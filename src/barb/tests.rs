@@ -813,3 +813,84 @@ fn a_match_says_what_it_took_apart_could_be() {
         "what `Succ` wraps, which is what it answers"
     );
 }
+
+/// What the tiers below are entitled to assume. A program built rather than
+/// written reaches them too, and nothing about a builder makes a call give
+/// a name what it takes.
+#[test]
+fn a_program_built_wrongly_is_refused() {
+    let mut program = Program::default();
+    let nat = program.declare_type("Nat");
+    program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let takes_two = program.declare("takes_two", &[nat, nat], nat);
+    program.define(takes_two, |_, args| args[0]);
+    let zero = program.ctor_at(nat, 0);
+    let main = program.declare("main", &[], nat);
+    program.define(main, |b, _| {
+        let held = b.con(zero, &[]);
+        b.call(takes_two, &[held])
+    });
+    program.set_entry(main);
+
+    let refused = validate(&program).unwrap_err();
+    assert!(
+        refused.contains("gives `takes_two` 1 where it takes 2"),
+        "{refused}"
+    );
+}
+
+/// A program with nowhere to start is not a program.
+#[test]
+fn a_program_says_where_it_starts() {
+    let mut program = Program::default();
+    let nat = program.declare_type("Nat");
+    program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let refused = validate(&program).unwrap_err();
+    assert!(refused.contains("where the program starts"), "{refused}");
+}
+
+/// Mutual recursion goes round the longer way, and the same argument has to
+/// be what gets smaller all the way round: one definition taking its first
+/// apart and the next taking its second is two things getting smaller by
+/// turns, and reading the calls one at a time cannot tell that from neither
+/// of them running out.
+#[test]
+fn what_goes_round_the_long_way_is_read_the_same() {
+    let held = |text: &str| parse(text).and_then(|program| validate(&program));
+
+    // Even and odd, each taking its argument apart before handing it on.
+    assert!(
+        held(
+            "type Nat Zero Succ(Nat)
+             type Bool False True
+
+             even(Zero) -> True
+             even(Succ(k)) -> odd(k)
+
+             odd(Zero) -> False
+             odd(Succ(k)) -> even(k)
+
+             count(False) -> Zero
+             count(True) -> Succ(Zero)
+
+             main!(h) -> exit!(h count(even(Succ(Succ(Zero)))))",
+        )
+        .is_ok()
+    );
+
+    // And the same pair handing on what they were handed.
+    let refused = held(
+        "type Nat Zero Succ(Nat)
+         type Bool False True
+
+         even(n) -> odd(n)
+         odd(n) -> even(n)
+
+         count(False) -> Zero
+         count(True) -> Succ(Zero)
+
+         main!(h) -> exit!(h count(even(Zero)))",
+    )
+    .unwrap_err();
+    assert!(refused.contains("nothing here shows"), "{refused}");
+}

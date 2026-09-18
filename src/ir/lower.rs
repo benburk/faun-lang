@@ -30,6 +30,7 @@ use super::validate::validate;
 ///
 /// If `program` has no entry.
 pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, String> {
+    barb::validate(program)?;
     let entry = program.entry().expect("a program to lower has an entry");
     // Whether a value of each type takes a place at all. What place is a
     // question per value, which is why this answers nothing about width.

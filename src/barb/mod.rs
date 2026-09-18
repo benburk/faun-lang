@@ -36,6 +36,8 @@ mod fold;
 mod ir;
 mod parse;
 mod pretty;
+mod stops;
+mod validate;
 
 pub use bounds::Bounds;
 pub use builder::Builder;
@@ -47,6 +49,7 @@ pub use ir::{
     Symbol, Type, TypeId,
 };
 pub use parse::parse;
+pub use validate::validate;
 
 /// Which argument a name something outside answers for hands back, where it
 /// hands one back at all. The effects are the one place a name has no body

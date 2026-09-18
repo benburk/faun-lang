@@ -1255,11 +1255,13 @@ fn what_is_known_is_worked_out_before_a_target_sees_it() {
     }
 }
 
-/// Working a term out is bounded. A definition that does not stop is left
-/// as it was written, which compiles rather than hanging the compiler.
+/// A definition may go round only on something it took apart, so each time
+/// round is over something smaller and the taking apart has an end. Which
+/// is what lets the tier above work a term out without wondering whether it
+/// will come back.
 #[test]
-fn a_definition_that_does_not_stop_is_left_as_it_was_written() {
-    let machine = faun::read(
+fn a_definition_that_does_not_stop_is_refused() {
+    let refused = faun::read(
         "type Nat Zero Succ(Nat)
 
          add(a Zero) -> a
@@ -1267,10 +1269,27 @@ fn a_definition_that_does_not_stop_is_left_as_it_was_written() {
 
          spin(n) -> add(Zero spin(n))
 
-         never_mind(Zero) -> Succ(Succ(Succ(Succ(Zero))))
-         never_mind(Succ(k)) -> spin(k)
+         main!(h) -> exit!(h spin(Zero))",
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("nothing here shows `spin` stops"),
+        "{refused}"
+    );
 
-         main!(h) -> exit!(h never_mind(Zero))",
+    // The same shape, taking its argument apart: this one has an end.
+    let machine = faun::read(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         twice(Zero) -> Zero
+         twice(Succ(k)) -> Succ(Succ(twice(k)))
+
+         main!(h) ->
+           two = opaque!(h Succ(Succ(Zero)))
+           exit!(h twice(two))",
     )
     .expect("a program");
     for target in Target::ALL {
