@@ -1029,7 +1029,7 @@ fn an_effect_hands_over_what_the_routine_reads() {
     )
     .unwrap_err();
     assert!(
-        refused.contains("`exit!` hands over nothing, but `exit` reads a word"),
+        refused.contains("`exit` reads a word, and is handed nothing"),
         "{refused}"
     );
 }
@@ -1228,7 +1228,7 @@ fn what_is_known_is_worked_out_before_a_target_sees_it() {
                         exit!(h mul(two two))";
     let known = faun::read(&arithmetic.replace("HELD", "Succ(Succ(Zero))")).expect("a program");
     let handed =
-        faun::read(&arithmetic.replace("HELD", "opaque!(h Succ(Succ(Zero)))")).expect("a program");
+        faun::read(&arithmetic.replace("HELD", "opaque(Succ(Succ(Zero)))")).expect("a program");
     let four = faun::read(
         "type Nat Zero Succ(Nat)
 
@@ -1288,7 +1288,7 @@ fn a_definition_that_does_not_stop_is_refused() {
          twice(Succ(k)) -> Succ(Succ(twice(k)))
 
          main!(h) ->
-           two = opaque!(h Succ(Succ(Zero)))
+           two = opaque(Succ(Succ(Zero)))
            exit!(h twice(two))",
     )
     .expect("a program");
@@ -1363,7 +1363,7 @@ fn how_wide_a_number_is_held_is_what_it_can_be() {
          add(a Succ(k)) -> Succ(add(a k))
 
          main!(h) ->
-           two = opaque!(h Succ(Succ(Zero)))
+           two = opaque(Succ(Succ(Zero)))
            exit!(h add(two two))",
     );
     assert!(held.contains(&Class::Fixed { bits: 3 }), "{held:?}");
@@ -1382,7 +1382,7 @@ fn how_wide_a_number_is_held_is_what_it_can_be() {
          up(Succ(k)) -> Succ(Succ(up(k)))
 
          main!(h) ->
-           n = opaque!(h Succ(Zero))
+           n = opaque(Succ(Zero))
            exit!(h up(n))",
     );
     // Nought is nought however wide the numbers around it are; what says

@@ -109,6 +109,11 @@ pub struct Function {
     /// What it rewrites to, or nothing when the program only declares it and
     /// something outside answers for it.
     pub body: Option<Body>,
+    /// Which argument something outside hands straight back, where it hands
+    /// one back rather than working something out. Nothing about a
+    /// declaration can be read, so what is known of one is what the tier
+    /// above said -- this being the first such thing it has to say.
+    pub answers: Option<usize>,
 }
 
 /// A program, and the pools every part of it lives in.

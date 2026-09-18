@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use super::ir::{Atom, CtorId, FnId, Program, TypeId};
+use crate::barb::{Atom, CtorId, FnId, Program, TypeId};
 
 /// What a clause matches in one argument: a name, or a constructor and the
 /// names its fields take.
@@ -285,25 +285,58 @@ fn build(source: &Source) -> Result<Program, String> {
     validate(source, &clauses, &arity)?;
     let told = infer(source, &clauses, &program, &ctors, &arity)?;
     let mut functions: HashMap<&str, FnId> = HashMap::new();
-    for (name, ..) in EFFECTS {
-        if let Some((params, result)) = told.get(name) {
-            functions.insert(name, program.declare(name, params, *result));
+    for (name, _, answers, authority) in ELSEWHERE {
+        let Some((params, result)) = told.get(name) else {
+            continue;
+        };
+        // The `!` says a program may observe this one working, which is a
+        // rule about the language rather than about the routine. The tier
+        // below holds the name a target answers to.
+        let held = name.strip_suffix('!').unwrap_or(name);
+        let id = program.declare(held, params, *result);
+        // And what is known of it, since nothing can be read off a
+        // declaration. What it hands back is one along where the authority
+        // is in front of it.
+        if let Answers::Argument(at) = answers {
+            program.hands_back(id, at + usize::from(authority));
         }
+        functions.insert(name, id);
     }
     for name in &source.order {
         let (params, result) = &told[name];
         functions.insert(name, program.declare(name, params, *result));
     }
 
-    // Where a program starts, by name, since nothing in the text says so. It
-    // is effectful because a program that does nothing observable does
-    // nothing: the status it leaves with is something it says, not something
-    // that falls out of how it was called.
+    let main = starts(&program, &functions, &told)?;
+    program.set_entry(main);
+    define(&mut program, source, &clauses, &told, &functions)
+}
+
+/// Where a program starts, since nothing in the text says so.
+///
+/// It is effectful because a program that does nothing observable does
+/// nothing: the status it leaves with is something it says rather than
+/// something that falls out of how it was called. And it leaves through an
+/// effect rather than answering one -- what a program did is what it is, so
+/// the last thing it does is the last thing there is. Nothing after it
+/// could be told to run, and nothing before it can be dropped for want of
+/// a reader.
+fn starts(
+    program: &Program,
+    functions: &HashMap<&str, FnId>,
+    told: &HashMap<String, Inferred>,
+) -> Result<FnId, String> {
     let main = functions
         .get("main!")
         .ok_or_else(|| "no `main!` to start at".to_owned())?;
-    program.set_entry(*main);
-    define(&mut program, source, &clauses, &told, &functions)
+    let (_, answers) = &told["main!"];
+    if *answers != NEVER {
+        let held = program.name(program.type_(*answers).name);
+        return Err(format!(
+            "a program leaves through an effect, and `main!` answers `{held}`"
+        ));
+    }
+    Ok(*main)
 }
 
 /// Compile every function's clauses into its body.
@@ -388,8 +421,8 @@ fn arities<'a>(
         }
         arity.insert(name.as_str(), width);
     }
-    for (name, takes, _) in EFFECTS {
-        arity.insert(name, takes + 1);
+    for (name, takes, _, authority) in ELSEWHERE {
+        arity.insert(name, takes + usize::from(authority));
     }
     Ok(arity)
 }
@@ -553,24 +586,30 @@ const BUILTIN: [&str; 3] = ["Host", "Unit", "Never"];
 const HOST: TypeId = TypeId(0);
 const NEVER: TypeId = TypeId(2);
 
-/// What an effect answers. Nothing ever, or the argument it was handed:
-/// a name that answers what it was given is a name the tiers below may not
-/// see through, which is how a program holds a value the compiler will not
-/// work out for itself.
+/// What a name something outside answers for hands back. Nothing ever, or
+/// the argument it was given -- and the second is not an effect at all: a
+/// name with no body is one the tiers below cannot see through, which is
+/// all it takes to hold a value the compiler will not work out for itself.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Answers {
+enum Answers {
     Never,
     Argument(usize),
 }
 
-/// The effects a target answers for, how many arguments each takes past the
-/// authority, and what each answers. A program declares none of these: they
-/// are the interface to the outside, so the compiler knows their names and a
-/// target provides them. What they take beyond the authority is whatever
-/// they are given -- one type per program, like any other name here.
-pub(super) const EFFECTS: [(&str, usize, Answers); 2] = [
-    ("exit!", 1, Answers::Never),
-    ("opaque!", 1, Answers::Argument(0)),
+/// The names something outside answers for: how many arguments each takes,
+/// what it answers, and whether it is handed the authority. A program
+/// declares none of them -- they are the interface to the outside, so the
+/// compiler knows the names and a target provides them -- and what they take
+/// is whatever they are given, one type per program like any other name.
+///
+/// An effect is one that is handed the authority, and only those may do
+/// observable work. `opaque` is not one: it answers what it was given and a
+/// target hands it straight back, so nothing about it is observable and a
+/// pure name may call it. What it is for is being a name with no body,
+/// which is the one thing the tier above cannot see through.
+const ELSEWHERE: [(&str, usize, Answers, bool); 2] = [
+    ("exit!", 1, Answers::Never, true),
+    ("opaque", 1, Answers::Argument(0), false),
 ];
 
 /// Every constructor a term may name.
@@ -663,7 +702,7 @@ impl Lowering<'_> {
                 Ok(atom) => atom,
                 Err(error) => {
                     failed = Some(error);
-                    args.first().copied().unwrap_or(Atom(super::ir::Local(0)))
+                    args.first().copied().unwrap_or(Atom(crate::barb::Local(0)))
                 }
             }
         });
@@ -687,7 +726,7 @@ impl Lowering<'_> {
     /// reaches here answers here.
     fn rows(
         &self,
-        b: &mut super::Builder,
+        b: &mut crate::barb::Builder,
         rows: &[Row],
         args: &[Atom],
         types: &[TypeId],
@@ -774,7 +813,12 @@ impl Lowering<'_> {
     /// answers. Order is the order they were written: the tier below keeps a
     /// body's bindings in the order they arrive, so an effect that must
     /// happen first is written first.
-    fn body(&self, b: &mut super::Builder, clause: &Clause, scope: Scope) -> Result<Atom, String> {
+    fn body(
+        &self,
+        b: &mut crate::barb::Builder,
+        clause: &Clause,
+        scope: Scope,
+    ) -> Result<Atom, String> {
         let mut scope = scope;
         for (held, step) in &clause.steps {
             let atom = self.term(b, step, &scope)?;
@@ -783,7 +827,12 @@ impl Lowering<'_> {
         self.term(b, &clause.body, &scope)
     }
 
-    fn term(&self, b: &mut super::Builder, term: &Term, scope: &Scope) -> Result<Atom, String> {
+    fn term(
+        &self,
+        b: &mut crate::barb::Builder,
+        term: &Term,
+        scope: &Scope,
+    ) -> Result<Atom, String> {
         let Term(name, args) = term;
         if args.is_empty()
             && let Some((_, atom)) = scope.iter().rev().find(|(held, _)| held == name)
@@ -913,7 +962,7 @@ fn infer(
     }
     // An effect no program calls settles nothing, and needs to: there is
     // nothing to declare and nothing to answer for.
-    for (name, ..) in EFFECTS {
+    for (name, ..) in ELSEWHERE {
         if let Ok(held) = settled(&mut unify, &base, arity, name) {
             told.insert(name.to_owned(), held);
         }
@@ -936,20 +985,23 @@ fn slots<'a>(
         }
         base.insert(name.as_str(), at);
     }
-    // An effect takes the authority; what it takes between is whatever it is
-    // given, which is what the argument settles, and what it answers is
-    // either nothing ever or one of those arguments.
-    for (name, takes, answers) in EFFECTS {
+    // An effect is handed the authority; what either takes after that is
+    // whatever it is given, which the argument settles, and what it answers
+    // is either nothing ever or one of those arguments.
+    for (name, takes, answers, authority) in ELSEWHERE {
         let at = unify.parent.len();
-        let authority = unify.fresh();
-        unify.pin(authority, HOST)?;
+        let front = usize::from(authority);
+        if authority {
+            let held = unify.fresh();
+            unify.pin(held, HOST)?;
+        }
         for _ in 0..takes {
             unify.fresh();
         }
         let answer = unify.fresh();
         match answers {
             Answers::Never => unify.pin(answer, NEVER)?,
-            Answers::Argument(held) => unify.union(answer, at + 1 + held)?,
+            Answers::Argument(held) => unify.union(answer, at + front + held)?,
         }
         base.insert(name, at);
     }
@@ -1000,9 +1052,9 @@ fn diverging<'a>(source: &'a Source, clauses: &HashMap<&str, Vec<Clause>>) -> Ha
     fn leaves(term: &Term, held: &HashSet<&str>) -> bool {
         held.contains(term.0.as_str()) || term.1.iter().any(|argument| leaves(argument, held))
     }
-    let mut held: HashSet<&str> = EFFECTS
+    let mut held: HashSet<&str> = ELSEWHERE
         .into_iter()
-        .filter(|(_, _, answers)| *answers == Answers::Never)
+        .filter(|(_, _, answers, _)| *answers == Answers::Never)
         .map(|(name, ..)| name)
         .collect();
     let mut growing = true;

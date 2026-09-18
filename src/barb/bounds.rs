@@ -266,8 +266,10 @@ fn once(
     let Some(body) = program.function(id).body else {
         // Something outside answers, and what it answers is either what it
         // was handed or anything at all.
-        let answer = super::answered(program.name(program.function(id).name))
-            .and_then(|held| params.get(held + 1).copied())
+        let answer = program
+            .function(id)
+            .answers
+            .and_then(|held| params.get(held).copied())
             .unwrap_or(Bounds::ANY);
         return settle(&mut held.results[at], answer, round);
     };

@@ -141,9 +141,7 @@ fn provided(
     params: &[Class],
     returns: &[Class],
 ) -> Result<(&'static str, &'static Routine), String> {
-    // The `!` says the program may observe this one working; the routine a
-    // target provides is named without it.
-    let held = name.strip_suffix('!').unwrap_or(name);
+    let held = name;
     let Some(wanted) = routine(held) else {
         return Err(format!("nothing answers for `{name}`"));
     };
@@ -153,16 +151,16 @@ fn provided(
     // read.
     if params.len() != wanted.takes.len() {
         return Err(format!(
-            "`{name}` hands over {}, but `{held}` reads {}",
-            reads(params),
+            "`{held}` reads {}, and is handed {}",
             reads(wanted.takes),
+            reads(params),
         ));
     }
     if returns.len() != wanted.answers.len() {
         return Err(format!(
-            "`{name}` takes back {}, but `{held}` answers {}",
-            reads(returns),
+            "`{held}` answers {}, and what is taken back is {}",
             reads(wanted.answers),
+            reads(returns),
         ));
     }
     Ok((wanted.name, wanted))

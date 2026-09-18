@@ -76,8 +76,16 @@ impl Program {
             params: Range::of(at, params.len()),
             result,
             body: None,
+            answers: None,
         });
         FnId::at(self.functions.len() - 1)
+    }
+
+    /// Say that something outside hands an argument straight back, which is
+    /// the one thing a definition with no body can be known to do: what it
+    /// answers is what it was handed, whatever else happens on the way.
+    pub fn hands_back(&mut self, id: FnId, argument: usize) {
+        self.functions[id.index()].answers = Some(argument);
     }
 
     /// The function a target enters.

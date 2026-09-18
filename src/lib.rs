@@ -1,6 +1,7 @@
 pub mod barb;
 mod index;
 pub mod ir;
+pub mod surface;
 pub mod targets;
 
 use ir::Class;
@@ -67,7 +68,7 @@ pub fn two_and_two() -> barb::Program {
 ///
 /// Names what it could not read, or what it read and cannot represent.
 pub fn read(text: &str) -> Result<ir::Program, String> {
-    let mut program = barb::parse(text)?;
+    let mut program = surface::parse(text)?;
     barb::fold(&mut program);
     let program = program;
     let facts = barb::recognise(&program);

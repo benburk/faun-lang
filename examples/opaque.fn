@@ -17,5 +17,5 @@ add(a Zero) -> a
 add(a Succ(k)) -> Succ(add(a k))
 
 main!(h) ->
-  two = opaque!(h Succ(Succ(Zero)))
+  two = opaque(Succ(Succ(Zero)))
   exit!(h add(two two))

@@ -29,7 +29,7 @@ select(True t f) -> t
 select(False t f) -> f
 
 main!(h) ->
-  two = opaque!(h Succ(Succ(Zero)))
+  two = opaque(Succ(Succ(Zero)))
   four = double(two)
   # Nothing here is above four, so three bits hold every number in it.
   exit!(h select(is_zero(Zero) four Zero))
