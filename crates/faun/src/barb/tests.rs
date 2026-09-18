@@ -305,3 +305,53 @@ fn a_program_says_where_it_starts() {
     let refused = validate(&program).unwrap_err();
     assert!(refused.contains("where the program starts"), "{refused}");
 }
+
+/// A number held compactly costs what it stands for when it is read back.
+///
+/// `intern_number` writes a magnitude, so three bytes can stand for millions
+/// of constructors. Working one out builds every one of them, and a `Value`
+/// that deep is one this tier cannot even let go of -- so what a term costs
+/// to read is counted against the same budget as everything else.
+#[test]
+fn a_number_too_large_to_work_out_is_left_alone() {
+    let mut program = Program::default();
+    let nat = program.declare_type("Nat");
+    program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+
+    let add = program.declare("add", &[nat, nat], nat);
+    program.define(add, |b, args| {
+        let (left, right) = (args[0], args[1]);
+        b.match_(right, nat, |b, ctor, fields| match fields {
+            [] => left,
+            [k] => {
+                let rest = b.call(add, &[left, *k]);
+                b.con(ctor, &[rest])
+            }
+            _ => unreachable!("Nat takes at most one field"),
+        })
+    });
+
+    let held = |magnitude| {
+        let mut program = program.clone();
+        let number = program.intern_number(nat, magnitude);
+        let main = program.declare("main", &[], nat);
+        program.define(main, |b, _| {
+            let value = b.known(nat, number);
+            b.call(add, &[value, value])
+        });
+        program.set_entry(main);
+        fold(&mut program);
+        program.render()
+    };
+
+    // Small enough to work out: what is left is the answer, and nothing to
+    // work it out with.
+    let small = held(3);
+    assert!(small.contains("\n  6\n"), "{small}");
+    assert!(!small.contains("add(v0, v0)"), "{small}");
+
+    // Too large, so the call stands as it was written. Saying less than a
+    // program says is always an answer; taking the compiler down is not.
+    let large = held(4_000_000);
+    assert!(large.contains("add(v0, v0)"), "{large}");
+}

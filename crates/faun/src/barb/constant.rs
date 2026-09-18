@@ -257,6 +257,19 @@ fn leb128(mut value: u64, out: &mut Vec<u8>) {
     }
 }
 
+/// How many constructors a held value stands for.
+///
+/// What a value costs to hold and what it costs to work with are different
+/// numbers: a spine is written as its length, so three bytes stand for as
+/// many constructors as the number says. Anything else is written out as it
+/// is built, so holding one already cost what it stands for.
+pub(super) fn weight(program: &Program, id: TypeId, bytes: &[u8]) -> u64 {
+    match shape(program, id) {
+        Shape::Spine { .. } => unleb128(bytes).0,
+        Shape::Tagged => 1,
+    }
+}
+
 fn unleb128(bytes: &[u8]) -> (u64, usize) {
     let mut value = 0u64;
     for (at, byte) in bytes.iter().enumerate() {

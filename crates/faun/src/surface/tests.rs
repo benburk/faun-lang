@@ -631,3 +631,24 @@ fn a_program_leaves_through_an_effect() {
     )
     .expect("a program");
 }
+
+/// A term nested past what this reads is refused rather than read.
+///
+/// Everything that reads a term walks it the way it was written, so a term
+/// deeper than the machine has stack for would take the compiler down with
+/// it -- and refusing one after it is built is too late, since letting go of
+/// a tree that deep is itself a walk.
+#[test]
+fn a_term_nested_too_deep_is_refused() {
+    let held = |deep: usize| {
+        format!(
+            "type Nat Zero Succ(Nat)\n\nmain!(h) -> exit!(h {}Zero{})",
+            "Succ(".repeat(deep),
+            ")".repeat(deep)
+        )
+    };
+    parse(&held(64)).expect("a program nested as deep as anyone writes");
+
+    let refused = parse(&held(4096)).unwrap_err();
+    assert!(refused.contains("nested more than"), "{refused}");
+}

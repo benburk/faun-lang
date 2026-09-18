@@ -148,15 +148,37 @@ fn read_patterns(words: &mut Words) -> Result<Vec<Pattern>, String> {
     Ok(patterns)
 }
 
+/// How deep one term may hold another.
+///
+/// A term is a tree and everything that reads one walks it the way it was
+/// written, so a term nested deeper than the machine has stack for would
+/// take the compiler down rather than be refused. The count is kept here,
+/// where a term is built, since refusing it later means a tree that deep
+/// already exists -- and letting go of one is itself a walk.
+///
+/// Well past anything written by hand. A number is a chain of constructors
+/// until there is a shorter way to say one, so this is not as far off as it
+/// looks.
+const DEEPEST: usize = 1024;
+
 fn read_term(words: &mut Words) -> Result<Term, String> {
+    read_term_at(words, 0)
+}
+
+fn read_term_at(words: &mut Words, depth: usize) -> Result<Term, String> {
     let head = words.word()?;
     if words.peek() != Some("(") {
         return Ok(Term(head, Vec::new()));
     }
+    if depth == DEEPEST {
+        return Err(format!(
+            "`{head}` is nested more than {DEEPEST} deep, which is deeper than this reads"
+        ));
+    }
     words.take();
     let mut args = Vec::new();
     while words.peek() != Some(")") {
-        args.push(read_term(words)?);
+        args.push(read_term_at(words, depth + 1)?);
     }
     words.expect(")")?;
     Ok(Term(head, args))

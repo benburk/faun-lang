@@ -19,7 +19,7 @@
 //! is always an answer: what a program says is what it does, and what this
 //! tier says of it is only ever less.
 
-use super::constant::{Value, decode};
+use super::constant::{Value, decode, weight};
 use super::ir::{Body, Expr, ExprId, FnId, Program};
 
 /// How much working out one term is worth. A number built one constructor
@@ -82,7 +82,15 @@ fn eval(program: &Program, id: ExprId, env: &[Option<Value>], fuel: &mut u32) ->
     *fuel = fuel.checked_sub(1)?;
     match program.expr(id) {
         Expr::Atom(atom) => env.get(atom.0.index())?.clone(),
-        Expr::Static(owner, held) => Some(decode(program, owner, program.known_bytes(held)).0),
+        // Reading one back costs what building it would. A number is held
+        // as its magnitude rather than as the chain it stands for, so the
+        // one term that is free to hold is the one that is not free to read.
+        Expr::Static(owner, held) => {
+            let bytes = program.known_bytes(held);
+            let held = u32::try_from(weight(program, owner, bytes)).ok()?;
+            *fuel = fuel.checked_sub(held)?;
+            Some(decode(program, owner, bytes).0)
+        }
         Expr::Con(ctor, args) => {
             let fields = held(program, args, env)?;
             Some(Value(ctor, fields))
