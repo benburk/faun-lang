@@ -2,7 +2,7 @@
 //! come out empty are left out entirely.
 
 use super::{Code, END, FUNC_TYPE, I32, I32_CONST};
-use crate::targets::bytes::{Bytes, len32};
+use faun::targets::bytes::{Bytes, len32};
 
 /// Section ids, in the order a module must list them.
 const TYPE: u8 = 1;
@@ -19,7 +19,7 @@ const KIND_MEMORY: u8 = 0x02;
 const WASI: &str = "wasi_snapshot_preview1";
 const PAGE_SIZE: u32 = 65536;
 
-pub(super) fn module(code: &Code) -> Vec<u8> {
+pub(crate) fn module(code: &Code) -> Vec<u8> {
     // Imports come first in the function index space, so every body is
     // numbered after them.
     let imports = len32(code.imports.len());
@@ -156,11 +156,13 @@ fn pages(code: &Code) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use faun::targets::Target;
+
     use super::*;
-    use crate::targets::Target;
 
     fn hello() -> Vec<u8> {
-        crate::compile(Target::Wasm32Wasi, &crate::hello_world())
+        crate::Wasm32Wasi
+            .emit(&faun::hello_world())
             .pop()
             .unwrap()
             .bytes
@@ -189,6 +191,6 @@ mod tests {
 
     #[test]
     fn one_page_holds_a_greeting() {
-        assert_eq!(pages(&super::super::lower::lower(&crate::hello_world())), 1);
+        assert_eq!(pages(&super::super::lower::lower(&faun::hello_world())), 1);
     }
 }

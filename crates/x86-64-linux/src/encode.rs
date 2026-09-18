@@ -3,7 +3,7 @@
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub(super) enum Reg {
+pub(crate) enum Reg {
     Rax = 0,
     Rcx = 1,
     Rdx = 2,
@@ -23,7 +23,7 @@ impl From<Reg> for u8 {
 }
 
 impl Reg {
-    pub(super) fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         usize::from(u8::from(self))
     }
 
@@ -47,7 +47,7 @@ struct Fixup {
 }
 
 #[derive(Default)]
-pub(super) struct Encoder {
+pub(crate) struct Encoder {
     bytes: Vec<u8>,
     fixups: Vec<Fixup>,
     /// Branches, by number, already found not to reach in one byte.
@@ -59,26 +59,26 @@ pub(super) struct Encoder {
 }
 
 impl Encoder {
-    pub(super) fn new(distant: Vec<bool>) -> Self {
+    pub(crate) fn new(distant: Vec<bool>) -> Self {
         Self {
             distant,
             ..Self::default()
         }
     }
 
-    pub(super) const fn spilled(&self) -> bool {
+    pub(crate) const fn spilled(&self) -> bool {
         self.spilled
     }
 
     /// Forget what was written to a frame, so that the next function's
     /// answer is about that function alone.
-    pub(super) const fn forget_spilled(&mut self) {
+    pub(crate) const fn forget_spilled(&mut self) {
         self.spilled = false;
     }
 
     /// Fill every displacement, and report the branches that turned out not
     /// to reach in the byte they were given.
-    pub(super) fn finish(mut self) -> (Vec<u8>, Vec<usize>) {
+    pub(crate) fn finish(mut self) -> (Vec<u8>, Vec<usize>) {
         let mut overflowed = Vec::new();
         for fixup in std::mem::take(&mut self.fixups) {
             let target = fixup.target.expect("every jump is aimed");
@@ -101,29 +101,29 @@ impl Encoder {
 
     /// The shortest zeroing, and it clears all 64 bits despite naming the
     /// 32-bit half.
-    pub(super) fn xor_self(&mut self, dst: Reg) {
+    pub(crate) fn xor_self(&mut self, dst: Reg) {
         self.rex(false, Some(dst), dst);
         self.emit(&[0x31, modrm(dst, dst)]);
     }
 
-    pub(super) fn mov_reg(&mut self, dst: Reg, src: Reg, wide: bool) {
+    pub(crate) fn mov_reg(&mut self, dst: Reg, src: Reg, wide: bool) {
         self.rex(wide, Some(src), dst);
         self.emit(&[0x89, modrm(src, dst)]);
     }
 
     /// Sign-extends to a full 64-bit stack slot.
-    pub(super) fn push_imm8(&mut self, value: i8) {
+    pub(crate) fn push_imm8(&mut self, value: i8) {
         self.emit(&[0x6A, value.cast_unsigned()]);
     }
 
-    pub(super) fn pop(&mut self, dst: Reg) {
+    pub(crate) fn pop(&mut self, dst: Reg) {
         self.rex(false, None, dst);
         self.emit(&[0x58 + dst.low()]);
     }
 
     /// Zero-extends to 64 bits. Returns the offset of the immediate, which
     /// is where a relocation would land.
-    pub(super) fn mov_imm32(&mut self, dst: Reg, value: u32) -> usize {
+    pub(crate) fn mov_imm32(&mut self, dst: Reg, value: u32) -> usize {
         self.rex(false, None, dst);
         self.emit(&[0xB8 + dst.low()]);
         let offset = self.bytes.len();
@@ -132,7 +132,7 @@ impl Encoder {
     }
 
     /// Sign-extended to 64 bits, for negative constants.
-    pub(super) fn mov_sext_imm32(&mut self, dst: Reg, value: i32) {
+    pub(crate) fn mov_sext_imm32(&mut self, dst: Reg, value: i32) {
         // ModRM.reg holds the opcode extension /0, not a register.
         self.rex(true, None, dst);
         self.emit(&[0xC7, modrm(Reg::Rax, dst)]);
@@ -140,7 +140,7 @@ impl Encoder {
     }
 
     /// The only form that carries a full 64-bit value.
-    pub(super) fn mov_imm64(&mut self, dst: Reg, value: u64) {
+    pub(crate) fn mov_imm64(&mut self, dst: Reg, value: u64) {
         self.emit(&[0x48 | u8::from(dst.extended()), 0xB8 + dst.low()]);
         self.emit(&value.to_le_bytes());
     }
@@ -148,20 +148,20 @@ impl Encoder {
     /// `dst = [base + disp]` and its mirror, in whole words. A `ModRM` mod
     /// of 10 takes a 32-bit displacement; rsp and rbp are not addressable
     /// this way, and nothing here asks to be.
-    pub(super) fn load_word(&mut self, dst: Reg, base: Reg, disp: i32) {
+    pub(crate) fn load_word(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.at(&[0x8B], dst, base, disp);
     }
 
-    pub(super) fn store_word(&mut self, src: Reg, base: Reg, disp: i32) {
+    pub(crate) fn store_word(&mut self, src: Reg, base: Reg, disp: i32) {
         self.at(&[0x89], src, base, disp);
     }
 
     /// The low byte, zero-extended on the way in.
-    pub(super) fn load_byte(&mut self, dst: Reg, base: Reg, disp: i32) {
+    pub(crate) fn load_byte(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.at(&[0x0F, 0xB6], dst, base, disp);
     }
 
-    pub(super) fn store_byte(&mut self, src: Reg, base: Reg, disp: i32) {
+    pub(crate) fn store_byte(&mut self, src: Reg, base: Reg, disp: i32) {
         self.at(&[0x88], src, base, disp);
     }
 
@@ -174,14 +174,14 @@ impl Encoder {
 
     /// Whether [`Encoder::narrow`] has anything to do at this width. When
     /// it has not, a conversion to it is the value it converted.
-    pub(super) const fn narrows(bits: u16) -> bool {
+    pub(crate) const fn narrows(bits: u16) -> bool {
         matches!(bits, 8 | 16)
     }
 
     /// `rax` taken modulo two to the `bits`. Only the widths whose own form
     /// leaves the upper bits alone need this; the 32-bit forms already
     /// zero-extend into the whole register.
-    pub(super) fn narrow(&mut self, bits: u16) {
+    pub(crate) fn narrow(&mut self, bits: u16) {
         match bits {
             8 => self.emit(&[0x48, 0x0F, 0xB6, 0xC0]), // movzx rax, al
             16 => self.emit(&[0x48, 0x0F, 0xB7, 0xC0]), // movzx rax, ax
@@ -190,17 +190,17 @@ impl Encoder {
         }
     }
 
-    pub(super) fn syscall(&mut self) {
+    pub(crate) fn syscall(&mut self) {
         self.emit(&[0x0F, 0x05]);
     }
 
     /// A `ModRM` `rm` of 100 means a SIB byte follows; 0x24 is rsp as the
     /// base with no index.
-    pub(super) fn load_slot(&mut self, dst: Reg, disp: u32) {
+    pub(crate) fn load_slot(&mut self, dst: Reg, disp: u32) {
         self.slot(0x8B, dst, disp);
     }
 
-    pub(super) fn store_slot(&mut self, src: Reg, disp: u32) {
+    pub(crate) fn store_slot(&mut self, src: Reg, disp: u32) {
         self.slot(0x89, src, disp);
     }
 
@@ -222,7 +222,7 @@ impl Encoder {
         }
     }
 
-    pub(super) fn open_frame(&mut self, bytes: u32) {
+    pub(crate) fn open_frame(&mut self, bytes: u32) {
         self.adjust_rsp(0xEC, bytes);
     }
 
@@ -235,7 +235,7 @@ impl Encoder {
     /// thirty-two-bit one zero-extends into the whole of it, which is both
     /// shorter than the sixty-four-bit form and what keeps a value holding
     /// nothing above what it needs.
-    pub(super) fn alu_sized(&mut self, opcode: u8, dst: Reg, src: Reg, bits: u16) {
+    pub(crate) fn alu_sized(&mut self, opcode: u8, dst: Reg, src: Reg, bits: u16) {
         if bits <= 32 {
             self.rex(false, Some(src), dst);
             self.emit(&[opcode, modrm(src, dst)]);
@@ -245,13 +245,13 @@ impl Encoder {
     }
 
     /// `dst = dst op src`.
-    pub(super) fn alu(&mut self, opcode: u8, dst: Reg, src: Reg) {
+    pub(crate) fn alu(&mut self, opcode: u8, dst: Reg, src: Reg) {
         self.rex(true, Some(src), dst);
         self.emit(&[opcode, modrm(src, dst)]);
     }
 
     /// `dst = 1` when the flags satisfy `cc`, else 0, zero-extended.
-    pub(super) fn set_if(&mut self, cc: u8, dst: Reg) {
+    pub(crate) fn set_if(&mut self, cc: u8, dst: Reg) {
         self.rex(false, None, dst);
         self.emit(&[0x0F, 0x90 | cc, 0xC0 | dst.low()]);
         self.rex(false, Some(dst), dst);
@@ -261,7 +261,7 @@ impl Encoder {
     /// The displacement is measured from the end of this instruction, and
     /// its offset is returned. `REX.W` is not optional: without it the
     /// address truncates to 32 bits, which ASLR makes fatal.
-    pub(super) fn lea_rip(&mut self, dst: Reg) -> usize {
+    pub(crate) fn lea_rip(&mut self, dst: Reg) -> usize {
         self.rex(true, Some(dst), Reg::Rax);
         self.emit(&[0x8D, (dst.low() << 3) | 5]);
         // The linker fills this one in, not [`Encoder::patch`], so it is a
@@ -274,16 +274,16 @@ impl Encoder {
     /// Leaves a hole for [`Encoder::patch`], like any other displacement.
     /// There is no short form of a call, so this is always a full
     /// displacement.
-    pub(super) fn call(&mut self) -> usize {
+    pub(crate) fn call(&mut self) -> usize {
         self.emit(&[0xE8]);
         self.hole(4, None)
     }
 
-    pub(super) fn ret(&mut self) {
+    pub(crate) fn ret(&mut self) {
         self.emit(&[0xC3]);
     }
 
-    pub(super) fn close_frame(&mut self, bytes: u32) {
+    pub(crate) fn close_frame(&mut self, bytes: u32) {
         self.adjust_rsp(0xC4, bytes);
     }
 
@@ -301,7 +301,7 @@ impl Encoder {
 
     /// Unconditional, or taken when the flags satisfy `cc`. Both leave a
     /// hole, and return its offset.
-    pub(super) fn jump(&mut self) -> usize {
+    pub(crate) fn jump(&mut self) -> usize {
         let branch = self.take_branch();
         if self.far(branch) {
             self.emit(&[0xE9]);
@@ -312,7 +312,7 @@ impl Encoder {
         }
     }
 
-    pub(super) fn jump_if(&mut self, cc: u8) -> usize {
+    pub(crate) fn jump_if(&mut self, cc: u8) -> usize {
         let branch = self.take_branch();
         if self.far(branch) {
             self.emit(&[0x0F, 0x80 | cc]);
@@ -344,12 +344,12 @@ impl Encoder {
         fixup
     }
 
-    pub(super) const fn here(&self) -> usize {
+    pub(crate) const fn here(&self) -> usize {
         self.bytes.len()
     }
 
     /// Where a jump is going, resolved once every address is known.
-    pub(super) fn patch(&mut self, fixup: usize, target: usize) {
+    pub(crate) fn patch(&mut self, fixup: usize, target: usize) {
         self.fixups[fixup].target = Some(target);
     }
 

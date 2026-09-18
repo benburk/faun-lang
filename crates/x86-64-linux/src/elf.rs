@@ -31,11 +31,11 @@
 //!   `mmap` and the stack from the kernel, so neither needs a segment.
 
 use super::Code;
-use crate::ir::{Origin, Program};
-use crate::targets::bytes::{Bytes, len32};
+use faun::ir::{Origin, Program};
+use faun::targets::bytes::{Bytes, len32};
 
-pub(super) const EHDR_LEN: u16 = 64;
-pub(super) const PHDR_LEN: u16 = 56;
+pub(crate) const EHDR_LEN: u16 = 64;
+pub(crate) const PHDR_LEN: u16 = 56;
 const PAGE_SIZE: u64 = 0x1000;
 const PAGE: usize = 0x1000;
 
@@ -54,7 +54,7 @@ struct Segment {
     vaddr: u32,
 }
 
-pub(super) fn image(code: &Code, program: &Program) -> Vec<u8> {
+pub(crate) fn image(code: &Code, program: &Program) -> Vec<u8> {
     let layout = Layout::new(code, program);
     let mut out = Bytes::default();
 
@@ -187,11 +187,13 @@ fn len16(count: usize) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    use faun::targets::Target;
+
     use super::*;
-    use crate::targets::Target;
 
     fn hello() -> Vec<u8> {
-        crate::compile(Target::X86_64Linux, &crate::hello_world())
+        crate::X86_64Linux
+            .emit(&faun::hello_world())
             .pop()
             .unwrap()
             .bytes

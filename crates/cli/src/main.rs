@@ -14,13 +14,14 @@ use bpaf::positional;
 use bpaf::short;
 
 use faun::targets::Target;
+use faun_targets as targets;
 
 #[derive(Clone, Debug)]
 enum Command {
     Build {
         source: PathBuf,
         output: PathBuf,
-        target: Target,
+        target: &'static dyn Target,
     },
     Run {
         source: PathBuf,
@@ -40,8 +41,8 @@ fn cli() -> OptionParser<Command> {
     let target = long("target")
         .help("Machine to compile for")
         .argument::<String>("TARGET")
-        .parse(|name| Target::from_name(&name).ok_or_else(|| unknown(&name)))
-        .fallback_with(|| Target::HOST.ok_or(NO_HOST))
+        .parse(|name| targets::from_name(&name).ok_or_else(|| unknown(&name)))
+        .fallback_with(|| targets::HOST.ok_or(NO_HOST))
         .debug_fallback();
 
     let build = construct!(Command::Build {
@@ -67,8 +68,8 @@ fn cli() -> OptionParser<Command> {
 const NO_HOST: &str = "no backend for this machine, so --target is required";
 
 fn unknown(name: &str) -> String {
-    let known: Vec<_> = Target::ALL.into_iter().map(Target::name).collect();
-    format!("unknown target `{name}`, expected: {}", known.join(", "))
+    let known = targets::names().join(", ");
+    format!("unknown target `{name}`, expected: {known}")
 }
 
 fn main() -> ExitCode {
@@ -96,7 +97,7 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
         }
         Command::Run { source } => {
             let program = read(&source)?;
-            let target = Target::HOST.ok_or(NO_HOST)?;
+            let target = targets::HOST.ok_or(NO_HOST)?;
             let dir = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
             fs::create_dir_all(&dir)?;
 
@@ -120,14 +121,14 @@ fn read(path: &Path) -> Result<faun::ir::Program, Box<dyn Error>> {
 }
 
 fn write(
-    target: Target,
+    target: &'static dyn Target,
     output: &Path,
     program: &faun::ir::Program,
 ) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     target.accepts(program)?;
     let mut written = Vec::new();
 
-    for artifact in faun::compile(target, program) {
+    for artifact in target.emit(program) {
         let mut path = output.to_path_buf().into_os_string();
         path.push(artifact.extension);
         let path = PathBuf::from(path);

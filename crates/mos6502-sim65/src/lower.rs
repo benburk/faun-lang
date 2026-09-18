@@ -10,7 +10,7 @@ use super::{
     ARG_COUNT, ARGS, CSP, CSTACK_TOP, Code, FP, FRAMES_TOP, HEAP, HOME_COUNT, HOMES, HOOK_EXIT,
     HOOK_WRITE, LOAD, PTR, R0, T0, T1,
 };
-use crate::ir::{
+use faun::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op, Origin, Program, RegionId, Relation,
     Terminator, ValueId, Width,
 };
@@ -244,7 +244,7 @@ const ROUNDS: usize = 32;
 ///
 /// If the layout does not settle, which is this target disagreeing with
 /// itself rather than anything a program did.
-pub(super) fn lower(program: &Program) -> Code {
+pub(crate) fn lower(program: &Program) -> Code {
     let mut far: Vec<bool> = Vec::new();
     let mut heap = LOAD;
     for _ in 0..ROUNDS {

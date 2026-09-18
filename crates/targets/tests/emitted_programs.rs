@@ -9,6 +9,10 @@ use std::sync::{Mutex, PoisonError};
 use faun::ir::Class::Word;
 use faun::ir::{Binary, Builder, Class, Offset, Program, Relation, Width};
 use faun::targets::Target;
+use faun_mos6502_sim65::Mos6502Sim65;
+use faun_targets::ALL;
+use faun_wasm32_wasi::Wasm32Wasi;
+use faun_x86_64_linux::X86_64Linux;
 
 /// The whole of a program that does nothing: a number to leave with, and the
 /// one effect there is. This is the floor for a program somebody writes,
@@ -18,7 +22,7 @@ const EXIT_ZERO: &str = "type Nat Zero Succ(Nat)
                          main!(h) -> exit!(h Zero)";
 
 /// Every program here and what each target makes of it, in the order
-/// [`Target::ALL`] lists them: x86-64, wasm, and the 6502.
+/// [`ALL`] lists them: x86-64, wasm, and the 6502.
 ///
 /// Ratchets: lower one when a target improves, and do not raise one without
 /// saying why. These are the only thing that notices a decision a target
@@ -88,6 +92,12 @@ fn built() -> Vec<(&'static str, Program, [usize; 3])> {
     ]
 }
 
+/// Where the examples are. They belong to the project rather than to any one
+/// crate, so they are not found by where a test happens to be run from.
+fn examples() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples")
+}
+
 /// The examples, which are programs somebody wrote.
 fn written() -> Vec<(String, Program, [usize; 3])> {
     [
@@ -102,10 +112,10 @@ fn written() -> Vec<(String, Program, [usize; 3])> {
     ]
     .into_iter()
     .map(|(name, sizes)| {
-        let path = format!("examples/{name}.fn");
+        let path = examples().join(format!("{name}.fn"));
         let text = fs::read_to_string(&path).expect("an example");
-        let program = faun::read(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
-        (path, program, sizes)
+        let program = faun::read(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (name.to_owned(), program, sizes)
     })
     .collect()
 }
@@ -113,8 +123,8 @@ fn written() -> Vec<(String, Program, [usize; 3])> {
 #[test]
 fn programs_compile_to_the_sizes_recorded_for_them() {
     for (name, program, sizes) in corpus() {
-        for (target, size) in Target::ALL.into_iter().zip(sizes) {
-            let bytes = faun::compile(target, &program)[0].bytes.len();
+        for (target, size) in ALL.into_iter().zip(sizes) {
+            let bytes = target.emit(&program)[0].bytes.len();
             assert_eq!(bytes, size, "{name} for {target}");
         }
     }
@@ -122,7 +132,7 @@ fn programs_compile_to_the_sizes_recorded_for_them() {
 
 #[test]
 fn every_target_adds_two_and_two() {
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &two_and_two()), 4, "{target}");
     }
 }
@@ -130,13 +140,13 @@ fn every_target_adds_two_and_two() {
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_prints_hello_world() {
-    let (output, _) = run(Target::X86_64Linux, &faun::hello_world());
+    let (output, _) = run(&X86_64Linux, &faun::hello_world());
     assert_eq!(output, "Hello, World!\n");
 }
 
 #[test]
 fn the_mos6502_image_prints_hello_world() {
-    let (output, _) = run(Target::Mos6502Sim65, &faun::hello_world());
+    let (output, _) = run(&Mos6502Sim65, &faun::hello_world());
     assert_eq!(output, "Hello, World!\n");
 }
 
@@ -146,7 +156,7 @@ fn the_mos6502_image_prints_hello_world() {
 /// widened branch still lands where it meant to.
 #[test]
 fn every_target_branches_over_an_arm_a_byte_cannot_reach() {
-    for target in Target::ALL {
+    for target in ALL {
         for first in [true, false] {
             let program = a_branch_over_a_long_arm(40, first);
             assert_eq!(
@@ -164,7 +174,7 @@ fn every_target_branches_over_an_arm_a_byte_cannot_reach() {
 /// carried through a loop that only an arm reads.
 #[test]
 fn every_target_runs_what_a_constant_cannot_answer() {
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(
             status(target, &compares_two_worked_out_values()),
             1,
@@ -188,52 +198,49 @@ fn every_target_runs_what_a_constant_cannot_answer() {
 
 #[test]
 fn every_target_counts_in_a_global() {
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &counts_in_a_global()), 3, "{target}");
     }
 }
 
 #[test]
 fn every_target_wraps_a_fixed_width() {
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &wraps_at_eight_bits()), 4, "{target}");
     }
 }
 
 #[test]
 fn the_mos6502_image_runs_every_program() {
-    assert_eq!(status(Target::Mos6502Sim65, &empty()), 0);
-    assert_eq!(status(Target::Mos6502Sim65, &less(7, 9)), 1);
-    assert_eq!(status(Target::Mos6502Sim65, &less(9, 7)), 0);
-    assert_eq!(status(Target::Mos6502Sim65, &calls_a_function()), 42);
-    assert_eq!(status(Target::Mos6502Sim65, &recurses()), 6);
-    assert_eq!(
-        run(Target::Mos6502Sim65, &countdown(3)).0,
-        "tick\n".repeat(3)
-    );
-    assert_eq!(status(Target::Mos6502Sim65, &uses_the_heap()), 42);
-    assert_eq!(status(Target::Mos6502Sim65, &stores_a_byte()), 8);
-    assert_eq!(run(Target::Mos6502Sim65, &writes_from_the_heap()).0, "hi\n");
-    assert_eq!(status(Target::Mos6502Sim65, &values_survive_a_call()), 45);
+    assert_eq!(status(&Mos6502Sim65, &empty()), 0);
+    assert_eq!(status(&Mos6502Sim65, &less(7, 9)), 1);
+    assert_eq!(status(&Mos6502Sim65, &less(9, 7)), 0);
+    assert_eq!(status(&Mos6502Sim65, &calls_a_function()), 42);
+    assert_eq!(status(&Mos6502Sim65, &recurses()), 6);
+    assert_eq!(run(&Mos6502Sim65, &countdown(3)).0, "tick\n".repeat(3));
+    assert_eq!(status(&Mos6502Sim65, &uses_the_heap()), 42);
+    assert_eq!(status(&Mos6502Sim65, &stores_a_byte()), 8);
+    assert_eq!(run(&Mos6502Sim65, &writes_from_the_heap()).0, "hi\n");
+    assert_eq!(status(&Mos6502Sim65, &values_survive_a_call()), 45);
 }
 
 #[test]
 fn every_target_hands_back_what_a_call_would_destroy() {
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &values_survive_a_call()), 45, "{target}");
     }
 }
 
 #[test]
 fn every_target_writes_from_the_heap() {
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(run(target, &writes_from_the_heap()).0, "hi\n", "{target}");
     }
 }
 
 #[test]
 fn the_wasm32_wasi_module_prints_hello_world() {
-    let (output, _) = run(Target::Wasm32Wasi, &faun::hello_world());
+    let (output, _) = run(&Wasm32Wasi, &faun::hello_world());
     assert_eq!(output, "Hello, World!\n");
 }
 
@@ -241,7 +248,7 @@ fn the_wasm32_wasi_module_prints_hello_world() {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_smallest_x86_64_linux_executable_is_headers_and_an_exit() {
     // 120 bytes of header, then `push 60; pop rax; xor edi, edi; syscall`.
-    let (output, _) = run(Target::X86_64Linux, &empty());
+    let (output, _) = run(&X86_64Linux, &empty());
     assert_eq!(output, "");
 }
 
@@ -249,15 +256,15 @@ fn the_smallest_x86_64_linux_executable_is_headers_and_an_exit() {
 fn the_smallest_wasm32_wasi_module_imports_nothing() {
     // Type, function, export, code. No import section at all, no memory,
     // no data.
-    let (output, _) = run(Target::Wasm32Wasi, &empty());
+    let (output, _) = run(&Wasm32Wasi, &empty());
     assert_eq!(output, "");
 
     // A program that leaves with nought says so, and compiles to the same
     // module: `proc_exit(0)` is what running off the end of `_start` does.
     let written = faun::read(EXIT_ZERO).expect("a program");
     assert_eq!(
-        faun::compile(Target::Wasm32Wasi, &written)[0].bytes,
-        faun::compile(Target::Wasm32Wasi, &empty())[0].bytes
+        Wasm32Wasi.emit(&written)[0].bytes,
+        Wasm32Wasi.emit(&empty())[0].bytes
     );
 }
 
@@ -274,51 +281,51 @@ fn the_wasm32_wasi_module_imports_proc_exit_where_it_has_to() {
          main!(h) -> leave!(h Zero)",
     )
     .expect("a program");
-    assert_eq!(status(Target::Wasm32Wasi, &leaves), 0);
+    assert_eq!(status(&Wasm32Wasi, &leaves), 0);
 
     // Inside the entry, where one arm returns and the other has to call.
-    assert_eq!(status(Target::Wasm32Wasi, &exits_from_a_branch(0)), 0);
-    assert_eq!(status(Target::Wasm32Wasi, &exits_from_a_branch(1)), 5);
+    assert_eq!(status(&Wasm32Wasi, &exits_from_a_branch(0)), 0);
+    assert_eq!(status(&Wasm32Wasi, &exits_from_a_branch(1)), 5);
 }
 
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_uses_the_heap() {
-    assert_eq!(status(Target::X86_64Linux, &uses_the_heap()), 42);
-    assert_eq!(status(Target::X86_64Linux, &stores_a_byte()), 8);
+    assert_eq!(status(&X86_64Linux, &uses_the_heap()), 42);
+    assert_eq!(status(&X86_64Linux, &stores_a_byte()), 8);
 }
 
 #[test]
 fn the_wasm32_wasi_module_uses_the_heap() {
-    assert_eq!(status(Target::Wasm32Wasi, &uses_the_heap()), 42);
-    assert_eq!(status(Target::Wasm32Wasi, &stores_a_byte()), 8);
+    assert_eq!(status(&Wasm32Wasi, &uses_the_heap()), 42);
+    assert_eq!(status(&Wasm32Wasi, &stores_a_byte()), 8);
 }
 
 /// A call and a return, on each target's own calling convention.
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_calls_a_function() {
-    assert_eq!(status(Target::X86_64Linux, &calls_a_function()), 42);
-    assert_eq!(status(Target::X86_64Linux, &recurses()), 6);
+    assert_eq!(status(&X86_64Linux, &calls_a_function()), 42);
+    assert_eq!(status(&X86_64Linux, &recurses()), 6);
 }
 
 #[test]
 fn the_wasm32_wasi_module_calls_a_function() {
-    assert_eq!(status(Target::Wasm32Wasi, &calls_a_function()), 42);
-    assert_eq!(status(Target::Wasm32Wasi, &recurses()), 6);
+    assert_eq!(status(&Wasm32Wasi, &calls_a_function()), 42);
+    assert_eq!(status(&Wasm32Wasi, &recurses()), 6);
 }
 
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_compares() {
-    assert_eq!(status(Target::X86_64Linux, &less(7, 9)), 1);
-    assert_eq!(status(Target::X86_64Linux, &less(9, 7)), 0);
+    assert_eq!(status(&X86_64Linux, &less(7, 9)), 1);
+    assert_eq!(status(&X86_64Linux, &less(9, 7)), 0);
 }
 
 #[test]
 fn the_wasm32_wasi_module_compares() {
-    assert_eq!(status(Target::Wasm32Wasi, &less(7, 9)), 1);
-    assert_eq!(status(Target::Wasm32Wasi, &less(9, 7)), 0);
+    assert_eq!(status(&Wasm32Wasi, &less(7, 9)), 1);
+    assert_eq!(status(&Wasm32Wasi, &less(9, 7)), 0);
 }
 
 /// The IR's loop has to survive into both targets, which have nothing in
@@ -326,17 +333,14 @@ fn the_wasm32_wasi_module_compares() {
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_counts_down() {
-    assert_eq!(
-        run(Target::X86_64Linux, &countdown(3)).0,
-        "tick\n".repeat(3)
-    );
-    assert_eq!(run(Target::X86_64Linux, &countdown(0)).0, "");
+    assert_eq!(run(&X86_64Linux, &countdown(3)).0, "tick\n".repeat(3));
+    assert_eq!(run(&X86_64Linux, &countdown(0)).0, "");
 }
 
 #[test]
 fn the_wasm32_wasi_module_counts_down() {
-    assert_eq!(run(Target::Wasm32Wasi, &countdown(3)).0, "tick\n".repeat(3));
-    assert_eq!(run(Target::Wasm32Wasi, &countdown(0)).0, "");
+    assert_eq!(run(&Wasm32Wasi, &countdown(3)).0, "tick\n".repeat(3));
+    assert_eq!(run(&Wasm32Wasi, &countdown(0)).0, "");
 }
 
 /// Two exits from one entry, one of them with nought. Whatever a target
@@ -829,7 +833,7 @@ fn countdown(times: u64) -> Program {
 /// The exit status a program leaves with, which is what `main` returns.
 /// WASI rejects anything outside `[0, 126)`, so a test that wants to check a
 /// larger number has to reduce it to a small one first.
-fn status(target: Target, program: &Program) -> i32 {
+fn status(target: &dyn Target, program: &Program) -> i32 {
     execute(target, program).0
 }
 
@@ -842,13 +846,13 @@ fn status(target: Target, program: &Program) -> i32 {
 /// Serialised because the two halves race: another thread forking for its own
 /// `Command` inherits this one's still-open write descriptor, and the exec
 /// that follows fails with `ETXTBSY`.
-fn run(target: Target, program: &Program) -> (String, usize) {
+fn run(target: &dyn Target, program: &Program) -> (String, usize) {
     let (code, output, size) = execute(target, program);
     assert_eq!(code, 0, "exited with {code}");
     (output, size)
 }
 
-fn execute(target: Target, program: &Program) -> (i32, String, usize) {
+fn execute(target: &dyn Target, program: &Program) -> (i32, String, usize) {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     faun::ir::validate(program).expect("a well-formed program");
@@ -869,10 +873,13 @@ fn execute(target: Target, program: &Program) -> (i32, String, usize) {
     fs::create_dir_all(&dir).unwrap();
     let path = write(target, &dir.join("program"), program);
 
-    let output = match target {
-        Target::X86_64Linux => Command::new(&path).output().unwrap(),
-        Target::Wasm32Wasi => Command::new("wasmtime").arg(&path).output().unwrap(),
-        Target::Mos6502Sim65 => Command::new("sim65").arg(&path).output().unwrap(),
+    // How a machine that is not this one is run, which is a fact about the
+    // tools here rather than about the target.
+    let output = match target.name() {
+        "x86_64-linux" => Command::new(&path).output().unwrap(),
+        "wasm32-wasi" => Command::new("wasmtime").arg(&path).output().unwrap(),
+        "mos6502-sim65" => Command::new("sim65").arg(&path).output().unwrap(),
+        held => panic!("nothing here runs {held}"),
     };
     let size = usize::try_from(fs::metadata(&path).unwrap().len()).unwrap();
     fs::remove_dir_all(&dir).unwrap();
@@ -881,8 +888,8 @@ fn execute(target: Target, program: &Program) -> (i32, String, usize) {
     (code, String::from_utf8(output.stdout).unwrap(), size)
 }
 
-fn write(target: Target, output: &Path, program: &Program) -> PathBuf {
-    let artifacts = faun::compile(target, program);
+fn write(target: &dyn Target, output: &Path, program: &Program) -> PathBuf {
+    let artifacts = target.emit(program);
     assert_eq!(artifacts.len(), 1);
 
     let mut path = output.to_path_buf().into_os_string();
@@ -911,7 +918,7 @@ fn every_target_runs_two_and_two_from_barb() {
     // `add` was recognised, so it is an instruction rather than a function:
     // what is left is the entry alone.
     assert_eq!(machine.functions().len(), 1, "only the entry survives");
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &machine), 4, "{target}");
     }
 }
@@ -928,7 +935,7 @@ fn every_target_runs_two_and_two_from_text() {
          main!(h) -> exit!(h add(Succ(Succ(Zero)) Succ(Succ(Zero))))",
     )
     .expect("a program");
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &machine), 4, "{target}");
     }
 }
@@ -937,11 +944,11 @@ fn every_target_runs_two_and_two_from_text() {
 /// cannot rot into a program that no longer reads.
 #[test]
 fn every_target_runs_every_example() {
-    for entry in fs::read_dir("examples").expect("the examples") {
+    for entry in fs::read_dir(examples()).expect("the examples") {
         let path = entry.expect("an example").path();
         let text = fs::read_to_string(&path).expect("an example to read");
         let machine = faun::read(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        for target in Target::ALL {
+        for target in ALL {
             assert_eq!(
                 status(target, &machine),
                 4,
@@ -962,7 +969,7 @@ fn every_target_exits_with_what_it_was_told() {
          main!(h) -> exit!(h Succ(Succ(Succ(Zero))))",
     )
     .expect("a program");
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &machine), 3, "{target}");
     }
 }
@@ -979,7 +986,7 @@ fn every_target_exits_through_a_name_that_leaves() {
          main!(h) -> die!(h Succ(Succ(Zero)))",
     )
     .expect("a program");
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &machine), 2, "{target}");
     }
 }
@@ -997,7 +1004,7 @@ fn every_target_runs_a_match_with_an_arm_that_leaves() {
          main!(h) -> exit!(h Succ(pick!(h Succ(Succ(Zero)))))",
     )
     .expect("a program");
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &machine), 2, "{target}");
     }
 
@@ -1011,7 +1018,7 @@ fn every_target_runs_a_match_with_an_arm_that_leaves() {
          main!(h) -> exit!(h Succ(pick!(h Zero)))",
     )
     .expect("a program");
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &machine), 1, "{target}");
     }
 }
@@ -1070,7 +1077,7 @@ fn every_target_reads_a_tag() {
 
     for (which, answer) in [("Zero", 0), ("Succ(Zero)", 2)] {
         let machine = faun::read(&ordering.replace("WHICH", which)).expect("a program");
-        for target in Target::ALL {
+        for target in ALL {
             assert_eq!(status(target, &machine), answer, "{which} on {target}");
         }
     }
@@ -1090,7 +1097,7 @@ fn every_target_tells_a_tag_from_a_count() {
          main!(h) -> exit!(h count(True))",
     )
     .expect("a program");
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &machine), 1, "{target}");
     }
 }
@@ -1149,7 +1156,7 @@ fn every_target_matches_on_more_than_one_argument() {
         ("rank(cmp(three(Zero) Succ(Zero)))", 2),
     ] {
         let machine = faun::read(&arithmetic.replace("ANSWER", answer)).expect("a program");
-        for target in Target::ALL {
+        for target in ALL {
             assert_eq!(status(target, &machine), want, "{answer} on {target}");
         }
     }
@@ -1173,13 +1180,13 @@ fn what_nothing_reaches_is_not_emitted() {
          quadruple_again(n) -> quadruple(quadruple(n))"
     );
 
-    for target in Target::ALL {
+    for target in ALL {
         let machine = faun::read(reached).expect("a program");
         let spare = faun::read(&spare).expect("a program");
         assert_eq!(status(target, &machine), 4, "{target}");
         assert_eq!(
-            faun::compile(target, &spare)[0].bytes,
-            faun::compile(target, &machine)[0].bytes,
+            target.emit(&spare)[0].bytes,
+            target.emit(&machine)[0].bytes,
             "{target}"
         );
     }
@@ -1199,12 +1206,12 @@ fn a_chain_of_constructors_is_the_number_it_builds() {
         faun::read(&text).expect("a program")
     };
 
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &chain(4)), 4, "{target}");
         assert_eq!(status(target, &chain(40)), 40, "{target}");
         assert_eq!(
-            faun::compile(target, &chain(40))[0].bytes.len(),
-            faun::compile(target, &chain(4))[0].bytes.len(),
+            target.emit(&chain(40))[0].bytes.len(),
+            target.emit(&chain(4))[0].bytes.len(),
             "{target}"
         );
     }
@@ -1236,22 +1243,19 @@ fn what_is_known_is_worked_out_before_a_target_sees_it() {
     )
     .expect("a program");
 
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &known), 4, "{target}");
         assert_eq!(status(target, &handed), 4, "{target}");
 
         // Nothing is left of the multiplication, nor of anything it called.
         assert_eq!(
-            faun::compile(target, &known)[0].bytes,
-            faun::compile(target, &four)[0].bytes,
+            target.emit(&known)[0].bytes,
+            target.emit(&four)[0].bytes,
             "{target}"
         );
         // And everything is left of it where the value was handed over.
-        let handed = faun::compile(target, &handed)[0].bytes.len();
-        assert!(
-            handed > faun::compile(target, &four)[0].bytes.len(),
-            "{target}"
-        );
+        let handed = target.emit(&handed)[0].bytes.len();
+        assert!(handed > target.emit(&four)[0].bytes.len(), "{target}");
     }
 }
 
@@ -1292,7 +1296,7 @@ fn a_definition_that_does_not_stop_is_refused() {
            exit!(h twice(two))",
     )
     .expect("a program");
-    for target in Target::ALL {
+    for target in ALL {
         assert_eq!(status(target, &machine), 4, "{target}");
     }
 }
@@ -1314,14 +1318,14 @@ fn a_target_says_what_it_cannot_hold() {
 
     // Seventy thousand needs seventeen bits, which the 6502 does not have.
     let program = big(70_000);
-    assert!(Target::X86_64Linux.accepts(&program).is_ok());
-    assert!(Target::Wasm32Wasi.accepts(&program).is_ok());
-    let refused = Target::Mos6502Sim65.accepts(&program).unwrap_err();
+    assert!(&X86_64Linux.accepts(&program).is_ok());
+    assert!(&Wasm32Wasi.accepts(&program).is_ok());
+    let refused = &Mos6502Sim65.accepts(&program).unwrap_err();
     assert!(refused.contains("holds 16 bits, and 70000"), "{refused}");
 
     // And what every target holds, every target holds.
     let program = big(4);
-    for target in Target::ALL {
+    for target in ALL {
         assert!(target.accepts(&program).is_ok(), "{target}");
     }
 
@@ -1333,9 +1337,9 @@ fn a_target_says_what_it_cannot_hold() {
         let held = b.constant(Class::Fixed { bits: 32 }, 1);
         b.ret(&[held])
     });
-    assert!(Target::X86_64Linux.accepts(&program).is_ok());
-    assert!(Target::Wasm32Wasi.accepts(&program).is_ok());
-    let refused = Target::Mos6502Sim65.accepts(&program).unwrap_err();
+    assert!(&X86_64Linux.accepts(&program).is_ok());
+    assert!(&Wasm32Wasi.accepts(&program).is_ok());
+    let refused = &Mos6502Sim65.accepts(&program).unwrap_err();
     assert!(
         refused.contains("holds 16 bits, and a value here needs 32"),
         "{refused}"

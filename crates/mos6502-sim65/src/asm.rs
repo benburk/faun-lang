@@ -7,11 +7,11 @@
 //! caller assembles again.
 
 #[derive(Clone, Copy)]
-pub(super) struct Label(usize);
+pub(crate) struct Label(usize);
 
 /// A condition, as the branch that takes it.
 #[derive(Clone, Copy)]
-pub(super) enum Cc {
+pub(crate) enum Cc {
     Equal,
     NotEqual,
     NoCarry,
@@ -41,7 +41,7 @@ impl Cc {
 }
 
 #[derive(Default)]
-pub(super) struct Assembler {
+pub(crate) struct Assembler {
     bytes: Vec<u8>,
     /// Where each label landed, once it has been bound.
     labels: Vec<Option<u16>>,
@@ -59,7 +59,7 @@ pub(super) struct Assembler {
 }
 
 impl Assembler {
-    pub(super) fn new(origin: u16, far: Vec<bool>) -> Self {
+    pub(crate) fn new(origin: u16, far: Vec<bool>) -> Self {
         Self {
             far,
             origin,
@@ -67,22 +67,22 @@ impl Assembler {
         }
     }
 
-    pub(super) fn label(&mut self) -> Label {
+    pub(crate) fn label(&mut self) -> Label {
         self.labels.push(None);
         Label(self.labels.len() - 1)
     }
 
-    pub(super) fn bind(&mut self, label: Label) {
+    pub(crate) fn bind(&mut self, label: Label) {
         self.labels[label.0] = Some(self.here());
     }
 
-    pub(super) fn here(&self) -> u16 {
+    pub(crate) fn here(&self) -> u16 {
         self.origin + u16::try_from(self.bytes.len()).expect("an image within 64 KiB")
     }
 
     /// Fill every hole with the address its label ended up at, and report
     /// the branches whose target turned out to be out of reach.
-    pub(super) fn finish(mut self) -> (Vec<u8>, Vec<usize>) {
+    pub(crate) fn finish(mut self) -> (Vec<u8>, Vec<usize>) {
         for (at, label) in std::mem::take(&mut self.holes) {
             let target = self.labels[label.0].expect("every label is bound");
             self.bytes[at..at + 2].copy_from_slice(&target.to_le_bytes());
@@ -110,134 +110,134 @@ impl Assembler {
 
     // Loads and stores. A pair is two zero-page bytes, low first.
 
-    pub(super) fn lda_imm(&mut self, value: u8) {
+    pub(crate) fn lda_imm(&mut self, value: u8) {
         self.emit(&[0xA9, value]);
     }
 
     /// Half of a label's address, as an immediate.
-    pub(super) fn lda_imm_half(&mut self, label: Label, high: bool) {
+    pub(crate) fn lda_imm_half(&mut self, label: Label, high: bool) {
         self.emit(&[0xA9]);
         self.halves.push((self.bytes.len(), label, high));
         self.emit(&[0]);
     }
 
     /// A literal word, for data the target lays down itself.
-    pub(super) fn word(&mut self, value: u16) {
+    pub(crate) fn word(&mut self, value: u16) {
         self.emit(&value.to_le_bytes());
     }
 
-    pub(super) fn lda_zp(&mut self, at: u8) {
+    pub(crate) fn lda_zp(&mut self, at: u8) {
         self.emit(&[0xA5, at]);
     }
 
-    pub(super) fn sta_zp(&mut self, at: u8) {
+    pub(crate) fn sta_zp(&mut self, at: u8) {
         self.emit(&[0x85, at]);
     }
 
     /// `a = [pair + y]`, and its mirror: the only way to reach a computed
     /// address, since the machine has no sixteen-bit register.
-    pub(super) fn lda_ind_y(&mut self, pair: u8) {
+    pub(crate) fn lda_ind_y(&mut self, pair: u8) {
         self.emit(&[0xB1, pair]);
     }
 
-    pub(super) fn sta_ind_y(&mut self, pair: u8) {
+    pub(crate) fn sta_ind_y(&mut self, pair: u8) {
         self.emit(&[0x91, pair]);
     }
 
-    pub(super) fn ldx_imm(&mut self, value: u8) {
+    pub(crate) fn ldx_imm(&mut self, value: u8) {
         self.emit(&[0xA2, value]);
     }
 
-    pub(super) fn ldx_zp(&mut self, at: u8) {
+    pub(crate) fn ldx_zp(&mut self, at: u8) {
         self.emit(&[0xA6, at]);
     }
 
-    pub(super) fn ldy_imm(&mut self, value: u8) {
+    pub(crate) fn ldy_imm(&mut self, value: u8) {
         self.emit(&[0xA0, value]);
     }
 
-    pub(super) fn iny(&mut self) {
+    pub(crate) fn iny(&mut self) {
         self.emit(&[0xC8]);
     }
 
-    pub(super) fn txs(&mut self) {
+    pub(crate) fn txs(&mut self) {
         self.emit(&[0x9A]);
     }
 
     // Arithmetic and comparison, all through the accumulator.
 
-    pub(super) fn clc(&mut self) {
+    pub(crate) fn clc(&mut self) {
         self.emit(&[0x18]);
     }
 
-    pub(super) fn sec(&mut self) {
+    pub(crate) fn sec(&mut self) {
         self.emit(&[0x38]);
     }
 
-    pub(super) fn adc_zp(&mut self, at: u8) {
+    pub(crate) fn adc_zp(&mut self, at: u8) {
         self.emit(&[0x65, at]);
     }
 
-    pub(super) fn adc_imm(&mut self, value: u8) {
+    pub(crate) fn adc_imm(&mut self, value: u8) {
         self.emit(&[0x69, value]);
     }
 
-    pub(super) fn sbc_zp(&mut self, at: u8) {
+    pub(crate) fn sbc_zp(&mut self, at: u8) {
         self.emit(&[0xE5, at]);
     }
 
-    pub(super) fn sbc_imm(&mut self, value: u8) {
+    pub(crate) fn sbc_imm(&mut self, value: u8) {
         self.emit(&[0xE9, value]);
     }
 
-    pub(super) fn cmp_imm(&mut self, value: u8) {
+    pub(crate) fn cmp_imm(&mut self, value: u8) {
         self.emit(&[0xC9, value]);
     }
 
-    pub(super) fn inc_zp(&mut self, at: u8) {
+    pub(crate) fn inc_zp(&mut self, at: u8) {
         self.emit(&[0xE6, at]);
     }
 
-    pub(super) fn dec_zp(&mut self, at: u8) {
+    pub(crate) fn dec_zp(&mut self, at: u8) {
         self.emit(&[0xC6, at]);
     }
 
-    pub(super) fn cmp_zp(&mut self, at: u8) {
+    pub(crate) fn cmp_zp(&mut self, at: u8) {
         self.emit(&[0xC5, at]);
     }
 
-    pub(super) fn ora_zp(&mut self, at: u8) {
+    pub(crate) fn ora_zp(&mut self, at: u8) {
         self.emit(&[0x05, at]);
     }
 
     // Control flow.
 
-    pub(super) fn jsr(&mut self, label: Label) {
+    pub(crate) fn jsr(&mut self, label: Label) {
         self.emit(&[0x20]);
         self.hole(label);
     }
 
-    pub(super) fn jmp(&mut self, label: Label) {
+    pub(crate) fn jmp(&mut self, label: Label) {
         self.emit(&[0x4C]);
         self.hole(label);
     }
 
     /// A call to a fixed address, such as one of the simulator's hooks.
-    pub(super) fn jsr_abs(&mut self, at: u16, _back: Label) {
+    pub(crate) fn jsr_abs(&mut self, at: u16, _back: Label) {
         self.emit(&[0x20]);
         self.emit(&at.to_le_bytes());
     }
 
-    pub(super) fn jmp_abs(&mut self, at: u16) {
+    pub(crate) fn jmp_abs(&mut self, at: u16) {
         self.emit(&[0x4C]);
         self.emit(&at.to_le_bytes());
     }
 
-    pub(super) fn rts(&mut self) {
+    pub(crate) fn rts(&mut self) {
         self.emit(&[0x60]);
     }
 
-    pub(super) fn branch(&mut self, cc: Cc, label: Label) {
+    pub(crate) fn branch(&mut self, cc: Cc, label: Label) {
         let branch = self.branches;
         self.branches += 1;
 

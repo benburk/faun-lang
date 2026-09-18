@@ -12,6 +12,7 @@ use std::process::Command;
 use faun::ir::Class::Word;
 use faun::ir::{Binary, Program, Relation};
 use faun::targets::Target;
+use faun_mos6502_sim65::Mos6502Sim65;
 
 /// `for (i = 0; i < limit; i++) acc += i;`, answering `acc`'s low byte.
 fn summing_loop(limit: u64) -> Program {
@@ -54,7 +55,7 @@ fn run(program: &Program) -> (u64, i32) {
     ));
     fs::create_dir_all(&dir).expect("a scratch directory");
     let path = dir.join("image");
-    let artifacts = faun::compile(Target::Mos6502Sim65, program);
+    let artifacts = Mos6502Sim65.emit(program);
     fs::write(&path, &artifacts[0].bytes).expect("the image");
 
     let output = Command::new("sim65")

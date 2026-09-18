@@ -13,8 +13,11 @@
         "aarch64-darwin"
       ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
-      # Cargo.toml is the one place the package is named and versioned.
-      cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      # The command is one crate of several, and its manifest is the one
+      # place it is named. The version is the workspace's, being every
+      # crate's.
+      cargoToml = builtins.fromTOML (builtins.readFile ./crates/cli/Cargo.toml);
+      workspace = builtins.fromTOML (builtins.readFile ./Cargo.toml);
     in
     {
       packages = forAllSystems (
@@ -25,11 +28,11 @@
         {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = cargoToml.package.name;
-            version = cargoToml.package.version;
+            version = workspace.workspace.package.version;
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
             meta = {
-              mainProgram = cargoToml.package.name;
+              mainProgram = "faun";
             };
           };
         }

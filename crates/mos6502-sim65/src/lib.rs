@@ -14,8 +14,8 @@ mod asm;
 mod image;
 mod lower;
 
-use crate::ir::Program;
-use crate::targets::Artifact;
+use faun::ir::Program;
+use faun::targets::{Artifact, Target};
 
 /// Where sim65 loads the image, and the zero-page pairs below it.
 const LOAD: u16 = 0x0200;
@@ -50,13 +50,26 @@ const HOME_COUNT: u8 = 16;
 const HOOK_WRITE: u16 = 0xFFF7;
 const HOOK_EXIT: u16 = 0xFFF9;
 
-#[must_use]
-pub fn emit(program: &Program) -> Vec<Artifact> {
-    vec![Artifact {
-        extension: ".bin",
-        bytes: image::image(&lower::lower(program), program),
-        executable: false,
-    }]
+/// This target, for whoever is choosing between them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mos6502Sim65;
+
+impl Target for Mos6502Sim65 {
+    fn name(&self) -> &'static str {
+        "mos6502-sim65"
+    }
+
+    fn word(&self) -> u16 {
+        16
+    }
+
+    fn emit(&self, program: &Program) -> Vec<Artifact> {
+        vec![Artifact {
+            extension: ".bin",
+            bytes: image::image(&lower::lower(program), program),
+            executable: false,
+        }]
+    }
 }
 
 struct Code {

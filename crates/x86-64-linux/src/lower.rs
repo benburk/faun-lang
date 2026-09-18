@@ -8,7 +8,7 @@
 
 use super::encode::{Encoder, Reg};
 use super::{Code, Reloc};
-use crate::ir::{
+use faun::ir::{
     Binary, Class, DataId, Exit, Function, FunctionId, Offset, Op, PlatformId, Program, RegionId,
     Relation, Terminator, ValueId, Width,
 };
@@ -78,7 +78,7 @@ const ROUNDS: usize = 32;
 ///
 /// If the layout does not settle, which is this target disagreeing with
 /// itself rather than anything a program did.
-pub(super) fn lower(program: &Program) -> Code {
+pub(crate) fn lower(program: &Program) -> Code {
     let mut distant: Vec<bool> = Vec::new();
     let mut framed = vec![true; program.functions().len()];
     for _ in 0..ROUNDS {
@@ -811,9 +811,9 @@ impl Lowering<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::Class;
+    use faun::ir::Class;
 
-    fn entry(build: impl FnOnce(&mut crate::ir::Builder) -> Terminator) -> Program {
+    fn entry(build: impl FnOnce(&mut faun::ir::Builder) -> Terminator) -> Program {
         let (mut program, main) = Program::new("main");
         program.define(main, |b, _| build(b));
         program
@@ -821,7 +821,7 @@ mod tests {
 
     #[test]
     fn hello_world_uses_the_short_encodings() {
-        let code = lower(&crate::hello_world());
+        let code = lower(&faun::hello_world());
         #[rustfmt::skip]
         let expected: &[u8] = &[
             0x6A, 0x01,                   // push 1
@@ -847,7 +847,7 @@ mod tests {
     /// hello world at the size it is.
     #[test]
     fn constants_never_reach_the_stack() {
-        let program = crate::hello_world();
+        let program = faun::hello_world();
         let main = &program.functions()[program.entry().index()];
         assert_eq!(Plan::new(&program, main).frame, 0);
     }

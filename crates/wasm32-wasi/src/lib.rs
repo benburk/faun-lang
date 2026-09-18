@@ -4,8 +4,8 @@
 mod lower;
 mod module;
 
-use crate::ir::Program;
-use crate::targets::Artifact;
+use faun::ir::Program;
+use faun::targets::{Artifact, Target};
 
 const I32: u8 = 0x7F;
 const FUNC_TYPE: u8 = 0x60;
@@ -14,13 +14,26 @@ const CALL: u8 = 0x10;
 const DROP: u8 = 0x1A;
 const END: u8 = 0x0B;
 
-#[must_use]
-pub fn emit(program: &Program) -> Vec<Artifact> {
-    vec![Artifact {
-        extension: ".wasm",
-        bytes: module::module(&lower::lower(program)),
-        executable: false,
-    }]
+/// This target, for whoever is choosing between them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Wasm32Wasi;
+
+impl Target for Wasm32Wasi {
+    fn name(&self) -> &'static str {
+        "wasm32-wasi"
+    }
+
+    fn word(&self) -> u16 {
+        32
+    }
+
+    fn emit(&self, program: &Program) -> Vec<Artifact> {
+        vec![Artifact {
+            extension: ".wasm",
+            bytes: module::module(&lower::lower(program)),
+            executable: false,
+        }]
+    }
 }
 
 struct Code {

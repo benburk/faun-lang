@@ -1,0 +1,8 @@
+[package]
+name = "faun"
+version.workspace = true
+edition.workspace = true
+description = "The Faun compiler, up to the tier a target reads"
+
+[lints]
+workspace = true

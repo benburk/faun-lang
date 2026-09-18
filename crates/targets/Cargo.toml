@@ -1,0 +1,14 @@
+[package]
+name = "faun-targets"
+version.workspace = true
+edition.workspace = true
+description = "Every target Faun is built with, and how to choose between them"
+
+[dependencies]
+faun.workspace = true
+faun-mos6502-sim65.workspace = true
+faun-wasm32-wasi.workspace = true
+faun-x86-64-linux.workspace = true
+
+[lints]
+workspace = true

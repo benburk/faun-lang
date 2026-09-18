@@ -11,6 +11,43 @@ checksum = "597e81e56404b7a3e26ef7b449f82a4b7a661ae76c3cac692b42d6bad06a0fbe"
 [[package]]
 name = "faun"
 version = "0.1.0"
+
+[[package]]
+name = "faun-cli"
+version = "0.1.0"
 dependencies = [
  "bpaf",
+ "faun",
+ "faun-targets",
+]
+
+[[package]]
+name = "faun-mos6502-sim65"
+version = "0.1.0"
+dependencies = [
+ "faun",
+]
+
+[[package]]
+name = "faun-targets"
+version = "0.1.0"
+dependencies = [
+ "faun",
+ "faun-mos6502-sim65",
+ "faun-wasm32-wasi",
+ "faun-x86-64-linux",
+]
+
+[[package]]
+name = "faun-wasm32-wasi"
+version = "0.1.0"
+dependencies = [
+ "faun",
+]
+
+[[package]]
+name = "faun-x86-64-linux"
+version = "0.1.0"
+dependencies = [
+ "faun",
 ]

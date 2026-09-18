@@ -9,11 +9,11 @@
 //!   imports nothing, which is most of a small module.
 
 use super::{Body, CALL, Code, DROP, END, I32_CONST, Segment};
-use crate::ir::{
+use faun::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op, Origin, Program, Range, RegionId,
     Relation, Terminator, ValueId, Width,
 };
-use crate::targets::bytes::{Bytes, len32};
+use faun::targets::bytes::{Bytes, len32};
 
 const STDOUT: i32 = 1;
 
@@ -67,7 +67,7 @@ enum Source {
     Local(u32),
 }
 
-pub(super) fn lower(program: &Program) -> Code {
+pub(crate) fn lower(program: &Program) -> Code {
     let (plan, frames) = Plan::new(program);
 
     let data_start = IOVECS + IOVEC_LEN * len32(plan.writes);
@@ -552,7 +552,7 @@ impl Lowering<'_> {
 
     fn platform_call(
         &mut self,
-        platform: crate::ir::PlatformId,
+        platform: faun::ir::PlatformId,
         args: &[ValueId],
         results: &[ValueId],
         ending: bool,
@@ -712,9 +712,9 @@ impl Lowering<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::Class;
+    use faun::ir::Class;
 
-    fn entry(build: impl FnOnce(&mut crate::ir::Builder) -> Terminator) -> Program {
+    fn entry(build: impl FnOnce(&mut faun::ir::Builder) -> Terminator) -> Program {
         let (mut program, main) = Program::new("main");
         program.define(main, |b, _| build(b));
         program
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn hello_world_needs_no_exit_call() {
-        let code = lower(&crate::hello_world());
+        let code = lower(&faun::hello_world());
         assert_eq!(code.imports, ["fd_write"], "no proc_exit");
         assert_eq!(code.bodies[0].locals, 0, "constants need no locals");
 
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn the_vector_points_at_the_message() {
-        let code = lower(&crate::hello_world());
+        let code = lower(&faun::hello_world());
         assert_eq!(code.data[0].offset, IOVECS);
         // Base 16 is the first byte past the vector itself, length 14.
         assert_eq!(code.data[0].bytes, [16, 0, 0, 0, 14, 0, 0, 0]);

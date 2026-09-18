@@ -1,0 +1,11 @@
+[package]
+name = "faun-wasm32-wasi"
+version.workspace = true
+edition.workspace = true
+description = "The wasm32-wasi target for Faun"
+
+[dependencies]
+faun.workspace = true
+
+[lints]
+workspace = true

@@ -1,37 +1,46 @@
+//! Writing bytes out, which every target does and none does differently.
+
 /// Both formats hold every length and index in 32 bits.
-pub(super) fn len32(len: usize) -> u32 {
+///
+/// # Panics
+///
+/// If the output outgrew what a format can say the length of.
+#[must_use]
+pub fn len32(len: usize) -> u32 {
     u32::try_from(len).expect("the output fits in 32 bits")
 }
 
 #[derive(Debug, Default)]
-pub(super) struct Bytes(Vec<u8>);
+pub struct Bytes(Vec<u8>);
 
 impl Bytes {
-    pub(super) fn finish(self) -> Vec<u8> {
+    /// What was written.
+    #[must_use]
+    pub fn finish(self) -> Vec<u8> {
         self.0
     }
 
-    pub(super) fn byte(&mut self, value: u8) {
+    pub fn byte(&mut self, value: u8) {
         self.0.push(value);
     }
 
-    pub(super) fn bytes(&mut self, value: &[u8]) {
+    pub fn bytes(&mut self, value: &[u8]) {
         self.0.extend_from_slice(value);
     }
 
-    pub(super) fn le16(&mut self, value: u16) {
+    pub fn le16(&mut self, value: u16) {
         self.bytes(&value.to_le_bytes());
     }
 
-    pub(super) fn le32(&mut self, value: u32) {
+    pub fn le32(&mut self, value: u32) {
         self.bytes(&value.to_le_bytes());
     }
 
-    pub(super) fn le64(&mut self, value: u64) {
+    pub fn le64(&mut self, value: u64) {
         self.bytes(&value.to_le_bytes());
     }
 
-    pub(super) fn uleb(&mut self, mut value: u32) {
+    pub fn uleb(&mut self, mut value: u32) {
         while value >= 0x80 {
             self.byte(value.to_le_bytes()[0] & 0x7F | 0x80);
             value >>= 7;
@@ -41,7 +50,7 @@ impl Bytes {
 
     /// A byte is the last only once the bits left over agree with the sign
     /// bit it just wrote.
-    pub(super) fn sleb(&mut self, mut value: i32) {
+    pub fn sleb(&mut self, mut value: i32) {
         loop {
             let byte = value.to_le_bytes()[0] & 0x7F;
             value >>= 7;
@@ -53,13 +62,13 @@ impl Bytes {
         }
     }
 
-    pub(super) fn name(&mut self, text: &str) {
+    pub fn name(&mut self, text: &str) {
         self.uleb(len32(text.len()));
         self.bytes(text.as_bytes());
     }
 
     /// Whatever `build` writes, prefixed by its length.
-    pub(super) fn sized(&mut self, build: impl FnOnce(&mut Self)) {
+    pub fn sized(&mut self, build: impl FnOnce(&mut Self)) {
         let mut body = Self::default();
         build(&mut body);
         self.uleb(len32(body.0.len()));
@@ -67,7 +76,7 @@ impl Bytes {
     }
 
     /// A wasm section. One that would come out empty is left out entirely.
-    pub(super) fn section(&mut self, id: u8, build: impl FnOnce(&mut Self)) {
+    pub fn section(&mut self, id: u8, build: impl FnOnce(&mut Self)) {
         let mut body = Self::default();
         build(&mut body);
         if !body.0.is_empty() {

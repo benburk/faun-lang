@@ -1,3 +1,11 @@
+//! The compiler, down to the tier a target reads.
+//!
+//! Three tiers and the interface below them. [`surface`] is the language,
+//! [`barb`] the core it lowers to, [`ir`] the tier that decides how a value
+//! is held, and [`platform`] what a target answers for. A target is not
+//! here: it is a crate implementing [`targets::Target`], so what this
+//! compiles for is a fact about a build rather than about the compiler.
+
 pub mod barb;
 mod index;
 pub mod ir;
@@ -6,7 +14,6 @@ pub mod surface;
 pub mod targets;
 
 use ir::Class;
-use targets::{Artifact, Target};
 
 const MESSAGE: &[u8] = b"Hello, World!\n";
 
@@ -74,9 +81,4 @@ pub fn read(text: &str) -> Result<ir::Program, String> {
     let program = program;
     let facts = barb::recognise(&program);
     ir::lower(&program, &facts)
-}
-
-#[must_use]
-pub fn compile(target: Target, program: &ir::Program) -> Vec<Artifact> {
-    target.emit(program)
 }

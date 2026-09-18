@@ -1,9 +1,9 @@
 //! The sim65 container: a twelve-byte header, then the data and the code.
 
 use super::{CSP, Code, LOAD};
-use crate::ir::Program;
+use faun::ir::Program;
 
-pub(super) fn image(code: &Code, program: &Program) -> Vec<u8> {
+pub(crate) fn image(code: &Code, program: &Program) -> Vec<u8> {
     let mut out = Vec::with_capacity(12 + program.data().len() + code.bytes.len());
 
     out.extend_from_slice(b"sim65");
