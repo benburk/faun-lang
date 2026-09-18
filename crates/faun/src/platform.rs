@@ -42,17 +42,13 @@ pub struct Routine {
     /// Whether control comes back. Nothing after a call to one that does
     /// not is ever reached, and nothing is laid out for it.
     pub comes_back: bool,
-    /// Whether a program hands it the authority it holds, which is the
-    /// language's way of saying a program may observe this one working.
-    /// Nothing below the language reads it.
-    pub authority: bool,
-    /// Which argument it hands straight back, counted past the authority.
-    /// Nothing can be read off a declaration, so what is known of one is
-    /// what this says.
-    pub hands_back: Option<usize>,
 }
 
 /// The routines a program is read against.
+///
+/// Every one of them is observable. A name with no body is something outside
+/// answers for, and what it does while answering cannot be seen from here,
+/// so a program calling one is a program that may be watched working.
 ///
 /// A program naming anything outside the set it was read with is not a
 /// program any target can be handed, and one naming something in it that
@@ -71,24 +67,12 @@ impl Routines {
             takes: takes.to_vec(),
             answers: answers.to_vec(),
             comes_back: true,
-            authority: true,
-            hands_back: None,
         };
         Self(vec![
             held("write", None, &[Class::Address, Class::Word], &[]),
             Routine {
                 comes_back: false,
                 ..held("exit", Some("exit!"), &[Class::Word], &[])
-            },
-            // What a target hands straight back. Nothing happens, and that
-            // is the point: a value that went through it is a value no tier
-            // worked out, so a program can hold one the compiler will not
-            // fold away. It is handed no authority, since nothing about it
-            // is observable -- what it is for is being a name with no body.
-            Routine {
-                authority: false,
-                hands_back: Some(0),
-                ..held("opaque", Some("opaque"), &[Class::Word], &[Class::Word])
             },
             // The kernel picks the address, so nothing asking for a page
             // says where.

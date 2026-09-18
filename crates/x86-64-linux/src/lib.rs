@@ -23,7 +23,7 @@ impl Target for X86_64Linux {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write", "exit", "opaque", "grow"]
+        &["write", "exit", "grow"]
     }
 
     fn emit(&self, program: &Program) -> Vec<Artifact> {

@@ -48,9 +48,9 @@ min(a b) -> select(less(a b) a b)
 max(a b) -> select(less(a b) b a)
 
 main!(h) ->
-  # Worked out here rather than handed over, and the arithmetic below would
-  # all be worked out with it: `opaque!` is where that stops.
-  two = opaque(Succ(Succ(Zero)))
+  # Every number below is known, so all of this is worked out before the
+  # program runs and what a target is handed is the answer.
+  two = Succ(Succ(Zero))
   four = mul(two two)
   eight = mul(two four)
   exit!(h min(four sub(eight two)))

@@ -419,52 +419,7 @@ fn a_name_a_clause_binds_is_not_the_name_it_shadows() {
     .expect("a program");
 }
 
-/// What the compiler may not see through. `opaque` answers what it was
-/// given, so its type is the type it was given -- and it is not an effect:
-/// what stops the tier above is that it has no body, which is a different
-/// thing from doing observable work.
-#[test]
-fn a_value_handed_over_is_one_nothing_worked_out() {
-    let program = parse(
-        "type Nat Zero Succ(Nat)
-
-         add(a Zero) -> a
-         add(a Succ(k)) -> Succ(add(a k))
-
-         main!(h) ->
-           two = opaque(Succ(Succ(Zero)))
-           exit!(h add(two two))",
-    )
-    .expect("a program");
-    assert!(
-        program.render().contains("opaque(v0: Nat) -> Nat"),
-        "{}",
-        program.render()
-    );
-
-    // A pure name may call it, since nothing about it is observable: it is
-    // handed nothing and answers what it was given.
-    let program = parse(
-        "type Nat Zero Succ(Nat)
-
-         add(a Zero) -> a
-         add(a Succ(k)) -> Succ(add(a k))
-
-         double(n) -> add(opaque(n) n)
-
-         main!(h) -> exit!(h double(Succ(Succ(Zero))))",
-    )
-    .expect("a program");
-    assert!(
-        program.render().contains("double(v0: Nat) -> Nat"),
-        "{}",
-        program.render()
-    );
-}
-
-/// What a number can be, worked out from what a program does with it. A
-/// value handed over is unknown and its bounds are not: `opaque!` answers
-/// what it was given, so what it answers is between what that was.
+/// What a number can be, worked out from what a program does with it.
 #[test]
 fn what_a_number_can_be_is_read_off_what_is_done_with_it() {
     // What a definition answers, which is what its callers hold.
@@ -486,7 +441,7 @@ fn what_a_number_can_be_is_read_off_what_is_done_with_it() {
          add(a Succ(k)) -> Succ(add(a k))
          double(n) -> add(n n)
          main!(h) ->
-           two = opaque(Succ(Succ(Zero)))
+           two = Succ(Succ(Zero))
            exit!(h double(two))",
         "double",
     );
@@ -506,7 +461,7 @@ fn what_a_number_can_be_is_read_off_what_is_done_with_it() {
          up(Zero) -> Succ(Zero)
          up(Succ(k)) -> Succ(Succ(up(k)))
          main!(h) ->
-           n = opaque(Succ(Zero))
+           n = Succ(Zero)
            exit!(h up(n))",
         "up",
     );
@@ -530,7 +485,7 @@ fn a_match_says_what_it_took_apart_could_be() {
          which(Zero) -> Zero
          which(Succ(k)) -> k
          main!(h) ->
-           n = opaque(Succ(Succ(Zero)))
+           n = Succ(Succ(Zero))
            exit!(h which(n))",
     );
     let which = program
@@ -681,8 +636,6 @@ fn a_routine_written_down_is_one_a_program_may_name() {
         takes: Vec::new(),
         answers: Vec::new(),
         comes_back: true,
-        authority: true,
-        hands_back: None,
     });
 
     let program = super::parse(held, &routines).expect("a program naming it");

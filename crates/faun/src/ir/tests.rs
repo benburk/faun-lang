@@ -149,8 +149,7 @@ fn two_names_may_give_the_same_routine() {
 
     let holds = |program: &mut crate::barb::Program, name, type_| {
         let id = program.declare(name, &[type_], type_);
-        program.answered_by(id, "opaque");
-        program.hands_back(id, 0);
+        program.answered_by(id, "hold");
         id
     };
     let held_nat = holds(&mut program, "held_nat", nat);
@@ -167,10 +166,18 @@ fn two_names_may_give_the_same_routine() {
     });
     program.set_entry(main);
 
+    let mut routines = crate::platform::Routines::builtin();
+    routines.push(crate::platform::Routine {
+        name: "hold".to_owned(),
+        called: None,
+        takes: vec![Class::Word],
+        answers: vec![Class::Word],
+        comes_back: true,
+    });
+
     let facts = crate::barb::recognise(&program);
-    let machine = lower(&program, &facts, &crate::platform::Routines::builtin())
-        .expect("a representable program");
-    let routines: Vec<&str> = machine
+    let machine = lower(&program, &facts, &routines).expect("a representable program");
+    let held: Vec<&str> = machine
         .platforms()
         .iter()
         .map(|held| machine.name(held.name))
@@ -178,7 +185,7 @@ fn two_names_may_give_the_same_routine() {
     // One per declaration, since each is handed a value of its own type and
     // what a target reads is stated per call. Both say the same routine,
     // which is the whole of what the name was doing before.
-    assert_eq!(routines, ["opaque", "opaque"], "both answered elsewhere");
+    assert_eq!(held, ["hold", "hold"], "both answered elsewhere");
 }
 
 /// A value too wide for what a routine reads is refused, not narrowed.
@@ -197,8 +204,6 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         takes: vec![Class::Fixed { bits: 4 }],
         answers: Vec::new(),
         comes_back: true,
-        authority: true,
-        hands_back: None,
     });
 
     let held = |value: u64| {

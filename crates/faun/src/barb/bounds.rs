@@ -264,14 +264,9 @@ fn once(
     let params: Option<Vec<Bounds>> = held.params[at].iter().copied().collect();
     let Some(params) = params else { return false };
     let Some(body) = program.function(id).body else {
-        // Something outside answers, and what it answers is either what it
-        // was handed or anything at all.
-        let answer = program
-            .function(id)
-            .answers
-            .and_then(|held| params.get(held).copied())
-            .unwrap_or(Bounds::ANY);
-        return settle(&mut held.results[at], answer, round);
+        // Something outside answers, and nothing about a declaration can be
+        // read, so what comes back from one is anything at all.
+        return settle(&mut held.results[at], Bounds::ANY, round);
     };
 
     let results = held.results.clone();

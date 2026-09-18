@@ -1137,12 +1137,6 @@ impl Lowering<'_> {
     fn platform_call(&mut self, name: &str, args: &[ValueId], results: &[ValueId]) {
         match name {
             "write" => self.write(args),
-            // Handed straight back, through the scratch pair it is read
-            // into: nothing is asked of the outside.
-            "opaque" => {
-                self.read(T0, args[0]);
-                self.commit(results[0], T0);
-            }
             "exit" => {
                 let status = self.operand(args[0], T0);
                 self.load(status.byte(0));

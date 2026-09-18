@@ -30,5 +30,5 @@ select(False t f) -> f
 
 main!(h) ->
   four = Succ(Succ(Succ(Succ(Zero))))
-  held = and(not(False) or(False is_zero(opaque(Zero))))
+  held = and(not(False) or(False is_zero(Zero)))
   exit!(h select(held four Zero))

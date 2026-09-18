@@ -320,12 +320,6 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
         let held = called.strip_suffix('!').unwrap_or(called);
         let id = program.declare(held, params, *result);
         program.answered_by(id, &routine.name);
-        // And what else is known of it, since nothing can be read off a
-        // declaration. What it hands back is one along where the authority
-        // is in front of it.
-        if let Some(at) = routine.hands_back {
-            program.hands_back(id, at + usize::from(routine.authority));
-        }
         functions.insert(called, id);
     }
     for name in &source.order {
@@ -453,7 +447,7 @@ fn arities<'a>(
         arity.insert(name.as_str(), width);
     }
     for (called, routine) in routines.offered() {
-        arity.insert(called, routine.takes.len() + usize::from(routine.authority));
+        arity.insert(called, routine.takes.len() + 1);
     }
     Ok(arity)
 }
@@ -998,21 +992,20 @@ fn slots<'a>(
     // is either nothing ever or one of those arguments.
     for (called, routine) in routines.offered() {
         let at = unify.parent.len();
-        let front = usize::from(routine.authority);
-        if routine.authority {
-            let held = unify.fresh();
-            unify.pin(held, HOST)?;
-        }
+        // Every one of them is handed the authority, since every one of them
+        // is something a program may be watched doing.
+        let held = unify.fresh();
+        unify.pin(held, HOST)?;
         for _ in 0..routine.takes.len() {
             unify.fresh();
         }
         let answer = unify.fresh();
-        match (routine.comes_back, routine.hands_back) {
-            (false, _) => unify.pin(answer, NEVER)?,
-            (true, Some(held)) => unify.union(answer, at + front + held)?,
+        if routine.comes_back {
             // One that comes back and works nothing out says nothing by
             // answering, which is what `Unit` is for.
-            (true, None) => unify.pin(answer, UNIT)?,
+            unify.pin(answer, UNIT)?;
+        } else {
+            unify.pin(answer, NEVER)?;
         }
         base.insert(called, at);
     }

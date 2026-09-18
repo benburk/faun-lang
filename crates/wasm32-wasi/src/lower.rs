@@ -590,12 +590,6 @@ impl Lowering<'_> {
             "exit" => self.leave(args[0], ending),
             // Handed straight back: nothing is asked of the outside, and
             // all this says is that nothing worked the value out.
-            "opaque" => {
-                self.push(args[0]);
-                self.set(results[0]);
-            }
-            // Linear memory only grows in pages, and `memory.grow` answers
-            // with the old size, so the new region starts where it ended.
             "grow" => {
                 self.push(args[0]);
                 self.constant_i32((1 << PAGE_BITS) - 1);

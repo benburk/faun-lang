@@ -10,9 +10,6 @@
 # wraps: a value needing three bits is held in whatever a target has that
 # holds three bits, and what it holds above them is nought, so reading it as
 # a word needs no instruction at all.
-#
-# `opaque!` stops the working out and not the bounding. What it answers is
-# unknown, and is still between what it was handed.
 
 type Nat Zero Succ(Nat)
 type Bool False True
@@ -29,7 +26,7 @@ select(True t f) -> t
 select(False t f) -> f
 
 main!(h) ->
-  two = opaque(Succ(Succ(Zero)))
+  two = Succ(Succ(Zero))
   four = double(two)
   # Nothing here is above four, so three bits hold every number in it.
   exit!(h select(is_zero(Zero) four Zero))

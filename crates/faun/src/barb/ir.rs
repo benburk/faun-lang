@@ -114,11 +114,6 @@ pub struct Function {
     /// the whole of what a pass owes it: a call to a bodyless name may not
     /// run more times on any path than the program says.
     pub body: Option<Body>,
-    /// Which argument something outside hands straight back, where it hands
-    /// one back rather than working something out. Nothing about a
-    /// declaration can be read, so what is known of one is what the tier
-    /// above said -- this being the first such thing it has to say.
-    pub answers: Option<usize>,
     /// What answers for it out there, where that is not the name a program
     /// calls it by. Nothing here reads it: it is a name this tier holds and
     /// the tier below resolves, like [`Function::answers`] is a fact this
