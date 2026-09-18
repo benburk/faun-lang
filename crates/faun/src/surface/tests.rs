@@ -639,7 +639,7 @@ fn a_routine_written_down_is_one_a_program_may_name() {
         name: "tick".to_owned(),
         called: Some("tick!".to_owned()),
         takes: Vec::new(),
-        answers: Vec::new(),
+        answers: None,
         comes_back: true,
     });
 

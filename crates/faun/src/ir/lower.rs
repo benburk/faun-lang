@@ -169,10 +169,10 @@ fn provided<'a>(
             reads(params),
         ));
     }
-    if returns.len() != wanted.answers.len() {
+    if returns.len() != wanted.answers.iter().len() {
         return Err(format!(
             "`{held}` answers {}, and what is taken back is {}",
-            reads(&wanted.answers),
+            reads(wanted.answers.as_slice()),
             reads(returns),
         ));
     }
@@ -518,7 +518,7 @@ impl Lowering<'_> {
         }
         let held = self.platforms.iter().find(|(id, ..)| *id == function);
         let (results, answers) = if let Some((_, platform, wanted)) = held {
-            (b.platform_call(*platform, &args), wanted.answers.first())
+            (b.platform_call(*platform, &args), wanted.answers.as_ref())
         } else {
             let callee = self.functions[function.index()]
                 .expect("a call to something that stayed a function");

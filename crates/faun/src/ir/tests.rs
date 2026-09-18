@@ -171,7 +171,7 @@ fn two_names_may_give_the_same_routine() {
         name: "hold".to_owned(),
         called: None,
         takes: vec![Class::Word],
-        answers: vec![Class::Word],
+        answers: Some(Class::Word),
         comes_back: true,
     });
 
@@ -202,7 +202,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         name: "narrow".to_owned(),
         called: None,
         takes: vec![Class::Fixed { bits: 4 }],
-        answers: Vec::new(),
+        answers: None,
         comes_back: true,
     });
 

@@ -93,10 +93,10 @@ impl Program {
             .routines
             .get(name)
             .unwrap_or_else(|| panic!("no routine named `{name}`"));
-        let (takes, answers) = (routine.takes.clone(), routine.answers.clone());
+        let (takes, answers) = (routine.takes.clone(), routine.answers);
         let name = self.symbol(name);
         let params = self.sign(&takes);
-        let returns = self.sign(&answers);
+        let returns = self.sign(answers.as_slice());
         self.platform.push(Platform {
             name,
             params,

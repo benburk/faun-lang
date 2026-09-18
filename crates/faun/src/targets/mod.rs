@@ -52,6 +52,15 @@ pub trait Target: fmt::Debug {
     /// found out by a backend part way through writing it.
     fn provides(&self) -> &'static [&'static str];
 
+    /// The routines a program compiled for it is read against.
+    ///
+    /// What a compiler knows is not what any one machine can do, so a
+    /// program naming something this target has no answer for is refused
+    /// where it is written rather than after it is lowered.
+    fn routines(&self) -> crate::platform::Routines {
+        crate::platform::Routines::builtin().only(self.provides())
+    }
+
     /// The files a program becomes.
     fn emit(&self, program: &Program) -> Vec<Artifact>;
 
@@ -84,6 +93,25 @@ pub trait Target: fmt::Debug {
             reaches(program, function.body, name, self.provides())?;
         }
         Ok(())
+    }
+}
+
+/// What a program is read against is what its own target answers for, not
+/// what every target between them does. A program naming something this one
+/// has no answer for never reaches a backend at all.
+#[cfg(test)]
+mod reading {
+    use super::*;
+
+    #[test]
+    fn a_program_reads_against_the_routines_of_one_target() {
+        let spartan = tests::Spartan.routines();
+        assert!(spartan.get("exit").is_some());
+        assert!(spartan.get("write").is_none(), "one it does not answer for");
+        assert!(
+            crate::platform::Routines::builtin().get("write").is_some(),
+            "which something else does"
+        );
     }
 }
 
@@ -164,7 +192,7 @@ mod tests {
 
     /// A machine with a kernel to ask but nothing to ask it for.
     #[derive(Debug)]
-    struct Spartan;
+    pub(super) struct Spartan;
 
     impl Target for Spartan {
         fn name(&self) -> &'static str {
@@ -184,7 +212,8 @@ mod tests {
         }
     }
 
-    /// What a program may reach is what its target answers for. One naming
+    /// What a program may reach is what its target answers for, whether it
+    /// is refused where it is written or after it is lowered. One naming
     /// anything else is refused by name, rather than found out by a backend
     /// part way through writing a file it cannot finish.
     #[test]

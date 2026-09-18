@@ -89,15 +89,15 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
             output,
             target,
         } => {
-            let program = read(&source)?;
+            let program = read(&source, target)?;
             for path in write(target, &output, &program)? {
                 println!("wrote {}", path.display());
             }
             Ok(ExitCode::SUCCESS)
         }
         Command::Run { source } => {
-            let program = read(&source)?;
             let target = targets::HOST.ok_or(NO_HOST)?;
+            let program = read(&source, target)?;
             let dir = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
             fs::create_dir_all(&dir)?;
 
@@ -115,9 +115,9 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
 }
 
 /// The program at `path`, read and lowered.
-fn read(path: &Path) -> Result<faun::ir::Program, Box<dyn Error>> {
+fn read(path: &Path, target: &dyn Target) -> Result<faun::ir::Program, Box<dyn Error>> {
     let text = fs::read_to_string(path)?;
-    faun::read(&text, &faun::platform::Routines::builtin())
+    faun::read(&text, &target.routines())
         .map_err(|error| format!("{}: {error}", path.display()).into())
 }
 

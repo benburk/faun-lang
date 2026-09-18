@@ -1062,7 +1062,7 @@ fn slots<'a>(
         let answer = unify.fresh();
         if !routine.comes_back {
             unify.pin(answer, NEVER)?;
-        } else if routine.answers.is_empty() {
+        } else if routine.answers.is_none() {
             // One that comes back and works nothing out says nothing by
             // answering, which is what `Unit` is for.
             unify.pin(answer, UNIT)?;

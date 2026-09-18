@@ -26,10 +26,16 @@ pub struct Routine {
     /// same routine, which is how one serves a program at more than one
     /// type: there is no body to copy, so nothing is duplicated by it.
     pub name: String,
-    /// What a program calls it, where a program may call it at all. A
-    /// routine with no name here is one a target provides and no language
-    /// yet offers -- the tier below still reaches it, since a program built
-    /// rather than written is a program too.
+    /// What a program calls it, where a program may call it at all.
+    ///
+    /// A routine with no name here is one a target answers for and no
+    /// program may reach: the heap's own hook, or anything a target uses to
+    /// build what it offers. The tier below still reaches it, since a
+    /// program built rather than written is a program too.
+    ///
+    /// The `!` in one is this language's, and a target knowing it is the
+    /// coupling between a frontend and a target that the host interface
+    /// gave up trying to avoid.
     pub called: Option<String>,
     /// What it reads and what it leaves, in the machine's terms.
     ///
@@ -38,7 +44,7 @@ pub struct Routine {
     /// would take no slot here and still be written at the call, and then
     /// this would have to say both.
     pub takes: Vec<Class>,
-    pub answers: Vec<Class>,
+    pub answers: Option<Class>,
     /// Whether control comes back. Nothing after a call to one that does
     /// not is ever reached, and nothing is laid out for it.
     pub comes_back: bool,
@@ -61,27 +67,34 @@ impl Routines {
     /// its own machine, rather than by reaching a name somebody wrote down.
     #[must_use]
     pub fn builtin() -> Self {
-        let held = |name: &str, called: Option<&str>, takes: &[Class], answers: &[Class]| Routine {
+        let held = |name: &str, called: Option<&str>, takes: &[Class], answers| Routine {
             name: name.to_owned(),
             called: called.map(str::to_owned),
             takes: takes.to_vec(),
-            answers: answers.to_vec(),
+            answers,
             comes_back: true,
         };
         Self(vec![
-            held("write", None, &[Class::Address, Class::Word], &[]),
+            held("write", None, &[Class::Address, Class::Word], None),
             Routine {
                 comes_back: false,
-                ..held("exit", Some("exit!"), &[Class::Word], &[])
+                ..held("exit", Some("exit!"), &[Class::Word], None)
             },
             // The kernel picks the address, so nothing asking for a page
             // says where.
-            held("grow", None, &[Class::Word], &[Class::Address]),
+            held("grow", None, &[Class::Word], Some(Class::Address)),
             // How many arguments a program was handed, which is the one
             // thing every machine here can be asked and the only thing a
             // program can be told that it did not work out itself.
-            held("argc", Some("argc!"), &[], &[Class::Word]),
+            held("argc", Some("argc!"), &[], Some(Class::Word)),
         ])
+    }
+
+    /// Every routine a program may call by name, and what each is called.
+    pub fn offered(&self) -> impl Iterator<Item = (&str, &Routine)> {
+        self.0
+            .iter()
+            .filter_map(|routine| Some((routine.called.as_deref()?, routine)))
     }
 
     /// The routine a target answers to by `name`.
@@ -90,11 +103,18 @@ impl Routines {
         self.0.iter().find(|routine| routine.name == name)
     }
 
-    /// Every routine a program may call by name, and what each is called.
-    pub fn offered(&self) -> impl Iterator<Item = (&str, &Routine)> {
-        self.0
-            .iter()
-            .filter_map(|routine| Some((routine.called.as_deref()?, routine)))
+    /// The ones named, and no others. What a target answers for is not what
+    /// every target answers for, and a program is read against the one it
+    /// is being compiled for.
+    #[must_use]
+    pub fn only(&self, names: &[&str]) -> Self {
+        Self(
+            self.0
+                .iter()
+                .filter(|routine| names.contains(&routine.name.as_str()))
+                .cloned()
+                .collect(),
+        )
     }
 
     /// Take one more in, which is how a routine somebody wrote down arrives.
