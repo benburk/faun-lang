@@ -1,0 +1,35 @@
+# How wide a number is held, worked out rather than written.
+#
+# `Nat` counts without a last step and a machine word does not, so holding
+# one in the other is sound only while the number fits -- and what says
+# whether it fits is what the program does with its numbers. The tier above
+# works out what every value can be, from the constructors that build it and
+# the matches that take it apart, and the width follows from that.
+#
+# A width is what a value needs and never what it wraps at. Nothing here
+# wraps: a value needing three bits is held in whatever a target has that
+# holds three bits, and what it holds above them is nought, so reading it as
+# a word needs no instruction at all.
+#
+# `opaque!` stops the working out and not the bounding. What it answers is
+# unknown, and is still between what it was handed.
+
+type Nat Zero Succ(Nat)
+type Bool False True
+
+add(a Zero) -> a
+add(a Succ(k)) -> Succ(add(a k))
+
+double(n) -> add(n n)
+
+is_zero(Zero) -> True
+is_zero(Succ(k)) -> False
+
+select(True t f) -> t
+select(False t f) -> f
+
+main!(h) ->
+  two = opaque!(h Succ(Succ(Zero)))
+  four = double(two)
+  # Nothing here is above four, so three bits hold every number in it.
+  exit!(h select(is_zero(Zero) four Zero))

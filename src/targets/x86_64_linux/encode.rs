@@ -229,13 +229,18 @@ impl Encoder {
     /// `dst = dst op src` at the width a class fixes. The 32-bit form is
     /// the one to reach for: it zero-extends into the whole register, so
     /// nothing has to follow it.
+    /// `dst = dst op src`, in the narrowest form that leaves nought above
+    /// the bits it answers. The eight- and sixteen-bit forms write only
+    /// their own half of the register and are no use for that; the
+    /// thirty-two-bit one zero-extends into the whole of it, which is both
+    /// shorter than the sixty-four-bit form and what keeps a value holding
+    /// nothing above what it needs.
     pub(super) fn alu_sized(&mut self, opcode: u8, dst: Reg, src: Reg, bits: u16) {
-        match bits {
-            8 => self.emit(&[opcode - 1, modrm(src, dst)]),
-            16 => self.emit(&[0x66, opcode, modrm(src, dst)]),
-            32 => self.emit(&[opcode, modrm(src, dst)]),
-            64 => self.alu(opcode, dst, src),
-            other => panic!("no {other}-bit form on this target"),
+        if bits <= 32 {
+            self.rex(false, Some(src), dst);
+            self.emit(&[opcode, modrm(src, dst)]);
+        } else {
+            self.alu(opcode, dst, src);
         }
     }
 

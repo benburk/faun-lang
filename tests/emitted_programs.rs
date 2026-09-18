@@ -95,10 +95,10 @@ fn written() -> Vec<(String, Program, [usize; 3])> {
         ("two-and-two", [128, 96, 29]),
         ("double", [128, 96, 29]),
         ("leave", [141, 108, 49]),
-        ("bool", [531, 286, 424]),
-        ("nat", [1067, 541, 1226]),
-        ("opaque", [153, 109, 58]),
-        ("byte", [366, 238, 311]),
+        ("bool", [529, 296, 442]),
+        ("nat", [1063, 554, 1242]),
+        ("opaque", [152, 119, 76]),
+        ("width", [278, 186, 212]),
     ]
     .into_iter()
     .map(|(name, sizes)| {
@@ -1306,54 +1306,74 @@ fn a_target_says_what_it_cannot_hold() {
         assert!(target.accepts(&program).is_ok(), "{target}");
     }
 
-    // A width a target has no form for is the same kind of refusal.
+    // A value needing more bits than a target holds is the same refusal.
+    // Narrower than its word is not: what a value holds above the bits it
+    // needs is nought, so a target holds it in whatever it has.
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let held = b.constant(Class::Fixed { bits: 32 }, 1);
-        let held = b.convert(Word, held);
         b.ret(&[held])
     });
     assert!(Target::X86_64Linux.accepts(&program).is_ok());
+    assert!(Target::Wasm32Wasi.accepts(&program).is_ok());
     let refused = Target::Mos6502Sim65.accepts(&program).unwrap_err();
-    assert!(refused.contains("no 32-bit form"), "{refused}");
+    assert!(
+        refused.contains("holds 16 bits, and a value here needs 32"),
+        "{refused}"
+    );
 }
 
-/// A bound says how wide a number is, and counting past it counts back
-/// round to nought: the type is the ring, not a machine word it stands in
-/// for. So the same program answers the same whether the compiler worked
-/// the number out or the machine did.
+/// How wide a number is held is what its values can be, worked out by the
+/// tier above from what the program does with them. Nothing says it and
+/// nothing wraps: a value needing three bits is held in three bits, and a
+/// value nothing bounds is held in a machine word.
 #[test]
-fn every_target_counts_within_a_bound() {
-    let byte = |held: &str| {
-        let text = format!(
-            "type Byte Zero Succ(Byte) below 256
-             type Bool False True
-
-             add(a Zero) -> a
-             add(a Succ(k)) -> Succ(add(a k))
-
-             is_zero(Zero) -> True
-             is_zero(Succ(k)) -> False
-
-             count(False) -> Zero
-             count(True) -> Succ(Zero)
-
-             main!(h) ->
-               half = {held}
-               whole = add(half half)
-               exit!(h count(is_zero(whole)))"
-        );
-        faun::read(&text).expect("a program")
+fn how_wide_a_number_is_held_is_what_it_can_be() {
+    let widths = |text: &str| {
+        let program = faun::read(text).expect("a program");
+        (0..program.values_count())
+            .map(|at| program.class(faun::ir::ValueId::at(at)))
+            .collect::<Vec<_>>()
     };
-    let chain = |held: usize| format!("{}Zero{}", "Succ(".repeat(held), ")".repeat(held));
 
-    for target in Target::ALL {
-        // 128 and 128 is 256, which a byte counts back round to nought.
-        assert_eq!(status(target, &byte(&chain(128))), 1, "{target}");
-        assert_eq!(status(target, &byte(&chain(100))), 0, "{target}");
+    // Two and two is four, which three bits hold.
+    let held = widths(
+        "type Nat Zero Succ(Nat)
 
-        // And the same, worked out by the machine rather than the compiler.
-        let handed = format!("opaque!(h {})", chain(128));
-        assert_eq!(status(target, &byte(&handed)), 1, "{target}");
-    }
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         main!(h) ->
+           two = opaque!(h Succ(Succ(Zero)))
+           exit!(h add(two two))",
+    );
+    assert!(held.contains(&Class::Fixed { bits: 3 }), "{held:?}");
+    assert!(
+        held.iter()
+            .all(|held| held.fits(Class::Fixed { bits: 3 }) || *held == Word),
+        "{held:?}"
+    );
+
+    // Counting up without a last step has no last value, and then there is
+    // nothing to say but a machine word.
+    let held = widths(
+        "type Nat Zero Succ(Nat)
+
+         up(Zero) -> Succ(Zero)
+         up(Succ(k)) -> Succ(Succ(up(k)))
+
+         main!(h) ->
+           n = opaque!(h Succ(Zero))
+           exit!(h up(n))",
+    );
+    // Nought is nought however wide the numbers around it are; what says
+    // this one is unbounded is that nothing in it is held narrower than a
+    // word except the constants that cannot be anything else.
+    assert!(held.contains(&Word), "{held:?}");
+    assert!(
+        !held
+            .iter()
+            .any(|held| matches!(*held, Class::Fixed { bits } if bits > 1)),
+        "{held:?}"
+    );
 }

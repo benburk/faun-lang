@@ -31,7 +31,9 @@ use super::validate::validate;
 /// If `program` has no entry.
 pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, String> {
     let entry = program.entry().expect("a program to lower has an entry");
-    let classes: Vec<Option<Class>> = (0..program.types().len())
+    // Whether a value of each type takes a place at all. What place is a
+    // question per value, which is why this answers nothing about width.
+    let carries: Vec<Option<()>> = (0..program.types().len())
         .map(|at| represent(program, barb::TypeId::at(at)))
         .collect::<Result<_, _>>()?;
 
@@ -40,7 +42,7 @@ pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, St
     let (functions, platforms) = declare(
         program,
         facts,
-        &classes,
+        &carries,
         &mut machine,
         (entry, main),
         &reached,
@@ -49,7 +51,7 @@ pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, St
     let lowering = Lowering {
         barb: program,
         facts,
-        classes,
+        carries,
         functions,
         platforms,
     };
@@ -72,7 +74,7 @@ pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, St
 fn declare(
     program: &barb::Program,
     facts: &barb::Facts,
-    classes: &[Option<Class>],
+    carries: &[Option<()>],
     machine: &mut Program,
     (entry, main): (barb::FnId, FunctionId),
     reached: &[bool],
@@ -104,9 +106,14 @@ fn declare(
         let params: Vec<Class> = program
             .params(id)
             .iter()
-            .filter_map(|type_| classes[type_.index()])
+            .zip(facts.takes(id))
+            .filter(|(type_, _)| carries[type_.index()].is_some())
+            .map(|(_, held)| width(*held))
             .collect();
-        let returns: Vec<Class> = classes[function.result.index()].into_iter().collect();
+        let returns: Vec<Class> = carries[function.result.index()]
+            .map(|()| width(facts.answers(id)))
+            .into_iter()
+            .collect();
         let name = program.name(function.name);
         // One something else answers for is a platform routine rather than a
         // function: the program declares it and a target provides it.
@@ -197,27 +204,23 @@ fn reached(program: &barb::Program, entry: barb::FnId) -> Vec<bool> {
 }
 
 /// The class a type's values take. Numbers and tags are decided so far.
-fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Option<Class>, String> {
+fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Option<()>, String> {
     let name = program.name(program.type_(id).name);
     if uninhabited(program, id) || erased(program, id) {
         return Ok(None);
     }
     if tagged(program, id) {
-        return Ok(Some(Class::Word));
+        return Ok(Some(()));
     }
     let barb::Shape::Spine { cons, .. } = barb::shape(program, id) else {
         return Err(format!("`{name}` has no representation in this tier yet"));
     };
     if program.fields(cons).len() == 1 {
-        // A bound says how wide its values are, and counting past it counts
-        // back round to nought, which is what a fixed width does. Without a
-        // bound a number is a machine word: sound while the number fits,
-        // and nothing yet says when it does.
-        return Ok(Some(program.type_(id).below.map_or(Class::Word, |below| {
-            Class::Fixed {
-                bits: u16::try_from(below.trailing_zeros()).expect("a width a machine has"),
-            }
-        })));
+        // A number takes a place. How wide is not a question about the type
+        // -- every `Nat` is the same type and they are not all the same
+        // size -- so it is asked of each value, where the tier above
+        // answered it.
+        return Ok(Some(()));
     }
     Err(format!(
         "`{name}` carries something per element, which has no representation in this tier yet"
@@ -231,6 +234,21 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Option<Class>,
 fn erased(program: &barb::Program, id: barb::TypeId) -> bool {
     let ctors = program.ctors(id);
     ctors.len() == 1 && program.types_of(ctors[0].fields).is_empty()
+}
+
+/// The narrowest class holding every value a term answers. A width is what
+/// a value needs and not what it wraps at, so this narrows nothing: what a
+/// target holds it in is whatever it has that is at least this wide.
+///
+/// Where nothing bounds the values there is nothing to say but a machine
+/// word, which is the placeholder rule -- sound while the number fits one,
+/// and this is where it stops saying so of numbers it can see the size of.
+fn width(held: barb::Bounds) -> Class {
+    held.width().map_or(Class::Word, |bits| Class::Fixed {
+        // A value that can only be nought still takes a place to be nought
+        // in, until something makes it worth not taking one.
+        bits: u16::try_from(bits.max(1)).expect("a width a machine has"),
+    })
 }
 
 /// A type with no constructors has no values, so nothing holds one and
@@ -301,6 +319,34 @@ impl<T> Answer<T> {
     }
 }
 
+/// Every value at the width that reads it. How wide a value is held is
+/// worked out where it is built; how wide it is read is what the name
+/// reading it was declared at. A value needing fewer bits is already one
+/// needing more, so this only ever narrows -- and narrowing takes nothing
+/// off, since what a value holds above the bits it needs is nought.
+fn met(b: &mut super::Builder, args: &[ValueId], takes: &[Class]) -> Vec<ValueId> {
+    args.iter()
+        .zip(takes)
+        .map(|(&arg, &wanted)| {
+            if b.class(arg).fits(wanted) {
+                arg
+            } else {
+                b.convert(wanted, arg)
+            }
+        })
+        .collect()
+}
+
+/// Where two arms meet: what they leave with is one place, so it is as wide
+/// as either of them needs.
+fn widest(held: Answer<Class>, other: Answer<Class>) -> Answer<Class> {
+    match (held.held(), other.held()) {
+        (Some(held), Some(other)) if other.fits(held) => Answer::Value(held),
+        (Some(_), Some(other)) => Answer::Value(other),
+        _ => held.or(other),
+    }
+}
+
 /// Leave an arm with what its body answered. An arm that does not come back
 /// never reaches the join, so it carries nothing there.
 fn yielded(b: &mut super::Builder, answer: Answer<ValueId>) -> Terminator {
@@ -314,9 +360,8 @@ fn yielded(b: &mut super::Builder, answer: Answer<ValueId>) -> Terminator {
 struct Lowering<'a> {
     barb: &'a barb::Program,
     facts: &'a barb::Facts,
-    /// The class each barb type takes, by type, and nothing where it is
-    /// erased.
-    classes: Vec<Option<Class>>,
+    /// Whether a value of each barb type takes a place, by type.
+    carries: Vec<Option<()>>,
     /// The machine function each barb function became, by function, and
     /// `None` for one that became an instruction.
     functions: Vec<Option<FunctionId>>,
@@ -325,9 +370,11 @@ struct Lowering<'a> {
 }
 
 impl Lowering<'_> {
-    /// The class a type takes, where it takes one.
-    fn class(&self, id: barb::TypeId) -> Class {
-        self.classes[id.index()].expect("a type that carries something")
+    /// The class a term answers at, which is how wide what it answers can
+    /// be. Two values of one type may be held differently, since what makes
+    /// them wide is what was done with them and not what they are.
+    fn width(&self, id: barb::ExprId) -> Class {
+        width(self.facts.held(id))
     }
 
     fn function(&self, machine: &mut Program, id: barb::FnId) {
@@ -340,10 +387,15 @@ impl Lowering<'_> {
             .barb
             .params(id)
             .iter()
-            .map(|type_| self.classes[type_.index()].is_none())
+            .map(|type_| self.carries[type_.index()].is_none())
             .collect();
-        let status =
-            entry && self.classes[self.barb.function(id).result.index()] != Some(Class::Word);
+        // What it leaves with: a word from the entry, whatever the program
+        // worked in, and otherwise the width it was declared at.
+        let returns = if entry {
+            Class::Word
+        } else {
+            width(self.facts.answers(id))
+        };
         machine.define(into, |b, params| {
             let mut taken = params.iter().copied();
             let mut locals: Vec<Option<ValueId>> = erased
@@ -353,12 +405,9 @@ impl Lowering<'_> {
             match self.body(b, body, &mut locals) {
                 Answer::Value(answer) => {
                     // The entry leaves with a word, whatever width it
-                    // worked in, since that is what the machine takes.
-                    let answer = if status {
-                        b.convert(Class::Word, answer)
-                    } else {
-                        answer
-                    };
+                    // worked in, since that is what the machine takes; and
+                    // every definition leaves at the width it says it does.
+                    let answer = met(b, &[answer], &[returns])[0];
                     b.ret(&[answer])
                 }
                 // The entry answers a status whatever the program says, and
@@ -406,9 +455,10 @@ impl Lowering<'_> {
             // which constructor for a tag, and what it counts to for a
             // number. One that carries nothing is nothing to carry.
             barb::Expr::Static(id, value) => {
-                let Some(class) = self.classes[id.index()] else {
+                let Some(()) = self.carries[id.index()] else {
                     return Answer::Nothing;
                 };
+                let class = self.width(expr);
                 let bytes = self.barb.known_bytes(value);
                 let held = if tagged(self.barb, id) {
                     u64::from(self.barb.tag(barb::decode(self.barb, id, bytes).0.0))
@@ -417,8 +467,8 @@ impl Lowering<'_> {
                 };
                 Answer::Value(b.constant(class, held))
             }
-            barb::Expr::Con(ctor, args) => self.construct(b, ctor, args, locals).into(),
-            barb::Expr::Call(function, args) => self.call(b, function, args, locals),
+            barb::Expr::Con(ctor, args) => self.construct(b, expr, ctor, args, locals).into(),
+            barb::Expr::Call(function, args) => self.call(b, expr, function, args, locals),
             barb::Expr::Match(scrutinee, arms) => {
                 let scrutinee = locals[scrutinee.0.index()].expect("a scrutinee to match");
                 self.branch(b, scrutinee, arms, locals)
@@ -432,6 +482,7 @@ impl Lowering<'_> {
     fn call(
         &self,
         b: &mut super::Builder,
+        expr: barb::ExprId,
         function: barb::FnId,
         args: barb::Range,
         locals: &[Option<ValueId>],
@@ -443,58 +494,32 @@ impl Lowering<'_> {
             .filter_map(|atom| locals[atom.0.index()])
             .collect();
         if self.facts.operation(function) == Some(barb::Operation::Add) {
-            return Answer::Value(b.binary(Binary::Add, args[0], args[1]));
+            let class = self.width(expr);
+            return Answer::Value(b.binary_at(class, Binary::Add, args[0], args[1]));
         }
         let held = self.platforms.iter().find(|(id, ..)| *id == function);
         let (results, answers) = if let Some((_, platform, wanted)) = held {
-            let args = self.widened(b, function, &args, wanted.takes);
+            let args = met(b, &args, wanted.takes);
             (b.platform_call(*platform, &args), wanted.answers.first())
         } else {
             let callee = self.functions[function.index()]
                 .expect("a call to something that stayed a function");
+            let takes = b.takes(callee);
+            let args = met(b, &args, &takes);
             (b.call(callee, &args), None)
         };
         // A call answers what its result type does, which is nothing ever
-        // where that type has no values -- and a routine answers at the
-        // width it says, which is not always the width the program works in.
-        self.answer(self.barb.function(function).result)
-            .map(|class| {
-                let held = *results.first().expect("a result where a type carries one");
-                if answers.is_some_and(|answers| *answers != class) {
-                    b.convert(class, held)
-                } else {
-                    held
-                }
-            })
-    }
-
-    /// Every argument at the width the routine reads it at. A program works
-    /// in whatever width its types say and a routine in the one it says, and
-    /// this is where the two meet.
-    fn widened(
-        &self,
-        b: &mut super::Builder,
-        function: barb::FnId,
-        args: &[ValueId],
-        takes: &[Class],
-    ) -> Vec<ValueId> {
-        let held: Vec<Class> = self
-            .barb
-            .params(function)
-            .iter()
-            .filter_map(|type_| self.classes[type_.index()])
-            .collect();
-        args.iter()
-            .zip(held)
-            .zip(takes)
-            .map(|((&arg, held), &wanted)| {
-                if held == wanted {
-                    arg
-                } else {
-                    b.convert(wanted, arg)
-                }
-            })
-            .collect()
+        // where that type has no values -- and it answers at the width the
+        // name it calls was declared at, which the caller may hold wider.
+        self.answer(self.barb.function(function).result).map(|_| {
+            let class = self.width(expr);
+            let held = *results.first().expect("a result where a type carries one");
+            if answers.is_some_and(|answers| !answers.fits(class)) {
+                b.convert(class, held)
+            } else {
+                held
+            }
+        })
     }
 
     /// A tag is which constructor it is. A number's empty constructor is
@@ -504,12 +529,14 @@ impl Lowering<'_> {
     fn construct(
         &self,
         b: &mut super::Builder,
+        expr: barb::ExprId,
         ctor: barb::CtorId,
         args: barb::Range,
         locals: &[Option<ValueId>],
     ) -> Option<ValueId> {
         let owner = self.barb.ctor(ctor).owner;
-        let class = self.classes[owner.index()]?;
+        self.carries[owner.index()]?;
+        let class = self.width(expr);
         if tagged(self.barb, owner) {
             return Some(b.constant(class, u64::from(self.barb.tag(ctor))));
         }
@@ -518,7 +545,7 @@ impl Lowering<'_> {
         };
         let one = b.constant(class, 1);
         let held = locals[atom.0.index()].expect("a field that carries something");
-        Some(b.binary(Binary::Add, held, one))
+        Some(b.binary_at(class, Binary::Add, held, one))
     }
 
     /// Matching a number asks whether it is nought; the other arm counts the
@@ -532,7 +559,9 @@ impl Lowering<'_> {
     ) -> Answer<ValueId> {
         let arms = self.barb.arms(arms).to_vec();
         let owner = self.barb.ctor(arms[0].ctor).owner;
-        let class = self.class(owner);
+        // Read at the width what it is taking apart is held at, since that
+        // is what the comparison and the step down are against.
+        let class = b.class(scrutinee);
         let barb::Shape::Spine { nil, .. } = barb::shape(self.barb, owner) else {
             return self.tags(b, scrutinee, class, &arms, locals);
         };
@@ -600,7 +629,7 @@ impl Lowering<'_> {
         let answer = arms
             .iter()
             .map(|arm| self.answers(b, arm.body, locals))
-            .fold(Answer::Never, Answer::or);
+            .fold(Answer::Never, widest);
         let held: Vec<Class> = answer.held().into_iter().collect();
         let tag = b.constant(class, u64::from(self.barb.tag(arm.ctor)));
         let is_this_one = b.compare(Relation::Equal, scrutinee, tag);
@@ -662,6 +691,6 @@ impl Lowering<'_> {
         if uninhabited(self.barb, id) {
             return Answer::Never;
         }
-        self.classes[id.index()].into()
+        self.carries[id.index()].map(|()| Class::Word).into()
     }
 }

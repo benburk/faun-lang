@@ -47,11 +47,9 @@ struct Clause {
     body: Term,
 }
 
-/// A type as written: its name, what its values stay under where a program
-/// said, then each constructor and its field types.
+/// A type as written: its name, then each constructor and its field types.
 struct Declared {
     name: String,
-    below: Option<u64>,
     ctors: Vec<(String, Vec<String>)>,
 }
 
@@ -110,19 +108,7 @@ pub fn parse(text: &str) -> Result<Program, String> {
 fn read_type(words: &mut Words) -> Result<Declared, String> {
     let name = words.word()?;
     let mut ctors = Vec::new();
-    let mut below = None;
     while words.peek().is_some_and(|word| word != "type") && !words.starts_clause() {
-        // What a type's values stay under, written after the constructors
-        // they are built with, since that is where a reader wants it.
-        if words.peek() == Some(BELOW) {
-            words.take();
-            let held = words.word()?;
-            let held: u64 = held
-                .parse()
-                .map_err(|_| format!("`{held}` is not a number to stay under"))?;
-            below = Some(held);
-            continue;
-        }
         let ctor = words.word()?;
         let fields = if words.peek() == Some("(") {
             read_names(words)?
@@ -131,12 +117,8 @@ fn read_type(words: &mut Words) -> Result<Declared, String> {
         };
         ctors.push((ctor, fields));
     }
-    Ok(Declared { name, below, ctors })
+    Ok(Declared { name, ctors })
 }
-
-/// What says a type's values stay under something, which is therefore not a
-/// constructor a program may name.
-const BELOW: &str = "below";
 
 /// A parenthesised run of bare words.
 fn read_names(words: &mut Words) -> Result<Vec<String>, String> {
@@ -371,7 +353,7 @@ fn declare_types(program: &mut Program, source: &Source) -> Result<(), String> {
     for held in &source.types {
         types.insert(&held.name, program.declare_type(&held.name));
     }
-    for Declared { name, below, ctors } in &source.types {
+    for Declared { name, ctors } in &source.types {
         let held: Vec<(&str, Vec<TypeId>)> = ctors
             .iter()
             .map(|(ctor, fields)| {
@@ -387,30 +369,9 @@ fn declare_types(program: &mut Program, source: &Source) -> Result<(), String> {
             .map(|(ctor, fields)| (*ctor, fields.as_slice()))
             .collect();
         program.define_type(types[name.as_str()], &held);
-
-        // A bound is what counting past it comes back round to, so it is a
-        // power of two and a width a machine has. Anything else would mean
-        // a remainder at every step, which no target here takes for free.
-        if let Some(below) = below {
-            if !WIDTHS.iter().any(|width| 1u64 << width == *below) {
-                let held: Vec<String> = WIDTHS.iter().map(|w| (1u64 << w).to_string()).collect();
-                return Err(format!(
-                    "`{name}` stays under {below}, and a bound is one of {}",
-                    held.join(", ")
-                ));
-            }
-            program.bound_type(types[name.as_str()], *below);
-        }
     }
     Ok(())
 }
-
-/// The widths a machine has, which is what a bound may be two to the power
-/// of. Below eight is a width nothing here holds, and two to the sixty-four
-/// is not a number this one can be written with -- which is no loss, since
-/// a number that stays under the whole of a machine word stays under
-/// nothing, and that is what saying no bound already means.
-const WIDTHS: [u32; 3] = [8, 16, 32];
 
 /// How many arguments each name takes, which every clause of one has to
 /// agree on. An effect takes the authority and what it was blessed with.
@@ -597,7 +558,7 @@ const NEVER: TypeId = TypeId(2);
 /// see through, which is how a program holds a value the compiler will not
 /// work out for itself.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Answers {
+pub(super) enum Answers {
     Never,
     Argument(usize),
 }
@@ -607,7 +568,7 @@ enum Answers {
 /// are the interface to the outside, so the compiler knows their names and a
 /// target provides them. What they take beyond the authority is whatever
 /// they are given -- one type per program, like any other name here.
-const EFFECTS: [(&str, usize, Answers); 2] = [
+pub(super) const EFFECTS: [(&str, usize, Answers); 2] = [
     ("exit!", 1, Answers::Never),
     ("opaque!", 1, Answers::Argument(0)),
 ];

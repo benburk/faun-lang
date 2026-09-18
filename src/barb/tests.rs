@@ -720,38 +720,96 @@ fn a_value_handed_over_is_one_nothing_worked_out() {
     );
 }
 
-/// What a number's values stay under, where a program says. A bound is a
-/// power of two and a width a machine has, so that counting past it is
-/// counting back round to nought -- the type is the ring, rather than a
-/// machine word it stands in for.
+/// What a number can be, worked out from what a program does with it. A
+/// value handed over is unknown and its bounds are not: `opaque!` answers
+/// what it was given, so what it answers is between what that was.
 #[test]
-fn a_number_may_say_what_it_stays_under() {
-    let program = parse(
-        "type Byte Zero Succ(Byte) below 256
+fn what_a_number_can_be_is_read_off_what_is_done_with_it() {
+    // What a definition answers, which is what its callers hold.
+    let held = |text: &str, name: &str| {
+        let program = parse(text).expect("a program");
+        let facts = recognise(&program);
+        let at = program
+            .functions()
+            .iter()
+            .position(|held| program.name(held.name) == name)
+            .expect("the definition");
+        (facts.answers(FnId::at(at)), program, facts)
+    };
 
-         main!(h) -> exit!(h Succ(Zero))",
-    )
-    .expect("a program");
-    assert_eq!(program.type_(TypeId::at(3)).below, Some(256));
-
-    let refused = parse(
-        "type Odd Zero Succ(Odd) below 100
-
-         main!(h) -> exit!(h Zero)",
-    )
-    .unwrap_err();
-    assert!(
-        refused.contains("stays under 100, and a bound is one of"),
-        "{refused}"
-    );
-
-    // Nothing says a `Nat` stays under anything, which is what makes it the
-    // one this tier cannot promise a width for.
-    let program = parse(
+    // Two and two is four, whether or not the four is worked out here.
+    let (bounds, ..) = held(
         "type Nat Zero Succ(Nat)
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+         double(n) -> add(n n)
+         main!(h) ->
+           two = opaque!(h Succ(Succ(Zero)))
+           exit!(h double(two))",
+        "double",
+    );
+    assert_eq!(
+        bounds,
+        Bounds {
+            low: 4,
+            high: Some(4)
+        }
+    );
+    assert_eq!(bounds.width(), Some(3));
 
-         main!(h) -> exit!(h Succ(Zero))",
-    )
-    .expect("a program");
-    assert_eq!(program.type_(TypeId::at(3)).below, None);
+    // A definition counting up without a last step has no last value, and
+    // saying so is what keeps the walk from going round after it.
+    let (bounds, ..) = held(
+        "type Nat Zero Succ(Nat)
+         up(Zero) -> Succ(Zero)
+         up(Succ(k)) -> Succ(Succ(up(k)))
+         main!(h) ->
+           n = opaque!(h Succ(Zero))
+           exit!(h up(n))",
+        "up",
+    );
+    assert_eq!(bounds.high, None);
+    assert_eq!(bounds.width(), None);
+}
+
+/// What a match says of what it took apart: an arm for `Succ` binds one
+/// less than what it matched, and what it matched is whatever the only name
+/// calling it hands over.
+#[test]
+fn a_match_says_what_it_took_apart_could_be() {
+    let held = |text: &str| {
+        let program = parse(text).expect("a program");
+        let facts = recognise(&program);
+        (program, facts)
+    };
+
+    let (program, facts) = held(
+        "type Nat Zero Succ(Nat)
+         which(Zero) -> Zero
+         which(Succ(k)) -> k
+         main!(h) ->
+           n = opaque!(h Succ(Succ(Zero)))
+           exit!(h which(n))",
+    );
+    let which = program
+        .functions()
+        .iter()
+        .position(|held| program.name(held.name) == "which")
+        .expect("the definition");
+    assert_eq!(
+        facts.takes(FnId::at(which))[0],
+        Bounds {
+            low: 2,
+            high: Some(2)
+        },
+        "what it is handed"
+    );
+    assert_eq!(
+        facts.answers(FnId::at(which)),
+        Bounds {
+            low: 1,
+            high: Some(1)
+        },
+        "what `Succ` wraps, which is what it answers"
+    );
 }

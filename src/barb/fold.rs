@@ -16,8 +16,8 @@
 //! is always an answer: what a program says is what it does, and what this
 //! tier says of it is only ever less.
 
-use super::constant::{Shape, Value, decode, shape};
-use super::ir::{Body, Expr, ExprId, FnId, Program, TypeId};
+use super::constant::{Value, decode};
+use super::ir::{Body, Expr, ExprId, FnId, Program};
 
 /// How much working out one term is worth. A number built one constructor
 /// at a time costs a step per constructor, so this is also the largest one
@@ -82,7 +82,7 @@ fn eval(program: &Program, id: ExprId, env: &[Option<Value>], fuel: &mut u32) ->
         Expr::Static(owner, held) => Some(decode(program, owner, program.known_bytes(held)).0),
         Expr::Con(ctor, args) => {
             let fields = held(program, args, env)?;
-            Some(within(program, Value(ctor, fields)))
+            Some(Value(ctor, fields))
         }
         // A name something outside answers for has no body to work out, and
         // that is what makes it the one thing this cannot see through.
@@ -113,57 +113,6 @@ fn in_scope(
         env.push(held);
     }
     eval(program, body.tail, &env, fuel)
-}
-
-/// A value counted back within its type's bound, where it has one.
-///
-/// What a target does with a number past the bound is take it modulo the
-/// bound, so working one out here has to mean the same. A term that folds
-/// must answer what the term would have answered, and a `Succ` that would
-/// have wrapped on the machine wraps here.
-fn within(program: &Program, value: Value) -> Value {
-    let owner = program.ctor(value.0).owner;
-    let Some(below) = program.type_(owner).below else {
-        return value;
-    };
-    let Some(held) = steps(program, owner, &value) else {
-        return value;
-    };
-    if held < below {
-        return value;
-    }
-    chain(program, owner, held % below)
-}
-
-/// What a spine counts to, where it is one.
-fn steps(program: &Program, owner: TypeId, value: &Value) -> Option<u64> {
-    let Shape::Spine {
-        nil,
-        cons,
-        recursive,
-    } = shape(program, owner)
-    else {
-        return None;
-    };
-    let mut held = 0;
-    let mut at = value;
-    while at.0 == cons {
-        held += 1;
-        at = at.1.get(recursive)?;
-    }
-    (at.0 == nil).then_some(held)
-}
-
-/// The spine counting to `count`, which is the value that number is.
-fn chain(program: &Program, owner: TypeId, count: u64) -> Value {
-    let Shape::Spine { nil, cons, .. } = shape(program, owner) else {
-        unreachable!("a spine, since it was counted as one");
-    };
-    let mut held = Value(nil, Vec::new());
-    for _ in 0..count {
-        held = Value(cons, vec![held]);
-    }
-    held
 }
 
 /// The values a run of arguments holds, where every one of them is known.

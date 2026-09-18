@@ -28,6 +28,7 @@
 //! - primitives — arithmetic is recursion over a constructor, and the
 //!   machine tier is what recognises it
 
+mod bounds;
 mod builder;
 mod constant;
 mod facts;
@@ -36,6 +37,7 @@ mod ir;
 mod parse;
 mod pretty;
 
+pub use bounds::Bounds;
 pub use builder::Builder;
 pub use constant::{Shape, Value, as_bytes, as_number, decode, shape};
 pub use facts::{Facts, Operation, recognise};
@@ -45,6 +47,20 @@ pub use ir::{
     Symbol, Type, TypeId,
 };
 pub use parse::parse;
+
+/// Which argument a name something outside answers for hands back, where it
+/// hands one back at all. The effects are the one place a name has no body
+/// to read, so this is the one thing that has to be said of them rather
+/// than worked out.
+fn answered(name: &str) -> Option<usize> {
+    parse::EFFECTS
+        .into_iter()
+        .find(|(held, ..)| *held == name)
+        .and_then(|(_, _, answers)| match answers {
+            parse::Answers::Argument(held) => Some(held),
+            parse::Answers::Never => None,
+        })
+}
 
 #[cfg(test)]
 mod tests;

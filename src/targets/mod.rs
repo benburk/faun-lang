@@ -57,14 +57,16 @@ impl Target {
         Self::ALL.into_iter().find(|target| target.name() == name)
     }
 
-    /// The widths this target has forms for, and how wide its own word is.
-    /// A program wanting another is one this target cannot compile, which is
-    /// a different thing from one it compiles wrongly.
-    const fn widths(self) -> (&'static [u16], u16) {
+    /// How wide this target's own word is, which is the widest value it
+    /// holds. A width is what a value needs, so anything narrower than this
+    /// is held in one of these and anything wider is a program this target
+    /// cannot compile -- which is a different thing from one it compiles
+    /// wrongly.
+    const fn word(self) -> u16 {
         match self {
-            Self::X86_64Linux => (&[8, 16, 32, 64], 64),
-            Self::Wasm32Wasi => (&[8, 16, 32], 32),
-            Self::Mos6502Sim65 => (&[8, 16], 16),
+            Self::X86_64Linux => 64,
+            Self::Wasm32Wasi => 32,
+            Self::Mos6502Sim65 => 16,
         }
     }
 
@@ -81,13 +83,15 @@ impl Target {
     ///
     /// Names the first thing it cannot hold.
     pub fn accepts(self, program: &Program) -> Result<(), String> {
-        let (widths, word) = self.widths();
+        let word = self.word();
         for at in 0..program.values_count() {
             let class = program.class(ValueId::at(at));
             if let Class::Fixed { bits } = class
-                && !widths.contains(&bits)
+                && bits > word
             {
-                return Err(format!("{self} has no {bits}-bit form"));
+                return Err(format!(
+                    "{self} holds {word} bits, and a value here needs {bits}"
+                ));
             }
         }
         for function in program.functions() {

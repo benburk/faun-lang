@@ -90,10 +90,6 @@ pub struct Arm {
 pub struct Type {
     pub name: Symbol,
     pub ctors: Range,
-    /// What its values stay under, where a program said. A bound is a power
-    /// of two, so counting past it is counting back round to nought: what
-    /// the type means is the ring, not a machine word it stands in for.
-    pub below: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,6 +217,13 @@ impl Program {
     #[must_use]
     pub fn expr(&self, id: ExprId) -> Expr {
         self.exprs[id.index()]
+    }
+
+    /// How many terms the program holds, which is what anything keeping an
+    /// answer per term needs.
+    #[must_use]
+    pub const fn exprs_count(&self) -> usize {
+        self.exprs.len()
     }
 
     /// Put another term where one is. A term is a slot in the arena rather

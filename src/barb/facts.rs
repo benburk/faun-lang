@@ -10,8 +10,9 @@
 //! where the program wrote a recursive call. A fold or a constant folder
 //! would read the same entry.
 
+use super::bounds::{Bounds, Known};
 use super::constant::{Shape, shape};
-use super::ir::{Atom, Expr, FnId, Local, Program};
+use super::ir::{Atom, Expr, ExprId, FnId, Local, Program};
 
 /// An operation the tiers below have a name for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub enum Operation {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
     operations: Vec<Option<Operation>>,
+    known: Known,
 }
 
 impl Facts {
@@ -31,16 +33,44 @@ impl Facts {
     pub fn operation(&self, id: FnId) -> Option<Operation> {
         self.operations.get(id.index()).copied().flatten()
     }
+
+    /// What a term answers.
+    #[must_use]
+    pub fn held(&self, id: ExprId) -> Bounds {
+        self.known
+            .terms
+            .get(id.index())
+            .copied()
+            .unwrap_or(Bounds::ANY)
+    }
+
+    /// What a definition is handed, by parameter.
+    #[must_use]
+    pub fn takes(&self, id: FnId) -> &[Bounds] {
+        self.known.takes.get(id.index()).map_or(&[], Vec::as_slice)
+    }
+
+    /// And what it answers.
+    #[must_use]
+    pub fn answers(&self, id: FnId) -> Bounds {
+        self.known
+            .answers
+            .get(id.index())
+            .copied()
+            .unwrap_or(Bounds::ANY)
+    }
 }
 
 /// Read what can be read off every definition.
 #[must_use]
 pub fn recognise(program: &Program) -> Facts {
-    Facts {
-        operations: (0..program.functions().len())
-            .map(|at| operation(program, FnId::at(at)))
-            .collect(),
-    }
+    let operations: Vec<Option<Operation>> = (0..program.functions().len())
+        .map(|at| operation(program, FnId::at(at)))
+        .collect();
+    // What a definition computes is read first, since what a number can be
+    // is worked out through the operations rather than around them.
+    let known = super::bounds::walk(program, &operations);
+    Facts { operations, known }
 }
 
 /// Addition, as counting one argument down onto the other:

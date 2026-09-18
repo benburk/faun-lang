@@ -198,6 +198,18 @@ impl Builder<'_> {
         self.program.class(value)
     }
 
+    /// The classes a function's parameters were declared at, which is what
+    /// a call to it hands over.
+    #[must_use]
+    pub fn takes(&self, function: FunctionId) -> Vec<Class> {
+        let params = self.program.functions[function.index()].params;
+        self.program
+            .values(params)
+            .iter()
+            .map(|&value| self.program.class(value))
+            .collect()
+    }
+
     pub fn constant(&mut self, class: Class, value: u64) -> ValueId {
         let value = wrap(class, value);
         self.push_one(Op::Constant { class, value }, class)
@@ -217,8 +229,23 @@ impl Builder<'_> {
         self.constant(Class::Word, u64::from(len))
     }
 
+    /// As wide as its left operand, which is what a program building its own
+    /// IR means by an operation on two values of one width.
     pub fn binary(&mut self, op: Binary, left: ValueId, right: ValueId) -> ValueId {
         let class = self.program.class(left);
+        self.binary_at(class, op, left, right)
+    }
+
+    /// And at a width said outright, for a tier that worked out what the
+    /// answer can be before working out what reads it: two and two are two
+    /// bits each and four is three.
+    pub fn binary_at(
+        &mut self,
+        class: Class,
+        op: Binary,
+        left: ValueId,
+        right: ValueId,
+    ) -> ValueId {
         self.push_one(Op::Binary { op, left, right }, class)
     }
 

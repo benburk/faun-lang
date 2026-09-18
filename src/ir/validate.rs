@@ -20,11 +20,24 @@ pub fn validate(program: &Program) -> Result<(), String> {
 }
 
 fn check(program: &Program, name: &str, region: RegionId, returns: &[Class]) -> Result<(), String> {
-    for op in program.ops(region) {
+    for (op, results) in program.walk(region) {
         match *op {
-            Op::Binary { left, right, .. } | Op::Compare { left, right, .. } => {
+            // Operands of one operation are read at one width, and a value
+            // needing fewer bits already reads as one needing more. What
+            // they may not be is wider than what reads them, or an address
+            // where a number is read.
+            Op::Binary { left, right, .. } => {
+                let held = program.class(results[0]);
+                for operand in [left, right] {
+                    let operand = program.class(operand);
+                    if !operand.fits(held) {
+                        return Err(format!("{name}: {operand:?} read as {held:?}"));
+                    }
+                }
+            }
+            Op::Compare { left, right, .. } => {
                 let (left, right) = (program.class(left), program.class(right));
-                if left != right {
+                if !left.fits(right) && !right.fits(left) {
                     return Err(format!("{name}: {left:?} and {right:?} in one operation"));
                 }
             }
@@ -43,20 +56,31 @@ fn check(program: &Program, name: &str, region: RegionId, returns: &[Class]) -> 
     }
     leaves(program, name, region)?;
 
+    left(program, name, region, returns)
+}
+
+/// What a region leaves with, against what the function it is in answers.
+fn left(program: &Program, name: &str, region: RegionId, returns: &[Class]) -> Result<(), String> {
     let terminator = program.region(region).terminator;
-    if terminator.exit == Exit::Return {
-        let found: Vec<_> = program
-            .values(terminator.values)
-            .iter()
-            .map(|&value| program.class(value))
-            .collect();
-        if found != returns {
-            return Err(format!(
-                "{name} returns {returns:?} but leaves with {found:?}"
-            ));
-        }
+    if terminator.exit != Exit::Return {
+        return Ok(());
     }
-    Ok(())
+    let found: Vec<_> = program
+        .values(terminator.values)
+        .iter()
+        .map(|&value| program.class(value))
+        .collect();
+    let fits = found.len() == returns.len()
+        && found
+            .iter()
+            .zip(returns)
+            .all(|(found, wanted)| found.fits(*wanted));
+    if fits {
+        return Ok(());
+    }
+    Err(format!(
+        "{name} returns {returns:?} but leaves with {found:?}"
+    ))
 }
 
 /// What a call hands over, against what the name it calls takes. A target
@@ -86,7 +110,12 @@ fn given(program: &Program, name: &str, op: &Op) -> Result<(), String> {
         _ => return Ok(()),
     };
     let held = classes(args);
-    if held == takes {
+    if held.len() == takes.len()
+        && held
+            .iter()
+            .zip(&takes)
+            .all(|(held, wanted)| held.fits(*wanted))
+    {
         return Ok(());
     }
     let callee = program.name(callee);

@@ -73,9 +73,15 @@ pub struct Span {
 pub enum Class {
     /// As wide as an address, whatever the target's is.
     Word,
-    /// Arithmetic in Z/2^bits: wrapping is the meaning, not an overflow a
-    /// target may or may not have. One wider than `bits` narrows after each
-    /// operation, and one narrower synthesizes.
+    /// A value needing at least this many bits, and never more. It is a
+    /// requirement rather than a modulus: a target may hold one in anything
+    /// wider, since what it holds above those bits is nought.
+    ///
+    /// So nothing wraps of its own accord. Arithmetic on values that fit
+    /// answers a value that fits, because the tier above worked out what
+    /// they could be before saying how wide to hold them, and taking one
+    /// modulo a width is what [`Op::Convert`] is for -- a program asking,
+    /// rather than a machine deciding.
     Fixed {
         bits: u16,
     },
@@ -339,8 +345,26 @@ impl Program {
     }
 }
 
-/// A value taken modulo its class, which for [`Class::Fixed`] is the only
-/// reading there is.
+impl Class {
+    /// Whether a value of this class can be read as one of `wanted` without
+    /// anything happening in between. A width is what a value needs and
+    /// what it holds above that is nought, so a narrower one is already a
+    /// wider one; the other way needs taking modulo, which is an operation
+    /// rather than an assumption.
+    #[must_use]
+    pub const fn fits(self, wanted: Self) -> bool {
+        match (self, wanted) {
+            (Self::Address, Self::Address) | (Self::Word, Self::Word) => true,
+            (Self::Fixed { bits }, Self::Word) => bits <= 64,
+            (Self::Fixed { bits }, Self::Fixed { bits: wanted }) => bits <= wanted,
+            _ => false,
+        }
+    }
+}
+
+/// A constant taken modulo its class. Everything else fits its class by
+/// construction; a constant is where a builder could write one that does
+/// not, and this is what it means if it does.
 #[must_use]
 pub const fn wrap(class: Class, value: u64) -> u64 {
     match class {

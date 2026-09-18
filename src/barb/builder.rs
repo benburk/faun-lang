@@ -40,20 +40,8 @@ impl Program {
         self.types.push(Type {
             name,
             ctors: Range::default(),
-            below: None,
         });
         TypeId::at(self.types.len() - 1)
-    }
-
-    /// Say what a type's values stay under. A bound is a power of two, so
-    /// that counting past it is counting back round to nought.
-    ///
-    /// # Panics
-    ///
-    /// If `below` is not a power of two.
-    pub fn bound_type(&mut self, id: TypeId, below: u64) {
-        assert!(below.is_power_of_two(), "a bound is a power of two");
-        self.types[id.index()].below = Some(below);
     }
 
     /// Give a reserved type its constructors, in tag order.

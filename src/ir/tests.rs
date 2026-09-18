@@ -1,40 +1,63 @@
 use super::*;
 
-/// The mistake `Convert` exists to make visible: an entry that says it
-/// leaves with a word, leaving with eight bits instead.
+/// A width is what a value needs, so a value needing fewer bits than what
+/// reads it is already what reads it: what it holds above those bits is
+/// nought. Needing more is the mistake, and `Convert` is what says where a
+/// value is taken modulo a width rather than assumed to fit one.
 #[test]
-fn a_width_that_changes_without_saying_so_is_rejected() {
+fn a_value_wider_than_what_reads_it_is_rejected() {
+    let narrow = |bits| {
+        let (mut program, main) = Program::new("main");
+        let takes = program.declare("takes", &[Class::Fixed { bits: 8 }], &[]);
+        program.define(takes, |b, _| b.ret(&[]));
+        program.define(main, |b, _| {
+            let held = b.constant(Class::Fixed { bits }, 1);
+            b.call(takes, &[held]);
+            let status = b.constant(Class::Word, 0);
+            b.ret(&[status])
+        });
+        program
+    };
+
+    assert!(validate(&narrow(8)).is_ok(), "the width it reads");
+    assert!(validate(&narrow(3)).is_ok(), "narrower, which already fits");
+    let error = validate(&narrow(16)).unwrap_err();
+    assert!(error.contains("main calls `takes`"), "{error}");
+
+    // The entry leaves with a word, and a byte is a word with nothing above
+    // its eight bits.
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let byte = b.constant(Class::Fixed { bits: 8 }, 250);
         b.ret(&[byte])
     });
-
-    let error = validate(&program).unwrap_err();
-    assert!(error.contains("main returns"), "{error}");
-
-    let (mut program, main) = Program::new("main");
-    program.define(main, |b, _| {
-        let byte = b.constant(Class::Fixed { bits: 8 }, 250);
-        let word = b.convert(Class::Word, byte);
-        b.ret(&[word])
-    });
     assert!(validate(&program).is_ok());
 }
 
+/// Operands are read at the width of what they answer, and a value needing
+/// fewer bits already reads as one needing more. Wider than what reads it is
+/// the mistake: the bits above would be dropped without anything saying so.
 #[test]
-fn operands_of_one_operation_must_agree() {
-    let (mut program, main) = Program::new("main");
-    program.define(main, |b, _| {
-        let byte = b.constant(Class::Fixed { bits: 8 }, 1);
-        let word = b.constant(Class::Word, 1);
-        let sum = b.binary(Binary::Add, byte, word);
-        let sum = b.convert(Class::Word, sum);
-        b.ret(&[sum])
-    });
+fn an_operand_wider_than_what_reads_it_is_rejected() {
+    let held = |left: Class, right: Class| {
+        let (mut program, main) = Program::new("main");
+        program.define(main, |b, _| {
+            let left = b.constant(left, 1);
+            let right = b.constant(right, 1);
+            // The result is as wide as the left operand, which is what a
+            // program building its own IR means by adding them.
+            let sum = b.binary(Binary::Add, left, right);
+            let sum = b.convert(Class::Word, sum);
+            b.ret(&[sum])
+        });
+        validate(&program)
+    };
 
-    let error = validate(&program).unwrap_err();
-    assert!(error.contains("in one operation"), "{error}");
+    let byte = Class::Fixed { bits: 8 };
+    assert!(held(Class::Word, byte).is_ok(), "a byte read as a word");
+    assert!(held(byte, byte).is_ok());
+    let error = held(byte, Class::Word).unwrap_err();
+    assert!(error.contains("read as"), "{error}");
 }
 
 #[test]
@@ -62,7 +85,10 @@ fn a_call_gives_a_name_what_it_takes() {
     assert!(bad(1, Class::Word).is_ok());
     let error = bad(2, Class::Word).unwrap_err();
     assert!(error.contains("main calls `takes_one`"), "{error}");
-    let error = bad(1, Class::Fixed { bits: 8 }).unwrap_err();
+    // A byte is read as a word without anything in between; an address is
+    // not a number, whatever it is as wide as.
+    assert!(bad(1, Class::Fixed { bits: 8 }).is_ok());
+    let error = bad(1, Class::Address).unwrap_err();
     assert!(error.contains("main calls `takes_one`"), "{error}");
 }
 
