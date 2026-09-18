@@ -134,6 +134,10 @@ impl Assembler {
         self.emit(&[0x85, at]);
     }
 
+    pub(crate) fn stx_zp(&mut self, at: u8) {
+        self.emit(&[0x86, at]);
+    }
+
     /// `a = [pair + y]`, and its mirror: the only way to reach a computed
     /// address, since the machine has no sixteen-bit register.
     pub(crate) fn lda_ind_y(&mut self, pair: u8) {

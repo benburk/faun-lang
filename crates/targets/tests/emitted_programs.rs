@@ -112,12 +112,10 @@ fn written() -> Vec<(String, Program, [usize; 3])> {
         ("two-and-two", [128, 96, 29]),
         ("double", [128, 96, 29]),
         ("leave", [141, 108, 49]),
-        // Every one of these works out before it runs, so what a target is
-        // handed is the answer and nothing to work it out with. They
-        // measure a program that computes again once something reads.
-        ("bool", [128, 96, 29]),
-        ("nat", [128, 96, 29]),
-        ("width", [128, 96, 29]),
+        ("bool", [628, 390, 533]),
+        ("nat", [1087, 604, 1265]),
+        ("width", [294, 239, 225]),
+        ("argc", [187, 179, 102]),
     ]
     .into_iter()
     .map(|(name, sizes)| {
@@ -1396,5 +1394,29 @@ fn every_target_provides_routines_that_exist() {
                 "{target} answers for `{held}`, which is not a routine"
             );
         }
+    }
+}
+
+/// Every machine answers how many arguments a program was handed, and each
+/// does it its own way: Linux leaves the count on the stack it starts a
+/// program on, WASI reports it through a call, and the simulator has a hook
+/// for it. What a program says is the same on all three.
+#[test]
+fn every_target_says_how_many_arguments_it_was_handed() {
+    let machine = read(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         main!(h) ->
+           n = argc!(h)
+           exit!(h add(n n))",
+    )
+    .expect("a program");
+
+    for target in ALL {
+        // Run with nothing, so the program was handed only itself.
+        assert_eq!(status(target, &machine), 2, "{target}");
     }
 }

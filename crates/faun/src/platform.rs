@@ -77,6 +77,10 @@ impl Routines {
             // The kernel picks the address, so nothing asking for a page
             // says where.
             held("grow", None, &[Class::Word], &[Class::Address]),
+            // How many arguments a program was handed, which is the one
+            // thing every machine here can be asked and the only thing a
+            // program can be told that it did not work out itself.
+            held("argc", Some("argc!"), &[], &[Class::Word]),
         ])
     }
 

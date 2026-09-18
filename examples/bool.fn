@@ -21,6 +21,9 @@ or(True b) -> True
 is_zero(Zero) -> True
 is_zero(Succ(k)) -> False
 
+down(Zero) -> Zero
+down(Succ(k)) -> k
+
 # Both answers are worked out before the choice is made, which is what you
 # want where both are cheap and already in hand. It is not a spelling of a
 # match: an arm a match never takes is never entered, and an argument here
@@ -30,5 +33,5 @@ select(False t f) -> f
 
 main!(h) ->
   four = Succ(Succ(Succ(Succ(Zero))))
-  held = and(not(False) or(False is_zero(Zero)))
+  held = and(not(False) or(False is_zero(down(argc!(h)))))
   exit!(h select(held four Zero))

@@ -20,6 +20,10 @@ const STDOUT: i32 = 1;
 /// Linear memory: the cell `fd_write` reports its byte count into, then the
 /// vectors, four-byte aligned as WASI requires, then the data.
 const NWRITTEN: i32 = 0;
+/// Where `args_sizes_get` reports the count. The cell beside it is the one
+/// `fd_write` reports into, and neither is live while the other is called,
+/// so the second thing `args_sizes_get` answers goes there and is dropped.
+const ARGC: i32 = 4;
 const IOVECS: u32 = 8;
 const IOVEC_LEN: u32 = 8;
 
@@ -95,6 +99,9 @@ pub(crate) fn lower(program: &Program) -> Code {
     }
     if state.needs_proc_exit() {
         state.imports.push("proc_exit");
+    }
+    if state.needs("argc") {
+        state.imports.push("args_sizes_get");
     }
 
     let bodies = state.bodies(&frames);
@@ -211,6 +218,29 @@ impl Lowering<'_> {
     /// Anything else has to be said: a status the entry did not work out to
     /// nought, and every exit from somewhere a `return` would not end the
     /// program.
+    /// Whether anything in the program asks for a routine by this name.
+    fn needs(&self, name: &str) -> bool {
+        fn within(state: &Lowering, region: RegionId, name: &str) -> bool {
+            state.program.ops(region).iter().any(|op| match *op {
+                Op::PlatformCall { platform, .. } => {
+                    let held = state.program.platforms()[platform.index()].name;
+                    state.program.name(held) == name
+                }
+                Op::If {
+                    then_region,
+                    else_region,
+                    ..
+                } => within(state, then_region, name) || within(state, else_region, name),
+                Op::Loop { body, .. } => within(state, body, name),
+                _ => false,
+            })
+        }
+        self.program
+            .functions()
+            .iter()
+            .any(|function| within(self, function.body, name))
+    }
+
     fn needs_proc_exit(&self) -> bool {
         let entry = &self.program.functions()[self.entry.index()];
         let terminator = self.program.region(entry.body).terminator;
@@ -535,6 +565,24 @@ impl Lowering<'_> {
 
     /// The opcode for the width, then its alignment as a power of two and
     /// the constant part of its address.
+    /// How many arguments the program was handed.
+    ///
+    /// Two cells are written and one is wanted: the count comes back
+    /// through memory, and what the call answers is an errno there is
+    /// nobody to tell.
+    fn count(&mut self, result: ValueId) {
+        self.constant_i32(ARGC);
+        self.constant_i32(NWRITTEN);
+        let sizes = self
+            .import("args_sizes_get")
+            .expect("a count imports args_sizes_get");
+        self.call(sizes);
+        self.body.byte(DROP);
+        self.constant_i32(ARGC);
+        self.access(Width::Word, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.set(result);
+    }
+
     fn access(&mut self, width: Width, offset: Offset, byte: u8, word: u8) {
         let bytes = match offset {
             Offset::Bytes(bytes) => bytes,
@@ -588,6 +636,7 @@ impl Lowering<'_> {
                 self.body.byte(DROP); // The errno, which there is nobody to tell.
             }
             "exit" => self.leave(args[0], ending),
+            "argc" => self.count(results[0]),
             // Handed straight back: nothing is asked of the outside, and
             // all this says is that nothing worked the value out.
             "grow" => {

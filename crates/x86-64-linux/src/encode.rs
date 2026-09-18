@@ -7,6 +7,9 @@ pub(crate) enum Reg {
     Rax = 0,
     Rcx = 1,
     Rdx = 2,
+    /// Nothing here tracks or clobbers it, which is what makes it somewhere
+    /// to keep a value for as long as the program runs.
+    Rbx = 3,
     Rsi = 6,
     Rdi = 7,
     R8 = 8,

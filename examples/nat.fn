@@ -48,9 +48,10 @@ min(a b) -> select(less(a b) a b)
 max(a b) -> select(less(a b) b a)
 
 main!(h) ->
-  # Every number below is known, so all of this is worked out before the
-  # program runs and what a target is handed is the answer.
-  two = Succ(Succ(Zero))
+  # Nothing below is known, since the count came from outside. A program
+  # handed no arguments was handed itself, so this is two.
+  n = argc!(h)
+  two = add(n n)
   four = mul(two two)
   eight = mul(two four)
   exit!(h min(four sub(eight two)))

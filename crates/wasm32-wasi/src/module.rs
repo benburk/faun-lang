@@ -69,8 +69,9 @@ fn types(out: &mut Bytes, code: &Code) {
         s.uleb(len32(code.imports.len() + code.bodies.len()));
         for name in &code.imports {
             let (params, returns) = match *name {
-                "fd_write" => (4, 1),  // (fd, iovs, iovs_len, nwritten)
-                "proc_exit" => (1, 0), // (status)
+                "fd_write" => (4, 1),       // (fd, iovs, iovs_len, nwritten)
+                "proc_exit" => (1, 0),      // (status)
+                "args_sizes_get" => (2, 1), // (argc_out, argv_size_out)
                 other => panic!("no signature for `{other}`"),
             };
             signature(s, params, returns);

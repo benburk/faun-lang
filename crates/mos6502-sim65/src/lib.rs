@@ -46,8 +46,12 @@ const HEAP: u8 = 0x16;
 const HOMES: u8 = 0x18;
 const HOME_COUNT: u8 = 16;
 
+/// Where the count of arguments is kept, read once at reset.
+const ARGC: u8 = 0x28;
+
 /// The simulator's hooks: a `jmp` or `jsr` to one is answered by the host.
 const HOOK_WRITE: u16 = 0xFFF7;
+const HOOK_ARGS: u16 = 0xFFF8;
 const HOOK_EXIT: u16 = 0xFFF9;
 
 /// This target, for whoever is choosing between them.
@@ -64,7 +68,7 @@ impl Target for Mos6502Sim65 {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write", "exit", "grow"]
+        &["write", "exit", "grow", "argc"]
     }
 
     fn emit(&self, program: &Program) -> Vec<Artifact> {

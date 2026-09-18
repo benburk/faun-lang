@@ -26,7 +26,8 @@ select(True t f) -> t
 select(False t f) -> f
 
 main!(h) ->
-  two = Succ(Succ(Zero))
+  n = argc!(h)
+  two = add(n n)
   four = double(two)
   # Nothing here is above four, so three bits hold every number in it.
   exit!(h select(is_zero(Zero) four Zero))

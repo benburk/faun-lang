@@ -7,8 +7,8 @@
 
 use super::asm::{Assembler, Cc};
 use super::{
-    ARG_COUNT, ARGS, CSP, CSTACK_TOP, Code, FP, FRAMES_TOP, HEAP, HOME_COUNT, HOMES, HOOK_EXIT,
-    HOOK_WRITE, LOAD, PTR, R0, T0, T1,
+    ARG_COUNT, ARGC, ARGS, CSP, CSTACK_TOP, Code, FP, FRAMES_TOP, HEAP, HOME_COUNT, HOMES,
+    HOOK_ARGS, HOOK_EXIT, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
 };
 use faun::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op, Origin, Program, RegionId, Relation,
@@ -355,6 +355,22 @@ impl Lowering<'_> {
         }
         if uses_platform(self.program, "grow") {
             self.set_pair(HEAP, heap);
+        }
+        // The hook writes the arguments themselves wherever it is told, and
+        // nothing has asked for memory yet, so it is told the heap. What is
+        // wanted is the count, which comes back in `A` and `X`.
+        if uses_platform(self.program, "argc") {
+            let [low, high] = heap.to_le_bytes();
+            self.set_pair(CSP, CSTACK_TOP - 2);
+            self.asm.ldy_imm(0);
+            self.asm.lda_imm(low);
+            self.asm.sta_ind_y(CSP);
+            self.asm.iny();
+            self.asm.lda_imm(high);
+            self.asm.sta_ind_y(CSP);
+            self.jsr_hook(HOOK_ARGS);
+            self.asm.sta_zp(ARGC);
+            self.asm.stx_zp(ARGC + 1);
         }
 
         let entry = self.starts[self.program.entry().index()];
@@ -1137,6 +1153,8 @@ impl Lowering<'_> {
     fn platform_call(&mut self, name: &str, args: &[ValueId], results: &[ValueId]) {
         match name {
             "write" => self.write(args),
+            // Read at reset and kept since, so nothing is asked here.
+            "argc" => self.commit(results[0], ARGC),
             "exit" => {
                 let status = self.operand(args[0], T0);
                 self.load(status.byte(0));

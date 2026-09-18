@@ -42,6 +42,37 @@ const BELOW: u8 = 0x2;
 /// `syscall` returns in rax and destroys rcx and r11.
 const CLOBBERED: [Reg; 3] = [Reg::Rax, Reg::Rcx, Reg::R11];
 
+/// Where the count of arguments is kept, for as long as the program runs.
+///
+/// The kernel leaves it on the stack it starts a program on, and nothing
+/// puts it anywhere a program could ask for later, so it is read once
+/// before anything moves the stack pointer. A register is enough because
+/// this one is outside [`TRACKED`]: nothing here reads it, writes it, or
+/// counts it among what a call destroys.
+const ARGC: Reg = Reg::Rbx;
+
+/// Whether anything in the program asks for a routine by this name.
+fn uses_platform(program: &Program, name: &str) -> bool {
+    fn within(program: &Program, region: RegionId, name: &str) -> bool {
+        program.ops(region).iter().any(|op| match *op {
+            Op::PlatformCall { platform, .. } => {
+                program.name(program.platforms()[platform.index()].name) == name
+            }
+            Op::If {
+                then_region,
+                else_region,
+                ..
+            } => within(program, then_region, name) || within(program, else_region, name),
+            Op::Loop { body, .. } => within(program, body, name),
+            _ => false,
+        })
+    }
+    program
+        .functions()
+        .iter()
+        .any(|function| within(program, function.body, name))
+}
+
 const TRACKED: [Reg; 9] = [
     Reg::Rax,
     Reg::Rcx,
@@ -110,6 +141,7 @@ fn assemble(
         program,
         entry,
         in_entry: true,
+        counts: uses_platform(program, "argc"),
         plan: Plan::empty(program),
         asm: Encoder::new(distant),
         framed: framed.to_vec(),
@@ -316,6 +348,8 @@ struct Lowering<'a> {
     program: &'a Program,
     entry: FunctionId,
     in_entry: bool,
+    /// Whether anything asks how many arguments the program was handed.
+    counts: bool,
     plan: Plan,
     asm: Encoder,
     relocs: Vec<Reloc>,
@@ -352,6 +386,12 @@ impl Lowering<'_> {
         self.starts[id.index()] = self.asm.here();
         self.plan = Plan::new(self.program, function);
         self.forget();
+
+        // Before anything moves the stack pointer, since what the kernel
+        // left there is only there until it does.
+        if self.in_entry && self.counts {
+            self.asm.load_slot(ARGC, 0);
+        }
 
         self.frame = if self.framed[id.index()] {
             self.plan.frame
@@ -502,6 +542,15 @@ impl Lowering<'_> {
         let name = self.program.platforms()[platform.index()].name;
         // What is handed straight back needs no kernel: the value is the
         // one it was, and all this says is that nothing worked it out.
+        // Read once at the entry and kept since, so nothing is asked of
+        // the kernel here.
+        if self.program.name(name) == "argc" {
+            self.asm.mov_reg(Reg::Rax, ARGC, true);
+            self.known[Reg::Rax.index()] = None;
+            self.holds[Reg::Rax.index()] = None;
+            self.keep(results[0]);
+            return;
+        }
         match self.program.name(name) {
             "write" => {
                 // rax first, so stdout can be copied from it.

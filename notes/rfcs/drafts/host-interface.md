@@ -189,11 +189,10 @@ the frontend now keeps it.
   `Convert` when a value does not fit what a routine takes, which is the
   machine deciding where `Op::Convert`'s own doc says a program asks. Latent
   while every routine takes a word.
-- **Nothing reads input.** `opaque` is gone, so every example works out
-  before it runs and six of the seven compile to the same bytes as an exit
-  with a constant. A routine that reads is what gives them something to
-  compute, and until there is one the written half of the corpus measures
-  folding rather than code.
+- **Only the count reads input.** `argc` is what every machine can be asked
+  and every one answers differently: linux leaves it on the stack it starts
+  a program on, wasi reports it through a call, the simulator has a hook.
+  `args` themselves need computed aggregates to have a representation.
 - **Narrowing needs recognition.** A program proves a value fits by clamping
   or taking a modulus, and `facts` recognises `add` and nothing else.
 - **faun needs a prelude.** `Standard.number` has to point at a type, and
@@ -205,10 +204,8 @@ the frontend now keeps it.
 
 1. `met()` refuses rather than converts. Changes nothing today, and gets
    awkward once the first narrow routine exists.
-2. A routine that reads, on each target. Gives the examples something to
-   compute, and the corpus something to measure.
-3. Routines move into the targets, and the conformance test over shared
+2. Routines move into the targets, and the conformance test over shared
    names lands with them.
-4. Imports in surface, which is also what lets a prelude exist, and what
+3. Imports in surface, which is also what lets a prelude exist, and what
    retires the entry rule as a special case.
-5. `Standard`, and borrow checking over resources.
+4. `Standard`, and borrow checking over resources.

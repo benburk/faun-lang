@@ -1000,13 +1000,16 @@ fn slots<'a>(
             unify.fresh();
         }
         let answer = unify.fresh();
-        if routine.comes_back {
+        if !routine.comes_back {
+            unify.pin(answer, NEVER)?;
+        } else if routine.answers.is_empty() {
             // One that comes back and works nothing out says nothing by
             // answering, which is what `Unit` is for.
             unify.pin(answer, UNIT)?;
-        } else {
-            unify.pin(answer, NEVER)?;
         }
+        // And one that answers a value says nothing here about which type
+        // holds it, there being no type below this tier. What it answers
+        // is whatever it stands beside, the same as anything else.
         base.insert(called, at);
     }
     Ok(base)

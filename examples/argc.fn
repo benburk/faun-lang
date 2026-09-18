@@ -1,0 +1,19 @@
+# What the world hands a program, and the one thing it hands every machine.
+#
+# A program works out what it can before it runs, so everything in the other
+# examples is known and what a target sees is the answer. Nothing here is:
+# the count came from outside, so the arithmetic below is left to run, and
+# what a target is handed is the program rather than its answer.
+#
+# Every machine answers it differently. Linux leaves it on the stack it
+# starts a program on, WASI has a call that reports it, and the simulator
+# has a hook. None of that is written here, and none of it is barb's.
+
+type Nat Zero Succ(Nat)
+
+add(a Zero) -> a
+add(a Succ(k)) -> Succ(add(a k))
+
+main!(h) ->
+  n = argc!(h)
+  exit!(h add(add(n n) add(n n)))
