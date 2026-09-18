@@ -1009,7 +1009,9 @@ fn every_target_runs_a_match_with_an_arm_that_leaves() {
          pick!(h Zero) -> exit!(h Succ(Zero))
          pick!(h Succ(k)) -> k
 
-         main!(h) -> exit!(h Succ(pick!(h Succ(Succ(Zero)))))",
+         main!(h) ->
+           held = pick!(h Succ(Succ(Zero)))
+           exit!(h Succ(held))",
     )
     .expect("a program");
     for target in ALL {
@@ -1023,7 +1025,9 @@ fn every_target_runs_a_match_with_an_arm_that_leaves() {
          pick!(h Zero) -> exit!(h Succ(Zero))
          pick!(h Succ(k)) -> k
 
-         main!(h) -> exit!(h Succ(pick!(h Zero)))",
+         main!(h) ->
+           held = pick!(h Zero)
+           exit!(h Succ(held))",
     )
     .expect("a program");
     for target in ALL {

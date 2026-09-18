@@ -208,7 +208,9 @@ fn a_clause_that_leaves_does_not_decide_what_the_rest_answer() {
         "type Nat Zero Succ(Nat)
          pick!(h Zero) -> exit!(h Zero)
          pick!(h Succ(k)) -> k
-         main!(h) -> exit!(h pick!(h Succ(Succ(Zero))))",
+         main!(h) ->
+           held = pick!(h Succ(Succ(Zero)))
+           exit!(h held)",
     )
     .expect("a program");
     assert!(
@@ -231,7 +233,10 @@ fn leaving_twice_does_not_tie_the_two_together() {
          flag!(h Zero) -> exit!(h Zero)
          flag!(h Succ(k)) -> On
 
-         main!(h) -> exit!(h status!(h flag!(h Succ(Zero))))",
+         main!(h) ->
+           held = flag!(h Succ(Zero))
+           kept = status!(h held)
+           exit!(h kept)",
     )
     .expect("a program");
     let render = program.render();
@@ -640,4 +645,48 @@ fn a_routine_written_down_is_one_a_program_may_name() {
 
     let program = super::parse(held, &routines).expect("a program naming it");
     assert!(program.render().contains("tick"), "{}", program.render());
+}
+
+/// An effect stands on its own: as the whole of a step, or as what a clause
+/// answers. Which of two goes first is then answered by where their names
+/// are written, rather than by how one term nests inside another.
+#[test]
+fn an_effect_may_not_stand_in_an_argument() {
+    let refused = parse(
+        "type Nat Zero Succ(Nat)
+
+         main!(h) -> exit!(h argc!(h))",
+    )
+    .unwrap_err();
+    assert!(refused.contains("stands on its own"), "{refused}");
+
+    // The same program with the effect bound to a name, which says what
+    // runs first by saying it first.
+    parse(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         main!(h) ->
+           n = argc!(h)
+           exit!(h add(n n))",
+    )
+    .expect("a program");
+}
+
+/// A routine nothing calls settles nothing, and needs to. One something
+/// calls that still settles nothing is a program that never said which type
+/// it was working over, and saying so beats saying the name does not exist.
+#[test]
+fn a_routine_nothing_settles_is_named_as_one() {
+    let refused = parse(
+        "type Nat Zero Succ(Nat)
+
+         main!(h) ->
+           n = argc!(h)
+           exit!(h n)",
+    )
+    .unwrap_err();
+    assert!(refused.contains("nothing says what type"), "{refused}");
 }

@@ -33,5 +33,6 @@ select(False t f) -> f
 
 main!(h) ->
   four = Succ(Succ(Succ(Succ(Zero))))
-  held = and(not(False) or(False is_zero(down(argc!(h)))))
+  n = argc!(h)
+  held = and(not(False) or(False is_zero(down(n))))
   exit!(h select(held four Zero))

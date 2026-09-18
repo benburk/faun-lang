@@ -461,6 +461,7 @@ fn validate(
     arity: &HashMap<&str, usize>,
 ) -> Result<(), String> {
     colour(source)?;
+    standing(source)?;
     one_name_per_thing(source)?;
     calls_are_saturated(source, clauses, arity)?;
     // The entry is handed the authority and nothing else: there is nobody
@@ -576,6 +577,57 @@ fn colour(source: &Source) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// An effect stands on its own: as the whole of a step, or as what a clause
+/// answers, and never as an argument to something else.
+///
+/// What a term hands over is worked out before the term is, and where two
+/// of them are observable, which goes first is a question the writing does
+/// not answer. Binding each to a name answers it, in the order the names
+/// are written. Nothing below the language knows this rule, and nothing
+/// below it has to: what reaches the tier below is already in an order.
+fn standing(source: &Source) -> Result<(), String> {
+    fn within(term: &Term, name: &str) -> Result<(), String> {
+        for held in &term.1 {
+            if held.0.ends_with('!') {
+                return Err(format!(
+                    "`{name}` hands over `{}`, and an effect stands on its own",
+                    held.0
+                ));
+            }
+            within(held, name)?;
+        }
+        Ok(())
+    }
+    for name in &source.order {
+        for clause in &source.clauses[name] {
+            for term in clause
+                .steps
+                .iter()
+                .map(|(_, term)| term)
+                .chain([&clause.body])
+            {
+                within(term, name)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether anything in the program calls a name.
+fn calls(source: &Source, name: &str) -> bool {
+    fn within(term: &Term, name: &str) -> bool {
+        term.0 == name || term.1.iter().any(|held| within(held, name))
+    }
+    source.clauses.values().flatten().any(|clause| {
+        clause
+            .steps
+            .iter()
+            .map(|(_, term)| term)
+            .chain([&clause.body])
+            .any(|term| within(term, name))
+    })
 }
 
 /// A pattern naming a declared constructor is that constructor, not a name
@@ -964,8 +1016,16 @@ fn infer(
     // An effect no program calls settles nothing, and needs to: there is
     // nothing to declare and nothing to answer for.
     for (called, _) in routines.offered() {
-        if let Ok(held) = settled(&mut unify, &base, arity, called) {
-            told.insert(called.to_owned(), held);
+        match settled(&mut unify, &base, arity, called) {
+            Ok(held) => {
+                told.insert(called.to_owned(), held);
+            }
+            // One nothing calls settles nothing, and needs to: there is
+            // nothing to declare and nothing to answer for. One something
+            // calls and that still settles nothing is a program that never
+            // said which type it was working over.
+            Err(held) if calls(source, called) => return Err(held),
+            Err(_) => {}
         }
     }
     Ok(told)
