@@ -119,6 +119,13 @@ pub struct Function {
     /// declaration can be read, so what is known of one is what the tier
     /// above said -- this being the first such thing it has to say.
     pub answers: Option<usize>,
+    /// What answers for it out there, where that is not the name a program
+    /// calls it by. Nothing here reads it: it is a name this tier holds and
+    /// the tier below resolves, like [`Function::answers`] is a fact this
+    /// tier holds and does not use. Two names may give the same one, which
+    /// is how one routine serves a program at more than one type -- there
+    /// is no body to copy, so nothing is duplicated by saying it twice.
+    pub outside: Option<Symbol>,
 }
 
 /// A program, and the pools every part of it lives in.

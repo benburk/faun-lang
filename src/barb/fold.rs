@@ -7,9 +7,12 @@
 //! arguments are all known, which is the one that matters -- a definition
 //! nothing reaches after its callers fold is not emitted at all.
 //!
-//! Nothing observable folds. An effect has no body to read, so a call to
-//! one answers nothing here, and a pure name may not call an effect, so
-//! anything with a body is something whose answer is all it does.
+//! Folding stops at a name with no body. There is nothing to read, so the
+//! call is worked out to nothing here, and so is everything that reads what
+//! it answered. That is structural rather than a promise the tier above
+//! keeps: a term a target would run cannot be worked out from a body it
+//! does not have, and this tier never has to know that running one does
+//! anything.
 //!
 //! Working a term out is bounded, since nothing yet says a definition
 //! stops. A term that runs past its budget is left as it was written, which

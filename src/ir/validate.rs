@@ -1,7 +1,7 @@
 //! What a target is entitled to assume.
 
 use super::model::{Class, Exit, Op, Program, Range, RegionId};
-use super::platform::routine;
+use crate::platform::routine;
 
 /// What a program has to be true of before a target sees it. These are the
 /// mistakes a builder can make that a target would otherwise miscompile in

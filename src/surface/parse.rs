@@ -23,6 +23,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::platform;
+
 use crate::barb::{Atom, CtorId, FnId, Program, TypeId};
 
 /// What a clause matches in one argument: a name, or a constructor and the
@@ -285,22 +287,24 @@ fn build(source: &Source) -> Result<Program, String> {
     validate(source, &clauses, &arity)?;
     let told = infer(source, &clauses, &program, &ctors, &arity)?;
     let mut functions: HashMap<&str, FnId> = HashMap::new();
-    for (name, _, answers, authority) in ELSEWHERE {
-        let Some((params, result)) = told.get(name) else {
+    for (called, routine) in platform::offered() {
+        let Some((params, result)) = told.get(called) else {
             continue;
         };
         // The `!` says a program may observe this one working, which is a
-        // rule about the language rather than about the routine. The tier
-        // below holds the name a target answers to.
-        let held = name.strip_suffix('!').unwrap_or(name);
+        // rule about the language rather than about the routine, so the
+        // declaration goes without it -- and says which routine answers for
+        // it rather than leaving the tier below to read the name twice.
+        let held = called.strip_suffix('!').unwrap_or(called);
         let id = program.declare(held, params, *result);
-        // And what is known of it, since nothing can be read off a
+        program.answered_by(id, routine.name);
+        // And what else is known of it, since nothing can be read off a
         // declaration. What it hands back is one along where the authority
         // is in front of it.
-        if let Answers::Argument(at) = answers {
-            program.hands_back(id, at + usize::from(authority));
+        if let Some(at) = routine.hands_back {
+            program.hands_back(id, at + usize::from(routine.authority));
         }
-        functions.insert(name, id);
+        functions.insert(called, id);
     }
     for name in &source.order {
         let (params, result) = &told[name];
@@ -316,11 +320,15 @@ fn build(source: &Source) -> Result<Program, String> {
 ///
 /// It is effectful because a program that does nothing observable does
 /// nothing: the status it leaves with is something it says rather than
-/// something that falls out of how it was called. And it leaves through an
-/// effect rather than answering one -- what a program did is what it is, so
-/// the last thing it does is the last thing there is. Nothing after it
-/// could be told to run, and nothing before it can be dropped for want of
-/// a reader.
+/// something that falls out of how it was called.
+///
+/// That it leaves through an effect rather than answering one is this
+/// language's shape and not something the tier below asks for. Barb keeps
+/// an operation because something reads what it answered, whatever type an
+/// entry has, and a target that cannot leave early would want the other
+/// shape entirely. What the rule buys until a world is threaded through
+/// each effect is narrow but real: the last thing a program does is the
+/// term its entry answers, and nothing drops one of those.
 fn starts(
     program: &Program,
     functions: &HashMap<&str, FnId>,
@@ -421,8 +429,8 @@ fn arities<'a>(
         }
         arity.insert(name.as_str(), width);
     }
-    for (name, takes, _, authority) in ELSEWHERE {
-        arity.insert(name, takes + usize::from(authority));
+    for (called, routine) in platform::offered() {
+        arity.insert(called, routine.takes.len() + usize::from(routine.authority));
     }
     Ok(arity)
 }
@@ -584,33 +592,8 @@ const BUILTIN: [&str; 3] = ["Host", "Unit", "Never"];
 /// below are written in terms of them. The order `BUILTIN` is declared in is
 /// what makes these the indices they are.
 const HOST: TypeId = TypeId(0);
+const UNIT: TypeId = TypeId(1);
 const NEVER: TypeId = TypeId(2);
-
-/// What a name something outside answers for hands back. Nothing ever, or
-/// the argument it was given -- and the second is not an effect at all: a
-/// name with no body is one the tiers below cannot see through, which is
-/// all it takes to hold a value the compiler will not work out for itself.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Answers {
-    Never,
-    Argument(usize),
-}
-
-/// The names something outside answers for: how many arguments each takes,
-/// what it answers, and whether it is handed the authority. A program
-/// declares none of them -- they are the interface to the outside, so the
-/// compiler knows the names and a target provides them -- and what they take
-/// is whatever they are given, one type per program like any other name.
-///
-/// An effect is one that is handed the authority, and only those may do
-/// observable work. `opaque` is not one: it answers what it was given and a
-/// target hands it straight back, so nothing about it is observable and a
-/// pure name may call it. What it is for is being a name with no body,
-/// which is the one thing the tier above cannot see through.
-const ELSEWHERE: [(&str, usize, Answers, bool); 2] = [
-    ("exit!", 1, Answers::Never, true),
-    ("opaque", 1, Answers::Argument(0), false),
-];
 
 /// Every constructor a term may name.
 fn catalogue(program: &Program) -> HashMap<String, CtorId> {
@@ -962,9 +945,9 @@ fn infer(
     }
     // An effect no program calls settles nothing, and needs to: there is
     // nothing to declare and nothing to answer for.
-    for (name, ..) in ELSEWHERE {
-        if let Ok(held) = settled(&mut unify, &base, arity, name) {
-            told.insert(name.to_owned(), held);
+    for (called, _) in platform::offered() {
+        if let Ok(held) = settled(&mut unify, &base, arity, called) {
+            told.insert(called.to_owned(), held);
         }
     }
     Ok(told)
@@ -988,22 +971,25 @@ fn slots<'a>(
     // An effect is handed the authority; what either takes after that is
     // whatever it is given, which the argument settles, and what it answers
     // is either nothing ever or one of those arguments.
-    for (name, takes, answers, authority) in ELSEWHERE {
+    for (called, routine) in platform::offered() {
         let at = unify.parent.len();
-        let front = usize::from(authority);
-        if authority {
+        let front = usize::from(routine.authority);
+        if routine.authority {
             let held = unify.fresh();
             unify.pin(held, HOST)?;
         }
-        for _ in 0..takes {
+        for _ in 0..routine.takes.len() {
             unify.fresh();
         }
         let answer = unify.fresh();
-        match answers {
-            Answers::Never => unify.pin(answer, NEVER)?,
-            Answers::Argument(held) => unify.union(answer, at + front + held)?,
+        match (routine.comes_back, routine.hands_back) {
+            (false, _) => unify.pin(answer, NEVER)?,
+            (true, Some(held)) => unify.union(answer, at + front + held)?,
+            // One that comes back and works nothing out says nothing by
+            // answering, which is what `Unit` is for.
+            (true, None) => unify.pin(answer, UNIT)?,
         }
-        base.insert(name, at);
+        base.insert(called, at);
     }
     Ok(base)
 }
@@ -1052,10 +1038,9 @@ fn diverging<'a>(source: &'a Source, clauses: &HashMap<&str, Vec<Clause>>) -> Ha
     fn leaves(term: &Term, held: &HashSet<&str>) -> bool {
         held.contains(term.0.as_str()) || term.1.iter().any(|argument| leaves(argument, held))
     }
-    let mut held: HashSet<&str> = ELSEWHERE
-        .into_iter()
-        .filter(|(_, _, answers, _)| *answers == Answers::Never)
-        .map(|(name, ..)| name)
+    let mut held: HashSet<&str> = platform::offered()
+        .filter(|(_, routine)| !routine.comes_back)
+        .map(|(called, _)| called)
         .collect();
     let mut growing = true;
     while growing {

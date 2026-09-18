@@ -16,8 +16,8 @@
 use crate::barb;
 
 use super::model::{Binary, Class, FunctionId, PlatformId, Program, Relation, Terminator, ValueId};
-use super::platform::{Routine, reads, routine};
 use super::validate::validate;
+use crate::platform::{Routine, reads, routine};
 
 /// Lower a whole program, or say what it holds that this tier cannot yet
 /// represent.
@@ -121,7 +121,11 @@ fn declare(
         functions.push(Some(if function.body.is_some() {
             machine.declare(name, &params, &returns)
         } else {
-            let (held, wanted) = provided(name, &params, &returns)?;
+            // What a program calls it and what answers for it need not be
+            // the same name, so that one routine may serve a program at
+            // more than one type.
+            let outside = function.outside.map_or(name, |held| program.name(held));
+            let (held, wanted) = provided(name, outside, &params, &returns)?;
             platforms.push((id, machine.platform(held), wanted));
             main
         }));
@@ -138,13 +142,14 @@ fn declare(
 /// past the end of their arguments.
 fn provided(
     name: &str,
+    outside: &str,
     params: &[Class],
     returns: &[Class],
 ) -> Result<(&'static str, &'static Routine), String> {
-    let held = name;
-    let Some(wanted) = routine(held) else {
+    let Some(wanted) = routine(outside) else {
         return Err(format!("nothing answers for `{name}`"));
     };
+    let held = wanted.name;
     // What is handed over is converted to what the routine reads, so what
     // has to agree is how many of them: a value of a type carrying nothing
     // is not handed over at all, and then there is no value where one is
@@ -228,7 +233,7 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Option<()>, St
 
 /// A type with one constructor and no fields says nothing by being one value
 /// rather than another, so it needs no bits and no argument. The authority a
-/// program is handed is such a type, and so is what an effect answers when it
+/// program is handed is such a type, and so is what a routine answers when it
 /// answers nothing.
 fn erased(program: &barb::Program, id: barb::TypeId) -> bool {
     let ctors = program.ctors(id);

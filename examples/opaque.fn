@@ -6,10 +6,11 @@
 # is what you want of a program and exactly not what you want of a test of
 # one, since a test that folds away tests nothing.
 #
-# `opaque!` answers what it was given. Nothing else about it is so: no
-# target asks anything of the outside for it, and what it costs is a move.
-# It is an effect because the working-out is what must stop at it, and a
-# name with no body is the one thing that tier cannot read through.
+# `opaque` answers what it was given. Nothing else about it is so: no target
+# asks anything of the outside for it, and what it costs is a move. It is
+# not an effect and is handed no authority -- what stops the working-out at
+# it is that it has no body, which is the one thing that tier cannot read
+# through.
 
 type Nat Zero Succ(Nat)
 

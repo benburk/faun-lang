@@ -77,6 +77,7 @@ impl Program {
             result,
             body: None,
             answers: None,
+            outside: None,
         });
         FnId::at(self.functions.len() - 1)
     }
@@ -86,6 +87,14 @@ impl Program {
     /// answers is what it was handed, whatever else happens on the way.
     pub fn hands_back(&mut self, id: FnId, argument: usize) {
         self.functions[id.index()].answers = Some(argument);
+    }
+
+    /// Say what answers for a declaration out there, where a program calls
+    /// it by another name. Two declarations may name the same one, which is
+    /// how a program reaches it at more than one type.
+    pub fn answered_by(&mut self, id: FnId, name: &str) {
+        let name = self.symbol(name);
+        self.functions[id.index()].outside = Some(name);
     }
 
     /// The function a target enters.

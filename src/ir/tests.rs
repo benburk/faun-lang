@@ -134,3 +134,48 @@ fn nothing_is_written_after_a_routine_that_does_not_come_back() {
     });
     assert!(validate(&program).is_ok());
 }
+
+/// One routine, reached by two names. What a program calls a thing and what
+/// answers for it are different names, so a program may declare the same
+/// routine at as many types as it uses it at -- there is no body to copy, so
+/// nothing is duplicated by saying it twice.
+#[test]
+fn two_names_may_give_the_same_routine() {
+    let mut program = crate::barb::Program::default();
+    let nat = program.declare_type("Nat");
+    program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let bool_ = program.declare_type("Bool");
+    program.define_type(bool_, &[("False", &[]), ("True", &[])]);
+
+    let holds = |program: &mut crate::barb::Program, name, type_| {
+        let id = program.declare(name, &[type_], type_);
+        program.answered_by(id, "opaque");
+        program.hands_back(id, 0);
+        id
+    };
+    let held_nat = holds(&mut program, "held_nat", nat);
+    let held_bool = holds(&mut program, "held_bool", bool_);
+
+    let (yes, zero) = (program.ctor_at(bool_, 1), program.ctor_at(nat, 0));
+    let main = program.declare("main", &[], nat);
+    program.define(main, |b, _| {
+        let true_ = b.con(yes, &[]);
+        let asked = b.call(held_bool, &[true_]);
+        let nought = b.con(zero, &[]);
+        let kept = b.call(held_nat, &[nought]);
+        b.match_(asked, bool_, |_, _, _| kept)
+    });
+    program.set_entry(main);
+
+    let facts = crate::barb::recognise(&program);
+    let machine = lower(&program, &facts).expect("a representable program");
+    let routines: Vec<&str> = machine
+        .platforms()
+        .iter()
+        .map(|held| machine.name(held.name))
+        .collect();
+    // One per declaration, since each is handed a value of its own type and
+    // what a target reads is stated per call. Both say the same routine,
+    // which is the whole of what the name was doing before.
+    assert_eq!(routines, ["opaque", "opaque"], "both answered elsewhere");
+}

@@ -82,7 +82,7 @@ impl Program {
     /// program cannot reach it.
     pub fn platform(&mut self, name: &str) -> PlatformId {
         let routine =
-            super::platform::routine(name).unwrap_or_else(|| panic!("no routine named `{name}`"));
+            crate::platform::routine(name).unwrap_or_else(|| panic!("no routine named `{name}`"));
         let name = self.symbol(name);
         let params = self.sign(routine.takes);
         let returns = self.sign(routine.answers);
