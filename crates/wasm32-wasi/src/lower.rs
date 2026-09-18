@@ -608,7 +608,7 @@ impl Lowering<'_> {
                 self.body.byte(I32_SHL);
                 self.set(results[0]);
             }
-            other => panic!("this target provides no `{other}`"),
+            other => panic!("`{other}` is not one this answers for, which `accepts` says first"),
         }
     }
 

@@ -27,6 +27,10 @@ impl Target for Wasm32Wasi {
         32
     }
 
+    fn provides(&self) -> &'static [&'static str] {
+        &["write", "exit", "opaque", "grow"]
+    }
+
     fn emit(&self, program: &Program) -> Vec<Artifact> {
         vec![Artifact {
             extension: ".wasm",

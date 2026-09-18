@@ -1400,3 +1400,20 @@ fn how_wide_a_number_is_held_is_what_it_can_be() {
         "{held:?}"
     );
 }
+
+/// What a target says it answers for is what something answers for it.
+///
+/// The name is how a routine is reached, so one spelled wrong here is a
+/// program refused for naming something that exists, or a backend reached
+/// by a name its own `match` has no arm for. Neither says what went wrong.
+#[test]
+fn every_target_provides_routines_that_exist() {
+    for target in ALL {
+        for held in target.provides() {
+            assert!(
+                faun::platform::routine(held).is_some(),
+                "{target} answers for `{held}`, which is not a routine"
+            );
+        }
+    }
+}

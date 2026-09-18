@@ -1167,7 +1167,7 @@ impl Lowering<'_> {
 
                 self.commit(results[0], T1);
             }
-            other => panic!("this target provides no `{other}`"),
+            other => panic!("`{other}` is not one this answers for, which `accepts` says first"),
         }
     }
 

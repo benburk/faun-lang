@@ -43,6 +43,15 @@ pub trait Target: fmt::Debug {
     /// -- which is a different thing from one it compiles wrongly.
     fn word(&self) -> u16;
 
+    /// The routines it answers for, by the name a target is asked by.
+    ///
+    /// What a program may reach is what its target provides, and no two
+    /// provide the same set: one machine has a kernel to ask, another has a
+    /// simulator's hooks, and a third has neither and does what it can for
+    /// itself. A program naming anything else is refused here rather than
+    /// found out by a backend part way through writing it.
+    fn provides(&self) -> &'static [&'static str];
+
     /// The files a program becomes.
     fn emit(&self, program: &Program) -> Vec<Artifact>;
 
@@ -72,6 +81,7 @@ pub trait Target: fmt::Debug {
         }
         for function in program.functions() {
             holds(program, function.body, name, word)?;
+            reaches(program, function.body, name, self.provides())?;
         }
         Ok(())
     }
@@ -82,6 +92,37 @@ impl fmt::Display for dyn Target {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
+}
+
+/// Every routine a region calls, against what this target answers for.
+fn reaches(
+    program: &Program,
+    region: RegionId,
+    name: &str,
+    provides: &[&str],
+) -> Result<(), String> {
+    for op in program.ops(region) {
+        match *op {
+            Op::PlatformCall { platform, .. } => {
+                let held = program.platforms()[platform.index()].name;
+                let held = program.name(held);
+                if !provides.contains(&held) {
+                    return Err(format!("{name} answers for nothing called `{held}`"));
+                }
+            }
+            Op::If {
+                then_region,
+                else_region,
+                ..
+            } => {
+                reaches(program, then_region, name, provides)?;
+                reaches(program, else_region, name, provides)?;
+            }
+            Op::Loop { body, .. } => reaches(program, body, name, provides)?,
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Every constant in a region, against the width of what holds it.
@@ -114,4 +155,57 @@ fn holds(program: &Program, region: RegionId, name: &str, word: u16) -> Result<(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::Builder;
+
+    /// A machine with a kernel to ask but nothing to ask it for.
+    #[derive(Debug)]
+    struct Spartan;
+
+    impl Target for Spartan {
+        fn name(&self) -> &'static str {
+            "spartan"
+        }
+
+        fn word(&self) -> u16 {
+            32
+        }
+
+        fn provides(&self) -> &'static [&'static str] {
+            &["exit"]
+        }
+
+        fn emit(&self, _: &Program) -> Vec<Artifact> {
+            Vec::new()
+        }
+    }
+
+    /// What a program may reach is what its target answers for. One naming
+    /// anything else is refused by name, rather than found out by a backend
+    /// part way through writing a file it cannot finish.
+    #[test]
+    fn a_target_refuses_a_routine_it_does_not_answer_for() {
+        let held = |routine: &str| {
+            let (mut program, main) = Program::new("main");
+            let called = program.platform(routine);
+            program.define(main, |b: &mut Builder, _| {
+                let status = b.constant(Class::Word, 0);
+                b.platform_call(called, &[status]);
+                b.ret(&[status])
+            });
+            Spartan.accepts(&program)
+        };
+
+        held("exit").expect("a routine it answers for");
+
+        let refused = held("write").unwrap_err();
+        assert!(
+            refused.contains("spartan answers for nothing called `write`"),
+            "{refused}"
+        );
+    }
 }

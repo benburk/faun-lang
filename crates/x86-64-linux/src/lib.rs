@@ -22,6 +22,10 @@ impl Target for X86_64Linux {
         64
     }
 
+    fn provides(&self) -> &'static [&'static str] {
+        &["write", "exit", "opaque", "grow"]
+    }
+
     fn emit(&self, program: &Program) -> Vec<Artifact> {
         vec![Artifact {
             extension: "",

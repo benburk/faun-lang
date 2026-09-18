@@ -529,7 +529,7 @@ impl Lowering<'_> {
                 self.load_const(SYSCALL_REGS[4], u64::MAX);
                 self.load_const(SYSCALL_REGS[5], 0);
             }
-            other => panic!("this target provides no `{other}`"),
+            other => panic!("`{other}` is not one this answers for, which `accepts` says first"),
         }
         self.syscall();
         if let Some(&result) = results.first() {

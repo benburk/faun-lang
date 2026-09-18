@@ -63,6 +63,10 @@ impl Target for Mos6502Sim65 {
         16
     }
 
+    fn provides(&self) -> &'static [&'static str] {
+        &["write", "exit", "opaque", "grow"]
+    }
+
     fn emit(&self, program: &Program) -> Vec<Artifact> {
         vec![Artifact {
             extension: ".bin",
