@@ -331,11 +331,18 @@ impl<T> Answer<T> {
     }
 }
 
-/// Every value at the width that reads it. How wide a value is held is
-/// worked out where it is built; how wide it is read is what the name
-/// reading it was declared at. A value needing fewer bits is already one
-/// needing more, so this only ever narrows -- and narrowing takes nothing
-/// off, since what a value holds above the bits it needs is nought.
+/// Every value at the width that reads it, where what reads it was worked
+/// out from the same bounds the value was.
+///
+/// A class is what a term could need rather than what it does: a field
+/// stepped down from a scrutinee is held at the scrutinee's width, while the
+/// tier above may have proved it smaller. So narrowing here takes nothing
+/// off, and what it narrows to is a width that tier chose.
+///
+/// Nothing like that holds where a width came from outside. A routine reads
+/// what it reads whatever a program worked out, so a value not fitting one
+/// is a program refused rather than a value quietly made to fit -- which is
+/// what [`super::model::Op::Convert`] is for, a program asking.
 fn met(b: &mut super::Builder, args: &[ValueId], takes: &[Class]) -> Vec<ValueId> {
     args.iter()
         .zip(takes)
@@ -415,10 +422,10 @@ impl Lowering<'_> {
                 .map(|erased| (!erased).then(|| taken.next().expect("a parameter")))
                 .collect();
             match self.body(b, body, &mut locals) {
+                // The entry leaves with a word, whatever width it worked
+                // in, since that is what the machine takes; and every
+                // definition leaves at the width it was worked out at.
                 Answer::Value(answer) => {
-                    // The entry leaves with a word, whatever width it
-                    // worked in, since that is what the machine takes; and
-                    // every definition leaves at the width it says it does.
                     let answer = met(b, &[answer], &[returns])[0];
                     b.ret(&[answer])
                 }
@@ -511,7 +518,6 @@ impl Lowering<'_> {
         }
         let held = self.platforms.iter().find(|(id, ..)| *id == function);
         let (results, answers) = if let Some((_, platform, wanted)) = held {
-            let args = met(b, &args, &wanted.takes);
             (b.platform_call(*platform, &args), wanted.answers.first())
         } else {
             let callee = self.functions[function.index()]

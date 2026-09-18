@@ -180,3 +180,52 @@ fn two_names_may_give_the_same_routine() {
     // which is the whole of what the name was doing before.
     assert_eq!(routines, ["opaque", "opaque"], "both answered elsewhere");
 }
+
+/// A value too wide for what a routine reads is refused, not narrowed.
+///
+/// Where a width was worked out from the same bounds the value was, holding
+/// a value in fewer bits takes nothing off it. A routine's width came from
+/// outside and says nothing about what a program worked out, so a value not
+/// fitting one is a program this tier cannot lower rather than a value to
+/// quietly make fit.
+#[test]
+fn a_value_too_wide_for_a_routine_is_refused() {
+    let mut routines = crate::platform::Routines::builtin();
+    routines.push(crate::platform::Routine {
+        name: "narrow".to_owned(),
+        called: None,
+        takes: vec![Class::Fixed { bits: 4 }],
+        answers: Vec::new(),
+        comes_back: true,
+        authority: true,
+        hands_back: None,
+    });
+
+    let held = |value: u64| {
+        let mut program = crate::barb::Program::default();
+        let nat = program.declare_type("Nat");
+        program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+        let unit = program.declare_type("Unit");
+        program.define_type(unit, &[("Only", &[])]);
+
+        let narrow = program.declare("narrow", &[nat], unit);
+        program.answered_by(narrow, "narrow");
+
+        let number = program.intern_number(nat, value);
+        let main = program.declare("main", &[], nat);
+        program.define(main, |b, _| {
+            let held = b.known(nat, number);
+            b.call(narrow, &[held]);
+            held
+        });
+        program.set_entry(main);
+
+        let facts = crate::barb::recognise(&program);
+        lower(&program, &facts, &routines)
+    };
+
+    held(9).expect("a value inside four bits");
+
+    let refused = held(100).unwrap_err();
+    assert!(refused.contains("`narrow`"), "{refused}");
+}
