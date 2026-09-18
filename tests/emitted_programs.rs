@@ -17,40 +17,102 @@ const EXIT_ZERO: &str = "type Nat Zero Succ(Nat)
 
                          main!(h) -> exit!(h Zero)";
 
-/// What the smallest programs compile to, for every target. Ratchets: lower
-/// one when a target improves, and do not raise one without saying why.
-#[test]
-fn minimal_programs_compile_to_the_sizes_recorded_for_them() {
-    use Target::{Mos6502Sim65, Wasm32Wasi, X86_64Linux};
-    for (name, program, sizes) in [
+/// Every program here and what each target makes of it, in the order
+/// [`Target::ALL`] lists them: x86-64, wasm, and the 6502.
+///
+/// Ratchets: lower one when a target improves, and do not raise one without
+/// saying why. These are the only thing that notices a decision a target
+/// stops making, since a program answers the same either way.
+fn corpus() -> Vec<(String, Program, [usize; 3])> {
+    let built = built()
+        .into_iter()
+        .map(|(name, program, sizes)| (name.to_owned(), program, sizes));
+    built.chain(written()).collect()
+}
+
+/// The programs this tier is handed, built rather than read.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one line per program; the length is the corpus"
+)]
+fn built() -> Vec<(&'static str, Program, [usize; 3])> {
+    vec![
+        ("empty", empty(), [127, 36, 30]),
         (
-            "empty",
-            empty(),
-            [(X86_64Linux, 127), (Wasm32Wasi, 36), (Mos6502Sim65, 30)],
-        ),
-        // `exit!` answers `Never`, so nothing is laid out after it and what
-        // is left is the leaving itself. On x86-64 that is the same seven
-        // bytes the floor above spends on returning a status, and on the
-        // 6502 it is five where returning one is seven. On wasm an exit
-        // with nought from `_start` is the end of `_start`, so this is the
-        // module above to the byte.
-        (
-            "exit zero, from text",
+            "exit zero",
             faun::read(EXIT_ZERO).expect("a program"),
-            [(X86_64Linux, 127), (Wasm32Wasi, 36), (Mos6502Sim65, 29)],
+            [127, 36, 29],
+        ),
+        ("two and two", two_and_two(), [136, 105, 45]),
+        ("hello world", faun::hello_world(), [158, 141, 63]),
+        ("a call", calls_a_function(), [160, 125, 81]),
+        ("recursion", recurses(), [245, 159, 232]),
+        (
+            "values across a call",
+            values_survive_a_call(),
+            [267, 204, 390],
+        ),
+        ("the heap", uses_the_heap(), [193, 137, 158]),
+        ("a byte", stores_a_byte(), [241, 160, 215]),
+        ("a global", counts_in_a_global(), [256, 158, 144]),
+        ("writing the heap", writes_from_the_heap(), [206, 163, 177]),
+        (
+            "a computed length",
+            writes_a_length_it_worked_out(),
+            [225, 170, 190],
+        ),
+        ("eight bits", wraps_at_eight_bits(), [142, 114, 63]),
+        ("less", less(7, 9), [143, 105, 63]),
+        (
+            "two worked out",
+            compares_two_worked_out_values(),
+            [170, 119, 89],
+        ),
+        ("a flag", branches_on_a_flag_it_read(), [257, 135, 119]),
+        ("a countdown", countdown(3), [217, 173, 97]),
+        (
+            "a carried total",
+            carries_a_total_into_an_arm(3),
+            [281, 156, 103],
         ),
         (
-            "two and two",
-            two_and_two(),
-            [(X86_64Linux, 136), (Wasm32Wasi, 105), (Mos6502Sim65, 45)],
+            "a step first",
+            counts_down_before_it_branches(3),
+            [230, 172, 99],
         ),
         (
-            "hello world",
-            faun::hello_world(),
-            [(X86_64Linux, 158), (Wasm32Wasi, 141), (Mos6502Sim65, 63)],
+            "a long arm",
+            a_branch_over_a_long_arm(40, true),
+            [332, 401, 1008],
         ),
-    ] {
-        for (target, size) in sizes {
+    ]
+}
+
+/// The examples, which are programs somebody wrote.
+fn written() -> Vec<(String, Program, [usize; 3])> {
+    [
+        ("exit", [128, 96, 29]),
+        ("two-and-two", [128, 96, 29]),
+        ("double", [128, 96, 29]),
+        ("leave", [141, 108, 49]),
+        ("bool", [531, 286, 424]),
+        ("nat", [1067, 541, 1226]),
+        ("opaque", [153, 109, 58]),
+    ]
+    .into_iter()
+    .map(|(name, sizes)| {
+        let path = format!("examples/{name}.fn");
+        let text = fs::read_to_string(&path).expect("an example");
+        let program = faun::read(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+        (path, program, sizes)
+    })
+    .collect()
+}
+
+#[test]
+fn programs_compile_to_the_sizes_recorded_for_them() {
+    for (name, program, sizes) in corpus() {
+        for (target, size) in Target::ALL.into_iter().zip(sizes) {
             let bytes = faun::compile(target, &program)[0].bytes.len();
             assert_eq!(bytes, size, "{name} for {target}");
         }
@@ -983,4 +1045,231 @@ fn a_pure_name_cannot_call_an_effect() {
         refused.contains("`quietly` is pure and calls `exit!`"),
         "{refused}"
     );
+}
+
+/// A type whose constructors carry nothing is a tag, and matching one asks
+/// which it is. Three of them, so the asking is a run of tests rather than
+/// the single question a number's two constructors answer.
+#[test]
+fn every_target_reads_a_tag() {
+    let ordering = "type Nat Zero Succ(Nat)
+                    type Order Lt Eq Gt
+
+                    rank(Lt) -> Zero
+                    rank(Eq) -> Succ(Zero)
+                    rank(Gt) -> Succ(Succ(Zero))
+
+                    pick(Zero) -> Lt
+                    pick(Succ(k)) -> Gt
+
+                    main!(h) -> exit!(h rank(pick(WHICH)))";
+
+    for (which, answer) in [("Zero", 0), ("Succ(Zero)", 2)] {
+        let machine = faun::read(&ordering.replace("WHICH", which)).expect("a program");
+        for target in Target::ALL {
+            assert_eq!(status(target, &machine), answer, "{which} on {target}");
+        }
+    }
+}
+
+/// A tag is which constructor it is, and a number is what it counts to.
+/// Writing `Succ` before `Zero` moves the tags and must not move either.
+#[test]
+fn every_target_tells_a_tag_from_a_count() {
+    let machine = faun::read(
+        "type Nat Succ(Nat) Zero
+         type Bool True False
+
+         count(False) -> Zero
+         count(True) -> Succ(Zero)
+
+         main!(h) -> exit!(h count(True))",
+    )
+    .expect("a program");
+    for target in Target::ALL {
+        assert_eq!(status(target, &machine), 1, "{target}");
+    }
+}
+
+/// What a tag is not: a constructor carrying something has no
+/// representation here yet, however many of them there are.
+#[test]
+fn a_constructor_that_carries_something_is_not_a_tag() {
+    let refused = faun::read(
+        "type Nat Zero Succ(Nat)
+         type Maybe None Some(Nat)
+
+         main!(h) -> exit!(h Zero)",
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("`Maybe` has no representation"),
+        "{refused}"
+    );
+}
+
+/// A clause matches as many arguments as it likes, which is what `sub` and
+/// `cmp` want: both take two numbers apart at once. What that compiles to
+/// is a match per column, so the answer is the only thing that says the
+/// rows were narrowed in the right order.
+#[test]
+fn every_target_matches_on_more_than_one_argument() {
+    let arithmetic = "type Nat Zero Succ(Nat)
+                      type Order Lt Eq Gt
+
+                      sub(Zero b) -> Zero
+                      sub(Succ(m) Zero) -> Succ(m)
+                      sub(Succ(m) Succ(n)) -> sub(m n)
+
+                      cmp(Zero Zero) -> Eq
+                      cmp(Zero Succ(n)) -> Lt
+                      cmp(Succ(m) Zero) -> Gt
+                      cmp(Succ(m) Succ(n)) -> cmp(m n)
+
+                      rank(Lt) -> Zero
+                      rank(Eq) -> Succ(Zero)
+                      rank(Gt) -> Succ(Succ(Zero))
+
+                      three(n) -> Succ(Succ(Succ(n)))
+
+                      main!(h) -> exit!(h ANSWER)";
+
+    // Subtraction stops at nought rather than wrapping, which is the whole
+    // of what the second column buys: the arm for `Succ(m) Zero` is the one
+    // that says so.
+    for (answer, want) in [
+        ("sub(three(Zero) Succ(Zero))", 2),
+        ("sub(Succ(Zero) three(Zero))", 0),
+        ("rank(cmp(Succ(Zero) three(Zero)))", 0),
+        ("rank(cmp(three(Zero) three(Zero)))", 1),
+        ("rank(cmp(three(Zero) Succ(Zero)))", 2),
+    ] {
+        let machine = faun::read(&arithmetic.replace("ANSWER", answer)).expect("a program");
+        for target in Target::ALL {
+            assert_eq!(status(target, &machine), want, "{answer} on {target}");
+        }
+    }
+}
+
+/// A program is what runs from its entry. A name nothing reaches is not
+/// part of it, however much of it there is.
+#[test]
+fn what_nothing_reaches_is_not_emitted() {
+    let reached = "type Nat Zero Succ(Nat)
+
+                   double(n) -> add(n n)
+                   add(a Zero) -> a
+                   add(a Succ(k)) -> Succ(add(a k))
+
+                   main!(h) -> exit!(h double(Succ(Succ(Zero))))";
+    let spare = format!(
+        "{reached}
+
+         quadruple(n) -> double(double(n))
+         quadruple_again(n) -> quadruple(quadruple(n))"
+    );
+
+    for target in Target::ALL {
+        let machine = faun::read(reached).expect("a program");
+        let spare = faun::read(&spare).expect("a program");
+        assert_eq!(status(target, &machine), 4, "{target}");
+        assert_eq!(
+            faun::compile(target, &spare)[0].bytes,
+            faun::compile(target, &machine)[0].bytes,
+            "{target}"
+        );
+    }
+}
+
+/// A chain of constructors is the number it builds, read back here rather
+/// than built an instruction at a time. So a longer chain is not a longer
+/// program, and the answer is what says it was read back rightly.
+#[test]
+fn a_chain_of_constructors_is_the_number_it_builds() {
+    let chain = |held: usize| {
+        let text = format!(
+            "type Nat Zero Succ(Nat)\n\nmain!(h) -> exit!(h {}Zero{})",
+            "Succ(".repeat(held),
+            ")".repeat(held)
+        );
+        faun::read(&text).expect("a program")
+    };
+
+    for target in Target::ALL {
+        assert_eq!(status(target, &chain(4)), 4, "{target}");
+        assert_eq!(status(target, &chain(40)), 40, "{target}");
+        assert_eq!(
+            faun::compile(target, &chain(40))[0].bytes.len(),
+            faun::compile(target, &chain(4))[0].bytes.len(),
+            "{target}"
+        );
+    }
+}
+
+/// What a program works out before it runs is not something a target sees.
+/// A program of constants is the constant it answers, and one it was handed
+/// a value for is the work it was written as.
+#[test]
+fn what_is_known_is_worked_out_before_a_target_sees_it() {
+    let arithmetic = "type Nat Zero Succ(Nat)
+
+                      add(a Zero) -> a
+                      add(a Succ(k)) -> Succ(add(a k))
+
+                      mul(Zero b) -> Zero
+                      mul(Succ(k) b) -> add(b mul(k b))
+
+                      main!(h) ->
+                        two = HELD
+                        exit!(h mul(two two))";
+    let known = faun::read(&arithmetic.replace("HELD", "Succ(Succ(Zero))")).expect("a program");
+    let handed =
+        faun::read(&arithmetic.replace("HELD", "opaque!(h Succ(Succ(Zero)))")).expect("a program");
+    let four = faun::read(
+        "type Nat Zero Succ(Nat)
+
+         main!(h) -> exit!(h Succ(Succ(Succ(Succ(Zero)))))",
+    )
+    .expect("a program");
+
+    for target in Target::ALL {
+        assert_eq!(status(target, &known), 4, "{target}");
+        assert_eq!(status(target, &handed), 4, "{target}");
+
+        // Nothing is left of the multiplication, nor of anything it called.
+        assert_eq!(
+            faun::compile(target, &known)[0].bytes,
+            faun::compile(target, &four)[0].bytes,
+            "{target}"
+        );
+        // And everything is left of it where the value was handed over.
+        let handed = faun::compile(target, &handed)[0].bytes.len();
+        assert!(
+            handed > faun::compile(target, &four)[0].bytes.len(),
+            "{target}"
+        );
+    }
+}
+
+/// Working a term out is bounded. A definition that does not stop is left
+/// as it was written, which compiles rather than hanging the compiler.
+#[test]
+fn a_definition_that_does_not_stop_is_left_as_it_was_written() {
+    let machine = faun::read(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         spin(n) -> add(Zero spin(n))
+
+         never_mind(Zero) -> Succ(Succ(Succ(Succ(Zero))))
+         never_mind(Succ(k)) -> spin(k)
+
+         main!(h) -> exit!(h never_mind(Zero))",
+    )
+    .expect("a program");
+    for target in Target::ALL {
+        assert_eq!(status(target, &machine), 4, "{target}");
+    }
 }

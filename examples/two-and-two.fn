@@ -2,9 +2,10 @@
 #
 # Nothing here says a number is a machine word. `Nat` is the type its
 # declaration makes it, addition is recursion over `Succ`, and two is what
-# the program builds out of its own constructors. The tiers below recognise
-# the addition and decide the representation, so this compiles to two
-# instructions and leaves with 4.
+# the program builds out of its own constructors. The tiers below decide the
+# representation and recognise the addition -- and then find that everything
+# it adds is known, so what a target is handed is the number 4 and nothing
+# to work it out with. See `opaque.fn` for where that stops.
 
 type Nat Zero Succ(Nat)
 

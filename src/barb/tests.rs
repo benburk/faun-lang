@@ -317,11 +317,13 @@ main!(v0: Host) -> Never =
 
 #[test]
 fn what_the_surface_will_not_read_it_names() {
-    let two = "type Nat Zero Succ(Nat)
-               f(Zero Zero) -> Zero
-               f(a b) -> a
-               main!(h) -> exit!(h f(Zero Zero))";
-    assert!(parse(two).unwrap_err().contains("one at a time"));
+    // A pattern is one constructor deep: anything further is a name, and
+    // a name is a word rather than something applied.
+    let deep = "type Nat Zero Succ(Nat)
+                f(Succ(Succ(k))) -> k
+                f(a) -> a
+                main!(h) -> exit!(h f(Zero))";
+    assert!(parse(deep).unwrap_err().contains("expected a name"));
 
     let comma = "type Nat Zero Succ(Nat)
                  f(a, b) -> a
@@ -576,11 +578,14 @@ fn a_name_stands_for_one_thing() {
 }
 
 /// Clauses are tried in the order they are written, so one that nothing
-/// reaches is a mistake rather than a spare.
+/// reaches is a mistake rather than a spare. Which rows reach a leaf is
+/// what compiling the match works out, so this is one answer to what were
+/// three different-looking mistakes.
 #[test]
 fn every_clause_is_reached_by_something() {
     let refused = |text: &str| parse(text).unwrap_err();
 
+    // The same constructor twice.
     let held = refused(
         "type Nat Zero Succ(Nat)
          f(Zero) -> Zero
@@ -588,8 +593,9 @@ fn every_clause_is_reached_by_something() {
          f(Succ(k)) -> k
          main!(h) -> exit!(h f(Zero))",
     );
-    assert!(held.contains("matches `Zero` twice"), "{held}");
+    assert!(held.contains("a clause nothing reaches"), "{held}");
 
+    // Anything after a clause that takes the argument as a name.
     let held = refused(
         "type Nat Zero Succ(Nat)
          f(n) -> n
@@ -598,13 +604,55 @@ fn every_clause_is_reached_by_something() {
     );
     assert!(held.contains("a clause nothing reaches"), "{held}");
 
+    // Two clauses with nothing to tell them apart.
     let held = refused(
         "type Nat Zero Succ(Nat)
          f(a) -> a
          f(a) -> Zero
          main!(h) -> exit!(h f(Zero))",
     );
-    assert!(held.contains("nothing to tell them apart"), "{held}");
+    assert!(held.contains("a clause nothing reaches"), "{held}");
+
+    // And a column covered everywhere but one pairing.
+    let held = refused(
+        "type Nat Zero Succ(Nat)
+         f(Zero Zero) -> Zero
+         f(Succ(m) Zero) -> m
+         main!(h) -> exit!(h f(Zero Zero))",
+    );
+    assert!(
+        held.contains("no clause covers `Zero` and `Succ`"),
+        "{held}"
+    );
+}
+
+/// A clause matches as many arguments as it likes. `sub` and `cmp` are the
+/// definitions that want it: both take two numbers apart at once, and both
+/// are written here the way they are written anywhere.
+#[test]
+fn a_clause_matches_as_many_arguments_as_it_likes() {
+    let program = parse(
+        "type Nat Zero Succ(Nat)
+         type Order Lt Eq Gt
+
+         sub(Zero b) -> Zero
+         sub(Succ(m) Zero) -> Succ(m)
+         sub(Succ(m) Succ(n)) -> sub(m n)
+
+         cmp(Zero Zero) -> Eq
+         cmp(Zero Succ(n)) -> Lt
+         cmp(Succ(m) Zero) -> Gt
+         cmp(Succ(m) Succ(n)) -> cmp(m n)
+
+         main!(h) -> exit!(h sub(Succ(Zero) Zero))",
+    )
+    .expect("a program");
+    let render = program.render();
+    assert!(render.contains("sub(v0: Nat, v1: Nat) -> Nat"), "{render}");
+    assert!(
+        render.contains("cmp(v0: Nat, v1: Nat) -> Order"),
+        "{render}"
+    );
 }
 
 /// There is nobody to hand the entry anything more than the authority.
@@ -633,4 +681,41 @@ fn a_name_a_clause_binds_is_not_the_name_it_shadows() {
          main!(h) -> exit!(h f(Succ(Zero)))",
     )
     .expect("a program");
+}
+
+/// What the compiler may not see through. `opaque!` answers what it was
+/// given, so its type is the type it was given -- and it is an effect,
+/// which is what makes it the one thing the tier above stops at.
+#[test]
+fn a_value_handed_over_is_one_nothing_worked_out() {
+    let program = parse(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         main!(h) ->
+           two = opaque!(h Succ(Succ(Zero)))
+           exit!(h add(two two))",
+    )
+    .expect("a program");
+    assert!(
+        program
+            .render()
+            .contains("opaque!(v0: Host, v1: Nat) -> Nat"),
+        "{}",
+        program.render()
+    );
+
+    // A pure name may not call one, like any other effect.
+    let refused = parse(
+        "type Nat Zero Succ(Nat)
+         quietly(h n) -> opaque!(h n)
+         main!(h) -> exit!(h quietly(h Zero))",
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("`quietly` is pure and calls `opaque!`"),
+        "{refused}"
+    );
 }

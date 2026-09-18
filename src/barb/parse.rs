@@ -5,8 +5,11 @@
 //! are inferred, since every one of them is a name a declaration already
 //! gave, so there is nothing to infer but which.
 //!
-//! A function matches on at most one argument, with patterns one constructor
-//! deep. Anything further is refused by name rather than read wrongly.
+//! A clause matches as many arguments as it likes, with patterns one
+//! constructor deep. Clauses are tried in the order they are written, and
+//! what they compile to is a match per column any of them tests: rows that
+//! could match the constructor go on to the next column, and a row nothing
+//! reaches is refused by name.
 //!
 //! ```text
 //! type Nat Zero Succ(Nat)
@@ -279,7 +282,7 @@ fn build(source: &Source) -> Result<Program, String> {
     validate(source, &clauses, &arity)?;
     let told = infer(source, &clauses, &program, &ctors, &arity)?;
     let mut functions: HashMap<&str, FnId> = HashMap::new();
-    for (name, _) in EFFECTS {
+    for (name, ..) in EFFECTS {
         if let Some((params, result)) = told.get(name) {
             functions.insert(name, program.declare(name, params, *result));
         }
@@ -382,7 +385,7 @@ fn arities<'a>(
         }
         arity.insert(name.as_str(), width);
     }
-    for (name, takes) in EFFECTS {
+    for (name, takes, _) in EFFECTS {
         arity.insert(name, takes + 1);
     }
     Ok(arity)
@@ -399,7 +402,6 @@ fn validate(
     colour(source)?;
     one_name_per_thing(source)?;
     calls_are_saturated(source, clauses, arity)?;
-    clauses_do_not_overlap(source, clauses)?;
     // The entry is handed the authority and nothing else: there is nobody
     // to hand it anything more.
     if arity.get("main!").is_some_and(|takes| *takes != 1) {
@@ -480,41 +482,6 @@ fn calls_are_saturated(
     Ok(())
 }
 
-/// Every clause is reached by something. Clauses are tried in the order
-/// they are written, so a second one for a constructor is dead, and so is
-/// anything written after a clause that takes the argument as a name.
-fn clauses_do_not_overlap(
-    source: &Source,
-    clauses: &HashMap<&str, Vec<Clause>>,
-) -> Result<(), String> {
-    for name in &source.order {
-        let held = &clauses[name.as_str()];
-        let Some(at) = matched_argument(held)? else {
-            if held.len() > 1 {
-                return Err(format!(
-                    "`{name}` has clauses with nothing to tell them apart"
-                ));
-            }
-            continue;
-        };
-        let mut seen: HashSet<&str> = HashSet::new();
-        let mut everything = false;
-        for clause in held {
-            if everything {
-                return Err(format!("`{name}` has a clause nothing reaches"));
-            }
-            match &clause.patterns[at] {
-                Pattern::Bind(_) => everything = true,
-                Pattern::Ctor(ctor, _) if !seen.insert(ctor.as_str()) => {
-                    return Err(format!("`{name}` matches `{ctor}` twice"));
-                }
-                Pattern::Ctor(..) => {}
-            }
-        }
-    }
-    Ok(())
-}
-
 /// A name ending in `!` may perform observable work, and a name that does
 /// not may not call one that does. One colour, stated where it is written.
 fn colour(source: &Source) -> Result<(), String> {
@@ -570,29 +537,6 @@ fn resolve(clause: &Clause, ctors: &HashMap<String, CtorId>) -> Clause {
     }
 }
 
-/// Which argument the clauses match on, if any. One is allowed, so that a
-/// single `match` serves: more is a pattern-match compiler.
-fn matched_argument(clauses: &[Clause]) -> Result<Option<usize>, String> {
-    let mut matched = None;
-    for clause in clauses {
-        for (at, pattern) in clause.patterns.iter().enumerate() {
-            if matches!(pattern, Pattern::Bind(_)) {
-                continue;
-            }
-            match matched {
-                None => matched = Some(at),
-                Some(already) if already == at => {}
-                Some(already) => {
-                    return Err(format!(
-                        "this matches on argument {already} and on argument {at}; one at a time"
-                    ));
-                }
-            }
-        }
-    }
-    Ok(matched)
-}
-
 /// The types the compiler declares, in the order they are declared in: the
 /// authority a program is handed, what an effect answers when it answers
 /// nothing, and what a term answers when it does not come back. None of them
@@ -606,11 +550,25 @@ const BUILTIN: [&str; 3] = ["Host", "Unit", "Never"];
 const HOST: TypeId = TypeId(0);
 const NEVER: TypeId = TypeId(2);
 
-/// The effects a target answers for, and how many arguments each takes past
-/// the authority. A program declares none of these: they are the interface
-/// to the outside, so the compiler knows their names and a target provides
-/// them. What they take beyond the authority is whatever they are given.
-const EFFECTS: [(&str, usize); 1] = [("exit!", 1)];
+/// What an effect answers. Nothing ever, or the argument it was handed:
+/// a name that answers what it was given is a name the tiers below may not
+/// see through, which is how a program holds a value the compiler will not
+/// work out for itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Answers {
+    Never,
+    Argument(usize),
+}
+
+/// The effects a target answers for, how many arguments each takes past the
+/// authority, and what each answers. A program declares none of these: they
+/// are the interface to the outside, so the compiler knows their names and a
+/// target provides them. What they take beyond the authority is whatever
+/// they are given -- one type per program, like any other name here.
+const EFFECTS: [(&str, usize, Answers); 2] = [
+    ("exit!", 1, Answers::Never),
+    ("opaque!", 1, Answers::Argument(0)),
+];
 
 /// Every constructor a term may name.
 fn catalogue(program: &Program) -> HashMap<String, CtorId> {
@@ -641,6 +599,40 @@ struct Lowering<'a> {
 /// The names a clause has bound, and what each stands for.
 type Scope = Vec<(String, Atom)>;
 
+/// One clause on its way through the matrix: what it still matches on, and
+/// what it has bound so far. Two clauses may name one constructor's fields
+/// differently, so the bindings belong to the row rather than to the match
+/// that made them.
+#[derive(Clone)]
+struct Row<'a> {
+    clause: &'a Clause,
+    at: usize,
+    /// Its patterns, with a column that has been matched on left out: every
+    /// row in a run of them has the same columns settled, since they were
+    /// settled by the same match.
+    patterns: Vec<Option<Pattern>>,
+    scope: Scope,
+}
+
+/// The leftmost column any row still matches on, and nothing where every
+/// row takes what is left as a name.
+fn column(rows: &[Row]) -> Option<usize> {
+    let width = rows.first()?.patterns.len();
+    (0..width).find(|at| {
+        rows.iter()
+            .any(|row| matches!(row.patterns[*at], Some(Pattern::Ctor(..))))
+    })
+}
+
+/// What the constructors chosen to reach here were, as a program reads it.
+fn along(chosen: &[String]) -> String {
+    match chosen {
+        [] => String::new(),
+        [held] => format!("`{held}`"),
+        [rest @ .., last] => format!("{} and `{last}`", along(rest)),
+    }
+}
+
 impl Lowering<'_> {
     /// Compile one function's clauses into its body. A builder answers an
     /// atom rather than a result, so a refusal is carried out around it.
@@ -651,10 +643,20 @@ impl Lowering<'_> {
         clauses: &[Clause],
         types: &[TypeId],
     ) -> Result<(), String> {
-        let matched = matched_argument(clauses)?;
         let mut failed = None;
+        let mut reached = vec![false; clauses.len()];
         program.define(id, |b, args| {
-            match self.clauses(b, clauses, args, types, matched, Scope::new()) {
+            let rows: Vec<Row> = clauses
+                .iter()
+                .enumerate()
+                .map(|(at, clause)| Row {
+                    clause,
+                    at,
+                    patterns: clause.patterns.iter().cloned().map(Some).collect(),
+                    scope: Scope::new(),
+                })
+                .collect();
+            match self.rows(b, &rows, args, types, &[], &mut reached) {
                 Ok(atom) => atom,
                 Err(error) => {
                     failed = Some(error);
@@ -662,33 +664,55 @@ impl Lowering<'_> {
                 }
             }
         });
-        failed.map_or(Ok(()), Err)
+        if let Some(error) = failed {
+            return Err(error);
+        }
+        if reached.iter().any(|reached| !reached) {
+            let name = program.name(program.function(id).name).to_owned();
+            return Err(format!("`{name}` has a clause nothing reaches"));
+        }
+        Ok(())
     }
 
-    /// The clauses of one function: a match on the argument they agree to
-    /// match on, with each arm the clause that names that constructor.
-    fn clauses(
+    /// The clauses still in play, as a match on a column one of them tests.
+    /// Each arm keeps the rows that could match that constructor -- the ones
+    /// naming it, and the ones taking the argument as a name -- and asks the
+    /// same question of what is left.
+    ///
+    /// Where no row tests anything, the first of them is what matches: they
+    /// are tried in the order they were written, so an earlier row that
+    /// reaches here answers here.
+    fn rows(
         &self,
         b: &mut super::Builder,
-        clauses: &[Clause],
+        rows: &[Row],
         args: &[Atom],
         types: &[TypeId],
-        matched: Option<usize>,
-        scope: Scope,
+        chosen: &[String],
+        reached: &mut [bool],
     ) -> Result<Atom, String> {
-        let Some(matched) = matched else {
-            let clause = &clauses[0];
-            let scope = bind(scope, &clause.patterns, args)?;
-            return self.body(b, clause, scope);
+        let Some(at) = column(rows) else {
+            let row = rows.first().expect("a row, since an empty run is refused");
+            reached[row.at] = true;
+            let mut scope = row.scope.clone();
+            for (pattern, arg) in row.patterns.iter().zip(args) {
+                if let Some(Pattern::Bind(name)) = pattern {
+                    scope.push((name.clone(), *arg));
+                }
+            }
+            return self.body(b, row.clause, scope);
         };
         let scrutinee = *args
-            .get(matched)
-            .ok_or_else(|| format!("no argument {matched} to match on"))?;
-        let owner = types[matched];
+            .get(at)
+            .ok_or_else(|| format!("no argument {at} to match on"))?;
+        let owner = types[at];
 
         let mut failed = None;
         let answer = b.match_(scrutinee, owner, |b, ctor, fields| {
-            match self.arm(b, clauses, (args, matched), (ctor, fields), &scope) {
+            let held = self
+                .narrow(rows, (at, scrutinee), (ctor, fields), chosen)
+                .and_then(|(rows, chosen)| self.rows(b, &rows, args, types, &chosen, reached));
+            match held {
                 Ok(atom) => atom,
                 Err(error) => {
                     failed.get_or_insert(error);
@@ -699,50 +723,48 @@ impl Lowering<'_> {
         failed.map_or(Ok(answer), Err)
     }
 
-    /// The clause for one constructor: the one naming it, or failing that a
-    /// clause that binds the argument rather than matching it.
-    fn arm(
+    /// The rows that could match `ctor` in column `at`, each with what that
+    /// constructor revealed bound to the names that row gave it.
+    fn narrow<'a>(
         &self,
-        b: &mut super::Builder,
-        clauses: &[Clause],
-        (args, matched): (&[Atom], usize),
+        rows: &[Row<'a>],
+        (at, scrutinee): (usize, Atom),
         (ctor, fields): (CtorId, &[Atom]),
-        scope: &Scope,
-    ) -> Result<Atom, String> {
+        chosen: &[String],
+    ) -> Result<(Vec<Row<'a>>, Vec<String>), String> {
         let wanted = self
             .ctors
             .iter()
             .find(|(_, held)| **held == ctor)
             .map(|(name, _)| name.clone())
             .expect("a constructor of the program");
-        let clause = clauses
-            .iter()
-            .find(|clause| match &clause.patterns[matched] {
-                Pattern::Ctor(name, _) => *name == wanted,
-                Pattern::Bind(_) => true,
-            })
-            .ok_or_else(|| format!("no clause covers `{wanted}`"))?;
 
-        let mut scope = scope.clone();
-        for (at, pattern) in clause.patterns.iter().enumerate() {
-            // The matched argument binds the fields the constructor revealed;
-            // every other one binds whatever name the clause gave it.
-            if at == matched
-                && let Pattern::Ctor(_, names) = pattern
-            {
-                if names.len() != fields.len() {
-                    return Err(format!("`{wanted}` takes {} fields", fields.len()));
+        let mut held = Vec::new();
+        for row in rows {
+            let mut row = row.clone();
+            match row.patterns[at].take() {
+                Some(Pattern::Bind(name)) => row.scope.push((name, scrutinee)),
+                Some(Pattern::Ctor(name, names)) if name == wanted => {
+                    if names.len() != fields.len() {
+                        return Err(format!("`{wanted}` takes {} fields", fields.len()));
+                    }
+                    for (name, field) in names.into_iter().zip(fields) {
+                        row.scope.push((name, *field));
+                    }
                 }
-                for (name, field) in names.iter().zip(fields) {
-                    scope.push((name.clone(), *field));
-                }
-                continue;
+                // Another constructor, so this row is not this arm's.
+                Some(Pattern::Ctor(..)) => continue,
+                None => {}
             }
-            if let Pattern::Bind(name) = pattern {
-                scope.push((name.clone(), args[at]));
-            }
+            held.push(row);
         }
-        self.body(b, clause, scope)
+
+        let mut chosen = chosen.to_vec();
+        chosen.push(wanted);
+        if held.is_empty() {
+            return Err(format!("no clause covers {}", along(&chosen)));
+        }
+        Ok((held, chosen))
     }
 
     /// A clause's steps in order, each bound where it named it, then what it
@@ -775,17 +797,6 @@ impl Lowering<'_> {
         let id = look(self.functions, name, "function")?;
         Ok(b.call(id, &args))
     }
-}
-
-/// Bind a clause's names to the arguments, where it matches none of them.
-fn bind(mut scope: Scope, patterns: &[Pattern], args: &[Atom]) -> Result<Scope, String> {
-    for (pattern, arg) in patterns.iter().zip(args) {
-        match pattern {
-            Pattern::Bind(name) => scope.push((name.clone(), *arg)),
-            Pattern::Ctor(name, _) => return Err(format!("`{name}` matches where nothing does")),
-        }
-    }
-    Ok(scope)
 }
 
 /// What a function takes and answers, worked out rather than declared.
@@ -899,7 +910,7 @@ fn infer(
     }
     // An effect no program calls settles nothing, and needs to: there is
     // nothing to declare and nothing to answer for.
-    for (name, _) in EFFECTS {
+    for (name, ..) in EFFECTS {
         if let Ok(held) = settled(&mut unify, &base, arity, name) {
             told.insert(name.to_owned(), held);
         }
@@ -922,9 +933,10 @@ fn slots<'a>(
         }
         base.insert(name.as_str(), at);
     }
-    // An effect takes the authority and does not come back; what it takes
-    // between is whatever it is given, which is what the argument settles.
-    for (name, takes) in EFFECTS {
+    // An effect takes the authority; what it takes between is whatever it is
+    // given, which is what the argument settles, and what it answers is
+    // either nothing ever or one of those arguments.
+    for (name, takes, answers) in EFFECTS {
         let at = unify.parent.len();
         let authority = unify.fresh();
         unify.pin(authority, HOST)?;
@@ -932,7 +944,10 @@ fn slots<'a>(
             unify.fresh();
         }
         let answer = unify.fresh();
-        unify.pin(answer, NEVER)?;
+        match answers {
+            Answers::Never => unify.pin(answer, NEVER)?,
+            Answers::Argument(held) => unify.union(answer, at + 1 + held)?,
+        }
         base.insert(name, at);
     }
     Ok(base)
@@ -982,7 +997,11 @@ fn diverging<'a>(source: &'a Source, clauses: &HashMap<&str, Vec<Clause>>) -> Ha
     fn leaves(term: &Term, held: &HashSet<&str>) -> bool {
         held.contains(term.0.as_str()) || term.1.iter().any(|argument| leaves(argument, held))
     }
-    let mut held: HashSet<&str> = EFFECTS.into_iter().map(|(name, _)| name).collect();
+    let mut held: HashSet<&str> = EFFECTS
+        .into_iter()
+        .filter(|(_, _, answers)| *answers == Answers::Never)
+        .map(|(name, ..)| name)
+        .collect();
     let mut growing = true;
     while growing {
         growing = false;

@@ -1,0 +1,56 @@
+# Arithmetic, as recursion over the constructors it is written in.
+#
+# Nothing here is a primitive and nothing is declared elsewhere. `add` is
+# recognised by the tier below and becomes an instruction; the rest are
+# ordinary rewrites, so `sub` counts both arguments down together and `mul`
+# adds. Subtraction stops at nought, which is the answer a type with no
+# negative values has.
+#
+# A clause matches as many arguments as it likes, and `sub` and `cmp` are
+# what wants that: both take two numbers apart at once. One structural
+# recursion gives `cmp`, and everything ordered follows from it, so no two
+# of them can disagree.
+
+type Nat Zero Succ(Nat)
+type Bool False True
+type Order Lt Eq Gt
+
+add(a Zero) -> a
+add(a Succ(k)) -> Succ(add(a k))
+
+sub(Zero b) -> Zero
+sub(Succ(m) Zero) -> Succ(m)
+sub(Succ(m) Succ(n)) -> sub(m n)
+
+mul(Zero b) -> Zero
+mul(Succ(k) b) -> add(b mul(k b))
+
+cmp(Zero Zero) -> Eq
+cmp(Zero Succ(n)) -> Lt
+cmp(Succ(m) Zero) -> Gt
+cmp(Succ(m) Succ(n)) -> cmp(m n)
+
+under(Lt) -> True
+under(Eq) -> False
+under(Gt) -> False
+
+same(Eq) -> True
+same(Lt) -> False
+same(Gt) -> False
+
+less(a b) -> under(cmp(a b))
+equals(a b) -> same(cmp(a b))
+
+select(True t f) -> t
+select(False t f) -> f
+
+min(a b) -> select(less(a b) a b)
+max(a b) -> select(less(a b) b a)
+
+main!(h) ->
+  # Worked out here rather than handed over, and the arithmetic below would
+  # all be worked out with it: `opaque!` is where that stops.
+  two = opaque!(h Succ(Succ(Zero)))
+  four = mul(two two)
+  eight = mul(two four)
+  exit!(h min(four sub(eight two)))

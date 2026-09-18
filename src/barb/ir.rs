@@ -219,6 +219,13 @@ impl Program {
         self.exprs[id.index()]
     }
 
+    /// Put another term where one is. A term is a slot in the arena rather
+    /// than something owned, so replacing one is a store and nothing that
+    /// named it has to hear about it.
+    pub(super) fn write(&mut self, id: ExprId, expr: Expr) {
+        self.exprs[id.index()] = expr;
+    }
+
     #[must_use]
     pub fn ctors(&self, id: TypeId) -> &[Ctor] {
         &self.ctors[self.type_(id).ctors.range()]

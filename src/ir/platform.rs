@@ -22,7 +22,7 @@ pub(super) struct Routine {
 
 /// Every routine there is. A program naming anything else is not a program
 /// any target can be handed.
-pub(super) const ROUTINES: [Routine; 3] = [
+pub(super) const ROUTINES: [Routine; 4] = [
     Routine {
         name: "write",
         takes: &[Class::Address, Class::Word],
@@ -34,6 +34,15 @@ pub(super) const ROUTINES: [Routine; 3] = [
         takes: &[Class::Word],
         answers: &[],
         comes_back: false,
+    },
+    // What a target hands straight back. Nothing happens, and that is the
+    // point: a value that went through it is a value no tier worked out, so
+    // a program can hold one the compiler will not fold away.
+    Routine {
+        name: "opaque",
+        takes: &[Class::Word],
+        answers: &[Class::Word],
+        comes_back: true,
     },
     // The kernel picks the address, so nothing asking for a page says where.
     Routine {

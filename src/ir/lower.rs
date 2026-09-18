@@ -35,8 +35,16 @@ pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, St
         .map(|at| represent(program, barb::TypeId::at(at)))
         .collect::<Result<_, _>>()?;
 
+    let reached = reached(program, entry);
     let (mut machine, main) = Program::new(program.name(program.function(entry).name));
-    let (functions, platforms) = declare(program, facts, &classes, &mut machine, (entry, main))?;
+    let (functions, platforms) = declare(
+        program,
+        facts,
+        &classes,
+        &mut machine,
+        (entry, main),
+        &reached,
+    )?;
 
     let lowering = Lowering {
         barb: program,
@@ -45,9 +53,9 @@ pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, St
         functions,
         platforms,
     };
-    for at in 0..program.functions().len() {
+    for (at, reached) in reached.iter().enumerate() {
         let id = barb::FnId::at(at);
-        if facts.operation(id).is_none() && program.function(id).body.is_some() {
+        if *reached && facts.operation(id).is_none() && program.function(id).body.is_some() {
             lowering.function(&mut machine, id);
         }
     }
@@ -67,19 +75,21 @@ fn declare(
     classes: &[Option<Class>],
     machine: &mut Program,
     (entry, main): (barb::FnId, FunctionId),
+    reached: &[bool],
 ) -> Result<(Vec<Option<FunctionId>>, Vec<(barb::FnId, PlatformId)>), String> {
     // `None` where a definition became an instruction and has no function.
     let mut functions: Vec<Option<FunctionId>> = Vec::with_capacity(program.functions().len());
     let mut platforms: Vec<(barb::FnId, PlatformId)> = Vec::new();
-    for at in 0..program.functions().len() {
+    for (at, reached) in reached.iter().enumerate() {
         let id = barb::FnId::at(at);
         if id == entry {
             functions.push(Some(main));
             continue;
         }
         // A definition the tier below has an instruction for is never
-        // emitted: its callers write the instruction instead.
-        if facts.operation(id).is_some() {
+        // emitted: its callers write the instruction instead. Neither is one
+        // nothing reaches, which has no callers to write anything.
+        if facts.operation(id).is_some() || !reached {
             functions.push(None);
             continue;
         }
@@ -136,11 +146,50 @@ fn provided(name: &str, params: &[Class], returns: &[Class]) -> Result<&'static 
     Ok(wanted.name)
 }
 
-/// The class a type's values take. Only numbers are decided so far.
+/// Which definitions the entry can reach, by definition. A program is what
+/// runs from its entry, and a name nothing calls is not part of it -- so it
+/// is not emitted, and nothing below this tier hears of it.
+fn reached(program: &barb::Program, entry: barb::FnId) -> Vec<bool> {
+    fn within(program: &barb::Program, body: barb::Body, held: &mut Vec<barb::FnId>) {
+        for expr in program
+            .bindings(body.bindings)
+            .iter()
+            .chain([&body.tail])
+            .copied()
+        {
+            match program.expr(expr) {
+                barb::Expr::Call(id, _) => held.push(id),
+                barb::Expr::Match(_, arms) => {
+                    for arm in program.arms(arms).to_vec() {
+                        within(program, arm.body, held);
+                    }
+                }
+                barb::Expr::Atom(_) | barb::Expr::Con(..) | barb::Expr::Static(..) => {}
+            }
+        }
+    }
+
+    let mut reached = vec![false; program.functions().len()];
+    let mut waiting = vec![entry];
+    while let Some(id) = waiting.pop() {
+        if std::mem::replace(&mut reached[id.index()], true) {
+            continue;
+        }
+        if let Some(body) = program.function(id).body {
+            within(program, body, &mut waiting);
+        }
+    }
+    reached
+}
+
+/// The class a type's values take. Numbers and tags are decided so far.
 fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Option<Class>, String> {
     let name = program.name(program.type_(id).name);
     if uninhabited(program, id) || erased(program, id) {
         return Ok(None);
+    }
+    if tagged(program, id) {
+        return Ok(Some(Class::Word));
     }
     let barb::Shape::Spine { cons, .. } = barb::shape(program, id) else {
         return Err(format!("`{name}` has no representation in this tier yet"));
@@ -166,6 +215,21 @@ fn erased(program: &barb::Program, id: barb::TypeId) -> bool {
 /// nothing is passed. What is said to answer one does not answer.
 fn uninhabited(program: &barb::Program, id: barb::TypeId) -> bool {
     program.ctors(id).is_empty()
+}
+
+/// A type whose constructors all carry nothing says which one it is and
+/// says nothing else, so a value of one is which: the tag, in a word.
+/// `Bool` is such a type, and so is an ordering, and so is anything a
+/// program writes as a run of bare names.
+///
+/// One such constructor is [`erased`] rather than tagged: a value that
+/// could not have been anything else says nothing by being itself.
+fn tagged(program: &barb::Program, id: barb::TypeId) -> bool {
+    let ctors = program.ctors(id);
+    ctors.len() > 1
+        && ctors
+            .iter()
+            .all(|ctor| program.types_of(ctor.fields).is_empty())
 }
 
 /// What a term answers: a value, nothing because its type carries nothing,
@@ -305,10 +369,20 @@ impl Lowering<'_> {
     ) -> Answer<ValueId> {
         match self.barb.expr(expr) {
             barb::Expr::Atom(atom) => locals[atom.0.index()].into(),
+            // A value the tier above worked out, as the word it lowers to:
+            // which constructor for a tag, and what it counts to for a
+            // number. One that carries nothing is nothing to carry.
             barb::Expr::Static(id, value) => {
+                let Some(class) = self.classes[id.index()] else {
+                    return Answer::Nothing;
+                };
                 let bytes = self.barb.known_bytes(value);
-                let number = barb::as_number(self.barb, id, bytes).expect("a number");
-                Answer::Value(b.constant(self.class(id), number))
+                let held = if tagged(self.barb, id) {
+                    u64::from(self.barb.tag(barb::decode(self.barb, id, bytes).0.0))
+                } else {
+                    barb::as_number(self.barb, id, bytes).expect("a number")
+                };
+                Answer::Value(b.constant(class, held))
             }
             barb::Expr::Con(ctor, args) => self.construct(b, ctor, args, locals).into(),
             barb::Expr::Call(function, args) => self.call(b, function, args, locals),
@@ -352,8 +426,10 @@ impl Lowering<'_> {
             .map(|_| *results.first().expect("a result where a type carries one"))
     }
 
-    /// A number's empty constructor is nought, and its other one counts up.
-    /// One that carries nothing builds nothing.
+    /// A tag is which constructor it is. A number's empty constructor is
+    /// nought and its other one counts up -- which is not the same as its
+    /// tag, since a program may write `Succ` before `Zero`. One that
+    /// carries nothing builds nothing.
     fn construct(
         &self,
         b: &mut super::Builder,
@@ -363,6 +439,9 @@ impl Lowering<'_> {
     ) -> Option<ValueId> {
         let owner = self.barb.ctor(ctor).owner;
         let class = self.classes[owner.index()]?;
+        if tagged(self.barb, owner) {
+            return Some(b.constant(class, u64::from(self.barb.tag(ctor))));
+        }
         let Some(&atom) = self.barb.atoms(args).first() else {
             return Some(b.constant(class, 0));
         };
@@ -384,7 +463,7 @@ impl Lowering<'_> {
         let owner = self.barb.ctor(arms[0].ctor).owner;
         let class = self.class(owner);
         let barb::Shape::Spine { nil, .. } = barb::shape(self.barb, owner) else {
-            unreachable!("only numbers are represented");
+            return self.tags(b, scrutinee, class, &arms, locals);
         };
         let empty = arms
             .iter()
@@ -414,6 +493,50 @@ impl Lowering<'_> {
                 let one = b.constant(class, 1);
                 inner.push(Some(b.binary(Binary::Sub, scrutinee, one)));
                 let answer = self.body(b, counted.body, &mut inner);
+                yielded(b, answer)
+            },
+        );
+        answer.map(|_| *results.first().expect("a result where the arms carry one"))
+    }
+
+    /// Matching a tag asks which one it is, arm by arm. The last needs no
+    /// asking: nothing else is left for the value to be.
+    ///
+    /// A run of tests is what a target has instructions for. Anything
+    /// cleverer -- a jump table, a search -- wants more constructors than
+    /// anything here has, and would be this tier deciding what a target is
+    /// better placed to.
+    fn tags(
+        &self,
+        b: &mut super::Builder,
+        scrutinee: ValueId,
+        class: Class,
+        arms: &[barb::Arm],
+        locals: &[Option<ValueId>],
+    ) -> Answer<ValueId> {
+        let (arm, rest) = arms.split_first().expect("an arm to match");
+        if rest.is_empty() {
+            let mut inner = locals.to_vec();
+            return self.body(b, arm.body, &mut inner);
+        }
+
+        let answer = arms
+            .iter()
+            .map(|arm| self.answers(arm.body))
+            .fold(Answer::Never, Answer::or);
+        let held: Vec<Class> = answer.held().into_iter().collect();
+        let tag = b.constant(class, u64::from(self.barb.tag(arm.ctor)));
+        let is_this_one = b.compare(Relation::Equal, scrutinee, tag);
+        let results = b.if_(
+            is_this_one,
+            &held,
+            |b| {
+                let mut inner = locals.to_vec();
+                let answer = self.body(b, arm.body, &mut inner);
+                yielded(b, answer)
+            },
+            |b| {
+                let answer = self.tags(b, scrutinee, class, rest, locals);
                 yielded(b, answer)
             },
         );

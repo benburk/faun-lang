@@ -500,6 +500,13 @@ impl Lowering<'_> {
 
     fn platform_call(&mut self, platform: PlatformId, args: &[ValueId], results: &[ValueId]) {
         let name = self.program.platforms()[platform.index()].name;
+        // What is handed straight back needs no kernel: the value is the
+        // one it was, and all this says is that nothing worked it out.
+        if self.program.name(name) == "opaque" {
+            self.read(Reg::Rax, args[0]);
+            self.keep(results[0]);
+            return;
+        }
         match self.program.name(name) {
             "write" => {
                 // rax first, so stdout can be copied from it.
