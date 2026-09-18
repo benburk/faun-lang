@@ -61,14 +61,27 @@ enum Source {
     Slot(u32),
 }
 
+/// What a round may learn and never unlearn: a branch that does not reach
+/// in one byte, and a function that writes to its frame. Neither is taken
+/// back, so the rounds are bounded by how far one relaxed branch can push
+/// others out of reach -- and every program here settles in two, one to
+/// guess and one to confirm. Reaching this many means a round undid what an
+/// earlier one settled.
+const ROUNDS: usize = 32;
+
 /// Assembled until nothing changes. Two facts are only knowable once the
 /// addresses are: which jumps reach in a single byte, and whether a frame
 /// was ever written to. Shortening a jump can pull another into reach, so
 /// this repeats rather than assuming one pass settles it.
+///
+/// # Panics
+///
+/// If the layout does not settle, which is this target disagreeing with
+/// itself rather than anything a program did.
 pub(super) fn lower(program: &Program) -> Code {
     let mut distant: Vec<bool> = Vec::new();
     let mut framed = vec![true; program.functions().len()];
-    loop {
+    for _ in 0..ROUNDS {
         let (code, overflowed, spilled) = assemble(program, distant.clone(), &framed);
         if !overflowed.is_empty() {
             let widest = overflowed.iter().copied().max().expect("a branch");
@@ -84,6 +97,7 @@ pub(super) fn lower(program: &Program) -> Code {
         }
         return code;
     }
+    panic!("the layout did not settle in {ROUNDS} rounds")
 }
 
 fn assemble(
@@ -594,8 +608,10 @@ impl Lowering<'_> {
                 self.loops.last_mut().expect("a loop").ends.push(hole);
             }
             Exit::Return => self.leave(values),
-            // Emitting nothing would fall into whatever was laid out next.
-            Exit::Unreachable => self.asm.trap(),
+            // Nothing arrives here: either what came before does not come
+            // back, or every path out of it was already taken. So nothing
+            // is laid out for it, and what follows is the next function.
+            Exit::Unreachable => {}
         }
     }
 
@@ -842,11 +858,11 @@ mod tests {
         });
 
         let bytes = lower(&program).bytes;
-        // `ud2` for the unreachable tail, and before it a jump back to the
-        // loop head. The head is a few bytes behind, so the short form
-        // reaches it and the displacement is negative.
-        let end = bytes.len() - 2;
-        assert_eq!(&bytes[end..], [0x0F, 0x0B]);
+        // Nothing is laid out for the unreachable tail, so the jump back to
+        // the loop head is the last of the function. The head is a few bytes
+        // behind, so the short form reaches it and the displacement is
+        // negative.
+        let end = bytes.len();
         assert_eq!(bytes[end - 2], 0xEB, "a near loop takes the short jump");
         assert!(
             bytes[end - 1].cast_signed() < 0,
@@ -858,7 +874,7 @@ mod tests {
     fn a_syscall_invalidates_the_registers_it_clobbers() {
         let (mut program, main) = Program::new("main");
         let data = program.intern(b"x".as_slice());
-        let write = program.platform("write", &[Class::Address, Class::Word], &[]);
+        let write = program.platform("write");
         program.define(main, |b, _| {
             let buf = b.address_of(data);
             let len = b.constant(Class::Word, 1);

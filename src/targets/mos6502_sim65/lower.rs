@@ -232,10 +232,22 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
 /// the image ends, since with no kernel and no mapping the heap is whatever
 /// address space the image does not occupy. Lengthening a branch can push
 /// another out of reach, so this repeats rather than assuming one pass.
+/// What a round may learn and never unlearn: a branch that does not reach
+/// in one byte, and a heap that has to start higher. Neither is taken back
+/// -- an address is two bytes however high it is, so a heap further out
+/// never makes the code that names it longer -- and every program here
+/// settles in two, one to lay the image out and one to confirm it. Reaching
+/// this many means a round undid what an earlier one settled.
+const ROUNDS: usize = 32;
+
+/// # Panics
+///
+/// If the layout does not settle, which is this target disagreeing with
+/// itself rather than anything a program did.
 pub(super) fn lower(program: &Program) -> Code {
     let mut far: Vec<bool> = Vec::new();
     let mut heap = LOAD;
-    loop {
+    for _ in 0..ROUNDS {
         let (code, overflowed) = assemble(program, heap, far.clone());
         if !overflowed.is_empty() {
             let widest = overflowed.iter().copied().max().expect("a branch");
@@ -252,6 +264,7 @@ pub(super) fn lower(program: &Program) -> Code {
         }
         heap = end;
     }
+    panic!("the layout did not settle in {ROUNDS} rounds")
 }
 
 fn assemble(program: &Program, heap: u16, far: Vec<bool>) -> (Code, Vec<usize>) {

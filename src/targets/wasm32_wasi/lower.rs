@@ -3,14 +3,15 @@
 //!
 //! - A transfer pushes every source before setting any destination, leaving
 //!   the parallel move to wasm's operand stack.
-//! - Returning from `_start` already exits zero, so a program ending in
-//!   `exit 0` calls nothing and need not import `proc_exit`, which is most
-//!   of an import section.
+//! - Returning from `_start` already exits zero, so inside the entry an
+//!   `exit 0` is a `return`, and at the end of the body it is the `end`
+//!   that is there anyway. A program that only ever leaves with nought
+//!   imports nothing, which is most of a small module.
 
 use super::{Body, CALL, Code, DROP, END, I32_CONST, Segment};
 use crate::ir::{
-    Binary, Class, DataId, Exit, FunctionId, Offset, Op, Origin, Program, RegionId, Relation,
-    Terminator, ValueId, Width,
+    Binary, Class, DataId, Exit, FunctionId, Offset, Op, Origin, Program, Range, RegionId,
+    Relation, Terminator, ValueId, Width,
 };
 use crate::targets::bytes::{Bytes, len32};
 
@@ -203,47 +204,58 @@ struct Lowering<'a> {
 }
 
 impl Lowering<'_> {
-    /// Falling off the end of `_start` already means success, so an entry
-    /// returning a constant zero costs nothing and needs no import.
+    /// Falling off the end of `_start` already means success, so a program
+    /// that only ever leaves with nought needs no import, and that is most
+    /// of an import section.
     ///
-    /// A program that leaves through the routine itself still needs it,
-    /// whatever its entry says it returns: what follows such a call never
-    /// runs, so the return there says nothing about how the program ends.
+    /// Anything else has to be said: a status the entry did not work out to
+    /// nought, and every exit from somewhere a `return` would not end the
+    /// program.
     fn needs_proc_exit(&self) -> bool {
-        if self.calls_exit() {
-            return true;
-        }
         let entry = &self.program.functions()[self.entry.index()];
         let terminator = self.program.region(entry.body).terminator;
-        if terminator.exit != Exit::Return {
-            return true;
-        }
-        self.program
-            .values(terminator.values)
-            .first()
-            .is_some_and(|&value| self.constant(value) != Some(0))
+        // The entry's own return: nought is what running off the end does
+        // anyway, and any other status has to be said.
+        let status = terminator.exit == Exit::Return
+            && self
+                .program
+                .values(terminator.values)
+                .first()
+                .is_some_and(|&value| self.constant(value) != Some(0));
+        status
+            || self
+                .program
+                .functions()
+                .iter()
+                .enumerate()
+                .any(|(id, function)| self.exits(function.body, id == self.entry.index()))
     }
 
-    fn calls_exit(&self) -> bool {
-        fn within(program: &Program, region: RegionId) -> bool {
-            program.ops(region).iter().any(|op| match *op {
-                Op::PlatformCall { platform, .. } => {
-                    let name = program.platforms()[platform.index()].name;
-                    program.name(name) == "exit"
-                }
-                Op::If {
-                    then_region,
-                    else_region,
-                    ..
-                } => within(program, then_region) || within(program, else_region),
-                Op::Loop { body, .. } => within(program, body),
-                _ => false,
-            })
-        }
+    /// Whether a region holds an exit this target has to make a call for.
+    /// Leaving `_start` with nought is a `return`, which is the same thing
+    /// and costs a byte; leaving anywhere else, or with anything else, is
+    /// the routine.
+    fn exits(&self, region: RegionId, in_entry: bool) -> bool {
+        self.program.ops(region).iter().any(|op| match *op {
+            Op::PlatformCall { platform, args } => {
+                let name = self.program.platforms()[platform.index()].name;
+                self.program.name(name) == "exit" && !(in_entry && self.leaves_with_nought(args))
+            }
+            Op::If {
+                then_region,
+                else_region,
+                ..
+            } => self.exits(then_region, in_entry) || self.exits(else_region, in_entry),
+            Op::Loop { body, .. } => self.exits(body, in_entry),
+            _ => false,
+        })
+    }
+
+    fn leaves_with_nought(&self, args: Range) -> bool {
         self.program
-            .functions()
-            .iter()
-            .any(|function| within(self.program, function.body))
+            .values(args)
+            .first()
+            .is_some_and(|&value| self.constant(value) == Some(0))
     }
 
     /// `_start` returns nothing of its own, whatever the entry's signature
@@ -301,17 +313,23 @@ impl Lowering<'_> {
         // The program outlives this, so the walk borrows it rather than
         // `self`, and the loop stays one pass over a contiguous run.
         let program = self.program;
-        for (op, results) in program.walk(region) {
-            self.instruction(op, results);
+        let terminator = program.region(region).terminator;
+        // Where the last of these instructions is the last of `_start`:
+        // what happens after it is running off the end, which is already
+        // an exit with nought.
+        let ending = self.in_entry && self.depth == 0 && terminator.exit == Exit::Unreachable;
+        let last = program.ops(region).len();
+        for (at, (op, results)) in program.walk(region).enumerate() {
+            self.instruction(op, results, ending && at + 1 == last);
         }
-        self.terminator(program.region(region).terminator);
+        self.terminator(terminator);
     }
 
     #[expect(
         clippy::too_many_lines,
         reason = "one call per op; the length is the patterns"
     )]
-    fn instruction(&mut self, op: &Op, results: &[ValueId]) {
+    fn instruction(&mut self, op: &Op, results: &[ValueId], ending: bool) {
         let program = self.program;
         match op {
             Op::Constant { .. } | Op::AddressOf(_) => {}
@@ -351,7 +369,7 @@ impl Lowering<'_> {
                 self.set(results[0]);
             }
             Op::PlatformCall { platform, args } => {
-                self.platform_call(*platform, program.values(*args), results);
+                self.platform_call(*platform, program.values(*args), results, ending);
             }
             Op::Call { function, args } => {
                 for &arg in program.values(*args) {
@@ -496,6 +514,20 @@ impl Lowering<'_> {
         }
     }
 
+    /// Leaving `_start` with nought is returning from it, and a return at
+    /// the end of a body is the `end` that body ends with anyway. Every
+    /// other way out is the routine, which is why it is imported.
+    fn leave(&mut self, status: ValueId, ending: bool) {
+        if self.in_entry && self.constant(status) == Some(0) {
+            if !ending {
+                self.body.byte(RETURN);
+            }
+        } else if let Some(index) = self.import("proc_exit") {
+            self.push(status);
+            self.call(index);
+        }
+    }
+
     /// The opcode for the width, then its alignment as a power of two and
     /// the constant part of its address.
     fn access(&mut self, width: Width, offset: Offset, byte: u8, word: u8) {
@@ -518,13 +550,14 @@ impl Lowering<'_> {
         platform: crate::ir::PlatformId,
         args: &[ValueId],
         results: &[ValueId],
+        ending: bool,
     ) {
         let name = self.program.platforms()[platform.index()].name;
         let name = self.program.name(name).to_owned();
-        self.platform_named(&name, args, results);
+        self.platform_named(&name, args, results, ending);
     }
 
-    fn platform_named(&mut self, name: &str, args: &[ValueId], results: &[ValueId]) {
+    fn platform_named(&mut self, name: &str, args: &[ValueId], results: &[ValueId], ending: bool) {
         match name {
             "write" => {
                 let index = self.written;
@@ -549,12 +582,7 @@ impl Lowering<'_> {
                 self.call(fd_write);
                 self.body.byte(DROP); // The errno, which there is nobody to tell.
             }
-            "exit" => {
-                if let Some(index) = self.import("proc_exit") {
-                    self.push(args[0]);
-                    self.call(index);
-                }
-            }
+            "exit" => self.leave(args[0], ending),
             // Linear memory only grows in pages, and `memory.grow` answers
             // with the old size, so the new region starts where it ended.
             "grow" => {
@@ -718,6 +746,44 @@ mod tests {
         assert_eq!(code.imports, ["proc_exit"]);
         // The only import, so `proc_exit` is function zero.
         assert_eq!(code.bodies[0].code, [0x41, 0x03, 0x10, 0x00]);
+    }
+
+    /// The whole of a program that leaves with nought: no call, nothing to
+    /// import, and nothing in the body but the `end` a body ends with.
+    #[test]
+    fn leaving_with_nought_is_the_end_of_the_entry() {
+        let (mut program, main) = Program::new("main");
+        let exit = program.platform("exit");
+        program.define(main, |b, _| {
+            let status = b.constant(Class::Word, 0);
+            b.platform_call(exit, &[status]);
+            Terminator::UNREACHABLE
+        });
+
+        let code = lower(&program);
+        assert!(code.imports.is_empty(), "{:?}", code.imports);
+        assert_eq!(code.bodies[0].code, []);
+    }
+
+    /// The same exit where returning is not the end of the program: from a
+    /// name the entry calls, it has to be the routine.
+    #[test]
+    fn leaving_with_nought_from_elsewhere_is_a_call() {
+        let (mut program, main) = Program::new("main");
+        let exit = program.platform("exit");
+        let leave = program.declare("leave", &[], &[]);
+        program.define(leave, |b, _| {
+            let status = b.constant(Class::Word, 0);
+            b.platform_call(exit, &[status]);
+            Terminator::UNREACHABLE
+        });
+        program.define(main, |b, _| {
+            b.call(leave, &[]);
+            Terminator::UNREACHABLE
+        });
+
+        let code = lower(&program);
+        assert_eq!(code.imports, ["proc_exit"]);
     }
 
     /// Structured control flow goes out as it came in: a `loop` inside a

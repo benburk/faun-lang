@@ -28,15 +28,19 @@ pub(super) fn module(code: &Code) -> Vec<u8> {
     out.bytes(&[1, 0, 0, 0]);
 
     types(&mut out, code);
-    out.section(IMPORT, |s| {
-        s.uleb(imports);
-        for (index, name) in code.imports.iter().enumerate() {
-            s.name(WASI);
-            s.name(name);
-            s.byte(KIND_FUNC);
-            s.uleb(len32(index));
-        }
-    });
+    // A count of none is still a section saying nothing, so it is the count
+    // that has to be guarded rather than the bytes it writes.
+    if !code.imports.is_empty() {
+        out.section(IMPORT, |s| {
+            s.uleb(imports);
+            for (index, name) in code.imports.iter().enumerate() {
+                s.name(WASI);
+                s.name(name);
+                s.byte(KIND_FUNC);
+                s.uleb(len32(index));
+            }
+        });
+    }
     out.section(FUNCTION, |s| {
         s.uleb(len32(code.bodies.len()));
         for index in 0..code.bodies.len() {

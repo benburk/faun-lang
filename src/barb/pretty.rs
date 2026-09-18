@@ -37,12 +37,13 @@ impl Program {
                 }
             })
             .collect();
-        let _ = writeln!(
-            out,
-            "{} = {}",
-            self.name(self.type_(id).name),
-            ctors.join(" | ")
-        );
+        let name = self.name(self.type_(id).name);
+        // A type with no constructors has nothing to be written equal to.
+        let _ = if ctors.is_empty() {
+            writeln!(out, "{name}")
+        } else {
+            writeln!(out, "{name} = {}", ctors.join(" | "))
+        };
     }
 
     fn render_function(&self, id: FnId, out: &mut String) {

@@ -7,8 +7,15 @@ use std::process::Command;
 use std::sync::{Mutex, PoisonError};
 
 use faun::ir::Class::Word;
-use faun::ir::{Binary, Class, Offset, Program, Relation, Width};
+use faun::ir::{Binary, Builder, Class, Offset, Program, Relation, Width};
 use faun::targets::Target;
+
+/// The whole of a program that does nothing: a number to leave with, and the
+/// one effect there is. This is the floor for a program somebody writes,
+/// where [`empty`] is the floor for one this tier is handed.
+const EXIT_ZERO: &str = "type Nat Zero Succ(Nat)
+
+                         main!(h) -> exit!(h Zero)";
 
 /// What the smallest programs compile to, for every target. Ratchets: lower
 /// one when a target improves, and do not raise one without saying why.
@@ -19,7 +26,18 @@ fn minimal_programs_compile_to_the_sizes_recorded_for_them() {
         (
             "empty",
             empty(),
-            [(X86_64Linux, 127), (Wasm32Wasi, 39), (Mos6502Sim65, 30)],
+            [(X86_64Linux, 127), (Wasm32Wasi, 36), (Mos6502Sim65, 30)],
+        ),
+        // `exit!` answers `Never`, so nothing is laid out after it and what
+        // is left is the leaving itself. On x86-64 that is the same seven
+        // bytes the floor above spends on returning a status, and on the
+        // 6502 it is five where returning one is seven. On wasm an exit
+        // with nought from `_start` is the end of `_start`, so this is the
+        // module above to the byte.
+        (
+            "exit zero, from text",
+            faun::read(EXIT_ZERO).expect("a program"),
+            [(X86_64Linux, 127), (Wasm32Wasi, 36), (Mos6502Sim65, 29)],
         ),
         (
             "two and two",
@@ -57,6 +75,52 @@ fn the_x86_64_linux_executable_prints_hello_world() {
 fn the_mos6502_image_prints_hello_world() {
     let (output, _) = run(Target::Mos6502Sim65, &faun::hello_world());
     assert_eq!(output, "Hello, World!\n");
+}
+
+/// The branch that does not reach in one byte, which until now no program
+/// here was long enough to need. Both targets that relax branches lay the
+/// image out again with this one widened, and the answer is what says the
+/// widened branch still lands where it meant to.
+#[test]
+fn every_target_branches_over_an_arm_a_byte_cannot_reach() {
+    for target in Target::ALL {
+        for first in [true, false] {
+            let program = a_branch_over_a_long_arm(40, first);
+            assert_eq!(
+                status(target, &program),
+                40,
+                "{target}, long arm first: {first}"
+            );
+        }
+    }
+}
+
+/// The shapes every target has an instruction for and no program here had
+/// asked of it: both sides of a comparison worked out, a condition read
+/// rather than just made, a routine's argument worked out, and a value
+/// carried through a loop that only an arm reads.
+#[test]
+fn every_target_runs_what_a_constant_cannot_answer() {
+    for target in Target::ALL {
+        assert_eq!(
+            status(target, &compares_two_worked_out_values()),
+            1,
+            "{target}"
+        );
+        assert_eq!(status(target, &branches_on_a_flag_it_read()), 7, "{target}");
+        assert_eq!(
+            run(target, &writes_a_length_it_worked_out()).0,
+            "hi\n",
+            "{target}"
+        );
+        assert_eq!(
+            status(target, &carries_a_total_into_an_arm(3)),
+            3,
+            "{target}"
+        );
+        let ticks = counts_down_before_it_branches(3);
+        assert_eq!(run(target, &ticks).0, "tick\n".repeat(3), "{target}");
+    }
 }
 
 #[test]
@@ -120,9 +184,38 @@ fn the_smallest_x86_64_linux_executable_is_headers_and_an_exit() {
 
 #[test]
 fn the_smallest_wasm32_wasi_module_imports_nothing() {
-    // Type, function, export, code. No imports, no memory, no data.
+    // Type, function, export, code. No import section at all, no memory,
+    // no data.
     let (output, _) = run(Target::Wasm32Wasi, &empty());
     assert_eq!(output, "");
+
+    // A program that leaves with nought says so, and compiles to the same
+    // module: `proc_exit(0)` is what running off the end of `_start` does.
+    let written = faun::read(EXIT_ZERO).expect("a program");
+    assert_eq!(
+        faun::compile(Target::Wasm32Wasi, &written)[0].bytes,
+        faun::compile(Target::Wasm32Wasi, &empty())[0].bytes
+    );
+}
+
+/// Leaving with nought is a `return` only where returning ends the program.
+/// A name that leaves is called, so it leaves through the routine wherever
+/// it was called from.
+#[test]
+fn the_wasm32_wasi_module_imports_proc_exit_where_it_has_to() {
+    let leaves = faun::read(
+        "type Nat Zero Succ(Nat)
+
+         leave!(h n) -> exit!(h n)
+
+         main!(h) -> leave!(h Zero)",
+    )
+    .expect("a program");
+    assert_eq!(status(Target::Wasm32Wasi, &leaves), 0);
+
+    // Inside the entry, where one arm returns and the other has to call.
+    assert_eq!(status(Target::Wasm32Wasi, &exits_from_a_branch(0)), 0);
+    assert_eq!(status(Target::Wasm32Wasi, &exits_from_a_branch(1)), 5);
 }
 
 #[test]
@@ -181,6 +274,209 @@ fn the_x86_64_linux_executable_counts_down() {
 fn the_wasm32_wasi_module_counts_down() {
     assert_eq!(run(Target::Wasm32Wasi, &countdown(3)).0, "tick\n".repeat(3));
     assert_eq!(run(Target::Wasm32Wasi, &countdown(0)).0, "");
+}
+
+/// Two exits from one entry, one of them with nought. Whatever a target
+/// makes of the second, the first has to leave with the status it says.
+fn exits_from_a_branch(taken: u64) -> Program {
+    let (mut program, main) = Program::new("main");
+    let exit = program.platform("exit");
+
+    program.define(main, |b, _| {
+        let value = b.constant(Word, taken);
+        let zero = b.constant(Word, 0);
+        let nought = b.compare(Relation::Equal, value, zero);
+        b.if_(
+            nought,
+            &[],
+            // Neither arm comes back, so neither reaches the join.
+            |b| {
+                let status = b.constant(Word, 0);
+                b.platform_call(exit, &[status]);
+                faun::ir::Terminator::UNREACHABLE
+            },
+            |b| {
+                let status = b.constant(Word, 5);
+                b.platform_call(exit, &[status]);
+                faun::ir::Terminator::UNREACHABLE
+            },
+        );
+        let status = b.constant(Word, 0);
+        b.ret(&[status])
+    });
+    program
+}
+
+/// An arm longer than a byte of displacement reaches over, which is the one
+/// thing that makes a layout take more than a guess and a confirmation.
+/// Which arm is long decides which branch cannot reach: the one jumping
+/// over it to the join, or the one testing the condition.
+///
+/// The long arm is the arm that runs, so the answer is `steps` either way
+/// and a branch landing anywhere else answers something else.
+fn a_branch_over_a_long_arm(steps: u64, first: bool) -> Program {
+    fn counts(b: &mut Builder, steps: u64) -> faun::ir::Terminator {
+        let mut total = b.constant(Word, 0);
+        for _ in 0..steps {
+            let one = b.constant(Word, 1);
+            total = b.binary(Binary::Add, total, one);
+        }
+        b.yield_(&[total])
+    }
+    fn nothing(b: &mut Builder) -> faun::ir::Terminator {
+        let held = b.constant(Word, 0);
+        b.yield_(&[held])
+    }
+
+    let (mut program, main) = Program::new("main");
+    program.define(main, |b, _| {
+        // Worked out rather than written, so no target folds the branch away
+        // and lays the arms out as one run.
+        let zero = b.constant(Word, 0);
+        let held = b.constant(Word, u64::from(!first));
+        let taken = b.compare(Relation::Equal, zero, held);
+        let answer = if first {
+            b.if_(taken, &[Word], |b| counts(b, steps), nothing)
+        } else {
+            b.if_(taken, &[Word], nothing, |b| counts(b, steps))
+        };
+        b.ret(&answer)
+    });
+    program
+}
+
+/// Both sides worked out, where every comparison here has had one side
+/// written. A target with one accumulator has to hold the left somewhere
+/// while it reads the right, and that is a different instruction.
+fn compares_two_worked_out_values() -> Program {
+    let (mut program, main) = Program::new("main");
+    program.define(main, |b, _| {
+        let one = b.constant(Word, 1);
+        let two = b.binary(Binary::Add, one, one);
+        let three = b.binary(Binary::Add, two, one);
+        let answer = b.compare(Relation::Less, two, three);
+        b.ret(&[answer])
+    });
+    program
+}
+
+/// A condition that is not the comparison just made: a flag read back out
+/// of storage, which a target has to test for itself.
+fn branches_on_a_flag_it_read() -> Program {
+    let (mut program, main) = Program::new("main");
+    let flag = program.global(&[1, 0, 0, 0, 0, 0, 0, 0]);
+
+    program.define(main, |b, _| {
+        let at = b.address_of(flag);
+        let held = b.load(Width::Word, at, Offset::Words(0));
+        let answer = b.if_(
+            held,
+            &[Word],
+            |b| {
+                let held = b.constant(Word, 7);
+                b.yield_(&[held])
+            },
+            |b| {
+                let held = b.constant(Word, 9);
+                b.yield_(&[held])
+            },
+        );
+        b.ret(&answer)
+    });
+    program
+}
+
+/// "hi\n" again, with the length worked out as well as the bytes, so
+/// neither of the routine's arguments is a constant a target can lay down.
+fn writes_a_length_it_worked_out() -> Program {
+    let (mut program, main) = Program::new("main");
+    let grow = program.platform("grow");
+    let write = program.platform("write");
+
+    program.define(main, |b, _| {
+        let size = b.constant(Word, 4096);
+        let page = b.platform_call(grow, &[size])[0];
+        for (index, byte) in [b'h', b'i', b'\n'].into_iter().enumerate() {
+            let value = b.constant(Word, u64::from(byte));
+            let offset = Offset::Bytes(i32::try_from(index).expect("a short greeting"));
+            b.store(Width::Byte, page, offset, value);
+        }
+
+        let one = b.constant(Word, 1);
+        let two = b.constant(Word, 2);
+        let length = b.binary(Binary::Add, one, two);
+        b.platform_call(write, &[page, length]);
+        let status = b.constant(Word, 0);
+        b.ret(&[status])
+    });
+    program
+}
+
+/// A loop carrying a total that nothing in the body itself reads: both the
+/// arm that leaves with it and the arm that adds to it are inside the `if`,
+/// so whether it is still wanted is a question about the arms.
+fn carries_a_total_into_an_arm(times: u64) -> Program {
+    let (mut program, main) = Program::new("main");
+    program.define(main, |b, _| {
+        let start = b.constant(Word, times);
+        let total = b.constant(Word, 0);
+        let answer = b.loop_(&[start, total], &[Word], |b, params| {
+            let (n, total) = (params[0], params[1]);
+            let zero = b.constant(Word, 0);
+            let done = b.compare(Relation::Equal, n, zero);
+            b.if_(
+                done,
+                &[],
+                |b| b.break_(&[total]),
+                |b| {
+                    let one = b.constant(Word, 1);
+                    let next = b.binary(Binary::Sub, n, one);
+                    let more = b.binary(Binary::Add, total, one);
+                    b.continue_(&[next, more])
+                },
+            );
+            faun::ir::Terminator::UNREACHABLE
+        });
+        b.ret(&answer)
+    });
+    program
+}
+
+/// The countdown again, with the step worked out in the body rather than in
+/// the arm that goes round. Nothing in the body reads it -- the `if` sits
+/// between the step and the `continue` carrying it -- so whether the step
+/// may be left until last is a question about what the arms read.
+fn counts_down_before_it_branches(times: u64) -> Program {
+    let (mut program, main) = Program::new("main");
+    let tick = program.intern(b"tick\n".as_slice());
+    let write = program.platform("write");
+
+    program.define(main, |b, _| {
+        let start = b.constant(Word, times);
+        b.loop_(&[start], &[], |b, params| {
+            let n = params[0];
+            let one = b.constant(Word, 1);
+            let next = b.binary(Binary::Sub, n, one);
+            let zero = b.constant(Word, 0);
+            let done = b.compare(Relation::Equal, n, zero);
+            b.if_(
+                done,
+                &[],
+                |b| b.break_(&[]),
+                |b| {
+                    let buf = b.address_of(tick);
+                    let len = b.constant(Word, 5);
+                    b.platform_call(write, &[buf, len]);
+                    b.yield_(&[])
+                },
+            );
+            b.continue_(&[next])
+        });
+
+        let status = b.constant(Word, 0);
+        b.ret(&[status])
+    });
+    program
 }
 
 /// Nothing at all. A target's floor: headers, and whatever it takes to stop.
@@ -261,7 +557,7 @@ fn recurses() -> Program {
 /// Exits with what it read, so nothing but real memory can make it pass.
 fn uses_the_heap() -> Program {
     let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow", &[Word], &[Class::Address]);
+    let grow = program.platform("grow");
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
@@ -326,8 +622,8 @@ fn values_survive_a_call() -> Program {
 /// the case a target cannot answer with a block of constants.
 fn writes_from_the_heap() -> Program {
     let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow", &[Word], &[Class::Address]);
-    let write = program.platform("write", &[Class::Address, Word], &[]);
+    let grow = program.platform("grow");
+    let write = program.platform("write");
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
@@ -353,7 +649,7 @@ fn writes_from_the_heap() -> Program {
 /// `(first == 200) + second`, so both have to hold to reach 8.
 fn stores_a_byte() -> Program {
     let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow", &[Word], &[Class::Address]);
+    let grow = program.platform("grow");
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
@@ -436,7 +732,7 @@ fn less(left: u64, right: u64) -> Program {
 fn countdown(times: u64) -> Program {
     let (mut program, main) = Program::new("main");
     let tick = program.intern(b"tick\n".as_slice());
-    let write = program.platform("write", &[Class::Address, Word], &[]);
+    let write = program.platform("write");
 
     program.define(main, |b, _| {
         let start = b.constant(Word, times);
@@ -603,6 +899,73 @@ fn every_target_exits_with_what_it_was_told() {
     for target in Target::ALL {
         assert_eq!(status(target, &machine), 3, "{target}");
     }
+}
+
+/// However many calls deep it is, a name that leaves does not come back: the
+/// status is the one it was handed, and nothing after the call is reached.
+#[test]
+fn every_target_exits_through_a_name_that_leaves() {
+    let machine = faun::read(
+        "type Nat Zero Succ(Nat)
+
+         die!(h n) -> exit!(h n)
+
+         main!(h) -> die!(h Succ(Succ(Zero)))",
+    )
+    .expect("a program");
+    for target in Target::ALL {
+        assert_eq!(status(target, &machine), 2, "{target}");
+    }
+}
+
+/// A clause that leaves is one the others are not measured against, so a
+/// name with an arm that exits still answers what its other arm answers.
+#[test]
+fn every_target_runs_a_match_with_an_arm_that_leaves() {
+    let machine = faun::read(
+        "type Nat Zero Succ(Nat)
+
+         pick!(h Zero) -> exit!(h Succ(Zero))
+         pick!(h Succ(k)) -> k
+
+         main!(h) -> exit!(h Succ(pick!(h Succ(Succ(Zero)))))",
+    )
+    .expect("a program");
+    for target in Target::ALL {
+        assert_eq!(status(target, &machine), 2, "{target}");
+    }
+
+    // The other way through, which leaves from inside the match.
+    let machine = faun::read(
+        "type Nat Zero Succ(Nat)
+
+         pick!(h Zero) -> exit!(h Succ(Zero))
+         pick!(h Succ(k)) -> k
+
+         main!(h) -> exit!(h Succ(pick!(h Zero)))",
+    )
+    .expect("a program");
+    for target in Target::ALL {
+        assert_eq!(status(target, &machine), 1, "{target}");
+    }
+}
+
+/// What a routine reads is what the name means, not what a program hands
+/// it. A type with one constructor says nothing by being one value rather
+/// than another, so it carries no bits and is not passed at all -- which
+/// leaves `exit!` with no status to leave with.
+#[test]
+fn an_effect_hands_over_what_the_routine_reads() {
+    let refused = faun::read(
+        "type Nat Zero
+
+         main!(h) -> exit!(h Zero)",
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("`exit!` hands over nothing, but `exit` reads a word"),
+        "{refused}"
+    );
 }
 
 /// A pure name may not do observable work.

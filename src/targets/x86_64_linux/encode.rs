@@ -278,10 +278,6 @@ impl Encoder {
         self.emit(&[0xC3]);
     }
 
-    pub(super) fn trap(&mut self) {
-        self.emit(&[0x0F, 0x0B]);
-    }
-
     pub(super) fn close_frame(&mut self, bytes: u32) {
         self.adjust_rsp(0xC4, bytes);
     }

@@ -73,10 +73,19 @@ impl Program {
         Symbol::at(self.symbols.len() - 1)
     }
 
-    pub fn platform(&mut self, name: &str, params: &[Class], returns: &[Class]) -> PlatformId {
+    /// A routine a target answers for, by name. What it takes and what it
+    /// answers are what the name means, not something a program says.
+    ///
+    /// # Panics
+    ///
+    /// If no target answers for `name`. The tier above checks this, so a
+    /// program cannot reach it.
+    pub fn platform(&mut self, name: &str) -> PlatformId {
+        let routine =
+            super::platform::routine(name).unwrap_or_else(|| panic!("no routine named `{name}`"));
         let name = self.symbol(name);
-        let params = self.sign(params);
-        let returns = self.sign(returns);
+        let params = self.sign(routine.takes);
+        let returns = self.sign(routine.answers);
         self.platform.push(Platform {
             name,
             params,

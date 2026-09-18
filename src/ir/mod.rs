@@ -40,6 +40,7 @@
 mod builder;
 mod lower;
 mod model;
+mod platform;
 mod validate;
 
 pub use builder::Builder;

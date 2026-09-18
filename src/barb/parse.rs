@@ -18,6 +18,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use super::ir::{Atom, CtorId, FnId, Program, TypeId};
 
@@ -275,7 +276,7 @@ fn build(source: &Source) -> Result<Program, String> {
         .collect();
 
     let arity = arities(source, &clauses)?;
-    colour(source)?;
+    validate(source, &clauses, &arity)?;
     let told = infer(source, &clauses, &program, &ctors, &arity)?;
     let mut functions: HashMap<&str, FnId> = HashMap::new();
     for (name, _) in EFFECTS {
@@ -320,17 +321,21 @@ fn define(
     Ok(std::mem::take(program))
 }
 
-/// The authority a program is handed, and what an effect answers when it
-/// answers nothing. Nothing can build a `Host`, because its constructor is
-/// not among the names a term may use, so the only way to hold one is to
-/// have been handed it.
+/// The authority a program is handed, what an effect answers when it answers
+/// nothing, and what one answers when it does not answer. Nothing can build a
+/// `Host`, because its constructor is not among the names a term may use, so
+/// the only way to hold one is to have been handed it. Nothing can build a
+/// `Never` either, and for a stronger reason: it has no constructors at all.
 fn declare_builtin(program: &mut Program, source: &Source) -> Result<(), String> {
     for name in BUILTIN {
         if source.types.iter().any(|(held, _)| held == name) {
             return Err(format!("`{name}` is the compiler's, not a program's"));
         }
         let id = program.declare_type(name);
-        program.define_type(id, &[(name, &[])]);
+        // A type with no constructors has no values, which is what says that
+        // the terms answering it never answer.
+        let ctors: &[(&str, &[TypeId])] = if id == NEVER { &[] } else { &[(name, &[])] };
+        program.define_type(id, ctors);
     }
     Ok(())
 }
@@ -381,6 +386,133 @@ fn arities<'a>(
         arity.insert(name, takes + 1);
     }
     Ok(arity)
+}
+
+/// What the tiers below are entitled to assume of a program. Everything
+/// else here answers what a program says; this answers whether it says
+/// anything at all, and it runs before anything reads it as though it did.
+fn validate(
+    source: &Source,
+    clauses: &HashMap<&str, Vec<Clause>>,
+    arity: &HashMap<&str, usize>,
+) -> Result<(), String> {
+    colour(source)?;
+    one_name_per_thing(source)?;
+    calls_are_saturated(source, clauses, arity)?;
+    clauses_do_not_overlap(source, clauses)?;
+    // The entry is handed the authority and nothing else: there is nobody
+    // to hand it anything more.
+    if arity.get("main!").is_some_and(|takes| *takes != 1) {
+        return Err("`main!` is handed the authority and nothing else".to_owned());
+    }
+    Ok(())
+}
+
+/// A constructor is named once, and nothing else takes its name. A term
+/// reads a name as a constructor before it reads it as anything, so a
+/// second one is not a second meaning but the loss of the first.
+fn one_name_per_thing(source: &Source) -> Result<(), String> {
+    let mut held: HashSet<&str> = BUILTIN.into_iter().collect();
+    for (_, ctors) in &source.types {
+        for (ctor, _) in ctors {
+            if !held.insert(ctor.as_str()) {
+                return Err(format!("`{ctor}` is declared twice"));
+            }
+        }
+    }
+    for name in &source.order {
+        if held.contains(name.as_str()) {
+            return Err(format!(
+                "`{name}` is a constructor and a name; one or the other"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every call gives a name what it takes. Nothing downstream checks this:
+/// the slots a call unifies with are the name's own, so an argument too
+/// many lands on the name's result and the call answers whatever was
+/// allocated after it.
+fn calls_are_saturated(
+    source: &Source,
+    clauses: &HashMap<&str, Vec<Clause>>,
+    arity: &HashMap<&str, usize>,
+) -> Result<(), String> {
+    fn within(
+        term: &Term,
+        bound: &HashSet<&str>,
+        arity: &HashMap<&str, usize>,
+    ) -> Result<(), String> {
+        let Term(name, args) = term;
+        // A name a clause binds is a value, and shadows the one declared.
+        if !bound.contains(name.as_str())
+            && let Some(&takes) = arity.get(name.as_str())
+            && args.len() != takes
+        {
+            let each = if takes == 1 { "argument" } else { "arguments" };
+            return Err(format!("`{name}` takes {takes} {each}, not {}", args.len()));
+        }
+        args.iter()
+            .try_for_each(|argument| within(argument, bound, arity))
+    }
+
+    for name in &source.order {
+        for clause in &clauses[name.as_str()] {
+            let mut bound: HashSet<&str> = HashSet::new();
+            for pattern in &clause.patterns {
+                match pattern {
+                    Pattern::Bind(held) => {
+                        bound.insert(held.as_str());
+                    }
+                    Pattern::Ctor(_, fields) => {
+                        bound.extend(fields.iter().map(String::as_str));
+                    }
+                }
+            }
+            for (held, step) in &clause.steps {
+                within(step, &bound, arity)?;
+                bound.insert(held.as_str());
+            }
+            within(&clause.body, &bound, arity)?;
+        }
+    }
+    Ok(())
+}
+
+/// Every clause is reached by something. Clauses are tried in the order
+/// they are written, so a second one for a constructor is dead, and so is
+/// anything written after a clause that takes the argument as a name.
+fn clauses_do_not_overlap(
+    source: &Source,
+    clauses: &HashMap<&str, Vec<Clause>>,
+) -> Result<(), String> {
+    for name in &source.order {
+        let held = &clauses[name.as_str()];
+        let Some(at) = matched_argument(held)? else {
+            if held.len() > 1 {
+                return Err(format!(
+                    "`{name}` has clauses with nothing to tell them apart"
+                ));
+            }
+            continue;
+        };
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut everything = false;
+        for clause in held {
+            if everything {
+                return Err(format!("`{name}` has a clause nothing reaches"));
+            }
+            match &clause.patterns[at] {
+                Pattern::Bind(_) => everything = true,
+                Pattern::Ctor(ctor, _) if !seen.insert(ctor.as_str()) => {
+                    return Err(format!("`{name}` matches `{ctor}` twice"));
+                }
+                Pattern::Ctor(..) => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A name ending in `!` may perform observable work, and a name that does
@@ -461,11 +593,18 @@ fn matched_argument(clauses: &[Clause]) -> Result<Option<usize>, String> {
     Ok(matched)
 }
 
-/// The types the compiler declares: the authority a program is handed, and
-/// what an effect answers when it answers nothing. Neither carries anything,
-/// so both are erased, and `Host`'s constructor is left out of the names a
-/// term may use so that no program can make one for itself.
-const BUILTIN: [&str; 2] = ["Host", "Unit"];
+/// The types the compiler declares, in the order they are declared in: the
+/// authority a program is handed, what an effect answers when it answers
+/// nothing, and what a term answers when it does not come back. None of them
+/// carries anything, so all are erased, and `Host`'s constructor is left out
+/// of the names a term may use so that no program can make one for itself.
+const BUILTIN: [&str; 3] = ["Host", "Unit", "Never"];
+
+/// Two of them are named here as well as declared above, since the rules
+/// below are written in terms of them. The order `BUILTIN` is declared in is
+/// what makes these the indices they are.
+const HOST: TypeId = TypeId(0);
+const NEVER: TypeId = TypeId(2);
 
 /// The effects a target answers for, and how many arguments each takes past
 /// the authority. A program declares none of these: they are the interface
@@ -682,9 +821,7 @@ impl Unify {
             return Ok(());
         }
         let held = match (self.known[left], self.known[right]) {
-            (Some(one), Some(other)) if one != other => {
-                return Err("a value is used at two types".to_owned());
-            }
+            (Some(one), Some(other)) => Some(agree(one, other)?),
             (held, other) => held.or(other),
         };
         self.parent[right] = left;
@@ -694,18 +831,28 @@ impl Unify {
 
     fn pin(&mut self, slot: usize, id: TypeId) -> Result<(), String> {
         let slot = self.find(slot);
-        match self.known[slot] {
-            Some(held) if held != id => Err("a value is used at two types".to_owned()),
-            _ => {
-                self.known[slot] = Some(id);
-                Ok(())
-            }
-        }
+        self.known[slot] = Some(match self.known[slot] {
+            Some(held) => agree(held, id)?,
+            None => id,
+        });
+        Ok(())
     }
 
     fn get(&mut self, slot: usize) -> Option<TypeId> {
         let slot = self.find(slot);
         self.known[slot]
+    }
+}
+
+/// The type two slots hold once they are the same slot. `Never` has no
+/// values, so a term answering it answers nothing that could disagree with
+/// anything: it takes the type of whatever it was used beside. That is the
+/// one place two types meet and both are kept.
+fn agree(one: TypeId, other: TypeId) -> Result<TypeId, String> {
+    match (one, other) {
+        _ if one == other => Ok(one),
+        (NEVER, held) | (held, NEVER) => Ok(held),
+        _ => Err("a value is used at two types".to_owned()),
     }
 }
 
@@ -723,15 +870,24 @@ fn infer(
     };
     // Each function takes a run of slots: one per argument, then its result.
     let base = slots(source, arity, &mut unify)?;
+    let leaving = diverging(source, clauses);
 
     for name in &source.order {
         for clause in &clauses[name.as_str()] {
             let mut scope = bound(clause, base[name.as_str()], &mut unify, program, ctors)?;
             for (held, step) in &clause.steps {
-                let slot = term(step, &scope, &mut unify, program, ctors, &base)?;
+                let slot = term(step, &scope, &mut unify, program, ctors, &base, &leaving)?;
                 scope.insert(held.as_str(), slot);
             }
-            let answer = term(&clause.body, &scope, &mut unify, program, ctors, &base)?;
+            let answer = term(
+                &clause.body,
+                &scope,
+                &mut unify,
+                program,
+                ctors,
+                &base,
+                &leaving,
+            )?;
             let result = base[name.as_str()] + arity[name.as_str()];
             unify.union(answer, result)?;
         }
@@ -766,18 +922,17 @@ fn slots<'a>(
         }
         base.insert(name.as_str(), at);
     }
-    // An effect takes the authority and answers nothing; what it takes
+    // An effect takes the authority and does not come back; what it takes
     // between is whatever it is given, which is what the argument settles.
-    let (host, unit) = (TypeId::at(0), TypeId::at(1));
     for (name, takes) in EFFECTS {
         let at = unify.parent.len();
         let authority = unify.fresh();
-        unify.pin(authority, host)?;
+        unify.pin(authority, HOST)?;
         for _ in 0..takes {
             unify.fresh();
         }
         let answer = unify.fresh();
-        unify.pin(answer, unit)?;
+        unify.pin(answer, NEVER)?;
         base.insert(name, at);
     }
     Ok(base)
@@ -814,6 +969,40 @@ fn bound<'a>(
     Ok(scope)
 }
 
+/// The names a call to which does not come back: the effects, and every
+/// name whose clauses all leave through one. Inference needs this before it
+/// decides anything, since a use of such a name is free to stand at whatever
+/// type its neighbours do -- and freedom per use is not something the slots
+/// can work out for themselves, because they are shared between uses.
+///
+/// A clause leaves if any of its steps does or if its body does, and a term
+/// leaves if the name at its head does or if one of its arguments does.
+/// Nothing here recognises a loop that never ends; only leaving.
+fn diverging<'a>(source: &'a Source, clauses: &HashMap<&str, Vec<Clause>>) -> HashSet<&'a str> {
+    fn leaves(term: &Term, held: &HashSet<&str>) -> bool {
+        held.contains(term.0.as_str()) || term.1.iter().any(|argument| leaves(argument, held))
+    }
+    let mut held: HashSet<&str> = EFFECTS.into_iter().map(|(name, _)| name).collect();
+    let mut growing = true;
+    while growing {
+        growing = false;
+        for name in &source.order {
+            if held.contains(name.as_str()) {
+                continue;
+            }
+            let every = clauses[name.as_str()].iter().all(|clause| {
+                clause.steps.iter().any(|(_, step)| leaves(step, &held))
+                    || leaves(&clause.body, &held)
+            });
+            if every {
+                held.insert(name.as_str());
+                growing = true;
+            }
+        }
+    }
+    held
+}
+
 /// What a name takes and answers, once everything it is used at agrees.
 fn settled(
     unify: &mut Unify,
@@ -843,6 +1032,7 @@ fn term(
     program: &Program,
     ctors: &HashMap<String, CtorId>,
     base: &HashMap<&str, usize>,
+    leaving: &HashSet<&str>,
 ) -> Result<usize, String> {
     let Term(name, args) = held;
     if let Some(slot) = scope.get(name.as_str()) {
@@ -857,7 +1047,7 @@ fn term(
             return Err(format!("`{name}` takes {} fields", fields.len()));
         }
         for (argument, field) in args.iter().zip(fields) {
-            let slot = term(argument, scope, unify, program, ctors, base)?;
+            let slot = term(argument, scope, unify, program, ctors, base, leaving)?;
             unify.pin(slot, field)?;
         }
         let answer = unify.fresh();
@@ -867,13 +1057,23 @@ fn term(
     let at = *base.get(name.as_str()).ok_or_else(|| {
         if name == BUILTIN[0] {
             format!("`{name}` cannot be built; it is what `main!` is handed")
+        } else if name == BUILTIN[NEVER.index()] {
+            format!("`{name}` cannot be built; it is what a term that leaves answers")
         } else {
             format!("nothing named `{name}` is in scope")
         }
     })?;
     for (argument, index) in args.iter().zip(0..) {
-        let slot = term(argument, scope, unify, program, ctors, base)?;
+        let slot = term(argument, scope, unify, program, ctors, base, leaving)?;
         unify.union(slot, at + index)?;
     }
-    Ok(at + args.len())
+    if !leaving.contains(name.as_str()) {
+        return Ok(at + args.len());
+    }
+    // A call that does not come back answers `Never`, and a use of it takes
+    // a slot of its own rather than the name's result: what stands beside
+    // this use settles this use, and every other use stays free.
+    let answer = unify.fresh();
+    unify.pin(answer, NEVER)?;
+    Ok(answer)
 }

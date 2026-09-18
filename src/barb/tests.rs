@@ -287,9 +287,10 @@ fn a_program_reads_from_text() {
         program.render(),
         "Host = Host
 Unit = Unit
+Never
 Nat = Zero | Succ(Nat)
 
-exit!(v0: Host, v1: Nat) -> Unit =
+exit!(v0: Host, v1: Nat) -> Never =
   <elsewhere>
 
 add(v0: Nat, v1: Nat) -> Nat =
@@ -301,7 +302,7 @@ add(v0: Nat, v1: Nat) -> Nat =
       Succ(v3)
   }
 
-main!(v0: Host) -> Unit =
+main!(v0: Host) -> Never =
   v1 = Zero
   v2 = Succ(v1)
   v3 = Succ(v2)
@@ -357,9 +358,10 @@ fn a_body_works_things_out_on_the_way() {
         program.render(),
         "Host = Host
 Unit = Unit
+Never
 Nat = Zero | Succ(Nat)
 
-exit!(v0: Host, v1: Nat) -> Unit =
+exit!(v0: Host, v1: Nat) -> Never =
   <elsewhere>
 
 double(v0: Nat) -> Nat =
@@ -374,7 +376,7 @@ add(v0: Nat, v1: Nat) -> Nat =
       Succ(v3)
   }
 
-main!(v0: Host) -> Unit =
+main!(v0: Host) -> Never =
   v1 = Zero
   v2 = Succ(v1)
   v3 = Succ(v2)
@@ -403,7 +405,7 @@ fn constructors_need_nothing_between_them() {
     .expect("a program");
     assert!(
         program.render().starts_with(
-            "Host = Host\nUnit = Unit\nNat = Succ(Nat) | Zero\nPair = Both(Nat, Nat)\n"
+            "Host = Host\nUnit = Unit\nNever\nNat = Succ(Nat) | Zero\nPair = Both(Nat, Nat)\n"
         ),
         "{}",
         program.render()
@@ -434,4 +436,201 @@ fn a_program_may_write_unit_and_may_not_write_host() {
         "{}",
         program.render()
     );
+}
+
+/// What a name answers when it does not answer. `exit!` leaves, so nothing
+/// comes back from it and nothing comes back from a name that ends in it:
+/// the type says so, and says it about a wrapper nobody declared.
+#[test]
+fn a_name_that_leaves_answers_never() {
+    let program = parse(
+        "type Nat Zero Succ(Nat)
+         die!(h) -> exit!(h Zero)
+         quit!(h n) -> die!(h)
+         main!(h) -> quit!(h Zero)",
+    )
+    .expect("a program");
+    let render = program.render();
+    for held in [
+        "exit!(v0: Host, v1: Nat) -> Never",
+        "die!(v0: Host) -> Never",
+        "quit!(v0: Host, v1: Nat) -> Never",
+        "main!(v0: Host) -> Never",
+    ] {
+        assert!(render.contains(held), "{render}");
+    }
+}
+
+/// A clause that leaves says nothing about what the others answer, which is
+/// the whole of what `Never` buys: it stands at whatever type it is used at,
+/// and the use beside it is what settles the name.
+#[test]
+fn a_clause_that_leaves_does_not_decide_what_the_rest_answer() {
+    let program = parse(
+        "type Nat Zero Succ(Nat)
+         pick!(h Zero) -> exit!(h Zero)
+         pick!(h Succ(k)) -> k
+         main!(h) -> exit!(h pick!(h Succ(Succ(Zero))))",
+    )
+    .expect("a program");
+    assert!(
+        program.render().contains("pick!(v0: Host, v1: Nat) -> Nat"),
+        "{}",
+        program.render()
+    );
+}
+
+/// Two uses of `exit!` at different types is not two types for `exit!`.
+#[test]
+fn leaving_twice_does_not_tie_the_two_together() {
+    let program = parse(
+        "type Nat Zero Succ(Nat)
+         type Flag Off On
+
+         status!(h Off) -> exit!(h Zero)
+         status!(h On) -> Zero
+
+         flag!(h Zero) -> exit!(h Zero)
+         flag!(h Succ(k)) -> On
+
+         main!(h) -> exit!(h status!(h flag!(h Succ(Zero))))",
+    )
+    .expect("a program");
+    let render = program.render();
+    assert!(
+        render.contains("status!(v0: Host, v1: Flag) -> Nat"),
+        "{render}"
+    );
+    assert!(
+        render.contains("flag!(v0: Host, v1: Nat) -> Flag"),
+        "{render}"
+    );
+}
+
+/// `Never` is the compiler's, like the authority is, and for the same
+/// reason: a program that could declare it could disagree about it.
+#[test]
+fn a_program_may_not_declare_never() {
+    let refused = parse(
+        "type Never Nope
+         main!(h) -> exit!(h Nope)",
+    )
+    .unwrap_err();
+    assert!(refused.contains("`Never` is the compiler's"), "{refused}");
+
+    let refused = parse(
+        "type Nat Zero Succ(Nat)
+         sneak() -> Never
+         main!(h) -> exit!(h Zero)",
+    )
+    .unwrap_err();
+    assert!(refused.contains("`Never` cannot be built"), "{refused}");
+}
+
+/// An argument too many lands on the name's own result, and the call
+/// answers whatever was allocated after it. Nothing else says so.
+#[test]
+fn a_call_gives_a_name_what_it_takes() {
+    let refused = |text: &str| parse(text).unwrap_err();
+
+    let held = refused(
+        "type Nat Zero Succ(Nat)
+         f(a) -> a
+         main!(h) -> exit!(h f(Zero Zero))",
+    );
+    assert!(held.contains("`f` takes 1 argument, not 2"), "{held}");
+
+    let held = refused(
+        "type Nat Zero Succ(Nat)
+         f(a b) -> b
+         main!(h) -> exit!(h f(Zero))",
+    );
+    assert!(held.contains("`f` takes 2 arguments, not 1"), "{held}");
+
+    let held = refused(
+        "type Nat Zero Succ(Nat)
+         main!(h) -> exit!(h)",
+    );
+    assert!(held.contains("`exit!` takes 2 arguments"), "{held}");
+}
+
+/// A term reads a name as a constructor before it reads it as anything, so
+/// a second one is not a second meaning but the loss of the first.
+#[test]
+fn a_name_stands_for_one_thing() {
+    let refused = |text: &str| parse(text).unwrap_err();
+
+    let held = refused(
+        "type Nat Zero Succ(Nat)
+         type Other Zero
+         main!(h) -> exit!(h Succ(Zero))",
+    );
+    assert!(held.contains("`Zero` is declared twice"), "{held}");
+
+    let held = refused(
+        "type Nat Zero Succ(Nat)
+         Zero(a) -> a
+         main!(h) -> exit!(h Zero)",
+    );
+    assert!(held.contains("a constructor and a name"), "{held}");
+}
+
+/// Clauses are tried in the order they are written, so one that nothing
+/// reaches is a mistake rather than a spare.
+#[test]
+fn every_clause_is_reached_by_something() {
+    let refused = |text: &str| parse(text).unwrap_err();
+
+    let held = refused(
+        "type Nat Zero Succ(Nat)
+         f(Zero) -> Zero
+         f(Zero) -> Succ(Zero)
+         f(Succ(k)) -> k
+         main!(h) -> exit!(h f(Zero))",
+    );
+    assert!(held.contains("matches `Zero` twice"), "{held}");
+
+    let held = refused(
+        "type Nat Zero Succ(Nat)
+         f(n) -> n
+         f(Succ(k)) -> k
+         main!(h) -> exit!(h f(Zero))",
+    );
+    assert!(held.contains("a clause nothing reaches"), "{held}");
+
+    let held = refused(
+        "type Nat Zero Succ(Nat)
+         f(a) -> a
+         f(a) -> Zero
+         main!(h) -> exit!(h f(Zero))",
+    );
+    assert!(held.contains("nothing to tell them apart"), "{held}");
+}
+
+/// There is nobody to hand the entry anything more than the authority.
+#[test]
+fn the_entry_is_handed_the_authority_and_nothing_else() {
+    let held = parse(
+        "type Nat Zero Succ(Nat)
+         main!(h n) -> exit!(h n)",
+    )
+    .unwrap_err();
+    assert!(held.contains("the authority and nothing else"), "{held}");
+}
+
+/// A clause binds its own names, and a name it binds is a value however it
+/// is declared elsewhere.
+#[test]
+fn a_name_a_clause_binds_is_not_the_name_it_shadows() {
+    parse(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         f(add) -> add
+
+         main!(h) -> exit!(h f(Succ(Zero)))",
+    )
+    .expect("a program");
 }
