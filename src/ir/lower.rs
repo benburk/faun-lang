@@ -16,7 +16,7 @@
 use crate::barb;
 
 use super::model::{Binary, Class, FunctionId, PlatformId, Program, Relation, Terminator, ValueId};
-use super::platform::{reads, routine};
+use super::platform::{Routine, reads, routine};
 use super::validate::validate;
 
 /// Lower a whole program, or say what it holds that this tier cannot yet
@@ -76,10 +76,16 @@ fn declare(
     machine: &mut Program,
     (entry, main): (barb::FnId, FunctionId),
     reached: &[bool],
-) -> Result<(Vec<Option<FunctionId>>, Vec<(barb::FnId, PlatformId)>), String> {
+) -> Result<
+    (
+        Vec<Option<FunctionId>>,
+        Vec<(barb::FnId, PlatformId, &'static Routine)>,
+    ),
+    String,
+> {
     // `None` where a definition became an instruction and has no function.
     let mut functions: Vec<Option<FunctionId>> = Vec::with_capacity(program.functions().len());
-    let mut platforms: Vec<(barb::FnId, PlatformId)> = Vec::new();
+    let mut platforms: Vec<(barb::FnId, PlatformId, &'static Routine)> = Vec::new();
     for (at, reached) in reached.iter().enumerate() {
         let id = barb::FnId::at(at);
         if id == entry {
@@ -107,8 +113,8 @@ fn declare(
         functions.push(Some(if function.body.is_some() {
             machine.declare(name, &params, &returns)
         } else {
-            let held = provided(name, &params, &returns)?;
-            platforms.push((id, machine.platform(held)));
+            let (held, wanted) = provided(name, &params, &returns)?;
+            platforms.push((id, machine.platform(held), wanted));
             main
         }));
     }
@@ -122,28 +128,36 @@ fn declare(
 /// carries nothing is not handed over at all. So a status that carries
 /// nothing is no status, and saying so here beats three targets reading
 /// past the end of their arguments.
-fn provided(name: &str, params: &[Class], returns: &[Class]) -> Result<&'static str, String> {
+fn provided(
+    name: &str,
+    params: &[Class],
+    returns: &[Class],
+) -> Result<(&'static str, &'static Routine), String> {
     // The `!` says the program may observe this one working; the routine a
     // target provides is named without it.
     let held = name.strip_suffix('!').unwrap_or(name);
     let Some(wanted) = routine(held) else {
         return Err(format!("nothing answers for `{name}`"));
     };
-    if params != wanted.takes {
+    // What is handed over is converted to what the routine reads, so what
+    // has to agree is how many of them: a value of a type carrying nothing
+    // is not handed over at all, and then there is no value where one is
+    // read.
+    if params.len() != wanted.takes.len() {
         return Err(format!(
             "`{name}` hands over {}, but `{held}` reads {}",
             reads(params),
             reads(wanted.takes),
         ));
     }
-    if returns != wanted.answers {
+    if returns.len() != wanted.answers.len() {
         return Err(format!(
             "`{name}` takes back {}, but `{held}` answers {}",
             reads(returns),
             reads(wanted.answers),
         ));
     }
-    Ok(wanted.name)
+    Ok((wanted.name, wanted))
 }
 
 /// Which definitions the entry can reach, by definition. A program is what
@@ -195,7 +209,15 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Option<Class>,
         return Err(format!("`{name}` has no representation in this tier yet"));
     };
     if program.fields(cons).len() == 1 {
-        return Ok(Some(Class::Word));
+        // A bound says how wide its values are, and counting past it counts
+        // back round to nought, which is what a fixed width does. Without a
+        // bound a number is a machine word: sound while the number fits,
+        // and nothing yet says when it does.
+        return Ok(Some(program.type_(id).below.map_or(Class::Word, |below| {
+            Class::Fixed {
+                bits: u16::try_from(below.trailing_zeros()).expect("a width a machine has"),
+            }
+        })));
     }
     Err(format!(
         "`{name}` carries something per element, which has no representation in this tier yet"
@@ -299,7 +321,7 @@ struct Lowering<'a> {
     /// `None` for one that became an instruction.
     functions: Vec<Option<FunctionId>>,
     /// The platform routine each declared-elsewhere function became.
-    platforms: Vec<(barb::FnId, PlatformId)>,
+    platforms: Vec<(barb::FnId, PlatformId, &'static Routine)>,
 }
 
 impl Lowering<'_> {
@@ -320,6 +342,8 @@ impl Lowering<'_> {
             .iter()
             .map(|type_| self.classes[type_.index()].is_none())
             .collect();
+        let status =
+            entry && self.classes[self.barb.function(id).result.index()] != Some(Class::Word);
         machine.define(into, |b, params| {
             let mut taken = params.iter().copied();
             let mut locals: Vec<Option<ValueId>> = erased
@@ -327,7 +351,16 @@ impl Lowering<'_> {
                 .map(|erased| (!erased).then(|| taken.next().expect("a parameter")))
                 .collect();
             match self.body(b, body, &mut locals) {
-                Answer::Value(answer) => b.ret(&[answer]),
+                Answer::Value(answer) => {
+                    // The entry leaves with a word, whatever width it
+                    // worked in, since that is what the machine takes.
+                    let answer = if status {
+                        b.convert(Class::Word, answer)
+                    } else {
+                        answer
+                    };
+                    b.ret(&[answer])
+                }
                 // The entry answers a status whatever the program says, and
                 // reaches here only where nothing has already left.
                 Answer::Nothing if entry => {
@@ -412,18 +445,56 @@ impl Lowering<'_> {
         if self.facts.operation(function) == Some(barb::Operation::Add) {
             return Answer::Value(b.binary(Binary::Add, args[0], args[1]));
         }
-        let results =
-            if let Some((_, platform)) = self.platforms.iter().find(|(id, _)| *id == function) {
-                b.platform_call(*platform, &args)
-            } else {
-                let callee = self.functions[function.index()]
-                    .expect("a call to something that stayed a function");
-                b.call(callee, &args)
-            };
+        let held = self.platforms.iter().find(|(id, ..)| *id == function);
+        let (results, answers) = if let Some((_, platform, wanted)) = held {
+            let args = self.widened(b, function, &args, wanted.takes);
+            (b.platform_call(*platform, &args), wanted.answers.first())
+        } else {
+            let callee = self.functions[function.index()]
+                .expect("a call to something that stayed a function");
+            (b.call(callee, &args), None)
+        };
         // A call answers what its result type does, which is nothing ever
-        // where that type has no values.
+        // where that type has no values -- and a routine answers at the
+        // width it says, which is not always the width the program works in.
         self.answer(self.barb.function(function).result)
-            .map(|_| *results.first().expect("a result where a type carries one"))
+            .map(|class| {
+                let held = *results.first().expect("a result where a type carries one");
+                if answers.is_some_and(|answers| *answers != class) {
+                    b.convert(class, held)
+                } else {
+                    held
+                }
+            })
+    }
+
+    /// Every argument at the width the routine reads it at. A program works
+    /// in whatever width its types say and a routine in the one it says, and
+    /// this is where the two meet.
+    fn widened(
+        &self,
+        b: &mut super::Builder,
+        function: barb::FnId,
+        args: &[ValueId],
+        takes: &[Class],
+    ) -> Vec<ValueId> {
+        let held: Vec<Class> = self
+            .barb
+            .params(function)
+            .iter()
+            .filter_map(|type_| self.classes[type_.index()])
+            .collect();
+        args.iter()
+            .zip(held)
+            .zip(takes)
+            .map(|((&arg, held), &wanted)| {
+                if held == wanted {
+                    arg
+                } else {
+                    b.convert(wanted, arg)
+                }
+            })
+            .collect()
     }
 
     /// A tag is which constructor it is. A number's empty constructor is
@@ -476,7 +547,13 @@ impl Lowering<'_> {
 
         // Both arms answer alike, so whichever of them comes back says what
         // the match holds. An arm that leaves says nothing about it.
-        let answer = self.answers(empty.body).or(self.answers(counted.body));
+        // The counting arm binds what the scrutinee wraps, which holds what
+        // the scrutinee holds.
+        let mut inner = locals.to_vec();
+        inner.push(Some(scrutinee));
+        let answer = self
+            .answers(b, empty.body, locals)
+            .or(self.answers(b, counted.body, &inner));
         let held: Vec<Class> = answer.held().into_iter().collect();
         let nought = b.constant(class, 0);
         let is_nought = b.compare(Relation::Equal, scrutinee, nought);
@@ -522,7 +599,7 @@ impl Lowering<'_> {
 
         let answer = arms
             .iter()
-            .map(|arm| self.answers(arm.body))
+            .map(|arm| self.answers(b, arm.body, locals))
             .fold(Answer::Never, Answer::or);
         let held: Vec<Class> = answer.held().into_iter().collect();
         let tag = b.constant(class, u64::from(self.barb.tag(arm.ctor)));
@@ -545,18 +622,37 @@ impl Lowering<'_> {
 
     /// What a body answers, read off its shape: an `if` has to be told what
     /// its arms leave with before either of them is lowered.
-    fn answers(&self, body: barb::Body) -> Answer<Class> {
+    ///
+    /// A body that answers a name it was given answers whatever that name
+    /// is, which is why this needs the locals: nothing about the term says
+    /// how wide the value it names is.
+    fn answers(
+        &self,
+        b: &super::Builder,
+        body: barb::Body,
+        locals: &[Option<ValueId>],
+    ) -> Answer<Class> {
         match self.barb.expr(body.tail) {
             barb::Expr::Static(id, _) => self.answer(id),
             barb::Expr::Con(ctor, _) => self.answer(self.barb.ctor(ctor).owner),
             barb::Expr::Call(function, _) => self.answer(self.barb.function(function).result),
-            barb::Expr::Match(_, arms) => self
-                .barb
-                .arms(arms)
-                .iter()
-                .map(|arm| self.answers(arm.body))
-                .fold(Answer::Never, Answer::or),
-            barb::Expr::Atom(_) => Answer::Value(Class::Word),
+            barb::Expr::Match(scrutinee, arms) => {
+                // A constructor's fields are the next locals, and what they
+                // hold is what the value they came out of holds.
+                let mut inner = locals.to_vec();
+                let held = locals[scrutinee.0.index()];
+                self.barb
+                    .arms(arms)
+                    .iter()
+                    .map(|arm| {
+                        inner.resize(locals.len(), None);
+                        inner.resize(locals.len() + self.barb.fields(arm.ctor).len(), held);
+                        self.answers(b, arm.body, &inner)
+                    })
+                    .fold(Answer::Never, Answer::or)
+            }
+            barb::Expr::Atom(atom) => locals[atom.0.index()]
+                .map_or(Answer::Nothing, |value| Answer::Value(b.class(value))),
         }
     }
 

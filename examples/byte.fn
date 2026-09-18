@@ -1,0 +1,36 @@
+# A number that says how wide it is.
+#
+# `Nat` is unbounded -- counting has no last step -- and a machine word is
+# not, so lowering one to the other is sound only while the number fits and
+# nothing yet says when it does. A bound is the program saying: below 256,
+# and counting past it counts back round to nought.
+#
+# That makes the type the ring rather than a machine word it stands in for,
+# and it is what the tier below needs to pick a byte for the representation.
+# On a machine whose registers are eight bits wide -- the 6502 -- that is
+# half the instructions of a word. A bound is a power of two and a width a
+# machine has, so wrapping is exactly what the bound says.
+
+type Byte Zero Succ(Byte) below 256
+type Bool False True
+
+add(a Zero) -> a
+add(a Succ(k)) -> Succ(add(a k))
+
+is_zero(Zero) -> True
+is_zero(Succ(k)) -> False
+
+select(True t f) -> t
+select(False t f) -> f
+
+main!(h) ->
+  two = Succ(Succ(Zero))
+  four = add(two two)
+  eight = add(four four)
+  sixteen = add(eight eight)
+  thirty_two = add(sixteen sixteen)
+  sixty_four = add(thirty_two thirty_two)
+  # Handed over, so what follows is the machine's arithmetic rather than
+  # the compiler's -- and both answer the same, which is the point.
+  half = opaque!(h add(sixty_four sixty_four))
+  exit!(h select(is_zero(add(half half)) four Zero))

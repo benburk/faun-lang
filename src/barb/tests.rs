@@ -719,3 +719,39 @@ fn a_value_handed_over_is_one_nothing_worked_out() {
         "{refused}"
     );
 }
+
+/// What a number's values stay under, where a program says. A bound is a
+/// power of two and a width a machine has, so that counting past it is
+/// counting back round to nought -- the type is the ring, rather than a
+/// machine word it stands in for.
+#[test]
+fn a_number_may_say_what_it_stays_under() {
+    let program = parse(
+        "type Byte Zero Succ(Byte) below 256
+
+         main!(h) -> exit!(h Succ(Zero))",
+    )
+    .expect("a program");
+    assert_eq!(program.type_(TypeId::at(3)).below, Some(256));
+
+    let refused = parse(
+        "type Odd Zero Succ(Odd) below 100
+
+         main!(h) -> exit!(h Zero)",
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("stays under 100, and a bound is one of"),
+        "{refused}"
+    );
+
+    // Nothing says a `Nat` stays under anything, which is what makes it the
+    // one this tier cannot promise a width for.
+    let program = parse(
+        "type Nat Zero Succ(Nat)
+
+         main!(h) -> exit!(h Succ(Zero))",
+    )
+    .expect("a program");
+    assert_eq!(program.type_(TypeId::at(3)).below, None);
+}

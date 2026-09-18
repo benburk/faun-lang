@@ -61,7 +61,7 @@ fn built() -> Vec<(&'static str, Program, [usize; 3])> {
             writes_a_length_it_worked_out(),
             [225, 170, 190],
         ),
-        ("eight bits", wraps_at_eight_bits(), [142, 114, 63]),
+        ("eight bits", wraps_at_eight_bits(), [142, 118, 63]),
         ("less", less(7, 9), [143, 105, 63]),
         (
             "two worked out",
@@ -98,6 +98,7 @@ fn written() -> Vec<(String, Program, [usize; 3])> {
         ("bool", [531, 286, 424]),
         ("nat", [1067, 541, 1226]),
         ("opaque", [153, 109, 58]),
+        ("byte", [366, 238, 311]),
     ]
     .into_iter()
     .map(|(name, sizes)| {
@@ -851,6 +852,9 @@ fn execute(target: Target, program: &Program) -> (i32, String, usize) {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     faun::ir::validate(program).expect("a well-formed program");
+    target
+        .accepts(program)
+        .expect("a program this target holds");
     let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
 
     let dir = std::env::temp_dir().join(format!(
@@ -1271,5 +1275,85 @@ fn a_definition_that_does_not_stop_is_left_as_it_was_written() {
     .expect("a program");
     for target in Target::ALL {
         assert_eq!(status(target, &machine), 4, "{target}");
+    }
+}
+
+/// A word is as wide as the machine is, so a number whose size a program
+/// knows is a claim about which machines will run it. Nothing above the
+/// targets can check that claim, because a class saying `Word` means
+/// something different on each of them.
+#[test]
+fn a_target_says_what_it_cannot_hold() {
+    let big = |held: u64| {
+        let (mut program, main) = Program::new("main");
+        program.define(main, |b, _| {
+            let held = b.constant(Word, held);
+            b.ret(&[held])
+        });
+        program
+    };
+
+    // Seventy thousand needs seventeen bits, which the 6502 does not have.
+    let program = big(70_000);
+    assert!(Target::X86_64Linux.accepts(&program).is_ok());
+    assert!(Target::Wasm32Wasi.accepts(&program).is_ok());
+    let refused = Target::Mos6502Sim65.accepts(&program).unwrap_err();
+    assert!(refused.contains("holds 16 bits, and 70000"), "{refused}");
+
+    // And what every target holds, every target holds.
+    let program = big(4);
+    for target in Target::ALL {
+        assert!(target.accepts(&program).is_ok(), "{target}");
+    }
+
+    // A width a target has no form for is the same kind of refusal.
+    let (mut program, main) = Program::new("main");
+    program.define(main, |b, _| {
+        let held = b.constant(Class::Fixed { bits: 32 }, 1);
+        let held = b.convert(Word, held);
+        b.ret(&[held])
+    });
+    assert!(Target::X86_64Linux.accepts(&program).is_ok());
+    let refused = Target::Mos6502Sim65.accepts(&program).unwrap_err();
+    assert!(refused.contains("no 32-bit form"), "{refused}");
+}
+
+/// A bound says how wide a number is, and counting past it counts back
+/// round to nought: the type is the ring, not a machine word it stands in
+/// for. So the same program answers the same whether the compiler worked
+/// the number out or the machine did.
+#[test]
+fn every_target_counts_within_a_bound() {
+    let byte = |held: &str| {
+        let text = format!(
+            "type Byte Zero Succ(Byte) below 256
+             type Bool False True
+
+             add(a Zero) -> a
+             add(a Succ(k)) -> Succ(add(a k))
+
+             is_zero(Zero) -> True
+             is_zero(Succ(k)) -> False
+
+             count(False) -> Zero
+             count(True) -> Succ(Zero)
+
+             main!(h) ->
+               half = {held}
+               whole = add(half half)
+               exit!(h count(is_zero(whole)))"
+        );
+        faun::read(&text).expect("a program")
+    };
+    let chain = |held: usize| format!("{}Zero{}", "Succ(".repeat(held), ")".repeat(held));
+
+    for target in Target::ALL {
+        // 128 and 128 is 256, which a byte counts back round to nought.
+        assert_eq!(status(target, &byte(&chain(128))), 1, "{target}");
+        assert_eq!(status(target, &byte(&chain(100))), 0, "{target}");
+
+        // And the same, worked out by the machine rather than the compiler.
+        let handed = format!("opaque!(h {})", chain(128));
+        assert_eq!(status(target, &byte(&handed)), 1, "{target}");
     }
 }

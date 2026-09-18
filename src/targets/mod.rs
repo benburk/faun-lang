@@ -14,7 +14,7 @@ pub mod x86_64_linux;
 
 use std::fmt;
 
-use crate::ir::Program;
+use crate::ir::{Class, Op, Program, RegionId, ValueId};
 
 #[derive(Debug)]
 pub struct Artifact {
@@ -55,6 +55,77 @@ impl Target {
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|target| target.name() == name)
+    }
+
+    /// The widths this target has forms for, and how wide its own word is.
+    /// A program wanting another is one this target cannot compile, which is
+    /// a different thing from one it compiles wrongly.
+    const fn widths(self) -> (&'static [u16], u16) {
+        match self {
+            Self::X86_64Linux => (&[8, 16, 32, 64], 64),
+            Self::Wasm32Wasi => (&[8, 16, 32], 32),
+            Self::Mos6502Sim65 => (&[8, 16], 16),
+        }
+    }
+
+    /// Whether this target can hold what the program holds.
+    ///
+    /// A word is as wide as the machine is, so a number the program knows
+    /// the size of is a claim about which machines it runs on. Nothing above
+    /// this tier can check that claim -- a class says `Word` and means
+    /// something different here than it does on the next target along -- so
+    /// it is checked here, once, rather than found out by an instruction
+    /// that quietly holds less than it was given.
+    ///
+    /// # Errors
+    ///
+    /// Names the first thing it cannot hold.
+    pub fn accepts(self, program: &Program) -> Result<(), String> {
+        let (widths, word) = self.widths();
+        for at in 0..program.values_count() {
+            let class = program.class(ValueId::at(at));
+            if let Class::Fixed { bits } = class
+                && !widths.contains(&bits)
+            {
+                return Err(format!("{self} has no {bits}-bit form"));
+            }
+        }
+        for function in program.functions() {
+            self.holds(program, function.body, word)?;
+        }
+        Ok(())
+    }
+
+    /// Every constant in a region, against the width of what holds it.
+    fn holds(self, program: &Program, region: RegionId, word: u16) -> Result<(), String> {
+        for op in program.ops(region) {
+            match *op {
+                Op::Constant { class, value } => {
+                    let bits = match class {
+                        Class::Fixed { bits } => bits,
+                        Class::Word | Class::Address => word,
+                    };
+                    // A fixed width is taken modulo its own, so only a word
+                    // can be handed more than it holds.
+                    if bits < 64 && value >> bits != 0 {
+                        return Err(format!(
+                            "{self} holds {bits} bits, and {value} does not fit in them"
+                        ));
+                    }
+                }
+                Op::If {
+                    then_region,
+                    else_region,
+                    ..
+                } => {
+                    self.holds(program, then_region, word)?;
+                    self.holds(program, else_region, word)?;
+                }
+                Op::Loop { body, .. } => self.holds(program, body, word)?,
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     #[must_use]

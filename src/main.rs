@@ -123,7 +123,8 @@ fn write(
     target: Target,
     output: &Path,
     program: &faun::ir::Program,
-) -> std::io::Result<Vec<PathBuf>> {
+) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    target.accepts(program)?;
     let mut written = Vec::new();
 
     for artifact in faun::compile(target, program) {

@@ -414,10 +414,15 @@ impl Lowering<'_> {
         }
     }
 
+    /// Wasm has one width and the program may want a narrower one, so what
+    /// a fixed width means here is a mask after every operation in it. The
+    /// other targets pick an instruction of that width instead and pay
+    /// nothing, which is why this is the one that has to say so.
     fn binary(&mut self, opcode: u8, left: ValueId, right: ValueId, result: ValueId) {
         self.push(left);
         self.push(right);
         self.body.byte(opcode);
+        self.narrow(bits(self.program.class(result)));
         self.set(result);
     }
 

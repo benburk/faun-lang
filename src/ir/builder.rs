@@ -190,6 +190,14 @@ pub struct Builder<'a> {
 }
 
 impl Builder<'_> {
+    /// What class a value has, for a decision that has to be made before
+    /// the values it is about are built -- an `if` is told what its arms
+    /// leave with before either arm is lowered.
+    #[must_use]
+    pub fn class(&self, value: ValueId) -> Class {
+        self.program.class(value)
+    }
+
     pub fn constant(&mut self, class: Class, value: u64) -> ValueId {
         let value = wrap(class, value);
         self.push_one(Op::Constant { class, value }, class)
