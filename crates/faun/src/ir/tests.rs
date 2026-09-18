@@ -168,7 +168,8 @@ fn two_names_may_give_the_same_routine() {
     program.set_entry(main);
 
     let facts = crate::barb::recognise(&program);
-    let machine = lower(&program, &facts).expect("a representable program");
+    let machine = lower(&program, &facts, &crate::platform::Routines::builtin())
+        .expect("a representable program");
     let routines: Vec<&str> = machine
         .platforms()
         .iter()

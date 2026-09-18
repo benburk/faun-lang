@@ -17,7 +17,7 @@ use crate::barb;
 
 use super::model::{Binary, Class, FunctionId, PlatformId, Program, Relation, Terminator, ValueId};
 use super::validate::validate;
-use crate::platform::{Routine, reads, routine};
+use crate::platform::{Routine, Routines, reads};
 
 /// Lower a whole program, or say what it holds that this tier cannot yet
 /// represent.
@@ -29,7 +29,11 @@ use crate::platform::{Routine, reads, routine};
 /// # Panics
 ///
 /// If `program` has no entry.
-pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, String> {
+pub fn lower(
+    program: &barb::Program,
+    facts: &barb::Facts,
+    routines: &Routines,
+) -> Result<Program, String> {
     barb::validate(program)?;
     let entry = program.entry().expect("a program to lower has an entry");
     // Whether a value of each type takes a place at all. What place is a
@@ -39,10 +43,12 @@ pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, St
         .collect::<Result<_, _>>()?;
 
     let reached = reached(program, entry);
-    let (mut machine, main) = Program::new(program.name(program.function(entry).name));
+    let (mut machine, main) =
+        Program::with(program.name(program.function(entry).name), routines.clone());
     let (functions, platforms) = declare(
         program,
         facts,
+        routines,
         &carries,
         &mut machine,
         (entry, main),
@@ -72,9 +78,10 @@ pub fn lower(program: &barb::Program, facts: &barb::Facts) -> Result<Program, St
     clippy::type_complexity,
     reason = "what each definition became, by definition"
 )]
-fn declare(
+fn declare<'a>(
     program: &barb::Program,
     facts: &barb::Facts,
+    routines: &'a Routines,
     carries: &[Option<()>],
     machine: &mut Program,
     (entry, main): (barb::FnId, FunctionId),
@@ -82,13 +89,13 @@ fn declare(
 ) -> Result<
     (
         Vec<Option<FunctionId>>,
-        Vec<(barb::FnId, PlatformId, &'static Routine)>,
+        Vec<(barb::FnId, PlatformId, &'a Routine)>,
     ),
     String,
 > {
     // `None` where a definition became an instruction and has no function.
     let mut functions: Vec<Option<FunctionId>> = Vec::with_capacity(program.functions().len());
-    let mut platforms: Vec<(barb::FnId, PlatformId, &'static Routine)> = Vec::new();
+    let mut platforms: Vec<(barb::FnId, PlatformId, &Routine)> = Vec::new();
     for (at, reached) in reached.iter().enumerate() {
         let id = barb::FnId::at(at);
         if id == entry {
@@ -125,7 +132,7 @@ fn declare(
             // the same name, so that one routine may serve a program at
             // more than one type.
             let outside = function.outside.map_or(name, |held| program.name(held));
-            let (held, wanted) = provided(name, outside, &params, &returns)?;
+            let (held, wanted) = provided(routines, name, outside, &params, &returns)?;
             platforms.push((id, machine.platform(held), wanted));
             main
         }));
@@ -140,16 +147,17 @@ fn declare(
 /// carries nothing is not handed over at all. So a status that carries
 /// nothing is no status, and saying so here beats three targets reading
 /// past the end of their arguments.
-fn provided(
+fn provided<'a>(
+    routines: &'a Routines,
     name: &str,
     outside: &str,
     params: &[Class],
     returns: &[Class],
-) -> Result<(&'static str, &'static Routine), String> {
-    let Some(wanted) = routine(outside) else {
+) -> Result<(&'a str, &'a Routine), String> {
+    let Some(wanted) = routines.get(outside) else {
         return Err(format!("nothing answers for `{name}`"));
     };
-    let held = wanted.name;
+    let held = wanted.name.as_str();
     // What is handed over is converted to what the routine reads, so what
     // has to agree is how many of them: a value of a type carrying nothing
     // is not handed over at all, and then there is no value where one is
@@ -157,18 +165,18 @@ fn provided(
     if params.len() != wanted.takes.len() {
         return Err(format!(
             "`{held}` reads {}, and is handed {}",
-            reads(wanted.takes),
+            reads(&wanted.takes),
             reads(params),
         ));
     }
     if returns.len() != wanted.answers.len() {
         return Err(format!(
             "`{held}` answers {}, and what is taken back is {}",
-            reads(wanted.answers),
+            reads(&wanted.answers),
             reads(returns),
         ));
     }
-    Ok((wanted.name, wanted))
+    Ok((held, wanted))
 }
 
 /// Which definitions the entry can reach, by definition. A program is what
@@ -370,7 +378,7 @@ struct Lowering<'a> {
     /// `None` for one that became an instruction.
     functions: Vec<Option<FunctionId>>,
     /// The platform routine each declared-elsewhere function became.
-    platforms: Vec<(barb::FnId, PlatformId, &'static Routine)>,
+    platforms: Vec<(barb::FnId, PlatformId, &'a Routine)>,
 }
 
 impl Lowering<'_> {
@@ -503,7 +511,7 @@ impl Lowering<'_> {
         }
         let held = self.platforms.iter().find(|(id, ..)| *id == function);
         let (results, answers) = if let Some((_, platform, wanted)) = held {
-            let args = met(b, &args, wanted.takes);
+            let args = met(b, &args, &wanted.takes);
             (b.platform_call(*platform, &args), wanted.answers.first())
         } else {
             let callee = self.functions[function.index()]

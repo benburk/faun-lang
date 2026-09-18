@@ -1,5 +1,10 @@
-use super::parse;
 use crate::barb::*;
+
+/// Every test here reads against what a compiler knows, since none of them
+/// is about a routine somebody wrote down.
+fn parse(text: &str) -> Result<Program, String> {
+    super::parse(text, &crate::platform::Routines::builtin())
+}
 
 #[test]
 fn a_program_reads_from_text() {
@@ -651,4 +656,35 @@ fn a_term_nested_too_deep_is_refused() {
 
     let refused = parse(&held(4096)).unwrap_err();
     assert!(refused.contains("nested more than"), "{refused}");
+}
+
+/// A routine somebody wrote down is one a program may name.
+///
+/// What a compiler knows is a set rather than a list it is built from, so a
+/// name it has never heard of is reachable by handing it one more -- which
+/// is what a file saying where to find something outside amounts to.
+#[test]
+fn a_routine_written_down_is_one_a_program_may_name() {
+    let held = "type Nat Zero Succ(Nat)
+
+                main!(h) ->
+                  ticked = tick!(h)
+                  exit!(h Zero)";
+
+    let refused = parse(held).unwrap_err();
+    assert!(refused.contains("nothing named `tick!`"), "{refused}");
+
+    let mut routines = crate::platform::Routines::builtin();
+    routines.push(crate::platform::Routine {
+        name: "tick".to_owned(),
+        called: Some("tick!".to_owned()),
+        takes: Vec::new(),
+        answers: Vec::new(),
+        comes_back: true,
+        authority: true,
+        hands_back: None,
+    });
+
+    let program = super::parse(held, &routines).expect("a program naming it");
+    assert!(program.render().contains("tick"), "{}", program.render());
 }

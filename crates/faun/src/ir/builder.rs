@@ -11,7 +11,15 @@ impl Program {
     /// an entry unrepresentable.
     #[must_use]
     pub fn new(entry: &str) -> (Self, FunctionId) {
+        Self::with(entry, crate::platform::Routines::builtin())
+    }
+
+    /// The same, against a set of routines somebody chose: what a compiler
+    /// knows, and whatever was written down beside it.
+    #[must_use]
+    pub fn with(entry: &str, routines: crate::platform::Routines) -> (Self, FunctionId) {
         let mut program = Self {
+            routines,
             platform: Vec::new(),
             data: Vec::new(),
             globals: Vec::new(),
@@ -81,11 +89,14 @@ impl Program {
     /// If no target answers for `name`. The tier above checks this, so a
     /// program cannot reach it.
     pub fn platform(&mut self, name: &str) -> PlatformId {
-        let routine =
-            crate::platform::routine(name).unwrap_or_else(|| panic!("no routine named `{name}`"));
+        let routine = self
+            .routines
+            .get(name)
+            .unwrap_or_else(|| panic!("no routine named `{name}`"));
+        let (takes, answers) = (routine.takes.clone(), routine.answers.clone());
         let name = self.symbol(name);
-        let params = self.sign(routine.takes);
-        let returns = self.sign(routine.answers);
+        let params = self.sign(&takes);
+        let returns = self.sign(&answers);
         self.platform.push(Platform {
             name,
             params,

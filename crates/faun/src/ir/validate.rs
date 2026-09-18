@@ -1,7 +1,6 @@
 //! What a target is entitled to assume.
 
 use super::model::{Class, Exit, Op, Program, Range, RegionId};
-use crate::platform::routine;
 
 /// What a program has to be true of before a target sees it. These are the
 /// mistakes a builder can make that a target would otherwise miscompile in
@@ -134,7 +133,11 @@ fn leaves(program: &Program, name: &str, region: RegionId) -> Result<(), String>
             continue;
         };
         let held = program.name(program.platforms()[platform.index()].name);
-        if routine(held).is_none_or(|routine| routine.comes_back) {
+        if program
+            .routines()
+            .get(held)
+            .is_none_or(|routine| routine.comes_back)
+        {
             continue;
         }
         if at + 1 != ops.len() || program.region(region).terminator.exit != Exit::Unreachable {

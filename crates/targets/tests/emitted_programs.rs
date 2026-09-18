@@ -9,6 +9,13 @@ use std::sync::{Mutex, PoisonError};
 use faun::ir::Class::Word;
 use faun::ir::{Binary, Builder, Class, Offset, Program, Relation, Width};
 use faun::targets::Target;
+
+/// Read against what a compiler knows, since nothing here is about a
+/// routine somebody wrote down.
+fn read(text: &str) -> Result<Program, String> {
+    faun::read(text, &faun::platform::Routines::builtin())
+}
+
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_targets::ALL;
 use faun_wasm32_wasi::Wasm32Wasi;
@@ -44,7 +51,7 @@ fn built() -> Vec<(&'static str, Program, [usize; 3])> {
         ("empty", empty(), [127, 36, 30]),
         (
             "exit zero",
-            faun::read(EXIT_ZERO).expect("a program"),
+            read(EXIT_ZERO).expect("a program"),
             [127, 36, 29],
         ),
         ("two and two", two_and_two(), [136, 105, 45]),
@@ -114,7 +121,7 @@ fn written() -> Vec<(String, Program, [usize; 3])> {
     .map(|(name, sizes)| {
         let path = examples().join(format!("{name}.fn"));
         let text = fs::read_to_string(&path).expect("an example");
-        let program = faun::read(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let program = read(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
         (name.to_owned(), program, sizes)
     })
     .collect()
@@ -261,7 +268,7 @@ fn the_smallest_wasm32_wasi_module_imports_nothing() {
 
     // A program that leaves with nought says so, and compiles to the same
     // module: `proc_exit(0)` is what running off the end of `_start` does.
-    let written = faun::read(EXIT_ZERO).expect("a program");
+    let written = read(EXIT_ZERO).expect("a program");
     assert_eq!(
         Wasm32Wasi.emit(&written)[0].bytes,
         Wasm32Wasi.emit(&empty())[0].bytes
@@ -273,7 +280,7 @@ fn the_smallest_wasm32_wasi_module_imports_nothing() {
 /// it was called from.
 #[test]
 fn the_wasm32_wasi_module_imports_proc_exit_where_it_has_to() {
-    let leaves = faun::read(
+    let leaves = read(
         "type Nat Zero Succ(Nat)
 
          leave!(h n) -> exit!(h n)
@@ -913,7 +920,8 @@ fn write(target: &dyn Target, output: &Path, program: &Program) -> PathBuf {
 fn every_target_runs_two_and_two_from_barb() {
     let barb = faun::two_and_two();
     let facts = faun::barb::recognise(&barb);
-    let machine = faun::ir::lower(&barb, &facts).expect("a representable program");
+    let machine = faun::ir::lower(&barb, &facts, &faun::platform::Routines::builtin())
+        .expect("a representable program");
 
     // `add` was recognised, so it is an instruction rather than a function:
     // what is left is the entry alone.
@@ -926,7 +934,7 @@ fn every_target_runs_two_and_two_from_barb() {
 /// The same program again, written out rather than built, and run.
 #[test]
 fn every_target_runs_two_and_two_from_text() {
-    let machine = faun::read(
+    let machine = read(
         "type Nat Zero Succ(Nat)
 
          add(a Zero) -> a
@@ -947,7 +955,7 @@ fn every_target_runs_every_example() {
     for entry in fs::read_dir(examples()).expect("the examples") {
         let path = entry.expect("an example").path();
         let text = fs::read_to_string(&path).expect("an example to read");
-        let machine = faun::read(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let machine = read(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         for target in ALL {
             assert_eq!(
                 status(target, &machine),
@@ -963,7 +971,7 @@ fn every_target_runs_every_example() {
 /// out, through a platform routine it declared and a host it was handed.
 #[test]
 fn every_target_exits_with_what_it_was_told() {
-    let machine = faun::read(
+    let machine = read(
         "type Nat Zero Succ(Nat)
 
          main!(h) -> exit!(h Succ(Succ(Succ(Zero))))",
@@ -978,7 +986,7 @@ fn every_target_exits_with_what_it_was_told() {
 /// status is the one it was handed, and nothing after the call is reached.
 #[test]
 fn every_target_exits_through_a_name_that_leaves() {
-    let machine = faun::read(
+    let machine = read(
         "type Nat Zero Succ(Nat)
 
          die!(h n) -> exit!(h n)
@@ -995,7 +1003,7 @@ fn every_target_exits_through_a_name_that_leaves() {
 /// name with an arm that exits still answers what its other arm answers.
 #[test]
 fn every_target_runs_a_match_with_an_arm_that_leaves() {
-    let machine = faun::read(
+    let machine = read(
         "type Nat Zero Succ(Nat)
 
          pick!(h Zero) -> exit!(h Succ(Zero))
@@ -1009,7 +1017,7 @@ fn every_target_runs_a_match_with_an_arm_that_leaves() {
     }
 
     // The other way through, which leaves from inside the match.
-    let machine = faun::read(
+    let machine = read(
         "type Nat Zero Succ(Nat)
 
          pick!(h Zero) -> exit!(h Succ(Zero))
@@ -1029,7 +1037,7 @@ fn every_target_runs_a_match_with_an_arm_that_leaves() {
 /// leaves `exit!` with no status to leave with.
 #[test]
 fn an_effect_hands_over_what_the_routine_reads() {
-    let refused = faun::read(
+    let refused = read(
         "type Nat Zero
 
          main!(h) -> exit!(h Zero)",
@@ -1044,7 +1052,7 @@ fn an_effect_hands_over_what_the_routine_reads() {
 /// A pure name may not do observable work.
 #[test]
 fn a_pure_name_cannot_call_an_effect() {
-    let refused = faun::read(
+    let refused = read(
         "type Nat Zero Succ(Nat)
 
          quietly(h) -> exit!(h Zero)
@@ -1076,7 +1084,7 @@ fn every_target_reads_a_tag() {
                     main!(h) -> exit!(h rank(pick(WHICH)))";
 
     for (which, answer) in [("Zero", 0), ("Succ(Zero)", 2)] {
-        let machine = faun::read(&ordering.replace("WHICH", which)).expect("a program");
+        let machine = read(&ordering.replace("WHICH", which)).expect("a program");
         for target in ALL {
             assert_eq!(status(target, &machine), answer, "{which} on {target}");
         }
@@ -1087,7 +1095,7 @@ fn every_target_reads_a_tag() {
 /// Writing `Succ` before `Zero` moves the tags and must not move either.
 #[test]
 fn every_target_tells_a_tag_from_a_count() {
-    let machine = faun::read(
+    let machine = read(
         "type Nat Succ(Nat) Zero
          type Bool True False
 
@@ -1106,7 +1114,7 @@ fn every_target_tells_a_tag_from_a_count() {
 /// representation here yet, however many of them there are.
 #[test]
 fn a_constructor_that_carries_something_is_not_a_tag() {
-    let refused = faun::read(
+    let refused = read(
         "type Nat Zero Succ(Nat)
          type Maybe None Some(Nat)
 
@@ -1155,7 +1163,7 @@ fn every_target_matches_on_more_than_one_argument() {
         ("rank(cmp(three(Zero) three(Zero)))", 1),
         ("rank(cmp(three(Zero) Succ(Zero)))", 2),
     ] {
-        let machine = faun::read(&arithmetic.replace("ANSWER", answer)).expect("a program");
+        let machine = read(&arithmetic.replace("ANSWER", answer)).expect("a program");
         for target in ALL {
             assert_eq!(status(target, &machine), want, "{answer} on {target}");
         }
@@ -1181,8 +1189,8 @@ fn what_nothing_reaches_is_not_emitted() {
     );
 
     for target in ALL {
-        let machine = faun::read(reached).expect("a program");
-        let spare = faun::read(&spare).expect("a program");
+        let machine = read(reached).expect("a program");
+        let spare = read(&spare).expect("a program");
         assert_eq!(status(target, &machine), 4, "{target}");
         assert_eq!(
             target.emit(&spare)[0].bytes,
@@ -1203,7 +1211,7 @@ fn a_chain_of_constructors_is_the_number_it_builds() {
             "Succ(".repeat(held),
             ")".repeat(held)
         );
-        faun::read(&text).expect("a program")
+        read(&text).expect("a program")
     };
 
     for target in ALL {
@@ -1233,10 +1241,9 @@ fn what_is_known_is_worked_out_before_a_target_sees_it() {
                       main!(h) ->
                         two = HELD
                         exit!(h mul(two two))";
-    let known = faun::read(&arithmetic.replace("HELD", "Succ(Succ(Zero))")).expect("a program");
-    let handed =
-        faun::read(&arithmetic.replace("HELD", "opaque(Succ(Succ(Zero)))")).expect("a program");
-    let four = faun::read(
+    let known = read(&arithmetic.replace("HELD", "Succ(Succ(Zero))")).expect("a program");
+    let handed = read(&arithmetic.replace("HELD", "opaque(Succ(Succ(Zero)))")).expect("a program");
+    let four = read(
         "type Nat Zero Succ(Nat)
 
          main!(h) -> exit!(h Succ(Succ(Succ(Succ(Zero)))))",
@@ -1265,7 +1272,7 @@ fn what_is_known_is_worked_out_before_a_target_sees_it() {
 /// will come back.
 #[test]
 fn a_definition_that_does_not_stop_is_refused() {
-    let refused = faun::read(
+    let refused = read(
         "type Nat Zero Succ(Nat)
 
          add(a Zero) -> a
@@ -1282,7 +1289,7 @@ fn a_definition_that_does_not_stop_is_refused() {
     );
 
     // The same shape, taking its argument apart: this one has an end.
-    let machine = faun::read(
+    let machine = read(
         "type Nat Zero Succ(Nat)
 
          add(a Zero) -> a
@@ -1353,7 +1360,7 @@ fn a_target_says_what_it_cannot_hold() {
 #[test]
 fn how_wide_a_number_is_held_is_what_it_can_be() {
     let widths = |text: &str| {
-        let program = faun::read(text).expect("a program");
+        let program = read(text).expect("a program");
         (0..program.values_count())
             .map(|at| program.class(faun::ir::ValueId::at(at)))
             .collect::<Vec<_>>()
@@ -1411,7 +1418,7 @@ fn every_target_provides_routines_that_exist() {
     for target in ALL {
         for held in target.provides() {
             assert!(
-                faun::platform::routine(held).is_some(),
+                faun::platform::Routines::builtin().get(held).is_some(),
                 "{target} answers for `{held}`, which is not a routine"
             );
         }

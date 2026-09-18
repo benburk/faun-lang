@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::platform;
+use crate::platform::Routines;
 
 use crate::barb::{Atom, CtorId, FnId, Program, TypeId};
 
@@ -68,7 +68,7 @@ struct Source {
 /// # Errors
 ///
 /// Names what it could not read, or what it read and cannot represent.
-pub fn parse(text: &str) -> Result<Program, String> {
+pub fn parse(text: &str, routines: &Routines) -> Result<Program, String> {
     let mut words = Words::new(text);
     let mut source = Source::default();
 
@@ -101,7 +101,7 @@ pub fn parse(text: &str) -> Result<Program, String> {
         };
         source.clauses.entry(name).or_default().push(clause);
     }
-    build(&source)
+    build(&source, routines)
 }
 
 /// A type and its constructors, which run until the next declaration: there
@@ -285,7 +285,7 @@ fn flush(held: &mut String, words: &mut Vec<String>) {
 }
 
 /// Turn what was read into a program.
-fn build(source: &Source) -> Result<Program, String> {
+fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
     let mut program = Program::default();
     declare_builtin(&mut program, source)?;
     declare_types(&mut program, source)?;
@@ -305,11 +305,11 @@ fn build(source: &Source) -> Result<Program, String> {
         })
         .collect();
 
-    let arity = arities(source, &clauses)?;
+    let arity = arities(source, &clauses, routines)?;
     validate(source, &clauses, &arity)?;
-    let told = infer(source, &clauses, &program, &ctors, &arity)?;
+    let told = infer(source, routines, &clauses, &program, &ctors, &arity)?;
     let mut functions: HashMap<&str, FnId> = HashMap::new();
-    for (called, routine) in platform::offered() {
+    for (called, routine) in routines.offered() {
         let Some((params, result)) = told.get(called) else {
             continue;
         };
@@ -319,7 +319,7 @@ fn build(source: &Source) -> Result<Program, String> {
         // it rather than leaving the tier below to read the name twice.
         let held = called.strip_suffix('!').unwrap_or(called);
         let id = program.declare(held, params, *result);
-        program.answered_by(id, routine.name);
+        program.answered_by(id, &routine.name);
         // And what else is known of it, since nothing can be read off a
         // declaration. What it hands back is one along where the authority
         // is in front of it.
@@ -441,6 +441,7 @@ fn declare_types(program: &mut Program, source: &Source) -> Result<(), String> {
 fn arities<'a>(
     source: &'a Source,
     clauses: &HashMap<&str, Vec<Clause>>,
+    routines: &'a Routines,
 ) -> Result<HashMap<&'a str, usize>, String> {
     let mut arity = HashMap::new();
     for name in &source.order {
@@ -451,7 +452,7 @@ fn arities<'a>(
         }
         arity.insert(name.as_str(), width);
     }
-    for (called, routine) in platform::offered() {
+    for (called, routine) in routines.offered() {
         arity.insert(called, routine.takes.len() + usize::from(routine.authority));
     }
     Ok(arity)
@@ -927,6 +928,7 @@ fn agree(one: TypeId, other: TypeId) -> Result<TypeId, String> {
 /// Work out what every function takes and answers.
 fn infer(
     source: &Source,
+    routines: &Routines,
     clauses: &HashMap<&str, Vec<Clause>>,
     program: &Program,
     ctors: &HashMap<String, CtorId>,
@@ -937,8 +939,8 @@ fn infer(
         known: Vec::new(),
     };
     // Each function takes a run of slots: one per argument, then its result.
-    let base = slots(source, arity, &mut unify)?;
-    let leaving = diverging(source, clauses);
+    let base = slots(source, routines, arity, &mut unify)?;
+    let leaving = diverging(source, clauses, routines);
 
     for name in &source.order {
         for clause in &clauses[name.as_str()] {
@@ -967,7 +969,7 @@ fn infer(
     }
     // An effect no program calls settles nothing, and needs to: there is
     // nothing to declare and nothing to answer for.
-    for (called, _) in platform::offered() {
+    for (called, _) in routines.offered() {
         if let Ok(held) = settled(&mut unify, &base, arity, called) {
             told.insert(called.to_owned(), held);
         }
@@ -979,6 +981,7 @@ fn infer(
 /// platform states what it takes, so its slots start out settled.
 fn slots<'a>(
     source: &'a Source,
+    routines: &'a Routines,
     arity: &HashMap<&str, usize>,
     unify: &mut Unify,
 ) -> Result<HashMap<&'a str, usize>, String> {
@@ -993,7 +996,7 @@ fn slots<'a>(
     // An effect is handed the authority; what either takes after that is
     // whatever it is given, which the argument settles, and what it answers
     // is either nothing ever or one of those arguments.
-    for (called, routine) in platform::offered() {
+    for (called, routine) in routines.offered() {
         let at = unify.parent.len();
         let front = usize::from(routine.authority);
         if routine.authority {
@@ -1056,11 +1059,16 @@ fn bound<'a>(
 /// A clause leaves if any of its steps does or if its body does, and a term
 /// leaves if the name at its head does or if one of its arguments does.
 /// Nothing here recognises a loop that never ends; only leaving.
-fn diverging<'a>(source: &'a Source, clauses: &HashMap<&str, Vec<Clause>>) -> HashSet<&'a str> {
+fn diverging<'a>(
+    source: &'a Source,
+    clauses: &HashMap<&str, Vec<Clause>>,
+    routines: &'a Routines,
+) -> HashSet<&'a str> {
     fn leaves(term: &Term, held: &HashSet<&str>) -> bool {
         held.contains(term.0.as_str()) || term.1.iter().any(|argument| leaves(argument, held))
     }
-    let mut held: HashSet<&str> = platform::offered()
+    let mut held: HashSet<&str> = routines
+        .offered()
         .filter(|(_, routine)| !routine.comes_back)
         .map(|(called, _)| called)
         .collect();

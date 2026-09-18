@@ -220,8 +220,12 @@ pub struct Function {
     pub body: RegionId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Program {
+    /// The routines this was read against, since a program naming one is
+    /// naming something from a set somebody chose rather than something
+    /// every compiler knows.
+    pub(super) routines: crate::platform::Routines,
     pub(super) platform: Vec<Platform>,
     /// Every datum end to end. A target adds its own base and nothing else,
     /// so two of them cannot disagree about the layout between.
@@ -301,6 +305,12 @@ impl Program {
     #[must_use]
     pub fn region(&self, region: RegionId) -> Region {
         self.regions[region.index()]
+    }
+
+    /// The routines this program was read against.
+    #[must_use]
+    pub const fn routines(&self) -> &crate::platform::Routines {
+        &self.routines
     }
 
     #[must_use]

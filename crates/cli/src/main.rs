@@ -117,7 +117,8 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
 /// The program at `path`, read and lowered.
 fn read(path: &Path) -> Result<faun::ir::Program, Box<dyn Error>> {
     let text = fs::read_to_string(path)?;
-    faun::read(&text).map_err(|error| format!("{}: {error}", path.display()).into())
+    faun::read(&text, &faun::platform::Routines::builtin())
+        .map_err(|error| format!("{}: {error}", path.display()).into())
 }
 
 fn write(
