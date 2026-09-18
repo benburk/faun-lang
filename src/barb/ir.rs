@@ -108,6 +108,11 @@ pub struct Function {
     pub result: TypeId,
     /// What it rewrites to, or nothing when the program only declares it and
     /// something outside answers for it.
+    ///
+    /// Nothing here is observable, so a call to one is a value like any
+    /// other -- but what a target does while running one is not, which is
+    /// the whole of what a pass owes it: a call to a bodyless name may not
+    /// run more times on any path than the program says.
     pub body: Option<Body>,
     /// Which argument something outside hands straight back, where it hands
     /// one back rather than working something out. Nothing about a

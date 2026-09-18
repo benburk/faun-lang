@@ -45,30 +45,35 @@
 //! - **The order those names run in.** Nothing here is observable, so
 //!   nothing here orders anything: a program whose operations must happen
 //!   in an order says so by handing each one a value the next one takes.
-//!   Then the order is what every pass already respects, and a program that
-//!   must reach its last operation reaches it because the last one answers
-//!   what the program answers.
+//!   Then the order is what every pass already respects, and an operation
+//!   is kept because something reads what it answered, up to whatever the
+//!   program itself answers. Say it another way and this tier does what the
+//!   program actually said rather than what was meant by it.
 //!
 //! # What a pass may do
 //!
-//! Rewrite a program to do less work. That is the whole model: nothing here
-//! knows what a branch costs, what a word is, or how often anything runs,
-//! so nothing here is in a position to spend work to save time. The tier
-//! that knows what things cost is the tier that may make that trade.
+//! Anything that keeps what the program answers, with one exception.
 //!
-//! One rule follows from it and is worth stating on its own, since it is
-//! the one a pass could break while believing it was doing less work:
+//! There is no effect here. A name with no body is a value something
+//! outside works out: ordered where dataflow orders it, dropped where
+//! nothing reads it, and otherwise opaque. What a target does while running
+//! one cannot be seen from here, so the rule is about how many times such a
+//! call runs rather than where it sits.
 //!
-//! > A pass may not move a term out of an arm into what runs before it,
-//! > since an arm may not run.
+//! > A pass may not make a call to a bodyless function run more times on
+//! > any path than the program says.
 //!
-//! Everything else a pass might want is already safe. Moving a term *into*
-//! the arm that needs it does less work, and so does moving one out of
-//! every arm at once. Dropping a term nothing reads does less work. Two
-//! terms that are the same term are one term's work. And working a term out
-//! here rather than leaving it to run there is no work at all, which is
-//! what totality buys: a term that is worth working out is a term that
-//! stops.
+//! Lifting one out of a single arm breaks it, since the path through the
+//! other arm did not run it. Lifting one out of every arm does not, nor
+//! does pushing a copy into each: what runs on a path is what ran before.
+//! Everything else is free -- a pure term may be moved, shared, dropped, or
+//! worked out here rather than left to run there, and totality is what
+//! makes the last of those stop.
+//!
+//! Doing less work is the point of a pass rather than a rule over one.
+//! Nothing here knows what a branch costs, what a word is, or how often
+//! anything runs, so the tier that knows prices is the tier that may trade
+//! work for time.
 
 mod bounds;
 mod builder;
