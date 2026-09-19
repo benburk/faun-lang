@@ -46,6 +46,7 @@ mod builder;
 pub mod evaluate;
 mod lower;
 mod model;
+pub mod natural;
 mod validate;
 
 pub use builder::Builder;
@@ -60,6 +61,8 @@ pub use validate::validate;
 mod arithmetic_tests;
 #[cfg(test)]
 mod interpreter_tests;
+#[cfg(test)]
+mod natural_tests;
 #[cfg(test)]
 mod representation_tests;
 #[cfg(test)]
