@@ -20,7 +20,6 @@
 //! decided.
 
 use num_bigint::BigUint;
-use num_traits::ToPrimitive;
 
 use super::{CtorId, Program, TypeId};
 
@@ -147,7 +146,7 @@ fn decode_spine(
     {
         {
             let (count, mut at) = unleb128(bytes);
-            let fields = program.fields(cons).to_vec();
+            let fields = program.fields(cons);
             let mut elements = Vec::new();
             for _ in 0..count {
                 let mut element = Vec::new();
@@ -206,7 +205,13 @@ fn decode_tagged(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) 
 /// If the bytes are not an encoding of this type.
 #[must_use]
 pub fn as_number(program: &Program, id: TypeId, bytes: &[u8]) -> Option<u64> {
-    as_natural(program, id, bytes)?.to_u64()
+    let Shape::Spine { cons, .. } = shape(program, id) else {
+        return None;
+    };
+    if program.fields(cons).len() != 1 {
+        return None;
+    }
+    read_u64(bytes).0
 }
 
 /// Read a natural without expanding its constructor spine or limiting its size.
@@ -255,9 +260,9 @@ pub fn as_bytes<'a>(program: &Program, id: TypeId, bytes: &'a [u8]) -> Option<&'
     if !matches!(shape(program, id), Shape::Spine { .. }) {
         return None;
     }
-    let (count, at) = read_natural(bytes);
+    let (count, at) = read_u64(bytes);
     let payload = &bytes[at..];
-    let count = count.to_usize()?;
+    let count = usize::try_from(count?).ok()?;
     (payload.len() == count).then_some(payload)
 }
 
@@ -291,12 +296,26 @@ fn leb128(mut value: u64, out: &mut Vec<u8>) {
     }
 }
 
+// Read the bounded queries without allocating bigint digits. Find the end
+// first so unterminated encodings still panic even after numerical overflow.
+// Folding high digits first also accepts arbitrarily zero-padded encodings,
+// just like read_natural; length alone is not evidence of overflow.
+fn read_u64(bytes: &[u8]) -> (Option<u64>, usize) {
+    let took = bytes
+        .iter()
+        .position(|byte| byte & 0x80 == 0)
+        .expect("a terminated number")
+        + 1;
+    let value = bytes[..took].iter().rev().try_fold(0u64, |value, byte| {
+        value.checked_mul(128)?.checked_add(u64::from(byte & 0x7f))
+    });
+    (value, took)
+}
+
 fn unleb128(bytes: &[u8]) -> (u64, usize) {
-    let (value, took) = read_natural(bytes);
+    let (value, took) = read_u64(bytes);
     (
-        value
-            .to_u64()
-            .expect("a constructor count small enough to materialize"),
+        value.expect("a constructor count small enough to materialize"),
         took,
     )
 }

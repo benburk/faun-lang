@@ -570,7 +570,7 @@ impl Lowering<'_> {
         body: barb::Body,
         locals: &mut Vec<Option<ValueId>>,
     ) -> Answer<ValueId> {
-        for binding in self.barb.bindings(body.bindings).to_vec() {
+        for &binding in self.barb.bindings(body.bindings) {
             match self.expr(b, binding, locals) {
                 Answer::Value(value) => locals.push(Some(value)),
                 Answer::Nothing => locals.push(None),

@@ -219,6 +219,30 @@ fn unrecognized_recursion_still_has_an_evaluation_budget() {
 }
 
 #[test]
+fn range_propagation_observes_earlier_answers_in_the_same_round() {
+    let (mut program, nat, _, _) = tests::types();
+    let seven = program.intern_number(nat, 7);
+    let first = program.declare("first", &[], nat);
+    program.define(first, |b, _| b.known(nat, seven));
+    let mut previous = first;
+    // Longer than the round limit: moving the snapshot to a whole round
+    // would lose precision here. Each walk reads the current result table.
+    let mut chain = vec![first];
+    for at in 0..64 {
+        let id = program.declare(&format!("forward_{at}"), &[], nat);
+        program.define(id, |b, _| b.call(previous, &[]));
+        chain.push(id);
+        previous = id;
+    }
+    program.set_entry(previous);
+    validate(&program).unwrap();
+    let facts = analyze(&program);
+    for id in chain {
+        assert_eq!(facts.answers(id), Bounds::at(7));
+    }
+}
+
+#[test]
 fn arithmetic_interval_bounds_contain_every_small_answer() {
     for a0 in 0..5 {
         for a1 in a0..6 {

@@ -102,6 +102,8 @@ mod arena_tests;
 #[cfg(test)]
 mod arithmetic_tests;
 #[cfg(test)]
+mod constant_tests;
+#[cfg(test)]
 mod library_tests;
 #[cfg(test)]
 mod normalization_tests;

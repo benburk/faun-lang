@@ -28,7 +28,8 @@ fn in_body(
     if depth == 0 {
         return;
     }
-    for id in program.bindings(body.bindings).to_vec() {
+    for at in body.bindings.range() {
+        let id = program.bindings[at];
         let value = in_expr(program, ops, id, small, depth);
         small.push(value);
     }
@@ -62,7 +63,8 @@ fn in_expr(
             }
         }
         Expr::Match(_, arms) => {
-            for arm in program.arms(arms).to_vec() {
+            for at in arms.range() {
+                let arm = program.arms[at];
                 let level = small.len();
                 small.resize(level + program.fields(arm.ctor).len(), None);
                 in_body(program, ops, arm.body, small, depth - 1);

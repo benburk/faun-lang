@@ -370,11 +370,12 @@ fn once(
         );
     }
 
-    let results = held.results.clone();
+    // Results change only after this walk; borrowing retains the same
+    // per-function snapshot without copying the whole table each round.
     let mut walk = FunctionWalk {
         program,
         operations,
-        results: &results,
+        results: &held.results,
         predicates: vec![None; params.len()],
         scope: params,
         terms: std::mem::take(&mut held.terms),
@@ -384,9 +385,10 @@ fn once(
     let answer = walk.body(body);
     held.terms = walk.terms;
     held.matched = walk.matched;
+    let calls = walk.calls;
 
     let mut again = settle(&mut held.results[at], answer, round);
-    for (called, args) in walk.calls {
+    for (called, args) in calls {
         for (at, bounds) in args.into_iter().enumerate() {
             again |= settle(&mut held.params[called.index()][at], bounds, round);
         }
@@ -434,7 +436,7 @@ struct FunctionWalk<'a> {
 
 impl FunctionWalk<'_> {
     fn body(&mut self, body: Body) -> Bounds {
-        for binding in self.program.bindings(body.bindings).to_vec() {
+        for &binding in self.program.bindings(body.bindings) {
             let held = self.expr(binding);
             if let Expr::Call(called, _) = self.program.expr(binding)
                 && self
@@ -555,7 +557,7 @@ impl FunctionWalk<'_> {
         let outer = self.scope.clone();
         let predicates = self.predicates.clone();
         let mut surviving: Option<Vec<Bounds>> = None;
-        for arm in self.program.arms(arms).to_vec() {
+        for arm in self.program.arms(arms) {
             self.scope.clone_from(&outer);
             self.predicates.clone_from(&predicates);
             let level = self.scope.len();

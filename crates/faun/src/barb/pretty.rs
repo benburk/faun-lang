@@ -72,7 +72,7 @@ impl Program {
     fn render_body(&self, body: Body, level: u32, depth: usize, out: &mut String) {
         let pad = "  ".repeat(depth);
         let mut level = level;
-        for binding in self.bindings(body.bindings).to_vec() {
+        for &binding in self.bindings(body.bindings) {
             let mut bound = String::new();
             self.render_expr(binding, level, depth, &mut bound);
             // A match bound to a name runs over several lines; the rest keep
@@ -106,7 +106,7 @@ impl Program {
             }
             Expr::Match(scrutinee, arms) => {
                 let _ = writeln!(out, "{pad}match v{} {{", scrutinee.0.0);
-                for arm in self.arms(arms).to_vec() {
+                for arm in self.arms(arms) {
                     let fields = self.types_of(self.ctor(arm.ctor).fields).len();
                     let bound: Vec<String> = (0..fields)
                         .map(|at| format!("v{}", level + u32::try_from(at).expect("a sane arity")))

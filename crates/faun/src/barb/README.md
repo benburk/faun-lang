@@ -107,6 +107,13 @@ expression sharing preserved; liveness rewriting remains occurrence-specific.
 Names, declarations, type lists and constant storage are neither cloned nor moved.
 Constant-pool garbage collection is not part of this pass.
 
+Read-only walks borrow pool slices; mutating laws and folding traverse stable ranges
+one entry at a time instead of copying binding/arm lists. Range propagation borrows
+the current result table for each function, then publishes its answer; it does not
+snapshot the whole table per function or delay answers until the next round.
+Bounded constant queries decode directly into a checked `u64`, without allocating a
+bigint; arbitrary-precision queries retain their separate unbounded decoder.
+
 Compaction invalidates old expression IDs and term ranges, including saved bodies
 and expression-indexed facts. Function, type, constructor, symbol and constant IDs
 stay stable. Recompute `analyze` after optimization. Disabling cleanup leaves the

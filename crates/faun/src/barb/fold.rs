@@ -46,7 +46,8 @@ fn in_body(
     if depth == 0 || budget.remaining == 0 {
         return;
     }
-    for binding in program.bindings(body.bindings).to_vec() {
+    for at in body.bindings.range() {
+        let binding = program.bindings[at];
         let held = in_expr(program, operations, binding, known, budget, depth);
         known.push(held);
         if budget.remaining == 0 {
@@ -76,7 +77,8 @@ fn in_expr(
         return Some(value);
     }
     if let Expr::Match(_, arms) = program.expr(id) {
-        for arm in program.arms(arms).to_vec() {
+        for at in arms.range() {
+            let arm = program.arms[at];
             let level = known.len();
             known.resize(level + program.fields(arm.ctor).len(), None);
             in_body(program, operations, arm.body, known, budget, depth - 1);

@@ -67,18 +67,30 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
 }
 
 fn skeleton(source: &Program) -> Program {
-    // Preserve the externally visible pools and IDs. Old value/region arenas
-    // cannot survive: Builder appends contiguous regions in postorder.
-    let mut output = source.clone();
-    output.functions.clear();
-    output.classes.clear();
-    output.ops.clear();
-    output.results.clear();
-    output.operands.clear();
-    output.regions.clear();
-    for class in &mut output.signature {
-        *class = representation(*class);
-    }
+    // Copy only preserved pools. Value/instruction/region arenas are rebuilt,
+    // so neither their contents nor their old capacity belongs in the skeleton.
+    let mut output = Program {
+        layout: source.layout,
+        routines: source.routines.clone(),
+        platform: source.platform.clone(),
+        data: source.data.clone(),
+        globals: source.globals.clone(),
+        spans: source.spans.clone(),
+        functions: Vec::with_capacity(source.functions.len()),
+        classes: Vec::new(),
+        signature: source
+            .signature
+            .iter()
+            .copied()
+            .map(representation)
+            .collect(),
+        ops: Vec::new(),
+        results: Vec::new(),
+        operands: Vec::new(),
+        regions: Vec::new(),
+        names: source.names.clone(),
+        symbols: source.symbols.clone(),
+    };
     for function in source.functions() {
         let params: Vec<_> = source
             .values(function.params)
@@ -462,5 +474,91 @@ impl Pass<'_> {
             }
         };
         vec![one]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source() -> Program {
+        let (mut p, main) = Program::new("main");
+        p.intern(b"unaligned data");
+        p.global(&[1, 2, 3]);
+        p.platform("write");
+        p.symbol("unused name");
+        let identity = p.declare("identity", &[Class::Natural], &[Class::Natural]);
+        p.define(identity, |b, args| b.ret(&[args[0]]));
+        p.define(main, |b, _| {
+            let value = b.constant(Class::Natural, 7);
+            let value = b.call(identity, &[value])[0];
+            let value = b.convert(Class::Word, value);
+            b.ret(&[value])
+        });
+        p.bind_layout(
+            Config {
+                word_bits: 64,
+                heap_bytes: 256,
+            }
+            .layout(),
+        )
+        .unwrap();
+        validate(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn skeleton_keeps_metadata_but_does_not_clone_discarded_instruction_storage() {
+        let p = source();
+        let out = skeleton(&p);
+        assert_eq!(out.layout, p.layout);
+        assert_eq!(out.names, p.names);
+        assert_eq!(out.symbols, p.symbols);
+        assert_eq!(out.data, p.data);
+        assert_eq!(out.globals, p.globals);
+        assert_eq!(out.spans, p.spans);
+        assert_eq!(out.platform, p.platform);
+        assert_eq!(format!("{:?}", out.routines), format!("{:?}", p.routines));
+        assert_eq!(
+            out.signature[..p.signature.len()],
+            p.signature
+                .iter()
+                .copied()
+                .map(representation)
+                .collect::<Vec<_>>()
+        );
+        assert!(!p.ops.is_empty());
+        assert!(!p.results.is_empty());
+        assert_eq!(out.ops.capacity(), 0);
+        assert_eq!(out.results.capacity(), 0);
+        assert!(out.regions.iter().all(|r| r.ops.is_empty()));
+    }
+
+    #[test]
+    fn skeleton_preserves_function_ids_and_rebuilds_parameter_and_result_classes() {
+        let p = source();
+        let out = skeleton(&p);
+        assert_eq!(out.functions.len(), p.functions.len());
+        for (before, after) in p.functions.iter().zip(&out.functions) {
+            assert_eq!(before.name, after.name);
+            assert_eq!(
+                p.values(before.params)
+                    .iter()
+                    .map(|&v| representation(p.class(v)))
+                    .collect::<Vec<_>>(),
+                out.values(after.params)
+                    .iter()
+                    .map(|&v| out.class(v))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                p.signature(before.returns)
+                    .iter()
+                    .copied()
+                    .map(representation)
+                    .collect::<Vec<_>>(),
+                out.signature(after.returns)
+            );
+        }
     }
 }

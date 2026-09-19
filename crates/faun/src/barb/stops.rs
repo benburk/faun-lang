@@ -240,7 +240,7 @@ fn read(
     round: &[FnId],
     (sizes, held, params): (&mut Vec<Vec<Step>>, &mut Vec<Matrix>, usize),
 ) {
-    for binding in program.bindings(body.bindings).to_vec() {
+    for &binding in program.bindings(body.bindings) {
         term(program, binding, round, (sizes, held, params));
         sizes.push(vec![Step::Unknown; params]);
     }
@@ -255,12 +255,11 @@ fn term(
 ) {
     match program.expr(id) {
         Expr::Call(called, args) if round.contains(&called) => {
-            let args = program.atoms(args).to_vec();
-            held.push(matrix(sizes, &args, params));
+            held.push(matrix(sizes, program.atoms(args), params));
         }
         Expr::Match(scrutinee, arms) => {
             let of = taken(sizes, scrutinee);
-            for arm in program.arms(arms).to_vec() {
+            for arm in program.arms(arms) {
                 let level = sizes.len();
                 sizes.resize(level + program.fields(arm.ctor).len(), of.clone());
                 read(program, arm.body, round, (sizes, held, params));
