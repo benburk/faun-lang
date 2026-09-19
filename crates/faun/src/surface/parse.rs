@@ -993,22 +993,21 @@ fn infer(
     let base = slots(source, routines, arity, &mut unify)?;
     let leaving = diverging(source, clauses, routines);
 
+    let reading = Reading {
+        program,
+        ctors,
+        base: &base,
+        arity,
+        leaving: &leaving,
+    };
     for name in &source.order {
         for clause in &clauses[name.as_str()] {
-            let mut scope = bound(clause, base[name.as_str()], &mut unify, program, ctors)?;
+            let mut scope = reading.bound(clause, base[name.as_str()], &mut unify)?;
             for (held, step) in &clause.steps {
-                let slot = term(step, &scope, &mut unify, program, ctors, &base, &leaving)?;
+                let slot = reading.term(step, &scope, &mut unify)?;
                 scope.insert(held.as_str(), slot);
             }
-            let answer = term(
-                &clause.body,
-                &scope,
-                &mut unify,
-                program,
-                ctors,
-                &base,
-                &leaving,
-            )?;
+            let answer = reading.term(&clause.body, &scope, &mut unify)?;
             let result = base[name.as_str()] + arity[name.as_str()];
             unify.union(answer, result)?;
         }
@@ -1016,12 +1015,12 @@ fn infer(
 
     let mut told = HashMap::new();
     for name in source.order.iter().map(String::as_str) {
-        told.insert(name.to_owned(), settled(&mut unify, &base, arity, name)?);
+        told.insert(name.to_owned(), reading.settled(&mut unify, name)?);
     }
     // An effect no program calls settles nothing, and needs to: there is
     // nothing to declare and nothing to answer for.
     for (called, _) in routines.offered() {
-        match settled(&mut unify, &base, arity, called) {
+        match reading.settled(&mut unify, called) {
             Ok(held) => {
                 told.insert(called.to_owned(), held);
             }
@@ -1080,37 +1079,6 @@ fn slots<'a>(
     Ok(base)
 }
 
-/// What a clause's patterns bind: an argument's own slot where the pattern
-/// names it, and a fresh slot per field where it takes one apart.
-fn bound<'a>(
-    clause: &'a Clause,
-    base: usize,
-    unify: &mut Unify,
-    program: &Program,
-    ctors: &HashMap<String, CtorId>,
-) -> Result<HashMap<&'a str, usize>, String> {
-    let mut scope = HashMap::new();
-    for (at, pattern) in clause.patterns.iter().enumerate() {
-        match pattern {
-            Pattern::Bind(held) => {
-                scope.insert(held.as_str(), base + at);
-            }
-            Pattern::Ctor(ctor, fields) => {
-                let id = *ctors
-                    .get(ctor)
-                    .ok_or_else(|| format!("no constructor named `{ctor}`"))?;
-                unify.pin(base + at, program.ctor(id).owner)?;
-                for (field, held) in program.fields(id).to_vec().iter().zip(fields) {
-                    let slot = unify.fresh();
-                    unify.pin(slot, *field)?;
-                    scope.insert(held.as_str(), slot);
-                }
-            }
-        }
-    }
-    Ok(scope)
-}
-
 /// The names a call to which does not come back: the effects, and every
 /// name whose clauses all leave through one. Inference needs this before it
 /// decides anything, since a use of such a name is free to stand at whatever
@@ -1153,77 +1121,118 @@ fn diverging<'a>(
     held
 }
 
-/// What a name takes and answers, once everything it is used at agrees.
-fn settled(
-    unify: &mut Unify,
-    base: &HashMap<&str, usize>,
-    arity: &HashMap<&str, usize>,
-    name: &str,
-) -> Result<Inferred, String> {
-    let at = base[name];
-    let params = (0..arity[name])
-        .map(|argument| tell(unify, at + argument, name))
-        .collect::<Result<_, _>>()?;
-    let result = tell(unify, at + arity[name], name)?;
-    Ok((params, result))
-}
-
 fn tell(unify: &mut Unify, slot: usize, name: &str) -> Result<TypeId, String> {
     unify
         .get(slot)
         .ok_or_else(|| format!("nothing says what type `{name}` works over"))
 }
 
-/// The slot a term's type lives in, constraining what it is built from.
-fn term(
-    held: &Term,
-    scope: &HashMap<&str, usize>,
-    unify: &mut Unify,
-    program: &Program,
-    ctors: &HashMap<String, CtorId>,
-    base: &HashMap<&str, usize>,
-    leaving: &HashSet<&str>,
-) -> Result<usize, String> {
-    let Term(name, args) = held;
-    if let Some(slot) = scope.get(name.as_str()) {
-        if args.is_empty() {
-            return Ok(*slot);
-        }
-        return Err(format!("`{name}` is a value, not something to apply"));
+/// What a term is read against: the types a program declared, the slots
+/// every name takes, and which names do not come back.
+///
+/// None of it changes while a program is read, and all of it is wanted
+/// wherever a term is, so it is carried rather than handed over one piece
+/// at a time.
+struct Reading<'a> {
+    program: &'a Program,
+    ctors: &'a HashMap<String, CtorId>,
+    base: &'a HashMap<&'a str, usize>,
+    arity: &'a HashMap<&'a str, usize>,
+    leaving: &'a HashSet<&'a str>,
+}
+
+impl Reading<'_> {
+    /// What a name takes and answers, once everything it is used at agrees.
+    fn settled(&self, unify: &mut Unify, name: &str) -> Result<Inferred, String> {
+        let at = self.base[name];
+        let params = (0..self.arity[name])
+            .map(|argument| tell(unify, at + argument, name))
+            .collect::<Result<_, _>>()?;
+        let result = tell(unify, at + self.arity[name], name)?;
+        Ok((params, result))
     }
-    if let Some(ctor) = ctors.get(name) {
-        let fields = program.fields(*ctor).to_vec();
-        if fields.len() != args.len() {
-            return Err(format!("`{name}` takes {} fields", fields.len()));
+
+    /// The slot a clause's patterns bind, and the scope they bind into.
+    ///
+    /// A pattern one constructor deep says the type of what it matched and
+    /// of every name it binds, so a clause settles its own arguments.
+    fn bound<'b>(
+        &self,
+        clause: &'b Clause,
+        base: usize,
+        unify: &mut Unify,
+    ) -> Result<HashMap<&'b str, usize>, String> {
+        let mut scope = HashMap::new();
+        for (at, pattern) in clause.patterns.iter().enumerate() {
+            match pattern {
+                Pattern::Bind(held) => {
+                    scope.insert(held.as_str(), base + at);
+                }
+                Pattern::Ctor(ctor, fields) => {
+                    let id = *self
+                        .ctors
+                        .get(ctor)
+                        .ok_or_else(|| format!("no constructor named `{ctor}`"))?;
+                    unify.pin(base + at, self.program.ctor(id).owner)?;
+                    for (field, held) in self.program.fields(id).to_vec().iter().zip(fields) {
+                        let slot = unify.fresh();
+                        unify.pin(slot, *field)?;
+                        scope.insert(held.as_str(), slot);
+                    }
+                }
+            }
         }
-        for (argument, field) in args.iter().zip(fields) {
-            let slot = term(argument, scope, unify, program, ctors, base, leaving)?;
-            unify.pin(slot, field)?;
+        Ok(scope)
+    }
+
+    /// The slot a term's type lives in, constraining what it is built from.
+    fn term(
+        &self,
+        held: &Term,
+        scope: &HashMap<&str, usize>,
+        unify: &mut Unify,
+    ) -> Result<usize, String> {
+        let Term(name, args) = held;
+        if let Some(slot) = scope.get(name.as_str()) {
+            if args.is_empty() {
+                return Ok(*slot);
+            }
+            return Err(format!("`{name}` is a value, not something to apply"));
         }
+        if let Some(ctor) = self.ctors.get(name) {
+            let fields = self.program.fields(*ctor).to_vec();
+            if fields.len() != args.len() {
+                return Err(format!("`{name}` takes {} fields", fields.len()));
+            }
+            for (argument, field) in args.iter().zip(fields) {
+                let slot = self.term(argument, scope, unify)?;
+                unify.pin(slot, field)?;
+            }
+            let answer = unify.fresh();
+            unify.pin(answer, self.program.ctor(*ctor).owner)?;
+            return Ok(answer);
+        }
+        let at = *self.base.get(name.as_str()).ok_or_else(|| {
+            if name == BUILTIN[0] {
+                format!("`{name}` cannot be built; it is what `main!` is handed")
+            } else if name == BUILTIN[NEVER.index()] {
+                format!("`{name}` cannot be built; it is what a term that leaves answers")
+            } else {
+                format!("nothing named `{name}` is in scope")
+            }
+        })?;
+        for (argument, index) in args.iter().zip(0..) {
+            let slot = self.term(argument, scope, unify)?;
+            unify.union(slot, at + index)?;
+        }
+        if !self.leaving.contains(name.as_str()) {
+            return Ok(at + args.len());
+        }
+        // A call that does not come back answers `Never`, and a use of it takes
+        // a slot of its own rather than the name's result: what stands beside
+        // this use settles this use, and every other use stays free.
         let answer = unify.fresh();
-        unify.pin(answer, program.ctor(*ctor).owner)?;
-        return Ok(answer);
+        unify.pin(answer, NEVER)?;
+        Ok(answer)
     }
-    let at = *base.get(name.as_str()).ok_or_else(|| {
-        if name == BUILTIN[0] {
-            format!("`{name}` cannot be built; it is what `main!` is handed")
-        } else if name == BUILTIN[NEVER.index()] {
-            format!("`{name}` cannot be built; it is what a term that leaves answers")
-        } else {
-            format!("nothing named `{name}` is in scope")
-        }
-    })?;
-    for (argument, index) in args.iter().zip(0..) {
-        let slot = term(argument, scope, unify, program, ctors, base, leaving)?;
-        unify.union(slot, at + index)?;
-    }
-    if !leaving.contains(name.as_str()) {
-        return Ok(at + args.len());
-    }
-    // A call that does not come back answers `Never`, and a use of it takes
-    // a slot of its own rather than the name's result: what stands beside
-    // this use settles this use, and every other use stays free.
-    let answer = unify.fresh();
-    unify.pin(answer, NEVER)?;
-    Ok(answer)
 }
