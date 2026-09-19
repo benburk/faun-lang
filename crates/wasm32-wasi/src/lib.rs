@@ -3,6 +3,8 @@
 
 mod lower;
 mod module;
+#[cfg(test)]
+mod tests;
 
 use faun::ir::Program;
 use faun::targets::{Artifact, Target};

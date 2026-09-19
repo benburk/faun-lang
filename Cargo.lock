@@ -18,7 +18,9 @@ version = "0.1.0"
 dependencies = [
  "bpaf",
  "faun",
- "faun-targets",
+ "faun-mos6502-sim65",
+ "faun-wasm32-wasi",
+ "faun-x86-64-linux",
 ]
 
 [[package]]
@@ -26,16 +28,6 @@ name = "faun-mos6502-sim65"
 version = "0.1.0"
 dependencies = [
  "faun",
-]
-
-[[package]]
-name = "faun-targets"
-version = "0.1.0"
-dependencies = [
- "faun",
- "faun-mos6502-sim65",
- "faun-wasm32-wasi",
- "faun-x86-64-linux",
 ]
 
 [[package]]

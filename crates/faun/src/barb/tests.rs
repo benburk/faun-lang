@@ -355,3 +355,42 @@ fn a_number_too_large_to_work_out_is_left_alone() {
     let large = held(4_000_000);
     assert!(large.contains("add(v0, v0)"), "{large}");
 }
+
+/// A definition may go round only on something it took apart, so each time
+/// round is over something smaller and the taking apart has an end.
+#[test]
+fn a_definition_that_does_not_stop_is_refused() {
+    let read = |text: &str| crate::read(text, &crate::platform::Routines::builtin());
+
+    let refused = read(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         spin(n) -> add(Zero spin(n))
+
+         main!(h) -> exit!(h spin(Zero))",
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("nothing here shows `spin` stops"),
+        "{refused}"
+    );
+
+    // The same shape, taking its argument apart: this one has an end.
+    read(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         twice(Zero) -> Zero
+         twice(Succ(k)) -> Succ(Succ(twice(k)))
+
+         main!(h) ->
+           two = Succ(Succ(Zero))
+           exit!(h twice(two))",
+    )
+    .expect("a program that stops");
+}

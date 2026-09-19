@@ -630,6 +630,15 @@ fn answers_built() -> Vec<(&'static str, Program, i32)> {
 fn answers_written() -> Vec<(&'static str, Program, i32)> {
     vec![
         (
+            "exit zero",
+            read(
+                "type Nat Zero Succ(Nat)
+
+                  main!(h) -> exit!(h Zero)",
+            ),
+            0,
+        ),
+        (
             "a status it was told",
             read(
                 "type Nat Zero Succ(Nat)

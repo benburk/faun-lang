@@ -14,7 +14,24 @@ use bpaf::positional;
 use bpaf::short;
 
 use faun::targets::Target;
-use faun_targets as targets;
+use faun_mos6502_sim65::Mos6502Sim65;
+use faun_wasm32_wasi::Wasm32Wasi;
+use faun_x86_64_linux::X86_64Linux;
+
+/// Every target this was built with, in the order they were written.
+///
+/// Nothing else names all three. A compiler for three machines has to hold
+/// three backends, and this is the thing that has to: what a target is, and
+/// how to reach one, are questions every other crate answers for itself.
+const ALL: [&dyn Target; 3] = [&X86_64Linux, &Wasm32Wasi, &Mos6502Sim65];
+
+/// The one native to the machine this is running on, if there is one here
+/// for it. `None` means `--target` is not optional here.
+const HOST: Option<&dyn Target> = if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
+    Some(&X86_64Linux)
+} else {
+    None
+};
 
 #[derive(Clone, Debug)]
 enum Command {
@@ -41,8 +58,12 @@ fn cli() -> OptionParser<Command> {
     let target = long("target")
         .help("Machine to compile for")
         .argument::<String>("TARGET")
-        .parse(|name| targets::from_name(&name).ok_or_else(|| unknown(&name)))
-        .fallback_with(|| targets::HOST.ok_or(NO_HOST))
+        .parse(|name| {
+            ALL.into_iter()
+                .find(|target| target.name() == name)
+                .ok_or_else(|| unknown(&name))
+        })
+        .fallback_with(|| HOST.ok_or(NO_HOST))
         .debug_fallback();
 
     let build = construct!(Command::Build {
@@ -68,7 +89,8 @@ fn cli() -> OptionParser<Command> {
 const NO_HOST: &str = "no backend for this machine, so --target is required";
 
 fn unknown(name: &str) -> String {
-    let known = targets::names().join(", ");
+    let known: Vec<_> = ALL.iter().map(|target| target.name()).collect();
+    let known = known.join(", ");
     format!("unknown target `{name}`, expected: {known}")
 }
 
@@ -96,7 +118,7 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Run { source } => {
-            let target = targets::HOST.ok_or(NO_HOST)?;
+            let target = HOST.ok_or(NO_HOST)?;
             let program = read(&source, target)?;
             let dir = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
             fs::create_dir_all(&dir)?;

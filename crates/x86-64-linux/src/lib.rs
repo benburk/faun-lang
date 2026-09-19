@@ -5,6 +5,8 @@
 mod elf;
 mod encode;
 mod lower;
+#[cfg(test)]
+mod tests;
 
 use faun::ir::{DataId, Program};
 use faun::targets::{Artifact, Target};

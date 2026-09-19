@@ -13,6 +13,8 @@
 mod asm;
 mod image;
 mod lower;
+#[cfg(test)]
+mod tests;
 
 use faun::ir::Program;
 use faun::targets::{Artifact, Target};
