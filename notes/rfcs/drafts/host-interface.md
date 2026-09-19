@@ -206,6 +206,7 @@ the frontend now keeps it.
    awkward once the first narrow routine exists.
 2. Routines move into the targets, and the conformance test over shared
    names lands with them.
-3. Imports in surface, which is also what lets a prelude exist, and what
-   retires the entry rule as a special case.
+3. Imports in surface, which is also what lets a prelude exist. The entry
+   rule stays either way: a program leaves through an effect answering
+   `Never`, which asks for nothing a machine cannot do.
 4. `Standard`, and borrow checking over resources.
