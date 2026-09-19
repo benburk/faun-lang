@@ -335,16 +335,21 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
 /// Where a program starts, since nothing in the text says so.
 ///
 /// It is effectful because a program that does nothing observable does
-/// nothing: the status it leaves with is something it says rather than
-/// something that falls out of how it was called.
+/// nothing, and it leaves through an effect rather than answering one.
 ///
-/// That it leaves through an effect rather than answering one is this
-/// language's shape and not something the tier below asks for. Barb keeps
-/// an operation because something reads what it answered, whatever type an
-/// entry has, and a target that cannot leave early would want the other
-/// shape entirely. What the rule buys until a world is threaded through
-/// each effect is narrow but real: the last thing a program does is the
-/// term its entry answers, and nothing drops one of those.
+/// A program is what it did, so the status it leaves with is something it
+/// says rather than something falling out of how it was called. There is
+/// one way a program ends and so one place to look for it. And `Never` is
+/// what says nothing comes after the last thing a program does, in the
+/// types rather than by agreement.
+///
+/// Requiring it requires a target to answer for a way to stop, which every
+/// machine has: one with no kernel and no loader still ends by running out
+/// of program. So this asks for nothing a machine cannot do.
+///
+/// Nothing below this tier asks for it. Barb keeps an operation because
+/// something reads what it answered, whatever type an entry has, so this is
+/// a rule about the language and is kept because it is a good one.
 fn starts(
     program: &Program,
     functions: &HashMap<&str, FnId>,
