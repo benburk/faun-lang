@@ -64,6 +64,12 @@ pub enum Binary {
     /// Word subtraction; on `Natural`, truncated subtraction (monus).
     /// Lowering uses it for predecessors only on a nonzero branch.
     Sub,
+    /// Product. A fixed result is a fit requirement, not a modulus.
+    Mul,
+    /// Unsigned quotient, with `Div(x, 0) = 0`.
+    Div,
+    /// Unsigned remainder, with `Mod(x, 0) = x`.
+    Mod,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -182,9 +182,7 @@ impl Plan {
                 Op::AddressOf(data) => self.source[results[0].index()] = Source::Addr(data),
                 // A conversion that narrows nothing leaves the bits alone,
                 // so the result can live wherever the operand does.
-                Op::Convert { class, value }
-                    if !Encoder::narrows(bits(class).min(bits(program.class(value)))) =>
-                {
+                Op::Convert { class, value } if bits(class) >= bits(program.class(value)) => {
                     let result = results[0];
                     self.source[result.index()] = self.source[value.index()];
                     // The storage is shared, so its readers are too, and
@@ -425,8 +423,8 @@ impl Lowering<'_> {
                 // Whatever the source made meaningful, kept as far as the
                 // target is wide. When that takes no instruction, the plan
                 // has already given the result the operand's storage.
-                let kept = bits(*class).min(bits(self.program.class(*value)));
-                if Encoder::narrows(kept) {
+                let kept = bits(*class);
+                if kept < bits(self.program.class(*value)) {
                     self.read(Reg::Rax, *value);
                     self.asm.narrow(kept);
                     self.keep(results[0]);
@@ -478,6 +476,10 @@ impl Lowering<'_> {
         let opcode = match op {
             Binary::Add => 0x01,
             Binary::Sub => 0x29,
+            Binary::Mul | Binary::Div | Binary::Mod => {
+                self.multiply_or_divide(op, left, right, result);
+                return;
+            }
         };
         // A value added to itself is one value: there is nothing to put
         // anywhere else, so nothing is copied there.
@@ -490,6 +492,38 @@ impl Lowering<'_> {
         };
         self.asm
             .alu_sized(opcode, Reg::Rax, source, bits(self.program.class(result)));
+        self.keep(result);
+    }
+
+    fn multiply_or_divide(&mut self, op: Binary, left: ValueId, right: ValueId, result: ValueId) {
+        // Every live value has a slot, except a deferred RAX result. Settle
+        // that before touching the implicit RAX/RDX pair. RCX is the divisor,
+        // never RDX, even when its source was last held there by a call.
+        self.pair(left, right);
+        self.flush();
+        if op == Binary::Mul {
+            self.asm.multiply_or_divide(false);
+        } else {
+            self.asm.alu(0x85, Reg::Rcx, Reg::Rcx);
+            let zero = self.asm.jump_if(EQUAL);
+            self.asm.xor_self(Reg::Rdx);
+            self.asm.multiply_or_divide(true);
+            if op == Binary::Mod {
+                self.asm.mov_reg(Reg::Rax, Reg::Rdx, true);
+            }
+            let end = self.asm.jump();
+            let here = self.asm.here();
+            self.asm.patch(zero, here);
+            if op == Binary::Div {
+                self.asm.xor_self(Reg::Rax);
+            }
+            let here = self.asm.here();
+            self.asm.patch(end, here);
+        }
+        for reg in [Reg::Rax, Reg::Rdx] {
+            self.known[reg.index()] = None;
+            self.holds[reg.index()] = None;
+        }
         self.keep(result);
     }
 
@@ -524,6 +558,7 @@ impl Lowering<'_> {
         // Read once at the entry and kept since, so nothing is asked of
         // the kernel here.
         if self.program.name(name) == "argc" {
+            self.flush();
             self.asm.mov_reg(Reg::Rax, ARGC, true);
             self.known[Reg::Rax.index()] = None;
             self.holds[Reg::Rax.index()] = None;

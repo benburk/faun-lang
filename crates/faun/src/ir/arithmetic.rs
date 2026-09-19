@@ -1,5 +1,5 @@
-//! Portable legalization of natural arithmetic. Backends can later replace
-//! these regions with native multiply/divide or bigint runtime calls.
+//! Preserve arithmetic and its range-selected classes until target selection.
+//! Only monus needs a portable guard around machine subtraction.
 
 use super::{Binary, Builder, Class, Relation, ValueId};
 use crate::barb::Operation;
@@ -46,8 +46,9 @@ pub(super) fn lower(
     let answer = match op {
         Operation::Add => b.binary(Binary::Add, left, right),
         Operation::Monus => monus(b, class, left, right),
-        Operation::Mul => multiply(b, class, left, right),
-        Operation::Div | Operation::Mod => divide(b, class, left, right, op == Operation::Mod),
+        Operation::Mul => b.binary(Binary::Mul, left, right),
+        Operation::Div => b.binary(Binary::Div, left, right),
+        Operation::Mod => b.binary(Binary::Mod, left, right),
         Operation::Equals { .. } | Operation::LessThan { .. } => {
             unreachable!("comparison lowered separately")
         }
@@ -67,59 +68,6 @@ fn monus(b: &mut Builder, class: Class, left: ValueId, right: ValueId) -> ValueI
         |b| {
             let value = b.binary(Binary::Sub, left, right);
             b.yield_(&[value])
-        },
-    )[0]
-}
-
-fn multiply(b: &mut Builder, class: Class, left: ValueId, right: ValueId) -> ValueId {
-    let zero = b.constant(class, 0);
-    b.loop_(&[right, zero], &[class], |b, state| {
-        let done = b.compare(Relation::Equal, state[0], zero);
-        b.if_(
-            done,
-            &[],
-            |b| b.break_(&[state[1]]),
-            |b| {
-                let one = b.constant(class, 1);
-                let rest = b.binary(Binary::Sub, state[0], one);
-                let sum = b.binary(Binary::Add, state[1], left);
-                b.continue_(&[rest, sum])
-            },
-        );
-        super::Terminator::UNREACHABLE
-    })[0]
-}
-
-fn divide(
-    b: &mut Builder,
-    class: Class,
-    left: ValueId,
-    right: ValueId,
-    remainder: bool,
-) -> ValueId {
-    let zero = b.constant(class, 0);
-    let is_zero = b.compare(Relation::Equal, right, zero);
-    b.if_(
-        is_zero,
-        &[class],
-        |b| b.yield_(&[if remainder { left } else { zero }]),
-        |b| {
-            let answer = b.loop_(&[left, zero], &[class], |b, state| {
-                let done = b.compare(Relation::Less, state[0], right);
-                b.if_(
-                    done,
-                    &[],
-                    |b| b.break_(&[if remainder { state[0] } else { state[1] }]),
-                    |b| {
-                        let remainder = b.binary(Binary::Sub, state[0], right);
-                        let one = b.constant(class, 1);
-                        let quotient = b.binary(Binary::Add, state[1], one);
-                        b.continue_(&[remainder, quotient])
-                    },
-                );
-                super::Terminator::UNREACHABLE
-            });
-            b.yield_(&answer)
         },
     )[0]
 }

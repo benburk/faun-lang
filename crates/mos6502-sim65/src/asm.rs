@@ -290,6 +290,36 @@ impl Assembler {
         self.emit(&[0xC8]);
     }
 
+    pub(crate) fn dex(&mut self) {
+        self.step();
+        self.emit(&[0xCA]);
+    }
+
+    pub(crate) fn asl_zp(&mut self, at: u8) {
+        self.step();
+        self.emit(&[0x06, at]);
+    }
+
+    pub(crate) fn rol_zp(&mut self, at: u8) {
+        self.step();
+        self.emit(&[0x26, at]);
+    }
+
+    pub(crate) fn lsr_zp(&mut self, at: u8) {
+        self.step();
+        self.emit(&[0x46, at]);
+    }
+
+    pub(crate) fn ror_zp(&mut self, at: u8) {
+        self.step();
+        self.emit(&[0x66, at]);
+    }
+
+    pub(crate) fn and_imm(&mut self, value: u8) {
+        self.step();
+        self.emit(&[0x29, value]);
+    }
+
     pub(crate) fn txs(&mut self) {
         self.step();
         self.emit(&[0x9A]);

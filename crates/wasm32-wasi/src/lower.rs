@@ -51,6 +51,9 @@ const WORD: i32 = 4;
 const PAGE_BITS: i32 = 16;
 const I32_ADD: u8 = 0x6A;
 const I32_SUB: u8 = 0x6B;
+const I32_MUL: u8 = 0x6C;
+const I32_DIV_U: u8 = 0x6E;
+const I32_REM_U: u8 = 0x70;
 const I32_EQ: u8 = 0x46;
 const I32_LT_U: u8 = 0x49;
 const EMPTY: u8 = 0x40;
@@ -341,6 +344,17 @@ impl Lowering<'_> {
                 let opcode = match op {
                     Binary::Add => I32_ADD,
                     Binary::Sub => I32_SUB,
+                    Binary::Mul => {
+                        self.push(*left);
+                        self.push(*right);
+                        self.body.byte(I32_MUL);
+                        self.set(results[0]);
+                        return;
+                    }
+                    Binary::Div | Binary::Mod => {
+                        self.divide(*op, *left, *right, results[0]);
+                        return;
+                    }
                 };
                 self.binary(opcode, *left, *right, results[0]);
             }
@@ -368,8 +382,10 @@ impl Lowering<'_> {
             } => self.store_at(*width, *address, *offset, *value),
             Op::Convert { class, value } => {
                 self.push(*value);
-                let kept = bits(*class).min(bits(self.program.class(*value)));
-                self.narrow(kept);
+                let kept = bits(*class);
+                if kept < bits(self.program.class(*value)) {
+                    self.narrow(kept);
+                }
                 self.set(results[0]);
             }
             Op::PlatformCall { platform, args } => {
@@ -418,15 +434,35 @@ impl Lowering<'_> {
         }
     }
 
-    /// Wasm has one width and the program may want a narrower one, so what
-    /// a fixed width means here is a mask after every operation in it. The
-    /// other targets pick an instruction of that width instead and pay
-    /// nothing, which is why this is the one that has to say so.
+    /// Fixed widths are fit requirements, so arithmetic never masks an
+    /// answer. Only an explicit narrowing conversion may discard bits.
     fn binary(&mut self, opcode: u8, left: ValueId, right: ValueId, result: ValueId) {
         self.push(left);
         self.push(right);
         self.body.byte(opcode);
-        self.narrow(bits(self.program.class(result)));
+        self.set(result);
+    }
+
+    /// WASM traps on a zero divisor; the machine IR's operations are total.
+    fn divide(&mut self, op: Binary, left: ValueId, right: ValueId, result: ValueId) {
+        self.push(right);
+        self.body.byte(IF);
+        self.body.byte(0x7F); // one i32 result
+        self.open();
+        self.push(left);
+        self.push(right);
+        self.body.byte(if op == Binary::Div {
+            I32_DIV_U
+        } else {
+            I32_REM_U
+        });
+        self.body.byte(ELSE);
+        if op == Binary::Div {
+            self.constant_i32(0);
+        } else {
+            self.push(left);
+        }
+        self.close();
         self.set(result);
     }
 

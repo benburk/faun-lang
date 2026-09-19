@@ -67,3 +67,37 @@ fn a_natural_constant_is_compact_and_does_not_alias_a_word() {
     assert!(!Class::Word.fits(Class::Natural), "promotion is explicit");
     validate(&program).unwrap();
 }
+
+#[test]
+fn runtime_arithmetic_survives_barb_lowering_as_operations() {
+    for (name, expected) in [
+        ("mul", Binary::Mul),
+        ("div", Binary::Div),
+        ("mod", Binary::Mod),
+    ] {
+        let text = format!(
+            "{}\nbounded!(h True n) -> n\nbounded!(h False n) -> exit!(h Zero)\n\
+             main!(h) ->\n  count = argc!(h)\n\
+               n = bounded!(h less_than(count Succ(Succ(Zero))) count)\n\
+               exit!(h {name}(n n))",
+            include_str!("../../../../standard/nat.fn")
+        );
+        let machine = crate::read(&text, &crate::platform::Routines::builtin()).unwrap();
+        validate(&machine).unwrap();
+        let body = machine.functions()[0].body;
+        assert!(
+            machine
+                .every(body)
+                .any(|op| matches!(op, Op::Binary { op, .. } if *op == expected)),
+            "{name}"
+        );
+        assert!(
+            !machine.every(body).any(|op| matches!(op, Op::Loop { .. })),
+            "{name} must not become a portable value-counting loop"
+        );
+        assert!(
+            (0..machine.values_count())
+                .all(|index| machine.class(ValueId::at(index)) != Class::Natural)
+        );
+    }
+}

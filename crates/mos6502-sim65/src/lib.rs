@@ -49,7 +49,7 @@ const HOMES: u8 = 0x18;
 const HOME_COUNT: u8 = 16;
 
 /// Where the count of arguments is kept, read once at reset.
-const ARGC: u8 = 0x28;
+const ARGC: u8 = HOMES + 2 * HOME_COUNT;
 
 /// The simulator's hooks: a `jmp` or `jsr` to one is answered by the host.
 const HOOK_WRITE: u16 = 0xFFF7;

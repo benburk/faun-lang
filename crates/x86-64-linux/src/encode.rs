@@ -302,23 +302,33 @@ impl Encoder {
         self.emit(&disp.to_le_bytes());
     }
 
-    /// Whether [`Encoder::narrow`] has anything to do at this width. When
-    /// it has not, a conversion to it is the value it converted.
-    pub(crate) const fn narrows(bits: u16) -> bool {
-        matches!(bits, 8 | 16)
-    }
-
-    /// `rax` taken modulo two to the `bits`. Only the widths whose own form
-    /// leaves the upper bits alone need this; the 32-bit forms already
-    /// zero-extend into the whole register.
+    /// `rax` explicitly taken modulo two to the `bits`, including odd widths.
     pub(crate) fn narrow(&mut self, bits: u16) {
         self.step();
         match bits {
             8 => self.emit(&[0x48, 0x0F, 0xB6, 0xC0]), // movzx rax, al
             16 => self.emit(&[0x48, 0x0F, 0xB7, 0xC0]), // movzx rax, ax
-            32 | 64 => {}
+            32 => self.emit(&[0x89, 0xC0]),            // mov eax, eax
+            64 => {}
+            1..=7 => self.emit(&[0x83, 0xE0, (1u8 << bits) - 1]), // and eax, imm8
+            9..=31 => {
+                self.emit(&[0x25]); // and eax, imm32, zero extending
+                self.emit(&((1u32 << bits) - 1).to_le_bytes());
+            }
+            33..=63 => {
+                let shift = u8::try_from(64 - bits).expect("a register shift");
+                self.emit(&[0x48, 0xC1, 0xE0, shift]); // shl rax, shift
+                self.emit(&[0x48, 0xC1, 0xE8, shift]); // shr rax, shift
+            }
             other => panic!("no {other}-bit form on this target"),
         }
+    }
+
+    /// Unsigned RDX:RAX = RAX * RCX, or RAX = RDX:RAX / RCX,
+    /// RDX = remainder. The caller owns both implicit clobbers and guards zero.
+    pub(crate) fn multiply_or_divide(&mut self, divide: bool) {
+        self.step();
+        self.emit(&[0x48, 0xF7, if divide { 0xF1 } else { 0xE1 }]);
     }
 
     pub(crate) fn syscall(&mut self) {
@@ -510,6 +520,11 @@ mod tests {
         assert_eq!(encoded(|a| a.xor_self(Reg::Rdi)), [0x31, 0xFF]);
         assert_eq!(encoded(|a| a.pop(Reg::Rdx)), [0x5A]);
         assert_eq!(encoded(|a| a.push_imm8(-5)), [0x6A, 0xFB]);
+        assert_eq!(encoded(|a| a.multiply_or_divide(false)), [0x48, 0xF7, 0xE1]);
+        assert_eq!(encoded(|a| a.multiply_or_divide(true)), [0x48, 0xF7, 0xF1]);
+        assert_eq!(encoded(|a| a.narrow(7)), [0x83, 0xE0, 0x7F]);
+        assert_eq!(encoded(|a| a.narrow(9)), [0x25, 0xFF, 0x01, 0x00, 0x00]);
+        assert_eq!(encoded(|a| a.narrow(32)), [0x89, 0xC0]);
         assert_eq!(
             encoded(|a| a.mov_reg(Reg::Rdi, Reg::Rax, false)),
             [0x89, 0xC7]

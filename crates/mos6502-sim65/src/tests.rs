@@ -49,7 +49,9 @@ fn corpus() -> Vec<(&'static str, Program, usize)> {
             programs::writes_a_length_it_worked_out(),
             190,
         ),
-        ("eight bits", programs::wraps_at_eight_bits(), 63),
+        // A fitting nine-bit sum, then an explicit eight-bit conversion:
+        // the old 63-byte fixture incorrectly overflowed Fixed8 arithmetic.
+        ("eight bits", programs::wraps_at_eight_bits(), 81),
         ("less", programs::less(7, 9), 63),
         (
             "two worked out",
@@ -78,6 +80,10 @@ fn corpus() -> Vec<(&'static str, Program, usize)> {
 
 /// And the same of the examples. Arithmetic examples now include an argc
 /// guard; helper normalization removes calls in the smaller examples.
+///
+/// Bitwise multiplication and non-masking promotions shrink `nat` from 1114
+/// to 998 bytes; promotions also shrink `width` (284 to 270) and `argc`
+/// (335 to 313), despite adding correct odd-width conversion masks.
 fn examples() -> Vec<(String, Program, usize)> {
     [
         ("exit", 29),
@@ -85,9 +91,9 @@ fn examples() -> Vec<(String, Program, usize)> {
         ("double", 29),
         ("leave", 29),
         ("bool", 225),
-        ("nat", 1114),
-        ("width", 284),
-        ("argc", 335),
+        ("nat", 998),
+        ("width", 270),
+        ("argc", 313),
     ]
     .into_iter()
     .map(|(name, size)| {
@@ -207,9 +213,17 @@ fn it_compiles_to_the_sizes_recorded() {
     let held = corpus()
         .into_iter()
         .map(|(name, program, size)| (name.to_owned(), program, size));
-    for (name, program, size) in held.chain(examples()) {
-        assert_eq!(bytes(&program).len(), size, "{name}");
-    }
+    let changed: Vec<_> = held
+        .chain(examples())
+        .filter_map(|(name, program, size)| {
+            let actual = bytes(&program).len();
+            (actual != size).then_some((name, actual, size))
+        })
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "(program, actual, expected): {changed:?}"
+    );
 }
 
 /// What this machine says it answers for is what something answers for it.
@@ -344,4 +358,80 @@ fn it_holds_what_a_program_holds() {
         refused.contains("holds 16 bits, and a value here needs 32"),
         "{refused}"
     );
+}
+
+/// Function parameters force selection of runtime arithmetic, and the
+/// callee compares the whole answer rather than only its low exit byte.
+#[test]
+fn runtime_arithmetic_boundaries_and_odd_widths() {
+    for bits in [1, 2, 3, 7, 8, 9, 15, 16, 31, 32, 33, 63, 64] {
+        if bits > 16 {
+            continue;
+        }
+        for op in [
+            faun::ir::Binary::Mul,
+            faun::ir::Binary::Div,
+            faun::ir::Binary::Mod,
+        ] {
+            assert_eq!(
+                status(&programs::arithmetic::boundaries(bits, op)),
+                0,
+                "{bits} {op:?}"
+            );
+        }
+    }
+    assert_eq!(status(&programs::arithmetic::odd_conversion()), 0);
+    assert_eq!(status(&programs::arithmetic::preserves_host_count()), 0);
+}
+
+#[test]
+fn runtime_arithmetic_varied_inputs() {
+    // Deterministic full-word inputs, checked by the host's unsigned model.
+    let mut seed = 0xD371u16;
+    let pairs: Vec<_> = (0..64)
+        .map(|_| {
+            seed = seed.wrapping_mul(25173).wrapping_add(13849);
+            let left = u64::from(seed);
+            seed = seed.wrapping_mul(25173).wrapping_add(13849);
+            (left, u64::from(seed))
+        })
+        .collect();
+    for op in [
+        faun::ir::Binary::Mul,
+        faun::ir::Binary::Div,
+        faun::ir::Binary::Mod,
+    ] {
+        let inputs: Vec<_> = pairs
+            .iter()
+            .map(|&(a, b)| {
+                if op == faun::ir::Binary::Mul {
+                    (a & 255, b & 255)
+                } else {
+                    (a, b)
+                }
+            })
+            .collect();
+        for chunk in inputs.chunks(8) {
+            assert_eq!(
+                status(&programs::arithmetic::cases(16, op, chunk)),
+                0,
+                "{op:?} {chunk:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn runtime_arithmetic_size_ratchets() {
+    // One runtime call, full-result comparison, startup and image headers.
+    // These baselines distinguish native selection / bitwise legalization
+    // from reintroducing value-counting regions above the targets.
+    for (op, expected) in [
+        (faun::ir::Binary::Mul, 209),
+        (faun::ir::Binary::Div, 248),
+        (faun::ir::Binary::Mod, 248),
+    ] {
+        let program = programs::arithmetic::cases(16, op, &[(65535, 1)]);
+        assert_eq!(bytes(&program).len(), expected, "{op:?}");
+    }
 }

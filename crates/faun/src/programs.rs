@@ -10,6 +10,8 @@
 //! Nothing here names a machine. What each becomes is a question for
 //! whichever target is handed one, and every target is handed all of them.
 
+pub mod arithmetic;
+
 use crate::ir::Class::Word;
 use crate::ir::{Binary, Builder, Class, Offset, Program, Relation, Width};
 
@@ -527,13 +529,15 @@ pub fn counts_in_a_global() -> Program {
 #[must_use]
 pub fn wraps_at_eight_bits() -> Program {
     let byte = Class::Fixed { bits: 8 };
+    let wide = Class::Fixed { bits: 9 };
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
-        let left = b.constant(byte, 250);
-        let right = b.constant(byte, 10);
+        let left = b.constant(wide, 250);
+        let right = b.constant(wide, 10);
         let sum = b.binary(Binary::Add, left, right);
-        // The entry returns a word, and this is where the width changes.
-        let answer = b.convert(Word, sum);
+        // Fixed is a fit requirement. Only this explicit conversion wraps.
+        let wrapped = b.convert(byte, sum);
+        let answer = b.convert(Word, wrapped);
         b.ret(&[answer])
     });
     program

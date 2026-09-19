@@ -77,7 +77,11 @@ fn corpus() -> Vec<(&'static str, Program, usize)> {
 }
 
 /// And the same of the examples. Arithmetic examples now include an argc
-/// guard and portable multiply regions; normalization removes helper calls.
+/// guard and native multiplication; normalization removes helper calls.
+///
+/// `nat` drops from 619 to 466 bytes: no multiply loop or implicit fixed
+/// masks. Removing masks from fitting arithmetic/promotions also shrinks
+/// `width` (260 to 239) and `argc` (286 to 254).
 fn examples() -> Vec<(String, Program, usize)> {
     [
         ("exit", 96),
@@ -85,9 +89,9 @@ fn examples() -> Vec<(String, Program, usize)> {
         ("double", 96),
         ("leave", 96),
         ("bool", 235),
-        ("nat", 619),
-        ("width", 260),
-        ("argc", 286),
+        ("nat", 466),
+        ("width", 239),
+        ("argc", 254),
     ]
     .into_iter()
     .map(|(name, size)| {
@@ -207,9 +211,17 @@ fn it_compiles_to_the_sizes_recorded() {
     let held = corpus()
         .into_iter()
         .map(|(name, program, size)| (name.to_owned(), program, size));
-    for (name, program, size) in held.chain(examples()) {
-        assert_eq!(bytes(&program).len(), size, "{name}");
-    }
+    let changed: Vec<_> = held
+        .chain(examples())
+        .filter_map(|(name, program, size)| {
+            let actual = bytes(&program).len();
+            (actual != size).then_some((name, actual, size))
+        })
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "(program, actual, expected): {changed:?}"
+    );
 }
 
 /// What this machine says it answers for is what something answers for it.
@@ -354,4 +366,80 @@ fn the_smallest_module_imports_nothing() {
     assert_eq!(execute(&programs::empty()).1, "");
     let written = read(EXIT_ZERO).expect("a program");
     assert_eq!(bytes(&written), bytes(&programs::empty()));
+}
+
+/// Function parameters force selection of runtime arithmetic, and the
+/// callee compares the whole answer rather than only its low exit byte.
+#[test]
+fn runtime_arithmetic_boundaries_and_odd_widths() {
+    for bits in [1, 2, 3, 7, 8, 9, 15, 16, 31, 32, 33, 63, 64] {
+        if bits > 32 {
+            continue;
+        }
+        for op in [
+            faun::ir::Binary::Mul,
+            faun::ir::Binary::Div,
+            faun::ir::Binary::Mod,
+        ] {
+            assert_eq!(
+                status(&programs::arithmetic::boundaries(bits, op)),
+                0,
+                "{bits} {op:?}"
+            );
+        }
+    }
+    assert_eq!(status(&programs::arithmetic::odd_conversion()), 0);
+    assert_eq!(status(&programs::arithmetic::preserves_host_count()), 0);
+}
+
+#[test]
+fn runtime_arithmetic_varied_inputs() {
+    // Deterministic full-word inputs, checked by the host's unsigned model.
+    let mut seed = 0xD371u16;
+    let pairs: Vec<_> = (0..64)
+        .map(|_| {
+            seed = seed.wrapping_mul(25173).wrapping_add(13849);
+            let left = u64::from(seed);
+            seed = seed.wrapping_mul(25173).wrapping_add(13849);
+            (left, u64::from(seed))
+        })
+        .collect();
+    for op in [
+        faun::ir::Binary::Mul,
+        faun::ir::Binary::Div,
+        faun::ir::Binary::Mod,
+    ] {
+        let inputs: Vec<_> = pairs
+            .iter()
+            .map(|&(a, b)| {
+                if op == faun::ir::Binary::Mul {
+                    (a & 255, b & 255)
+                } else {
+                    (a, b)
+                }
+            })
+            .collect();
+        for chunk in inputs.chunks(8) {
+            assert_eq!(
+                status(&programs::arithmetic::cases(16, op, chunk)),
+                0,
+                "{op:?} {chunk:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn runtime_arithmetic_size_ratchets() {
+    // One runtime call, full-result comparison, startup and image headers.
+    // These baselines distinguish native selection / bitwise legalization
+    // from reintroducing value-counting regions above the targets.
+    for (op, expected) in [
+        (faun::ir::Binary::Mul, 156),
+        (faun::ir::Binary::Div, 164),
+        (faun::ir::Binary::Mod, 162),
+    ] {
+        let program = programs::arithmetic::cases(16, op, &[(65535, 1)]);
+        assert_eq!(bytes(&program).len(), expected, "{op:?}");
+    }
 }

@@ -105,3 +105,22 @@ fn a_loop_iteration_stays_within_its_cycle_ceiling() {
         "an iteration costs {each} cycles; the ceiling is {CEILING}"
     );
 }
+
+/// Value-counting loops took tens of thousands of iterations for these
+/// inputs. Bitwise legalization must stay bounded by sixteen word bits.
+#[test]
+fn arithmetic_cost_is_bounded_by_word_bits_not_values() {
+    for (op, pair) in [
+        (Binary::Mul, (1, 65535)),
+        (Binary::Mul, (65535, 1)),
+        (Binary::Div, (65535, 1)),
+        (Binary::Mod, (65535, 1)),
+        (Binary::Div, (65535, 32768)),
+        (Binary::Mod, (65535, 0)),
+    ] {
+        let program = faun::programs::arithmetic::cases(16, op, &[pair]);
+        let (cycles, status) = run(&program);
+        assert_eq!(status, 0, "{op:?} {pair:?}");
+        assert!(cycles <= 1400, "{op:?} {pair:?}: {cycles} cycles");
+    }
+}

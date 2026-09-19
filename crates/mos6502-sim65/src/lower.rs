@@ -1160,13 +1160,23 @@ impl Lowering<'_> {
         }
     }
 
-    /// Whatever the source made meaningful, kept as far as the target is
-    /// wide -- which here only ever means dropping the high byte.
+    /// Only explicit narrowing discards bits, including widths inside a byte.
+    /// A promotion leaves a fitting value unchanged.
     fn convert(&mut self, class: Class, value: ValueId, result: ValueId) {
         self.read(T0, value);
-        if bits(class).min(bits(self.program.class(value))) <= 8 {
-            self.asm.lda_imm(0);
-            self.asm.sta_zp(T0 + 1);
+        let kept = bits(class);
+        if kept < bits(self.program.class(value)) {
+            let byte = if kept <= 8 { T0 } else { T0 + 1 };
+            let mask = ((1u16 << ((kept - 1) % 8 + 1)) - 1).to_le_bytes()[0];
+            if mask != 0xFF {
+                self.asm.lda_zp(byte);
+                self.asm.and_imm(mask);
+                self.asm.sta_zp(byte);
+            }
+            if kept <= 8 {
+                self.asm.lda_imm(0);
+                self.asm.sta_zp(T0 + 1);
+            }
         }
         self.commit(result, T0);
     }
@@ -1189,6 +1199,7 @@ impl Lowering<'_> {
                     self.asm.branch(Cc::NotEqual, done);
                     self.asm.dec_zp(dest + 1);
                 }
+                _ => unreachable!("multiply/divide use bitwise legalization"),
             }
             self.asm.bind(done);
             if matches!(op, Binary::Sub) {
@@ -1203,6 +1214,7 @@ impl Lowering<'_> {
         match op {
             Binary::Add => self.asm.clc(),
             Binary::Sub => self.asm.sec(),
+            _ => unreachable!("multiply/divide use bitwise legalization"),
         }
         self.accumulate(op, right.byte(0));
         self.asm.sta_zp(dest);
@@ -1213,6 +1225,64 @@ impl Lowering<'_> {
             self.accumulate(op, right.byte(1));
         }
         self.asm.sta_zp(dest + 1);
+    }
+
+    /// Shift/add in exactly sixteen rounds, independent of operand values.
+    /// Only scratch pairs and X are destroyed; homes, ARGC and call arguments
+    /// are untouched. The fit proof guarantees the final product fits.
+    fn multiply(&mut self) {
+        self.set_pair(PTR, 0);
+        self.asm.ldx_imm(16);
+        let head = self.asm.label();
+        let skip = self.asm.label();
+        self.asm.bind(head);
+        self.asm.lsr_zp(T1 + 1);
+        self.asm.ror_zp(T1);
+        self.asm.branch(Cc::NoCarry, skip);
+        self.arithmetic(Binary::Add, Operand::Zp(PTR), Operand::Zp(T0), PTR, false);
+        self.asm.bind(skip);
+        self.asm.asl_zp(T0);
+        self.asm.rol_zp(T0 + 1);
+        self.asm.dex();
+        self.asm.branch(Cc::NotEqual, head);
+    }
+
+    /// Restoring unsigned long division: T0 becomes the quotient and PTR
+    /// the remainder. Each round consumes one dividend bit. The carry out
+    /// of the remainder is its seventeenth bit, not something to discard
+    /// before deciding to subtract. Division by zero is handled separately.
+    fn divide(&mut self) {
+        let zero = self.asm.label();
+        let done = self.asm.label();
+        let head = self.asm.label();
+        let subtract = self.asm.label();
+        let next = self.asm.label();
+        self.set_pair(PTR, 0);
+        self.asm.lda_zp(T1);
+        self.asm.ora_zp(T1 + 1);
+        self.asm.branch(Cc::Equal, zero);
+        self.asm.ldx_imm(16);
+        self.asm.bind(head);
+        self.asm.asl_zp(T0);
+        self.asm.rol_zp(T0 + 1);
+        self.asm.rol_zp(PTR);
+        self.asm.rol_zp(PTR + 1);
+        self.asm.branch(Cc::Carry, subtract);
+        self.holds(Relation::Less, Operand::Zp(PTR), Operand::Zp(T1), next);
+        self.asm.bind(subtract);
+        self.arithmetic(Binary::Sub, Operand::Zp(PTR), Operand::Zp(T1), PTR, false);
+        self.asm.inc_zp(T0); // the shifted-in quotient bit was zero
+        self.asm.bind(next);
+        self.asm.dex();
+        self.asm.branch(Cc::NotEqual, head);
+        self.asm.jmp(done);
+        self.asm.bind(zero);
+        self.asm.lda_zp(T0);
+        self.asm.sta_zp(PTR);
+        self.asm.lda_zp(T0 + 1);
+        self.asm.sta_zp(PTR + 1);
+        self.set_pair(T0, 0);
+        self.asm.bind(done);
     }
 
     fn load(&mut self, byte: Byte) {
@@ -1228,6 +1298,7 @@ impl Lowering<'_> {
             (Binary::Add, Byte::Zp(at)) => self.asm.adc_zp(at),
             (Binary::Sub, Byte::Imm(value)) => self.asm.sbc_imm(value),
             (Binary::Sub, Byte::Zp(at)) => self.asm.sbc_zp(at),
+            _ => unreachable!("multiply/divide use bitwise legalization"),
         }
     }
 
@@ -1312,6 +1383,21 @@ impl Lowering<'_> {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
             Op::Constant { .. } | Op::AddressOf(_) => {}
             Op::Binary { op, left, right } => {
+                if matches!(op, Binary::Mul | Binary::Div | Binary::Mod) {
+                    // Copy both operands before touching any destination: loop
+                    // coalescing may give it the same home as an input.
+                    self.read(T0, *left);
+                    self.read(T1, *right);
+                    let pair = if *op == Binary::Mul {
+                        self.multiply();
+                        PTR
+                    } else {
+                        self.divide();
+                        if *op == Binary::Div { T0 } else { PTR }
+                    };
+                    self.commit(results[0], pair);
+                    return;
+                }
                 let left = self.operand(*left, T0);
                 let right = self.operand(*right, T1);
                 let narrow = bits(self.program.class(results[0])) <= 8;
