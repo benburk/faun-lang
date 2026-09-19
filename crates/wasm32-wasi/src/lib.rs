@@ -14,6 +14,10 @@ const CALL: u8 = 0x10;
 const DROP: u8 = 0x1A;
 const END: u8 = 0x0B;
 
+/// How wide this machine's own word is, which is the widest value it holds
+/// and what any class but a fixed one means here.
+pub(crate) const WORD_BITS: u16 = 32;
+
 /// This target, for whoever is choosing between them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Wasm32Wasi;
@@ -24,7 +28,7 @@ impl Target for Wasm32Wasi {
     }
 
     fn word(&self) -> u16 {
-        32
+        WORD_BITS
     }
 
     fn provides(&self) -> &'static [&'static str] {

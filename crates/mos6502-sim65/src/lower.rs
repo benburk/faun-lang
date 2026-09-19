@@ -10,6 +10,7 @@ use super::{
     ARG_COUNT, ARGC, ARGS, CSP, CSTACK_TOP, Code, FP, FRAMES_TOP, HEAP, HOME_COUNT, HOMES,
     HOOK_ARGS, HOOK_EXIT, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
 };
+use crate::WORD_BITS;
 use faun::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op, Origin, Program, RegionId, Relation,
     Terminator, ValueId, Width,
@@ -17,7 +18,6 @@ use faun::ir::{
 
 /// A word here is the width of an address.
 const WORD: i32 = 2;
-const WORD_BITS: u16 = 16;
 
 /// The next slot in a frame that holds at most 128 values.
 const fn step(frame: u8) -> u8 {
@@ -1437,10 +1437,7 @@ impl Lowering<'_> {
 
 /// How wide a class is held, which for anything unfixed is a word.
 const fn bits(class: Class) -> u16 {
-    match class {
-        Class::Fixed { bits } => bits,
-        Class::Word | Class::Address => WORD_BITS,
-    }
+    class.bits(WORD_BITS)
 }
 
 /// A byte distance, which is what the machine addresses in.

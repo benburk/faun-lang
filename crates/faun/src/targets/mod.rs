@@ -98,10 +98,7 @@ pub trait Target: fmt::Debug {
                 // A fixed width is taken modulo its own, so only a word can
                 // be handed more than it holds.
                 Op::Constant { class, value } => {
-                    let bits = match class {
-                        Class::Fixed { bits } => bits,
-                        Class::Word | Class::Address => word,
-                    };
+                    let bits = class.bits(word);
                     if bits < 64 && value >> bits != 0 {
                         return Err(format!(
                             "{name} holds {bits} bits, and {value} does not fit in them"

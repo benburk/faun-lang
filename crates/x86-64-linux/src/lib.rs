@@ -9,6 +9,10 @@ mod lower;
 use faun::ir::{DataId, Program};
 use faun::targets::{Artifact, Target};
 
+/// How wide this machine's own word is, which is the widest value it holds
+/// and what any class but a fixed one means here.
+pub(crate) const WORD_BITS: u16 = 64;
+
 /// This target, for whoever is choosing between them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct X86_64Linux;
@@ -19,7 +23,7 @@ impl Target for X86_64Linux {
     }
 
     fn word(&self) -> u16 {
-        64
+        WORD_BITS
     }
 
     fn provides(&self) -> &'static [&'static str] {

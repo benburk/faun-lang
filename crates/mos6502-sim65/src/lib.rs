@@ -54,6 +54,10 @@ const HOOK_WRITE: u16 = 0xFFF7;
 const HOOK_ARGS: u16 = 0xFFF8;
 const HOOK_EXIT: u16 = 0xFFF9;
 
+/// How wide this machine's own word is, which is the widest value it holds
+/// and what any class but a fixed one means here.
+pub(crate) const WORD_BITS: u16 = 16;
+
 /// This target, for whoever is choosing between them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Mos6502Sim65;
@@ -64,7 +68,7 @@ impl Target for Mos6502Sim65 {
     }
 
     fn word(&self) -> u16 {
-        16
+        WORD_BITS
     }
 
     fn provides(&self) -> &'static [&'static str] {

@@ -9,6 +9,7 @@
 //!   imports nothing, which is most of a small module.
 
 use super::{Body, CALL, Code, DROP, END, I32_CONST, Segment};
+use crate::WORD_BITS;
 use faun::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op, Origin, Program, Range, RegionId,
     Relation, Terminator, ValueId, Width,
@@ -47,8 +48,6 @@ const MEMORY_GROW: u8 = 0x40;
 
 /// A word on this target, in bytes, and a page as a power of two.
 const WORD: i32 = 4;
-/// A word here, in bits, which is what an unfixed class is held at.
-const WORD_BITS: u16 = 32;
 const PAGE_BITS: i32 = 16;
 const I32_ADD: u8 = 0x6A;
 const I32_SUB: u8 = 0x6B;
@@ -58,10 +57,7 @@ const EMPTY: u8 = 0x40;
 
 /// How wide a class is held, which for anything unfixed is a word.
 const fn bits(class: Class) -> u16 {
-    match class {
-        Class::Fixed { bits } => bits,
-        Class::Word | Class::Address => WORD_BITS,
-    }
+    class.bits(WORD_BITS)
 }
 
 #[derive(Clone, Copy)]

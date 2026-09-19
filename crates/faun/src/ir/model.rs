@@ -404,6 +404,19 @@ impl Program {
 }
 
 impl Class {
+    /// How many bits it needs, on a machine whose word is this wide.
+    ///
+    /// A fixed width says its own. Anything else is as wide as the machine
+    /// is, which is why this is a question a target answers and not one a
+    /// class answers alone.
+    #[must_use]
+    pub const fn bits(self, word: u16) -> u16 {
+        match self {
+            Self::Fixed { bits } => bits,
+            Self::Word | Self::Address => word,
+        }
+    }
+
     /// Whether a value of this class can be read as one of `wanted` without
     /// anything happening in between. A width is what a value needs and
     /// what it holds above that is nought, so a narrower one is already a

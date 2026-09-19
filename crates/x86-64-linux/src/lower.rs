@@ -8,6 +8,7 @@
 
 use super::encode::{Encoder, Reg};
 use super::{Code, Reloc};
+use crate::WORD_BITS;
 use faun::ir::{
     Binary, Class, DataId, Exit, Function, FunctionId, Offset, Op, PlatformId, Program, RegionId,
     Relation, Terminator, ValueId, Width,
@@ -24,9 +25,6 @@ const MAP_PRIVATE_ANONYMOUS: u64 = 0x22;
 
 /// A word in bytes, which is what [`Offset::Words`] counts.
 const WORD: i32 = 8;
-
-/// A word here, in bits, which is what an unfixed class is held at.
-const WORD_BITS: u16 = 64;
 
 /// A syscall's fourth argument goes in r10, where the ordinary convention
 /// would use rcx.
@@ -285,10 +283,7 @@ impl Plan {
 
 /// How wide a class is held, which for anything unfixed is a word.
 const fn bits(class: Class) -> u16 {
-    match class {
-        Class::Fixed { bits } => bits,
-        Class::Word | Class::Address => WORD_BITS,
-    }
+    class.bits(WORD_BITS)
 }
 
 /// A byte distance, which is what the machine addresses in.
