@@ -55,21 +55,18 @@ fn program() -> Program {
     p
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "native file setup, execution and exact byte comparison"
-)]
-fn check(target: &dyn Target, runner: Option<&str>) {
+fn execute(
+    p: &Program,
+    target: &dyn Target,
+    runner: Option<&str>,
+    label: &str,
+    verify: impl Fn(u128, std::process::Output),
+) {
     use std::fs;
     use std::process::Command;
-    let p = program();
-    assert!(
-        target.accepts(&p).is_err(),
-        "raw emission is not bigint legalization"
-    );
-    let artifact = target.compile(&p).expect("runtime compilation").remove(0);
+    let artifact = target.compile(p).expect("runtime compilation").remove(0);
     let dir = std::env::temp_dir().join(format!(
-        "faun-bigint-{}-{}",
+        "faun-bigint-{label}-{}-{}",
         target.name(),
         std::process::id()
     ));
@@ -93,7 +90,18 @@ fn check(target: &dyn Target, runner: Option<&str>) {
         for _ in 0..extra {
             command.arg("dynamic-input");
         }
-        let output = command.output().expect("target runner");
+        verify(extra, command.output().expect("target runner"));
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+fn check(target: &dyn Target, runner: Option<&str>) {
+    let p = program();
+    assert!(
+        target.accepts(&p).is_err(),
+        "raw emission is not bigint legalization"
+    );
+    execute(&p, target, runner, "full-bytes", |extra, output| {
         assert!(
             output.status.success(),
             "{:?}: {}",
@@ -107,6 +115,39 @@ fn check(target: &dyn Target, runner: Option<&str>) {
             .flat_map(u128::to_le_bytes)
             .collect();
         assert_eq!(output.stdout, expected, "full 80-byte arithmetic output");
+    });
+}
+
+fn source_check(target: &dyn Target, runner: Option<&str>) {
+    let text = format!(
+        "{}\n{}",
+        include_str!("../../../../standard/nat.fn"),
+        include_str!("runtime_naturals.fn")
+    );
+    let p = faun::read(&text, &target.routines()).expect("bounded effect after runtime arithmetic");
+    for wanted in [Binary::Mul, Binary::Div] {
+        assert!(
+            p.functions().iter().any(|f| p.every(f.body).any(|op| {
+                matches!(*op, faun::ir::Op::Binary { op, left, .. }
+                if op == wanted && p.class(left) == Class::Natural)
+            })),
+            "runtime {wanted:?} must survive source optimization"
+        );
     }
-    fs::remove_dir_all(dir).unwrap();
+    assert!(
+        p.functions().iter().any(|f| p.every(f.body).any(|op| {
+            matches!(*op, faun::ir::Op::NaturalConstant(data) if p.datum(data).len >= 17)
+        })),
+        "ordinary repeated squaring must construct at least 2^128"
+    );
+    execute(&p, target, runner, "source", |extra, output| {
+        let expected = i32::from(extra == 0);
+        assert_eq!(
+            output.status.code(),
+            Some(expected),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+    });
 }

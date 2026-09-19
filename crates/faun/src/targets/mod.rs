@@ -92,8 +92,10 @@ pub trait Target: fmt::Debug {
     /// Exhaustion terminates with status 2, never a wrapped natural result.
     /// On supported runtime targets, clients needing a different budget can
     /// call `ir::legalize` with an explicit `ir::natural::Config`, then compile
-    /// the scalar result. This is NOT a supported way to bypass the 16-bit
-    /// guard: manually legalized scalar input needs a backend capacity audit.
+    /// the scalar result. The config word size MUST match this target: serialized
+    /// headers are target sized, which ordinary Address IR cannot detect later.
+    /// This is NOT a supported way to bypass the 16-bit guard: manually legalized
+    /// scalar input needs a complete backend image/stack capacity audit.
     ///
     /// # Errors
     /// Reports invalid IR or a representation this target cannot safely emit.

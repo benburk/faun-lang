@@ -1,0 +1,18 @@
+# Prepend standard/nat.fn. Ordinary repeated squaring builds 2^128.
+square(n) -> mul(n n)
+
+status(False) -> Zero
+status(True) -> Succ(Zero)
+
+main!(h) ->
+  a = square(Succ(Succ(Zero)))
+  b = square(a)
+  c = square(b)
+  d = square(c)
+  e = square(d)
+  f = square(e)
+  huge = square(f)
+  count = argc!(h)
+  product = mul(huge count)
+  quotient = div(product huge)
+  exit!(h status(equals(quotient Succ(Zero))))

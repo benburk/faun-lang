@@ -22,6 +22,11 @@ use super::{
 /// Runtime helpers are appended and are not passed through ownership placement.
 /// Programs needing no representation change take an unchanged clone fast path.
 ///
+/// Serialized headers are target sized: `config.word_bits` MUST match the
+/// subsequent backend or interpreter. This obligation cannot be detected from
+/// the resulting ordinary Address IR. Relative size checks do not prove complete
+/// target image/pool/frame placement.
+///
 /// # Errors
 /// Rejects invalid IR, unsupported host/address conversions, wide fixed-width
 /// values, invalid runtime configuration, and constants exceeding the layout.

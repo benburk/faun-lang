@@ -3,6 +3,23 @@ use faun::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
 
 #[test]
+fn compilation_wrappers_apply_native_abi_and_transfer_limits() {
+    use faun::programs::abi;
+    for (p, accepted) in [
+        (abi::function(4, 1), true),
+        (abi::function(5, 1), false),
+        (abi::function(0, 2), false),
+        (abi::pointer_pair(), false),
+        (abi::region(abi::Transfer::If, 3), false),
+        (abi::region(abi::Transfer::LoopState, 3), false),
+        (abi::region(abi::Transfer::LoopResults, 3), false),
+    ] {
+        assert_eq!(Mos6502Sim65.prepare(&p).is_ok(), accepted);
+        assert_eq!(Mos6502Sim65.compile(&p).is_ok(), accepted);
+    }
+}
+
+#[test]
 fn runtime_images_are_rejected_until_frame_and_image_budgets_are_checked() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
