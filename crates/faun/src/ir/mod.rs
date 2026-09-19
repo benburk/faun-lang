@@ -59,3 +59,5 @@ pub use validate::validate;
 mod arithmetic_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod validation_tests;
