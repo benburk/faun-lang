@@ -1,10 +1,16 @@
 //! 6502 instruction encodings, and the labels that tie them together.
 //!
+//! The steps are kept before any of them is written, in the shape every
+//! tier above keeps a program: one array of them, another of the bytes the
+//! fixed ones are, and an index rather than a pointer to say which.
+//!
 //! A conditional is two bytes when its target is within the 127 the
 //! machine's relative branches reach, and five when it is not: the inverse
 //! branch over a `jmp`. Which is which cannot be known until the addresses
-//! are, so [`Assembler::finish`] reports the ones that did not fit and the
-//! caller assembles again.
+//! are, and the addresses cannot be known until it is. So the widths settle
+//! first, by measuring the steps rather than by writing any of them.
+
+use faun::index::Range;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Label(usize);
@@ -40,31 +46,69 @@ impl Cc {
     }
 }
 
+/// One step the lowering asked for, before anything says where it sits.
+enum Inst {
+    /// Bytes that are the same wherever they land.
+    Fixed(Range),
+    /// A conditional, which is two bytes where it reaches and five where it
+    /// does not.
+    Branch { cc: Cc, to: Label },
+    /// A `jmp` or a `jsr`, which spends two bytes on an address either way.
+    Absolute { opcode: u8, to: Label },
+    /// Half of an address, as an immediate.
+    Half { to: Label, high: bool },
+}
+
+impl Inst {
+    /// What it costs, given whether a branch was found not to reach.
+    fn len(&self, far: bool) -> usize {
+        match *self {
+            Self::Fixed(bytes) => bytes.len(),
+            Self::Branch { .. } if far => 5,
+            Self::Absolute { .. } => 3,
+            // A branch that reaches, and an immediate: an opcode and one
+            // byte either way.
+            Self::Branch { .. } | Self::Half { .. } => 2,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Assembler {
-    bytes: Vec<u8>,
-    /// Where each label landed, once it has been bound.
-    labels: Vec<Option<u16>>,
-    /// Each hole, and the label it waits on.
-    holes: Vec<(usize, Label)>,
-    /// The same for the one-byte holes a relative branch leaves, with the
-    /// branch's number so the caller can lengthen it.
-    near: Vec<(usize, Label, usize)>,
-    /// One-byte holes wanting half of a label's address, and which half.
-    halves: Vec<(usize, Label, bool)>,
-    /// Which branches, by number, have already been found not to reach.
-    far: Vec<bool>,
-    branches: usize,
+    /// The steps, in the order they were asked for.
+    insts: Vec<Inst>,
+    /// Every fixed step's bytes, end to end.
+    pool: Vec<u8>,
+    /// Where the step now being written began, if one is open.
+    open: Option<usize>,
+    /// Which step each label stands before, once it has been bound.
+    labels: Vec<Option<usize>>,
     origin: u16,
 }
 
 impl Assembler {
-    pub(crate) fn new(origin: u16, far: Vec<bool>) -> Self {
+    pub(crate) fn new(origin: u16) -> Self {
         Self {
-            far,
             origin,
             ..Self::default()
         }
+    }
+
+    /// Close the step being written, keeping what it wrote.
+    fn close(&mut self) {
+        if let Some(start) = self.open.take()
+            && self.pool.len() > start
+        {
+            self.insts
+                .push(Inst::Fixed(Range::of(start, self.pool.len() - start)));
+        }
+    }
+
+    /// Close the step being written and begin another. Every method below
+    /// starts with this, which is what makes a step a step.
+    fn step(&mut self) {
+        self.close();
+        self.open = Some(self.pool.len());
     }
 
     pub(crate) fn label(&mut self) -> Label {
@@ -72,195 +116,281 @@ impl Assembler {
         Label(self.labels.len() - 1)
     }
 
+    /// Say that a label stands here, which is before whatever comes next.
     pub(crate) fn bind(&mut self, label: Label) {
-        self.labels[label.0] = Some(self.here());
-    }
-
-    pub(crate) fn here(&self) -> u16 {
-        self.origin + u16::try_from(self.bytes.len()).expect("an image within 64 KiB")
+        self.close();
+        self.labels[label.0] = Some(self.insts.len());
     }
 
     /// Fill every hole with the address its label ended up at, and report
     /// the branches whose target turned out to be out of reach.
-    pub(crate) fn finish(mut self) -> (Vec<u8>, Vec<usize>) {
-        for (at, label) in std::mem::take(&mut self.holes) {
-            let target = self.labels[label.0].expect("every label is bound");
-            self.bytes[at..at + 2].copy_from_slice(&target.to_le_bytes());
-        }
+    /// The image, once every width is known.
+    ///
+    /// # Panics
+    ///
+    /// If a label was never bound, or the image outgrew the machine.
+    pub(crate) fn finish(mut self) -> Vec<u8> {
+        self.close();
+        let (far, at) = self.settled();
 
-        for (at, label, high) in std::mem::take(&mut self.halves) {
-            let target = self.labels[label.0].expect("every label is bound");
-            let [low, high_byte] = target.to_le_bytes();
-            self.bytes[at] = if high { high_byte } else { low };
-        }
-
-        let mut overflowed = Vec::new();
-        for (at, label, branch) in std::mem::take(&mut self.near) {
-            let target = self.labels[label.0].expect("every label is bound");
-            // Counted from the end of the branch, which is the byte after
-            // the displacement.
-            let from = self.origin + u16::try_from(at + 1).expect("an image within 64 KiB");
-            match i8::try_from(i32::from(target) - i32::from(from)) {
-                Ok(displacement) => self.bytes[at] = displacement.cast_unsigned(),
-                Err(_) => overflowed.push(branch),
+        let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
+        for (id, inst) in self.insts.iter().enumerate() {
+            match *inst {
+                Inst::Fixed(held) => bytes.extend_from_slice(&self.pool[held.range()]),
+                Inst::Absolute { opcode, to } => {
+                    bytes.push(opcode);
+                    bytes.extend_from_slice(&self.address(&at, to).to_le_bytes());
+                }
+                Inst::Half { to, high } => {
+                    let [low, held] = self.address(&at, to).to_le_bytes();
+                    bytes.extend_from_slice(&[0xA9, if high { held } else { low }]);
+                }
+                Inst::Branch { cc, to } => {
+                    if far[id] {
+                        // The inverse branch over a `jmp`, which is three
+                        // bytes, so the hop is three.
+                        bytes.extend_from_slice(&[cc.inverse(), 3, 0x4C]);
+                        bytes.extend_from_slice(&self.address(&at, to).to_le_bytes());
+                    } else {
+                        let step = self.step_to(&at, id, to, 2);
+                        let step = i8::try_from(step).expect("a branch that reaches");
+                        bytes.extend_from_slice(&[cc.taken(), step.cast_unsigned()]);
+                    }
+                }
             }
         }
-        (self.bytes, overflowed)
+        bytes
+    }
+
+    /// Which branches do not reach, and where every step lands once they
+    /// have the width they need.
+    ///
+    /// Nothing is written to find out. Every branch starts near, and any
+    /// found not to reach is widened and the measuring done again; a branch
+    /// only ever widens, so this settles.
+    fn settled(&self) -> (Vec<bool>, Vec<usize>) {
+        let mut far = vec![false; self.insts.len()];
+        loop {
+            let at = self.positions(&far);
+            let mut again = false;
+            for (id, inst) in self.insts.iter().enumerate() {
+                let Inst::Branch { to, .. } = *inst else {
+                    continue;
+                };
+                if far[id] {
+                    continue;
+                }
+                if i8::try_from(self.step_to(&at, id, to, 2)).is_err() {
+                    far[id] = true;
+                    again = true;
+                }
+            }
+            if !again {
+                return (far, at);
+            }
+        }
+    }
+
+    /// Where each step would land in the image, at the widths it was given.
+    fn positions(&self, far: &[bool]) -> Vec<usize> {
+        let mut at = Vec::with_capacity(self.insts.len() + 1);
+        let mut held = 0;
+        for (id, inst) in self.insts.iter().enumerate() {
+            at.push(held);
+            held += inst.len(far[id]);
+        }
+        at.push(held);
+        at
+    }
+
+    /// Where a label stands, as the machine addresses it.
+    ///
+    /// # Panics
+    ///
+    /// If it was never bound, or the image outgrew the machine.
+    fn address(&self, at: &[usize], label: Label) -> u16 {
+        let held = self.labels[label.0].expect("every label is bound");
+        self.origin + u16::try_from(at[held]).expect("an image within 64 KiB")
+    }
+
+    /// How far a branch steps, counted from the byte after it.
+    ///
+    /// # Panics
+    ///
+    /// If the label it aims at was never bound.
+    fn step_to(&self, at: &[usize], from: usize, to: Label, width: usize) -> i32 {
+        let held = self.labels[to.0].expect("every label is bound");
+        let after = i32::try_from(at[from] + width).expect("an image within 64 KiB");
+        i32::try_from(at[held]).expect("an image within 64 KiB") - after
     }
 
     // Loads and stores. A pair is two zero-page bytes, low first.
 
     pub(crate) fn lda_imm(&mut self, value: u8) {
+        self.step();
         self.emit(&[0xA9, value]);
     }
 
     /// Half of a label's address, as an immediate.
     pub(crate) fn lda_imm_half(&mut self, label: Label, high: bool) {
-        self.emit(&[0xA9]);
-        self.halves.push((self.bytes.len(), label, high));
-        self.emit(&[0]);
+        self.close();
+        self.insts.push(Inst::Half { to: label, high });
     }
 
     /// A literal word, for data the target lays down itself.
     pub(crate) fn word(&mut self, value: u16) {
+        self.step();
         self.emit(&value.to_le_bytes());
     }
 
     pub(crate) fn lda_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0xA5, at]);
     }
 
     pub(crate) fn sta_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0x85, at]);
     }
 
     pub(crate) fn stx_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0x86, at]);
     }
 
     /// `a = [pair + y]`, and its mirror: the only way to reach a computed
     /// address, since the machine has no sixteen-bit register.
     pub(crate) fn lda_ind_y(&mut self, pair: u8) {
+        self.step();
         self.emit(&[0xB1, pair]);
     }
 
     pub(crate) fn sta_ind_y(&mut self, pair: u8) {
+        self.step();
         self.emit(&[0x91, pair]);
     }
 
     pub(crate) fn ldx_imm(&mut self, value: u8) {
+        self.step();
         self.emit(&[0xA2, value]);
     }
 
     pub(crate) fn ldx_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0xA6, at]);
     }
 
     pub(crate) fn ldy_imm(&mut self, value: u8) {
+        self.step();
         self.emit(&[0xA0, value]);
     }
 
     pub(crate) fn iny(&mut self) {
+        self.step();
         self.emit(&[0xC8]);
     }
 
     pub(crate) fn txs(&mut self) {
+        self.step();
         self.emit(&[0x9A]);
     }
 
     // Arithmetic and comparison, all through the accumulator.
 
     pub(crate) fn clc(&mut self) {
+        self.step();
         self.emit(&[0x18]);
     }
 
     pub(crate) fn sec(&mut self) {
+        self.step();
         self.emit(&[0x38]);
     }
 
     pub(crate) fn adc_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0x65, at]);
     }
 
     pub(crate) fn adc_imm(&mut self, value: u8) {
+        self.step();
         self.emit(&[0x69, value]);
     }
 
     pub(crate) fn sbc_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0xE5, at]);
     }
 
     pub(crate) fn sbc_imm(&mut self, value: u8) {
+        self.step();
         self.emit(&[0xE9, value]);
     }
 
     pub(crate) fn cmp_imm(&mut self, value: u8) {
+        self.step();
         self.emit(&[0xC9, value]);
     }
 
     pub(crate) fn inc_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0xE6, at]);
     }
 
     pub(crate) fn dec_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0xC6, at]);
     }
 
     pub(crate) fn cmp_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0xC5, at]);
     }
 
     pub(crate) fn ora_zp(&mut self, at: u8) {
+        self.step();
         self.emit(&[0x05, at]);
     }
 
     // Control flow.
 
     pub(crate) fn jsr(&mut self, label: Label) {
-        self.emit(&[0x20]);
-        self.hole(label);
+        self.absolute(0x20, label);
     }
 
     pub(crate) fn jmp(&mut self, label: Label) {
-        self.emit(&[0x4C]);
-        self.hole(label);
+        self.absolute(0x4C, label);
     }
 
     /// A call to a fixed address, such as one of the simulator's hooks.
     pub(crate) fn jsr_abs(&mut self, at: u16, _back: Label) {
+        self.step();
         self.emit(&[0x20]);
         self.emit(&at.to_le_bytes());
     }
 
     pub(crate) fn jmp_abs(&mut self, at: u16) {
+        self.step();
         self.emit(&[0x4C]);
         self.emit(&at.to_le_bytes());
     }
 
     pub(crate) fn rts(&mut self) {
+        self.step();
         self.emit(&[0x60]);
     }
 
     pub(crate) fn branch(&mut self, cc: Cc, label: Label) {
-        let branch = self.branches;
-        self.branches += 1;
-
-        if self.far.get(branch).copied().unwrap_or(false) {
-            self.emit(&[cc.inverse(), 3]);
-            self.jmp(label);
-        } else {
-            self.emit(&[cc.taken()]);
-            self.near.push((self.bytes.len(), label, branch));
-            self.emit(&[0]);
-        }
+        self.close();
+        self.insts.push(Inst::Branch { cc, to: label });
     }
 
-    fn hole(&mut self, label: Label) {
-        self.holes.push((self.bytes.len(), label));
-        self.emit(&[0, 0]);
+    fn absolute(&mut self, opcode: u8, label: Label) {
+        self.close();
+        self.insts.push(Inst::Absolute { opcode, to: label });
     }
 
     fn emit(&mut self, bytes: &[u8]) {
-        self.bytes.extend_from_slice(bytes);
+        self.pool.extend_from_slice(bytes);
     }
 }

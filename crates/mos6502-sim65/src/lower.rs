@@ -205,17 +205,15 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     }
 }
 
-/// Assembled until nothing changes. Two things are only knowable once the
-/// addresses are: which branches reach their target in two bytes, and where
-/// the image ends, since with no kernel and no mapping the heap is whatever
-/// address space the image does not occupy. Lengthening a branch can push
-/// another out of reach, so this repeats rather than assuming one pass.
-/// What a round may learn and never unlearn: a branch that does not reach
-/// in one byte, and a heap that has to start higher. Neither is taken back
-/// -- an address is two bytes however high it is, so a heap further out
-/// never makes the code that names it longer -- and every program here
-/// settles in two, one to lay the image out and one to confirm it. Reaching
-/// this many means a round undid what an earlier one settled.
+/// What a round may learn and never unlearn: that the heap has to start
+/// further up. It is not taken back, and an address is two bytes however
+/// high it is, so a heap further out never makes the code that names it
+/// longer. Every program here settles in two, one to lay the image out and
+/// one to confirm it. Reaching this many means a round undid what an
+/// earlier one settled.
+///
+/// How far a branch reaches settles inside the assembling, where the steps
+/// can be measured without writing any of them out.
 const ROUNDS: usize = 32;
 
 /// # Panics
@@ -223,19 +221,9 @@ const ROUNDS: usize = 32;
 /// If the layout does not settle, which is this target disagreeing with
 /// itself rather than anything a program did.
 pub(crate) fn lower(program: &Program) -> Code {
-    let mut far: Vec<bool> = Vec::new();
     let mut heap = LOAD;
     for _ in 0..ROUNDS {
-        let (code, overflowed) = assemble(program, heap, far.clone());
-        if !overflowed.is_empty() {
-            let widest = overflowed.iter().copied().max().expect("a branch");
-            far.resize(widest + 1, false);
-            for branch in overflowed {
-                far[branch] = true;
-            }
-            continue;
-        }
-
+        let code = assemble(program, heap);
         let end = code.reset + u16::try_from(code.bytes.len()).expect("an image within 64 KiB");
         if end <= heap {
             return code;
@@ -245,14 +233,14 @@ pub(crate) fn lower(program: &Program) -> Code {
     panic!("the layout did not settle in {ROUNDS} rounds")
 }
 
-fn assemble(program: &Program, heap: u16, far: Vec<bool>) -> (Code, Vec<usize>) {
+fn assemble(program: &Program, heap: u16) -> Code {
     // The data sits at the front of the image and the code after it, so the
     // code's own addresses depend on how much data there is.
     let data = LOAD;
     let blob = program.data().len() + program.globals().len();
     let origin = data + u16::try_from(blob).expect("data within 64 KiB");
 
-    let mut state = Lowering::new(program, Assembler::new(origin, far), data);
+    let mut state = Lowering::new(program, Assembler::new(origin), data);
     state.starts = (0..program.functions().len())
         .map(|_| state.asm.label())
         .collect();
@@ -265,14 +253,10 @@ fn assemble(program: &Program, heap: u16, far: Vec<bool>) -> (Code, Vec<usize>) 
     }
     state.emit_pool();
 
-    let (bytes, overflowed) = state.asm.finish();
-    (
-        Code {
-            bytes,
-            reset: origin,
-        },
-        overflowed,
-    )
+    Code {
+        bytes: state.asm.finish(),
+        reset: origin,
+    }
 }
 
 struct Lowering<'a> {
