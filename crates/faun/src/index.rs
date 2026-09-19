@@ -6,14 +6,21 @@
 //! nothing is reference counted, a program is a handful of `Vec`s, and
 //! copying an index copies four bytes.
 //!
-//! Every tier keeps this shape, and the tier below the machine will too
-//! when it grows something to keep.
+//! Individually addressed entities use a typed, append-only `Pool`: insertion
+//! returns the entity's ID and indexing requires that kind of ID. Variable-length
+//! runs still use ordinary vectors and `Range`; temporary vectors and coupled
+//! instruction/result arrays retain their own construction rules.
 
 macro_rules! index {
 
     ($($name:ident),* $(,)?) => {$(
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(pub u32);
+
+        impl crate::index::Id for $name {
+            fn at(index: usize) -> Self { Self::at(index) }
+            fn index(self) -> usize { self.index() }
+        }
 
         impl $name {
             /// # Panics
@@ -33,6 +40,110 @@ macro_rules! index {
 }
 
 pub(crate) use index;
+
+#[cfg(test)]
+mod tests;
+
+/// Dense indices used by the compiler's entity pools. Conversion must round
+/// trip and reject unrepresentable positions rather than truncate them.
+pub(crate) trait Id: Copy {
+    fn at(index: usize) -> Self;
+    fn index(self) -> usize;
+}
+
+/// Append-only slots addressed by one kind of ID. Replacing an entry preserves
+/// its slot; middle insertion, removal and reordering are deliberately absent.
+/// IDs distinguish entity kinds, not programs or generations: rebuilding a
+/// pool still requires remapping references into it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Pool<I, T> {
+    entries: Vec<T>,
+    id: std::marker::PhantomData<fn() -> I>,
+}
+
+impl<I, T> Default for Pool<I, T> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            id: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<I: Id, T> Pool<I, T> {
+    /// Check representability before changing storage, then return the slot
+    /// actually inserted. This does not make surrounding construction atomic.
+    pub(crate) fn push(&mut self, value: T) -> I {
+        let id = I::at(self.entries.len());
+        self.entries.push(value);
+        id
+    }
+
+    pub(crate) const fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn get(&self, id: I) -> Option<&T> {
+        self.entries.get(id.index())
+    }
+
+    pub(crate) fn as_slice(&self) -> &[T] {
+        &self.entries
+    }
+
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.entries.iter()
+    }
+
+    /// The ID of the first entry matching a predicate.
+    pub(crate) fn position(&self, predicate: impl FnMut(&T) -> bool) -> Option<I> {
+        self.entries.iter().position(predicate).map(I::at)
+    }
+
+    pub(crate) fn iter_enumerated(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (I, &T)> + ExactSizeIterator {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(at, value)| (I::at(at), value))
+    }
+
+    /// A snapshot of existing IDs. Owns only a length, so the caller can
+    /// replace entries while walking it; later appends are not visited.
+    pub(crate) fn ids(&self) -> impl DoubleEndedIterator<Item = I> + ExactSizeIterator + use<I, T> {
+        (0..self.entries.len()).map(I::at)
+    }
+}
+
+impl<I: Id, T> std::ops::Index<I> for Pool<I, T> {
+    type Output = T;
+    fn index(&self, id: I) -> &T {
+        &self.entries[id.index()]
+    }
+}
+
+impl<I: Id, T> std::ops::IndexMut<I> for Pool<I, T> {
+    fn index_mut(&mut self, id: I) -> &mut T {
+        &mut self.entries[id.index()]
+    }
+}
+
+impl<'a, I, T> IntoIterator for &'a Pool<I, T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+impl<'a, I, T> IntoIterator for &'a mut Pool<I, T> {
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter_mut()
+    }
+}
 
 /// A run in one of those arrays: the arguments a call holds, a region's
 /// parameters, the characters of a name.

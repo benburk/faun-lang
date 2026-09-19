@@ -51,6 +51,22 @@ catalog. Source lowering only declares demanded functions. Targets own external
 call emission and internal function numbering; source IDs need not be dense
 emitted-body indices.
 
+## Typed entity storage
+
+Functions, regions, values' classes, data spans and symbol entries live in
+internal `Pool<Id, T>` collections. Insertion returns the inserted ID; indexing
+and checked lookup take that ID type. ID conversion is checked before that
+pool is extended, not after it. This does not make multi-pool builders transactional.
+The same storage is used for Barb's individually addressed entities, including
+its expression arena and the fresh arena built during cleanup.
+
+Each pool is still one contiguous vector with compact IDs. Public slice views
+remain available; byte, operand and signature runs still use ordinary vectors
+and ranges. Instruction/result arrays still have coordinated construction.
+Typed IDs distinguish entity kinds, not programs or generations: references
+must still be remapped when a pool is rebuilt. There is no insertion in the
+middle, removal, or mutable vector escape hatch on the pool itself.
+
 ## Region completion
 
 Builder callbacks record `ret`, `yield_`, `break_`, or `continue_` directly and

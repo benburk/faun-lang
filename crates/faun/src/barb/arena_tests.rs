@@ -20,17 +20,21 @@ fn counts(p: &Program) -> [usize; 4] {
     [p.exprs.len(), p.atoms.len(), p.bindings.len(), p.arms.len()]
 }
 
+fn allocation<T>(values: &[T]) -> *const () {
+    values.as_ptr().cast()
+}
+
 // These allocations are not term pools and must not be replaced by either pass.
 fn storage(p: &Program) -> [*const (); 8] {
     [
-        p.types.as_ptr().cast(),
-        p.ctors.as_ptr().cast(),
-        p.functions.as_ptr().cast(),
-        p.types_pool.as_ptr().cast(),
-        p.consts.as_ptr().cast(),
-        p.bytes.as_ptr().cast(),
-        p.names.as_ptr().cast(),
-        p.symbols.as_ptr().cast(),
+        allocation(p.types.as_slice()),
+        allocation(p.ctors.as_slice()),
+        allocation(p.functions.as_slice()),
+        allocation(&p.types_pool),
+        allocation(p.consts.as_slice()),
+        allocation(&p.bytes),
+        allocation(&p.names),
+        allocation(p.symbols.as_slice()),
     ]
 }
 
@@ -175,7 +179,10 @@ fn normalization_only_appends_terms_and_keeps_declaration_storage() {
     let allocations = storage(&p);
     super::normalize(&mut p);
     validate(&p).unwrap();
-    assert_eq!(p.exprs[..before.exprs.len()], before.exprs);
+    assert_eq!(
+        &p.exprs.as_slice()[..before.exprs.len()],
+        before.exprs.as_slice()
+    );
     assert_eq!(p.atoms[..before.atoms.len()], before.atoms);
     assert_eq!(p.bindings[..before.bindings.len()], before.bindings);
     assert_eq!(p.arms[..before.arms.len()], before.arms);
@@ -285,7 +292,7 @@ fn cleanup_remaps_shared_expressions_per_lexical_occurrence() {
         live
     });
     let body = p.function(second).body().unwrap();
-    p.functions[second.index()].define(Body {
+    p.functions[second].define(Body {
         tail: shared,
         ..body
     });

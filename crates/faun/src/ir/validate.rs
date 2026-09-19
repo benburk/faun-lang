@@ -4,6 +4,7 @@ use super::model::{
     Class, Definition, Exit, Function, Op, Origin, Program, Range, RegionId, Returns, Symbol,
     Terminator, ValueId, Width,
 };
+use crate::index::{Id, Pool};
 
 /// Check pool references, lexical SSA scope, and operation/control-flow classes.
 ///
@@ -15,7 +16,7 @@ use super::model::{
 /// Names the first disagreement found, without indexing an unchecked pool reference.
 pub fn validate(program: &Program) -> Result<(), String> {
     pools(program)?;
-    let Some(entry) = program.functions.first() else {
+    let Some(entry) = program.functions.get(program.entry()) else {
         return Err("missing entry function".into());
     };
     if entry.body().is_none()
@@ -84,8 +85,8 @@ fn pools(p: &Program) -> Result<(), String> {
     Ok(())
 }
 
-fn reference<T>(pool: &[T], index: usize, what: &str) -> Result<(), String> {
-    pool.get(index)
+fn reference<I: Id, T>(pool: &Pool<I, T>, id: I, what: &str) -> Result<(), String> {
+    pool.get(id)
         .map(|_| ())
         .ok_or_else(|| format!("invalid {what} reference"))
 }
@@ -94,7 +95,7 @@ struct References<'a>(&'a Program);
 
 impl References<'_> {
     fn value(&self, id: ValueId) -> Result<(), String> {
-        reference(&self.0.classes, id.index(), "value")
+        reference(&self.0.classes, id, "value")
     }
 
     fn values(&self, range: Range) -> Result<(), String> {
@@ -105,15 +106,11 @@ impl References<'_> {
     }
 
     fn region(&self, id: RegionId) -> Result<(), String> {
-        reference(&self.0.regions, id.index(), "region")
+        reference(&self.0.regions, id, "region")
     }
 
     fn symbol(&self, id: Symbol) -> Result<&str, String> {
-        let range = self
-            .0
-            .symbols
-            .get(id.index())
-            .ok_or("invalid symbol reference")?;
+        let range = self.0.symbols.get(id).ok_or("invalid symbol reference")?;
         std::str::from_utf8(slice(&self.0.names, *range)?).map_err(|_| "invalid name text".into())
     }
 
@@ -136,7 +133,7 @@ impl References<'_> {
     fn datum(&self, id: super::model::DataId) -> Result<&super::model::Span, String> {
         self.0
             .spans
-            .get(id.index())
+            .get(id)
             .ok_or_else(|| "invalid datum reference".into())
     }
 
@@ -165,7 +162,7 @@ impl References<'_> {
             }
             Op::Load { address: value, .. } | Op::Convert { value, .. } => self.value(value)?,
             Op::Call { function, args } => {
-                reference(&p.functions, function.index(), "function")?;
+                reference(&p.functions, function, "function")?;
                 self.values(args)?;
             }
             Op::If {
@@ -417,7 +414,7 @@ impl Checker<'_> {
             Op::Call { function, .. } => {
                 self.call(*op, results)?;
                 return Ok(Flow {
-                    next: self.program.functions[function.index()].returns != Returns::Never,
+                    next: self.program.functions[function].returns != Returns::Never,
                     ..Flow::NEXT
                 });
             }
@@ -491,7 +488,7 @@ impl Checker<'_> {
         let Op::Call { function, args } = op else {
             unreachable!("only calls")
         };
-        let callee = &p.functions[function.index()];
+        let callee = &p.functions[function];
         let what = format!("calls `{}`", p.name(callee.name));
         self.given(p.values(args), p.signature(callee.params), &what)?;
         self.results(results, p.signature(callee.returns.classes()))

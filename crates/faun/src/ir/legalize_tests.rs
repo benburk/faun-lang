@@ -418,7 +418,10 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
     .unwrap();
     assert_eq!(&scalar.data()[..p.data().len()], p.data());
     assert_eq!(&scalar.globals()[..p.globals().len()], p.globals());
-    assert_eq!(&scalar.spans[..p.spans.len()], p.spans);
+    assert_eq!(
+        &scalar.spans.as_slice()[..p.spans.len()],
+        p.spans.as_slice()
+    );
     assert_eq!(
         scalar.functions()[exit.index()].definition,
         p.functions()[exit.index()].definition
@@ -598,7 +601,7 @@ fn typed_loop_slots_keep_their_width_when_initialized_from_narrower_values() {
     });
     // Builder ordinarily picks the initial value's class, but the IR permits
     // a wider declared carried slot. Model a producer with that valid shape.
-    p.classes[carried.unwrap().index()] = Class::Word;
+    p.classes[carried.unwrap()] = Class::Word;
     let config = Config {
         word_bits: 16,
         heap_bytes: 64,

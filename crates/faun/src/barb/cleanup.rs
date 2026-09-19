@@ -4,6 +4,7 @@
 //! Rebuild into fresh term pools, then replace the old pools in one commit.
 //! Declarations and constants stay in place; expression IDs and ranges change.
 
+use crate::index::Pool;
 use std::collections::HashMap;
 
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
@@ -12,7 +13,7 @@ pub(super) fn cleanup(program: &mut Program) {
     let operations = super::arithmetic::recognise(program);
     let mut rewrite = Rewrite {
         source: program,
-        exprs: vec![],
+        exprs: Pool::default(),
         atoms: vec![],
         bindings: vec![],
         arms: vec![],
@@ -48,7 +49,7 @@ pub(super) fn cleanup(program: &mut Program) {
     program.bindings = bindings;
     program.arms = arms;
     for (id, body) in bodies {
-        program.functions[id.index()].define(body);
+        program.functions[id].define(body);
     }
 }
 
@@ -111,7 +112,7 @@ fn plan_expr(program: &Program, id: ExprId, live: &mut [bool]) -> PlannedExpr {
 
 struct Rewrite<'a> {
     source: &'a Program,
-    exprs: Vec<Expr>,
+    exprs: Pool<ExprId, Expr>,
     atoms: Vec<Atom>,
     bindings: Vec<ExprId>,
     arms: Vec<Arm>,
@@ -129,7 +130,7 @@ impl Rewrite<'_> {
                     return local(&locals, a);
                 }
                 let expr = self.expr(binding, &locals, level);
-                bindings.push(self.push(expr));
+                bindings.push(self.exprs.push(expr));
                 let value = Atom(Local::at(level));
                 level += 1;
                 value
@@ -137,7 +138,7 @@ impl Rewrite<'_> {
             locals.push(value);
         }
         let expr = self.expr(plan.tail, &locals, level);
-        let tail = self.push(expr);
+        let tail = self.exprs.push(expr);
         self.hold_body(&bindings, tail)
     }
 
@@ -168,12 +169,6 @@ impl Rewrite<'_> {
         self.atoms
             .extend(self.source.atoms(args).iter().map(|&a| local(locals, a)));
         Range::of(start, args.len())
-    }
-
-    fn push(&mut self, expr: Expr) -> ExprId {
-        let id = ExprId::at(self.exprs.len());
-        self.exprs.push(expr);
-        id
     }
 
     fn hold_body(&mut self, bindings: &[ExprId], tail: ExprId) -> Body {
@@ -223,7 +218,7 @@ impl Rewrite<'_> {
                 Expr::Match(value, self.hold_arms(&arms))
             }
         };
-        let copied = self.push(expr);
+        let copied = self.exprs.push(expr);
         self.copied.insert(id, copied);
         copied
     }

@@ -427,7 +427,7 @@ fn malformed_executed_ids_and_exit_arities_do_not_panic() {
         let value = b.constant(Class::Word, 0);
         b.ret(&[value]);
     });
-    let op = p.regions[p.functions[main.index()].body().unwrap().index()]
+    let op = p.regions[p.functions[main].body().unwrap()]
         .ops
         .range()
         .start;
@@ -722,7 +722,7 @@ fn oversized_word_and_address_constants_are_rejected_not_truncated() {
             vec![BigUint::default()]
         );
     }
-    let op = p.regions[p.functions[main.index()].body().unwrap().index()]
+    let op = p.regions[p.functions[main].body().unwrap()]
         .ops
         .range()
         .start;

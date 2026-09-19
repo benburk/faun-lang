@@ -24,13 +24,12 @@ impl Program {
     /// If the program outgrew the names it may have.
     pub fn symbol(&mut self, name: &str) -> Symbol {
         let held = |at: &Range| &self.names[at.range()] == name.as_bytes();
-        if let Some(at) = self.symbols.iter().position(held) {
-            return Symbol::at(at);
+        if let Some(id) = self.symbols.position(held) {
+            return id;
         }
         let at = self.names.len();
         self.names.extend_from_slice(name.as_bytes());
-        self.symbols.push(Range::of(at, name.len()));
-        Symbol::at(self.symbols.len() - 1)
+        self.symbols.push(Range::of(at, name.len()))
     }
 
     /// Reserve a type. Its constructors follow, so that a field may name the
@@ -40,8 +39,7 @@ impl Program {
         self.types.push(Type {
             name,
             ctors: Range::default(),
-        });
-        TypeId::at(self.types.len() - 1)
+        })
     }
 
     /// Give a reserved type its constructors, in tag order.
@@ -61,7 +59,7 @@ impl Program {
                 fields: Range::of(at, fields.len()),
             });
         }
-        self.types[id.index()].ctors = Range::of(start, ctors.len());
+        self.types[id].ctors = Range::of(start, ctors.len());
     }
 
     /// # Panics
@@ -79,8 +77,7 @@ impl Program {
                 symbol: name,
                 bounds: None,
             },
-        });
-        FnId::at(self.functions.len() - 1)
+        })
     }
 
     /// Say what answers for a declaration out there, where a program calls
@@ -91,8 +88,7 @@ impl Program {
     /// If the function already has a body.
     pub fn answered_by(&mut self, id: FnId, name: &str) {
         let name = self.symbol(name);
-        let super::Definition::External { symbol, .. } = &mut self.functions[id.index()].definition
-        else {
+        let super::Definition::External { symbol, .. } = &mut self.functions[id].definition else {
             panic!("only an external declaration can name a provider");
         };
         *symbol = name;
@@ -105,7 +101,7 @@ impl Program {
     pub fn bound(&mut self, id: FnId, bounds: super::Bounds) {
         let super::Definition::External {
             bounds: contract, ..
-        } = &mut self.functions[id.index()].definition
+        } = &mut self.functions[id].definition
         else {
             panic!("only an external declaration can carry a range contract");
         };
@@ -196,8 +192,7 @@ impl Program {
         write(self, &mut bytes);
         let len = bytes.len() - start;
         self.bytes = bytes;
-        self.consts.push(Range::of(start, len));
-        ConstId::at(self.consts.len() - 1)
+        self.consts.push(Range::of(start, len))
     }
 
     /// Build a declared function's body. Its parameters are the first locals.
@@ -213,7 +208,7 @@ impl Program {
             level: 0,
         };
         let body = builder.scope(arity, build);
-        self.functions[id.index()].define(body);
+        self.functions[id].define(body);
     }
 }
 
@@ -286,7 +281,7 @@ impl Builder<'_> {
 
     /// Bind an expression to the next local and answer it.
     fn emit(&mut self, expr: Expr) -> Atom {
-        let id = self.push(expr);
+        let id = self.program.exprs.push(expr);
         self.pending.push(id);
         let bound = Atom(Local(self.level));
         self.level += 1;
@@ -318,9 +313,9 @@ impl Builder<'_> {
             Some(expr) if last == Some(result.0) => expr,
             Some(expr) => {
                 pending.push(expr);
-                self.push(Expr::Atom(result))
+                self.program.exprs.push(Expr::Atom(result))
             }
-            None => self.push(Expr::Atom(result)),
+            None => self.program.exprs.push(Expr::Atom(result)),
         };
         let at = self.program.bindings.len();
         self.program.bindings.extend_from_slice(&pending);
@@ -328,11 +323,6 @@ impl Builder<'_> {
             bindings: Range::of(at, pending.len()),
             tail,
         }
-    }
-
-    fn push(&mut self, expr: Expr) -> ExprId {
-        self.program.exprs.push(expr);
-        ExprId::at(self.program.exprs.len() - 1)
     }
 
     fn atoms(&mut self, atoms: &[Atom]) -> Range {

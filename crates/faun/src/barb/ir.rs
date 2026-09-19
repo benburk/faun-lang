@@ -1,7 +1,7 @@
 //! The data model: terms, declarations, and the pools they live in.
 
 pub use crate::index::Range;
-use crate::index::index;
+use crate::index::{Pool, index};
 
 // `Symbol` is a name. The IR never reads the characters of one: names are
 // compared, hashed and copied as integers, and the string is read back only
@@ -115,11 +115,11 @@ impl Function {
 /// A program, and the pools every part of it lives in.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Program {
-    pub(super) types: Vec<Type>,
-    pub(super) ctors: Vec<Ctor>,
-    pub(super) functions: Vec<Function>,
+    pub(super) types: Pool<TypeId, Type>,
+    pub(super) ctors: Pool<CtorId, Ctor>,
+    pub(super) functions: Pool<FnId, Function>,
     /// The term arena.
-    pub(super) exprs: Vec<Expr>,
+    pub(super) exprs: Pool<ExprId, Expr>,
     /// Argument lists, for `Con` and `Call`.
     pub(super) atoms: Vec<Atom>,
     /// The bindings of every body, each run contiguous.
@@ -128,13 +128,13 @@ pub struct Program {
     /// Field and parameter types.
     pub(super) types_pool: Vec<TypeId>,
     /// Known values, encoded. See [`super::constant`].
-    pub(super) consts: Vec<Range>,
+    pub(super) consts: Pool<ConstId, Range>,
     pub(super) bytes: Vec<u8>,
     /// Every name the program uses, each once, end to end. A [`Symbol`] is
     /// an index into `symbols`, which says where in here its characters are,
     /// so naming something allocates nothing.
     pub(super) names: Vec<u8>,
-    pub(super) symbols: Vec<Range>,
+    pub(super) symbols: Pool<Symbol, Range>,
     pub(super) entry: Option<FnId>,
 }
 
@@ -146,7 +146,7 @@ impl Program {
     /// If the symbol came from another program.
     #[must_use]
     pub fn name(&self, symbol: Symbol) -> &str {
-        let at = self.symbols[symbol.index()];
+        let at = self.symbols[symbol];
         std::str::from_utf8(&self.names[at.range()]).expect("a name was written as text")
     }
 
@@ -202,22 +202,22 @@ impl Program {
 
     #[must_use]
     pub fn type_(&self, id: TypeId) -> &Type {
-        &self.types[id.index()]
+        &self.types[id]
     }
 
     #[must_use]
     pub fn ctor(&self, id: CtorId) -> &Ctor {
-        &self.ctors[id.index()]
+        &self.ctors[id]
     }
 
     #[must_use]
     pub fn function(&self, id: FnId) -> &Function {
-        &self.functions[id.index()]
+        &self.functions[id]
     }
 
     #[must_use]
     pub fn expr(&self, id: ExprId) -> Expr {
-        self.exprs[id.index()]
+        self.exprs[id]
     }
 
     /// How many terms the program holds, which is what anything keeping an
@@ -231,12 +231,12 @@ impl Program {
     /// than something owned, so replacing one is a store and nothing that
     /// named it has to hear about it.
     pub(super) fn write(&mut self, id: ExprId, expr: Expr) {
-        self.exprs[id.index()] = expr;
+        self.exprs[id] = expr;
     }
 
     #[must_use]
     pub fn ctors(&self, id: TypeId) -> &[Ctor] {
-        &self.ctors[self.type_(id).ctors.range()]
+        &self.ctors.as_slice()[self.type_(id).ctors.range()]
     }
 
     /// Where `ctor` sits among its type's constructors, which is the tag a
@@ -284,7 +284,7 @@ impl Program {
 
     #[must_use]
     pub fn known_bytes(&self, id: ConstId) -> &[u8] {
-        &self.bytes[self.consts[id.index()].range()]
+        &self.bytes[self.consts[id].range()]
     }
 
     #[must_use]
@@ -294,11 +294,11 @@ impl Program {
 
     #[must_use]
     pub fn types(&self) -> &[Type] {
-        &self.types
+        self.types.as_slice()
     }
 
     #[must_use]
     pub fn functions(&self) -> &[Function] {
-        &self.functions
+        self.functions.as_slice()
     }
 }

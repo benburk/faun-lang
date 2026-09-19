@@ -53,7 +53,7 @@ fn rewrite(program: &mut Program, inlining: Option<Inlining>) {
         bodies.push((id, body));
     }
     for (id, body) in bodies {
-        rewrite.program.functions[id.index()].define(body);
+        rewrite.program.functions[id].define(body);
     }
 }
 
@@ -77,7 +77,7 @@ impl Rewrite<'_> {
         let tail = if answer.0.index() + 1 == scope.level && !scope.bindings.is_empty() {
             scope.bindings.pop().expect("the last binding")
         } else {
-            self.push(Expr::Atom(answer))
+            self.program.exprs.push(Expr::Atom(answer))
         };
         let start = self.program.bindings.len();
         self.program.bindings.extend_from_slice(&scope.bindings);
@@ -129,7 +129,7 @@ impl Rewrite<'_> {
                 Expr::Match(locals[value.0.index()], Range::of(start, found.len()))
             }
         };
-        let id = self.push(expr);
+        let id = self.program.exprs.push(expr);
         scope.bindings.push(id);
         let value = Atom(Local::at(scope.level));
         scope.level += 1;
@@ -155,10 +155,5 @@ impl Rewrite<'_> {
         let start = self.program.atoms.len();
         self.program.atoms.extend_from_slice(args);
         Range::of(start, args.len())
-    }
-    fn push(&mut self, expr: Expr) -> ExprId {
-        let id = ExprId::at(self.program.exprs.len());
-        self.program.exprs.push(expr);
-        id
     }
 }

@@ -2,7 +2,7 @@
 //! live in.
 
 pub use crate::index::Range;
-use crate::index::index;
+use crate::index::{Pool, index};
 
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. The IR never reads those characters: names are compared and copied
@@ -234,10 +234,10 @@ pub struct Program {
     pub(super) data: Vec<u8>,
     /// The same, for what a program may write to.
     pub(super) globals: Vec<u8>,
-    pub(super) spans: Vec<Span>,
-    pub(super) functions: Vec<Function>,
+    pub(super) spans: Pool<DataId, Span>,
+    pub(super) functions: Pool<FunctionId, Function>,
     /// The class of every value, by value.
-    pub(super) classes: Vec<Class>,
+    pub(super) classes: Pool<ValueId, Class>,
     /// The classes a function takes and answers.
     pub(super) signature: Vec<Class>,
     pub(super) ops: Vec<Op>,
@@ -245,10 +245,10 @@ pub struct Program {
     /// that does not care never reads this array.
     pub(super) results: Vec<Range>,
     pub(super) operands: Vec<ValueId>,
-    pub(super) regions: Vec<Region>,
+    pub(super) regions: Pool<RegionId, Region>,
     /// Every name the program uses, each once, end to end.
     pub(super) names: Vec<u8>,
-    pub(super) symbols: Vec<Range>,
+    pub(super) symbols: Pool<Symbol, Range>,
 }
 impl Program {
     /// The layout required by serialized data, if representation is bound.
@@ -299,7 +299,7 @@ impl Program {
     /// If the symbol came from another program.
     #[must_use]
     pub fn name(&self, symbol: Symbol) -> &str {
-        let at = self.symbols[symbol.index()];
+        let at = self.symbols[symbol];
         std::str::from_utf8(&self.names[at.range()]).expect("a name was written as text")
     }
 
@@ -319,13 +319,13 @@ impl Program {
 
     #[must_use]
     pub fn ops(&self, region: RegionId) -> &[Op] {
-        let ops = self.regions[region.index()].ops;
+        let ops = self.regions[region].ops;
         &self.ops[ops.range()]
     }
 
     /// The instructions of a region, each with what it defines.
     pub fn walk(&self, region: RegionId) -> impl Iterator<Item = (&Op, &[ValueId])> {
-        let ops = self.regions[region.index()].ops;
+        let ops = self.regions[region].ops;
         self.ops[ops.range()]
             .iter()
             .zip(&self.results[ops.range()])
@@ -376,7 +376,7 @@ impl Program {
             .filter_map(Function::body)
             .flat_map(|body| self.every(body))
             .any(|op| match *op {
-                Op::Call { function, .. } => self.functions[function.index()]
+                Op::Call { function, .. } => self.functions[function]
                     .external()
                     .is_some_and(|symbol| self.name(symbol) == name),
                 _ => false,
@@ -385,12 +385,12 @@ impl Program {
 
     #[must_use]
     pub fn region(&self, region: RegionId) -> Region {
-        self.regions[region.index()]
+        self.regions[region]
     }
 
     #[must_use]
     pub fn functions(&self) -> &[Function] {
-        &self.functions
+        self.functions.as_slice()
     }
 
     /// The first function's ID. [`Program::new`] declares it immediately;
@@ -412,12 +412,12 @@ impl Program {
 
     #[must_use]
     pub fn datum(&self, data: DataId) -> Span {
-        self.spans[data.index()]
+        self.spans[data]
     }
 
     #[must_use]
     pub fn class(&self, value: ValueId) -> Class {
-        self.classes[value.index()]
+        self.classes[value]
     }
 
     #[must_use]

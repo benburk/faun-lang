@@ -4,6 +4,7 @@ use super::model::{
     Binary, Class, DataId, Definition, Exit, Function, FunctionId, Offset, Op, Origin, Program,
     Range, Region, RegionId, Relation, Returns, Span, Symbol, Terminator, ValueId, Width, wrap,
 };
+use crate::index::Pool;
 
 impl Program {
     /// A program and its entry function, which takes nothing and returns one
@@ -33,12 +34,16 @@ impl Program {
         Self::place(&mut self.globals, &mut self.spans, Origin::Globals, bytes)
     }
 
-    fn place(blob: &mut Vec<u8>, spans: &mut Vec<Span>, origin: Origin, bytes: &[u8]) -> DataId {
+    fn place(
+        blob: &mut Vec<u8>,
+        spans: &mut Pool<DataId, Span>,
+        origin: Origin,
+        bytes: &[u8],
+    ) -> DataId {
         let start = u32::try_from(blob.len()).expect("data within 4 GiB");
         let len = u32::try_from(bytes.len()).expect("a datum within 4 GiB");
         blob.extend_from_slice(bytes);
-        spans.push(Span { origin, start, len });
-        DataId::at(spans.len() - 1)
+        spans.push(Span { origin, start, len })
     }
 
     /// The symbol for `name`, the same symbol every time. This runs once
@@ -50,13 +55,12 @@ impl Program {
     /// If the program outgrew the names it may have.
     pub fn symbol(&mut self, name: &str) -> Symbol {
         let held = |at: &Range| &self.names[at.range()] == name.as_bytes();
-        if let Some(at) = self.symbols.iter().position(held) {
-            return Symbol::at(at);
+        if let Some(id) = self.symbols.position(held) {
+            return id;
         }
         let at = self.names.len();
         self.names.extend_from_slice(name.as_bytes());
-        self.symbols.push(Range::of(at, name.len()));
-        Symbol::at(self.symbols.len() - 1)
+        self.symbols.push(Range::of(at, name.len()))
     }
 
     /// Declare an external function by its provider name, with source aliases
@@ -79,8 +83,7 @@ impl Program {
             params,
             returns,
             definition: Definition::External,
-        });
-        FunctionId::at(self.functions.len() - 1)
+        })
     }
 
     /// Reserve parameters and a root slot, so a body may call a function
@@ -88,7 +91,7 @@ impl Program {
     pub fn declare(&mut self, name: &str, params: &[Class], returns: &[Class]) -> FunctionId {
         let values = self.mint(params);
         let params = self.sign(params);
-        self.regions.push(Region {
+        let body = self.regions.push(Region {
             params: values,
             ops: Range::default(),
             terminator: None,
@@ -99,16 +102,15 @@ impl Program {
             name,
             params,
             returns: Returns::Values(returns),
-            definition: Definition::Declared(RegionId::at(self.regions.len() - 1)),
-        });
-        FunctionId::at(self.functions.len() - 1)
+            definition: Definition::Declared(body),
+        })
     }
 
     /// Declare a function that never returns. Like `declare`, it must be
     /// defined before validation, even when nothing calls it yet.
     pub fn declare_never(&mut self, name: &str, params: &[Class]) -> FunctionId {
         let id = self.declare(name, params, &[]);
-        self.functions[id.index()].returns = Returns::Never;
+        self.functions[id].returns = Returns::Never;
         id
     }
 
@@ -148,11 +150,11 @@ impl Program {
         function: FunctionId,
         build: impl FnOnce(&mut Builder, &[ValueId]) -> Result<(), E>,
     ) -> Result<(), E> {
-        let body = match self.functions[function.index()].definition {
+        let body = match self.functions[function].definition {
             Definition::Declared(body) | Definition::Body(body) => body,
             Definition::External => panic!("an external function cannot be defined"),
         };
-        let entry = self.regions[body.index()].params;
+        let entry = self.regions[body].params;
         let params = self.values(entry).to_vec();
         let mut builder = Builder {
             program: self,
@@ -163,8 +165,8 @@ impl Program {
         };
         build(&mut builder, &params)?;
         let region = builder.finish();
-        self.regions[body.index()] = region;
-        self.functions[function.index()].definition = Definition::Body(body);
+        self.regions[body] = region;
+        self.functions[function].definition = Definition::Body(body);
         Ok(())
     }
 
@@ -178,8 +180,7 @@ impl Program {
     /// One value of `class`, and the run of one that names it.
     fn mint_one(&mut self, class: Class) -> (ValueId, Range) {
         let start = self.operands.len();
-        self.classes.push(class);
-        let value = ValueId::at(self.classes.len() - 1);
+        let value = self.classes.push(class);
         self.operands.push(value);
         (value, Range::of(start, 1))
     }
@@ -190,8 +191,8 @@ impl Program {
         let start = self.operands.len();
         for at in signature.range() {
             let class = self.signature[at];
-            self.classes.push(class);
-            self.operands.push(ValueId::at(self.classes.len() - 1));
+            let value = self.classes.push(class);
+            self.operands.push(value);
         }
         Range::of(start, signature.len())
     }
@@ -199,8 +200,8 @@ impl Program {
     fn mint(&mut self, classes: &[Class]) -> Range {
         let start = self.operands.len();
         for &class in classes {
-            self.classes.push(class);
-            self.operands.push(ValueId::at(self.classes.len() - 1));
+            let value = self.classes.push(class);
+            self.operands.push(value);
         }
         Range::of(start, classes.len())
     }
@@ -234,7 +235,7 @@ impl Builder<'_> {
     #[must_use]
     pub fn takes(&self, function: FunctionId) -> &[Class] {
         self.program
-            .signature(self.program.functions[function.index()].params)
+            .signature(self.program.functions[function].params)
     }
 
     pub fn constant(&mut self, class: Class, value: u64) -> ValueId {
@@ -315,7 +316,7 @@ impl Builder<'_> {
     }
 
     pub fn call(&mut self, function: FunctionId, args: &[ValueId]) -> Vec<ValueId> {
-        let returns = self.program.functions[function.index()].returns.classes();
+        let returns = self.program.functions[function].returns.classes();
         let args = self.program.hold(args);
         self.push_from(Op::Call { function, args }, returns)
     }
@@ -406,8 +407,7 @@ impl Builder<'_> {
         build(&mut builder, &params);
         let region = builder.finish();
 
-        self.program.regions.push(region);
-        RegionId::at(self.program.regions.len() - 1)
+        self.program.regions.push(region)
     }
 
     /// The same, for results a signature already names.

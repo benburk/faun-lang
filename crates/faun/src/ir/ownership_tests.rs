@@ -209,7 +209,7 @@ fn widened_loop() -> Program {
     });
     // Builder derives parameter widths from initial values. A valid arena
     // transform can instead widen the carried slot while retaining that input.
-    p.classes[parameter.unwrap().index()] = Class::Word;
+    p.classes[parameter.unwrap()] = Class::Word;
     p
 }
 

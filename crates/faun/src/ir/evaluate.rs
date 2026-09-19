@@ -270,7 +270,7 @@ impl<H: Host> Machine<'_, H> {
     fn class(&self, id: ValueId) -> Result<Class, Error> {
         self.program
             .classes
-            .get(id.index())
+            .get(id)
             .copied()
             .ok_or_else(|| invalid("value id"))
     }
@@ -354,7 +354,7 @@ impl<H: Host> Machine<'_, H> {
         let region = self
             .program
             .regions
-            .get(id.index())
+            .get(id)
             .ok_or_else(|| invalid("region id"))?;
         self.bind(region.params, args)?;
         self.tasks.push(Task::Region { id, at: 0 });
@@ -370,7 +370,7 @@ impl<H: Host> Machine<'_, H> {
         let function = self
             .program
             .functions
-            .get(id.index())
+            .get(id)
             .ok_or_else(|| invalid("function id"))?;
         self.signature(function.params, args)?;
         match function.definition {
@@ -428,7 +428,7 @@ impl<H: Host> Machine<'_, H> {
             let region = *self
                 .program
                 .regions
-                .get(id.index())
+                .get(id)
                 .ok_or_else(|| invalid("region id"))?;
             if at == region.ops.len() {
                 let terminator = region
@@ -672,7 +672,7 @@ impl<H: Host> Machine<'_, H> {
         let span = self
             .program
             .spans
-            .get(id.index())
+            .get(id)
             .ok_or_else(|| invalid("data id"))?;
         if span.origin != Origin::Data {
             return Err(invalid("natural constant outside Data"));
@@ -688,7 +688,7 @@ impl<H: Host> Machine<'_, H> {
         let span = self
             .program
             .spans
-            .get(id.index())
+            .get(id)
             .ok_or_else(|| invalid("data id"))?;
         let base = match span.origin {
             Origin::Data => 1,
@@ -749,7 +749,7 @@ impl<H: Host> Machine<'_, H> {
         let symbol = self
             .program
             .symbols
-            .get(symbol.index())
+            .get(symbol)
             .ok_or_else(|| invalid("symbol id"))?;
         let name = self
             .program

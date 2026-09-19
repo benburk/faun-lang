@@ -162,7 +162,7 @@ fn a_nested_loops_break_does_not_make_an_outer_loop_return() {
         ),
         Err(Error::FuelExhausted)
     );
-    p.regions[0].terminator = Some(Terminator {
+    p.regions[RegionId(0)].terminator = Some(Terminator {
         exit: Exit::Return,
         values: Range::EMPTY,
     });

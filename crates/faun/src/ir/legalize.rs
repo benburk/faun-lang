@@ -6,14 +6,15 @@
 //! not. This deliberately keeps dead locals until their region exits, trading
 //! peak memory for a small, auditable schedule rather than a liveness analysis.
 
+use crate::index::Pool;
 use std::{cell::Cell, collections::BTreeMap};
 
 use num_bigint::BigUint;
 
 use super::natural::{self, Config, Helper, Library, Needs};
 use super::{
-    Builder, Class, DataId, Definition, Exit, FunctionId, Op, Origin, Program, RegionId, Relation,
-    Terminator, ValueId, validate,
+    Builder, Class, DataId, Definition, Exit, Op, Origin, Program, RegionId, Relation, Terminator,
+    ValueId, validate,
 };
 
 /// Rebuild a validated program with naturals represented by immutable objects.
@@ -39,7 +40,9 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     }
     source.check_layout(config.layout())?;
     let needs = inspect(source, config)?;
-    if !source.classes.contains(&Class::Natural) && !source.signature.contains(&Class::Natural) {
+    if !source.classes.as_slice().contains(&Class::Natural)
+        && !source.signature.contains(&Class::Natural)
+    {
         return Ok(source.clone());
     }
 
@@ -52,11 +55,11 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         constants,
         values: vec![Cell::new(None); source.values_count()],
     };
-    for (at, function) in source.functions().iter().enumerate() {
+    for (id, function) in source.functions.iter_enumerated() {
         let Some(body) = function.body() else {
             continue;
         };
-        output.define(FunctionId::at(at), |b, params| {
+        output.define(id, |b, params| {
             pass.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params);
         });
     }
@@ -73,7 +76,7 @@ fn skeleton(source: &Program) -> Program {
         globals: source.globals.clone(),
         spans: source.spans.clone(),
         functions: source.functions.clone(),
-        classes: Vec::new(),
+        classes: Pool::default(),
         signature: source
             .signature
             .iter()
@@ -83,20 +86,19 @@ fn skeleton(source: &Program) -> Program {
         ops: Vec::new(),
         results: Vec::new(),
         operands: Vec::new(),
-        regions: Vec::new(),
+        regions: Pool::default(),
         names: source.names.clone(),
         symbols: source.symbols.clone(),
     };
-    for at in 0..output.functions.len() {
-        if output.functions[at].body().is_some() {
-            let params = output.mint_from(output.functions[at].params);
-            let body = RegionId::at(output.regions.len());
-            output.regions.push(super::Region {
+    for id in output.functions.ids() {
+        if output.functions[id].body().is_some() {
+            let params = output.mint_from(output.functions[id].params);
+            let body = output.regions.push(super::Region {
                 params,
                 ops: super::Range::EMPTY,
                 terminator: None,
             });
-            output.functions[at].definition = Definition::Declared(body);
+            output.functions[id].definition = Definition::Declared(body);
         }
     }
     output

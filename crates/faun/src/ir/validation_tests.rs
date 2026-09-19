@@ -101,7 +101,7 @@ fn every_definition_is_unique_including_parameters() {
     let mut p = simple();
     p.ops.push(p.ops[0]);
     p.results.push(p.results[0]);
-    p.regions[0].ops = Range::of(0, 2);
+    p.regions[RegionId(0)].ops = Range::of(0, 2);
     rejects(&p, "defines ValueId(0) twice");
 
     let (mut p, main) = Program::new("main");
@@ -111,7 +111,7 @@ fn every_definition_is_unique_including_parameters() {
         b.ret(&[value]);
     });
     p.define(other, |b, _| b.ret(&[]));
-    let params = p.region(p.functions[1].body().unwrap()).params;
+    let params = p.region(p.functions[FunctionId(1)].body().unwrap()).params;
     p.operands[params.range().start + 1] = p.operands[params.range().start];
     rejects(&p, "twice");
 }
@@ -119,7 +119,7 @@ fn every_definition_is_unique_including_parameters() {
 #[test]
 fn function_and_branch_parameters_must_match_their_owner() {
     let mut p = simple();
-    p.regions[0].params = p.results[0];
+    p.regions[RegionId(0)].params = p.results[0];
     rejects(&p, "function and body parameters disagree");
 
     let (mut p, main) = Program::new("main");
@@ -128,7 +128,7 @@ fn function_and_branch_parameters_must_match_their_owner() {
         b.if_(value, &[], |b| b.yield_(&[]), |b| b.yield_(&[]));
         b.ret(&[value]);
     });
-    p.regions[1].params = p.results[0];
+    p.regions[RegionId(1)].params = p.results[0];
     rejects(&p, "branch region cannot have parameters");
 }
 
@@ -156,7 +156,7 @@ fn all_leaf_operations_check_result_arity_and_class() {
         b.ret(&[value]);
     });
     validate(&p).unwrap();
-    for at in p.region(p.functions[0].body().unwrap()).ops.range() {
+    for at in p.region(p.functions[p.entry()].body().unwrap()).ops.range() {
         let mut wrong_arity = p.clone();
         if p.results[at].is_empty() {
             wrong_arity.results[at] = p.results[0];
@@ -167,7 +167,7 @@ fn all_leaf_operations_check_result_arity_and_class() {
 
         if let Some(&value) = p.values(p.results[at]).first() {
             let mut wrong_class = p.clone();
-            wrong_class.classes[value.index()] = if p.class(value) == Class::Address {
+            wrong_class.classes[value] = if p.class(value) == Class::Address {
                 Class::Word
             } else {
                 Class::Address
@@ -216,9 +216,9 @@ fn conditions_arithmetic_comparison_and_memory_need_suitable_classes() {
 fn terminators_need_a_receiver_and_the_right_values() {
     for exit in [Exit::Yield, Exit::Break, Exit::Continue, Exit::Return] {
         let mut p = simple();
-        p.regions[0].terminator.as_mut().unwrap().exit = exit;
+        p.regions[RegionId(0)].terminator.as_mut().unwrap().exit = exit;
         if exit == Exit::Return {
-            p.regions[0].terminator.as_mut().unwrap().values = Range::EMPTY;
+            p.regions[RegionId(0)].terminator.as_mut().unwrap().values = Range::EMPTY;
         }
         assert!(validate(&p).is_err(), "{exit:?}");
     }
@@ -278,9 +278,9 @@ fn loop_initial_continue_and_break_values_are_checked() {
             b.ret(&[word]);
         });
         if wrong_class {
-            let body = p.regions[1];
+            let body = p.regions[RegionId(1)];
             let param = p.values(body.params)[0];
-            p.classes[param.index()] = Class::Address;
+            p.classes[param] = Class::Address;
         } else if let Op::Loop { initial, .. } = &mut p.ops[1] {
             *initial = Range::EMPTY;
         }
@@ -358,11 +358,11 @@ fn invalid_public_ids_and_ranges_return_errors_instead_of_panicking() {
     rejects(&p, "invalid datum reference");
 
     let mut p = simple();
-    p.regions[0].terminator.as_mut().unwrap().values =
+    p.regions[RegionId(0)].terminator.as_mut().unwrap().values =
         Range::of(usize::try_from(u32::MAX).unwrap(), 2);
     rejects(&p, "invalid pool range");
     let mut p = simple();
-    p.regions[0].terminator.as_mut().unwrap().values = p.hold(&[ValueId(u32::MAX)]);
+    p.regions[RegionId(0)].terminator.as_mut().unwrap().values = p.hold(&[ValueId(u32::MAX)]);
     rejects(&p, "invalid value reference");
 
     for op in [
@@ -385,19 +385,19 @@ fn invalid_public_ids_and_ranges_return_errors_instead_of_panicking() {
 #[test]
 fn corrupt_declaration_and_storage_pools_are_rejected() {
     let mut p = simple();
-    p.functions[0].name = model::Symbol(u32::MAX);
+    p.functions[FunctionId(0)].name = model::Symbol(u32::MAX);
     rejects(&p, "invalid symbol");
     let mut p = simple();
     p.names[0] = 255;
     rejects(&p, "invalid name text");
     let mut p = simple();
-    p.functions[0].returns = Returns::Values(Range::of(100, 1));
+    p.functions[FunctionId(0)].returns = Returns::Values(Range::of(100, 1));
     rejects(&p, "invalid pool range");
     let mut p = simple();
     p.results.clear();
     rejects(&p, "different lengths");
     let mut p = simple();
-    p.regions[0].ops = Range::of(100, 1);
+    p.regions[RegionId(0)].ops = Range::of(100, 1);
     rejects(&p, "invalid pool range");
     let mut p = simple();
     p.spans.push(Span {
@@ -408,7 +408,7 @@ fn corrupt_declaration_and_storage_pools_are_rejected() {
     rejects(&p, "invalid pool range");
     let mut p = simple();
     let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
-    p.functions[argc.index()].name = model::Symbol(u32::MAX);
+    p.functions[argc].name = model::Symbol(u32::MAX);
     rejects(&p, "invalid symbol");
 }
 

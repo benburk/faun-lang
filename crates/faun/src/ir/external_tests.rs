@@ -361,6 +361,6 @@ fn source_externals_check_unit_against_nonreturning_provider_contracts() {
 #[test]
 fn an_external_declaration_cannot_be_the_entry_body() {
     let mut p = program();
-    p.functions[0].definition = Definition::External;
+    p.functions[FunctionId(0)].definition = Definition::External;
     assert!(validate(&p).unwrap_err().contains("entry"));
 }
