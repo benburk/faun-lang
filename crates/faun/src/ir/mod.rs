@@ -44,12 +44,14 @@
 mod arithmetic;
 mod builder;
 pub mod evaluate;
+mod legalize;
 mod lower;
 mod model;
 pub mod natural;
 mod validate;
 
 pub use builder::Builder;
+pub use legalize::legalize;
 pub use lower::lower;
 pub use model::{
     Binary, Class, DataId, Exit, Function, FunctionId, Offset, Op, Origin, Platform, PlatformId,
@@ -61,6 +63,8 @@ pub use validate::validate;
 mod arithmetic_tests;
 #[cfg(test)]
 mod interpreter_tests;
+#[cfg(test)]
+mod legalize_tests;
 #[cfg(test)]
 mod natural_tests;
 #[cfg(test)]

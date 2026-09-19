@@ -148,10 +148,10 @@ fn write(
     output: &Path,
     program: &faun::ir::Program,
 ) -> Result<Vec<PathBuf>, Box<dyn Error>> {
-    target.accepts(program)?;
+    let artifacts = target.compile(program)?;
     let mut written = Vec::new();
 
-    for artifact in target.emit(program) {
+    for artifact in artifacts {
         let mut path = output.to_path_buf().into_os_string();
         path.push(artifact.extension);
         let path = PathBuf::from(path);

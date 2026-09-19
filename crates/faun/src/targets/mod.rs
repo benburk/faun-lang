@@ -63,7 +63,8 @@ pub trait Target: fmt::Debug {
             .with_word(self.word())
     }
 
-    /// The files a program becomes.
+    /// The files an already validated, accepted scalar program becomes.
+    /// Prefer [`Self::compile`], which establishes these preconditions.
     fn emit(&self, program: &Program) -> Vec<Artifact>;
 
     /// Target-specific calling-convention and representation limits.
@@ -76,6 +77,56 @@ pub trait Target: fmt::Debug {
     /// Names an unsupported target-specific program shape.
     fn limits(&self, _program: &Program) -> Result<(), String> {
         Ok(())
+    }
+
+    /// Prepare once, then accept and emit that same scalar program.
+    ///
+    /// # Errors
+    /// Reports invalid IR, unsupported representations or target constraints.
+    fn compile(&self, program: &Program) -> Result<Vec<Artifact>, String> {
+        let prepared = self.prepare(program)?;
+        Ok(self.emit(&prepared))
+    }
+
+    /// Legalize representations using a bounded, reusable private heap.
+    /// Exhaustion terminates with status 2, never a wrapped natural result.
+    /// On supported runtime targets, clients needing a different budget can
+    /// call `ir::legalize` with an explicit `ir::natural::Config`, then compile
+    /// the scalar result. This is NOT a supported way to bypass the 16-bit
+    /// guard: manually legalized scalar input needs a backend capacity audit.
+    ///
+    /// # Errors
+    /// Reports invalid IR or a representation this target cannot safely emit.
+    fn prepare(&self, program: &Program) -> Result<Program, String> {
+        crate::ir::validate(program)?;
+        // The 6502 backend has image/frame and hardware-stack limits not yet
+        // audited for generated runtime helpers. Do not enter its infallible
+        // emitter with a larger image and hope that address arithmetic fits.
+        let naturals = (0..program.values_count())
+            .any(|at| program.class(ValueId::at(at)) == Class::Natural)
+            || program
+                .functions()
+                .iter()
+                .any(|f| program.signature(f.returns).contains(&Class::Natural));
+        if self.word() == 16 && naturals {
+            return Err(format!(
+                "{} runtime naturals await checked image/frame limits",
+                self.name()
+            ));
+        }
+        let prepared = crate::ir::legalize(
+            program,
+            crate::ir::natural::Config {
+                word_bits: self.word(),
+                heap_bytes: if self.word() == 16 {
+                    8 * 1024
+                } else {
+                    64 * 1024
+                },
+            },
+        )?;
+        self.accepts(&prepared)?;
+        Ok(prepared)
     }
 
     /// Whether it can hold what the program holds.
@@ -94,6 +145,9 @@ pub trait Target: fmt::Debug {
         let (name, word) = (self.name(), self.word());
         for at in 0..program.values_count() {
             let class = program.class(ValueId::at(at));
+            accepts_class(name, word, class)?;
+        }
+        for &class in signature_classes(program) {
             accepts_class(name, word, class)?;
         }
         let provides = self.provides();
@@ -126,10 +180,24 @@ pub trait Target: fmt::Debug {
     }
 }
 
+fn signature_classes(program: &Program) -> impl Iterator<Item = &Class> {
+    let returns = program
+        .functions()
+        .iter()
+        .flat_map(|f| program.signature(f.returns));
+    let platform = program.platforms().iter().flat_map(|p| {
+        program
+            .signature(p.params)
+            .iter()
+            .chain(program.signature(p.returns))
+    });
+    returns.chain(platform)
+}
+
 fn accepts_class(name: &str, word: u16, class: Class) -> Result<(), String> {
     if class == Class::Natural {
         return Err(format!(
-            "{name} does not yet implement arbitrary-precision naturals"
+            "{name} raw emission requires legalization of arbitrary-precision naturals"
         ));
     }
     if let Class::Fixed { bits } = class

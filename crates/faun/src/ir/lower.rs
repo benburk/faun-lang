@@ -163,6 +163,16 @@ fn provided<'a>(
             reads(params),
         ));
     }
+    // Unlike internal range-proven narrowing, a host signature is not a
+    // proof that its argument fits. In particular runtime Natural support
+    // must never turn an implicit effect argument into modulo-word Convert.
+    for (&actual, &expected) in params.iter().zip(&wanted.takes) {
+        if !actual.fits(expected) {
+            return Err(format!(
+                "`{held}` requires {expected:?}, but its argument needs {actual:?}; host arguments must be proven to fit"
+            ));
+        }
+    }
     if returns.len() != wanted.answers.iter().len() {
         return Err(format!(
             "`{held}` answers {}, and what is taken back is {}",
