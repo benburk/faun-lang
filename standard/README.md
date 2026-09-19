@@ -19,16 +19,25 @@ main!(h) ->
 
 ## Compilation
 
-Barb validates the source, normalizes nonrecursive helpers, folds constants,
-then recognizes arithmetic and derives ranges. Recognition checks structural
-recursion equations, never function/type/constructor names. Constructor order
-is irrelevant, including the order of `True` and `False`. Unsupported equivalent
-spellings remain ordinary functions rather than being guessed at.
+The pipeline is validation/totality checking → bounded Barb optimization →
+arithmetic recognition and range analysis → machine lowering/validation →
+target preparation/runtime legalization → target acceptance and emission.
 
-Constant evaluation keeps naturals encoded as arbitrary-precision magnitudes;
-it does not expand their unary trees. Unrecognized recursion has a fuel budget,
-and folded values have a size budget. Exhaustion leaves computation in place;
-it does not introduce a numeric limit into the language.
+`barb::optimize` runs each stage once: structural normalization, nonrecursive
+helper inlining, recognized arithmetic identities, constant folding, then
+cleanup. `OptimizeOptions` and `read_with_options` expose pass controls without
+bypassing validation. Inlining has per-function/program expansion budgets;
+folding has aggregate work, encoded-size, and depth budgets. Exhaustion leaves
+computation in place, not a numeric limit on the language. Constant evaluation
+uses compact arbitrary-precision magnitudes rather than expanded unary trees.
+Cleanup removes unused inert bindings while preserving eager calls and effects.
+
+Recognition checks structural recursion equations, never function/type/constructor
+names. Constructor order is irrelevant, including the order of `True` and `False`.
+Unsupported equivalent spellings remain ordinary functions rather than being
+guessed at. Arithmetic laws preserve monus and zero-divisor semantics; `x / x`
+is not unconditionally one. Optional optimization does not authorize dropping
+or reordering platform effects.
 
 Host return contracts supply finite ranges. `Target::routines()` resolves a
 host word's width for that target. Builder clients can supply contracts with
@@ -48,27 +57,59 @@ main!(h) ->
 Here `n` is at most one, but the sum needs two bits. More generally, bounded
 operands do not imply that their result fits the same width.
 
+## Machine IR and execution checks
+
+Machine-IR validation checks pool references, lexical value scope, operation
+classes/arity, function signatures, and structured branch/loop transfers. These
+are structural checks, not proofs of arithmetic bounds or memory safety; native
+ABI and capacity limits are checked separately by targets.
+
+`ir::evaluate` provides a deterministic reference interpreter with 16-, 32-, and
+64-bit word configurations, checked memory access, host callbacks, and explicit
+fuel/size limits. It evaluates `Natural` exactly and reports failed `Fixed` fit
+assertions. Interpreter support does not imply native target support.
+
 ## Current target boundary
 
 Unknown or overflowing bounds select machine IR's `Class::Natural`, never
-`Word`. Large constants use `NaturalConstant` with a compact magnitude in the
-data pool. Promotions to arbitrary precision are explicit conversions.
+silently `Word`. Large constants use `NaturalConstant` with compact magnitudes.
+Finite bounds select `Fixed` widths; arithmetic must fit those widths. Explicit
+conversions, not natural arithmetic, request truncation. Host arguments need a
+fit proof: passing a natural to an effect does not request modulo conversion.
 
-The current targets **do not implement runtime bigints yet** and reject that
-class explicitly. Values proven to fit use fixed-width operations; portable
-regions implement monus, multiplication, division, and modulo on all three
-targets. Multiplication currently uses repeated addition and division repeated
-subtraction, so this is a correctness baseline, not fast arithmetic.
+Multiplication, division, and remainder remain machine operations until target
+selection. x86-64 and wasm32 use native unsigned instructions with zero-divisor
+guards. The 6502 uses word-bit-bounded shift/add multiplication and restoring
+division, not repeated addition/subtraction proportional to the operand value.
+Monus retains its underflow guard.
 
-Runtime bigint storage/operations and native multiply/divide selection remain
-subsequent work. The `U8` and `Int` definitions below work in Barb constant
-evaluation/folding. They do **not** add runtime product/sum representation support
-to machine lowering or any target, nor do they make unbounded signed magnitudes
-fit a machine word. No `U8` packing or signed machine arithmetic is claimed.
+Runtime `Natural` is supported on x86-64 Linux and wasm32 WASI through shared
+runtime legalization. It uses exact byte-limb magnitudes and a reusable,
+reference-counted private heap, **64 KiB by default**. Allocation or reference-count
+exhaustion exits with **status 2**, never a wrapped or fabricated result. The heap
+has fixed capacity; it does not grow through an OS allocator. Native 6502 runtime
+naturals remain disabled pending audited image/frame/hardware-stack capacity,
+even though the shared runtime can be exercised by the 16-bit interpreter.
+
+`Fixed` values wider than the target word are still rejected, even when a
+`Natural` object could hold the magnitude. Native calling-convention and frame
+limits also apply; runtime naturals do not remove them.
+
+Use `Target::compile` (as the CLI does), or `Target::prepare` to inspect the
+legalized, target-accepted IR. Raw `emit` requires already validated, accepted
+scalar IR and does not legalize `Natural`. See [runtime naturals](../notes/runtime-naturals.md)
+for configuration, ownership, and target limitations.
+
+## Source-library representation boundary
+
 Unused library types/functions do not require runtime representations: all three
-files may be prepended to a Nat-only program. Representation checks follow the
+files may be prepended to a Nat-only program. Pure compile-time `U8`/`Int` uses
+work through folding and dead-binding cleanup. Representation checks follow the
 code actually lowered, excluding impossible arms and tails after an exit.
+
 Any remaining runtime `U8` or `Int` value is still rejected, not silently erased.
+The definitions below do not add runtime product/sum packing or signed machine
+lowering, nor do they make unbounded signed magnitudes fit a machine word.
 
 ## Bytes: `u8.fn`
 
