@@ -20,7 +20,7 @@ pub fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
             break;
         }
         let id = FnId::at(at);
-        let Some(body) = program.function(id).body else {
+        let Some(body) = program.function(id).body() else {
             continue;
         };
         let mut known = vec![None; program.params(id).len()];

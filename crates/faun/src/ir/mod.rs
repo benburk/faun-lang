@@ -1,5 +1,6 @@
 //! The machine IR. Names no register, syscall, instruction set, or word
-//! width.
+//! width until representation is legalized. Programs containing target-sized
+//! data then record a checked [`Layout`] obligation.
 //!
 //! It decides:
 //!
@@ -44,6 +45,7 @@
 mod arithmetic;
 mod builder;
 pub mod evaluate;
+mod layout;
 mod legalize;
 mod lower;
 mod model;
@@ -51,6 +53,7 @@ pub mod natural;
 mod validate;
 
 pub use builder::Builder;
+pub use layout::{Endian, Layout};
 pub use legalize::legalize;
 pub use lower::lower;
 pub use model::{
@@ -63,6 +66,8 @@ pub use validate::validate;
 mod arithmetic_tests;
 #[cfg(test)]
 mod interpreter_tests;
+#[cfg(test)]
+mod layout_tests;
 #[cfg(test)]
 mod legalize_tests;
 #[cfg(test)]

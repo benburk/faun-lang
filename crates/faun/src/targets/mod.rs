@@ -2,11 +2,11 @@
 //!
 //! A target owns everything below the IR: the machine, the environment it
 //! calls into, and the files it writes. Each is its own crate and answers
-//! [`Target`], which asks three things -- what it is called, how wide its
-//! word is, and what it makes of a program. Everything else a backend does
-//! is what that backend does, and not something to agree on.
+//! [`Target`], which supplies its layout, host contracts, acceptance limits
+//! and emission. Representation legalization is shared machine-IR code;
+//! instruction selection and file formats remain backend responsibilities.
 //!
-//! - Targets share [`bytes`] and nothing else.
+//! - Targets share [`bytes`] and the checked preparation path.
 //! - Duplication beats an abstraction fitting neither. Their parallel moves
 //!   have no common shape: wasm pushes every source before setting any
 //!   destination and lets its operand stack swap, where x86-64 routes
@@ -16,7 +16,7 @@ pub mod bytes;
 
 use std::fmt;
 
-use crate::ir::{Class, Op, Program, ValueId};
+use crate::ir::{Class, Endian, Layout, Op, Program, ValueId};
 
 #[derive(Debug)]
 pub struct Artifact {
@@ -29,19 +29,21 @@ pub struct Artifact {
 
 /// A machine, and everything below the IR that reaching it takes.
 ///
-/// Three answers, because nothing else is shared. What one holds a value in,
-/// how it calls, what a file of its code looks like -- none of those have a
-/// shape two targets both fit, and an abstraction over them would be one
-/// more thing to read past on the way to the machine.
+/// Shared preparation checks layout and representation; each target checks
+/// its own ABI and image limits before emission. Register placement, calling
+/// sequences and file formats remain target-specific.
 pub trait Target: fmt::Debug {
     /// What names it on a command line and in what a message says.
     fn name(&self) -> &'static str;
 
-    /// How wide its own word is, which is the widest value it holds. A width
-    /// is what a value needs, so anything narrower than this is held in one
-    /// of these and anything wider is a program this target cannot compile
-    /// -- which is a different thing from one it compiles wrongly.
+    /// Width of a scalar word and address. Wider Fixed values are rejected;
+    /// unbounded Naturals are legalized separately, never implicitly wrapped.
     fn word(&self) -> u16;
+
+    /// Byte order for word-sized memory accesses.
+    fn endian(&self) -> Endian {
+        Endian::Little
+    }
 
     /// The routines it answers for, by the name a target is asked by.
     ///
@@ -92,10 +94,10 @@ pub trait Target: fmt::Debug {
     /// Exhaustion terminates with status 2, never a wrapped natural result.
     /// On supported runtime targets, clients needing a different budget can
     /// call `ir::legalize` with an explicit `ir::natural::Config`, then compile
-    /// the scalar result. The config word size MUST match this target: serialized
-    /// headers are target sized, which ordinary Address IR cannot detect later.
-    /// This is NOT a supported way to bypass the 16-bit guard: manually legalized
-    /// scalar input needs a complete backend image/stack capacity audit.
+    /// the scalar result. Its recorded layout must match this target; acceptance
+    /// rejects mismatched word sizes and byte orders.
+    /// This cannot bypass the 16-bit runtime guard: acceptance also checks the
+    /// layout recorded on prelegalized input.
     ///
     /// # Errors
     /// Reports invalid IR or a representation this target cannot safely emit.
@@ -145,6 +147,11 @@ pub trait Target: fmt::Debug {
     /// Names the first thing it cannot hold.
     fn accepts(&self, program: &Program) -> Result<(), String> {
         let (name, word) = (self.name(), self.word());
+        let layout = Layout {
+            word_bits: word,
+            endian: self.endian(),
+        };
+        accepts_layout(name, layout, program)?;
         for at in 0..program.values_count() {
             let class = program.class(ValueId::at(at));
             accepts_class(name, word, class)?;
@@ -159,8 +166,7 @@ pub trait Target: fmt::Debug {
             .flat_map(|function| program.every(function.body))
         {
             match *op {
-                // A fixed width is taken modulo its own, so only a word can
-                // be handed more than it holds.
+                // Encoded constants must fit; narrowing is explicit.
                 Op::Constant { class, value } => {
                     let bits = class.bits(word);
                     if bits < 64 && value >> bits != 0 {
@@ -180,6 +186,18 @@ pub trait Target: fmt::Debug {
         }
         self.limits(program)
     }
+}
+
+fn accepts_layout(name: &str, layout: Layout, program: &Program) -> Result<(), String> {
+    program.check_layout(layout)?;
+    // Currently only natural-runtime generation binds serialized layouts.
+    // Prelegalized input needs the same image/stack audit as Natural IR.
+    if layout.word_bits == 16 && program.layout().is_some() {
+        return Err(format!(
+            "{name} runtime naturals await checked image/frame limits"
+        ));
+    }
+    Ok(())
 }
 
 fn signature_classes(program: &Program) -> impl Iterator<Item = &Class> {

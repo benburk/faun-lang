@@ -19,6 +19,7 @@ impl Program {
     #[must_use]
     pub fn with(entry: &str, routines: crate::platform::Routines) -> (Self, FunctionId) {
         let mut program = Self {
+            layout: None,
             routines,
             platform: Vec::new(),
             data: Vec::new(),
@@ -93,7 +94,7 @@ impl Program {
             .routines
             .get(name)
             .unwrap_or_else(|| panic!("no routine named `{name}`"));
-        let (takes, answers) = (routine.takes.clone(), routine.answers);
+        let (takes, answers) = (routine.takes.clone(), routine.answers());
         let name = self.symbol(name);
         let params = self.sign(&takes);
         let returns = self.sign(answers.as_slice());

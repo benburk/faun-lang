@@ -10,10 +10,10 @@ use std::collections::BTreeMap;
 
 use num_bigint::BigUint;
 
-use super::natural::{self, Config, Library, Needs};
+use super::natural::{self, Config, Helper, Library, Needs};
 use super::{
-    Binary, Builder, Class, DataId, Exit, FunctionId, Op, Origin, Program, RegionId, Relation,
-    Terminator, ValueId, validate,
+    Builder, Class, DataId, Exit, FunctionId, Op, Origin, Program, RegionId, Relation, Terminator,
+    ValueId, validate,
 };
 
 /// Rebuild a validated program with naturals represented by immutable objects.
@@ -22,10 +22,10 @@ use super::{
 /// Runtime helpers are appended and are not passed through ownership placement.
 /// Programs needing no representation change take an unchanged clone fast path.
 ///
-/// Serialized headers are target sized: `config.word_bits` MUST match the
-/// subsequent backend or interpreter. This obligation cannot be detected from
-/// the resulting ordinary Address IR. Relative size checks do not prove complete
-/// target image/pool/frame placement.
+/// Serialized headers bind the output to a little-endian layout at
+/// `config.word_bits`. Re-legalization, target acceptance and interpretation
+/// check this obligation. Relative size checks do not prove complete target
+/// image/pool/frame placement.
 ///
 /// # Errors
 /// Rejects invalid IR, unsupported host/address conversions, wide fixed-width
@@ -36,6 +36,7 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     if !matches!(config.word_bits, 16 | 32 | 64) {
         return Err("natural representation needs a 16, 32, or 64 bit word".into());
     }
+    source.check_layout(config.layout())?;
     let needs = inspect(source, config)?;
     if !source.classes.contains(&Class::Natural) && !source.signature.contains(&Class::Natural) {
         return Ok(source.clone());
@@ -58,7 +59,7 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
             for (&old, &new) in source.values(function.params).iter().zip(params) {
                 state.values[old.index()] = Some(new);
             }
-            pass.region(b, function.body, &mut state, false, &[])
+            pass.region(b, function.body, &mut state, ScopeKind::Ordinary, &[])
         });
     }
     validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
@@ -133,15 +134,11 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
     for function in source.functions() {
         for op in source.every(function.body) {
             match *op {
-                Op::Binary { op, left, .. } if source.class(left) == Class::Natural => match op {
-                    Binary::Add => needs.add = true,
-                    Binary::Sub => needs.sub = true,
-                    Binary::Mul => needs.mul = true,
-                    Binary::Div => needs.div = true,
-                    Binary::Mod => needs.modulo = true,
-                },
+                Op::Binary { op, left, .. } if source.class(left) == Class::Natural => {
+                    needs.insert(Helper::arithmetic(op));
+                }
                 Op::Compare { left, .. } if source.class(left) == Class::Natural => {
-                    needs.compare = true;
+                    needs.insert(Helper::Compare);
                 }
                 Op::Convert { class, value } => match (source.class(value), class) {
                     (Class::Address, Class::Natural) | (Class::Natural, Class::Address) => {
@@ -150,8 +147,8 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
                         );
                     }
                     (Class::Natural, Class::Natural) => {}
-                    (_, Class::Natural) => needs.from_word = true,
-                    (Class::Natural, _) => needs.to_word = true,
+                    (_, Class::Natural) => needs.insert(Helper::FromWord),
+                    (Class::Natural, _) => needs.insert(Helper::ToWord),
                     _ => {}
                 },
                 Op::Store { value, .. } if source.class(value) == Class::Natural => {
@@ -231,10 +228,17 @@ struct Pass<'a> {
     constants: BTreeMap<ValueId, DataId>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScopeKind {
+    Ordinary,
+    /// Parameters own the claims carried by this iteration.
+    Loop,
+}
+
 #[derive(Clone)]
 struct Scope {
     owners: Vec<ValueId>,
-    loop_: bool,
+    kind: ScopeKind,
 }
 
 #[derive(Clone)]
@@ -259,18 +263,18 @@ impl Pass<'_> {
         b: &mut Builder,
         region: RegionId,
         state: &mut State,
-        loop_: bool,
+        kind: ScopeKind,
         params: &[ValueId],
     ) -> Terminator {
         let old = self.source.region(region);
         let mut owners = Vec::new();
         for (&old, &new) in self.source.values(old.params).iter().zip(params) {
             state.values[old.index()] = Some(new);
-            if loop_ && self.source.class(old) == Class::Natural {
+            if kind == ScopeKind::Loop && self.source.class(old) == Class::Natural {
                 owners.push(new);
             }
         }
-        state.scopes.push(Scope { owners, loop_ });
+        state.scopes.push(Scope { owners, kind });
         for (op, results) in self.source.walk(region) {
             let fresh = self.op(b, *op, results, state);
             for (&old, new) in results.iter().zip(fresh) {
@@ -313,7 +317,7 @@ impl Pass<'_> {
             Exit::Break | Exit::Continue => state
                 .scopes
                 .iter()
-                .rposition(|s| s.loop_)
+                .rposition(|s| s.kind == ScopeKind::Loop)
                 .expect("validated loop exit"),
             Exit::Unreachable => unreachable!(),
         };
@@ -359,14 +363,7 @@ impl Pass<'_> {
             Op::Constant { class, value } => b.constant(class, value),
             Op::AddressOf(data) => b.address_of(data),
             Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => {
-                let function = match op {
-                    Binary::Add => self.library.add,
-                    Binary::Sub => self.library.sub,
-                    Binary::Mul => self.library.mul,
-                    Binary::Div => self.library.div,
-                    Binary::Mod => self.library.modulo,
-                }
-                .expect("requested arithmetic helper");
+                let function = self.library.require(Helper::arithmetic(op));
                 b.call(function, &[v(left), v(right)])[0]
             }
             Op::Binary { op, left, right } => {
@@ -377,10 +374,8 @@ impl Pass<'_> {
                 left,
                 right,
             } if self.source.class(left) == Class::Natural => {
-                let ordering = b.call(
-                    self.library.compare.expect("requested comparison"),
-                    &[v(left), v(right)],
-                )[0];
+                let ordering =
+                    b.call(self.library.require(Helper::Compare), &[v(left), v(right)])[0];
                 let wanted = b.constant(Class::Word, u64::from(relation == Relation::Equal));
                 b.compare(Relation::Equal, ordering, wanted)
             }
@@ -391,15 +386,11 @@ impl Pass<'_> {
             } => b.compare(relation, v(left), v(right)),
             Op::Convert { class, value } => match (self.source.class(value), class) {
                 (Class::Natural, Class::Natural) => self.retained(b, v(value)),
-                (_, Class::Natural) => b.call(
-                    self.library.from_word.expect("requested promotion"),
-                    &[v(value)],
-                )[0],
+                (_, Class::Natural) => {
+                    b.call(self.library.require(Helper::FromWord), &[v(value)])[0]
+                }
                 (Class::Natural, _) => {
-                    let word = b.call(
-                        self.library.to_word.expect("requested narrowing"),
-                        &[v(value)],
-                    )[0];
+                    let word = b.call(self.library.require(Helper::ToWord), &[v(value)])[0];
                     if class == Class::Word {
                         word
                     } else {
@@ -438,8 +429,8 @@ impl Pass<'_> {
                 return b.if_(
                     v(condition),
                     &classes(),
-                    |b| self.region(b, then_region, &mut state.clone(), false, &[]),
-                    |b| self.region(b, else_region, &mut state.clone(), false, &[]),
+                    |b| self.region(b, then_region, &mut state.clone(), ScopeKind::Ordinary, &[]),
+                    |b| self.region(b, else_region, &mut state.clone(), ScopeKind::Ordinary, &[]),
                 );
             }
             Op::Loop { initial, body } => {
@@ -466,7 +457,7 @@ impl Pass<'_> {
                     })
                     .collect();
                 return b.loop_(&initial, &classes(), |b, params| {
-                    self.region(b, body, &mut state.clone(), true, params)
+                    self.region(b, body, &mut state.clone(), ScopeKind::Loop, params)
                 });
             }
         };

@@ -30,7 +30,7 @@ pub fn validate(program: &Program) -> Result<(), String> {
     }
     for at in 0..program.functions().len() {
         let id = FnId::at(at);
-        let Some(body) = program.function(id).body else {
+        let Some(body) = program.function(id).body() else {
             continue;
         };
         let name = program.name(program.function(id).name);

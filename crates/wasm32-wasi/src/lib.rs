@@ -1,5 +1,5 @@
-//! [`lower`] decides what `_start` does and where things sit in linear
-//! memory; [`module`] wraps that in the sections a wasm file is made of.
+//! `lower` decides what `_start` does and where things sit in linear
+//! memory; `module` wraps that in the sections a wasm file is made of.
 
 mod lower;
 mod module;

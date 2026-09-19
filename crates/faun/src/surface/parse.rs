@@ -320,7 +320,7 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
         let held = called.strip_suffix('!').unwrap_or(called);
         let id = program.declare(held, params, *result);
         program.answered_by(id, &routine.name);
-        if let Some(class) = routine.answers {
+        if let Some(class) = routine.answers() {
             program.bound(id, host_bound(class));
         }
         functions.insert(called, id);
@@ -1076,9 +1076,9 @@ fn slots<'a>(
             unify.fresh();
         }
         let answer = unify.fresh();
-        if !routine.comes_back {
+        if !routine.comes_back() {
             unify.pin(answer, NEVER)?;
-        } else if routine.answers.is_none() {
+        } else if routine.answers().is_none() {
             // One that comes back and works nothing out says nothing by
             // answering, which is what `Unit` is for.
             unify.pin(answer, UNIT)?;
@@ -1110,7 +1110,7 @@ fn diverging<'a>(
     }
     let mut held: HashSet<&str> = routines
         .offered()
-        .filter(|(_, routine)| !routine.comes_back)
+        .filter(|(_, routine)| !routine.comes_back())
         .map(|(called, _)| called)
         .collect();
     let mut growing = true;

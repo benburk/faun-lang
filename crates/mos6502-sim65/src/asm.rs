@@ -46,6 +46,12 @@ impl Cc {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Half {
+    Low,
+    High,
+}
+
 /// One step the lowering asked for, before anything says where it sits.
 enum Inst {
     /// Bytes that are the same wherever they land.
@@ -56,7 +62,7 @@ enum Inst {
     /// A `jmp` or a `jsr`, which spends two bytes on an address either way.
     Absolute { opcode: u8, to: Label },
     /// Half of an address, as an immediate.
-    Half { to: Label, high: bool },
+    Half { to: Label, half: Half },
 }
 
 impl Inst {
@@ -141,9 +147,13 @@ impl Assembler {
                     bytes.push(opcode);
                     bytes.extend_from_slice(&self.address(&at, to).to_le_bytes());
                 }
-                Inst::Half { to, high } => {
+                Inst::Half { to, half } => {
                     let [low, held] = self.address(&at, to).to_le_bytes();
-                    bytes.extend_from_slice(&[0xA9, if high { held } else { low }]);
+                    let byte = match half {
+                        Half::Low => low,
+                        Half::High => held,
+                    };
+                    bytes.extend_from_slice(&[0xA9, byte]);
                 }
                 Inst::Branch { cc, to } => {
                     if far[id] {
@@ -232,9 +242,9 @@ impl Assembler {
     }
 
     /// Half of a label's address, as an immediate.
-    pub(crate) fn lda_imm_half(&mut self, label: Label, high: bool) {
+    pub(crate) fn lda_imm_half(&mut self, label: Label, half: Half) {
         self.close();
-        self.insts.push(Inst::Half { to: label, high });
+        self.insts.push(Inst::Half { to: label, half });
     }
 
     /// A literal word, for data the target lays down itself.

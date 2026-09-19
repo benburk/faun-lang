@@ -5,7 +5,7 @@
 //! Two-operand forms read their operands into the scratch pairs and work
 //! there, which is unhurried and obviously correct.
 
-use super::asm::{Assembler, Cc};
+use super::asm::{Assembler, Cc, Half};
 use super::{
     ARG_COUNT, ARGC, ARGS, CSP, CSTACK_TOP, Code, FP, FRAMES_TOP, HEAP, HOME_COUNT, HOMES,
     HOOK_ARGS, HOOK_EXIT, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
@@ -18,6 +18,12 @@ use faun::ir::{
 
 /// A word here is the width of an address.
 const WORD: i32 = 2;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FrameAction {
+    Enter,
+    Leave,
+}
 
 /// Where a function keeps what it holds.
 #[derive(Clone, Default)]
@@ -376,7 +382,7 @@ impl Lowering<'_> {
         self.homes = plan.homes;
         let frame = self.frame;
         if frame > 0 {
-            self.adjust_frame(frame, true);
+            self.adjust_frame(frame, FrameAction::Enter);
         }
 
         // Arguments arrive in fixed pairs, so a callee takes its own copies
@@ -390,9 +396,9 @@ impl Lowering<'_> {
     }
 
     /// `FP` down by the frame, or back up again.
-    fn adjust_frame(&mut self, frame: u8, open: bool) {
+    fn adjust_frame(&mut self, frame: u8, action: FrameAction) {
         self.asm.lda_zp(FP);
-        if open {
+        if action == FrameAction::Enter {
             self.asm.sec();
             self.asm.sbc_imm(frame);
         } else {
@@ -401,7 +407,7 @@ impl Lowering<'_> {
         }
         self.asm.sta_zp(FP);
         self.asm.lda_zp(FP + 1);
-        if open {
+        if action == FrameAction::Enter {
             self.asm.sbc_imm(0);
         } else {
             self.asm.adc_imm(0);
@@ -912,9 +918,9 @@ impl Lowering<'_> {
         let count = self.operand(args[1], T0);
         if let Some(at) = self.constant(args[0]) {
             let block = self.intern([at, 1]);
-            self.asm.lda_imm_half(block, false);
+            self.asm.lda_imm_half(block, Half::Low);
             self.asm.sta_zp(CSP);
-            self.asm.lda_imm_half(block, true);
+            self.asm.lda_imm_half(block, Half::High);
             self.asm.sta_zp(CSP + 1);
         } else {
             self.build_arguments(buffer);
@@ -1202,10 +1208,10 @@ impl Lowering<'_> {
         self.commit(result, T0);
     }
 
-    fn arithmetic(&mut self, op: Binary, left: Operand, right: Operand, dest: u8, narrow: bool) {
+    fn arithmetic(&mut self, op: Binary, left: Operand, right: Operand, dest: u8, width: Width) {
         // A step of one over a pair the result already occupies is an
         // increment, which carries into the high byte only on a wrap.
-        if let (Operand::Zp(at), Operand::Imm(1), false) = (left, right, narrow)
+        if let (Operand::Zp(at), Operand::Imm(1), Width::Word) = (left, right, width)
             && at == dest
         {
             let done = self.asm.label();
@@ -1239,7 +1245,7 @@ impl Lowering<'_> {
         }
         self.accumulate(op, right.byte(0));
         self.asm.sta_zp(dest);
-        if narrow {
+        if width == Width::Byte {
             self.asm.lda_imm(0);
         } else {
             self.load(left.byte(1));
@@ -1260,7 +1266,13 @@ impl Lowering<'_> {
         self.asm.lsr_zp(T1 + 1);
         self.asm.ror_zp(T1);
         self.asm.branch(Cc::NoCarry, skip);
-        self.arithmetic(Binary::Add, Operand::Zp(PTR), Operand::Zp(T0), PTR, false);
+        self.arithmetic(
+            Binary::Add,
+            Operand::Zp(PTR),
+            Operand::Zp(T0),
+            PTR,
+            Width::Word,
+        );
         self.asm.bind(skip);
         self.asm.asl_zp(T0);
         self.asm.rol_zp(T0 + 1);
@@ -1291,7 +1303,13 @@ impl Lowering<'_> {
         self.asm.branch(Cc::Carry, subtract);
         self.holds(Relation::Less, Operand::Zp(PTR), Operand::Zp(T1), next);
         self.asm.bind(subtract);
-        self.arithmetic(Binary::Sub, Operand::Zp(PTR), Operand::Zp(T1), PTR, false);
+        self.arithmetic(
+            Binary::Sub,
+            Operand::Zp(PTR),
+            Operand::Zp(T1),
+            PTR,
+            Width::Word,
+        );
         self.asm.inc_zp(T0); // the shifted-in quotient bit was zero
         self.asm.bind(next);
         self.asm.dex();
@@ -1421,9 +1439,13 @@ impl Lowering<'_> {
                 }
                 let left = self.operand(*left, T0);
                 let right = self.operand(*right, T1);
-                let narrow = bits(self.program.class(results[0])) <= 8;
+                let width = if bits(self.program.class(results[0])) <= 8 {
+                    Width::Byte
+                } else {
+                    Width::Word
+                };
                 let dest = self.dest(results[0]);
-                self.arithmetic(*op, left, right, dest, narrow);
+                self.arithmetic(*op, left, right, dest, width);
                 self.commit(results[0], dest);
             }
             Op::Compare {
@@ -1502,7 +1524,7 @@ impl Lowering<'_> {
                 }
                 if self.frame > 0 {
                     let frame = self.frame;
-                    self.adjust_frame(frame, false);
+                    self.adjust_frame(frame, FrameAction::Leave);
                 }
                 self.asm.rts();
             }

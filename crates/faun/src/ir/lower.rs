@@ -39,26 +39,17 @@ pub fn lower(
     let demand = Demand::discover(program, facts, entry)?;
     let (mut machine, main) =
         Program::with(program.name(program.function(entry).name), routines.clone());
-    let (functions, platforms) = declare(
-        program,
-        facts,
-        routines,
-        &demand.carries,
-        &mut machine,
-        (entry, main),
-        &demand.reached,
-    )?;
+    let callees = declare(&demand, routines, &mut machine, (entry, main))?;
 
     let lowering = Lowering {
         barb: program,
         facts,
         carries: demand.carries,
-        functions,
-        platforms,
+        callees,
     };
-    for (at, reached) in demand.reached.iter().enumerate() {
+    for (at, callee) in lowering.callees.iter().enumerate() {
         let id = barb::FnId::at(at);
-        if *reached && facts.operation(id).is_none() && program.function(id).body.is_some() {
+        if matches!(callee, Callee::Function(_)) && program.function(id).body().is_some() {
             lowering.function(&mut machine, id)?;
         }
     }
@@ -66,72 +57,62 @@ pub fn lower(
     Ok(machine)
 }
 
-/// Every definition, as what it becomes: a function, an instruction, or a
-/// routine something outside provides.
-#[expect(
-    clippy::type_complexity,
-    reason = "what each definition became, by definition"
-)]
+/// One entry per source function; no fabricated IDs for non-functions.
+#[derive(Clone, Copy)]
+enum Callee<'a> {
+    Unreachable,
+    Instruction(barb::Operation),
+    Function(FunctionId),
+    Platform {
+        id: PlatformId,
+        routine: &'a Routine,
+    },
+}
+
 fn declare<'a>(
-    program: &barb::Program,
-    facts: &barb::Facts,
+    demand: &Demand<'_>,
     routines: &'a Routines,
-    carries: &[Option<()>],
     machine: &mut Program,
     (entry, main): (barb::FnId, FunctionId),
-    reached: &[bool],
-) -> Result<
-    (
-        Vec<Option<FunctionId>>,
-        Vec<(barb::FnId, PlatformId, &'a Routine)>,
-    ),
-    String,
-> {
-    // `None` where a definition became an instruction and has no function.
-    let mut functions: Vec<Option<FunctionId>> = Vec::with_capacity(program.functions().len());
-    let mut platforms: Vec<(barb::FnId, PlatformId, &Routine)> = Vec::new();
-    for (at, reached) in reached.iter().enumerate() {
+) -> Result<Vec<Callee<'a>>, String> {
+    let (program, facts) = (demand.program, demand.facts);
+    let mut callees = Vec::with_capacity(program.functions().len());
+    for (at, reached) in demand.reached.iter().enumerate() {
         let id = barb::FnId::at(at);
         if id == entry {
-            functions.push(Some(main));
+            callees.push(Callee::Function(main));
             continue;
         }
         // A definition the tier below has an instruction for is never
         // emitted: its callers write the instruction instead. Neither is one
         // nothing reaches, which has no callers to write anything.
-        if facts.operation(id).is_some() || !reached {
-            functions.push(None);
+        if !reached {
+            callees.push(Callee::Unreachable);
+            continue;
+        }
+        if let Some(operation) = facts.operation(id) {
+            callees.push(Callee::Instruction(operation));
             continue;
         }
         let function = program.function(id);
-        // A parameter or a result that carries nothing takes no slot.
-        let params: Vec<Class> = program
-            .params(id)
-            .iter()
-            .zip(facts.takes(id))
-            .filter(|(type_, _)| carries[type_.index()].is_some())
-            .map(|(_, held)| width(*held))
-            .collect();
-        let returns: Vec<Class> = carries[function.result.index()]
-            .map(|()| width(facts.answers(id)))
-            .into_iter()
-            .collect();
+        let (params, returns) = demand.signature(id);
         let name = program.name(function.name);
         // One something else answers for is a platform routine rather than a
         // function: the program declares it and a target provides it.
-        functions.push(Some(if function.body.is_some() {
-            machine.declare(name, &params, &returns)
-        } else {
-            // What a program calls it and what answers for it need not be
-            // the same name, so that one routine may serve a program at
-            // more than one type.
-            let outside = function.outside.map_or(name, |held| program.name(held));
-            let (held, wanted) = provided(routines, name, outside, &params, &returns)?;
-            platforms.push((id, machine.platform(held), wanted));
-            main
-        }));
+        callees.push(match function.definition {
+            barb::Definition::Body(_) => Callee::Function(machine.declare(name, &params, &returns)),
+            barb::Definition::External { symbol, .. } => {
+                // A provider may answer for several source declarations.
+                let outside = program.name(symbol);
+                let (held, wanted) = provided(routines, name, outside, &params, &returns)?;
+                Callee::Platform {
+                    id: machine.platform(held),
+                    routine: wanted,
+                }
+            }
+        });
     }
-    Ok((functions, platforms))
+    Ok(callees)
 }
 
 /// The routine answering for a name nothing defines, checked against what
@@ -173,14 +154,31 @@ fn provided<'a>(
             ));
         }
     }
-    if returns.len() != wanted.answers.iter().len() {
+    if returns.len() != wanted.answers().iter().len() {
         return Err(format!(
             "`{held}` answers {}, and what is taken back is {}",
-            reads(wanted.answers.as_slice()),
+            reads(wanted.answers().as_slice()),
             reads(returns),
         ));
     }
     Ok((held, wanted))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Storage {
+    Undemanded,
+    Erased,
+    Carried,
+}
+
+impl Storage {
+    fn carried(self) -> bool {
+        match self {
+            Self::Carried => true,
+            Self::Erased => false,
+            Self::Undemanded => panic!("a lowered type must have been demanded"),
+        }
+    }
 }
 
 /// Function and representation demand follow the same paths as emission:
@@ -191,10 +189,9 @@ struct Demand<'a> {
     facts: &'a barb::Facts,
     reached: Vec<bool>,
     waiting: Vec<barb::FnId>,
-    // An undemanded type has no slot. Every introduction of a lowered value
-    // (signature, constructor, constant, or match field) checks it first;
-    // unsupported representations are never mistaken for erased values.
-    carries: Vec<Option<()>>,
+    // Every lowered introduction must demand its type first. Undemanded is
+    // distinct from erased, so a missed visit cannot silently discard a value.
+    carries: Vec<Storage>,
 }
 
 impl<'a> Demand<'a> {
@@ -208,7 +205,7 @@ impl<'a> Demand<'a> {
             facts,
             reached: vec![false; program.functions().len()],
             waiting: vec![entry],
-            carries: vec![None; program.types().len()],
+            carries: vec![Storage::Undemanded; program.types().len()],
         };
         while let Some(id) = demand.waiting.pop() {
             if std::mem::replace(&mut demand.reached[id.index()], true) {
@@ -219,12 +216,31 @@ impl<'a> Demand<'a> {
                 demand.type_(ty)?;
             }
             if facts.operation(id).is_none()
-                && let Some(body) = function.body
+                && let Some(body) = function.body()
             {
                 demand.body(body)?;
             }
         }
         Ok(demand)
+    }
+
+    /// Erased parameters and results take no machine slot.
+    fn signature(&self, id: barb::FnId) -> (Vec<Class>, Vec<Class>) {
+        let params = self
+            .program
+            .params(id)
+            .iter()
+            .zip(self.facts.takes(id))
+            .filter(|(ty, _)| self.carries[ty.index()].carried())
+            .map(|(_, held)| width(*held))
+            .collect();
+        let result = self.program.function(id).result;
+        let returns = self.carries[result.index()]
+            .carried()
+            .then(|| width(self.facts.answers(id)))
+            .into_iter()
+            .collect();
+        (params, returns)
     }
 
     fn type_(&mut self, ty: barb::TypeId) -> Result<(), String> {
@@ -293,13 +309,13 @@ fn reachable(program: &barb::Program, arms: barb::Range, bounds: barb::Bounds) -
 }
 
 /// The class a type's values take. Numbers and tags are decided so far.
-fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Option<()>, String> {
+fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, String> {
     let name = program.name(program.type_(id).name);
     if uninhabited(program, id) || erased(program, id) {
-        return Ok(None);
+        return Ok(Storage::Erased);
     }
     if tagged(program, id) {
-        return Ok(Some(()));
+        return Ok(Storage::Carried);
     }
     let barb::Shape::Spine { cons, .. } = barb::shape(program, id) else {
         return Err(format!("`{name}` has no representation in this tier yet"));
@@ -309,7 +325,7 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Option<()>, St
         // -- every `Nat` is the same type and they are not all the same
         // size -- so it is asked of each value, where the tier above
         // answered it.
-        return Ok(Some(()));
+        return Ok(Storage::Carried);
     }
     Err(format!(
         "`{name}` carries something per element, which has no representation in this tier yet"
@@ -454,16 +470,25 @@ fn yielded(b: &mut super::Builder, answer: Answer<ValueId>, classes: &[Class]) -
     }
 }
 
+#[derive(Clone, Copy)]
+enum ReturnTo {
+    Entry,
+    Function(Class),
+}
+
 /// The entry's implicit status is a host word, not a request for modulo.
 fn returned(
     b: &mut super::Builder,
     answer: Answer<ValueId>,
-    entry: bool,
-    returns: Class,
+    destination: ReturnTo,
 ) -> Result<Terminator, String> {
+    let returns = match destination {
+        ReturnTo::Entry => Class::Word,
+        ReturnTo::Function(class) => class,
+    };
     Ok(match answer {
         Answer::Value(answer) => {
-            if entry && b.class(answer) == Class::Natural {
+            if matches!(destination, ReturnTo::Entry) && b.class(answer) == Class::Natural {
                 return Err(
                     "the entry's result is unbounded, but its exit status must fit a word"
                         .to_owned(),
@@ -472,7 +497,7 @@ fn returned(
             let answer = met(b, &[answer], &[returns])[0];
             b.ret(&[answer])
         }
-        Answer::Nothing if entry => {
+        Answer::Nothing if matches!(destination, ReturnTo::Entry) => {
             let status = b.constant(Class::Word, 0);
             b.ret(&[status])
         }
@@ -485,12 +510,8 @@ struct Lowering<'a> {
     barb: &'a barb::Program,
     facts: &'a barb::Facts,
     /// Whether a value of each barb type takes a place, by type.
-    carries: Vec<Option<()>>,
-    /// The machine function each barb function became, by function, and
-    /// `None` for one that became an instruction.
-    functions: Vec<Option<FunctionId>>,
-    /// The platform routine each declared-elsewhere function became.
-    platforms: Vec<(barb::FnId, PlatformId, &'a Routine)>,
+    carries: Vec<Storage>,
+    callees: Vec<Callee<'a>>,
 }
 
 impl Lowering<'_> {
@@ -502,8 +523,14 @@ impl Lowering<'_> {
     }
 
     fn function(&self, machine: &mut Program, id: barb::FnId) -> Result<(), String> {
-        let body = self.barb.function(id).body.expect("a function with a body");
-        let into = self.functions[id.index()].expect("a function that is not an instruction");
+        let body = self
+            .barb
+            .function(id)
+            .body()
+            .expect("a function with a body");
+        let Callee::Function(into) = self.callees[id.index()] else {
+            unreachable!("only machine functions have bodies to lower");
+        };
         let entry = self.barb.entry() == Some(id);
         // An erased parameter takes no slot, so the machine's run of them is
         // shorter than barb's and they are matched up in order.
@@ -511,14 +538,14 @@ impl Lowering<'_> {
             .barb
             .params(id)
             .iter()
-            .map(|type_| self.carries[type_.index()].is_none())
+            .map(|type_| !self.carries[type_.index()].carried())
             .collect();
         // What it leaves with: a word from the entry, whatever the program
         // worked in, and otherwise the width it was declared at.
-        let returns = if entry {
-            Class::Word
+        let destination = if entry {
+            ReturnTo::Entry
         } else {
-            width(self.facts.answers(id))
+            ReturnTo::Function(width(self.facts.answers(id)))
         };
         let mut failure = None;
         machine.define(into, |b, params| {
@@ -528,7 +555,7 @@ impl Lowering<'_> {
                 .map(|erased| (!erased).then(|| taken.next().expect("a parameter")))
                 .collect();
             let answer = self.body(b, body, &mut locals);
-            returned(b, answer, entry, returns).unwrap_or_else(|error| {
+            returned(b, answer, destination).unwrap_or_else(|error| {
                 failure = Some(error);
                 Terminator::UNREACHABLE
             })
@@ -567,9 +594,9 @@ impl Lowering<'_> {
             // which constructor for a tag, and what it counts to for a
             // number. One that carries nothing is nothing to carry.
             barb::Expr::Static(id, value) => {
-                let Some(()) = self.carries[id.index()] else {
+                if !self.carries[id.index()].carried() {
                     return Answer::Nothing;
-                };
+                }
                 let class = self.width(expr);
                 let bytes = self.barb.known_bytes(value);
                 if tagged(self.barb, id) {
@@ -610,18 +637,17 @@ impl Lowering<'_> {
             .iter()
             .filter_map(|atom| locals[atom.0.index()])
             .collect();
-        if let Some(operation) = self.facts.operation(function) {
-            return Answer::Value(self.operation(b, operation, self.width(expr), &args));
-        }
-        let held = self.platforms.iter().find(|(id, ..)| *id == function);
-        let (results, answers) = if let Some((_, platform, wanted)) = held {
-            (b.platform_call(*platform, &args), wanted.answers.as_ref())
-        } else {
-            let callee = self.functions[function.index()]
-                .expect("a call to something that stayed a function");
-            let takes = b.takes(callee);
-            let args = met(b, &args, &takes);
-            (b.call(callee, &args), None)
+        let (results, answers) = match self.callees[function.index()] {
+            Callee::Instruction(operation) => {
+                return Answer::Value(self.operation(b, operation, self.width(expr), &args));
+            }
+            Callee::Platform { id, routine } => (b.platform_call(id, &args), routine.answers()),
+            Callee::Function(callee) => {
+                let takes = b.takes(callee);
+                let args = met(b, &args, &takes);
+                (b.call(callee, &args), None)
+            }
+            Callee::Unreachable => unreachable!("a lowered call must have been demanded"),
         };
         // A call answers what its result type does, which is nothing ever
         // where that type has no values -- and it answers at the width the
@@ -629,7 +655,7 @@ impl Lowering<'_> {
         self.answer(self.barb.function(function).result).map(|_| {
             let class = self.width(expr);
             let held = *results.first().expect("a result where a type carries one");
-            if answers == Some(&Class::Word) {
+            if answers == Some(Class::Word) {
                 held
             } else if answers.is_some_and(|answers| !answers.fits(class)) {
                 b.convert(class, held)
@@ -684,7 +710,9 @@ impl Lowering<'_> {
         locals: &[Option<ValueId>],
     ) -> Option<ValueId> {
         let owner = self.barb.ctor(ctor).owner;
-        self.carries[owner.index()]?;
+        if !self.carries[owner.index()].carried() {
+            return None;
+        }
         let class = self.width(expr);
         if tagged(self.barb, owner) {
             return Some(b.constant(class, u64::from(self.barb.tag(ctor))));
@@ -883,7 +911,7 @@ impl Lowering<'_> {
                         self.barb
                             .fields(arm.ctor)
                             .iter()
-                            .map(|ty| self.carries[ty.index()].is_some()),
+                            .map(|ty| self.carries[ty.index()].carried()),
                     );
                     self.body_answer(arm.body, inner)
                 })
@@ -904,6 +932,9 @@ impl Lowering<'_> {
         if uninhabited(self.barb, id) {
             return Answer::Never;
         }
-        self.carries[id.index()].map(|()| Class::Word).into()
+        self.carries[id.index()]
+            .carried()
+            .then_some(Class::Word)
+            .into()
     }
 }

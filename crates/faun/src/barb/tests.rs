@@ -57,6 +57,61 @@ fn a_name_is_interned_once_and_reads_back() {
 }
 
 #[test]
+fn a_definition_replaces_external_metadata_instead_of_retaining_it() {
+    let (mut program, nat, _, _) = types();
+    let function = program.declare("external", &[], nat);
+    assert_eq!(
+        program.function(function).definition,
+        Definition::External {
+            symbol: program.function(function).name,
+            bounds: None,
+        }
+    );
+    program.answered_by(function, "provider");
+    program.bound(function, Bounds::at(7));
+    let Definition::External { symbol, bounds } = program.function(function).definition else {
+        panic!("a declaration has no body");
+    };
+    assert_eq!(program.name(symbol), "provider");
+    assert_eq!(bounds, Some(Bounds::at(7)));
+    program.define(function, |b, _| {
+        let value = b.number(nat, 3);
+        b.known(nat, value)
+    });
+    assert!(matches!(
+        program.function(function).definition,
+        Definition::Body(_)
+    ));
+    assert_eq!(program.function(function).bounds(), None);
+    program.set_entry(function);
+    validate(&program).unwrap();
+}
+
+#[test]
+#[should_panic(expected = "only an external declaration can carry a range contract")]
+fn a_defined_function_cannot_acquire_a_host_range_contract() {
+    let (mut program, nat, _, _) = types();
+    let function = program.declare("defined", &[], nat);
+    program.define(function, |b, _| {
+        let value = b.number(nat, 3);
+        b.known(nat, value)
+    });
+    program.bound(function, Bounds::at(7));
+}
+
+#[test]
+#[should_panic(expected = "only an external declaration can name a provider")]
+fn a_defined_function_cannot_acquire_a_host_provider() {
+    let (mut program, nat, _, _) = types();
+    let function = program.declare("defined", &[], nat);
+    program.define(function, |b, _| {
+        let value = b.number(nat, 3);
+        b.known(nat, value)
+    });
+    program.answered_by(function, "provider");
+}
+
+#[test]
 fn a_term_stays_small() {
     assert_eq!(size_of::<Expr>(), 16);
     assert_eq!(size_of::<Arm>(), 16);
@@ -189,7 +244,7 @@ fn the_builder_writes_the_lets_itself() {
     // of its body.
     assert_eq!(program.locals(add), 4);
 
-    let body = program.function(add).body.expect("a defined function");
+    let body = program.function(add).body().expect("a defined function");
     assert!(
         program.bindings(body.bindings).is_empty(),
         "the match is the tail, with nothing bound before it"

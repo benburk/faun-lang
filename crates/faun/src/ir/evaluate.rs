@@ -21,11 +21,7 @@ use super::{
 };
 use num_bigint::BigUint;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Endian {
-    Little,
-    Big,
-}
+pub use super::Endian;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
@@ -49,6 +45,10 @@ impl Default for Config {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidConfig,
+    LayoutMismatch {
+        expected: super::Layout,
+        actual: super::Layout,
+    },
     InvalidProgram(&'static str),
     FuelExhausted,
     SizeLimit,
@@ -67,11 +67,36 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// Values returned by the evaluated function, checked against its signature.
+    Returned(Vec<BigUint>),
+    /// A host halt's payload, not a function result.
+    Halted(Vec<BigUint>),
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct Evaluation {
-    pub values: Vec<BigUint>,
+    pub outcome: Outcome,
     pub globals: Vec<u8>,
     pub fuel_remaining: u64,
-    pub halted: bool,
+}
+
+impl Evaluation {
+    #[must_use]
+    pub fn returned(&self) -> Option<&[BigUint]> {
+        match &self.outcome {
+            Outcome::Returned(values) => Some(values),
+            Outcome::Halted(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn halted(&self) -> Option<&[BigUint]> {
+        match &self.outcome {
+            Outcome::Halted(values) => Some(values),
+            Outcome::Returned(_) => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -193,6 +218,15 @@ pub fn evaluate(
 ) -> Result<Evaluation, Error> {
     if !matches!(config.word_bits, 16 | 32 | 64) || config.max_natural_bits == 0 {
         return Err(Error::InvalidConfig);
+    }
+    let actual = super::Layout {
+        word_bits: config.word_bits,
+        endian: config.endian,
+    };
+    if let Some(expected) = program.layout()
+        && expected != actual
+    {
+        return Err(Error::LayoutMismatch { expected, actual });
     }
     let globals_base = u64::try_from(program.data.len())
         .ok()
@@ -346,12 +380,11 @@ impl<H: Host> Machine<'_, H> {
         self.region(function.body, args)
     }
 
-    fn finish(self, values: Vec<BigUint>, halted: bool) -> Evaluation {
+    fn finish(self, outcome: Outcome) -> Evaluation {
         Evaluation {
-            values,
+            outcome,
             globals: self.memory.globals,
             fuel_remaining: self.config.fuel,
-            halted,
         }
     }
 
@@ -373,7 +406,7 @@ impl<H: Host> Machine<'_, H> {
             if at == region.ops.len() {
                 let values = self.values(region.terminator.values)?;
                 if let Some(values) = self.leave(region.terminator.exit, values)? {
-                    return Ok(self.finish(values, false));
+                    return Ok(self.finish(Outcome::Returned(values)));
                 }
                 continue;
             }
@@ -386,7 +419,7 @@ impl<H: Host> Machine<'_, H> {
             let (op, results) = self.instruction(index)?;
             self.tasks.push(Task::Region { id, at: at + 1 });
             if let Some(values) = self.step(op, results)? {
-                return Ok(self.finish(values, true));
+                return Ok(self.finish(Outcome::Halted(values)));
             }
         }
     }
@@ -706,7 +739,7 @@ impl<H: Host> Machine<'_, H> {
                 .program
                 .routines
                 .get(name)
-                .is_some_and(|r| !r.comes_back)
+                .is_some_and(|r| !r.comes_back())
             {
                 return Err(invalid("non-returning host returned"));
             }

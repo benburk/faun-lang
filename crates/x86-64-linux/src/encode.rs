@@ -325,11 +325,16 @@ impl Encoder {
         }
     }
 
-    /// Unsigned RDX:RAX = RAX * RCX, or RAX = RDX:RAX / RCX,
-    /// RDX = remainder. The caller owns both implicit clobbers and guards zero.
-    pub(crate) fn multiply_or_divide(&mut self, divide: bool) {
+    /// Unsigned RDX:RAX = RAX * RCX; both result registers are clobbered.
+    pub(crate) fn multiply(&mut self) {
         self.step();
-        self.emit(&[0x48, 0xF7, if divide { 0xF1 } else { 0xE1 }]);
+        self.emit(&[0x48, 0xF7, 0xE1]);
+    }
+
+    /// Unsigned RAX = RDX:RAX / RCX, RDX = remainder. The caller guards zero.
+    pub(crate) fn divide(&mut self) {
+        self.step();
+        self.emit(&[0x48, 0xF7, 0xF1]);
     }
 
     pub(crate) fn syscall(&mut self) {
@@ -521,8 +526,8 @@ mod tests {
         assert_eq!(encoded(|a| a.xor_self(Reg::Rdi)), [0x31, 0xFF]);
         assert_eq!(encoded(|a| a.pop(Reg::Rdx)), [0x5A]);
         assert_eq!(encoded(|a| a.push_imm8(-5)), [0x6A, 0xFB]);
-        assert_eq!(encoded(|a| a.multiply_or_divide(false)), [0x48, 0xF7, 0xE1]);
-        assert_eq!(encoded(|a| a.multiply_or_divide(true)), [0x48, 0xF7, 0xF1]);
+        assert_eq!(encoded(Encoder::multiply), [0x48, 0xF7, 0xE1]);
+        assert_eq!(encoded(Encoder::divide), [0x48, 0xF7, 0xF1]);
         assert_eq!(encoded(|a| a.narrow(0)), [0x31, 0xC0]);
         assert_eq!(encoded(|a| a.narrow(7)), [0x83, 0xE0, 0x7F]);
         assert_eq!(encoded(|a| a.narrow(9)), [0x25, 0xFF, 0x01, 0x00, 0x00]);

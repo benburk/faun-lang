@@ -1,5 +1,5 @@
-//! [`lower`] turns the IR into instructions but cannot know where the data
-//! will sit, so it leaves a [`Reloc`] wherever an address belongs; [`elf`]
+//! `lower` turns the IR into instructions but cannot know where the data
+//! will sit, so it leaves a `Reloc` wherever an address belongs; `elf`
 //! chooses the layout and fills them in.
 
 #[cfg(test)]

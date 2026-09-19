@@ -68,7 +68,7 @@ fn run(program: &Program, id: FnId, args: Vec<Value>, trace: &mut Vec<FnId>) -> 
             }
         }
     }
-    if let Some(b) = program.function(id).body {
+    if let Some(b) = program.function(id).body() {
         body(program, b, args, trace)
     } else {
         trace.push(id);
@@ -169,10 +169,10 @@ fn self_division_is_not_one_and_misleading_names_do_not_earn_laws() {
         },
     );
     assert!(
-        matches!(program.expr(program.function(test).body.unwrap().tail), Expr::Call(called, _) if called == div)
+        matches!(program.expr(program.function(test).body().unwrap().tail), Expr::Call(called, _) if called == div)
     );
     assert!(
-        matches!(program.expr(program.function(use_fake).body.unwrap().tail), Expr::Call(called, _) if called == fake)
+        matches!(program.expr(program.function(use_fake).body().unwrap().tail), Expr::Call(called, _) if called == fake)
     );
 }
 
@@ -237,7 +237,7 @@ fn eager_effects_survive_folding_inlining_laws_and_cleanup() {
             operations: &ops
         }
         .body(
-            original.function(helper).body.unwrap(),
+            original.function(helper).body().unwrap(),
             vec![],
             &mut Budget::new(FoldLimits::default())
         )
@@ -289,7 +289,7 @@ fn folding_a_known_match_does_not_erase_effects_in_its_selected_arm() {
     run(&program, test, vec![], &mut trace);
     assert_eq!(trace, [effect]);
     assert!(matches!(
-        program.expr(program.function(test).body.unwrap().tail),
+        program.expr(program.function(test).body().unwrap().tail),
         Expr::Match(..)
     ));
 }
@@ -311,7 +311,7 @@ fn unknown_nonreturning_bindings_are_not_folded_away() {
     assert!(validate(&program).unwrap_err().contains("stops"));
     fold(&mut program);
     assert!(matches!(
-        program.expr(program.function(test).body.unwrap().tail),
+        program.expr(program.function(test).body().unwrap().tail),
         Expr::Call(..)
     ));
 }
@@ -342,7 +342,7 @@ fn fold_fuel_is_shared_across_the_whole_program() {
         .iter()
         .filter(|&&id| {
             matches!(
-                program.expr(program.function(id).body.unwrap().tail),
+                program.expr(program.function(id).body().unwrap().tail),
                 Expr::Static(..)
             )
         })
@@ -372,7 +372,7 @@ fn bigint_size_and_work_are_guarded_before_native_operations() {
         program: &program,
         operations: &ops,
     };
-    let body = program.function(test).body.unwrap();
+    let body = program.function(test).body().unwrap();
     let mut size = Budget::new(FoldLimits {
         max_bytes: 600,
         ..FoldLimits::default()
@@ -398,7 +398,7 @@ fn bigint_size_and_work_are_guarded_before_native_operations() {
 }
 
 fn calls_to(program: &Program, id: FnId, called: FnId) -> usize {
-    let mut bodies = vec![program.function(id).body.unwrap()];
+    let mut bodies = vec![program.function(id).body().unwrap()];
     let mut count = 0;
     while let Some(body) = bodies.pop() {
         for &expr in program
@@ -502,7 +502,7 @@ fn large_helpers_and_deep_helper_chains_are_not_blindly_copied() {
     );
     let first = named(&program, "deep_0");
     assert_eq!(calls_to(&program, first, wide), 1);
-    let Expr::Call(called, _) = program.expr(program.function(last).body.unwrap().tail) else {
+    let Expr::Call(called, _) = program.expr(program.function(last).body().unwrap().tail) else {
         panic!("depth cap must retain a call")
     };
     assert_eq!(called, named(&program, "deep_94"));
@@ -532,7 +532,7 @@ fn constructor_size_is_checked_before_concatenating_fields() {
         },
     );
     assert!(matches!(
-        program.expr(program.function(test).body.unwrap().tail),
+        program.expr(program.function(test).body().unwrap().tail),
         Expr::Con(..)
     ));
 }
@@ -568,7 +568,7 @@ fn nested_capture_program() -> Program {
 }
 
 fn expressions(program: &Program, id: FnId) -> Vec<Expr> {
-    let mut pending = vec![program.function(id).body.unwrap()];
+    let mut pending = vec![program.function(id).body().unwrap()];
     let mut found = vec![];
     while let Some(body) = pending.pop() {
         for &id in program
@@ -639,7 +639,7 @@ fn cleanup_substitutes_aliases_captured_across_removed_bindings() {
             b.con(succ, &[alias])
         })
     });
-    let body = program.function(test).body.unwrap();
+    let body = program.function(test).body().unwrap();
     let alias = program.bindings(body.bindings)[1];
     program.write(alias, Expr::Atom(super::Atom(super::Local::at(0))));
     program.set_entry(test);
@@ -653,7 +653,7 @@ fn cleanup_substitutes_aliases_captured_across_removed_bindings() {
     validate(&program).unwrap();
     assert!(
         program
-            .bindings(program.function(test).body.unwrap().bindings)
+            .bindings(program.function(test).body().unwrap().bindings)
             .is_empty()
     );
     for n in 0..4 {
@@ -735,7 +735,7 @@ fn cleanup_removes_a_wide_dead_constructor_chain_in_one_pass() {
     );
     assert!(
         program
-            .bindings(program.function(test).body.unwrap().bindings)
+            .bindings(program.function(test).body().unwrap().bindings)
             .len()
             <= 1
     );
@@ -801,7 +801,7 @@ fn deep_evaluation_declines_without_exhausting_aggregate_fuel() {
             operations: &ops
         }
         .body(
-            program.function(count).body.unwrap(),
+            program.function(count).body().unwrap(),
             vec![Some(Held { owner: ty, bytes })],
             &mut budget
         )

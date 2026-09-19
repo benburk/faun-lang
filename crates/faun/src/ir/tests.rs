@@ -181,8 +181,7 @@ fn two_names_may_give_the_same_routine() {
         name: "hold".to_owned(),
         called: None,
         takes: vec![Class::Word],
-        answers: Some(Class::Word),
-        comes_back: true,
+        returns: crate::platform::Returns::Value(Class::Word),
     });
 
     let facts = crate::barb::recognise(&program);
@@ -212,8 +211,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         name: "narrow".to_owned(),
         called: None,
         takes: vec![Class::Fixed { bits: 4 }],
-        answers: None,
-        comes_back: true,
+        returns: crate::platform::Returns::Unit,
     });
 
     let held = |value: u64| {

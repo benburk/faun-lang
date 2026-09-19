@@ -44,7 +44,7 @@ impl Library {
             operations: &self.operations,
         }
         .body(
-            self.program.function(id).body.unwrap(),
+            self.program.function(id).body().unwrap(),
             args.iter().cloned().map(Some).collect(),
             &mut Budget::new(FoldLimits {
                 max_depth: 512,
@@ -315,7 +315,8 @@ fn assert_calls_fold(lib: &mut Library, cases: &[(&str, Vec<Held>)]) {
         fold(&mut program);
         validate(&program).unwrap();
         for (id, expected) in &probes {
-            let Expr::Static(owner, value) = program.expr(program.function(*id).body.unwrap().tail)
+            let Expr::Static(owner, value) =
+                program.expr(program.function(*id).body().unwrap().tail)
             else {
                 panic!("probe did not fold (normalized={normalized})");
             };
@@ -362,7 +363,7 @@ fn library_meaning_does_not_depend_on_names_or_constructor_order() {
         .iter()
         .find(|f| program.name(f.name) == "probe")
         .unwrap();
-    let Expr::Static(owner, value) = program.expr(probe.body.unwrap().tail) else {
+    let Expr::Static(owner, value) = program.expr(probe.body().unwrap().tail) else {
         panic!("renamed probe did not fold");
     };
     assert_eq!(

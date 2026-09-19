@@ -11,7 +11,7 @@ pub(super) fn laws(program: &mut Program) {
             continue;
         }
         let id = FnId::at(at);
-        if let Some(body) = program.function(id).body {
+        if let Some(body) = program.function(id).body() {
             let mut small = vec![None; program.params(id).len()];
             in_body(program, &operations, body, &mut small, 128);
         }

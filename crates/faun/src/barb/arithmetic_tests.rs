@@ -113,7 +113,7 @@ fn structural_evaluation_matches_arithmetic_for_small_inputs() {
         for a in 0..12 {
             for b in 0..8 {
                 let args = vec![Some(number(ty, a)), Some(number(ty, b))];
-                let body = program.function(id).body.unwrap();
+                let body = program.function(id).body().unwrap();
                 let baseline = Evaluator {
                     program: &program,
                     operations: &unknown,
@@ -131,7 +131,11 @@ fn structural_evaluation_matches_arithmetic_for_small_inputs() {
                     program: &caller,
                     operations: &ops,
                 }
-                .body(caller.function(test).body.unwrap(), args, &mut budget(1000))
+                .body(
+                    caller.function(test).body().unwrap(),
+                    args,
+                    &mut budget(1000),
+                )
                 .unwrap();
                 assert_eq!(baseline.owner, fast.owner);
                 assert_eq!(baseline.bytes, fast.bytes, "{name}({a}, {b})");
@@ -153,7 +157,8 @@ fn folded_values_are_not_limited_to_u64() {
         b.call(mul, &[n, n])
     });
     fold(&mut program);
-    let Expr::Static(owner, value) = program.expr(program.function(test).body.unwrap().tail) else {
+    let Expr::Static(owner, value) = program.expr(program.function(test).body().unwrap().tail)
+    else {
         panic!("not folded")
     };
     assert_eq!(
@@ -174,7 +179,7 @@ fn an_early_exit_refines_the_continuation() {
     normalize(&mut program);
     fold(&mut program);
     let facts = recognise(&program);
-    let body = program.function(program.entry().unwrap()).body.unwrap();
+    let body = program.function(program.entry().unwrap()).body().unwrap();
     let sum = program.bindings(body.bindings).iter().copied().find(|expr| {
         matches!(program.expr(*expr), Expr::Call(called, _) if facts.operation(called) == Some(Operation::Add))
     }).expect("runtime addition");
@@ -206,7 +211,7 @@ fn unrecognized_recursion_still_has_an_evaluation_budget() {
         operations: &operations,
     }
     .body(
-        program.function(id).body.unwrap(),
+        program.function(id).body().unwrap(),
         vec![Some(number(ty, 1_000_000))],
         &mut budget(32),
     );

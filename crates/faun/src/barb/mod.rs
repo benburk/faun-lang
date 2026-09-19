@@ -22,7 +22,7 @@
 //!
 //! - `If` — a [`Expr::Match`] on `Bool`
 //! - tuples and records — single-constructor inductives
-//! - blocks — chains of [`Expr::Let`]
+//! - blocks — ordered bindings and a tail expression in a [`Body`]
 //! - `absurd` — a match with no arms
 //! - `Lam`/`App` — first-order; recursion lives between top-level names
 //! - primitives — arithmetic is recursion over a constructor, and the
@@ -87,8 +87,8 @@ pub use evaluate::FoldLimits;
 pub use facts::{Facts, Operation, recognise};
 pub use fold::{fold, fold_with_limits};
 pub use ir::{
-    Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Local, Program, Range,
-    Symbol, Type, TypeId,
+    Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, FnId, Function, Local,
+    Program, Range, Symbol, Type, TypeId,
 };
 pub use normalize::{InlineLimits, normalize, normalize_with_limits, structural};
 pub use optimize::{OptimizeOptions, optimize};

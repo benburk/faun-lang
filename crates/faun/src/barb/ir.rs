@@ -17,7 +17,7 @@ pub struct Atom(pub Local);
 /// A term.
 ///
 /// Binders are implicit. Locals are de Bruijn levels: a function's parameters
-/// are the first of them, a [`Expr::Let`] binds the next, and a [`Arm`] binds
+/// are the first of them, each [`Body`] binding binds the next, and an [`Arm`] binds
 /// its constructor's fields in order. Two sibling arms reuse the same levels
 /// because they are alternative paths, so a term carries no names and two
 /// structurally equal terms are equal.
@@ -67,28 +67,49 @@ pub struct Ctor {
     pub fields: Range,
 }
 
+/// A body or a host declaration, never both. External calls are observable:
+/// optimization may not discard, duplicate or reorder them. Defined functions
+/// may themselves call external routines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Definition {
+    Body(Body),
+    External {
+        /// Provider name, which may differ from the source name.
+        symbol: Symbol,
+        /// An optional range contract for a natural-valued result.
+        bounds: Option<super::Bounds>,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
     pub name: Symbol,
     /// The types of its parameters, which are the first locals.
     pub params: Range,
     pub result: TypeId,
-    /// What it rewrites to, or nothing when the program only declares it and
-    /// something outside answers for it.
-    ///
-    /// Nothing here is observable, so a call to one is a value like any
-    /// other -- but what a target does while running one is not, which is
-    /// the whole of what a pass owes it: a call to a bodyless name may not
-    /// run more times on any path than the program says.
-    pub body: Option<Body>,
-    /// What answers for it out there, where that is not the name a program
-    /// calls it by. Nothing here reads it: it is a name this tier holds and
-    /// the tier below resolves. Two names may give the same one, which
-    /// is how one routine serves a program at more than one type -- there
-    /// is no body to copy, so nothing is duplicated by saying it twice.
-    pub outside: Option<Symbol>,
-    /// A contract supplied for a bodyless natural-valued declaration.
-    pub bounds: Option<super::Bounds>,
+    pub definition: Definition,
+}
+
+impl Function {
+    #[must_use]
+    pub const fn body(&self) -> Option<Body> {
+        match self.definition {
+            Definition::Body(body) => Some(body),
+            Definition::External { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn bounds(&self) -> Option<super::Bounds> {
+        match self.definition {
+            Definition::External { bounds, .. } => bounds,
+            Definition::Body(_) => None,
+        }
+    }
+
+    pub(super) const fn define(&mut self, body: Body) {
+        self.definition = Definition::Body(body);
+    }
 }
 
 /// A program, and the pools every part of it lives in.
@@ -175,7 +196,7 @@ impl Program {
         }
         let params = u32::try_from(self.params(id).len()).expect("a sane arity");
         self.function(id)
-            .body
+            .body()
             .map_or(params, |body| in_body(self, body, params))
     }
 

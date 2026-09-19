@@ -216,7 +216,7 @@ fn descends(program: &Program, round: &[FnId]) -> Result<(), String> {
 fn matrices(program: &Program, id: FnId, round: &[FnId]) -> Vec<Matrix> {
     let params = program.params(id).len();
     let mut held = Vec::new();
-    let Some(body) = program.function(id).body else {
+    let Some(body) = program.function(id).body() else {
         return held;
     };
     // A parameter is itself and no part of itself: going round on the whole
@@ -327,7 +327,7 @@ fn graph(program: &Program) -> Vec<Vec<FnId>> {
         .map(|at| {
             let id = FnId::at(at);
             let mut held = Vec::new();
-            if let Some(body) = program.function(id).body {
+            if let Some(body) = program.function(id).body() {
                 within(program, body, &mut held);
             }
             held

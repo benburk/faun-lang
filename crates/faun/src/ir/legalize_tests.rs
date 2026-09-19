@@ -61,7 +61,7 @@ fn word(bytes: &[u8]) -> usize {
 }
 
 fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
-    let address = word(&evaluation.values[0].to_bytes_le());
+    let address = word(&evaluation.returned().unwrap()[0].to_bytes_le());
     let globals = p.data().len() + 2;
     let (bytes, start) = if address >= globals {
         (&evaluation.globals[..], address - globals)
@@ -83,7 +83,7 @@ fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
 }
 
 fn no_live_objects(p: &Program, evaluation: &Evaluation, config: Config) {
-    assert!(!evaluation.halted, "unexpected OOM");
+    assert!(evaluation.returned().is_some(), "unexpected OOM");
     let pool = p
         .spans
         .iter()
@@ -154,10 +154,10 @@ fn exact_runtime_arithmetic_and_returned_ownership_at_each_word_size() {
                 let args = [BigUint::from(seed)];
                 let expected = run(&p, test, &args, bits);
                 let actual = run(&scalar, test, &args, bits);
-                assert!(!actual.halted);
+                assert!(actual.returned().is_some());
                 assert_eq!(
                     decoded(&scalar, &actual, bits),
-                    expected.values[0],
+                    expected.returned().unwrap()[0],
                     "{bits} {operation:?} {seed}"
                 );
             }
@@ -192,7 +192,10 @@ fn zero_division_and_monus_alias_paths_keep_returned_values_live() {
                 let args = [BigUint::from(65535u32)];
                 let expected = run(&p, test, &args, bits);
                 let actual = run(&scalar, test, &args, bits);
-                assert_eq!(decoded(&scalar, &actual, bits), expected.values[0]);
+                assert_eq!(
+                    decoded(&scalar, &actual, bits),
+                    expected.returned().unwrap()[0]
+                );
             }
         }
     }
@@ -288,7 +291,7 @@ fn loops_rotate_aliases_reuse_tiny_heaps_and_clean_nested_early_returns() {
                 let args = [BigUint::from(seed)];
                 let expected = run(&p, test, &args, bits);
                 let actual = run(&scalar, test, &args, bits);
-                assert_eq!(actual.values, expected.values);
+                assert_eq!(actual.outcome, expected.outcome);
                 no_live_objects(&scalar, &actual, config);
             }
         }
@@ -336,7 +339,7 @@ fn recursive_calls_borrow_parameters_and_transfer_owned_results() {
         let scalar = legalize(&p, config).unwrap();
         let expected = run(&p, main, &[], bits);
         let actual = run(&scalar, main, &[], bits);
-        assert_eq!(actual.values, expected.values);
+        assert_eq!(actual.outcome, expected.outcome);
         no_live_objects(&scalar, &actual, config);
     }
 }
@@ -388,7 +391,7 @@ fn conversion_aliases_comparisons_and_odd_width_truncation() {
                 let args = [BigUint::from(seed)];
                 let expected = run(&p, test, &args, bits);
                 let actual = run(&scalar, test, &args, bits);
-                assert_eq!(actual.values, expected.values);
+                assert_eq!(actual.outcome, expected.outcome);
                 no_live_objects(&scalar, &actual, config);
             }
         }
@@ -426,8 +429,7 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
     let mut host = TestHost::default();
     let result =
         evaluate::evaluate(&scalar, main, &[], evaluate::Config::default(), &mut host).unwrap();
-    assert!(result.halted);
-    assert_eq!(result.values, [BigUint::from(42u8)]);
+    assert_eq!(result.halted().unwrap(), [BigUint::from(42u8)]);
     assert_eq!(host.calls, ["exit"]);
 }
 
@@ -481,8 +483,7 @@ fn natural_host_signatures_do_not_become_address_signatures() {
         name: "foreign".into(),
         called: None,
         takes: vec![Class::Natural],
-        answers: Some(Class::Natural),
-        comes_back: true,
+        returns: crate::platform::Returns::Value(Class::Natural),
     });
     let (mut p, main) = Program::with("main", routines);
     let foreign = p.platform("foreign");
@@ -515,8 +516,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
             name: "mark".into(),
             called: None,
             takes: vec![],
-            answers: None,
-            comes_back: true,
+            returns: crate::platform::Returns::Unit,
         });
         let (mut p, main) = Program::with("main", routines);
         let mark = p.platform("mark");
@@ -548,8 +548,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
             &mut host,
         )
         .unwrap();
-        assert!(result.halted);
-        assert_eq!(result.values, [BigUint::from(2u8)]);
+        assert_eq!(result.halted().unwrap(), [BigUint::from(2u8)]);
         assert_eq!(host.calls, ["mark", "exit"]);
     }
 }
@@ -608,7 +607,7 @@ fn typed_loop_slots_keep_their_width_when_initialized_from_narrower_values() {
     let scalar = legalize(&p, config).unwrap();
     let expected = run(&p, main, &[], 16);
     let actual = run(&scalar, main, &[], 16);
-    assert_eq!(actual.values, expected.values);
+    assert_eq!(actual.outcome, expected.outcome);
     no_live_objects(&scalar, &actual, config);
 }
 

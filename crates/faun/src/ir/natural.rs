@@ -1,4 +1,4 @@
-//! Generated, target-independent natural arithmetic on base-256 digits.
+//! Shared machine-IR natural arithmetic on base-256 digits.
 //!
 //! Inputs are borrowed; every natural result owns a claim. The caller must
 //! release it. Objects have three target-word headers: total block bytes,
@@ -27,33 +27,95 @@ pub struct Config {
     pub heap_bytes: usize,
 }
 
-// These independent switches describe a dependency set, not runtime state.
-#[expect(clippy::struct_excessive_bools)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Needs {
-    pub add: bool,
-    pub sub: bool,
-    pub mul: bool,
-    pub div: bool,
-    pub modulo: bool,
-    pub compare: bool,
-    pub from_word: bool,
-    pub to_word: bool,
+/// One inventory for helper requests, generated handles and omission tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Helper {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Compare,
+    FromWord,
+    ToWord,
 }
 
+impl Helper {
+    pub(super) const ALL: [Self; 8] = [
+        Self::Add,
+        Self::Sub,
+        Self::Mul,
+        Self::Div,
+        Self::Mod,
+        Self::Compare,
+        Self::FromWord,
+        Self::ToWord,
+    ];
+
+    #[expect(
+        clippy::as_conversions,
+        reason = "fieldless discriminants index the helper inventory"
+    )]
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    pub(super) const fn arithmetic(op: Binary) -> Self {
+        match op {
+            Binary::Add => Self::Add,
+            Binary::Sub => Self::Sub,
+            Binary::Mul => Self::Mul,
+            Binary::Div => Self::Div,
+            Binary::Mod => Self::Mod,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Needs([bool; Helper::ALL.len()]);
+
+impl Needs {
+    pub(super) const fn insert(&mut self, helper: Helper) {
+        self.0[helper.index()] = true;
+    }
+
+    pub(super) const fn contains(self, helper: Helper) -> bool {
+        self.0[helper.index()]
+    }
+}
+
+impl<const N: usize> From<[Helper; N]> for Needs {
+    fn from(helpers: [Helper; N]) -> Self {
+        let mut needs = Self::default();
+        for helper in helpers {
+            needs.insert(helper);
+        }
+        needs
+    }
+}
+
+/// Exported handles for requested operations; dependencies stay internal.
 #[derive(Clone, Debug)]
-pub struct Library {
+pub(super) struct Library {
     pub zero: DataId,
     pub retain: FunctionId,
     pub release: FunctionId,
-    pub add: Option<FunctionId>,
-    pub sub: Option<FunctionId>,
-    pub mul: Option<FunctionId>,
-    pub div: Option<FunctionId>,
-    pub modulo: Option<FunctionId>,
-    pub compare: Option<FunctionId>,
-    pub from_word: Option<FunctionId>,
-    pub to_word: Option<FunctionId>,
+    helpers: [Option<FunctionId>; Helper::ALL.len()],
+}
+
+impl Library {
+    pub(super) const fn get(&self, helper: Helper) -> Option<FunctionId> {
+        self.helpers[helper.index()]
+    }
+
+    pub(super) const fn require(&self, helper: Helper) -> FunctionId {
+        self.get(helper)
+            .expect("requested natural helper was generated")
+    }
+
+    const fn insert(&mut self, helper: Helper, function: FunctionId) {
+        self.helpers[helper.index()] = Some(function);
+    }
 }
 
 const A: Class = Class::Address;
@@ -61,6 +123,13 @@ const W: Class = Class::Word;
 const END: Terminator = Terminator::UNREACHABLE;
 
 impl Config {
+    pub(super) const fn layout(self) -> super::Layout {
+        super::Layout {
+            word_bits: self.word_bits,
+            endian: super::Endian::Little,
+        }
+    }
+
     fn checked(self) -> Result<(usize, u64), String> {
         if !matches!(self.word_bits, 16 | 32 | 64) {
             return Err("natural runtime needs a 16, 32, or 64 bit word".to_owned());
@@ -89,7 +158,7 @@ fn header(bytes: &mut [u8], at: usize, value: u64, word: usize) {
 ///
 /// # Errors
 /// If the configuration or object size does not fit the target.
-pub fn constant(
+pub(super) fn constant(
     program: &mut Program,
     config: Config,
     magnitude: &BigUint,
@@ -117,6 +186,7 @@ pub fn constant(
     {
         return Err("natural constants exceed the data pool".to_owned());
     }
+    program.bind_layout(config.layout())?;
     if padding != 0 {
         program.intern(&vec![0; padding]);
     }
@@ -197,13 +267,17 @@ fn declare(p: &mut Program, name: &str, params: &[Class], result: &[Class]) -> F
 ///
 /// # Errors
 /// If the heap configuration or required exit contract is invalid.
-pub fn append(program: &mut Program, config: Config, needs: Needs) -> Result<Library, String> {
+pub(super) fn append(
+    program: &mut Program,
+    config: Config,
+    needs: Needs,
+) -> Result<Library, String> {
     let (word, max) = config.checked()?;
     let exit = program
         .routines()
         .get("exit")
         .ok_or_else(|| "natural runtime requires exit(word)".to_owned())?;
-    if exit.takes != [W] || exit.answers.is_some() || exit.comes_back {
+    if exit.takes != [W] || exit.returns != crate::platform::Returns::Never {
         return Err("natural runtime requires nonreturning exit(word)".to_owned());
     }
     let zero = constant(program, config, &BigUint::default())?;
@@ -212,16 +286,18 @@ pub fn append(program: &mut Program, config: Config, needs: Needs) -> Result<Lib
         zero,
         retain,
         release,
-        add: None,
-        sub: None,
-        mul: None,
-        div: None,
-        modulo: None,
-        compare: needs.compare.then(|| comparison(program, word)),
-        from_word: None,
-        to_word: needs.to_word.then(|| narrowing(program, word)),
+        helpers: [None; Helper::ALL.len()],
     };
-    if needs.add || needs.sub || needs.mul || needs.div || needs.modulo || needs.from_word {
+    if needs.contains(Helper::Compare) {
+        library.insert(Helper::Compare, comparison(program, word));
+    }
+    if needs.contains(Helper::ToWord) {
+        library.insert(Helper::ToWord, narrowing(program, word));
+    }
+    if Helper::ALL
+        .into_iter()
+        .any(|helper| needs.contains(helper) && !matches!(helper, Helper::Compare | Helper::ToWord))
+    {
         let alloc = allocator(program, config, word, zero, fail)?;
         let trim = trimming(program, word);
         let finish = finishing(program, trim, release, zero);
@@ -264,18 +340,27 @@ struct Storage {
 
 impl Storage {
     fn append(self, p: &mut Program, needs: Needs, lib: &mut Library) {
-        if needs.from_word {
-            lib.from_word = Some(promotion(p, self.alloc, self.finish, lib.zero, self.word));
+        if needs.contains(Helper::FromWord) {
+            lib.insert(
+                Helper::FromWord,
+                promotion(p, self.alloc, self.finish, lib.zero, self.word),
+            );
         }
-        if needs.mul {
-            lib.mul = Some(multiplication(p, self, lib.zero));
+        if needs.contains(Helper::Mul) {
+            lib.insert(Helper::Mul, multiplication(p, self, lib.zero));
         }
-        if needs.add || needs.sub || needs.div || needs.modulo {
+        if [Helper::Add, Helper::Sub, Helper::Div, Helper::Mod]
+            .into_iter()
+            .any(|h| needs.contains(h))
+        {
             let digit = digit_reader(p, self.word);
-            if needs.add {
-                lib.add = Some(addition(p, self, digit));
+            if needs.contains(Helper::Add) {
+                lib.insert(Helper::Add, addition(p, self, digit));
             }
-            if needs.sub || needs.div || needs.modulo {
+            if [Helper::Sub, Helper::Div, Helper::Mod]
+                .into_iter()
+                .any(|h| needs.contains(h))
+            {
                 self.append_subdivision(p, needs, lib, digit);
             }
         }
@@ -288,15 +373,27 @@ impl Storage {
         lib: &mut Library,
         digit: FunctionId,
     ) {
-        let compare = lib.compare.unwrap_or_else(|| comparison(p, self.word));
+        let compare = lib
+            .get(Helper::Compare)
+            .unwrap_or_else(|| comparison(p, self.word));
         let subtract = subtracting(p, digit, self.trim, self.word);
-        if needs.sub {
-            lib.sub = Some(monus(p, self, compare, subtract, lib.zero));
+        if needs.contains(Helper::Sub) {
+            lib.insert(Helper::Sub, monus(p, self, compare, subtract, lib.zero));
         }
-        if needs.div || needs.modulo {
+        if needs.contains(Helper::Div) || needs.contains(Helper::Mod) {
             let divmod = division(p, self, compare, subtract, lib);
-            lib.div = needs.div.then(|| division_entry(p, divmod, false));
-            lib.modulo = needs.modulo.then(|| division_entry(p, divmod, true));
+            if needs.contains(Helper::Div) {
+                lib.insert(
+                    Helper::Div,
+                    division_entry(p, divmod, DivisionResult::Quotient),
+                );
+            }
+            if needs.contains(Helper::Mod) {
+                lib.insert(
+                    Helper::Mod,
+                    division_entry(p, divmod, DivisionResult::Remainder),
+                );
+            }
         }
     }
 }
@@ -1093,11 +1190,20 @@ fn division(
     f
 }
 
-fn division_entry(p: &mut Program, divmod: FunctionId, remainder: bool) -> FunctionId {
-    let name = if remainder { "nat.mod" } else { "nat.div" };
+#[derive(Clone, Copy)]
+enum DivisionResult {
+    Quotient,
+    Remainder,
+}
+
+fn division_entry(p: &mut Program, divmod: FunctionId, result: DivisionResult) -> FunctionId {
+    let (name, mode) = match result {
+        DivisionResult::Quotient => ("nat.div", 0),
+        DivisionResult::Remainder => ("nat.mod", 1),
+    };
     let f = declare(p, name, &[A, A], &[A]);
     p.define(f, |b, args| {
-        let mode = number(b, u64::from(remainder));
+        let mode = number(b, mode);
         let out = call(b, divmod, &[args[0], args[1], mode]);
         b.ret(&[out])
     });

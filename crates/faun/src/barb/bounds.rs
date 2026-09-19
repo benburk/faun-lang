@@ -349,12 +349,12 @@ fn once(
     let at = id.index();
     let params: Option<Vec<Bounds>> = held.params[at].iter().copied().collect();
     let Some(params) = params else { return false };
-    let Some(body) = program.function(id).body else {
+    let Some(body) = program.function(id).body() else {
         // Something outside answers, and nothing about a declaration can be
         // read, so what comes back from one is anything at all.
         return settle(
             &mut held.results[at],
-            program.function(id).bounds.unwrap_or(Bounds::ANY),
+            program.function(id).bounds().unwrap_or(Bounds::ANY),
             round,
         );
     };

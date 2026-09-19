@@ -1,7 +1,7 @@
 use num_bigint::BigUint;
 
 use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
-use super::natural::{self, Config, Library, Needs};
+use super::natural::{self, Config, Helper, Library, Needs};
 use super::{Binary, Builder, Class, DataId, FunctionId, Op, Program, Relation};
 use crate::platform::{Routine, Routines};
 
@@ -59,8 +59,7 @@ fn test_program() -> (Program, FunctionId) {
         name: "observe".to_owned(),
         called: None,
         takes: vec![ADDRESS],
-        answers: None,
-        comes_back: true,
+        returns: crate::platform::Returns::Unit,
     });
     let (mut p, entry) = Program::with("test", routines);
     p.define(entry, |b, _| {
@@ -174,15 +173,30 @@ fn static_layout_configuration_and_pruning() {
 }
 
 #[test]
+fn every_helper_subset_resolves_exactly_its_requested_handles() {
+    for mask in 0u16..(1 << Helper::ALL.len()) {
+        let mut needs = Needs::default();
+        for (at, helper) in Helper::ALL.into_iter().enumerate() {
+            if mask & (1 << at) != 0 {
+                needs.insert(helper);
+            }
+        }
+        let (p, library, _) = program(config(32), needs);
+        super::validate(&p).unwrap();
+        for helper in Helper::ALL {
+            assert_eq!(
+                library.get(helper).is_some(),
+                needs.contains(helper),
+                "{mask}: {helper:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn unused_arithmetic_families_are_not_generated() {
     for bits in [16, 32, 64] {
-        let (p, _, _) = program(
-            config(bits),
-            Needs {
-                add: true,
-                ..Needs::default()
-            },
-        );
+        let (p, _, _) = program(config(bits), Needs::from([Helper::Add]));
         let names: Vec<_> = p.functions().iter().map(|f| p.name(f.name)).collect();
         assert!(names.contains(&"nat.add"));
         assert!(!names.contains(&"nat.mul"));
@@ -221,19 +235,7 @@ fn invalid_configurations_are_rejected() {
 #[test]
 fn generated_regions_fit_the_narrow_calling_convention() {
     for bits in [16, 32, 64] {
-        let (p, _, _) = program(
-            config(bits),
-            Needs {
-                add: true,
-                sub: true,
-                mul: true,
-                div: true,
-                modulo: true,
-                compare: true,
-                from_word: true,
-                to_word: true,
-            },
-        );
+        let (p, _, _) = program(config(bits), Needs::from(Helper::ALL));
         super::validate(&p).unwrap();
         for f in p.functions() {
             assert!(f.params.len() <= 4);
@@ -309,14 +311,13 @@ fn all_arithmetic_matches_biguint_at_every_word_width() {
         let conf = config(bits);
         let (mut p, lib, _) = program(
             conf,
-            Needs {
-                add: true,
-                sub: true,
-                mul: true,
-                div: true,
-                modulo: true,
-                ..Needs::default()
-            },
+            Needs::from([
+                Helper::Add,
+                Helper::Sub,
+                Helper::Mul,
+                Helper::Div,
+                Helper::Mod,
+            ]),
         );
         let checks = arithmetic_checks(&mut p, &lib);
         let pairs: Vec<_> = samples(bits)
@@ -332,7 +333,7 @@ fn all_arithmetic_matches_biguint_at_every_word_width() {
                 let expected = model(op, a, c);
                 let args = [data_address(&p, *da), data_address(&p, *dc)];
                 let (evaluation, seen) = run(&p, check, &args, bits);
-                assert!(!evaluation.halted, "{bits} {op:?} {a} {c}");
+                assert!(evaluation.returned().is_some(), "{bits} {op:?} {a} {c}");
                 assert_eq!(
                     seen,
                     [expected, a.clone(), c.clone()],
@@ -347,11 +348,11 @@ fn all_arithmetic_matches_biguint_at_every_word_width() {
 fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)> {
     let observer = p.platform("observe");
     [
-        (Binary::Add, lib.add),
-        (Binary::Sub, lib.sub),
-        (Binary::Mul, lib.mul),
-        (Binary::Div, lib.div),
-        (Binary::Mod, lib.modulo),
+        (Binary::Add, lib.get(Helper::Add)),
+        (Binary::Sub, lib.get(Helper::Sub)),
+        (Binary::Mul, lib.get(Helper::Mul)),
+        (Binary::Div, lib.get(Helper::Div)),
+        (Binary::Mod, lib.get(Helper::Mod)),
     ]
     .into_iter()
     .map(|(op, function)| {
@@ -387,14 +388,7 @@ fn model(op: Binary, a: &BigUint, c: &BigUint) -> BigUint {
 fn comparison_and_explicit_low_word_conversion() {
     for bits in [16, 32, 64] {
         let conf = config(bits);
-        let (mut p, lib, _) = program(
-            conf,
-            Needs {
-                compare: true,
-                to_word: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, _) = program(conf, Needs::from([Helper::Compare, Helper::ToWord]));
         assert!(p.globals().is_empty());
         let mask = (BigUint::from(1u8) << usize::from(bits)) - BigUint::from(1u8);
         for (a, c) in samples(bits) {
@@ -402,7 +396,7 @@ fn comparison_and_explicit_low_word_conversion() {
             let dc = natural::constant(&mut p, conf, &c).unwrap();
             let (answer, _) = run(
                 &p,
-                lib.compare.unwrap(),
+                lib.require(Helper::Compare),
                 &[data_address(&p, da), data_address(&p, dc)],
                 bits,
             );
@@ -411,9 +405,14 @@ fn comparison_and_explicit_low_word_conversion() {
                 std::cmp::Ordering::Equal => 1,
                 std::cmp::Ordering::Greater => 2,
             };
-            assert_eq!(answer.values, [BigUint::from(order)]);
-            let (answer, _) = run(&p, lib.to_word.unwrap(), &[data_address(&p, da)], bits);
-            assert_eq!(answer.values, [&a & &mask]);
+            assert_eq!(answer.returned().unwrap(), [BigUint::from(order)]);
+            let (answer, _) = run(
+                &p,
+                lib.require(Helper::ToWord),
+                &[data_address(&p, da)],
+                bits,
+            );
+            assert_eq!(answer.returned().unwrap(), [&a & &mask]);
         }
     }
 }
@@ -432,12 +431,7 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
         };
         let (mut p, lib, _) = program(
             conf,
-            Needs {
-                from_word: true,
-                to_word: true,
-                add: true,
-                ..Needs::default()
-            },
+            Needs::from([Helper::FromWord, Helper::ToWord, Helper::Add]),
         );
         let observer = p.platform("observe");
         let check = p.declare("reuse", &[WORD], &[WORD]);
@@ -449,10 +443,10 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
                 let i = state[0];
                 let done = b.compare(Relation::Equal, i, rounds);
                 b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                let a = b.call(lib.from_word.unwrap(), args)[0];
+                let a = b.call(lib.require(Helper::FromWord), args)[0];
                 let alias = b.call(lib.retain, &[a])[0];
                 b.call(lib.release, &[a]);
-                let sum = b.call(lib.add.unwrap(), &[alias, alias])[0];
+                let sum = b.call(lib.require(Helper::Add), &[alias, alias])[0];
                 b.call(lib.release, &[alias]);
                 observe_and_release(b, &lib, observer, sum);
                 let next = b.binary(Binary::Add, i, one);
@@ -462,13 +456,13 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
         });
         let input = (BigUint::from(1u8) << usize::from(bits)) - BigUint::from(1u8);
         let (evaluation, seen) = run(&p, check, std::slice::from_ref(&input), bits);
-        assert!(!evaluation.halted);
+        assert!(evaluation.returned().is_some());
         assert_eq!(seen.len(), 1000);
         assert!(seen.iter().all(|n| n == &(&input * BigUint::from(2u8))));
         free_heap(&evaluation.globals, word);
         // The zero promotion path is immortal and allocates nothing.
         let (evaluation, seen) = run(&p, check, &[BigUint::default()], bits);
-        assert!(!evaluation.halted);
+        assert!(evaluation.returned().is_some());
         assert_eq!(seen, vec![BigUint::default(); 1000]);
         free_heap(&evaluation.globals, word);
     }
@@ -482,33 +476,26 @@ fn freed_adjacent_blocks_coalesce_for_a_larger_allocation() {
             word_bits: bits,
             heap_bytes: 12 * word,
         };
-        let (mut p, lib, _) = program(
-            conf,
-            Needs {
-                from_word: true,
-                add: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Add]));
         let observer = p.platform("observe");
         let magnitude = BigUint::from(1u8) << (word * 8);
         let big = natural::constant(&mut p, conf, &magnitude).unwrap();
         let check = p.declare("coalesce", &[WORD], &[WORD]);
         p.define(check, |b, args| {
-            let first = b.call(lib.from_word.unwrap(), args)[0];
-            let second = b.call(lib.from_word.unwrap(), args)[0];
-            let last = b.call(lib.from_word.unwrap(), args)[0];
+            let first = b.call(lib.require(Helper::FromWord), args)[0];
+            let second = b.call(lib.require(Helper::FromWord), args)[0];
+            let last = b.call(lib.require(Helper::FromWord), args)[0];
             b.call(lib.release, &[first]);
             b.call(lib.release, &[second]);
             let big = b.address_of(big);
-            let sum = b.call(lib.add.unwrap(), &[big, big])[0];
+            let sum = b.call(lib.require(Helper::Add), &[big, big])[0];
             observe_and_release(b, &lib, observer, sum);
             observe_and_release(b, &lib, observer, last);
             let zero = b.constant(WORD, 0);
             b.ret(&[zero])
         });
         let (evaluation, seen) = run(&p, check, &[BigUint::from(7u8)], bits);
-        assert!(!evaluation.halted);
+        assert!(evaluation.returned().is_some());
         assert_eq!(seen, [&magnitude + &magnitude, BigUint::from(7u8)]);
         free_heap(&evaluation.globals, word);
     }
@@ -522,27 +509,19 @@ fn exhaustion_halts_without_corrupting_the_heap() {
             word_bits: bits,
             heap_bytes: 4 * word,
         };
-        let (mut p, lib, _) = program(
-            conf,
-            Needs {
-                from_word: true,
-                mul: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Mul]));
         let observer = p.platform("observe");
         let check = p.declare("exhaust", &[WORD], &[WORD]);
         p.define(check, |b, args| {
-            let first = b.call(lib.from_word.unwrap(), args)[0];
+            let first = b.call(lib.require(Helper::FromWord), args)[0];
             b.platform_call(observer, &[first]);
-            let second = b.call(lib.from_word.unwrap(), args)[0];
+            let second = b.call(lib.require(Helper::FromWord), args)[0];
             b.platform_call(observer, &[second]);
             let zero = b.constant(WORD, 0);
             b.ret(&[zero])
         });
         let (evaluation, seen) = run(&p, check, &[BigUint::from(1u8)], bits);
-        assert!(evaluation.halted);
-        assert_eq!(evaluation.values, [BigUint::from(2u8)]);
+        assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
         assert_eq!(
             seen,
             [BigUint::from(1u8)],
@@ -565,22 +544,15 @@ fn oversized_results_halt_before_allocation() {
             word_bits: bits,
             heap_bytes: 4 * word,
         };
-        let (mut p, lib, _) = program(
-            conf,
-            Needs {
-                mul: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul]));
         let huge = natural::constant(&mut p, conf, &(BigUint::from(1u8) << (word * 16))).unwrap();
         let (evaluation, _) = run(
             &p,
-            lib.mul.unwrap(),
+            lib.require(Helper::Mul),
             &[data_address(&p, huge), data_address(&p, huge)],
             bits,
         );
-        assert!(evaluation.halted);
-        assert_eq!(evaluation.values, [BigUint::from(2u8)]);
+        assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
         free_heap(&evaluation.globals, word);
     }
 }
@@ -589,18 +561,12 @@ fn oversized_results_halt_before_allocation() {
 fn reference_count_exhaustion_does_not_create_an_immortal_object() {
     for bits in [16, 32, 64] {
         let conf = config(bits);
-        let (mut p, lib, _) = program(
-            conf,
-            Needs {
-                from_word: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord]));
         let check = p.declare("count_overflow", &[], &[WORD]);
         let max = u64::MAX >> (64 - bits);
         p.define(check, |b, _| {
             let one = b.constant(WORD, 1);
-            let object = b.call(lib.from_word.unwrap(), &[one])[0];
+            let object = b.call(lib.require(Helper::FromWord), &[one])[0];
             // Test-only injection: no feasible test needs MAX-1 live aliases.
             let count = b.constant(WORD, max - 1);
             b.store(super::Width::Word, object, super::Offset::Words(1), count);
@@ -608,8 +574,7 @@ fn reference_count_exhaustion_does_not_create_an_immortal_object() {
             b.ret(&[one])
         });
         let (evaluation, _) = run(&p, check, &[], bits);
-        assert!(evaluation.halted);
-        assert_eq!(evaluation.values, [BigUint::from(2u8)]);
+        assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
         let word = usize::from(bits / 8);
         assert_eq!(read_word(&evaluation.globals[word..2 * word]), max - 1);
     }
@@ -630,7 +595,7 @@ fn repeat(b: &mut Builder<'_>, times: u64, body: impl FnOnce(&mut Builder<'_>)) 
 
 fn promote(b: &mut Builder<'_>, lib: &Library, value: u64) -> super::ValueId {
     let value = b.constant(WORD, value);
-    b.call(lib.from_word.unwrap(), &[value])[0]
+    b.call(lib.require(Helper::FromWord), &[value])[0]
 }
 
 fn observed_product(
@@ -642,7 +607,7 @@ fn observed_product(
 ) {
     let left = b.address_of(left);
     let right = b.address_of(right);
-    let result = b.call(lib.mul.unwrap(), &[left, right])[0];
+    let result = b.call(lib.require(Helper::Mul), &[left, right])[0];
     observe_and_release(b, lib, observer, result);
 }
 
@@ -653,13 +618,7 @@ fn multiplication_clears_dirty_recycled_accumulators() {
             word_bits: bits,
             heap_bytes: 64,
         };
-        let (mut p, lib, entry) = program(
-            conf,
-            Needs {
-                mul: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, entry) = program(conf, Needs::from([Helper::Mul]));
         let observer = p.platform("observe");
         let dense = (BigUint::from(1u8) << 128usize) - BigUint::from(1u8);
         let sparse = BigUint::from(1u8) << 120usize;
@@ -675,7 +634,7 @@ fn multiplication_clears_dirty_recycled_accumulators() {
             b.ret(&[zero])
         });
         let (evaluation, seen) = run(&p, entry, &[], bits);
-        assert!(!evaluation.halted);
+        assert!(evaluation.returned().is_some());
         assert_eq!(seen.len(), 200);
         for pair in seen.chunks_exact(2) {
             assert_eq!(pair, [&dense * &dense, sparse.clone()]);
@@ -692,19 +651,12 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
             word_bits: bits,
             heap_bytes: 8 * word,
         };
-        let (mut p, lib, entry) = program(
-            conf,
-            Needs {
-                from_word: true,
-                modulo: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, entry) = program(conf, Needs::from([Helper::FromWord, Helper::Mod]));
         let observer = p.platform("observe");
         p.define(entry, |b, _| {
             let left = promote(b, &lib, 513);
             let right = promote(b, &lib, 514);
-            let result = b.call(lib.modulo.unwrap(), &[left, right])[0];
+            let result = b.call(lib.require(Helper::Mod), &[left, right])[0];
             b.call(lib.release, &[left]);
             b.call(lib.release, &[right]);
             let replacement = promote(b, &lib, 9);
@@ -714,7 +666,7 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
             b.ret(&[zero])
         });
         let (evaluation, seen) = run(&p, entry, &[], bits);
-        assert!(!evaluation.halted);
+        assert!(evaluation.returned().is_some());
         assert_eq!(seen, [BigUint::from(513u32), BigUint::from(9u8)]);
         free_heap(&evaluation.globals, word);
     }
@@ -733,7 +685,7 @@ fn fragmented_check(p: &mut Program, lib: &Library, big: DataId, remove_middle: 
             b.call(lib.release, &[middle]);
         }
         let big = b.address_of(big);
-        let result = b.call(lib.add.unwrap(), &[big, big])[0];
+        let result = b.call(lib.require(Helper::Add), &[big, big])[0];
         // Keep the 5W result alive: this request must take the 7W remainder.
         let replacement = promote(b, lib, 9);
         observe_and_release(b, lib, observer, result);
@@ -757,20 +709,13 @@ fn coalescing_stops_at_live_blocks_and_later_reuses_the_joined_run() {
         };
         let magnitude = BigUint::from(1u8) << usize::from(bits);
         for remove_middle in [false, true] {
-            let (mut p, lib, entry) = program(
-                conf,
-                Needs {
-                    from_word: true,
-                    add: true,
-                    ..Needs::default()
-                },
-            );
+            let (mut p, lib, entry) = program(conf, Needs::from([Helper::FromWord, Helper::Add]));
             let big = natural::constant(&mut p, conf, &magnitude).unwrap();
             fragmented_check(&mut p, &lib, big, remove_middle);
             let (evaluation, seen) = run(&p, entry, &[], bits);
             let blocks = partition(&evaluation.globals, word);
             if remove_middle {
-                assert!(!evaluation.halted);
+                assert!(evaluation.returned().is_some());
                 assert_eq!(
                     seen,
                     [
@@ -782,8 +727,7 @@ fn coalescing_stops_at_live_blocks_and_later_reuses_the_joined_run() {
                 assert_eq!(blocks, [(5 * word, 0), (7 * word, 0), (4 * word, 0)]);
                 free_heap(&evaluation.globals, word);
             } else {
-                assert!(evaluation.halted);
-                assert_eq!(evaluation.values, [BigUint::from(2u8)]);
+                assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
                 assert!(seen.is_empty());
                 still_fragmented(&evaluation.globals, word);
             }
@@ -830,16 +774,8 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
         let (mut p, entry) = test_program();
         let sentinel = p.intern(&[0xa5]);
         p.global(&[0x5a]);
-        let lib = natural::append(
-            &mut p,
-            conf,
-            Needs {
-                from_word: true,
-                mul: true,
-                ..Needs::default()
-            },
-        )
-        .unwrap();
+        let lib =
+            natural::append(&mut p, conf, Needs::from([Helper::FromWord, Helper::Mul])).unwrap();
         let tail = p.intern(&[0x6b]); // makes the interpreter's Globals base unaligned
         assert_ne!((p.data().len() + 2 + word) % word, 0);
         let prefix = p.globals()[..word].to_vec();
@@ -847,7 +783,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
         p.define(entry, |b, _| {
             repeat(b, 100, |b| {
                 let input = promote(b, &lib, 513);
-                let result = b.call(lib.mul.unwrap(), &[input, input])[0];
+                let result = b.call(lib.require(Helper::Mul), &[input, input])[0];
                 b.call(lib.release, &[input]);
                 observe_and_release(b, &lib, observer, result);
             });
@@ -855,8 +791,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
             b.ret(&[pair])
         });
         let (evaluation, seen) = run(&p, entry, &[], bits);
-        assert!(!evaluation.halted);
-        assert_eq!(evaluation.values, [BigUint::from(0xa56bu32)]);
+        assert_eq!(evaluation.returned().unwrap(), [BigUint::from(0xa56bu32)]);
         assert_eq!(seen, vec![BigUint::from(513u32 * 513); 100]);
         assert_eq!(&evaluation.globals[..word], prefix);
         free_heap(&evaluation.globals[word..], word);
@@ -870,14 +805,7 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
             word_bits: bits,
             heap_bytes: 128,
         };
-        let (mut p, lib, entry) = program(
-            conf,
-            Needs {
-                add: true,
-                sub: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, entry) = program(conf, Needs::from([Helper::Add, Helper::Sub]));
         let observer = p.platform("observe");
         let power = BigUint::from(1u8) << 128usize;
         let dense = &power - BigUint::from(1u8);
@@ -887,9 +815,9 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
             repeat(b, 32, |b| {
                 let dense = b.address_of(dense_id);
                 let one = b.address_of(one);
-                let sum = b.call(lib.add.unwrap(), &[dense, one])[0];
+                let sum = b.call(lib.require(Helper::Add), &[dense, one])[0];
                 b.platform_call(observer, &[sum]);
-                let difference = b.call(lib.sub.unwrap(), &[sum, one])[0];
+                let difference = b.call(lib.require(Helper::Sub), &[sum, one])[0];
                 b.call(lib.release, &[sum]);
                 observe_and_release(b, &lib, observer, difference);
             });
@@ -897,7 +825,7 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
             b.ret(&[zero])
         });
         let (evaluation, seen) = run(&p, entry, &[], bits);
-        assert!(!evaluation.halted);
+        assert!(evaluation.returned().is_some());
         assert_eq!(seen.len(), 64);
         for pair in seen.chunks_exact(2) {
             assert_eq!(pair, [power.clone(), dense.clone()]);
@@ -928,22 +856,14 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
             word_bits: bits,
             heap_bytes: 128,
         };
-        let (mut p, lib, _) = program(
-            conf,
-            Needs {
-                mul: true,
-                div: true,
-                modulo: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul, Helper::Div, Helper::Mod]));
         let dense = (BigUint::from(1u8) << 128usize) - BigUint::from(1u8);
         let dirty = natural::constant(&mut p, conf, &dense).unwrap();
         let observer = p.platform("observe");
         let check = p.declare("recycled_division", &[ADDRESS, ADDRESS], &[WORD]);
         p.define(check, |b, args| {
             observed_product(b, &lib, observer, dirty, dirty);
-            for function in [lib.div.unwrap(), lib.modulo.unwrap()] {
+            for function in [lib.require(Helper::Div), lib.require(Helper::Mod)] {
                 let value = b.call(function, args)[0];
                 observe_and_release(b, &lib, observer, value);
             }
@@ -957,7 +877,7 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
             let right = natural::constant(&mut p, conf, &b).unwrap();
             let args = [data_address(&p, left), data_address(&p, right)];
             let (evaluation, seen) = run(&p, check, &args, bits);
-            assert!(!evaluation.halted);
+            assert!(evaluation.returned().is_some());
             assert_eq!(seen, [&dense * &dense, quotient, remainder]);
             free_heap(&evaluation.globals, usize::from(bits / 8));
         }
@@ -965,16 +885,7 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
 }
 
 fn isolated_needs(op: Option<Binary>) -> Needs {
-    let mut needs = Needs::default();
-    match op {
-        Some(Binary::Sub) => needs.sub = true,
-        Some(Binary::Div) => needs.div = true,
-        Some(Binary::Mod) => needs.modulo = true,
-        Some(Binary::Mul) => needs.mul = true,
-        None => needs.from_word = true,
-        _ => unreachable!("one of the isolated test families"),
-    }
-    needs
+    Needs::from([op.map_or(Helper::FromWord, Helper::arithmetic)])
 }
 
 fn isolated_family(bits: u16, op: Option<Binary>) {
@@ -983,16 +894,7 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
         heap_bytes: 128,
     };
     let (mut p, lib, entry) = program(conf, isolated_needs(op));
-    let optional = [
-        lib.add,
-        lib.sub,
-        lib.mul,
-        lib.div,
-        lib.modulo,
-        lib.compare,
-        lib.from_word,
-        lib.to_word,
-    ];
+    let optional = Helper::ALL.map(|helper| lib.get(helper));
     assert_eq!(optional.iter().filter(|id| id.is_some()).count(), 1);
     let function = optional.into_iter().flatten().next().unwrap();
     let left = (BigUint::from(1u8) << 128usize) + BigUint::from(257u32);
@@ -1013,7 +915,7 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
         b.ret(&[zero])
     });
     let (evaluation, seen) = run(&p, entry, &[], bits);
-    assert!(!evaluation.halted);
+    assert!(evaluation.returned().is_some());
     let expected = op.map_or_else(|| BigUint::from(513u32), |op| model(op, &left, &right));
     assert_eq!(seen, [expected]);
     free_heap(&evaluation.globals, usize::from(bits / 8));
@@ -1039,13 +941,7 @@ fn retain_and_release_reject_zero_counts_without_resurrecting_storage() {
     for bits in [16, 32, 64] {
         let conf = config(bits);
         for retaining in [false, true] {
-            let (mut p, lib, entry) = program(
-                conf,
-                Needs {
-                    from_word: true,
-                    ..Needs::default()
-                },
-            );
+            let (mut p, lib, entry) = program(conf, Needs::from([Helper::FromWord]));
             p.define(entry, |b, _| {
                 let object = promote(b, &lib, 1);
                 let zero = b.constant(WORD, 0);
@@ -1055,8 +951,7 @@ fn retain_and_release_reject_zero_counts_without_resurrecting_storage() {
                 b.ret(&[zero])
             });
             let (evaluation, seen) = run(&p, entry, &[], bits);
-            assert!(evaluation.halted);
-            assert_eq!(evaluation.values, [BigUint::from(2u8)]);
+            assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
             assert!(seen.is_empty());
             free_heap(&evaluation.globals, usize::from(bits / 8));
         }
@@ -1067,20 +962,13 @@ fn retain_and_release_reject_zero_counts_without_resurrecting_storage() {
 fn immortal_and_mortal_identity_results_have_correct_claims() {
     for bits in [16, 32, 64] {
         let conf = config(bits);
-        let (mut p, lib, _) = program(
-            conf,
-            Needs {
-                from_word: true,
-                modulo: true,
-                ..Needs::default()
-            },
-        );
+        let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Mod]));
         let observer = p.platform("observe");
         let check = p.declare("identity", &[WORD], &[WORD]);
         p.define(check, |b, args| {
-            let a = b.call(lib.from_word.unwrap(), args)[0];
+            let a = b.call(lib.require(Helper::FromWord), args)[0];
             let zero = b.address_of(lib.zero);
-            let same = b.call(lib.modulo.unwrap(), &[a, zero])[0];
+            let same = b.call(lib.require(Helper::Mod), &[a, zero])[0];
             b.call(lib.release, &[a]);
             observe_and_release(b, &lib, observer, same);
             let alias = b.call(lib.retain, &[zero])[0];
@@ -1090,7 +978,7 @@ fn immortal_and_mortal_identity_results_have_correct_claims() {
             b.ret(&[zero])
         });
         let (evaluation, seen) = run(&p, check, &[BigUint::from(513u32)], bits);
-        assert!(!evaluation.halted);
+        assert!(evaluation.returned().is_some());
         assert_eq!(seen, [BigUint::from(513u32), BigUint::default()]);
         free_heap(&evaluation.globals, usize::from(bits / 8));
     }

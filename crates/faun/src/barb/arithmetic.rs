@@ -223,7 +223,7 @@ impl<'a> Normal<'a> {
     }
 
     fn run(&self, args: Vec<Term>) -> Option<Term> {
-        self.body(self.program.function(self.id).body?, args, &mut 256)
+        self.body(self.program.function(self.id).body()?, args, &mut 256)
     }
     fn body(&self, body: Body, mut locals: Vec<Term>, fuel: &mut u32) -> Option<Term> {
         for &binding in self.program.bindings(body.bindings) {
@@ -261,7 +261,7 @@ impl<'a> Normal<'a> {
                 if let Some(op) = self.facts[called.index()] {
                     return Some(Term::Known(op, fields));
                 }
-                self.body(self.program.function(called).body?, fields, fuel)
+                self.body(self.program.function(called).body()?, fields, fuel)
             }
             Expr::Match(value, arms) => self.branch(&locals[value.0.index()], arms, locals, fuel),
         }

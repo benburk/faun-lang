@@ -53,7 +53,7 @@ pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
         costs: source
             .functions()
             .iter()
-            .map(|f| f.body.map_or(0, |body| cost(&source, body)))
+            .map(|f| f.body().map_or(0, |body| cost(&source, body)))
             .collect(),
         limits,
         function_left: 0,
@@ -65,14 +65,14 @@ pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
         if rewrite.operations[at].is_some() {
             continue;
         }
-        let Some(body) = source.function(id).body else {
+        let Some(body) = source.function(id).body() else {
             continue;
         };
         rewrite.function_left = limits.per_function;
         let count = source.params(id).len();
         let locals: Vec<_> = (0..count).map(|at| Atom(Local::at(at))).collect();
         let body = rewrite.body(body, locals, count);
-        rewrite.program.functions[at].body = Some(body);
+        rewrite.program.functions[at].define(body);
     }
 }
 
@@ -197,7 +197,7 @@ impl Rewrite<'_> {
         {
             return None;
         }
-        let body = self.source.function(called).body?;
+        let body = self.source.function(called).body()?;
         self.function_left -= cost;
         self.total_left -= cost;
         Some(body)

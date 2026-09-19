@@ -298,7 +298,7 @@ impl Evaluator<'_> {
                     );
                 }
                 self.body(
-                    self.program.function(called).body?,
+                    self.program.function(called).body()?,
                     fields.into_iter().map(Some).collect(),
                     budget,
                 )

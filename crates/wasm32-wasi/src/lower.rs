@@ -79,7 +79,7 @@ pub(crate) fn lower(program: &Program) -> Code {
     let mut state = Lowering {
         program,
         entry: program.entry(),
-        in_entry: true,
+        role: FunctionRole::Entry,
         iovecs: vec![None; plan.writes],
         plan,
         data_start,
@@ -192,11 +192,34 @@ struct LoopFrame {
     exit: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FunctionRole {
+    Entry,
+    Function,
+}
+
+impl FunctionRole {
+    fn at(index: usize, entry: FunctionId) -> Self {
+        if index == entry.index() {
+            Self::Entry
+        } else {
+            Self::Function
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Position {
+    Interior,
+    /// The final instruction of the entry's outermost region.
+    EntryEnd,
+}
+
 struct Lowering<'a> {
     program: &'a Program,
     data_start: u32,
     entry: FunctionId,
-    in_entry: bool,
+    role: FunctionRole,
     plan: Plan,
     body: Bytes,
     /// Each call's vector, where its contents were known.
@@ -234,25 +257,26 @@ impl Lowering<'_> {
                 .functions()
                 .iter()
                 .enumerate()
-                .any(|(id, function)| self.exits(function.body, id == self.entry.index()))
+                .any(|(id, function)| self.exits(function.body, FunctionRole::at(id, self.entry)))
     }
 
     /// Whether a region holds an exit this target has to make a call for.
     /// Leaving `_start` with nought is a `return`, which is the same thing
     /// and costs a byte; leaving anywhere else, or with anything else, is
     /// the routine.
-    fn exits(&self, region: RegionId, in_entry: bool) -> bool {
+    fn exits(&self, region: RegionId, role: FunctionRole) -> bool {
         self.program.ops(region).iter().any(|op| match *op {
             Op::PlatformCall { platform, args } => {
                 let name = self.program.platforms()[platform.index()].name;
-                self.program.name(name) == "exit" && !(in_entry && self.leaves_with_nought(args))
+                self.program.name(name) == "exit"
+                    && !(role == FunctionRole::Entry && self.leaves_with_nought(args))
             }
             Op::If {
                 then_region,
                 else_region,
                 ..
-            } => self.exits(then_region, in_entry) || self.exits(else_region, in_entry),
-            Op::Loop { body, .. } => self.exits(body, in_entry),
+            } => self.exits(then_region, role) || self.exits(else_region, role),
+            Op::Loop { body, .. } => self.exits(body, role),
             _ => false,
         })
     }
@@ -269,7 +293,7 @@ impl Lowering<'_> {
     fn bodies(&mut self, frames: &[u32]) -> Vec<Body> {
         let mut bodies = Vec::new();
         for (id, function) in self.program.functions().iter().enumerate() {
-            self.in_entry = id == self.entry.index();
+            self.role = FunctionRole::at(id, self.entry);
             self.body = Bytes::default();
             self.region(function.body);
 
@@ -277,7 +301,7 @@ impl Lowering<'_> {
             bodies.push(Body {
                 params,
                 locals: frames[id] - params,
-                returns: if self.in_entry {
+                returns: if self.role == FunctionRole::Entry {
                     0
                 } else {
                     len32(function.returns.len())
@@ -323,10 +347,17 @@ impl Lowering<'_> {
         // Where the last of these instructions is the last of `_start`:
         // what happens after it is running off the end, which is already
         // an exit with nought.
-        let ending = self.in_entry && self.depth == 0 && terminator.exit == Exit::Unreachable;
+        let ending = self.role == FunctionRole::Entry
+            && self.depth == 0
+            && terminator.exit == Exit::Unreachable;
         let last = program.ops(region).len();
         for (at, (op, results)) in program.walk(region).enumerate() {
-            self.instruction(op, results, ending && at + 1 == last);
+            let position = if ending && at + 1 == last {
+                Position::EntryEnd
+            } else {
+                Position::Interior
+            };
+            self.instruction(op, results, position);
         }
         self.terminator(terminator);
     }
@@ -335,7 +366,7 @@ impl Lowering<'_> {
         clippy::too_many_lines,
         reason = "one call per op; the length is the patterns"
     )]
-    fn instruction(&mut self, op: &Op, results: &[ValueId], ending: bool) {
+    fn instruction(&mut self, op: &Op, results: &[ValueId], position: Position) {
         let program = self.program;
         match op {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
@@ -389,7 +420,7 @@ impl Lowering<'_> {
                 self.set(results[0]);
             }
             Op::PlatformCall { platform, args } => {
-                self.platform_call(*platform, program.values(*args), results, ending);
+                self.platform_call(*platform, program.values(*args), results, position);
             }
             Op::Call { function, args } => {
                 for &arg in program.values(*args) {
@@ -535,7 +566,7 @@ impl Lowering<'_> {
                 self.branch(exit);
             }
             Exit::Return => {
-                if self.in_entry {
+                if self.role == FunctionRole::Entry {
                     // The status the entry returns is the program's, and a
                     // WASI command has no result of its own.
                     if let Some(index) = self.import("proc_exit") {
@@ -562,9 +593,9 @@ impl Lowering<'_> {
     /// Leaving `_start` with nought is returning from it, and a return at
     /// the end of a body is the `end` that body ends with anyway. Every
     /// other way out is the routine, which is why it is imported.
-    fn leave(&mut self, status: ValueId, ending: bool) {
-        if self.in_entry && self.constant(status) == Some(0) {
-            if !ending {
+    fn leave(&mut self, status: ValueId, position: Position) {
+        if self.role == FunctionRole::Entry && self.constant(status) == Some(0) {
+            if position != Position::EntryEnd {
                 self.body.byte(RETURN);
             }
         } else if let Some(index) = self.import("proc_exit") {
@@ -613,14 +644,20 @@ impl Lowering<'_> {
         platform: faun::ir::PlatformId,
         args: &[ValueId],
         results: &[ValueId],
-        ending: bool,
+        position: Position,
     ) {
         let name = self.program.platforms()[platform.index()].name;
         let name = self.program.name(name).to_owned();
-        self.platform_named(&name, args, results, ending);
+        self.platform_named(&name, args, results, position);
     }
 
-    fn platform_named(&mut self, name: &str, args: &[ValueId], results: &[ValueId], ending: bool) {
+    fn platform_named(
+        &mut self,
+        name: &str,
+        args: &[ValueId],
+        results: &[ValueId],
+        position: Position,
+    ) {
         match name {
             "write" => {
                 let index = self.written;
@@ -645,7 +682,7 @@ impl Lowering<'_> {
                 self.call(fd_write);
                 self.body.byte(DROP); // The errno, which there is nobody to tell.
             }
-            "exit" => self.leave(args[0], ending),
+            "exit" => self.leave(args[0], position),
             "argc" => self.count(results[0]),
             // Handed straight back: nothing is asked of the outside, and
             // all this says is that nothing worked the value out.

@@ -75,9 +75,10 @@ impl Program {
             name,
             params: Range::of(at, params.len()),
             result,
-            body: None,
-            outside: None,
-            bounds: None,
+            definition: super::Definition::External {
+                symbol: name,
+                bounds: None,
+            },
         });
         FnId::at(self.functions.len() - 1)
     }
@@ -85,14 +86,30 @@ impl Program {
     /// Say what answers for a declaration out there, where a program calls
     /// it by another name. Two declarations may name the same one, which is
     /// how a program reaches it at more than one type.
+    ///
+    /// # Panics
+    /// If the function already has a body.
     pub fn answered_by(&mut self, id: FnId, name: &str) {
         let name = self.symbol(name);
-        self.functions[id.index()].outside = Some(name);
+        let super::Definition::External { symbol, .. } = &mut self.functions[id.index()].definition
+        else {
+            panic!("only an external declaration can name a provider");
+        };
+        *symbol = name;
     }
 
     /// Supply a range contract for a declaration implemented outside Barb.
+    ///
+    /// # Panics
+    /// If the function already has a body.
     pub fn bound(&mut self, id: FnId, bounds: super::Bounds) {
-        self.functions[id.index()].bounds = Some(bounds);
+        let super::Definition::External {
+            bounds: contract, ..
+        } = &mut self.functions[id.index()].definition
+        else {
+            panic!("only an external declaration can carry a range contract");
+        };
+        *contract = Some(bounds);
     }
 
     /// The function a target enters.
@@ -196,13 +213,13 @@ impl Program {
             level: 0,
         };
         let body = builder.scope(arity, build);
-        self.functions[id.index()].body = Some(body);
+        self.functions[id.index()].define(body);
     }
 }
 
 /// Builds one function's body.
 ///
-/// Bindings accumulate in order and become nested `Let`s when the scope
+/// Bindings accumulate in order and become a `Body` when the scope
 /// closes, which is what lets an operation hand back an atom. Locals are de
 /// Bruijn levels, so the level a binding takes is fixed the moment it is
 /// emitted and no renaming is ever needed.

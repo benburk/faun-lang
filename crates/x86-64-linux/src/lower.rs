@@ -502,12 +502,12 @@ impl Lowering<'_> {
         self.pair(left, right);
         self.flush();
         if op == Binary::Mul {
-            self.asm.multiply_or_divide(false);
+            self.asm.multiply();
         } else {
             self.asm.alu(0x85, Reg::Rcx, Reg::Rcx);
             let zero = self.asm.jump_if(EQUAL);
             self.asm.xor_self(Reg::Rdx);
-            self.asm.multiply_or_divide(true);
+            self.asm.divide();
             if op == Binary::Mod {
                 self.asm.mov_reg(Reg::Rax, Reg::Rdx, true);
             }

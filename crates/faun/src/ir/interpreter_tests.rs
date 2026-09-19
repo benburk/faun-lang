@@ -64,7 +64,10 @@ fn loops_and_nested_exits_match_total_division_model_at_every_width() {
                     left.checked_rem(right).unwrap_or(left),
                 ];
                 assert_eq!(
-                    run(&p, divmod, &[left, right], bits).unwrap().values,
+                    run(&p, divmod, &[left, right], bits)
+                        .unwrap()
+                        .returned()
+                        .unwrap(),
                     expected.into_iter().map(BigUint::from).collect::<Vec<_>>()
                 );
             }
@@ -88,7 +91,7 @@ fn recursive_calls_keep_caller_frames_and_early_returns() {
     });
     for bits in [16, 32, 64] {
         assert_eq!(
-            run(&p, sum, &[100], bits).unwrap().values,
+            run(&p, sum, &[100], bits).unwrap().returned().unwrap(),
             vec![BigUint::from(5050u32)]
         );
     }
@@ -146,7 +149,7 @@ fn natural_arithmetic_is_not_a_word_and_conversion_is_explicit() {
         )
         .unwrap();
         assert_eq!(
-            result.values,
+            result.returned().unwrap(),
             vec![
                 &large + BigUint::from(1u8),
                 BigUint::default(),
@@ -183,7 +186,7 @@ fn natural_constants_and_fixed_arithmetic_check_their_fit() {
     });
     for bits in [16, 32, 64] {
         assert_eq!(
-            run(&p, main, &[], bits).unwrap().values,
+            run(&p, main, &[], bits).unwrap().returned().unwrap(),
             vec![BigUint::from(256u16)]
         );
     }
@@ -221,7 +224,10 @@ fn words_wrap_at_the_configured_width_not_the_host_width() {
     });
     for bits in [16, 32, 64] {
         let max = (BigUint::from(1u8) << usize::from(bits)) - BigUint::from(1u8);
-        assert_eq!(run(&p, main, &[], bits).unwrap().values, vec![max]);
+        assert_eq!(
+            run(&p, main, &[], bits).unwrap().returned().unwrap(),
+            vec![max]
+        );
     }
     for bits in [16, 32, 64] {
         p.define(main, |b, _| {
@@ -231,7 +237,7 @@ fn words_wrap_at_the_configured_width_not_the_host_width() {
             b.ret(&[zero])
         });
         assert_eq!(
-            run(&p, main, &[], bits).unwrap().values,
+            run(&p, main, &[], bits).unwrap().returned().unwrap(),
             vec![BigUint::default()]
         );
     }
@@ -274,7 +280,7 @@ fn memory_respects_endian_word_stride_and_negative_offsets() {
                 &mut RejectHost,
             )
             .unwrap();
-            assert_eq!(result.values, vec![BigUint::from(0x34u8)]);
+            assert_eq!(result.returned().unwrap(), vec![BigUint::from(0x34u8)]);
             let stride = usize::from(word_bits / 8);
             let mut expected = vec![0; 32];
             expected[0] = 0x34;
@@ -400,8 +406,7 @@ fn deterministic_host_can_return_values_and_halt_callers() {
             &mut host,
         )
         .unwrap();
-        assert!(result.halted);
-        assert_eq!(result.values, vec![BigUint::from(7u8)]);
+        assert_eq!(result.halted().unwrap(), vec![BigUint::from(7u8)]);
         assert_eq!(host.calls, ["argc", "exit"]);
     }
     assert!(matches!(run(&p, main, &[], 64), Err(Error::Host(_))));
@@ -450,7 +455,7 @@ fn return_crosses_nested_loops_without_running_the_continuation() {
     });
     for bits in [16, 32, 64] {
         assert_eq!(
-            run(&p, main, &[], bits).unwrap().values,
+            run(&p, main, &[], bits).unwrap().returned().unwrap(),
             vec![BigUint::from(42u8)]
         );
     }
@@ -501,7 +506,7 @@ fn host_observes_data_and_byte_stores_truncate_only_the_written_byte() {
         )
         .unwrap();
         assert_eq!(host.0, b"hello");
-        assert_eq!(result.values, vec![BigUint::from(0x1234u16)]);
+        assert_eq!(result.returned().unwrap(), vec![BigUint::from(0x1234u16)]);
         assert_eq!(result.globals, [0, 0x34]);
     }
 }
@@ -532,7 +537,10 @@ fn direct_unsigned_operations_match_word_model_including_wrap_and_zero() {
                         _ => unreachable!(),
                     };
                     assert_eq!(
-                        run(&p, f, &[left, right], bits).unwrap().values,
+                        run(&p, f, &[left, right], bits)
+                            .unwrap()
+                            .returned()
+                            .unwrap(),
                         vec![BigUint::from(expected)],
                         "{op:?}({left},{right})/{bits}"
                     );
@@ -591,7 +599,7 @@ fn direct_natural_operations_preserve_full_magnitudes_and_total_zero_semantics()
                         &mut RejectHost,
                     )
                     .unwrap();
-                    assert_eq!(result.values, vec![expected.clone()]);
+                    assert_eq!(result.returned().unwrap(), vec![expected.clone()]);
                 }
             }
         }
@@ -608,7 +616,7 @@ fn natural_multiplication_size_guard_accepts_exact_boundary_and_zero() {
     for (left, right, expected) in [(8u16, 16u16, 128u16), (0, 255, 0), (255, 1, 255)] {
         let result =
             evaluate(&p, f, &[left.into(), right.into()], config, &mut RejectHost).unwrap();
-        assert_eq!(result.values, vec![expected.into()]);
+        assert_eq!(result.returned().unwrap(), vec![expected.into()]);
     }
     // 128*2 is known oversized from bit lengths alone. 15*31 has the
     // ambiguous bit-length boundary and fails the exact post-product check.
@@ -645,12 +653,12 @@ fn fixed_products_require_a_fitting_result_class() {
     });
     for bits in [16, 32, 64] {
         assert_eq!(
-            run(&p, f, &[15, 17], bits).unwrap().values,
+            run(&p, f, &[15, 17], bits).unwrap().returned().unwrap(),
             vec![BigUint::from(255u16)]
         );
         assert_eq!(run(&p, f, &[16, 16], bits), Err(Error::DoesNotFit(class)));
         assert_eq!(
-            run(&p, wide, &[16, 16], bits).unwrap().values,
+            run(&p, wide, &[16, 16], bits).unwrap().returned().unwrap(),
             vec![BigUint::from(256u16)]
         );
     }
@@ -669,7 +677,7 @@ fn zero_bit_fixed_values_constants_and_conversions_are_always_zero() {
     });
     for bits in [16, 32, 64] {
         assert_eq!(
-            run(&p, main, &[], bits).unwrap().values,
+            run(&p, main, &[], bits).unwrap().returned().unwrap(),
             vec![BigUint::from(1u8)]
         );
         for op in [
@@ -681,7 +689,7 @@ fn zero_bit_fixed_values_constants_and_conversions_are_always_zero() {
         ] {
             let (p, f) = binary_program(class, op);
             assert_eq!(
-                run(&p, f, &[0, 0], bits).unwrap().values,
+                run(&p, f, &[0, 0], bits).unwrap().returned().unwrap(),
                 vec![BigUint::default()]
             );
             assert_eq!(run(&p, f, &[1, 0], bits), Err(Error::DoesNotFit(class)));
@@ -702,7 +710,7 @@ fn oversized_word_and_address_constants_are_rejected_not_truncated() {
             assert_eq!(run(&p, main, &[], bits), Err(Error::DoesNotFit(class)));
         }
         assert_eq!(
-            run(&p, main, &[], 64).unwrap().values,
+            run(&p, main, &[], 64).unwrap().returned().unwrap(),
             vec![BigUint::from(u64::MAX)]
         );
     }
@@ -713,7 +721,7 @@ fn oversized_word_and_address_constants_are_rejected_not_truncated() {
     });
     for bits in [16, 32, 64] {
         assert_eq!(
-            run(&p, main, &[], bits).unwrap().values,
+            run(&p, main, &[], bits).unwrap().returned().unwrap(),
             vec![BigUint::default()]
         );
     }
@@ -739,18 +747,18 @@ fn shared_native_backend_arithmetic_fixtures_agree_with_interpreter() {
             let p = arithmetic::boundaries(bits, op);
             validate(&p).unwrap();
             assert_eq!(
-                run(&p, p.entry(), &[], bits).unwrap().values,
+                run(&p, p.entry(), &[], bits).unwrap().returned().unwrap(),
                 vec![BigUint::default()]
             );
         }
         let p = arithmetic::odd_conversion();
         assert_eq!(
-            run(&p, p.entry(), &[], bits).unwrap().values,
+            run(&p, p.entry(), &[], bits).unwrap().returned().unwrap(),
             vec![BigUint::default()]
         );
         let p = wraps_at_eight_bits();
         assert_eq!(
-            run(&p, p.entry(), &[], bits).unwrap().values,
+            run(&p, p.entry(), &[], bits).unwrap().returned().unwrap(),
             vec![BigUint::from(4u8)]
         );
         let p = arithmetic::preserves_host_count();
@@ -765,7 +773,7 @@ fn shared_native_backend_arithmetic_fixtures_agree_with_interpreter() {
             &mut TestHost { calls: Vec::new() },
         )
         .unwrap();
-        assert_eq!(result.values, vec![BigUint::default()]);
+        assert_eq!(result.returned().unwrap(), vec![BigUint::default()]);
     }
 }
 

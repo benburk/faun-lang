@@ -136,7 +136,7 @@ impl References<'_> {
                 .routines
                 .get(name)
                 .ok_or_else(|| format!("unknown platform `{name}`"))?;
-            if takes != routine.takes || answers != routine.answers.as_slice() {
+            if takes != routine.takes || answers != routine.answers().as_slice() {
                 return Err(format!(
                     "platform `{name}` disagrees with its routine signature"
                 ));
@@ -145,13 +145,15 @@ impl References<'_> {
         Ok(())
     }
 
-    fn datum(&self, id: super::model::DataId, natural: bool) -> Result<(), String> {
-        let span = self
-            .0
+    fn datum(&self, id: super::model::DataId) -> Result<&super::model::Span, String> {
+        self.0
             .spans
             .get(id.index())
-            .ok_or("invalid datum reference")?;
-        if natural && span.origin != Origin::Data {
+            .ok_or_else(|| "invalid datum reference".into())
+    }
+
+    fn natural_datum(&self, id: super::model::DataId) -> Result<(), String> {
+        if self.datum(id)?.origin != Origin::Data {
             return Err("natural constant must use immutable data".into());
         }
         Ok(())
@@ -161,9 +163,8 @@ impl References<'_> {
         let p = self.0;
         match op {
             Op::Constant { .. } => {}
-            Op::NaturalConstant(id) | Op::AddressOf(id) => {
-                self.datum(id, matches!(op, Op::NaturalConstant(_)))?;
-            }
+            Op::NaturalConstant(id) => self.natural_datum(id)?,
+            Op::AddressOf(id) => return self.datum(id).map(|_| ()),
             Op::Binary { left, right, .. }
             | Op::Compare { left, right, .. }
             | Op::Store {
@@ -293,7 +294,7 @@ impl Checker<'_> {
             self.instruction(&p.ops[at], results, context)?;
             if let Op::PlatformCall { platform, .. } = p.ops[at] {
                 let name = p.name(p.platform[platform.index()].name);
-                if p.routines.get(name).is_some_and(|r| !r.comes_back)
+                if p.routines.get(name).is_some_and(|r| !r.comes_back())
                     && (at + 1 != region.ops.range().end
                         || region.terminator.exit != Exit::Unreachable)
                 {

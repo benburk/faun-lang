@@ -23,6 +23,7 @@ check:
     @fd -e md --hidden -E .git -X awk '/^[[:space:]]*[|]/ && length($0) > 80 {print FILENAME ":" FNR ": table row is " length($0) " chars (>80)"; bad=1} END {exit bad}'
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
+    RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
     fd -e nix -X nixfmt --check
     ! rg -l '[^\n]\z' --multiline .
 

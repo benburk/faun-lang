@@ -19,6 +19,14 @@
 
 use crate::ir::Class;
 
+/// A host call's control-flow and result contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Returns {
+    Never,
+    Unit,
+    Value(Class),
+}
+
 /// A routine, as every tier that reads one reads it.
 #[derive(Clone, Debug)]
 pub struct Routine {
@@ -44,10 +52,22 @@ pub struct Routine {
     /// would take no slot here and still be written at the call, and then
     /// this would have to say both.
     pub takes: Vec<Class>,
-    pub answers: Option<Class>,
-    /// Whether control comes back. Nothing after a call to one that does
-    /// not is ever reached, and nothing is laid out for it.
-    pub comes_back: bool,
+    pub returns: Returns,
+}
+
+impl Routine {
+    #[must_use]
+    pub const fn answers(&self) -> Option<Class> {
+        match self.returns {
+            Returns::Value(class) => Some(class),
+            Returns::Unit | Returns::Never => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn comes_back(&self) -> bool {
+        !matches!(self.returns, Returns::Never)
+    }
 }
 
 /// The routines a program is read against.
@@ -67,26 +87,22 @@ impl Routines {
     /// its own machine, rather than by reaching a name somebody wrote down.
     #[must_use]
     pub fn builtin() -> Self {
-        let held = |name: &str, called: Option<&str>, takes: &[Class], answers| Routine {
+        let held = |name: &str, called: Option<&str>, takes: &[Class], returns| Routine {
             name: name.to_owned(),
             called: called.map(str::to_owned),
             takes: takes.to_vec(),
-            answers,
-            comes_back: true,
+            returns,
         };
         Self(vec![
-            held("write", None, &[Class::Address, Class::Word], None),
-            Routine {
-                comes_back: false,
-                ..held("exit", Some("exit!"), &[Class::Word], None)
-            },
+            held("write", None, &[Class::Address, Class::Word], Returns::Unit),
+            held("exit", Some("exit!"), &[Class::Word], Returns::Never),
             // The kernel picks the address, so nothing asking for a page
             // says where.
-            held("grow", None, &[Class::Word], Some(Class::Address)),
+            held("grow", None, &[Class::Word], Returns::Value(Class::Address)),
             // How many arguments a program was handed, which is the one
             // thing every machine here can be asked and the only thing a
             // program can be told that it did not work out itself.
-            held("argc", Some("argc!"), &[], Some(Class::Word)),
+            held("argc", Some("argc!"), &[], Returns::Value(Class::Word)),
         ])
     }
 
@@ -95,8 +111,8 @@ impl Routines {
     #[must_use]
     pub fn with_word(mut self, bits: u16) -> Self {
         for routine in &mut self.0 {
-            if routine.answers == Some(Class::Word) {
-                routine.answers = Some(Class::Fixed { bits });
+            if routine.returns == Returns::Value(Class::Word) {
+                routine.returns = Returns::Value(Class::Fixed { bits });
             }
         }
         self

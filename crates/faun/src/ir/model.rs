@@ -193,6 +193,8 @@ pub struct Function {
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    /// Absent until a representation pass serializes target-sized data.
+    pub(super) layout: Option<super::Layout>,
     /// The routines this was read against, since a program naming one is
     /// naming something from a set somebody chose rather than something
     /// every compiler knows.
@@ -221,6 +223,31 @@ pub struct Program {
     pub(super) symbols: Vec<Range>,
 }
 impl Program {
+    /// The layout required by serialized data, if representation is bound.
+    #[must_use]
+    pub const fn layout(&self) -> Option<super::Layout> {
+        self.layout
+    }
+
+    /// # Errors
+    /// Rejects use of target-sized data at a different width or byte order.
+    pub fn check_layout(&self, actual: super::Layout) -> Result<(), String> {
+        if let Some(expected) = self.layout
+            && expected != actual
+        {
+            return Err(format!(
+                "program requires layout {expected:?}, not {actual:?}"
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn bind_layout(&mut self, layout: super::Layout) -> Result<(), String> {
+        self.check_layout(layout)?;
+        self.layout = Some(layout);
+        Ok(())
+    }
+
     /// Keep a list of existing values, giving back the run it occupies.
     pub(super) fn hold(&mut self, values: &[ValueId]) -> Range {
         let start = self.operands.len();

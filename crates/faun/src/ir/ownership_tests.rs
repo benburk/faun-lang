@@ -65,7 +65,10 @@ fn run(p: &Program, bits: u16, argc: u64) -> (Evaluation, Observer) {
         &mut host,
     )
     .expect("ownership fixture execution");
-    assert!(!result.halted, "unexpected runtime exhaustion: {result:?}");
+    assert!(
+        result.returned().is_some(),
+        "unexpected runtime exhaustion: {result:?}"
+    );
     (result, host)
 }
 
@@ -115,8 +118,8 @@ fn nested_lifetimes_preserve_full_values_and_free_every_mortal_claim() {
             for argc in [1, 3] {
                 let (before, before_host) = run(&original, bits, argc);
                 let (after, after_host) = run(&scalar, bits, argc);
-                assert_eq!(before.values, [BigUint::from(0u8)]);
-                assert_eq!(after.values, before.values);
+                assert_eq!(before.returned().unwrap(), [BigUint::from(0u8)]);
+                assert_eq!(after.outcome, before.outcome);
                 assert_eq!(before_host.bytes, fixture::expected(argc));
                 assert_eq!(
                     after_host.bytes, before_host.bytes,
@@ -185,8 +188,8 @@ fn narrower_loop_initial_values_do_not_narrow_rebuilt_carried_parameters() {
         );
         let (before, _) = run(&original, bits, 0);
         let (after, _) = run(&scalar, bits, 0);
-        assert_eq!(before.values, [BigUint::from(260u16)]);
-        assert_eq!(after.values, before.values);
+        assert_eq!(before.returned().unwrap(), [BigUint::from(260u16)]);
+        assert_eq!(after.outcome, before.outcome);
         no_live_objects(&scalar, &after, config);
     }
 }

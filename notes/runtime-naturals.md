@@ -17,11 +17,12 @@ Its default budget is 64 KiB on x86-64 and wasm32. Allocation or reference-count
 exhaustion exits with status 2; it never returns a wrapped integer or zero in
 place of a failed allocation. Explicit `Convert` to scalar classes truncates.
 Clients can select a different budget by legalizing explicitly before emission.
-The serialized headers are **target sized**: `Config.word_bits` MUST match the
-subsequent backend or interpreter. Feeding 32-bit-legalized IR to a 64-bit backend
-is unsupported; ordinary Address IR cannot detect its historical configuration.
-Header words are little endian, so interpreter execution must also select
-`Endian::Little`.
+The serialized headers are **target sized**. Runtime generation records a
+`Program::layout()` obligation containing `Config.word_bits` and
+`Endian::Little`. Legalization, target acceptance and interpretation reject a
+mismatched word size or byte order before execution or emission. Cloning and
+re-legalizing preserve this obligation; scalar-only legalization leaves portable
+programs unbound.
 This is a memory resource limit, not a numeric modulus.
 
 Each local natural result owns one reference. Function arguments are borrowed;
@@ -43,10 +44,10 @@ iteration cleanup reclaims dead allocations rather than accumulating history.
   The exact software-frame gate in `Target::limits` does not establish complete
   image placement, frame separation, or hardware-stack safety.
   An 8 KiB heap is only a proposed 6502 default, not a proven image budget.
-  Manually legalized scalar IR no longer carries the Natural marker: feeding it
-  to the 6502 backend bypasses this guard and remains the raw-emitter caller's
-  responsibility. The custom-budget compilation recipe above is for x86/wasm,
-  not a supported route to native 6502 runtime execution.
+  Prelegalized scalar IR retains its layout obligation, so target acceptance
+  rejects it too: manual legalization cannot bypass the guard. The custom-budget
+  compilation recipe above is for x86/wasm, not a supported route to native 6502
+  runtime execution. Raw emission still requires validated, accepted input.
 - Heap capacity is configurable but cannot exceed the target address space.
   Runtime helper generation checks relative object/pool sizes, not complete
   target placement. Preexisting pools, all appended constants, code/image origin

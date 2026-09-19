@@ -16,14 +16,14 @@ pub(super) fn cleanup(program: &mut Program) {
             continue;
         }
         let id = FnId::at(at);
-        let Some(body) = source.function(id).body else {
+        let Some(body) = source.function(id).body() else {
             continue;
         };
         let count = source.params(id).len();
         let (plan, _) = plan_body(&source, body, count);
         let locals = (0..count).map(|at| Some(Atom(Local::at(at)))).collect();
         let body = rewrite.body(plan, locals, count);
-        rewrite.program.functions[at].body = Some(body);
+        rewrite.program.functions[at].define(body);
     }
 }
 
