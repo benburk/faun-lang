@@ -30,7 +30,7 @@ const EXIT_ZERO: &str = "type Nat Zero Succ(Nat)
 fn corpus() -> Vec<(&'static str, Program, usize)> {
     vec![
         ("empty", programs::empty(), 30),
-        ("exit zero", read(EXIT_ZERO).expect("a program"), 29),
+        ("exit zero", read(EXIT_ZERO).expect("a program"), 28),
         ("two and two", programs::two_and_two(), 45),
         ("hello world", programs::hello_world(), 63),
         ("a call", programs::calls_a_function(), 81),
@@ -59,11 +59,11 @@ fn corpus() -> Vec<(&'static str, Program, usize)> {
             89,
         ),
         ("a flag", programs::branches_on_a_flag_it_read(), 119),
-        ("a countdown", programs::countdown(3), 97),
+        ("a countdown", programs::countdown(3), 96),
         (
             "a carried total",
             programs::carries_a_total_into_an_arm(3),
-            103,
+            102,
         ),
         (
             "a step first",
@@ -84,16 +84,17 @@ fn corpus() -> Vec<(&'static str, Program, usize)> {
 /// Bitwise multiplication and non-masking promotions shrink `nat` from 1114
 /// to 998 bytes; promotions also shrink `width` (284 to 270) and `argc`
 /// (335 to 313), despite adding correct odd-width conversion masks.
+/// Deriving terminal control flow removes another one or two dead RTS bytes.
 fn examples() -> Vec<(String, Program, usize)> {
     [
-        ("exit", 29),
-        ("two-and-two", 29),
-        ("double", 29),
-        ("leave", 29),
-        ("bool", 225),
-        ("nat", 998),
-        ("width", 270),
-        ("argc", 313),
+        ("exit", 28),
+        ("two-and-two", 28),
+        ("double", 28),
+        ("leave", 28),
+        ("bool", 224),
+        ("nat", 996),
+        ("width", 268),
+        ("argc", 311),
     ]
     .into_iter()
     .map(|(name, size)| {
@@ -242,7 +243,7 @@ fn wide(value: u64) -> Program {
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let held = b.constant(Class::Word, value);
-        b.ret(&[held])
+        b.ret(&[held]);
     });
     program
 }
@@ -252,7 +253,7 @@ fn narrow(bits: u16) -> Program {
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let held = b.constant(Class::Fixed { bits }, 1);
-        b.ret(&[held])
+        b.ret(&[held]);
     });
     program
 }
@@ -427,6 +428,24 @@ fn runtime_arithmetic_varied_inputs() {
                 "{op:?} {chunk:?}"
             );
         }
+    }
+}
+
+#[test]
+fn structured_completion_preserves_returns_and_skipped_effects() {
+    for condition in [0, 1] {
+        for p in [
+            programs::control::entry_returns(condition),
+            programs::control::function_returns(condition),
+        ] {
+            faun::ir::validate(&p).unwrap();
+            assert_eq!(status(&p), if condition == 0 { 17 } else { 42 });
+        }
+        let p = programs::control::early_success(condition);
+        faun::ir::validate(&p).unwrap();
+        let (status, output, _) = execute(&p);
+        assert_eq!(status, 0);
+        assert_eq!(output, if condition == 0 { "continued\n" } else { "" });
     }
 }
 

@@ -259,30 +259,15 @@ impl Lowering<'_> {
     /// nought, and every exit from somewhere a `return` would not end the
     /// program.
     fn needs_proc_exit(&self) -> bool {
-        let entry = &self.program.functions()[self.entry.index()];
-        let terminator = self
-            .program
-            .region(entry.body().expect("entry has a body"))
-            .terminator;
-        // The entry's own return: nought is what running off the end does
-        // anyway, and any other status has to be said.
-        let status = terminator.exit == Exit::Return
-            && self
-                .program
-                .values(terminator.values)
-                .first()
-                .is_some_and(|&value| self.constant(value) != Some(0));
-        status
-            || self
-                .program
-                .functions()
-                .iter()
-                .enumerate()
-                .any(|(id, function)| {
-                    function
-                        .body()
-                        .is_some_and(|body| self.exits(body, FunctionRole::at(id, self.entry)))
-                })
+        self.program
+            .functions()
+            .iter()
+            .enumerate()
+            .any(|(id, function)| {
+                function
+                    .body()
+                    .is_some_and(|body| self.exits(body, FunctionRole::at(id, self.entry)))
+            })
     }
 
     /// Whether a region holds an exit this target has to make a call for.
@@ -290,21 +275,33 @@ impl Lowering<'_> {
     /// and costs a byte; leaving anywhere else, or with anything else, is
     /// the routine.
     fn exits(&self, region: RegionId, role: FunctionRole) -> bool {
-        self.program.ops(region).iter().any(|op| match *op {
-            Op::Call { function, args } => {
-                self.program.functions()[function.index()]
-                    .external()
-                    .is_some_and(|symbol| self.program.name(symbol) == "exit")
-                    && !(role == FunctionRole::Entry && self.leaves_with_nought(args))
-            }
-            Op::If {
-                then_region,
-                else_region,
-                ..
-            } => self.exits(then_region, role) || self.exits(else_region, role),
-            Op::Loop { body, .. } => self.exits(body, role),
-            _ => false,
-        })
+        let status = role == FunctionRole::Entry
+            && self
+                .program
+                .region(region)
+                .terminator
+                .is_some_and(|t| t.exit == Exit::Return)
+            && self
+                .program
+                .outgoing(region)
+                .first()
+                .is_some_and(|&value| self.constant(value) != Some(0));
+        status
+            || self.program.ops(region).iter().any(|op| match *op {
+                Op::Call { function, args } => {
+                    self.program.functions()[function.index()]
+                        .external()
+                        .is_some_and(|symbol| self.program.name(symbol) == "exit")
+                        && !(role == FunctionRole::Entry && self.leaves_with_nought(args))
+                }
+                Op::If {
+                    then_region,
+                    else_region,
+                    ..
+                } => self.exits(then_region, role) || self.exits(else_region, role),
+                Op::Loop { body, .. } => self.exits(body, role),
+                _ => false,
+            })
     }
 
     fn leaves_with_nought(&self, args: Range) -> bool {
@@ -325,6 +322,15 @@ impl Lowering<'_> {
             self.role = FunctionRole::at(id, self.entry);
             self.body = Bytes::default();
             self.region(body);
+            // Wasm does not infer that both branches return, or that a
+            // void host import never returns. Supply its stack-polymorphic
+            // marker when a result-bearing function has no final transfer.
+            if self.role != FunctionRole::Entry
+                && !function.returns.classes().is_empty()
+                && self.program.region(body).terminator.is_none()
+            {
+                self.body.byte(UNREACHABLE);
+            }
 
             let params = len32(function.params.len());
             bodies.push(Body {
@@ -376,9 +382,7 @@ impl Lowering<'_> {
         // Where the last of these instructions is the last of `_start`:
         // what happens after it is running off the end, which is already
         // an exit with nought.
-        let ending = self.role == FunctionRole::Entry
-            && self.depth == 0
-            && terminator.exit == Exit::Unreachable;
+        let ending = self.role == FunctionRole::Entry && self.depth == 0 && terminator.is_none();
         let last = program.ops(region).len();
         for (at, (op, results)) in program.walk(region).enumerate() {
             let position = if ending && at + 1 == last {
@@ -388,7 +392,11 @@ impl Lowering<'_> {
             };
             self.instruction(op, results, position);
         }
-        self.terminator(terminator);
+        if let Some(terminator) = terminator {
+            self.terminator(terminator);
+        } else if self.depth > 0 {
+            self.body.byte(UNREACHABLE);
+        }
     }
 
     #[expect(
@@ -614,17 +622,14 @@ impl Lowering<'_> {
                             self.push(value);
                         }
                         self.call(index);
+                    } else if self.depth > 0 {
+                        self.body.byte(RETURN);
                     }
                 } else {
                     for &value in values {
                         self.push(value);
                     }
                     self.body.byte(RETURN);
-                }
-            }
-            Exit::Unreachable => {
-                if self.depth > 0 {
-                    self.body.byte(UNREACHABLE);
                 }
             }
         }
@@ -832,9 +837,10 @@ mod tests {
     use super::*;
     use faun::ir::Class;
 
-    fn entry(build: impl FnOnce(&mut faun::ir::Builder) -> Terminator) -> Program {
+    fn entry(build: impl FnOnce(&mut faun::ir::Builder)) -> Program {
         let (mut program, main) = Program::new("main");
         program.define(main, |b, _| build(b));
+        faun::ir::validate(&program).unwrap();
         program
     }
 
@@ -869,7 +875,7 @@ mod tests {
     fn a_nonzero_status_has_to_be_called_in() {
         let program = entry(|b| {
             let status = b.constant(Class::Word, 3);
-            b.ret(&[status])
+            b.ret(&[status]);
         });
         let code = lower(&program);
         assert_eq!(code.imports, ["proc_exit"]);
@@ -886,7 +892,6 @@ mod tests {
         program.define(main, |b, _| {
             let status = b.constant(Class::Word, 0);
             b.call(exit, &[status]);
-            Terminator::UNREACHABLE
         });
 
         let code = lower(&program);
@@ -900,16 +905,15 @@ mod tests {
     fn leaving_with_nought_from_elsewhere_is_a_call() {
         let (mut program, main) = Program::new("main");
         let exit = faun::platform::Routines::builtin().declare(&mut program, "exit");
-        let leave = program.declare("leave", &[], &[]);
+        let leave = program.declare_never("leave", &[]);
         program.define(leave, |b, _| {
             let status = b.constant(Class::Word, 0);
             b.call(exit, &[status]);
-            Terminator::UNREACHABLE
         });
         program.define(main, |b, _| {
             b.call(leave, &[]);
-            Terminator::UNREACHABLE
         });
+        faun::ir::validate(&program).unwrap();
 
         let code = lower(&program);
         assert_eq!(code.imports, ["proc_exit"]);
@@ -931,12 +935,12 @@ mod tests {
                     |b| {
                         let one = b.constant(Class::Word, 1);
                         let next = b.binary(Binary::Sub, params[0], one);
-                        b.continue_(&[next])
+                        b.continue_(&[next]);
                     },
                 );
-                Terminator::UNREACHABLE
             });
-            Terminator::UNREACHABLE
+            let zero = b.constant(Class::Word, 0);
+            b.ret(&[zero]);
         });
 
         let body = lower(&program).bodies[0].code.clone();

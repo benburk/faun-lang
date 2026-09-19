@@ -1,7 +1,6 @@
 // Shared by machine-IR ownership tests and real x86/wasm integration tests.
 use super::ir::{
-    Binary, Builder, Class, FunctionId, Offset, Program, Relation, Returns, Terminator, ValueId,
-    Width,
+    Binary, Builder, Class, FunctionId, Offset, Program, Relation, Returns, ValueId, Width,
 };
 use super::targets::Target;
 
@@ -40,7 +39,7 @@ pub(super) fn program(early_return: bool) -> Program {
         b.call(write, &[address, length]);
         let status = b.constant(Class::Word, 0);
         // Cleanup must run on Return, not be skipped by a terminal exit effect.
-        b.ret(&[status])
+        b.ret(&[status]);
     });
     p
 }
@@ -68,9 +67,8 @@ fn accumulator(p: &mut Program, identity: FunctionId, early_return: bool) -> Fun
                 |b| b.break_(&[inner]),
                 |b| b.continue_(&[inner, index]),
             );
-            Terminator::UNREACHABLE
         });
-        b.ret(&result)
+        b.ret(&result);
     });
     function
 }
@@ -84,7 +82,7 @@ fn nested(b: &mut Builder<'_>, value: ValueId, done: ValueId, early_return: bool
             &[],
             |b| {
                 let one = b.constant(Class::Word, 1);
-                b.continue_(&[state[0], one])
+                b.continue_(&[state[0], one]);
             },
             |b| b.yield_(&[]),
         );
@@ -95,14 +93,13 @@ fn nested(b: &mut Builder<'_>, value: ValueId, done: ValueId, early_return: bool
                 if early_return {
                     // Unwind both loops, their branch scopes, and the root's
                     // owners before the outer loop's result has been defined.
-                    b.ret(&[state[0]])
+                    b.ret(&[state[0]]);
                 } else {
-                    b.break_(&[state[0]])
+                    b.break_(&[state[0]]);
                 }
             },
             |b| b.break_(&[state[0]]),
         );
-        Terminator::UNREACHABLE
     })[0]
 }
 
@@ -130,9 +127,8 @@ fn serializer(p: &mut Program) -> FunctionId {
                 |b| b.break_(&[]),
                 |b| b.continue_(&[rest, index]),
             );
-            Terminator::UNREACHABLE
         });
-        b.ret(&[])
+        b.ret(&[]);
     });
     function
 }

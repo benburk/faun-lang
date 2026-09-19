@@ -325,7 +325,7 @@ mod tests {
         program.define(main, |b, _| {
             b.natural(&(num_bigint::BigUint::from(1u8) << 100usize));
             let status = b.constant(Class::Word, 0);
-            b.ret(&[status])
+            b.ret(&[status]);
         });
         assert!(
             Spartan
@@ -347,7 +347,7 @@ mod tests {
             program.define(main, |b: &mut Builder, _| {
                 let status = b.constant(Class::Word, 0);
                 b.call(called, &[status]);
-                b.ret(&[status])
+                b.ret(&[status]);
             });
             Spartan.accepts(&program)
         };

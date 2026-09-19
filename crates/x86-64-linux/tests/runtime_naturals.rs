@@ -10,7 +10,7 @@ fn native_compilation_rejects_unimplemented_multiple_return_abi() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     let pair = p.declare("pair", &[Class::Natural], &[Class::Natural, Class::Natural]);
     p.define(pair, |b, args| b.ret(&[args[0], args[0]]));

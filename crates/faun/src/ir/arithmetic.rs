@@ -63,11 +63,11 @@ fn monus(b: &mut Builder, class: Class, left: ValueId, right: ValueId) -> ValueI
         &[class],
         |b| {
             let zero = b.constant(class, 0);
-            b.yield_(&[zero])
+            b.yield_(&[zero]);
         },
         |b| {
             let value = b.binary(Binary::Sub, left, right);
-            b.yield_(&[value])
+            b.yield_(&[value]);
         },
     )[0]
 }

@@ -26,7 +26,7 @@ fn runtime_images_are_rejected_until_frame_and_image_budgets_are_checked() {
         let value = b.constant(Class::Word, 42);
         let natural = b.convert(Class::Natural, value);
         let result = b.convert(Class::Word, natural);
-        b.ret(&[result])
+        b.ret(&[result]);
     });
     let error = Mos6502Sim65.compile(&p).unwrap_err();
     assert!(error.contains("checked image/frame limits"), "{error}");

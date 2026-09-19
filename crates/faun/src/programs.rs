@@ -12,6 +12,7 @@
 
 pub mod abi;
 pub mod arithmetic;
+pub mod control;
 pub mod external;
 
 use crate::ir::Class::Word;
@@ -31,7 +32,7 @@ pub fn hello_world() -> Program {
         b.call(write, &[buf, len]);
 
         let status = b.constant(Word, 0);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
 
     program
@@ -89,16 +90,14 @@ pub fn exits_from_a_branch(taken: u64) -> Program {
             |b| {
                 let status = b.constant(Word, 0);
                 b.call(exit, &[status]);
-                crate::ir::Terminator::UNREACHABLE
             },
             |b| {
                 let status = b.constant(Word, 5);
                 b.call(exit, &[status]);
-                crate::ir::Terminator::UNREACHABLE
             },
         );
         let status = b.constant(Word, 0);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
     program
 }
@@ -114,17 +113,17 @@ pub fn exits_from_a_branch(taken: u64) -> Program {
 /// and a branch landing anywhere else answers something else.
 #[must_use]
 pub fn a_branch_over_a_long_arm(steps: u64, first: bool) -> Program {
-    fn counts(b: &mut Builder, steps: u64) -> crate::ir::Terminator {
+    fn counts(b: &mut Builder, steps: u64) {
         let mut total = b.constant(Word, 0);
         for _ in 0..steps {
             let one = b.constant(Word, 1);
             total = b.binary(Binary::Add, total, one);
         }
-        b.yield_(&[total])
+        b.yield_(&[total]);
     }
-    fn nothing(b: &mut Builder) -> crate::ir::Terminator {
+    fn nothing(b: &mut Builder) {
         let held = b.constant(Word, 0);
-        b.yield_(&[held])
+        b.yield_(&[held]);
     }
 
     let (mut program, main) = Program::new("main");
@@ -139,7 +138,7 @@ pub fn a_branch_over_a_long_arm(steps: u64, first: bool) -> Program {
         } else {
             b.if_(taken, &[Word], nothing, |b| counts(b, steps))
         };
-        b.ret(&answer)
+        b.ret(&answer);
     });
     program
 }
@@ -155,7 +154,7 @@ pub fn compares_two_worked_out_values() -> Program {
         let two = b.binary(Binary::Add, one, one);
         let three = b.binary(Binary::Add, two, one);
         let answer = b.compare(Relation::Less, two, three);
-        b.ret(&[answer])
+        b.ret(&[answer]);
     });
     program
 }
@@ -175,14 +174,14 @@ pub fn branches_on_a_flag_it_read() -> Program {
             &[Word],
             |b| {
                 let held = b.constant(Word, 7);
-                b.yield_(&[held])
+                b.yield_(&[held]);
             },
             |b| {
                 let held = b.constant(Word, 9);
-                b.yield_(&[held])
+                b.yield_(&[held]);
             },
         );
-        b.ret(&answer)
+        b.ret(&answer);
     });
     program
 }
@@ -215,7 +214,7 @@ pub fn writes_a_length_it_worked_out() -> Program {
         let length = b.binary(Binary::Add, one, two);
         b.call(write, &[page, length]);
         let status = b.constant(Word, 0);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
     program
 }
@@ -243,12 +242,11 @@ pub fn carries_a_total_into_an_arm(times: u64) -> Program {
                     let one = b.constant(Word, 1);
                     let next = b.binary(Binary::Sub, n, one);
                     let more = b.binary(Binary::Add, total, one);
-                    b.continue_(&[next, more])
+                    b.continue_(&[next, more]);
                 },
             );
-            crate::ir::Terminator::UNREACHABLE
         });
-        b.ret(&answer)
+        b.ret(&answer);
     });
     program
 }
@@ -281,14 +279,14 @@ pub fn counts_down_before_it_branches(times: u64) -> Program {
                     let buf = b.address_of(tick);
                     let len = b.constant(Word, 5);
                     b.call(write, &[buf, len]);
-                    b.yield_(&[])
+                    b.yield_(&[]);
                 },
             );
-            b.continue_(&[next])
+            b.continue_(&[next]);
         });
 
         let status = b.constant(Word, 0);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
     program
 }
@@ -299,7 +297,7 @@ pub fn empty() -> Program {
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let status = b.constant(Word, 0);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
     program
 }
@@ -310,7 +308,7 @@ pub fn two_and_two() -> Program {
     program.define(main, |b, _| {
         let two = b.constant(Word, 2);
         let sum = b.binary(Binary::Add, two, two);
-        b.ret(&[sum])
+        b.ret(&[sum]);
     });
     program
 }
@@ -324,13 +322,13 @@ pub fn calls_a_function() -> Program {
     program.define(double, |b, params| {
         let n = params[0];
         let doubled = b.binary(Binary::Add, n, n);
-        b.ret(&[doubled])
+        b.ret(&[doubled]);
     });
 
     program.define(main, |b, _| {
         let twenty_one = b.constant(Word, 21);
         let answer = b.call(double, &[twenty_one]);
-        b.ret(&answer)
+        b.ret(&answer);
     });
     program
 }
@@ -350,23 +348,23 @@ pub fn recurses() -> Program {
             &[Word],
             |b| {
                 let zero = b.constant(Word, 0);
-                b.yield_(&[zero])
+                b.yield_(&[zero]);
             },
             |b| {
                 let one = b.constant(Word, 1);
                 let less = b.binary(Binary::Sub, n, one);
                 let rest = b.call(sum, &[less]);
                 let total = b.binary(Binary::Add, n, rest[0]);
-                b.yield_(&[total])
+                b.yield_(&[total]);
             },
         );
-        b.ret(&answer)
+        b.ret(&answer);
     });
 
     program.define(main, |b, _| {
         let three = b.constant(Word, 3);
         let answer = b.call(sum, &[three]);
-        b.ret(&answer)
+        b.ret(&answer);
     });
     program
 }
@@ -388,7 +386,7 @@ pub fn uses_the_heap() -> Program {
         b.store(Width::Word, page, Offset::Words(1), answer);
 
         let answer = b.load(Width::Word, page, Offset::Words(1));
-        b.ret(&[answer])
+        b.ret(&[answer]);
     });
     program
 }
@@ -413,7 +411,7 @@ pub fn values_survive_a_call() -> Program {
         let up = b.binary(Binary::Add, x, one);
         let down = b.binary(Binary::Sub, up, two);
         let back = b.binary(Binary::Add, down, three);
-        b.ret(&[back])
+        b.ret(&[back]);
     });
 
     program.define(outer, |b, params| {
@@ -426,14 +424,14 @@ pub fn values_survive_a_call() -> Program {
         let total = b.binary(Binary::Add, total, r);
         let total = b.binary(Binary::Add, total, a);
         let total = b.binary(Binary::Add, total, second);
-        b.ret(&[total])
+        b.ret(&[total]);
     });
 
     program.define(main, |b, _| {
         let ten = b.constant(Word, 10);
         let three = b.constant(Word, 3);
         let answer = b.call(outer, &[ten, three]);
-        b.ret(&answer)
+        b.ret(&answer);
     });
     program
 }
@@ -465,7 +463,7 @@ pub fn writes_from_the_heap() -> Program {
         let length = b.constant(Word, 3);
         b.call(write, &[page, length]);
         let status = b.constant(Word, 0);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
     program
 }
@@ -492,7 +490,7 @@ pub fn stores_a_byte() -> Program {
         let expected = b.constant(Word, 200);
         let intact = b.compare(Relation::Equal, first, expected);
         let answer = b.binary(Binary::Add, intact, second);
-        b.ret(&[answer])
+        b.ret(&[answer]);
     });
     program
 }
@@ -511,7 +509,7 @@ pub fn counts_in_a_global() -> Program {
         let one = b.constant(Word, 1);
         let next = b.binary(Binary::Add, seen, one);
         b.store(Width::Word, at, Offset::Words(0), next);
-        b.ret(&[])
+        b.ret(&[]);
     });
 
     program.define(main, |b, _| {
@@ -520,7 +518,7 @@ pub fn counts_in_a_global() -> Program {
         b.call(bump, &[]);
         let at = b.address_of(counter);
         let answer = b.load(Width::Word, at, Offset::Words(0));
-        b.ret(&[answer])
+        b.ret(&[answer]);
     });
     program
 }
@@ -540,7 +538,7 @@ pub fn wraps_at_eight_bits() -> Program {
         // Fixed is a fit requirement. Only this explicit conversion wraps.
         let wrapped = b.convert(byte, sum);
         let answer = b.convert(Word, wrapped);
-        b.ret(&[answer])
+        b.ret(&[answer]);
     });
     program
 }
@@ -554,7 +552,7 @@ pub fn less(left: u64, right: u64) -> Program {
         let left = b.constant(Word, left);
         let right = b.constant(Word, right);
         let answer = b.compare(Relation::Less, left, right);
-        b.ret(&[answer])
+        b.ret(&[answer]);
     });
     program
 }
@@ -583,14 +581,13 @@ pub fn countdown(times: u64) -> Program {
                     b.call(write, &[buf, len]);
                     let one = b.constant(Word, 1);
                     let next = b.binary(Binary::Sub, n, one);
-                    b.continue_(&[next])
+                    b.continue_(&[next]);
                 },
             );
-            crate::ir::Terminator::UNREACHABLE
         });
 
         let status = b.constant(Word, 0);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
 
     program

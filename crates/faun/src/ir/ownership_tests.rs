@@ -144,17 +144,17 @@ fn branching_function(p: &mut Program, offset: u64) -> FunctionId {
                 let word = b.constant(Class::Word, offset + 1);
                 let local = b.convert(Class::Natural, word);
                 let sum = b.binary(Binary::Add, ancestor, local);
-                b.yield_(&[sum])
+                b.yield_(&[sum]);
             },
             |b| {
                 let word = b.constant(Class::Word, offset + 3);
                 let local = b.convert(Class::Natural, word);
                 let sum = b.binary(Binary::Add, ancestor, local);
-                b.yield_(&[sum])
+                b.yield_(&[sum]);
             },
         );
         let word = b.convert(Class::Word, selected[0]);
-        b.ret(&[word])
+        b.ret(&[word]);
     });
     function
 }
@@ -173,7 +173,7 @@ fn one_global_mapping_preserves_sibling_and_cross_function_ownership() {
                 let value = b.call(function, &[arg])[0];
                 sum = b.binary(Binary::Add, sum, value);
             }
-            b.ret(&[sum])
+            b.ret(&[sum]);
         });
         for bits in [16, 32, 64] {
             let config = natural::Config {
@@ -204,9 +204,8 @@ fn widened_loop() -> Program {
             let next = b.binary_at(Class::Word, Binary::Add, state[0], one);
             let done = b.compare(Relation::Equal, next, limit);
             b.if_(done, &[], |b| b.break_(&[next]), |b| b.continue_(&[next]));
-            Terminator::UNREACHABLE
         });
-        b.ret(&answer)
+        b.ret(&answer);
     });
     // Builder derives parameter widths from initial values. A valid arena
     // transform can instead widen the carried slot while retaining that input.

@@ -55,7 +55,6 @@ pub enum Error {
     DoesNotFit(Class),
     InvalidMemory,
     ReadOnlyMemory,
-    Unreachable,
     Host(String),
 }
 
@@ -375,6 +374,7 @@ impl<H: Host> Machine<'_, H> {
             .ok_or_else(|| invalid("function id"))?;
         self.signature(function.params, args)?;
         match function.definition {
+            Definition::Declared(_) => Err(invalid("function has not been defined")),
             Definition::Body(body) => {
                 self.frames.push(vec![None; self.program.classes.len()]);
                 self.tasks.push(Task::Call {
@@ -431,8 +431,11 @@ impl<H: Host> Machine<'_, H> {
                 .get(id.index())
                 .ok_or_else(|| invalid("region id"))?;
             if at == region.ops.len() {
-                let values = self.values(region.terminator.values)?;
-                if let Some(values) = self.leave(region.terminator.exit, values)? {
+                let terminator = region
+                    .terminator
+                    .ok_or_else(|| invalid("missing region terminator"))?;
+                let values = self.values(terminator.values)?;
+                if let Some(values) = self.leave(terminator.exit, values)? {
                     return Ok(self.finish(Outcome::Returned(values)));
                 }
                 continue;
@@ -466,9 +469,6 @@ impl<H: Host> Machine<'_, H> {
     }
 
     fn leave(&mut self, exit: Exit, values: Vec<BigUint>) -> Result<Option<Vec<BigUint>>, Error> {
-        if exit == Exit::Unreachable {
-            return Err(Error::Unreachable);
-        }
         while let Some(task) = self.tasks.pop() {
             match (task, exit) {
                 (Task::If { results }, Exit::Yield) | (Task::Loop { results, .. }, Exit::Break) => {

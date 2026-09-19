@@ -83,15 +83,15 @@ impl Program {
         FunctionId::at(self.functions.len() - 1)
     }
 
-    /// Separate from defining, so a body may call a function declared after
-    /// it, or itself.
+    /// Reserve parameters and a root slot, so a body may call a function
+    /// declared after it, or itself. Validation rejects unbuilt declarations.
     pub fn declare(&mut self, name: &str, params: &[Class], returns: &[Class]) -> FunctionId {
         let values = self.mint(params);
         let params = self.sign(params);
         self.regions.push(Region {
             params: values,
             ops: Range::default(),
-            terminator: Terminator::UNREACHABLE,
+            terminator: None,
         });
         let name = self.symbol(name);
         let returns = self.sign(returns);
@@ -99,22 +99,31 @@ impl Program {
             name,
             params,
             returns: Returns::Values(returns),
-            definition: Definition::Body(RegionId::at(self.regions.len() - 1)),
+            definition: Definition::Declared(RegionId::at(self.regions.len() - 1)),
         });
         FunctionId::at(self.functions.len() - 1)
     }
 
-    /// Replace a declared body's instructions.
+    /// Declare a function that never returns. Like `declare`, it must be
+    /// defined before validation, even when nothing calls it yet.
+    pub fn declare_never(&mut self, name: &str, params: &[Class]) -> FunctionId {
+        let id = self.declare(name, params, &[]);
+        self.functions[id.index()].returns = Returns::Never;
+        id
+    }
+
+    /// Build a declared function or replace its existing body. The callback
+    /// records explicit transfers on the builder; it need not add one after
+    /// instructions which cannot fall through. Validation checks completion.
     ///
     /// # Panics
     /// If `function` is invalid or external.
-    pub fn define(
-        &mut self,
-        function: FunctionId,
-        build: impl FnOnce(&mut Builder, &[ValueId]) -> Terminator,
-    ) {
+    pub fn define(&mut self, function: FunctionId, build: impl FnOnce(&mut Builder, &[ValueId])) {
         let result: Result<(), std::convert::Infallible> =
-            self.try_define(function, |b, params| Ok(build(b, params)));
+            self.try_define(function, |b, params| {
+                build(b, params);
+                Ok(())
+            });
         match result {
             Ok(()) => {}
             Err(never) => match never {},
@@ -124,7 +133,8 @@ impl Program {
     /// Build a body without an error side channel or a fabricated terminator.
     ///
     /// # Errors
-    /// Returns the callback's error without replacing the old body. This is
+    /// Returns the callback's error without replacing the old body or marking
+    /// an unbuilt declaration as defined. This is
     /// append-only construction, not a transaction: values, data and nested
     /// regions appended by the callback remain in the pools on failure. They
     /// are not attached to this function, but still undergo pool-wide checks.
@@ -136,11 +146,12 @@ impl Program {
     pub fn try_define<E>(
         &mut self,
         function: FunctionId,
-        build: impl FnOnce(&mut Builder, &[ValueId]) -> Result<Terminator, E>,
+        build: impl FnOnce(&mut Builder, &[ValueId]) -> Result<(), E>,
     ) -> Result<(), E> {
-        let body = self.functions[function.index()]
-            .body()
-            .expect("a defined function");
+        let body = match self.functions[function.index()].definition {
+            Definition::Declared(body) | Definition::Body(body) => body,
+            Definition::External => panic!("an external function cannot be defined"),
+        };
         let entry = self.regions[body.index()].params;
         let params = self.values(entry).to_vec();
         let mut builder = Builder {
@@ -148,10 +159,12 @@ impl Program {
             params: entry,
             ops: Vec::new(),
             results: Vec::new(),
+            terminator: None,
         };
-        let terminator = build(&mut builder, &params)?;
-        let region = builder.finish(terminator);
+        build(&mut builder, &params)?;
+        let region = builder.finish();
         self.regions[body.index()] = region;
+        self.functions[function.index()].definition = Definition::Body(body);
         Ok(())
     }
 
@@ -204,6 +217,7 @@ pub struct Builder<'a> {
     params: Range,
     ops: Vec<Op>,
     results: Vec<Range>,
+    terminator: Option<Terminator>,
 }
 
 impl Builder<'_> {
@@ -310,8 +324,8 @@ impl Builder<'_> {
         &mut self,
         condition: ValueId,
         results: &[Class],
-        then: impl FnOnce(&mut Builder) -> Terminator,
-        otherwise: impl FnOnce(&mut Builder) -> Terminator,
+        then: impl FnOnce(&mut Builder),
+        otherwise: impl FnOnce(&mut Builder),
     ) -> Vec<ValueId> {
         let then_region = self.region(&[], |builder, _| then(builder));
         let else_region = self.region(&[], |builder, _| otherwise(builder));
@@ -329,7 +343,7 @@ impl Builder<'_> {
         &mut self,
         initial: &[ValueId],
         results: &[Class],
-        build: impl FnOnce(&mut Builder, &[ValueId]) -> Terminator,
+        build: impl FnOnce(&mut Builder, &[ValueId]),
     ) -> Vec<ValueId> {
         let classes: Vec<_> = initial
             .iter()
@@ -340,36 +354,45 @@ impl Builder<'_> {
         self.push(Op::Loop { initial, body }, results)
     }
 
-    // The exits, which have to intern the values they carry.
+    // Explicit transfers close the region. Its callback returns no token.
 
-    pub fn ret(&mut self, values: &[ValueId]) -> Terminator {
-        self.exit(Exit::Return, values)
+    pub fn ret(&mut self, values: &[ValueId]) {
+        self.exit(Exit::Return, values);
     }
 
-    pub fn yield_(&mut self, values: &[ValueId]) -> Terminator {
-        self.exit(Exit::Yield, values)
+    pub fn yield_(&mut self, values: &[ValueId]) {
+        self.exit(Exit::Yield, values);
     }
 
-    pub fn continue_(&mut self, values: &[ValueId]) -> Terminator {
-        self.exit(Exit::Continue, values)
+    pub fn continue_(&mut self, values: &[ValueId]) {
+        self.exit(Exit::Continue, values);
     }
 
-    pub fn break_(&mut self, values: &[ValueId]) -> Terminator {
-        self.exit(Exit::Break, values)
+    pub fn break_(&mut self, values: &[ValueId]) {
+        self.exit(Exit::Break, values);
     }
 
-    fn exit(&mut self, exit: Exit, values: &[ValueId]) -> Terminator {
-        Terminator {
+    fn exit(&mut self, exit: Exit, values: &[ValueId]) {
+        self.open();
+        self.terminator = Some(Terminator {
             exit,
             values: self.program.hold(values),
-        }
+        });
+    }
+
+    fn open(&self) {
+        assert!(
+            self.terminator.is_none(),
+            "a terminated region cannot be extended"
+        );
     }
 
     fn region(
         &mut self,
         params: &[Class],
-        build: impl FnOnce(&mut Builder, &[ValueId]) -> Terminator,
+        build: impl FnOnce(&mut Builder, &[ValueId]),
     ) -> RegionId {
+        self.open();
         let entry = self.program.mint(params);
         let params: Vec<_> = self.program.values(entry).to_vec();
 
@@ -378,9 +401,10 @@ impl Builder<'_> {
             params: entry,
             ops: Vec::new(),
             results: Vec::new(),
+            terminator: None,
         };
-        let terminator = build(&mut builder, &params);
-        let region = builder.finish(terminator);
+        build(&mut builder, &params);
+        let region = builder.finish();
 
         self.program.regions.push(region);
         RegionId::at(self.program.regions.len() - 1)
@@ -388,6 +412,7 @@ impl Builder<'_> {
 
     /// The same, for results a signature already names.
     fn push_from(&mut self, op: Op, returns: Range) -> Vec<ValueId> {
+        self.open();
         let results = self.program.mint_from(returns);
         let values = self.program.values(results).to_vec();
         self.ops.push(op);
@@ -399,6 +424,7 @@ impl Builder<'_> {
     /// carries values out. Answers the value itself, so that the common case
     /// never builds a list to take the first of.
     fn push_one(&mut self, op: Op, class: Class) -> ValueId {
+        self.open();
         let (value, results) = self.program.mint_one(class);
         self.ops.push(op);
         self.results.push(results);
@@ -406,6 +432,7 @@ impl Builder<'_> {
     }
 
     fn push(&mut self, op: Op, classes: &[Class]) -> Vec<ValueId> {
+        self.open();
         let results = self.program.mint(classes);
         let values = self.program.values(results).to_vec();
         self.ops.push(op);
@@ -415,7 +442,7 @@ impl Builder<'_> {
 
     /// Append this region's instructions to the program, where they become
     /// one contiguous run.
-    fn finish(self, terminator: Terminator) -> Region {
+    fn finish(self) -> Region {
         let start = self.program.ops.len();
         let len = self.ops.len();
         self.program.ops.extend_from_slice(&self.ops);
@@ -424,7 +451,7 @@ impl Builder<'_> {
         Region {
             params: self.params,
             ops: Range::of(start, len),
-            terminator,
+            terminator: self.terminator,
         }
     }
 }

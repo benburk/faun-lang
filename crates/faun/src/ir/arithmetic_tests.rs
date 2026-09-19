@@ -60,7 +60,7 @@ fn a_natural_constant_is_compact_and_does_not_alias_a_word() {
         let value = b.natural(&magnitude);
         assert_eq!(b.class(value), Class::Natural);
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     assert_eq!(program.data(), magnitude.to_bytes_le());
     assert!(!Class::Natural.fits(Class::Word));

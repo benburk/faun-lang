@@ -60,7 +60,7 @@ fn test_program() -> (Program, FunctionId) {
     let (mut p, entry) = Program::new("test");
     p.define(entry, |b, _| {
         let zero = b.constant(WORD, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     (p, entry)
 }
@@ -361,7 +361,7 @@ fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)
             b.call(observer, &[args[0]]);
             b.call(observer, &[args[1]]);
             let zero = b.constant(WORD, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         (op, check)
     })
@@ -447,9 +447,9 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
                 b.call(lib.release, &[alias]);
                 observe_and_release(b, &lib, observer, sum);
                 let next = b.binary(Binary::Add, i, one);
-                b.continue_(&[next])
+                b.continue_(&[next]);
             });
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         let input = (BigUint::from(1u8) << usize::from(bits)) - BigUint::from(1u8);
         let (evaluation, seen) = run(&p, check, std::slice::from_ref(&input), bits);
@@ -489,7 +489,7 @@ fn freed_adjacent_blocks_coalesce_for_a_larger_allocation() {
             observe_and_release(b, &lib, observer, sum);
             observe_and_release(b, &lib, observer, last);
             let zero = b.constant(WORD, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         let (evaluation, seen) = run(&p, check, &[BigUint::from(7u8)], bits);
         assert!(evaluation.returned().is_some());
@@ -515,7 +515,7 @@ fn exhaustion_halts_without_corrupting_the_heap() {
             let second = b.call(lib.require(Helper::FromWord), args)[0];
             b.call(observer, &[second]);
             let zero = b.constant(WORD, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         let (evaluation, seen) = run(&p, check, &[BigUint::from(1u8)], bits);
         assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
@@ -568,7 +568,7 @@ fn reference_count_exhaustion_does_not_create_an_immortal_object() {
             let count = b.constant(WORD, max - 1);
             b.store(super::Width::Word, object, super::Offset::Words(1), count);
             b.call(lib.retain, &[object]);
-            b.ret(&[one])
+            b.ret(&[one]);
         });
         let (evaluation, _) = run(&p, check, &[], bits);
         assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
@@ -586,7 +586,7 @@ fn repeat(b: &mut Builder<'_>, times: u64, body: impl FnOnce(&mut Builder<'_>)) 
         b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
         body(b);
         let next = b.binary(Binary::Add, state[0], one);
-        b.continue_(&[next])
+        b.continue_(&[next]);
     });
 }
 
@@ -628,7 +628,7 @@ fn multiplication_clears_dirty_recycled_accumulators() {
                 observed_product(b, &lib, observer, sparse_id, one);
             });
             let zero = b.constant(WORD, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         let (evaluation, seen) = run(&p, entry, &[], bits);
         assert!(evaluation.returned().is_some());
@@ -660,7 +660,7 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
             observe_and_release(b, &lib, observer, result);
             observe_and_release(b, &lib, observer, replacement);
             let zero = b.constant(WORD, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         let (evaluation, seen) = run(&p, entry, &[], bits);
         assert!(evaluation.returned().is_some());
@@ -692,7 +692,7 @@ fn fragmented_check(p: &mut Program, lib: &Library, big: DataId, remove_middle: 
             b.call(lib.release, &[middle]);
         }
         let zero = b.constant(WORD, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
 }
 
@@ -785,7 +785,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
                 observe_and_release(b, &lib, observer, result);
             });
             let pair = sentinel_pair(b, sentinel, tail);
-            b.ret(&[pair])
+            b.ret(&[pair]);
         });
         let (evaluation, seen) = run(&p, entry, &[], bits);
         assert_eq!(evaluation.returned().unwrap(), [BigUint::from(0xa56bu32)]);
@@ -819,7 +819,7 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
                 observe_and_release(b, &lib, observer, difference);
             });
             let zero = b.constant(WORD, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         let (evaluation, seen) = run(&p, entry, &[], bits);
         assert!(evaluation.returned().is_some());
@@ -865,7 +865,7 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
                 observe_and_release(b, &lib, observer, value);
             }
             let zero = b.constant(WORD, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         for (a, b, quotient, remainder) in division_boundaries() {
             assert_eq!(&quotient * &b + &remainder, a);
@@ -909,7 +909,7 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
         };
         observe_and_release(b, &lib, observer, value);
         let zero = b.constant(WORD, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     let (evaluation, seen) = run(&p, entry, &[], bits);
     assert!(evaluation.returned().is_some());
@@ -945,7 +945,7 @@ fn retain_and_release_reject_zero_counts_without_resurrecting_storage() {
                 b.store(super::Width::Word, object, super::Offset::Words(1), zero);
                 let function = if retaining { lib.retain } else { lib.release };
                 b.call(function, &[object]);
-                b.ret(&[zero])
+                b.ret(&[zero]);
             });
             let (evaluation, seen) = run(&p, entry, &[], bits);
             assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
@@ -972,7 +972,7 @@ fn immortal_and_mortal_identity_results_have_correct_claims() {
             b.call(lib.release, &[zero]);
             observe_and_release(b, &lib, observer, alias);
             let zero = b.constant(WORD, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         let (evaluation, seen) = run(&p, check, &[BigUint::from(513u32)], bits);
         assert!(evaluation.returned().is_some());

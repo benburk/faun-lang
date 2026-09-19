@@ -43,12 +43,11 @@ fn division_program() -> (Program, FunctionId) {
                 |b| {
                     let q = b.binary(Binary::Add, state[0], one);
                     let r = b.binary(Binary::Sub, state[1], args[1]);
-                    b.continue_(&[q, r])
+                    b.continue_(&[q, r]);
                 },
             );
-            Terminator::UNREACHABLE
         });
-        b.ret(&answer)
+        b.ret(&answer);
     });
     (p, divmod)
 }
@@ -87,7 +86,7 @@ fn recursive_calls_keep_caller_frames_and_early_returns() {
         let n = b.binary(Binary::Sub, args[0], one);
         let tail = b.call(sum, &[n])[0];
         let result = b.binary(Binary::Add, args[0], tail);
-        b.ret(&[result])
+        b.ret(&[result]);
     });
     for bits in [16, 32, 64] {
         assert_eq!(
@@ -99,7 +98,7 @@ fn recursive_calls_keep_caller_frames_and_early_returns() {
     let f = p.declare("forever", &[], &[]);
     p.define(f, |b, _| {
         b.call(f, &[]);
-        b.ret(&[])
+        b.ret(&[]);
     });
     assert_eq!(
         evaluate(
@@ -127,7 +126,7 @@ fn natural_program() -> (Program, FunctionId) {
         let sum = b.binary(Binary::Add, args[0], args[1]);
         let difference = b.binary(Binary::Sub, args[1], args[0]);
         let word = b.convert(Class::Word, sum);
-        b.ret(&[sum, difference, word])
+        b.ret(&[sum, difference, word]);
     });
     (p, f)
 }
@@ -182,7 +181,7 @@ fn natural_constants_and_fixed_arithmetic_check_their_fit() {
         let one = b.constant(Class::Fixed { bits: 8 }, 1);
         let sum = b.binary_at(Class::Fixed { bits: 9 }, Binary::Add, byte, one);
         let word = b.convert(Class::Word, sum);
-        b.ret(&[word])
+        b.ret(&[word]);
     });
     for bits in [16, 32, 64] {
         assert_eq!(
@@ -195,7 +194,7 @@ fn natural_constants_and_fixed_arithmetic_check_their_fit() {
         let one = b.constant(Class::Fixed { bits: 8 }, 1);
         let overflow = b.binary(Binary::Add, max, one);
         let word = b.convert(Class::Word, overflow);
-        b.ret(&[word])
+        b.ret(&[word]);
     });
     assert_eq!(
         run(&p, main, &[], 64),
@@ -205,7 +204,7 @@ fn natural_constants_and_fixed_arithmetic_check_their_fit() {
         let zero = b.constant(Class::Fixed { bits: 8 }, 0);
         let one = b.constant(Class::Fixed { bits: 8 }, 1);
         let underflow = b.binary(Binary::Sub, zero, one);
-        b.ret(&[underflow])
+        b.ret(&[underflow]);
     });
     assert_eq!(
         run(&p, main, &[], 64),
@@ -220,7 +219,7 @@ fn words_wrap_at_the_configured_width_not_the_host_width() {
         let zero = b.constant(Class::Word, 0);
         let one = b.constant(Class::Word, 1);
         let max = b.binary(Binary::Sub, zero, one);
-        b.ret(&[max])
+        b.ret(&[max]);
     });
     for bits in [16, 32, 64] {
         let max = (BigUint::from(1u8) << usize::from(bits)) - BigUint::from(1u8);
@@ -234,7 +233,7 @@ fn words_wrap_at_the_configured_width_not_the_host_width() {
             let max = b.constant(Class::Word, u64::MAX >> (64 - bits));
             let one = b.constant(Class::Word, 1);
             let zero = b.binary(Binary::Add, max, one);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         assert_eq!(
             run(&p, main, &[], bits).unwrap().returned().unwrap(),
@@ -258,7 +257,7 @@ fn memory_program(word_bits: u16) -> (Program, FunctionId) {
         let next = b.convert(Class::Address, next);
         b.store(Width::Byte, next, Offset::Words(-1), value);
         let answer = b.load(Width::Word, address, Offset::Words(1));
-        b.ret(&[answer])
+        b.ret(&[answer]);
     });
     (p, main)
 }
@@ -295,14 +294,14 @@ fn memory_respects_endian_word_stride_and_negative_offsets() {
 }
 
 #[test]
-fn invalid_memory_widths_and_unreachable_are_errors() {
+fn invalid_memory_widths_and_missing_terminators_are_errors() {
     let (mut p, main) = Program::new("main");
     let data = p.intern(&[0; 8]);
     for offset in [Offset::Bytes(-2), Offset::Bytes(8), Offset::Words(i32::MAX)] {
         p.define(main, |b, _| {
             let address = b.address_of(data);
             let value = b.load(Width::Byte, address, offset);
-            b.ret(&[value])
+            b.ret(&[value]);
         });
         for bits in [16, 32, 64] {
             assert_eq!(run(&p, main, &[], bits), Err(Error::InvalidMemory));
@@ -312,20 +311,23 @@ fn invalid_memory_widths_and_unreachable_are_errors() {
         let address = b.address_of(data);
         let zero = b.constant(Class::Word, 0);
         b.store(Width::Byte, address, Offset::Bytes(0), zero);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     assert_eq!(run(&p, main, &[], 64), Err(Error::ReadOnlyMemory));
     p.define(main, |b, _| {
         let n = b.constant(Class::Fixed { bits: 17 }, 1);
-        b.ret(&[n])
+        b.ret(&[n]);
     });
     assert_eq!(
         run(&p, main, &[], 16),
         Err(Error::DoesNotFit(Class::Fixed { bits: 17 }))
     );
     assert_eq!(run(&p, main, &[], 8), Err(Error::InvalidConfig));
-    p.define(main, |_, _| Terminator::UNREACHABLE);
-    assert_eq!(run(&p, main, &[], 64), Err(Error::Unreachable));
+    p.define(main, |_, _| ());
+    assert_eq!(
+        run(&p, main, &[], 64),
+        Err(Error::InvalidProgram("missing region terminator"))
+    );
 }
 
 #[test]
@@ -333,7 +335,7 @@ fn fuel_counts_instructions_and_terminators_including_empty_loops() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let n = b.constant(Class::Word, 7);
-        b.ret(&[n])
+        b.ret(&[n]);
     });
     let config = Config {
         fuel: 2,
@@ -351,7 +353,6 @@ fn fuel_counts_instructions_and_terminators_including_empty_loops() {
     );
     p.define(main, |b, _| {
         b.loop_(&[], &[], |b, _| b.continue_(&[]));
-        Terminator::UNREACHABLE
     });
     assert_eq!(
         evaluate(&p, main, &[], config, &mut RejectHost),
@@ -383,15 +384,13 @@ fn deterministic_host_can_return_values_and_halt_callers() {
     let (mut p, main) = Program::new("main");
     let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
     let exit = crate::platform::Routines::builtin().declare(&mut p, "exit");
-    let f = p.declare("stop", &[], &[]);
+    let f = p.declare_never("stop", &[]);
     p.define(f, |b, _| {
         let count = b.call(argc, &[]);
         b.call(exit, &count);
-        Terminator::UNREACHABLE
     });
     p.define(main, |b, _| {
         b.call(f, &[]);
-        Terminator::UNREACHABLE
     });
     for word_bits in [16, 32, 64] {
         let mut host = TestHost { calls: Vec::new() };
@@ -426,7 +425,7 @@ fn malformed_executed_ids_and_exit_arities_do_not_panic() {
     ));
     p.define(main, |b, _| {
         let value = b.constant(Class::Word, 0);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     let op = p.regions[p.functions[main.index()].body().unwrap().index()]
         .ops
@@ -449,9 +448,7 @@ fn return_crosses_nested_loops_without_running_the_continuation() {
         let answer = b.constant(Class::Word, 42);
         b.loop_(&[], &[], |b, _| {
             b.loop_(&[], &[], |b, _| b.ret(&[answer]));
-            Terminator::UNREACHABLE
         });
-        Terminator::UNREACHABLE
     });
     for bits in [16, 32, 64] {
         assert_eq!(
@@ -490,7 +487,7 @@ fn host_observes_data_and_byte_stores_truncate_only_the_written_byte() {
         let address = b.address_of(global);
         let value = b.constant(Class::Word, 0x1234);
         b.store(Width::Byte, address, Offset::Bytes(1), value);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     for word_bits in [16, 32, 64] {
         let mut host = MemoryHost(Vec::new());
@@ -516,7 +513,7 @@ fn binary_program(class: Class, op: Binary) -> (Program, FunctionId) {
     let f = p.declare("binary", &[class, class], &[class]);
     p.define(f, |b, args| {
         let result = b.binary(op, args[0], args[1]);
-        b.ret(&[result])
+        b.ret(&[result]);
     });
     (p, f)
 }
@@ -649,7 +646,7 @@ fn fixed_products_require_a_fitting_result_class() {
     let wide = p.declare("wide", &[class, class], &[Class::Fixed { bits: 9 }]);
     p.define(wide, |b, args| {
         let product = b.binary_at(Class::Fixed { bits: 9 }, Binary::Mul, args[0], args[1]);
-        b.ret(&[product])
+        b.ret(&[product]);
     });
     for bits in [16, 32, 64] {
         assert_eq!(
@@ -673,7 +670,7 @@ fn zero_bit_fixed_values_constants_and_conversions_are_always_zero() {
         let value = b.constant(Class::Word, 123);
         let converted = b.convert(class, value);
         let equal = b.compare(Relation::Equal, zero, converted);
-        b.ret(&[equal])
+        b.ret(&[equal]);
     });
     for bits in [16, 32, 64] {
         assert_eq!(
@@ -704,7 +701,7 @@ fn oversized_word_and_address_constants_are_rejected_not_truncated() {
         p.define(main, |b, _| {
             let max = b.constant(class, u64::MAX);
             let word = b.convert(Class::Word, max);
-            b.ret(&[word])
+            b.ret(&[word]);
         });
         for bits in [16, 32] {
             assert_eq!(run(&p, main, &[], bits), Err(Error::DoesNotFit(class)));
@@ -717,7 +714,7 @@ fn oversized_word_and_address_constants_are_rejected_not_truncated() {
     // Fixed constants are normalized by Builder, before any target sees them.
     p.define(main, |b, _| {
         let byte = b.constant(Class::Fixed { bits: 8 }, 256);
-        b.ret(&[byte])
+        b.ret(&[byte]);
     });
     for bits in [16, 32, 64] {
         assert_eq!(
@@ -790,7 +787,7 @@ fn host_results_do_not_implicitly_fit_a_word() {
     let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
     p.define(main, |b, _| {
         let count = b.call(argc, &[]);
-        b.ret(&count)
+        b.ret(&count);
     });
     for word_bits in [16, 32, 64] {
         assert_eq!(

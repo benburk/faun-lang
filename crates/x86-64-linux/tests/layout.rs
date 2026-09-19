@@ -8,7 +8,7 @@ fn checked_native_compilation_rejects_foreign_runtime_layouts() {
     program.define(main, |b, _| {
         let seven = b.constant(Class::Natural, 7);
         let status = b.convert(Class::Word, seven);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
     let foreign = legalize(
         &program,

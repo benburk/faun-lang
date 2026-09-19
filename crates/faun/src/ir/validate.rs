@@ -1,8 +1,8 @@
 //! What a target is entitled to assume.
 
 use super::model::{
-    Class, Exit, Function, Op, Origin, Program, Range, RegionId, Returns, Symbol, Terminator,
-    ValueId, Width,
+    Class, Definition, Exit, Function, Op, Origin, Program, Range, RegionId, Returns, Symbol,
+    Terminator, ValueId, Width,
 };
 
 /// Check pool references, lexical SSA scope, and operation/control-flow classes.
@@ -74,7 +74,9 @@ fn pools(p: &Program) -> Result<(), String> {
     for held in &p.regions {
         refs.values(held.params)?;
         slice(&p.ops, held.ops)?;
-        refs.values(held.terminator.values)?;
+        if let Some(terminator) = held.terminator {
+            refs.values(terminator.values)?;
+        }
     }
     for op in &p.ops {
         refs.op(*op)?;
@@ -118,7 +120,10 @@ impl References<'_> {
     fn declarations(&self) -> Result<(), String> {
         let p = self.0;
         for function in &p.functions {
-            self.symbol(function.name)?;
+            let name = self.symbol(function.name)?;
+            if matches!(function.definition, Definition::Declared(_)) {
+                return Err(format!("function `{name}` has not been defined"));
+            }
             slice(&p.signature, function.params)?;
             slice(&p.signature, function.returns.classes())?;
             if let Some(body) = function.body() {
@@ -188,6 +193,37 @@ struct Context<'a> {
     loops: Option<(&'a [Class], &'a [Class])>,
 }
 
+/// Transfers to enclosing constructs. These are independent possibilities:
+/// one path may yield while another breaks. Returns and nonreturning calls
+/// escape all local receivers, so need no bit here. Continue never exits a loop.
+#[derive(Clone, Copy, Default)]
+struct Transfers {
+    yields: bool,
+    breaks: bool,
+}
+
+impl Transfers {
+    const fn merge(&mut self, other: Self) {
+        self.yields |= other.yields;
+        self.breaks |= other.breaks;
+    }
+}
+
+struct Flow {
+    next: bool,
+    transfers: Transfers,
+}
+
+impl Flow {
+    const NEXT: Self = Self {
+        next: true,
+        transfers: Transfers {
+            yields: false,
+            breaks: false,
+        },
+    };
+}
+
 struct Checker<'a> {
     program: &'a Program,
     // Definition uniqueness is program-wide; visibility is lexical. Restore
@@ -221,7 +257,7 @@ impl Checker<'_> {
             yields: None,
             loops: None,
         };
-        self.region(body, &context)
+        self.region(body, &context).map(|_| ())
     }
 
     fn define(&mut self, value: ValueId) -> Result<(), String> {
@@ -279,7 +315,7 @@ impl Checker<'_> {
         Ok(())
     }
 
-    fn region(&mut self, id: RegionId, context: &Context<'_>) -> Result<(), String> {
+    fn region(&mut self, id: RegionId, context: &Context<'_>) -> Result<Transfers, String> {
         if std::mem::replace(&mut self.regions[id.index()], true) {
             return Err(format!("region {id:?} is cyclic or has multiple owners"));
         }
@@ -289,33 +325,44 @@ impl Checker<'_> {
         for &param in p.values(region.params) {
             self.define(param)?;
         }
-        for at in region.ops.range() {
+        let mut flow = self.instructions(region.ops, context)?;
+        match (flow.next, region.terminator) {
+            (true, Some(terminator)) => {
+                self.terminator(terminator, context)?;
+                flow.transfers.merge(Transfers {
+                    yields: terminator.exit == Exit::Yield,
+                    breaks: terminator.exit == Exit::Break,
+                });
+            }
+            (false, None) => {}
+            (true, None) => return Err("region can fall through but has no terminator".into()),
+            (false, Some(_)) => return Err("region does not come back but has a terminator".into()),
+        }
+        for value in self.entered.drain(mark..) {
+            self.visible[value.index()] = false;
+        }
+        Ok(flow.transfers)
+    }
+
+    fn instructions(&mut self, ops: Range, context: &Context<'_>) -> Result<Flow, String> {
+        let p = self.program;
+        let mut flow = Flow::NEXT;
+        for at in ops.range() {
             if std::mem::replace(&mut self.ops[at], true) {
                 return Err("instruction has multiple region owners".into());
             }
-            let results = p.values(p.results[at]);
-            self.instruction(&p.ops[at], results, context)?;
-            if let Op::Call { function, .. } = p.ops[at] {
-                let function = &p.functions[function.index()];
-                let name = p.name(function.name);
-                if function.returns == Returns::Never
-                    && (at + 1 != region.ops.range().end
-                        || region.terminator.exit != Exit::Unreachable)
-                {
-                    return Err(format!(
-                        "calls `{name}`, which does not come back, and carries on"
-                    ));
-                }
+            if !flow.next {
+                return Err("instruction follows control flow that does not come back".into());
             }
+            let results = p.values(p.results[at]);
+            let next = self.instruction(&p.ops[at], results, context)?;
+            flow.next = next.next;
+            flow.transfers.merge(next.transfers);
             for &result in results {
                 self.define(result)?;
             }
         }
-        self.terminator(region.terminator, context)?;
-        for value in self.entered.drain(mark..) {
-            self.visible[value.index()] = false;
-        }
-        Ok(())
+        Ok(flow)
     }
 
     fn terminator(&self, terminator: Terminator, context: &Context<'_>) -> Result<(), String> {
@@ -324,7 +371,6 @@ impl Checker<'_> {
             Exit::Yield => context.yields,
             Exit::Continue => context.loops.map(|l| l.0),
             Exit::Break => context.loops.map(|l| l.1),
-            Exit::Unreachable => Some([].as_slice()),
         }
         .ok_or_else(|| format!("{:?} has no enclosing receiver", terminator.exit))?;
         self.given(
@@ -339,7 +385,7 @@ impl Checker<'_> {
         op: &Op,
         results: &[ValueId],
         context: &Context<'_>,
-    ) -> Result<(), String> {
+    ) -> Result<Flow, String> {
         match *op {
             // Address constants are supported, including a literal null pointer.
             Op::Constant { class, .. } => self.results(results, &[class])?,
@@ -368,18 +414,28 @@ impl Checker<'_> {
                 self.store(width, address, value)?;
                 self.results(results, &[])?;
             }
-            Op::Call { .. } => self.call(*op, results)?,
-            Op::If { .. } | Op::Loop { .. } => self.control(*op, results, context)?,
+            Op::Call { function, .. } => {
+                self.call(*op, results)?;
+                return Ok(Flow {
+                    next: self.program.functions[function.index()].returns != Returns::Never,
+                    ..Flow::NEXT
+                });
+            }
+            Op::If { .. } | Op::Loop { .. } => return self.control(*op, results, context),
         }
-        Ok(())
+        Ok(Flow::NEXT)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "two structured receivers, with class and continuation checks"
+    )]
     fn control(
         &mut self,
         op: Op,
         results: &[ValueId],
         context: &Context<'_>,
-    ) -> Result<(), String> {
+    ) -> Result<Flow, String> {
         let p = self.program;
         match op {
             Op::If {
@@ -393,12 +449,21 @@ impl Checker<'_> {
                     yields: Some(&yields),
                     ..*context
                 };
+                let mut transfers = Transfers::default();
                 for branch in [then_region, else_region] {
                     if !p.values(p.region(branch).params).is_empty() {
                         return Err("branch region cannot have parameters".into());
                     }
-                    self.region(branch, &inner)?;
+                    transfers.merge(self.region(branch, &inner)?);
                 }
+                // Yield reaches this If's continuation; Break escapes it.
+                Ok(Flow {
+                    next: transfers.yields,
+                    transfers: Transfers {
+                        breaks: transfers.breaks,
+                        yields: false,
+                    },
+                })
             }
             Op::Loop { initial, body } => {
                 let carried = self.classes(p.values(p.region(body).params));
@@ -409,11 +474,16 @@ impl Checker<'_> {
                     yields: None,
                     loops: Some((&carried, &answers)),
                 };
-                self.region(body, &inner)?;
+                let transfers = self.region(body, &inner)?;
+                // Only a break from this loop reaches its continuation.
+                // Breaks from nested loops were consumed at those loops.
+                Ok(Flow {
+                    next: transfers.breaks,
+                    ..Flow::NEXT
+                })
             }
             _ => unreachable!("only structured control"),
         }
-        Ok(())
     }
 
     fn call(&self, op: Op, results: &[ValueId]) -> Result<(), String> {

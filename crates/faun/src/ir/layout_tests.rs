@@ -37,7 +37,7 @@ fn natural_program() -> Program {
     program.define(main, |b, _| {
         let value = b.constant(Class::Natural, 7);
         let value = b.convert(Class::Word, value);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     program
 }
@@ -150,7 +150,7 @@ fn scalar_only_legalization_does_not_bind_a_portable_program() {
     let (mut program, main) = Program::new("scalar");
     program.define(main, |b, _| {
         let seven = b.constant(Class::Word, 7);
-        b.ret(&[seven])
+        b.ret(&[seven]);
     });
     let scalar = legalize(&program, config(32)).unwrap();
     assert_eq!(scalar.layout(), None);

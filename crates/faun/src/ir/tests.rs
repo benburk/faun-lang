@@ -22,7 +22,7 @@ fn a_value_wider_than_what_reads_it_is_rejected() {
             let held = b.constant(Class::Fixed { bits }, 1);
             b.call(takes, &[held]);
             let status = b.constant(Class::Word, 0);
-            b.ret(&[status])
+            b.ret(&[status]);
         });
         program
     };
@@ -37,7 +37,7 @@ fn a_value_wider_than_what_reads_it_is_rejected() {
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let byte = b.constant(Class::Fixed { bits: 8 }, 250);
-        b.ret(&[byte])
+        b.ret(&[byte]);
     });
     assert!(validate(&program).is_ok());
 }
@@ -56,7 +56,7 @@ fn an_operand_wider_than_what_reads_it_is_rejected() {
             // program building its own IR means by adding them.
             let sum = b.binary(Binary::Add, left, right);
             let sum = b.convert(Class::Word, sum);
-            b.ret(&[sum])
+            b.ret(&[sum]);
         });
         validate(&program)
     };
@@ -85,7 +85,7 @@ fn a_call_gives_a_name_what_it_takes() {
         program.define(main, |b, _| {
             let held: Vec<_> = (0..args).map(|_| b.constant(class, 1)).collect();
             let answer = b.call(takes_one, &held);
-            b.ret(&answer)
+            b.ret(&answer);
         });
         validate(&program)
     };
@@ -109,7 +109,7 @@ fn a_platform_call_gives_a_routine_what_it_takes() {
     program.define(main, |b, _| {
         b.call(exit, &[]);
         let status = b.constant(Class::Word, 0);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
 
     let error = validate(&program).unwrap_err();
@@ -127,7 +127,7 @@ fn nothing_is_written_after_a_routine_that_does_not_come_back() {
         let status = b.constant(Class::Word, 0);
         b.call(exit, &[status]);
         let held = b.constant(Class::Word, 1);
-        b.ret(&[held])
+        b.ret(&[held]);
     });
 
     let error = validate(&program).unwrap_err();
@@ -138,7 +138,6 @@ fn nothing_is_written_after_a_routine_that_does_not_come_back() {
     program.define(main, |b, _| {
         let status = b.constant(Class::Word, 0);
         b.call(exit, &[status]);
-        Terminator::UNREACHABLE
     });
     assert!(validate(&program).is_ok());
 }

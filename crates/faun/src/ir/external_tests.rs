@@ -7,7 +7,7 @@ fn program() -> Program {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     p
 }
@@ -54,9 +54,8 @@ fn call_external(p: &mut Program, function: FunctionId) {
         let args: Vec<_> = classes.iter().map(|&class| b.constant(class, 0)).collect();
         b.call(function, &args);
         if returns == Returns::Never {
-            Terminator::UNREACHABLE
         } else {
-            b.ret(&[status])
+            b.ret(&[status]);
         }
     });
 }
@@ -122,13 +121,13 @@ fn one_call_operation_handles_local_and_external_multivalue_functions() {
     p.define(wrapper, |b, args| {
         let values = b.call(pair, args);
         let result = b.binary(Binary::Add, values[0], values[1]);
-        b.ret(&[result])
+        b.ret(&[result]);
     });
     p.define(p.entry(), |b, _| {
         let a = b.constant(Class::Word, 3);
         let z = b.constant(Class::Word, 8);
         let answer = b.call(wrapper, &[a, z]);
-        b.ret(&answer)
+        b.ret(&answer);
     });
     validate(&p).unwrap();
     let mut host = reply(|args| HostResult::Return(args.to_vec()));
@@ -155,7 +154,7 @@ fn returning_unit_and_never_are_not_interchangeable() {
         p.define(p.entry(), |b, _| {
             b.call(effect, &[]);
             let zero = b.constant(Class::Word, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         if returns == Returns::Never {
             assert!(validate(&p).unwrap_err().contains("does not come back"));
@@ -182,12 +181,11 @@ fn host_halts_escape_internal_callers_and_direct_external_evaluation() {
     let wrapper = p.declare("wrapper", &[], &[]);
     p.define(wrapper, |b, _| {
         b.call(stop, &[]);
-        Terminator::UNREACHABLE
     });
     p.define(p.entry(), |b, _| {
         b.call(wrapper, &[]);
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     validate(&p).unwrap();
     let mut host = reply(|_| HostResult::Halt(vec![BigUint::from(23u8)]));
@@ -297,11 +295,11 @@ fn a_body_named_like_an_external_function_is_still_a_body() {
     let internal = p.declare("argc", &[], &[Class::Word]);
     p.define(internal, |b, _| {
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     p.define(p.entry(), |b, _| {
         let result = b.call(internal, &[]);
-        b.ret(&result)
+        b.ret(&result);
     });
     assert!(!p.reaches("argc"));
     Provider(64).compile(&p).unwrap();
@@ -317,7 +315,7 @@ fn a_body_named_like_an_external_function_is_still_a_body() {
     let external = p.external("argc", &[], Returns::Values(&[Class::Word]));
     p.define(p.entry(), |b, _| {
         let result = b.call(external, &[]);
-        b.ret(&result)
+        b.ret(&result);
     });
     assert!(p.reaches("argc"));
     Provider(64).compile(&p).unwrap();

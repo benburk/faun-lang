@@ -240,8 +240,7 @@ impl Plan {
             }
         }
 
-        let terminator = program.region(region).terminator;
-        read(&mut self.uses, program.values(terminator.values));
+        read(&mut self.uses, program.outgoing(region));
 
         for op in program.ops(region) {
             match *op {
@@ -282,10 +281,12 @@ const fn displacement(offset: Offset) -> i32 {
 /// them: it reads straight into the register it leaves by, so counting it
 /// would buy a frame that nothing writes to.
 fn transferred(program: &Program, region: RegionId) -> &[ValueId] {
-    let terminator = program.region(region).terminator;
-    match terminator.exit {
-        Exit::Yield | Exit::Continue | Exit::Break => program.values(terminator.values),
-        Exit::Return | Exit::Unreachable => &[],
+    match program.region(region).terminator {
+        Some(Terminator {
+            exit: Exit::Yield | Exit::Continue | Exit::Break,
+            values,
+        }) => program.values(values),
+        _ => &[],
     }
 }
 
@@ -389,7 +390,10 @@ impl Lowering<'_> {
         for (op, results) in program.walk(region) {
             self.instruction(op, results);
         }
-        self.terminator(program.region(region).terminator);
+        // Otherwise every path already left; there is no tail to emit.
+        if let Some(terminator) = program.region(region).terminator {
+            self.terminator(terminator);
+        }
     }
 
     #[expect(
@@ -675,10 +679,6 @@ impl Lowering<'_> {
                 self.loops.last_mut().expect("a loop").ends.push(hole);
             }
             Exit::Return => self.leave(values),
-            // Nothing arrives here: either what came before does not come
-            // back, or every path out of it was already taken. So nothing
-            // is laid out for it, and what follows is the next function.
-            Exit::Unreachable => {}
         }
     }
 
@@ -873,9 +873,10 @@ mod tests {
     use super::*;
     use faun::ir::Class;
 
-    fn entry(build: impl FnOnce(&mut faun::ir::Builder) -> Terminator) -> Program {
+    fn entry(build: impl FnOnce(&mut faun::ir::Builder)) -> Program {
         let (mut program, main) = Program::new("main");
         program.define(main, |b, _| build(b));
+        faun::ir::validate(&program).unwrap();
         program
     }
 
@@ -919,9 +920,8 @@ mod tests {
             b.loop_(&[start], &[], |b, params| {
                 let one = b.constant(Class::Word, 1);
                 let next = b.binary(Binary::Sub, params[0], one);
-                b.continue_(&[next])
+                b.continue_(&[next]);
             });
-            Terminator::UNREACHABLE
         });
 
         let bytes = lower(&program).bytes;
@@ -949,7 +949,7 @@ mod tests {
             // Leave with the status stdout had, so the two registers that
             // both held 1 across the syscall can be told apart.
             let status = b.constant(Class::Word, 1);
-            b.ret(&[status])
+            b.ret(&[status]);
         });
 
         let bytes = lower(&program).bytes;

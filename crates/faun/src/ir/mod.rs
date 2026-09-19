@@ -74,6 +74,8 @@ mod builder_tests;
 #[cfg(test)]
 mod external_tests;
 #[cfg(test)]
+mod flow_tests;
+#[cfg(test)]
 mod interpreter_tests;
 #[cfg(test)]
 mod layout_tests;

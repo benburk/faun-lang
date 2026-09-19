@@ -54,7 +54,7 @@ pub fn cases(bits: u16, op: Binary, pairs: &[(u64, u64)]) -> Program {
     program.define(check, |b, args| {
         let actual = b.binary(op, args[0], args[1]);
         let equal = b.compare(Relation::Equal, actual, args[2]);
-        b.ret(&[equal])
+        b.ret(&[equal]);
     });
     program.define(main, |b, _| {
         let mut passed = b.constant(Class::Word, 0);
@@ -75,7 +75,7 @@ pub fn cases(bits: u16, op: Binary, pairs: &[(u64, u64)]) -> Program {
             u64::try_from(pairs.len()).expect("a few cases"),
         );
         let failures = b.binary(Binary::Sub, count, passed);
-        b.ret(&[failures])
+        b.ret(&[failures]);
     });
     program
 }
@@ -95,12 +95,12 @@ pub fn odd_conversion() -> Program {
         let equal = b.compare(Relation::Equal, square, expected);
         let one = b.constant(Class::Word, 1);
         let failure = b.binary(Binary::Sub, one, equal);
-        b.ret(&[failure])
+        b.ret(&[failure]);
     });
     program.define(main, |b, _| {
         let input = b.constant(wide, 511);
         let result = b.call(check, &[input]);
-        b.ret(&result)
+        b.ret(&result);
     });
     program
 }
@@ -116,7 +116,7 @@ pub fn zero_conversion() -> Program {
         let promoted = b.convert(Class::Word, narrowed);
         let zero = b.constant(Class::Word, 0);
         let equal = b.compare(Relation::Equal, promoted, zero);
-        b.ret(&[equal])
+        b.ret(&[equal]);
     });
     program.define(main, |b, _| {
         let mut passed = b.constant(Class::Word, 0);
@@ -127,7 +127,7 @@ pub fn zero_conversion() -> Program {
         }
         let count = b.constant(Class::Word, 5);
         let failures = b.binary(Binary::Sub, count, passed);
-        b.ret(&[failures])
+        b.ret(&[failures]);
     });
     program
 }
@@ -153,7 +153,7 @@ pub fn preserves_host_count() -> Program {
         let preserved = b.compare(Relation::Equal, before, after);
         let passed = b.binary(Binary::Add, correct, preserved);
         let failures = b.binary(Binary::Sub, two, passed);
-        b.ret(&[failures])
+        b.ret(&[failures]);
     });
     program
 }

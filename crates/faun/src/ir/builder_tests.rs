@@ -6,7 +6,7 @@ fn program() -> Program {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let value = b.constant(Class::Word, 7);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     p
 }
@@ -33,7 +33,7 @@ fn default_program_requires_an_entry_before_validation() {
     assert_eq!(main, p.entry());
     p.define(main, |b, _| {
         let value = b.constant(Class::Word, 7);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     assert_eq!(answer(&p), 7);
 }
@@ -53,11 +53,11 @@ fn fallible_builds_preserve_the_old_body_but_not_a_pool_checkpoint() {
                 &[Class::Natural],
                 |b| {
                     let n = b.natural(&BigUint::from(3u8));
-                    b.yield_(&[n])
+                    b.yield_(&[n]);
                 },
                 |b| {
                     let n = b.natural(&BigUint::from(5u8));
-                    b.yield_(&[n])
+                    b.yield_(&[n]);
                 },
             );
             Err(vec!["the callback's owned error"])
@@ -75,20 +75,31 @@ fn fallible_builds_preserve_the_old_body_but_not_a_pool_checkpoint() {
 fn successful_retry_uses_the_same_parameters_and_installs_only_its_body() {
     let mut p = program();
     let helper = p.declare("helper", &[Class::Word], &[Class::Word]);
-    let root = p.functions()[helper.index()].body().unwrap();
+    let Definition::Declared(root) = p.functions()[helper.index()].definition else {
+        panic!("unbuilt declaration");
+    };
     let params = p.region(root).params;
     let error = p.try_define(helper, |b, args| {
         b.convert(Class::Natural, args[0]);
         Err("unfinished")
     });
     assert_eq!(error, Err("unfinished"));
-    p.try_define(helper, |b, args| Ok::<_, &str>(b.ret(args)))
-        .unwrap();
+    assert_eq!(
+        p.functions()[helper.index()].definition,
+        Definition::Declared(root)
+    );
+    assert!(validate(&p).unwrap_err().contains("has not been defined"));
+    p.try_define(helper, |b, args| {
+        b.ret(args);
+        Ok::<_, &str>(())
+    })
+    .unwrap();
     assert_eq!(p.region(root).params, params);
     p.try_define(p.entry(), |b, _| {
         let value = b.constant(Class::Word, 19);
         let result = b.call(helper, &[value]);
-        Ok::<_, &str>(b.ret(&result))
+        b.ret(&result);
+        Ok::<_, &str>(())
     })
     .unwrap();
     assert_eq!(answer(&p), 19);
@@ -100,12 +111,13 @@ fn infallible_and_fallible_builders_install_the_same_region() {
     let mut fallible = infallible.clone();
     infallible.define(infallible.entry(), |b, _| {
         let value = b.constant(Class::Word, 21);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     fallible
         .try_define(fallible.entry(), |b, _| {
             let value = b.constant(Class::Word, 21);
-            Ok::<_, &str>(b.ret(&[value]))
+            b.ret(&[value]);
+            Ok::<_, &str>(())
         })
         .unwrap();
     assert_eq!(fallible.ops, infallible.ops);
@@ -115,7 +127,7 @@ fn infallible_and_fallible_builders_install_the_same_region() {
 }
 
 #[test]
-#[should_panic(expected = "a defined function")]
+#[should_panic(expected = "an external function cannot be defined")]
 fn defining_an_external_is_a_builder_contract_error() {
     let mut p = program();
     let external = p.external("outside", &[], Returns::Values(&[]));

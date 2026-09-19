@@ -17,8 +17,7 @@
 use num_bigint::BigUint;
 
 use super::{
-    Binary, Builder, Class, DataId, FunctionId, Offset, Program, Relation, Terminator, ValueId,
-    Width,
+    Binary, Builder, Class, DataId, FunctionId, Offset, Program, Relation, ValueId, Width,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -120,7 +119,6 @@ impl Library {
 
 const A: Class = Class::Address;
 const W: Class = Class::Word;
-const END: Terminator = Terminator::UNREACHABLE;
 
 impl Config {
     pub(super) const fn layout(self) -> super::Layout {
@@ -310,11 +308,10 @@ pub(super) fn append(
 
 fn claims(program: &mut Program, max: u64) -> (FunctionId, FunctionId, FunctionId) {
     let exit = program.external("exit", &[W], super::Returns::Never);
-    let fail = declare(program, "nat.fail", &[], &[]);
+    let fail = program.declare_never("nat.fail", &[]);
     program.define(fail, |b, _| {
         let status = number(b, 2);
         b.call(exit, &[status]);
-        END
     });
     let retain = declare(program, "nat.retain", &[A], &[A]);
     let release = declare(program, "nat.release", &[A], &[]);
@@ -414,17 +411,16 @@ fn counting(p: &mut Program, retain: FunctionId, release: FunctionId, fail: Func
                     &[],
                     |b| {
                         b.call(fail, &[]);
-                        END
                     },
                     |b| b.yield_(&[]),
                 );
                 let one = number(b, 1);
                 let next = add(b, refs, one);
                 b.store(Width::Word, a, Offset::Words(1), next);
-                b.yield_(&[])
+                b.yield_(&[]);
             },
         );
-        b.ret(&[a])
+        b.ret(&[a]);
     });
     p.define(release, |b, args| {
         let a = args[0];
@@ -439,10 +435,10 @@ fn counting(p: &mut Program, retain: FunctionId, release: FunctionId, fail: Func
                 let one = number(b, 1);
                 let next = sub(b, refs, one);
                 b.store(Width::Word, a, Offset::Words(1), next);
-                b.yield_(&[])
+                b.yield_(&[]);
             },
         );
-        b.ret(&[])
+        b.ret(&[]);
     });
 }
 
@@ -455,7 +451,6 @@ fn live_count(b: &mut Builder<'_>, object: ValueId, fail: FunctionId) -> ValueId
         &[],
         |b| {
             b.call(fail, &[]);
-            END
         },
         |b| b.yield_(&[]),
     );
@@ -499,7 +494,7 @@ fn allocator(
             &[],
             |b| {
                 let z = b.address_of(zero);
-                b.ret(&[z])
+                b.ret(&[z]);
             },
             |b| b.yield_(&[]),
         );
@@ -510,7 +505,6 @@ fn allocator(
             &[],
             |b| {
                 b.call(fail, &[]);
-                END
             },
             |b| b.yield_(&[]),
         );
@@ -530,7 +524,6 @@ fn allocator(
                 &[],
                 |b| {
                     b.call(fail, &[]);
-                    END
                 },
                 |b| b.yield_(&[]),
             );
@@ -550,23 +543,21 @@ fn allocator(
                         &[],
                         |b| {
                             let next = add(b, offset, merged);
-                            b.continue_(&[next])
+                            b.continue_(&[next]);
                         },
                         |b| {
                             b.call(claim, &[at, wanted, cap]);
-                            b.break_(&[at])
+                            b.break_(&[at]);
                         },
                     );
-                    END
                 },
                 |b| {
                     let next = add(b, offset, size);
-                    b.continue_(&[next])
+                    b.continue_(&[next]);
                 },
             );
-            END
         })[0];
-        b.ret(&[result])
+        b.ret(&[result]);
     });
     Ok(allocate)
 }
@@ -594,13 +585,12 @@ fn coalescing(p: &mut Program) -> FunctionId {
                 |b| {
                     let more = b.load(Width::Word, after, Offset::Words(0));
                     let total = add(b, size, more);
-                    b.continue_(&[total])
+                    b.continue_(&[total]);
                 },
                 |b| b.break_(&[size]),
             );
-            END
         })[0];
-        b.ret(&[merged])
+        b.ret(&[merged]);
     });
     f
 }
@@ -627,7 +617,7 @@ fn claiming(p: &mut Program, word: usize) -> FunctionId {
                 b.store(Width::Word, tail, Offset::Words(1), nil);
                 b.store(Width::Word, tail, Offset::Words(2), nil);
                 b.store(Width::Word, at, Offset::Words(0), wanted);
-                b.yield_(&[])
+                b.yield_(&[]);
             },
         );
         b.store(Width::Word, at, Offset::Words(1), one);
@@ -638,9 +628,9 @@ fn claiming(p: &mut Program, word: usize) -> FunctionId {
             b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
             write_digit(b, at, i, nil, word);
             let next = add(b, i, one);
-            b.continue_(&[next])
+            b.continue_(&[next]);
         });
-        b.ret(&[])
+        b.ret(&[]);
     });
     f
 }
@@ -655,14 +645,14 @@ fn digit_reader(p: &mut Program, word: usize) -> FunctionId {
             &[W],
             |b| {
                 let digit = read_digit(b, args[0], args[1], word);
-                b.yield_(&[digit])
+                b.yield_(&[digit]);
             },
             |b| {
                 let zero = number(b, 0);
-                b.yield_(&[zero])
+                b.yield_(&[zero]);
             },
         )[0];
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     f
 }
@@ -682,10 +672,9 @@ fn trimming(p: &mut Program, word: usize) -> FunctionId {
             let digit = read_digit(b, a, last, word);
             let empty = eq(b, digit, zero);
             b.if_(empty, &[], |b| b.continue_(&[last]), |b| b.break_(&[n]));
-            END
         })[0];
         set_length(b, a, n);
-        b.ret(&[])
+        b.ret(&[]);
     });
     f
 }
@@ -704,11 +693,11 @@ fn finishing(p: &mut Program, trim: FunctionId, release: FunctionId, zero: DataI
             |b| {
                 b.call(release, &[a]);
                 let z = b.address_of(zero);
-                b.yield_(&[z])
+                b.yield_(&[z]);
             },
             |b| b.yield_(&[a]),
         )[0];
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     f
 }
@@ -738,9 +727,8 @@ fn comparison(p: &mut Program, word: usize) -> FunctionId {
             b.if_(less, &[], |b| b.break_(&[zero]), |b| b.yield_(&[]));
             let greater = lt(b, y, x);
             b.if_(greater, &[], |b| b.break_(&[two]), |b| b.continue_(&[i]));
-            END
         })[0];
-        b.ret(&[order])
+        b.ret(&[order]);
     });
     f
 }
@@ -774,7 +762,6 @@ fn addition(p: &mut Program, storage: Storage, digit: FunctionId) -> FunctionId 
             |b| b.yield_(&[]),
             |b| {
                 b.call(fail, &[]);
-                END
             },
         );
         let one = number(b, 1);
@@ -795,11 +782,11 @@ fn addition(p: &mut Program, storage: Storage, digit: FunctionId) -> FunctionId 
             let high = b.binary(Binary::Div, sum, radix);
             write_digit(b, out, i, low, word);
             let next = add(b, i, one);
-            b.continue_(&[next, high])
+            b.continue_(&[next, high]);
         })[0];
         write_digit(b, out, len, carry, word);
         let result = call(b, finish, &[out]);
-        b.ret(&[result])
+        b.ret(&[result]);
     });
     f
 }
@@ -829,19 +816,19 @@ fn subtracting(p: &mut Program, digit: FunctionId, trim: FunctionId, word: usize
                 |b| {
                     let wide = add(b, x, radix);
                     let low = sub(b, wide, y);
-                    b.yield_(&[low])
+                    b.yield_(&[low]);
                 },
                 |b| {
                     let low = sub(b, x, y);
-                    b.yield_(&[low])
+                    b.yield_(&[low]);
                 },
             )[0];
             write_digit(b, a, i, low, word);
             let next = add(b, i, one);
-            b.continue_(&[next, borrow])
+            b.continue_(&[next, borrow]);
         });
         b.call(trim, &[a]);
-        b.ret(&[])
+        b.ret(&[]);
     });
     f
 }
@@ -872,7 +859,7 @@ fn monus(
             |b| b.yield_(&[]),
             |b| {
                 let z = b.address_of(zero);
-                b.ret(&[z])
+                b.ret(&[z]);
             },
         );
         let len = length(b, a);
@@ -886,11 +873,11 @@ fn monus(
             let x = read_digit(b, a, i, word);
             write_digit(b, out, i, x, word);
             let next = add(b, i, one);
-            b.continue_(&[next])
+            b.continue_(&[next]);
         });
         b.call(subtract, &[out, c]);
         let result = call(b, finish, &[out]);
-        b.ret(&[result])
+        b.ret(&[result]);
     });
     f
 }
@@ -923,11 +910,11 @@ fn multiply_row(p: &mut Program, word: usize) -> FunctionId {
             let high = b.binary(Binary::Div, sum, radix);
             write_digit(b, out, at, low, word);
             let next = add(b, j, one);
-            b.continue_(&[next, high])
+            b.continue_(&[next, high]);
         })[0];
         let at = add(b, i, len);
         write_digit(b, out, at, carry, word);
-        b.ret(&[])
+        b.ret(&[]);
     });
     row
 }
@@ -961,7 +948,7 @@ fn multiplication(p: &mut Program, storage: Storage, zero: DataId) -> FunctionId
                 &[],
                 |b| {
                     let z = b.address_of(zero);
-                    b.ret(&[z])
+                    b.ret(&[z]);
                 },
                 |b| b.yield_(&[]),
             );
@@ -974,7 +961,6 @@ fn multiplication(p: &mut Program, storage: Storage, zero: DataId) -> FunctionId
             &[],
             |b| {
                 b.call(fail, &[]);
-                END
             },
             |b| b.yield_(&[]),
         );
@@ -985,7 +971,6 @@ fn multiplication(p: &mut Program, storage: Storage, zero: DataId) -> FunctionId
             &[],
             |b| {
                 b.call(fail, &[]);
-                END
             },
             |b| b.yield_(&[]),
         );
@@ -997,10 +982,10 @@ fn multiplication(p: &mut Program, storage: Storage, zero: DataId) -> FunctionId
             b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
             b.call(row, &[a, c, out, i]);
             let next = add(b, i, one);
-            b.continue_(&[next])
+            b.continue_(&[next]);
         });
         let result = call(b, finish, &[out]);
-        b.ret(&[result])
+        b.ret(&[result]);
     });
     f
 }
@@ -1028,7 +1013,7 @@ fn shifting(p: &mut Program, word: usize) -> FunctionId {
             let high = b.binary(Binary::Div, sum, radix);
             write_digit(b, out, i, low, word);
             let next = add(b, i, one);
-            b.continue_(&[next, high])
+            b.continue_(&[next, high]);
         })[0];
         let empty = eq(b, carry, zero);
         b.if_(
@@ -1039,10 +1024,10 @@ fn shifting(p: &mut Program, word: usize) -> FunctionId {
                 write_digit(b, out, len, carry, word);
                 let next = add(b, len, one);
                 set_length(b, out, next);
-                b.yield_(&[])
+                b.yield_(&[]);
             },
         );
-        b.ret(&[])
+        b.ret(&[]);
     });
     f
 }
@@ -1080,13 +1065,13 @@ fn divide_digit(
                 |b| {
                     b.call(subtract, &[r, divisor]);
                     let next = add(b, quotient, mask);
-                    b.yield_(&[next])
+                    b.yield_(&[next]);
                 },
             )[0];
             let next = b.binary(Binary::Div, mask, two);
-            b.continue_(&[next, quotient])
+            b.continue_(&[next, quotient]);
         })[0];
-        b.ret(&[answer])
+        b.ret(&[answer]);
     });
     step
 }
@@ -1138,14 +1123,14 @@ fn division(
                         &[A],
                         |b| {
                             let kept = call(b, retain, &[a]);
-                            b.yield_(&[kept])
+                            b.yield_(&[kept]);
                         },
                         |b| {
                             let z = b.address_of(zero);
-                            b.yield_(&[z])
+                            b.yield_(&[z]);
                         },
                     )[0];
-                    b.ret(&[answer])
+                    b.ret(&[answer]);
                 },
                 |b| b.yield_(&[]),
             );
@@ -1163,7 +1148,7 @@ fn division(
             let digit = read_digit(b, a, i, word);
             let quotient = call(b, step, &[r, c, digit]);
             write_digit(b, q, i, quotient, word);
-            b.continue_(&[i])
+            b.continue_(&[i]);
         });
         let out = b.if_(
             remainder,
@@ -1171,15 +1156,15 @@ fn division(
             |b| {
                 b.call(release, &[q]);
                 let out = call(b, finish, &[r]);
-                b.yield_(&[out])
+                b.yield_(&[out]);
             },
             |b| {
                 b.call(release, &[r]);
                 let out = call(b, finish, &[q]);
-                b.yield_(&[out])
+                b.yield_(&[out]);
             },
         )[0];
-        b.ret(&[out])
+        b.ret(&[out]);
     });
     f
 }
@@ -1199,7 +1184,7 @@ fn division_entry(p: &mut Program, divmod: FunctionId, result: DivisionResult) -
     p.define(f, |b, args| {
         let mode = number(b, mode);
         let out = call(b, divmod, &[args[0], args[1], mode]);
-        b.ret(&[out])
+        b.ret(&[out]);
     });
     f
 }
@@ -1221,7 +1206,7 @@ fn promotion(
             &[],
             |b| {
                 let z = b.address_of(zero);
-                b.ret(&[z])
+                b.ret(&[z]);
             },
             |b| b.yield_(&[]),
         );
@@ -1238,10 +1223,10 @@ fn promotion(
             let high = b.binary(Binary::Div, n, radix);
             write_digit(b, out, i, low, word);
             let next = add(b, i, one);
-            b.continue_(&[next, high])
+            b.continue_(&[next, high]);
         });
         let result = call(b, finish, &[out]);
-        b.ret(&[result])
+        b.ret(&[result]);
     });
     f
 }
@@ -1266,9 +1251,9 @@ fn narrowing(p: &mut Program, word: usize) -> FunctionId {
             let digit = read_digit(b, a, i, word);
             let high = b.binary(Binary::Mul, value, radix);
             let value = add(b, high, digit);
-            b.continue_(&[i, value])
+            b.continue_(&[i, value]);
         })[0];
-        b.ret(&[out])
+        b.ret(&[out]);
     });
     f
 }

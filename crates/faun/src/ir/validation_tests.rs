@@ -12,7 +12,7 @@ fn simple() -> Program {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let value = b.constant(Class::Word, 1);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     p
 }
@@ -29,16 +29,16 @@ fn branch_locals_cannot_escape_to_parent_or_sibling() {
                 &[],
                 |b| {
                     escaped.set(b.constant(Class::Word, 2));
-                    b.yield_(&[])
+                    b.yield_(&[]);
                 },
                 |b| {
                     if sibling {
                         b.binary(Binary::Add, escaped.get(), condition);
                     }
-                    b.yield_(&[])
+                    b.yield_(&[]);
                 },
             );
-            b.ret(&[escaped.get()])
+            b.ret(&[escaped.get()]);
         });
         rejects(&p, "before it is available");
     }
@@ -57,9 +57,9 @@ fn loop_parameters_and_locals_do_not_escape() {
                 } else {
                     b.constant(Class::Word, 1)
                 };
-                b.break_(&[])
+                b.break_(&[]);
             });
-            b.ret(&[escaped])
+            b.ret(&[escaped]);
         });
         rejects(&p, "before it is available");
     }
@@ -72,7 +72,7 @@ fn values_from_another_function_are_not_in_scope() {
     let mut escaped = ValueId(0);
     p.define(other, |b, params| {
         escaped = params[0];
-        b.ret(&[])
+        b.ret(&[]);
     });
     p.define(main, |b, _| b.ret(&[escaped]));
     rejects(&p, "before it is available");
@@ -85,7 +85,7 @@ fn use_before_definition_and_self_reference_are_rejected() {
         p.define(main, |b, _| {
             let first = b.constant(Class::Word, 1);
             let second = b.constant(Class::Word, 2);
-            b.ret(&[second, first])
+            b.ret(&[second, first]);
         });
         p.ops[0] = Op::Binary {
             op: Binary::Add,
@@ -108,7 +108,7 @@ fn every_definition_is_unique_including_parameters() {
     let other = p.declare("other", &[Class::Word, Class::Word], &[]);
     p.define(main, |b, _| {
         let value = b.constant(Class::Word, 0);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     p.define(other, |b, _| b.ret(&[]));
     let params = p.region(p.functions[1].body().unwrap()).params;
@@ -126,7 +126,7 @@ fn function_and_branch_parameters_must_match_their_owner() {
     p.define(main, |b, _| {
         let value = b.constant(Class::Word, 1);
         b.if_(value, &[], |b| b.yield_(&[]), |b| b.yield_(&[]));
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     p.regions[1].params = p.results[0];
     rejects(&p, "branch region cannot have parameters");
@@ -140,7 +140,7 @@ fn all_leaf_operations_check_result_arity_and_class() {
     let other = p.declare("other", &[], &[Class::Word]);
     p.define(other, |b, _| {
         let value = b.constant(Class::Word, 1);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     p.define(main, |b, _| {
         let value = b.constant(Class::Word, 1);
@@ -153,7 +153,7 @@ fn all_leaf_operations_check_result_arity_and_class() {
         b.convert(Class::Fixed { bits: 8 }, value);
         b.call(other, &[]);
         b.call(argc, &[]);
-        b.ret(&[value])
+        b.ret(&[value]);
     });
     validate(&p).unwrap();
     for at in p.region(p.functions[0].body().unwrap()).ops.range() {
@@ -206,7 +206,7 @@ fn conditions_arithmetic_comparison_and_memory_need_suitable_classes() {
                     b.convert(Class::Natural, address);
                 }
             }
-            b.ret(&[word])
+            b.ret(&[word]);
         });
         assert!(validate(&p).is_err(), "case {case}");
     }
@@ -214,17 +214,11 @@ fn conditions_arithmetic_comparison_and_memory_need_suitable_classes() {
 
 #[test]
 fn terminators_need_a_receiver_and_the_right_values() {
-    for exit in [
-        Exit::Yield,
-        Exit::Break,
-        Exit::Continue,
-        Exit::Unreachable,
-        Exit::Return,
-    ] {
+    for exit in [Exit::Yield, Exit::Break, Exit::Continue, Exit::Return] {
         let mut p = simple();
-        p.regions[0].terminator.exit = exit;
+        p.regions[0].terminator.as_mut().unwrap().exit = exit;
         if exit == Exit::Return {
-            p.regions[0].terminator.values = Range::EMPTY;
+            p.regions[0].terminator.as_mut().unwrap().values = Range::EMPTY;
         }
         assert!(validate(&p).is_err(), "{exit:?}");
     }
@@ -242,14 +236,14 @@ fn branch_yields_check_both_arity_and_class() {
                 |b| {
                     if wrong_class {
                         let address = b.constant(Class::Address, 0);
-                        b.yield_(&[address])
+                        b.yield_(&[address]);
                     } else {
-                        b.yield_(&[])
+                        b.yield_(&[]);
                     }
                 },
                 |b| b.yield_(&[word]),
             );
-            b.ret(&answer)
+            b.ret(&answer);
         });
         rejects(&p, "Yield");
     }
@@ -271,7 +265,7 @@ fn loop_initial_continue_and_break_values_are_checked() {
                         _ => b.yield_(values),
                     }
                 });
-                b.ret(&[word])
+                b.ret(&[word]);
             });
             rejects(&p, &format!("{exit:?}"));
         }
@@ -281,7 +275,7 @@ fn loop_initial_continue_and_break_values_are_checked() {
         p.define(main, |b, _| {
             let word = b.constant(Class::Word, 1);
             b.loop_(&[word], &[], |b, _| b.break_(&[]));
-            b.ret(&[word])
+            b.ret(&[word]);
         });
         if wrong_class {
             let body = p.regions[1];
@@ -313,7 +307,6 @@ fn nested_controls_use_the_nearest_loop_and_allow_early_return() {
                         |b| b.continue_(&[carried]),
                         |b| b.break_(&[carried]),
                     );
-                    Terminator::UNREACHABLE
                 },
                 |b| {
                     b.if_(
@@ -322,15 +315,12 @@ fn nested_controls_use_the_nearest_loop_and_allow_early_return() {
                         |b| b.ret(&[carried]),
                         |b| {
                             b.call(exit, &[word]);
-                            Terminator::UNREACHABLE
                         },
                     );
-                    Terminator::UNREACHABLE
                 },
             );
-            Terminator::UNREACHABLE
         });
-        b.ret(&result)
+        b.ret(&result);
     });
     validate(&p).unwrap();
 }
@@ -353,7 +343,7 @@ fn conversions_pointer_memory_and_narrow_control_values_remain_valid() {
             |b| b.yield_(&[byte]),
             |b| b.ret(&[byte]),
         );
-        b.ret(&answer)
+        b.ret(&answer);
     });
     validate(&p).unwrap();
 }
@@ -363,15 +353,16 @@ fn invalid_public_ids_and_ranges_return_errors_instead_of_panicking() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         b.address_of(DataId(u32::MAX));
-        b.ret(&[])
+        b.ret(&[]);
     });
     rejects(&p, "invalid datum reference");
 
     let mut p = simple();
-    p.regions[0].terminator.values = Range::of(usize::try_from(u32::MAX).unwrap(), 2);
+    p.regions[0].terminator.as_mut().unwrap().values =
+        Range::of(usize::try_from(u32::MAX).unwrap(), 2);
     rejects(&p, "invalid pool range");
     let mut p = simple();
-    p.regions[0].terminator.values = p.hold(&[ValueId(u32::MAX)]);
+    p.regions[0].terminator.as_mut().unwrap().values = p.hold(&[ValueId(u32::MAX)]);
     rejects(&p, "invalid value reference");
 
     for op in [
@@ -434,7 +425,7 @@ fn cyclic_and_shared_regions_are_rejected() {
     p.define(main, |b, _| {
         let word = b.constant(Class::Word, 0);
         b.if_(word, &[], |b| b.yield_(&[]), |b| b.yield_(&[]));
-        b.ret(&[word])
+        b.ret(&[word]);
     });
     if let Op::If {
         then_region,

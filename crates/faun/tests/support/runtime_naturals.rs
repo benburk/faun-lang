@@ -51,7 +51,7 @@ fn program() -> Program {
         let length = b.constant(Class::Word, 80);
         b.call(write, &[address, length]);
         let status = b.constant(Class::Word, 0);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
     p
 }

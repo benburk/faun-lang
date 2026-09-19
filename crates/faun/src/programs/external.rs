@@ -1,6 +1,6 @@
 //! External symbols and internal bodies share IDs but not code-generation roles.
 
-use crate::ir::{Binary, Class, Program, Returns, Terminator};
+use crate::ir::{Binary, Class, Program, Returns};
 
 /// Interleave external declarations and bodies whose names resemble host functions.
 /// Writes `externals\n`, then exits 42 if two argc declarations agree.
@@ -21,14 +21,14 @@ pub fn interleaved() -> Program {
     p.define(increment, |b, args| {
         let one = b.constant(Class::Word, 1);
         let next = b.binary(Binary::Add, args[0], one);
-        b.ret(&[next])
+        b.ret(&[next]);
     });
     p.define(wrapper, |b, args| {
         let address = b.address_of(data);
         let length = b.data_len(data);
         b.call(write, &[address, length]);
         let value = b.call(increment, args);
-        b.ret(&value)
+        b.ret(&value);
     });
     p.define(main, |b, _| {
         let before = b.call(count, &[])[0];
@@ -38,7 +38,6 @@ pub fn interleaved() -> Program {
         let expected = b.constant(Class::Word, 41);
         let status = b.binary(Binary::Add, expected, difference);
         b.call(exit, &[status]);
-        Terminator::UNREACHABLE
     });
     p
 }

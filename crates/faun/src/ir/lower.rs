@@ -13,7 +13,7 @@
 
 use crate::barb;
 
-use super::model::{Binary, Class, FunctionId, Program, Relation, Terminator, ValueId};
+use super::model::{Binary, Class, FunctionId, Program, Relation, ValueId};
 use super::validate::validate;
 use crate::platform::{Routine, Routines, reads};
 
@@ -68,6 +68,10 @@ enum Callee<'a> {
     },
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one dispatch over demanded declarations and their contracts"
+)]
 fn declare<'a>(
     demand: &Demand<'_>,
     routines: &'a Routines,
@@ -99,7 +103,13 @@ fn declare<'a>(
         // External functions carry the provider's machine contract. They
         // share function IDs and calls with bodies, not the narrowing policy.
         callees.push(match function.definition {
-            barb::Definition::Body(_) => Callee::Function(machine.declare(name, &params, &returns)),
+            barb::Definition::Body(_) => {
+                Callee::Function(if uninhabited(program, function.result) {
+                    machine.declare_never(name, &params)
+                } else {
+                    machine.declare(name, &params, &returns)
+                })
+            }
             barb::Definition::External { symbol, .. } => {
                 // A provider may answer for several source declarations.
                 let outside = program.name(symbol);
@@ -458,14 +468,14 @@ fn widest(held: Answer<Class>, other: Answer<Class>) -> Answer<Class> {
 
 /// Leave an arm with what its body answered. An arm that does not come back
 /// never reaches the join, so it carries nothing there.
-fn yielded(b: &mut super::Builder, answer: Answer<ValueId>, classes: &[Class]) -> Terminator {
+fn yielded(b: &mut super::Builder, answer: Answer<ValueId>, classes: &[Class]) {
     match answer {
         Answer::Value(value) => {
             let value = met(b, value, classes[0]);
-            b.yield_(&[value])
+            b.yield_(&[value]);
         }
         Answer::Nothing => b.yield_(&[]),
-        Answer::Never => Terminator::UNREACHABLE,
+        Answer::Never => (),
     }
 }
 
@@ -480,12 +490,12 @@ fn returned(
     b: &mut super::Builder,
     answer: Answer<ValueId>,
     destination: ReturnTo,
-) -> Result<Terminator, String> {
+) -> Result<(), String> {
     let returns = match destination {
         ReturnTo::Entry => Class::Word,
         ReturnTo::Function(class) => class,
     };
-    Ok(match answer {
+    match answer {
         Answer::Value(answer) => {
             if matches!(destination, ReturnTo::Entry) && b.class(answer) == Class::Natural {
                 return Err(
@@ -494,15 +504,16 @@ fn returned(
                 );
             }
             let answer = met(b, answer, returns);
-            b.ret(&[answer])
+            b.ret(&[answer]);
         }
         Answer::Nothing if matches!(destination, ReturnTo::Entry) => {
             let status = b.constant(Class::Word, 0);
-            b.ret(&[status])
+            b.ret(&[status]);
         }
         Answer::Nothing => b.ret(&[]),
-        Answer::Never => Terminator::UNREACHABLE,
-    })
+        Answer::Never => (),
+    }
+    Ok(())
 }
 
 struct Lowering<'a> {
@@ -685,11 +696,11 @@ impl Lowering<'_> {
                     &[class],
                     |b| {
                         let value = b.constant(class, u64::from(self.barb.tag(yes)));
-                        b.yield_(&[value])
+                        b.yield_(&[value]);
                     },
                     |b| {
                         let value = b.constant(class, u64::from(self.barb.tag(no)));
-                        b.yield_(&[value])
+                        b.yield_(&[value]);
                     },
                 )[0]
             }
@@ -793,14 +804,14 @@ impl Lowering<'_> {
             |b| {
                 let mut inner = locals.to_vec();
                 let answer = self.body(b, empty.body, &mut inner);
-                yielded(b, answer, &held)
+                yielded(b, answer, &held);
             },
             |b| {
                 let mut inner = locals.to_vec();
                 let one = b.constant(class, 1);
                 inner.push(Some(b.binary(Binary::Sub, scrutinee, one)));
                 let answer = self.body(b, counted.body, &mut inner);
-                yielded(b, answer, &held)
+                yielded(b, answer, &held);
             },
         );
         answer.map(|_| *results.first().expect("a result where the arms carry one"))
@@ -862,11 +873,11 @@ impl Lowering<'_> {
             |b| {
                 let mut inner = locals.to_vec();
                 let answer = self.body(b, arm.body, &mut inner);
-                yielded(b, answer, &held)
+                yielded(b, answer, &held);
             },
             |b| {
                 let answer = self.tags(b, scrutinee, class, rest, locals);
-                yielded(b, answer, &held)
+                yielded(b, answer, &held);
             },
         );
         answer.map(|_| *results.first().expect("a result where the arms carry one"))

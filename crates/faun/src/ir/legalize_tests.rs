@@ -48,7 +48,7 @@ fn base() -> (Program, FunctionId) {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     let test = p.declare("test", &[Class::Word], &[Class::Natural]);
     (p, test)
@@ -130,7 +130,7 @@ fn exact_runtime_arithmetic_and_returned_ownership_at_each_word_size() {
             );
             p.define(arithmetic, |b, a| {
                 let result = b.binary(operation, a[0], a[1]);
-                b.ret(&[result])
+                b.ret(&[result]);
             });
             p.define(test, |b, a| {
                 let input = b.convert(Class::Natural, a[0]);
@@ -139,7 +139,7 @@ fn exact_runtime_arithmetic_and_returned_ownership_at_each_word_size() {
                 let divisor = b.constant(Class::Natural, 257);
                 let right = b.binary(Binary::Add, divisor, input);
                 let result = b.call(arithmetic, &[left, right]);
-                b.ret(&result)
+                b.ret(&result);
             });
             let config = Config {
                 word_bits: bits,
@@ -179,7 +179,7 @@ fn zero_division_and_monus_alias_paths_keep_returned_values_live() {
                         input
                     };
                     let result = b.binary(operation, input, right);
-                    b.ret(&[result])
+                    b.ret(&[result]);
                 });
                 let scalar = legalize(
                     &p,
@@ -209,7 +209,7 @@ fn lifetime_program(early_return: bool) -> (Program, FunctionId) {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     let pair = p.declare(
         "duplicate borrowed",
@@ -235,7 +235,7 @@ fn lifetime_program(early_return: bool) -> (Program, FunctionId) {
                         &[],
                         |b| {
                             let one = b.constant(Class::Word, 1);
-                            b.continue_(&[carried[0], one])
+                            b.continue_(&[carried[0], one]);
                         },
                         |b| b.yield_(&[]),
                     );
@@ -250,11 +250,10 @@ fn lifetime_program(early_return: bool) -> (Program, FunctionId) {
                         &[],
                         |b| {
                             let old = b.convert(Class::Word, ancestor);
-                            b.ret(&[old])
+                            b.ret(&[old]);
                         },
                         |b| b.break_(&[carried[0]]),
                     );
-                    Terminator::UNREACHABLE
                 });
                 let more = b.compare(Relation::Less, state[2], args[0]);
                 b.if_(
@@ -263,16 +262,15 @@ fn lifetime_program(early_return: bool) -> (Program, FunctionId) {
                     |b| {
                         let one = b.constant(Class::Word, 1);
                         let index = b.binary(Binary::Add, state[2], one);
-                        b.continue_(&[state[1], inner[0], index])
+                        b.continue_(&[state[1], inner[0], index]);
                     },
                     |b| b.break_(&[inner[0], inner[0]]),
                 );
-                Terminator::UNREACHABLE
             },
         );
         let sum = b.binary(Binary::Add, result[0], result[1]);
         let status = b.convert(Class::Word, sum);
-        b.ret(&[status])
+        b.ret(&[status]);
     });
     (p, test)
 }
@@ -319,10 +317,9 @@ fn recursive_calls_borrow_parameters_and_transfer_owned_results() {
                     // Reading a borrowed parameter after the recursive call must
                     // remain safe even if the callee reuses released heap blocks.
                     let result = b.binary(Binary::Add, inner, args[1]);
-                    b.ret(&[result])
+                    b.ret(&[result]);
                 },
             );
-            Terminator::UNREACHABLE
         });
         p.define(main, |b, _| {
             let word = b.constant(Class::Word, 7);
@@ -330,7 +327,7 @@ fn recursive_calls_borrow_parameters_and_transfer_owned_results() {
             let count = b.constant(Class::Word, 12);
             let value = b.call(recurse, &[count, input])[0];
             let result = b.convert(Class::Word, value);
-            b.ret(&[result])
+            b.ret(&[result]);
         });
         let config = Config {
             word_bits: bits,
@@ -359,7 +356,7 @@ fn conversion_aliases_comparisons_and_odd_width_truncation() {
             let test = p.declare("conversions", &[Class::Word], &[Class::Word]);
             p.define(main, |b, _| {
                 let zero = b.constant(Class::Word, 0);
-                b.ret(&[zero])
+                b.ret(&[zero]);
             });
             p.define(test, |b, args| {
                 let a = b.convert(Class::Natural, args[0]);
@@ -373,14 +370,14 @@ fn conversion_aliases_comparisons_and_odd_width_truncation() {
                     |b| {
                         let high = b.natural(&(BigUint::from(1u8) << 100usize));
                         let value = b.binary(Binary::Add, alias, high);
-                        b.yield_(&[value])
+                        b.yield_(&[value]);
                     },
                     |b| b.yield_(&[zero]),
                 );
                 let narrow = b.convert(Class::Fixed { bits: narrow }, result[0]);
                 let result = b.convert(Class::Word, narrow);
                 let result = b.binary(Binary::Mul, result, equal);
-                b.ret(&[result])
+                b.ret(&[result]);
             });
             let config = Config {
                 word_bits: bits,
@@ -410,7 +407,6 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
         let value = b.constant(Class::Word, 42);
         b.convert(Class::Natural, value);
         b.call(exit, &[value]);
-        Terminator::UNREACHABLE
     });
     let scalar = legalize(
         &p,
@@ -448,7 +444,7 @@ fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
             let value = b.constant(source, 1);
             b.convert(target, value);
             let zero = b.constant(Class::Word, 0);
-            b.ret(&[zero])
+            b.ret(&[zero]);
         });
         assert!(
             legalize(
@@ -465,7 +461,7 @@ fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
     p.define(main, |b, _| {
         b.constant(Class::Fixed { bits: 65 }, 1);
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     assert!(
         legalize(
@@ -495,7 +491,7 @@ fn natural_host_signatures_do_not_become_address_signatures() {
         let natural = b.constant(Class::Natural, 1);
         b.call(foreign, &[natural]);
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     let error = legalize(
         &p,
@@ -530,7 +526,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
             b.convert(Class::Natural, word);
             b.convert(Class::Natural, word);
             b.call(mark, &[]);
-            b.ret(&[word])
+            b.ret(&[word]);
         });
         let scalar = legalize(
             &p,
@@ -593,13 +589,12 @@ fn typed_loop_slots_keep_their_width_when_initialized_from_narrower_values() {
                 |b| {
                     let one = b.constant(Class::Word, 1);
                     let next = b.binary_at(Class::Word, Binary::Add, params[0], one);
-                    b.continue_(&[next])
+                    b.continue_(&[next]);
                 },
                 |b| b.break_(&[params[0]]),
             );
-            Terminator::UNREACHABLE
         });
-        b.ret(&result)
+        b.ret(&result);
     });
     // Builder ordinarily picks the initial value's class, but the IR permits
     // a wider declared carried slot. Model a producer with that valid shape.
@@ -620,7 +615,7 @@ fn scalar_fast_path_has_no_runtime_code_data_or_globals() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let answer = b.constant(Class::Word, 42);
-        b.ret(&[answer])
+        b.ret(&[answer]);
     });
     let scalar = legalize(
         &p,

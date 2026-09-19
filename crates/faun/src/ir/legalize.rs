@@ -57,7 +57,7 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
             continue;
         };
         output.define(FunctionId::at(at), |b, params| {
-            pass.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params)
+            pass.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params);
         });
     }
     validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
@@ -94,9 +94,9 @@ fn skeleton(source: &Program) -> Program {
             output.regions.push(super::Region {
                 params,
                 ops: super::Range::EMPTY,
-                terminator: Terminator::UNREACHABLE,
+                terminator: None,
             });
-            output.functions[at].definition = Definition::Body(body);
+            output.functions[at].definition = Definition::Declared(body);
         }
     }
     output
@@ -281,7 +281,7 @@ impl Pass<'_> {
         scopes: &mut Vec<Scope>,
         kind: ScopeKind,
         params: &[ValueId],
-    ) -> Terminator {
+    ) {
         let old = self.source.region(region);
         let mut owners = Vec::new();
         for (&old, &new) in self.source.values(old.params).iter().zip(params) {
@@ -300,17 +300,15 @@ impl Pass<'_> {
                 }
             }
         }
-        let terminator = self.exit(b, scopes, old.terminator);
+        // Terminal child transfers already cleaned their scopes. A Never
+        // call must not be followed by cleanup at this region's end.
+        if let Some(terminator) = old.terminator {
+            self.exit(b, scopes, terminator);
+        }
         scopes.pop();
-        terminator
     }
 
-    fn exit(&self, b: &mut Builder, scopes: &[Scope], terminator: Terminator) -> Terminator {
-        // No operations may follow a nonreturning platform call. Unreachable
-        // also follows constructs whose branches both leave this scope.
-        if terminator.exit == Exit::Unreachable {
-            return Terminator::UNREACHABLE;
-        }
+    fn exit(&self, b: &mut Builder, scopes: &[Scope], terminator: Terminator) {
         let outgoing: Vec<_> = self
             .source
             .values(terminator.values)
@@ -331,7 +329,6 @@ impl Pass<'_> {
                 .iter()
                 .rposition(|s| s.kind == ScopeKind::Loop)
                 .expect("validated loop exit"),
-            Exit::Unreachable => unreachable!(),
         };
         for scope in scopes[start..].iter().rev() {
             for &value in scope.owners.iter().rev() {
@@ -343,7 +340,6 @@ impl Pass<'_> {
             Exit::Return => b.ret(&outgoing),
             Exit::Continue => b.continue_(&outgoing),
             Exit::Break => b.break_(&outgoing),
-            Exit::Unreachable => unreachable!(),
         }
     }
 
@@ -444,7 +440,7 @@ impl Pass<'_> {
                             &mut scopes.to_vec(),
                             ScopeKind::Ordinary,
                             &[],
-                        )
+                        );
                     },
                     |b| {
                         self.region(
@@ -453,7 +449,7 @@ impl Pass<'_> {
                             &mut scopes.to_vec(),
                             ScopeKind::Ordinary,
                             &[],
-                        )
+                        );
                     },
                 );
             }
@@ -481,7 +477,7 @@ impl Pass<'_> {
                     })
                     .collect();
                 return b.loop_(&initial, &classes(), |b, params| {
-                    self.region(b, body, &mut scopes.to_vec(), ScopeKind::Loop, params)
+                    self.region(b, body, &mut scopes.to_vec(), ScopeKind::Loop, params);
                 });
             }
         };
@@ -505,7 +501,7 @@ mod tests {
             let value = b.constant(Class::Natural, 7);
             let value = b.call(identity, &[value])[0];
             let value = b.convert(Class::Word, value);
-            b.ret(&[value])
+            b.ret(&[value]);
         });
         p.bind_layout(
             Config {

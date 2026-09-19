@@ -106,9 +106,7 @@ impl Operand {
 
 /// Whether `value` is read anywhere in `region`, nested regions included.
 fn region_reads(program: &Program, region: RegionId, value: ValueId) -> bool {
-    program
-        .values(program.region(region).terminator.values)
-        .contains(&value)
+    program.outgoing(region).contains(&value)
         || program
             .ops(region)
             .iter()
@@ -136,7 +134,12 @@ fn op_reads(program: &Program, op: &Op, value: ValueId) -> bool {
 /// How many `continue`s a loop body has. A nested loop's own belongs to it,
 /// so the walk stops at one.
 fn continues(program: &Program, region: RegionId) -> usize {
-    let own = usize::from(program.region(region).terminator.exit == Exit::Continue);
+    let own = usize::from(
+        program
+            .region(region)
+            .terminator
+            .is_some_and(|t| t.exit == Exit::Continue),
+    );
     own + program
         .ops(region)
         .iter()
@@ -160,7 +163,11 @@ fn path_to_continue(
     path: &mut Vec<(RegionId, usize)>,
 ) -> bool {
     let ops = program.ops(region);
-    if program.region(region).terminator.exit == Exit::Continue {
+    if program
+        .region(region)
+        .terminator
+        .is_some_and(|t| t.exit == Exit::Continue)
+    {
         path.push((region, ops.len()));
         return true;
     }
@@ -522,7 +529,7 @@ impl Lowering<'_> {
                 uses[value.index()] += 1;
             });
         }
-        for &value in program.values(program.region(region).terminator.values) {
+        for &value in program.outgoing(region) {
             weight[value.index()] += each;
             uses[value.index()] += 1;
         }
@@ -607,7 +614,7 @@ impl Lowering<'_> {
             }
         }
         *at += 1;
-        for &value in program.values(program.region(region).terminator.values) {
+        for &value in program.outgoing(region) {
             spans.touch(value, *at);
         }
     }
@@ -616,7 +623,9 @@ impl Lowering<'_> {
     /// nowhere else in the region and so can be computed last.
     fn deferred(&self, region: RegionId) -> Vec<usize> {
         let program = self.program;
-        let terminator = program.region(region).terminator;
+        let Some(terminator) = program.region(region).terminator else {
+            return Vec::new();
+        };
         if terminator.exit != Exit::Continue {
             return Vec::new();
         }
@@ -644,7 +653,7 @@ impl Lowering<'_> {
         let mut deferred = self.deferred(region);
         let ops = program.ops(region);
         let results: Vec<&[ValueId]> = program.walk(region).map(|(_, results)| results).collect();
-        let carried = program.values(program.region(region).terminator.values);
+        let carried = program.outgoing(region);
 
         // Which parameter the instruction at `index` would overwrite.
         let overwrites = |index: usize| -> Option<ValueId> {
@@ -713,9 +722,7 @@ impl Lowering<'_> {
             return;
         }
         let (innermost, _) = *path.last().expect("a path to the continue");
-        let carried = program
-            .values(program.region(innermost).terminator.values)
-            .to_vec();
+        let carried = program.outgoing(innermost).to_vec();
         let params = program.values(program.region(body).params).to_vec();
 
         for (slot, &value) in carried.iter().enumerate() {
@@ -995,7 +1002,9 @@ impl Lowering<'_> {
             let (op, results) = steps[index];
             self.instruction(op, results);
         }
-        self.terminator(program.region(region).terminator);
+        if let Some(terminator) = program.region(region).terminator {
+            self.terminator(terminator);
+        }
     }
 
     /// Store each source into its destination as one simultaneous
@@ -1539,8 +1548,6 @@ impl Lowering<'_> {
                 }
                 self.asm.rts();
             }
-            // Nothing follows, so nothing has to be emitted to avoid it.
-            Exit::Unreachable => self.asm.rts(),
         }
     }
 

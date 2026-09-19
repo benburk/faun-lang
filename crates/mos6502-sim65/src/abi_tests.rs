@@ -53,7 +53,7 @@ fn frame(pairs: usize) -> Program {
         for _ in 0..pairs {
             b.binary(Binary::Add, zero, zero);
         }
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     program
 }

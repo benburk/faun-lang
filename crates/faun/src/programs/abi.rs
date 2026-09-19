@@ -32,7 +32,7 @@ pub fn function(params: usize, returns: usize) -> Program {
                 b.binary(Binary::Add, sum, index)
             })
             .collect();
-        b.ret(&results)
+        b.ret(&results);
     });
     program.define(main, |b, _| {
         let args: Vec<_> = (1..=params)
@@ -59,7 +59,7 @@ pub fn function(params: usize, returns: usize) -> Program {
             u64::try_from(returns).expect("a small signature"),
         );
         let difference = b.binary(Binary::Sub, count, passed);
-        b.ret(&[difference])
+        b.ret(&[difference]);
     });
     program
 }
@@ -72,12 +72,12 @@ pub fn pointer_pair() -> Program {
     let pair = program.declare("pair", &[], &[Class::Address; 2]);
     program.define(pair, |b, _| {
         let pointer = b.address_of(data);
-        b.ret(&[pointer, pointer])
+        b.ret(&[pointer, pointer]);
     });
     program.define(main, |b, _| {
         b.call(pair, &[]);
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     program
 }
@@ -114,7 +114,7 @@ pub fn region(kind: Transfer, count: usize) -> Program {
             }
         }
         let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero])
+        b.ret(&[zero]);
     });
     program
 }

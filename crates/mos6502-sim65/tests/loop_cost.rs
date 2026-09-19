@@ -31,13 +31,12 @@ fn summing_loop(limit: u64) -> Program {
                     let one = b.constant(Word, 1);
                     let next = b.binary(Binary::Add, i, one);
                     let sum = b.binary(Binary::Add, acc, i);
-                    b.continue_(&[next, sum])
+                    b.continue_(&[next, sum]);
                 },
                 |b| b.break_(&[acc]),
             );
-            faun::ir::Terminator::UNREACHABLE
         });
-        b.ret(&[total[0]])
+        b.ret(&[total[0]]);
     });
     program
 }

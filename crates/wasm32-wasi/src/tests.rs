@@ -240,7 +240,7 @@ fn wide(value: u64) -> Program {
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let held = b.constant(Class::Word, value);
-        b.ret(&[held])
+        b.ret(&[held]);
     });
     program
 }
@@ -250,7 +250,7 @@ fn narrow(bits: u16) -> Program {
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let held = b.constant(Class::Fixed { bits }, 1);
-        b.ret(&[held])
+        b.ret(&[held]);
     });
     program
 }
@@ -435,6 +435,24 @@ fn runtime_arithmetic_varied_inputs() {
                 "{op:?} {chunk:?}"
             );
         }
+    }
+}
+
+#[test]
+fn structured_completion_preserves_returns_and_skipped_effects() {
+    for condition in [0, 1] {
+        for p in [
+            programs::control::entry_returns(condition),
+            programs::control::function_returns(condition),
+        ] {
+            faun::ir::validate(&p).unwrap();
+            assert_eq!(status(&p), if condition == 0 { 17 } else { 42 });
+        }
+        let p = programs::control::early_success(condition);
+        faun::ir::validate(&p).unwrap();
+        let (status, output, _) = execute(&p);
+        assert_eq!(status, 0);
+        assert_eq!(output, if condition == 0 { "continued\n" } else { "" });
     }
 }
 

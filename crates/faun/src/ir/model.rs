@@ -145,7 +145,6 @@ pub enum Exit {
     Continue,
     Break,
     Return,
-    Unreachable,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,19 +153,14 @@ pub struct Terminator {
     pub values: Range,
 }
 
-impl Terminator {
-    pub const UNREACHABLE: Self = Self {
-        exit: Exit::Unreachable,
-        values: Range::EMPTY,
-    };
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Region {
     pub params: Range,
     /// The instructions, contiguous, so that walking one is a scan.
     pub ops: Range,
-    pub terminator: Terminator,
+    /// Absent only when the instructions cannot fall through. Validation
+    /// derives this from call signatures and structured transfers.
+    pub terminator: Option<Terminator>,
 }
 
 /// Returning no values is different from never returning. Builders accept
@@ -190,6 +184,8 @@ impl Returns<Range> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Definition {
+    /// Reserved root and parameter values, not yet a built body.
+    Declared(RegionId),
     Body(RegionId),
     /// A function implemented outside this program. Targets check whether
     /// they can provide its name and signature.
@@ -213,7 +209,7 @@ impl Function {
     pub const fn body(&self) -> Option<RegionId> {
         match self.definition {
             Definition::Body(body) => Some(body),
-            Definition::External => None,
+            Definition::Declared(_) | Definition::External => None,
         }
     }
 
@@ -221,7 +217,7 @@ impl Function {
     #[must_use]
     pub const fn external(&self) -> Option<Symbol> {
         match self.definition {
-            Definition::Body(_) => None,
+            Definition::Declared(_) | Definition::Body(_) => None,
             Definition::External => Some(self.name),
         }
     }
@@ -305,6 +301,15 @@ impl Program {
     pub fn name(&self, symbol: Symbol) -> &str {
         let at = self.symbols[symbol.index()];
         std::str::from_utf8(&self.names[at.range()]).expect("a name was written as text")
+    }
+
+    /// Values carried by the region's explicit transfer, or none when its
+    /// instructions cannot fall through.
+    #[must_use]
+    pub fn outgoing(&self, region: RegionId) -> &[ValueId] {
+        self.region(region)
+            .terminator
+            .map_or(&[], |term| self.values(term.values))
     }
 
     #[must_use]
