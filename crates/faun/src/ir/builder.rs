@@ -175,15 +175,12 @@ impl Program {
     }
 
     fn mint(&mut self, classes: &[Class]) -> Range {
-        let start = u32::try_from(self.operands.len()).expect("a program within 4G operands");
+        let start = self.operands.len();
         for &class in classes {
             self.classes.push(class);
             self.operands.push(ValueId::at(self.classes.len() - 1));
         }
-        Range {
-            start,
-            len: u32::try_from(classes.len()).expect("a sane arity"),
-        }
+        Range::of(start, classes.len())
     }
 }
 
@@ -414,14 +411,14 @@ impl Builder<'_> {
     /// Append this region's instructions to the program, where they become
     /// one contiguous run.
     fn finish(self, terminator: Terminator) -> Region {
-        let start = u32::try_from(self.program.ops.len()).expect("a program within 4G ops");
-        let len = u32::try_from(self.ops.len()).expect("a region within 4G ops");
+        let start = self.program.ops.len();
+        let len = self.ops.len();
         self.program.ops.extend_from_slice(&self.ops);
         self.program.results.extend_from_slice(&self.results);
 
         Region {
             params: self.params,
-            ops: Range { start, len },
+            ops: Range::of(start, len),
             terminator,
         }
     }

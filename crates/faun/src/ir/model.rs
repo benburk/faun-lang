@@ -1,52 +1,13 @@
 //! The data model: operations, regions, declarations, and the pools they
 //! live in.
 
+pub use crate::index::Range;
 use crate::index::index;
 
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. The IR never reads those characters: names are compared and copied
 // as integers, and the text comes back only to render one.
 index!(ValueId, DataId, FunctionId, PlatformId, RegionId, Symbol);
-
-/// A run in one of the program's pools: the values an argument list holds,
-/// a region's parameters, the classes a signature names, the characters of
-/// a name.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Range {
-    pub(super) start: u32,
-    pub(super) len: u32,
-}
-
-impl Range {
-    /// # Panics
-    ///
-    /// Never, on any machine whose pointers reach 32 bits.
-    #[must_use]
-    pub fn len(self) -> usize {
-        usize::try_from(self.len).expect("an index that fits a pointer")
-    }
-
-    #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.len == 0
-    }
-
-    /// # Panics
-    ///
-    /// If the program outgrew the four billion entries a pool may hold.
-    #[must_use]
-    pub fn of(start: usize, len: usize) -> Self {
-        Self {
-            start: u32::try_from(start).expect("a pool within 4G"),
-            len: u32::try_from(len).expect("a run within 4G"),
-        }
-    }
-
-    pub(super) fn range(self) -> std::ops::Range<usize> {
-        let start = usize::try_from(self.start).expect("an index that fits a pointer");
-        start..start + self.len()
-    }
-}
 
 /// Which of a program's two regions a datum sits in.
 ///
@@ -197,7 +158,7 @@ pub struct Terminator {
 impl Terminator {
     pub const UNREACHABLE: Self = Self {
         exit: Exit::Unreachable,
-        values: Range { start: 0, len: 0 },
+        values: Range::EMPTY,
     };
 }
 
@@ -250,12 +211,9 @@ pub struct Program {
 impl Program {
     /// Keep a list of existing values, giving back the run it occupies.
     pub(super) fn hold(&mut self, values: &[ValueId]) -> Range {
-        let start = u32::try_from(self.operands.len()).expect("a program within 4G operands");
+        let start = self.operands.len();
         self.operands.extend_from_slice(values);
-        Range {
-            start,
-            len: u32::try_from(values.len()).expect("a sane arity"),
-        }
+        Range::of(start, values.len())
     }
 
     /// The name a symbol stands for.

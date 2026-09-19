@@ -1,5 +1,6 @@
 //! The data model: terms, declarations, and the pools they live in.
 
+pub use crate::index::Range;
 use crate::index::index;
 
 // `Symbol` is a name. The IR never reads the characters of one: names are
@@ -8,40 +9,6 @@ use crate::index::index;
 // here, so a program is a self-contained value and two of them cannot
 // disagree about what a symbol means.
 index!(ExprId, FnId, TypeId, CtorId, ConstId, Local, Symbol);
-
-/// A run of values in one of the pools beside the arena.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Range {
-    pub(super) start: u32,
-    pub(super) len: u32,
-}
-
-impl Range {
-    /// # Panics
-    ///
-    /// Never, on any machine whose pointers reach 32 bits.
-    #[must_use]
-    pub fn len(self) -> usize {
-        usize::try_from(self.len).expect("a length that fits a pointer")
-    }
-
-    #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.len == 0
-    }
-
-    pub(super) fn of(start: usize, len: usize) -> Self {
-        Self {
-            start: u32::try_from(start).expect("a pool within 4G"),
-            len: u32::try_from(len).expect("a run within 4G"),
-        }
-    }
-
-    pub(super) fn range(self) -> std::ops::Range<usize> {
-        let start = usize::try_from(self.start).expect("an index that fits a pointer");
-        start..start + self.len()
-    }
-}
 
 /// An argument: a local, and nothing else. That is what A-normal form buys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,12 +221,12 @@ impl Program {
     /// known value carries.
     #[must_use]
     pub fn tag(&self, ctor: CtorId) -> u32 {
-        ctor.0 - self.type_(self.ctor(ctor).owner).ctors.start
+        ctor.0 - self.type_(self.ctor(ctor).owner).ctors.start()
     }
 
     #[must_use]
     pub fn ctor_at(&self, owner: TypeId, tag: u32) -> CtorId {
-        CtorId(self.type_(owner).ctors.start + tag)
+        CtorId(self.type_(owner).ctors.start() + tag)
     }
 
     /// The types a range of the pool holds.
