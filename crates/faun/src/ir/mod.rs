@@ -58,6 +58,8 @@ pub use validate::validate;
 #[cfg(test)]
 mod arithmetic_tests;
 #[cfg(test)]
+mod representation_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod validation_tests;

@@ -65,6 +65,10 @@ subsequent work. The `U8` and `Int` definitions below work in Barb constant
 evaluation/folding. They do **not** add runtime product/sum representation support
 to machine lowering or any target, nor do they make unbounded signed magnitudes
 fit a machine word. No `U8` packing or signed machine arithmetic is claimed.
+Unused library types/functions do not require runtime representations: all three
+files may be prepended to a Nat-only program. Representation checks follow the
+code actually lowered, excluding impossible arms and tails after an exit.
+Any remaining runtime `U8` or `Int` value is still rejected, not silently erased.
 
 ## Bytes: `u8.fn`
 

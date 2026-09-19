@@ -252,8 +252,10 @@ fn a_constructor_that_carries_something_is_not_a_tag() {
     let refused = read(
         "type Nat Zero Succ(Nat)
          type Maybe None Some(Nat)
+         unwrap(None) -> Zero
+         unwrap(Some(n)) -> n
 
-         main!(h) -> exit!(h Zero)",
+         main!(h) -> n = argc!(h) exit!(h unwrap(Some(n)))",
     )
     .unwrap_err();
     assert!(

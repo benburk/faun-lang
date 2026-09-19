@@ -34,33 +34,29 @@ pub fn lower(
 ) -> Result<Program, String> {
     barb::validate(program)?;
     let entry = program.entry().expect("a program to lower has an entry");
-    // Whether a value of each type takes a place at all. What place is a
-    // question per value, which is why this answers nothing about width.
-    let carries: Vec<Option<()>> = (0..program.types().len())
-        .map(|at| represent(program, barb::TypeId::at(at)))
-        .collect::<Result<_, _>>()?;
-
-    let reached = reached(program, facts, entry);
+    // Only values actually lowered need a representation. Merely declaring
+    // a library type (or retaining an old expression in the arena) does not.
+    let demand = Demand::discover(program, facts, entry)?;
     let (mut machine, main) =
         Program::with(program.name(program.function(entry).name), routines.clone());
     let (functions, platforms) = declare(
         program,
         facts,
         routines,
-        &carries,
+        &demand.carries,
         &mut machine,
         (entry, main),
-        &reached,
+        &demand.reached,
     )?;
 
     let lowering = Lowering {
         barb: program,
         facts,
-        carries,
+        carries: demand.carries,
         functions,
         platforms,
     };
-    for (at, reached) in reached.iter().enumerate() {
+    for (at, reached) in demand.reached.iter().enumerate() {
         let id = barb::FnId::at(at);
         if *reached && facts.operation(id).is_none() && program.function(id).body.is_some() {
             lowering.function(&mut machine, id)?;
@@ -177,42 +173,113 @@ fn provided<'a>(
     Ok((held, wanted))
 }
 
-/// Which definitions the entry can reach, by definition. A program is what
-/// runs from its entry, and a name nothing calls is not part of it -- so it
-/// is not emitted, and nothing below this tier hears of it.
-fn reached(program: &barb::Program, facts: &barb::Facts, entry: barb::FnId) -> Vec<bool> {
-    fn within(program: &barb::Program, body: barb::Body, held: &mut Vec<barb::FnId>) {
-        for expr in program
+/// Function and representation demand follow the same paths as emission:
+/// recognized definitions become instructions, impossible arms disappear,
+/// and a body stops at its first binding that cannot return.
+struct Demand<'a> {
+    program: &'a barb::Program,
+    facts: &'a barb::Facts,
+    reached: Vec<bool>,
+    waiting: Vec<barb::FnId>,
+    // An undemanded type has no slot. Every introduction of a lowered value
+    // (signature, constructor, constant, or match field) checks it first;
+    // unsupported representations are never mistaken for erased values.
+    carries: Vec<Option<()>>,
+}
+
+impl<'a> Demand<'a> {
+    fn discover(
+        program: &'a barb::Program,
+        facts: &'a barb::Facts,
+        entry: barb::FnId,
+    ) -> Result<Self, String> {
+        let mut demand = Self {
+            program,
+            facts,
+            reached: vec![false; program.functions().len()],
+            waiting: vec![entry],
+            carries: vec![None; program.types().len()],
+        };
+        while let Some(id) = demand.waiting.pop() {
+            if std::mem::replace(&mut demand.reached[id.index()], true) {
+                continue;
+            }
+            let function = program.function(id);
+            for &ty in program.params(id).iter().chain([&function.result]) {
+                demand.type_(ty)?;
+            }
+            if facts.operation(id).is_none()
+                && let Some(body) = function.body
+            {
+                demand.body(body)?;
+            }
+        }
+        Ok(demand)
+    }
+
+    fn type_(&mut self, ty: barb::TypeId) -> Result<(), String> {
+        self.carries[ty.index()] = represent(self.program, ty)?;
+        Ok(())
+    }
+
+    /// Whether this body can return, matching `Lowering::body`.
+    fn body(&mut self, body: barb::Body) -> Result<bool, String> {
+        for &expr in self
+            .program
             .bindings(body.bindings)
             .iter()
             .chain([&body.tail])
-            .copied()
         {
-            match program.expr(expr) {
-                barb::Expr::Call(id, _) => held.push(id),
-                barb::Expr::Match(_, arms) => {
-                    for arm in program.arms(arms).to_vec() {
-                        within(program, arm.body, held);
-                    }
-                }
-                barb::Expr::Atom(_) | barb::Expr::Con(..) | barb::Expr::Static(..) => {}
+            if !self.expr(expr)? {
+                return Ok(false);
             }
         }
+        Ok(true)
     }
 
-    let mut reached = vec![false; program.functions().len()];
-    let mut waiting = vec![entry];
-    while let Some(id) = waiting.pop() {
-        if std::mem::replace(&mut reached[id.index()], true) {
-            continue;
+    fn expr(&mut self, expr: barb::ExprId) -> Result<bool, String> {
+        match self.program.expr(expr) {
+            barb::Expr::Atom(_) => {}
+            barb::Expr::Static(ty, _) => self.type_(ty)?,
+            barb::Expr::Con(ctor, _) => self.type_(self.program.ctor(ctor).owner)?,
+            barb::Expr::Call(id, _) => {
+                self.waiting.push(id);
+                return Ok(!uninhabited(self.program, self.program.function(id).result));
+            }
+            barb::Expr::Match(_, arms) => {
+                let mut returns = false;
+                for arm in reachable(self.program, arms, self.facts.matched(expr)) {
+                    for &ty in self.program.fields(arm.ctor) {
+                        self.type_(ty)?;
+                    }
+                    // Visit every reachable arm, even after one can return.
+                    returns |= self.body(arm.body)?;
+                }
+                return Ok(returns);
+            }
         }
-        if facts.operation(id).is_none()
-            && let Some(body) = program.function(id).body
-        {
-            within(program, body, &mut waiting);
-        }
+        Ok(true)
     }
-    reached
+}
+
+/// Shared by demand discovery, answer analysis, and emission: types in an
+/// impossible arm do not need storage any more than its calls need code.
+fn reachable(program: &barb::Program, arms: barb::Range, bounds: barb::Bounds) -> Vec<barb::Arm> {
+    program
+        .arms(arms)
+        .iter()
+        .copied()
+        .filter(
+            |arm| match barb::shape(program, program.ctor(arm.ctor).owner) {
+                barb::Shape::Spine { nil, .. } if arm.ctor == nil => bounds.low == 0,
+                barb::Shape::Spine { .. } => bounds.high != Some(0),
+                barb::Shape::Tagged => {
+                    let tag = u64::from(program.tag(arm.ctor));
+                    tag >= bounds.low && bounds.high.is_none_or(|high| tag <= high)
+                }
+            },
+        )
+        .collect()
 }
 
 /// The class a type's values take. Numbers and tags are decided so far.
@@ -702,21 +769,7 @@ impl Lowering<'_> {
     }
 
     fn reachable(&self, arms: barb::Range, bounds: barb::Bounds) -> Vec<barb::Arm> {
-        self.barb
-            .arms(arms)
-            .iter()
-            .copied()
-            .filter(
-                |arm| match barb::shape(self.barb, self.barb.ctor(arm.ctor).owner) {
-                    barb::Shape::Spine { nil, .. } if arm.ctor == nil => bounds.low == 0,
-                    barb::Shape::Spine { .. } => bounds.high != Some(0),
-                    barb::Shape::Tagged => {
-                        let tag = u64::from(self.barb.tag(arm.ctor));
-                        tag >= bounds.low && bounds.high.is_none_or(|high| tag <= high)
-                    }
-                },
-            )
-            .collect()
+        reachable(self.barb, arms, bounds)
     }
 
     fn only_arm(
