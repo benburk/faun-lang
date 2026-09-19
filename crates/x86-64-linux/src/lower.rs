@@ -68,50 +68,36 @@ enum Source {
     Slot(u32),
 }
 
-/// What a round may learn and never unlearn: a branch that does not reach
-/// in one byte, and a function that writes to its frame. Neither is taken
-/// back, so the rounds are bounded by how far one relaxed branch can push
-/// others out of reach -- and every program here settles in two, one to
-/// guess and one to confirm. Reaching this many means a round undid what an
-/// earlier one settled.
+/// What a round may learn and never unlearn: that a function writes to its
+/// frame, and so needs one. It is not taken back, so two rounds settle it:
+/// one to guess and one to confirm. Reaching this many means a round undid
+/// what an earlier one settled.
 const ROUNDS: usize = 32;
 
-/// Assembled until nothing changes. Two facts are only knowable once the
-/// addresses are: which jumps reach in a single byte, and whether a frame
-/// was ever written to. Shortening a jump can pull another into reach, so
-/// this repeats rather than assuming one pass settles it.
+/// Assembled until nothing changes. Whether a frame was ever written to is
+/// only knowable once it has been, and opening one changes what is written,
+/// so this repeats rather than assuming one pass settles it.
+///
+/// How far a jump reaches settles inside the assembling, where the steps
+/// can be measured without writing any of them out.
 ///
 /// # Panics
 ///
 /// If the layout does not settle, which is this target disagreeing with
 /// itself rather than anything a program did.
 pub(crate) fn lower(program: &Program) -> Code {
-    let mut distant: Vec<bool> = Vec::new();
     let mut framed = vec![true; program.functions().len()];
     for _ in 0..ROUNDS {
-        let (code, overflowed, spilled) = assemble(program, distant.clone(), &framed);
-        if !overflowed.is_empty() {
-            let widest = overflowed.iter().copied().max().expect("a branch");
-            distant.resize(widest + 1, false);
-            for branch in overflowed {
-                distant[branch] = true;
-            }
-            continue;
+        let (code, spilled) = assemble(program, &framed);
+        if framed == spilled {
+            return code;
         }
-        if framed != spilled {
-            framed = spilled;
-            continue;
-        }
-        return code;
+        framed = spilled;
     }
     panic!("the layout did not settle in {ROUNDS} rounds")
 }
 
-fn assemble(
-    program: &Program,
-    distant: Vec<bool>,
-    framed: &[bool],
-) -> (Code, Vec<usize>, Vec<bool>) {
+fn assemble(program: &Program, framed: &[bool]) -> (Code, Vec<bool>) {
     let entry = program.entry();
     let mut state = Lowering {
         program,
@@ -119,7 +105,7 @@ fn assemble(
         in_entry: true,
         counts: program.reaches("argc"),
         plan: Plan::empty(program),
-        asm: Encoder::new(distant),
+        asm: Encoder::default(),
         framed: framed.to_vec(),
         spilled: vec![false; program.functions().len()],
         frame: 0,
@@ -146,8 +132,7 @@ fn assemble(
     }
 
     let spilled = state.spilled.clone();
-    let (code, overflowed) = state.finish();
-    (code, overflowed, spilled)
+    (state.finish(), spilled)
 }
 
 struct Plan {
@@ -347,10 +332,22 @@ struct Lowering<'a> {
 }
 
 impl Lowering<'_> {
-    fn finish(self) -> (Code, Vec<usize>) {
-        let relocs = self.relocs;
-        let (bytes, overflowed) = self.asm.finish();
-        (Code { bytes, relocs }, overflowed)
+    /// What a reloc holds is which step wants an address; where that step
+    /// landed is only known once every width is, so it is read off the
+    /// finished positions.
+    fn finish(self) -> Code {
+        let (bytes, at) = self.asm.finish();
+        let relocs = self
+            .relocs
+            .into_iter()
+            .map(|held| Reloc {
+                // The hole is the last four bytes of the step that wants
+                // it, and where that step ends is where the next begins.
+                offset: at[held.offset + 1] - 4,
+                data: held.data,
+            })
+            .collect();
+        Code { bytes, relocs }
     }
 
     fn function(&mut self, id: FunctionId) {

@@ -1,5 +1,9 @@
-//! Each method appends exactly one instruction. Choosing between two
-//! encodings of the same value is [`super::lower`]'s job, not this module's.
+//! Each method appends exactly one step, and a step is one instruction
+//! except where a caller asked for something that takes two. Choosing
+//! between two encodings of the same value is [`super::lower`]'s job, not
+//! this module's.
+
+use faun::index::Range;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -40,33 +44,70 @@ impl Reg {
     }
 }
 
-/// A displacement left to be filled in, and how much room was left for it.
-struct Fixup {
-    at: usize,
-    size: usize,
-    /// Which branch, for the ones that could be shortened.
-    branch: Option<usize>,
-    target: Option<usize>,
+/// One step the lowering asked for, before anything says where it sits.
+///
+/// Everything but a jump is the same bytes wherever it lands, so it is kept
+/// as the bytes it is. A jump is not: how far it reaches decides whether it
+/// spends one byte on the displacement or four, and how far it reaches is
+/// not known until everything before it has a width.
+enum Inst {
+    Fixed(Range),
+    Jump {
+        cc: Option<u8>,
+        to: Option<usize>,
+    },
+    /// There is no short form of a call, so this is always a full
+    /// displacement and never has to be measured.
+    Call {
+        to: Option<usize>,
+    },
+}
+
+impl Inst {
+    /// What it costs, given whether a jump was found to need four bytes.
+    fn len(&self, far: bool) -> usize {
+        match *self {
+            Self::Fixed(bytes) => bytes.len(),
+            Self::Call { .. } => 5,
+            // `EB cb` against `E9 cd`, and `7x cb` against `0F 8x cd`: the
+            // near forms are a byte of opcode and a byte of displacement
+            // either way, and only the far ones differ.
+            Self::Jump { cc: None, .. } if far => 5,
+            Self::Jump { cc: Some(_), .. } if far => 6,
+            Self::Jump { .. } => 2,
+        }
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct Encoder {
-    bytes: Vec<u8>,
-    fixups: Vec<Fixup>,
-    /// Branches, by number, already found not to reach in one byte.
-    distant: Vec<bool>,
-    branches: usize,
+    /// The steps, in the order they were asked for.
+    insts: Vec<Inst>,
+    /// Every fixed step's bytes, end to end.
+    pool: Vec<u8>,
+    /// Where the step now being written began, if one is open.
+    open: Option<usize>,
     /// Whether anything was written to a frame slot, which is what says a
     /// frame was needed at all.
     spilled: bool,
 }
 
 impl Encoder {
-    pub(crate) fn new(distant: Vec<bool>) -> Self {
-        Self {
-            distant,
-            ..Self::default()
+    /// Close whatever step was being written, keeping what it wrote.
+    fn close(&mut self) {
+        if let Some(start) = self.open.take()
+            && self.pool.len() > start
+        {
+            self.insts
+                .push(Inst::Fixed(Range::of(start, self.pool.len() - start)));
         }
+    }
+
+    /// Close the step being written and begin another. Every method below
+    /// starts with this, which is what makes a step a step.
+    fn step(&mut self) {
+        self.close();
+        self.open = Some(self.pool.len());
     }
 
     pub(crate) const fn spilled(&self) -> bool {
@@ -79,63 +120,144 @@ impl Encoder {
         self.spilled = false;
     }
 
-    /// Fill every displacement, and report the branches that turned out not
-    /// to reach in the byte they were given.
+    /// Where every step lands, and the bytes they come to.
+    ///
+    /// A jump spends one byte on its displacement where it reaches and
+    /// four where it does not, and shortening one can pull another into
+    /// reach. So the widths are settled first, by measuring rather than by
+    /// writing anything: every jump starts near, and any found not to
+    /// reach is widened and the measuring done again. A jump only ever
+    /// widens, so this settles.
+    ///
+    /// # Panics
+    ///
+    /// If a jump was never aimed, or reaches further than two gigabytes.
     pub(crate) fn finish(mut self) -> (Vec<u8>, Vec<usize>) {
-        let mut overflowed = Vec::new();
-        for fixup in std::mem::take(&mut self.fixups) {
-            let target = fixup.target.expect("every jump is aimed");
-            let from = fixup.at + fixup.size;
-            let displacement = i64::try_from(target).expect("a reachable offset")
-                - i64::try_from(from).expect("a reachable offset");
-
-            if fixup.size == 1 {
-                match i8::try_from(displacement) {
-                    Ok(near) => self.bytes[fixup.at] = near.cast_unsigned(),
-                    Err(_) => overflowed.push(fixup.branch.expect("a branch")),
+        self.close();
+        let (far, at) = self.settled();
+        let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
+        for (id, inst) in self.insts.iter().enumerate() {
+            match *inst {
+                Inst::Fixed(held) => bytes.extend_from_slice(&self.pool[held.range()]),
+                Inst::Call { to } => {
+                    let to = to.expect("every call is aimed");
+                    let from = at[id] + 5;
+                    let step = i64::try_from(at[to]).expect("a reachable offset")
+                        - i64::try_from(from).expect("a reachable offset");
+                    let step = i32::try_from(step).expect("a call within 2 GiB");
+                    bytes.push(0xE8);
+                    bytes.extend_from_slice(&step.to_le_bytes());
                 }
-            } else {
-                let displacement = i32::try_from(displacement).expect("a jump within 2 GiB");
-                self.bytes[fixup.at..fixup.at + 4].copy_from_slice(&displacement.to_le_bytes());
+                Inst::Jump { cc, to } => {
+                    let to = to.expect("every jump is aimed");
+                    let from = at[id] + inst.len(far[id]);
+                    let step = i64::try_from(at[to]).expect("a reachable offset")
+                        - i64::try_from(from).expect("a reachable offset");
+                    match (cc, far[id]) {
+                        (None, false) => bytes.push(0xEB),
+                        (None, true) => bytes.push(0xE9),
+                        (Some(cc), false) => bytes.push(0x70 | cc),
+                        (Some(cc), true) => bytes.extend_from_slice(&[0x0F, 0x80 | cc]),
+                    }
+                    if far[id] {
+                        let step = i32::try_from(step).expect("a jump within 2 GiB");
+                        bytes.extend_from_slice(&step.to_le_bytes());
+                    } else {
+                        let step = i8::try_from(step).expect("a jump that reaches");
+                        bytes.push(step.cast_unsigned());
+                    }
+                }
             }
         }
-        (self.bytes, overflowed)
+        (bytes, at)
+    }
+
+    /// Which jumps need four bytes of displacement, and where every step
+    /// lands once they have them.
+    ///
+    /// Nothing is written to find out. Every jump starts near, and any
+    /// found not to reach is widened and the measuring done again; a jump
+    /// only ever widens, so this settles.
+    ///
+    /// # Panics
+    ///
+    /// If a jump was never aimed.
+    fn settled(&self) -> (Vec<bool>, Vec<usize>) {
+        let mut far = vec![false; self.insts.len()];
+        loop {
+            let at = self.positions(&far);
+            let mut again = false;
+            for (id, inst) in self.insts.iter().enumerate() {
+                let Inst::Jump { to, .. } = *inst else {
+                    continue;
+                };
+                if far[id] {
+                    continue;
+                }
+                let to = to.expect("every jump is aimed");
+                let from = at[id] + inst.len(false);
+                let step = i64::try_from(at[to]).expect("a reachable offset")
+                    - i64::try_from(from).expect("a reachable offset");
+                if i8::try_from(step).is_err() {
+                    far[id] = true;
+                    again = true;
+                }
+            }
+            if !again {
+                return (far, at);
+            }
+        }
+    }
+
+    /// Where each step would land, at the widths it was given.
+    fn positions(&self, far: &[bool]) -> Vec<usize> {
+        let mut at = Vec::with_capacity(self.insts.len() + 1);
+        let mut held = 0;
+        for (id, inst) in self.insts.iter().enumerate() {
+            at.push(held);
+            held += inst.len(far[id]);
+        }
+        at.push(held);
+        at
     }
 
     /// The shortest zeroing, and it clears all 64 bits despite naming the
     /// 32-bit half.
     pub(crate) fn xor_self(&mut self, dst: Reg) {
+        self.step();
         self.rex(false, Some(dst), dst);
         self.emit(&[0x31, modrm(dst, dst)]);
     }
 
     pub(crate) fn mov_reg(&mut self, dst: Reg, src: Reg, wide: bool) {
+        self.step();
         self.rex(wide, Some(src), dst);
         self.emit(&[0x89, modrm(src, dst)]);
     }
 
     /// Sign-extends to a full 64-bit stack slot.
     pub(crate) fn push_imm8(&mut self, value: i8) {
+        self.step();
         self.emit(&[0x6A, value.cast_unsigned()]);
     }
 
     pub(crate) fn pop(&mut self, dst: Reg) {
+        self.step();
         self.rex(false, None, dst);
         self.emit(&[0x58 + dst.low()]);
     }
 
-    /// Zero-extends to 64 bits. Returns the offset of the immediate, which
-    /// is where a relocation would land.
-    pub(crate) fn mov_imm32(&mut self, dst: Reg, value: u32) -> usize {
+    /// Zero-extends to 64 bits.
+    pub(crate) fn mov_imm32(&mut self, dst: Reg, value: u32) {
+        self.step();
         self.rex(false, None, dst);
         self.emit(&[0xB8 + dst.low()]);
-        let offset = self.bytes.len();
         self.emit(&value.to_le_bytes());
-        offset
     }
 
     /// Sign-extended to 64 bits, for negative constants.
     pub(crate) fn mov_sext_imm32(&mut self, dst: Reg, value: i32) {
+        self.step();
         // ModRM.reg holds the opcode extension /0, not a register.
         self.rex(true, None, dst);
         self.emit(&[0xC7, modrm(Reg::Rax, dst)]);
@@ -144,6 +266,7 @@ impl Encoder {
 
     /// The only form that carries a full 64-bit value.
     pub(crate) fn mov_imm64(&mut self, dst: Reg, value: u64) {
+        self.step();
         self.emit(&[0x48 | u8::from(dst.extended()), 0xB8 + dst.low()]);
         self.emit(&value.to_le_bytes());
     }
@@ -152,19 +275,23 @@ impl Encoder {
     /// of 10 takes a 32-bit displacement; rsp and rbp are not addressable
     /// this way, and nothing here asks to be.
     pub(crate) fn load_word(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.step();
         self.at(&[0x8B], dst, base, disp);
     }
 
     pub(crate) fn store_word(&mut self, src: Reg, base: Reg, disp: i32) {
+        self.step();
         self.at(&[0x89], src, base, disp);
     }
 
     /// The low byte, zero-extended on the way in.
     pub(crate) fn load_byte(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.step();
         self.at(&[0x0F, 0xB6], dst, base, disp);
     }
 
     pub(crate) fn store_byte(&mut self, src: Reg, base: Reg, disp: i32) {
+        self.step();
         self.at(&[0x88], src, base, disp);
     }
 
@@ -185,6 +312,7 @@ impl Encoder {
     /// leaves the upper bits alone need this; the 32-bit forms already
     /// zero-extend into the whole register.
     pub(crate) fn narrow(&mut self, bits: u16) {
+        self.step();
         match bits {
             8 => self.emit(&[0x48, 0x0F, 0xB6, 0xC0]), // movzx rax, al
             16 => self.emit(&[0x48, 0x0F, 0xB7, 0xC0]), // movzx rax, ax
@@ -194,16 +322,19 @@ impl Encoder {
     }
 
     pub(crate) fn syscall(&mut self) {
+        self.step();
         self.emit(&[0x0F, 0x05]);
     }
 
     /// A `ModRM` `rm` of 100 means a SIB byte follows; 0x24 is rsp as the
     /// base with no index.
     pub(crate) fn load_slot(&mut self, dst: Reg, disp: u32) {
+        self.step();
         self.slot(0x8B, dst, disp);
     }
 
     pub(crate) fn store_slot(&mut self, src: Reg, disp: u32) {
+        self.step();
         self.slot(0x89, src, disp);
     }
 
@@ -226,6 +357,7 @@ impl Encoder {
     }
 
     pub(crate) fn open_frame(&mut self, bytes: u32) {
+        self.step();
         self.adjust_rsp(0xEC, bytes);
     }
 
@@ -239,6 +371,7 @@ impl Encoder {
     /// shorter than the sixty-four-bit form and what keeps a value holding
     /// nothing above what it needs.
     pub(crate) fn alu_sized(&mut self, opcode: u8, dst: Reg, src: Reg, bits: u16) {
+        self.step();
         if bits <= 32 {
             self.rex(false, Some(src), dst);
             self.emit(&[opcode, modrm(src, dst)]);
@@ -249,12 +382,14 @@ impl Encoder {
 
     /// `dst = dst op src`.
     pub(crate) fn alu(&mut self, opcode: u8, dst: Reg, src: Reg) {
+        self.step();
         self.rex(true, Some(src), dst);
         self.emit(&[opcode, modrm(src, dst)]);
     }
 
     /// `dst = 1` when the flags satisfy `cc`, else 0, zero-extended.
     pub(crate) fn set_if(&mut self, cc: u8, dst: Reg) {
+        self.step();
         self.rex(false, None, dst);
         self.emit(&[0x0F, 0x90 | cc, 0xC0 | dst.low()]);
         self.rex(false, Some(dst), dst);
@@ -264,29 +399,33 @@ impl Encoder {
     /// The displacement is measured from the end of this instruction, and
     /// its offset is returned. `REX.W` is not optional: without it the
     /// address truncates to 32 bits, which ASLR makes fatal.
+    /// Answers which step it is. What fills the hole is the layout rather
+    /// than [`Encoder::patch`], so what a caller keeps is the step, and
+    /// where in the file it lands is read off the finished positions.
     pub(crate) fn lea_rip(&mut self, dst: Reg) -> usize {
+        self.step();
         self.rex(true, Some(dst), Reg::Rax);
         self.emit(&[0x8D, (dst.low() << 3) | 5]);
-        // The linker fills this one in, not [`Encoder::patch`], so it is a
-        // byte offset rather than a fixup.
-        let at = self.bytes.len();
         self.emit(&[0; 4]);
-        at
+        self.insts.len()
     }
 
     /// Leaves a hole for [`Encoder::patch`], like any other displacement.
     /// There is no short form of a call, so this is always a full
     /// displacement.
     pub(crate) fn call(&mut self) -> usize {
-        self.emit(&[0xE8]);
-        self.hole(4, None)
+        self.close();
+        self.insts.push(Inst::Call { to: None });
+        self.insts.len() - 1
     }
 
     pub(crate) fn ret(&mut self) {
+        self.step();
         self.emit(&[0xC3]);
     }
 
     pub(crate) fn close_frame(&mut self, bytes: u32) {
+        self.step();
         self.adjust_rsp(0xC4, bytes);
     }
 
@@ -302,58 +441,39 @@ impl Encoder {
         }
     }
 
-    /// Unconditional, or taken when the flags satisfy `cc`. Both leave a
-    /// hole, and return its offset.
+    /// Unconditional, or taken when the flags satisfy `cc`. Both answer
+    /// which step they are, for saying later where they go.
     pub(crate) fn jump(&mut self) -> usize {
-        let branch = self.take_branch();
-        if self.far(branch) {
-            self.emit(&[0xE9]);
-            self.hole(4, Some(branch))
-        } else {
-            self.emit(&[0xEB]);
-            self.hole(1, Some(branch))
-        }
+        self.branch(None)
     }
 
     pub(crate) fn jump_if(&mut self, cc: u8) -> usize {
-        let branch = self.take_branch();
-        if self.far(branch) {
-            self.emit(&[0x0F, 0x80 | cc]);
-            self.hole(4, Some(branch))
-        } else {
-            self.emit(&[0x70 | cc]);
-            self.hole(1, Some(branch))
-        }
+        self.branch(Some(cc))
     }
 
-    const fn take_branch(&mut self) -> usize {
-        self.branches += 1;
-        self.branches - 1
+    fn branch(&mut self, cc: Option<u8>) -> usize {
+        self.close();
+        self.insts.push(Inst::Jump { cc, to: None });
+        self.insts.len() - 1
     }
 
-    fn far(&self, branch: usize) -> bool {
-        self.distant.get(branch).copied().unwrap_or(false)
+    /// Which step comes next, for aiming a jump at it.
+    pub(crate) fn here(&mut self) -> usize {
+        self.close();
+        self.open = Some(self.pool.len());
+        self.insts.len()
     }
 
-    fn hole(&mut self, size: usize, branch: Option<usize>) -> usize {
-        let fixup = self.fixups.len();
-        self.fixups.push(Fixup {
-            at: self.bytes.len(),
-            size,
-            branch,
-            target: None,
-        });
-        self.emit(&vec![0; size]);
-        fixup
-    }
-
-    pub(crate) const fn here(&self) -> usize {
-        self.bytes.len()
-    }
-
-    /// Where a jump is going, resolved once every address is known.
-    pub(crate) fn patch(&mut self, fixup: usize, target: usize) {
-        self.fixups[fixup].target = Some(target);
+    /// Where a jump goes, said once there is something to aim it at.
+    ///
+    /// # Panics
+    ///
+    /// If what was handed over is not a jump.
+    pub(crate) fn patch(&mut self, jump: usize, target: usize) {
+        let (Inst::Jump { to, .. } | Inst::Call { to }) = &mut self.insts[jump] else {
+            panic!("only a jump or a call goes anywhere");
+        };
+        *to = Some(target);
     }
 
     /// `reg` is `None` for the forms with no `ModRM` byte. Omitted entirely
@@ -367,7 +487,7 @@ impl Encoder {
     }
 
     fn emit(&mut self, bytes: &[u8]) {
-        self.bytes.extend_from_slice(bytes);
+        self.pool.extend_from_slice(bytes);
     }
 }
 
