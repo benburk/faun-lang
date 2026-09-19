@@ -384,7 +384,7 @@ impl<H: Host> Machine<'_, H> {
                 self.region(body, args)?;
                 Ok(None)
             }
-            Definition::External { symbol } => {
+            Definition::External => {
                 if results.is_none() {
                     self.config.fuel = self
                         .config
@@ -392,7 +392,7 @@ impl<H: Host> Machine<'_, H> {
                         .checked_sub(1)
                         .ok_or(Error::FuelExhausted)?;
                 }
-                match self.external(symbol, function.returns, args)? {
+                match self.external(function.name, function.returns, args)? {
                     HostResult::Halt(values) => Ok(Some(Outcome::Halted(values))),
                     HostResult::Return(values) => {
                         if let Some(results) = results {

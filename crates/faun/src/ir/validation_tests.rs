@@ -417,9 +417,7 @@ fn corrupt_declaration_and_storage_pools_are_rejected() {
     rejects(&p, "invalid pool range");
     let mut p = simple();
     let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
-    p.functions[argc.index()].definition = Definition::External {
-        symbol: model::Symbol(u32::MAX),
-    };
+    p.functions[argc.index()].name = model::Symbol(u32::MAX);
     rejects(&p, "invalid symbol");
 }
 

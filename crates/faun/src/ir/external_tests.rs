@@ -85,7 +85,6 @@ fn external_declarations_need_neither_a_catalog_nor_parameter_values_or_regions(
     let values = p.values_count();
     let regions = p.regions.len();
     let f = p.external(
-        "local name",
         "library_symbol",
         &[Class::Word],
         Returns::Values(&[Class::Word]),
@@ -93,7 +92,9 @@ fn external_declarations_need_neither_a_catalog_nor_parameter_values_or_regions(
     let held = &p.functions()[f.index()];
     assert_eq!(p.signature(held.params), [Class::Word]);
     assert_eq!(p.signature(held.returns.classes()), [Class::Word]);
-    assert_eq!(p.name(held.external().unwrap()), "library_symbol");
+    assert_eq!(p.name(held.name), "library_symbol");
+    assert_eq!(held.definition, Definition::External);
+    assert_eq!(held.external(), Some(held.name));
     assert!(held.body().is_none());
     assert_eq!(p.values_count(), values);
     assert_eq!(p.regions.len(), regions);
@@ -113,7 +114,6 @@ fn external_declarations_need_neither_a_catalog_nor_parameter_values_or_regions(
 fn one_call_operation_handles_local_and_external_multivalue_functions() {
     let mut p = program();
     let pair = p.external(
-        "pair",
         "pair_provider",
         &[Class::Word, Class::Word],
         Returns::Values(&[Class::Word, Class::Word]),
@@ -151,7 +151,7 @@ fn one_call_operation_handles_local_and_external_multivalue_functions() {
 fn returning_unit_and_never_are_not_interchangeable() {
     for returns in [Returns::Never, Returns::Values([].as_slice())] {
         let mut p = program();
-        let effect = p.external("effect", "host", &[], returns);
+        let effect = p.external("host", &[], returns);
         p.define(p.entry(), |b, _| {
             b.call(effect, &[]);
             let zero = b.constant(Class::Word, 0);
@@ -178,7 +178,7 @@ fn returning_unit_and_never_are_not_interchangeable() {
 #[test]
 fn host_halts_escape_internal_callers_and_direct_external_evaluation() {
     let mut p = program();
-    let stop = p.external("stop", "host_halt", &[], Returns::Never);
+    let stop = p.external("host_halt", &[], Returns::Never);
     let wrapper = p.declare("wrapper", &[], &[]);
     p.define(wrapper, |b, _| {
         b.call(stop, &[]);
@@ -203,7 +203,7 @@ fn host_halts_escape_internal_callers_and_direct_external_evaluation() {
 fn host_values_and_direct_arguments_are_checked_against_declarations() {
     let mut p = program();
     let byte = Class::Fixed { bits: 8 };
-    let external = p.external("echo", "echo", &[byte], Returns::Values(&[byte]));
+    let external = p.external("echo", &[byte], Returns::Values(&[byte]));
     let mut echo = reply(|args| HostResult::Return(args.to_vec()));
     assert_eq!(
         run(&p, external, &[], &mut echo).unwrap_err(),
@@ -229,7 +229,7 @@ fn host_values_and_direct_arguments_are_checked_against_declarations() {
 #[test]
 fn direct_external_evaluation_consumes_fuel() {
     let mut p = program();
-    let unit = p.external("unit", "unit", &[], Returns::Values(&[]));
+    let unit = p.external("unit", &[], Returns::Values(&[]));
     let mut host = reply(|_| HostResult::Return(vec![]));
     let result = evaluate::evaluate(
         &p,
@@ -254,7 +254,7 @@ fn target_contracts_check_parameters_results_and_returning_behavior() {
         (&[Class::Word][..], Returns::Values(&[Class::Word][..])),
     ] {
         let mut p = program();
-        let external = p.external("pretend exit", "exit", params, returns);
+        let external = p.external("exit", params, returns);
         call_external(&mut p, external);
         validate(&p).unwrap();
         assert!(
@@ -271,13 +271,12 @@ fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not(
     for bits in [16, 32, 64] {
         for class in [Class::Word, Class::Fixed { bits }] {
             let mut p = program();
-            let external = p.external("count", "argc", &[], Returns::Values(&[class]));
+            let external = p.external("argc", &[], Returns::Values(&[class]));
             call_external(&mut p, external);
             Provider(bits).compile(&p).unwrap();
         }
         let mut p = program();
         let external = p.external(
-            "count",
             "argc",
             &[],
             Returns::Values(&[Class::Fixed { bits: bits - 1 }]),
@@ -293,7 +292,7 @@ fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not(
 }
 
 #[test]
-fn external_symbols_not_local_names_determine_reachability_and_support() {
+fn a_body_named_like_an_external_function_is_still_a_body() {
     let mut p = program();
     let internal = p.declare("argc", &[], &[Class::Word]);
     p.define(internal, |b, _| {
@@ -305,15 +304,23 @@ fn external_symbols_not_local_names_determine_reachability_and_support() {
         b.ret(&result)
     });
     assert!(!p.reaches("argc"));
-    let external = p.external("write", "argc", &[], Returns::Values(&[Class::Word]));
+    Provider(64).compile(&p).unwrap();
+    let mut host = reply(|_| HostResult::Return(vec![BigUint::from(7u8)]));
+    assert_eq!(
+        run(&p, p.entry(), &[], &mut host)
+            .unwrap()
+            .returned()
+            .unwrap(),
+        [BigUint::from(0u8)]
+    );
+    assert!(host.calls.is_empty());
+    let external = p.external("argc", &[], Returns::Values(&[Class::Word]));
     p.define(p.entry(), |b, _| {
         let result = b.call(external, &[]);
         b.ret(&result)
     });
     assert!(p.reaches("argc"));
-    assert!(!p.reaches("write"));
     Provider(64).compile(&p).unwrap();
-    let mut host = reply(|_| HostResult::Return(vec![BigUint::from(7u8)]));
     assert_eq!(
         run(&p, p.entry(), &[], &mut host)
             .unwrap()
@@ -356,7 +363,6 @@ fn source_externals_check_unit_against_nonreturning_provider_contracts() {
 #[test]
 fn an_external_declaration_cannot_be_the_entry_body() {
     let mut p = program();
-    let symbol = p.symbol("somewhere_else");
-    p.functions[0].definition = Definition::External { symbol };
+    p.functions[0].definition = Definition::External;
     assert!(validate(&p).unwrap_err().contains("entry"));
 }

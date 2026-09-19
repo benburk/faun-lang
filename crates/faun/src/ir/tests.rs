@@ -189,13 +189,13 @@ fn two_names_may_give_the_same_routine() {
     let held: Vec<&str> = machine
         .functions()
         .iter()
-        .filter_map(Function::external)
-        .map(|symbol| machine.name(symbol))
+        .filter(|f| f.definition == Definition::External)
+        .map(|f| machine.name(f.name))
         .collect();
-    // One per declaration, since each is handed a value of its own type and
-    // what a target reads is stated per call. Both say the same routine,
-    // which is the whole of what the name was doing before.
+    // Lowering resolves source aliases; machine declarations retain only the
+    // provider name. The source spellings are not interned in the machine IR.
     assert_eq!(held, ["hold", "hold"], "both answered elsewhere");
+    assert_eq!(machine.symbols.len(), 2, "main and hold only");
 }
 
 /// A value too wide for what a routine reads is refused, not narrowed.

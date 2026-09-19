@@ -2,8 +2,17 @@
 
 `ir::Program::new` creates an entry, not an environment. It neither installs
 builtins nor detects a host. The program has one function table and one `Call`
-operation. A function's `Definition` is either `Body(RegionId)` or
-`External { symbol }`; its local name need not match the provider symbol.
+operation. A function's `Definition` is either `Body(RegionId)` or `External`.
+For an external function, `Function.name` is the provider symbol. Source aliases
+are resolved by frontend lowering to function IDs; the machine declaration does
+not store a second source name. A function with a body has a descriptive name,
+which does not select a host operation.
+
+`Program::default()` is an empty construction state. Its first function must
+be the entry: validation rejects a missing entry or one without a body, with
+parameters, or without exactly one Word result. `Program::new(name)` uses that
+empty state and declares the entry immediately; it still returns the program
+and entry ID together.
 
 Parameter classes and returning result classes occupy the signature pool.
 A body's parameter values belong to its root region. External declarations
@@ -15,7 +24,7 @@ normally, while the former must end its calling region with `Unreachable`.
 use faun::ir::{Class, Program, Returns, Terminator};
 
 let (mut program, main) = Program::new("main");
-let stop = program.external("stop", "exit", &[Class::Word], Returns::Never);
+let stop = program.external("exit", &[Class::Word], Returns::Never);
 program.define(main, |b, _| {
     let status = b.constant(Class::Word, 0);
     b.call(stop, &[status]);
@@ -23,8 +32,9 @@ program.define(main, |b, _| {
 });
 ```
 
-Declarations express requirements, not availability. Structural IR validation
-checks their references and calls without consulting a catalog. Target
+An external function declaration describes its name and signature, not whether
+a provider exists. Structural IR validation checks references and calls without
+consulting a catalog. Target
 acceptance checks called external declarations against the target's symbols,
 parameter/result classes and returning behavior. Uncalled declarations do not
 require a provider; all signatures still undergo structural and representation
@@ -34,7 +44,7 @@ result claim does not. The interpreter uses the declared contract and calls its
 host by provider symbol, including when evaluating an external function directly.
 
 Environment discovery still uses `platform::Routines` in frontend setup and
-`Target::routines`. `Routine::declare` copies a chosen contract into a program;
+`Target::routines`. `Routine::declare` copies the provider name and contract into a program;
 `Routines::declare` also performs the named lookup. The program retains no
 catalog. Source lowering only declares demanded functions. Targets own external
 call emission and internal function numbering; source IDs need not be dense

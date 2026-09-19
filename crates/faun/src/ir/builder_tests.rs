@@ -25,6 +25,20 @@ fn answer(p: &Program) -> u64 {
 }
 
 #[test]
+fn default_program_requires_an_entry_before_validation() {
+    let mut p = Program::default();
+    assert!(p.functions().is_empty());
+    assert_eq!(validate(&p).unwrap_err(), "missing entry function");
+    let main = p.declare("main", &[], &[Class::Word]);
+    assert_eq!(main, p.entry());
+    p.define(main, |b, _| {
+        let value = b.constant(Class::Word, 7);
+        b.ret(&[value])
+    });
+    assert_eq!(answer(&p), 7);
+}
+
+#[test]
 fn fallible_builds_preserve_the_old_body_but_not_a_pool_checkpoint() {
     let mut p = program();
     let root = p.functions()[0].body().unwrap();
@@ -104,6 +118,6 @@ fn infallible_and_fallible_builders_install_the_same_region() {
 #[should_panic(expected = "a defined function")]
 fn defining_an_external_is_a_builder_contract_error() {
     let mut p = program();
-    let external = p.external("outside", "outside", &[], Returns::Values(&[]));
+    let external = p.external("outside", &[], Returns::Values(&[]));
     let _: Result<(), ()> = p.try_define(external, |_, _| panic!("must not run callback"));
 }

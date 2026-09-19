@@ -110,7 +110,7 @@ fn declare<'a>(
                     ));
                 }
                 Callee::External {
-                    id: wanted.declare(machine, name),
+                    id: wanted.declare(machine),
                     routine: wanted,
                 }
             }

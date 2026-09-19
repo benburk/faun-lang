@@ -59,14 +59,14 @@ impl Routine {
     /// Copy this environment contract into an ordinary machine declaration.
     /// The machine program retains no catalog; targets check the declaration
     /// against their own contracts before emission.
-    pub fn declare(&self, program: &mut crate::ir::Program, name: &str) -> crate::ir::FunctionId {
+    pub fn declare(&self, program: &mut crate::ir::Program) -> crate::ir::FunctionId {
         let answers = self.answers();
         let returns = if self.comes_back() {
             crate::ir::Returns::Values(answers.as_slice())
         } else {
             crate::ir::Returns::Never
         };
-        program.external(name, &self.name, &self.takes, returns)
+        program.external(&self.name, &self.takes, returns)
     }
 
     #[must_use]
@@ -151,7 +151,7 @@ impl Routines {
     pub fn declare(&self, program: &mut crate::ir::Program, name: &str) -> crate::ir::FunctionId {
         self.get(name)
             .unwrap_or_else(|| panic!("no routine named `{name}`"))
-            .declare(program, name)
+            .declare(program)
     }
 
     /// The ones named, and no others. What a target answers for is not what

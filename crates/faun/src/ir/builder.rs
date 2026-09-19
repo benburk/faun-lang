@@ -7,25 +7,11 @@ use super::model::{
 
 impl Program {
     /// A program and its entry function, which takes nothing and returns one
-    /// word, the exit status. Minting it here is what makes a program without
-    /// an entry unrepresentable. No environment or builtin catalog is installed.
+    /// word, the exit status. Unlike `default`, this reserves the entry before
+    /// other declarations. No environment or builtin catalog is installed.
     #[must_use]
     pub fn new(entry: &str) -> (Self, FunctionId) {
-        let mut program = Self {
-            layout: None,
-            data: Vec::new(),
-            globals: Vec::new(),
-            spans: Vec::new(),
-            functions: Vec::new(),
-            classes: Vec::new(),
-            signature: Vec::new(),
-            ops: Vec::new(),
-            results: Vec::new(),
-            operands: Vec::new(),
-            regions: Vec::new(),
-            names: Vec::new(),
-            symbols: Vec::new(),
-        };
+        let mut program = Self::default();
         let entry = program.declare(entry, &[], &[Class::Word]);
         (program, entry)
     }
@@ -73,18 +59,16 @@ impl Program {
         Symbol::at(self.symbols.len() - 1)
     }
 
-    /// Declare an external requirement. The local name need not be the
-    /// provider symbol. Target acceptance checks availability and ABI;
-    /// declaring a symbol does not establish either.
+    /// Declare an external function by its provider name, with source aliases
+    /// already resolved. Targets check whether they can provide this name and
+    /// signature.
     pub fn external(
         &mut self,
         name: &str,
-        symbol: &str,
         params: &[Class],
         returns: Returns<&[Class]>,
     ) -> FunctionId {
         let name = self.symbol(name);
-        let symbol = self.symbol(symbol);
         let params = self.sign(params);
         let returns = match returns {
             Returns::Never => Returns::Never,
@@ -94,7 +78,7 @@ impl Program {
             name,
             params,
             returns,
-            definition: Definition::External { symbol },
+            definition: Definition::External,
         });
         FunctionId::at(self.functions.len() - 1)
     }

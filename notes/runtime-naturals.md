@@ -39,8 +39,8 @@ legalizer therefore keeps one monotonic old-to-new value map for the whole
 program, shared by sequential branch builders; it does not snapshot that map
 per function or branch. Ownership scopes remain path-local snapshots, so an
 exit in one sibling cannot consume another sibling's claims. The runtime
-itself declares its nonreturning `exit(word)` requirement; target acceptance
-checks the provider contract, not a catalog retained in the IR.
+itself declares the nonreturning external function `exit(word)`; target
+acceptance checks the provider contract, not a catalog retained in the IR.
 
 ## Deliberate limits
 

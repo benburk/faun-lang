@@ -53,12 +53,7 @@ impl Host for Observer {
 }
 
 fn observer(p: &mut Program) -> FunctionId {
-    p.external(
-        "observe",
-        "observe",
-        &[ADDRESS],
-        super::Returns::Values(&[]),
-    )
+    p.external("observe", &[ADDRESS], super::Returns::Values(&[]))
 }
 
 fn test_program() -> (Program, FunctionId) {

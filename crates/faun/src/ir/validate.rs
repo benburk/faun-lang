@@ -1,8 +1,8 @@
 //! What a target is entitled to assume.
 
 use super::model::{
-    Class, Definition, Exit, Function, Op, Origin, Program, Range, RegionId, Returns, Symbol,
-    Terminator, ValueId, Width,
+    Class, Exit, Function, Op, Origin, Program, Range, RegionId, Returns, Symbol, Terminator,
+    ValueId, Width,
 };
 
 /// Check pool references, lexical SSA scope, and operation/control-flow classes.
@@ -121,11 +121,8 @@ impl References<'_> {
             self.symbol(function.name)?;
             slice(&p.signature, function.params)?;
             slice(&p.signature, function.returns.classes())?;
-            match function.definition {
-                Definition::Body(body) => self.region(body)?,
-                Definition::External { symbol } => {
-                    self.symbol(symbol)?;
-                }
+            if let Some(body) = function.body() {
+                self.region(body)?;
             }
         }
         Ok(())

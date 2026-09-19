@@ -191,14 +191,15 @@ impl Returns<Range> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Definition {
     Body(RegionId),
-    /// A requirement, not evidence that any particular target supplies it.
-    External {
-        symbol: Symbol,
-    },
+    /// A function implemented outside this program. Targets check whether
+    /// they can provide its name and signature.
+    External,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
+    /// The provider symbol for an external, or a descriptive name for a body.
+    /// Source aliases are resolved before constructing this declaration.
     pub name: Symbol,
     /// Parameter classes in the signature pool. A body's parameter values
     /// belong to its root region; external declarations need no SSA values.
@@ -212,20 +213,23 @@ impl Function {
     pub const fn body(&self) -> Option<RegionId> {
         match self.definition {
             Definition::Body(body) => Some(body),
-            Definition::External { .. } => None,
+            Definition::External => None,
         }
     }
 
+    /// The provider name, derived from this function's definition and name.
     #[must_use]
     pub const fn external(&self) -> Option<Symbol> {
         match self.definition {
             Definition::Body(_) => None,
-            Definition::External { symbol } => Some(symbol),
+            Definition::External => Some(self.name),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+/// An empty construction state by default. The first function is the entry;
+/// validation requires it to have a body, no parameters, and one Word result.
+#[derive(Clone, Debug, Default)]
 pub struct Program {
     /// Absent until a representation pass serializes target-sized data.
     pub(super) layout: Option<super::Layout>,
@@ -384,7 +388,8 @@ impl Program {
         &self.functions
     }
 
-    /// Always the first, since [`Program::new`] declares it.
+    /// The first function's ID. [`Program::new`] declares it immediately;
+    /// a default program must declare it before this ID can be used.
     #[must_use]
     pub const fn entry(&self) -> FunctionId {
         FunctionId(0)

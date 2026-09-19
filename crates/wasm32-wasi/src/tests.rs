@@ -439,10 +439,10 @@ fn runtime_arithmetic_varied_inputs() {
 }
 
 #[test]
-fn external_aliases_interleave_with_internal_function_ids() {
-    let (status, stdout, _) = execute(&programs::external::aliases());
+fn external_declarations_interleave_with_internal_function_ids() {
+    let (status, stdout, _) = execute(&programs::external::interleaved());
     assert_eq!(status, 42);
-    assert_eq!(stdout, "aliases\n");
+    assert_eq!(stdout, "externals\n");
 }
 
 #[test]
