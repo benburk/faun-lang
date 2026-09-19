@@ -223,13 +223,13 @@ fn words_wrap_at_the_configured_width_not_the_host_width() {
         let max = (BigUint::from(1u8) << usize::from(bits)) - BigUint::from(1u8);
         assert_eq!(run(&p, main, &[], bits).unwrap().values, vec![max]);
     }
-    p.define(main, |b, _| {
-        let max = b.constant(Class::Word, u64::MAX);
-        let one = b.constant(Class::Word, 1);
-        let zero = b.binary(Binary::Add, max, one);
-        b.ret(&[zero])
-    });
     for bits in [16, 32, 64] {
+        p.define(main, |b, _| {
+            let max = b.constant(Class::Word, u64::MAX >> (64 - bits));
+            let one = b.constant(Class::Word, 1);
+            let zero = b.binary(Binary::Add, max, one);
+            b.ret(&[zero])
+        });
         assert_eq!(
             run(&p, main, &[], bits).unwrap().values,
             vec![BigUint::default()]
@@ -503,6 +503,269 @@ fn host_observes_data_and_byte_stores_truncate_only_the_written_byte() {
         assert_eq!(host.0, b"hello");
         assert_eq!(result.values, vec![BigUint::from(0x1234u16)]);
         assert_eq!(result.globals, [0, 0x34]);
+    }
+}
+
+fn binary_program(class: Class, op: Binary) -> (Program, FunctionId) {
+    let (mut p, _) = Program::new("main");
+    let f = p.declare("binary", &[class, class], &[class]);
+    p.define(f, |b, args| {
+        let result = b.binary(op, args[0], args[1]);
+        b.ret(&[result])
+    });
+    (p, f)
+}
+
+#[test]
+fn direct_unsigned_operations_match_word_model_including_wrap_and_zero() {
+    for bits in [16, 32, 64] {
+        let max = u64::MAX >> (64 - bits);
+        let high = 1u64 << (bits - 1);
+        for op in [Binary::Mul, Binary::Div, Binary::Mod] {
+            let (p, f) = binary_program(Class::Word, op);
+            for left in [0, 1, 2, 3, high, max] {
+                for right in [0, 1, 2, 3, high, max] {
+                    let expected = match op {
+                        Binary::Mul => left.wrapping_mul(right) & max,
+                        Binary::Div => left.checked_div(right).unwrap_or(0),
+                        Binary::Mod => left.checked_rem(right).unwrap_or(left),
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        run(&p, f, &[left, right], bits).unwrap().values,
+                        vec![BigUint::from(expected)],
+                        "{op:?}({left},{right})/{bits}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn natural_model(op: Binary, left: &BigUint, right: &BigUint) -> BigUint {
+    match op {
+        Binary::Mul => left * right,
+        Binary::Div => {
+            if right == &BigUint::default() {
+                BigUint::default()
+            } else {
+                left / right
+            }
+        }
+        Binary::Mod => {
+            if right == &BigUint::default() {
+                left.clone()
+            } else {
+                left % right
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn direct_natural_operations_preserve_full_magnitudes_and_total_zero_semantics() {
+    let large = (BigUint::from(1u8) << 200usize) + BigUint::from(17u8);
+    let small = (BigUint::from(1u8) << 100usize) + BigUint::from(3u8);
+    let cases = [
+        BigUint::default(),
+        BigUint::from(1u8),
+        BigUint::from(u64::MAX),
+        small,
+        large,
+    ];
+    for op in [Binary::Mul, Binary::Div, Binary::Mod] {
+        let (p, f) = binary_program(Class::Natural, op);
+        for left in &cases {
+            for right in &cases {
+                let expected = natural_model(op, left, right);
+                for word_bits in [16, 32, 64] {
+                    let result = evaluate(
+                        &p,
+                        f,
+                        &[left.clone(), right.clone()],
+                        Config {
+                            word_bits,
+                            ..Config::default()
+                        },
+                        &mut RejectHost,
+                    )
+                    .unwrap();
+                    assert_eq!(result.values, vec![expected.clone()]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn natural_multiplication_size_guard_accepts_exact_boundary_and_zero() {
+    let (p, f) = binary_program(Class::Natural, Binary::Mul);
+    let config = Config {
+        max_natural_bits: 8,
+        ..Config::default()
+    };
+    for (left, right, expected) in [(8u16, 16u16, 128u16), (0, 255, 0), (255, 1, 255)] {
+        let result =
+            evaluate(&p, f, &[left.into(), right.into()], config, &mut RejectHost).unwrap();
+        assert_eq!(result.values, vec![expected.into()]);
+    }
+    // 128*2 is known oversized from bit lengths alone. 15*31 has the
+    // ambiguous bit-length boundary and fails the exact post-product check.
+    for (left, right) in [(128u16, 2u16), (15, 31)] {
+        assert_eq!(
+            evaluate(&p, f, &[left.into(), right.into()], config, &mut RejectHost),
+            Err(Error::SizeLimit)
+        );
+    }
+    let large = BigUint::from(1u8) << 4095usize;
+    assert_eq!(
+        evaluate(
+            &p,
+            f,
+            &[large.clone(), large],
+            Config {
+                max_natural_bits: 4096,
+                ..config
+            },
+            &mut RejectHost
+        ),
+        Err(Error::SizeLimit)
+    );
+}
+
+#[test]
+fn fixed_products_require_a_fitting_result_class() {
+    let class = Class::Fixed { bits: 8 };
+    let (mut p, f) = binary_program(class, Binary::Mul);
+    let wide = p.declare("wide", &[class, class], &[Class::Fixed { bits: 9 }]);
+    p.define(wide, |b, args| {
+        let product = b.binary_at(Class::Fixed { bits: 9 }, Binary::Mul, args[0], args[1]);
+        b.ret(&[product])
+    });
+    for bits in [16, 32, 64] {
+        assert_eq!(
+            run(&p, f, &[15, 17], bits).unwrap().values,
+            vec![BigUint::from(255u16)]
+        );
+        assert_eq!(run(&p, f, &[16, 16], bits), Err(Error::DoesNotFit(class)));
+        assert_eq!(
+            run(&p, wide, &[16, 16], bits).unwrap().values,
+            vec![BigUint::from(256u16)]
+        );
+    }
+}
+
+#[test]
+fn zero_bit_fixed_values_constants_and_conversions_are_always_zero() {
+    let class = Class::Fixed { bits: 0 };
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let zero = b.constant(class, u64::MAX);
+        let value = b.constant(Class::Word, 123);
+        let converted = b.convert(class, value);
+        let equal = b.compare(Relation::Equal, zero, converted);
+        b.ret(&[equal])
+    });
+    for bits in [16, 32, 64] {
+        assert_eq!(
+            run(&p, main, &[], bits).unwrap().values,
+            vec![BigUint::from(1u8)]
+        );
+        for op in [
+            Binary::Add,
+            Binary::Sub,
+            Binary::Mul,
+            Binary::Div,
+            Binary::Mod,
+        ] {
+            let (p, f) = binary_program(class, op);
+            assert_eq!(
+                run(&p, f, &[0, 0], bits).unwrap().values,
+                vec![BigUint::default()]
+            );
+            assert_eq!(run(&p, f, &[1, 0], bits), Err(Error::DoesNotFit(class)));
+        }
+    }
+}
+
+#[test]
+fn oversized_word_and_address_constants_are_rejected_not_truncated() {
+    let (mut p, main) = Program::new("main");
+    for class in [Class::Word, Class::Address] {
+        p.define(main, |b, _| {
+            let max = b.constant(class, u64::MAX);
+            let word = b.convert(Class::Word, max);
+            b.ret(&[word])
+        });
+        for bits in [16, 32] {
+            assert_eq!(run(&p, main, &[], bits), Err(Error::DoesNotFit(class)));
+        }
+        assert_eq!(
+            run(&p, main, &[], 64).unwrap().values,
+            vec![BigUint::from(u64::MAX)]
+        );
+    }
+    // Fixed constants are normalized by Builder, before any target sees them.
+    p.define(main, |b, _| {
+        let byte = b.constant(Class::Fixed { bits: 8 }, 256);
+        b.ret(&[byte])
+    });
+    for bits in [16, 32, 64] {
+        assert_eq!(
+            run(&p, main, &[], bits).unwrap().values,
+            vec![BigUint::default()]
+        );
+    }
+    let op = p.regions[p.functions[main.index()].body.index()]
+        .ops
+        .range()
+        .start;
+    p.ops[op] = Op::Constant {
+        class: Class::Fixed { bits: 8 },
+        value: 256,
+    };
+    assert_eq!(
+        run(&p, main, &[], 64),
+        Err(Error::DoesNotFit(Class::Fixed { bits: 8 }))
+    );
+}
+
+#[test]
+fn shared_native_backend_arithmetic_fixtures_agree_with_interpreter() {
+    use crate::programs::{arithmetic, wraps_at_eight_bits};
+    for bits in [16, 32, 64] {
+        for op in [Binary::Mul, Binary::Div, Binary::Mod] {
+            let p = arithmetic::boundaries(bits, op);
+            validate(&p).unwrap();
+            assert_eq!(
+                run(&p, p.entry(), &[], bits).unwrap().values,
+                vec![BigUint::default()]
+            );
+        }
+        let p = arithmetic::odd_conversion();
+        assert_eq!(
+            run(&p, p.entry(), &[], bits).unwrap().values,
+            vec![BigUint::default()]
+        );
+        let p = wraps_at_eight_bits();
+        assert_eq!(
+            run(&p, p.entry(), &[], bits).unwrap().values,
+            vec![BigUint::from(4u8)]
+        );
+        let p = arithmetic::preserves_host_count();
+        let result = evaluate(
+            &p,
+            p.entry(),
+            &[],
+            Config {
+                word_bits: bits,
+                ..Config::default()
+            },
+            &mut TestHost { calls: Vec::new() },
+        )
+        .unwrap();
+        assert_eq!(result.values, vec![BigUint::default()]);
     }
 }
 

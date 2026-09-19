@@ -2,8 +2,12 @@
 //!
 //! `Natural` uses arbitrary precision. `Fixed` arithmetic must fit its declared
 //! result (a violated proof is an error); `Word` arithmetic uses target-width
-//! unsigned machine arithmetic. Only constants and explicit conversions truncate
-//! fixed values. Memory is byte-addressed, unaligned access is allowed, address
+//! unsigned machine arithmetic; division and remainder are total (`x/0=0`,
+//! `x%0=x`). Only explicit conversions truncate values. Builders normalize Fixed
+//! constants before storing them; encoded constants must fit, just as with
+//! `Target::accepts`. In particular, an oversized Word constant is an error,
+//! not an implicit conversion. `Fixed { bits: 0 }` holds only zero.
+//! Memory is byte-addressed, unaligned access is allowed, address
 //! zero is invalid, and Data is read-only. These addresses are interpreter-local.
 //!
 //! Fuel charges one unit per instruction and region terminator, including calls
@@ -240,7 +244,7 @@ impl<H: Host> Machine<'_, H> {
         match class {
             Class::Natural => Ok(None),
             Class::Word | Class::Address => Ok(Some(self.config.word_bits)),
-            Class::Fixed { bits } if bits > 0 && bits <= self.config.word_bits => Ok(Some(bits)),
+            Class::Fixed { bits } if bits <= self.config.word_bits => Ok(Some(bits)),
             Class::Fixed { .. } => Err(Error::DoesNotFit(class)),
         }
     }
@@ -469,6 +473,21 @@ impl<H: Host> Machine<'_, H> {
         self.fit(class, &right)?;
         let value = match op {
             Binary::Add => left + right,
+            Binary::Mul => self.multiply(class, left, right)?,
+            Binary::Div => {
+                if right == BigUint::default() {
+                    BigUint::default()
+                } else {
+                    left / right
+                }
+            }
+            Binary::Mod => {
+                if right == BigUint::default() {
+                    left
+                } else {
+                    left % right
+                }
+            }
             Binary::Sub if left >= right => left - right,
             Binary::Sub if class == Class::Natural => BigUint::default(),
             Binary::Sub if class == Class::Word => {
@@ -482,6 +501,32 @@ impl<H: Host> Machine<'_, H> {
             self.fit(class, &value)?;
             Ok(value)
         }
+    }
+
+    fn multiply(&self, class: Class, left: BigUint, right: BigUint) -> Result<BigUint, Error> {
+        // A nonzero product needs m+n-1 or m+n bits. Reject obviously oversized
+        // products before allocating them, without rejecting any fitting value.
+        // The ambiguous boundary allocates at most cap+1 result bits; binary's
+        // exact fit check then decides it. Zero products need no allocation.
+        if left == BigUint::default() || right == BigUint::default() {
+            return Ok(BigUint::default());
+        }
+        if class == Class::Natural
+            && left
+                .bits()
+                .checked_add(right.bits())
+                .and_then(|bits| bits.checked_sub(1))
+                .is_none_or(|bits| bits > self.config.max_natural_bits)
+        {
+            return Err(Error::SizeLimit);
+        }
+        Ok(left * right)
+    }
+
+    fn constant(&self, class: Class, value: u64) -> Result<BigUint, Error> {
+        let value = BigUint::from(value);
+        self.fit(class, &value)?;
+        Ok(value)
     }
 
     // A non-local host halt is returned directly rather than disguised as a
@@ -524,7 +569,7 @@ impl<H: Host> Machine<'_, H> {
 
     fn scalar(&mut self, op: Op, results: Range) -> Result<Vec<BigUint>, Error> {
         let value = match op {
-            Op::Constant { class, value } => self.convert(class, BigUint::from(value))?,
+            Op::Constant { class, value } => self.constant(class, value)?,
             Op::NaturalConstant(id) => self.natural(id)?,
             Op::AddressOf(id) => BigUint::from(self.datum_address(id)?),
             Op::Binary { op, left, right } => self.binary(
