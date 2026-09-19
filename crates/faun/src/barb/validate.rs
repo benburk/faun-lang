@@ -13,7 +13,8 @@
 //!   order the declaration gave them
 //! - every definition stops, which [`stops`](super::stops) answers
 
-use super::ir::{Atom, Body, Expr, ExprId, FnId, Program, Range};
+use super::model::{Atom, Body, Expr, ExprId, FnId, Range};
+use super::program::Program;
 
 /// Refuse a program the tiers below could not read rightly.
 ///

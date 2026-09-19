@@ -1,214 +1,16 @@
-//! Building well-shaped programs.
+//! Scoped construction of function bodies.
+//!
+//! [`Program::define`] starts construction; this module owns the temporary
+//! bindings and local levels used to build a body.
 //!
 //! Every operation returns an [`Atom`], and the `Let` that binds it is
 //! written for you: A-normal form is the shape of the IR, not a burden on
 //! whoever constructs it. A caller never names a local and never sees an
 //! [`ExprId`].
 
-use super::constant;
-use super::ir::Symbol;
-use super::ir::{Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Local};
-use super::ir::{Program, Range, Type, TypeId};
+use super::model::{Arm, Atom, Body, ConstId, CtorId, Expr, ExprId, FnId, Local, Range, TypeId};
+use super::program::Program;
 use crate::index::append_range;
-use constant::{Shape, Value};
-
-impl Program {
-    /// The symbol for `name`, the same symbol every time.
-    ///
-    /// A scan rather than a table beside it. This runs once per declaration
-    /// and nowhere else: nothing here mints a name, since specialisation
-    /// happens above this tier, so the cost is over what a program declares
-    /// rather than over its terms. Reading one back is an index and a slice.
-    ///
-    /// # Panics
-    ///
-    /// If the program outgrew the names it may have.
-    pub fn symbol(&mut self, name: &str) -> Symbol {
-        let held = |at: &Range| &self.names[at.range()] == name.as_bytes();
-        if let Some(id) = self.symbols.position(held) {
-            return id;
-        }
-        let name = append_range(&mut self.names, name.as_bytes());
-        self.symbols.push(name)
-    }
-
-    /// Reserve a type. Its constructors follow, so that a field may name the
-    /// type being declared.
-    pub fn declare_type(&mut self, name: &str) -> TypeId {
-        let name = self.symbol(name);
-        self.types.push(Type {
-            name,
-            ctors: Range::default(),
-        })
-    }
-
-    /// Give a reserved type its constructors, in tag order.
-    ///
-    /// # Panics
-    ///
-    /// If the program outgrew the pools it may have.
-    pub fn define_type(&mut self, id: TypeId, ctors: &[(&str, &[TypeId])]) {
-        let start = self.ctors.len();
-        for (name, fields) in ctors {
-            let name = self.symbol(name);
-            let fields = append_range(&mut self.types_pool, fields);
-            self.ctors.push(Ctor {
-                name,
-                owner: id,
-                fields,
-            });
-        }
-        self.types[id].ctors = Range::of(start, ctors.len());
-    }
-
-    /// # Panics
-    ///
-    /// If the program outgrew the pools it may have.
-    pub fn declare(&mut self, name: &str, params: &[TypeId], result: TypeId) -> FnId {
-        let name = self.symbol(name);
-        let params = append_range(&mut self.types_pool, params);
-        self.functions.push(Function {
-            name,
-            params,
-            result,
-            definition: super::Definition::External {
-                symbol: name,
-                bounds: None,
-            },
-        })
-    }
-
-    /// Say what answers for a declaration out there, where a program calls
-    /// it by another name. Two declarations may name the same one, which is
-    /// how a program reaches it at more than one type.
-    ///
-    /// # Panics
-    /// If the function already has a body.
-    pub fn answered_by(&mut self, id: FnId, name: &str) {
-        let name = self.symbol(name);
-        let super::Definition::External { symbol, .. } = &mut self.functions[id].definition else {
-            panic!("only an external declaration can name a provider");
-        };
-        *symbol = name;
-    }
-
-    /// Supply a range contract for a declaration implemented outside Barb.
-    ///
-    /// # Panics
-    /// If the function already has a body.
-    pub fn bound(&mut self, id: FnId, bounds: super::Bounds) {
-        let super::Definition::External {
-            bounds: contract, ..
-        } = &mut self.functions[id].definition
-        else {
-            panic!("only an external declaration can carry a range contract");
-        };
-        *contract = Some(bounds);
-    }
-
-    /// The function a target enters.
-    pub const fn set_entry(&mut self, id: FnId) {
-        self.entry = Some(id);
-    }
-
-    /// Encode a known value into the pool.
-    ///
-    /// # Panics
-    ///
-    /// If `value` is not of type `id`.
-    pub fn intern(&mut self, id: TypeId, value: &Value) -> ConstId {
-        self.hold(|program, out| {
-            constant::encode(program, id, value, out);
-        })
-    }
-
-    /// A number, written straight into the pool. The chain of constructors
-    /// it stands for is never built, which for a large one is the difference
-    /// between a few bytes and its own magnitude.
-    ///
-    /// # Panics
-    ///
-    /// If `id` is not a number: a spine whose elements carry nothing.
-    pub fn intern_number(&mut self, id: TypeId, value: u64) -> ConstId {
-        let name = self.type_(id).name;
-        let Shape::Spine { cons, .. } = constant::shape(self, id) else {
-            panic!("`{}` is not a number", self.name(name));
-        };
-        assert_eq!(
-            self.fields(cons).len(),
-            1,
-            "`{}` carries something per element",
-            self.name(name)
-        );
-        self.hold(|_, out| constant::write_number(value, out))
-    }
-
-    /// An arbitrary-precision natural, encoded without constructing its spine.
-    ///
-    /// # Panics
-    /// If `id` is not a natural-number shape.
-    pub fn intern_natural(&mut self, id: TypeId, value: &num_bigint::BigUint) -> ConstId {
-        assert!(
-            super::arithmetic::natural(self, id).is_some(),
-            "a natural type"
-        );
-        self.hold(|_, out| constant::write_natural(value, out))
-    }
-
-    pub(super) fn intern_encoded(&mut self, bytes: &[u8]) -> ConstId {
-        self.hold(|_, out| out.extend_from_slice(bytes))
-    }
-
-    /// A run of bytes, likewise.
-    ///
-    /// # Panics
-    ///
-    /// If `id` is not a spine of numbers.
-    pub fn intern_bytes(&mut self, id: TypeId, value: &[u8]) -> ConstId {
-        let name = self.type_(id).name;
-        let Shape::Spine { cons, .. } = constant::shape(self, id) else {
-            panic!("`{}` is not a sequence", self.name(name));
-        };
-        let element = self
-            .fields(cons)
-            .iter()
-            .find(|field| **field != id)
-            .copied();
-        assert!(
-            element.is_some_and(|field| constant::as_number(self, field, &[0]).is_some()),
-            "`{}` does not hold numbers",
-            self.name(name)
-        );
-        self.hold(|_, out| constant::write_bytes(value, out))
-    }
-
-    /// Write into the pool itself, so that nothing is encoded into a buffer
-    /// and then copied in.
-    fn hold(&mut self, write: impl FnOnce(&Self, &mut Vec<u8>)) -> ConstId {
-        let mut bytes = std::mem::take(&mut self.bytes);
-        let start = bytes.len();
-        write(self, &mut bytes);
-        let len = bytes.len() - start;
-        self.bytes = bytes;
-        self.consts.push(Range::of(start, len))
-    }
-
-    /// Build a declared function's body. Its parameters are the first locals.
-    ///
-    /// # Panics
-    ///
-    /// If the function takes more parameters than the tier allows.
-    pub fn define(&mut self, id: FnId, build: impl FnOnce(&mut Builder, &[Atom]) -> Atom) {
-        let arity = u32::try_from(self.params(id).len()).expect("a sane arity");
-        let mut builder = Builder {
-            program: self,
-            pending: Vec::new(),
-            level: 0,
-        };
-        let body = builder.scope(arity, build);
-        self.functions[id].define(body);
-    }
-}
 
 /// Builds one function's body.
 ///
@@ -224,6 +26,20 @@ pub struct Builder<'a> {
 }
 
 impl Builder<'_> {
+    /// Build a root scope with the function's parameters as its first locals.
+    pub(super) fn build(
+        program: &mut Program,
+        arity: u32,
+        build: impl FnOnce(&mut Builder, &[Atom]) -> Atom,
+    ) -> Body {
+        let mut builder = Builder {
+            program,
+            pending: Vec::new(),
+            level: 0,
+        };
+        builder.scope(arity, build)
+    }
+
     /// A saturated constructor application.
     pub fn con(&mut self, ctor: CtorId, args: &[Atom]) -> Atom {
         let args = self.atoms(args);

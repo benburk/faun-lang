@@ -1,9 +1,10 @@
 //! What a target is entitled to assume.
 
 use super::model::{
-    Class, Definition, Exit, Function, Op, Origin, Program, Range, RegionId, Returns, Symbol,
-    Terminator, ValueId, Width,
+    Class, Definition, Exit, Function, Op, Origin, Range, RegionId, Returns, Symbol, Terminator,
+    ValueId, Width,
 };
+use super::program::Program;
 use crate::index::{Id, Pool};
 
 /// Check pool references, lexical SSA scope, and operation/control-flow classes.

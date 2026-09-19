@@ -47,6 +47,19 @@
 //! Unbounded naturals are different: [`Class::Natural`] and
 //! [`Op::NaturalConstant`] retain arbitrary precision. A target must either
 //! implement that representation or reject it, never select its word size.
+//!
+//! # Code organization
+//!
+//! - `model`: operations, regions, declarations, IDs, and their small methods.
+//! - `program`: [`Program`], its pools, queries, and construction entry points.
+//! - `builder`: [`Builder`], the temporary state for scoped region construction.
+//! - Other modules own named algorithms: validation, evaluation, lowering,
+//!   and legalization. Ordinary program queries and mutations stay with the
+//!   owning type rather than being split into read and write modules.
+//!
+//! Barb follows the same split. Public types are re-exported here; the file
+//! layout is not part of the public API.
+
 mod arithmetic;
 mod builder;
 pub mod evaluate;
@@ -55,6 +68,7 @@ mod legalize;
 mod lower;
 mod model;
 pub mod natural;
+mod program;
 mod validate;
 
 pub use builder::Builder;
@@ -62,9 +76,10 @@ pub use layout::{Endian, Layout};
 pub use legalize::legalize;
 pub use lower::lower;
 pub use model::{
-    Binary, Class, DataId, Definition, Exit, Function, FunctionId, Offset, Op, Origin, Program,
-    Range, Region, RegionId, Relation, Returns, Span, Terminator, ValueId, Width,
+    Binary, Class, DataId, Definition, Exit, Function, FunctionId, Offset, Op, Origin, Range,
+    Region, RegionId, Relation, Returns, Span, Terminator, ValueId, Width,
 };
+pub use program::Program;
 pub use validate::validate;
 
 #[cfg(test)]

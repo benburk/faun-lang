@@ -4,7 +4,8 @@ use num_bigint::BigUint;
 use num_traits::Zero;
 
 use super::bounds::{Bounds, Ranges};
-use super::ir::{CtorId, ExprId, FnId, Program};
+use super::model::{CtorId, ExprId, FnId};
+use super::program::Program;
 
 /// Operations on unbounded naturals. These are not wrapping machine ops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

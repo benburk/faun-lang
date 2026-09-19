@@ -64,6 +64,18 @@
 //! Nothing here knows what a branch costs, what a word is, or how often
 //! anything runs, so the tier that knows prices is the tier that may trade
 //! work for time.
+//!
+//! # Code organization
+//!
+//! - `model`: terms, declarations, IDs, and their small intrinsic methods.
+//! - `program`: [`Program`], its pools, queries, and construction entry points.
+//! - `builder`: [`Builder`], the temporary state for scoped body construction.
+//! - Other modules own named algorithms: validation, analysis, rendering,
+//!   and rewriting. A capability-specific impl may live with its algorithm;
+//!   ordinary program queries and mutations stay with the owning type.
+//!
+//! The machine IR follows the same split. Public types are re-exported here;
+//! the file layout is not part of the public API.
 
 mod arithmetic;
 mod bounds;
@@ -74,11 +86,12 @@ mod evaluate;
 mod facts;
 mod fold;
 mod inline;
-mod ir;
 mod laws;
+mod model;
 mod normalize;
 mod optimize;
 mod pretty;
+mod program;
 mod stops;
 mod validate;
 
@@ -89,12 +102,13 @@ pub use evaluate::FoldLimits;
 pub use facts::{Facts, Operation, analyze};
 pub use fold::{fold, fold_with_limits};
 pub use inline::InlineLimits;
-pub use ir::{
-    Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, FnId, Function, Local,
-    Program, Range, Symbol, Type, TypeId,
+pub use model::{
+    Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, FnId, Function, Local, Range,
+    Symbol, Type, TypeId,
 };
 pub use normalize::{normalize, normalize_with_limits, structural};
 pub use optimize::{OptimizeOptions, optimize};
+pub use program::Program;
 pub use validate::validate;
 
 #[cfg(test)]

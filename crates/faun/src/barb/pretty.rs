@@ -3,7 +3,8 @@
 use std::fmt::Write;
 
 use super::constant::{Shape, as_bytes, as_natural, shape};
-use super::ir::{Body, Expr, FnId, Program, Symbol, TypeId};
+use super::model::{Body, ConstId, Expr, ExprId, FnId, Range, Symbol, TypeId};
+use super::program::Program;
 
 impl Program {
     /// The whole program: its types, then its functions.
@@ -88,7 +89,7 @@ impl Program {
         self.render_expr(body.tail, level, depth, out);
     }
 
-    fn render_expr(&self, expr: super::ir::ExprId, level: u32, depth: usize, out: &mut String) {
+    fn render_expr(&self, expr: ExprId, level: u32, depth: usize, out: &mut String) {
         let pad = "  ".repeat(depth);
         match self.expr(expr) {
             Expr::Atom(atom) => {
@@ -125,7 +126,7 @@ impl Program {
         }
     }
 
-    fn render_call(&self, name: Symbol, args: super::ir::Range) -> String {
+    fn render_call(&self, name: Symbol, args: Range) -> String {
         let args: Vec<String> = self
             .atoms(args)
             .iter()
@@ -139,7 +140,7 @@ impl Program {
     }
 
     /// A known value as what it stands for, not as its bytes.
-    fn render_known(&self, id: TypeId, value: super::ir::ConstId) -> String {
+    fn render_known(&self, id: TypeId, value: ConstId) -> String {
         let bytes = self.known_bytes(value);
         if let Some(number) = as_natural(self, id, bytes) {
             return number.to_string();

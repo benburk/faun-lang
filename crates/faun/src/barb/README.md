@@ -44,7 +44,14 @@ x    ::= a parameter, a binding, or a field an arm bound
 
 ## Code map
 
-- `ir.rs`, `builder.rs`: pooled terms, declarations and construction.
+- `model.rs`: terms, declarations, IDs and their small intrinsic methods.
+- `program.rs`: `Program`, pool ownership, queries, declarations and interning.
+  Its body-construction entry point delegates to `builder.rs`.
+- `builder.rs`: `Builder` and temporary state for scoped body construction.
+  The machine IR uses the same model/program/builder split. Keep each type's
+  core API with its definition; separate substantial named algorithms, not
+  reads from writes. Keep fields and construction machinery private or narrowly
+  visible within the tier, and re-export the public API from `mod.rs`.
 - `validate.rs`, `stops.rs`: structural checks and termination. Frontend typing
   and well-formed arena references remain preconditions, not proofs supplied here.
 - `arithmetic.rs`: recognize induction equations, without range analysis.

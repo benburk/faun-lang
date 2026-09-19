@@ -13,7 +13,8 @@
 
 use crate::barb;
 
-use super::model::{Binary, Class, FunctionId, Program, Relation, ValueId};
+use super::model::{Binary, Class, FunctionId, Relation, ValueId};
+use super::program::Program;
 use super::validate::validate;
 use crate::platform::{Routine, Routines, reads};
 

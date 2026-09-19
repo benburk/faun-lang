@@ -19,7 +19,8 @@
 //! tiers below hold what they must.
 
 use super::constant::{Shape, as_number, shape};
-use super::ir::{Body, CtorId, Expr, FnId, Program};
+use super::model::{Body, CtorId, Expr, ExprId, FnId, Range};
+use super::program::Program;
 
 /// The least and greatest a number can be. No greatest is a number counting
 /// up without a last step, which is every `Nat` until something says less.
@@ -471,13 +472,13 @@ impl FunctionWalk<'_> {
 
     /// What a term answers, held against the term so that the tier below
     /// has it where it walks.
-    fn expr(&mut self, id: super::ir::ExprId) -> Bounds {
+    fn expr(&mut self, id: ExprId) -> Bounds {
         let held = self.worked(id);
         self.terms[id.index()] = self.terms[id.index()].or(held);
         held
     }
 
-    fn worked(&mut self, id: super::ir::ExprId) -> Bounds {
+    fn worked(&mut self, id: ExprId) -> Bounds {
         match self.program.expr(id) {
             Expr::Atom(atom) => self.scope[atom.0.index()],
             Expr::Static(owner, value) => {
@@ -508,7 +509,7 @@ impl FunctionWalk<'_> {
         }
     }
 
-    fn call(&mut self, called: FnId, args: super::Range) -> Bounds {
+    fn call(&mut self, called: FnId, args: Range) -> Bounds {
         let held: Vec<Bounds> = self
             .program
             .atoms(args)
@@ -533,7 +534,7 @@ impl FunctionWalk<'_> {
 
     /// A number's empty constructor is nought and its other one is one more
     /// than what it wraps. A tag is which constructor it is.
-    fn built(&self, ctor: CtorId, args: super::ir::Range) -> Bounds {
+    fn built(&self, ctor: CtorId, args: Range) -> Bounds {
         let owner = self.program.ctor(ctor).owner;
         let Shape::Spine { nil, cons, .. } = shape(self.program, owner) else {
             return Bounds::at(u64::from(self.program.tag(ctor)));
@@ -552,7 +553,7 @@ impl FunctionWalk<'_> {
 
     /// Each arm in turn, with what the constructor it matched says of the
     /// value it took apart. What the match holds is what any arm holds.
-    fn branch(&mut self, scrutinee: usize, arms: super::ir::Range) -> Bounds {
+    fn branch(&mut self, scrutinee: usize, arms: Range) -> Bounds {
         let mut answer = None;
         let outer = self.scope.clone();
         let predicates = self.predicates.clone();

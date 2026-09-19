@@ -21,7 +21,8 @@
 //! them is what this grows into, and the matrices are the seam: what the
 //! walk below answers would not change, only what is asked of it.
 
-use super::ir::{Atom, Body, Expr, ExprId, FnId, Program};
+use super::model::{Atom, Body, Expr, ExprId, FnId};
+use super::program::Program;
 
 /// What a value is, against a parameter it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
