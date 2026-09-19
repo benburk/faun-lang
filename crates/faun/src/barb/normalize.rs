@@ -5,7 +5,43 @@
 
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
 
+/// Copied arena entries, rather than call count, bound helper expansion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InlineLimits {
+    pub max_callee: usize,
+    pub per_function: usize,
+    pub total: usize,
+    pub max_depth: usize,
+}
+
+impl Default for InlineLimits {
+    fn default() -> Self {
+        Self {
+            max_callee: 256,
+            per_function: 4096,
+            total: 65_536,
+            max_depth: 32,
+        }
+    }
+}
+
+/// Compatibility entry point: structural normalization plus helper inlining.
 pub fn normalize(program: &mut Program) {
+    normalize_with_limits(program, InlineLimits::default());
+}
+
+/// Remove local aliases without expanding calls or dropping eager bindings.
+pub fn structural(program: &mut Program) {
+    normalize_with_limits(
+        program,
+        InlineLimits {
+            total: 0,
+            ..InlineLimits::default()
+        },
+    );
+}
+
+pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
     let source = program.clone();
     let operations = super::arithmetic::recognise(&source);
     let recursive = super::stops::recursive(&source);
@@ -14,7 +50,15 @@ pub fn normalize(program: &mut Program) {
         program,
         recursive,
         operations,
-        fuel: 0,
+        costs: source
+            .functions()
+            .iter()
+            .map(|f| f.body.map_or(0, |body| cost(&source, body)))
+            .collect(),
+        limits,
+        function_left: 0,
+        total_left: limits.total,
+        inline_depth: 0,
     };
     for at in 0..source.functions().len() {
         let id = FnId::at(at);
@@ -24,7 +68,7 @@ pub fn normalize(program: &mut Program) {
         let Some(body) = source.function(id).body else {
             continue;
         };
-        rewrite.fuel = 1024;
+        rewrite.function_left = limits.per_function;
         let count = source.params(id).len();
         let locals: Vec<_> = (0..count).map(|at| Atom(Local::at(at))).collect();
         let body = rewrite.body(body, locals, count);
@@ -32,12 +76,45 @@ pub fn normalize(program: &mut Program) {
     }
 }
 
+// Count expressions, bindings, argument slots and arms which copying a body
+// can allocate. Nested expansions pay separately; aliases may cost less than
+// this conservative estimate. This walk does not recurse on the Rust stack.
+fn cost(program: &Program, body: Body) -> usize {
+    let mut pending = vec![body];
+    let mut cost = 0usize;
+    while let Some(body) = pending.pop() {
+        cost = cost.saturating_add(program.bindings(body.bindings).len());
+        // One possible alias tail is manufactured for each copied body.
+        cost = cost.saturating_add(1);
+        for &id in program
+            .bindings(body.bindings)
+            .iter()
+            .chain(std::iter::once(&body.tail))
+        {
+            cost = cost.saturating_add(1);
+            match program.expr(id) {
+                Expr::Con(_, args) | Expr::Call(_, args) => cost = cost.saturating_add(args.len()),
+                Expr::Match(_, arms) => {
+                    cost = cost.saturating_add(arms.len());
+                    pending.extend(program.arms(arms).iter().map(|a| a.body));
+                }
+                Expr::Atom(_) | Expr::Static(..) => {}
+            }
+        }
+    }
+    cost
+}
+
 struct Rewrite<'a> {
     source: &'a Program,
     program: &'a mut Program,
     recursive: Vec<bool>,
     operations: Vec<Option<super::Operation>>,
-    fuel: usize,
+    costs: Vec<usize>,
+    limits: InlineLimits,
+    function_left: usize,
+    total_left: usize,
+    inline_depth: usize,
 }
 struct Scope {
     bindings: Vec<ExprId>,
@@ -79,13 +156,11 @@ impl Rewrite<'_> {
             }
             Expr::Call(called, args) => {
                 let args = self.args(args, locals);
-                if self.fuel > 0
-                    && !self.recursive[called.index()]
-                    && self.operations[called.index()].is_none()
-                    && let Some(body) = self.source.function(called).body
-                {
-                    self.fuel -= 1;
-                    return self.into(body, args, scope);
+                if let Some(body) = self.callee(called) {
+                    self.inline_depth += 1;
+                    let answer = self.into(body, args, scope);
+                    self.inline_depth -= 1;
+                    return answer;
                 }
                 Expr::Call(called, self.hold(&args))
             }
@@ -111,6 +186,23 @@ impl Rewrite<'_> {
         scope.level += 1;
         value
     }
+    fn callee(&mut self, called: FnId) -> Option<Body> {
+        let cost = self.costs[called.index()];
+        if self.inline_depth >= self.limits.max_depth
+            || cost > self.limits.max_callee
+            || cost > self.function_left
+            || cost > self.total_left
+            || self.recursive[called.index()]
+            || self.operations[called.index()].is_some()
+        {
+            return None;
+        }
+        let body = self.source.function(called).body?;
+        self.function_left -= cost;
+        self.total_left -= cost;
+        Some(body)
+    }
+
     fn args(&self, args: Range, locals: &[Atom]) -> Vec<Atom> {
         self.source
             .atoms(args)

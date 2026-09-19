@@ -1,4 +1,12 @@
-use super::evaluate::{Evaluator, Held};
+use super::evaluate::{Budget, Evaluator, Held};
+
+fn budget(work: u64) -> Budget {
+    Budget::new(FoldLimits {
+        work,
+        max_depth: 512,
+        ..FoldLimits::default()
+    })
+}
 use super::*;
 use num_bigint::BigUint;
 
@@ -110,8 +118,8 @@ fn structural_evaluation_matches_arithmetic_for_small_inputs() {
                     program: &program,
                     operations: &unknown,
                 }
-                .body(body, args.clone(), &mut 100_000)
-                .unwrap();
+                .body(body, args.clone(), &mut budget(1_000_000))
+                .unwrap_or_else(|| panic!("baseline budget for {name}({a}, {b})"));
                 // Evaluate a call so the recognized fast path is exercised at
                 // the root too, including zero-divisor and comparison cases.
                 let mut caller = program.clone();
@@ -123,7 +131,7 @@ fn structural_evaluation_matches_arithmetic_for_small_inputs() {
                     program: &caller,
                     operations: &ops,
                 }
-                .body(caller.function(test).body.unwrap(), args, &mut 1000)
+                .body(caller.function(test).body.unwrap(), args, &mut budget(1000))
                 .unwrap();
                 assert_eq!(baseline.owner, fast.owner);
                 assert_eq!(baseline.bytes, fast.bytes, "{name}({a}, {b})");
@@ -200,7 +208,7 @@ fn unrecognized_recursion_still_has_an_evaluation_budget() {
     .body(
         program.function(id).body.unwrap(),
         vec![Some(number(ty, 1_000_000))],
-        &mut 32,
+        &mut budget(32),
     );
     assert!(result.is_none());
 }

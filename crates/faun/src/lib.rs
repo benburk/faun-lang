@@ -21,11 +21,24 @@ pub mod targets;
 ///
 /// Names what it could not read, or what it read and cannot represent.
 pub fn read(text: &str, routines: &platform::Routines) -> Result<ir::Program, String> {
+    read_with_options(text, routines, &barb::OptimizeOptions::default())
+}
+
+/// Compile with deterministic optimization controls. Totality checking always
+/// runs, even when all optional passes are disabled.
+///
+/// # Errors
+///
+/// Names what it could not read, or what it read and cannot represent. Disabling
+/// helper inlining can reduce the range information available to lowering.
+pub fn read_with_options(
+    text: &str,
+    routines: &platform::Routines,
+    options: &barb::OptimizeOptions,
+) -> Result<ir::Program, String> {
     let mut program = surface::parse(text, routines)?;
     barb::validate(&program)?;
-    barb::normalize(&mut program);
-    barb::fold(&mut program);
-    let program = program;
+    barb::optimize(&mut program, options);
     let facts = barb::recognise(&program);
     ir::lower(&program, &facts, routines)
 }

@@ -42,33 +42,21 @@
 //!   answers for, and nothing about it can be read — so what is known of
 //!   one is what the tier above said, which is today [`Function::bounds`]
 //!   for a finite host result, and will be more.
-//! - **The order those names run in.** Nothing here is observable, so
-//!   nothing here orders anything: a program whose operations must happen
-//!   in an order says so by handing each one a value the next one takes.
-//!   Then the order is what every pass already respects, and an operation
-//!   is kept because something reads what it answered, up to whatever the
-//!   program itself answers. Say it another way and this tier does what the
-//!   program actually said rather than what was meant by it.
+//! - **What effects those names perform.** Programs express dependencies by
+//!   threading state through calls. Optimizations also retain eager bindings:
+//!   an unused answer does not prove a call harmless or that it returns.
 //!
 //! # What a pass may do
 //!
-//! Anything that keeps what the program answers, with one exception.
+//! Preserve answers and eager evaluation of opaque calls. A bodyless name
+//! may perform an effect or exit without returning, even if its result is
+//! unused. Without further proof, keep its multiplicity, order and path.
 //!
-//! There is no effect here. A name with no body is a value something
-//! outside works out: ordered where dataflow orders it, dropped where
-//! nothing reads it, and otherwise opaque. What a target does while running
-//! one cannot be seen from here, so the rule is about how many times such a
-//! call runs rather than where it sits.
-//!
-//! > A pass may not make a call to a bodyless function run more times on
-//! > any path than the program says.
-//!
-//! Lifting one out of a single arm breaks it, since the path through the
-//! other arm did not run it. Lifting one out of every arm does not, nor
-//! does pushing a copy into each: what runs on a path is what ran before.
-//! Everything else is free -- a pure term may be moved, shared, dropped, or
-//! worked out here rather than left to run there, and totality is what
-//! makes the last of those stop.
+//! The bounded optimizer substitutes already-evaluated ANF atoms, leaves
+//! argument bindings in place when applying laws, and removes only aliases
+//! during cleanup. Constant evaluation refuses a whole call or match if any
+//! selected eager binding cannot be evaluated. Totality checking runs before
+//! any of these rewrites; optimization must not hide a rejected definition.
 //!
 //! Doing less work is the point of a pass rather than a rule over one.
 //! Nothing here knows what a branch costs, what a word is, or how often
@@ -83,7 +71,9 @@ mod evaluate;
 mod facts;
 mod fold;
 mod ir;
+mod laws;
 mod normalize;
+mod optimize;
 mod pretty;
 mod stops;
 mod validate;
@@ -91,18 +81,22 @@ mod validate;
 pub use bounds::Bounds;
 pub use builder::Builder;
 pub use constant::{Shape, Value, as_bytes, as_natural, as_number, decode, shape};
+pub use evaluate::FoldLimits;
 pub use facts::{Facts, Operation, recognise};
-pub use fold::fold;
+pub use fold::{fold, fold_with_limits};
 pub use ir::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Local, Program, Range,
     Symbol, Type, TypeId,
 };
-pub use normalize::normalize;
+pub use normalize::{InlineLimits, normalize, normalize_with_limits, structural};
+pub use optimize::{OptimizeOptions, optimize};
 pub use validate::validate;
 
 #[cfg(test)]
 mod arithmetic_tests;
 #[cfg(test)]
 mod library_tests;
+#[cfg(test)]
+mod optimization_tests;
 #[cfg(test)]
 mod tests;
