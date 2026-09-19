@@ -22,6 +22,8 @@ pub mod targets;
 /// Names what it could not read, or what it read and cannot represent.
 pub fn read(text: &str, routines: &platform::Routines) -> Result<ir::Program, String> {
     let mut program = surface::parse(text, routines)?;
+    barb::validate(&program)?;
+    barb::normalize(&mut program);
     barb::fold(&mut program);
     let program = program;
     let facts = barb::recognise(&program);

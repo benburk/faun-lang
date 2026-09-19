@@ -4,5 +4,9 @@ version.workspace = true
 edition.workspace = true
 description = "The Faun compiler, up to the tier a target reads"
 
+[dependencies]
+num-bigint = "0.4.8"
+num-traits = "0.2"
+
 [lints]
 workspace = true

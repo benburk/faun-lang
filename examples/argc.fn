@@ -10,10 +10,21 @@
 # has a hook. None of that is written here, and none of it is barb's.
 
 type Nat Zero Succ(Nat)
+type Bool False True
+
+less_than(Zero Zero) -> False
+less_than(Zero Succ(b)) -> True
+less_than(Succ(a) Zero) -> False
+less_than(Succ(a) Succ(b)) -> less_than(a b)
+
+bounded!(h True n) -> n
+bounded!(h False n) -> exit!(h Zero)
 
 add(a Zero) -> a
 add(a Succ(k)) -> Succ(add(a k))
 
 main!(h) ->
-  n = argc!(h)
+  count = argc!(h)
+  # Keep only counts below two, before arithmetic can widen them.
+  n = bounded!(h less_than(count Succ(Succ(Zero))) count)
   exit!(h add(add(n n) add(n n)))

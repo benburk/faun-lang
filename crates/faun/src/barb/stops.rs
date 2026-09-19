@@ -52,6 +52,19 @@ impl Matrix {
     }
 }
 
+pub(super) fn recursive(program: &Program) -> Vec<bool> {
+    let calls = graph(program);
+    let mut found = vec![false; calls.len()];
+    for round in rounds(&calls) {
+        if round.len() > 1 || calls[round[0].index()].contains(&round[0]) {
+            for id in round {
+                found[id.index()] = true;
+            }
+        }
+    }
+    found
+}
+
 /// Refuse a definition nothing shows stops.
 pub(super) fn stops(program: &Program) -> Result<(), String> {
     let calls = graph(program);

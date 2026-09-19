@@ -110,6 +110,83 @@ impl Bounds {
         }
     }
 
+    /// The intersection is what a branch establishes in addition to its input.
+    #[must_use]
+    pub fn and(self, other: Self) -> Self {
+        Self {
+            low: self.low.max(other.low),
+            high: match (self.high, other.high) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn monus(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        Self {
+            low: other.high.map_or(0, |b| self.low.saturating_sub(b)),
+            high: self.high.map(|a| a.saturating_sub(other.low)),
+        }
+    }
+
+    #[must_use]
+    pub fn times(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        if self.high == Some(0) || other.high == Some(0) {
+            return Self::at(0);
+        }
+        Self {
+            low: self.low.saturating_mul(other.low),
+            high: self
+                .high
+                .zip(other.high)
+                .and_then(|(a, b)| a.checked_mul(b)),
+        }
+    }
+
+    #[must_use]
+    pub fn quotient(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        if other.high == Some(0) {
+            return Self::at(0);
+        }
+        Self {
+            low: if other.low == 0 {
+                0
+            } else {
+                other.high.map_or(0, |b| self.low / b)
+            },
+            high: self.high.map(|a| a / other.low.max(1)),
+        }
+    }
+
+    #[must_use]
+    pub fn remainder(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        if other.high == Some(0) {
+            return self;
+        }
+        let high = if other.low == 0 {
+            self.high
+        } else {
+            match (self.high, other.high.map(|b| b.saturating_sub(1))) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        };
+        Self { low: 0, high }
+    }
+
     /// How many bits hold every number this could be, where anything does.
     #[must_use]
     pub fn width(self) -> Option<u32> {
@@ -163,6 +240,7 @@ const ROUNDS: usize = 24;
 pub(super) struct Known {
     /// What each term answers, by the term.
     pub terms: Vec<Bounds>,
+    pub matched: Vec<Bounds>,
     /// What each definition is handed, by definition.
     pub takes: Vec<Vec<Bounds>>,
     /// And what each answers.
@@ -184,6 +262,7 @@ pub(super) fn walk(program: &Program, operations: &[Option<super::Operation>]) -
             .collect(),
         results: vec![None; count],
         terms: vec![Bounds::NOTHING; program.exprs_count()],
+        matched: vec![Bounds::NOTHING; program.exprs_count()],
     };
 
     let mut settled = false;
@@ -205,6 +284,7 @@ pub(super) fn walk(program: &Program, operations: &[Option<super::Operation>]) -
     // not reach -- and then nothing here is known.
     if !settled {
         held.terms.fill(Bounds::ANY);
+        held.matched.fill(Bounds::ANY);
         held.params.iter_mut().flatten().for_each(|held| {
             *held = Some(Bounds::ANY);
         });
@@ -219,6 +299,11 @@ fn known(held: Held) -> Known {
     // A term nothing reached is a term nothing knows, and so is a parameter
     // nothing was ever handed.
     Known {
+        matched: held
+            .matched
+            .into_iter()
+            .map(|held| anything(Some(held)))
+            .collect(),
         terms: held
             .terms
             .into_iter()
@@ -250,6 +335,7 @@ struct Held {
     params: Vec<Vec<Option<Bounds>>>,
     results: Vec<Option<Bounds>>,
     terms: Vec<Bounds>,
+    matched: Vec<Bounds>,
 }
 
 /// One definition, once. Answers whether anything it worked out was more
@@ -266,20 +352,38 @@ fn once(
     let Some(body) = program.function(id).body else {
         // Something outside answers, and nothing about a declaration can be
         // read, so what comes back from one is anything at all.
-        return settle(&mut held.results[at], Bounds::ANY, round);
+        return settle(
+            &mut held.results[at],
+            program.function(id).bounds.unwrap_or(Bounds::ANY),
+            round,
+        );
     };
+
+    // A recognized equation is evaluated as that operation, not walked as
+    // unary recursion. Besides being cheaper, this avoids widening a huge
+    // countdown one predecessor at a time.
+    if let Some(op) = operations[at] {
+        return settle(
+            &mut held.results[at],
+            operation(program, op, params[0], params[1]),
+            round,
+        );
+    }
 
     let results = held.results.clone();
     let mut walk = Walk {
         program,
         operations,
         results: &results,
+        predicates: vec![None; params.len()],
         scope: params,
         terms: std::mem::take(&mut held.terms),
+        matched: std::mem::take(&mut held.matched),
         calls: Vec::new(),
     };
     let answer = walk.body(body);
     held.terms = walk.terms;
+    held.matched = walk.matched;
 
     let mut again = settle(&mut held.results[at], answer, round);
     for (called, args) in walk.calls {
@@ -321,8 +425,10 @@ struct Walk<'a> {
     results: &'a [Option<Bounds>],
     /// What each level holds here, which arms take back as they end.
     scope: Vec<Bounds>,
+    predicates: Vec<Option<(super::Operation, usize, usize)>>,
     /// And what each term answers, joined over every walk of it.
     terms: Vec<Bounds>,
+    matched: Vec<Bounds>,
     calls: Vec<(FnId, Vec<Bounds>)>,
 }
 
@@ -330,7 +436,33 @@ impl Walk<'_> {
     fn body(&mut self, body: Body) -> Bounds {
         for binding in self.program.bindings(body.bindings).to_vec() {
             let held = self.expr(binding);
+            if let Expr::Call(called, _) = self.program.expr(binding)
+                && self
+                    .program
+                    .ctors(self.program.function(called).result)
+                    .is_empty()
+            {
+                return Bounds::NOTHING;
+            }
+            let predicate = match self.program.expr(binding) {
+                Expr::Call(called, args) => {
+                    let op = self.operations[called.index()];
+                    match op {
+                        Some(
+                            op @ (super::Operation::Equals { .. }
+                            | super::Operation::LessThan { .. }),
+                        ) => {
+                            let args = self.program.atoms(args);
+                            Some((op, args[0].0.index(), args[1].0.index()))
+                        }
+                        _ => None,
+                    }
+                }
+                Expr::Atom(a) => self.predicates[a.0.index()],
+                _ => None,
+            };
             self.scope.push(held);
+            self.predicates.push(predicate);
         }
         self.expr(body.tail)
     }
@@ -348,27 +480,52 @@ impl Walk<'_> {
             Expr::Atom(atom) => self.scope[atom.0.index()],
             Expr::Static(owner, value) => {
                 let bytes = self.program.known_bytes(value);
-                as_number(self.program, owner, bytes).map_or(Bounds::ANY, Bounds::at)
+                if let Some(number) = as_number(self.program, owner, bytes) {
+                    return Bounds::at(number);
+                }
+                if self
+                    .program
+                    .ctors(owner)
+                    .iter()
+                    .all(|c| self.program.types_of(c.fields).is_empty())
+                {
+                    return Bounds::at(u64::from(
+                        self.program
+                            .tag(super::decode(self.program, owner, bytes).0.0),
+                    ));
+                }
+                Bounds::ANY
             }
             Expr::Con(ctor, args) => self.built(ctor, args),
-            Expr::Call(called, args) => {
-                let held: Vec<Bounds> = self
-                    .program
-                    .atoms(args)
-                    .iter()
-                    .map(|atom| self.scope[atom.0.index()])
-                    .collect();
-                // An operation the tiers below have is one this knows the
-                // answer of, which is what keeps a recursion exact.
-                let answer = match self.operations.get(called.index()).copied().flatten() {
-                    Some(super::Operation::Add) => held[0].plus(held[1]),
-                    // A name nothing has worked out yet answers nothing yet.
-                    None => self.results[called.index()].unwrap_or(Bounds::NOTHING),
-                };
-                self.calls.push((called, held));
-                answer
+            Expr::Call(called, args) => self.call(called, args),
+            Expr::Match(scrutinee, arms) => {
+                self.matched[id.index()] =
+                    self.matched[id.index()].or(self.scope[scrutinee.0.index()]);
+                self.branch(scrutinee.0.index(), arms)
             }
-            Expr::Match(scrutinee, arms) => self.branch(scrutinee.0.index(), arms),
+        }
+    }
+
+    fn call(&mut self, called: FnId, args: super::Range) -> Bounds {
+        let held: Vec<Bounds> = self
+            .program
+            .atoms(args)
+            .iter()
+            .map(|atom| self.scope[atom.0.index()])
+            .collect();
+        let answer = match self.operations.get(called.index()).copied().flatten() {
+            Some(op) => operation(self.program, op, held[0], held[1]),
+            None => self.results[called.index()].unwrap_or(Bounds::NOTHING),
+        };
+        self.calls.push((called, held));
+        if self
+            .program
+            .ctors(self.program.function(called).result)
+            .is_empty()
+        {
+            Bounds::NOTHING
+        } else {
+            answer
         }
     }
 
@@ -394,47 +551,163 @@ impl Walk<'_> {
     /// Each arm in turn, with what the constructor it matched says of the
     /// value it took apart. What the match holds is what any arm holds.
     fn branch(&mut self, scrutinee: usize, arms: super::ir::Range) -> Bounds {
-        let owner = self.program.ctor(self.program.arms(arms)[0].ctor).owner;
-        let spine = shape(self.program, owner);
         let mut answer = None;
+        let outer = self.scope.clone();
+        let predicates = self.predicates.clone();
+        let mut surviving: Option<Vec<Bounds>> = None;
         for arm in self.program.arms(arms).to_vec() {
+            self.scope.clone_from(&outer);
+            self.predicates.clone_from(&predicates);
             let level = self.scope.len();
-            let held = self.scope[scrutinee];
-            let fields = self.program.fields(arm.ctor).len();
-            // An arm the value cannot be is an arm nothing reaches, and what
-            // it answers is not what the match answers.
-            if !reaches(self.program, held, spine, arm.ctor) {
+            if !self.enter(scrutinee, arm.ctor) {
                 continue;
-            }
-            match spine {
-                Shape::Spine { nil, .. } if arm.ctor == nil => {
-                    self.scope[scrutinee] = Bounds::at(0);
-                }
-                Shape::Spine { .. } => {
-                    // One apart from what it wraps, and never nought here.
-                    self.scope[scrutinee] = Bounds {
-                        low: held.low.max(1),
-                        high: held.high,
-                    };
-                    let inner = self.scope[scrutinee].down();
-                    for _ in 0..fields {
-                        self.scope.push(inner);
-                    }
-                }
-                Shape::Tagged => {
-                    self.scope[scrutinee] = Bounds::at(u64::from(self.program.tag(arm.ctor)));
-                    for _ in 0..fields {
-                        self.scope.push(Bounds::ANY);
-                    }
-                }
             }
             let found = self.body(arm.body);
             answer = Some(answer.map_or(found, |held: Bounds| held.or(found)));
-            self.scope.truncate(level);
-            self.scope[scrutinee] = held;
+            if !found.is_nothing() {
+                let inner = &self.scope[..level];
+                if let Some(surviving) = &mut surviving {
+                    for (held, found) in surviving.iter_mut().zip(inner) {
+                        *held = held.or(*found);
+                    }
+                } else {
+                    surviving = Some(inner.to_vec());
+                }
+            }
         }
+        self.scope = surviving.unwrap_or(outer);
+        self.predicates = predicates;
         // Where no arm is reached, nothing is: a value nothing knows yet is
         // a value no constructor could have built.
         answer.unwrap_or(Bounds::NOTHING)
+    }
+
+    fn enter(&mut self, scrutinee: usize, ctor: CtorId) -> bool {
+        let held = self.scope[scrutinee];
+        let spine = shape(self.program, self.program.ctor(ctor).owner);
+        if !reaches(self.program, held, spine, ctor) {
+            return false;
+        }
+        let field = match spine {
+            Shape::Spine { nil, .. } if ctor == nil => {
+                self.scope[scrutinee] = Bounds::at(0);
+                Bounds::NOTHING
+            }
+            Shape::Spine { .. } => {
+                self.scope[scrutinee] = Bounds {
+                    low: held.low.max(1),
+                    high: held.high,
+                };
+                self.scope[scrutinee].down()
+            }
+            Shape::Tagged => {
+                self.scope[scrutinee] = Bounds::at(u64::from(self.program.tag(ctor)));
+                Bounds::ANY
+            }
+        };
+        self.scope
+            .resize(self.scope.len() + self.program.fields(ctor).len(), field);
+        if let Some((op, left, right)) = self.predicates[scrutinee] {
+            let (a, b) = refine(op, ctor, self.scope[left], self.scope[right]);
+            self.scope[left] = a;
+            self.scope[right] = b;
+            if a.is_nothing() || b.is_nothing() {
+                return false;
+            }
+        }
+        self.predicates.resize(self.scope.len(), None);
+        true
+    }
+}
+
+fn operation(program: &Program, op: super::Operation, a: Bounds, b: Bounds) -> Bounds {
+    use super::Operation;
+    if a.is_nothing() || b.is_nothing() {
+        return Bounds::NOTHING;
+    }
+    let (yes, no, decided) = match op {
+        Operation::Add => return a.plus(b),
+        Operation::Monus => return a.monus(b),
+        Operation::Mul => return a.times(b),
+        Operation::Div => return a.quotient(b),
+        Operation::Mod => return a.remainder(b),
+        Operation::Equals { yes, no } => (
+            yes,
+            no,
+            if a.high == Some(a.low) && b.high == Some(b.low) {
+                Some(a.low == b.low)
+            } else if a.high.is_some_and(|a| a < b.low) || b.high.is_some_and(|b| b < a.low) {
+                Some(false)
+            } else {
+                None
+            },
+        ),
+        Operation::LessThan { yes, no } => (
+            yes,
+            no,
+            if a.high.is_some_and(|a| a < b.low) {
+                Some(true)
+            } else if b.high.is_some_and(|b| a.low >= b) {
+                Some(false)
+            } else {
+                None
+            },
+        ),
+    };
+    let yes = Bounds::at(u64::from(program.tag(yes)));
+    let no = Bounds::at(u64::from(program.tag(no)));
+    decided.map_or_else(|| yes.or(no), |held| if held { yes } else { no })
+}
+
+fn exclude(held: Bounds, other: Bounds) -> Bounds {
+    if other.high != Some(other.low) {
+        return held;
+    }
+    if held.low == other.low {
+        return held.and(Bounds {
+            low: held.low.saturating_add(1),
+            high: None,
+        });
+    }
+    if held.high == Some(other.low) {
+        return held.and(Bounds {
+            low: 0,
+            high: other.low.checked_sub(1),
+        });
+    }
+    held
+}
+
+fn refine(op: super::Operation, ctor: CtorId, a: Bounds, b: Bounds) -> (Bounds, Bounds) {
+    use super::Operation;
+    match op {
+        Operation::Equals { yes, .. } if ctor == yes => (a.and(b), b.and(a)),
+        Operation::Equals { .. } => (exclude(a, b), exclude(b, a)),
+        Operation::LessThan { yes, .. } if ctor == yes => {
+            let a_limit = b.high.map_or(Bounds::ANY, |high| {
+                high.checked_sub(1).map_or(Bounds::NOTHING, |high| Bounds {
+                    low: 0,
+                    high: Some(high),
+                })
+            });
+            (
+                a.and(a_limit),
+                b.and(Bounds {
+                    low: a.low.saturating_add(1),
+                    high: None,
+                }),
+            )
+        }
+        Operation::LessThan { .. } => (
+            a.and(Bounds {
+                low: b.low,
+                high: None,
+            }),
+            b.and(Bounds {
+                low: 0,
+                high: a.high,
+            }),
+        ),
+        _ => (a, b),
     }
 }

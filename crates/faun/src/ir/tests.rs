@@ -1,4 +1,5 @@
 use super::*;
+use crate::barb::Bounds;
 
 /// A program read from text, against what a compiler knows. These are
 /// about what this tier makes of one, so which target would take it is not
@@ -157,6 +158,8 @@ fn two_names_may_give_the_same_routine() {
     let holds = |program: &mut crate::barb::Program, name, type_| {
         let id = program.declare(name, &[type_], type_);
         program.answered_by(id, "hold");
+        // Builder clients supply finite host contracts, like the frontend.
+        program.bound(id, Bounds::at(0).or(Bounds::at(u64::MAX)));
         id
     };
     let held_nat = holds(&mut program, "held_nat", nat);

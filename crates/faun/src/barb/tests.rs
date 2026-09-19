@@ -306,14 +306,9 @@ fn a_program_says_where_it_starts() {
     assert!(refused.contains("where the program starts"), "{refused}");
 }
 
-/// A number held compactly costs what it stands for when it is read back.
-///
-/// `intern_number` writes a magnitude, so three bytes can stand for millions
-/// of constructors. Working one out builds every one of them, and a `Value`
-/// that deep is one this tier cannot even let go of -- so what a term costs
-/// to read is counted against the same budget as everything else.
+/// Recognized arithmetic works on the compact magnitude, not the unary tree.
 #[test]
-fn a_number_too_large_to_work_out_is_left_alone() {
+fn large_arithmetic_does_not_expand_constructor_spines() {
     let mut program = Program::default();
     let nat = program.declare_type("Nat");
     program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
@@ -350,10 +345,9 @@ fn a_number_too_large_to_work_out_is_left_alone() {
     assert!(small.contains("\n  6\n"), "{small}");
     assert!(!small.contains("add(v0, v0)"), "{small}");
 
-    // Too large, so the call stands as it was written. Saying less than a
-    // program says is always an answer; taking the compiler down is not.
     let large = held(4_000_000);
-    assert!(large.contains("add(v0, v0)"), "{large}");
+    assert!(large.contains("\n  8000000\n"), "{large}");
+    assert!(!large.contains("add(v0, v0)"), "{large}");
 }
 
 /// A definition may go round only on something it took apart, so each time

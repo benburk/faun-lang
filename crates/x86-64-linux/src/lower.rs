@@ -226,7 +226,7 @@ impl Plan {
         };
         for op in program.ops(region) {
             match *op {
-                Op::Constant { .. } | Op::AddressOf(_) => {}
+                Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) => {}
                 Op::Binary { left, right, .. } | Op::Compare { left, right, .. } => {
                     read(&mut self.uses, &[left, right]);
                 }
@@ -400,6 +400,7 @@ impl Lowering<'_> {
         let program = self.program;
         match op {
             // Materialised where they are read, never where they are written.
+            Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
             Op::Constant { .. } | Op::AddressOf(_) => {}
             Op::Binary { op, left, right } => {
                 self.binary(*op, *left, *right, results[0]);

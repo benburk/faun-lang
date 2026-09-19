@@ -335,6 +335,7 @@ impl Lowering<'_> {
     fn instruction(&mut self, op: &Op, results: &[ValueId], ending: bool) {
         let program = self.program;
         match op {
+            Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
             Op::Constant { .. } | Op::AddressOf(_) => {}
             Op::Binary { op, left, right } => {
                 let opcode = match op {

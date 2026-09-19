@@ -223,6 +223,12 @@ impl Builder<'_> {
         self.push_one(Op::Constant { class, value }, class)
     }
 
+    /// An arbitrary-precision constant, kept compactly in the data pool.
+    pub fn natural(&mut self, value: &num_bigint::BigUint) -> ValueId {
+        let data = self.program.intern(&value.to_bytes_le());
+        self.push_one(Op::NaturalConstant(data), Class::Natural)
+    }
+
     /// The same word, written the way a negative number reads.
     pub fn constant_signed(&mut self, class: Class, value: i64) -> ValueId {
         self.constant(class, value.cast_unsigned())

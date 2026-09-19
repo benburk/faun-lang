@@ -76,17 +76,18 @@ fn corpus() -> Vec<(&'static str, Program, usize)> {
     ]
 }
 
-/// And the same of the examples, which are programs somebody wrote.
+/// And the same of the examples. Arithmetic examples now include an argc
+/// guard; helper normalization removes calls in the smaller examples.
 fn examples() -> Vec<(String, Program, usize)> {
     [
         ("exit", 29),
         ("two-and-two", 29),
         ("double", 29),
-        ("leave", 49),
-        ("bool", 533),
-        ("nat", 1265),
-        ("width", 225),
-        ("argc", 102),
+        ("leave", 29),
+        ("bool", 225),
+        ("nat", 1114),
+        ("width", 284),
+        ("argc", 335),
     ]
     .into_iter()
     .map(|(name, size)| {

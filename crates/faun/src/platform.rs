@@ -90,6 +90,18 @@ impl Routines {
         ])
     }
 
+    /// Resolve the finite range of a host word for a particular target.
+    /// The range is a host contract, not a bound on the language's Nat type.
+    #[must_use]
+    pub fn with_word(mut self, bits: u16) -> Self {
+        for routine in &mut self.0 {
+            if routine.answers == Some(Class::Word) {
+                routine.answers = Some(Class::Fixed { bits });
+            }
+        }
+        self
+    }
+
     /// Every routine a program may call by name, and what each is called.
     pub fn offered(&self) -> impl Iterator<Item = (&str, &Routine)> {
         self.0
@@ -133,6 +145,7 @@ pub fn reads(classes: &[Class]) -> String {
     classes
         .iter()
         .map(|class| match *class {
+            Class::Natural => "an arbitrary-precision natural".to_owned(),
             Class::Word => "a word".to_owned(),
             Class::Address => "an address".to_owned(),
             Class::Fixed { bits } => format!("{bits} bits"),

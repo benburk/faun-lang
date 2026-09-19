@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use super::constant::{Shape, as_bytes, as_number, shape};
+use super::constant::{Shape, as_bytes, as_natural, shape};
 use super::ir::{Body, Expr, FnId, Program, Symbol, TypeId};
 
 impl Program {
@@ -141,7 +141,7 @@ impl Program {
     /// A known value as what it stands for, not as its bytes.
     fn render_known(&self, id: TypeId, value: super::ir::ConstId) -> String {
         let bytes = self.known_bytes(value);
-        if let Some(number) = as_number(self, id, bytes) {
+        if let Some(number) = as_natural(self, id, bytes) {
             return number.to_string();
         }
         if let Some(run) = as_bytes(self, id, bytes)

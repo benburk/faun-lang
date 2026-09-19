@@ -30,6 +30,8 @@ pub struct Span {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
+    /// An arbitrary-precision nonnegative integer. Never a wrapping word.
+    Natural,
     /// As wide as an address, whatever the target's is.
     Word,
     /// A value needing at least this many bits, and never more. It is a
@@ -59,6 +61,8 @@ pub struct Platform {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Binary {
     Add,
+    /// Word subtraction; on `Natural`, truncated subtraction (monus).
+    /// Lowering uses it for predecessors only on a nonzero branch.
     Sub,
 }
 
@@ -89,6 +93,8 @@ pub enum Op {
         class: Class,
         value: u64,
     },
+    /// Unsigned magnitude in little-endian bytes, held in the data pool.
+    NaturalConstant(DataId),
     AddressOf(DataId),
     Binary {
         op: Binary,
@@ -367,11 +373,16 @@ impl Class {
     /// A fixed width says its own. Anything else is as wide as the machine
     /// is, which is why this is a question a target answers and not one a
     /// class answers alone.
+    ///
+    /// # Panics
+    /// If asked for the width of an arbitrary-precision natural. Targets
+    /// without that representation must reject it before selecting widths.
     #[must_use]
     pub const fn bits(self, word: u16) -> u16 {
         match self {
             Self::Fixed { bits } => bits,
             Self::Word | Self::Address => word,
+            Self::Natural => panic!("an arbitrary-precision integer has no fixed width"),
         }
     }
 
@@ -383,7 +394,9 @@ impl Class {
     #[must_use]
     pub const fn fits(self, wanted: Self) -> bool {
         match (self, wanted) {
-            (Self::Address, Self::Address) | (Self::Word, Self::Word) => true,
+            (Self::Address, Self::Address)
+            | (Self::Word, Self::Word)
+            | (Self::Natural, Self::Natural) => true,
             (Self::Fixed { bits }, Self::Word) => bits <= 64,
             (Self::Fixed { bits }, Self::Fixed { bits: wanted }) => bits <= wanted,
             _ => false,

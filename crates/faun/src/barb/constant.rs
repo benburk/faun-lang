@@ -19,6 +19,9 @@
 //! static memory, or as a counted cell, and [`crate::ir`] is where that is
 //! decided.
 
+use num_bigint::BigUint;
+use num_traits::ToPrimitive;
+
 use super::{CtorId, Program, TypeId};
 
 /// How a type's values are encoded, read off its declaration.
@@ -115,13 +118,13 @@ pub(super) fn encode(program: &Program, id: TypeId, value: &Value, out: &mut Vec
 /// Read one value back, answering it and how many bytes it took.
 ///
 /// This builds the value in full, so a chain as long as its own magnitude
-/// costs that much: a number is better read with [`as_number`] and a run of
+/// costs that much: a number is better read with [`as_natural`] and a run of
 /// bytes with [`as_bytes`].
 ///
 /// # Panics
 ///
-/// If the bytes are not an encoding of this type, which the pool's own
-/// writer cannot produce.
+/// If the bytes are not an encoding of this type, or the constructor count
+/// is too large to materialize. Large naturals should use [`as_natural`].
 #[must_use]
 pub fn decode(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) {
     match shape(program, id) {
@@ -194,17 +197,48 @@ fn decode_tagged(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) 
 }
 
 /// A spine-shaped value whose elements carry nothing, which is a number.
-/// Reading it costs nothing, where [`decode`] would build the whole chain.
+///
+/// Returns `None` if it is not a natural or exceeds `u64`; [`as_natural`]
+/// has no such width limit. Neither expands the constructor chain.
 ///
 /// # Panics
 ///
 /// If the bytes are not an encoding of this type.
 #[must_use]
 pub fn as_number(program: &Program, id: TypeId, bytes: &[u8]) -> Option<u64> {
+    as_natural(program, id, bytes)?.to_u64()
+}
+
+/// Read a natural without expanding its constructor spine or limiting its size.
+#[must_use]
+pub fn as_natural(program: &Program, id: TypeId, bytes: &[u8]) -> Option<BigUint> {
     let Shape::Spine { cons, .. } = shape(program, id) else {
         return None;
     };
-    (program.fields(cons).len() == 1).then(|| unleb128(bytes).0)
+    (program.fields(cons).len() == 1).then(|| read_natural(bytes).0)
+}
+
+pub(super) fn read_natural(bytes: &[u8]) -> (BigUint, usize) {
+    let end = bytes
+        .iter()
+        .position(|byte| byte & 0x80 == 0)
+        .expect("a terminated number");
+    let digits: Vec<u8> = bytes[..=end].iter().map(|byte| byte & 0x7f).collect();
+    (
+        BigUint::from_radix_le(&digits, 128).expect("base 128 digits"),
+        end + 1,
+    )
+}
+
+pub(super) fn write_natural(value: &BigUint, out: &mut Vec<u8>) {
+    let digits = value.to_radix_le(128);
+    for (at, digit) in digits.iter().enumerate() {
+        out.push(if at + 1 == digits.len() {
+            *digit
+        } else {
+            *digit | 0x80
+        });
+    }
 }
 
 /// The elements of a spine-shaped value, when each of them encoded to one
@@ -221,9 +255,9 @@ pub fn as_bytes<'a>(program: &Program, id: TypeId, bytes: &'a [u8]) -> Option<&'
     if !matches!(shape(program, id), Shape::Spine { .. }) {
         return None;
     }
-    let (count, at) = unleb128(bytes);
+    let (count, at) = read_natural(bytes);
     let payload = &bytes[at..];
-    let count = usize::try_from(count).expect("a count that fits a pointer");
+    let count = count.to_usize()?;
     (payload.len() == count).then_some(payload)
 }
 
@@ -257,26 +291,12 @@ fn leb128(mut value: u64, out: &mut Vec<u8>) {
     }
 }
 
-/// How many constructors a held value stands for.
-///
-/// What a value costs to hold and what it costs to work with are different
-/// numbers: a spine is written as its length, so three bytes stand for as
-/// many constructors as the number says. Anything else is written out as it
-/// is built, so holding one already cost what it stands for.
-pub(super) fn weight(program: &Program, id: TypeId, bytes: &[u8]) -> u64 {
-    match shape(program, id) {
-        Shape::Spine { .. } => unleb128(bytes).0,
-        Shape::Tagged => 1,
-    }
-}
-
 fn unleb128(bytes: &[u8]) -> (u64, usize) {
-    let mut value = 0u64;
-    for (at, byte) in bytes.iter().enumerate() {
-        value |= u64::from(byte & 0x7F) << (7 * at);
-        if byte & 0x80 == 0 {
-            return (value, at + 1);
-        }
-    }
-    panic!("a value that runs off the end of the pool")
+    let (value, took) = read_natural(bytes);
+    (
+        value
+            .to_u64()
+            .expect("a constructor count small enough to materialize"),
+        took,
+    )
 }

@@ -25,8 +25,17 @@ is_zero(Succ(k)) -> False
 select(True t f) -> t
 select(False t f) -> f
 
+less_than(Zero Zero) -> False
+less_than(Zero Succ(b)) -> True
+less_than(Succ(a) Zero) -> False
+less_than(Succ(a) Succ(b)) -> less_than(a b)
+
+bounded!(h True n) -> n
+bounded!(h False n) -> exit!(h Zero)
+
 main!(h) ->
-  n = argc!(h)
+  count = argc!(h)
+  n = bounded!(h less_than(count Succ(Succ(Zero))) count)
   two = add(n n)
   four = double(two)
   # Nothing here is above four, so three bits hold every number in it.

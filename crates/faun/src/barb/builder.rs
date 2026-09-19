@@ -77,6 +77,7 @@ impl Program {
             result,
             body: None,
             outside: None,
+            bounds: None,
         });
         FnId::at(self.functions.len() - 1)
     }
@@ -87,6 +88,11 @@ impl Program {
     pub fn answered_by(&mut self, id: FnId, name: &str) {
         let name = self.symbol(name);
         self.functions[id.index()].outside = Some(name);
+    }
+
+    /// Supply a range contract for a declaration implemented outside Barb.
+    pub fn bound(&mut self, id: FnId, bounds: super::Bounds) {
+        self.functions[id.index()].bounds = Some(bounds);
     }
 
     /// The function a target enters.
@@ -124,6 +130,22 @@ impl Program {
             self.name(name)
         );
         self.hold(|_, out| constant::write_number(value, out))
+    }
+
+    /// An arbitrary-precision natural, encoded without constructing its spine.
+    ///
+    /// # Panics
+    /// If `id` is not a natural-number shape.
+    pub fn intern_natural(&mut self, id: TypeId, value: &num_bigint::BigUint) -> ConstId {
+        assert!(
+            super::arithmetic::natural(self, id).is_some(),
+            "a natural type"
+        );
+        self.hold(|_, out| constant::write_natural(value, out))
+    }
+
+    pub(super) fn intern_encoded(&mut self, bytes: &[u8]) -> ConstId {
+        self.hold(|_, out| out.extend_from_slice(bytes))
     }
 
     /// A run of bytes, likewise.

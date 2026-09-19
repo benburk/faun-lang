@@ -592,7 +592,8 @@ pub fn countdown(times: u64) -> Program {
 
 /// A program read from text, against what a compiler knows.
 fn read(text: &str) -> Program {
-    crate::read(text, &crate::platform::Routines::builtin()).expect("a program")
+    crate::read(text, &crate::platform::Routines::builtin())
+        .unwrap_or_else(|error| panic!("{error}\n{text}"))
 }
 
 /// Every program here and what it leaves with.
@@ -608,6 +609,8 @@ pub fn running() -> Vec<(&'static str, Program, i32)> {
     held.extend(answers_counted());
     held.extend(answers_leaving());
     held.extend(answers_tagged());
+    held.extend(arithmetic_cases());
+    held.push(("a runtime guard exits early", rejected_count(), 7));
     held
 }
 
@@ -685,8 +688,17 @@ fn answers_counted() -> Vec<(&'static str, Program, i32)> {
                   add(a Zero) -> a
                   add(a Succ(k)) -> Succ(add(a k))
 
+                  type Bool False True
+                  less_than(Zero Zero) -> False
+                  less_than(Zero Succ(b)) -> True
+                  less_than(Succ(a) Zero) -> False
+                  less_than(Succ(a) Succ(b)) -> less_than(a b)
+                  bounded!(h True n) -> n
+                  bounded!(h False n) -> exit!(h Zero)
+
                   main!(h) ->
-                    n = argc!(h)
+                    count = argc!(h)
+                    n = bounded!(h less_than(count Succ(Succ(Zero))) count)
                     exit!(h add(n n))",
             ),
             2,
@@ -784,6 +796,59 @@ fn answers_tagged() -> Vec<(&'static str, Program, i32)> {
         ));
     }
     held
+}
+
+fn rejected_count() -> Program {
+    let library = include_str!("../../../standard/nat.fn");
+    let source = format!(
+        "{library}\n
+        bounded!(h True n) -> n
+        bounded!(h False n) -> exit!(h Succ(Succ(Succ(Succ(Succ(Succ(Succ(Zero))))))))
+        main!(h) ->
+            count = argc!(h)
+            n = bounded!(h less_than(count Succ(Zero)) count)
+            exit!(h n)"
+    );
+    read(&source)
+}
+
+/// Runtime arithmetic: the count cannot fold, and the guard is what makes
+/// its subsequent arithmetic fit even on the smallest target.
+#[must_use]
+pub fn arithmetic_cases() -> Vec<(&'static str, Program, i32)> {
+    let library = include_str!("../../../standard/nat.fn");
+    let setup = "
+        bounded!(h True n) -> n
+        bounded!(h False n) -> exit!(h Zero)
+        four(n) -> Succ(Succ(Succ(Succ(n))))
+        rank(False) -> Zero
+        rank(True) -> Succ(Zero)
+        main!(h) ->
+            count = argc!(h)
+            n = bounded!(h less_than(count Succ(Succ(Zero))) count)
+            a = add(n four(four(Zero)))
+            b = Succ(n)
+            z = sub(n n)
+            exit!(h ANSWER)";
+    [
+        ("runtime addition", "add(a b)", 11),
+        ("runtime monus", "sub(a b)", 7),
+        ("runtime underflow", "sub(b a)", 0),
+        ("runtime multiplication", "mul(a b)", 18),
+        ("runtime division", "div(a b)", 4),
+        ("runtime remainder", "mod(a b)", 1),
+        ("runtime division by zero", "div(a z)", 0),
+        ("runtime remainder by zero", "mod(a z)", 9),
+        ("runtime less than", "rank(less_than(b a))", 1),
+        ("runtime equality", "rank(equals(a a))", 1),
+        ("runtime inequality", "rank(equals(a b))", 0),
+    ]
+    .into_iter()
+    .map(|(name, answer, want)| {
+        let source = format!("{library}\n{}", setup.replace("ANSWER", answer));
+        (name, read(&source), want)
+    })
+    .collect()
 }
 
 /// Every program here that writes, and what it writes.

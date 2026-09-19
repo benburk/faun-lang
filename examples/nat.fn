@@ -1,9 +1,7 @@
 # Arithmetic, as recursion over the constructors it is written in.
 #
 # Nothing here is a primitive and nothing is declared elsewhere. `add` is
-# recognised by the tier below and becomes an instruction; the rest are
-# ordinary rewrites, so `sub` counts both arguments down together and `mul`
-# adds. Subtraction stops at nought, which is the answer a type with no
+# recognised by the tier below, along with monus and multiplication. Subtraction stops at nought, which is the answer a type with no
 # negative values has.
 #
 # A clause matches as many arguments as it likes, and `sub` and `cmp` are
@@ -47,10 +45,19 @@ select(False t f) -> f
 min(a b) -> select(less(a b) a b)
 max(a b) -> select(less(a b) b a)
 
+less_than(Zero Zero) -> False
+less_than(Zero Succ(b)) -> True
+less_than(Succ(a) Zero) -> False
+less_than(Succ(a) Succ(b)) -> less_than(a b)
+
+bounded!(h True n) -> n
+bounded!(h False n) -> exit!(h Zero)
+
 main!(h) ->
   # Nothing below is known, since the count came from outside. A program
   # handed no arguments was handed itself, so this is two.
-  n = argc!(h)
+  count = argc!(h)
+  n = bounded!(h less_than(count Succ(Succ(Zero))) count)
   two = add(n n)
   four = mul(two two)
   eight = mul(two four)

@@ -83,11 +83,12 @@ pub struct Function {
     pub body: Option<Body>,
     /// What answers for it out there, where that is not the name a program
     /// calls it by. Nothing here reads it: it is a name this tier holds and
-    /// the tier below resolves, like [`Function::answers`] is a fact this
-    /// tier holds and does not use. Two names may give the same one, which
+    /// the tier below resolves. Two names may give the same one, which
     /// is how one routine serves a program at more than one type -- there
     /// is no body to copy, so nothing is duplicated by saying it twice.
     pub outside: Option<Symbol>,
+    /// A contract supplied for a bodyless natural-valued declaration.
+    pub bounds: Option<super::Bounds>,
 }
 
 /// A program, and the pools every part of it lives in.

@@ -58,7 +58,9 @@ pub trait Target: fmt::Debug {
     /// program naming something this target has no answer for is refused
     /// where it is written rather than after it is lowered.
     fn routines(&self) -> crate::platform::Routines {
-        crate::platform::Routines::builtin().only(self.provides())
+        crate::platform::Routines::builtin()
+            .only(self.provides())
+            .with_word(self.word())
     }
 
     /// The files a program becomes.
@@ -80,13 +82,7 @@ pub trait Target: fmt::Debug {
         let (name, word) = (self.name(), self.word());
         for at in 0..program.values_count() {
             let class = program.class(ValueId::at(at));
-            if let Class::Fixed { bits } = class
-                && bits > word
-            {
-                return Err(format!(
-                    "{name} holds {word} bits, and a value here needs {bits}"
-                ));
-            }
+            accepts_class(name, word, class)?;
         }
         let provides = self.provides();
         for op in program
@@ -116,6 +112,22 @@ pub trait Target: fmt::Debug {
         }
         Ok(())
     }
+}
+
+fn accepts_class(name: &str, word: u16, class: Class) -> Result<(), String> {
+    if class == Class::Natural {
+        return Err(format!(
+            "{name} does not yet implement arbitrary-precision naturals"
+        ));
+    }
+    if let Class::Fixed { bits } = class
+        && bits > word
+    {
+        return Err(format!(
+            "{name} holds {word} bits, and a value here needs {bits}"
+        ));
+    }
+    Ok(())
 }
 
 /// What a program is read against is what its own target answers for, not
@@ -169,6 +181,22 @@ mod tests {
         fn emit(&self, _: &Program) -> Vec<Artifact> {
             Vec::new()
         }
+    }
+
+    #[test]
+    fn unsupported_bigints_are_rejected_instead_of_wrapping() {
+        let (mut program, main) = Program::new("main");
+        program.define(main, |b, _| {
+            b.natural(&(num_bigint::BigUint::from(1u8) << 100usize));
+            let status = b.constant(Class::Word, 0);
+            b.ret(&[status])
+        });
+        assert!(
+            Spartan
+                .accepts(&program)
+                .unwrap_err()
+                .contains("arbitrary-precision")
+        );
     }
 
     /// What a program may reach is what its target answers for, whether it

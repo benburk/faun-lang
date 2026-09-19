@@ -186,7 +186,7 @@ fn path_to_continue(
 /// Every value an operation reads, nested regions excluded.
 fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     match op {
-        Op::Constant { .. } | Op::AddressOf(_) => {}
+        Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) => {}
         Op::Binary { left, right, .. } | Op::Compare { left, right, .. } => {
             each(*left);
             each(*right);
@@ -1309,6 +1309,7 @@ impl Lowering<'_> {
     fn instruction(&mut self, op: &Op, results: &[ValueId]) {
         let program = self.program;
         match op {
+            Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
             Op::Constant { .. } | Op::AddressOf(_) => {}
             Op::Binary { op, left, right } => {
                 let left = self.operand(*left, T0);

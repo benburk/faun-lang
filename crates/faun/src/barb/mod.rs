@@ -26,7 +26,7 @@
 //! - `absurd` — a match with no arms
 //! - `Lam`/`App` — first-order; recursion lives between top-level names
 //! - primitives — arithmetic is recursion over a constructor, and the
-//!   machine tier is what recognises it
+//!   recognizer establishes the arithmetic facts used by lower tiers
 //!
 //! # What a program has to be
 //!
@@ -40,8 +40,8 @@
 //!
 //! - **What a name with no body does.** Such a name is something outside
 //!   answers for, and nothing about it can be read — so what is known of
-//!   one is what the tier above said, which is today [`Function::answers`]
-//!   and will be more.
+//!   one is what the tier above said, which is today [`Function::bounds`]
+//!   for a finite host result, and will be more.
 //! - **The order those names run in.** Nothing here is observable, so
 //!   nothing here orders anything: a program whose operations must happen
 //!   in an order says so by handing each one a value the next one takes.
@@ -75,26 +75,32 @@
 //! anything runs, so the tier that knows prices is the tier that may trade
 //! work for time.
 
+mod arithmetic;
 mod bounds;
 mod builder;
 mod constant;
+mod evaluate;
 mod facts;
 mod fold;
 mod ir;
+mod normalize;
 mod pretty;
 mod stops;
 mod validate;
 
 pub use bounds::Bounds;
 pub use builder::Builder;
-pub use constant::{Shape, Value, as_bytes, as_number, decode, shape};
+pub use constant::{Shape, Value, as_bytes, as_natural, as_number, decode, shape};
 pub use facts::{Facts, Operation, recognise};
 pub use fold::fold;
 pub use ir::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Local, Program, Range,
     Symbol, Type, TypeId,
 };
+pub use normalize::normalize;
 pub use validate::validate;
 
+#[cfg(test)]
+mod arithmetic_tests;
 #[cfg(test)]
 mod tests;
