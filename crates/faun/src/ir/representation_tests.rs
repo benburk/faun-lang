@@ -16,7 +16,7 @@ fn parse(text: &str) -> barb::Program {
 fn lower_program(source: &barb::Program) -> Result<Program, String> {
     lower(
         source,
-        &barb::recognise(source),
+        &barb::analyze(source),
         &Routines::builtin().with_word(64),
     )
 }
@@ -155,7 +155,7 @@ fn recognized_definition_bodies_do_not_demand_runtime_representations() {
     let text = library("main!(h) -> n = argc!(h) exit!(h add(n Zero))")
         .replace("add(a Zero) -> a", "add(a Zero) -> ignored = Pos(a) a");
     let source = parse(&text);
-    let facts = barb::recognise(&source);
+    let facts = barb::analyze(&source);
     let add = barb::FnId::at(
         source
             .functions()

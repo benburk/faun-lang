@@ -332,7 +332,7 @@ fn it_lays_out_a_chain_as_the_number_it_builds() {
 #[test]
 fn it_runs_a_program_built_rather_than_written() {
     let barb = programs::two_and_two_in_barb();
-    let facts = faun::barb::recognise(&barb);
+    let facts = faun::barb::analyze(&barb);
     let machine =
         faun::ir::lower(&barb, &facts, &Mos6502Sim65.routines()).expect("a representable program");
 

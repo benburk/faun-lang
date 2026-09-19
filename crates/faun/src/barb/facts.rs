@@ -1,9 +1,9 @@
-//! Semantic facts read from definitions, shared by folding and lowering.
+//! Final-program analysis: recognized equations and conservative value ranges.
 
 use num_bigint::BigUint;
 use num_traits::Zero;
 
-use super::bounds::{Bounds, Known};
+use super::bounds::{Bounds, Ranges};
 use super::ir::{CtorId, ExprId, FnId, Program};
 
 /// Operations on unbounded naturals. These are not wrapping machine ops.
@@ -69,7 +69,7 @@ impl Operation {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
     operations: Vec<Option<Operation>>,
-    known: Known,
+    ranges: Ranges,
 }
 
 impl Facts {
@@ -79,7 +79,7 @@ impl Facts {
     }
     #[must_use]
     pub fn held(&self, id: ExprId) -> Bounds {
-        self.known
+        self.ranges
             .terms
             .get(id.index())
             .copied()
@@ -87,7 +87,7 @@ impl Facts {
     }
     #[must_use]
     pub fn matched(&self, id: ExprId) -> Bounds {
-        self.known
+        self.ranges
             .matched
             .get(id.index())
             .copied()
@@ -95,11 +95,11 @@ impl Facts {
     }
     #[must_use]
     pub fn takes(&self, id: FnId) -> &[Bounds] {
-        self.known.takes.get(id.index()).map_or(&[], Vec::as_slice)
+        self.ranges.takes.get(id.index()).map_or(&[], Vec::as_slice)
     }
     #[must_use]
     pub fn answers(&self, id: FnId) -> Bounds {
-        self.known
+        self.ranges
             .answers
             .get(id.index())
             .copied()
@@ -107,9 +107,11 @@ impl Facts {
     }
 }
 
+/// Analyze the final Barb program before lowering. Recompute after rewriting:
+/// recognition identifies equations; range propagation uses those equations.
 #[must_use]
-pub fn recognise(program: &Program) -> Facts {
+pub fn analyze(program: &Program) -> Facts {
     let operations = super::arithmetic::recognise(program);
-    let known = super::bounds::walk(program, &operations);
-    Facts { operations, known }
+    let ranges = super::bounds::analyze(program, &operations);
+    Facts { operations, ranges }
 }

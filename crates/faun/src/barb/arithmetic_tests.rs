@@ -39,7 +39,7 @@ fn library_equations_are_recognized_before_and_after_folding() {
     let mut program = source(LIBRARY);
     validate(&program).unwrap();
     for _ in 0..2 {
-        let facts = recognise(&program);
+        let facts = analyze(&program);
         for (name, op) in [
             ("add", Operation::Add),
             ("sub", Operation::Monus),
@@ -75,11 +75,11 @@ fn recognition_is_structural_and_zero_divisor_near_misses_are_not_operations() {
         .replace("add", "plus");
     let program = source(&library);
     assert_eq!(
-        recognise(&program).operation(named(&program, "plus")),
+        analyze(&program).operation(named(&program, "plus")),
         Some(Operation::Add)
     );
     assert_eq!(
-        recognise(&program).operation(named(&program, "mod")),
+        analyze(&program).operation(named(&program, "mod")),
         Some(Operation::Mod)
     );
     for (old, new, name) in [
@@ -95,7 +95,7 @@ fn recognition_is_structural_and_zero_divisor_near_misses_are_not_operations() {
     ] {
         let program = source(&LIBRARY.replace(old, new));
         assert_eq!(
-            recognise(&program).operation(named(&program, name)),
+            analyze(&program).operation(named(&program, name)),
             None,
             "{name}"
         );
@@ -178,7 +178,7 @@ fn an_early_exit_refines_the_continuation() {
     let mut program = crate::surface::parse(&text, &routines).unwrap();
     normalize(&mut program);
     fold(&mut program);
-    let facts = recognise(&program);
+    let facts = analyze(&program);
     let body = program.function(program.entry().unwrap()).body().unwrap();
     let sum = program.bindings(body.bindings).iter().copied().find(|expr| {
         matches!(program.expr(*expr), Expr::Call(called, _) if facts.operation(called) == Some(Operation::Add))

@@ -1,29 +1,11 @@
-//! Bounded, capture-free inlining of nonrecursive helpers. In particular a
-//! comparison followed by a selector becomes a match in the same scope, so
-//! range analysis can connect the condition to its operands. ANF arguments
-//! are evaluated once; no bodyless call is duplicated or moved across arms.
+//! Capture-free structural rebuilding, with optional bounded helper expansion.
+//!
+//! Structural normalization substitutes aliases without planning any inlining.
+//! Expanding rewrites use the policy in `inline`; both preserve eager bindings
+//! and protect recognized arithmetic definitions from changes to their equations.
 
+use super::inline::{InlineLimits, Inlining};
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
-
-/// Copied arena entries, rather than call count, bound helper expansion.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InlineLimits {
-    pub max_callee: usize,
-    pub per_function: usize,
-    pub total: usize,
-    pub max_depth: usize,
-}
-
-impl Default for InlineLimits {
-    fn default() -> Self {
-        Self {
-            max_callee: 256,
-            per_function: 4096,
-            total: 65_536,
-            max_depth: 32,
-        }
-    }
-}
 
 /// Compatibility entry point: structural normalization plus helper inlining.
 pub fn normalize(program: &mut Program) {
@@ -32,32 +14,24 @@ pub fn normalize(program: &mut Program) {
 
 /// Remove local aliases without expanding calls or dropping eager bindings.
 pub fn structural(program: &mut Program) {
-    normalize_with_limits(
-        program,
-        InlineLimits {
-            total: 0,
-            ..InlineLimits::default()
-        },
-    );
+    rewrite(program, None);
 }
 
+/// Normalize aliases and inline nonrecursive helpers within the supplied limits.
+/// A zero limit disables expansion without computing recursion or copy costs.
 pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
+    let inlining = Inlining::new(program, limits);
+    rewrite(program, inlining);
+}
+
+fn rewrite(program: &mut Program, inlining: Option<Inlining>) {
     let source = program.clone();
     let operations = super::arithmetic::recognise(&source);
-    let recursive = super::stops::recursive(&source);
     let mut rewrite = Rewrite {
         source: &source,
         program,
-        recursive,
         operations,
-        costs: source
-            .functions()
-            .iter()
-            .map(|f| f.body().map_or(0, |body| cost(&source, body)))
-            .collect(),
-        limits,
-        function_left: 0,
-        total_left: limits.total,
+        inlining,
         inline_depth: 0,
     };
     for at in 0..source.functions().len() {
@@ -68,7 +42,9 @@ pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
         let Some(body) = source.function(id).body() else {
             continue;
         };
-        rewrite.function_left = limits.per_function;
+        if let Some(inlining) = &mut rewrite.inlining {
+            inlining.begin_function();
+        }
         let count = source.params(id).len();
         let locals: Vec<_> = (0..count).map(|at| Atom(Local::at(at))).collect();
         let body = rewrite.body(body, locals, count);
@@ -76,44 +52,11 @@ pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
     }
 }
 
-// Count expressions, bindings, argument slots and arms which copying a body
-// can allocate. Nested expansions pay separately; aliases may cost less than
-// this conservative estimate. This walk does not recurse on the Rust stack.
-fn cost(program: &Program, body: Body) -> usize {
-    let mut pending = vec![body];
-    let mut cost = 0usize;
-    while let Some(body) = pending.pop() {
-        cost = cost.saturating_add(program.bindings(body.bindings).len());
-        // One possible alias tail is manufactured for each copied body.
-        cost = cost.saturating_add(1);
-        for &id in program
-            .bindings(body.bindings)
-            .iter()
-            .chain(std::iter::once(&body.tail))
-        {
-            cost = cost.saturating_add(1);
-            match program.expr(id) {
-                Expr::Con(_, args) | Expr::Call(_, args) => cost = cost.saturating_add(args.len()),
-                Expr::Match(_, arms) => {
-                    cost = cost.saturating_add(arms.len());
-                    pending.extend(program.arms(arms).iter().map(|a| a.body));
-                }
-                Expr::Atom(_) | Expr::Static(..) => {}
-            }
-        }
-    }
-    cost
-}
-
 struct Rewrite<'a> {
     source: &'a Program,
     program: &'a mut Program,
-    recursive: Vec<bool>,
     operations: Vec<Option<super::Operation>>,
-    costs: Vec<usize>,
-    limits: InlineLimits,
-    function_left: usize,
-    total_left: usize,
+    inlining: Option<Inlining>,
     inline_depth: usize,
 }
 struct Scope {
@@ -187,20 +130,12 @@ impl Rewrite<'_> {
         value
     }
     fn callee(&mut self, called: FnId) -> Option<Body> {
-        let cost = self.costs[called.index()];
-        if self.inline_depth >= self.limits.max_depth
-            || cost > self.limits.max_callee
-            || cost > self.function_left
-            || cost > self.total_left
-            || self.recursive[called.index()]
-            || self.operations[called.index()].is_some()
-        {
+        if self.operations[called.index()].is_some() {
             return None;
         }
-        let body = self.source.function(called).body()?;
-        self.function_left -= cost;
-        self.total_left -= cost;
-        Some(body)
+        self.inlining
+            .as_mut()?
+            .callee(self.source, called, self.inline_depth)
     }
 
     fn args(&self, args: Range, locals: &[Atom]) -> Vec<Atom> {

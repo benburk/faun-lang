@@ -184,7 +184,7 @@ fn two_names_may_give_the_same_routine() {
         returns: crate::platform::Returns::Value(Class::Word),
     });
 
-    let facts = crate::barb::recognise(&program);
+    let facts = crate::barb::analyze(&program);
     let machine = lower(&program, &facts, &routines).expect("a representable program");
     let held: Vec<&str> = machine
         .platforms()
@@ -233,7 +233,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         });
         program.set_entry(main);
 
-        let facts = crate::barb::recognise(&program);
+        let facts = crate::barb::analyze(&program);
         lower(&program, &facts, &routines)
     };
 

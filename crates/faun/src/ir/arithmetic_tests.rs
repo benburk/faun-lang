@@ -15,7 +15,7 @@ fn unknown_or_overflowing_bounds_never_choose_a_machine_word() {
             let sum = b.call(add, &[n, n]);
             b.match_(sum, nat, |b, _, _| b.known(nat, zero))
         });
-        let facts = barb::recognise(&source);
+        let facts = barb::analyze(&source);
         let machine = lower(&source, &facts, &crate::platform::Routines::builtin()).unwrap();
         let body = machine.functions()[0].body;
         assert!(machine.walk(body).any(|(op, results)| {
@@ -45,7 +45,7 @@ fn an_unbounded_entry_result_is_not_silently_truncated() {
     source.define(source.entry().unwrap(), |b, _| b.known(nat, value));
     let error = lower(
         &source,
-        &barb::recognise(&source),
+        &barb::analyze(&source),
         &crate::platform::Routines::builtin(),
     )
     .unwrap_err();

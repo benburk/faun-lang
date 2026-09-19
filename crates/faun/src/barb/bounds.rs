@@ -235,9 +235,9 @@ const WIDEN: usize = 8;
 /// settles, so this is the room that takes rather than a guess.
 const ROUNDS: usize = 24;
 
-/// What every local of every function holds, by the level it takes.
+/// Final conservative ranges consumed by lowering.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct Known {
+pub(super) struct Ranges {
     /// What each term answers, by the term.
     pub terms: Vec<Bounds>,
     pub matched: Vec<Bounds>,
@@ -247,12 +247,12 @@ pub(super) struct Known {
     pub answers: Vec<Bounds>,
 }
 
-pub(super) fn walk(program: &Program, operations: &[Option<super::Operation>]) -> Known {
+pub(super) fn analyze(program: &Program, operations: &[Option<super::Operation>]) -> Ranges {
     let count = program.functions().len();
     let entry = program.entry();
     // A parameter nothing has handed anything to yet is a parameter nothing
     // is known of, which is not the same as one anything could be handed.
-    let mut held = Held {
+    let mut held = Propagation {
         params: (0..count)
             .map(|at| {
                 let held = program.params(FnId::at(at)).len();
@@ -291,14 +291,14 @@ pub(super) fn walk(program: &Program, operations: &[Option<super::Operation>]) -
         held.results.fill(Some(Bounds::ANY));
     }
 
-    known(held)
+    finish(held)
 }
 
 /// What the walk worked out, as the tier below reads it.
-fn known(held: Held) -> Known {
+fn finish(held: Propagation) -> Ranges {
     // A term nothing reached is a term nothing knows, and so is a parameter
     // nothing was ever handed.
-    Known {
+    Ranges {
         matched: held
             .matched
             .into_iter()
@@ -331,7 +331,7 @@ const fn anything(held: Option<Bounds>) -> Bounds {
 
 /// What the walk has worked out so far, which is what it goes round again
 /// to add to.
-struct Held {
+struct Propagation {
     params: Vec<Vec<Option<Bounds>>>,
     results: Vec<Option<Bounds>>,
     terms: Vec<Bounds>,
@@ -343,7 +343,7 @@ struct Held {
 fn once(
     program: &Program,
     operations: &[Option<super::Operation>],
-    held: &mut Held,
+    held: &mut Propagation,
     (id, round): (FnId, usize),
 ) -> bool {
     let at = id.index();
@@ -371,7 +371,7 @@ fn once(
     }
 
     let results = held.results.clone();
-    let mut walk = Walk {
+    let mut walk = FunctionWalk {
         program,
         operations,
         results: &results,
@@ -419,7 +419,7 @@ fn settle(held: &mut Option<Bounds>, found: Bounds, round: usize) -> bool {
 }
 
 /// One walk over one definition, with what it hands to what it calls.
-struct Walk<'a> {
+struct FunctionWalk<'a> {
     program: &'a Program,
     operations: &'a [Option<super::Operation>],
     results: &'a [Option<Bounds>],
@@ -432,7 +432,7 @@ struct Walk<'a> {
     calls: Vec<(FnId, Vec<Bounds>)>,
 }
 
-impl Walk<'_> {
+impl FunctionWalk<'_> {
     fn body(&mut self, body: Body) -> Bounds {
         for binding in self.program.bindings(body.bindings).to_vec() {
             let held = self.expr(binding);

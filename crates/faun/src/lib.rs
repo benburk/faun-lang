@@ -39,6 +39,6 @@ pub fn read_with_options(
     let mut program = surface::parse(text, routines)?;
     barb::validate(&program)?;
     barb::optimize(&mut program, options);
-    let facts = barb::recognise(&program);
+    let facts = barb::analyze(&program);
     ir::lower(&program, &facts, routines)
 }

@@ -430,7 +430,7 @@ fn what_a_number_can_be_is_read_off_what_is_done_with_it() {
     // What a definition answers, which is what its callers hold.
     let held = |text: &str, name: &str| {
         let program = parse(text).expect("a program");
-        let facts = recognise(&program);
+        let facts = analyze(&program);
         let at = program
             .functions()
             .iter()
@@ -481,7 +481,7 @@ fn what_a_number_can_be_is_read_off_what_is_done_with_it() {
 fn a_match_says_what_it_took_apart_could_be() {
     let held = |text: &str| {
         let program = parse(text).expect("a program");
-        let facts = recognise(&program);
+        let facts = analyze(&program);
         (program, facts)
     };
 

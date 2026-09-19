@@ -42,6 +42,23 @@ arm  ::= Ctor(x*) -> body         fields bound as the next locals
 x    ::= a parameter, a binding, or a field an arm bound
 ```
 
+## Code map
+
+- `ir.rs`, `builder.rs`: pooled terms, declarations and construction.
+- `validate.rs`, `stops.rs`: structural checks and termination. Frontend typing
+  and well-formed arena references remain preconditions, not proofs supplied here.
+- `arithmetic.rs`: recognize induction equations, without range analysis.
+- `bounds.rs`: interval arithmetic and interprocedural range propagation.
+  `Propagation` is the evolving state; `Ranges` is the conservative final result.
+- `facts.rs`: `analyze` combines recognition and ranges for the final program.
+  Run it after optimization; facts must be recomputed after rewriting.
+- `normalize.rs`: capture-free structural rebuilding; `inline.rs`: expansion
+  eligibility, copy costs and budgets. Structural-only normalization does not
+  construct an inlining plan or compute its recursion/copy-cost tables.
+- `constant.rs`, `evaluate.rs`: compact values and bounded evaluation.
+- `laws.rs`, `fold.rs`, `cleanup.rs`: separate optimizing rewrites.
+- `optimize.rs`: the fixed schedule below; `pretty.rs`: rendering.
+
 ## Optimization passes
 
 `optimize(program, &OptimizeOptions)` runs a small fixed schedule after validation:
@@ -56,6 +73,9 @@ Each stage runs once and can be disabled programmatically. `read_with_options` e
 these controls without bypassing validation or totality checking. Disabling helper
 inlining may reduce range analysis precision and backend representability, not alter
 Barb semantics. The compatibility `normalize` entry point still includes inlining.
+`normalize_with_limits` does structural-only rebuilding when any inline limit is
+zero, without planning expansions. Recognition still runs to protect arithmetic
+definitions; this is not a claim that structural normalization performs no analysis.
 
 `InlineLimits` bounds copied arena entries per callee, per caller and across the whole
 program, plus expansion depth. Large callees are refused before copying; exhausted

@@ -296,7 +296,7 @@ main() -> Nat =
 #[test]
 fn addition_is_recognised_and_its_near_miss_is_not() {
     let program = crate::programs::two_and_two_in_barb();
-    let facts = recognise(&program);
+    let facts = analyze(&program);
     let add = FnId::at(0);
     assert_eq!(program.name(program.function(add).name), "add");
     assert_eq!(facts.operation(add), Some(Operation::Add));
@@ -323,7 +323,7 @@ fn addition_is_recognised_and_its_near_miss_is_not() {
             _ => unreachable!("Nat takes at most one field"),
         })
     });
-    assert_eq!(recognise(&program).operation(wrong), None);
+    assert_eq!(analyze(&program).operation(wrong), None);
 }
 
 /// The surface: the same program as [`crate::two_and_two`], written out.

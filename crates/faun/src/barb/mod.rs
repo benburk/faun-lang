@@ -33,10 +33,11 @@
 //! [`validate`] answers most of it: every call and construction saturated,
 //! every name a term reads bound by something above it, every match with an
 //! arm per constructor in the order the declaration gave them, and every
-//! definition stopping. A program built rather than written is checked the
-//! same way, so none of it rests on a frontend's good manners.
+//! definition stopping. A program built rather than written gets these checks
+//! too. This is not a full type checker or a validator for corrupted arenas:
+//! frontend typing and the pool-construction invariants remain preconditions.
 //!
-//! Two things are left to one, because nothing here can see them:
+//! Two other things must come from outside, because nothing here can see them:
 //!
 //! - **What a name with no body does.** Such a name is something outside
 //!   answers for, and nothing about it can be read — so what is known of
@@ -72,6 +73,7 @@ mod constant;
 mod evaluate;
 mod facts;
 mod fold;
+mod inline;
 mod ir;
 mod laws;
 mod normalize;
@@ -84,13 +86,14 @@ pub use bounds::Bounds;
 pub use builder::Builder;
 pub use constant::{Shape, Value, as_bytes, as_natural, as_number, decode, shape};
 pub use evaluate::FoldLimits;
-pub use facts::{Facts, Operation, recognise};
+pub use facts::{Facts, Operation, analyze};
 pub use fold::{fold, fold_with_limits};
+pub use inline::InlineLimits;
 pub use ir::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, FnId, Function, Local,
     Program, Range, Symbol, Type, TypeId,
 };
-pub use normalize::{InlineLimits, normalize, normalize_with_limits, structural};
+pub use normalize::{normalize, normalize_with_limits, structural};
 pub use optimize::{OptimizeOptions, optimize};
 pub use validate::validate;
 
@@ -98,6 +101,8 @@ pub use validate::validate;
 mod arithmetic_tests;
 #[cfg(test)]
 mod library_tests;
+#[cfg(test)]
+mod normalization_tests;
 #[cfg(test)]
 mod optimization_tests;
 #[cfg(test)]

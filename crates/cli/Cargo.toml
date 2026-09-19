@@ -7,6 +7,8 @@ description = "The Faun compiler as a command"
 [[bin]]
 name = "faun"
 path = "src/main.rs"
+# The command and library share a name; only the library has an API to document.
+doc = false
 
 [dependencies]
 bpaf = "0.9"
