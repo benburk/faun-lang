@@ -6,9 +6,7 @@ use crate::index::index;
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. The IR never reads those characters: names are compared and copied
 // as integers, and the text comes back only to render one.
-index!(
-    ValueId, DataId, FunctionId, PlatformId, RegionId, OpId, Symbol
-);
+index!(ValueId, DataId, FunctionId, PlatformId, RegionId, Symbol);
 
 /// A run in one of the program's pools: the values an argument list holds,
 /// a region's parameters, the classes a signature names, the characters of
@@ -302,6 +300,56 @@ impl Program {
             .map(|(op, results)| (op, &self.operands[results.range()]))
     }
 
+    /// Every instruction in a region and in every region within it.
+    ///
+    /// A region holds regions, so anything asking what a program does has
+    /// to walk down through them. Five places did, each writing the same
+    /// descent past `If` and `Loop` to reach what it came for.
+    ///
+    /// # Panics
+    ///
+    /// Never: what it reads back is what it just read.
+    pub fn every(&self, region: RegionId) -> impl Iterator<Item = &Op> {
+        let mut stack = vec![(region, 0usize)];
+        std::iter::from_fn(move || {
+            loop {
+                let (region, at) = *stack.last()?;
+                let Some(op) = self.ops(region).get(at) else {
+                    stack.pop();
+                    continue;
+                };
+                stack.last_mut().expect("the region just read").1 = at + 1;
+                match *op {
+                    Op::If {
+                        then_region,
+                        else_region,
+                        ..
+                    } => {
+                        stack.push((then_region, 0));
+                        stack.push((else_region, 0));
+                    }
+                    Op::Loop { body, .. } => stack.push((body, 0)),
+                    _ => {}
+                }
+                return Some(op);
+            }
+        })
+    }
+
+    /// Whether anything in the program calls a routine by this name.
+    #[must_use]
+    pub fn reaches(&self, name: &str) -> bool {
+        self.functions
+            .iter()
+            .flat_map(|function| self.every(function.body))
+            .any(|op| match *op {
+                Op::PlatformCall { platform, .. } => {
+                    self.name(self.platform[platform.index()].name) == name
+                }
+                _ => false,
+            })
+    }
+
     #[must_use]
     pub fn region(&self, region: RegionId) -> Region {
         self.regions[region.index()]
@@ -376,7 +424,7 @@ impl Class {
 /// construction; a constant is where a builder could write one that does
 /// not, and this is what it means if it does.
 #[must_use]
-pub const fn wrap(class: Class, value: u64) -> u64 {
+pub(super) const fn wrap(class: Class, value: u64) -> u64 {
     match class {
         Class::Fixed { bits } if bits < 64 => value & ((1 << bits) - 1),
         _ => value,

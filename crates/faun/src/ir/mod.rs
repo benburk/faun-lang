@@ -45,8 +45,8 @@ mod validate;
 pub use builder::Builder;
 pub use lower::lower;
 pub use model::{
-    Binary, Class, DataId, Exit, Function, FunctionId, Offset, Op, OpId, Origin, Platform,
-    PlatformId, Program, Range, Region, RegionId, Relation, Span, Terminator, ValueId, Width, wrap,
+    Binary, Class, DataId, Exit, Function, FunctionId, Offset, Op, Origin, Platform, PlatformId,
+    Program, Range, Region, RegionId, Relation, Span, Terminator, ValueId, Width,
 };
 pub use validate::validate;
 

@@ -66,28 +66,6 @@ impl Spans {
     }
 }
 
-/// Whether the program calls the named platform routine anywhere.
-fn uses_platform(program: &Program, name: &str) -> bool {
-    fn within(program: &Program, region: RegionId, name: &str) -> bool {
-        program.ops(region).iter().any(|op| match *op {
-            Op::PlatformCall { platform, .. } => {
-                program.name(program.platforms()[platform.index()].name) == name
-            }
-            Op::If {
-                then_region,
-                else_region,
-                ..
-            } => within(program, then_region, name) || within(program, else_region, name),
-            Op::Loop { body, .. } => within(program, body, name),
-            _ => false,
-        })
-    }
-    program
-        .functions()
-        .iter()
-        .any(|function| within(program, function.body, name))
-}
-
 #[derive(Clone, Copy)]
 enum Source {
     Const(u64),
@@ -353,13 +331,13 @@ impl Lowering<'_> {
         if self.plans.iter().any(|plan| plan.frame > 0) {
             self.set_pair(FP, FRAMES_TOP);
         }
-        if uses_platform(self.program, "grow") {
+        if self.program.reaches("grow") {
             self.set_pair(HEAP, heap);
         }
         // The hook writes the arguments themselves wherever it is told, and
         // nothing has asked for memory yet, so it is told the heap. What is
         // wanted is the count, which comes back in `A` and `X`.
-        if uses_platform(self.program, "argc") {
+        if self.program.reaches("argc") {
             let [low, high] = heap.to_le_bytes();
             self.set_pair(CSP, CSTACK_TOP - 2);
             self.asm.ldy_imm(0);

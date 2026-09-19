@@ -16,7 +16,7 @@ pub mod bytes;
 
 use std::fmt;
 
-use crate::ir::{Class, Op, Program, RegionId, ValueId};
+use crate::ir::{Class, Op, Program, ValueId};
 
 #[derive(Debug)]
 pub struct Artifact {
@@ -88,9 +88,34 @@ pub trait Target: fmt::Debug {
                 ));
             }
         }
-        for function in program.functions() {
-            holds(program, function.body, name, word)?;
-            reaches(program, function.body, name, self.provides())?;
+        let provides = self.provides();
+        for op in program
+            .functions()
+            .iter()
+            .flat_map(|function| program.every(function.body))
+        {
+            match *op {
+                // A fixed width is taken modulo its own, so only a word can
+                // be handed more than it holds.
+                Op::Constant { class, value } => {
+                    let bits = match class {
+                        Class::Fixed { bits } => bits,
+                        Class::Word | Class::Address => word,
+                    };
+                    if bits < 64 && value >> bits != 0 {
+                        return Err(format!(
+                            "{name} holds {bits} bits, and {value} does not fit in them"
+                        ));
+                    }
+                }
+                Op::PlatformCall { platform, .. } => {
+                    let held = program.name(program.platforms()[platform.index()].name);
+                    if !provides.contains(&held) {
+                        return Err(format!("{name} answers for nothing called `{held}`"));
+                    }
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -120,69 +145,6 @@ impl fmt::Display for dyn Target {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
-}
-
-/// Every routine a region calls, against what this target answers for.
-fn reaches(
-    program: &Program,
-    region: RegionId,
-    name: &str,
-    provides: &[&str],
-) -> Result<(), String> {
-    for op in program.ops(region) {
-        match *op {
-            Op::PlatformCall { platform, .. } => {
-                let held = program.platforms()[platform.index()].name;
-                let held = program.name(held);
-                if !provides.contains(&held) {
-                    return Err(format!("{name} answers for nothing called `{held}`"));
-                }
-            }
-            Op::If {
-                then_region,
-                else_region,
-                ..
-            } => {
-                reaches(program, then_region, name, provides)?;
-                reaches(program, else_region, name, provides)?;
-            }
-            Op::Loop { body, .. } => reaches(program, body, name, provides)?,
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-/// Every constant in a region, against the width of what holds it.
-fn holds(program: &Program, region: RegionId, name: &str, word: u16) -> Result<(), String> {
-    for op in program.ops(region) {
-        match *op {
-            Op::Constant { class, value } => {
-                let bits = match class {
-                    Class::Fixed { bits } => bits,
-                    Class::Word | Class::Address => word,
-                };
-                // A fixed width is taken modulo its own, so only a word can
-                // be handed more than it holds.
-                if bits < 64 && value >> bits != 0 {
-                    return Err(format!(
-                        "{name} holds {bits} bits, and {value} does not fit in them"
-                    ));
-                }
-            }
-            Op::If {
-                then_region,
-                else_region,
-                ..
-            } => {
-                holds(program, then_region, name, word)?;
-                holds(program, else_region, name, word)?;
-            }
-            Op::Loop { body, .. } => holds(program, body, name, word)?,
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -100,7 +100,7 @@ pub(crate) fn lower(program: &Program) -> Code {
     if state.needs_proc_exit() {
         state.imports.push("proc_exit");
     }
-    if state.needs("argc") {
+    if program.reaches("argc") {
         state.imports.push("args_sizes_get");
     }
 
@@ -218,29 +218,6 @@ impl Lowering<'_> {
     /// Anything else has to be said: a status the entry did not work out to
     /// nought, and every exit from somewhere a `return` would not end the
     /// program.
-    /// Whether anything in the program asks for a routine by this name.
-    fn needs(&self, name: &str) -> bool {
-        fn within(state: &Lowering, region: RegionId, name: &str) -> bool {
-            state.program.ops(region).iter().any(|op| match *op {
-                Op::PlatformCall { platform, .. } => {
-                    let held = state.program.platforms()[platform.index()].name;
-                    state.program.name(held) == name
-                }
-                Op::If {
-                    then_region,
-                    else_region,
-                    ..
-                } => within(state, then_region, name) || within(state, else_region, name),
-                Op::Loop { body, .. } => within(state, body, name),
-                _ => false,
-            })
-        }
-        self.program
-            .functions()
-            .iter()
-            .any(|function| within(self, function.body, name))
-    }
-
     fn needs_proc_exit(&self) -> bool {
         let entry = &self.program.functions()[self.entry.index()];
         let terminator = self.program.region(entry.body).terminator;

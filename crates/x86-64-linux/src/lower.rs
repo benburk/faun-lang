@@ -51,28 +51,6 @@ const CLOBBERED: [Reg; 3] = [Reg::Rax, Reg::Rcx, Reg::R11];
 /// counts it among what a call destroys.
 const ARGC: Reg = Reg::Rbx;
 
-/// Whether anything in the program asks for a routine by this name.
-fn uses_platform(program: &Program, name: &str) -> bool {
-    fn within(program: &Program, region: RegionId, name: &str) -> bool {
-        program.ops(region).iter().any(|op| match *op {
-            Op::PlatformCall { platform, .. } => {
-                program.name(program.platforms()[platform.index()].name) == name
-            }
-            Op::If {
-                then_region,
-                else_region,
-                ..
-            } => within(program, then_region, name) || within(program, else_region, name),
-            Op::Loop { body, .. } => within(program, body, name),
-            _ => false,
-        })
-    }
-    program
-        .functions()
-        .iter()
-        .any(|function| within(program, function.body, name))
-}
-
 const TRACKED: [Reg; 9] = [
     Reg::Rax,
     Reg::Rcx,
@@ -141,7 +119,7 @@ fn assemble(
         program,
         entry,
         in_entry: true,
-        counts: uses_platform(program, "argc"),
+        counts: program.reaches("argc"),
         plan: Plan::empty(program),
         asm: Encoder::new(distant),
         framed: framed.to_vec(),
