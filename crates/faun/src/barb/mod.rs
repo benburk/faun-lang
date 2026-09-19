@@ -103,4 +103,6 @@ pub use validate::validate;
 #[cfg(test)]
 mod arithmetic_tests;
 #[cfg(test)]
+mod library_tests;
+#[cfg(test)]
 mod tests;
