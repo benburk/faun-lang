@@ -151,13 +151,6 @@ fn programs_compile_to_the_sizes_recorded_for_them() {
 }
 
 #[test]
-fn every_target_adds_two_and_two() {
-    for target in ALL {
-        assert_eq!(status(target, &programs::two_and_two()), 4, "{target}");
-    }
-}
-
-#[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_prints_hello_world() {
     let (output, _) = run(&X86_64Linux, &programs::hello_world());
@@ -168,78 +161,6 @@ fn the_x86_64_linux_executable_prints_hello_world() {
 fn the_mos6502_image_prints_hello_world() {
     let (output, _) = run(&Mos6502Sim65, &programs::hello_world());
     assert_eq!(output, "Hello, World!\n");
-}
-
-/// The branch that does not reach in one byte, which until now no program
-/// here was long enough to need. Both targets that relax branches lay the
-/// image out again with this one widened, and the answer is what says the
-/// widened branch still lands where it meant to.
-#[test]
-fn every_target_branches_over_an_arm_a_byte_cannot_reach() {
-    for target in ALL {
-        for first in [true, false] {
-            let program = programs::a_branch_over_a_long_arm(40, first);
-            assert_eq!(
-                status(target, &program),
-                40,
-                "{target}, long arm first: {first}"
-            );
-        }
-    }
-}
-
-/// The shapes every target has an instruction for and no program here had
-/// asked of it: both sides of a comparison worked out, a condition read
-/// rather than just made, a routine's argument worked out, and a value
-/// carried through a loop that only an arm reads.
-#[test]
-fn every_target_runs_what_a_constant_cannot_answer() {
-    for target in ALL {
-        assert_eq!(
-            status(target, &programs::compares_two_worked_out_values()),
-            1,
-            "{target}"
-        );
-        assert_eq!(
-            status(target, &programs::branches_on_a_flag_it_read()),
-            7,
-            "{target}"
-        );
-        assert_eq!(
-            run(target, &programs::writes_a_length_it_worked_out()).0,
-            "hi\n",
-            "{target}"
-        );
-        assert_eq!(
-            status(target, &programs::carries_a_total_into_an_arm(3)),
-            3,
-            "{target}"
-        );
-        let ticks = programs::counts_down_before_it_branches(3);
-        assert_eq!(run(target, &ticks).0, "tick\n".repeat(3), "{target}");
-    }
-}
-
-#[test]
-fn every_target_counts_in_a_global() {
-    for target in ALL {
-        assert_eq!(
-            status(target, &programs::counts_in_a_global()),
-            3,
-            "{target}"
-        );
-    }
-}
-
-#[test]
-fn every_target_wraps_a_fixed_width() {
-    for target in ALL {
-        assert_eq!(
-            status(target, &programs::wraps_at_eight_bits()),
-            4,
-            "{target}"
-        );
-    }
 }
 
 #[test]
@@ -263,28 +184,6 @@ fn the_mos6502_image_runs_every_program() {
         status(&Mos6502Sim65, &programs::values_survive_a_call()),
         45
     );
-}
-
-#[test]
-fn every_target_hands_back_what_a_call_would_destroy() {
-    for target in ALL {
-        assert_eq!(
-            status(target, &programs::values_survive_a_call()),
-            45,
-            "{target}"
-        );
-    }
-}
-
-#[test]
-fn every_target_writes_from_the_heap() {
-    for target in ALL {
-        assert_eq!(
-            run(target, &programs::writes_from_the_heap()).0,
-            "hi\n",
-            "{target}"
-        );
-    }
 }
 
 #[test]
@@ -492,23 +391,6 @@ fn every_target_runs_two_and_two_from_barb() {
     }
 }
 
-/// The same program again, written out rather than built, and run.
-#[test]
-fn every_target_runs_two_and_two_from_text() {
-    let machine = read(
-        "type Nat Zero Succ(Nat)
-
-         add(a Zero) -> a
-         add(a Succ(k)) -> Succ(add(a k))
-
-         main!(h) -> exit!(h add(Succ(Succ(Zero)) Succ(Succ(Zero))))",
-    )
-    .expect("a program");
-    for target in ALL {
-        assert_eq!(status(target, &machine), 4, "{target}");
-    }
-}
-
 /// Every example compiles and answers what it says it does, so that one
 /// cannot rot into a program that no longer reads.
 #[test]
@@ -524,161 +406,6 @@ fn every_target_runs_every_example() {
                 "{} on {target}",
                 path.display()
             );
-        }
-    }
-}
-
-/// The one effect there is: a program that leaves with a status it worked
-/// out, through a platform routine it declared and a host it was handed.
-#[test]
-fn every_target_exits_with_what_it_was_told() {
-    let machine = read(
-        "type Nat Zero Succ(Nat)
-
-         main!(h) -> exit!(h Succ(Succ(Succ(Zero))))",
-    )
-    .expect("a program");
-    for target in ALL {
-        assert_eq!(status(target, &machine), 3, "{target}");
-    }
-}
-
-/// However many calls deep it is, a name that leaves does not come back: the
-/// status is the one it was handed, and nothing after the call is reached.
-#[test]
-fn every_target_exits_through_a_name_that_leaves() {
-    let machine = read(
-        "type Nat Zero Succ(Nat)
-
-         die!(h n) -> exit!(h n)
-
-         main!(h) -> die!(h Succ(Succ(Zero)))",
-    )
-    .expect("a program");
-    for target in ALL {
-        assert_eq!(status(target, &machine), 2, "{target}");
-    }
-}
-
-/// A clause that leaves is one the others are not measured against, so a
-/// name with an arm that exits still answers what its other arm answers.
-#[test]
-fn every_target_runs_a_match_with_an_arm_that_leaves() {
-    let machine = read(
-        "type Nat Zero Succ(Nat)
-
-         pick!(h Zero) -> exit!(h Succ(Zero))
-         pick!(h Succ(k)) -> k
-
-         main!(h) ->
-           held = pick!(h Succ(Succ(Zero)))
-           exit!(h Succ(held))",
-    )
-    .expect("a program");
-    for target in ALL {
-        assert_eq!(status(target, &machine), 2, "{target}");
-    }
-
-    // The other way through, which leaves from inside the match.
-    let machine = read(
-        "type Nat Zero Succ(Nat)
-
-         pick!(h Zero) -> exit!(h Succ(Zero))
-         pick!(h Succ(k)) -> k
-
-         main!(h) ->
-           held = pick!(h Zero)
-           exit!(h Succ(held))",
-    )
-    .expect("a program");
-    for target in ALL {
-        assert_eq!(status(target, &machine), 1, "{target}");
-    }
-}
-
-/// A type whose constructors carry nothing is a tag, and matching one asks
-/// which it is. Three of them, so the asking is a run of tests rather than
-/// the single question a number's two constructors answer.
-#[test]
-fn every_target_reads_a_tag() {
-    let ordering = "type Nat Zero Succ(Nat)
-                    type Order Lt Eq Gt
-
-                    rank(Lt) -> Zero
-                    rank(Eq) -> Succ(Zero)
-                    rank(Gt) -> Succ(Succ(Zero))
-
-                    pick(Zero) -> Lt
-                    pick(Succ(k)) -> Gt
-
-                    main!(h) -> exit!(h rank(pick(WHICH)))";
-
-    for (which, answer) in [("Zero", 0), ("Succ(Zero)", 2)] {
-        let machine = read(&ordering.replace("WHICH", which)).expect("a program");
-        for target in ALL {
-            assert_eq!(status(target, &machine), answer, "{which} on {target}");
-        }
-    }
-}
-
-/// A tag is which constructor it is, and a number is what it counts to.
-/// Writing `Succ` before `Zero` moves the tags and must not move either.
-#[test]
-fn every_target_tells_a_tag_from_a_count() {
-    let machine = read(
-        "type Nat Succ(Nat) Zero
-         type Bool True False
-
-         count(False) -> Zero
-         count(True) -> Succ(Zero)
-
-         main!(h) -> exit!(h count(True))",
-    )
-    .expect("a program");
-    for target in ALL {
-        assert_eq!(status(target, &machine), 1, "{target}");
-    }
-}
-
-/// A clause matches as many arguments as it likes, which is what `sub` and
-/// `cmp` want: both take two numbers apart at once. What that compiles to
-/// is a match per column, so the answer is the only thing that says the
-/// rows were narrowed in the right order.
-#[test]
-fn every_target_matches_on_more_than_one_argument() {
-    let arithmetic = "type Nat Zero Succ(Nat)
-                      type Order Lt Eq Gt
-
-                      sub(Zero b) -> Zero
-                      sub(Succ(m) Zero) -> Succ(m)
-                      sub(Succ(m) Succ(n)) -> sub(m n)
-
-                      cmp(Zero Zero) -> Eq
-                      cmp(Zero Succ(n)) -> Lt
-                      cmp(Succ(m) Zero) -> Gt
-                      cmp(Succ(m) Succ(n)) -> cmp(m n)
-
-                      rank(Lt) -> Zero
-                      rank(Eq) -> Succ(Zero)
-                      rank(Gt) -> Succ(Succ(Zero))
-
-                      three(n) -> Succ(Succ(Succ(n)))
-
-                      main!(h) -> exit!(h ANSWER)";
-
-    // Subtraction stops at nought rather than wrapping, which is the whole
-    // of what the second column buys: the arm for `Succ(m) Zero` is the one
-    // that says so.
-    for (answer, want) in [
-        ("sub(three(Zero) Succ(Zero))", 2),
-        ("sub(Succ(Zero) three(Zero))", 0),
-        ("rank(cmp(Succ(Zero) three(Zero)))", 0),
-        ("rank(cmp(three(Zero) three(Zero)))", 1),
-        ("rank(cmp(three(Zero) Succ(Zero)))", 2),
-    ] {
-        let machine = read(&arithmetic.replace("ANSWER", answer)).expect("a program");
-        for target in ALL {
-            assert_eq!(status(target, &machine), want, "{answer} on {target}");
         }
     }
 }
@@ -878,26 +605,24 @@ fn every_target_provides_routines_that_exist() {
     }
 }
 
-/// Every machine answers how many arguments a program was handed, and each
-/// does it its own way: Linux leaves the count on the stack it starts a
-/// program on, WASI reports it through a call, and the simulator has a hook
-/// for it. What a program says is the same on all three.
+/// Every target answers what every program says, and the same as every
+/// other. What a program answers is a fact about the program, so this asks
+/// each machine the same question rather than a different one per machine.
 #[test]
-fn every_target_says_how_many_arguments_it_was_handed() {
-    let machine = read(
-        "type Nat Zero Succ(Nat)
+fn every_target_answers_what_a_program_says() {
+    for (name, program, answer) in programs::running() {
+        for target in ALL {
+            assert_eq!(status(target, &program), answer, "{name} on {target}");
+        }
+    }
+}
 
-         add(a Zero) -> a
-         add(a Succ(k)) -> Succ(add(a k))
-
-         main!(h) ->
-           n = argc!(h)
-           exit!(h add(n n))",
-    )
-    .expect("a program");
-
-    for target in ALL {
-        // Run with nothing, so the program was handed only itself.
-        assert_eq!(status(target, &machine), 2, "{target}");
+/// And the same of what one writes.
+#[test]
+fn every_target_writes_what_a_program_writes() {
+    for (name, program, written) in programs::printing() {
+        for target in ALL {
+            assert_eq!(run(target, &program).0, written, "{name} on {target}");
+        }
     }
 }
