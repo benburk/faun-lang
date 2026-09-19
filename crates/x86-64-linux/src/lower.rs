@@ -838,7 +838,7 @@ mod tests {
 
     #[test]
     fn hello_world_uses_the_short_encodings() {
-        let code = lower(&faun::hello_world());
+        let code = lower(&faun::programs::hello_world());
         #[rustfmt::skip]
         let expected: &[u8] = &[
             0x6A, 0x01,                   // push 1
@@ -864,7 +864,7 @@ mod tests {
     /// hello world at the size it is.
     #[test]
     fn constants_never_reach_the_stack() {
-        let program = faun::hello_world();
+        let program = faun::programs::hello_world();
         let main = &program.functions()[program.entry().index()];
         assert_eq!(Plan::new(&program, main).frame, 0);
     }

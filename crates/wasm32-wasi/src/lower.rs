@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn hello_world_needs_no_exit_call() {
-        let code = lower(&faun::hello_world());
+        let code = lower(&faun::programs::hello_world());
         assert_eq!(code.imports, ["fd_write"], "no proc_exit");
         assert_eq!(code.bodies[0].locals, 0, "constants need no locals");
 
@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn the_vector_points_at_the_message() {
-        let code = lower(&faun::hello_world());
+        let code = lower(&faun::programs::hello_world());
         assert_eq!(code.data[0].offset, IOVECS);
         // Base 16 is the first byte past the vector itself, length 14.
         assert_eq!(code.data[0].bytes, [16, 0, 0, 0, 14, 0, 0, 0]);

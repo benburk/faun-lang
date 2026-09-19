@@ -7,7 +7,8 @@ use std::process::Command;
 use std::sync::{Mutex, PoisonError};
 
 use faun::ir::Class::Word;
-use faun::ir::{Binary, Builder, Class, Offset, Program, Relation, Width};
+use faun::ir::{Class, Program};
+use faun::programs;
 use faun::targets::Target;
 
 /// Read against what a compiler knows, since nothing here is about a
@@ -48,52 +49,64 @@ fn corpus() -> Vec<(String, Program, [usize; 3])> {
 )]
 fn built() -> Vec<(&'static str, Program, [usize; 3])> {
     vec![
-        ("empty", empty(), [127, 36, 30]),
+        ("empty", programs::empty(), [127, 36, 30]),
         (
             "exit zero",
             read(EXIT_ZERO).expect("a program"),
             [127, 36, 29],
         ),
-        ("two and two", two_and_two(), [136, 105, 45]),
-        ("hello world", faun::hello_world(), [158, 141, 63]),
-        ("a call", calls_a_function(), [160, 125, 81]),
-        ("recursion", recurses(), [245, 159, 232]),
+        ("two and two", programs::two_and_two(), [136, 105, 45]),
+        ("hello world", programs::hello_world(), [158, 141, 63]),
+        ("a call", programs::calls_a_function(), [160, 125, 81]),
+        ("recursion", programs::recurses(), [245, 159, 232]),
         (
             "values across a call",
-            values_survive_a_call(),
+            programs::values_survive_a_call(),
             [267, 204, 390],
         ),
-        ("the heap", uses_the_heap(), [193, 137, 158]),
-        ("a byte", stores_a_byte(), [241, 160, 215]),
-        ("a global", counts_in_a_global(), [256, 158, 144]),
-        ("writing the heap", writes_from_the_heap(), [206, 163, 177]),
+        ("the heap", programs::uses_the_heap(), [193, 137, 158]),
+        ("a byte", programs::stores_a_byte(), [241, 160, 215]),
+        ("a global", programs::counts_in_a_global(), [256, 158, 144]),
+        (
+            "writing the heap",
+            programs::writes_from_the_heap(),
+            [206, 163, 177],
+        ),
         (
             "a computed length",
-            writes_a_length_it_worked_out(),
+            programs::writes_a_length_it_worked_out(),
             [225, 170, 190],
         ),
-        ("eight bits", wraps_at_eight_bits(), [142, 118, 63]),
-        ("less", less(7, 9), [143, 105, 63]),
+        (
+            "eight bits",
+            programs::wraps_at_eight_bits(),
+            [142, 118, 63],
+        ),
+        ("less", programs::less(7, 9), [143, 105, 63]),
         (
             "two worked out",
-            compares_two_worked_out_values(),
+            programs::compares_two_worked_out_values(),
             [170, 119, 89],
         ),
-        ("a flag", branches_on_a_flag_it_read(), [257, 135, 119]),
-        ("a countdown", countdown(3), [217, 173, 97]),
+        (
+            "a flag",
+            programs::branches_on_a_flag_it_read(),
+            [257, 135, 119],
+        ),
+        ("a countdown", programs::countdown(3), [217, 173, 97]),
         (
             "a carried total",
-            carries_a_total_into_an_arm(3),
+            programs::carries_a_total_into_an_arm(3),
             [281, 156, 103],
         ),
         (
             "a step first",
-            counts_down_before_it_branches(3),
+            programs::counts_down_before_it_branches(3),
             [230, 172, 99],
         ),
         (
             "a long arm",
-            a_branch_over_a_long_arm(40, true),
+            programs::a_branch_over_a_long_arm(40, true),
             [332, 401, 1008],
         ),
     ]
@@ -140,20 +153,20 @@ fn programs_compile_to_the_sizes_recorded_for_them() {
 #[test]
 fn every_target_adds_two_and_two() {
     for target in ALL {
-        assert_eq!(status(target, &two_and_two()), 4, "{target}");
+        assert_eq!(status(target, &programs::two_and_two()), 4, "{target}");
     }
 }
 
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_prints_hello_world() {
-    let (output, _) = run(&X86_64Linux, &faun::hello_world());
+    let (output, _) = run(&X86_64Linux, &programs::hello_world());
     assert_eq!(output, "Hello, World!\n");
 }
 
 #[test]
 fn the_mos6502_image_prints_hello_world() {
-    let (output, _) = run(&Mos6502Sim65, &faun::hello_world());
+    let (output, _) = run(&Mos6502Sim65, &programs::hello_world());
     assert_eq!(output, "Hello, World!\n");
 }
 
@@ -165,7 +178,7 @@ fn the_mos6502_image_prints_hello_world() {
 fn every_target_branches_over_an_arm_a_byte_cannot_reach() {
     for target in ALL {
         for first in [true, false] {
-            let program = a_branch_over_a_long_arm(40, first);
+            let program = programs::a_branch_over_a_long_arm(40, first);
             assert_eq!(
                 status(target, &program),
                 40,
@@ -183,22 +196,26 @@ fn every_target_branches_over_an_arm_a_byte_cannot_reach() {
 fn every_target_runs_what_a_constant_cannot_answer() {
     for target in ALL {
         assert_eq!(
-            status(target, &compares_two_worked_out_values()),
+            status(target, &programs::compares_two_worked_out_values()),
             1,
             "{target}"
         );
-        assert_eq!(status(target, &branches_on_a_flag_it_read()), 7, "{target}");
         assert_eq!(
-            run(target, &writes_a_length_it_worked_out()).0,
+            status(target, &programs::branches_on_a_flag_it_read()),
+            7,
+            "{target}"
+        );
+        assert_eq!(
+            run(target, &programs::writes_a_length_it_worked_out()).0,
             "hi\n",
             "{target}"
         );
         assert_eq!(
-            status(target, &carries_a_total_into_an_arm(3)),
+            status(target, &programs::carries_a_total_into_an_arm(3)),
             3,
             "{target}"
         );
-        let ticks = counts_down_before_it_branches(3);
+        let ticks = programs::counts_down_before_it_branches(3);
         assert_eq!(run(target, &ticks).0, "tick\n".repeat(3), "{target}");
     }
 }
@@ -206,48 +223,73 @@ fn every_target_runs_what_a_constant_cannot_answer() {
 #[test]
 fn every_target_counts_in_a_global() {
     for target in ALL {
-        assert_eq!(status(target, &counts_in_a_global()), 3, "{target}");
+        assert_eq!(
+            status(target, &programs::counts_in_a_global()),
+            3,
+            "{target}"
+        );
     }
 }
 
 #[test]
 fn every_target_wraps_a_fixed_width() {
     for target in ALL {
-        assert_eq!(status(target, &wraps_at_eight_bits()), 4, "{target}");
+        assert_eq!(
+            status(target, &programs::wraps_at_eight_bits()),
+            4,
+            "{target}"
+        );
     }
 }
 
 #[test]
 fn the_mos6502_image_runs_every_program() {
-    assert_eq!(status(&Mos6502Sim65, &empty()), 0);
-    assert_eq!(status(&Mos6502Sim65, &less(7, 9)), 1);
-    assert_eq!(status(&Mos6502Sim65, &less(9, 7)), 0);
-    assert_eq!(status(&Mos6502Sim65, &calls_a_function()), 42);
-    assert_eq!(status(&Mos6502Sim65, &recurses()), 6);
-    assert_eq!(run(&Mos6502Sim65, &countdown(3)).0, "tick\n".repeat(3));
-    assert_eq!(status(&Mos6502Sim65, &uses_the_heap()), 42);
-    assert_eq!(status(&Mos6502Sim65, &stores_a_byte()), 8);
-    assert_eq!(run(&Mos6502Sim65, &writes_from_the_heap()).0, "hi\n");
-    assert_eq!(status(&Mos6502Sim65, &values_survive_a_call()), 45);
+    assert_eq!(status(&Mos6502Sim65, &programs::empty()), 0);
+    assert_eq!(status(&Mos6502Sim65, &programs::less(7, 9)), 1);
+    assert_eq!(status(&Mos6502Sim65, &programs::less(9, 7)), 0);
+    assert_eq!(status(&Mos6502Sim65, &programs::calls_a_function()), 42);
+    assert_eq!(status(&Mos6502Sim65, &programs::recurses()), 6);
+    assert_eq!(
+        run(&Mos6502Sim65, &programs::countdown(3)).0,
+        "tick\n".repeat(3)
+    );
+    assert_eq!(status(&Mos6502Sim65, &programs::uses_the_heap()), 42);
+    assert_eq!(status(&Mos6502Sim65, &programs::stores_a_byte()), 8);
+    assert_eq!(
+        run(&Mos6502Sim65, &programs::writes_from_the_heap()).0,
+        "hi\n"
+    );
+    assert_eq!(
+        status(&Mos6502Sim65, &programs::values_survive_a_call()),
+        45
+    );
 }
 
 #[test]
 fn every_target_hands_back_what_a_call_would_destroy() {
     for target in ALL {
-        assert_eq!(status(target, &values_survive_a_call()), 45, "{target}");
+        assert_eq!(
+            status(target, &programs::values_survive_a_call()),
+            45,
+            "{target}"
+        );
     }
 }
 
 #[test]
 fn every_target_writes_from_the_heap() {
     for target in ALL {
-        assert_eq!(run(target, &writes_from_the_heap()).0, "hi\n", "{target}");
+        assert_eq!(
+            run(target, &programs::writes_from_the_heap()).0,
+            "hi\n",
+            "{target}"
+        );
     }
 }
 
 #[test]
 fn the_wasm32_wasi_module_prints_hello_world() {
-    let (output, _) = run(&Wasm32Wasi, &faun::hello_world());
+    let (output, _) = run(&Wasm32Wasi, &programs::hello_world());
     assert_eq!(output, "Hello, World!\n");
 }
 
@@ -255,7 +297,7 @@ fn the_wasm32_wasi_module_prints_hello_world() {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_smallest_x86_64_linux_executable_is_headers_and_an_exit() {
     // 120 bytes of header, then `push 60; pop rax; xor edi, edi; syscall`.
-    let (output, _) = run(&X86_64Linux, &empty());
+    let (output, _) = run(&X86_64Linux, &programs::empty());
     assert_eq!(output, "");
 }
 
@@ -263,7 +305,7 @@ fn the_smallest_x86_64_linux_executable_is_headers_and_an_exit() {
 fn the_smallest_wasm32_wasi_module_imports_nothing() {
     // Type, function, export, code. No import section at all, no memory,
     // no data.
-    let (output, _) = run(&Wasm32Wasi, &empty());
+    let (output, _) = run(&Wasm32Wasi, &programs::empty());
     assert_eq!(output, "");
 
     // A program that leaves with nought says so, and compiles to the same
@@ -271,7 +313,7 @@ fn the_smallest_wasm32_wasi_module_imports_nothing() {
     let written = read(EXIT_ZERO).expect("a program");
     assert_eq!(
         Wasm32Wasi.emit(&written)[0].bytes,
-        Wasm32Wasi.emit(&empty())[0].bytes
+        Wasm32Wasi.emit(&programs::empty())[0].bytes
     );
 }
 
@@ -291,48 +333,48 @@ fn the_wasm32_wasi_module_imports_proc_exit_where_it_has_to() {
     assert_eq!(status(&Wasm32Wasi, &leaves), 0);
 
     // Inside the entry, where one arm returns and the other has to call.
-    assert_eq!(status(&Wasm32Wasi, &exits_from_a_branch(0)), 0);
-    assert_eq!(status(&Wasm32Wasi, &exits_from_a_branch(1)), 5);
+    assert_eq!(status(&Wasm32Wasi, &programs::exits_from_a_branch(0)), 0);
+    assert_eq!(status(&Wasm32Wasi, &programs::exits_from_a_branch(1)), 5);
 }
 
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_uses_the_heap() {
-    assert_eq!(status(&X86_64Linux, &uses_the_heap()), 42);
-    assert_eq!(status(&X86_64Linux, &stores_a_byte()), 8);
+    assert_eq!(status(&X86_64Linux, &programs::uses_the_heap()), 42);
+    assert_eq!(status(&X86_64Linux, &programs::stores_a_byte()), 8);
 }
 
 #[test]
 fn the_wasm32_wasi_module_uses_the_heap() {
-    assert_eq!(status(&Wasm32Wasi, &uses_the_heap()), 42);
-    assert_eq!(status(&Wasm32Wasi, &stores_a_byte()), 8);
+    assert_eq!(status(&Wasm32Wasi, &programs::uses_the_heap()), 42);
+    assert_eq!(status(&Wasm32Wasi, &programs::stores_a_byte()), 8);
 }
 
 /// A call and a return, on each target's own calling convention.
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_calls_a_function() {
-    assert_eq!(status(&X86_64Linux, &calls_a_function()), 42);
-    assert_eq!(status(&X86_64Linux, &recurses()), 6);
+    assert_eq!(status(&X86_64Linux, &programs::calls_a_function()), 42);
+    assert_eq!(status(&X86_64Linux, &programs::recurses()), 6);
 }
 
 #[test]
 fn the_wasm32_wasi_module_calls_a_function() {
-    assert_eq!(status(&Wasm32Wasi, &calls_a_function()), 42);
-    assert_eq!(status(&Wasm32Wasi, &recurses()), 6);
+    assert_eq!(status(&Wasm32Wasi, &programs::calls_a_function()), 42);
+    assert_eq!(status(&Wasm32Wasi, &programs::recurses()), 6);
 }
 
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_compares() {
-    assert_eq!(status(&X86_64Linux, &less(7, 9)), 1);
-    assert_eq!(status(&X86_64Linux, &less(9, 7)), 0);
+    assert_eq!(status(&X86_64Linux, &programs::less(7, 9)), 1);
+    assert_eq!(status(&X86_64Linux, &programs::less(9, 7)), 0);
 }
 
 #[test]
 fn the_wasm32_wasi_module_compares() {
-    assert_eq!(status(&Wasm32Wasi, &less(7, 9)), 1);
-    assert_eq!(status(&Wasm32Wasi, &less(9, 7)), 0);
+    assert_eq!(status(&Wasm32Wasi, &programs::less(7, 9)), 1);
+    assert_eq!(status(&Wasm32Wasi, &programs::less(9, 7)), 0);
 }
 
 /// The IR's loop has to survive into both targets, which have nothing in
@@ -340,501 +382,20 @@ fn the_wasm32_wasi_module_compares() {
 #[test]
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn the_x86_64_linux_executable_counts_down() {
-    assert_eq!(run(&X86_64Linux, &countdown(3)).0, "tick\n".repeat(3));
-    assert_eq!(run(&X86_64Linux, &countdown(0)).0, "");
+    assert_eq!(
+        run(&X86_64Linux, &programs::countdown(3)).0,
+        "tick\n".repeat(3)
+    );
+    assert_eq!(run(&X86_64Linux, &programs::countdown(0)).0, "");
 }
 
 #[test]
 fn the_wasm32_wasi_module_counts_down() {
-    assert_eq!(run(&Wasm32Wasi, &countdown(3)).0, "tick\n".repeat(3));
-    assert_eq!(run(&Wasm32Wasi, &countdown(0)).0, "");
-}
-
-/// Two exits from one entry, one of them with nought. Whatever a target
-/// makes of the second, the first has to leave with the status it says.
-fn exits_from_a_branch(taken: u64) -> Program {
-    let (mut program, main) = Program::new("main");
-    let exit = program.platform("exit");
-
-    program.define(main, |b, _| {
-        let value = b.constant(Word, taken);
-        let zero = b.constant(Word, 0);
-        let nought = b.compare(Relation::Equal, value, zero);
-        b.if_(
-            nought,
-            &[],
-            // Neither arm comes back, so neither reaches the join.
-            |b| {
-                let status = b.constant(Word, 0);
-                b.platform_call(exit, &[status]);
-                faun::ir::Terminator::UNREACHABLE
-            },
-            |b| {
-                let status = b.constant(Word, 5);
-                b.platform_call(exit, &[status]);
-                faun::ir::Terminator::UNREACHABLE
-            },
-        );
-        let status = b.constant(Word, 0);
-        b.ret(&[status])
-    });
-    program
-}
-
-/// An arm longer than a byte of displacement reaches over, which is the one
-/// thing that makes a layout take more than a guess and a confirmation.
-/// Which arm is long decides which branch cannot reach: the one jumping
-/// over it to the join, or the one testing the condition.
-///
-/// The long arm is the arm that runs, so the answer is `steps` either way
-/// and a branch landing anywhere else answers something else.
-fn a_branch_over_a_long_arm(steps: u64, first: bool) -> Program {
-    fn counts(b: &mut Builder, steps: u64) -> faun::ir::Terminator {
-        let mut total = b.constant(Word, 0);
-        for _ in 0..steps {
-            let one = b.constant(Word, 1);
-            total = b.binary(Binary::Add, total, one);
-        }
-        b.yield_(&[total])
-    }
-    fn nothing(b: &mut Builder) -> faun::ir::Terminator {
-        let held = b.constant(Word, 0);
-        b.yield_(&[held])
-    }
-
-    let (mut program, main) = Program::new("main");
-    program.define(main, |b, _| {
-        // Worked out rather than written, so no target folds the branch away
-        // and lays the arms out as one run.
-        let zero = b.constant(Word, 0);
-        let held = b.constant(Word, u64::from(!first));
-        let taken = b.compare(Relation::Equal, zero, held);
-        let answer = if first {
-            b.if_(taken, &[Word], |b| counts(b, steps), nothing)
-        } else {
-            b.if_(taken, &[Word], nothing, |b| counts(b, steps))
-        };
-        b.ret(&answer)
-    });
-    program
-}
-
-/// Both sides worked out, where every comparison here has had one side
-/// written. A target with one accumulator has to hold the left somewhere
-/// while it reads the right, and that is a different instruction.
-fn compares_two_worked_out_values() -> Program {
-    let (mut program, main) = Program::new("main");
-    program.define(main, |b, _| {
-        let one = b.constant(Word, 1);
-        let two = b.binary(Binary::Add, one, one);
-        let three = b.binary(Binary::Add, two, one);
-        let answer = b.compare(Relation::Less, two, three);
-        b.ret(&[answer])
-    });
-    program
-}
-
-/// A condition that is not the comparison just made: a flag read back out
-/// of storage, which a target has to test for itself.
-fn branches_on_a_flag_it_read() -> Program {
-    let (mut program, main) = Program::new("main");
-    let flag = program.global(&[1, 0, 0, 0, 0, 0, 0, 0]);
-
-    program.define(main, |b, _| {
-        let at = b.address_of(flag);
-        let held = b.load(Width::Word, at, Offset::Words(0));
-        let answer = b.if_(
-            held,
-            &[Word],
-            |b| {
-                let held = b.constant(Word, 7);
-                b.yield_(&[held])
-            },
-            |b| {
-                let held = b.constant(Word, 9);
-                b.yield_(&[held])
-            },
-        );
-        b.ret(&answer)
-    });
-    program
-}
-
-/// "hi\n" again, with the length worked out as well as the bytes, so
-/// neither of the routine's arguments is a constant a target can lay down.
-fn writes_a_length_it_worked_out() -> Program {
-    let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow");
-    let write = program.platform("write");
-
-    program.define(main, |b, _| {
-        let size = b.constant(Word, 4096);
-        let page = b.platform_call(grow, &[size])[0];
-        for (index, byte) in [b'h', b'i', b'\n'].into_iter().enumerate() {
-            let value = b.constant(Word, u64::from(byte));
-            let offset = Offset::Bytes(i32::try_from(index).expect("a short greeting"));
-            b.store(Width::Byte, page, offset, value);
-        }
-
-        let one = b.constant(Word, 1);
-        let two = b.constant(Word, 2);
-        let length = b.binary(Binary::Add, one, two);
-        b.platform_call(write, &[page, length]);
-        let status = b.constant(Word, 0);
-        b.ret(&[status])
-    });
-    program
-}
-
-/// A loop carrying a total that nothing in the body itself reads: both the
-/// arm that leaves with it and the arm that adds to it are inside the `if`,
-/// so whether it is still wanted is a question about the arms.
-fn carries_a_total_into_an_arm(times: u64) -> Program {
-    let (mut program, main) = Program::new("main");
-    program.define(main, |b, _| {
-        let start = b.constant(Word, times);
-        let total = b.constant(Word, 0);
-        let answer = b.loop_(&[start, total], &[Word], |b, params| {
-            let (n, total) = (params[0], params[1]);
-            let zero = b.constant(Word, 0);
-            let done = b.compare(Relation::Equal, n, zero);
-            b.if_(
-                done,
-                &[],
-                |b| b.break_(&[total]),
-                |b| {
-                    let one = b.constant(Word, 1);
-                    let next = b.binary(Binary::Sub, n, one);
-                    let more = b.binary(Binary::Add, total, one);
-                    b.continue_(&[next, more])
-                },
-            );
-            faun::ir::Terminator::UNREACHABLE
-        });
-        b.ret(&answer)
-    });
-    program
-}
-
-/// The countdown again, with the step worked out in the body rather than in
-/// the arm that goes round. Nothing in the body reads it -- the `if` sits
-/// between the step and the `continue` carrying it -- so whether the step
-/// may be left until last is a question about what the arms read.
-fn counts_down_before_it_branches(times: u64) -> Program {
-    let (mut program, main) = Program::new("main");
-    let tick = program.intern(b"tick\n".as_slice());
-    let write = program.platform("write");
-
-    program.define(main, |b, _| {
-        let start = b.constant(Word, times);
-        b.loop_(&[start], &[], |b, params| {
-            let n = params[0];
-            let one = b.constant(Word, 1);
-            let next = b.binary(Binary::Sub, n, one);
-            let zero = b.constant(Word, 0);
-            let done = b.compare(Relation::Equal, n, zero);
-            b.if_(
-                done,
-                &[],
-                |b| b.break_(&[]),
-                |b| {
-                    let buf = b.address_of(tick);
-                    let len = b.constant(Word, 5);
-                    b.platform_call(write, &[buf, len]);
-                    b.yield_(&[])
-                },
-            );
-            b.continue_(&[next])
-        });
-
-        let status = b.constant(Word, 0);
-        b.ret(&[status])
-    });
-    program
-}
-
-/// Nothing at all. A target's floor: headers, and whatever it takes to stop.
-fn empty() -> Program {
-    let (mut program, main) = Program::new("main");
-    program.define(main, |b, _| {
-        let status = b.constant(Word, 0);
-        b.ret(&[status])
-    });
-    program
-}
-
-fn two_and_two() -> Program {
-    let (mut program, main) = Program::new("main");
-    program.define(main, |b, _| {
-        let two = b.constant(Word, 2);
-        let sum = b.binary(Binary::Add, two, two);
-        b.ret(&[sum])
-    });
-    program
-}
-
-/// `main` calls `double(21)` and exits with it. The point is the call, so
-/// the answer is the exit status rather than anything printed.
-fn calls_a_function() -> Program {
-    let (mut program, main) = Program::new("main");
-    let double = program.declare("double", &[Word], &[Word]);
-    program.define(double, |b, params| {
-        let n = params[0];
-        let doubled = b.binary(Binary::Add, n, n);
-        b.ret(&[doubled])
-    });
-
-    program.define(main, |b, _| {
-        let twenty_one = b.constant(Word, 21);
-        let answer = b.call(double, &[twenty_one]);
-        b.ret(&answer)
-    });
-    program
-}
-
-/// `sum(n)` recurses, so the call graph has a cycle and the callee needs a
-/// frame that survives its own recursive call. 1 + 2 + 3 = 6.
-fn recurses() -> Program {
-    let (mut program, main) = Program::new("main");
-    let sum = program.declare("sum", &[Word], &[Word]);
-    program.define(sum, |b, params| {
-        let n = params[0];
-        let zero = b.constant(Word, 0);
-        let done = b.compare(Relation::Equal, n, zero);
-        let answer = b.if_(
-            done,
-            &[Word],
-            |b| {
-                let zero = b.constant(Word, 0);
-                b.yield_(&[zero])
-            },
-            |b| {
-                let one = b.constant(Word, 1);
-                let less = b.binary(Binary::Sub, n, one);
-                let rest = b.call(sum, &[less]);
-                let total = b.binary(Binary::Add, n, rest[0]);
-                b.yield_(&[total])
-            },
-        );
-        b.ret(&answer)
-    });
-
-    program.define(main, |b, _| {
-        let three = b.constant(Word, 3);
-        let answer = b.call(sum, &[three]);
-        b.ret(&answer)
-    });
-    program
-}
-
-/// Ask the platform for a page, write two words into it, read one back.
-/// Exits with what it read, so nothing but real memory can make it pass.
-fn uses_the_heap() -> Program {
-    let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow");
-
-    program.define(main, |b, _| {
-        let size = b.constant(Word, 4096);
-        let page = b.platform_call(grow, &[size])[0];
-
-        let answer = b.constant(Word, 42);
-        let decoy = b.constant(Word, 7);
-        b.store(Width::Word, page, Offset::Words(0), decoy);
-        b.store(Width::Word, page, Offset::Words(1), answer);
-
-        let answer = b.load(Width::Word, page, Offset::Words(1));
-        b.ret(&[answer])
-    });
-    program
-}
-
-/// Several values still wanted after a call, and a callee greedy enough to
-/// take every pair it can. Anything the caller fails to hand back shows up
-/// in the answer.
-///
-/// `clobber(x)` is `x + 2` through three intermediates; `outer(10, 3)` is
-/// `13 + 7 + 12 + 10 + 3`.
-fn values_survive_a_call() -> Program {
-    let (mut program, main) = Program::new("main");
-    let clobber = program.declare("clobber", &[Word], &[Word]);
-    let outer = program.declare("outer", &[Word, Word], &[Word]);
-
-    program.define(clobber, |b, params| {
-        let x = params[0];
-        let one = b.constant(Word, 1);
-        let two = b.constant(Word, 2);
-        let three = b.constant(Word, 3);
-        let up = b.binary(Binary::Add, x, one);
-        let down = b.binary(Binary::Sub, up, two);
-        let back = b.binary(Binary::Add, down, three);
-        b.ret(&[back])
-    });
-
-    program.define(outer, |b, params| {
-        let (a, second) = (params[0], params[1]);
-        let p = b.binary(Binary::Add, a, second);
-        let q = b.binary(Binary::Sub, a, second);
-        let r = b.call(clobber, &[a])[0];
-        // Every one of these was computed before the call.
-        let total = b.binary(Binary::Add, p, q);
-        let total = b.binary(Binary::Add, total, r);
-        let total = b.binary(Binary::Add, total, a);
-        let total = b.binary(Binary::Add, total, second);
-        b.ret(&[total])
-    });
-
-    program.define(main, |b, _| {
-        let ten = b.constant(Word, 10);
-        let three = b.constant(Word, 3);
-        let answer = b.call(outer, &[ten, three]);
-        b.ret(&answer)
-    });
-    program
-}
-
-/// Writes through an address the program worked out for itself, which is
-/// the case a target cannot answer with a block of constants.
-fn writes_from_the_heap() -> Program {
-    let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow");
-    let write = program.platform("write");
-
-    program.define(main, |b, _| {
-        let size = b.constant(Word, 4096);
-        let page = b.platform_call(grow, &[size])[0];
-
-        // "hi\n", a byte at a time, since the bytes are computed too.
-        for (index, byte) in [b'h', b'i', b'\n'].into_iter().enumerate() {
-            let value = b.constant(Word, u64::from(byte));
-            let offset = Offset::Bytes(i32::try_from(index).expect("a short greeting"));
-            b.store(Width::Byte, page, offset, value);
-        }
-
-        let length = b.constant(Word, 3);
-        b.platform_call(write, &[page, length]);
-        let status = b.constant(Word, 0);
-        b.ret(&[status])
-    });
-    program
-}
-
-/// A byte store must not disturb its neighbour, and a byte above 127 must
-/// come back zero-extended rather than as a very large word. Answers
-/// `(first == 200) + second`, so both have to hold to reach 8.
-fn stores_a_byte() -> Program {
-    let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow");
-
-    program.define(main, |b, _| {
-        let size = b.constant(Word, 4096);
-        let page = b.platform_call(grow, &[size])[0];
-
-        let high = b.constant(Word, 200);
-        b.store(Width::Byte, page, Offset::Bytes(0), high);
-        let neighbour = b.constant(Word, 7);
-        b.store(Width::Byte, page, Offset::Bytes(1), neighbour);
-
-        let first = b.load(Width::Byte, page, Offset::Bytes(0));
-        let second = b.load(Width::Byte, page, Offset::Bytes(1));
-        let expected = b.constant(Word, 200);
-        let intact = b.compare(Relation::Equal, first, expected);
-        let answer = b.binary(Binary::Add, intact, second);
-        b.ret(&[answer])
-    });
-    program
-}
-
-/// A counter in a writable datum, bumped by a function called three times.
-/// Nothing but storage outliving a call can answer 3.
-fn counts_in_a_global() -> Program {
-    let (mut program, main) = Program::new("main");
-    let counter = program.global(&[0; 8]);
-
-    let bump = program.declare("bump", &[], &[]);
-    program.define(bump, |b, _| {
-        let at = b.address_of(counter);
-        let seen = b.load(Width::Word, at, Offset::Words(0));
-        let one = b.constant(Word, 1);
-        let next = b.binary(Binary::Add, seen, one);
-        b.store(Width::Word, at, Offset::Words(0), next);
-        b.ret(&[])
-    });
-
-    program.define(main, |b, _| {
-        b.call(bump, &[]);
-        b.call(bump, &[]);
-        b.call(bump, &[]);
-        let at = b.address_of(counter);
-        let answer = b.load(Width::Word, at, Offset::Words(0));
-        b.ret(&[answer])
-    });
-    program
-}
-
-/// `Fixed { bits: 8 }` is arithmetic in Z/256, so 250 + 10 is 4 on every
-/// target: free on a machine with eight-bit registers, a mask on the two
-/// that are wider.
-fn wraps_at_eight_bits() -> Program {
-    let byte = Class::Fixed { bits: 8 };
-    let (mut program, main) = Program::new("main");
-    program.define(main, |b, _| {
-        let left = b.constant(byte, 250);
-        let right = b.constant(byte, 10);
-        let sum = b.binary(Binary::Add, left, right);
-        // The entry returns a word, and this is where the width changes.
-        let answer = b.convert(Word, sum);
-        b.ret(&[answer])
-    });
-    program
-}
-
-/// `Relation::Less` is unsigned, and both targets carry an arm for it that
-/// nothing else exercises.
-fn less(left: u64, right: u64) -> Program {
-    let (mut program, main) = Program::new("main");
-    program.define(main, |b, _| {
-        let left = b.constant(Word, left);
-        let right = b.constant(Word, right);
-        let answer = b.compare(Relation::Less, left, right);
-        b.ret(&[answer])
-    });
-    program
-}
-
-/// `while n != 0 { print "tick"; n -= 1 }`, written the way the IR has it:
-/// a loop carrying `n`, and an `if` that either breaks or goes round again.
-fn countdown(times: u64) -> Program {
-    let (mut program, main) = Program::new("main");
-    let tick = program.intern(b"tick\n".as_slice());
-    let write = program.platform("write");
-
-    program.define(main, |b, _| {
-        let start = b.constant(Word, times);
-        b.loop_(&[start], &[], |b, params| {
-            let n = params[0];
-            let zero = b.constant(Word, 0);
-            let done = b.compare(Relation::Equal, n, zero);
-            b.if_(
-                done,
-                &[],
-                |b| b.break_(&[]),
-                |b| {
-                    let buf = b.address_of(tick);
-                    let len = b.constant(Word, 5);
-                    b.platform_call(write, &[buf, len]);
-                    let one = b.constant(Word, 1);
-                    let next = b.binary(Binary::Sub, n, one);
-                    b.continue_(&[next])
-                },
-            );
-            faun::ir::Terminator::UNREACHABLE
-        });
-
-        let status = b.constant(Word, 0);
-        b.ret(&[status])
-    });
-
-    program
+    assert_eq!(
+        run(&Wasm32Wasi, &programs::countdown(3)).0,
+        "tick\n".repeat(3)
+    );
+    assert_eq!(run(&Wasm32Wasi, &programs::countdown(0)).0, "");
 }
 
 /// The exit status a program leaves with, which is what `main` returns.
@@ -918,7 +479,7 @@ fn write(target: &dyn Target, output: &Path, program: &Program) -> PathBuf {
 /// which is where it becomes a word.
 #[test]
 fn every_target_runs_two_and_two_from_barb() {
-    let barb = faun::two_and_two();
+    let barb = programs::two_and_two_in_barb();
     let facts = faun::barb::recognise(&barb);
     let machine = faun::ir::lower(&barb, &facts, &faun::platform::Routines::builtin())
         .expect("a representable program");

@@ -217,7 +217,7 @@ fn the_builder_writes_the_lets_itself() {
 
 #[test]
 fn two_and_two_reads_back_as_what_was_written() {
-    let program = crate::two_and_two();
+    let program = crate::programs::two_and_two_in_barb();
     assert_eq!(
         program.render(),
         "Nat = Zero | Succ(Nat)
@@ -240,7 +240,7 @@ main() -> Nat =
 
 #[test]
 fn addition_is_recognised_and_its_near_miss_is_not() {
-    let program = crate::two_and_two();
+    let program = crate::programs::two_and_two_in_barb();
     let facts = recognise(&program);
     let add = FnId::at(0);
     assert_eq!(program.name(program.function(add).name), "add");

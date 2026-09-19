@@ -193,7 +193,7 @@ mod tests {
 
     fn hello() -> Vec<u8> {
         crate::X86_64Linux
-            .emit(&faun::hello_world())
+            .emit(&faun::programs::hello_world())
             .pop()
             .unwrap()
             .bytes

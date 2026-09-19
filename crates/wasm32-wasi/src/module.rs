@@ -163,7 +163,7 @@ mod tests {
 
     fn hello() -> Vec<u8> {
         crate::Wasm32Wasi
-            .emit(&faun::hello_world())
+            .emit(&faun::programs::hello_world())
             .pop()
             .unwrap()
             .bytes
@@ -192,6 +192,9 @@ mod tests {
 
     #[test]
     fn one_page_holds_a_greeting() {
-        assert_eq!(pages(&super::super::lower::lower(&faun::hello_world())), 1);
+        assert_eq!(
+            pages(&super::super::lower::lower(&faun::programs::hello_world())),
+            1
+        );
     }
 }
