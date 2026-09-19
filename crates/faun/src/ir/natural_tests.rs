@@ -53,7 +53,7 @@ impl Host for Observer {
     }
 }
 
-fn program(config: Config, needs: Needs) -> (Program, Library, FunctionId) {
+fn test_program() -> (Program, FunctionId) {
     let mut routines = Routines::builtin();
     routines.push(Routine {
         name: "observe".to_owned(),
@@ -67,6 +67,11 @@ fn program(config: Config, needs: Needs) -> (Program, Library, FunctionId) {
         let zero = b.constant(WORD, 0);
         b.ret(&[zero])
     });
+    (p, entry)
+}
+
+fn program(config: Config, needs: Needs) -> (Program, Library, FunctionId) {
+    let (mut p, entry) = test_program();
     let lib = natural::append(&mut p, config, needs).unwrap();
     (p, lib, entry)
 }
@@ -105,19 +110,24 @@ fn run(
 }
 
 fn free_heap(globals: &[u8], word: usize) {
+    for (size, refs) in partition(globals, word) {
+        assert_eq!(refs, 0, "unreleased {size}-byte allocation");
+    }
+}
+
+fn partition(globals: &[u8], word: usize) -> Vec<(usize, u64)> {
+    let mut blocks = Vec::new();
     let mut cursor = 0;
     while cursor < globals.len() {
         let size = usize::try_from(read_word(&globals[cursor..cursor + word])).unwrap();
         assert!(size >= 4 * word && size.is_multiple_of(word));
         assert!(cursor + size <= globals.len());
-        assert_eq!(
-            read_word(&globals[cursor + word..cursor + 2 * word]),
-            0,
-            "unreleased allocation at {cursor}"
-        );
+        let refs = read_word(&globals[cursor + word..cursor + 2 * word]);
+        blocks.push((size, refs));
         cursor += size;
     }
     assert_eq!(cursor, globals.len());
+    blocks
 }
 
 fn data_address(p: &Program, datum: DataId) -> BigUint {
@@ -602,6 +612,454 @@ fn reference_count_exhaustion_does_not_create_an_immortal_object() {
         assert_eq!(evaluation.values, [BigUint::from(2u8)]);
         let word = usize::from(bits / 8);
         assert_eq!(read_word(&evaluation.globals[word..2 * word]), max - 1);
+    }
+}
+
+fn repeat(b: &mut Builder<'_>, times: u64, body: impl FnOnce(&mut Builder<'_>)) {
+    let zero = b.constant(WORD, 0);
+    let one = b.constant(WORD, 1);
+    let times = b.constant(WORD, times);
+    b.loop_(&[zero], &[], |b, state| {
+        let done = b.compare(Relation::Equal, state[0], times);
+        b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+        body(b);
+        let next = b.binary(Binary::Add, state[0], one);
+        b.continue_(&[next])
+    });
+}
+
+fn promote(b: &mut Builder<'_>, lib: &Library, value: u64) -> super::ValueId {
+    let value = b.constant(WORD, value);
+    b.call(lib.from_word.unwrap(), &[value])[0]
+}
+
+fn observed_product(
+    b: &mut Builder<'_>,
+    lib: &Library,
+    observer: super::PlatformId,
+    left: DataId,
+    right: DataId,
+) {
+    let left = b.address_of(left);
+    let right = b.address_of(right);
+    let result = b.call(lib.mul.unwrap(), &[left, right])[0];
+    observe_and_release(b, lib, observer, result);
+}
+
+#[test]
+fn multiplication_clears_dirty_recycled_accumulators() {
+    for bits in [16, 32, 64] {
+        let conf = Config {
+            word_bits: bits,
+            heap_bytes: 64,
+        };
+        let (mut p, lib, entry) = program(
+            conf,
+            Needs {
+                mul: true,
+                ..Needs::default()
+            },
+        );
+        let observer = p.platform("observe");
+        let dense = (BigUint::from(1u8) << 128usize) - BigUint::from(1u8);
+        let sparse = BigUint::from(1u8) << 120usize;
+        let dense_id = natural::constant(&mut p, conf, &dense).unwrap();
+        let sparse_id = natural::constant(&mut p, conf, &sparse).unwrap();
+        let one = natural::constant(&mut p, conf, &BigUint::from(1u8)).unwrap();
+        p.define(entry, |b, _| {
+            repeat(b, 100, |b| {
+                observed_product(b, &lib, observer, dense_id, dense_id);
+                observed_product(b, &lib, observer, sparse_id, one);
+            });
+            let zero = b.constant(WORD, 0);
+            b.ret(&[zero])
+        });
+        let (evaluation, seen) = run(&p, entry, &[], bits);
+        assert!(!evaluation.halted);
+        assert_eq!(seen.len(), 200);
+        for pair in seen.chunks_exact(2) {
+            assert_eq!(pair, [&dense * &dense, sparse.clone()]);
+        }
+        free_heap(&evaluation.globals, usize::from(bits / 8));
+    }
+}
+
+#[test]
+fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
+    for bits in [16, 32, 64] {
+        let word = usize::from(bits / 8);
+        let conf = Config {
+            word_bits: bits,
+            heap_bytes: 8 * word,
+        };
+        let (mut p, lib, entry) = program(
+            conf,
+            Needs {
+                from_word: true,
+                modulo: true,
+                ..Needs::default()
+            },
+        );
+        let observer = p.platform("observe");
+        p.define(entry, |b, _| {
+            let left = promote(b, &lib, 513);
+            let right = promote(b, &lib, 514);
+            let result = b.call(lib.modulo.unwrap(), &[left, right])[0];
+            b.call(lib.release, &[left]);
+            b.call(lib.release, &[right]);
+            let replacement = promote(b, &lib, 9);
+            observe_and_release(b, &lib, observer, result);
+            observe_and_release(b, &lib, observer, replacement);
+            let zero = b.constant(WORD, 0);
+            b.ret(&[zero])
+        });
+        let (evaluation, seen) = run(&p, entry, &[], bits);
+        assert!(!evaluation.halted);
+        assert_eq!(seen, [BigUint::from(513u32), BigUint::from(9u8)]);
+        free_heap(&evaluation.globals, word);
+    }
+}
+
+fn fragmented_check(p: &mut Program, lib: &Library, big: DataId, remove_middle: bool) {
+    let observer = p.platform("observe");
+    p.define(p.entry(), |b, _| {
+        let first = promote(b, lib, 1);
+        let middle = promote(b, lib, 2);
+        let third = promote(b, lib, 3);
+        let last = promote(b, lib, 4);
+        b.call(lib.release, &[first]);
+        b.call(lib.release, &[third]);
+        if remove_middle {
+            b.call(lib.release, &[middle]);
+        }
+        let big = b.address_of(big);
+        let result = b.call(lib.add.unwrap(), &[big, big])[0];
+        // Keep the 5W result alive: this request must take the 7W remainder.
+        let replacement = promote(b, lib, 9);
+        observe_and_release(b, lib, observer, result);
+        observe_and_release(b, lib, observer, replacement);
+        observe_and_release(b, lib, observer, last);
+        if !remove_middle {
+            b.call(lib.release, &[middle]);
+        }
+        let zero = b.constant(WORD, 0);
+        b.ret(&[zero])
+    });
+}
+
+#[test]
+fn coalescing_stops_at_live_blocks_and_later_reuses_the_joined_run() {
+    for bits in [16, 32, 64] {
+        let word = usize::from(bits / 8);
+        let conf = Config {
+            word_bits: bits,
+            heap_bytes: 16 * word,
+        };
+        let magnitude = BigUint::from(1u8) << usize::from(bits);
+        for remove_middle in [false, true] {
+            let (mut p, lib, entry) = program(
+                conf,
+                Needs {
+                    from_word: true,
+                    add: true,
+                    ..Needs::default()
+                },
+            );
+            let big = natural::constant(&mut p, conf, &magnitude).unwrap();
+            fragmented_check(&mut p, &lib, big, remove_middle);
+            let (evaluation, seen) = run(&p, entry, &[], bits);
+            let blocks = partition(&evaluation.globals, word);
+            if remove_middle {
+                assert!(!evaluation.halted);
+                assert_eq!(
+                    seen,
+                    [
+                        &magnitude + &magnitude,
+                        BigUint::from(9u8),
+                        BigUint::from(4u8)
+                    ]
+                );
+                assert_eq!(blocks, [(5 * word, 0), (7 * word, 0), (4 * word, 0)]);
+                free_heap(&evaluation.globals, word);
+            } else {
+                assert!(evaluation.halted);
+                assert_eq!(evaluation.values, [BigUint::from(2u8)]);
+                assert!(seen.is_empty());
+                still_fragmented(&evaluation.globals, word);
+            }
+        }
+    }
+}
+
+fn still_fragmented(globals: &[u8], word: usize) {
+    assert_eq!(
+        partition(globals, word),
+        [(4 * word, 0), (4 * word, 1), (4 * word, 0), (4 * word, 1)]
+    );
+    // The failed allocation did not modify either surviving full magnitude.
+    for (offset, value) in [(4 * word, 2u8), (12 * word, 4u8)] {
+        let len =
+            usize::try_from(read_word(&globals[offset + 2 * word..offset + 3 * word])).unwrap();
+        assert_eq!(len, 1);
+        let start = offset + 3 * word;
+        assert_eq!(
+            BigUint::from_bytes_le(&globals[start..start + len]),
+            BigUint::from(value)
+        );
+    }
+}
+
+fn sentinel_pair(b: &mut Builder<'_>, first: DataId, last: DataId) -> super::ValueId {
+    let first = b.address_of(first);
+    let last = b.address_of(last);
+    let first = b.load(super::Width::Byte, first, super::Offset::Bytes(0));
+    let last = b.load(super::Width::Byte, last, super::Offset::Bytes(0));
+    let radix = b.constant(WORD, 256);
+    let high = b.binary(Binary::Mul, first, radix);
+    b.binary(Binary::Add, high, last)
+}
+
+#[test]
+fn preexisting_and_unaligned_pools_keep_their_sentinels() {
+    for bits in [16, 32, 64] {
+        let word = usize::from(bits / 8);
+        let conf = Config {
+            word_bits: bits,
+            heap_bytes: 128,
+        };
+        let (mut p, entry) = test_program();
+        let sentinel = p.intern(&[0xa5]);
+        p.global(&[0x5a]);
+        let lib = natural::append(
+            &mut p,
+            conf,
+            Needs {
+                from_word: true,
+                mul: true,
+                ..Needs::default()
+            },
+        )
+        .unwrap();
+        let tail = p.intern(&[0x6b]); // makes the interpreter's Globals base unaligned
+        assert_ne!((p.data().len() + 2 + word) % word, 0);
+        let prefix = p.globals()[..word].to_vec();
+        let observer = p.platform("observe");
+        p.define(entry, |b, _| {
+            repeat(b, 100, |b| {
+                let input = promote(b, &lib, 513);
+                let result = b.call(lib.mul.unwrap(), &[input, input])[0];
+                b.call(lib.release, &[input]);
+                observe_and_release(b, &lib, observer, result);
+            });
+            let pair = sentinel_pair(b, sentinel, tail);
+            b.ret(&[pair])
+        });
+        let (evaluation, seen) = run(&p, entry, &[], bits);
+        assert!(!evaluation.halted);
+        assert_eq!(evaluation.values, [BigUint::from(0xa56bu32)]);
+        assert_eq!(seen, vec![BigUint::from(513u32 * 513); 100]);
+        assert_eq!(&evaluation.globals[..word], prefix);
+        free_heap(&evaluation.globals[word..], word);
+    }
+}
+
+#[test]
+fn carry_and_borrow_cross_entire_zero_byte_runs() {
+    for bits in [16, 32, 64] {
+        let conf = Config {
+            word_bits: bits,
+            heap_bytes: 128,
+        };
+        let (mut p, lib, entry) = program(
+            conf,
+            Needs {
+                add: true,
+                sub: true,
+                ..Needs::default()
+            },
+        );
+        let observer = p.platform("observe");
+        let power = BigUint::from(1u8) << 128usize;
+        let dense = &power - BigUint::from(1u8);
+        let dense_id = natural::constant(&mut p, conf, &dense).unwrap();
+        let one = natural::constant(&mut p, conf, &BigUint::from(1u8)).unwrap();
+        p.define(entry, |b, _| {
+            repeat(b, 32, |b| {
+                let dense = b.address_of(dense_id);
+                let one = b.address_of(one);
+                let sum = b.call(lib.add.unwrap(), &[dense, one])[0];
+                b.platform_call(observer, &[sum]);
+                let difference = b.call(lib.sub.unwrap(), &[sum, one])[0];
+                b.call(lib.release, &[sum]);
+                observe_and_release(b, &lib, observer, difference);
+            });
+            let zero = b.constant(WORD, 0);
+            b.ret(&[zero])
+        });
+        let (evaluation, seen) = run(&p, entry, &[], bits);
+        assert!(!evaluation.halted);
+        assert_eq!(seen.len(), 64);
+        for pair in seen.chunks_exact(2) {
+            assert_eq!(pair, [power.clone(), dense.clone()]);
+        }
+        free_heap(&evaluation.globals, usize::from(bits / 8));
+    }
+}
+
+fn division_boundaries() -> Vec<(BigUint, BigUint, BigUint, BigUint)> {
+    let n = BigUint::from;
+    let high = n(1u64) << 128usize;
+    let middle = n(1u64) << 64usize;
+    vec![
+        (n(0xffff), n(0xff), n(0x101), n(0)),
+        (n(0x10000), n(0xff), n(0x101), n(1)),
+        (n(0x10000), n(0x100), n(0x100), n(0)),
+        (n(0x10000), n(0x101), n(0xff), n(1)),
+        (high.clone(), n(257), (&high - n(1)) / n(257), n(1)),
+        (&high + &middle + n(1), &middle + n(1), middle.clone(), n(1)),
+        (&high - n(1), middle.clone(), &middle - n(1), &middle - n(1)),
+    ]
+}
+
+#[test]
+fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
+    for bits in [16, 32, 64] {
+        let conf = Config {
+            word_bits: bits,
+            heap_bytes: 128,
+        };
+        let (mut p, lib, _) = program(
+            conf,
+            Needs {
+                mul: true,
+                div: true,
+                modulo: true,
+                ..Needs::default()
+            },
+        );
+        let dense = (BigUint::from(1u8) << 128usize) - BigUint::from(1u8);
+        let dirty = natural::constant(&mut p, conf, &dense).unwrap();
+        let observer = p.platform("observe");
+        let check = p.declare("recycled_division", &[ADDRESS, ADDRESS], &[WORD]);
+        p.define(check, |b, args| {
+            observed_product(b, &lib, observer, dirty, dirty);
+            for function in [lib.div.unwrap(), lib.modulo.unwrap()] {
+                let value = b.call(function, args)[0];
+                observe_and_release(b, &lib, observer, value);
+            }
+            let zero = b.constant(WORD, 0);
+            b.ret(&[zero])
+        });
+        for (a, b, quotient, remainder) in division_boundaries() {
+            assert_eq!(&quotient * &b + &remainder, a);
+            assert!(remainder < b);
+            let left = natural::constant(&mut p, conf, &a).unwrap();
+            let right = natural::constant(&mut p, conf, &b).unwrap();
+            let args = [data_address(&p, left), data_address(&p, right)];
+            let (evaluation, seen) = run(&p, check, &args, bits);
+            assert!(!evaluation.halted);
+            assert_eq!(seen, [&dense * &dense, quotient, remainder]);
+            free_heap(&evaluation.globals, usize::from(bits / 8));
+        }
+    }
+}
+
+fn isolated_needs(op: Option<Binary>) -> Needs {
+    let mut needs = Needs::default();
+    match op {
+        Some(Binary::Sub) => needs.sub = true,
+        Some(Binary::Div) => needs.div = true,
+        Some(Binary::Mod) => needs.modulo = true,
+        Some(Binary::Mul) => needs.mul = true,
+        None => needs.from_word = true,
+        _ => unreachable!("one of the isolated test families"),
+    }
+    needs
+}
+
+fn isolated_family(bits: u16, op: Option<Binary>) {
+    let conf = Config {
+        word_bits: bits,
+        heap_bytes: 128,
+    };
+    let (mut p, lib, entry) = program(conf, isolated_needs(op));
+    let optional = [
+        lib.add,
+        lib.sub,
+        lib.mul,
+        lib.div,
+        lib.modulo,
+        lib.compare,
+        lib.from_word,
+        lib.to_word,
+    ];
+    assert_eq!(optional.iter().filter(|id| id.is_some()).count(), 1);
+    let function = optional.into_iter().flatten().next().unwrap();
+    let left = (BigUint::from(1u8) << 128usize) + BigUint::from(257u32);
+    let right = BigUint::from(257u32);
+    let left_id = natural::constant(&mut p, conf, &left).unwrap();
+    let right_id = natural::constant(&mut p, conf, &right).unwrap();
+    let observer = p.platform("observe");
+    p.define(entry, |b, _| {
+        let value = if op.is_some() {
+            let left = b.address_of(left_id);
+            let right = b.address_of(right_id);
+            b.call(function, &[left, right])[0]
+        } else {
+            promote(b, &lib, 513)
+        };
+        observe_and_release(b, &lib, observer, value);
+        let zero = b.constant(WORD, 0);
+        b.ret(&[zero])
+    });
+    let (evaluation, seen) = run(&p, entry, &[], bits);
+    assert!(!evaluation.halted);
+    let expected = op.map_or_else(|| BigUint::from(513u32), |op| model(op, &left, &right));
+    assert_eq!(seen, [expected]);
+    free_heap(&evaluation.globals, usize::from(bits / 8));
+}
+
+#[test]
+fn isolated_sub_div_mod_mul_and_promotion_include_all_dependencies() {
+    for bits in [16, 32, 64] {
+        for op in [
+            Some(Binary::Sub),
+            Some(Binary::Div),
+            Some(Binary::Mod),
+            Some(Binary::Mul),
+            None,
+        ] {
+            isolated_family(bits, op);
+        }
+    }
+}
+
+#[test]
+fn retain_and_release_reject_zero_counts_without_resurrecting_storage() {
+    for bits in [16, 32, 64] {
+        let conf = config(bits);
+        for retaining in [false, true] {
+            let (mut p, lib, entry) = program(
+                conf,
+                Needs {
+                    from_word: true,
+                    ..Needs::default()
+                },
+            );
+            p.define(entry, |b, _| {
+                let object = promote(b, &lib, 1);
+                let zero = b.constant(WORD, 0);
+                b.store(super::Width::Word, object, super::Offset::Words(1), zero);
+                let function = if retaining { lib.retain } else { lib.release };
+                b.call(function, &[object]);
+                b.ret(&[zero])
+            });
+            let (evaluation, seen) = run(&p, entry, &[], bits);
+            assert!(evaluation.halted);
+            assert_eq!(evaluation.values, [BigUint::from(2u8)]);
+            assert!(seen.is_empty());
+            free_heap(&evaluation.globals, usize::from(bits / 8));
+        }
     }
 }
 

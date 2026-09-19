@@ -5,6 +5,11 @@
 //! reference count, and normalized digit count. Digits are little endian.
 //! Static objects have an all-ones count. Mortal objects live in a private,
 //! reusable, coalescing globals heap; exhaustion exits with status two.
+//!
+//! Retain requires a live borrowed object; release requires an owned claim.
+//! Both reject a zero reference count with exit(2), helping expose invalid
+//! lifetime schedules. This does not validate arbitrary pointers or stale
+//! pointers whose storage has already been reused.
 
 // The generated arithmetic follows the usual a/b, i/j, carry notation.
 #![allow(clippy::many_single_char_names)]
@@ -303,7 +308,7 @@ impl Storage {
 fn counting(p: &mut Program, retain: FunctionId, release: FunctionId, fail: FunctionId, max: u64) {
     p.define(retain, |b, args| {
         let a = args[0];
-        let refs = b.load(Width::Word, a, Offset::Words(1));
+        let refs = live_count(b, a, fail);
         let immortal = number(b, max);
         let static_ = eq(b, refs, immortal);
         b.if_(
@@ -332,7 +337,7 @@ fn counting(p: &mut Program, retain: FunctionId, release: FunctionId, fail: Func
     });
     p.define(release, |b, args| {
         let a = args[0];
-        let refs = b.load(Width::Word, a, Offset::Words(1));
+        let refs = live_count(b, a, fail);
         let immortal = number(b, max);
         let static_ = eq(b, refs, immortal);
         b.if_(
@@ -348,6 +353,22 @@ fn counting(p: &mut Program, retain: FunctionId, release: FunctionId, fail: Func
         );
         b.ret(&[])
     });
+}
+
+fn live_count(b: &mut Builder<'_>, object: ValueId, fail: FunctionId) -> ValueId {
+    let refs = b.load(Width::Word, object, Offset::Words(1));
+    let zero = number(b, 0);
+    let freed = eq(b, refs, zero);
+    b.if_(
+        freed,
+        &[],
+        |b| {
+            b.call(fail, &[]);
+            END
+        },
+        |b| b.yield_(&[]),
+    );
+    refs
 }
 
 // The request checks and first-fit scan stay together; nested work is
