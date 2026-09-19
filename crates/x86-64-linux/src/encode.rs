@@ -306,9 +306,10 @@ impl Encoder {
     pub(crate) fn narrow(&mut self, bits: u16) {
         self.step();
         match bits {
+            0 => self.emit(&[0x31, 0xC0]), // xor eax, eax: modulo one is zero
             8 => self.emit(&[0x48, 0x0F, 0xB6, 0xC0]), // movzx rax, al
             16 => self.emit(&[0x48, 0x0F, 0xB7, 0xC0]), // movzx rax, ax
-            32 => self.emit(&[0x89, 0xC0]),            // mov eax, eax
+            32 => self.emit(&[0x89, 0xC0]), // mov eax, eax
             64 => {}
             1..=7 => self.emit(&[0x83, 0xE0, (1u8 << bits) - 1]), // and eax, imm8
             9..=31 => {
@@ -522,6 +523,7 @@ mod tests {
         assert_eq!(encoded(|a| a.push_imm8(-5)), [0x6A, 0xFB]);
         assert_eq!(encoded(|a| a.multiply_or_divide(false)), [0x48, 0xF7, 0xE1]);
         assert_eq!(encoded(|a| a.multiply_or_divide(true)), [0x48, 0xF7, 0xF1]);
+        assert_eq!(encoded(|a| a.narrow(0)), [0x31, 0xC0]);
         assert_eq!(encoded(|a| a.narrow(7)), [0x83, 0xE0, 0x7F]);
         assert_eq!(encoded(|a| a.narrow(9)), [0x25, 0xFF, 0x01, 0x00, 0x00]);
         assert_eq!(encoded(|a| a.narrow(32)), [0x89, 0xC0]);

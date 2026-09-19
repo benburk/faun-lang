@@ -9,6 +9,9 @@ use crate::ir::{Binary, Class, Program, Relation};
 /// overflows its declared class; division includes the unsigned high bit.
 #[must_use]
 pub fn boundaries(bits: u16, op: Binary) -> Program {
+    if bits == 0 {
+        return cases(bits, op, &[(0, 0)]);
+    }
     let max = u64::MAX >> (64 - bits);
     let high = 1u64 << (bits - 1);
     let mut pairs = if op == Binary::Mul {
@@ -98,6 +101,33 @@ pub fn odd_conversion() -> Program {
         let input = b.constant(wide, 511);
         let result = b.call(check, &[input]);
         b.ret(&result)
+    });
+    program
+}
+
+/// Runtime word parameters narrowed to Fixed0 and promoted back to Word.
+/// Full-word comparisons check that both bytes are cleared even on the 6502.
+#[must_use]
+pub fn zero_conversion() -> Program {
+    let (mut program, main) = Program::new("main");
+    let check = program.declare("convert", &[Class::Word], &[Class::Word]);
+    program.define(check, |b, args| {
+        let narrowed = b.convert(Class::Fixed { bits: 0 }, args[0]);
+        let promoted = b.convert(Class::Word, narrowed);
+        let zero = b.constant(Class::Word, 0);
+        let equal = b.compare(Relation::Equal, promoted, zero);
+        b.ret(&[equal])
+    });
+    program.define(main, |b, _| {
+        let mut passed = b.constant(Class::Word, 0);
+        for input in [0, 1, 255, 256, 65535] {
+            let input = b.constant(Class::Word, input);
+            let equal = b.call(check, &[input])[0];
+            passed = b.binary(Binary::Add, passed, equal);
+        }
+        let count = b.constant(Class::Word, 5);
+        let failures = b.binary(Binary::Sub, count, passed);
+        b.ret(&[failures])
     });
     program
 }

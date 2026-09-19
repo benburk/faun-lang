@@ -372,7 +372,7 @@ fn the_smallest_module_imports_nothing() {
 /// callee compares the whole answer rather than only its low exit byte.
 #[test]
 fn runtime_arithmetic_boundaries_and_odd_widths() {
-    for bits in [1, 2, 3, 7, 8, 9, 15, 16, 31, 32, 33, 63, 64] {
+    for bits in [0, 1, 2, 3, 7, 8, 9, 15, 16, 31, 32, 33, 63, 64] {
         if bits > 32 {
             continue;
         }
@@ -389,6 +389,7 @@ fn runtime_arithmetic_boundaries_and_odd_widths() {
         }
     }
     assert_eq!(status(&programs::arithmetic::odd_conversion()), 0);
+    assert_eq!(status(&programs::arithmetic::zero_conversion()), 0);
     assert_eq!(status(&programs::arithmetic::preserves_host_count()), 0);
 }
 

@@ -1165,7 +1165,10 @@ impl Lowering<'_> {
     fn convert(&mut self, class: Class, value: ValueId, result: ValueId) {
         self.read(T0, value);
         let kept = bits(class);
-        if kept < bits(self.program.class(value)) {
+        if kept == 0 {
+            // Fixed0 has exactly one inhabitant: reduction modulo one.
+            self.set_pair(T0, 0);
+        } else if kept < bits(self.program.class(value)) {
             let byte = if kept <= 8 { T0 } else { T0 + 1 };
             let mask = ((1u16 << ((kept - 1) % 8 + 1)) - 1).to_le_bytes()[0];
             if mask != 0xFF {
