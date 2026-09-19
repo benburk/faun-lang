@@ -21,8 +21,6 @@
 //! them is what this grows into, and the matrices are the seam: what the
 //! walk below answers would not change, only what is asked of it.
 
-use std::collections::HashMap;
-
 use super::ir::{Atom, Body, Expr, ExprId, FnId, Program};
 
 /// What a value is, against a parameter it came from.
@@ -57,19 +55,112 @@ impl Matrix {
 /// Refuse a definition nothing shows stops.
 pub(super) fn stops(program: &Program) -> Result<(), String> {
     let calls = graph(program);
-    for at in 0..program.functions().len() {
-        let id = FnId::at(at);
-        let round: Vec<FnId> = (0..program.functions().len())
-            .map(FnId::at)
-            .filter(|held| reaches(&calls, id, *held) && reaches(&calls, *held, id))
-            .collect();
-        // Read each way round once, from the first definition in it.
-        if !reaches(&calls, id, id) || round.first() != Some(&id) {
+    for round in rounds(&calls) {
+        // One definition on its own goes round only if it calls itself.
+        if round.len() == 1 && !calls[round[0].index()].contains(&round[0]) {
             continue;
         }
         descends(program, &round)?;
     }
     Ok(())
+}
+
+/// The rounds a program's calls make: every definition in one reaches every
+/// other in it, and comes back.
+///
+/// Which is what a strongly connected component is, so it is found the way
+/// one is: a single walk that gives every definition a number as it is
+/// first reached, and closes a round when it finds one that reaches no
+/// further back than itself. Asking instead whether each definition reaches
+/// each other was a search per pair, and the pairs are the square of the
+/// program.
+fn rounds(calls: &[Vec<FnId>]) -> Vec<Vec<FnId>> {
+    let mut state = Rounds {
+        calls,
+        reached: vec![usize::MAX; calls.len()],
+        lowest: vec![usize::MAX; calls.len()],
+        within: vec![false; calls.len()],
+        stack: Vec::new(),
+        next: 0,
+        held: Vec::new(),
+    };
+    for at in 0..calls.len() {
+        if state.reached[at] == usize::MAX {
+            state.walk(FnId::at(at));
+        }
+    }
+    state.held
+}
+
+/// The walk that finds them, with its own stack rather than the machine's:
+/// a program may call deeper than there is room to recurse.
+struct Rounds<'a> {
+    calls: &'a [Vec<FnId>],
+    /// When each definition was first reached, and the earliest anything it
+    /// reaches was.
+    reached: Vec<usize>,
+    lowest: Vec<usize>,
+    /// Which are on the stack, since only those can close a round.
+    within: Vec<bool>,
+    stack: Vec<FnId>,
+    next: usize,
+    held: Vec<Vec<FnId>>,
+}
+
+impl Rounds<'_> {
+    fn walk(&mut self, from: FnId) {
+        // Where the walk is, and which call out of it comes next.
+        let mut going = vec![(from, 0)];
+        self.enter(from);
+
+        while let Some(&mut (at, ref mut step)) = going.last_mut() {
+            let called = self.calls[at.index()].get(*step).copied();
+            *step += 1;
+            let Some(called) = called else {
+                going.pop();
+                self.close(at);
+                if let Some(&mut (before, _)) = going.last_mut() {
+                    self.lowest[before.index()] =
+                        self.lowest[before.index()].min(self.lowest[at.index()]);
+                }
+                continue;
+            };
+            if self.reached[called.index()] == usize::MAX {
+                self.enter(called);
+                going.push((called, 0));
+            } else if self.within[called.index()] {
+                self.lowest[at.index()] = self.lowest[at.index()].min(self.reached[called.index()]);
+            }
+        }
+    }
+
+    fn enter(&mut self, at: FnId) {
+        self.reached[at.index()] = self.next;
+        self.lowest[at.index()] = self.next;
+        self.next += 1;
+        self.within[at.index()] = true;
+        self.stack.push(at);
+    }
+
+    /// A definition reaching no further back than itself is where a round
+    /// ends, and everything above it on the stack is in that round.
+    fn close(&mut self, at: FnId) {
+        if self.lowest[at.index()] != self.reached[at.index()] {
+            return;
+        }
+        let mut round = Vec::new();
+        while let Some(held) = self.stack.pop() {
+            self.within[held.index()] = false;
+            round.push(held);
+            if held == at {
+                break;
+            }
+        }
+        // In the order they were written, which is the order a round reads
+        // in and the order its matrices are built in.
+        round.sort_unstable_by_key(|held| held.index());
+        self.held.push(round);
+    }
 }
 
 /// One column that descends at every call round, which is this reading of
@@ -200,7 +291,7 @@ fn matrix(sizes: &[Vec<Step>], args: &[Atom], params: usize) -> Matrix {
 }
 
 /// Which definitions each one calls.
-fn graph(program: &Program) -> HashMap<FnId, Vec<FnId>> {
+fn graph(program: &Program) -> Vec<Vec<FnId>> {
     fn within(program: &Program, body: Body, held: &mut Vec<FnId>) {
         for expr in program
             .bindings(body.bindings)
@@ -226,24 +317,7 @@ fn graph(program: &Program) -> HashMap<FnId, Vec<FnId>> {
             if let Some(body) = program.function(id).body {
                 within(program, body, &mut held);
             }
-            (id, held)
+            held
         })
         .collect()
-}
-
-fn reaches(calls: &HashMap<FnId, Vec<FnId>>, from: FnId, to: FnId) -> bool {
-    let mut seen = vec![from];
-    let mut waiting = vec![from];
-    while let Some(at) = waiting.pop() {
-        for called in calls.get(&at).into_iter().flatten() {
-            if *called == to {
-                return true;
-            }
-            if !seen.contains(called) {
-                seen.push(*called);
-                waiting.push(*called);
-            }
-        }
-    }
-    false
 }

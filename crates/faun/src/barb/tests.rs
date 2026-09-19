@@ -394,3 +394,45 @@ fn a_definition_that_does_not_stop_is_refused() {
     )
     .expect("a program that stops");
 }
+
+/// Names that go round together are one round, however many of them there
+/// are and whichever of them is reached first. What every definition in one
+/// reaches is every other, so a round is found the way a program's calls
+/// make it rather than by asking each pair in turn.
+#[test]
+fn a_round_is_every_name_that_goes_round_together() {
+    let read = |text: &str| crate::read(text, &crate::platform::Routines::builtin());
+
+    // Three deep, taking a part each time round, which stops.
+    read(
+        "type Nat Zero Succ(Nat)
+
+         one(Zero) -> Zero
+         one(Succ(k)) -> two(k)
+         two(Zero) -> Zero
+         two(Succ(k)) -> three(k)
+         three(Zero) -> Zero
+         three(Succ(k)) -> one(k)
+
+         main!(h) ->
+           n = argc!(h)
+           exit!(h one(n))",
+    )
+    .expect("a round that takes something apart");
+
+    // The same three, going round on what they were handed.
+    let refused = read(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         one(n) -> add(Zero two(n))
+         two(n) -> add(Zero three(n))
+         three(n) -> add(Zero one(n))
+
+         main!(h) -> exit!(h one(Zero))",
+    )
+    .unwrap_err();
+    assert!(refused.contains("`one`, `two`, `three` stops"), "{refused}");
+}
