@@ -481,9 +481,17 @@ impl Lowering<'_> {
             Binary::Add => 0x01,
             Binary::Sub => 0x29,
         };
-        self.pair(left, right);
+        // A value added to itself is one value: there is nothing to put
+        // anywhere else, so nothing is copied there.
+        let source = if left == right {
+            self.read(Reg::Rax, left);
+            Reg::Rax
+        } else {
+            self.pair(left, right);
+            Reg::Rcx
+        };
         self.asm
-            .alu_sized(opcode, Reg::Rax, Reg::Rcx, bits(self.program.class(result)));
+            .alu_sized(opcode, Reg::Rax, source, bits(self.program.class(result)));
         self.keep(result);
     }
 

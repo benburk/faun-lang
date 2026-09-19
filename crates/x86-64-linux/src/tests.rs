@@ -31,9 +31,9 @@ fn corpus() -> Vec<(&'static str, Program, usize)> {
     vec![
         ("empty", programs::empty(), 127),
         ("exit zero", read(EXIT_ZERO).expect("a program"), 127),
-        ("two and two", programs::two_and_two(), 136),
+        ("two and two", programs::two_and_two(), 134),
         ("hello world", programs::hello_world(), 158),
-        ("a call", programs::calls_a_function(), 160),
+        ("a call", programs::calls_a_function(), 156),
         ("recursion", programs::recurses(), 245),
         (
             "values across a call",
@@ -54,7 +54,7 @@ fn corpus() -> Vec<(&'static str, Program, usize)> {
         (
             "two worked out",
             programs::compares_two_worked_out_values(),
-            170,
+            171,
         ),
         ("a flag", programs::branches_on_a_flag_it_read(), 257),
         ("a countdown", programs::countdown(3), 217),
@@ -84,9 +84,9 @@ fn examples() -> Vec<(String, Program, usize)> {
         ("double", 128),
         ("leave", 141),
         ("bool", 628),
-        ("nat", 1087),
-        ("width", 294),
-        ("argc", 187),
+        ("nat", 1083),
+        ("width", 286),
+        ("argc", 183),
     ]
     .into_iter()
     .map(|(name, size)| {
