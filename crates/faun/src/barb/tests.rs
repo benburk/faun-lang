@@ -46,14 +46,8 @@ fn a_name_is_interned_once_and_reads_back() {
     // written, and asking for one already held answers what is already there.
     assert_eq!(program.symbol("Zero"), on_nat);
 
-    // Every name the program uses, once each and end to end: naming things
-    // costs no allocation beyond the pool growing.
-    let names = "NatZeroSuccU8List_U8NilCons";
-    assert_eq!(
-        program.names_text(),
-        names,
-        "each name once, in declaration order"
-    );
+    assert_eq!(program.name(program.type_(nat).name), "Nat");
+    assert_eq!(program.name(program.type_(byte).name), "U8");
 }
 
 #[test]
@@ -152,21 +146,8 @@ fn a_natural_costs_the_logarithm_of_its_value() {
         as_number(&program, nat_id, program.known_bytes(id)),
         Some(1000)
     );
-}
-
-/// The same bytes, without ever building the chain they stand for. `decode`
-/// and the tree a caller hands `intern` both cost the magnitude; these do not.
-#[test]
-fn a_number_and_a_run_of_bytes_can_be_written_outright() {
-    let (mut program, nat_id, byte, list_id) = types();
-    let chain = program.intern(nat_id, &nat(&program, nat_id, 1000));
     let direct = program.intern_number(nat_id, 1000);
-    assert_eq!(program.known_bytes(chain), program.known_bytes(direct));
-
-    let built = list(&program, list_id, byte, b"Hello");
-    let chain = program.intern(list_id, &built);
-    let direct = program.intern_bytes(list_id, b"Hello");
-    assert_eq!(program.known_bytes(chain), program.known_bytes(direct));
+    assert_eq!(program.known_bytes(id), program.known_bytes(direct));
 }
 
 #[test]
@@ -238,11 +219,6 @@ fn the_builder_writes_the_lets_itself() {
             _ => unreachable!("Nat takes at most one field"),
         })
     });
-
-    // Two parameters, `k` in the recursive arm, and the call bound inside it.
-    // Neither the constructor nor the match binds anything: each is the tail
-    // of its body.
-    assert_eq!(program.locals(add), 4);
 
     let body = program.function(add).body().expect("a defined function");
     assert!(

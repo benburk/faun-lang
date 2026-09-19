@@ -310,7 +310,7 @@ fn assert_calls_fold(lib: &mut Library, cases: &[(&str, Vec<Held>)]) {
     for normalized in [false, true] {
         let mut program = lib.program.clone();
         if normalized {
-            normalize(&mut program);
+            normalize_with_limits(&mut program, InlineLimits::default());
         }
         fold(&mut program);
         validate(&program).unwrap();
@@ -355,7 +355,7 @@ fn library_meaning_does_not_depend_on_names_or_constructor_order() {
         .replace("int_", "signed_");
     let mut program =
         crate::surface::parse(&source, &crate::platform::Routines::builtin()).unwrap();
-    normalize(&mut program);
+    normalize_with_limits(&mut program, InlineLimits::default());
     fold(&mut program);
     validate(&program).unwrap();
     let probe = program

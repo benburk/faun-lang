@@ -72,36 +72,6 @@ pub fn two_and_two_in_barb() -> crate::barb::Program {
     program
 }
 
-/// Two exits from one entry, one of them with nought. Whatever a target
-/// makes of the second, the first has to leave with the status it says.
-#[must_use]
-pub fn exits_from_a_branch(taken: u64) -> Program {
-    let (mut program, main) = Program::new("main");
-    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit");
-
-    program.define(main, |b, _| {
-        let value = b.constant(Word, taken);
-        let zero = b.constant(Word, 0);
-        let nought = b.compare(Relation::Equal, value, zero);
-        b.if_(
-            nought,
-            &[],
-            // Neither arm comes back, so neither reaches the join.
-            |b| {
-                let status = b.constant(Word, 0);
-                b.call(exit, &[status]);
-            },
-            |b| {
-                let status = b.constant(Word, 5);
-                b.call(exit, &[status]);
-            },
-        );
-        let status = b.constant(Word, 0);
-        b.ret(&[status]);
-    });
-    program
-}
-
 /// An arm too long to reach over with a byte of displacement.
 ///
 /// Which is the one

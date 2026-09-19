@@ -79,8 +79,7 @@ x    ::= a parameter, a binding, or a field an arm bound
 Each stage runs once and can be disabled programmatically. `read_with_options` exposes
 these controls without bypassing validation or totality checking. Disabling helper
 inlining may reduce range analysis precision and backend representability, not alter
-Barb semantics. The compatibility `normalize` entry point still includes inlining.
-`normalize_with_limits` does structural-only rebuilding when any inline limit is
+Barb semantics. `normalize_with_limits` does structural-only rebuilding when any inline limit is
 zero, without planning expansions. Recognition still runs to protect arithmetic
 definitions; this is not a claim that structural normalization performs no analysis.
 

@@ -8,11 +8,6 @@ use super::inline::{InlineLimits, Inlining};
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
 use crate::index::append_range;
 
-/// Compatibility entry point: structural normalization plus helper inlining.
-pub fn normalize(program: &mut Program) {
-    normalize_with_limits(program, InlineLimits::default());
-}
-
 /// Remove local aliases without expanding calls or dropping eager bindings.
 pub fn structural(program: &mut Program) {
     rewrite(program, None);

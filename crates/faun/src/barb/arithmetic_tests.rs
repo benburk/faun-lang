@@ -176,7 +176,7 @@ fn an_early_exit_refines_the_continuation() {
         "{LIBRARY}\nbounded!(h True n) -> n\nbounded!(h False n) -> exit!(h Zero)\nmain!(h) -> count = argc!(h) n = bounded!(h less_than(count Succ(Succ(Zero))) count) exit!(h add(n n))"
     );
     let mut program = crate::surface::parse(&text, &routines).unwrap();
-    normalize(&mut program);
+    normalize_with_limits(&mut program, InlineLimits::default());
     fold(&mut program);
     let facts = analyze(&program);
     let body = program.function(program.entry().unwrap()).body().unwrap();

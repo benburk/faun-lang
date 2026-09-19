@@ -2,6 +2,7 @@
 use num_bigint::BigUint;
 
 use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
+use super::test_support::{no_live_objects, word};
 use super::*;
 use crate::{ir, targets};
 
@@ -29,8 +30,8 @@ impl Host for Observer {
         match name {
             "argc" => Ok(HostResult::Return(vec![BigUint::from(self.argc)])),
             "write" => {
-                let address = word(&args[0].to_bytes_le());
-                let len = usize::try_from(word(&args[1].to_bytes_le())).unwrap();
+                let address = u64::try_from(word(&args[0].to_bytes_le())).unwrap();
+                let len = word(&args[1].to_bytes_le());
                 self.bytes.extend_from_slice(memory.read(address, len)?);
                 Ok(HostResult::Return(vec![]))
             }
@@ -38,12 +39,6 @@ impl Host for Observer {
             _ => Err(evaluate::Error::Host(name.to_owned())),
         }
     }
-}
-
-fn word(bytes: &[u8]) -> u64 {
-    let mut held = [0; 8];
-    held[..bytes.len()].copy_from_slice(bytes);
-    u64::from_le_bytes(held)
 }
 
 fn run(p: &Program, bits: u16, argc: u64) -> (Evaluation, Observer) {
@@ -70,36 +65,6 @@ fn run(p: &Program, bits: u16, argc: u64) -> (Evaluation, Observer) {
         "unexpected runtime exhaustion: {result:?}"
     );
     (result, host)
-}
-
-fn no_live_objects(p: &Program, result: &Evaluation, config: natural::Config) {
-    let heap = p
-        .spans
-        .iter()
-        .rev()
-        .find(|span| {
-            span.origin == Origin::Globals
-                && usize::try_from(span.len).unwrap() == config.heap_bytes
-        })
-        .expect("runtime private heap");
-    let width = usize::from(config.word_bits / 8);
-    let mut at = usize::try_from(heap.start).unwrap();
-    let end = at + config.heap_bytes;
-    while at < end {
-        let size = usize::try_from(word(&result.globals[at..at + width])).unwrap();
-        assert!(
-            size >= 3 * width && size.is_multiple_of(width),
-            "bad block at {at}"
-        );
-        assert!(at + size <= end, "block escapes heap");
-        assert_eq!(
-            word(&result.globals[at + width..at + 2 * width]),
-            0,
-            "mortal claim remains at {at} after main returned"
-        );
-        at += size;
-    }
-    assert_eq!(at, end, "heap block chain");
 }
 
 #[test]
@@ -191,13 +156,13 @@ fn one_global_mapping_preserves_sibling_and_cross_function_ownership() {
     }
 }
 
-fn widened_loop() -> Program {
+fn widened_loop(initial_bits: u16) -> Program {
     let (mut p, main) = Program::new("main");
     let mut parameter = None;
     p.define(main, |b, _| {
         let one = b.constant(Class::Word, 1);
         b.convert(Class::Natural, one); // Force representation rebuilding.
-        let initial = b.constant(Class::Fixed { bits: 8 }, 0);
+        let initial = b.constant(Class::Fixed { bits: initial_bits }, 0);
         let limit = b.constant(Class::Word, 260);
         let answer = b.loop_(&[initial], &[Class::Word], |b, state| {
             parameter = Some(state[0]);
@@ -228,25 +193,30 @@ fn loop_body(p: &Program) -> RegionId {
 
 #[test]
 fn narrower_loop_initial_values_do_not_narrow_rebuilt_carried_parameters() {
-    let original = widened_loop();
-    validate(&original).expect("narrow initial values may feed a wider loop parameter");
-    for bits in [16, 32, 64] {
-        let config = natural::Config {
-            word_bits: bits,
-            heap_bytes: fixture::HEAP_BYTES,
-        };
-        let scalar = legalize(&original, config).unwrap();
-        let params = scalar.values(scalar.region(loop_body(&scalar)).params);
-        assert_eq!(params.len(), 1);
-        assert_eq!(
-            scalar.class(params[0]),
-            Class::Word,
-            "preserve declared loop width"
-        );
-        let (before, _) = run(&original, bits, 0);
-        let (after, _) = run(&scalar, bits, 0);
-        assert_eq!(before.returned().unwrap(), [BigUint::from(260u16)]);
-        assert_eq!(after.outcome, before.outcome);
-        no_live_objects(&scalar, &after, config);
+    for initial_bits in [1, 8] {
+        let original = widened_loop(initial_bits);
+        validate(&original).expect("narrow initial values may feed a wider loop parameter");
+        for bits in [16, 32, 64] {
+            let config = natural::Config {
+                word_bits: bits,
+                heap_bytes: 64,
+            };
+            let scalar = legalize(&original, config).unwrap();
+            let params = scalar.values(scalar.region(loop_body(&scalar)).params);
+            assert_eq!(params.len(), 1);
+            assert_eq!(
+                scalar.class(params[0]),
+                Class::Word,
+                "preserve declared loop width"
+            );
+            let (before, _) = run(&original, bits, 0);
+            let (after, _) = run(&scalar, bits, 0);
+            assert_eq!(before.returned().unwrap(), [BigUint::from(260u16)]);
+            assert_eq!(
+                after.outcome, before.outcome,
+                "{initial_bits}-bit initial, {bits}-bit word"
+            );
+            no_live_objects(&scalar, &after, config);
+        }
     }
 }

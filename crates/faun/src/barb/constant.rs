@@ -143,56 +143,48 @@ fn decode_spine(
     cons: CtorId,
     recursive: usize,
 ) -> (Value, usize) {
-    {
-        {
-            let (count, mut at) = unleb128(bytes);
-            let fields = program.fields(cons);
-            let mut elements = Vec::new();
-            for _ in 0..count {
-                let mut element = Vec::new();
-                for (index, field) in fields.iter().enumerate() {
-                    if index == recursive {
-                        element.push(Value(nil, Vec::new()));
-                    } else {
-                        let (value, took) = decode(program, *field, &bytes[at..]);
-                        element.push(value);
-                        at += took;
-                    }
-                }
-                elements.push(element);
+    let (count, mut at) = unleb128(bytes);
+    let fields = program.fields(cons);
+    let mut elements = Vec::new();
+    for _ in 0..count {
+        let mut element = Vec::new();
+        for (index, field) in fields.iter().enumerate() {
+            if index == recursive {
+                element.push(Value(nil, Vec::new()));
+            } else {
+                let (value, took) = decode(program, *field, &bytes[at..]);
+                element.push(value);
+                at += took;
             }
-            // Built from the end, so each element holds the rest of the value.
-            let mut value = Value(nil, Vec::new());
-            for mut element in elements.into_iter().rev() {
-                element[recursive] = value;
-                value = Value(cons, element);
-            }
-            (value, at)
         }
+        elements.push(element);
     }
+    // Built from the end, so each element holds the rest of the value.
+    let mut value = Value(nil, Vec::new());
+    for mut element in elements.into_iter().rev() {
+        element[recursive] = value;
+        value = Value(cons, element);
+    }
+    (value, at)
 }
 
 fn decode_tagged(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) {
-    {
-        {
-            let mut at = 0;
-            let ctor = if program.type_(id).ctors.len() > 1 {
-                let (tag, took) = unleb128(bytes);
-                at += took;
-                program.ctor_at(id, u32::try_from(tag).expect("a tag within 4G"))
-            } else {
-                program.ctor_at(id, 0)
-            };
-            let mut fields = Vec::with_capacity(program.fields(ctor).len());
-            for index in 0..program.fields(ctor).len() {
-                let field = program.fields(ctor)[index];
-                let (value, took) = decode(program, field, &bytes[at..]);
-                fields.push(value);
-                at += took;
-            }
-            (Value(ctor, fields), at)
-        }
+    let mut at = 0;
+    let ctor = if program.type_(id).ctors.len() > 1 {
+        let (tag, took) = unleb128(bytes);
+        at += took;
+        program.ctor_at(id, u32::try_from(tag).expect("a tag within 4G"))
+    } else {
+        program.ctor_at(id, 0)
+    };
+    let mut fields = Vec::with_capacity(program.fields(ctor).len());
+    for index in 0..program.fields(ctor).len() {
+        let field = program.fields(ctor)[index];
+        let (value, took) = decode(program, field, &bytes[at..]);
+        fields.push(value);
+        at += took;
     }
+    (Value(ctor, fields), at)
 }
 
 /// A spine-shaped value whose elements carry nothing, which is a number.
@@ -270,17 +262,6 @@ pub fn as_bytes<'a>(program: &Program, id: TypeId, bytes: &'a [u8]) -> Option<&'
 /// constructors it stands for.
 pub(super) fn write_number(value: u64, out: &mut Vec<u8>) {
     leb128(value, out);
-}
-
-/// The same for a run of bytes: the count, then each of them.
-pub(super) fn write_bytes(bytes: &[u8], out: &mut Vec<u8>) {
-    leb128(
-        u64::try_from(bytes.len()).expect("a run within 64 bits"),
-        out,
-    );
-    for byte in bytes {
-        leb128(u64::from(*byte), out);
-    }
 }
 
 /// Seven bits a byte, low first, with the high bit set while more follow.

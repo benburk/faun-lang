@@ -69,11 +69,6 @@ impl Builder<'_> {
         self.push_one(Op::NaturalConstant(data), Class::Natural)
     }
 
-    /// The same word, written the way a negative number reads.
-    pub fn constant_signed(&mut self, class: Class, value: i64) -> ValueId {
-        self.constant(class, value.cast_unsigned())
-    }
-
     pub fn address_of(&mut self, data: DataId) -> ValueId {
         self.push_one(Op::AddressOf(data), Class::Address)
     }

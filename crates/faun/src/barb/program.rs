@@ -3,7 +3,7 @@
 use super::builder::Builder;
 use super::constant::{self, Shape, Value};
 use super::model::{
-    Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Symbol, Type, TypeId,
+    Arm, Atom, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Symbol, Type, TypeId,
 };
 use crate::index::{Pool, Range, append_range};
 
@@ -43,56 +43,6 @@ impl Program {
     pub fn name(&self, symbol: Symbol) -> &str {
         let at = self.symbols[symbol];
         std::str::from_utf8(&self.names[at.range()]).expect("a name was written as text")
-    }
-
-    /// Every name the program uses, end to end. For tests and rendering.
-    ///
-    /// # Panics
-    ///
-    /// Never: names are written as text.
-    #[must_use]
-    pub fn names_text(&self) -> &str {
-        std::str::from_utf8(&self.names).expect("names were written as text")
-    }
-
-    /// How many locals a body binds, parameters included: the deepest chain
-    /// of binders in it, since sibling arms take the same levels back and a
-    /// `let`'s value is bound outside its own binding.
-    ///
-    /// # Panics
-    ///
-    /// If a constructor outgrew the fields it may have.
-    #[must_use]
-    pub fn locals(&self, id: FnId) -> u32 {
-        fn in_body(program: &Program, body: Body, at: u32) -> u32 {
-            let mut level = at;
-            let mut deepest = at;
-            for &binding in program.bindings(body.bindings) {
-                deepest = deepest.max(in_expr(program, binding, level));
-                level += 1;
-                deepest = deepest.max(level);
-            }
-            deepest.max(in_expr(program, body.tail, level))
-        }
-        fn in_expr(program: &Program, expr: ExprId, at: u32) -> u32 {
-            let Expr::Match(_, arms) = program.expr(expr) else {
-                return at;
-            };
-            program
-                .arms(arms)
-                .iter()
-                .map(|arm| {
-                    let bound = u32::try_from(program.fields(arm.ctor).len())
-                        .expect("a sane constructor arity");
-                    in_body(program, arm.body, at + bound)
-                })
-                .max()
-                .unwrap_or(at)
-        }
-        let params = u32::try_from(self.params(id).len()).expect("a sane arity");
-        self.function(id)
-            .body()
-            .map_or(params, |body| in_body(self, body, params))
     }
 
     #[must_use]
@@ -343,29 +293,6 @@ impl Program {
 
     pub(super) fn intern_encoded(&mut self, bytes: &[u8]) -> ConstId {
         self.hold(|_, out| out.extend_from_slice(bytes))
-    }
-
-    /// A run of bytes, likewise.
-    ///
-    /// # Panics
-    ///
-    /// If `id` is not a spine of numbers.
-    pub fn intern_bytes(&mut self, id: TypeId, value: &[u8]) -> ConstId {
-        let name = self.type_(id).name;
-        let Shape::Spine { cons, .. } = constant::shape(self, id) else {
-            panic!("`{}` is not a sequence", self.name(name));
-        };
-        let element = self
-            .fields(cons)
-            .iter()
-            .find(|field| **field != id)
-            .copied();
-        assert!(
-            element.is_some_and(|field| constant::as_number(self, field, &[0]).is_some()),
-            "`{}` does not hold numbers",
-            self.name(name)
-        );
-        self.hold(|_, out| constant::write_bytes(value, out))
     }
 
     /// Write into the pool itself, so that nothing is encoded into a buffer

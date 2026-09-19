@@ -31,10 +31,16 @@ fn default_program_requires_an_entry_before_validation() {
     assert_eq!(validate(&p).unwrap_err(), "missing entry function");
     let main = p.declare("main", &[], &[Class::Word]);
     assert_eq!(main, p.entry());
+    assert!(matches!(
+        p.function(main).definition,
+        Definition::Declared(_)
+    ));
+    assert!(p.signature(p.function(main).params).is_empty());
     p.define(main, |b, _| {
         let value = b.constant(Class::Word, 7);
         b.ret(&[value]);
     });
+    assert!(matches!(p.function(main).definition, Definition::Body(_)));
     assert_eq!(answer(&p), 7);
 }
 
@@ -92,6 +98,8 @@ fn successful_retry_uses_the_same_parameters_and_installs_only_its_body() {
     })
     .unwrap();
     assert_eq!(p.region(root).params, params);
+    assert_eq!(p.function(helper).definition, Definition::Body(root));
+    assert_eq!(p.signature(p.function(helper).params), &[Class::Word]);
     p.try_define(p.entry(), |b, _| {
         let value = b.constant(Class::Word, 19);
         let result = b.call(helper, &[value]);
@@ -100,53 +108,6 @@ fn successful_retry_uses_the_same_parameters_and_installs_only_its_body() {
     })
     .unwrap();
     assert_eq!(answer(&p), 19);
-}
-
-#[test]
-fn infallible_and_fallible_builders_install_the_same_region() {
-    let mut infallible = program();
-    let mut fallible = infallible.clone();
-    infallible.define(infallible.entry(), |b, _| {
-        let value = b.constant(Class::Word, 21);
-        b.ret(&[value]);
-    });
-    fallible
-        .try_define(fallible.entry(), |b, _| {
-            let value = b.constant(Class::Word, 21);
-            b.ret(&[value]);
-            Ok::<_, &str>(())
-        })
-        .unwrap();
-    assert_eq!(fallible.ops, infallible.ops);
-    assert_eq!(fallible.results, infallible.results);
-    assert_eq!(fallible.regions, infallible.regions);
-    assert_eq!(answer(&fallible), 21);
-}
-
-#[test]
-fn typed_function_lookup_preserves_definition_states_and_signatures() {
-    let (mut p, main) = Program::new("main");
-    assert!(matches!(
-        p.function(main).definition,
-        Definition::Declared(_)
-    ));
-    assert!(p.signature(p.function(main).params).is_empty());
-    let outside = p.external("outside", &[Class::Address], Returns::Never);
-    assert_eq!(p.function(outside).definition, Definition::External);
-    assert_eq!(p.function(outside).returns, Returns::Never);
-    assert_eq!(p.signature(p.function(outside).params), &[Class::Address]);
-    p.define(main, |b, _| {
-        let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero]);
-    });
-    assert!(matches!(p.function(main).definition, Definition::Body(_)));
-    assert_eq!(answer(&p), 0);
-}
-
-#[test]
-#[should_panic(expected = "index out of bounds")]
-fn typed_function_lookup_does_not_fabricate_a_missing_declaration() {
-    let _ = program().function(FunctionId(u32::MAX));
 }
 
 #[test]

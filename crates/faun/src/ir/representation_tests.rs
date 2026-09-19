@@ -201,7 +201,7 @@ fn unsupported_values_after_nonreturning_bindings_are_not_lowered() {
             let mut source = parse(&text);
             if normalized {
                 // The second case becomes a match whose every arm leaves.
-                barb::normalize(&mut source);
+                barb::normalize_with_limits(&mut source, barb::InlineLimits::default());
             }
             lower_program(&source).unwrap();
         }

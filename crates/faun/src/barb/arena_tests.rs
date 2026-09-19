@@ -177,7 +177,7 @@ fn normalization_only_appends_terms_and_keeps_declaration_storage() {
     let mut p = library();
     let before = p.clone();
     let allocations = storage(&p);
-    super::normalize(&mut p);
+    super::normalize_with_limits(&mut p, super::InlineLimits::default());
     validate(&p).unwrap();
     assert_eq!(
         &p.exprs.as_slice()[..before.exprs.len()],

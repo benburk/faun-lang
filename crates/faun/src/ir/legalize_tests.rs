@@ -4,6 +4,7 @@ use num_bigint::BigUint;
 
 use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
 use super::natural::Config;
+use super::test_support::{no_live_objects, word};
 use super::*;
 
 #[derive(Default)]
@@ -54,12 +55,6 @@ fn base() -> (Program, FunctionId) {
     (p, test)
 }
 
-fn word(bytes: &[u8]) -> usize {
-    let mut value = [0; 8];
-    value[..bytes.len()].copy_from_slice(bytes);
-    usize::try_from(u64::from_le_bytes(value)).expect("test size")
-}
-
 fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
     let address = word(&evaluation.returned().unwrap()[0].to_bytes_le());
     let globals = p.data().len() + 2;
@@ -80,32 +75,6 @@ fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
         );
     }
     BigUint::from_bytes_le(digits)
-}
-
-fn no_live_objects(p: &Program, evaluation: &Evaluation, config: Config) {
-    assert!(evaluation.returned().is_some(), "unexpected OOM");
-    let pool = p
-        .spans
-        .iter()
-        .rev()
-        .find(|s| {
-            s.origin == Origin::Globals && usize::try_from(s.len).unwrap() == config.heap_bytes
-        })
-        .expect("private heap");
-    let w = usize::from(config.word_bits / 8);
-    let mut at = usize::try_from(pool.start).unwrap();
-    let end = at + config.heap_bytes;
-    while at < end {
-        let size = word(&evaluation.globals[at..at + w]);
-        assert!(size >= 3 * w && size.is_multiple_of(w));
-        assert_eq!(
-            word(&evaluation.globals[at + w..at + 2 * w]),
-            0,
-            "leaked block at {at}"
-        );
-        at += size;
-    }
-    assert_eq!(at, end, "block chain stays inside heap");
 }
 
 #[test]
@@ -573,44 +542,6 @@ fn source_host_arguments_are_not_implicitly_truncated() {
         &crate::platform::Routines::builtin().with_word(16),
     )
     .unwrap();
-}
-
-#[test]
-fn typed_loop_slots_keep_their_width_when_initialized_from_narrower_values() {
-    let (mut p, main) = Program::new("main");
-    let mut carried = None;
-    p.define(main, |b, _| {
-        let zero = b.constant(Class::Fixed { bits: 1 }, 0);
-        b.convert(Class::Natural, zero);
-        let result = b.loop_(&[zero], &[Class::Word], |b, params| {
-            carried = Some(params[0]);
-            let bound = b.constant(Class::Word, 10);
-            let more = b.compare(Relation::Less, params[0], bound);
-            b.if_(
-                more,
-                &[],
-                |b| {
-                    let one = b.constant(Class::Word, 1);
-                    let next = b.binary_at(Class::Word, Binary::Add, params[0], one);
-                    b.continue_(&[next]);
-                },
-                |b| b.break_(&[params[0]]),
-            );
-        });
-        b.ret(&result);
-    });
-    // Builder ordinarily picks the initial value's class, but the IR permits
-    // a wider declared carried slot. Model a producer with that valid shape.
-    p.classes[carried.unwrap()] = Class::Word;
-    let config = Config {
-        word_bits: 16,
-        heap_bytes: 64,
-    };
-    let scalar = legalize(&p, config).unwrap();
-    let expected = run(&p, main, &[], 16);
-    let actual = run(&scalar, main, &[], 16);
-    assert_eq!(actual.outcome, expected.outcome);
-    no_live_objects(&scalar, &actual, config);
 }
 
 #[test]

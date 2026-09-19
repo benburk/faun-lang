@@ -106,7 +106,7 @@ pub use model::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, FnId, Function, Local, Range,
     Symbol, Type, TypeId,
 };
-pub use normalize::{normalize, normalize_with_limits, structural};
+pub use normalize::{normalize_with_limits, structural};
 pub use optimize::{OptimizeOptions, optimize};
 pub use program::Program;
 pub use validate::validate;

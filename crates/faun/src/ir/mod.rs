@@ -38,8 +38,7 @@
 //!
 //! A word constant is 64 bits of pattern, not a signed number:
 //!
-//! - `-1` and `u64::MAX` are one value. [`Builder::constant_signed`] is a
-//!   spelling, not a second representation.
+//! - `-1` and `u64::MAX` describe the same 64-bit pattern.
 //! - Signedness picks `div` against `idiv` and `jb` against `jl`, so it
 //!   belongs to operations. LLVM dropped signed and unsigned integer types;
 //!   wasm never had them.
@@ -102,6 +101,8 @@ mod natural_tests;
 mod ownership_tests;
 #[cfg(test)]
 mod representation_tests;
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
