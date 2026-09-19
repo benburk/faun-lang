@@ -1,4 +1,4 @@
-use super::evaluate::{Evaluator, Held};
+use super::evaluate::{Budget, Evaluator, Held};
 use super::*;
 use num_bigint::BigUint;
 
@@ -46,7 +46,10 @@ impl Library {
         .body(
             self.program.function(id).body.unwrap(),
             args.iter().cloned().map(Some).collect(),
-            &mut 100_000,
+            &mut Budget::new(FoldLimits {
+                max_depth: 512,
+                ..FoldLimits::default()
+            }),
         )
         .unwrap_or_else(|| panic!("evaluation budget exhausted: {name}"))
     }
