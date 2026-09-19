@@ -25,35 +25,39 @@ pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
 }
 
 fn rewrite(program: &mut Program, inlining: Option<Inlining>) {
-    let source = program.clone();
-    let operations = super::arithmetic::recognise(&source);
+    let operations = super::arithmetic::recognise(program);
     let mut rewrite = Rewrite {
-        source: &source,
         program,
         operations,
         inlining,
         inline_depth: 0,
     };
-    for at in 0..source.functions().len() {
+    // Reads name existing entries; writes only append. Keep all function roots
+    // unchanged until the end, so later callers still inline original bodies
+    // using the costs and depth limits computed for those bodies.
+    let mut bodies = vec![];
+    for at in 0..rewrite.program.functions().len() {
         let id = FnId::at(at);
         if rewrite.operations[at].is_some() {
             continue;
         }
-        let Some(body) = source.function(id).body() else {
+        let Some(body) = rewrite.program.function(id).body() else {
             continue;
         };
         if let Some(inlining) = &mut rewrite.inlining {
             inlining.begin_function();
         }
-        let count = source.params(id).len();
+        let count = rewrite.program.params(id).len();
         let locals: Vec<_> = (0..count).map(|at| Atom(Local::at(at))).collect();
         let body = rewrite.body(body, locals, count);
-        rewrite.program.functions[at].define(body);
+        bodies.push((id, body));
+    }
+    for (id, body) in bodies {
+        rewrite.program.functions[id.index()].define(body);
     }
 }
 
 struct Rewrite<'a> {
-    source: &'a Program,
     program: &'a mut Program,
     operations: Vec<Option<super::Operation>>,
     inlining: Option<Inlining>,
@@ -83,16 +87,17 @@ impl Rewrite<'_> {
         }
     }
     fn into(&mut self, body: Body, mut locals: Vec<Atom>, scope: &mut Scope) -> Atom {
-        for &binding in self.source.bindings(body.bindings) {
+        for at in body.bindings.range() {
+            let binding = self.program.bindings[at];
             let value = self.expr(binding, &locals, scope);
             locals.push(value);
         }
         self.expr(body.tail, &locals, scope)
     }
     fn expr(&mut self, id: ExprId, locals: &[Atom], scope: &mut Scope) -> Atom {
-        let expr = match self.source.expr(id) {
+        let expr = match self.program.expr(id) {
             Expr::Atom(a) => return locals[a.0.index()],
-            Expr::Static(..) => self.source.expr(id),
+            value @ Expr::Static(..) => value,
             Expr::Con(ctor, fields) => {
                 let fields = self.args(fields, locals);
                 Expr::Con(ctor, self.hold(&fields))
@@ -109,8 +114,9 @@ impl Rewrite<'_> {
             }
             Expr::Match(value, arms) => {
                 let mut found = vec![];
-                for arm in self.source.arms(arms) {
-                    let fields = self.source.fields(arm.ctor).len();
+                for at in arms.range() {
+                    let arm = self.program.arms[at];
+                    let fields = self.program.fields(arm.ctor).len();
                     let mut inner = locals.to_vec();
                     inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
                     found.push(Arm {
@@ -135,11 +141,11 @@ impl Rewrite<'_> {
         }
         self.inlining
             .as_mut()?
-            .callee(self.source, called, self.inline_depth)
+            .callee(self.program, called, self.inline_depth)
     }
 
     fn args(&self, args: Range, locals: &[Atom]) -> Vec<Atom> {
-        self.source
+        self.program
             .atoms(args)
             .iter()
             .map(|a| locals[a.0.index()])

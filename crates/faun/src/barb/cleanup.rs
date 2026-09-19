@@ -1,29 +1,54 @@
 //! Backward liveness for inert bindings, followed by capture-free renaming.
 //! Calls and matches are always retained, even when their answers are unused.
 //! Dropping a constructor never drops the eager calls that produced its fields.
+//! Rebuild into fresh term pools, then replace the old pools in one commit.
+//! Declarations and constants stay in place; expression IDs and ranges change.
+
+use std::collections::HashMap;
 
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
 
 pub(super) fn cleanup(program: &mut Program) {
-    let source = program.clone();
-    let operations = super::arithmetic::recognise(&source);
+    let operations = super::arithmetic::recognise(program);
     let mut rewrite = Rewrite {
-        source: &source,
-        program,
+        source: program,
+        exprs: vec![],
+        atoms: vec![],
+        bindings: vec![],
+        arms: vec![],
+        copied: HashMap::new(),
     };
+    let mut bodies = vec![];
+    // Every definition is a root, not just the entry or its reachable callees.
     for (at, op) in operations.iter().enumerate() {
-        if op.is_some() {
-            continue;
-        }
         let id = FnId::at(at);
-        let Some(body) = source.function(id).body() else {
+        let Some(body) = program.function(id).body() else {
             continue;
         };
-        let count = source.params(id).len();
-        let (plan, _) = plan_body(&source, body, count);
-        let locals = (0..count).map(|at| Some(Atom(Local::at(at)))).collect();
-        let body = rewrite.body(plan, locals, count);
-        rewrite.program.functions[at].define(body);
+        let body = if op.is_some() {
+            // Protected equations need new pool references, but no rewriting.
+            rewrite.copy_body(body)
+        } else {
+            let count = program.params(id).len();
+            let (plan, _) = plan_body(program, body, count);
+            let locals = (0..count).map(|at| Some(Atom(Local::at(at)))).collect();
+            rewrite.body(plan, locals, count)
+        };
+        bodies.push((id, body));
+    }
+    let Rewrite {
+        exprs,
+        atoms,
+        bindings,
+        arms,
+        ..
+    } = rewrite;
+    program.exprs = exprs;
+    program.atoms = atoms;
+    program.bindings = bindings;
+    program.arms = arms;
+    for (id, body) in bodies {
+        program.functions[id.index()].define(body);
     }
 }
 
@@ -86,7 +111,13 @@ fn plan_expr(program: &Program, id: ExprId, live: &mut [bool]) -> PlannedExpr {
 
 struct Rewrite<'a> {
     source: &'a Program,
-    program: &'a mut Program,
+    exprs: Vec<Expr>,
+    atoms: Vec<Atom>,
+    bindings: Vec<ExprId>,
+    arms: Vec<Arm>,
+    // Copying protected equations is context-free, unlike liveness rewriting.
+    // Preserve expression sharing there, including shared match subtrees.
+    copied: HashMap<ExprId, ExprId>,
 }
 
 impl Rewrite<'_> {
@@ -107,12 +138,7 @@ impl Rewrite<'_> {
         }
         let expr = self.expr(plan.tail, &locals, level);
         let tail = self.push(expr);
-        let start = self.program.bindings.len();
-        self.program.bindings.extend_from_slice(&bindings);
-        Body {
-            bindings: Range::of(start, bindings.len()),
-            tail,
-        }
+        self.hold_body(&bindings, tail)
     }
 
     fn expr(&mut self, plan: PlannedExpr, locals: &[Option<Atom>], level: usize) -> Expr {
@@ -132,25 +158,80 @@ impl Rewrite<'_> {
                         body: self.body(body, inner, level + fields),
                     });
                 }
-                let start = self.program.arms.len();
-                self.program.arms.extend_from_slice(&found);
-                Expr::Match(local(locals, value), Range::of(start, found.len()))
+                Expr::Match(local(locals, value), self.hold_arms(&found))
             }
         }
     }
 
     fn args(&mut self, args: Range, locals: &[Option<Atom>]) -> Range {
-        let start = self.program.atoms.len();
-        self.program
-            .atoms
+        let start = self.atoms.len();
+        self.atoms
             .extend(self.source.atoms(args).iter().map(|&a| local(locals, a)));
         Range::of(start, args.len())
     }
 
     fn push(&mut self, expr: Expr) -> ExprId {
-        let id = ExprId::at(self.program.exprs.len());
-        self.program.exprs.push(expr);
+        let id = ExprId::at(self.exprs.len());
+        self.exprs.push(expr);
         id
+    }
+
+    fn hold_body(&mut self, bindings: &[ExprId], tail: ExprId) -> Body {
+        let start = self.bindings.len();
+        self.bindings.extend_from_slice(bindings);
+        Body {
+            bindings: Range::of(start, bindings.len()),
+            tail,
+        }
+    }
+
+    fn hold_arms(&mut self, arms: &[Arm]) -> Range {
+        let start = self.arms.len();
+        self.arms.extend_from_slice(arms);
+        Range::of(start, arms.len())
+    }
+
+    fn copy_body(&mut self, body: Body) -> Body {
+        let bindings: Vec<_> = self
+            .source
+            .bindings(body.bindings)
+            .iter()
+            .map(|&id| self.copy_expr(id))
+            .collect();
+        let tail = self.copy_expr(body.tail);
+        self.hold_body(&bindings, tail)
+    }
+
+    fn copy_expr(&mut self, id: ExprId) -> ExprId {
+        if let Some(&copied) = self.copied.get(&id) {
+            return copied;
+        }
+        let expr = match self.source.expr(id) {
+            value @ (Expr::Atom(_) | Expr::Static(..)) => value,
+            Expr::Con(ctor, args) => Expr::Con(ctor, self.copy_args(args)),
+            Expr::Call(called, args) => Expr::Call(called, self.copy_args(args)),
+            Expr::Match(value, arms) => {
+                let arms: Vec<_> = self
+                    .source
+                    .arms(arms)
+                    .iter()
+                    .map(|arm| Arm {
+                        ctor: arm.ctor,
+                        body: self.copy_body(arm.body),
+                    })
+                    .collect();
+                Expr::Match(value, self.hold_arms(&arms))
+            }
+        };
+        let copied = self.push(expr);
+        self.copied.insert(id, copied);
+        copied
+    }
+
+    fn copy_args(&mut self, args: Range) -> Range {
+        let start = self.atoms.len();
+        self.atoms.extend_from_slice(self.source.atoms(args));
+        Range::of(start, args.len())
     }
 }
 

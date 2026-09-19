@@ -98,6 +98,8 @@ pub use optimize::{OptimizeOptions, optimize};
 pub use validate::validate;
 
 #[cfg(test)]
+mod arena_tests;
+#[cfg(test)]
 mod arithmetic_tests;
 #[cfg(test)]
 mod library_tests;

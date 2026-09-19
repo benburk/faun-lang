@@ -80,7 +80,10 @@ definitions; this is not a claim that structural normalization performs no analy
 `InlineLimits` bounds copied arena entries per callee, per caller and across the whole
 program, plus expansion depth. Large callees are refused before copying; exhausted
 budgets leave ordinary calls. Structural copying of the input itself is not charged
-as expansion. Arena slots superseded by normalization are not compacted.
+as expansion. Normalization reads existing slots and appends new ones without
+cloning the program. Function roots change only after all bodies have been rebuilt,
+so inlining always reads original callees and respects their original cost/depth
+limits. Superseded slots remain until cleanup.
 
 `FoldLimits` bounds aggregate work, encoded value size and evaluation depth. Work
 includes expression visits, copied bytes and conservative bigint word-operation
@@ -95,6 +98,19 @@ there is no fixed-point loop. Every call and match is conservatively retained, e
 when its result is unused. In particular, dropping a constructor does not drop the
 eager calls that computed its fields. Folded, now-unused product constants no longer
 demand runtime representations; live products still require backend support.
+
+Cleanup is also the term-arena compaction point. It borrows the original program,
+builds fresh expression/argument/binding/arm pools, then installs those pools and
+updated function roots. Every defined function is retained, not only entry-reachable
+ones. Recognized arithmetic equations are copied without semantic rewriting, with
+expression sharing preserved; liveness rewriting remains occurrence-specific.
+Names, declarations, type lists and constant storage are neither cloned nor moved.
+Constant-pool garbage collection is not part of this pass.
+
+Compaction invalidates old expression IDs and term ranges, including saved bodies
+and expression-indexed facts. Function, type, constructor, symbol and constant IDs
+stay stable. Recompute `analyze` after optimization. Disabling cleanup leaves the
+append-only arena history in place; memory reclamation is not required for semantics.
 
 Identities preserve monus and zero-divisor semantics. In particular, `x / x` is not
 rewritten to one. Argument bindings remain eager even when a law makes their values

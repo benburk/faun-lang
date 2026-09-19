@@ -37,6 +37,10 @@ impl Default for OptimizeOptions {
 /// Each stage runs at most once, in this order. Recognized induction equations
 /// are left intact. Cleanup removes aliases and unused inert bindings, never
 /// calls or matches whose evaluation may have effects.
+///
+/// Cleanup rebuilds the term pools: discard saved expression IDs, body/range
+/// handles and analysis facts after optimization. Declaration and constant IDs
+/// are preserved.
 pub fn optimize(program: &mut Program, options: &OptimizeOptions) {
     if options.structural {
         super::structural(program);
