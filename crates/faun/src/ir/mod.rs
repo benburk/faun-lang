@@ -43,6 +43,7 @@
 //! implement that representation or reject it, never select its word size.
 mod arithmetic;
 mod builder;
+pub mod evaluate;
 mod lower;
 mod model;
 mod validate;
@@ -57,6 +58,8 @@ pub use validate::validate;
 
 #[cfg(test)]
 mod arithmetic_tests;
+#[cfg(test)]
+mod interpreter_tests;
 #[cfg(test)]
 mod representation_tests;
 #[cfg(test)]
