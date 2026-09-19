@@ -19,11 +19,6 @@ use faun::ir::{
 /// A word here is the width of an address.
 const WORD: i32 = 2;
 
-/// The next slot in a frame that holds at most 128 values.
-const fn step(frame: u8) -> u8 {
-    frame.checked_add(2).expect("a frame within 128 values")
-}
-
 /// Where a function keeps what it holds.
 #[derive(Clone, Default)]
 struct Plan {
@@ -233,6 +228,22 @@ pub(crate) fn lower(program: &Program) -> Code {
     panic!("the layout did not settle in {ROUNDS} rounds")
 }
 
+/// Run the actual home/slot allocation, without emitting instructions. A
+/// frame's byte size must fit u8: at most 127 spilled pairs, not 128.
+/// This does not prove recursion stack depth or image/stack separation.
+pub(crate) fn check_frames(program: &Program) -> Result<(), String> {
+    let mut state = Lowering::new(program, Assembler::new(0), 0);
+    for function in program.functions() {
+        state.plan(function.body).map_err(|error| {
+            format!(
+                "mos6502-sim65 function `{}`: {error}",
+                program.name(function.name)
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn assemble(program: &Program, heap: u16) -> Code {
     // The data sits at the front of the image and the code after it, so the
     // code's own addresses depend on how much data there is.
@@ -245,7 +256,11 @@ fn assemble(program: &Program, heap: u16) -> Code {
         .map(|_| state.asm.label())
         .collect();
     state.plans = (0..program.functions().len())
-        .map(|id| state.plan(program.functions()[id].body))
+        .map(|id| {
+            state
+                .plan(program.functions()[id].body)
+                .expect("accepted frame size")
+        })
         .collect();
     state.reset(heap);
     for id in 0..program.functions().len() {
@@ -399,7 +414,7 @@ impl Lowering<'_> {
     /// rather than the twenty a frame slot costs; the rest get slots. Use
     /// is counted per loop depth, so an inner loop outbids straight line
     /// code for the pairs.
-    fn plan(&mut self, body: RegionId) -> Plan {
+    fn plan(&mut self, body: RegionId) -> Result<Plan, String> {
         let mut weight = vec![0u64; self.program.values_count()];
         let mut uses = vec![0u32; self.program.values_count()];
         let mut held = Vec::new();
@@ -422,17 +437,17 @@ impl Lowering<'_> {
         held.sort_by_key(|value| (core::cmp::Reverse(weight[value.index()]), value.index()));
 
         let spans = self.spans(body);
-        let plan = self.place(&held, &spans);
+        let plan = self.place(&held, &spans)?;
         for (value, param) in shared {
             self.source[value.index()] = self.source[param.index()];
         }
-        plan
+        Ok(plan)
     }
 
     /// The most used values get a zero-page pair and the rest frame slots,
     /// with room after them to save the pairs, for a function that has
     /// someone to give them back to.
-    fn place(&mut self, held: &[ValueId], spans: &Spans) -> Plan {
+    fn place(&mut self, held: &[ValueId], spans: &Spans) -> Result<Plan, String> {
         let mut plan = Plan::default();
         for &value in held {
             // A callee takes the pairs from the same place, so a value a
@@ -447,11 +462,14 @@ impl Lowering<'_> {
                 }
                 _ => {
                     self.source[value.index()] = Source::Slot(plan.frame);
-                    plan.frame = step(plan.frame);
+                    plan.frame = plan
+                        .frame
+                        .checked_add(2)
+                        .ok_or_else(|| "frame exceeds 254 bytes (127 spilled values)".to_owned())?;
                 }
             }
         }
-        plan
+        Ok(plan)
     }
 
     /// What each value is, and how much the function leans on it.

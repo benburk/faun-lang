@@ -2,6 +2,8 @@
 //! will sit, so it leaves a [`Reloc`] wherever an address belongs; [`elf`]
 //! chooses the layout and fills them in.
 
+#[cfg(test)]
+mod abi_tests;
 mod elf;
 mod encode;
 mod lower;
@@ -30,6 +32,25 @@ impl Target for X86_64Linux {
 
     fn provides(&self) -> &'static [&'static str] {
         &["write", "exit", "grow", "argc"]
+    }
+
+    fn limits(&self, program: &Program) -> Result<(), String> {
+        for function in program.functions() {
+            let name = program.name(function.name);
+            if function.params.len() > 6 {
+                return Err(format!(
+                    "x86-64-linux function `{name}` has {} parameters; at most 6 are supported",
+                    function.params.len()
+                ));
+            }
+            if function.returns.len() > 1 {
+                return Err(format!(
+                    "x86-64-linux function `{name}` has {} results; at most 1 is supported",
+                    function.returns.len()
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn emit(&self, program: &Program) -> Vec<Artifact> {

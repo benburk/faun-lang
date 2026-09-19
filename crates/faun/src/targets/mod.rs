@@ -66,6 +66,18 @@ pub trait Target: fmt::Debug {
     /// The files a program becomes.
     fn emit(&self, program: &Program) -> Vec<Artifact>;
 
+    /// Target-specific calling-convention and representation limits.
+    ///
+    /// This runs from [`Self::accepts`] after scalar class checks. The IR
+    /// itself permits multivalue functions and regions; a target that cannot
+    /// implement those shapes must reject them here, before emission.
+    ///
+    /// # Errors
+    /// Names an unsupported target-specific program shape.
+    fn limits(&self, _program: &Program) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Whether it can hold what the program holds.
     ///
     /// A word is as wide as the machine is, so a number the program knows
@@ -110,7 +122,7 @@ pub trait Target: fmt::Debug {
                 _ => {}
             }
         }
-        Ok(())
+        self.limits(program)
     }
 }
 

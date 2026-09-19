@@ -444,3 +444,17 @@ fn runtime_arithmetic_size_ratchets() {
         assert_eq!(bytes(&program).len(), expected, "{op:?}");
     }
 }
+
+/// WASM uses its operand stack for multiple function returns and region
+/// transfers; the native targets' register/scratch limits do not apply.
+#[test]
+fn multivalue_function_and_region_abis_are_supported() {
+    assert_eq!(status(&programs::abi::function(7, 3)), 0);
+    for kind in [
+        programs::abi::Transfer::If,
+        programs::abi::Transfer::LoopState,
+        programs::abi::Transfer::LoopResults,
+    ] {
+        assert_eq!(status(&programs::abi::region(kind, 3)), 0);
+    }
+}

@@ -10,6 +10,7 @@
 //! Nothing here names a machine. What each becomes is a question for
 //! whichever target is handed one, and every target is handed all of them.
 
+pub mod abi;
 pub mod arithmetic;
 
 use crate::ir::Class::Word;

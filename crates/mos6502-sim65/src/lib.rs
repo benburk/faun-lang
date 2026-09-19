@@ -10,13 +10,15 @@
 //! `$0200`. The platform is the simulator's hooks, and `grow` is a bump
 //! upwards from the end of the image toward the stack.
 
+#[cfg(test)]
+mod abi_tests;
 mod asm;
 mod image;
 mod lower;
 #[cfg(test)]
 mod tests;
 
-use faun::ir::Program;
+use faun::ir::{Op, Program, RegionId};
 use faun::targets::{Artifact, Target};
 
 /// Where sim65 loads the image, and the zero-page pairs below it.
@@ -77,6 +79,26 @@ impl Target for Mos6502Sim65 {
         &["write", "exit", "grow", "argc"]
     }
 
+    fn limits(&self, program: &Program) -> Result<(), String> {
+        for function in program.functions() {
+            let name = program.name(function.name);
+            if function.params.len() > usize::from(ARG_COUNT) {
+                return Err(format!(
+                    "mos6502-sim65 function `{name}` has {} parameters; at most {ARG_COUNT} are supported",
+                    function.params.len()
+                ));
+            }
+            if function.returns.len() > 1 {
+                return Err(format!(
+                    "mos6502-sim65 function `{name}` has {} results; at most 1 is supported",
+                    function.returns.len()
+                ));
+            }
+            region_limits(program, name, function.body)?;
+        }
+        lower::check_frames(program)
+    }
+
     fn emit(&self, program: &Program) -> Vec<Artifact> {
         vec![Artifact {
             extension: ".bin",
@@ -84,6 +106,45 @@ impl Target for Mos6502Sim65 {
             executable: false,
         }]
     }
+}
+
+/// All nested region edges use at most the two scratch pairs. Function
+/// parameters arrive in separate argument pairs and are checked separately.
+fn region_limits(program: &Program, name: &str, body: RegionId) -> Result<(), String> {
+    let mut regions = vec![body];
+    while let Some(region) = regions.pop() {
+        for (op, results) in program.walk(region) {
+            let (kind, count) = match *op {
+                Op::If {
+                    then_region,
+                    else_region,
+                    ..
+                } => {
+                    regions.extend([then_region, else_region]);
+                    ("if results", results.len())
+                }
+                Op::Loop { initial, body } => {
+                    regions.push(body);
+                    if initial.len() > 2 {
+                        return Err(format!(
+                            "mos6502-sim65 function `{name}` region {} has {} loop parameters; at most 2 are supported",
+                            region.index(),
+                            initial.len()
+                        ));
+                    }
+                    ("loop results", results.len())
+                }
+                _ => continue,
+            };
+            if count > 2 {
+                return Err(format!(
+                    "mos6502-sim65 function `{name}` region {} has {count} {kind}; at most 2 are supported",
+                    region.index()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 struct Code {
