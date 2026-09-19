@@ -17,7 +17,7 @@ fn unknown_or_overflowing_bounds_never_choose_a_machine_word() {
         });
         let facts = barb::analyze(&source);
         let machine = lower(&source, &facts, &crate::platform::Routines::builtin()).unwrap();
-        let body = machine.functions()[0].body().unwrap();
+        let body = machine.function(machine.entry()).body().unwrap();
         assert!(machine.walk(body).any(|(op, results)| {
             matches!(
                 op,
@@ -93,7 +93,7 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
         )
         .unwrap();
         validate(&machine).unwrap();
-        let body = machine.functions()[0].body().unwrap();
+        let body = machine.function(machine.entry()).body().unwrap();
         assert!(
             machine
                 .every(body)

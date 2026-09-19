@@ -2,7 +2,7 @@
 //! live in.
 
 pub use crate::index::Range;
-use crate::index::{Pool, index};
+use crate::index::{Pool, append_range, index};
 
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. The IR never reads those characters: names are compared and copied
@@ -278,9 +278,7 @@ impl Program {
 
     /// Keep a list of existing values, giving back the run it occupies.
     pub(super) fn hold(&mut self, values: &[ValueId]) -> Range {
-        let start = self.operands.len();
-        self.operands.extend_from_slice(values);
-        Range::of(start, values.len())
+        append_range(&mut self.operands, values)
     }
 
     /// The classes a run in the signature pool names.
@@ -386,6 +384,16 @@ impl Program {
     #[must_use]
     pub fn region(&self, region: RegionId) -> Region {
         self.regions[region]
+    }
+
+    /// A function declaration by its typed ID, in any definition state.
+    ///
+    /// # Panics
+    /// If the ID is outside this program's function table. IDs do not encode
+    /// which program they came from.
+    #[must_use]
+    pub fn function(&self, id: FunctionId) -> &Function {
+        &self.functions[id]
     }
 
     #[must_use]

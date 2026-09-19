@@ -67,7 +67,7 @@ pub fn cases(bits: u16, op: Binary, pairs: &[(u64, u64)]) -> Program {
                 Binary::Sub => left.checked_sub(right).expect("a guarded subtraction"),
             };
             let args = [left, right, expected].map(|value| b.constant(class, value));
-            let result = b.call(check, &args)[0];
+            let result = b.call_one(check, &args);
             passed = b.binary(Binary::Add, passed, result);
         }
         let count = b.constant(
@@ -122,7 +122,7 @@ pub fn zero_conversion() -> Program {
         let mut passed = b.constant(Class::Word, 0);
         for input in [0, 1, 255, 256, 65535] {
             let input = b.constant(Class::Word, input);
-            let equal = b.call(check, &[input])[0];
+            let equal = b.call_one(check, &[input]);
             passed = b.binary(Binary::Add, passed, equal);
         }
         let count = b.constant(Class::Word, 5);
@@ -139,11 +139,11 @@ pub fn preserves_host_count() -> Program {
     let (mut program, main) = Program::new("main");
     let argc = crate::platform::Routines::builtin().declare(&mut program, "argc");
     program.define(main, |b, _| {
-        let before = b.call(argc, &[])[0];
+        let before = b.call_one(argc, &[]);
         let two = b.constant(Class::Word, 2);
         let three = b.constant(Class::Word, 3);
         let products: Vec<_> = (0..12).map(|_| b.binary(Binary::Mul, two, three)).collect();
-        let after = b.call(argc, &[])[0];
+        let after = b.call_one(argc, &[]);
         let mut total = b.constant(Class::Word, 0);
         for product in products {
             total = b.binary(Binary::Add, total, product);

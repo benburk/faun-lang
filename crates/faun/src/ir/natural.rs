@@ -220,10 +220,6 @@ fn lt(b: &mut Builder<'_>, a: ValueId, c: ValueId) -> ValueId {
     b.compare(Relation::Less, a, c)
 }
 
-fn call(b: &mut Builder<'_>, f: FunctionId, args: &[ValueId]) -> ValueId {
-    b.call(f, args)[0]
-}
-
 fn address(b: &mut Builder<'_>, base: ValueId, offset: ValueId) -> ValueId {
     let base = b.convert(W, base);
     let at = add(b, base, offset);
@@ -535,7 +531,7 @@ fn allocator(
                 free,
                 &[],
                 |b| {
-                    let merged = call(b, coalesce, &[base, offset, pool]);
+                    let merged = b.call_one(coalesce, &[base, offset, pool]);
                     b.store(Width::Word, at, Offset::Words(0), merged);
                     let small = lt(b, merged, wanted);
                     b.if_(
@@ -768,14 +764,14 @@ fn addition(p: &mut Program, storage: Storage, digit: FunctionId) -> FunctionId 
         let zero = number(b, 0);
         let radix = number(b, 256);
         let cap = add(b, len, one);
-        let out = call(b, alloc, &[cap]);
+        let out = b.call_one(alloc, &[cap]);
         let carry = b.loop_(&[zero, zero], &[W], |b, state| {
             let i = state[0];
             let carry = state[1];
             let done = eq(b, i, len);
             b.if_(done, &[], |b| b.break_(&[carry]), |b| b.yield_(&[]));
-            let x = call(b, digit, &[a, i]);
-            let y = call(b, digit, &[c, i]);
+            let x = b.call_one(digit, &[a, i]);
+            let y = b.call_one(digit, &[c, i]);
             let sum = add(b, x, y);
             let sum = add(b, sum, carry);
             let low = b.binary(Binary::Mod, sum, radix);
@@ -785,7 +781,7 @@ fn addition(p: &mut Program, storage: Storage, digit: FunctionId) -> FunctionId 
             b.continue_(&[next, high]);
         })[0];
         write_digit(b, out, len, carry, word);
-        let result = call(b, finish, &[out]);
+        let result = b.call_one(finish, &[out]);
         b.ret(&[result]);
     });
     f
@@ -807,7 +803,7 @@ fn subtracting(p: &mut Program, digit: FunctionId, trim: FunctionId, word: usize
             let done = eq(b, i, len);
             b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
             let x = read_digit(b, a, i, word);
-            let y = call(b, digit, &[c, i]);
+            let y = b.call_one(digit, &[c, i]);
             let y = add(b, y, borrow);
             let borrow = lt(b, x, y);
             let low = b.if_(
@@ -850,7 +846,7 @@ fn monus(
     p.define(f, |b, args| {
         let a = args[0];
         let c = args[1];
-        let order = call(b, compare, &[a, c]);
+        let order = b.call_one(compare, &[a, c]);
         let two = number(b, 2);
         let greater = eq(b, order, two);
         b.if_(
@@ -863,7 +859,7 @@ fn monus(
             },
         );
         let len = length(b, a);
-        let out = call(b, alloc, &[len]);
+        let out = b.call_one(alloc, &[len]);
         let zero = number(b, 0);
         let one = number(b, 1);
         b.loop_(&[zero], &[], |b, state| {
@@ -876,7 +872,7 @@ fn monus(
             b.continue_(&[next]);
         });
         b.call(subtract, &[out, c]);
-        let result = call(b, finish, &[out]);
+        let result = b.call_one(finish, &[out]);
         b.ret(&[result]);
     });
     f
@@ -975,7 +971,7 @@ fn multiplication(p: &mut Program, storage: Storage, zero: DataId) -> FunctionId
             |b| b.yield_(&[]),
         );
         let cap = add(b, la, lc);
-        let out = call(b, alloc, &[cap]);
+        let out = b.call_one(alloc, &[cap]);
         b.loop_(&[nil], &[], |b, state| {
             let i = state[0];
             let done = eq(b, i, la);
@@ -984,7 +980,7 @@ fn multiplication(p: &mut Program, storage: Storage, zero: DataId) -> FunctionId
             let next = add(b, i, one);
             b.continue_(&[next]);
         });
-        let result = call(b, finish, &[out]);
+        let result = b.call_one(finish, &[out]);
         b.ret(&[result]);
     });
     f
@@ -1056,7 +1052,7 @@ fn divide_digit(
             let part = b.binary(Binary::Div, digit, mask);
             let bit = b.binary(Binary::Mod, part, two);
             b.call(shift, &[r, bit]);
-            let order = call(b, compare, &[r, divisor]);
+            let order = b.call_one(compare, &[r, divisor]);
             let less = eq(b, order, zero);
             let quotient = b.if_(
                 less,
@@ -1110,7 +1106,7 @@ fn division(
         let nil = number(b, 0);
         let one = number(b, 1);
         let empty = eq(b, lc, nil);
-        let order = call(b, compare, &[a, c]);
+        let order = b.call_one(compare, &[a, c]);
         let less = eq(b, order, nil);
         // Both trivial paths borrow `a` and must create an owned result.
         for trivial in [empty, less] {
@@ -1122,7 +1118,7 @@ fn division(
                         remainder,
                         &[A],
                         |b| {
-                            let kept = call(b, retain, &[a]);
+                            let kept = b.call_one(retain, &[a]);
                             b.yield_(&[kept]);
                         },
                         |b| {
@@ -1137,16 +1133,16 @@ fn division(
         }
         // lc+1 cannot overflow: a valid object also has its three-word header.
         let cap = add(b, lc, one);
-        let r = call(b, alloc, &[cap]);
+        let r = b.call_one(alloc, &[cap]);
         set_length(b, r, nil);
-        let q = call(b, alloc, &[la]);
+        let q = b.call_one(alloc, &[la]);
         b.loop_(&[la], &[], |b, state| {
             let n = state[0];
             let done = eq(b, n, nil);
             b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
             let i = sub(b, n, one);
             let digit = read_digit(b, a, i, word);
-            let quotient = call(b, step, &[r, c, digit]);
+            let quotient = b.call_one(step, &[r, c, digit]);
             write_digit(b, q, i, quotient, word);
             b.continue_(&[i]);
         });
@@ -1155,12 +1151,12 @@ fn division(
             &[A],
             |b| {
                 b.call(release, &[q]);
-                let out = call(b, finish, &[r]);
+                let out = b.call_one(finish, &[r]);
                 b.yield_(&[out]);
             },
             |b| {
                 b.call(release, &[r]);
-                let out = call(b, finish, &[q]);
+                let out = b.call_one(finish, &[q]);
                 b.yield_(&[out]);
             },
         )[0];
@@ -1183,7 +1179,7 @@ fn division_entry(p: &mut Program, divmod: FunctionId, result: DivisionResult) -
     let f = declare(p, name, &[A, A], &[A]);
     p.define(f, |b, args| {
         let mode = number(b, mode);
-        let out = call(b, divmod, &[args[0], args[1], mode]);
+        let out = b.call_one(divmod, &[args[0], args[1], mode]);
         b.ret(&[out]);
     });
     f
@@ -1211,7 +1207,7 @@ fn promotion(
             |b| b.yield_(&[]),
         );
         let cap = number(b, size64(word));
-        let out = call(b, alloc, &[cap]);
+        let out = b.call_one(alloc, &[cap]);
         let radix = number(b, 256);
         let one = number(b, 1);
         b.loop_(&[nil, value], &[], |b, state| {
@@ -1225,7 +1221,7 @@ fn promotion(
             let next = add(b, i, one);
             b.continue_(&[next, high]);
         });
-        let result = call(b, finish, &[out]);
+        let result = b.call_one(finish, &[out]);
         b.ret(&[result]);
     });
     f

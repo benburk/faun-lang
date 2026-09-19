@@ -4,7 +4,7 @@ use super::model::{
     Binary, Class, DataId, Definition, Exit, Function, FunctionId, Offset, Op, Origin, Program,
     Range, Region, RegionId, Relation, Returns, Span, Symbol, Terminator, ValueId, Width, wrap,
 };
-use crate::index::Pool;
+use crate::index::{Pool, append_range};
 
 impl Program {
     /// A program and its entry function, which takes nothing and returns one
@@ -58,9 +58,8 @@ impl Program {
         if let Some(id) = self.symbols.position(held) {
             return id;
         }
-        let at = self.names.len();
-        self.names.extend_from_slice(name.as_bytes());
-        self.symbols.push(Range::of(at, name.len()))
+        let name = append_range(&mut self.names, name.as_bytes());
+        self.symbols.push(name)
     }
 
     /// Declare an external function by its provider name, with source aliases
@@ -172,9 +171,7 @@ impl Program {
 
     /// Hold a run of classes, for a signature.
     fn sign(&mut self, classes: &[Class]) -> Range {
-        let at = self.signature.len();
-        self.signature.extend_from_slice(classes);
-        Range::of(at, classes.len())
+        append_range(&mut self.signature, classes)
     }
 
     /// One value of `class`, and the run of one that names it.
@@ -319,6 +316,24 @@ impl Builder<'_> {
         let returns = self.program.functions[function].returns.classes();
         let args = self.program.hold(args);
         self.push_from(Op::Call { function, args }, returns)
+    }
+
+    /// Call a function declared to return exactly one value, without building
+    /// a temporary result vector. The result class comes from its signature.
+    /// Argument and control-flow validity are still checked by validation.
+    ///
+    /// # Panics
+    /// If the function ID is invalid, the region already has an explicit
+    /// transfer, or the signature has zero/multiple results or never returns.
+    /// Result-arity rejection happens before appending call operands or values.
+    pub fn call_one(&mut self, function: FunctionId, args: &[ValueId]) -> ValueId {
+        self.open();
+        let returns = self.program.function(function).returns.classes();
+        let &[class] = self.program.signature(returns) else {
+            panic!("call_one requires exactly one result");
+        };
+        let args = self.program.hold(args);
+        self.push_one(Op::Call { function, args }, class)
     }
 
     pub fn if_(

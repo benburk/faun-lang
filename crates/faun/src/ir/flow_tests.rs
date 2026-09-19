@@ -10,14 +10,14 @@ fn rejects(p: &Program, message: &str) {
 #[test]
 fn declarations_and_built_but_incomplete_bodies_are_different_errors() {
     let (mut p, main) = Program::new("main");
-    assert!(p.functions()[0].body().is_none());
+    assert!(p.function(p.entry()).body().is_none());
     assert_eq!(
         evaluate::evaluate(&p, main, &[], Config::default(), &mut RejectHost),
         Err(Error::InvalidProgram("function has not been defined"))
     );
     rejects(&p, "has not been defined");
     p.define(main, |_, _| {});
-    assert!(p.functions()[0].body().is_some());
+    assert!(p.function(p.entry()).body().is_some());
     rejects(&p, "can fall through but has no terminator");
     p.define(main, |b, _| {
         let zero = b.constant(Class::Word, 0);
@@ -56,7 +56,7 @@ fn never_calls_need_no_marker_and_reject_following_code_or_transfers() {
         if following == 0 {
             validate(&p).unwrap();
             assert!(
-                p.region(p.functions()[0].body().unwrap())
+                p.region(p.function(p.entry()).body().unwrap())
                     .terminator
                     .is_none()
             );

@@ -30,9 +30,9 @@ pub(super) fn program(early_return: bool) -> Program {
     );
     let buffer = p.global(&[0; OUTPUT_BYTES]);
     p.define(main, |b, _| {
-        let argc = b.call(argc, &[])[0];
+        let argc = b.call_one(argc, &[]);
         let iterations = b.constant(Class::Word, ITERATIONS);
-        let answer = b.call(accumulate, &[argc, iterations])[0];
+        let answer = b.call_one(accumulate, &[argc, iterations]);
         let address = b.address_of(buffer);
         b.call(serialize, &[answer, address]);
         let length = b.constant(Class::Word, u64::try_from(OUTPUT_BYTES).unwrap());
@@ -56,7 +56,7 @@ fn accumulator(p: &mut Program, identity: FunctionId, early_return: bool) -> Fun
         let zero = b.constant(Class::Word, 0);
         let result = b.loop_(&[initial, zero], &[Class::Natural], |b, state| {
             let next = b.binary(Binary::Add, state[0], increment);
-            let alias = b.call(identity, &[next])[0];
+            let alias = b.call_one(identity, &[next]);
             let one = b.constant(Class::Word, 1);
             let index = b.binary(Binary::Add, state[1], one);
             let done = b.compare(Relation::Equal, index, args[1]);

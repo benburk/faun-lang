@@ -355,7 +355,7 @@ fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)
     .map(|(op, function)| {
         let check = p.declare("check", &[ADDRESS, ADDRESS], &[WORD]);
         p.define(check, |b, args| {
-            let out = b.call(function.unwrap(), args)[0];
+            let out = b.call_one(function.unwrap(), args);
             observe_and_release(b, lib, observer, out);
             // Arithmetic borrows rather than consumes or mutates operands.
             b.call(observer, &[args[0]]);
@@ -440,10 +440,10 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
                 let i = state[0];
                 let done = b.compare(Relation::Equal, i, rounds);
                 b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                let a = b.call(lib.require(Helper::FromWord), args)[0];
-                let alias = b.call(lib.retain, &[a])[0];
+                let a = b.call_one(lib.require(Helper::FromWord), args);
+                let alias = b.call_one(lib.retain, &[a]);
                 b.call(lib.release, &[a]);
-                let sum = b.call(lib.require(Helper::Add), &[alias, alias])[0];
+                let sum = b.call_one(lib.require(Helper::Add), &[alias, alias]);
                 b.call(lib.release, &[alias]);
                 observe_and_release(b, &lib, observer, sum);
                 let next = b.binary(Binary::Add, i, one);
@@ -479,13 +479,13 @@ fn freed_adjacent_blocks_coalesce_for_a_larger_allocation() {
         let big = natural::constant(&mut p, conf, &magnitude).unwrap();
         let check = p.declare("coalesce", &[WORD], &[WORD]);
         p.define(check, |b, args| {
-            let first = b.call(lib.require(Helper::FromWord), args)[0];
-            let second = b.call(lib.require(Helper::FromWord), args)[0];
-            let last = b.call(lib.require(Helper::FromWord), args)[0];
+            let first = b.call_one(lib.require(Helper::FromWord), args);
+            let second = b.call_one(lib.require(Helper::FromWord), args);
+            let last = b.call_one(lib.require(Helper::FromWord), args);
             b.call(lib.release, &[first]);
             b.call(lib.release, &[second]);
             let big = b.address_of(big);
-            let sum = b.call(lib.require(Helper::Add), &[big, big])[0];
+            let sum = b.call_one(lib.require(Helper::Add), &[big, big]);
             observe_and_release(b, &lib, observer, sum);
             observe_and_release(b, &lib, observer, last);
             let zero = b.constant(WORD, 0);
@@ -510,9 +510,9 @@ fn exhaustion_halts_without_corrupting_the_heap() {
         let observer = observer(&mut p);
         let check = p.declare("exhaust", &[WORD], &[WORD]);
         p.define(check, |b, args| {
-            let first = b.call(lib.require(Helper::FromWord), args)[0];
+            let first = b.call_one(lib.require(Helper::FromWord), args);
             b.call(observer, &[first]);
-            let second = b.call(lib.require(Helper::FromWord), args)[0];
+            let second = b.call_one(lib.require(Helper::FromWord), args);
             b.call(observer, &[second]);
             let zero = b.constant(WORD, 0);
             b.ret(&[zero]);
@@ -563,7 +563,7 @@ fn reference_count_exhaustion_does_not_create_an_immortal_object() {
         let max = u64::MAX >> (64 - bits);
         p.define(check, |b, _| {
             let one = b.constant(WORD, 1);
-            let object = b.call(lib.require(Helper::FromWord), &[one])[0];
+            let object = b.call_one(lib.require(Helper::FromWord), &[one]);
             // Test-only injection: no feasible test needs MAX-1 live aliases.
             let count = b.constant(WORD, max - 1);
             b.store(super::Width::Word, object, super::Offset::Words(1), count);
@@ -592,7 +592,7 @@ fn repeat(b: &mut Builder<'_>, times: u64, body: impl FnOnce(&mut Builder<'_>)) 
 
 fn promote(b: &mut Builder<'_>, lib: &Library, value: u64) -> super::ValueId {
     let value = b.constant(WORD, value);
-    b.call(lib.require(Helper::FromWord), &[value])[0]
+    b.call_one(lib.require(Helper::FromWord), &[value])
 }
 
 fn observed_product(
@@ -604,7 +604,7 @@ fn observed_product(
 ) {
     let left = b.address_of(left);
     let right = b.address_of(right);
-    let result = b.call(lib.require(Helper::Mul), &[left, right])[0];
+    let result = b.call_one(lib.require(Helper::Mul), &[left, right]);
     observe_and_release(b, lib, observer, result);
 }
 
@@ -653,7 +653,7 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
         p.define(entry, |b, _| {
             let left = promote(b, &lib, 513);
             let right = promote(b, &lib, 514);
-            let result = b.call(lib.require(Helper::Mod), &[left, right])[0];
+            let result = b.call_one(lib.require(Helper::Mod), &[left, right]);
             b.call(lib.release, &[left]);
             b.call(lib.release, &[right]);
             let replacement = promote(b, &lib, 9);
@@ -682,7 +682,7 @@ fn fragmented_check(p: &mut Program, lib: &Library, big: DataId, remove_middle: 
             b.call(lib.release, &[middle]);
         }
         let big = b.address_of(big);
-        let result = b.call(lib.require(Helper::Add), &[big, big])[0];
+        let result = b.call_one(lib.require(Helper::Add), &[big, big]);
         // Keep the 5W result alive: this request must take the 7W remainder.
         let replacement = promote(b, lib, 9);
         observe_and_release(b, lib, observer, result);
@@ -780,7 +780,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
         p.define(entry, |b, _| {
             repeat(b, 100, |b| {
                 let input = promote(b, &lib, 513);
-                let result = b.call(lib.require(Helper::Mul), &[input, input])[0];
+                let result = b.call_one(lib.require(Helper::Mul), &[input, input]);
                 b.call(lib.release, &[input]);
                 observe_and_release(b, &lib, observer, result);
             });
@@ -812,9 +812,9 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
             repeat(b, 32, |b| {
                 let dense = b.address_of(dense_id);
                 let one = b.address_of(one);
-                let sum = b.call(lib.require(Helper::Add), &[dense, one])[0];
+                let sum = b.call_one(lib.require(Helper::Add), &[dense, one]);
                 b.call(observer, &[sum]);
-                let difference = b.call(lib.require(Helper::Sub), &[sum, one])[0];
+                let difference = b.call_one(lib.require(Helper::Sub), &[sum, one]);
                 b.call(lib.release, &[sum]);
                 observe_and_release(b, &lib, observer, difference);
             });
@@ -861,7 +861,7 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
         p.define(check, |b, args| {
             observed_product(b, &lib, observer, dirty, dirty);
             for function in [lib.require(Helper::Div), lib.require(Helper::Mod)] {
-                let value = b.call(function, args)[0];
+                let value = b.call_one(function, args);
                 observe_and_release(b, &lib, observer, value);
             }
             let zero = b.constant(WORD, 0);
@@ -903,7 +903,7 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
         let value = if op.is_some() {
             let left = b.address_of(left_id);
             let right = b.address_of(right_id);
-            b.call(function, &[left, right])[0]
+            b.call_one(function, &[left, right])
         } else {
             promote(b, &lib, 513)
         };
@@ -963,12 +963,12 @@ fn immortal_and_mortal_identity_results_have_correct_claims() {
         let observer = observer(&mut p);
         let check = p.declare("identity", &[WORD], &[WORD]);
         p.define(check, |b, args| {
-            let a = b.call(lib.require(Helper::FromWord), args)[0];
+            let a = b.call_one(lib.require(Helper::FromWord), args);
             let zero = b.address_of(lib.zero);
-            let same = b.call(lib.require(Helper::Mod), &[a, zero])[0];
+            let same = b.call_one(lib.require(Helper::Mod), &[a, zero]);
             b.call(lib.release, &[a]);
             observe_and_release(b, &lib, observer, same);
-            let alias = b.call(lib.retain, &[zero])[0];
+            let alias = b.call_one(lib.retain, &[zero]);
             b.call(lib.release, &[zero]);
             observe_and_release(b, &lib, observer, alias);
             let zero = b.constant(WORD, 0);

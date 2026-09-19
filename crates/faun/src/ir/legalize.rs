@@ -273,7 +273,7 @@ impl Pass<'_> {
     }
 
     fn retained(&self, b: &mut Builder, value: ValueId) -> ValueId {
-        b.call(self.library.retain, &[value])[0]
+        b.call_one(self.library.retain, &[value])
     }
 
     fn region(
@@ -374,7 +374,7 @@ impl Pass<'_> {
             Op::AddressOf(data) => b.address_of(data),
             Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => {
                 let function = self.library.require(Helper::arithmetic(op));
-                b.call(function, &[v(left), v(right)])[0]
+                b.call_one(function, &[v(left), v(right)])
             }
             Op::Binary { op, left, right } => {
                 b.binary_at(self.source.class(results[0]), op, v(left), v(right))
@@ -385,7 +385,7 @@ impl Pass<'_> {
                 right,
             } if self.source.class(left) == Class::Natural => {
                 let ordering =
-                    b.call(self.library.require(Helper::Compare), &[v(left), v(right)])[0];
+                    b.call_one(self.library.require(Helper::Compare), &[v(left), v(right)]);
                 let wanted = b.constant(Class::Word, u64::from(relation == Relation::Equal));
                 b.compare(Relation::Equal, ordering, wanted)
             }
@@ -397,10 +397,10 @@ impl Pass<'_> {
             Op::Convert { class, value } => match (self.source.class(value), class) {
                 (Class::Natural, Class::Natural) => self.retained(b, v(value)),
                 (_, Class::Natural) => {
-                    b.call(self.library.require(Helper::FromWord), &[v(value)])[0]
+                    b.call_one(self.library.require(Helper::FromWord), &[v(value)])
                 }
                 (Class::Natural, _) => {
-                    let word = b.call(self.library.require(Helper::ToWord), &[v(value)])[0];
+                    let word = b.call_one(self.library.require(Helper::ToWord), &[v(value)]);
                     if class == Class::Word {
                         word
                     } else {
@@ -501,7 +501,7 @@ mod tests {
         p.define(identity, |b, args| b.ret(&[args[0]]));
         p.define(main, |b, _| {
             let value = b.constant(Class::Natural, 7);
-            let value = b.call(identity, &[value])[0];
+            let value = b.call_one(identity, &[value]);
             let value = b.convert(Class::Word, value);
             b.ret(&[value]);
         });

@@ -191,7 +191,7 @@ fn accepts_externals<T: Target + ?Sized>(target: &T, program: &Program) -> Resul
         let Op::Call { function, .. } = *op else {
             continue;
         };
-        let function = &program.functions()[function.index()];
+        let function = program.function(function);
         let Some(symbol) = function.external() else {
             continue;
         };

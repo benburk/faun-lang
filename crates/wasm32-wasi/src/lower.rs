@@ -175,7 +175,8 @@ impl Plan {
             }
             match *op {
                 Op::Call { function, .. }
-                    if program.functions()[function.index()]
+                    if program
+                        .function(function)
                         .external()
                         .is_some_and(|symbol| program.name(symbol) == "write") =>
                 {
@@ -289,7 +290,8 @@ impl Lowering<'_> {
         status
             || self.program.ops(region).iter().any(|op| match *op {
                 Op::Call { function, args } => {
-                    self.program.functions()[function.index()]
+                    self.program
+                        .function(function)
                         .external()
                         .is_some_and(|symbol| self.program.name(symbol) == "exit")
                         && !(role == FunctionRole::Entry && self.leaves_with_nought(args))
@@ -457,7 +459,7 @@ impl Lowering<'_> {
                 self.set(results[0]);
             }
             Op::Call { function, args } => {
-                if let Some(symbol) = program.functions()[function.index()].external() {
+                if let Some(symbol) = program.function(*function).external() {
                     self.platform_named(
                         program.name(symbol),
                         program.values(*args),

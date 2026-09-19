@@ -31,9 +31,9 @@ pub fn interleaved() -> Program {
         b.ret(&value);
     });
     p.define(main, |b, _| {
-        let before = b.call(count, &[])[0];
-        let held = b.call(wrapper, &[before])[0];
-        let after = b.call(again, &[])[0];
+        let before = b.call_one(count, &[]);
+        let held = b.call_one(wrapper, &[before]);
+        let after = b.call_one(again, &[]);
         let difference = b.binary(Binary::Sub, held, after);
         let expected = b.constant(Class::Word, 41);
         let status = b.binary(Binary::Add, expected, difference);

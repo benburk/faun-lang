@@ -170,7 +170,7 @@ fn one_global_mapping_preserves_sibling_and_cross_function_ownership() {
             let arg = b.constant(Class::Word, choice);
             let mut sum = b.constant(Class::Word, 0);
             for &function in &functions {
-                let value = b.call(function, &[arg])[0];
+                let value = b.call_one(function, &[arg]);
                 sum = b.binary(Binary::Add, sum, value);
             }
             b.ret(&[sum]);
@@ -214,7 +214,7 @@ fn widened_loop() -> Program {
 }
 
 fn loop_body(p: &Program) -> RegionId {
-    p.ops(p.functions()[0].body().unwrap())
+    p.ops(p.function(p.entry()).body().unwrap())
         .iter()
         .find_map(|op| {
             if let Op::Loop { body, .. } = *op {

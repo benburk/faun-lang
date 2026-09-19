@@ -67,6 +67,26 @@ Typed IDs distinguish entity kinds, not programs or generations: references
 must still be remapped when a pool is rebuilt. There is no insertion in the
 middle, removal, or mutable vector escape hatch on the pool itself.
 
+`Program::function(FunctionId)` provides typed lookup outside the IR module;
+`functions()` still exposes a slice for iteration. Like other indexing accessors,
+`function` panics for an out-of-bounds ID. Validation and unchecked interpretation
+keep checked lookups rather than assuming references are valid.
+
+Ordinary slice appends use `append_range`, which checks the encoded start and
+length before extending a vector and returns the appended run. Empty runs keep
+their position. This preserves the existing two-field range contract: it does
+not impose a new total-pool byte limit or promise rollback if element cloning
+panics. Iterator-based construction and coordinated instruction/result writes
+retain their own construction logic.
+
+For a callee declared to return exactly one value, `Builder::call_one` returns
+a `ValueId` directly, using the result class from the signature. It rejects
+zero, multiple, and nonreturning result contracts before appending call operands
+or values. General `call` remains available for all result contracts.
+Both emit ordinary calls with the same ordering and effect semantics;
+`call_one` avoids constructing a temporary result vector, not the operand or SSA
+storage required by the call.
+
 ## Region completion
 
 Builder callbacks record `ret`, `yield_`, `break_`, or `continue_` directly and

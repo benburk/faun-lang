@@ -84,7 +84,7 @@ fn recursive_calls_keep_caller_frames_and_early_returns() {
         let done = b.compare(Relation::Equal, args[0], zero);
         b.if_(done, &[], |b| b.ret(&[zero]), |b| b.yield_(&[]));
         let n = b.binary(Binary::Sub, args[0], one);
-        let tail = b.call(sum, &[n])[0];
+        let tail = b.call_one(sum, &[n]);
         let result = b.binary(Binary::Add, args[0], tail);
         b.ret(&[result]);
     });

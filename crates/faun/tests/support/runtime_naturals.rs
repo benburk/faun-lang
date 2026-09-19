@@ -13,7 +13,7 @@ fn program() -> Program {
     let write = routines.declare(&mut p, "write");
     let bytes = p.global(&[0; 80]);
     p.define(main, |b, _| {
-        let count = b.call(argc, &[])[0];
+        let count = b.call_one(argc, &[]);
         let count = b.convert(Class::Natural, count);
         let max = b.constant(Class::Natural, u64::MAX);
         let one = b.constant(Class::Natural, 1);

@@ -313,7 +313,7 @@ fn recursive_calls_borrow_parameters_and_transfer_owned_results() {
                     let next = b.binary(Binary::Add, args[1], one);
                     let one = b.constant(Class::Word, 1);
                     let count = b.binary(Binary::Sub, args[0], one);
-                    let inner = b.call(recurse, &[count, next])[0];
+                    let inner = b.call_one(recurse, &[count, next]);
                     // Reading a borrowed parameter after the recursive call must
                     // remain safe even if the callee reuses released heap blocks.
                     let result = b.binary(Binary::Add, inner, args[1]);
@@ -325,7 +325,7 @@ fn recursive_calls_borrow_parameters_and_transfer_owned_results() {
             let word = b.constant(Class::Word, 7);
             let input = b.convert(Class::Natural, word);
             let count = b.constant(Class::Word, 12);
-            let value = b.call(recurse, &[count, input])[0];
+            let value = b.call_one(recurse, &[count, input]);
             let result = b.convert(Class::Word, value);
             b.ret(&[result]);
         });
@@ -423,11 +423,11 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
         p.spans.as_slice()
     );
     assert_eq!(
-        scalar.functions()[exit.index()].definition,
-        p.functions()[exit.index()].definition
+        scalar.function(exit).definition,
+        p.function(exit).definition
     );
-    assert_eq!(scalar.functions()[exit.index()].returns, Returns::Never);
-    let ops = scalar.ops(scalar.functions()[0].body().unwrap());
+    assert_eq!(scalar.function(exit).returns, Returns::Never);
+    let ops = scalar.ops(scalar.function(scalar.entry()).body().unwrap());
     assert!(matches!(ops.last(), Some(Op::Call { function, .. }) if *function == exit));
     let mut host = TestHost::default();
     let result =

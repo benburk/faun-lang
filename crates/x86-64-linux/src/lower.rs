@@ -351,7 +351,7 @@ impl Lowering<'_> {
     }
 
     fn function(&mut self, id: FunctionId) {
-        let function = &self.program.functions()[id.index()];
+        let function = self.program.function(id);
         let Some(body) = function.body() else { return };
         self.in_entry = id.index() == self.entry.index();
         self.starts[id.index()] = self.asm.here();
@@ -437,7 +437,7 @@ impl Lowering<'_> {
                 }
             }
             Op::Call { function, args } => {
-                if let Some(symbol) = program.functions()[function.index()].external() {
+                if let Some(symbol) = program.function(*function).external() {
                     self.platform_call(program.name(symbol), program.values(*args), results);
                     return;
                 }
@@ -909,7 +909,7 @@ mod tests {
     #[test]
     fn constants_never_reach_the_stack() {
         let program = faun::programs::hello_world();
-        let main = &program.functions()[program.entry().index()];
+        let main = program.function(program.entry());
         assert_eq!(Plan::new(&program, main).frame, 0);
     }
 

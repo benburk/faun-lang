@@ -145,6 +145,16 @@ impl<'a, I, T> IntoIterator for &'a mut Pool<I, T> {
     }
 }
 
+/// Append a slice and return its run, checking the encoded start and length
+/// before extending storage. Empty runs retain the current end position.
+/// This neither caps the total pool at `u32::MAX` nor makes a panicking `Clone`
+/// or surrounding multi-pool construction transactional.
+pub(crate) fn append_range<T: Clone>(pool: &mut Vec<T>, values: &[T]) -> Range {
+    let range = Range::of(pool.len(), values.len());
+    pool.extend_from_slice(values);
+    range
+}
+
 /// A run in one of those arrays: the arguments a call holds, a region's
 /// parameters, the characters of a name.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

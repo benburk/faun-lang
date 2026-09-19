@@ -9,6 +9,7 @@ use super::constant;
 use super::ir::Symbol;
 use super::ir::{Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Local};
 use super::ir::{Program, Range, Type, TypeId};
+use crate::index::append_range;
 use constant::{Shape, Value};
 
 impl Program {
@@ -27,9 +28,8 @@ impl Program {
         if let Some(id) = self.symbols.position(held) {
             return id;
         }
-        let at = self.names.len();
-        self.names.extend_from_slice(name.as_bytes());
-        self.symbols.push(Range::of(at, name.len()))
+        let name = append_range(&mut self.names, name.as_bytes());
+        self.symbols.push(name)
     }
 
     /// Reserve a type. Its constructors follow, so that a field may name the
@@ -51,12 +51,11 @@ impl Program {
         let start = self.ctors.len();
         for (name, fields) in ctors {
             let name = self.symbol(name);
-            let at = self.types_pool.len();
-            self.types_pool.extend_from_slice(fields);
+            let fields = append_range(&mut self.types_pool, fields);
             self.ctors.push(Ctor {
                 name,
                 owner: id,
-                fields: Range::of(at, fields.len()),
+                fields,
             });
         }
         self.types[id].ctors = Range::of(start, ctors.len());
@@ -67,11 +66,10 @@ impl Program {
     /// If the program outgrew the pools it may have.
     pub fn declare(&mut self, name: &str, params: &[TypeId], result: TypeId) -> FnId {
         let name = self.symbol(name);
-        let at = self.types_pool.len();
-        self.types_pool.extend_from_slice(params);
+        let params = append_range(&mut self.types_pool, params);
         self.functions.push(Function {
             name,
-            params: Range::of(at, params.len()),
+            params,
             result,
             definition: super::Definition::External {
                 symbol: name,
@@ -273,9 +271,7 @@ impl Builder<'_> {
             let body = self.scope(fields, |builder, bound| arm(builder, ctor, bound));
             arms.push(Arm { ctor, body });
         }
-        let at = self.program.arms.len();
-        self.program.arms.extend_from_slice(&arms);
-        let arms = Range::of(at, arms.len());
+        let arms = append_range(&mut self.program.arms, &arms);
         self.emit(Expr::Match(scrutinee, arms))
     }
 
@@ -317,17 +313,13 @@ impl Builder<'_> {
             }
             None => self.program.exprs.push(Expr::Atom(result)),
         };
-        let at = self.program.bindings.len();
-        self.program.bindings.extend_from_slice(&pending);
         Body {
-            bindings: Range::of(at, pending.len()),
+            bindings: append_range(&mut self.program.bindings, &pending),
             tail,
         }
     }
 
     fn atoms(&mut self, atoms: &[Atom]) -> Range {
-        let at = self.program.atoms.len();
-        self.program.atoms.extend_from_slice(atoms);
-        Range::of(at, atoms.len())
+        append_range(&mut self.program.atoms, atoms)
     }
 }

@@ -4,7 +4,7 @@
 //! Rebuild into fresh term pools, then replace the old pools in one commit.
 //! Declarations and constants stay in place; expression IDs and ranges change.
 
-use crate::index::Pool;
+use crate::index::{Pool, append_range};
 use std::collections::HashMap;
 
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
@@ -172,18 +172,14 @@ impl Rewrite<'_> {
     }
 
     fn hold_body(&mut self, bindings: &[ExprId], tail: ExprId) -> Body {
-        let start = self.bindings.len();
-        self.bindings.extend_from_slice(bindings);
         Body {
-            bindings: Range::of(start, bindings.len()),
+            bindings: append_range(&mut self.bindings, bindings),
             tail,
         }
     }
 
     fn hold_arms(&mut self, arms: &[Arm]) -> Range {
-        let start = self.arms.len();
-        self.arms.extend_from_slice(arms);
-        Range::of(start, arms.len())
+        append_range(&mut self.arms, arms)
     }
 
     fn copy_body(&mut self, body: Body) -> Body {
@@ -224,9 +220,7 @@ impl Rewrite<'_> {
     }
 
     fn copy_args(&mut self, args: Range) -> Range {
-        let start = self.atoms.len();
-        self.atoms.extend_from_slice(self.source.atoms(args));
-        Range::of(start, args.len())
+        append_range(&mut self.atoms, self.source.atoms(args))
     }
 }
 

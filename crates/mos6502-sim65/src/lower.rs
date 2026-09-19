@@ -271,9 +271,11 @@ fn assemble(program: &Program, heap: u16) -> Code {
     state.starts = (0..program.functions().len())
         .map(|_| state.asm.label())
         .collect();
-    state.plans = (0..program.functions().len())
-        .map(|id| {
-            program.functions()[id]
+    state.plans = program
+        .functions()
+        .iter()
+        .map(|function| {
+            function
                 .body()
                 .map(|body| state.plan(body).expect("accepted frame size"))
         })
@@ -383,7 +385,7 @@ impl Lowering<'_> {
     }
 
     fn function(&mut self, id: FunctionId) {
-        let function = &self.program.functions()[id.index()];
+        let function = self.program.function(id);
         let Some(body) = function.body() else { return };
         let start = self.starts[id.index()];
         self.asm.bind(start);
@@ -591,9 +593,7 @@ impl Lowering<'_> {
             }
             for_each_operand(op, program, |value| spans.touch(value, *at));
             match *op {
-                Op::Call { function, .. }
-                    if program.functions()[function.index()].body().is_some() =>
-                {
+                Op::Call { function, .. } if program.function(function).body().is_some() => {
                     spans.calls.push(*at);
                 }
                 Op::If {
@@ -1500,7 +1500,7 @@ impl Lowering<'_> {
                 self.convert(*class, *value, results[0]);
             }
             Op::Call { function, args } => {
-                if let Some(symbol) = program.functions()[function.index()].external() {
+                if let Some(symbol) = program.function(*function).external() {
                     self.platform_call(program.name(symbol), program.values(*args), results);
                 } else {
                     self.call(*function, program.values(*args), results);

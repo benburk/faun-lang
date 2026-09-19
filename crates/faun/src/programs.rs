@@ -202,7 +202,7 @@ pub fn writes_a_length_it_worked_out() -> Program {
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
-        let page = b.call(grow, &[size])[0];
+        let page = b.call_one(grow, &[size]);
         for (index, byte) in [b'h', b'i', b'\n'].into_iter().enumerate() {
             let value = b.constant(Word, u64::from(byte));
             let offset = Offset::Bytes(i32::try_from(index).expect("a short greeting"));
@@ -378,7 +378,7 @@ pub fn uses_the_heap() -> Program {
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
-        let page = b.call(grow, &[size])[0];
+        let page = b.call_one(grow, &[size]);
 
         let answer = b.constant(Word, 42);
         let decoy = b.constant(Word, 7);
@@ -418,7 +418,7 @@ pub fn values_survive_a_call() -> Program {
         let (a, second) = (params[0], params[1]);
         let p = b.binary(Binary::Add, a, second);
         let q = b.binary(Binary::Sub, a, second);
-        let r = b.call(clobber, &[a])[0];
+        let r = b.call_one(clobber, &[a]);
         // Every one of these was computed before the call.
         let total = b.binary(Binary::Add, p, q);
         let total = b.binary(Binary::Add, total, r);
@@ -451,7 +451,7 @@ pub fn writes_from_the_heap() -> Program {
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
-        let page = b.call(grow, &[size])[0];
+        let page = b.call_one(grow, &[size]);
 
         // "hi\n", a byte at a time, since the bytes are computed too.
         for (index, byte) in [b'h', b'i', b'\n'].into_iter().enumerate() {
@@ -478,7 +478,7 @@ pub fn stores_a_byte() -> Program {
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
-        let page = b.call(grow, &[size])[0];
+        let page = b.call_one(grow, &[size]);
 
         let high = b.constant(Word, 200);
         b.store(Width::Byte, page, Offset::Bytes(0), high);

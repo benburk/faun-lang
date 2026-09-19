@@ -46,7 +46,7 @@ fn run(
 }
 
 fn call_external(p: &mut Program, function: FunctionId) {
-    let held = &p.functions()[function.index()];
+    let held = p.function(function);
     let classes = p.signature(held.params).to_vec();
     let returns = held.returns;
     p.define(p.entry(), |b, _| {
@@ -88,7 +88,7 @@ fn external_declarations_need_neither_a_catalog_nor_parameter_values_or_regions(
         &[Class::Word],
         Returns::Values(&[Class::Word]),
     );
-    let held = &p.functions()[f.index()];
+    let held = p.function(f);
     assert_eq!(p.signature(held.params), [Class::Word]);
     assert_eq!(p.signature(held.returns.classes()), [Class::Word]);
     assert_eq!(p.name(held.name), "library_symbol");

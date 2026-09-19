@@ -94,7 +94,7 @@ fn default_pipeline_removes_folded_library_temporaries() {
         assert_eq!(externals(&machine), 1, "only exit remains");
         assert!(
             machine
-                .every(machine.functions()[0].body().unwrap())
+                .every(machine.function(machine.entry()).body().unwrap())
                 .any(|op| matches!(op, Op::Constant { value, .. } if *value == expected))
         );
         assert!(

@@ -6,6 +6,7 @@
 
 use super::inline::{InlineLimits, Inlining};
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
+use crate::index::append_range;
 
 /// Compatibility entry point: structural normalization plus helper inlining.
 pub fn normalize(program: &mut Program) {
@@ -79,10 +80,8 @@ impl Rewrite<'_> {
         } else {
             self.program.exprs.push(Expr::Atom(answer))
         };
-        let start = self.program.bindings.len();
-        self.program.bindings.extend_from_slice(&scope.bindings);
         Body {
-            bindings: Range::of(start, scope.bindings.len()),
+            bindings: append_range(&mut self.program.bindings, &scope.bindings),
             tail,
         }
     }
@@ -124,9 +123,8 @@ impl Rewrite<'_> {
                         body: self.body(arm.body, inner, scope.level + fields),
                     });
                 }
-                let start = self.program.arms.len();
-                self.program.arms.extend_from_slice(&found);
-                Expr::Match(locals[value.0.index()], Range::of(start, found.len()))
+                let arms = append_range(&mut self.program.arms, &found);
+                Expr::Match(locals[value.0.index()], arms)
             }
         };
         let id = self.program.exprs.push(expr);
@@ -152,8 +150,6 @@ impl Rewrite<'_> {
             .collect()
     }
     fn hold(&mut self, args: &[Atom]) -> Range {
-        let start = self.program.atoms.len();
-        self.program.atoms.extend_from_slice(args);
-        Range::of(start, args.len())
+        append_range(&mut self.program.atoms, args)
     }
 }

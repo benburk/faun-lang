@@ -1,4 +1,4 @@
-use super::{Id, Pool};
+use super::{Id, Pool, Range, append_range};
 use crate::ir::{FunctionId, ValueId};
 
 #[test]
@@ -105,6 +105,67 @@ fn an_unrepresentable_id_is_rejected_before_insertion() {
     assert!(error.is_err());
     assert_eq!(pool.as_slice(), before);
     assert_eq!(pool.get(ByteId(u8::MAX)), Some(&255));
+}
+
+#[test]
+fn appending_a_slice_returns_exactly_the_new_run() {
+    let mut pool = vec![String::from("prefix")];
+    let values = [String::from("one"), String::from("two")];
+    let range = append_range(&mut pool, &values);
+    assert_eq!(range, Range::of(1, 2));
+    assert_eq!(&pool[range.range()], &values);
+    assert_eq!(pool[0], "prefix");
+    let empty = append_range(&mut pool, &[]);
+    assert_eq!(empty, Range::of(3, 0));
+    assert_eq!(pool.len(), 3);
+    let last = append_range(&mut pool, &[String::from("last")]);
+    assert_eq!(last, Range::of(3, 1));
+    assert_eq!(pool[last.range()], ["last"]);
+}
+
+// Zero-sized elements exercise real u32 limits without allocating gigabytes.
+fn beyond_u32() -> Option<usize> {
+    usize::try_from(u64::from(u32::MAX) + 1).ok()
+}
+
+#[test]
+fn an_unrepresentable_run_start_is_rejected_before_appending() {
+    let Some(large) = beyond_u32() else {
+        return;
+    };
+    let mut pool = vec![(); large];
+    let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        append_range(&mut pool, &[()]);
+    }));
+    assert!(error.is_err());
+    assert_eq!(pool.len(), large);
+}
+
+#[test]
+fn an_unrepresentable_run_length_is_rejected_before_appending() {
+    let Some(large) = beyond_u32() else {
+        return;
+    };
+    let values = vec![(); large];
+    let mut pool = vec![(); 3];
+    let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        append_range(&mut pool, &values);
+    }));
+    assert!(error.is_err());
+    assert_eq!(pool.len(), 3);
+}
+
+#[test]
+fn append_checks_the_encoded_fields_not_an_unstored_u32_end() {
+    let Some(large) = beyond_u32() else {
+        return;
+    };
+    let mut pool = vec![(); large - 1];
+    let range = append_range(&mut pool, &[()]);
+    assert_eq!(range.start(), u32::MAX);
+    assert_eq!(range.len(), 1);
+    assert_eq!(range.range().end, large);
+    assert_eq!(pool.len(), large);
 }
 
 #[test]
