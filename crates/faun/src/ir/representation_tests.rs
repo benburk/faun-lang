@@ -55,6 +55,59 @@ fn folded_library_calls_leave_no_runtime_representation_demand() {
 }
 
 #[test]
+fn default_pipeline_removes_folded_library_temporaries() {
+    for (main, expected) in [
+        (
+            "main!(h) -> exit!(h u8_to_nat(u8_sub_wrapping(u8_zero() u8_from_nat_wrapping(Succ(Zero)))))",
+            255,
+        ),
+        (
+            "main!(h) -> a = Pos(Zero) b = Pos(Succ(Zero)) difference = int_sub(a b) exit!(h int_abs(difference))",
+            1,
+        ),
+        (
+            "main!(h) -> a = u8_zero() b = u8_from_nat_wrapping(Succ(Zero)) byte = u8_sub_wrapping(a b) n = u8_to_nat(byte) signed = int_sub(Pos(Zero) Pos(Succ(Zero))) magnitude = int_abs(signed) exit!(h add(n magnitude))",
+            256,
+        ),
+    ] {
+        let text = library(main);
+        let routines = Routines::builtin().with_word(64);
+        let machine = crate::read(&text, &routines).unwrap();
+        validate(&machine).unwrap();
+        assert_eq!(machine.functions().len(), 1);
+        assert_eq!(machine.platforms().len(), 1, "only exit remains");
+        assert!(
+            machine
+                .every(machine.functions()[0].body)
+                .any(|op| matches!(op, Op::Constant { value, .. } if *value == expected))
+        );
+        assert!(
+            crate::read_with_options(
+                &text,
+                &routines,
+                &barb::OptimizeOptions {
+                    cleanup: false,
+                    ..barb::OptimizeOptions::default()
+                }
+            )
+            .is_err(),
+            "without cleanup, dead products still demand storage"
+        );
+    }
+}
+
+#[test]
+fn default_pipeline_still_rejects_runtime_products() {
+    for main in [
+        "main!(h) -> n = argc!(h) byte = u8_from_nat_wrapping(n) exit!(h u8_to_nat(byte))",
+        "main!(h) -> n = argc!(h) signed = int_from_nat(n) exit!(h int_abs(signed))",
+    ] {
+        let error = crate::read(&library(main), &Routines::builtin().with_word(64)).unwrap_err();
+        assert!(error.contains("has no representation"), "{error}");
+    }
+}
+
+#[test]
 fn runtime_products_and_signed_sums_are_still_rejected() {
     for (name, text) in [
         (

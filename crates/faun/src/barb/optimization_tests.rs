@@ -537,6 +537,215 @@ fn constructor_size_is_checked_before_concatenating_fields() {
     ));
 }
 
+fn nested_capture_program() -> Program {
+    let (mut program, ty, _, _) = super::tests::types();
+    let pair = program.declare_type("Pair");
+    program.define_type(pair, &[("Pair", &[ty, ty])]);
+    let pair = program.ctor_at(pair, 0);
+    let succ = program.ctor_at(ty, 1);
+    let first = program.declare("first", &[], ty);
+    let second = program.declare("second", &[ty], ty);
+    let zero = program.intern_number(ty, 0);
+    let test = program.declare("nested", &[ty, ty], ty);
+    program.define(test, |b, args| {
+        b.known(ty, zero);
+        let effect = b.call(first, &[]);
+        b.con(pair, &[effect, args[1]]);
+        b.match_(args[0], ty, |b, _, fields| {
+            let capture = fields.first().copied().unwrap_or(args[1]);
+            b.known(ty, zero);
+            b.con(pair, &[capture, args[1]]);
+            b.match_(args[1], ty, |b, _, fields| {
+                let inner = fields.first().copied().unwrap_or(capture);
+                b.con(pair, &[inner, capture]);
+                b.call(second, &[effect]);
+                b.con(succ, &[inner])
+            })
+        })
+    });
+    program.set_entry(test);
+    program
+}
+
+fn expressions(program: &Program, id: FnId) -> Vec<Expr> {
+    let mut pending = vec![program.function(id).body.unwrap()];
+    let mut found = vec![];
+    while let Some(body) = pending.pop() {
+        for &id in program
+            .bindings(body.bindings)
+            .iter()
+            .chain(std::iter::once(&body.tail))
+        {
+            let expr = program.expr(id);
+            if let Expr::Match(_, arms) = expr {
+                pending.extend(program.arms(arms).iter().map(|a| a.body));
+            }
+            found.push(expr);
+        }
+    }
+    found
+}
+
+#[test]
+fn cleanup_preserves_nested_captures_and_eager_constructor_arguments() {
+    let original = nested_capture_program();
+    let test = original.entry().unwrap();
+    let ty = original.function(test).result;
+    let mut cleaned = original.clone();
+    optimize(
+        &mut cleaned,
+        &OptimizeOptions {
+            cleanup: true,
+            ..off()
+        },
+    );
+    validate(&cleaned).unwrap();
+    assert!(
+        expressions(&cleaned, test).iter().all(|expr| match expr {
+            Expr::Static(..) => false,
+            Expr::Con(ctor, _) => cleaned.ctor(*ctor).owner == ty,
+            _ => true,
+        }),
+        "dead constants and Pair constructors were removed inside every arm"
+    );
+    for a in 0..4 {
+        for b in 0..4 {
+            let args = vec![
+                super::tests::nat(&original, ty, a),
+                super::tests::nat(&original, ty, b),
+            ];
+            let expected = run(&original, test, args.clone(), &mut vec![]);
+            let mut trace = vec![];
+            assert_eq!(run(&cleaned, test, args, &mut trace), expected);
+            assert_eq!(
+                trace,
+                [named(&original, "first"), named(&original, "second")]
+            );
+        }
+    }
+}
+
+#[test]
+fn cleanup_substitutes_aliases_captured_across_removed_bindings() {
+    let (mut program, ty, _, _) = super::tests::types();
+    let one = program.intern_number(ty, 1);
+    let succ = program.ctor_at(ty, 1);
+    let test = program.declare("alias", &[ty], ty);
+    program.define(test, |b, args| {
+        b.known(ty, one);
+        let alias = b.known(ty, one);
+        b.match_(args[0], ty, |b, _, _| {
+            b.known(ty, one);
+            b.con(succ, &[alias])
+        })
+    });
+    let body = program.function(test).body.unwrap();
+    let alias = program.bindings(body.bindings)[1];
+    program.write(alias, Expr::Atom(super::Atom(super::Local::at(0))));
+    program.set_entry(test);
+    optimize(
+        &mut program,
+        &OptimizeOptions {
+            cleanup: true,
+            ..off()
+        },
+    );
+    validate(&program).unwrap();
+    assert!(
+        program
+            .bindings(program.function(test).body.unwrap().bindings)
+            .is_empty()
+    );
+    for n in 0..4 {
+        assert_eq!(
+            run(
+                &program,
+                test,
+                vec![super::tests::nat(&program, ty, n)],
+                &mut vec![]
+            ),
+            super::tests::nat(&program, ty, n + 1)
+        );
+    }
+}
+
+#[test]
+fn cleanup_retains_unused_calls_and_matches_in_order() {
+    let (mut program, ty, _, _) = super::tests::types();
+    let first = program.declare("first", &[], ty);
+    let second = program.declare("second", &[], ty);
+    let zero = program.intern_number(ty, 0);
+    let pure = program.declare("pure", &[], ty);
+    program.define(pure, |b, _| b.known(ty, zero));
+    let test = program.declare("unused", &[ty], ty);
+    program.define(test, |b, args| {
+        b.call(first, &[]);
+        b.call(pure, &[]);
+        b.match_(args[0], ty, |b, _, _| b.call(second, &[]));
+        b.known(ty, zero)
+    });
+    optimize(
+        &mut program,
+        &OptimizeOptions {
+            cleanup: true,
+            ..off()
+        },
+    );
+    // Even a pure call is retained.
+    assert_eq!(calls_to(&program, test, pure), 1);
+    assert_eq!(
+        expressions(&program, test)
+            .iter()
+            .filter(|expr| matches!(expr, Expr::Match(..)))
+            .count(),
+        1
+    );
+    for n in 0..2 {
+        let mut trace = vec![];
+        run(
+            &program,
+            test,
+            vec![super::tests::nat(&program, ty, n)],
+            &mut trace,
+        );
+        assert_eq!(trace, [first, second]);
+    }
+}
+
+#[test]
+fn cleanup_removes_a_wide_dead_constructor_chain_in_one_pass() {
+    let (mut program, ty, _, _) = super::tests::types();
+    let zero = program.intern_number(ty, 0);
+    let succ = program.ctor_at(ty, 1);
+    let test = program.declare("wide", &[], ty);
+    program.define(test, |b, _| {
+        let zero = b.known(ty, zero);
+        let mut dead = zero;
+        for _ in 0..10_000 {
+            dead = b.con(succ, &[dead]);
+        }
+        zero
+    });
+    optimize(
+        &mut program,
+        &OptimizeOptions {
+            cleanup: true,
+            ..off()
+        },
+    );
+    assert!(
+        program
+            .bindings(program.function(test).body.unwrap().bindings)
+            .len()
+            <= 1
+    );
+    assert!(
+        !expressions(&program, test)
+            .iter()
+            .any(|expr| matches!(expr, Expr::Con(..)))
+    );
+}
+
 #[test]
 fn compiler_options_never_bypass_totality_checking() {
     let text = format!(

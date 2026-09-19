@@ -35,7 +35,8 @@ impl Default for OptimizeOptions {
 /// and evaluation must not hide a malformed or nonterminating definition.
 ///
 /// Each stage runs at most once, in this order. Recognized induction equations
-/// are left intact. Cleanup removes aliases only, never eager call bindings.
+/// are left intact. Cleanup removes aliases and unused inert bindings, never
+/// calls or matches whose evaluation may have effects.
 pub fn optimize(program: &mut Program, options: &OptimizeOptions) {
     if options.structural {
         super::structural(program);
@@ -50,6 +51,6 @@ pub fn optimize(program: &mut Program, options: &OptimizeOptions) {
         super::fold_with_limits(program, options.fold_limits);
     }
     if options.cleanup {
-        super::structural(program);
+        super::cleanup::cleanup(program);
     }
 }

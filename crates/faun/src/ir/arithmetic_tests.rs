@@ -82,7 +82,16 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
                exit!(h {name}(n n))",
             include_str!("../../../../standard/nat.fn")
         );
-        let machine = crate::read(&text, &crate::platform::Routines::builtin()).unwrap();
+        // Isolate lowering from laws such as mod(n, n) = 0.
+        let machine = crate::read_with_options(
+            &text,
+            &crate::platform::Routines::builtin(),
+            &barb::OptimizeOptions {
+                arithmetic_laws: false,
+                ..barb::OptimizeOptions::default()
+            },
+        )
+        .unwrap();
         validate(&machine).unwrap();
         let body = machine.functions()[0].body;
         assert!(

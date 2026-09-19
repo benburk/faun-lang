@@ -53,8 +53,9 @@
 //! unused. Without further proof, keep its multiplicity, order and path.
 //!
 //! The bounded optimizer substitutes already-evaluated ANF atoms, leaves
-//! argument bindings in place when applying laws, and removes only aliases
-//! during cleanup. Constant evaluation refuses a whole call or match if any
+//! argument bindings in place when applying laws. Cleanup removes aliases and
+//! unused atoms, constants and constructors, but retains calls and matches.
+//! Constant evaluation refuses a whole call or match if any
 //! selected eager binding cannot be evaluated. Totality checking runs before
 //! any of these rewrites; optimization must not hide a rejected definition.
 //!
@@ -66,6 +67,7 @@
 mod arithmetic;
 mod bounds;
 mod builder;
+mod cleanup;
 mod constant;
 mod evaluate;
 mod facts;

@@ -50,7 +50,7 @@ x    ::= a parameter, a binding, or a field an arm bound
 2. Optional helper inlining: nonrecursive, non-arithmetic helpers only.
 3. Arithmetic identities justified by structurally recognized `Operation` facts.
 4. Constant folding with one shared evaluation budget for the entire pass.
-5. Effect-safe cleanup: remove aliases, not unused eager calls.
+5. Effect-safe cleanup: remove aliases and unused atoms, constants and constructors.
 
 Each stage runs once and can be disabled programmatically. `read_with_options` exposes
 these controls without bypassing validation or totality checking. Disabling helper
@@ -68,6 +68,13 @@ estimates. Result-size and work checks precede native arithmetic and constructor
 concatenation. Limits are optimization policy, never language integer limits; a
 refused fold retains the original expression. Traversing/recognizing the input is
 not covered by evaluator fuel.
+
+Cleanup walks bindings backward, accounting for captures in nested match arms, then
+renames retained locals. Dead constructor chains disappear in this single traversal;
+there is no fixed-point loop. Every call and match is conservatively retained, even
+when its result is unused. In particular, dropping a constructor does not drop the
+eager calls that computed its fields. Folded, now-unused product constants no longer
+demand runtime representations; live products still require backend support.
 
 Identities preserve monus and zero-divisor semantics. In particular, `x / x` is not
 rewritten to one. Argument bindings remain eager even when a law makes their values
