@@ -1,27 +1,18 @@
 //! Building well-shaped programs.
 
 use super::model::{
-    Binary, Class, DataId, Exit, Function, FunctionId, Offset, Op, Origin, Platform, PlatformId,
-    Program, Range, Region, RegionId, Relation, Span, Symbol, Terminator, ValueId, Width, wrap,
+    Binary, Class, DataId, Definition, Exit, Function, FunctionId, Offset, Op, Origin, Program,
+    Range, Region, RegionId, Relation, Returns, Span, Symbol, Terminator, ValueId, Width, wrap,
 };
 
 impl Program {
     /// A program and its entry function, which takes nothing and returns one
     /// word, the exit status. Minting it here is what makes a program without
-    /// an entry unrepresentable.
+    /// an entry unrepresentable. No environment or builtin catalog is installed.
     #[must_use]
     pub fn new(entry: &str) -> (Self, FunctionId) {
-        Self::with(entry, crate::platform::Routines::builtin())
-    }
-
-    /// The same, against a set of routines somebody chose: what a compiler
-    /// knows, and whatever was written down beside it.
-    #[must_use]
-    pub fn with(entry: &str, routines: crate::platform::Routines) -> (Self, FunctionId) {
         let mut program = Self {
             layout: None,
-            routines,
-            platform: Vec::new(),
             data: Vec::new(),
             globals: Vec::new(),
             spans: Vec::new(),
@@ -82,36 +73,39 @@ impl Program {
         Symbol::at(self.symbols.len() - 1)
     }
 
-    /// A routine a target answers for, by name. What it takes and what it
-    /// answers are what the name means, not something a program says.
-    ///
-    /// # Panics
-    ///
-    /// If no target answers for `name`. The tier above checks this, so a
-    /// program cannot reach it.
-    pub fn platform(&mut self, name: &str) -> PlatformId {
-        let routine = self
-            .routines
-            .get(name)
-            .unwrap_or_else(|| panic!("no routine named `{name}`"));
-        let (takes, answers) = (routine.takes.clone(), routine.answers());
+    /// Declare an external requirement. The local name need not be the
+    /// provider symbol. Target acceptance checks availability and ABI;
+    /// declaring a symbol does not establish either.
+    pub fn external(
+        &mut self,
+        name: &str,
+        symbol: &str,
+        params: &[Class],
+        returns: Returns<&[Class]>,
+    ) -> FunctionId {
         let name = self.symbol(name);
-        let params = self.sign(&takes);
-        let returns = self.sign(answers.as_slice());
-        self.platform.push(Platform {
+        let symbol = self.symbol(symbol);
+        let params = self.sign(params);
+        let returns = match returns {
+            Returns::Never => Returns::Never,
+            Returns::Values(classes) => Returns::Values(self.sign(classes)),
+        };
+        self.functions.push(Function {
             name,
             params,
             returns,
+            definition: Definition::External { symbol },
         });
-        PlatformId::at(self.platform.len() - 1)
+        FunctionId::at(self.functions.len() - 1)
     }
 
     /// Separate from defining, so a body may call a function declared after
     /// it, or itself.
     pub fn declare(&mut self, name: &str, params: &[Class], returns: &[Class]) -> FunctionId {
-        let params = self.mint(params);
+        let values = self.mint(params);
+        let params = self.sign(params);
         self.regions.push(Region {
-            params: Range::default(),
+            params: values,
             ops: Range::default(),
             terminator: Terminator::UNREACHABLE,
         });
@@ -120,33 +114,63 @@ impl Program {
         self.functions.push(Function {
             name,
             params,
-            returns,
-            body: RegionId::at(self.regions.len() - 1),
+            returns: Returns::Values(returns),
+            definition: Definition::Body(RegionId::at(self.regions.len() - 1)),
         });
         FunctionId::at(self.functions.len() - 1)
     }
 
+    /// Replace a declared body's instructions.
+    ///
+    /// # Panics
+    /// If `function` is invalid or external.
     pub fn define(
         &mut self,
         function: FunctionId,
         build: impl FnOnce(&mut Builder, &[ValueId]) -> Terminator,
     ) {
-        let entry = self.functions[function.index()].params;
-        let body = self.functions[function.index()].body;
-        let params: Vec<_> = self.values(entry).to_vec();
+        let result: Result<(), std::convert::Infallible> =
+            self.try_define(function, |b, params| Ok(build(b, params)));
+        match result {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+    }
 
+    /// Build a body without an error side channel or a fabricated terminator.
+    ///
+    /// # Errors
+    /// Returns the callback's error without replacing the old body. This is
+    /// append-only construction, not a transaction: values, data and nested
+    /// regions appended by the callback remain in the pools on failure. They
+    /// are not attached to this function, but still undergo pool-wide checks.
+    /// Discard the program if that retained construction storage is unwanted;
+    /// retrying does not roll it back.
+    ///
+    /// # Panics
+    /// If `function` is invalid or external.
+    pub fn try_define<E>(
+        &mut self,
+        function: FunctionId,
+        build: impl FnOnce(&mut Builder, &[ValueId]) -> Result<Terminator, E>,
+    ) -> Result<(), E> {
+        let body = self.functions[function.index()]
+            .body()
+            .expect("a defined function");
+        let entry = self.regions[body.index()].params;
+        let params = self.values(entry).to_vec();
         let mut builder = Builder {
             program: self,
             params: entry,
             ops: Vec::new(),
             results: Vec::new(),
         };
-        let terminator = build(&mut builder, &params);
+        let terminator = build(&mut builder, &params)?;
         let region = builder.finish(terminator);
         self.regions[body.index()] = region;
+        Ok(())
     }
 
-    /// Mint one value per class, and give back the run they occupy.
     /// Hold a run of classes, for a signature.
     fn sign(&mut self, classes: &[Class]) -> Range {
         let at = self.signature.len();
@@ -165,7 +189,7 @@ impl Program {
 
     /// A run of values for the classes a signature already names, read where
     /// they lie rather than copied out first.
-    fn mint_from(&mut self, signature: Range) -> Range {
+    pub(super) fn mint_from(&mut self, signature: Range) -> Range {
         let start = self.operands.len();
         for at in signature.range() {
             let class = self.signature[at];
@@ -210,13 +234,9 @@ impl Builder<'_> {
     /// The classes a function's parameters were declared at, which is what
     /// a call to it hands over.
     #[must_use]
-    pub fn takes(&self, function: FunctionId) -> Vec<Class> {
-        let params = self.program.functions[function.index()].params;
+    pub fn takes(&self, function: FunctionId) -> &[Class] {
         self.program
-            .values(params)
-            .iter()
-            .map(|&value| self.program.class(value))
-            .collect()
+            .signature(self.program.functions[function.index()].params)
     }
 
     pub fn constant(&mut self, class: Class, value: u64) -> ValueId {
@@ -296,14 +316,8 @@ impl Builder<'_> {
         self.push_one(Op::Convert { class, value }, class)
     }
 
-    pub fn platform_call(&mut self, platform: PlatformId, args: &[ValueId]) -> Vec<ValueId> {
-        let returns = self.program.platform[platform.index()].returns;
-        let args = self.program.hold(args);
-        self.push_from(Op::PlatformCall { platform, args }, returns)
-    }
-
     pub fn call(&mut self, function: FunctionId, args: &[ValueId]) -> Vec<ValueId> {
-        let returns = self.program.functions[function.index()].returns;
+        let returns = self.program.functions[function.index()].returns.classes();
         let args = self.program.hold(args);
         self.push_from(Op::Call { function, args }, returns)
     }

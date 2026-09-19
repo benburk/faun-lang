@@ -266,20 +266,14 @@ fn declare(p: &mut Program, name: &str, params: &[Class], result: &[Class]) -> F
 /// most two values, so the library also fits the narrowest target's ABI.
 ///
 /// # Errors
-/// If the heap configuration or required exit contract is invalid.
+/// If the heap configuration is invalid. The generated library declares
+/// nonreturning `exit(word)`; the target must supply that contract.
 pub(super) fn append(
     program: &mut Program,
     config: Config,
     needs: Needs,
 ) -> Result<Library, String> {
     let (word, max) = config.checked()?;
-    let exit = program
-        .routines()
-        .get("exit")
-        .ok_or_else(|| "natural runtime requires exit(word)".to_owned())?;
-    if exit.takes != [W] || exit.returns != crate::platform::Returns::Never {
-        return Err("natural runtime requires nonreturning exit(word)".to_owned());
-    }
     let zero = constant(program, config, &BigUint::default())?;
     let (retain, release, fail) = claims(program, max);
     let mut library = Library {
@@ -315,11 +309,11 @@ pub(super) fn append(
 }
 
 fn claims(program: &mut Program, max: u64) -> (FunctionId, FunctionId, FunctionId) {
-    let exit = program.platform("exit");
+    let exit = program.external("nat.exit", "exit", &[W], super::Returns::Never);
     let fail = declare(program, "nat.fail", &[], &[]);
     program.define(fail, |b, _| {
         let status = number(b, 2);
-        b.platform_call(exit, &[status]);
+        b.call(exit, &[status]);
         END
     });
     let retain = declare(program, "nat.retain", &[A], &[A]);

@@ -16,8 +16,8 @@
 //! themselves terminate; their internal work cannot be metered by this evaluator.
 
 use super::{
-    Binary, Class, Exit, FunctionId, Offset, Op, Origin, Program, Range, RegionId, Relation,
-    ValueId, Width,
+    Binary, Class, Definition, Exit, FunctionId, Offset, Op, Origin, Program, Range, RegionId,
+    Relation, Returns, ValueId, Width,
 };
 use num_bigint::BigUint;
 
@@ -190,7 +190,7 @@ enum Task {
     },
     Call {
         results: Option<Range>,
-        returns: Range,
+        returns: Returns<Range>,
     },
 }
 
@@ -250,7 +250,9 @@ pub fn evaluate(
         frames: Vec::new(),
         tasks: Vec::new(),
     };
-    machine.call(function, args, None)?;
+    if let Some(outcome) = machine.call(function, args, None)? {
+        return Ok(machine.finish(outcome));
+    }
     machine.run()
 }
 
@@ -365,19 +367,44 @@ impl<H: Host> Machine<'_, H> {
         id: FunctionId,
         args: &[BigUint],
         results: Option<Range>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Outcome>, Error> {
         let function = self
             .program
             .functions
             .get(id.index())
             .ok_or_else(|| invalid("function id"))?;
-        self.frames.push(vec![None; self.program.classes.len()]);
-        self.bind(function.params, args)?;
-        self.tasks.push(Task::Call {
-            results,
-            returns: function.returns,
-        });
-        self.region(function.body, args)
+        self.signature(function.params, args)?;
+        match function.definition {
+            Definition::Body(body) => {
+                self.frames.push(vec![None; self.program.classes.len()]);
+                self.tasks.push(Task::Call {
+                    results,
+                    returns: function.returns,
+                });
+                self.region(body, args)?;
+                Ok(None)
+            }
+            Definition::External { symbol } => {
+                if results.is_none() {
+                    self.config.fuel = self
+                        .config
+                        .fuel
+                        .checked_sub(1)
+                        .ok_or(Error::FuelExhausted)?;
+                }
+                match self.external(symbol, function.returns, args)? {
+                    HostResult::Halt(values) => Ok(Some(Outcome::Halted(values))),
+                    HostResult::Return(values) => {
+                        if let Some(results) = results {
+                            self.bind(results, &values)?;
+                            Ok(None)
+                        } else {
+                            Ok(Some(Outcome::Returned(values)))
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn finish(self, outcome: Outcome) -> Evaluation {
@@ -418,8 +445,8 @@ impl<H: Host> Machine<'_, H> {
                 .ok_or_else(|| invalid("instruction range"))?;
             let (op, results) = self.instruction(index)?;
             self.tasks.push(Task::Region { id, at: at + 1 });
-            if let Some(values) = self.step(op, results)? {
-                return Ok(self.finish(Outcome::Halted(values)));
+            if let Some(outcome) = self.step(op, results)? {
+                return Ok(self.finish(outcome));
             }
         }
     }
@@ -457,6 +484,9 @@ impl<H: Host> Machine<'_, H> {
                 | (Task::If { .. }, Exit::Return | Exit::Break | Exit::Continue)
                 | (Task::Loop { .. }, Exit::Return) => {}
                 (Task::Call { results, returns }, Exit::Return) => {
+                    let Returns::Values(returns) = returns else {
+                        return Err(invalid("non-returning function returned"));
+                    };
                     self.signature(returns, &values)?;
                     self.frames.pop();
                     if let Some(results) = results {
@@ -564,7 +594,7 @@ impl<H: Host> Machine<'_, H> {
 
     // A non-local host halt is returned directly rather than disguised as a
     // function return, which would incorrectly execute caller continuations.
-    fn step(&mut self, op: Op, results: Range) -> Result<Option<Vec<BigUint>>, Error> {
+    fn step(&mut self, op: Op, results: Range) -> Result<Option<Outcome>, Error> {
         match op {
             Op::If {
                 condition,
@@ -586,12 +616,8 @@ impl<H: Host> Machine<'_, H> {
             }
             Op::Call { function, args } => {
                 let args = self.values(args)?;
-                self.call(function, &args, Some(results))?;
+                return self.call(function, &args, Some(results));
             }
-            Op::PlatformCall { platform, args } => match self.platform(platform, args)? {
-                HostResult::Halt(values) => return Ok(Some(values)),
-                HostResult::Return(values) => self.bind(results, &values)?,
-            },
             _ => {
                 let values = self.scalar(op, results)?;
                 self.bind(results, &values)?;
@@ -714,18 +740,16 @@ impl<H: Host> Machine<'_, H> {
         self.memory.write(address, &bytes)
     }
 
-    fn platform(&mut self, platform: super::PlatformId, args: Range) -> Result<HostResult, Error> {
-        let platform = self
-            .program
-            .platform
-            .get(platform.index())
-            .ok_or_else(|| invalid("platform id"))?;
-        let args = self.values(args)?;
-        self.signature(platform.params, &args)?;
+    fn external(
+        &mut self,
+        symbol: super::model::Symbol,
+        returns: Returns<Range>,
+        args: &[BigUint],
+    ) -> Result<HostResult, Error> {
         let symbol = self
             .program
             .symbols
-            .get(platform.name.index())
+            .get(symbol.index())
             .ok_or_else(|| invalid("symbol id"))?;
         let name = self
             .program
@@ -733,17 +757,12 @@ impl<H: Host> Machine<'_, H> {
             .get(symbol.range())
             .and_then(|n| std::str::from_utf8(n).ok())
             .ok_or_else(|| invalid("platform name"))?;
-        let result = self.host.call(name, &args, &mut self.memory)?;
+        let result = self.host.call(name, args, &mut self.memory)?;
         if let HostResult::Return(values) = &result {
-            if self
-                .program
-                .routines
-                .get(name)
-                .is_some_and(|r| !r.comes_back())
-            {
+            let Returns::Values(classes) = returns else {
                 return Err(invalid("non-returning host returned"));
-            }
-            self.signature(platform.returns, values)?;
+            };
+            self.signature(classes, values)?;
         }
         Ok(result)
     }

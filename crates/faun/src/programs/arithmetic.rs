@@ -137,13 +137,13 @@ pub fn zero_conversion() -> Program {
 #[must_use]
 pub fn preserves_host_count() -> Program {
     let (mut program, main) = Program::new("main");
-    let argc = program.platform("argc");
+    let argc = crate::platform::Routines::builtin().declare(&mut program, "argc");
     program.define(main, |b, _| {
-        let before = b.platform_call(argc, &[])[0];
+        let before = b.call(argc, &[])[0];
         let two = b.constant(Class::Word, 2);
         let three = b.constant(Class::Word, 3);
         let products: Vec<_> = (0..12).map(|_| b.binary(Binary::Mul, two, three)).collect();
-        let after = b.platform_call(argc, &[])[0];
+        let after = b.call(argc, &[])[0];
         let mut total = b.constant(Class::Word, 0);
         for product in products {
             total = b.binary(Binary::Add, total, product);

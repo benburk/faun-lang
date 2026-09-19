@@ -111,7 +111,7 @@ fn every_definition_is_unique_including_parameters() {
         b.ret(&[value])
     });
     p.define(other, |b, _| b.ret(&[]));
-    let params = p.functions[1].params;
+    let params = p.region(p.functions[1].body().unwrap()).params;
     p.operands[params.range().start + 1] = p.operands[params.range().start];
     rejects(&p, "twice");
 }
@@ -136,7 +136,7 @@ fn function_and_branch_parameters_must_match_their_owner() {
 fn all_leaf_operations_check_result_arity_and_class() {
     let (mut p, main) = Program::new("main");
     let datum = p.intern(&[0; 8]);
-    let argc = p.platform("argc");
+    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
     let other = p.declare("other", &[], &[Class::Word]);
     p.define(other, |b, _| {
         let value = b.constant(Class::Word, 1);
@@ -152,11 +152,11 @@ fn all_leaf_operations_check_result_arity_and_class() {
         b.store(Width::Byte, address, Offset::Bytes(0), value);
         b.convert(Class::Fixed { bits: 8 }, value);
         b.call(other, &[]);
-        b.platform_call(argc, &[]);
+        b.call(argc, &[]);
         b.ret(&[value])
     });
     validate(&p).unwrap();
-    for at in p.region(p.functions[0].body).ops.range() {
+    for at in p.region(p.functions[0].body().unwrap()).ops.range() {
         let mut wrong_arity = p.clone();
         if p.results[at].is_empty() {
             wrong_arity.results[at] = p.results[0];
@@ -297,7 +297,7 @@ fn loop_initial_continue_and_break_values_are_checked() {
 #[test]
 fn nested_controls_use_the_nearest_loop_and_allow_early_return() {
     let (mut p, main) = Program::new("main");
-    let exit = p.platform("exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit");
     p.define(main, |b, _| {
         let word = b.constant(Class::Word, 1);
         let result = b.loop_(&[word], &[Class::Word], |b, params| {
@@ -321,7 +321,7 @@ fn nested_controls_use_the_nearest_loop_and_allow_early_return() {
                         &[Class::Word],
                         |b| b.ret(&[carried]),
                         |b| {
-                            b.platform_call(exit, &[word]);
+                            b.call(exit, &[word]);
                             Terminator::UNREACHABLE
                         },
                     );
@@ -379,10 +379,6 @@ fn invalid_public_ids_and_ranges_return_errors_instead_of_panicking() {
             function: FunctionId(u32::MAX),
             args: Range::EMPTY,
         },
-        Op::PlatformCall {
-            platform: PlatformId(u32::MAX),
-            args: Range::EMPTY,
-        },
         Op::Loop {
             initial: Range::EMPTY,
             body: RegionId(u32::MAX),
@@ -404,7 +400,7 @@ fn corrupt_declaration_and_storage_pools_are_rejected() {
     p.names[0] = 255;
     rejects(&p, "invalid name text");
     let mut p = simple();
-    p.functions[0].returns = Range::of(100, 1);
+    p.functions[0].returns = Returns::Values(Range::of(100, 1));
     rejects(&p, "invalid pool range");
     let mut p = simple();
     p.results.clear();
@@ -420,9 +416,11 @@ fn corrupt_declaration_and_storage_pools_are_rejected() {
     });
     rejects(&p, "invalid pool range");
     let mut p = simple();
-    let argc = p.platform("argc");
-    p.platform[argc.index()].returns = Range::EMPTY;
-    rejects(&p, "routine signature");
+    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
+    p.functions[argc.index()].definition = Definition::External {
+        symbol: model::Symbol(u32::MAX),
+    };
+    rejects(&p, "invalid symbol");
 }
 
 #[test]

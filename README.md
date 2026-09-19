@@ -24,4 +24,5 @@ signed lowering are not implemented.
 
 Compiler clients should use `Target::compile`, or `Target::prepare` to inspect
 the prepared IR; raw `emit` does not legalize naturals or establish its validation
-and target-acceptance preconditions.
+and target-acceptance preconditions. See [machine IR contracts](notes/machine-ir.md)
+for external declarations, function construction, and representation rebuilding.

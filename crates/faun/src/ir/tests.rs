@@ -105,9 +105,9 @@ fn a_call_gives_a_name_what_it_takes() {
 #[test]
 fn a_platform_call_gives_a_routine_what_it_takes() {
     let (mut program, main) = Program::new("main");
-    let exit = program.platform("exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit");
     program.define(main, |b, _| {
-        b.platform_call(exit, &[]);
+        b.call(exit, &[]);
         let status = b.constant(Class::Word, 0);
         b.ret(&[status])
     });
@@ -122,10 +122,10 @@ fn a_platform_call_gives_a_routine_what_it_takes() {
 #[test]
 fn nothing_is_written_after_a_routine_that_does_not_come_back() {
     let (mut program, main) = Program::new("main");
-    let exit = program.platform("exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit");
     program.define(main, |b, _| {
         let status = b.constant(Class::Word, 0);
-        b.platform_call(exit, &[status]);
+        b.call(exit, &[status]);
         let held = b.constant(Class::Word, 1);
         b.ret(&[held])
     });
@@ -134,10 +134,10 @@ fn nothing_is_written_after_a_routine_that_does_not_come_back() {
     assert!(error.contains("does not come back"), "{error}");
 
     let (mut program, main) = Program::new("main");
-    let exit = program.platform("exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit");
     program.define(main, |b, _| {
         let status = b.constant(Class::Word, 0);
-        b.platform_call(exit, &[status]);
+        b.call(exit, &[status]);
         Terminator::UNREACHABLE
     });
     assert!(validate(&program).is_ok());
@@ -187,9 +187,10 @@ fn two_names_may_give_the_same_routine() {
     let facts = crate::barb::analyze(&program);
     let machine = lower(&program, &facts, &routines).expect("a representable program");
     let held: Vec<&str> = machine
-        .platforms()
+        .functions()
         .iter()
-        .map(|held| machine.name(held.name))
+        .filter_map(Function::external)
+        .map(|symbol| machine.name(symbol))
         .collect();
     // One per declaration, since each is handed a value of its own type and
     // what a target reads is stated per call. Both say the same routine,

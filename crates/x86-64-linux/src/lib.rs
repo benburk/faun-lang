@@ -43,10 +43,10 @@ impl Target for X86_64Linux {
                     function.params.len()
                 ));
             }
-            if function.returns.len() > 1 {
+            if function.returns.classes().len() > 1 {
                 return Err(format!(
                     "x86-64-linux function `{name}` has {} results; at most 1 is supported",
-                    function.returns.len()
+                    function.returns.classes().len()
                 ));
             }
         }

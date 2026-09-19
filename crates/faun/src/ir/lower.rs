@@ -13,7 +13,7 @@
 
 use crate::barb;
 
-use super::model::{Binary, Class, FunctionId, PlatformId, Program, Relation, Terminator, ValueId};
+use super::model::{Binary, Class, FunctionId, Program, Relation, Terminator, ValueId};
 use super::validate::validate;
 use crate::platform::{Routine, Routines, reads};
 
@@ -37,8 +37,7 @@ pub fn lower(
     // Only values actually lowered need a representation. Merely declaring
     // a library type (or retaining an old expression in the arena) does not.
     let demand = Demand::discover(program, facts, entry)?;
-    let (mut machine, main) =
-        Program::with(program.name(program.function(entry).name), routines.clone());
+    let (mut machine, main) = Program::new(program.name(program.function(entry).name));
     let callees = declare(&demand, routines, &mut machine, (entry, main))?;
 
     let lowering = Lowering {
@@ -63,8 +62,8 @@ enum Callee<'a> {
     Unreachable,
     Instruction(barb::Operation),
     Function(FunctionId),
-    Platform {
-        id: PlatformId,
+    External {
+        id: FunctionId,
         routine: &'a Routine,
     },
 }
@@ -97,16 +96,21 @@ fn declare<'a>(
         let function = program.function(id);
         let (params, returns) = demand.signature(id);
         let name = program.name(function.name);
-        // One something else answers for is a platform routine rather than a
-        // function: the program declares it and a target provides it.
+        // External functions carry the provider's machine contract. They
+        // share function IDs and calls with bodies, not the narrowing policy.
         callees.push(match function.definition {
             barb::Definition::Body(_) => Callee::Function(machine.declare(name, &params, &returns)),
             barb::Definition::External { symbol, .. } => {
                 // A provider may answer for several source declarations.
                 let outside = program.name(symbol);
-                let (held, wanted) = provided(routines, name, outside, &params, &returns)?;
-                Callee::Platform {
-                    id: machine.platform(held),
+                let wanted = provided(routines, name, outside, &params, &returns)?;
+                if wanted.comes_back() == uninhabited(program, function.result) {
+                    return Err(format!(
+                        "`{outside}` disagrees with `{name}` about returning"
+                    ));
+                }
+                Callee::External {
+                    id: wanted.declare(machine, name),
                     routine: wanted,
                 }
             }
@@ -128,7 +132,7 @@ fn provided<'a>(
     outside: &str,
     params: &[Class],
     returns: &[Class],
-) -> Result<(&'a str, &'a Routine), String> {
+) -> Result<&'a Routine, String> {
     let Some(wanted) = routines.get(outside) else {
         return Err(format!("nothing answers for `{name}`"));
     };
@@ -161,7 +165,7 @@ fn provided<'a>(
             reads(returns),
         ));
     }
-    Ok((held, wanted))
+    Ok(wanted)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -423,7 +427,7 @@ impl<T> Answer<T> {
     }
 }
 
-/// Every value at the width that reads it, where what reads it was worked
+/// A value at the width that reads it, where what reads it was worked
 /// out from the same bounds the value was.
 ///
 /// A class is what a term could need rather than what it does: a field
@@ -435,17 +439,12 @@ impl<T> Answer<T> {
 /// what it reads whatever a program worked out, so a value not fitting one
 /// is a program refused rather than a value quietly made to fit -- which is
 /// what [`super::model::Op::Convert`] is for, a program asking.
-fn met(b: &mut super::Builder, args: &[ValueId], takes: &[Class]) -> Vec<ValueId> {
-    args.iter()
-        .zip(takes)
-        .map(|(&arg, &wanted)| {
-            if b.class(arg).fits(wanted) {
-                arg
-            } else {
-                b.convert(wanted, arg)
-            }
-        })
-        .collect()
+fn met(b: &mut super::Builder, arg: ValueId, wanted: Class) -> ValueId {
+    if b.class(arg).fits(wanted) {
+        arg
+    } else {
+        b.convert(wanted, arg)
+    }
 }
 
 /// Where two arms meet: what they leave with is one place, so it is as wide
@@ -462,8 +461,8 @@ fn widest(held: Answer<Class>, other: Answer<Class>) -> Answer<Class> {
 fn yielded(b: &mut super::Builder, answer: Answer<ValueId>, classes: &[Class]) -> Terminator {
     match answer {
         Answer::Value(value) => {
-            let values = met(b, &[value], classes);
-            b.yield_(&values)
+            let value = met(b, value, classes[0]);
+            b.yield_(&[value])
         }
         Answer::Nothing => b.yield_(&[]),
         Answer::Never => Terminator::UNREACHABLE,
@@ -494,7 +493,7 @@ fn returned(
                         .to_owned(),
                 );
             }
-            let answer = met(b, &[answer], &[returns])[0];
+            let answer = met(b, answer, returns);
             b.ret(&[answer])
         }
         Answer::Nothing if matches!(destination, ReturnTo::Entry) => {
@@ -547,20 +546,15 @@ impl Lowering<'_> {
         } else {
             ReturnTo::Function(width(self.facts.answers(id)))
         };
-        let mut failure = None;
-        machine.define(into, |b, params| {
+        machine.try_define(into, |b, params| {
             let mut taken = params.iter().copied();
             let mut locals: Vec<Option<ValueId>> = erased
                 .iter()
                 .map(|erased| (!erased).then(|| taken.next().expect("a parameter")))
                 .collect();
             let answer = self.body(b, body, &mut locals);
-            returned(b, answer, destination).unwrap_or_else(|error| {
-                failure = Some(error);
-                Terminator::UNREACHABLE
-            })
-        });
-        failure.map_or(Ok(()), Err)
+            returned(b, answer, destination)
+        })
     }
 
     /// Each binding takes the next local, then the tail answers.
@@ -641,10 +635,16 @@ impl Lowering<'_> {
             Callee::Instruction(operation) => {
                 return Answer::Value(self.operation(b, operation, self.width(expr), &args));
             }
-            Callee::Platform { id, routine } => (b.platform_call(id, &args), routine.answers()),
+            Callee::External { id, routine } => (b.call(id, &args), routine.answers()),
             Callee::Function(callee) => {
-                let takes = b.takes(callee);
-                let args = met(b, &args, &takes);
+                let args: Vec<_> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(at, &arg)| {
+                        let wanted = b.takes(callee)[at];
+                        met(b, arg, wanted)
+                    })
+                    .collect();
                 (b.call(callee, &args), None)
             }
             Callee::Unreachable => unreachable!("a lowered call must have been demanded"),

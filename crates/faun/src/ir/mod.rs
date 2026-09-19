@@ -10,6 +10,11 @@
 //! - Layout: what is data, what is global, and what an offset means
 //! - Function signatures: arity, and the class of each parameter and result
 //!
+//! Defined and external functions share IDs and [`Op::Call`]. Signatures
+//! describe classes and [`Returns`]; bodies alone own parameter values.
+//! External declarations are not a provider catalog: targets check symbol
+//! availability and ABI before emitting calls.
+//!
 //! It does not decide:
 //!
 //! - Which values live in registers and which in memory
@@ -57,13 +62,17 @@ pub use layout::{Endian, Layout};
 pub use legalize::legalize;
 pub use lower::lower;
 pub use model::{
-    Binary, Class, DataId, Exit, Function, FunctionId, Offset, Op, Origin, Platform, PlatformId,
-    Program, Range, Region, RegionId, Relation, Span, Terminator, ValueId, Width,
+    Binary, Class, DataId, Definition, Exit, Function, FunctionId, Offset, Op, Origin, Program,
+    Range, Region, RegionId, Relation, Returns, Span, Terminator, ValueId, Width,
 };
 pub use validate::validate;
 
 #[cfg(test)]
 mod arithmetic_tests;
+#[cfg(test)]
+mod builder_tests;
+#[cfg(test)]
+mod external_tests;
 #[cfg(test)]
 mod interpreter_tests;
 #[cfg(test)]

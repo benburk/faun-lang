@@ -6,19 +6,20 @@
 //! not. This deliberately keeps dead locals until their region exits, trading
 //! peak memory for a small, auditable schedule rather than a liveness analysis.
 
-use std::collections::BTreeMap;
+use std::{cell::Cell, collections::BTreeMap};
 
 use num_bigint::BigUint;
 
 use super::natural::{self, Config, Helper, Library, Needs};
 use super::{
-    Builder, Class, DataId, Exit, FunctionId, Op, Origin, Program, RegionId, Relation, Terminator,
-    ValueId, validate,
+    Builder, Class, DataId, Definition, Exit, FunctionId, Op, Origin, Program, RegionId, Relation,
+    Terminator, ValueId, validate,
 };
 
 /// Rebuild a validated program with naturals represented by immutable objects.
 ///
-/// Existing data, globals, names, platform IDs and function IDs are preserved.
+/// Existing data, globals, names and function IDs are preserved, including
+/// external declarations.
 /// Runtime helpers are appended and are not passed through ownership placement.
 /// Programs needing no representation change take an unchanged clone fast path.
 ///
@@ -49,17 +50,14 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         source,
         library,
         constants,
+        values: vec![Cell::new(None); source.values_count()],
     };
     for (at, function) in source.functions().iter().enumerate() {
+        let Some(body) = function.body() else {
+            continue;
+        };
         output.define(FunctionId::at(at), |b, params| {
-            let mut state = State {
-                values: vec![None; source.values_count()],
-                scopes: Vec::new(),
-            };
-            for (&old, &new) in source.values(function.params).iter().zip(params) {
-                state.values[old.index()] = Some(new);
-            }
-            pass.region(b, function.body, &mut state, ScopeKind::Ordinary, &[])
+            pass.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params)
         });
     }
     validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
@@ -71,12 +69,10 @@ fn skeleton(source: &Program) -> Program {
     // so neither their contents nor their old capacity belongs in the skeleton.
     let mut output = Program {
         layout: source.layout,
-        routines: source.routines.clone(),
-        platform: source.platform.clone(),
         data: source.data.clone(),
         globals: source.globals.clone(),
         spans: source.spans.clone(),
-        functions: Vec::with_capacity(source.functions.len()),
+        functions: source.functions.clone(),
         classes: Vec::new(),
         signature: source
             .signature
@@ -91,19 +87,17 @@ fn skeleton(source: &Program) -> Program {
         names: source.names.clone(),
         symbols: source.symbols.clone(),
     };
-    for function in source.functions() {
-        let params: Vec<_> = source
-            .values(function.params)
-            .iter()
-            .map(|&v| representation(source.class(v)))
-            .collect();
-        let returns: Vec<_> = source
-            .signature(function.returns)
-            .iter()
-            .copied()
-            .map(representation)
-            .collect();
-        output.declare(source.name(function.name), &params, &returns);
+    for at in 0..output.functions.len() {
+        if output.functions[at].body().is_some() {
+            let params = output.mint_from(output.functions[at].params);
+            let body = RegionId::at(output.regions.len());
+            output.regions.push(super::Region {
+                params,
+                ops: super::Range::EMPTY,
+                terminator: Terminator::UNREACHABLE,
+            });
+            output.functions[at].definition = Definition::Body(body);
+        }
     }
     output
 }
@@ -127,11 +121,11 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
             ));
         }
     }
-    for platform in source.platforms() {
+    for function in source.functions().iter().filter(|f| f.external().is_some()) {
         if source
-            .signature(platform.params)
+            .signature(function.params)
             .iter()
-            .chain(source.signature(platform.returns))
+            .chain(source.signature(function.returns.classes()))
             .any(|&c| c == Class::Natural)
         {
             return Err("host signatures containing Natural have no bigint ABI".into());
@@ -143,8 +137,8 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
 fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
     check_classes(source, config)?;
     let mut needs = Needs::default();
-    for function in source.functions() {
-        for op in source.every(function.body) {
+    for body in source.functions().iter().filter_map(super::Function::body) {
+        for op in source.every(body) {
             match *op {
                 Op::Binary { op, left, .. } if source.class(left) == Class::Natural => {
                     needs.insert(Helper::arithmetic(op));
@@ -180,7 +174,11 @@ fn constants(
 ) -> Result<BTreeMap<ValueId, DataId>, String> {
     let mut interned = BTreeMap::new();
     let mut constants = BTreeMap::new();
-    let mut pending: Vec<_> = source.functions().iter().map(|f| f.body).collect();
+    let mut pending: Vec<_> = source
+        .functions()
+        .iter()
+        .filter_map(super::Function::body)
+        .collect();
     while let Some(region) = pending.pop() {
         for (op, results) in source.walk(region) {
             let magnitude = match *op {
@@ -238,6 +236,11 @@ struct Pass<'a> {
     source: &'a Program,
     library: Library,
     constants: BTreeMap<ValueId, DataId>,
+    // Validation establishes globally unique SSA definitions and lexical use.
+    // Mapping is monotonic across functions and sibling regions, not path-local.
+    // Cells let the builder's two sequential branch callbacks share this table
+    // without cloning it or borrowing a whole Pass mutably.
+    values: Vec<Cell<Option<ValueId>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -253,19 +256,20 @@ struct Scope {
     kind: ScopeKind,
 }
 
-#[derive(Clone)]
-struct State {
-    values: Vec<Option<ValueId>>,
-    scopes: Vec<Scope>,
-}
-
-impl State {
-    fn value(&self, old: ValueId) -> ValueId {
-        self.values[old.index()].expect("validated SSA operand has been rebuilt")
-    }
-}
-
 impl Pass<'_> {
+    fn value(&self, old: ValueId) -> ValueId {
+        self.values[old.index()]
+            .get()
+            .expect("validated SSA operand has been rebuilt")
+    }
+
+    fn mapped(&self, old: ValueId, new: ValueId) {
+        assert!(
+            self.values[old.index()].replace(Some(new)).is_none(),
+            "each SSA definition is rebuilt once"
+        );
+    }
+
     fn retained(&self, b: &mut Builder, value: ValueId) -> ValueId {
         b.call(self.library.retain, &[value])[0]
     }
@@ -274,37 +278,34 @@ impl Pass<'_> {
         &self,
         b: &mut Builder,
         region: RegionId,
-        state: &mut State,
+        scopes: &mut Vec<Scope>,
         kind: ScopeKind,
         params: &[ValueId],
     ) -> Terminator {
         let old = self.source.region(region);
         let mut owners = Vec::new();
         for (&old, &new) in self.source.values(old.params).iter().zip(params) {
-            state.values[old.index()] = Some(new);
+            self.mapped(old, new);
             if kind == ScopeKind::Loop && self.source.class(old) == Class::Natural {
                 owners.push(new);
             }
         }
-        state.scopes.push(Scope { owners, kind });
+        scopes.push(Scope { owners, kind });
         for (op, results) in self.source.walk(region) {
-            let fresh = self.op(b, *op, results, state);
+            let fresh = self.op(b, *op, results, scopes);
             for (&old, new) in results.iter().zip(fresh) {
-                state.values[old.index()] = Some(new);
+                self.mapped(old, new);
                 if self.source.class(old) == Class::Natural {
-                    state
-                        .scopes
-                        .last_mut()
-                        .expect("current scope")
-                        .owners
-                        .push(new);
+                    scopes.last_mut().expect("current scope").owners.push(new);
                 }
             }
         }
-        self.exit(b, state, old.terminator)
+        let terminator = self.exit(b, scopes, old.terminator);
+        scopes.pop();
+        terminator
     }
 
-    fn exit(&self, b: &mut Builder, state: &State, terminator: Terminator) -> Terminator {
+    fn exit(&self, b: &mut Builder, scopes: &[Scope], terminator: Terminator) -> Terminator {
         // No operations may follow a nonreturning platform call. Unreachable
         // also follows constructs whose branches both leave this scope.
         if terminator.exit == Exit::Unreachable {
@@ -315,7 +316,7 @@ impl Pass<'_> {
             .values(terminator.values)
             .iter()
             .map(|&old| {
-                let value = state.value(old);
+                let value = self.value(old);
                 if self.source.class(old) == Class::Natural {
                     self.retained(b, value)
                 } else {
@@ -325,15 +326,14 @@ impl Pass<'_> {
             .collect();
         let start = match terminator.exit {
             Exit::Return => 0,
-            Exit::Yield => state.scopes.len() - 1,
-            Exit::Break | Exit::Continue => state
-                .scopes
+            Exit::Yield => scopes.len() - 1,
+            Exit::Break | Exit::Continue => scopes
                 .iter()
                 .rposition(|s| s.kind == ScopeKind::Loop)
                 .expect("validated loop exit"),
             Exit::Unreachable => unreachable!(),
         };
-        for scope in state.scopes[start..].iter().rev() {
+        for scope in scopes[start..].iter().rev() {
             for &value in scope.owners.iter().rev() {
                 b.call(self.library.release, &[value]);
             }
@@ -351,8 +351,8 @@ impl Pass<'_> {
         clippy::too_many_lines,
         reason = "exhaustive operation dispatch keeps scalar cloning beside each representation rewrite"
     )]
-    fn op(&self, b: &mut Builder, op: Op, results: &[ValueId], state: &State) -> Vec<ValueId> {
-        let v = |old| state.value(old);
+    fn op(&self, b: &mut Builder, op: Op, results: &[ValueId], scopes: &[Scope]) -> Vec<ValueId> {
+        let v = |old| self.value(old);
         let args = |range| {
             self.source
                 .values(range)
@@ -429,10 +429,6 @@ impl Pass<'_> {
                 function,
                 args: held,
             } => return b.call(function, &args(held)),
-            Op::PlatformCall {
-                platform,
-                args: held,
-            } => return b.platform_call(platform, &args(held)),
             Op::If {
                 condition,
                 then_region,
@@ -441,8 +437,24 @@ impl Pass<'_> {
                 return b.if_(
                     v(condition),
                     &classes(),
-                    |b| self.region(b, then_region, &mut state.clone(), ScopeKind::Ordinary, &[]),
-                    |b| self.region(b, else_region, &mut state.clone(), ScopeKind::Ordinary, &[]),
+                    |b| {
+                        self.region(
+                            b,
+                            then_region,
+                            &mut scopes.to_vec(),
+                            ScopeKind::Ordinary,
+                            &[],
+                        )
+                    },
+                    |b| {
+                        self.region(
+                            b,
+                            else_region,
+                            &mut scopes.to_vec(),
+                            ScopeKind::Ordinary,
+                            &[],
+                        )
+                    },
                 );
             }
             Op::Loop { initial, body } => {
@@ -469,7 +481,7 @@ impl Pass<'_> {
                     })
                     .collect();
                 return b.loop_(&initial, &classes(), |b, params| {
-                    self.region(b, body, &mut state.clone(), ScopeKind::Loop, params)
+                    self.region(b, body, &mut scopes.to_vec(), ScopeKind::Loop, params)
                 });
             }
         };
@@ -485,7 +497,7 @@ mod tests {
         let (mut p, main) = Program::new("main");
         p.intern(b"unaligned data");
         p.global(&[1, 2, 3]);
-        p.platform("write");
+        crate::platform::Routines::builtin().declare(&mut p, "write");
         p.symbol("unused name");
         let identity = p.declare("identity", &[Class::Natural], &[Class::Natural]);
         p.define(identity, |b, args| b.ret(&[args[0]]));
@@ -517,8 +529,16 @@ mod tests {
         assert_eq!(out.data, p.data);
         assert_eq!(out.globals, p.globals);
         assert_eq!(out.spans, p.spans);
-        assert_eq!(out.platform, p.platform);
-        assert_eq!(format!("{:?}", out.routines), format!("{:?}", p.routines));
+        assert_eq!(
+            out.functions
+                .iter()
+                .filter_map(super::super::Function::external)
+                .collect::<Vec<_>>(),
+            p.functions
+                .iter()
+                .filter_map(super::super::Function::external)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(
             out.signature[..p.signature.len()],
             p.signature
@@ -542,22 +562,20 @@ mod tests {
         for (before, after) in p.functions.iter().zip(&out.functions) {
             assert_eq!(before.name, after.name);
             assert_eq!(
-                p.values(before.params)
-                    .iter()
-                    .map(|&v| representation(p.class(v)))
-                    .collect::<Vec<_>>(),
-                out.values(after.params)
-                    .iter()
-                    .map(|&v| out.class(v))
-                    .collect::<Vec<_>>()
-            );
-            assert_eq!(
-                p.signature(before.returns)
+                p.signature(before.params)
                     .iter()
                     .copied()
                     .map(representation)
                     .collect::<Vec<_>>(),
-                out.signature(after.returns)
+                out.signature(after.params)
+            );
+            assert_eq!(
+                p.signature(before.returns.classes())
+                    .iter()
+                    .copied()
+                    .map(representation)
+                    .collect::<Vec<_>>(),
+                out.signature(after.returns.classes())
             );
         }
     }

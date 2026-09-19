@@ -71,7 +71,7 @@ enum Source {
 }
 
 pub(crate) fn lower(program: &Program) -> Code {
-    let (plan, frames) = Plan::new(program);
+    let plan = Plan::new(program);
 
     let data_start = IOVECS + IOVEC_LEN * len32(plan.writes);
 
@@ -103,7 +103,7 @@ pub(crate) fn lower(program: &Program) -> Code {
         state.imports.push("args_sizes_get");
     }
 
-    let bodies = state.bodies(&frames);
+    let bodies = state.bodies();
 
     Code {
         data: state.segments(data_start),
@@ -116,29 +116,45 @@ pub(crate) fn lower(program: &Program) -> Code {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Frame {
+    /// Dense emitted index; external function IDs do not occupy wasm bodies.
+    index: u32,
+    locals: u32,
+}
+
 struct Plan {
     source: Vec<Source>,
     locals: u32,
     writes: usize,
+    functions: Vec<Option<Frame>>,
 }
 
 impl Plan {
-    /// The plan, and each function's local count. Locals restart per
-    /// function, and a body's region parameters are the function's, so
-    /// wasm's numbering falls out: parameters first, then the rest.
-    fn new(program: &Program) -> (Self, Vec<u32>) {
+    /// Locals restart per body: parameters first, then the rest. External
+    /// declarations have no frame and do not consume an emitted body index.
+    fn new(program: &Program) -> Self {
         let mut plan = Self {
             source: vec![Source::Local(0); program.values_count()],
             locals: 0,
             writes: 0,
+            functions: Vec::new(),
         };
-        let mut frames = Vec::new();
+        let mut index = 0;
         for function in program.functions() {
-            plan.locals = 0;
-            plan.walk(program, function.body);
-            frames.push(plan.locals);
+            let frame = function.body().map(|body| {
+                plan.locals = 0;
+                plan.walk(program, body);
+                let frame = Frame {
+                    index,
+                    locals: plan.locals,
+                };
+                index += 1;
+                frame
+            });
+            plan.functions.push(frame);
         }
-        (plan, frames)
+        plan
     }
 
     fn walk(&mut self, program: &Program, region: RegionId) {
@@ -158,8 +174,10 @@ impl Plan {
                 }
             }
             match *op {
-                Op::PlatformCall { platform, .. }
-                    if program.name(program.platforms()[platform.index()].name) == "write" =>
+                Op::Call { function, .. }
+                    if program.functions()[function.index()]
+                        .external()
+                        .is_some_and(|symbol| program.name(symbol) == "write") =>
                 {
                     self.writes += 1;
                 }
@@ -242,7 +260,10 @@ impl Lowering<'_> {
     /// program.
     fn needs_proc_exit(&self) -> bool {
         let entry = &self.program.functions()[self.entry.index()];
-        let terminator = self.program.region(entry.body).terminator;
+        let terminator = self
+            .program
+            .region(entry.body().expect("entry has a body"))
+            .terminator;
         // The entry's own return: nought is what running off the end does
         // anyway, and any other status has to be said.
         let status = terminator.exit == Exit::Return
@@ -257,7 +278,11 @@ impl Lowering<'_> {
                 .functions()
                 .iter()
                 .enumerate()
-                .any(|(id, function)| self.exits(function.body, FunctionRole::at(id, self.entry)))
+                .any(|(id, function)| {
+                    function
+                        .body()
+                        .is_some_and(|body| self.exits(body, FunctionRole::at(id, self.entry)))
+                })
     }
 
     /// Whether a region holds an exit this target has to make a call for.
@@ -266,9 +291,10 @@ impl Lowering<'_> {
     /// the routine.
     fn exits(&self, region: RegionId, role: FunctionRole) -> bool {
         self.program.ops(region).iter().any(|op| match *op {
-            Op::PlatformCall { platform, args } => {
-                let name = self.program.platforms()[platform.index()].name;
-                self.program.name(name) == "exit"
+            Op::Call { function, args } => {
+                self.program.functions()[function.index()]
+                    .external()
+                    .is_some_and(|symbol| self.program.name(symbol) == "exit")
                     && !(role == FunctionRole::Entry && self.leaves_with_nought(args))
             }
             Op::If {
@@ -290,21 +316,24 @@ impl Lowering<'_> {
 
     /// `_start` returns nothing of its own, whatever the entry's signature
     /// says: WASI takes the status through `proc_exit`.
-    fn bodies(&mut self, frames: &[u32]) -> Vec<Body> {
+    fn bodies(&mut self) -> Vec<Body> {
         let mut bodies = Vec::new();
         for (id, function) in self.program.functions().iter().enumerate() {
+            let Some(body) = function.body() else {
+                continue;
+            };
             self.role = FunctionRole::at(id, self.entry);
             self.body = Bytes::default();
-            self.region(function.body);
+            self.region(body);
 
             let params = len32(function.params.len());
             bodies.push(Body {
                 params,
-                locals: frames[id] - params,
+                locals: self.plan.functions[id].expect("a body has a frame").locals - params,
                 returns: if self.role == FunctionRole::Entry {
                     0
                 } else {
-                    len32(function.returns.len())
+                    len32(function.returns.classes().len())
                 },
                 code: std::mem::take(&mut self.body).finish(),
             });
@@ -419,15 +448,26 @@ impl Lowering<'_> {
                 }
                 self.set(results[0]);
             }
-            Op::PlatformCall { platform, args } => {
-                self.platform_call(*platform, program.values(*args), results, position);
-            }
             Op::Call { function, args } => {
+                if let Some(symbol) = program.functions()[function.index()].external() {
+                    self.platform_named(
+                        program.name(symbol),
+                        program.values(*args),
+                        results,
+                        position,
+                    );
+                    return;
+                }
                 for &arg in program.values(*args) {
                     self.push(arg);
                 }
                 let imports = len32(self.imports.len());
-                self.call(imports + len32(function.index()));
+                self.call(
+                    imports
+                        + self.plan.functions[function.index()]
+                            .expect("an internal callee")
+                            .index,
+                );
                 for &result in results.iter().rev() {
                     self.set(result);
                 }
@@ -639,18 +679,6 @@ impl Lowering<'_> {
             .uleb(u32::try_from(bytes).expect("a non-negative offset in range"));
     }
 
-    fn platform_call(
-        &mut self,
-        platform: faun::ir::PlatformId,
-        args: &[ValueId],
-        results: &[ValueId],
-        position: Position,
-    ) {
-        let name = self.program.platforms()[platform.index()].name;
-        let name = self.program.name(name).to_owned();
-        self.platform_named(&name, args, results, position);
-    }
-
     fn platform_named(
         &mut self,
         name: &str,
@@ -854,10 +882,10 @@ mod tests {
     #[test]
     fn leaving_with_nought_is_the_end_of_the_entry() {
         let (mut program, main) = Program::new("main");
-        let exit = program.platform("exit");
+        let exit = faun::platform::Routines::builtin().declare(&mut program, "exit");
         program.define(main, |b, _| {
             let status = b.constant(Class::Word, 0);
-            b.platform_call(exit, &[status]);
+            b.call(exit, &[status]);
             Terminator::UNREACHABLE
         });
 
@@ -871,11 +899,11 @@ mod tests {
     #[test]
     fn leaving_with_nought_from_elsewhere_is_a_call() {
         let (mut program, main) = Program::new("main");
-        let exit = program.platform("exit");
+        let exit = faun::platform::Routines::builtin().declare(&mut program, "exit");
         let leave = program.declare("leave", &[], &[]);
         program.define(leave, |b, _| {
             let status = b.constant(Class::Word, 0);
-            b.platform_call(exit, &[status]);
+            b.call(exit, &[status]);
             Terminator::UNREACHABLE
         });
         program.define(main, |b, _| {

@@ -5,6 +5,22 @@ const NAT: &str = include_str!("../../../../standard/nat.fn");
 const BYTE: &str = include_str!("../../../../standard/u8.fn");
 const INT: &str = include_str!("../../../../standard/int.fn");
 
+fn bodies(program: &Program) -> usize {
+    program
+        .functions()
+        .iter()
+        .filter_map(Function::body)
+        .count()
+}
+
+fn externals(program: &Program) -> usize {
+    program
+        .functions()
+        .iter()
+        .filter_map(Function::external)
+        .count()
+}
+
 fn library(main: &str) -> String {
     format!("{NAT}\n{BYTE}\n{INT}\n{main}")
 }
@@ -33,8 +49,8 @@ fn unused_library_types_and_functions_do_not_need_runtime_representations() {
         crate::read(&text, &Routines::builtin().with_word(64)).unwrap(),
     ] {
         validate(&machine).unwrap();
-        assert_eq!(machine.functions().len(), 1, "only main is emitted");
-        assert_eq!(machine.platforms().len(), 2, "argc and exit are retained");
+        assert_eq!(bodies(&machine), 1, "only main is emitted");
+        assert_eq!(externals(&machine), 2, "argc and exit are retained");
     }
 }
 
@@ -50,8 +66,8 @@ fn folded_library_calls_leave_no_runtime_representation_demand() {
     // The old function bodies and library types remain in the arenas, but
     // their callers now hold naturals, not products or signed sums.
     let machine = lower_program(&source).unwrap();
-    assert_eq!(machine.functions().len(), 1);
-    assert_eq!(machine.platforms().len(), 1);
+    assert_eq!(bodies(&machine), 1);
+    assert_eq!(externals(&machine), 1);
 }
 
 #[test]
@@ -74,11 +90,11 @@ fn default_pipeline_removes_folded_library_temporaries() {
         let routines = Routines::builtin().with_word(64);
         let machine = crate::read(&text, &routines).unwrap();
         validate(&machine).unwrap();
-        assert_eq!(machine.functions().len(), 1);
-        assert_eq!(machine.platforms().len(), 1, "only exit remains");
+        assert_eq!(bodies(&machine), 1);
+        assert_eq!(externals(&machine), 1, "only exit remains");
         assert!(
             machine
-                .every(machine.functions()[0].body)
+                .every(machine.functions()[0].body().unwrap())
                 .any(|op| matches!(op, Op::Constant { value, .. } if *value == expected))
         );
         assert!(
@@ -145,8 +161,8 @@ fn unsupported_types_in_impossible_arms_do_not_demand_storage_or_functions() {
         // No folding or inlining: the lowering's own reachability must agree
         // between function discovery, type demand, and branch emission.
         let machine = lower_program(&parse(&text)).unwrap();
-        assert_eq!(machine.functions().len(), 2, "main and select only");
-        assert_eq!(machine.platforms().len(), 1);
+        assert_eq!(bodies(&machine), 2, "main and select only");
+        assert_eq!(externals(&machine), 1);
     }
 }
 
@@ -165,7 +181,7 @@ fn recognized_definition_bodies_do_not_demand_runtime_representations() {
     );
     assert_eq!(facts.operation(add), Some(barb::Operation::Add));
     let machine = lower(&source, &facts, &Routines::builtin().with_word(64)).unwrap();
-    assert_eq!(machine.functions().len(), 1, "add becomes an instruction");
+    assert_eq!(bodies(&machine), 1, "add becomes an instruction");
 }
 
 #[test]
@@ -211,6 +227,6 @@ fn detached_arena_expressions_do_not_demand_a_representation() {
         b.call(exit, &[args[0], zero])
     });
     let machine = lower_program(&source).unwrap();
-    assert_eq!(machine.functions().len(), 1);
-    assert_eq!(machine.platforms().len(), 1);
+    assert_eq!(bodies(&machine), 1);
+    assert_eq!(externals(&machine), 1);
 }

@@ -6,7 +6,8 @@ its input must already be validated and accepted; it does not legalize naturals.
 `Target::prepare` exposes the transformed program for inspection and evaluation.
 
 `ir::legalize(&Program, ir::natural::Config)` rebuilds the arena-backed program,
-keeping original function/platform IDs and existing data/globals intact. Only
+keeping original function IDs (including externals) and existing data/globals
+intact. Only
 original Natural values become owned object addresses. Ordinary addresses are
 not reference counted, and address/natural reinterpretation is rejected. Host
 signatures containing Natural have no supported bigint ABI. Source host arguments
@@ -32,6 +33,14 @@ Nested loop exits do not release ancestor captures; function returns unwind all
 local scopes but not borrowed parameters. Dead locals remain live until their
 region exits, so peak memory can be higher than with last-use placement. Loop
 iteration cleanup reclaims dead allocations rather than accumulating history.
+
+Validation establishes globally unique SSA definitions and lexical use. The
+legalizer therefore keeps one monotonic old-to-new value map for the whole
+program, shared by sequential branch builders; it does not snapshot that map
+per function or branch. Ownership scopes remain path-local snapshots, so an
+exit in one sibling cannot consume another sibling's claims. The runtime
+itself declares its nonreturning `exit(word)` requirement; target acceptance
+checks the provider contract, not a catalog retained in the IR.
 
 ## Deliberate limits
 

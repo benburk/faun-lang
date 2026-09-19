@@ -381,12 +381,12 @@ impl Host for TestHost {
 #[test]
 fn deterministic_host_can_return_values_and_halt_callers() {
     let (mut p, main) = Program::new("main");
-    let argc = p.platform("argc");
-    let exit = p.platform("exit");
+    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
+    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit");
     let f = p.declare("stop", &[], &[]);
     p.define(f, |b, _| {
-        let count = b.platform_call(argc, &[]);
-        b.platform_call(exit, &count);
+        let count = b.call(argc, &[]);
+        b.call(exit, &count);
         Terminator::UNREACHABLE
     });
     p.define(main, |b, _| {
@@ -428,7 +428,7 @@ fn malformed_executed_ids_and_exit_arities_do_not_panic() {
         let value = b.constant(Class::Word, 0);
         b.ret(&[value])
     });
-    let op = p.regions[p.functions[main.index()].body.index()]
+    let op = p.regions[p.functions[main.index()].body().unwrap().index()]
         .ops
         .range()
         .start;
@@ -482,11 +482,11 @@ fn host_observes_data_and_byte_stores_truncate_only_the_written_byte() {
     let (mut p, main) = Program::new("main");
     let data = p.intern(b"hello");
     let global = p.global(&[0; 2]);
-    let write = p.platform("write");
+    let write = crate::platform::Routines::builtin().declare(&mut p, "write");
     p.define(main, |b, _| {
         let address = b.address_of(data);
         let len = b.data_len(data);
-        b.platform_call(write, &[address, len]);
+        b.call(write, &[address, len]);
         let address = b.address_of(global);
         let value = b.constant(Class::Word, 0x1234);
         b.store(Width::Byte, address, Offset::Bytes(1), value);
@@ -725,7 +725,7 @@ fn oversized_word_and_address_constants_are_rejected_not_truncated() {
             vec![BigUint::default()]
         );
     }
-    let op = p.regions[p.functions[main.index()].body.index()]
+    let op = p.regions[p.functions[main.index()].body().unwrap().index()]
         .ops
         .range()
         .start;
@@ -787,9 +787,9 @@ impl Host for OversizedHost {
 #[test]
 fn host_results_do_not_implicitly_fit_a_word() {
     let (mut p, main) = Program::new("main");
-    let argc = p.platform("argc");
+    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
     p.define(main, |b, _| {
-        let count = b.platform_call(argc, &[]);
+        let count = b.call(argc, &[]);
         b.ret(&count)
     });
     for word_bits in [16, 32, 64] {

@@ -1,11 +1,11 @@
 //! What a target answers for, said once.
 //!
-//! A routine is where a program meets the outside: a name it declares and
-//! never defines, and a target provides. Two tiers read these and neither
-//! owns them. The language above reads what a routine is called, how much a
-//! program hands it, and what holding it means; the machine tier below reads
-//! what it takes and leaves in a target's own terms. barb, in between, reads
-//! none of it -- a routine there is a name with no body, like any other.
+//! A routine describes a chosen environment: what a source program may name,
+//! and the machine contract a target supplies. Frontend setup and lowering
+//! read these contracts; target acceptance checks calls against its own set.
+//! Machine programs keep ordinary external function declarations, not this
+//! catalog. barb reads none of it -- an external there is a name with no body,
+//! like any other.
 //!
 //! Saying it once is the point. It was said twice before, in two
 //! vocabularies that had to agree and nothing checked, and a third time in
@@ -56,6 +56,19 @@ pub struct Routine {
 }
 
 impl Routine {
+    /// Copy this environment contract into an ordinary machine declaration.
+    /// The machine program retains no catalog; targets check the declaration
+    /// against their own contracts before emission.
+    pub fn declare(&self, program: &mut crate::ir::Program, name: &str) -> crate::ir::FunctionId {
+        let answers = self.answers();
+        let returns = if self.comes_back() {
+            crate::ir::Returns::Values(answers.as_slice())
+        } else {
+            crate::ir::Returns::Never
+        };
+        program.external(name, &self.name, &self.takes, returns)
+    }
+
     #[must_use]
     pub const fn answers(&self) -> Option<Class> {
         match self.returns {
@@ -76,7 +89,7 @@ impl Routine {
 /// answers for, and what it does while answering cannot be seen from here,
 /// so a program calling one is a program that may be watched working.
 ///
-/// A program naming anything outside the set it was read with is not a
+/// A source program naming anything outside the set it was read with is not a
 /// program any target can be handed, and one naming something in it that
 /// its own target does not answer for is refused by the target.
 #[derive(Clone, Debug, Default)]
@@ -129,6 +142,16 @@ impl Routines {
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&Routine> {
         self.0.iter().find(|routine| routine.name == name)
+    }
+
+    /// Declare one of this environment's contracts in a machine program.
+    ///
+    /// # Panics
+    /// If the environment has no routine with this name.
+    pub fn declare(&self, program: &mut crate::ir::Program, name: &str) -> crate::ir::FunctionId {
+        self.get(name)
+            .unwrap_or_else(|| panic!("no routine named `{name}`"))
+            .declare(program, name)
     }
 
     /// The ones named, and no others. What a target answers for is not what

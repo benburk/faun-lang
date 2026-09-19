@@ -198,7 +198,7 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
             each(*value);
         }
         Op::Convert { value, .. } => each(*value),
-        Op::PlatformCall { args, .. } | Op::Call { args, .. } => {
+        Op::Call { args, .. } => {
             program.values(*args).iter().copied().for_each(each);
         }
         Op::If { condition, .. } => each(*condition),
@@ -240,7 +240,10 @@ pub(crate) fn lower(program: &Program) -> Code {
 pub(crate) fn check_frames(program: &Program) -> Result<(), String> {
     let mut state = Lowering::new(program, Assembler::new(0), 0);
     for function in program.functions() {
-        state.plan(function.body).map_err(|error| {
+        let Some(body) = function.body() else {
+            continue;
+        };
+        state.plan(body).map_err(|error| {
             format!(
                 "mos6502-sim65 function `{}`: {error}",
                 program.name(function.name)
@@ -263,9 +266,9 @@ fn assemble(program: &Program, heap: u16) -> Code {
         .collect();
     state.plans = (0..program.functions().len())
         .map(|id| {
-            state
-                .plan(program.functions()[id].body)
-                .expect("accepted frame size")
+            program.functions()[id]
+                .body()
+                .map(|body| state.plan(body).expect("accepted frame size"))
         })
         .collect();
     state.reset(heap);
@@ -289,7 +292,7 @@ struct Lowering<'a> {
     /// The zero-page pairs this function keeps values in.
     homes: Vec<u8>,
     /// Every function's plan, worked out before any code is emitted.
-    plans: Vec<Plan>,
+    plans: Vec<Option<Plan>>,
     /// Argument blocks the target lays down itself, one per distinct pair of
     /// constant arguments, emitted after the code.
     pool: Vec<(super::asm::Label, [u16; 2])>,
@@ -333,7 +336,7 @@ impl Lowering<'_> {
     fn reset(&mut self, heap: u16) {
         self.asm.ldx_imm(0xFF);
         self.asm.txs();
-        if self.plans.iter().any(|plan| plan.frame > 0) {
+        if self.plans.iter().flatten().any(|plan| plan.frame > 0) {
             self.set_pair(FP, FRAMES_TOP);
         }
         if self.program.reaches("grow") {
@@ -374,10 +377,14 @@ impl Lowering<'_> {
 
     fn function(&mut self, id: FunctionId) {
         let function = &self.program.functions()[id.index()];
+        let Some(body) = function.body() else { return };
         let start = self.starts[id.index()];
         self.asm.bind(start);
 
-        let plan = self.plans[id.index()].clone();
+        let plan = self.plans[id.index()]
+            .as_ref()
+            .expect("a body has a frame plan")
+            .clone();
         self.frame = plan.frame;
         self.homes = plan.homes;
         let frame = self.frame;
@@ -387,12 +394,12 @@ impl Lowering<'_> {
 
         // Arguments arrive in fixed pairs, so a callee takes its own copies
         // before anything it calls can overwrite them.
-        let params = self.program.values(function.params);
+        let params = self.program.values(self.program.region(body).params);
         for (index, &param) in params.to_vec().iter().enumerate() {
             let pair = ARGS + 2 * u8::try_from(index).expect("a few arguments");
             self.commit(param, pair);
         }
-        self.region(function.body);
+        self.region(body);
     }
 
     /// `FP` down by the frame, or back up again.
@@ -577,7 +584,11 @@ impl Lowering<'_> {
             }
             for_each_operand(op, program, |value| spans.touch(value, *at));
             match *op {
-                Op::Call { .. } => spans.calls.push(*at),
+                Op::Call { function, .. }
+                    if program.functions()[function.index()].body().is_some() =>
+                {
+                    spans.calls.push(*at);
+                }
                 Op::If {
                     then_region,
                     else_region,
@@ -1479,12 +1490,12 @@ impl Lowering<'_> {
             Op::Convert { class, value } => {
                 self.convert(*class, *value, results[0]);
             }
-            Op::PlatformCall { platform, args } => {
-                let name = program.name(program.platforms()[platform.index()].name);
-                self.platform_call(name, program.values(*args), results);
-            }
             Op::Call { function, args } => {
-                self.call(*function, program.values(*args), results);
+                if let Some(symbol) = program.functions()[function.index()].external() {
+                    self.platform_call(program.name(symbol), program.values(*args), results);
+                } else {
+                    self.call(*function, program.values(*args), results);
+                }
             }
             Op::If {
                 condition,

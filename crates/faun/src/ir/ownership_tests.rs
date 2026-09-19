@@ -133,6 +133,64 @@ fn nested_lifetimes_preserve_full_values_and_free_every_mortal_claim() {
     }
 }
 
+fn branching_function(p: &mut Program, offset: u64) -> FunctionId {
+    let function = p.declare("branching", &[Class::Word], &[Class::Word]);
+    p.define(function, |b, args| {
+        let ancestor = b.convert(Class::Natural, args[0]);
+        let selected = b.if_(
+            args[0],
+            &[Class::Natural],
+            |b| {
+                let word = b.constant(Class::Word, offset + 1);
+                let local = b.convert(Class::Natural, word);
+                let sum = b.binary(Binary::Add, ancestor, local);
+                b.yield_(&[sum])
+            },
+            |b| {
+                let word = b.constant(Class::Word, offset + 3);
+                let local = b.convert(Class::Natural, word);
+                let sum = b.binary(Binary::Add, ancestor, local);
+                b.yield_(&[sum])
+            },
+        );
+        let word = b.convert(Class::Word, selected[0]);
+        b.ret(&[word])
+    });
+    function
+}
+
+#[test]
+fn one_global_mapping_preserves_sibling_and_cross_function_ownership() {
+    for choice in [0, 1] {
+        let (mut original, main) = Program::new("main");
+        let functions: Vec<_> = (0..16)
+            .map(|offset| branching_function(&mut original, offset))
+            .collect();
+        original.define(main, |b, _| {
+            let arg = b.constant(Class::Word, choice);
+            let mut sum = b.constant(Class::Word, 0);
+            for &function in &functions {
+                let value = b.call(function, &[arg])[0];
+                sum = b.binary(Binary::Add, sum, value);
+            }
+            b.ret(&[sum])
+        });
+        for bits in [16, 32, 64] {
+            let config = natural::Config {
+                word_bits: bits,
+                heap_bytes: 256,
+            };
+            let scalar = legalize(&original, config).unwrap();
+            let (before, _) = run(&original, bits, 0);
+            let (after, _) = run(&scalar, bits, 0);
+            let expected = 120 + 16 * if choice == 0 { 3u64 } else { 2 };
+            assert_eq!(before.returned().unwrap(), [BigUint::from(expected)]);
+            assert_eq!(after.outcome, before.outcome);
+            no_live_objects(&scalar, &after, config);
+        }
+    }
+}
+
 fn widened_loop() -> Program {
     let (mut p, main) = Program::new("main");
     let mut parameter = None;
@@ -157,7 +215,7 @@ fn widened_loop() -> Program {
 }
 
 fn loop_body(p: &Program) -> RegionId {
-    p.ops(p.functions()[0].body)
+    p.ops(p.functions()[0].body().unwrap())
         .iter()
         .find_map(|op| {
             if let Op::Loop { body, .. } = *op {

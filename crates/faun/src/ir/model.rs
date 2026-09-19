@@ -7,7 +7,7 @@ use crate::index::index;
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. The IR never reads those characters: names are compared and copied
 // as integers, and the text comes back only to render one.
-index!(ValueId, DataId, FunctionId, PlatformId, RegionId, Symbol);
+index!(ValueId, DataId, FunctionId, RegionId, Symbol);
 
 /// Which of a program's two regions a datum sits in.
 ///
@@ -47,15 +47,6 @@ pub enum Class {
         bits: u16,
     },
     Address,
-}
-
-/// What a program cannot compute for itself. A target provides what it has
-/// and rejects the rest by name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Platform {
-    pub name: Symbol,
-    pub params: Range,
-    pub returns: Range,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,10 +121,6 @@ pub enum Op {
         class: Class,
         value: ValueId,
     },
-    PlatformCall {
-        platform: PlatformId,
-        args: Range,
-    },
     Call {
         function: FunctionId,
         args: Range,
@@ -182,24 +169,66 @@ pub struct Region {
     pub terminator: Terminator,
 }
 
+/// Returning no values is different from never returning. Builders accept
+/// borrowed classes; stored declarations hold a range in the signature pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Returns<T> {
+    Never,
+    Values(T),
+}
+
+impl Returns<Range> {
+    /// The result classes, empty for a call which cannot return.
+    #[must_use]
+    pub const fn classes(self) -> Range {
+        match self {
+            Self::Never => Range::EMPTY,
+            Self::Values(classes) => classes,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Definition {
+    Body(RegionId),
+    /// A requirement, not evidence that any particular target supplies it.
+    External {
+        symbol: Symbol,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
     pub name: Symbol,
-    /// The values its parameters are, minted with it.
+    /// Parameter classes in the signature pool. A body's parameter values
+    /// belong to its root region; external declarations need no SSA values.
     pub params: Range,
-    pub returns: Range,
-    pub body: RegionId,
+    pub returns: Returns<Range>,
+    pub definition: Definition,
+}
+
+impl Function {
+    #[must_use]
+    pub const fn body(&self) -> Option<RegionId> {
+        match self.definition {
+            Definition::Body(body) => Some(body),
+            Definition::External { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn external(&self) -> Option<Symbol> {
+        match self.definition {
+            Definition::Body(_) => None,
+            Definition::External { symbol } => Some(symbol),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct Program {
     /// Absent until a representation pass serializes target-sized data.
     pub(super) layout: Option<super::Layout>,
-    /// The routines this was read against, since a program naming one is
-    /// naming something from a set somebody chose rather than something
-    /// every compiler knows.
-    pub(super) routines: crate::platform::Routines,
-    pub(super) platform: Vec<Platform>,
     /// Every datum end to end. A target adds its own base and nothing else,
     /// so two of them cannot disagree about the layout between.
     pub(super) data: Vec<u8>,
@@ -209,8 +238,7 @@ pub struct Program {
     pub(super) functions: Vec<Function>,
     /// The class of every value, by value.
     pub(super) classes: Vec<Class>,
-    /// The classes a signature names: what a platform routine or a function
-    /// takes and answers.
+    /// The classes a function takes and answers.
     pub(super) signature: Vec<Class>,
     pub(super) ops: Vec<Op>,
     /// What each instruction defines, beside it rather than in it: a pass
@@ -255,12 +283,10 @@ impl Program {
         Range::of(start, values.len())
     }
 
-    /// The name a symbol stands for.
+    /// The classes a run in the signature pool names.
     ///
     /// # Panics
-    ///
-    /// If the symbol came from another program.
-    /// The classes a run of a signature names.
+    /// If the range is outside this program's signature pool.
     #[must_use]
     pub fn signature(&self, range: Range) -> &[Class] {
         &self.signature[range.range()]
@@ -338,11 +364,12 @@ impl Program {
     pub fn reaches(&self, name: &str) -> bool {
         self.functions
             .iter()
-            .flat_map(|function| self.every(function.body))
+            .filter_map(Function::body)
+            .flat_map(|body| self.every(body))
             .any(|op| match *op {
-                Op::PlatformCall { platform, .. } => {
-                    self.name(self.platform[platform.index()].name) == name
-                }
+                Op::Call { function, .. } => self.functions[function.index()]
+                    .external()
+                    .is_some_and(|symbol| self.name(symbol) == name),
                 _ => false,
             })
     }
@@ -350,17 +377,6 @@ impl Program {
     #[must_use]
     pub fn region(&self, region: RegionId) -> Region {
         self.regions[region.index()]
-    }
-
-    /// The routines this program was read against.
-    #[must_use]
-    pub const fn routines(&self) -> &crate::platform::Routines {
-        &self.routines
-    }
-
-    #[must_use]
-    pub fn platforms(&self) -> &[Platform] {
-        &self.platform
     }
 
     #[must_use]

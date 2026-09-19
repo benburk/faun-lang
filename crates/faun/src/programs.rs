@@ -12,6 +12,7 @@
 
 pub mod abi;
 pub mod arithmetic;
+pub mod external;
 
 use crate::ir::Class::Word;
 use crate::ir::{Binary, Builder, Class, Offset, Program, Relation, Width};
@@ -22,12 +23,12 @@ const MESSAGE: &[u8] = b"Hello, World!\n";
 pub fn hello_world() -> Program {
     let (mut program, main) = Program::new("main");
     let message = program.intern(MESSAGE);
-    let write = program.platform("write");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
 
     program.define(main, |b, _| {
         let buf = b.address_of(message);
         let len = b.data_len(message);
-        b.platform_call(write, &[buf, len]);
+        b.call(write, &[buf, len]);
 
         let status = b.constant(Word, 0);
         b.ret(&[status])
@@ -75,7 +76,7 @@ pub fn two_and_two_in_barb() -> crate::barb::Program {
 #[must_use]
 pub fn exits_from_a_branch(taken: u64) -> Program {
     let (mut program, main) = Program::new("main");
-    let exit = program.platform("exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit");
 
     program.define(main, |b, _| {
         let value = b.constant(Word, taken);
@@ -87,12 +88,12 @@ pub fn exits_from_a_branch(taken: u64) -> Program {
             // Neither arm comes back, so neither reaches the join.
             |b| {
                 let status = b.constant(Word, 0);
-                b.platform_call(exit, &[status]);
+                b.call(exit, &[status]);
                 crate::ir::Terminator::UNREACHABLE
             },
             |b| {
                 let status = b.constant(Word, 5);
-                b.platform_call(exit, &[status]);
+                b.call(exit, &[status]);
                 crate::ir::Terminator::UNREACHABLE
             },
         );
@@ -197,12 +198,12 @@ pub fn branches_on_a_flag_it_read() -> Program {
 #[must_use]
 pub fn writes_a_length_it_worked_out() -> Program {
     let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow");
-    let write = program.platform("write");
+    let grow = crate::platform::Routines::builtin().declare(&mut program, "grow");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
-        let page = b.platform_call(grow, &[size])[0];
+        let page = b.call(grow, &[size])[0];
         for (index, byte) in [b'h', b'i', b'\n'].into_iter().enumerate() {
             let value = b.constant(Word, u64::from(byte));
             let offset = Offset::Bytes(i32::try_from(index).expect("a short greeting"));
@@ -212,7 +213,7 @@ pub fn writes_a_length_it_worked_out() -> Program {
         let one = b.constant(Word, 1);
         let two = b.constant(Word, 2);
         let length = b.binary(Binary::Add, one, two);
-        b.platform_call(write, &[page, length]);
+        b.call(write, &[page, length]);
         let status = b.constant(Word, 0);
         b.ret(&[status])
     });
@@ -262,7 +263,7 @@ pub fn carries_a_total_into_an_arm(times: u64) -> Program {
 pub fn counts_down_before_it_branches(times: u64) -> Program {
     let (mut program, main) = Program::new("main");
     let tick = program.intern(b"tick\n".as_slice());
-    let write = program.platform("write");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
 
     program.define(main, |b, _| {
         let start = b.constant(Word, times);
@@ -279,7 +280,7 @@ pub fn counts_down_before_it_branches(times: u64) -> Program {
                 |b| {
                     let buf = b.address_of(tick);
                     let len = b.constant(Word, 5);
-                    b.platform_call(write, &[buf, len]);
+                    b.call(write, &[buf, len]);
                     b.yield_(&[])
                 },
             );
@@ -375,11 +376,11 @@ pub fn recurses() -> Program {
 #[must_use]
 pub fn uses_the_heap() -> Program {
     let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow");
+    let grow = crate::platform::Routines::builtin().declare(&mut program, "grow");
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
-        let page = b.platform_call(grow, &[size])[0];
+        let page = b.call(grow, &[size])[0];
 
         let answer = b.constant(Word, 42);
         let decoy = b.constant(Word, 7);
@@ -447,12 +448,12 @@ pub fn values_survive_a_call() -> Program {
 #[must_use]
 pub fn writes_from_the_heap() -> Program {
     let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow");
-    let write = program.platform("write");
+    let grow = crate::platform::Routines::builtin().declare(&mut program, "grow");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
-        let page = b.platform_call(grow, &[size])[0];
+        let page = b.call(grow, &[size])[0];
 
         // "hi\n", a byte at a time, since the bytes are computed too.
         for (index, byte) in [b'h', b'i', b'\n'].into_iter().enumerate() {
@@ -462,7 +463,7 @@ pub fn writes_from_the_heap() -> Program {
         }
 
         let length = b.constant(Word, 3);
-        b.platform_call(write, &[page, length]);
+        b.call(write, &[page, length]);
         let status = b.constant(Word, 0);
         b.ret(&[status])
     });
@@ -475,11 +476,11 @@ pub fn writes_from_the_heap() -> Program {
 #[must_use]
 pub fn stores_a_byte() -> Program {
     let (mut program, main) = Program::new("main");
-    let grow = program.platform("grow");
+    let grow = crate::platform::Routines::builtin().declare(&mut program, "grow");
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
-        let page = b.platform_call(grow, &[size])[0];
+        let page = b.call(grow, &[size])[0];
 
         let high = b.constant(Word, 200);
         b.store(Width::Byte, page, Offset::Bytes(0), high);
@@ -564,7 +565,7 @@ pub fn less(left: u64, right: u64) -> Program {
 pub fn countdown(times: u64) -> Program {
     let (mut program, main) = Program::new("main");
     let tick = program.intern(b"tick\n".as_slice());
-    let write = program.platform("write");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
 
     program.define(main, |b, _| {
         let start = b.constant(Word, times);
@@ -579,7 +580,7 @@ pub fn countdown(times: u64) -> Program {
                 |b| {
                     let buf = b.address_of(tick);
                     let len = b.constant(Word, 5);
-                    b.platform_call(write, &[buf, len]);
+                    b.call(write, &[buf, len]);
                     let one = b.constant(Word, 1);
                     let next = b.binary(Binary::Sub, n, one);
                     b.continue_(&[next])

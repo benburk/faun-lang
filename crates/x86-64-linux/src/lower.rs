@@ -10,8 +10,8 @@ use super::encode::{Encoder, Reg};
 use super::{Code, Reloc};
 use crate::WORD_BITS;
 use faun::ir::{
-    Binary, Class, DataId, Exit, Function, FunctionId, Offset, Op, PlatformId, Program, RegionId,
-    Relation, Terminator, ValueId, Width,
+    Binary, Class, DataId, Exit, Function, FunctionId, Offset, Op, Program, RegionId, Relation,
+    Terminator, ValueId, Width,
 };
 
 const SYS_WRITE: u64 = 1;
@@ -160,8 +160,9 @@ impl Plan {
     fn new(program: &Program, function: &Function) -> Self {
         let mut plan = Self::empty(program);
         let mut widest = function.params.len();
-        plan.count(program, function.body);
-        plan.walk(program, function.body, &mut widest);
+        let body = function.body().expect("only bodies are planned");
+        plan.count(program, body);
+        plan.walk(program, body, &mut widest);
         plan.scratch = plan.frame;
         plan.frame += 8 * u32::try_from(widest).expect("a sane region width");
         plan
@@ -231,7 +232,7 @@ impl Plan {
                 Op::Load { address, .. } => read(&mut self.uses, &[address]),
                 Op::Store { address, value, .. } => read(&mut self.uses, &[address, value]),
                 Op::Convert { value, .. } => read(&mut self.uses, &[value]),
-                Op::PlatformCall { args, .. } | Op::Call { args, .. } => {
+                Op::Call { args, .. } => {
                     read(&mut self.uses, program.values(args));
                 }
                 Op::If { condition, .. } => read(&mut self.uses, &[condition]),
@@ -350,6 +351,7 @@ impl Lowering<'_> {
 
     fn function(&mut self, id: FunctionId) {
         let function = &self.program.functions()[id.index()];
+        let Some(body) = function.body() else { return };
         self.in_entry = id.index() == self.entry.index();
         self.starts[id.index()] = self.asm.here();
         self.plan = Plan::new(self.program, function);
@@ -372,11 +374,11 @@ impl Lowering<'_> {
         // The flag answers for this function alone; opening a frame does not
         // set it, so only what the body writes counts.
         self.asm.forget_spilled();
-        let params = self.program.values(function.params);
+        let params = self.program.values(self.program.region(body).params);
         for (&param, reg) in params.iter().zip(ARG_REGS) {
             self.store(param, reg);
         }
-        self.region(function.body);
+        self.region(body);
         self.spilled[id.index()] = self.asm.spilled();
     }
 
@@ -430,10 +432,11 @@ impl Lowering<'_> {
                     self.keep(results[0]);
                 }
             }
-            Op::PlatformCall { platform, args } => {
-                self.platform_call(*platform, program.values(*args), results);
-            }
             Op::Call { function, args } => {
+                if let Some(symbol) = program.functions()[function.index()].external() {
+                    self.platform_call(program.name(symbol), program.values(*args), results);
+                    return;
+                }
                 for (&arg, reg) in program.values(*args).iter().zip(ARG_REGS) {
                     self.read(reg, arg);
                 }
@@ -551,13 +554,12 @@ impl Lowering<'_> {
         }
     }
 
-    fn platform_call(&mut self, platform: PlatformId, args: &[ValueId], results: &[ValueId]) {
-        let name = self.program.platforms()[platform.index()].name;
+    fn platform_call(&mut self, name: &str, args: &[ValueId], results: &[ValueId]) {
         // What is handed straight back needs no kernel: the value is the
         // one it was, and all this says is that nothing worked it out.
         // Read once at the entry and kept since, so nothing is asked of
         // the kernel here.
-        if self.program.name(name) == "argc" {
+        if name == "argc" {
             self.flush();
             self.asm.mov_reg(Reg::Rax, ARGC, true);
             self.known[Reg::Rax.index()] = None;
@@ -565,7 +567,7 @@ impl Lowering<'_> {
             self.keep(results[0]);
             return;
         }
-        match self.program.name(name) {
+        match name {
             "write" => {
                 // rax first, so stdout can be copied from it.
                 self.load_const(Reg::Rax, SYS_WRITE);
@@ -939,11 +941,11 @@ mod tests {
     fn a_syscall_invalidates_the_registers_it_clobbers() {
         let (mut program, main) = Program::new("main");
         let data = program.intern(b"x".as_slice());
-        let write = program.platform("write");
+        let write = faun::platform::Routines::builtin().declare(&mut program, "write");
         program.define(main, |b, _| {
             let buf = b.address_of(data);
             let len = b.constant(Class::Word, 1);
-            b.platform_call(write, &[buf, len]);
+            b.call(write, &[buf, len]);
             // Leave with the status stdout had, so the two registers that
             // both held 1 across the syscall can be told apart.
             let status = b.constant(Class::Word, 1);

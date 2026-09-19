@@ -338,7 +338,15 @@ fn it_runs_a_program_built_rather_than_written() {
 
     // `add` was recognised, so it is an instruction rather than a function:
     // what is left is the entry alone.
-    assert_eq!(machine.functions().len(), 1, "only the entry survives");
+    assert_eq!(
+        machine
+            .functions()
+            .iter()
+            .filter_map(faun::ir::Function::body)
+            .count(),
+        1,
+        "only the entry survives"
+    );
     assert_eq!(status(&machine), 4);
 }
 
@@ -420,6 +428,13 @@ fn runtime_arithmetic_varied_inputs() {
             );
         }
     }
+}
+
+#[test]
+fn external_aliases_interleave_with_internal_function_ids() {
+    let (status, stdout, _) = execute(&programs::external::aliases());
+    assert_eq!(status, 42);
+    assert_eq!(stdout, "aliases\n");
 }
 
 #[test]

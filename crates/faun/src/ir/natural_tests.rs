@@ -3,7 +3,6 @@ use num_bigint::BigUint;
 use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
 use super::natural::{self, Config, Helper, Library, Needs};
 use super::{Binary, Builder, Class, DataId, FunctionId, Op, Program, Relation};
-use crate::platform::{Routine, Routines};
 
 const WORD: Class = Class::Word;
 const ADDRESS: Class = Class::Address;
@@ -53,15 +52,17 @@ impl Host for Observer {
     }
 }
 
+fn observer(p: &mut Program) -> FunctionId {
+    p.external(
+        "observe",
+        "observe",
+        &[ADDRESS],
+        super::Returns::Values(&[]),
+    )
+}
+
 fn test_program() -> (Program, FunctionId) {
-    let mut routines = Routines::builtin();
-    routines.push(Routine {
-        name: "observe".to_owned(),
-        called: None,
-        takes: vec![ADDRESS],
-        returns: crate::platform::Returns::Unit,
-    });
-    let (mut p, entry) = Program::with("test", routines);
+    let (mut p, entry) = Program::new("test");
     p.define(entry, |b, _| {
         let zero = b.constant(WORD, 0);
         b.ret(&[zero])
@@ -136,10 +137,10 @@ fn data_address(p: &Program, datum: DataId) -> BigUint {
 fn observe_and_release(
     b: &mut Builder<'_>,
     lib: &Library,
-    observer: super::PlatformId,
+    observer: FunctionId,
     value: super::ValueId,
 ) {
-    b.platform_call(observer, &[value]);
+    b.call(observer, &[value]);
     b.call(lib.release, &[value]);
 }
 
@@ -152,8 +153,8 @@ fn static_layout_configuration_and_pruning() {
         assert!(p.globals().is_empty(), "no allocation family requested");
         assert_eq!(
             p.functions().len(),
-            4,
-            "entry, failure, retain, release only"
+            5,
+            "entry, exit declaration, failure, retain, release only"
         );
         let magnitude = (BigUint::from(1u8) << 130usize) + BigUint::from(257u32);
         let datum = natural::constant(&mut p, conf, &magnitude).unwrap();
@@ -239,13 +240,14 @@ fn generated_regions_fit_the_narrow_calling_convention() {
         super::validate(&p).unwrap();
         for f in p.functions() {
             assert!(f.params.len() <= 4);
-            assert!(f.returns.len() <= 1);
+            assert!(f.returns.classes().len() <= 1);
+            let Some(body) = f.body() else { continue };
             assert!(
-                region_values(&p, f.body) <= 128,
+                region_values(&p, body) <= 128,
                 "{} fits frame slots",
                 p.name(f.name)
             );
-            for op in p.every(f.body) {
+            for op in p.every(body) {
                 match *op {
                     Op::Loop { body, initial } => {
                         assert!(initial.len() <= 2);
@@ -346,7 +348,7 @@ fn all_arithmetic_matches_biguint_at_every_word_width() {
 }
 
 fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)> {
-    let observer = p.platform("observe");
+    let observer = observer(p);
     [
         (Binary::Add, lib.get(Helper::Add)),
         (Binary::Sub, lib.get(Helper::Sub)),
@@ -361,8 +363,8 @@ fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)
             let out = b.call(function.unwrap(), args)[0];
             observe_and_release(b, lib, observer, out);
             // Arithmetic borrows rather than consumes or mutates operands.
-            b.platform_call(observer, &[args[0]]);
-            b.platform_call(observer, &[args[1]]);
+            b.call(observer, &[args[0]]);
+            b.call(observer, &[args[1]]);
             let zero = b.constant(WORD, 0);
             b.ret(&[zero])
         });
@@ -433,7 +435,7 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
             conf,
             Needs::from([Helper::FromWord, Helper::ToWord, Helper::Add]),
         );
-        let observer = p.platform("observe");
+        let observer = observer(&mut p);
         let check = p.declare("reuse", &[WORD], &[WORD]);
         p.define(check, |b, args| {
             let zero = b.constant(WORD, 0);
@@ -477,7 +479,7 @@ fn freed_adjacent_blocks_coalesce_for_a_larger_allocation() {
             heap_bytes: 12 * word,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Add]));
-        let observer = p.platform("observe");
+        let observer = observer(&mut p);
         let magnitude = BigUint::from(1u8) << (word * 8);
         let big = natural::constant(&mut p, conf, &magnitude).unwrap();
         let check = p.declare("coalesce", &[WORD], &[WORD]);
@@ -510,13 +512,13 @@ fn exhaustion_halts_without_corrupting_the_heap() {
             heap_bytes: 4 * word,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Mul]));
-        let observer = p.platform("observe");
+        let observer = observer(&mut p);
         let check = p.declare("exhaust", &[WORD], &[WORD]);
         p.define(check, |b, args| {
             let first = b.call(lib.require(Helper::FromWord), args)[0];
-            b.platform_call(observer, &[first]);
+            b.call(observer, &[first]);
             let second = b.call(lib.require(Helper::FromWord), args)[0];
-            b.platform_call(observer, &[second]);
+            b.call(observer, &[second]);
             let zero = b.constant(WORD, 0);
             b.ret(&[zero])
         });
@@ -601,7 +603,7 @@ fn promote(b: &mut Builder<'_>, lib: &Library, value: u64) -> super::ValueId {
 fn observed_product(
     b: &mut Builder<'_>,
     lib: &Library,
-    observer: super::PlatformId,
+    observer: FunctionId,
     left: DataId,
     right: DataId,
 ) {
@@ -619,7 +621,7 @@ fn multiplication_clears_dirty_recycled_accumulators() {
             heap_bytes: 64,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::Mul]));
-        let observer = p.platform("observe");
+        let observer = observer(&mut p);
         let dense = (BigUint::from(1u8) << 128usize) - BigUint::from(1u8);
         let sparse = BigUint::from(1u8) << 120usize;
         let dense_id = natural::constant(&mut p, conf, &dense).unwrap();
@@ -652,7 +654,7 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
             heap_bytes: 8 * word,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::FromWord, Helper::Mod]));
-        let observer = p.platform("observe");
+        let observer = observer(&mut p);
         p.define(entry, |b, _| {
             let left = promote(b, &lib, 513);
             let right = promote(b, &lib, 514);
@@ -673,7 +675,7 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
 }
 
 fn fragmented_check(p: &mut Program, lib: &Library, big: DataId, remove_middle: bool) {
-    let observer = p.platform("observe");
+    let observer = observer(p);
     p.define(p.entry(), |b, _| {
         let first = promote(b, lib, 1);
         let middle = promote(b, lib, 2);
@@ -779,7 +781,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
         let tail = p.intern(&[0x6b]); // makes the interpreter's Globals base unaligned
         assert_ne!((p.data().len() + 2 + word) % word, 0);
         let prefix = p.globals()[..word].to_vec();
-        let observer = p.platform("observe");
+        let observer = observer(&mut p);
         p.define(entry, |b, _| {
             repeat(b, 100, |b| {
                 let input = promote(b, &lib, 513);
@@ -806,7 +808,7 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
             heap_bytes: 128,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::Add, Helper::Sub]));
-        let observer = p.platform("observe");
+        let observer = observer(&mut p);
         let power = BigUint::from(1u8) << 128usize;
         let dense = &power - BigUint::from(1u8);
         let dense_id = natural::constant(&mut p, conf, &dense).unwrap();
@@ -816,7 +818,7 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
                 let dense = b.address_of(dense_id);
                 let one = b.address_of(one);
                 let sum = b.call(lib.require(Helper::Add), &[dense, one])[0];
-                b.platform_call(observer, &[sum]);
+                b.call(observer, &[sum]);
                 let difference = b.call(lib.require(Helper::Sub), &[sum, one])[0];
                 b.call(lib.release, &[sum]);
                 observe_and_release(b, &lib, observer, difference);
@@ -859,7 +861,7 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
         let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul, Helper::Div, Helper::Mod]));
         let dense = (BigUint::from(1u8) << 128usize) - BigUint::from(1u8);
         let dirty = natural::constant(&mut p, conf, &dense).unwrap();
-        let observer = p.platform("observe");
+        let observer = observer(&mut p);
         let check = p.declare("recycled_division", &[ADDRESS, ADDRESS], &[WORD]);
         p.define(check, |b, args| {
             observed_product(b, &lib, observer, dirty, dirty);
@@ -901,7 +903,7 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
     let right = BigUint::from(257u32);
     let left_id = natural::constant(&mut p, conf, &left).unwrap();
     let right_id = natural::constant(&mut p, conf, &right).unwrap();
-    let observer = p.platform("observe");
+    let observer = observer(&mut p);
     p.define(entry, |b, _| {
         let value = if op.is_some() {
             let left = b.address_of(left_id);
@@ -963,7 +965,7 @@ fn immortal_and_mortal_identity_results_have_correct_claims() {
     for bits in [16, 32, 64] {
         let conf = config(bits);
         let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Mod]));
-        let observer = p.platform("observe");
+        let observer = observer(&mut p);
         let check = p.declare("identity", &[WORD], &[WORD]);
         p.define(check, |b, args| {
             let a = b.call(lib.require(Helper::FromWord), args)[0];

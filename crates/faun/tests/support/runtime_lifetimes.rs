@@ -1,6 +1,7 @@
 // Shared by machine-IR ownership tests and real x86/wasm integration tests.
 use super::ir::{
-    Binary, Builder, Class, FunctionId, Offset, Program, Relation, Terminator, ValueId, Width,
+    Binary, Builder, Class, FunctionId, Offset, Program, Relation, Returns, Terminator, ValueId,
+    Width,
 };
 use super::targets::Target;
 
@@ -22,17 +23,22 @@ pub(super) fn program(early_return: bool) -> Program {
     p.define(identity, |b, args| b.ret(&[args[0]]));
     let accumulate = accumulator(&mut p, identity, early_return);
     let serialize = serializer(&mut p);
-    let argc = p.platform("argc");
-    let write = p.platform("write");
+    let argc = p.external("argc", "argc", &[], Returns::Values(&[Class::Word]));
+    let write = p.external(
+        "write",
+        "write",
+        &[Class::Address, Class::Word],
+        Returns::Values(&[]),
+    );
     let buffer = p.global(&[0; OUTPUT_BYTES]);
     p.define(main, |b, _| {
-        let argc = b.platform_call(argc, &[])[0];
+        let argc = b.call(argc, &[])[0];
         let iterations = b.constant(Class::Word, ITERATIONS);
         let answer = b.call(accumulate, &[argc, iterations])[0];
         let address = b.address_of(buffer);
         b.call(serialize, &[answer, address]);
         let length = b.constant(Class::Word, u64::try_from(OUTPUT_BYTES).unwrap());
-        b.platform_call(write, &[address, length]);
+        b.call(write, &[address, length]);
         let status = b.constant(Class::Word, 0);
         // Cleanup must run on Return, not be skipped by a terminal exit effect.
         b.ret(&[status])

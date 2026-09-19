@@ -1,7 +1,8 @@
 //! What a target is entitled to assume.
 
 use super::model::{
-    Class, Exit, Op, Origin, Program, Range, RegionId, Symbol, Terminator, ValueId, Width,
+    Class, Definition, Exit, Function, Op, Origin, Program, Range, RegionId, Returns, Symbol,
+    Terminator, ValueId, Width,
 };
 
 /// Check pool references, lexical SSA scope, and operation/control-flow classes.
@@ -17,7 +18,10 @@ pub fn validate(program: &Program) -> Result<(), String> {
     let Some(entry) = program.functions.first() else {
         return Err("missing entry function".into());
     };
-    if !program.values(entry.params).is_empty() || program.signature(entry.returns) != [Class::Word]
+    if entry.body().is_none()
+        || !program.signature(entry.params).is_empty()
+        || !matches!(entry.returns, Returns::Values(_))
+        || program.signature(entry.returns.classes()) != [Class::Word]
     {
         return Err("entry must take nothing and return one word".into());
     }
@@ -30,18 +34,9 @@ pub fn validate(program: &Program) -> Result<(), String> {
         ops: vec![false; program.ops.len()],
     };
     for function in program.functions() {
-        let name = program.name(function.name);
-        if program.values(function.params) != program.values(program.region(function.body).params) {
-            return Err(format!("{name}: function and body parameters disagree"));
-        }
-        let context = Context {
-            returns: program.signature(function.returns),
-            yields: None,
-            loops: None,
-        };
         checker
-            .region(function.body, &context)
-            .map_err(|error| format!("{name} {error}"))?;
+            .function(function)
+            .map_err(|error| format!("{} {error}", program.name(function.name)))?;
     }
     Ok(())
 }
@@ -124,22 +119,13 @@ impl References<'_> {
         let p = self.0;
         for function in &p.functions {
             self.symbol(function.name)?;
-            self.values(function.params)?;
-            slice(&p.signature, function.returns)?;
-            self.region(function.body)?;
-        }
-        for platform in &p.platform {
-            let name = self.symbol(platform.name)?;
-            let takes = slice(&p.signature, platform.params)?;
-            let answers = slice(&p.signature, platform.returns)?;
-            let routine = p
-                .routines
-                .get(name)
-                .ok_or_else(|| format!("unknown platform `{name}`"))?;
-            if takes != routine.takes || answers != routine.answers().as_slice() {
-                return Err(format!(
-                    "platform `{name}` disagrees with its routine signature"
-                ));
+            slice(&p.signature, function.params)?;
+            slice(&p.signature, function.returns.classes())?;
+            match function.definition {
+                Definition::Body(body) => self.region(body)?,
+                Definition::External { symbol } => {
+                    self.symbol(symbol)?;
+                }
             }
         }
         Ok(())
@@ -180,10 +166,6 @@ impl References<'_> {
                 reference(&p.functions, function.index(), "function")?;
                 self.values(args)?;
             }
-            Op::PlatformCall { platform, args } => {
-                reference(&p.platform, platform.index(), "platform")?;
-                self.values(args)?;
-            }
             Op::If {
                 condition,
                 then_region,
@@ -203,7 +185,7 @@ impl References<'_> {
 }
 
 struct Context<'a> {
-    returns: &'a [Class],
+    returns: Option<&'a [Class]>,
     yields: Option<&'a [Class]>,
     // Carried parameters and results of the nearest enclosing loop.
     loops: Option<(&'a [Class], &'a [Class])>,
@@ -221,6 +203,30 @@ struct Checker<'a> {
 }
 
 impl Checker<'_> {
+    fn function(&mut self, function: &Function) -> Result<(), String> {
+        let Some(body) = function.body() else {
+            return Ok(());
+        };
+        let p = self.program;
+        if !p
+            .values(p.region(body).params)
+            .iter()
+            .map(|&v| p.class(v))
+            .eq(p.signature(function.params).iter().copied())
+        {
+            return Err("function and body parameters disagree".into());
+        }
+        let context = Context {
+            returns: match function.returns {
+                Returns::Never => None,
+                Returns::Values(classes) => Some(p.signature(classes)),
+            },
+            yields: None,
+            loops: None,
+        };
+        self.region(body, &context)
+    }
+
     fn define(&mut self, value: ValueId) -> Result<(), String> {
         if std::mem::replace(&mut self.defined[value.index()], true) {
             return Err(format!("defines {value:?} twice"));
@@ -292,9 +298,10 @@ impl Checker<'_> {
             }
             let results = p.values(p.results[at]);
             self.instruction(&p.ops[at], results, context)?;
-            if let Op::PlatformCall { platform, .. } = p.ops[at] {
-                let name = p.name(p.platform[platform.index()].name);
-                if p.routines.get(name).is_some_and(|r| !r.comes_back())
+            if let Op::Call { function, .. } = p.ops[at] {
+                let function = &p.functions[function.index()];
+                let name = p.name(function.name);
+                if function.returns == Returns::Never
                     && (at + 1 != region.ops.range().end
                         || region.terminator.exit != Exit::Unreachable)
                 {
@@ -316,7 +323,7 @@ impl Checker<'_> {
 
     fn terminator(&self, terminator: Terminator, context: &Context<'_>) -> Result<(), String> {
         let expected = match terminator.exit {
-            Exit::Return => Some(context.returns),
+            Exit::Return => context.returns,
             Exit::Yield => context.yields,
             Exit::Continue => context.loops.map(|l| l.0),
             Exit::Break => context.loops.map(|l| l.1),
@@ -364,7 +371,7 @@ impl Checker<'_> {
                 self.store(width, address, value)?;
                 self.results(results, &[])?;
             }
-            Op::Call { .. } | Op::PlatformCall { .. } => self.call(*op, results)?,
+            Op::Call { .. } => self.call(*op, results)?,
             Op::If { .. } | Op::Loop { .. } => self.control(*op, results, context)?,
         }
         Ok(())
@@ -414,30 +421,13 @@ impl Checker<'_> {
 
     fn call(&self, op: Op, results: &[ValueId]) -> Result<(), String> {
         let p = self.program;
-        let (name, params, returns, args) = match op {
-            Op::Call { function, args } => {
-                let callee = &p.functions[function.index()];
-                (
-                    callee.name,
-                    self.classes(p.values(callee.params)),
-                    callee.returns,
-                    args,
-                )
-            }
-            Op::PlatformCall { platform, args } => {
-                let callee = &p.platform[platform.index()];
-                (
-                    callee.name,
-                    p.signature(callee.params).to_vec(),
-                    callee.returns,
-                    args,
-                )
-            }
-            _ => unreachable!("only calls"),
+        let Op::Call { function, args } = op else {
+            unreachable!("only calls")
         };
-        let what = format!("calls `{}`", p.name(name));
-        self.given(p.values(args), &params, &what)?;
-        self.results(results, p.signature(returns))
+        let callee = &p.functions[function.index()];
+        let what = format!("calls `{}`", p.name(callee.name));
+        self.given(p.values(args), p.signature(callee.params), &what)?;
+        self.results(results, p.signature(callee.returns.classes()))
     }
 
     fn conversion(&self, value: ValueId, class: Class) -> Result<(), String> {

@@ -8,11 +8,12 @@ use faun::targets::Target;
 )]
 fn program() -> Program {
     let (mut p, main) = Program::new("main");
-    let argc = p.platform("argc");
-    let write = p.platform("write");
+    let routines = faun::platform::Routines::builtin();
+    let argc = routines.declare(&mut p, "argc");
+    let write = routines.declare(&mut p, "write");
     let bytes = p.global(&[0; 80]);
     p.define(main, |b, _| {
-        let count = b.platform_call(argc, &[])[0];
+        let count = b.call(argc, &[])[0];
         let count = b.convert(Class::Natural, count);
         let max = b.constant(Class::Natural, u64::MAX);
         let one = b.constant(Class::Natural, 1);
@@ -48,7 +49,7 @@ fn program() -> Program {
             }
         }
         let length = b.constant(Class::Word, 80);
-        b.platform_call(write, &[address, length]);
+        b.call(write, &[address, length]);
         let status = b.constant(Class::Word, 0);
         b.ret(&[status])
     });
@@ -127,7 +128,7 @@ fn source_check(target: &dyn Target, runner: Option<&str>) {
     let p = faun::read(&text, &target.routines()).expect("bounded effect after runtime arithmetic");
     for wanted in [Binary::Mul, Binary::Div] {
         assert!(
-            p.functions().iter().any(|f| p.every(f.body).any(|op| {
+            p.functions().iter().filter_map(faun::ir::Function::body).any(|body| p.every(body).any(|op| {
                 matches!(*op, faun::ir::Op::Binary { op, left, .. }
                 if op == wanted && p.class(left) == Class::Natural)
             })),
@@ -135,7 +136,7 @@ fn source_check(target: &dyn Target, runner: Option<&str>) {
         );
     }
     assert!(
-        p.functions().iter().any(|f| p.every(f.body).any(|op| {
+        p.functions().iter().filter_map(faun::ir::Function::body).any(|body| p.every(body).any(|op| {
             matches!(*op, faun::ir::Op::NaturalConstant(data) if p.datum(data).len >= 17)
         })),
         "ordinary repeated squaring must construct at least 2^128"

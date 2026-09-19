@@ -16,7 +16,7 @@ pub mod bytes;
 
 use std::fmt;
 
-use crate::ir::{Class, Endian, Layout, Op, Program, ValueId};
+use crate::ir::{Class, Endian, Layout, Op, Program, Returns, ValueId};
 
 #[derive(Debug)]
 pub struct Artifact {
@@ -108,10 +108,7 @@ pub trait Target: fmt::Debug {
         // emitter with a larger image and hope that address arithmetic fits.
         let naturals = (0..program.values_count())
             .any(|at| program.class(ValueId::at(at)) == Class::Natural)
-            || program
-                .functions()
-                .iter()
-                .any(|f| program.signature(f.returns).contains(&Class::Natural));
+            || signature_classes(program).any(|&class| class == Class::Natural);
         if self.word() == 16 && naturals {
             return Err(format!(
                 "{} runtime naturals await checked image/frame limits",
@@ -159,33 +156,68 @@ pub trait Target: fmt::Debug {
         for &class in signature_classes(program) {
             accepts_class(name, word, class)?;
         }
-        let provides = self.provides();
+        accepts_externals(self, program)?;
         for op in program
             .functions()
             .iter()
-            .flat_map(|function| program.every(function.body))
+            .filter_map(crate::ir::Function::body)
+            .flat_map(|body| program.every(body))
         {
-            match *op {
-                // Encoded constants must fit; narrowing is explicit.
-                Op::Constant { class, value } => {
-                    let bits = class.bits(word);
-                    if bits < 64 && value >> bits != 0 {
-                        return Err(format!(
-                            "{name} holds {bits} bits, and {value} does not fit in them"
-                        ));
-                    }
+            // Encoded constants must fit; narrowing is explicit.
+            if let Op::Constant { class, value } = *op {
+                let bits = class.bits(word);
+                if bits < 64 && value >> bits != 0 {
+                    return Err(format!(
+                        "{name} holds {bits} bits, and {value} does not fit in them"
+                    ));
                 }
-                Op::PlatformCall { platform, .. } => {
-                    let held = program.name(program.platforms()[platform.index()].name);
-                    if !provides.contains(&held) {
-                        return Err(format!("{name} answers for nothing called `{held}`"));
-                    }
-                }
-                _ => {}
             }
         }
         self.limits(program)
     }
+}
+
+fn accepts_externals<T: Target + ?Sized>(target: &T, program: &Program) -> Result<(), String> {
+    let (name, word) = (target.name(), target.word());
+    let routines = target.routines();
+    // Only calls require a provider. Unused declarations remain metadata,
+    // just as a frontend environment may offer more routines than are used.
+    for op in program
+        .functions()
+        .iter()
+        .filter_map(crate::ir::Function::body)
+        .flat_map(|body| program.every(body))
+    {
+        let Op::Call { function, .. } = *op else {
+            continue;
+        };
+        let function = &program.functions()[function.index()];
+        let Some(symbol) = function.external() else {
+            continue;
+        };
+        let held = program.name(symbol);
+        let routine = routines
+            .get(held)
+            .filter(|_| target.provides().contains(&held))
+            .ok_or_else(|| format!("{name} answers for nothing called `{held}`"))?;
+        let classes_agree = |left: &[Class], right: &[Class]| {
+            left.iter()
+                .map(|&c| abi_class(c, word))
+                .eq(right.iter().map(|&c| abi_class(c, word)))
+        };
+        if !classes_agree(program.signature(function.params), &routine.takes)
+            || !classes_agree(
+                program.signature(function.returns.classes()),
+                routine.answers().as_slice(),
+            )
+            || matches!(function.returns, Returns::Never) == routine.comes_back()
+        {
+            return Err(format!(
+                "{name}: external `{held}` disagrees with its provider contract"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn accepts_layout(name: &str, layout: Layout, program: &Program) -> Result<(), String> {
@@ -201,17 +233,21 @@ fn accepts_layout(name: &str, layout: Layout, program: &Program) -> Result<(), S
 }
 
 fn signature_classes(program: &Program) -> impl Iterator<Item = &Class> {
-    let returns = program
-        .functions()
-        .iter()
-        .flat_map(|f| program.signature(f.returns));
-    let platform = program.platforms().iter().flat_map(|p| {
+    program.functions().iter().flat_map(|f| {
         program
-            .signature(p.params)
+            .signature(f.params)
             .iter()
-            .chain(program.signature(p.returns))
-    });
-    returns.chain(platform)
+            .chain(program.signature(f.returns.classes()))
+    })
+}
+
+// Environment discovery may refine a Word result to the target's fixed width.
+// Both describe the same scalar ABI here, but narrower claims must still agree.
+const fn abi_class(class: Class, word: u16) -> Class {
+    match class {
+        Class::Fixed { bits } if bits == word => Class::Word,
+        class => class,
+    }
 }
 
 fn accepts_class(name: &str, word: u16, class: Class) -> Result<(), String> {
@@ -307,10 +343,10 @@ mod tests {
     fn a_target_refuses_a_routine_it_does_not_answer_for() {
         let held = |routine: &str| {
             let (mut program, main) = Program::new("main");
-            let called = program.platform(routine);
+            let called = crate::platform::Routines::builtin().declare(&mut program, routine);
             program.define(main, |b: &mut Builder, _| {
                 let status = b.constant(Class::Word, 0);
-                b.platform_call(called, &[status]);
+                b.call(called, &[status]);
                 b.ret(&[status])
             });
             Spartan.accepts(&program)

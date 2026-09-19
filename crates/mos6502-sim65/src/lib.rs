@@ -88,13 +88,15 @@ impl Target for Mos6502Sim65 {
                     function.params.len()
                 ));
             }
-            if function.returns.len() > 1 {
+            if function.returns.classes().len() > 1 {
                 return Err(format!(
                     "mos6502-sim65 function `{name}` has {} results; at most 1 is supported",
-                    function.returns.len()
+                    function.returns.classes().len()
                 ));
             }
-            region_limits(program, name, function.body)?;
+            if let Some(body) = function.body() {
+                region_limits(program, name, body)?;
+            }
         }
         lower::check_frames(program)
     }

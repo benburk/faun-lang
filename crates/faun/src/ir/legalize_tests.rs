@@ -403,13 +403,13 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
     let (mut p, main) = Program::new("main");
     let data = p.intern(b"unaligned");
     let global = p.global(&[7, 8, 9]);
-    let exit = p.platform("exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit");
     p.define(main, |b, _| {
         b.address_of(data);
         b.address_of(global);
         let value = b.constant(Class::Word, 42);
         b.convert(Class::Natural, value);
-        b.platform_call(exit, &[value]);
+        b.call(exit, &[value]);
         Terminator::UNREACHABLE
     });
     let scalar = legalize(
@@ -423,9 +423,13 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
     assert_eq!(&scalar.data()[..p.data().len()], p.data());
     assert_eq!(&scalar.globals()[..p.globals().len()], p.globals());
     assert_eq!(&scalar.spans[..p.spans.len()], p.spans);
-    assert_eq!(&scalar.platforms()[..p.platforms().len()], p.platforms());
-    let ops = scalar.ops(scalar.functions()[0].body);
-    assert!(matches!(ops.last(), Some(Op::PlatformCall { platform, .. }) if *platform == exit));
+    assert_eq!(
+        scalar.functions()[exit.index()].definition,
+        p.functions()[exit.index()].definition
+    );
+    assert_eq!(scalar.functions()[exit.index()].returns, Returns::Never);
+    let ops = scalar.ops(scalar.functions()[0].body().unwrap());
+    assert!(matches!(ops.last(), Some(Op::Call { function, .. }) if *function == exit));
     let mut host = TestHost::default();
     let result =
         evaluate::evaluate(&scalar, main, &[], evaluate::Config::default(), &mut host).unwrap();
@@ -485,11 +489,11 @@ fn natural_host_signatures_do_not_become_address_signatures() {
         takes: vec![Class::Natural],
         returns: crate::platform::Returns::Value(Class::Natural),
     });
-    let (mut p, main) = Program::with("main", routines);
-    let foreign = p.platform("foreign");
+    let (mut p, main) = Program::new("main");
+    let foreign = routines.declare(&mut p, "foreign");
     p.define(main, |b, _| {
         let natural = b.constant(Class::Natural, 1);
-        b.platform_call(foreign, &[natural]);
+        b.call(foreign, &[natural]);
         let zero = b.constant(Class::Word, 0);
         b.ret(&[zero])
     });
@@ -518,14 +522,14 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
             takes: vec![],
             returns: crate::platform::Returns::Unit,
         });
-        let (mut p, main) = Program::with("main", routines);
-        let mark = p.platform("mark");
+        let (mut p, main) = Program::new("main");
+        let mark = routines.declare(&mut p, "mark");
         p.define(main, |b, _| {
-            b.platform_call(mark, &[]);
+            b.call(mark, &[]);
             let word = b.constant(Class::Word, 100);
             b.convert(Class::Natural, word);
             b.convert(Class::Natural, word);
-            b.platform_call(mark, &[]);
+            b.call(mark, &[]);
             b.ret(&[word])
         });
         let scalar = legalize(
