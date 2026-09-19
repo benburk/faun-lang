@@ -1035,41 +1035,6 @@ fn every_target_runs_a_match_with_an_arm_that_leaves() {
     }
 }
 
-/// What a routine reads is what the name means, not what a program hands
-/// it. A type with one constructor says nothing by being one value rather
-/// than another, so it carries no bits and is not passed at all -- which
-/// leaves `exit!` with no status to leave with.
-#[test]
-fn an_effect_hands_over_what_the_routine_reads() {
-    let refused = read(
-        "type Nat Zero
-
-         main!(h) -> exit!(h Zero)",
-    )
-    .unwrap_err();
-    assert!(
-        refused.contains("`exit` reads a word, and is handed nothing"),
-        "{refused}"
-    );
-}
-
-/// A pure name may not do observable work.
-#[test]
-fn a_pure_name_cannot_call_an_effect() {
-    let refused = read(
-        "type Nat Zero Succ(Nat)
-
-         quietly(h) -> exit!(h Zero)
-
-         main!(h) -> quietly(h)",
-    )
-    .unwrap_err();
-    assert!(
-        refused.contains("`quietly` is pure and calls `exit!`"),
-        "{refused}"
-    );
-}
-
 /// A type whose constructors carry nothing is a tag, and matching one asks
 /// which it is. Three of them, so the asking is a run of tests rather than
 /// the single question a number's two constructors answer.
@@ -1112,23 +1077,6 @@ fn every_target_tells_a_tag_from_a_count() {
     for target in ALL {
         assert_eq!(status(target, &machine), 1, "{target}");
     }
-}
-
-/// What a tag is not: a constructor carrying something has no
-/// representation here yet, however many of them there are.
-#[test]
-fn a_constructor_that_carries_something_is_not_a_tag() {
-    let refused = read(
-        "type Nat Zero Succ(Nat)
-         type Maybe None Some(Nat)
-
-         main!(h) -> exit!(h Zero)",
-    )
-    .unwrap_err();
-    assert!(
-        refused.contains("`Maybe` has no representation"),
-        "{refused}"
-    );
 }
 
 /// A clause matches as many arguments as it likes, which is what `sub` and
@@ -1349,38 +1297,6 @@ fn a_target_says_what_it_cannot_hold() {
     assert!(
         refused.contains("holds 16 bits, and a value here needs 32"),
         "{refused}"
-    );
-}
-
-/// How wide a number is held is what its values can be, worked out by the
-/// tier above from what the program does with them. Nothing says it and
-/// nothing wraps: a value needing three bits is held in three bits, and a
-/// value nothing bounds is held in a machine word.
-#[test]
-fn how_wide_a_number_is_held_is_what_it_can_be() {
-    let widths = |text: &str| {
-        let program = read(text).expect("a program");
-        (0..program.values_count())
-            .map(|at| program.class(faun::ir::ValueId::at(at)))
-            .collect::<Vec<_>>()
-    };
-
-    // Two and two is four, which three bits hold.
-    let held = widths(
-        "type Nat Zero Succ(Nat)
-
-         add(a Zero) -> a
-         add(a Succ(k)) -> Succ(add(a k))
-
-         main!(h) ->
-           two = Succ(Succ(Zero))
-           exit!(h add(two two))",
-    );
-    assert!(held.contains(&Class::Fixed { bits: 3 }), "{held:?}");
-    assert!(
-        held.iter()
-            .all(|held| held.fits(Class::Fixed { bits: 3 }) || *held == Word),
-        "{held:?}"
     );
 }
 

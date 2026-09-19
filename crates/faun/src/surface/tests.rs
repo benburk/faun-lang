@@ -690,3 +690,20 @@ fn a_routine_nothing_settles_is_named_as_one() {
     .unwrap_err();
     assert!(refused.contains("nothing says what type"), "{refused}");
 }
+
+/// A pure name may not do observable work.
+#[test]
+fn a_pure_name_cannot_call_an_effect() {
+    let refused = parse(
+        "type Nat Zero Succ(Nat)
+
+         quietly(h) -> exit!(h Zero)
+
+         main!(h) -> quietly(h)",
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("`quietly` is pure and calls `exit!`"),
+        "{refused}"
+    );
+}

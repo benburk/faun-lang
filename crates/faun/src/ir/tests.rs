@@ -1,5 +1,12 @@
 use super::*;
 
+/// A program read from text, against what a compiler knows. These are
+/// about what this tier makes of one, so which target would take it is not
+/// a question any of them asks.
+fn read(text: &str) -> Result<Program, String> {
+    crate::read(text, &crate::platform::Routines::builtin())
+}
+
 /// A width is what a value needs, so a value needing fewer bits than what
 /// reads it is already what reads it: what it holds above those bits is
 /// nought. Needing more is the mistake, and `Convert` is what says where a
@@ -233,4 +240,71 @@ fn a_value_too_wide_for_a_routine_is_refused() {
 
     let refused = held(100).unwrap_err();
     assert!(refused.contains("`narrow`"), "{refused}");
+}
+
+/// What a tag is not: a constructor carrying something has no
+/// representation here yet, however many of them there are.
+#[test]
+fn a_constructor_that_carries_something_is_not_a_tag() {
+    let refused = read(
+        "type Nat Zero Succ(Nat)
+         type Maybe None Some(Nat)
+
+         main!(h) -> exit!(h Zero)",
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("`Maybe` has no representation"),
+        "{refused}"
+    );
+}
+
+/// What a routine reads is what the name means, not what a program hands
+/// it. A type with one constructor says nothing by being one value rather
+/// than another, so it carries no bits and is not passed at all -- which
+/// leaves `exit!` with no status to leave with.
+#[test]
+fn an_effect_hands_over_what_the_routine_reads() {
+    let refused = read(
+        "type Nat Zero
+
+         main!(h) -> exit!(h Zero)",
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("`exit` reads a word, and is handed nothing"),
+        "{refused}"
+    );
+}
+
+/// How wide a number is held is what its values can be, worked out by the
+/// tier above from what the program does with them. Nothing says it and
+/// nothing wraps: a value needing three bits is held in three bits, and a
+/// value nothing bounds is held in a machine word.
+#[test]
+fn how_wide_a_number_is_held_is_what_it_can_be() {
+    let widths = |text: &str| {
+        let program = read(text).expect("a program");
+        (0..program.values_count())
+            .map(|at| program.class(ValueId::at(at)))
+            .collect::<Vec<_>>()
+    };
+
+    // Two and two is four, which three bits hold.
+    let held = widths(
+        "type Nat Zero Succ(Nat)
+
+         add(a Zero) -> a
+         add(a Succ(k)) -> Succ(add(a k))
+
+         main!(h) ->
+           two = Succ(Succ(Zero))
+           exit!(h add(two two))",
+    );
+    assert!(held.contains(&Class::Fixed { bits: 3 }), "{held:?}");
+    assert!(
+        held.iter()
+            .all(|held| held.fits(Class::Fixed { bits: 3 }) || *held == Class::Word),
+        "{held:?}"
+    );
 }
