@@ -6,7 +6,6 @@
 
 use super::inline::{InlineLimits, Inlining};
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
-use crate::index::append_range;
 
 /// Remove local aliases without expanding calls or dropping eager bindings.
 pub fn structural(program: &mut Program) {
@@ -48,9 +47,7 @@ fn rewrite(program: &mut Program, inlining: Option<Inlining>) {
         let body = rewrite.body(body, locals, count);
         bodies.push((id, body));
     }
-    for (id, body) in bodies {
-        rewrite.program.functions[id].define(body);
-    }
+    rewrite.program.replace_bodies(bodies);
 }
 
 struct Rewrite<'a> {
@@ -73,16 +70,13 @@ impl Rewrite<'_> {
         let tail = if answer.0.index() + 1 == scope.level && !scope.bindings.is_empty() {
             scope.bindings.pop().expect("the last binding")
         } else {
-            self.program.exprs.push(Expr::Atom(answer))
+            self.program.terms.push(Expr::Atom(answer))
         };
-        Body {
-            bindings: append_range(&mut self.program.bindings, &scope.bindings),
-            tail,
-        }
+        self.program.terms.hold_body(&scope.bindings, tail)
     }
     fn into(&mut self, body: Body, mut locals: Vec<Atom>, scope: &mut Scope) -> Atom {
         for at in body.bindings.range() {
-            let binding = self.program.bindings[at];
+            let binding = self.program.terms.binding(at);
             let value = self.expr(binding, &locals, scope);
             locals.push(value);
         }
@@ -94,7 +88,7 @@ impl Rewrite<'_> {
             value @ Expr::Static(..) => value,
             Expr::Con(ctor, fields) => {
                 let fields = self.args(fields, locals);
-                Expr::Con(ctor, self.hold(&fields))
+                Expr::Con(ctor, self.program.terms.hold_atoms(fields.into_iter()))
             }
             Expr::Call(called, args) => {
                 let args = self.args(args, locals);
@@ -104,12 +98,12 @@ impl Rewrite<'_> {
                     self.inline_depth -= 1;
                     return answer;
                 }
-                Expr::Call(called, self.hold(&args))
+                Expr::Call(called, self.program.terms.hold_atoms(args.into_iter()))
             }
             Expr::Match(value, arms) => {
                 let mut found = vec![];
                 for at in arms.range() {
-                    let arm = self.program.arms[at];
+                    let arm = self.program.terms.arm(at);
                     let fields = self.program.fields(arm.ctor).len();
                     let mut inner = locals.to_vec();
                     inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
@@ -118,11 +112,11 @@ impl Rewrite<'_> {
                         body: self.body(arm.body, inner, scope.level + fields),
                     });
                 }
-                let arms = append_range(&mut self.program.arms, &found);
+                let arms = self.program.terms.hold_arms(&found);
                 Expr::Match(locals[value.0.index()], arms)
             }
         };
-        let id = self.program.exprs.push(expr);
+        let id = self.program.terms.push(expr);
         scope.bindings.push(id);
         let value = Atom(Local::at(scope.level));
         scope.level += 1;
@@ -143,8 +137,5 @@ impl Rewrite<'_> {
             .iter()
             .map(|a| locals[a.0.index()])
             .collect()
-    }
-    fn hold(&mut self, args: &[Atom]) -> Range {
-        append_range(&mut self.program.atoms, args)
     }
 }

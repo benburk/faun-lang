@@ -9,9 +9,8 @@
 //! [`ExprId`].
 
 use super::ConstructionError;
-use super::model::{Arm, Atom, Body, ConstId, CtorId, Expr, ExprId, FnId, Local, Range, TypeId};
+use super::model::{Arm, Atom, Body, ConstId, CtorId, Expr, ExprId, FnId, Local, TypeId};
 use super::program::Program;
-use crate::index::append_range;
 
 /// Builds one function's body.
 ///
@@ -43,13 +42,13 @@ impl Builder<'_> {
 
     /// A saturated constructor application.
     pub fn con(&mut self, ctor: CtorId, args: &[Atom]) -> Atom {
-        let args = self.atoms(args);
+        let args = self.program.terms.hold_atoms(args.iter().copied());
         self.emit(Expr::Con(ctor, args))
     }
 
     /// A saturated call to a top-level name.
     pub fn call(&mut self, function: FnId, args: &[Atom]) -> Atom {
-        let args = self.atoms(args);
+        let args = self.program.terms.hold_atoms(args.iter().copied());
         self.emit(Expr::Call(function, args))
     }
 
@@ -91,13 +90,13 @@ impl Builder<'_> {
             let body = self.scope(fields, |builder, bound| arm(builder, ctor, bound));
             arms.push(Arm { ctor, body });
         }
-        let arms = append_range(&mut self.program.arms, &arms);
+        let arms = self.program.terms.hold_arms(&arms);
         self.emit(Expr::Match(scrutinee, arms))
     }
 
     /// Bind an expression to the next local and answer it.
     fn emit(&mut self, expr: Expr) -> Atom {
-        let id = self.program.exprs.push(expr);
+        let id = self.program.terms.push(expr);
         self.pending.push(id);
         let bound = Atom(Local(self.level));
         self.level += 1;
@@ -129,17 +128,10 @@ impl Builder<'_> {
             Some(expr) if last == Some(result.0) => expr,
             Some(expr) => {
                 pending.push(expr);
-                self.program.exprs.push(Expr::Atom(result))
+                self.program.terms.push(Expr::Atom(result))
             }
-            None => self.program.exprs.push(Expr::Atom(result)),
+            None => self.program.terms.push(Expr::Atom(result)),
         };
-        Body {
-            bindings: append_range(&mut self.program.bindings, &pending),
-            tail,
-        }
-    }
-
-    fn atoms(&mut self, atoms: &[Atom]) -> Range {
-        append_range(&mut self.program.atoms, atoms)
+        self.program.terms.hold_body(&pending, tail)
     }
 }

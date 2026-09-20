@@ -4,7 +4,7 @@
 //! Rebuild into fresh term pools, then replace the old pools in one commit.
 //! Declarations and constants stay in place; expression IDs and ranges change.
 
-use crate::index::{Pool, append_range};
+use super::terms::TermArena;
 use std::collections::HashMap;
 
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
@@ -13,10 +13,7 @@ pub(super) fn cleanup(program: &mut Program) {
     let operations = super::arithmetic::recognise(program);
     let mut rewrite = Rewrite {
         source: program,
-        exprs: Pool::default(),
-        atoms: vec![],
-        bindings: vec![],
-        arms: vec![],
+        terms: TermArena::default(),
         copied: HashMap::new(),
     };
     let mut bodies = vec![];
@@ -37,20 +34,7 @@ pub(super) fn cleanup(program: &mut Program) {
         };
         bodies.push((id, body));
     }
-    let Rewrite {
-        exprs,
-        atoms,
-        bindings,
-        arms,
-        ..
-    } = rewrite;
-    program.exprs = exprs;
-    program.atoms = atoms;
-    program.bindings = bindings;
-    program.arms = arms;
-    for (id, body) in bodies {
-        program.functions[id].define(body);
-    }
+    program.replace_terms(rewrite.terms, bodies);
 }
 
 // Plans belong to occurrences, not ExprIds: an arena expression can be used
@@ -112,10 +96,7 @@ fn plan_expr(program: &Program, id: ExprId, live: &mut [bool]) -> PlannedExpr {
 
 struct Rewrite<'a> {
     source: &'a Program,
-    exprs: Pool<ExprId, Expr>,
-    atoms: Vec<Atom>,
-    bindings: Vec<ExprId>,
-    arms: Vec<Arm>,
+    terms: TermArena,
     // Copying protected equations is context-free, unlike liveness rewriting.
     // Preserve expression sharing there, including shared match subtrees.
     copied: HashMap<ExprId, ExprId>,
@@ -130,7 +111,7 @@ impl Rewrite<'_> {
                     return local(&locals, a);
                 }
                 let expr = self.expr(binding, &locals, level);
-                bindings.push(self.exprs.push(expr));
+                bindings.push(self.terms.push(expr));
                 let value = Atom(Local::at(level));
                 level += 1;
                 value
@@ -138,8 +119,8 @@ impl Rewrite<'_> {
             locals.push(value);
         }
         let expr = self.expr(plan.tail, &locals, level);
-        let tail = self.exprs.push(expr);
-        self.hold_body(&bindings, tail)
+        let tail = self.terms.push(expr);
+        self.terms.hold_body(&bindings, tail)
     }
 
     fn expr(&mut self, plan: PlannedExpr, locals: &[Option<Atom>], level: usize) -> Expr {
@@ -159,27 +140,14 @@ impl Rewrite<'_> {
                         body: self.body(body, inner, level + fields),
                     });
                 }
-                Expr::Match(local(locals, value), self.hold_arms(&found))
+                Expr::Match(local(locals, value), self.terms.hold_arms(&found))
             }
         }
     }
 
     fn args(&mut self, args: Range, locals: &[Option<Atom>]) -> Range {
-        let start = self.atoms.len();
-        self.atoms
-            .extend(self.source.atoms(args).iter().map(|&a| local(locals, a)));
-        Range::of(start, args.len())
-    }
-
-    fn hold_body(&mut self, bindings: &[ExprId], tail: ExprId) -> Body {
-        Body {
-            bindings: append_range(&mut self.bindings, bindings),
-            tail,
-        }
-    }
-
-    fn hold_arms(&mut self, arms: &[Arm]) -> Range {
-        append_range(&mut self.arms, arms)
+        self.terms
+            .hold_atoms(self.source.atoms(args).iter().map(|&a| local(locals, a)))
     }
 
     fn copy_body(&mut self, body: Body) -> Body {
@@ -190,7 +158,7 @@ impl Rewrite<'_> {
             .map(|&id| self.copy_expr(id))
             .collect();
         let tail = self.copy_expr(body.tail);
-        self.hold_body(&bindings, tail)
+        self.terms.hold_body(&bindings, tail)
     }
 
     fn copy_expr(&mut self, id: ExprId) -> ExprId {
@@ -211,16 +179,17 @@ impl Rewrite<'_> {
                         body: self.copy_body(arm.body),
                     })
                     .collect();
-                Expr::Match(value, self.hold_arms(&arms))
+                Expr::Match(value, self.terms.hold_arms(&arms))
             }
         };
-        let copied = self.exprs.push(expr);
+        let copied = self.terms.push(expr);
         self.copied.insert(id, copied);
         copied
     }
 
     fn copy_args(&mut self, args: Range) -> Range {
-        append_range(&mut self.atoms, self.source.atoms(args))
+        self.terms
+            .hold_atoms(self.source.atoms(args).iter().copied())
     }
 }
 

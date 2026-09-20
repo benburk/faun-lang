@@ -48,7 +48,7 @@ fn in_body(
         return;
     }
     for at in body.bindings.range() {
-        let binding = program.bindings[at];
+        let binding = program.terms.binding(at);
         let held = in_expr(program, operations, binding, known, budget, depth);
         known.push(held);
         if budget.remaining == 0 {
@@ -82,7 +82,7 @@ fn in_expr(
     };
     if let Expr::Match(_, arms) = program.expr(id) {
         for at in arms.range() {
-            let arm = program.arms[at];
+            let arm = program.terms.arm(at);
             let level = known.len();
             known.resize(
                 level + program.fields(arm.ctor).len(),

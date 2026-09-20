@@ -49,6 +49,9 @@ x    ::= a parameter, a binding, or a field an arm bound
   Its body-construction entry point delegates to `builder.rs`.
 - `types.rs`: a private, borrowed view of declaration metadata, independent of
   function bodies, names and constant storage.
+- `terms.rs`: owns expressions, argument lists, binding runs and match arms.
+  Its append operations return IDs, ranges and bodies; buffer fields stay private.
+  `Program` coordinates arena replacement with remapped function roots.
 - `builder.rs`: `Builder` and temporary state for scoped body construction.
   The machine IR uses the same model/program/builder split. Keep each type's
   core API with its definition; separate substantial named algorithms, not
@@ -115,12 +118,19 @@ eager calls that computed its fields. Folded, now-unused product constants no lo
 demand runtime representations; live products still require backend support.
 
 Cleanup is also the term-arena compaction point. It borrows the original program,
-builds fresh expression/argument/binding/arm pools, then installs those pools and
-updated function roots. Every defined function is retained, not only entry-reachable
+builds a fresh `TermArena`, then hands it and all remapped function roots to
+`Program::replace_terms`. Every defined function is retained, not only entry-reachable
 ones. Recognized arithmetic equations are copied without semantic rewriting, with
 expression sharing preserved; liveness rewriting remains occurrence-specific.
 Names, declarations, type lists and constant storage are neither cloned nor moved.
 Constant-pool garbage collection is not part of this pass.
+
+`TermArena` groups the same four contiguous buffers, without another heap layer.
+Normalization appends to the existing arena and publishes roots after rebuilding;
+cleanup moves replacement buffers into place without cloning them. The two passes
+share storage operations, not traversal, liveness or inlining policy. Storage
+construction still assumes valid references and lexical scopes; it neither brands
+IDs nor makes panicking builders or iterators transactional.
 
 Read-only walks borrow pool slices; mutating laws and folding traverse stable ranges
 one entry at a time instead of copying binding/arm lists. Range propagation borrows

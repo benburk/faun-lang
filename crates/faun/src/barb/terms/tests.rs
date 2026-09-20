@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use super::{
-    Body, Definition, Expr, ExprId, FnId, Program, arithmetic, cleanup::cleanup, structural,
+use super::TermArena;
+use crate::barb::{
+    self, Body, Definition, Expr, ExprId, FnId, Program, arithmetic, cleanup::cleanup, structural,
     validate,
 };
 
@@ -9,7 +10,7 @@ fn library() -> Program {
     crate::surface::parse(
         &format!(
             "{}\nmain!(h) -> exit!(h Zero)",
-            include_str!("../../../../standard/nat.fn")
+            include_str!("../../../../../standard/nat.fn")
         ),
         &crate::platform::Routines::builtin(),
     )
@@ -17,11 +18,57 @@ fn library() -> Program {
 }
 
 fn counts(p: &Program) -> [usize; 4] {
-    [p.exprs.len(), p.atoms.len(), p.bindings.len(), p.arms.len()]
+    [
+        p.terms.exprs.len(),
+        p.terms.atoms.len(),
+        p.terms.bindings.len(),
+        p.terms.arms.len(),
+    ]
 }
 
 fn allocation<T>(values: &[T]) -> *const () {
     values.as_ptr().cast()
+}
+
+fn term_allocations(terms: &TermArena) -> [*const (); 4] {
+    [
+        allocation(terms.exprs.as_slice()),
+        allocation(&terms.atoms),
+        allocation(&terms.bindings),
+        allocation(&terms.arms),
+    ]
+}
+
+#[test]
+fn rebuilt_terms_move_with_their_roots_without_cloning_storage() {
+    let mut p = Program::default();
+    let unit = p.declare_type("Unit");
+    p.define_type(unit, &[("Unit", &[])]);
+    let main = p.declare("main", &[unit], unit);
+    p.define(main, |_, args| args[0]);
+    p.set_entry(main);
+    let declarations = storage(&p);
+    let mut terms = TermArena::default();
+    let a = barb::Atom(barb::Local::at(0));
+    let args = terms.hold_atoms([a, a].into_iter());
+    let empty = terms.hold_atoms(std::iter::empty());
+    assert_eq!(empty, barb::Range::of(2, 0));
+    let ctor = p.ctor_at(unit, 0);
+    let binding = terms.push(Expr::Con(ctor, empty));
+    let tail = terms.push(Expr::Atom(a));
+    let body = terms.hold_body(&[binding], tail);
+    let arms = terms.hold_arms(&[barb::Arm { ctor, body }]);
+    let tail = terms.push(Expr::Match(a, arms));
+    let root = terms.hold_body(&[], tail);
+    assert_eq!(root.bindings, barb::Range::of(1, 0));
+    let allocations = term_allocations(&terms);
+    p.replace_terms(terms, vec![(main, root)]);
+    assert_eq!(p.function(main).body(), Some(root));
+    assert_eq!(p.atoms(args), [a, a]);
+    assert_eq!(p.arms(arms)[0].body, body);
+    assert_eq!(term_allocations(&p.terms), allocations);
+    assert_eq!(storage(&p), declarations);
+    validate(&p).unwrap();
 }
 
 // These allocations are not term pools and must not be replaced by either pass.
@@ -61,7 +108,7 @@ fn assert_packed(p: &Program) {
     let mut pending: Vec<_> = p
         .functions()
         .iter()
-        .filter_map(super::Function::body)
+        .filter_map(barb::Function::body)
         .collect();
     while let Some(body) = pending.pop() {
         bindings[body.bindings.range()].fill(true);
@@ -147,6 +194,7 @@ fn assert_same_body(
 fn share_atoms(p: &mut Program) {
     let mut first = HashMap::new();
     let redirects: Vec<_> = p
+        .terms
         .exprs
         .iter()
         .enumerate()
@@ -159,10 +207,10 @@ fn share_atoms(p: &mut Program) {
             }
         })
         .collect();
-    for id in &mut p.bindings {
+    for id in &mut p.terms.bindings {
         *id = redirects[id.index()];
     }
-    for arm in &mut p.arms {
+    for arm in &mut p.terms.arms {
         arm.body.tail = redirects[arm.body.tail.index()];
     }
     for function in &mut p.functions {
@@ -177,20 +225,26 @@ fn normalization_only_appends_terms_and_keeps_declaration_storage() {
     let mut p = library();
     let before = p.clone();
     let allocations = storage(&p);
-    super::normalize_with_limits(&mut p, super::InlineLimits::default());
+    barb::normalize_with_limits(&mut p, barb::InlineLimits::default());
     validate(&p).unwrap();
     assert_eq!(
-        &p.exprs.as_slice()[..before.exprs.len()],
-        before.exprs.as_slice()
+        &p.terms.exprs.as_slice()[..before.terms.exprs.len()],
+        before.terms.exprs.as_slice()
     );
-    assert_eq!(p.atoms[..before.atoms.len()], before.atoms);
-    assert_eq!(p.bindings[..before.bindings.len()], before.bindings);
-    assert_eq!(p.arms[..before.arms.len()], before.arms);
+    assert_eq!(
+        p.terms.atoms[..before.terms.atoms.len()],
+        before.terms.atoms
+    );
+    assert_eq!(
+        p.terms.bindings[..before.terms.bindings.len()],
+        before.terms.bindings
+    );
+    assert_eq!(p.terms.arms[..before.terms.arms.len()], before.terms.arms);
     assert_eq!(storage(&p), allocations);
     assert_declarations(&before, &p);
 }
 
-fn fragmented() -> (Program, FnId, super::ConstId) {
+fn fragmented() -> (Program, FnId, barb::ConstId) {
     let mut p = library();
     let nat = p.params(FnId::at(
         p.functions()
@@ -281,7 +335,7 @@ fn repeated_cleanup_and_normalization_do_not_accumulate_dead_terms() {
 
 #[test]
 fn cleanup_remaps_shared_expressions_per_lexical_occurrence() {
-    let (mut p, nat, _, _) = super::tests::types();
+    let (mut p, nat, _, _) = barb::tests::types();
     let one = p.intern_number(nat, 1).unwrap();
     let first = p.declare("parameter", &[nat, nat], nat);
     p.define(first, |_, args| args[1]);
@@ -307,11 +361,11 @@ fn cleanup_remaps_shared_expressions_per_lexical_occurrence() {
     let second = p.function(second).body().unwrap();
     assert_eq!(
         p.expr(first.tail),
-        Expr::Atom(super::Atom(super::Local::at(1)))
+        Expr::Atom(barb::Atom(barb::Local::at(1)))
     );
     assert_eq!(
         p.expr(second.tail),
-        Expr::Atom(super::Atom(super::Local::at(0)))
+        Expr::Atom(barb::Atom(barb::Local::at(0)))
     );
     assert_eq!(second.bindings.len(), 1);
 }

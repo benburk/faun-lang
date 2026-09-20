@@ -94,6 +94,7 @@ mod optimize;
 mod pretty;
 mod program;
 mod stops;
+mod terms;
 mod types;
 mod validate;
 
@@ -119,8 +120,6 @@ pub use validate::validate;
 #[cfg(test)]
 use constant::decode;
 
-#[cfg(test)]
-mod arena_tests;
 #[cfg(test)]
 mod arithmetic_tests;
 #[cfg(test)]

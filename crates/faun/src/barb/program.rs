@@ -6,9 +6,10 @@ use super::constant::{
     self, Constant, ConstantPool, ConstructionError, DecodeError, Held, Shape, Value,
 };
 use super::model::{
-    Arm, Atom, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Symbol, Type, TypeDefinition,
-    TypeId,
+    Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Symbol, Type,
+    TypeDefinition, TypeId,
 };
+use super::terms::TermArena;
 use super::types::TypeInfo;
 use crate::index::{Pool, Range, append_range};
 
@@ -18,13 +19,7 @@ pub struct Program {
     pub(super) types: Pool<TypeId, Type>,
     pub(super) ctors: Pool<CtorId, Ctor>,
     pub(super) functions: Pool<FnId, Function>,
-    /// The term arena.
-    pub(super) exprs: Pool<ExprId, Expr>,
-    /// Argument lists, for `Con` and `Call`.
-    pub(super) atoms: Vec<Atom>,
-    /// The bindings of every body, each run contiguous.
-    pub(super) bindings: Vec<ExprId>,
-    pub(super) arms: Vec<Arm>,
+    pub(super) terms: TermArena,
     /// Field and parameter types.
     pub(super) types_pool: Vec<TypeId>,
     /// Known values, encoded. See [`super::constant`].
@@ -85,21 +80,21 @@ impl Program {
 
     #[must_use]
     pub fn expr(&self, id: ExprId) -> Expr {
-        self.exprs[id]
+        self.terms.expr(id)
     }
 
     /// How many terms the program holds, which is what anything keeping an
     /// answer per term needs.
     #[must_use]
     pub const fn exprs_count(&self) -> usize {
-        self.exprs.len()
+        self.terms.exprs_count()
     }
 
     /// Put another term where one is. A term is a slot in the arena rather
     /// than something owned, so replacing one is a store and nothing that
     /// named it has to hear about it.
     pub(super) fn write(&mut self, id: ExprId, expr: Expr) {
-        self.exprs[id] = expr;
+        self.terms.write(id, expr);
     }
 
     #[must_use]
@@ -137,17 +132,17 @@ impl Program {
 
     #[must_use]
     pub fn bindings(&self, range: Range) -> &[ExprId] {
-        &self.bindings[range.range()]
+        self.terms.bindings(range)
     }
 
     #[must_use]
     pub fn atoms(&self, range: Range) -> &[Atom] {
-        &self.atoms[range.range()]
+        self.terms.atoms(range)
     }
 
     #[must_use]
     pub fn arms(&self, range: Range) -> &[Arm] {
-        &self.arms[range.range()]
+        self.terms.arms(range)
     }
 
     #[must_use]
@@ -346,6 +341,21 @@ impl Program {
 
     pub(super) fn intern_held(&mut self, value: &Held) -> ConstId {
         self.constants.intern_held(value)
+    }
+
+    /// Publish roots only after a pass has finished reading the original bodies.
+    pub(super) fn replace_bodies(&mut self, bodies: Vec<(FnId, Body)>) {
+        for (id, body) in bodies {
+            self.functions[id].define(body);
+        }
+    }
+
+    /// Install a rebuilt arena and its roots without moving declarations or constants.
+    /// The rebuilder must supply every defined function's remapped body; old term
+    /// IDs, ranges and expression-indexed analyses are invalid after this operation.
+    pub(super) fn replace_terms(&mut self, terms: TermArena, bodies: Vec<(FnId, Body)>) {
+        self.terms = terms;
+        self.replace_bodies(bodies);
     }
 
     /// Build a declared function's body. Its parameters are the first locals.

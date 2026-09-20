@@ -29,7 +29,7 @@ fn in_body(
         return;
     }
     for at in body.bindings.range() {
-        let id = program.bindings[at];
+        let id = program.terms.binding(at);
         let value = in_expr(program, ops, id, small, depth);
         small.push(value);
     }
@@ -71,7 +71,7 @@ fn in_expr(
         }
         Expr::Match(_, arms) => {
             for at in arms.range() {
-                let arm = program.arms[at];
+                let arm = program.terms.arm(at);
                 let level = small.len();
                 small.resize(level + program.fields(arm.ctor).len(), None);
                 in_body(program, ops, arm.body, small, depth - 1);
