@@ -24,17 +24,15 @@ Unit = Unit
 Never
 Nat = Zero | Succ(Nat)
 
-exit(v0: Host, v1: Nat) -> Never =
-  <elsewhere>
+exit!(v0: Host, v1: Nat) -> Never = <elsewhere>
 
 add(v0: Nat, v1: Nat) -> Nat =
-  match v1 {
+  match v1
     Zero =>
       v0
     Succ(v2) =>
       v3 = add(v0, v2)
       Succ(v3)
-  }
 
 main!(v0: Host) -> Never =
   v1 = Zero
@@ -44,7 +42,7 @@ main!(v0: Host) -> Never =
   v5 = Succ(v4)
   v6 = Succ(v5)
   v7 = add(v3, v6)
-  exit(v0, v7)
+  exit!(v0, v7)
 "
     );
 }
@@ -97,27 +95,25 @@ Unit = Unit
 Never
 Nat = Zero | Succ(Nat)
 
-exit(v0: Host, v1: Nat) -> Never =
-  <elsewhere>
+exit!(v0: Host, v1: Nat) -> Never = <elsewhere>
 
 double(v0: Nat) -> Nat =
   add(v0, v0)
 
 add(v0: Nat, v1: Nat) -> Nat =
-  match v1 {
+  match v1
     Zero =>
       v0
     Succ(v2) =>
       v3 = add(v0, v2)
       Succ(v3)
-  }
 
 main!(v0: Host) -> Never =
   v1 = Zero
   v2 = Succ(v1)
   v3 = Succ(v2)
   v4 = double(v3)
-  exit(v0, v4)
+  exit!(v0, v4)
 "
     );
 }
@@ -190,7 +186,7 @@ fn a_name_that_leaves_answers_never() {
     .expect("a program");
     let render = program.render();
     for held in [
-        "exit(v0: Host, v1: Nat) -> Never",
+        "exit!(v0: Host, v1: Nat) -> Never",
         "die!(v0: Host) -> Never",
         "quit!(v0: Host, v1: Nat) -> Never",
         "main!(v0: Host) -> Never",
@@ -636,14 +632,39 @@ fn a_routine_written_down_is_one_a_program_may_name() {
 
     let mut routines = crate::platform::Routines::builtin();
     routines.push(crate::platform::Routine {
-        name: "tick".to_owned(),
+        name: "clock_tick".to_owned(),
         called: Some("tick!".to_owned()),
         takes: Vec::new(),
         returns: crate::platform::Returns::Unit,
     });
 
     let program = super::parse(held, &routines).expect("a program naming it");
-    assert!(program.render().contains("tick"), "{}", program.render());
+    let tick = program
+        .functions()
+        .iter()
+        .find(|f| program.name(f.name) == "tick!")
+        .unwrap();
+    let Definition::External { symbol, .. } = tick.definition else {
+        panic!("an external declaration");
+    };
+    assert_eq!(program.name(symbol), "clock_tick");
+    assert!(
+        program
+            .render()
+            .contains("tick!(v0: Host) -> Unit = <elsewhere>")
+    );
+    assert!(program.render().contains("tick!(v0)"));
+
+    let facts = analyze(&program);
+    let machine = crate::ir::lower(&program, &facts, &routines).unwrap();
+    crate::ir::validate(&machine).unwrap();
+    let providers: Vec<_> = machine
+        .functions()
+        .iter()
+        .filter_map(crate::ir::Function::external)
+        .map(|symbol| machine.name(symbol))
+        .collect();
+    assert_eq!(providers, ["exit", "clock_tick"]);
 }
 
 /// An effect stands on its own: as the whole of a step, or as what a clause

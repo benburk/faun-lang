@@ -366,9 +366,9 @@ fn erased(program: &barb::Program, id: barb::TypeId) -> bool {
 /// preserves the semantics. A target may reject it, but may not wrap it.
 fn width(held: barb::Bounds) -> Class {
     held.width().map_or(Class::Natural, |bits| Class::Fixed {
-        // A value that can only be nought still takes a place to be nought
-        // in, until something makes it worth not taking one.
-        bits: u16::try_from(bits.max(1)).expect("a width a machine has"),
+        // The singleton zero needs no value bits. It remains a scalar value;
+        // physical storage and calling-convention slots are target decisions.
+        bits: u16::try_from(bits).expect("a width a machine has"),
     })
 }
 
@@ -718,19 +718,31 @@ impl Lowering<'_> {
                 } else {
                     Relation::Less
                 };
+                let yes = u64::from(self.barb.tag(yes));
+                let no = u64::from(self.barb.tag(no));
+                let yes_class = width(barb::Bounds::at(yes));
+                let no_class = width(barb::Bounds::at(no));
+                // Both emitted arms must fit the join, even if range analysis
+                // proves only the zero tag reachable. Narrow after the join
+                // in that case, rather than truncating the other arm's tag.
+                let join = super::arithmetic::widest(
+                    class,
+                    super::arithmetic::widest(yes_class, no_class),
+                );
                 let test = super::arithmetic::compare(b, relation, args[0], args[1]);
-                b.if_(
+                let answer = b.if_(
                     test,
-                    &[class],
+                    &[join],
                     |b| {
-                        let value = b.constant(class, u64::from(self.barb.tag(yes)));
+                        let value = b.constant(yes_class, yes);
                         b.yield_(&[value]);
                     },
                     |b| {
-                        let value = b.constant(class, u64::from(self.barb.tag(no)));
+                        let value = b.constant(no_class, no);
                         b.yield_(&[value]);
                     },
-                )[0]
+                )[0];
+                met(b, answer, class)
             }
             operation => super::arithmetic::lower(b, operation, class, args[0], args[1]),
         }

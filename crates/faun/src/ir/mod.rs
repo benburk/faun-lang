@@ -67,6 +67,7 @@ mod legalize;
 mod lower;
 mod model;
 pub mod natural;
+mod pretty;
 mod program;
 mod validate;
 
@@ -100,6 +101,8 @@ mod natural_tests;
 #[cfg(test)]
 mod ownership_tests;
 #[cfg(test)]
+mod pretty_tests;
+#[cfg(test)]
 mod representation_tests;
 #[cfg(test)]
 mod test_support;
@@ -107,3 +110,5 @@ mod test_support;
 mod tests;
 #[cfg(test)]
 mod validation_tests;
+#[cfg(test)]
+mod zero_width_tests;

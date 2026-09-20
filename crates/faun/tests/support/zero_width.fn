@@ -1,0 +1,25 @@
+# A known-zero scalar is still an argument, a result and a branch result.
+# Computing it calls argc again: knowing the result must not erase that call.
+type Nat Zero Succ(Nat)
+type Bool False True
+
+equals(Zero Zero) -> True
+equals(Zero Succ(b)) -> False
+equals(Succ(a) Zero) -> False
+equals(Succ(a) Succ(b)) -> equals(a b)
+
+keep_zero!(h n) ->
+  observed = argc!(h)
+  n
+
+select_zero!(h False) -> keep_zero!(h Zero)
+select_zero!(h True) -> keep_zero!(h Zero)
+
+zero_or_one(False n) -> n
+zero_or_one(True n) -> Succ(n)
+
+main!(h) ->
+  count = argc!(h)
+  first = equals(count Succ(Zero))
+  z = select_zero!(h first)
+  exit!(h zero_or_one(first z))

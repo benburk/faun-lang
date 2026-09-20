@@ -217,7 +217,7 @@ fn detached_arena_expressions_do_not_demand_a_representation() {
         source
             .functions()
             .iter()
-            .position(|f| source.name(f.name) == "exit")
+            .position(|f| source.name(f.name) == "exit!")
             .unwrap(),
     );
     let nat = source.params(exit)[1];

@@ -12,6 +12,9 @@ use faun::targets::Target;
 
 use super::{ARITHMETIC_SIZES, CORPUS_SIZES, EXAMPLE_SIZES, RUNNER, TARGET};
 
+#[path = "expressions.rs"]
+mod expressions;
+
 pub(super) const EXIT_ZERO: &str = "type Nat Zero Succ(Nat)
 
                                    main!(h) -> exit!(h Zero)";
@@ -52,13 +55,18 @@ pub(super) fn read(text: &str) -> Result<Program, String> {
     faun::read(text, &TARGET.routines())
 }
 
-/// Exercise raw emission after explicitly establishing its preconditions.
-/// Integration tests separately cover the checked compilation wrappers.
+pub(super) fn execute(program: &Program) -> (i32, String) {
+    execute_counts(program, &[1]).remove(0)
+}
+
+/// Emit once, then run that same artifact with each argument count. Exercise
+/// raw emission after explicitly establishing its preconditions; integration
+/// tests separately cover the checked compilation wrappers.
 #[expect(
     clippy::too_many_lines,
     reason = "one test artifact's write/run/cleanup lifecycle"
 )]
-pub(super) fn execute(program: &Program) -> (i32, String) {
+fn execute_counts(program: &Program, counts: &[u16]) -> Vec<(i32, String)> {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     faun::ir::validate(program).expect("a well-formed program");
@@ -85,26 +93,34 @@ pub(super) fn execute(program: &Program) -> (i32, String) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("a runnable file");
     }
-    let mut command = RUNNER.map_or_else(
-        || Command::new(&path),
-        |runner| {
-            let mut command = Command::new(runner);
-            command.arg(&path);
-            command
-        },
-    );
-    let output = command.output().expect("a machine to run it");
+    let answers = counts
+        .iter()
+        .map(|&argc| {
+            assert!(argc >= 1, "the program name is an argument");
+            let mut command = RUNNER.map_or_else(
+                || Command::new(&path),
+                |runner| {
+                    let mut command = Command::new(runner);
+                    command.arg(&path);
+                    command
+                },
+            );
+            command.args((1..argc).map(|_| "dummy"));
+            let output = command.output().expect("a machine to run it");
+            let code = output.status.code().unwrap_or_else(|| {
+                panic!(
+                    "the program was signalled: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            });
+            (
+                code,
+                String::from_utf8(output.stdout).expect("what it wrote, as text"),
+            )
+        })
+        .collect();
     fs::remove_dir_all(&dir).expect("the scratch directory to go");
-    let code = output.status.code().unwrap_or_else(|| {
-        panic!(
-            "the program was signalled: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    });
-    (
-        code,
-        String::from_utf8(output.stdout).expect("what it wrote, as text"),
-    )
+    answers
 }
 
 pub(super) fn status(program: &Program) -> i32 {
@@ -273,6 +289,90 @@ fn it_runs_a_program_built_rather_than_written() {
         1
     );
     assert_eq!(status(&machine), 4);
+}
+
+#[test]
+fn guarded_argc_expressions_fold_constants_but_compute_runtime_inputs() {
+    use faun::ir::{Op, ValueId};
+
+    for case in expressions::CASES {
+        // Normal reading keeps every optimization enabled. The guard must
+        // prove scalar bounds even on targets with runtime Natural support.
+        let program = read(&case.source()).expect("a guarded source expression");
+        assert!(
+            (0..program.values_count()).all(|at| program.class(ValueId::at(at)) != Class::Natural),
+            "{case:?}: guarded arithmetic should not need runtime naturals"
+        );
+        let ops: Vec<_> = program
+            .functions()
+            .iter()
+            .filter_map(faun::ir::Function::body)
+            .flat_map(|body| program.every(body))
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(op, Op::Binary { .. })),
+            "{case:?}: runtime arithmetic must survive folding"
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(
+                op,
+                Op::Binary {
+                    op: Binary::Mul,
+                    ..
+                }
+            )),
+            "{case:?}: constant-only multiplication must fold"
+        );
+        let answers = execute_counts(&program, expressions::COUNTS);
+        for (&argc, (status, stdout)) in expressions::COUNTS.iter().zip(answers) {
+            assert_eq!(status, case.expected(argc), "{case:?}, argc={argc}");
+            assert!(stdout.is_empty(), "{case:?}, argc={argc}: {stdout:?}");
+        }
+    }
+}
+
+#[test]
+fn runnable_expression_example_uses_runtime_arguments() {
+    let program = read(include_str!("../../../../examples/expressions.fn")).unwrap();
+    let counts = [1, 2, 3, 31, 32, 33];
+    for (argc, (status, stdout)) in counts.into_iter().zip(execute_counts(&program, &counts)) {
+        let expected = if argc < 32 {
+            2 * i32::from(argc) + 2
+        } else {
+            0
+        };
+        assert_eq!(status, expected, "argc={argc}");
+        assert!(stdout.is_empty());
+    }
+}
+
+#[test]
+fn source_zero_width_scalars_cross_calls_and_joins() {
+    let source = include_str!("zero_width.fn");
+    for inline_helpers in [true, false] {
+        let program = faun::read_with_options(
+            source,
+            &TARGET.routines(),
+            &faun::barb::OptimizeOptions {
+                inline_helpers,
+                ..faun::barb::OptimizeOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            (0..program.values_count())
+                .any(|at| { program.class(faun::ir::ValueId::at(at)) == Class::Fixed { bits: 0 } })
+        );
+        let counts = [1, 2, 3, 33];
+        for (argc, (status, stdout)) in counts.into_iter().zip(execute_counts(&program, &counts)) {
+            assert_eq!(
+                status,
+                i32::from(argc == 1),
+                "argc={argc}, inline={inline_helpers}"
+            );
+            assert!(stdout.is_empty());
+        }
+    }
 }
 
 #[test]

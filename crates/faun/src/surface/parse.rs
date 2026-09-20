@@ -313,12 +313,9 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
         let Some((params, result)) = told.get(called) else {
             continue;
         };
-        // The `!` says a program may observe this one working, which is a
-        // rule about the language rather than about the routine, so the
-        // declaration goes without it -- and says which routine answers for
-        // it rather than leaving the tier below to read the name twice.
-        let held = called.strip_suffix('!').unwrap_or(called);
-        let id = program.declare(held, params, *result);
+        // Keep the source spelling for diagnostics, including its `!`.
+        // Linkage uses the separate provider symbol, not this display name.
+        let id = program.declare(called, params, *result);
         program.answered_by(id, &routine.name);
         if let Some(class) = routine.answers() {
             program.bound(id, host_bound(class));

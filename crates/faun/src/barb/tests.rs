@@ -263,13 +263,12 @@ fn two_and_two_reads_back_as_what_was_written() {
         "Nat = Zero | Succ(Nat)
 
 add(v0: Nat, v1: Nat) -> Nat =
-  match v1 {
+  match v1
     Zero =>
       v0
     Succ(v2) =>
       v3 = add(v0, v2)
       Succ(v3)
-  }
 
 main() -> Nat =
   v0 = 2

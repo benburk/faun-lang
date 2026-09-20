@@ -54,17 +54,20 @@ impl Program {
             .enumerate()
             .map(|(at, type_)| format!("v{at}: {}", self.name(self.type_(*type_).name)))
             .collect();
-        let _ = writeln!(
+        let _ = write!(
             out,
             "{}({}) -> {} =",
             self.name(function.name),
             params.join(", "),
             self.name(self.type_(function.result).name)
         );
-        let level = u32::try_from(self.params(id).len()).expect("a sane arity");
         match function.body() {
-            Some(body) => self.render_body(body, level, 1, out),
-            None => out.push_str("  <elsewhere>\n"),
+            Some(body) => {
+                out.push('\n');
+                let level = u32::try_from(self.params(id).len()).expect("a sane arity");
+                self.render_body(body, level, 1, out);
+            }
+            None => out.push_str(" <elsewhere>\n"),
         }
     }
 
@@ -105,7 +108,7 @@ impl Program {
                 let _ = writeln!(out, "{pad}{}", self.render_known(value));
             }
             Expr::Match(scrutinee, arms) => {
-                let _ = writeln!(out, "{pad}match v{} {{", scrutinee.0.0);
+                let _ = writeln!(out, "{pad}match v{}", scrutinee.0.0);
                 for arm in self.arms(arms) {
                     let fields = self.types_of(self.ctor(arm.ctor).fields).len();
                     let bound: Vec<String> = (0..fields)
@@ -120,7 +123,6 @@ impl Program {
                     let inner = level + u32::try_from(fields).expect("a sane arity");
                     self.render_body(arm.body, inner, depth + 2, out);
                 }
-                let _ = writeln!(out, "{pad}}}");
             }
         }
     }

@@ -78,6 +78,16 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `laws.rs`, `fold.rs`, `cleanup.rs`: separate optimizing rewrites.
 - `optimize.rs`: the fixed schedule below; `pretty.rs`: rendering.
 
+## Diagnostic rendering
+
+`Program::render` uses indentation to delimit match arms and nested bodies,
+without braces. Bodyless declarations keep `= <elsewhere>` on the signature
+line. The text is a diagnostic view, not surface syntax or a serialization.
+Frontend-created declarations retain their source names, including `!` on
+platform calls such as `exit!` and `argc!`. The external provider symbol is
+stored separately: machine lowering uses `exit` and `argc` for linkage, never
+inferring a provider or an effect from the display name.
+
 ## Optimization passes
 
 `optimize(program, &OptimizeOptions)` runs a small fixed schedule after validation:

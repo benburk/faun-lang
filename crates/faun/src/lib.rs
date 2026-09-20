@@ -36,9 +36,26 @@ pub fn read_with_options(
     routines: &platform::Routines,
     options: &barb::OptimizeOptions,
 ) -> Result<ir::Program, String> {
+    let program = read_barb_with_options(text, routines, options)?;
+    let facts = barb::analyze(&program);
+    ir::lower(&program, &facts, routines)
+}
+
+/// Read, validate and optimize Barb, stopping before representation selection.
+///
+/// This is the same front-end pipeline used by [`read_with_options`], exposed
+/// for inspection. Analyze the returned program before machine lowering.
+///
+/// # Errors
+/// Reports parsing, typing, structural or totality errors. Inspection never
+/// bypasses validation, even when optional optimization passes are disabled.
+pub fn read_barb_with_options(
+    text: &str,
+    routines: &platform::Routines,
+    options: &barb::OptimizeOptions,
+) -> Result<barb::Program, String> {
     let mut program = surface::parse(text, routines)?;
     barb::validate(&program)?;
     barb::optimize(&mut program, options);
-    let facts = barb::analyze(&program);
-    ir::lower(&program, &facts, routines)
+    Ok(program)
 }

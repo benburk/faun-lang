@@ -105,6 +105,8 @@ pub enum Definition {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
+    /// Diagnostic name; frontend declarations preserve the source spelling.
+    /// External linkage uses the symbol in `definition`, not this name.
     pub name: Symbol,
     /// The types of its parameters, which are the first locals.
     pub params: Range,

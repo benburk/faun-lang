@@ -1,5 +1,51 @@
 # Machine IR contracts
 
+## Inspection
+
+`Program::render` prints diagnostic text with function signatures, SSA value
+classes, data spans and explicit region edges. Function names are printed
+without quotes, as in `fn f0 main!() -> (word) = r0`. Calls name the callee and
+retain its declaration ID as an annotation, for example `call exit(v10)  # f1`.
+Names need not be unique; the ID distinguishes declarations, including internal
+functions named like external providers. It resolves operand/signature
+runs rather than exposing pool offsets; regions appear once in storage order,
+including retained detached regions. It neither validates nor mutates the
+program and assumes well-formed references, like other queries. Pending
+function definitions are distinct from externals, and `<no terminator>` records
+absence rather than inventing an unreachable instruction. In validated IR that
+absence means the region cannot fall through. The text is not a serialization
+or a round-trippable source format.
+
+Dumps with function declarations begin with a class legend: classes describe
+individual values' representation requirements, not source types. `fixedN`
+means `0 <= value < 2^N`, not wrapping arithmetic or an exact inferred interval.
+A narrower sink requires a fit proof or an explicit conversion. The legend does
+not add range analysis or change the classes printed on definitions and signatures.
+
+The CLI's `inspect --emit ir` validates lowered IR without requiring target
+acceptance; `--emit prepared-ir` prints the result of `Target::prepare` instead.
+`--emit barb` uses `read_barb_with_options` with the default optimization options,
+sharing the front-end pipeline with ordinary compilation. See the
+[runnable inspection example](../README.md#inspecting-a-runtime-expression).
+
+## Zero-width scalars
+
+Bounds-based lowering selects `fixed0` for values proven to be zero: the range
+`0 <= value < 2^0` has one inhabitant. Zero-valued parameters, results and joins
+remain scalar values with their original arity; they are not erased like unit.
+A known result does not permit dropping the effects or nonreturning calls that
+compute it. Targets may still materialize zero in a register, slot or ABI word.
+Constants already declared at wider classes remain valid, and the entry retains
+its Word result contract.
+
+Comparison lowering also gives each synthesized tag constant its own minimal
+class: zero uses `fixed0`, one uses `fixed1`. Both emitted arms must fit their
+shared join. If range analysis proves that only the zero tag can be returned,
+that narrower result is established after the join; the other arm's tag is not
+truncated merely because its branch is unreachable.
+
+## Functions
+
 `ir::Program::new` creates an entry, not an environment. It neither installs
 builtins nor detects a host. The program has one function table and one `Call`
 operation. A function's `Definition` is `Declared(RegionId)` while awaiting a

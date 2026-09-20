@@ -1,0 +1,29 @@
+# A small runtime expression: (n + 2) + n, where n is argc (including
+# the program name). No extra arguments gives status 4; two gives 8.
+# The guard proves n < 32. All the constant arithmetic should fold away.
+
+type Nat Zero Succ(Nat)
+type Bool False True
+
+add(a Zero) -> a
+add(a Succ(b)) -> Succ(add(a b))
+
+less_than(Zero Zero) -> False
+less_than(Zero Succ(b)) -> True
+less_than(Succ(a) Zero) -> False
+less_than(Succ(a) Succ(b)) -> less_than(a b)
+
+bounded!(h True n) -> n
+bounded!(h False n) -> exit!(h Zero)
+
+main!(h) ->
+  one = Succ(Zero)
+  two = add(one one)
+  four = add(two two)
+  eight = add(four four)
+  sixteen = add(eight eight)
+  limit = add(sixteen sixteen)
+  count = argc!(h)
+  n = bounded!(h less_than(count limit) count)
+  a = add(n two)
+  exit!(h add(a n))

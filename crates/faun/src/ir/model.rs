@@ -37,7 +37,8 @@ pub enum Class {
     Word,
     /// A value needing at least this many bits, and never more. It is a
     /// requirement rather than a modulus: a target may hold one in anything
-    /// wider, since what it holds above those bits is nought.
+    /// wider, since what it holds above those bits is nought. Zero bits
+    /// admits only zero; it is still a scalar, not an erased value.
     ///
     /// So nothing wraps of its own accord. Arithmetic on values that fit
     /// answers a value that fits, because the tier above worked out what

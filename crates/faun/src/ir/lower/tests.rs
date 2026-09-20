@@ -19,6 +19,7 @@ fn tag_planning_visits_each_body_once_and_preserves_every_suffix_join() {
             Never,
             Value(Class::Fixed { bits: 9 }),
             Value(Class::Fixed { bits: 1 }),
+            Value(Class::Fixed { bits: 0 }),
         ],
         (0..128)
             .map(|at| match at % 3 {

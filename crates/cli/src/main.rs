@@ -18,6 +18,9 @@ use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
 
+#[cfg(test)]
+mod tests;
+
 /// Every target this was built with, in the order they were written.
 ///
 /// Nothing else names all three. A compiler for three machines has to hold
@@ -43,6 +46,48 @@ enum Command {
     Run {
         source: PathBuf,
     },
+    Inspect {
+        source: PathBuf,
+        target: &'static dyn Target,
+        stage: Stage,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    Barb,
+    Ir,
+    PreparedIr,
+}
+
+fn target() -> impl Parser<&'static dyn Target> {
+    long("target")
+        .help("Machine to compile for")
+        .argument::<String>("TARGET")
+        .parse(|name| {
+            ALL.into_iter()
+                .find(|target| target.name() == name)
+                .ok_or_else(|| unknown(&name))
+        })
+        .fallback_with(|| HOST.ok_or(NO_HOST))
+        .debug_fallback()
+}
+
+fn inspection() -> impl Parser<Command> {
+    let source = positional::<PathBuf>("PATH").help("The program to inspect");
+    let stage = long("emit")
+        .help("Inspection stage: barb (optimized), ir (lowered), prepared-ir (target-ready)")
+        .argument::<String>("STAGE")
+        .parse(|stage| match stage.as_str() {
+            "barb" => Ok(Stage::Barb),
+            "ir" => Ok(Stage::Ir),
+            "prepared-ir" => Ok(Stage::PreparedIr),
+            _ => Err("expected barb, ir or prepared-ir"),
+        });
+    construct!(Command::Inspect { target(), stage, source })
+        .to_options()
+        .descr("Print an intermediate representation to stdout")
+        .command("inspect")
 }
 
 fn cli() -> OptionParser<Command> {
@@ -55,20 +100,9 @@ fn cli() -> OptionParser<Command> {
         .fallback(PathBuf::from("a.out"))
         .debug_fallback();
 
-    let target = long("target")
-        .help("Machine to compile for")
-        .argument::<String>("TARGET")
-        .parse(|name| {
-            ALL.into_iter()
-                .find(|target| target.name() == name)
-                .ok_or_else(|| unknown(&name))
-        })
-        .fallback_with(|| HOST.ok_or(NO_HOST))
-        .debug_fallback();
-
     let build = construct!(Command::Build {
         output,
-        target,
+        target(),
         source(),
     })
     .to_options()
@@ -80,7 +114,7 @@ fn cli() -> OptionParser<Command> {
         .descr("Compile the program for this machine and run it")
         .command("run");
 
-    choice([build.boxed(), run.boxed()])
+    choice([build.boxed(), run.boxed(), inspection().boxed()])
         .to_options()
         .descr("The Faun compiler")
         .version(env!("CARGO_PKG_VERSION"))
@@ -106,6 +140,17 @@ fn main() -> ExitCode {
 
 fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
     match command {
+        Command::Inspect {
+            source,
+            target,
+            stage,
+        } => {
+            let text = fs::read_to_string(&source)?;
+            let rendered = inspect(&text, target, stage)
+                .map_err(|error| format!("{}: {error}", source.display()))?;
+            print!("{rendered}");
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Build {
             source,
             output,
@@ -132,6 +177,29 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
 
             let code = status?.code().unwrap_or(1);
             Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
+        }
+    }
+}
+
+/// Stop at the requested tier; Barb inspection does not require a runtime
+/// representation, while prepared IR establishes target acceptance as well.
+fn inspect(text: &str, target: &dyn Target, stage: Stage) -> Result<String, String> {
+    let routines = target.routines();
+    match stage {
+        Stage::Barb => Ok(faun::read_barb_with_options(
+            text,
+            &routines,
+            &faun::barb::OptimizeOptions::default(),
+        )?
+        .render()),
+        Stage::Ir => {
+            let program = faun::read(text, &routines)?;
+            faun::ir::validate(&program)?;
+            Ok(program.render())
+        }
+        Stage::PreparedIr => {
+            let program = faun::read(text, &routines)?;
+            Ok(target.prepare(&program)?.render())
         }
     }
 }

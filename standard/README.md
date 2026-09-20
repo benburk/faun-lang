@@ -69,13 +69,38 @@ ABI and capacity limits are checked separately by targets.
 fuel/size limits. It evaluates `Natural` exactly and reports failed `Fixed` fit
 assertions. Interpreter support does not imply native target support.
 
+### Guarded runtime expression probes
+
+The [shared expression corpus](../crates/faun/tests/support/expressions.rs) uses
+`argc!` with a guard requiring `count < 32`; rejected counts exit with status 100.
+Normal optimization stays enabled: constants fold, while input-dependent
+addition chains, shared intermediates, constant-left addition, carry and monus
+remain runtime computations. No argument-string access or parsing is needed.
+
+Each backend compiles each case once and runs the same artifact with several
+numbers of dummy arguments. Counts include the program name. Tests cover both
+sides of the guard and arithmetic boundaries; the carry probe subtracts 255 from
+`n + 250`, so an incorrect wrapped high byte cannot hide behind an eight-bit exit
+status. They also check that the guard avoids runtime naturals and constant-only
+multiplication disappears from machine IR.
+
+The [6502 cost tests](../crates/mos6502-sim65/tests/expression_cost.rs) record image
+size and cycle ceilings for the same corpus. These are whole-program costs,
+including startup, argument-count acquisition, the guard and exit, not isolated
+expression costs. Run the probes with
+`nix develop --command cargo test --workspace guarded_argc_expressions`.
+
 ## Current target boundary
 
 Unknown or overflowing bounds select machine IR's `Class::Natural`, never
 silently `Word`. Large constants use `NaturalConstant` with compact magnitudes.
-Finite bounds select `Fixed` widths; arithmetic must fit those widths. Explicit
-conversions, not natural arithmetic, request truncation. Host arguments need a
-fit proof: passing a natural to an effect does not request modulo conversion.
+Finite bounds select `Fixed` widths; arithmetic must fit those widths. An exact
+zero bound selects `Fixed { bits: 0 }`, whose only value is zero. It remains a
+scalar in parameters, results and joins, not an erased unit or a license to drop
+eager effects. Storage and ABI slots remain target decisions; a zero required
+at a wider class is still valid. Explicit conversions, not natural arithmetic,
+request truncation. Host arguments need a fit proof: passing a natural to an
+effect does not request modulo conversion.
 
 Multiplication, division, and remainder remain machine operations until target
 selection. x86-64 and wasm32 use native unsigned instructions with zero-divisor
