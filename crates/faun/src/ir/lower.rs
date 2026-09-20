@@ -18,6 +18,9 @@ use super::program::Program;
 use super::validate::validate;
 use crate::platform::{Routine, Routines, reads};
 
+#[cfg(test)]
+mod tests;
+
 /// Lower a whole program, or say what it holds that this tier cannot yet
 /// represent.
 ///
@@ -305,22 +308,21 @@ impl<'a> Demand<'a> {
 
 /// Shared by demand discovery, answer analysis, and emission: types in an
 /// impossible arm do not need storage any more than its calls need code.
-fn reachable(program: &barb::Program, arms: barb::Range, bounds: barb::Bounds) -> Vec<barb::Arm> {
-    program
-        .arms(arms)
-        .iter()
-        .copied()
-        .filter(
-            |arm| match barb::shape(program, program.ctor(arm.ctor).owner) {
-                barb::Shape::Spine { nil, .. } if arm.ctor == nil => bounds.low == 0,
-                barb::Shape::Spine { .. } => bounds.high != Some(0),
-                barb::Shape::Tagged => {
-                    let tag = u64::from(program.tag(arm.ctor));
-                    tag >= bounds.low && bounds.high.is_none_or(|high| tag <= high)
-                }
-            },
-        )
-        .collect()
+fn reachable(
+    program: &barb::Program,
+    arms: barb::Range,
+    bounds: barb::Bounds,
+) -> impl Iterator<Item = barb::Arm> + '_ {
+    program.arms(arms).iter().copied().filter(move |arm| {
+        match barb::shape(program, program.ctor(arm.ctor).owner) {
+            barb::Shape::Spine { nil, .. } if arm.ctor == nil => bounds.low == 0,
+            barb::Shape::Spine { .. } => bounds.high != Some(0),
+            barb::Shape::Tagged => {
+                let tag = u64::from(program.tag(arm.ctor));
+                tag >= bounds.low && bounds.high.is_none_or(|high| tag <= high)
+            }
+        }
+    })
 }
 
 /// The class a type's values take. Numbers and tags are decided so far.
@@ -393,7 +395,7 @@ fn tagged(program: &barb::Program, id: barb::TypeId) -> bool {
 
 /// What a term answers: a value, nothing because its type carries nothing,
 /// or nothing ever because the term does not come back.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Answer<T> {
     Value(T),
     Nothing,
@@ -465,6 +467,33 @@ fn widest(held: Answer<Class>, other: Answer<Class>) -> Answer<Class> {
         (Some(held), Some(other)) => Answer::Value(super::arithmetic::widest(held, other)),
         _ => held.or(other),
     }
+}
+
+/// A tagged arm and the join of this arm with all following arms.
+struct TagArm {
+    arm: barb::Arm,
+    suffix: Answer<Class>,
+}
+
+// Analyze each body once, then accumulate joins backward. Returning arms of a
+// well-typed match agree on whether they carry a value, so widest is associative
+// here. Keep the narrower suffix joins, not just the width of the whole match.
+fn tag_plan(
+    arms: impl Iterator<Item = barb::Arm>,
+    mut answer: impl FnMut(barb::Body) -> Answer<Class>,
+) -> Vec<TagArm> {
+    let mut planned: Vec<_> = arms
+        .map(|arm| TagArm {
+            suffix: answer(arm.body),
+            arm,
+        })
+        .collect();
+    let mut suffix = Answer::Never;
+    for arm in planned.iter_mut().rev() {
+        suffix = widest(arm.suffix, suffix);
+        arm.suffix = suffix;
+    }
+    planned
 }
 
 /// Leave an arm with what its body answered. An arm that does not come back
@@ -543,14 +572,6 @@ impl Lowering<'_> {
             unreachable!("only machine functions have bodies to lower");
         };
         let entry = self.barb.entry() == Some(id);
-        // An erased parameter takes no slot, so the machine's run of them is
-        // shorter than barb's and they are matched up in order.
-        let erased: Vec<bool> = self
-            .barb
-            .params(id)
-            .iter()
-            .map(|type_| !self.carries[type_.index()].carried())
-            .collect();
         // What it leaves with: a word from the entry, whatever the program
         // worked in, and otherwise the width it was declared at.
         let destination = if entry {
@@ -560,9 +581,16 @@ impl Lowering<'_> {
         };
         machine.try_define(into, |b, params| {
             let mut taken = params.iter().copied();
-            let mut locals: Vec<Option<ValueId>> = erased
+            // Erased parameters take no machine slot; match the rest in order.
+            let mut locals: Vec<Option<ValueId>> = self
+                .barb
+                .params(id)
                 .iter()
-                .map(|erased| (!erased).then(|| taken.next().expect("a parameter")))
+                .map(|ty| {
+                    self.carries[ty.index()]
+                        .carried()
+                        .then(|| taken.next().expect("a parameter"))
+                })
                 .collect();
             let answer = self.body(b, body, &mut locals);
             returned(b, answer, destination)
@@ -640,7 +668,7 @@ impl Lowering<'_> {
         args: barb::Range,
         locals: &[Option<ValueId>],
     ) -> Answer<ValueId> {
-        let args: Vec<ValueId> = self
+        let mut args: Vec<ValueId> = self
             .barb
             .atoms(args)
             .iter()
@@ -652,14 +680,10 @@ impl Lowering<'_> {
             }
             Callee::External { id, routine } => (b.call(id, &args), routine.answers()),
             Callee::Function(callee) => {
-                let args: Vec<_> = args
-                    .iter()
-                    .enumerate()
-                    .map(|(at, &arg)| {
-                        let wanted = b.takes(callee)[at];
-                        met(b, arg, wanted)
-                    })
-                    .collect();
+                for (at, arg) in args.iter_mut().enumerate() {
+                    let wanted = b.takes(callee)[at];
+                    *arg = met(b, *arg, wanted);
+                }
                 (b.call(callee, &args), None)
             }
             Callee::Unreachable => unreachable!("a lowered call must have been demanded"),
@@ -756,30 +780,34 @@ impl Lowering<'_> {
         locals: &[Option<ValueId>],
         bounds: barb::Bounds,
     ) -> Answer<ValueId> {
-        let arms = self.reachable(arms, bounds);
-        let Some(first) = arms.first() else {
+        let mut arms = reachable(self.barb, arms, bounds);
+        let Some(first) = arms.next() else {
             return Answer::Never;
         };
-        let owner = self.barb.ctor(first.ctor).owner;
-        if arms.len() == 1 {
-            return self.only_arm(b, scrutinee, first, locals);
-        }
-        // Read at the width what it is taking apart is held at, since that
-        // is what the comparison and the step down are against.
-        let class = b.class(scrutinee);
-        let barb::Shape::Spine { nil, .. } = barb::shape(self.barb, owner) else {
-            return self.tags(b, scrutinee, class, &arms, locals);
+        let Some(second) = arms.next() else {
+            return self.only_arm(b, scrutinee, &first, locals);
         };
-        let empty = arms
-            .iter()
-            .find(|arm| arm.ctor == nil)
-            .expect("an empty arm");
-        let counted = arms
-            .iter()
-            .find(|arm| arm.ctor != nil)
-            .expect("a counting arm");
-
-        self.natural_branch(b, scrutinee, empty, counted, locals)
+        match barb::shape(self.barb, self.barb.ctor(first.ctor).owner) {
+            barb::Shape::Spine { nil, .. } => {
+                // A spine has exactly these two arms, regardless of their tags.
+                let (empty, counted) = if first.ctor == nil {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
+                self.natural_branch(b, scrutinee, &empty, &counted, locals)
+            }
+            barb::Shape::Tagged => {
+                let arms = {
+                    let mut carried = locals.iter().map(Option::is_some).collect();
+                    tag_plan([first, second].into_iter().chain(arms), |body| {
+                        self.body_answer(body, &mut carried)
+                    })
+                };
+                let class = b.class(scrutinee);
+                self.tags(b, scrutinee, class, &arms, locals)
+            }
+        }
     }
 
     fn natural_branch(
@@ -795,34 +823,32 @@ impl Lowering<'_> {
         // the match holds. An arm that leaves says nothing about it.
         // The counting arm binds what the scrutinee wraps, which holds what
         // the scrutinee holds.
-        let mut inner = locals.to_vec();
-        inner.push(Some(scrutinee));
-        let answer = self.answers(empty.body, locals);
-        let answer = widest(answer, self.answers(counted.body, &inner));
-        let held: Vec<Class> = answer.held().into_iter().collect();
+        let answer = {
+            let mut carried = locals.iter().map(Option::is_some).collect();
+            let answer = self.body_answer(empty.body, &mut carried);
+            carried.push(true);
+            widest(answer, self.body_answer(counted.body, &mut carried))
+        };
+        let held = answer.held();
         let nought = b.constant(class, 0);
         let is_nought = b.compare(Relation::Equal, scrutinee, nought);
         let results = b.if_(
             is_nought,
-            &held,
+            held.as_slice(),
             |b| {
                 let mut inner = locals.to_vec();
                 let answer = self.body(b, empty.body, &mut inner);
-                yielded(b, answer, &held);
+                yielded(b, answer, held.as_slice());
             },
             |b| {
                 let mut inner = locals.to_vec();
                 let one = b.constant(class, 1);
                 inner.push(Some(b.binary(Binary::Sub, scrutinee, one)));
                 let answer = self.body(b, counted.body, &mut inner);
-                yielded(b, answer, &held);
+                yielded(b, answer, held.as_slice());
             },
         );
         answer.map(|_| *results.first().expect("a result where the arms carry one"))
-    }
-
-    fn reachable(&self, arms: barb::Range, bounds: barb::Bounds) -> Vec<barb::Arm> {
-        reachable(self.barb, arms, bounds)
     }
 
     fn only_arm(
@@ -855,33 +881,34 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         scrutinee: ValueId,
         class: Class,
-        arms: &[barb::Arm],
+        arms: &[TagArm],
         locals: &[Option<ValueId>],
     ) -> Answer<ValueId> {
-        let (arm, rest) = arms.split_first().expect("an arm to match");
+        let (
+            TagArm {
+                arm,
+                suffix: answer,
+            },
+            rest,
+        ) = arms.split_first().expect("an arm to match");
         if rest.is_empty() {
             let mut inner = locals.to_vec();
             return self.body(b, arm.body, &mut inner);
         }
-
-        let answer = arms
-            .iter()
-            .map(|arm| self.answers(arm.body, locals))
-            .fold(Answer::Never, widest);
-        let held: Vec<Class> = answer.held().into_iter().collect();
+        let held = answer.held();
         let tag = b.constant(class, u64::from(self.barb.tag(arm.ctor)));
         let is_this_one = b.compare(Relation::Equal, scrutinee, tag);
         let results = b.if_(
             is_this_one,
-            &held,
+            held.as_slice(),
             |b| {
                 let mut inner = locals.to_vec();
                 let answer = self.body(b, arm.body, &mut inner);
-                yielded(b, answer, &held);
+                yielded(b, answer, held.as_slice());
             },
             |b| {
                 let answer = self.tags(b, scrutinee, class, rest, locals);
-                yielded(b, answer, &held);
+                yielded(b, answer, held.as_slice());
             },
         );
         answer.map(|_| *results.first().expect("a result where the arms carry one"))
@@ -890,25 +917,25 @@ impl Lowering<'_> {
     /// What a body answers, read off its shape: an `if` has to be told what
     /// its arms leave with before either of them is lowered.
     ///
-    /// A body that answers a name it was given answers whatever that name
-    /// is, which is why this needs the locals: nothing about the term says
-    /// how wide the value it names is.
-    fn answers(&self, body: barb::Body, locals: &[Option<ValueId>]) -> Answer<Class> {
-        self.body_answer(body, locals.iter().map(Option::is_some).collect())
-    }
-
-    fn body_answer(&self, body: barb::Body, mut carried: Vec<bool>) -> Answer<Class> {
-        for &binding in self.barb.bindings(body.bindings) {
-            let answer = self.expr_answer(binding, &carried);
-            if matches!(answer, Answer::Never) {
-                return Answer::Never;
+    /// Local presence is occurrence-specific, not an `ExprId` cache. Reuse the
+    /// scratch stack across siblings, restoring it even when a binding exits.
+    fn body_answer(&self, body: barb::Body, carried: &mut Vec<bool>) -> Answer<Class> {
+        let base = carried.len();
+        let answer = 'body: {
+            for &binding in self.barb.bindings(body.bindings) {
+                let answer = self.expr_answer(binding, carried);
+                if matches!(answer, Answer::Never) {
+                    break 'body answer;
+                }
+                carried.push(answer.held().is_some());
             }
-            carried.push(answer.held().is_some());
-        }
-        self.expr_answer(body.tail, &carried)
+            self.expr_answer(body.tail, carried)
+        };
+        carried.truncate(base);
+        answer
     }
 
-    fn expr_answer(&self, expr: barb::ExprId, carried: &[bool]) -> Answer<Class> {
+    fn expr_answer(&self, expr: barb::ExprId, carried: &mut Vec<bool>) -> Answer<Class> {
         match self.barb.expr(expr) {
             barb::Expr::Static(value) => self
                 .answer(self.barb.constant(value).owner())
@@ -919,20 +946,21 @@ impl Lowering<'_> {
             barb::Expr::Call(function, _) => self
                 .answer(self.barb.function(function).result)
                 .map(|_| self.width(expr)),
-            barb::Expr::Match(_, arms) => self
-                .reachable(arms, self.facts.matched(expr))
-                .iter()
-                .map(|arm| {
-                    let mut inner = carried.to_vec();
-                    inner.extend(
+            barb::Expr::Match(_, arms) => {
+                let base = carried.len();
+                let mut answer = Answer::Never;
+                for arm in reachable(self.barb, arms, self.facts.matched(expr)) {
+                    carried.extend(
                         self.barb
                             .fields(arm.ctor)
                             .iter()
                             .map(|ty| self.carries[ty.index()].carried()),
                     );
-                    self.body_answer(arm.body, inner)
-                })
-                .fold(Answer::Never, widest),
+                    answer = widest(answer, self.body_answer(arm.body, carried));
+                    carried.truncate(base);
+                }
+                answer
+            }
             barb::Expr::Atom(atom) => {
                 if carried[atom.0.index()] {
                     Answer::Value(self.width(expr))

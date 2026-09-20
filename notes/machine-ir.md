@@ -51,6 +51,13 @@ catalog. Source lowering only declares demanded functions. Targets own external
 call emission and internal function numbering; source IDs need not be dense
 emitted-body indices.
 
+Source demand discovery, answer analysis, and emission share a lazy reachable-arm
+walk. Tagged matches analyze each arm once when planning that match, then compute
+suffix join widths backward; nested tests retain their narrower joins. Answer
+analysis reuses a scoped local-presence stack, restoring it after each body and
+arm, including nonreturning ones. These results belong to lexical occurrences,
+not a global expression-ID cache. Demand discovery and emission remain separate.
+
 ## Typed entity storage
 
 Functions, regions, values' classes, data spans and symbol entries live in
