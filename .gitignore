@@ -1,3 +1,4 @@
-.claude/
+.claude/*
+!.claude/skills/
 .env
 /target/
