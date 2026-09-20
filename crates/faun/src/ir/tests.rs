@@ -224,7 +224,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         let narrow = program.declare("narrow", &[nat], unit);
         program.answered_by(narrow, "narrow");
 
-        let number = program.intern_number(nat, value);
+        let number = program.intern_number(nat, value).unwrap();
         let main = program.declare("main", &[], nat);
         program.define(main, |b, _| {
             let held = b.known(number);

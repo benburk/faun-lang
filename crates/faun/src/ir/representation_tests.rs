@@ -221,7 +221,7 @@ fn detached_arena_expressions_do_not_demand_a_representation() {
             .unwrap(),
     );
     let nat = source.params(exit)[1];
-    let zero = source.intern_number(nat, 0);
+    let zero = source.intern_number(nat, 0).unwrap();
     source.define(source.entry().unwrap(), |b, args| {
         let zero = b.known(zero);
         b.call(exit, &[args[0], zero])

@@ -26,13 +26,14 @@ fn allocation<T>(values: &[T]) -> *const () {
 
 // These allocations are not term pools and must not be replaced by either pass.
 fn storage(p: &Program) -> [*const (); 8] {
+    let [constants, bytes] = p.constants.allocations();
     [
         allocation(p.types.as_slice()),
         allocation(p.ctors.as_slice()),
         allocation(p.functions.as_slice()),
         allocation(&p.types_pool),
-        allocation(p.consts.as_slice()),
-        allocation(&p.bytes),
+        constants,
+        bytes,
         allocation(&p.names),
         allocation(p.symbols.as_slice()),
     ]
@@ -42,8 +43,7 @@ fn assert_declarations(before: &Program, after: &Program) {
     assert_eq!(before.types, after.types);
     assert_eq!(before.ctors, after.ctors);
     assert_eq!(before.types_pool, after.types_pool);
-    assert_eq!(before.consts, after.consts);
-    assert_eq!(before.bytes, after.bytes);
+    assert_eq!(before.constants, after.constants);
     assert_eq!(before.names, after.names);
     assert_eq!(before.symbols, after.symbols);
     assert_eq!(before.entry, after.entry);
@@ -199,7 +199,9 @@ fn fragmented() -> (Program, FnId, super::ConstId) {
             .unwrap(),
     ))[0];
     let unused = p.declare("not_called_from_entry", &[nat], nat);
-    let huge = p.intern_natural(nat, &(num_bigint::BigUint::from(1u8) << 4096usize));
+    let huge = p
+        .intern_natural(nat, &(num_bigint::BigUint::from(1u8) << 4096usize))
+        .unwrap();
     p.define(unused, |b, args| {
         b.match_(args[0], nat, |b, _, _| b.known(huge))
     });
@@ -280,7 +282,7 @@ fn repeated_cleanup_and_normalization_do_not_accumulate_dead_terms() {
 #[test]
 fn cleanup_remaps_shared_expressions_per_lexical_occurrence() {
     let (mut p, nat, _, _) = super::tests::types();
-    let one = p.intern_number(nat, 1);
+    let one = p.intern_number(nat, 1).unwrap();
     let first = p.declare("parameter", &[nat, nat], nat);
     p.define(first, |_, args| args[1]);
     let shared = p.function(first).body().unwrap().tail;

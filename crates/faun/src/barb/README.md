@@ -45,8 +45,10 @@ x    ::= a parameter, a binding, or a field an arm bound
 ## Code map
 
 - `model.rs`: terms, declarations, IDs and their small intrinsic methods.
-- `program.rs`: `Program`, pool ownership, queries, declarations and interning.
+- `program.rs`: `Program`, queries, declarations and coordination of owned pools.
   Its body-construction entry point delegates to `builder.rs`.
+- `types.rs`: a private, borrowed view of declaration metadata, independent of
+  function bodies, names and constant storage.
 - `builder.rs`: `Builder` and temporary state for scoped body construction.
   The machine IR uses the same model/program/builder split. Keep each type's
   core API with its definition; separate substantial named algorithms, not
@@ -66,6 +68,9 @@ x    ::= a parameter, a binding, or a field an arm bound
   validated semantic views, and checked construction/import boundaries.
   Views read magnitudes and constructors without materializing trees. Imports
   and evaluator field scans share one bounded, type-directed extent walk.
+- `constant/pool.rs`: owns constant entries, encoded bytes and checked insertion.
+  `Program` keeps this pool paired with its own declarations; callers cannot
+  substitute a different catalogue. The codec and views borrow only type metadata.
 - `evaluate.rs`, `budget.rs`: evaluation and its shared work/size/depth policy.
 - `laws.rs`, `fold.rs`, `cleanup.rs`: separate optimizing rewrites.
 - `optimize.rs`: the fixed schedule below; `pretty.rs`: rendering.
@@ -132,10 +137,14 @@ spine; the `Spine` case has element payloads. Classification is structural, neve
 based on source names. `NaturalView::try_u64()` can fail only with `TooWide`;
 `to_biguint()` reads the magnitude without expanding the spine. `SpineView` supplies
 its length and an explicit `ByteView` capability. Every constant has a total
-`constructor()` query. Ordinary constructor fields can be borrowed with a budget.
+`constructor()` query that inspects the header without allocating a bigint or
+computing a predecessor. Tail decomposition does that work only when requested.
+Ordinary constructor fields can be borrowed with a budget.
 
 `Program::intern` checks constructor trees; `construct` checks the arity and type
 identity of constant fields; `decode_constant` validates exactly one encoded value.
+`intern_number`, `intern_natural` and `Builder::number` return `Result`, rejecting
+undefined types and non-natural shapes (`NotNatural`) before writing any bytes.
 Failed construction/import never changes the pools. Unchecked raw-byte queries
 and constant constructors are not exposed. The byte format and
 `known_bytes` remain unchanged; a tree decoder remains only as an independent test
@@ -148,6 +157,13 @@ dynamic inputs, opaque calls and limits; only the folding driver decides to keep
 an expression. Invalid construction in otherwise well-typed Barb is an invariant
 violation, not a routine reason to decline folding. Field scans share evaluation's
 depth and work budget, and construction still reserves encoded size before copying.
+Pool construction checks fields once and assembles from borrowed inputs; imports
+validate the caller's bytes before copying directly into storage. Compound results
+still use an owned staging buffer so pool reallocation cannot invalidate input
+slices and resource refusal leaves storage unchanged. Former field-copy charges
+remain conservative reservations: removing those temporary buffers does not alter
+folding thresholds. Entries and bytes remain compact, contiguous and append-only,
+without deduplication or per-value heap objects in the pool.
 Leaf bigint conversions are total; evaluation size-checks arguments before using
 them. Evaluation results remain owned byte buffers. Buffer sharing and arena
 branding are separate decisions.

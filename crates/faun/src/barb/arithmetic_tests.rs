@@ -31,7 +31,7 @@ fn named(program: &Program, name: &str) -> FnId {
     )
 }
 fn number(program: &Program, owner: TypeId, n: u64) -> Held {
-    Held::number(program, owner, &BigUint::from(n))
+    Held::number(program.type_info(), owner, &BigUint::from(n))
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn folded_values_are_not_limited_to_u64() {
     let mul = named(&program, "mul");
     let ty = program.params(mul)[0];
     let n = BigUint::from(1u8) << 100usize;
-    let value = program.intern_natural(ty, &n);
+    let value = program.intern_natural(ty, &n).unwrap();
     let test = program.declare("huge", &[], ty);
     program.define(test, |b, _| {
         let n = b.known(value);
@@ -220,7 +220,7 @@ fn unrecognized_recursion_still_has_an_evaluation_budget() {
 #[test]
 fn range_propagation_observes_earlier_answers_in_the_same_round() {
     let (mut program, nat, _, _) = tests::types();
-    let seven = program.intern_number(nat, 7);
+    let seven = program.intern_number(nat, 7).unwrap();
     let first = program.declare("first", &[], nat);
     program.define(first, |b, _| b.known(seven));
     let mut previous = first;

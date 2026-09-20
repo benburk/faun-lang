@@ -8,6 +8,7 @@
 //! whoever constructs it. A caller never names a local and never sees an
 //! [`ExprId`].
 
+use super::ConstructionError;
 use super::model::{Arm, Atom, Body, ConstId, CtorId, Expr, ExprId, FnId, Local, Range, TypeId};
 use super::program::Program;
 use crate::index::append_range;
@@ -53,7 +54,10 @@ impl Builder<'_> {
     }
 
     /// Hold a number in the program's pool, for [`Self::known`].
-    pub fn number(&mut self, id: TypeId, value: u64) -> ConstId {
+    ///
+    /// # Errors
+    /// If the type is undefined or is not a natural-number shape.
+    pub fn number(&mut self, id: TypeId, value: u64) -> Result<ConstId, ConstructionError> {
         self.program.intern_number(id, value)
     }
 

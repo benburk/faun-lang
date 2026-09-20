@@ -121,6 +121,8 @@ fn identity(
 
 fn zero(program: &mut Program, called: FnId) -> Expr {
     let owner = program.function(called).result;
-    let value = program.intern_number(owner, 0);
+    let value = program
+        .intern_number(owner, 0)
+        .expect("a recognized natural result");
     Expr::Static(value)
 }

@@ -94,6 +94,7 @@ mod optimize;
 mod pretty;
 mod program;
 mod stops;
+mod types;
 mod validate;
 
 pub use bounds::Bounds;
@@ -101,7 +102,7 @@ pub use budget::{Budget, FoldLimits, LimitExceeded};
 pub use builder::Builder;
 pub use constant::{
     ByteView, Constant, ConstantView, ConstructionError, ConstructorView, DecodeError, NaturalView,
-    Shape, SpineView, TooWide, Value, shape,
+    Shape, SpineView, TooWide, Value,
 };
 pub use facts::{Facts, Operation, analyze};
 pub use fold::{fold, fold_with_limits};
@@ -112,7 +113,7 @@ pub use model::{
 };
 pub use normalize::{normalize_with_limits, structural};
 pub use optimize::{OptimizeOptions, optimize};
-pub use program::Program;
+pub use program::{Program, shape};
 pub use validate::validate;
 
 #[cfg(test)]

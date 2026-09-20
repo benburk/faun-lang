@@ -1,16 +1,18 @@
-//! Checked boundaries. No raw bytes or constructor trees enter the constant
-//! pool until their type, shape and complete encoding have been verified.
+//! Checked boundaries. Only declaration metadata is needed to establish a
+//! constant's type and complete encoded extent; no access to program storage.
 
 use std::fmt;
 
-use super::{Held, Shape, Value, read_u64, shape};
+use super::{Constant, Shape, Value, header_bytes, read_u64, shape};
 use crate::barb::budget::{Budget, LimitExceeded};
 use crate::barb::model::TypeDefinition;
-use crate::barb::{ConstId, CtorId, Program, TypeId};
+use crate::barb::types::TypeInfo;
+use crate::barb::{ConstId, CtorId, TypeId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConstructionError {
     UndefinedType(TypeId),
+    NotNatural(TypeId),
     UnknownConstructor(CtorId),
     UnknownConstant(ConstId),
     FieldCount { expected: usize, actual: usize },
@@ -57,27 +59,35 @@ impl fmt::Display for DecodeError {
 }
 impl std::error::Error for DecodeError {}
 
-fn defined(program: &Program, owner: TypeId) -> bool {
-    program
-        .types
-        .get(owner)
+fn defined(types: TypeInfo<'_>, owner: TypeId) -> bool {
+    types
+        .get_type(owner)
         .is_some_and(|ty| matches!(ty.definition, TypeDefinition::Defined(_)))
 }
 
-pub(in crate::barb) fn tree(
-    program: &Program,
+pub(super) fn natural(types: TypeInfo<'_>, owner: TypeId) -> Result<(), ConstructionError> {
+    if !defined(types, owner) {
+        return Err(ConstructionError::UndefinedType(owner));
+    }
+    match shape(types, owner) {
+        Shape::Spine { cons, .. } if types.fields(cons).len() == 1 => Ok(()),
+        _ => Err(ConstructionError::NotNatural(owner)),
+    }
+}
+
+pub(super) fn tree(
+    types: TypeInfo<'_>,
     owner: TypeId,
     value: &Value,
 ) -> Result<(), ConstructionError> {
     // Iterative validation also handles a large caller-built unary natural.
     let mut pending = vec![(owner, value)];
     while let Some((owner, value)) = pending.pop() {
-        if !defined(program, owner) {
+        if !defined(types, owner) {
             return Err(ConstructionError::UndefinedType(owner));
         }
-        let ctor = program
-            .ctors
-            .get(value.0)
+        let ctor = types
+            .get_ctor(value.0)
             .ok_or(ConstructionError::UnknownConstructor(value.0))?;
         if ctor.owner != owner {
             return Err(ConstructionError::FieldType {
@@ -85,32 +95,31 @@ pub(in crate::barb) fn tree(
                 actual: ctor.owner,
             });
         }
-        let expected = program.fields(value.0).len();
+        let expected = types.fields(value.0).len();
         if expected != value.1.len() {
             return Err(ConstructionError::FieldCount {
                 expected,
                 actual: value.1.len(),
             });
         }
-        pending.extend(program.fields(value.0).iter().copied().zip(&value.1));
+        pending.extend(types.fields(value.0).iter().copied().zip(&value.1));
     }
     Ok(())
 }
 
-pub(in crate::barb) fn fields(
-    program: &Program,
+pub(super) fn fields(
+    types: TypeInfo<'_>,
     ctor: CtorId,
     count: usize,
     owners: impl Iterator<Item = Result<TypeId, ConstructionError>>,
 ) -> Result<(), ConstructionError> {
-    let held = program
-        .ctors
-        .get(ctor)
+    let held = types
+        .get_ctor(ctor)
         .ok_or(ConstructionError::UnknownConstructor(ctor))?;
-    if !defined(program, held.owner) {
+    if !defined(types, held.owner) {
         return Err(ConstructionError::UndefinedType(held.owner));
     }
-    let expected = program.fields(ctor);
+    let expected = types.fields(ctor);
     if expected.len() != count {
         return Err(ConstructionError::FieldCount {
             expected: expected.len(),
@@ -126,48 +135,43 @@ pub(in crate::barb) fn fields(
     Ok(())
 }
 
-pub(in crate::barb) fn read(
-    program: &Program,
+pub(in crate::barb) fn read<'a>(
+    types: TypeInfo<'a>,
     owner: TypeId,
-    bytes: &[u8],
+    bytes: &'a [u8],
     budget: &mut Budget,
-) -> Result<Held, DecodeError> {
+) -> Result<Constant<'a>, DecodeError> {
     budget.bytes(bytes.len())?;
-    if extent(program, owner, bytes, budget)? != bytes.len() {
+    if extent(types, owner, bytes, budget)? != bytes.len() {
         return Err(DecodeError::TrailingBytes);
     }
-    Ok(Held {
-        owner,
-        bytes: bytes.to_vec(),
-    })
+    Ok(Constant::new(types, owner, bytes))
 }
 
 fn header(bytes: &[u8]) -> Result<usize, DecodeError> {
-    Ok(bytes
-        .iter()
-        .position(|byte| byte & 0x80 == 0)
+    Ok(header_bytes(bytes)
         .ok_or(DecodeError::UnterminatedHeader)?
-        + 1)
+        .len())
 }
 
 // Imports charge the input bytes; evaluator scans charge visits, just as before.
 // Both use this one type-directed extent walk.
 pub(super) fn extent(
-    program: &Program,
+    types: TypeInfo<'_>,
     owner: TypeId,
     bytes: &[u8],
     budget: &mut Budget,
 ) -> Result<usize, DecodeError> {
     budget.descend(|budget| {
-        if !defined(program, owner) {
+        if !defined(types, owner) {
             return Err(DecodeError::UndefinedType(owner));
         }
-        let (ctor, mut at, count, recursive) = match shape(program, owner) {
+        let (ctor, mut at, count, recursive) = match shape(types, owner) {
             Shape::Spine {
                 cons, recursive, ..
             } => {
                 let took = header(bytes)?;
-                if program.fields(cons).len() == 1 {
+                if types.fields(cons).len() == 1 {
                     return Ok(took);
                 }
                 let count = u32::try_from(read_u64(bytes).0.ok_or(LimitExceeded::Work)?)
@@ -175,7 +179,7 @@ pub(super) fn extent(
                 (cons, took, count, Some(recursive))
             }
             Shape::Tagged => {
-                let (tag, took) = if program.ctors(owner).len() == 1 {
+                let (tag, took) = if types.ctors(owner).len() == 1 {
                     (0, 0)
                 } else {
                     let took = header(bytes)?;
@@ -183,16 +187,16 @@ pub(super) fn extent(
                     (tag, took)
                 };
                 let tag = u32::try_from(tag).map_err(|_| DecodeError::InvalidTag(owner))?;
-                if usize::try_from(tag).unwrap() >= program.ctors(owner).len() {
+                if usize::try_from(tag).unwrap() >= types.ctors(owner).len() {
                     return Err(DecodeError::InvalidTag(owner));
                 }
-                (program.ctor_at(owner, tag), took, 1, None)
+                (types.ctor_at(owner, tag), took, 1, None)
             }
         };
         for _ in 0..count {
-            for (index, &field) in program.fields(ctor).iter().enumerate() {
+            for (index, &field) in types.fields(ctor).iter().enumerate() {
                 if recursive != Some(index) {
-                    at += extent(program, field, &bytes[at..], budget)?;
+                    at += extent(types, field, &bytes[at..], budget)?;
                 }
             }
         }

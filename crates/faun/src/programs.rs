@@ -43,6 +43,9 @@ pub fn hello_world() -> Program {
 /// `Nat` is the inductive type it is, so addition recurses on its second
 /// argument and the literal is a known value. Nothing here says a number is
 /// a word; the machine tier decides that when it lowers this.
+///
+/// # Panics
+/// If the fixture's declarations do not describe a natural-number type.
 #[must_use]
 pub fn two_and_two_in_barb() -> crate::barb::Program {
     let mut program = crate::barb::Program::default();
@@ -62,7 +65,9 @@ pub fn two_and_two_in_barb() -> crate::barb::Program {
         })
     });
 
-    let two = program.intern_number(nat, 2);
+    let two = program
+        .intern_number(nat, 2)
+        .expect("the declared natural shape");
     let main = program.declare("main", &[], nat);
     program.define(main, |b, _| {
         let value = b.known(two);

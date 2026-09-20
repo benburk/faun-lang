@@ -7,7 +7,7 @@ fn fixture() -> (Program, FnId, FnId) {
     let (mut program, nat, _, _) = super::tests::types();
     let effect = program.declare("effect", &[], nat);
     let helper = program.declare("helper", &[], nat);
-    let zero = program.intern_number(nat, 0);
+    let zero = program.intern_number(nat, 0).unwrap();
     program.define(helper, |b, _| {
         b.call(effect, &[]);
         b.known(zero)

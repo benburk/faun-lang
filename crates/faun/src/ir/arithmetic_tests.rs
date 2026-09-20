@@ -8,8 +8,8 @@ fn unknown_or_overflowing_bounds_never_choose_a_machine_word() {
         let mut source = crate::programs::two_and_two_in_barb();
         let add = barb::FnId::at(0);
         let nat = source.params(add)[0];
-        let value = source.intern_natural(nat, &magnitude);
-        let zero = source.intern_number(nat, 0);
+        let value = source.intern_natural(nat, &magnitude).unwrap();
+        let zero = source.intern_number(nat, 0).unwrap();
         source.define(source.entry().unwrap(), |b, _| {
             let n = b.known(value);
             let sum = b.call(add, &[n, n]);
@@ -41,7 +41,9 @@ fn unknown_or_overflowing_bounds_never_choose_a_machine_word() {
 fn an_unbounded_entry_result_is_not_silently_truncated() {
     let mut source = crate::programs::two_and_two_in_barb();
     let nat = source.params(barb::FnId::at(0))[0];
-    let value = source.intern_natural(nat, &(BigUint::from(1u8) << 100usize));
+    let value = source
+        .intern_natural(nat, &(BigUint::from(1u8) << 100usize))
+        .unwrap();
     source.define(source.entry().unwrap(), |b, _| b.known(value));
     let error = lower(
         &source,

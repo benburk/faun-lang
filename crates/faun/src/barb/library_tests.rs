@@ -58,7 +58,7 @@ impl Library {
 
     fn natural(&self, n: impl Into<BigUint>) -> Held {
         let owner = self.program.params(self.function("add"))[0];
-        Held::number(&self.program, owner, &n.into())
+        Held::number(self.program.type_info(), owner, &n.into())
     }
 
     // Construct tagged values independently of the library's conversions.
@@ -89,11 +89,13 @@ impl Library {
             bytes.extend_from_slice(field.encoded());
         }
         constant::read_checked(
-            &self.program,
+            self.program.type_info(),
             ctor.owner,
             &bytes,
             &mut Budget::new(FoldLimits::default()),
         )
+        .unwrap()
+        .to_owned(&mut Budget::new(FoldLimits::default()))
         .unwrap()
     }
 

@@ -94,8 +94,8 @@ fn arithmetic_probes() -> (Program, Vec<FnId>) {
                     &[ty],
                     original.function(called).result,
                 );
-                let zero = original.intern_number(ty, 0);
-                let one = original.intern_number(ty, 1);
+                let zero = original.intern_number(ty, 0).unwrap();
+                let one = original.intern_number(ty, 1).unwrap();
                 original.define(id, |b, args| {
                     let values = [b.known(zero), b.known(one), args[0]];
                     b.call(called, &[values[left], values[right]])
@@ -193,7 +193,7 @@ fn self_division_is_not_one_and_misleading_names_do_not_earn_laws() {
     let fake = program.declare("add_lookalike", &[ty, ty], ty);
     program.define(fake, |_, args| args[0]);
     let use_fake = program.declare("use_fake", &[ty], ty);
-    let zero = program.intern_number(ty, 0);
+    let zero = program.intern_number(ty, 0).unwrap();
     program.define(use_fake, |b, args| {
         let zero = b.known(zero);
         b.call(fake, &[zero, args[0]])
@@ -219,7 +219,7 @@ fn effect_program() -> Program {
     let ty = original.params(mul)[0];
     let first = original.declare("first_effect", &[], ty);
     let second = original.declare("second_effect", &[], ty);
-    let zero = original.intern_number(ty, 0);
+    let zero = original.intern_number(ty, 0).unwrap();
     let helper = original.declare("effect_then_zero", &[], ty);
     original.define(helper, |b, _| {
         b.call(first, &[]);
@@ -313,7 +313,7 @@ fn normalization_and_cleanup_keep_effects_on_their_original_paths() {
 fn folding_a_known_match_does_not_erase_effects_in_its_selected_arm() {
     let (mut program, ty, _, _) = super::tests::types();
     let effect = program.declare("effect", &[], ty);
-    let zero = program.intern_number(ty, 0);
+    let zero = program.intern_number(ty, 0).unwrap();
     let test = program.declare("test", &[], ty);
     program.define(test, |b, _| {
         let zero = b.known(zero);
@@ -337,7 +337,7 @@ fn unknown_nonreturning_bindings_are_not_folded_away() {
     let (mut program, ty, _, _) = super::tests::types();
     let looping = program.declare("looping", &[], ty);
     program.define(looping, |b, _| b.call(looping, &[]));
-    let zero = program.intern_number(ty, 0);
+    let zero = program.intern_number(ty, 0).unwrap();
     let helper = program.declare("helper", &[], ty);
     program.define(helper, |b, _| {
         b.call(looping, &[]);
@@ -360,7 +360,7 @@ fn fold_fuel_is_shared_across_the_whole_program() {
     let mul = named(&program, "mul");
     let ty = program.params(mul)[0];
     let mut tests = vec![];
-    let n = program.intern_number(ty, 3);
+    let n = program.intern_number(ty, 3).unwrap();
     for at in 0..200 {
         let id = program.declare(&format!("wide_{at}"), &[], ty);
         program.define(id, |b, _| {
@@ -403,7 +403,7 @@ fn bigint_size_and_work_are_guarded_before_native_operations() {
     let mul = named(&program, "mul");
     let ty = program.params(mul)[0];
     let n = num_bigint::BigUint::from(1u8) << 4000usize;
-    let value = program.intern_natural(ty, &n);
+    let value = program.intern_natural(ty, &n).unwrap();
     let test = program.declare("expensive", &[], ty);
     program.define(test, |b, _| {
         let n = b.known(value);
@@ -439,7 +439,7 @@ fn bigint_size_and_work_are_guarded_before_native_operations() {
     let value = evaluator
         .body(body, vec![], &mut Budget::new(FoldLimits::default()))
         .unwrap();
-    let ConstantView::Natural(number) = value.as_constant(&program).view() else {
+    let ConstantView::Natural(number) = value.as_constant(program.type_info()).view() else {
         panic!("a natural");
     };
     assert_eq!(number.to_biguint(), &n * &n);
@@ -467,7 +467,7 @@ fn calls_to(program: &Program, id: FnId, called: FnId) -> usize {
 fn inline_program() -> Program {
     let (mut original, ty, _, _) = super::tests::types();
     let effect = original.declare("effect", &[], ty);
-    let zero = original.intern_number(ty, 0);
+    let zero = original.intern_number(ty, 0).unwrap();
     let helper = original.declare("helper", &[], ty);
     original.define(helper, |b, _| {
         b.call(effect, &[]);
@@ -526,7 +526,7 @@ fn inline_budgets_charge_copied_nodes_per_callee_caller_and_program() {
 #[test]
 fn large_helpers_and_deep_helper_chains_are_not_blindly_copied() {
     let (mut program, ty, _, _) = super::tests::types();
-    let zero = program.intern_number(ty, 0);
+    let zero = program.intern_number(ty, 0).unwrap();
     let wide = program.declare("wide", &[], ty);
     program.define(wide, |b, _| {
         for _ in 0..1000 {
@@ -566,7 +566,9 @@ fn constructor_size_is_checked_before_concatenating_fields() {
     let record = program.declare_type("Pair");
     program.define_type(record, &[("Pair", &[ty, ty])]);
     let ctor = program.ctor_at(record, 0);
-    let value = program.intern_natural(ty, &(num_bigint::BigUint::from(1u8) << 200usize));
+    let value = program
+        .intern_natural(ty, &(num_bigint::BigUint::from(1u8) << 200usize))
+        .unwrap();
     let test = program.declare("pair", &[], record);
     program.define(test, |b, _| {
         let n = b.known(value);
@@ -593,7 +595,7 @@ fn nested_capture_program() -> Program {
     let succ = program.ctor_at(ty, 1);
     let first = program.declare("first", &[], ty);
     let second = program.declare("second", &[ty], ty);
-    let zero = program.intern_number(ty, 0);
+    let zero = program.intern_number(ty, 0).unwrap();
     let test = program.declare("nested", &[ty, ty], ty);
     program.define(test, |b, args| {
         b.known(zero);
@@ -676,7 +678,7 @@ fn cleanup_preserves_nested_captures_and_eager_constructor_arguments() {
 #[test]
 fn cleanup_substitutes_aliases_captured_across_removed_bindings() {
     let (mut program, ty, _, _) = super::tests::types();
-    let one = program.intern_number(ty, 1);
+    let one = program.intern_number(ty, 1).unwrap();
     let succ = program.ctor_at(ty, 1);
     let test = program.declare("alias", &[ty], ty);
     program.define(test, |b, args| {
@@ -722,7 +724,7 @@ fn cleanup_retains_unused_calls_and_matches_in_order() {
     let (mut program, ty, _, _) = super::tests::types();
     let first = program.declare("first", &[], ty);
     let second = program.declare("second", &[], ty);
-    let zero = program.intern_number(ty, 0);
+    let zero = program.intern_number(ty, 0).unwrap();
     let pure = program.declare("pure", &[], ty);
     program.define(pure, |b, _| b.known(zero));
     let test = program.declare("unused", &[ty], ty);
@@ -763,7 +765,7 @@ fn cleanup_retains_unused_calls_and_matches_in_order() {
 #[test]
 fn cleanup_removes_a_wide_dead_constructor_chain_in_one_pass() {
     let (mut program, ty, _, _) = super::tests::types();
-    let zero = program.intern_number(ty, 0);
+    let zero = program.intern_number(ty, 0).unwrap();
     let succ = program.ctor_at(ty, 1);
     let test = program.declare("wide", &[], ty);
     program.define(test, |b, _| {
@@ -836,7 +838,11 @@ fn deep_evaluation_declines_without_exhausting_aggregate_fuel() {
             }
         })
     });
-    let value = Held::number(&program, ty, &num_bigint::BigUint::from(1_000_000u32));
+    let value = Held::number(
+        program.type_info(),
+        ty,
+        &num_bigint::BigUint::from(1_000_000u32),
+    );
     let ops = arithmetic::recognise(&program);
     let mut budget = Budget::new(FoldLimits {
         max_depth: 16,

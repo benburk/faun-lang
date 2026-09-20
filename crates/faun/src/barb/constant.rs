@@ -21,23 +21,22 @@
 
 use num_bigint::BigUint;
 
-use super::{CtorId, Program, Range, TypeId};
+#[cfg(test)]
+use super::Program;
+use super::types::TypeInfo;
+use super::{CtorId, TypeId};
 
 mod checked;
+mod pool;
 mod view;
+#[cfg(test)]
+pub(super) use checked::read as read_checked;
 pub use checked::{ConstructionError, DecodeError};
-pub(super) use checked::{fields as check_fields, read as read_checked, tree as check_tree};
+pub(super) use pool::ConstantPool;
 pub(super) use view::natural_size;
 pub use view::{
     ByteView, Constant, ConstantView, ConstructorView, NaturalView, SpineView, TooWide,
 };
-
-/// A typed entry: expressions cannot attach a different type to its bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Entry {
-    pub owner: TypeId,
-    pub bytes: Range,
-}
 
 /// An owned, validated constant. Only the codec may create one.
 #[derive(Clone, Debug)]
@@ -72,18 +71,16 @@ pub enum Shape {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Value(pub CtorId, pub Vec<Self>);
 
-#[must_use]
-pub fn shape(program: &Program, id: TypeId) -> Shape {
-    let ctors = program.type_(id).constructors();
-    if ctors.len() != 2 {
+pub(super) fn shape(types: TypeInfo<'_>, id: TypeId) -> Shape {
+    if types.ctors(id).len() != 2 {
         return Shape::Tagged;
     }
-    let (first, second) = (program.ctor_at(id, 0), program.ctor_at(id, 1));
+    let (first, second) = (types.ctor_at(id, 0), types.ctor_at(id, 1));
     for (nil, cons) in [(first, second), (second, first)] {
-        if !program.fields(nil).is_empty() {
+        if !types.fields(nil).is_empty() {
             continue;
         }
-        let mut recursive = program
+        let mut recursive = types
             .fields(cons)
             .iter()
             .enumerate()
@@ -99,21 +96,15 @@ pub fn shape(program: &Program, id: TypeId) -> Shape {
     Shape::Tagged
 }
 
-/// Append `value` to `out`, answering how many elements it has when its type
-/// is spine-shaped and zero otherwise.
-///
-/// # Panics
-///
-/// If `value` is not of type `id`.
-pub(super) fn encode(program: &Program, id: TypeId, value: &Value, out: &mut Vec<u8>) -> u32 {
-    match shape(program, id) {
+/// Encode an already-validated constructor tree without materializing a spine.
+fn encode(types: TypeInfo<'_>, id: TypeId, value: &Value, out: &mut Vec<u8>) {
+    match shape(types, id) {
         Shape::Spine {
             nil,
             cons,
             recursive,
         } => {
-            // Count first, since a nested spine has no range end to stop at.
-            // Walking twice beats holding the chain: it is already in hand.
+            // Walking twice beats allocating a temporary chain of references.
             let mut count = 0u64;
             let mut rest = value;
             while rest.0 == cons {
@@ -121,27 +112,25 @@ pub(super) fn encode(program: &Program, id: TypeId, value: &Value, out: &mut Vec
                 rest = &rest.1[recursive];
             }
             assert_eq!(rest.0, nil, "a spine ends in its empty constructor");
-            leb128(count, out);
-
+            let count = u32::try_from(count).expect("a spine within 4G");
+            leb128(u64::from(count), out);
             let mut rest = value;
             while rest.0 == cons {
                 for (at, field) in rest.1.iter().enumerate() {
                     if at != recursive {
-                        encode(program, program.fields(cons)[at], field, out);
+                        encode(types, types.fields(cons)[at], field, out);
                     }
                 }
                 rest = &rest.1[recursive];
             }
-            u32::try_from(count).expect("a spine within 4G")
         }
         Shape::Tagged => {
-            if program.type_(id).constructors().len() > 1 {
-                leb128(u64::from(program.tag(value.0)), out);
+            if types.ctors(id).len() > 1 {
+                leb128(u64::from(types.tag(value.0)), out);
             }
-            for (field, at) in value.1.iter().zip(program.fields(value.0)) {
-                encode(program, *at, field, out);
+            for (field, at) in value.1.iter().zip(types.fields(value.0)) {
+                encode(types, *at, field, out);
             }
-            0
         }
     }
 }
@@ -150,7 +139,7 @@ pub(super) fn encode(program: &Program, id: TypeId, value: &Value, out: &mut Vec
 /// Production consumers use validated views and bounded field scans.
 #[cfg(test)]
 pub(super) fn decode(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) {
-    match shape(program, id) {
+    match shape(program.type_info(), id) {
         Shape::Spine {
             nil,
             cons,
@@ -213,15 +202,18 @@ fn decode_tagged(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) 
     (Value(ctor, fields), at)
 }
 
+/// Locate a terminated header; its magnitude need not fit any machine integer.
+fn header_bytes(bytes: &[u8]) -> Option<&[u8]> {
+    let end = bytes.iter().position(|byte| byte & 0x80 == 0)?;
+    Some(&bytes[..=end])
+}
+
 pub(super) fn read_natural(bytes: &[u8]) -> (BigUint, usize) {
-    let end = bytes
-        .iter()
-        .position(|byte| byte & 0x80 == 0)
-        .expect("a terminated number");
-    let digits: Vec<u8> = bytes[..=end].iter().map(|byte| byte & 0x7f).collect();
+    let header = header_bytes(bytes).expect("a terminated number");
+    let digits: Vec<u8> = header.iter().map(|byte| byte & 0x7f).collect();
     (
         BigUint::from_radix_le(&digits, 128).expect("base 128 digits"),
-        end + 1,
+        header.len(),
     )
 }
 
@@ -260,15 +252,11 @@ fn leb128(mut value: u64, out: &mut Vec<u8>) {
 // Folding high digits first also accepts arbitrarily zero-padded encodings,
 // just like read_natural; length alone is not evidence of overflow.
 fn read_u64(bytes: &[u8]) -> (Option<u64>, usize) {
-    let took = bytes
-        .iter()
-        .position(|byte| byte & 0x80 == 0)
-        .expect("a terminated number")
-        + 1;
-    let value = bytes[..took].iter().rev().try_fold(0u64, |value, byte| {
+    let header = header_bytes(bytes).expect("a terminated number");
+    let value = header.iter().rev().try_fold(0u64, |value, byte| {
         value.checked_mul(128)?.checked_add(u64::from(byte & 0x7f))
     });
-    (value, took)
+    (value, header.len())
 }
 
 #[cfg(test)]

@@ -9,7 +9,8 @@
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
-use super::constant::{ConstantView, Shape, shape};
+use super::constant::{ConstantView, Shape};
+use super::shape;
 use super::{Body, CtorId, Expr, FnId, Operation, Program, TypeId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

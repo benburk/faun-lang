@@ -69,7 +69,7 @@ fn a_definition_replaces_external_metadata_instead_of_retaining_it() {
     assert_eq!(program.name(symbol), "provider");
     assert_eq!(bounds, Some(Bounds::at(7)));
     program.define(function, |b, _| {
-        let value = b.number(nat, 3);
+        let value = b.number(nat, 3).unwrap();
         b.known(value)
     });
     assert!(matches!(
@@ -87,7 +87,7 @@ fn a_defined_function_cannot_acquire_a_host_range_contract() {
     let (mut program, nat, _, _) = types();
     let function = program.declare("defined", &[], nat);
     program.define(function, |b, _| {
-        let value = b.number(nat, 3);
+        let value = b.number(nat, 3).unwrap();
         b.known(value)
     });
     program.bound(function, Bounds::at(7));
@@ -99,7 +99,7 @@ fn a_defined_function_cannot_acquire_a_host_provider() {
     let (mut program, nat, _, _) = types();
     let function = program.declare("defined", &[], nat);
     program.define(function, |b, _| {
-        let value = b.number(nat, 3);
+        let value = b.number(nat, 3).unwrap();
         b.known(value)
     });
     program.answered_by(function, "provider");
@@ -146,7 +146,7 @@ fn a_natural_costs_the_logarithm_of_its_value() {
         panic!("a natural");
     };
     assert_eq!(number.try_u64(), Ok(1000));
-    let direct = program.intern_number(nat_id, 1000);
+    let direct = program.intern_number(nat_id, 1000).unwrap();
     assert_eq!(program.known_bytes(id), program.known_bytes(direct));
 }
 
@@ -368,7 +368,7 @@ fn large_arithmetic_does_not_expand_constructor_spines() {
 
     let held = |magnitude| {
         let mut program = program.clone();
-        let number = program.intern_number(nat, magnitude);
+        let number = program.intern_number(nat, magnitude).unwrap();
         let main = program.declare("main", &[], nat);
         program.define(main, |b, _| {
             let value = b.known(number);

@@ -18,9 +18,9 @@
 //! without a last step, an argument from outside -- it says so and the
 //! tiers below hold what they must.
 
-use super::constant::{Shape, shape};
 use super::model::{Body, CtorId, Expr, ExprId, FnId, Range};
 use super::program::Program;
+use super::{Shape, shape};
 
 /// The least and greatest a number can be. No greatest is a number counting
 /// up without a last step, which is every `Nat` until something says less.

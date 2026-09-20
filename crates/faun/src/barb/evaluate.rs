@@ -85,7 +85,7 @@ impl Evaluator<'_> {
     }
 
     fn construct(&self, ctor: super::CtorId, fields: &[Held], budget: &mut Budget) -> Evaluation {
-        match Held::build(self.program, ctor, fields, budget) {
+        match Held::build(self.program.type_info(), ctor, fields, budget) {
             Ok(value) => Ok(value),
             Err(ConstructionError::Limit(limit)) => Err(limit.into()),
             Err(error) => panic!("ill-typed Barb construction: {error}"),
@@ -99,7 +99,7 @@ impl Evaluator<'_> {
         env: &[Evaluation],
         budget: &mut Budget,
     ) -> Evaluation {
-        let (ctor, fields) = held.as_constant(self.program).parts(budget)?;
+        let (ctor, fields) = held.as_constant(self.program.type_info()).parts(budget)?;
         let arm = self
             .program
             .arms(arms)
@@ -124,8 +124,8 @@ impl Evaluator<'_> {
     ) -> Evaluation {
         // Recognition proves the operand shapes. Arguments are already size-checked.
         let (ConstantView::Natural(a), ConstantView::Natural(b)) = (
-            fields[0].as_constant(self.program).view(),
-            fields[1].as_constant(self.program).view(),
+            fields[0].as_constant(self.program.type_info()).view(),
+            fields[1].as_constant(self.program.type_info()).view(),
         ) else {
             panic!("recognized arithmetic takes naturals");
         };
@@ -145,7 +145,7 @@ impl Evaluator<'_> {
         };
         budget.spend(work)?;
         if let Some(n) = op.calculate(&a, &b) {
-            return Ok(Held::number(self.program, result, &n));
+            return Ok(Held::number(self.program.type_info(), result, &n));
         }
         self.construct(
             op.compare(&a, &b).expect("a comparison operation"),

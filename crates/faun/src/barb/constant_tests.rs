@@ -9,6 +9,98 @@ use super::{
 };
 
 #[test]
+fn numeric_construction_rejects_bad_types_without_mutating_storage() {
+    let (mut program, nat, _, list) = super::tests::types();
+    let unit = program.declare_type("Unit");
+    program.define_type(unit, &[("Only", &[])]);
+    let empty = program.declare_type("Empty");
+    program.define_type(empty, &[]);
+    let pending = program.declare_type("Pending");
+    let before = program.clone();
+    for (owner, error) in [
+        (list, ConstructionError::NotNatural(list)),
+        (unit, ConstructionError::NotNatural(unit)),
+        (empty, ConstructionError::NotNatural(empty)),
+        (pending, ConstructionError::UndefinedType(pending)),
+        (
+            TypeId::at(999),
+            ConstructionError::UndefinedType(TypeId::at(999)),
+        ),
+    ] {
+        assert_eq!(program.intern_number(owner, 42), Err(error.clone()));
+        assert_eq!(
+            program.intern_natural(owner, &(BigUint::from(1u8) << 200usize)),
+            Err(error)
+        );
+        assert_eq!(program, before);
+    }
+    let zero = program.intern_number(nat, 0).unwrap();
+    let before = program.constants.clone();
+    let function = program.declare("literal", &[], nat);
+    program.define(function, |b, _| {
+        assert_eq!(b.number(unit, 42), Err(ConstructionError::NotNatural(unit)));
+        b.known(zero)
+    });
+    assert_eq!(program.constants, before);
+}
+
+#[test]
+fn checked_import_borrows_input_until_it_is_committed_to_the_pool() {
+    let (mut program, nat, _, _) = super::tests::types();
+    let mut bytes = vec![0x81, 0];
+    let value = constant::read_checked(
+        program.type_info(),
+        nat,
+        &bytes,
+        &mut Budget::new(FoldLimits::default()),
+    )
+    .unwrap();
+    assert_eq!(value.encoded().as_ptr(), bytes.as_ptr());
+    assert_eq!(value.constructor(), program.ctor_at(nat, 1));
+    let id = program
+        .decode_constant(nat, &bytes, &mut Budget::new(FoldLimits::default()))
+        .unwrap();
+    bytes.fill(0);
+    assert_eq!(program.known_bytes(id), &[0x81, 0]);
+}
+
+#[test]
+fn pool_construction_preserves_reservations_including_zero_byte_fields() {
+    let (mut program, nat, _, _) = super::tests::types();
+    let unit = program.declare_type("Unit");
+    program.define_type(unit, &[("Only", &[])]);
+    for (owner, encoded, work) in [(nat, &[1][..], 11), (unit, &[][..], 7)] {
+        let pair = program.declare_type("Pair");
+        program.define_type(pair, &[("Pair", &[owner, owner])]);
+        let ctor = program.ctor_at(pair, 0);
+        let field = program
+            .decode_constant(owner, encoded, &mut Budget::new(FoldLimits::default()))
+            .unwrap();
+        let before = program.clone();
+        let mut short = Budget::new(FoldLimits {
+            work: work - 1,
+            ..FoldLimits::default()
+        });
+        assert_eq!(
+            program.construct(ctor, &[field, field], &mut short),
+            Err(ConstructionError::Limit(LimitExceeded::Work))
+        );
+        assert_eq!(short.remaining, 0);
+        assert_eq!(program, before);
+        let mut exact = Budget::new(FoldLimits {
+            work,
+            ..FoldLimits::default()
+        });
+        let id = program
+            .construct(ctor, &[field, field], &mut exact)
+            .unwrap();
+        assert_eq!(exact.remaining, 0);
+        assert_eq!(program.known_bytes(id), [encoded, encoded].concat());
+        assert_eq!(program.known_bytes(field), encoded);
+    }
+}
+
+#[test]
 fn bounded_queries_agree_with_bigints_at_every_bit_boundary() {
     let (mut program, nat, _, _) = super::tests::types();
     for bit in 0usize..=256 {
@@ -53,6 +145,10 @@ fn padded_fields_are_bounded_and_imports_reject_trailing_bytes() {
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].encoded().len(), length);
         assert_eq!(fields[1].encoded(), &[7]);
+        assert_eq!(
+            fields[0].constructor(),
+            program.ctor_at(nat, u32::from(value != 0))
+        );
         let ConstantView::Natural(number) = fields[0].view() else {
             panic!("a natural");
         };
@@ -72,7 +168,7 @@ fn bounded_queries_respect_structure_not_constructor_order_or_names() {
     let (mut program, _, _, list) = super::tests::types();
     let reversed = program.declare_type("Reversed");
     program.define_type(reversed, &[("Next", &[reversed]), ("Empty", &[])]);
-    let number = program.intern_number(reversed, 128);
+    let number = program.intern_number(reversed, 128).unwrap();
     let ConstantView::Natural(n) = program.constant(number).view() else {
         panic!("a natural");
     };
@@ -81,7 +177,7 @@ fn bounded_queries_respect_structure_not_constructor_order_or_names() {
         program.constant(number).constructor(),
         program.ctor_at(reversed, 0)
     );
-    let zero = program.intern_number(reversed, 0);
+    let zero = program.intern_number(reversed, 0).unwrap();
     assert_eq!(
         program.constant(zero).constructor(),
         program.ctor_at(reversed, 1)
@@ -235,9 +331,9 @@ fn construction_checks_type_identity_and_arity_before_mutating_the_pool() {
     let pair = program.declare_type("Pair");
     program.define_type(pair, &[("Pair", &[nat, nat])]);
     let ctor = program.ctor_at(pair, 0);
-    let one = program.intern_number(nat, 1);
-    let two = program.intern_number(nat, 2);
-    let octet = program.intern_number(byte, 1);
+    let one = program.intern_number(nat, 1).unwrap();
+    let two = program.intern_number(nat, 2).unwrap();
+    let octet = program.intern_number(byte, 1).unwrap();
     // Identical shapes and identical bytes are not interchangeable types.
     assert_eq!(program.known_bytes(one), program.known_bytes(octet));
     let before = program.clone();
@@ -313,7 +409,7 @@ fn definitions_are_immutable_and_an_undefined_type_is_not_an_empty_type() {
     let (mut program, nat, _, _) = super::tests::types();
     let empty = program.declare_type("Empty");
     program.define_type(empty, &[]);
-    let zero = program.intern_number(nat, 0);
+    let zero = program.intern_number(nat, 0).unwrap();
     let before = program.clone();
     for owner in [nat, empty] {
         assert!(
@@ -353,7 +449,7 @@ fn check_view(program: &mut Program, owner: TypeId, value: &Value) {
             (expected.clone(), field.encoded().len())
         );
     }
-    let rebuilt = Held::build(program, ctor, &fields, &mut budget).unwrap();
+    let rebuilt = Held::build(program.type_info(), ctor, &fields, &mut budget).unwrap();
     assert_eq!(rebuilt.owner(), owner);
     assert_eq!(rebuilt.encoded(), view.encoded());
     if let ConstantView::Constructor(ctor) = view.view() {
@@ -404,7 +500,7 @@ fn natural_views_take_a_huge_predecessor_without_materializing_the_spine() {
     let nat = program.declare_type("Count");
     program.define_type(nat, &[("Next", &[nat]), ("End", &[])]);
     let large = BigUint::from(1u8) << 200usize;
-    let id = program.intern_natural(nat, &large);
+    let id = program.intern_natural(nat, &large).unwrap();
     let view = program.constant(id);
     let ConstantView::Natural(number) = view.view() else {
         panic!("a natural");
@@ -415,11 +511,12 @@ fn natural_views_take_a_huge_predecessor_without_materializing_the_spine() {
     let mut budget = Budget::new(FoldLimits::default());
     let (ctor, fields) = view.parts(&mut budget).unwrap();
     assert_eq!(fields.len(), 1);
-    let ConstantView::Natural(predecessor) = fields[0].as_constant(&program).view() else {
+    let ConstantView::Natural(predecessor) = fields[0].as_constant(program.type_info()).view()
+    else {
         panic!("a natural");
     };
     assert_eq!(predecessor.to_biguint(), &large - 1u8);
-    let rebuilt = Held::build(&program, ctor, &fields, &mut budget).unwrap();
+    let rebuilt = Held::build(program.type_info(), ctor, &fields, &mut budget).unwrap();
     assert_eq!(rebuilt.encoded(), program.known_bytes(id));
 }
 
@@ -465,7 +562,7 @@ fn constant_construction_and_decomposition_keep_their_exact_budget_charges() {
         ..FoldLimits::default()
     });
     assert_eq!(
-        Held::build(&program, ctor, &fields, &mut budget)
+        Held::build(program.type_info(), ctor, &fields, &mut budget)
             .unwrap()
             .encoded(),
         [1, 2]
@@ -477,7 +574,7 @@ fn constant_construction_and_decomposition_keep_their_exact_budget_charges() {
         ..FoldLimits::default()
     });
     assert_eq!(
-        Held::build(&program, ctor, &fields, &mut small).unwrap_err(),
+        Held::build(program.type_info(), ctor, &fields, &mut small).unwrap_err(),
         ConstructionError::Limit(LimitExceeded::ValueSize)
     );
     assert_eq!(small.remaining, 100);
