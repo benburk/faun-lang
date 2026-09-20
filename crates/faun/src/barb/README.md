@@ -62,7 +62,11 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `normalize.rs`: capture-free structural rebuilding; `inline.rs`: expansion
   eligibility, copy costs and budgets. Structural-only normalization does not
   construct an inlining plan or compute its recursion/copy-cost tables.
-- `constant.rs`, `evaluate.rs`: compact values and bounded evaluation.
+- `constant.rs`, `constant/view.rs`, `constant/checked.rs`: compact encoding,
+  validated semantic views, and checked construction/import boundaries.
+  Views read magnitudes and constructors without materializing trees. Imports
+  and evaluator field scans share one bounded, type-directed extent walk.
+- `evaluate.rs`, `budget.rs`: evaluation and its shared work/size/depth policy.
 - `laws.rs`, `fold.rs`, `cleanup.rs`: separate optimizing rewrites.
 - `optimize.rs`: the fixed schedule below; `pretty.rs`: rendering.
 
@@ -117,8 +121,36 @@ Read-only walks borrow pool slices; mutating laws and folding traverse stable ra
 one entry at a time instead of copying binding/arm lists. Range propagation borrows
 the current result table for each function, then publishes its answer; it does not
 snapshot the whole table per function or delay answers until the next round.
-Bounded constant queries decode directly into a checked `u64`, without allocating a
-bigint; arbitrary-precision queries retain their separate unbounded decoder.
+Constants carry their types in the pool: `Expr::Static(ConstId)` and
+`Builder::known(ConstId)` cannot independently attach a different type. Type
+constructors are assigned once; a pending declaration is distinct from a defined
+empty type. Recursive and mutually recursive declarations remain possible.
+
+`Program::constant(id).view()` classifies a validated value as `Natural`, `Spine`,
+or `Constructor`, with private, shape-specific handles. A natural is a zero-payload
+spine; the `Spine` case has element payloads. Classification is structural, never
+based on source names. `NaturalView::try_u64()` can fail only with `TooWide`;
+`to_biguint()` reads the magnitude without expanding the spine. `SpineView` supplies
+its length and an explicit `ByteView` capability. Every constant has a total
+`constructor()` query. Ordinary constructor fields can be borrowed with a budget.
+
+`Program::intern` checks constructor trees; `construct` checks the arity and type
+identity of constant fields; `decode_constant` validates exactly one encoded value.
+Failed construction/import never changes the pools. Unchecked raw-byte queries
+and constant constructors are not exposed. The byte format and
+`known_bytes` remain unchanged; a tree decoder remains only as an independent test
+oracle. IDs are still unbranded and must be used with their owning program; this
+is not a full type checker for dynamic Barb expressions.
+
+`ConstructionError` and `DecodeError` describe invalid input. `LimitExceeded`
+distinguishes work, depth and value-size refusal. Evaluation separately reports
+dynamic inputs, opaque calls and limits; only the folding driver decides to keep
+an expression. Invalid construction in otherwise well-typed Barb is an invariant
+violation, not a routine reason to decline folding. Field scans share evaluation's
+depth and work budget, and construction still reserves encoded size before copying.
+Leaf bigint conversions are total; evaluation size-checks arguments before using
+them. Evaluation results remain owned byte buffers. Buffer sharing and arena
+branding are separate decisions.
 
 Compaction invalidates old expression IDs and term ranges, including saved bodies
 and expression-indexed facts. Function, type, constructor, symbol and constant IDs

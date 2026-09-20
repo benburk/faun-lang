@@ -79,6 +79,7 @@
 
 mod arithmetic;
 mod bounds;
+mod budget;
 mod builder;
 mod cleanup;
 mod constant;
@@ -96,9 +97,12 @@ mod stops;
 mod validate;
 
 pub use bounds::Bounds;
+pub use budget::{Budget, FoldLimits, LimitExceeded};
 pub use builder::Builder;
-pub use constant::{Shape, Value, as_bytes, as_natural, as_number, decode, shape};
-pub use evaluate::FoldLimits;
+pub use constant::{
+    ByteView, Constant, ConstantView, ConstructionError, ConstructorView, DecodeError, NaturalView,
+    Shape, SpineView, TooWide, Value, shape,
+};
 pub use facts::{Facts, Operation, analyze};
 pub use fold::{fold, fold_with_limits};
 pub use inline::InlineLimits;
@@ -110,6 +114,9 @@ pub use normalize::{normalize_with_limits, structural};
 pub use optimize::{OptimizeOptions, optimize};
 pub use program::Program;
 pub use validate::validate;
+
+#[cfg(test)]
+use constant::decode;
 
 #[cfg(test)]
 mod arena_tests;

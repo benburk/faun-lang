@@ -21,7 +21,39 @@
 
 use num_bigint::BigUint;
 
-use super::{CtorId, Program, TypeId};
+use super::{CtorId, Program, Range, TypeId};
+
+mod checked;
+mod view;
+pub use checked::{ConstructionError, DecodeError};
+pub(super) use checked::{fields as check_fields, read as read_checked, tree as check_tree};
+pub(super) use view::natural_size;
+pub use view::{
+    ByteView, Constant, ConstantView, ConstructorView, NaturalView, SpineView, TooWide,
+};
+
+/// A typed entry: expressions cannot attach a different type to its bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Entry {
+    pub owner: TypeId,
+    pub bytes: Range,
+}
+
+/// An owned, validated constant. Only the codec may create one.
+#[derive(Clone, Debug)]
+pub(super) struct Held {
+    owner: TypeId,
+    bytes: Vec<u8>,
+}
+
+impl Held {
+    pub(super) const fn owner(&self) -> TypeId {
+        self.owner
+    }
+    pub(super) fn encoded(&self) -> &[u8] {
+        &self.bytes
+    }
+}
 
 /// How a type's values are encoded, read off its declaration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +74,7 @@ pub struct Value(pub CtorId, pub Vec<Self>);
 
 #[must_use]
 pub fn shape(program: &Program, id: TypeId) -> Shape {
-    let ctors = program.type_(id).ctors;
+    let ctors = program.type_(id).constructors();
     if ctors.len() != 2 {
         return Shape::Tagged;
     }
@@ -103,7 +135,7 @@ pub(super) fn encode(program: &Program, id: TypeId, value: &Value, out: &mut Vec
             u32::try_from(count).expect("a spine within 4G")
         }
         Shape::Tagged => {
-            if program.type_(id).ctors.len() > 1 {
+            if program.type_(id).constructors().len() > 1 {
                 leb128(u64::from(program.tag(value.0)), out);
             }
             for (field, at) in value.1.iter().zip(program.fields(value.0)) {
@@ -114,18 +146,10 @@ pub(super) fn encode(program: &Program, id: TypeId, value: &Value, out: &mut Vec
     }
 }
 
-/// Read one value back, answering it and how many bytes it took.
-///
-/// This builds the value in full, so a chain as long as its own magnitude
-/// costs that much: a number is better read with [`as_natural`] and a run of
-/// bytes with [`as_bytes`].
-///
-/// # Panics
-///
-/// If the bytes are not an encoding of this type, or the constructor count
-/// is too large to materialize. Large naturals should use [`as_natural`].
-#[must_use]
-pub fn decode(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) {
+/// Independent, tree-materializing oracle for codec and optimizer tests.
+/// Production consumers use validated views and bounded field scans.
+#[cfg(test)]
+pub(super) fn decode(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) {
     match shape(program, id) {
         Shape::Spine {
             nil,
@@ -136,6 +160,7 @@ pub fn decode(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) {
     }
 }
 
+#[cfg(test)]
 fn decode_spine(
     program: &Program,
     bytes: &[u8],
@@ -168,9 +193,10 @@ fn decode_spine(
     (value, at)
 }
 
+#[cfg(test)]
 fn decode_tagged(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) {
     let mut at = 0;
-    let ctor = if program.type_(id).ctors.len() > 1 {
+    let ctor = if program.type_(id).constructors().len() > 1 {
         let (tag, took) = unleb128(bytes);
         at += took;
         program.ctor_at(id, u32::try_from(tag).expect("a tag within 4G"))
@@ -185,34 +211,6 @@ fn decode_tagged(program: &Program, id: TypeId, bytes: &[u8]) -> (Value, usize) 
         at += took;
     }
     (Value(ctor, fields), at)
-}
-
-/// A spine-shaped value whose elements carry nothing, which is a number.
-///
-/// Returns `None` if it is not a natural or exceeds `u64`; [`as_natural`]
-/// has no such width limit. Neither expands the constructor chain.
-///
-/// # Panics
-///
-/// If the bytes are not an encoding of this type.
-#[must_use]
-pub fn as_number(program: &Program, id: TypeId, bytes: &[u8]) -> Option<u64> {
-    let Shape::Spine { cons, .. } = shape(program, id) else {
-        return None;
-    };
-    if program.fields(cons).len() != 1 {
-        return None;
-    }
-    read_u64(bytes).0
-}
-
-/// Read a natural without expanding its constructor spine or limiting its size.
-#[must_use]
-pub fn as_natural(program: &Program, id: TypeId, bytes: &[u8]) -> Option<BigUint> {
-    let Shape::Spine { cons, .. } = shape(program, id) else {
-        return None;
-    };
-    (program.fields(cons).len() == 1).then(|| read_natural(bytes).0)
 }
 
 pub(super) fn read_natural(bytes: &[u8]) -> (BigUint, usize) {
@@ -236,26 +234,6 @@ pub(super) fn write_natural(value: &BigUint, out: &mut Vec<u8>) {
             *digit | 0x80
         });
     }
-}
-
-/// The elements of a spine-shaped value, when each of them encoded to one
-/// byte.
-///
-/// The run is then the value itself, so a target can lift it into static
-/// memory as it stands rather than walking it element by element.
-///
-/// # Panics
-///
-/// If the bytes are not an encoding of this type.
-#[must_use]
-pub fn as_bytes<'a>(program: &Program, id: TypeId, bytes: &'a [u8]) -> Option<&'a [u8]> {
-    if !matches!(shape(program, id), Shape::Spine { .. }) {
-        return None;
-    }
-    let (count, at) = read_u64(bytes);
-    let payload = &bytes[at..];
-    let count = usize::try_from(count?).ok()?;
-    (payload.len() == count).then_some(payload)
 }
 
 /// Write a number straight into the pool, without building the chain of
@@ -293,6 +271,7 @@ fn read_u64(bytes: &[u8]) -> (Option<u64>, usize) {
     (value, took)
 }
 
+#[cfg(test)]
 fn unleb128(bytes: &[u8]) -> (u64, usize) {
     let (value, took) = read_u64(bytes);
     (

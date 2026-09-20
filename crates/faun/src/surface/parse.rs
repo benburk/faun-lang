@@ -687,7 +687,7 @@ fn catalogue(program: &Program) -> HashMap<String, CtorId> {
     // From past the authority, which is the one a program may not build.
     for at in 1..program.types().len() {
         let id = TypeId::at(at);
-        for tag in 0..u32::try_from(program.type_(id).ctors.len()).expect("a sane count") {
+        for tag in 0..u32::try_from(program.ctors(id).len()).expect("a sane count") {
             let ctor = program.ctor_at(id, tag);
             ctors.insert(program.name(program.ctor(ctor).name).to_owned(), ctor);
         }

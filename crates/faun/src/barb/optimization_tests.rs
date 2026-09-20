@@ -1,8 +1,9 @@
-use super::evaluate::{Budget, Evaluator, Held};
+use super::budget::{Budget, LimitExceeded};
+use super::constant::Held;
+use super::evaluate::{CannotFold, Evaluator};
 use super::{
-    Body, Expr, ExprId, FnId, FoldLimits, InlineLimits, OptimizeOptions, Program, Value,
-    arithmetic, as_natural, constant, decode, fold, fold_with_limits, normalize_with_limits,
-    optimize, validate,
+    Body, ConstantView, Expr, ExprId, FnId, FoldLimits, InlineLimits, OptimizeOptions, Program,
+    Value, arithmetic, decode, fold, fold_with_limits, normalize_with_limits, optimize, validate,
 };
 
 const LIBRARY: &str = include_str!("../../../../standard/nat.fn");
@@ -56,7 +57,10 @@ fn run(program: &Program, id: FnId, args: Vec<Value>, trace: &mut Vec<FnId>) -> 
         };
         match program.expr(id) {
             Expr::Atom(a) => env[a.0.index()].clone(),
-            Expr::Static(owner, value) => decode(program, owner, program.known_bytes(value)).0,
+            Expr::Static(value) => {
+                let value = program.constant(value);
+                decode(program, value.owner(), value.encoded()).0
+            }
             Expr::Con(ctor, fields) => Value(ctor, args(fields)),
             Expr::Call(called, fields) => run(program, called, args(fields), trace),
             Expr::Match(a, arms) => {
@@ -93,7 +97,7 @@ fn arithmetic_probes() -> (Program, Vec<FnId>) {
                 let zero = original.intern_number(ty, 0);
                 let one = original.intern_number(ty, 1);
                 original.define(id, |b, args| {
-                    let values = [b.known(ty, zero), b.known(ty, one), args[0]];
+                    let values = [b.known(zero), b.known(one), args[0]];
                     b.call(called, &[values[left], values[right]])
                 });
                 probes.push(id);
@@ -147,6 +151,39 @@ fn schedule_ablations_preserve_small_arithmetic_and_recognition() {
 }
 
 #[test]
+fn arithmetic_laws_read_padded_constants_by_value_not_by_encoding() {
+    let mut program = library();
+    let ty = program.params(named(&program, "add"))[0];
+    let mut probes = vec![];
+    for (name, bytes) in [
+        ("add", [0x80, 0]),
+        ("mul", [0x81, 0]),
+        ("div", [0x81, 0]),
+        ("mod", [0x80, 0]),
+    ] {
+        let called = named(&program, name);
+        let constant = program
+            .decode_constant(ty, &bytes, &mut Budget::new(FoldLimits::default()))
+            .unwrap();
+        let probe = program.declare(&format!("padded_{name}"), &[ty], ty);
+        program.define(probe, |b, args| {
+            let constant = b.known(constant);
+            b.call(called, &[args[0], constant])
+        });
+        probes.push(probe);
+    }
+    super::laws::laws(&mut program);
+    validate(&program).unwrap();
+    for id in probes {
+        let tail = program.function(id).body().unwrap().tail;
+        assert_eq!(
+            program.expr(tail),
+            Expr::Atom(super::Atom(super::Local::at(0)))
+        );
+    }
+}
+
+#[test]
 fn self_division_is_not_one_and_misleading_names_do_not_earn_laws() {
     let mut program = library();
     let div = named(&program, "div");
@@ -158,7 +195,7 @@ fn self_division_is_not_one_and_misleading_names_do_not_earn_laws() {
     let use_fake = program.declare("use_fake", &[ty], ty);
     let zero = program.intern_number(ty, 0);
     program.define(use_fake, |b, args| {
-        let zero = b.known(ty, zero);
+        let zero = b.known(zero);
         b.call(fake, &[zero, args[0]])
     });
     optimize(
@@ -186,14 +223,14 @@ fn effect_program() -> Program {
     let helper = original.declare("effect_then_zero", &[], ty);
     original.define(helper, |b, _| {
         b.call(first, &[]);
-        b.known(ty, zero)
+        b.known(zero)
     });
     let test = original.declare("eager_test", &[], ty);
     original.define(test, |b, _| {
         let value = b.call(helper, &[]);
         b.match_(value, ty, |b, _, _| {
             let effect = b.call(second, &[]);
-            let zero = b.known(ty, zero);
+            let zero = b.known(zero);
             b.call(mul, &[zero, effect])
         })
     });
@@ -229,9 +266,9 @@ fn eager_effects_survive_folding_inlining_laws_and_cleanup() {
         assert_eq!(trace, [first, second], "{options:?}");
     }
     // The evaluator must decline the whole helper, even though its answer is
-    // known: None is not permission to skip an eager binding.
+    // known: a refusal is not permission to skip an eager binding.
     let ops = arithmetic::recognise(&original);
-    assert!(
+    assert_eq!(
         Evaluator {
             program: &original,
             operations: &ops
@@ -241,7 +278,8 @@ fn eager_effects_survive_folding_inlining_laws_and_cleanup() {
             vec![],
             &mut Budget::new(FoldLimits::default())
         )
-        .is_none()
+        .unwrap_err(),
+        CannotFold::ExternalCall
     );
 }
 
@@ -278,7 +316,7 @@ fn folding_a_known_match_does_not_erase_effects_in_its_selected_arm() {
     let zero = program.intern_number(ty, 0);
     let test = program.declare("test", &[], ty);
     program.define(test, |b, _| {
-        let zero = b.known(ty, zero);
+        let zero = b.known(zero);
         b.match_(zero, ty, |b, _, _| {
             b.call(effect, &[]);
             zero
@@ -303,7 +341,7 @@ fn unknown_nonreturning_bindings_are_not_folded_away() {
     let helper = program.declare("helper", &[], ty);
     program.define(helper, |b, _| {
         b.call(looping, &[]);
-        b.known(ty, zero)
+        b.known(zero)
     });
     let test = program.declare("test", &[], ty);
     program.define(test, |b, _| b.call(helper, &[]));
@@ -326,7 +364,7 @@ fn fold_fuel_is_shared_across_the_whole_program() {
     for at in 0..200 {
         let id = program.declare(&format!("wide_{at}"), &[], ty);
         program.define(id, |b, _| {
-            let n = b.known(ty, n);
+            let n = b.known(n);
             b.call(mul, &[n, n])
         });
         tests.push(id);
@@ -356,6 +394,10 @@ fn fold_fuel_is_shared_across_the_whole_program() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "size refusal, work refusal, and success for the same arithmetic expression"
+)]
 fn bigint_size_and_work_are_guarded_before_native_operations() {
     let mut program = library();
     let mul = named(&program, "mul");
@@ -364,7 +406,7 @@ fn bigint_size_and_work_are_guarded_before_native_operations() {
     let value = program.intern_natural(ty, &n);
     let test = program.declare("expensive", &[], ty);
     program.define(test, |b, _| {
-        let n = b.known(ty, value);
+        let n = b.known(value);
         b.call(mul, &[n, n])
     });
     let ops = arithmetic::recognise(&program);
@@ -377,13 +419,19 @@ fn bigint_size_and_work_are_guarded_before_native_operations() {
         max_bytes: 600,
         ..FoldLimits::default()
     });
-    assert!(evaluator.body(body, vec![], &mut size).is_none());
+    assert_eq!(
+        evaluator.body(body, vec![], &mut size).unwrap_err(),
+        CannotFold::Limit(LimitExceeded::ValueSize)
+    );
     assert!(size.remaining > 0, "size, not fuel, declined");
     let mut work = Budget::new(FoldLimits {
         work: 4000,
         ..FoldLimits::default()
     });
-    assert!(evaluator.body(body, vec![], &mut work).is_none());
+    assert_eq!(
+        evaluator.body(body, vec![], &mut work).unwrap_err(),
+        CannotFold::Limit(LimitExceeded::Work)
+    );
     assert_eq!(
         work.remaining, 0,
         "bigint work is charged, not just one expression"
@@ -391,10 +439,10 @@ fn bigint_size_and_work_are_guarded_before_native_operations() {
     let value = evaluator
         .body(body, vec![], &mut Budget::new(FoldLimits::default()))
         .unwrap();
-    assert_eq!(
-        as_natural(&program, value.owner, &value.bytes),
-        Some(&n * &n)
-    );
+    let ConstantView::Natural(number) = value.as_constant(&program).view() else {
+        panic!("a natural");
+    };
+    assert_eq!(number.to_biguint(), &n * &n);
 }
 
 fn calls_to(program: &Program, id: FnId, called: FnId) -> usize {
@@ -423,12 +471,12 @@ fn inline_program() -> Program {
     let helper = original.declare("helper", &[], ty);
     original.define(helper, |b, _| {
         b.call(effect, &[]);
-        b.known(ty, zero)
+        b.known(zero)
     });
     for at in 0..2 {
         let id = original.declare(&format!("caller_{at}"), &[], ty);
         original.define(id, |b, _| {
-            let mut answer = b.known(ty, zero);
+            let mut answer = b.known(zero);
             for _ in 0..20 {
                 answer = b.call(helper, &[]);
             }
@@ -482,9 +530,9 @@ fn large_helpers_and_deep_helper_chains_are_not_blindly_copied() {
     let wide = program.declare("wide", &[], ty);
     program.define(wide, |b, _| {
         for _ in 0..1000 {
-            b.known(ty, zero);
+            b.known(zero);
         }
-        b.known(ty, zero)
+        b.known(zero)
     });
     let mut last = wide;
     for at in 0..100 {
@@ -521,7 +569,7 @@ fn constructor_size_is_checked_before_concatenating_fields() {
     let value = program.intern_natural(ty, &(num_bigint::BigUint::from(1u8) << 200usize));
     let test = program.declare("pair", &[], record);
     program.define(test, |b, _| {
-        let n = b.known(ty, value);
+        let n = b.known(value);
         b.con(ctor, &[n, n])
     });
     fold_with_limits(
@@ -548,12 +596,12 @@ fn nested_capture_program() -> Program {
     let zero = program.intern_number(ty, 0);
     let test = program.declare("nested", &[ty, ty], ty);
     program.define(test, |b, args| {
-        b.known(ty, zero);
+        b.known(zero);
         let effect = b.call(first, &[]);
         b.con(pair, &[effect, args[1]]);
         b.match_(args[0], ty, |b, _, fields| {
             let capture = fields.first().copied().unwrap_or(args[1]);
-            b.known(ty, zero);
+            b.known(zero);
             b.con(pair, &[capture, args[1]]);
             b.match_(args[1], ty, |b, _, fields| {
                 let inner = fields.first().copied().unwrap_or(capture);
@@ -632,10 +680,10 @@ fn cleanup_substitutes_aliases_captured_across_removed_bindings() {
     let succ = program.ctor_at(ty, 1);
     let test = program.declare("alias", &[ty], ty);
     program.define(test, |b, args| {
-        b.known(ty, one);
-        let alias = b.known(ty, one);
+        b.known(one);
+        let alias = b.known(one);
         b.match_(args[0], ty, |b, _, _| {
-            b.known(ty, one);
+            b.known(one);
             b.con(succ, &[alias])
         })
     });
@@ -676,13 +724,13 @@ fn cleanup_retains_unused_calls_and_matches_in_order() {
     let second = program.declare("second", &[], ty);
     let zero = program.intern_number(ty, 0);
     let pure = program.declare("pure", &[], ty);
-    program.define(pure, |b, _| b.known(ty, zero));
+    program.define(pure, |b, _| b.known(zero));
     let test = program.declare("unused", &[ty], ty);
     program.define(test, |b, args| {
         b.call(first, &[]);
         b.call(pure, &[]);
         b.match_(args[0], ty, |b, _, _| b.call(second, &[]));
-        b.known(ty, zero)
+        b.known(zero)
     });
     optimize(
         &mut program,
@@ -719,7 +767,7 @@ fn cleanup_removes_a_wide_dead_constructor_chain_in_one_pass() {
     let succ = program.ctor_at(ty, 1);
     let test = program.declare("wide", &[], ty);
     program.define(test, |b, _| {
-        let zero = b.known(ty, zero);
+        let zero = b.known(zero);
         let mut dead = zero;
         for _ in 0..10_000 {
             dead = b.con(succ, &[dead]);
@@ -788,24 +836,24 @@ fn deep_evaluation_declines_without_exhausting_aggregate_fuel() {
             }
         })
     });
-    let mut bytes = vec![];
-    constant::write_number(1_000_000, &mut bytes);
+    let value = Held::number(&program, ty, &num_bigint::BigUint::from(1_000_000u32));
     let ops = arithmetic::recognise(&program);
     let mut budget = Budget::new(FoldLimits {
         max_depth: 16,
         ..FoldLimits::default()
     });
-    assert!(
+    assert_eq!(
         Evaluator {
             program: &program,
             operations: &ops
         }
         .body(
             program.function(count).body().unwrap(),
-            vec![Some(Held { owner: ty, bytes })],
+            vec![Ok(value)],
             &mut budget
         )
-        .is_none()
+        .unwrap_err(),
+        CannotFold::Limit(LimitExceeded::Depth)
     );
     assert!(budget.remaining > 0);
 }

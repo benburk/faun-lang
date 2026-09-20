@@ -29,6 +29,14 @@ pub fn validate(program: &Program) -> Result<(), String> {
     if program.entry().is_none() {
         return Err("nothing says where the program starts".to_owned());
     }
+    for ty in program.types() {
+        if matches!(ty.definition, super::model::TypeDefinition::Declared) {
+            return Err(format!(
+                "type `{}` was declared but never defined",
+                program.name(ty.name)
+            ));
+        }
+    }
     for at in 0..program.functions().len() {
         let id = FnId::at(at);
         let Some(body) = program.function(id).body() else {

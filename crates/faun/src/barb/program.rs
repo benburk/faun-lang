@@ -1,9 +1,11 @@
 //! Program storage, queries, and construction entry points.
 
+use super::budget::{Budget, LimitExceeded};
 use super::builder::Builder;
-use super::constant::{self, Shape, Value};
+use super::constant::{self, Constant, ConstructionError, DecodeError, Held, Shape, Value};
 use super::model::{
-    Arm, Atom, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Symbol, Type, TypeId,
+    Arm, Atom, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Symbol, Type, TypeDefinition,
+    TypeId,
 };
 use crate::index::{Pool, Range, append_range};
 
@@ -23,7 +25,7 @@ pub struct Program {
     /// Field and parameter types.
     pub(super) types_pool: Vec<TypeId>,
     /// Known values, encoded. See [`super::constant`].
-    pub(super) consts: Pool<ConstId, Range>,
+    pub(super) consts: Pool<ConstId, constant::Entry>,
     pub(super) bytes: Vec<u8>,
     /// Every name the program uses, each once, end to end. A [`Symbol`] is
     /// an index into `symbols`, which says where in here its characters are,
@@ -81,19 +83,19 @@ impl Program {
 
     #[must_use]
     pub fn ctors(&self, id: TypeId) -> &[Ctor] {
-        &self.ctors.as_slice()[self.type_(id).ctors.range()]
+        &self.ctors.as_slice()[self.type_(id).constructors().range()]
     }
 
     /// Where `ctor` sits among its type's constructors, which is the tag a
     /// known value carries.
     #[must_use]
     pub fn tag(&self, ctor: CtorId) -> u32 {
-        ctor.0 - self.type_(self.ctor(ctor).owner).ctors.start()
+        ctor.0 - self.type_(self.ctor(ctor).owner).constructors().start()
     }
 
     #[must_use]
     pub fn ctor_at(&self, owner: TypeId, tag: u32) -> CtorId {
-        CtorId(self.type_(owner).ctors.start() + tag)
+        CtorId(self.type_(owner).constructors().start() + tag)
     }
 
     /// The types a range of the pool holds.
@@ -129,7 +131,13 @@ impl Program {
 
     #[must_use]
     pub fn known_bytes(&self, id: ConstId) -> &[u8] {
-        &self.bytes[self.consts[id].range()]
+        &self.bytes[self.consts[id].bytes.range()]
+    }
+
+    /// A constant carries its own type; callers cannot reinterpret its bytes.
+    #[must_use]
+    pub fn constant(&self, value: ConstId) -> Constant<'_> {
+        Constant::stored(self, value)
     }
 
     #[must_use]
@@ -174,16 +182,25 @@ impl Program {
         let name = self.symbol(name);
         self.types.push(Type {
             name,
-            ctors: Range::default(),
+            definition: TypeDefinition::Declared,
         })
     }
 
-    /// Give a reserved type its constructors, in tag order.
+    /// Give a reserved type its constructors, once, in tag order.
     ///
     /// # Panics
-    ///
-    /// If the program outgrew the pools it may have.
+    /// If the type was already defined, a field is undeclared, or a pool overflows.
     pub fn define_type(&mut self, id: TypeId, ctors: &[(&str, &[TypeId])]) {
+        assert_eq!(
+            self.types[id].definition,
+            TypeDefinition::Declared,
+            "type definitions are immutable"
+        );
+        for (_, fields) in ctors {
+            for field in *fields {
+                assert!(self.types.get(*field).is_some(), "a declared field type");
+            }
+        }
         let start = self.ctors.len();
         for (name, fields) in ctors {
             let name = self.symbol(name);
@@ -194,7 +211,7 @@ impl Program {
                 fields,
             });
         }
-        self.types[id].ctors = Range::of(start, ctors.len());
+        self.types[id].definition = TypeDefinition::Defined(Range::of(start, ctors.len()));
     }
 
     /// # Panics
@@ -247,15 +264,59 @@ impl Program {
         self.entry = Some(id);
     }
 
-    /// Encode a known value into the pool.
+    /// Validate a constructor tree before encoding it into the pool.
     ///
-    /// # Panics
-    ///
-    /// If `value` is not of type `id`.
-    pub fn intern(&mut self, id: TypeId, value: &Value) -> ConstId {
-        self.hold(|program, out| {
+    /// # Errors
+    /// If a constructor, field count or field type does not match the declaration.
+    pub fn intern(&mut self, id: TypeId, value: &Value) -> Result<ConstId, ConstructionError> {
+        constant::check_tree(self, id, value)?;
+        Ok(self.hold(id, |program, out| {
             constant::encode(program, id, value, out);
-        })
+        }))
+    }
+
+    /// Import exactly one encoded value, without expanding its constructor tree.
+    ///
+    /// # Errors
+    /// If the encoding is malformed, has trailing bytes, or exceeds the budget.
+    pub fn decode_constant(
+        &mut self,
+        owner: TypeId,
+        bytes: &[u8],
+        budget: &mut Budget,
+    ) -> Result<ConstId, DecodeError> {
+        let value = constant::read_checked(self, owner, bytes, budget)?;
+        Ok(self.intern_held(&value))
+    }
+
+    /// Construct a typed constant from other constants in this program.
+    ///
+    /// # Errors
+    /// If the fields do not match the constructor, or the budget is exhausted.
+    pub fn construct(
+        &mut self,
+        ctor: CtorId,
+        fields: &[ConstId],
+        budget: &mut Budget,
+    ) -> Result<ConstId, ConstructionError> {
+        budget.spend(u64::try_from(fields.len()).map_err(|_| LimitExceeded::Work)?)?;
+        constant::check_fields(
+            self,
+            ctor,
+            fields.len(),
+            fields.iter().map(|&id| {
+                self.consts
+                    .get(id)
+                    .map(|entry| entry.owner)
+                    .ok_or(ConstructionError::UnknownConstant(id))
+            }),
+        )?;
+        let fields = fields
+            .iter()
+            .map(|&id| self.constant(id).to_owned(budget))
+            .collect::<Result<Vec<_>, _>>()?;
+        let value = Held::build(self, ctor, &fields, budget)?;
+        Ok(self.intern_held(&value))
     }
 
     /// A number, written straight into the pool. The chain of constructors
@@ -276,7 +337,7 @@ impl Program {
             "`{}` carries something per element",
             self.name(name)
         );
-        self.hold(|_, out| constant::write_number(value, out))
+        self.hold(id, |_, out| constant::write_number(value, out))
     }
 
     /// An arbitrary-precision natural, encoded without constructing its spine.
@@ -288,22 +349,27 @@ impl Program {
             super::arithmetic::natural(self, id).is_some(),
             "a natural type"
         );
-        self.hold(|_, out| constant::write_natural(value, out))
+        self.hold(id, |_, out| constant::write_natural(value, out))
     }
 
-    pub(super) fn intern_encoded(&mut self, bytes: &[u8]) -> ConstId {
-        self.hold(|_, out| out.extend_from_slice(bytes))
+    pub(super) fn intern_held(&mut self, value: &Held) -> ConstId {
+        self.hold(value.owner(), |_, out| {
+            out.extend_from_slice(value.encoded());
+        })
     }
 
     /// Write into the pool itself, so that nothing is encoded into a buffer
     /// and then copied in.
-    fn hold(&mut self, write: impl FnOnce(&Self, &mut Vec<u8>)) -> ConstId {
+    fn hold(&mut self, owner: TypeId, write: impl FnOnce(&Self, &mut Vec<u8>)) -> ConstId {
         let mut bytes = std::mem::take(&mut self.bytes);
         let start = bytes.len();
         write(self, &mut bytes);
         let len = bytes.len() - start;
         self.bytes = bytes;
-        self.consts.push(Range::of(start, len))
+        self.consts.push(constant::Entry {
+            owner,
+            bytes: Range::of(start, len),
+        })
     }
 
     /// Build a declared function's body. Its parameters are the first locals.

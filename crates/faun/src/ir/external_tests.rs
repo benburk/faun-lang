@@ -337,6 +337,7 @@ fn source_externals_check_unit_against_nonreturning_provider_contracts() {
         let unit = source.declare_type("Unit");
         source.define_type(unit, &[("Unit", &[])]);
         let never = source.declare_type("Never");
+        source.define_type(never, &[]);
         let result = if returns == platform::Returns::Unit {
             never
         } else {

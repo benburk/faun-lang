@@ -1,4 +1,6 @@
-use super::evaluate::{Budget, Evaluator, Held};
+use super::budget::Budget;
+use super::constant::Held;
+use super::evaluate::{CannotFold, Evaluator};
 
 fn budget(work: u64) -> Budget {
     Budget::new(FoldLimits {
@@ -28,10 +30,8 @@ fn named(program: &Program, name: &str) -> FnId {
             .unwrap(),
     )
 }
-fn number(owner: TypeId, n: u64) -> Held {
-    let mut bytes = vec![];
-    constant::write_natural(&BigUint::from(n), &mut bytes);
-    Held { owner, bytes }
+fn number(program: &Program, owner: TypeId, n: u64) -> Held {
+    Held::number(program, owner, &BigUint::from(n))
 }
 
 #[test]
@@ -112,14 +112,14 @@ fn structural_evaluation_matches_arithmetic_for_small_inputs() {
         let ty = program.params(id)[0];
         for a in 0..12 {
             for b in 0..8 {
-                let args = vec![Some(number(ty, a)), Some(number(ty, b))];
+                let args = vec![Ok(number(&program, ty, a)), Ok(number(&program, ty, b))];
                 let body = program.function(id).body().unwrap();
                 let baseline = Evaluator {
                     program: &program,
                     operations: &unknown,
                 }
                 .body(body, args.clone(), &mut budget(1_000_000))
-                .unwrap_or_else(|| panic!("baseline budget for {name}({a}, {b})"));
+                .unwrap_or_else(|reason| panic!("baseline {name}({a}, {b}): {reason:?}"));
                 // Evaluate a call so the recognized fast path is exercised at
                 // the root too, including zero-divisor and comparison cases.
                 let mut caller = program.clone();
@@ -137,8 +137,8 @@ fn structural_evaluation_matches_arithmetic_for_small_inputs() {
                     &mut budget(1000),
                 )
                 .unwrap();
-                assert_eq!(baseline.owner, fast.owner);
-                assert_eq!(baseline.bytes, fast.bytes, "{name}({a}, {b})");
+                assert_eq!(baseline.owner(), fast.owner());
+                assert_eq!(baseline.encoded(), fast.encoded(), "{name}({a}, {b})");
             }
         }
     }
@@ -153,19 +153,18 @@ fn folded_values_are_not_limited_to_u64() {
     let value = program.intern_natural(ty, &n);
     let test = program.declare("huge", &[], ty);
     program.define(test, |b, _| {
-        let n = b.known(ty, value);
+        let n = b.known(value);
         b.call(mul, &[n, n])
     });
     fold(&mut program);
-    let Expr::Static(owner, value) = program.expr(program.function(test).body().unwrap().tail)
-    else {
+    let Expr::Static(value) = program.expr(program.function(test).body().unwrap().tail) else {
         panic!("not folded")
     };
-    assert_eq!(
-        as_natural(&program, owner, program.known_bytes(value)),
-        Some(&n * &n)
-    );
-    assert!(as_number(&program, owner, program.known_bytes(value)).is_none());
+    let ConstantView::Natural(number) = program.constant(value).view() else {
+        panic!("a natural");
+    };
+    assert_eq!(number.to_biguint(), &n * &n);
+    assert_eq!(number.try_u64(), Err(TooWide));
     assert!(program.render().contains(&(&n * &n).to_string()));
 }
 
@@ -212,10 +211,10 @@ fn unrecognized_recursion_still_has_an_evaluation_budget() {
     }
     .body(
         program.function(id).body().unwrap(),
-        vec![Some(number(ty, 1_000_000))],
+        vec![Ok(number(&program, ty, 1_000_000))],
         &mut budget(32),
     );
-    assert!(result.is_none());
+    assert_eq!(result.unwrap_err(), CannotFold::Limit(LimitExceeded::Work));
 }
 
 #[test]
@@ -223,7 +222,7 @@ fn range_propagation_observes_earlier_answers_in_the_same_round() {
     let (mut program, nat, _, _) = tests::types();
     let seven = program.intern_number(nat, 7);
     let first = program.declare("first", &[], nat);
-    program.define(first, |b, _| b.known(nat, seven));
+    program.define(first, |b, _| b.known(seven));
     let mut previous = first;
     // Longer than the round limit: moving the snapshot to a whole round
     // would lose precision here. Each walk reads the current result table.

@@ -18,7 +18,7 @@
 //! without a last step, an argument from outside -- it says so and the
 //! tiers below hold what they must.
 
-use super::constant::{Shape, as_number, shape};
+use super::constant::{Shape, shape};
 use super::model::{Body, CtorId, Expr, ExprId, FnId, Range};
 use super::program::Program;
 
@@ -481,23 +481,25 @@ impl FunctionWalk<'_> {
     fn worked(&mut self, id: ExprId) -> Bounds {
         match self.program.expr(id) {
             Expr::Atom(atom) => self.scope[atom.0.index()],
-            Expr::Static(owner, value) => {
-                let bytes = self.program.known_bytes(value);
-                if let Some(number) = as_number(self.program, owner, bytes) {
-                    return Bounds::at(number);
+            Expr::Static(value) => {
+                let value = self.program.constant(value);
+                match value.view() {
+                    super::ConstantView::Natural(number) => {
+                        number.try_u64().map_or(Bounds::ANY, Bounds::at)
+                    }
+                    super::ConstantView::Constructor(ctor)
+                        if self
+                            .program
+                            .ctors(value.owner())
+                            .iter()
+                            .all(|c| self.program.types_of(c.fields).is_empty()) =>
+                    {
+                        Bounds::at(u64::from(self.program.tag(ctor.constructor())))
+                    }
+                    super::ConstantView::Constructor(_) | super::ConstantView::Spine(_) => {
+                        Bounds::ANY
+                    }
                 }
-                if self
-                    .program
-                    .ctors(owner)
-                    .iter()
-                    .all(|c| self.program.types_of(c.fields).is_empty())
-                {
-                    return Bounds::at(u64::from(
-                        self.program
-                            .tag(super::decode(self.program, owner, bytes).0.0),
-                    ));
-                }
-                Bounds::ANY
             }
             Expr::Con(ctor, args) => self.built(ctor, args),
             Expr::Call(called, args) => self.call(called, args),

@@ -10,13 +10,13 @@ fn fixture() -> (Program, FnId, FnId) {
     let zero = program.intern_number(nat, 0);
     program.define(helper, |b, _| {
         b.call(effect, &[]);
-        b.known(nat, zero)
+        b.known(zero)
     });
     let main = program.declare("main", &[], nat);
     program.define(main, |b, _| {
         b.call(helper, &[]);
-        let alias = b.known(nat, zero);
-        b.known(nat, zero); // An unused eager binding must survive normalization.
+        let alias = b.known(zero);
+        b.known(zero); // An unused eager binding must survive normalization.
         alias
     });
     let body = program.function(main).body().unwrap();

@@ -58,8 +58,8 @@ impl Builder<'_> {
     }
 
     /// A value known outright.
-    pub fn known(&mut self, id: TypeId, value: ConstId) -> Atom {
-        self.emit(Expr::Static(id, value))
+    pub fn known(&mut self, value: ConstId) -> Atom {
+        self.emit(Expr::Static(value))
     }
 
     /// One arm per constructor of `owner`, in tag order, so a match is
@@ -77,7 +77,7 @@ impl Builder<'_> {
         mut arm: impl FnMut(&mut Self, CtorId, &[Atom]) -> Atom,
     ) -> Atom {
         let count =
-            u32::try_from(self.program.type_(owner).ctors.len()).expect("a sane constructor count");
+            u32::try_from(self.program.ctors(owner).len()).expect("a sane constructor count");
         let mut arms =
             Vec::with_capacity(usize::try_from(count).expect("a count that fits a pointer"));
         for tag in 0..count {

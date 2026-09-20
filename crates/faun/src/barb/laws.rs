@@ -2,7 +2,7 @@
 //! Arguments are ANF locals: replacing a call does not discard, reorder or
 //! duplicate the bindings which evaluated them. No general dead-code removal.
 
-use super::{Atom, Body, Expr, ExprId, FnId, Operation, Program};
+use super::{Atom, Body, ConstantView, Expr, ExprId, FnId, Operation, Program};
 
 pub(super) fn laws(program: &mut Program) {
     let operations = super::arithmetic::recognise(program);
@@ -36,6 +36,10 @@ fn in_body(
     in_expr(program, ops, body.tail, small, depth);
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exhaustive expression dispatch for local identity facts"
+)]
 fn in_expr(
     program: &mut Program,
     ops: &[Option<Operation>],
@@ -45,10 +49,13 @@ fn in_expr(
 ) -> Option<u8> {
     match program.expr(id) {
         Expr::Atom(a) => small[a.0.index()],
-        Expr::Static(owner, value) => {
-            super::arithmetic::natural(program, owner)?;
-            match program.known_bytes(value) {
-                [n @ 0..=1] => Some(*n),
+        Expr::Static(value) => {
+            let ConstantView::Natural(number) = program.constant(value).view() else {
+                return None;
+            };
+            match number.try_u64() {
+                Ok(0) => Some(0),
+                Ok(1) => Some(1),
                 _ => None,
             }
         }
@@ -115,5 +122,5 @@ fn identity(
 fn zero(program: &mut Program, called: FnId) -> Expr {
     let owner = program.function(called).result;
     let value = program.intern_number(owner, 0);
-    Expr::Static(owner, value)
+    Expr::Static(value)
 }

@@ -1,4 +1,6 @@
-use super::evaluate::{Budget, Evaluator, Held};
+use super::budget::Budget;
+use super::constant::Held;
+use super::evaluate::Evaluator;
 use super::*;
 use num_bigint::BigUint;
 
@@ -37,7 +39,7 @@ impl Library {
         let id = self.function(name);
         assert_eq!(
             self.program.params(id),
-            args.iter().map(|a| a.owner).collect::<Vec<_>>()
+            args.iter().map(Held::owner).collect::<Vec<_>>()
         );
         Evaluator {
             program: &self.program,
@@ -45,20 +47,18 @@ impl Library {
         }
         .body(
             self.program.function(id).body().unwrap(),
-            args.iter().cloned().map(Some).collect(),
+            args.iter().cloned().map(Ok).collect(),
             &mut Budget::new(FoldLimits {
                 max_depth: 512,
                 ..FoldLimits::default()
             }),
         )
-        .unwrap_or_else(|| panic!("evaluation budget exhausted: {name}"))
+        .unwrap_or_else(|reason| panic!("cannot evaluate {name}: {reason:?}"))
     }
 
     fn natural(&self, n: impl Into<BigUint>) -> Held {
         let owner = self.program.params(self.function("add"))[0];
-        let mut bytes = vec![];
-        constant::write_natural(&n.into(), &mut bytes);
-        Held { owner, bytes }
+        Held::number(&self.program, owner, &n.into())
     }
 
     // Construct tagged values independently of the library's conversions.
@@ -79,19 +79,22 @@ impl Library {
             .unwrap();
         assert_eq!(
             self.program.fields(id),
-            fields.iter().map(|f| f.owner).collect::<Vec<_>>()
+            fields.iter().map(Held::owner).collect::<Vec<_>>()
         );
         let mut bytes = vec![];
         if self.program.ctors(ctor.owner).len() > 1 {
             constant::write_natural(&BigUint::from(self.program.tag(id)), &mut bytes);
         }
         for field in fields {
-            bytes.extend_from_slice(&field.bytes);
+            bytes.extend_from_slice(field.encoded());
         }
-        Held {
-            owner: ctor.owner,
-            bytes,
-        }
+        constant::read_checked(
+            &self.program,
+            ctor.owner,
+            &bytes,
+            &mut Budget::new(FoldLimits::default()),
+        )
+        .unwrap()
     }
 
     fn boolean(&self, yes: bool) -> Held {
@@ -117,17 +120,17 @@ impl Library {
 }
 
 fn same(actual: &Held, expected: &Held) {
-    assert_eq!(actual.owner, expected.owner);
-    assert_eq!(actual.bytes, expected.bytes);
+    assert_eq!(actual.owner(), expected.owner());
+    assert_eq!(actual.encoded(), expected.encoded());
 }
 
 #[test]
 fn every_constructible_byte_roundtrips_and_narrowing_is_explicit() {
     let lib = Library::new();
-    let owner = lib.byte(0).owner;
+    let owner = lib.byte(0).owner();
     assert_eq!(lib.program.ctors(owner).len(), 1);
     let fields = lib.program.fields(lib.program.ctor_at(owner, 0));
-    assert_eq!(fields, &[lib.boolean(false).owner; 8]);
+    assert_eq!(fields, &[lib.boolean(false).owner(); 8]);
     // Eight Bool fields: these enumerate *all* constructible U8 values.
     for n in 0..=255u8 {
         let byte = lib.byte(n);
@@ -296,13 +299,10 @@ fn assert_calls_fold(lib: &mut Library, cases: &[(&str, Vec<Held>)]) {
         let called = lib.function(name);
         let probe = lib
             .program
-            .declare(&format!("probe_{index}"), &[], expected.owner);
-        let values: Vec<_> = args
-            .iter()
-            .map(|v| (v.owner, lib.program.intern_encoded(&v.bytes)))
-            .collect();
+            .declare(&format!("probe_{index}"), &[], expected.owner());
+        let values: Vec<_> = args.iter().map(|v| lib.program.intern_held(v)).collect();
         lib.program.define(probe, |b, _| {
-            let args: Vec<_> = values.iter().map(|&(ty, v)| b.known(ty, v)).collect();
+            let args: Vec<_> = values.iter().map(|&v| b.known(v)).collect();
             b.call(called, &args)
         });
         probes.push((probe, expected));
@@ -315,16 +315,15 @@ fn assert_calls_fold(lib: &mut Library, cases: &[(&str, Vec<Held>)]) {
         fold(&mut program);
         validate(&program).unwrap();
         for (id, expected) in &probes {
-            let Expr::Static(owner, value) =
-                program.expr(program.function(*id).body().unwrap().tail)
+            let Expr::Static(value) = program.expr(program.function(*id).body().unwrap().tail)
             else {
                 panic!("probe did not fold (normalized={normalized})");
             };
             same(
-                &Held {
-                    owner,
-                    bytes: program.known_bytes(value).to_vec(),
-                },
+                &program
+                    .constant(value)
+                    .to_owned(&mut Budget::new(FoldLimits::default()))
+                    .unwrap(),
                 expected,
             );
         }
@@ -363,11 +362,11 @@ fn library_meaning_does_not_depend_on_names_or_constructor_order() {
         .iter()
         .find(|f| program.name(f.name) == "probe")
         .unwrap();
-    let Expr::Static(owner, value) = program.expr(probe.body().unwrap().tail) else {
+    let Expr::Static(value) = program.expr(probe.body().unwrap().tail) else {
         panic!("renamed probe did not fold");
     };
-    assert_eq!(
-        as_number(&program, owner, program.known_bytes(value)),
-        Some(255)
-    );
+    let ConstantView::Natural(number) = program.constant(value).view() else {
+        panic!("a natural");
+    };
+    assert_eq!(number.try_u64(), Ok(255));
 }

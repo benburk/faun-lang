@@ -70,7 +70,7 @@ fn a_definition_replaces_external_metadata_instead_of_retaining_it() {
     assert_eq!(bounds, Some(Bounds::at(7)));
     program.define(function, |b, _| {
         let value = b.number(nat, 3);
-        b.known(nat, value)
+        b.known(value)
     });
     assert!(matches!(
         program.function(function).definition,
@@ -88,7 +88,7 @@ fn a_defined_function_cannot_acquire_a_host_range_contract() {
     let function = program.declare("defined", &[], nat);
     program.define(function, |b, _| {
         let value = b.number(nat, 3);
-        b.known(nat, value)
+        b.known(value)
     });
     program.bound(function, Bounds::at(7));
 }
@@ -100,7 +100,7 @@ fn a_defined_function_cannot_acquire_a_host_provider() {
     let function = program.declare("defined", &[], nat);
     program.define(function, |b, _| {
         let value = b.number(nat, 3);
-        b.known(nat, value)
+        b.known(value)
     });
     program.answered_by(function, "provider");
 }
@@ -132,7 +132,7 @@ fn a_spine_is_recognised_and_a_branching_type_is_not() {
 fn a_natural_costs_the_logarithm_of_its_value() {
     let (mut program, nat_id, _, _) = types();
     let thousand = nat(&program, nat_id, 1000);
-    let id = program.intern(nat_id, &thousand);
+    let id = program.intern(nat_id, &thousand).unwrap();
     assert_eq!(
         program.known_bytes(id),
         [0xE8, 0x07],
@@ -142,10 +142,10 @@ fn a_natural_costs_the_logarithm_of_its_value() {
         decode(&program, nat_id, program.known_bytes(id)).0,
         thousand
     );
-    assert_eq!(
-        as_number(&program, nat_id, program.known_bytes(id)),
-        Some(1000)
-    );
+    let ConstantView::Natural(number) = program.constant(id).view() else {
+        panic!("a natural");
+    };
+    assert_eq!(number.try_u64(), Ok(1000));
     let direct = program.intern_number(nat_id, 1000);
     assert_eq!(program.known_bytes(id), program.known_bytes(direct));
 }
@@ -154,11 +154,17 @@ fn a_natural_costs_the_logarithm_of_its_value() {
 fn an_ascii_string_is_its_own_bytes_after_the_count() {
     let (mut program, _, byte, list_id) = types();
     let hello = list(&program, list_id, byte, b"Hello");
-    let id = program.intern(list_id, &hello);
+    let id = program.intern(list_id, &hello).unwrap();
     assert_eq!(program.known_bytes(id), b"\x05Hello");
 
-    let lifted = as_bytes(&program, list_id, program.known_bytes(id));
-    assert_eq!(lifted, Some(&b"Hello"[..]), "liftable as it stands");
+    let ConstantView::Spine(spine) = program.constant(id).view() else {
+        panic!("a spine");
+    };
+    assert_eq!(
+        spine.byte_slice(),
+        ByteView::Borrowed(b"Hello"),
+        "liftable as it stands"
+    );
     assert_eq!(decode(&program, list_id, program.known_bytes(id)).0, hello);
 }
 
@@ -168,8 +174,11 @@ fn an_ascii_string_is_its_own_bytes_after_the_count() {
 fn a_string_past_ascii_is_not_liftable() {
     let (mut program, _, byte, list_id) = types();
     let cafe = list(&program, list_id, byte, "café".as_bytes());
-    let id = program.intern(list_id, &cafe);
-    assert!(as_bytes(&program, list_id, program.known_bytes(id)).is_none());
+    let id = program.intern(list_id, &cafe).unwrap();
+    let ConstantView::Spine(spine) = program.constant(id).view() else {
+        panic!("a spine");
+    };
+    assert_eq!(spine.byte_slice(), ByteView::NeedsDecoding);
     assert_eq!(decode(&program, list_id, program.known_bytes(id)).0, cafe);
 }
 
@@ -191,7 +200,7 @@ fn a_record_costs_no_tag_and_packs_into_a_list() {
     for (x, y) in [(3u64, 4u64), (1, 2)] {
         value = Value(program.ctor_at(points, 1), vec![at(&program, x, y), value]);
     }
-    let id = program.intern(points, &value);
+    let id = program.intern(points, &value).unwrap();
     assert_eq!(
         program.known_bytes(id),
         [2, 1, 2, 3, 4],
@@ -362,7 +371,7 @@ fn large_arithmetic_does_not_expand_constructor_spines() {
         let number = program.intern_number(nat, magnitude);
         let main = program.declare("main", &[], nat);
         program.define(main, |b, _| {
-            let value = b.known(nat, number);
+            let value = b.known(number);
             b.call(add, &[value, value])
         });
         program.set_entry(main);

@@ -201,10 +201,10 @@ fn fragmented() -> (Program, FnId, super::ConstId) {
     let unused = p.declare("not_called_from_entry", &[nat], nat);
     let huge = p.intern_natural(nat, &(num_bigint::BigUint::from(1u8) << 4096usize));
     p.define(unused, |b, args| {
-        b.match_(args[0], nat, |b, _, _| b.known(nat, huge))
+        b.match_(args[0], nat, |b, _, _| b.known(huge))
     });
     // Redefinition leaves obsolete match/argument/binding entries in the pools.
-    p.define(unused, |b, _| b.known(nat, huge));
+    p.define(unused, |b, _| b.known(huge));
     for _ in 0..4 {
         structural(&mut p);
     }
@@ -235,7 +235,7 @@ fn cleanup_reclaims_superseded_terms_but_preserves_every_definition_and_equation
     assert_declarations(&before, &p);
     assert_eq!(arithmetic::recognise(&p), operations);
     assert!(
-        matches!(p.expr(p.function(unused).body().unwrap().tail), Expr::Static(_, id) if id == huge)
+        matches!(p.expr(p.function(unused).body().unwrap().tail), Expr::Static(id) if id == huge)
     );
     let mut copied = HashMap::new();
     for (at, operation) in operations.iter().enumerate() {
@@ -286,9 +286,9 @@ fn cleanup_remaps_shared_expressions_per_lexical_occurrence() {
     let shared = p.function(first).body().unwrap().tail;
     let second = p.declare("local", &[], nat);
     p.define(second, |b, _| {
-        b.known(nat, one);
-        let live = b.known(nat, one);
-        b.known(nat, one);
+        b.known(one);
+        let live = b.known(one);
+        b.known(one);
         live
     });
     let body = p.function(second).body().unwrap();

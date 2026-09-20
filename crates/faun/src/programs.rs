@@ -65,7 +65,7 @@ pub fn two_and_two_in_barb() -> crate::barb::Program {
     let two = program.intern_number(nat, 2);
     let main = program.declare("main", &[], nat);
     program.define(main, |b, _| {
-        let value = b.known(nat, two);
+        let value = b.known(two);
         b.call(add, &[value, value])
     });
     program.set_entry(main);

@@ -30,7 +30,7 @@ pub enum Expr {
     /// A saturated constructor application.
     Con(CtorId, Range),
     /// A value known outright, held encoded rather than as a chain of `Con`.
-    Static(TypeId, ConstId),
+    Static(ConstId),
     /// A saturated call to a top-level name. Every recursive edge is one.
     Call(FnId, Range),
     /// Destructuring. An arm per constructor of the scrutinee's type.
@@ -58,7 +58,27 @@ pub struct Arm {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Type {
     pub name: Symbol,
-    pub ctors: Range,
+    pub(super) definition: TypeDefinition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TypeDefinition {
+    Declared,
+    Defined(Range),
+}
+
+impl Type {
+    /// Constructors are assigned once, including an empty run for an empty type.
+    ///
+    /// # Panics
+    /// If the declaration has not yet been defined.
+    #[must_use]
+    pub fn constructors(&self) -> Range {
+        match self.definition {
+            TypeDefinition::Defined(ctors) => ctors,
+            TypeDefinition::Declared => panic!("a type must be defined before use"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

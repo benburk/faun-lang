@@ -1,7 +1,8 @@
 //! Constant folding shares the recognizer's arithmetic semantics. Unknown
 //! calls remain opaque; exhausting the shared budget leaves a term alone.
 
-use super::evaluate::{Budget, Evaluator, FoldLimits, Held};
+use super::budget::{Budget, FoldLimits};
+use super::evaluate::{CannotFold, Evaluation, Evaluator};
 use super::{Body, Expr, ExprId, FnId, Operation, Program};
 
 pub fn fold(program: &mut Program) {
@@ -23,7 +24,7 @@ pub fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
         let Some(body) = program.function(id).body() else {
             continue;
         };
-        let mut known = vec![None; program.params(id).len()];
+        let mut known = vec![Err(CannotFold::DynamicInput); program.params(id).len()];
         in_body(
             program,
             &operations,
@@ -39,7 +40,7 @@ fn in_body(
     program: &mut Program,
     operations: &[Option<Operation>],
     body: Body,
-    known: &mut Vec<Option<Held>>,
+    known: &mut Vec<Evaluation>,
     budget: &mut Budget,
     depth: usize,
 ) {
@@ -54,33 +55,39 @@ fn in_body(
             return;
         }
     }
-    in_expr(program, operations, body.tail, known, budget, depth);
+    let _ = in_expr(program, operations, body.tail, known, budget, depth);
 }
 
 fn in_expr(
     program: &mut Program,
     operations: &[Option<Operation>],
     id: ExprId,
-    known: &mut Vec<Option<Held>>,
+    known: &mut Vec<Evaluation>,
     budget: &mut Budget,
     depth: usize,
-) -> Option<Held> {
+) -> Evaluation {
     let evaluator = Evaluator {
         program,
         operations,
     };
-    if let Some(value) = evaluator.expr(id, known, budget) {
-        if !matches!(program.expr(id), Expr::Static(..)) {
-            let held = program.intern_encoded(&value.bytes);
-            program.write(id, Expr::Static(value.owner, held));
+    let refusal = match evaluator.expr(id, known, budget) {
+        Ok(value) => {
+            if !matches!(program.expr(id), Expr::Static(..)) {
+                let held = program.intern_held(&value);
+                program.write(id, Expr::Static(held));
+            }
+            return Ok(value);
         }
-        return Some(value);
-    }
+        Err(refusal) => refusal,
+    };
     if let Expr::Match(_, arms) = program.expr(id) {
         for at in arms.range() {
             let arm = program.arms[at];
             let level = known.len();
-            known.resize(level + program.fields(arm.ctor).len(), None);
+            known.resize(
+                level + program.fields(arm.ctor).len(),
+                Err(CannotFold::DynamicInput),
+            );
             in_body(program, operations, arm.body, known, budget, depth - 1);
             known.truncate(level);
             if budget.remaining == 0 {
@@ -88,5 +95,5 @@ fn in_expr(
             }
         }
     }
-    None
+    Err(refusal)
 }

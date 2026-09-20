@@ -11,9 +11,9 @@ fn unknown_or_overflowing_bounds_never_choose_a_machine_word() {
         let value = source.intern_natural(nat, &magnitude);
         let zero = source.intern_number(nat, 0);
         source.define(source.entry().unwrap(), |b, _| {
-            let n = b.known(nat, value);
+            let n = b.known(value);
             let sum = b.call(add, &[n, n]);
-            b.match_(sum, nat, |b, _, _| b.known(nat, zero))
+            b.match_(sum, nat, |b, _, _| b.known(zero))
         });
         let facts = barb::analyze(&source);
         let machine = lower(&source, &facts, &crate::platform::Routines::builtin()).unwrap();
@@ -42,7 +42,7 @@ fn an_unbounded_entry_result_is_not_silently_truncated() {
     let mut source = crate::programs::two_and_two_in_barb();
     let nat = source.params(barb::FnId::at(0))[0];
     let value = source.intern_natural(nat, &(BigUint::from(1u8) << 100usize));
-    source.define(source.entry().unwrap(), |b, _| b.known(nat, value));
+    source.define(source.entry().unwrap(), |b, _| b.known(value));
     let error = lower(
         &source,
         &barb::analyze(&source),

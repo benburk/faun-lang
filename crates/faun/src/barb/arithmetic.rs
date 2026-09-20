@@ -9,7 +9,7 @@
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
-use super::constant::{Shape, as_natural, shape};
+use super::constant::{ConstantView, Shape, shape};
 use super::{Body, CtorId, Expr, FnId, Operation, Program, TypeId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,7 +242,7 @@ impl<'a> Normal<'a> {
         };
         match self.program.expr(id) {
             Expr::Atom(a) => Some(locals[a.0.index()].clone()),
-            Expr::Static(ty, value) => self.constant(ty, value),
+            Expr::Static(value) => self.constant(value),
             Expr::Con(ctor, fields) => {
                 let mut fields = args(fields);
                 Some(if ctor == self.nil {
@@ -267,21 +267,21 @@ impl<'a> Normal<'a> {
         }
     }
 
-    fn constant(&self, ty: TypeId, value: super::ConstId) -> Option<Term> {
-        let bytes = self.program.known_bytes(value);
-        if let Some(n) = as_natural(self.program, ty, bytes) {
-            return Some(Term::Number(n));
+    fn constant(&self, value: super::ConstId) -> Option<Term> {
+        let value = self.program.constant(value);
+        match value.view() {
+            ConstantView::Natural(n) => Some(Term::Number(n.to_biguint())),
+            ConstantView::Constructor(ctor)
+                if self
+                    .program
+                    .ctors(value.owner())
+                    .iter()
+                    .all(|ctor| self.program.types_of(ctor.fields).is_empty()) =>
+            {
+                Some(tag(ctor.constructor()))
+            }
+            ConstantView::Constructor(_) | ConstantView::Spine(_) => None,
         }
-        if self
-            .program
-            .ctors(ty)
-            .iter()
-            .any(|ctor| !self.program.types_of(ctor.fields).is_empty())
-        {
-            return None;
-        }
-        let (value, _) = super::decode(self.program, ty, bytes);
-        Some(tag(value.0))
     }
 
     fn branch(

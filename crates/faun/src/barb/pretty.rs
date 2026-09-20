@@ -2,7 +2,6 @@
 
 use std::fmt::Write;
 
-use super::constant::{Shape, as_bytes, as_natural, shape};
 use super::model::{Body, ConstId, Expr, ExprId, FnId, Range, Symbol, TypeId};
 use super::program::Program;
 
@@ -102,8 +101,8 @@ impl Program {
                 let name = self.function(function).name;
                 let _ = writeln!(out, "{pad}{}", self.render_call(name, args));
             }
-            Expr::Static(id, value) => {
-                let _ = writeln!(out, "{pad}{}", self.render_known(id, value));
+            Expr::Static(value) => {
+                let _ = writeln!(out, "{pad}{}", self.render_known(value));
             }
             Expr::Match(scrutinee, arms) => {
                 let _ = writeln!(out, "{pad}match v{} {{", scrutinee.0.0);
@@ -140,19 +139,21 @@ impl Program {
     }
 
     /// A known value as what it stands for, not as its bytes.
-    fn render_known(&self, id: TypeId, value: ConstId) -> String {
-        let bytes = self.known_bytes(value);
-        if let Some(number) = as_natural(self, id, bytes) {
-            return number.to_string();
-        }
-        if let Some(run) = as_bytes(self, id, bytes)
-            && let Ok(text) = std::str::from_utf8(run)
-        {
-            return format!("{text:?}");
-        }
-        match shape(self, id) {
-            Shape::Spine { .. } => format!("<{} bytes>", bytes.len()),
-            Shape::Tagged => format!("<{}>", self.name(self.type_(id).name)),
+    fn render_known(&self, value: ConstId) -> String {
+        let known = self.constant(value);
+        match known.view() {
+            super::ConstantView::Natural(number) => number.to_biguint().to_string(),
+            super::ConstantView::Spine(spine) => {
+                if let super::ByteView::Borrowed(run) = spine.byte_slice()
+                    && let Ok(text) = std::str::from_utf8(run)
+                {
+                    return format!("{text:?}");
+                }
+                format!("<{} bytes>", known.encoded().len())
+            }
+            super::ConstantView::Constructor(_) => {
+                format!("<{}>", self.name(self.type_(known.owner()).name))
+            }
         }
     }
 }

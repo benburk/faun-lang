@@ -281,7 +281,7 @@ impl<'a> Demand<'a> {
     fn expr(&mut self, expr: barb::ExprId) -> Result<bool, String> {
         match self.program.expr(expr) {
             barb::Expr::Atom(_) => {}
-            barb::Expr::Static(ty, _) => self.type_(ty)?,
+            barb::Expr::Static(value) => self.type_(self.program.constant(value).owner())?,
             barb::Expr::Con(ctor, _) => self.type_(self.program.ctor(ctor).owner)?,
             barb::Expr::Call(id, _) => {
                 self.waiting.push(id);
@@ -599,22 +599,25 @@ impl Lowering<'_> {
             // A value the tier above worked out, as the word it lowers to:
             // which constructor for a tag, and what it counts to for a
             // number. One that carries nothing is nothing to carry.
-            barb::Expr::Static(id, value) => {
+            barb::Expr::Static(value) => {
+                let value = self.barb.constant(value);
+                let id = value.owner();
                 if !self.carries[id.index()].carried() {
                     return Answer::Nothing;
                 }
                 let class = self.width(expr);
-                let bytes = self.barb.known_bytes(value);
-                if tagged(self.barb, id) {
-                    let tag = u64::from(self.barb.tag(barb::decode(self.barb, id, bytes).0.0));
-                    return Answer::Value(b.constant(class, tag));
-                }
-                if let Some(held) = barb::as_number(self.barb, id, bytes) {
-                    Answer::Value(b.constant(class, held))
-                } else {
-                    Answer::Value(
-                        b.natural(&barb::as_natural(self.barb, id, bytes).expect("a natural")),
-                    )
+                match value.view() {
+                    barb::ConstantView::Constructor(ctor) => {
+                        let tag = u64::from(self.barb.tag(ctor.constructor()));
+                        Answer::Value(b.constant(class, tag))
+                    }
+                    barb::ConstantView::Natural(number) => match number.try_u64() {
+                        Ok(held) => Answer::Value(b.constant(class, held)),
+                        Err(barb::TooWide) => Answer::Value(b.natural(&number.to_biguint())),
+                    },
+                    barb::ConstantView::Spine(_) => {
+                        unreachable!("unsupported constants were rejected by demand")
+                    }
                 }
             }
             barb::Expr::Con(ctor, args) => self.construct(b, expr, ctor, args, locals).into(),
@@ -907,7 +910,9 @@ impl Lowering<'_> {
 
     fn expr_answer(&self, expr: barb::ExprId, carried: &[bool]) -> Answer<Class> {
         match self.barb.expr(expr) {
-            barb::Expr::Static(id, _) => self.answer(id).map(|_| self.width(expr)),
+            barb::Expr::Static(value) => self
+                .answer(self.barb.constant(value).owner())
+                .map(|_| self.width(expr)),
             barb::Expr::Con(ctor, _) => self
                 .answer(self.barb.ctor(ctor).owner)
                 .map(|_| self.width(expr)),
