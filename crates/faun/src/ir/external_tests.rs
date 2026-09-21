@@ -200,7 +200,7 @@ fn host_halts_escape_internal_callers_and_direct_external_evaluation() {
 #[test]
 fn host_values_and_direct_arguments_are_checked_against_declarations() {
     let mut p = program();
-    let byte = Class::Fixed { bits: 8 };
+    let byte = Class::fixed(8);
     let external = p.external("echo", &[byte], Returns::Values(&[byte]));
     let mut echo = reply(|args| HostResult::Return(args.to_vec()));
     assert_eq!(
@@ -267,18 +267,14 @@ fn target_contracts_check_parameters_results_and_returning_behavior() {
 #[test]
 fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not() {
     for bits in [16, 32, 64] {
-        for class in [Class::Word, Class::Fixed { bits }] {
+        for class in [Class::Word, Class::fixed(bits)] {
             let mut p = program();
             let external = p.external("argc!", &[], Returns::Values(&[class]));
             call_external(&mut p, external);
             Provider(bits).compile(&p).unwrap();
         }
         let mut p = program();
-        let external = p.external(
-            "argc!",
-            &[],
-            Returns::Values(&[Class::Fixed { bits: bits - 1 }]),
-        );
+        let external = p.external("argc!", &[], Returns::Values(&[Class::fixed(bits - 1)]));
         call_external(&mut p, external);
         assert!(
             Provider(bits)

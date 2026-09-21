@@ -4,7 +4,7 @@ use super::*;
 fn renders_value_classes_and_resolved_transfers_without_pool_runs() {
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
-        let one = b.constant(Class::Fixed { bits: 1 }, 1);
+        let one = b.constant(Class::fixed(1), 1);
         let word = b.convert(Class::Word, one);
         b.ret(&[word]);
     });

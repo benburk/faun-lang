@@ -114,7 +114,7 @@ fn representation(class: Class) -> Class {
 
 fn check_classes(source: &Program, config: Config) -> Result<(), String> {
     for class in source.classes.iter().chain(&source.signature) {
-        if let Class::Fixed { bits } = *class
+        if let Some(bits) = class.width()
             && bits > config.word_bits
         {
             return Err(format!(
@@ -140,7 +140,7 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
     check_classes(source, config)?;
     let mut needs = Needs::default();
     for body in source.functions().iter().filter_map(super::Function::body) {
-        for op in source.every(body) {
+        for (op, results) in source.walk_within(body) {
             match *op {
                 Op::Binary { op, left, .. } if source.class(left) == Class::Natural => {
                     needs.insert(Helper::arithmetic(op));
@@ -148,7 +148,7 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
                 Op::Compare { left, .. } if source.class(left) == Class::Natural => {
                     needs.insert(Helper::Compare);
                 }
-                Op::Convert { class, value } => match (source.class(value), class) {
+                Op::Convert { value } => match (source.class(value), source.class(results[0])) {
                     (Class::Address, Class::Natural) | (Class::Natural, Class::Address) => {
                         return Err(
                             "addresses cannot be reinterpreted as naturals or vice versa".into(),
@@ -183,23 +183,25 @@ fn constants(
         .collect();
     while let Some(region) = pending.pop() {
         for (op, results) in source.walk(region) {
-            let magnitude = match *op {
-                Op::If {
-                    then_region,
-                    else_region,
-                    ..
-                } => {
-                    pending.extend([then_region, else_region]);
-                    continue;
-                }
-                Op::Loop { body, .. } => {
-                    pending.push(body);
-                    continue;
-                }
-                _ => match magnitude(source, *op) {
-                    Some(value) => value,
-                    None => continue,
-                },
+            if let Op::If {
+                then_region,
+                else_region,
+                ..
+            } = *op
+            {
+                pending.extend([then_region, else_region]);
+                continue;
+            }
+            if let Op::Loop { body, .. } = *op {
+                pending.push(body);
+                continue;
+            }
+            // Only what writes a value can be a number worth placing.
+            let Some(magnitude) = results
+                .first()
+                .and_then(|&held| magnitude(source, *op, source.class(held)))
+            else {
+                continue;
             };
             let data = if let Some(&data) = interned.get(&magnitude) {
                 data
@@ -214,12 +216,9 @@ fn constants(
     Ok(constants)
 }
 
-fn magnitude(source: &Program, op: Op) -> Option<BigUint> {
+fn magnitude(source: &Program, op: Op, class: Class) -> Option<BigUint> {
     match op {
-        Op::Constant {
-            class: Class::Natural,
-            value,
-        } => Some(BigUint::from(value)),
+        Op::Constant { value } if class == Class::Natural => Some(BigUint::from(value)),
         Op::NaturalConstant(data) => {
             let span = source.datum(data);
             let bytes = match span.origin {
@@ -365,12 +364,13 @@ impl Pass<'_> {
                 .collect::<Vec<_>>()
         };
         let one = match op {
-            Op::Constant {
-                class: Class::Natural,
-                ..
+            Op::Constant { .. } | Op::NaturalConstant(_)
+                if self.source.class(results[0]) == Class::Natural =>
+            {
+                b.address_of(self.constants[&results[0]])
             }
-            | Op::NaturalConstant(_) => b.address_of(self.constants[&results[0]]),
-            Op::Constant { class, value } => b.constant(class, value),
+            Op::Constant { value } => b.constant(self.source.class(results[0]), value),
+            Op::NaturalConstant(data) => b.kept_natural(data),
             Op::AddressOf(data) => b.address_of(data),
             Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => {
                 let function = self.library.require(Helper::arithmetic(op));
@@ -394,21 +394,24 @@ impl Pass<'_> {
                 left,
                 right,
             } => b.compare(relation, v(left), v(right)),
-            Op::Convert { class, value } => match (self.source.class(value), class) {
-                (Class::Natural, Class::Natural) => self.retained(b, v(value)),
-                (_, Class::Natural) => {
-                    b.call_one(self.library.require(Helper::FromWord), &[v(value)])
-                }
-                (Class::Natural, _) => {
-                    let word = b.call_one(self.library.require(Helper::ToWord), &[v(value)]);
-                    if class == Class::Word {
-                        word
-                    } else {
-                        b.convert(class, word)
+            Op::Convert { value } => {
+                let class = self.source.class(results[0]);
+                match (self.source.class(value), class) {
+                    (Class::Natural, Class::Natural) => self.retained(b, v(value)),
+                    (_, Class::Natural) => {
+                        b.call_one(self.library.require(Helper::FromWord), &[v(value)])
                     }
+                    (Class::Natural, _) => {
+                        let word = b.call_one(self.library.require(Helper::ToWord), &[v(value)]);
+                        if class == Class::Word {
+                            word
+                        } else {
+                            b.convert(class, word)
+                        }
+                    }
+                    _ => b.convert(class, v(value)),
                 }
-                _ => b.convert(class, v(value)),
-            },
+            }
             Op::Load {
                 width,
                 address,

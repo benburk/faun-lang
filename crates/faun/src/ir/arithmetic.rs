@@ -8,7 +8,9 @@ pub(super) fn widest(a: Class, b: Class) -> Class {
     match (a, b) {
         (Class::Natural, _) | (_, Class::Natural) => Class::Natural,
         (Class::Word, _) | (_, Class::Word) => Class::Word,
-        (Class::Fixed { bits: a }, Class::Fixed { bits: b }) => Class::Fixed { bits: a.max(b) },
+        // What either can be, which is narrower than the wider of the two
+        // wherever the two say more than a width does.
+        (Class::Held(a), Class::Held(b)) => Class::Held(a.or(b)),
         _ => a,
     }
 }

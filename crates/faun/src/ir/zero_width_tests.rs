@@ -3,8 +3,8 @@ use crate::{barb::OptimizeOptions, platform::Routines};
 use num_bigint::BigUint;
 
 const SOURCE: &str = include_str!("../../tests/support/zero_width.fn");
-const ZERO: Class = Class::Fixed { bits: 0 };
-const BIT: Class = Class::Fixed { bits: 1 };
+const ZERO: Class = Class::fixed(0);
+const BIT: Class = Class::fixed(1);
 
 #[test]
 fn zero_constants_choose_fixed0_but_the_entry_still_returns_a_word() {
@@ -33,10 +33,7 @@ fn zero_constants_choose_fixed0_but_the_entry_still_returns_a_word() {
                     panic!("the source ends with exit");
                 };
                 assert_eq!(program.values(*args).len(), 1);
-                assert_eq!(
-                    program.class(program.values(*args)[0]),
-                    Class::Fixed { bits }
-                );
+                assert_eq!(program.class(program.values(*args)[0]).width(), Some(bits));
             }
         }
     }
@@ -118,10 +115,9 @@ fn range_proven_zero_arithmetic_selects_fixed0() {
                 ..
             }
         )));
-        assert!(
-            p.every(body)
-                .any(|op| matches!(op, Op::Convert { class, .. } if *class == ZERO))
-        );
+        assert!(p.walk_within(body).any(|(op, results)| {
+            matches!(op, Op::Convert { .. }) && p.class(results[0]) == ZERO
+        }));
         for argc in [0, 1, 255, 65535] {
             let mut host = Host {
                 argc,
@@ -189,8 +185,8 @@ fn comparison_arms(p: &Program, yes_tag: u64) {
     for (arm, tag) in [(yes, yes_tag), (no, 1 - yes_tag)] {
         let (op, results) = p.walk(arm).next().unwrap();
         let class = if tag == 0 { ZERO } else { BIT };
-        assert_eq!(*op, Op::Constant { class, value: tag });
-        assert_eq!(p.class(results[0]), class);
+        assert_eq!(*op, Op::Constant { value: tag });
+        assert_eq!(p.class(results[0]).width(), class.width());
         assert_eq!(
             p.outgoing(arm),
             results,
@@ -214,9 +210,9 @@ fn comparison_arms_use_minimal_constants_and_a_wide_enough_join() {
                 if known.is_some_and(|yes| if yes { yes_tag == 0 } else { yes_tag == 1 }) {
                     let body = lowered.function(lowered.entry()).body().unwrap();
                     assert!(
-                        lowered
-                            .every(body)
-                            .any(|op| matches!(op, Op::Convert { class, .. } if *class == ZERO)),
+                        lowered.walk_within(body).any(|(op, results)| {
+                            matches!(op, Op::Convert { .. }) && lowered.class(results[0]) == ZERO
+                        }),
                         "a proven zero is narrowed after the join"
                     );
                 }

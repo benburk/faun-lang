@@ -499,13 +499,13 @@ pub fn counts_in_a_global() -> Program {
     program
 }
 
-/// `Fixed { bits: 8 }` is arithmetic in Z/256, so 250 + 10 is 4 on every
+/// `fixed(8)` is arithmetic in Z/256, so 250 + 10 is 4 on every
 /// target: free on a machine with eight-bit registers, a mask on the two
 /// that are wider.
 #[must_use]
 pub fn wraps_at_eight_bits() -> Program {
-    let byte = Class::Fixed { bits: 8 };
-    let wide = Class::Fixed { bits: 9 };
+    let byte = Class::fixed(8);
+    let wide = Class::fixed(9);
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let left = b.constant(wide, 250);

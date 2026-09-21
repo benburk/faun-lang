@@ -39,7 +39,7 @@ fn program() -> Program {
             let value = b.binary(op, large, rhs);
             for (digit, &power) in powers.iter().enumerate() {
                 let part = b.binary(Binary::Div, value, power);
-                let byte = b.convert(Class::Fixed { bits: 8 }, part);
+                let byte = b.convert(Class::fixed(8), part);
                 b.store(
                     Width::Byte,
                     address,

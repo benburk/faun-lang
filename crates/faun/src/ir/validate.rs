@@ -303,6 +303,17 @@ impl Checker<'_> {
         Ok(())
     }
 
+    /// The one class an instruction writes, for those that write one.
+    ///
+    /// What it writes is not something it reads, so nothing here asks
+    /// whether the value is in scope: it is the value this brings into one.
+    fn one(&self, results: &[ValueId]) -> Result<Class, String> {
+        let [result] = results else {
+            return Err("operation must have one result".into());
+        };
+        Ok(self.program.class(*result))
+    }
+
     fn results(&self, results: &[ValueId], expected: &[Class]) -> Result<(), String> {
         let found = self.classes(results);
         if found != expected {
@@ -386,10 +397,14 @@ impl Checker<'_> {
     ) -> Result<Flow, String> {
         match *op {
             // Address constants are supported, including a literal null pointer.
-            Op::Constant { class, .. } => self.results(results, &[class])?,
-            Op::Convert { class, value } => {
+            // What one is held at is the class of the value it writes, so
+            // there is nothing here for the two of them to disagree about.
+            Op::Constant { .. } => {
+                self.one(results)?;
+            }
+            Op::Convert { value } => {
+                let class = self.one(results)?;
                 self.conversion(value, class)?;
-                self.results(results, &[class])?;
             }
             Op::NaturalConstant(_) => self.results(results, &[Class::Natural])?,
             Op::AddressOf(_) => self.results(results, &[Class::Address])?,
@@ -522,9 +537,21 @@ impl Checker<'_> {
         self.require(right, held)
     }
 
+    /// Two values may be compared where they are the same sort of thing.
+    ///
+    /// Not where one admits the other: two numbers that can be nothing the
+    /// same are still two numbers, and asking whether they are equal is a
+    /// question with an answer. What cannot be asked is whether a number
+    /// equals an address, or a machine word an arbitrary-precision natural.
     fn comparison(&self, left: ValueId, right: ValueId) -> Result<(), String> {
         let (left, right) = (self.read(left)?, self.read(right)?);
-        if !left.fits(right) && !right.fits(left) {
+        let alike = matches!(
+            (left, right),
+            (Class::Held(_) | Class::Word, Class::Held(_) | Class::Word)
+                | (Class::Natural, Class::Natural)
+                | (Class::Address, Class::Address)
+        );
+        if !alike {
             return Err(format!("{left:?} and {right:?} in one comparison"));
         }
         Ok(())

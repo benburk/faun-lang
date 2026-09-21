@@ -207,7 +207,7 @@ pub(super) fn wide(value: u64) -> Program {
 pub(super) fn narrow(bits: u16) -> Program {
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
-        let held = b.constant(Class::Fixed { bits }, 1);
+        let held = b.constant(Class::fixed(bits), 1);
         b.ret(&[held]);
     });
     program
@@ -361,7 +361,7 @@ fn source_zero_width_scalars_cross_calls_and_joins() {
         .unwrap();
         assert!(
             (0..program.values_count())
-                .any(|at| { program.class(faun::ir::ValueId::at(at)) == Class::Fixed { bits: 0 } })
+                .any(|at| { program.class(faun::ir::ValueId::at(at)) == Class::fixed(0) })
         );
         let counts = [1, 2, 3, 33];
         for (argc, (status, stdout)) in counts.into_iter().zip(execute_counts(&program, &counts)) {

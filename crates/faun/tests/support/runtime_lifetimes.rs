@@ -111,7 +111,7 @@ fn serializer(p: &mut Program) -> FunctionId {
         let length = b.constant(Class::Word, u64::try_from(OUTPUT_BYTES).unwrap());
         let radix = b.constant(Class::Natural, 256);
         b.loop_(&[args[0], zero], &[], |b, state| {
-            let byte = b.convert(Class::Fixed { bits: 8 }, state[0]);
+            let byte = b.convert(Class::fixed(8), state[0]);
             let base = b.convert(Class::Word, args[1]);
             let address = b.binary(Binary::Add, base, state[1]);
             let address = b.convert(Class::Address, address);

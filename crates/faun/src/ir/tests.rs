@@ -16,10 +16,10 @@ fn read(text: &str) -> Result<Program, String> {
 fn a_value_wider_than_what_reads_it_is_rejected() {
     let narrow = |bits| {
         let (mut program, main) = Program::new("main");
-        let takes = program.declare("takes", &[Class::Fixed { bits: 8 }], &[]);
+        let takes = program.declare("takes", &[Class::fixed(8)], &[]);
         program.define(takes, |b, _| b.ret(&[]));
         program.define(main, |b, _| {
-            let held = b.constant(Class::Fixed { bits }, 1);
+            let held = b.constant(Class::fixed(bits), 1);
             b.call(takes, &[held]);
             let status = b.constant(Class::Word, 0);
             b.ret(&[status]);
@@ -36,7 +36,7 @@ fn a_value_wider_than_what_reads_it_is_rejected() {
     // its eight bits.
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
-        let byte = b.constant(Class::Fixed { bits: 8 }, 250);
+        let byte = b.constant(Class::fixed(8), 250);
         b.ret(&[byte]);
     });
     assert!(validate(&program).is_ok());
@@ -61,7 +61,7 @@ fn an_operand_wider_than_what_reads_it_is_rejected() {
         validate(&program)
     };
 
-    let byte = Class::Fixed { bits: 8 };
+    let byte = Class::fixed(8);
     assert!(held(Class::Word, byte).is_ok(), "a byte read as a word");
     assert!(held(byte, byte).is_ok());
     let error = held(byte, Class::Word).unwrap_err();
@@ -95,7 +95,7 @@ fn a_call_gives_a_name_what_it_takes() {
     assert!(error.contains("main calls `takes_one`"), "{error}");
     // A byte is read as a word without anything in between; an address is
     // not a number, whatever it is as wide as.
-    assert!(bad(1, Class::Fixed { bits: 8 }).is_ok());
+    assert!(bad(1, Class::fixed(8)).is_ok());
     let error = bad(1, Class::Address).unwrap_err();
     assert!(error.contains("main calls `takes_one`"), "{error}");
 }
@@ -210,7 +210,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
     routines.push(crate::platform::Routine {
         name: "narrow".to_owned(),
         offered: false,
-        takes: vec![Class::Fixed { bits: 4 }],
+        takes: vec![Class::fixed(4)],
         returns: crate::platform::Returns::Unit,
     });
 
@@ -304,10 +304,10 @@ fn how_wide_a_number_is_held_is_what_it_can_be() {
            two = Succ(Succ(Zero))
            exit!(h add(two two))",
     );
-    assert!(held.contains(&Class::Fixed { bits: 3 }), "{held:?}");
+    assert!(held.iter().any(|held| held.width() == Some(3)), "{held:?}");
     assert!(
         held.iter()
-            .all(|held| held.fits(Class::Fixed { bits: 3 }) || *held == Class::Word),
+            .all(|held| held.width().is_some_and(|bits| bits <= 3) || *held == Class::Word),
         "{held:?}"
     );
 }

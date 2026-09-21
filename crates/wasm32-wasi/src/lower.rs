@@ -59,7 +59,7 @@ const I32_LT_U: u8 = 0x49;
 const EMPTY: u8 = 0x40;
 
 /// How wide a class is held, which for anything unfixed is a word.
-const fn bits(class: Class) -> u16 {
+fn bits(class: Class) -> u16 {
     class.bits(WORD_BITS)
 }
 
@@ -450,9 +450,9 @@ impl Lowering<'_> {
                 offset,
                 value,
             } => self.store_at(*width, *address, *offset, *value),
-            Op::Convert { class, value } => {
+            Op::Convert { value } => {
                 self.push(*value);
-                let kept = bits(*class);
+                let kept = bits(self.program.class(results[0]));
                 if kept < bits(self.program.class(*value)) {
                     self.narrow(kept);
                 }

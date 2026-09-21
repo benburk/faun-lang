@@ -343,7 +343,7 @@ fn conversion_aliases_comparisons_and_odd_width_truncation() {
                     },
                     |b| b.yield_(&[zero]),
                 );
-                let narrow = b.convert(Class::Fixed { bits: narrow }, result[0]);
+                let narrow = b.convert(Class::fixed(narrow), result[0]);
                 let result = b.convert(Class::Word, narrow);
                 let result = b.binary(Binary::Mul, result, equal);
                 b.ret(&[result]);
@@ -430,8 +430,12 @@ fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
         );
     }
     let (mut p, main) = Program::new("main");
+    // Wider than the machine, which is a program this cannot represent
+    // rather than one it can hold. Nothing above can write a width no
+    // number needs, so the width said here is one a smaller machine has
+    // not got.
     p.define(main, |b, _| {
-        b.constant(Class::Fixed { bits: 65 }, 1);
+        b.constant(Class::fixed(17), 1);
         let zero = b.constant(Class::Word, 0);
         b.ret(&[zero]);
     });
@@ -439,7 +443,7 @@ fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
         legalize(
             &p,
             Config {
-                word_bits: 64,
+                word_bits: 16,
                 heap_bytes: 256
             }
         )

@@ -157,15 +157,15 @@ pub trait Target: fmt::Debug {
             accepts_class(name, word, class)?;
         }
         accepts_externals(self, program)?;
-        for op in program
+        for (op, results) in program
             .functions()
             .iter()
             .filter_map(crate::ir::Function::body)
-            .flat_map(|body| program.every(body))
+            .flat_map(|body| program.walk_within(body))
         {
             // Encoded constants must fit; narrowing is explicit.
-            if let Op::Constant { class, value } = *op {
-                let bits = class.bits(word);
+            if let Op::Constant { value } = *op {
+                let bits = program.class(results[0]).bits(word);
                 if bits < 64 && value >> bits != 0 {
                     return Err(format!(
                         "{name} holds {bits} bits, and {value} does not fit in them"
@@ -243,9 +243,9 @@ fn signature_classes(program: &Program) -> impl Iterator<Item = &Class> {
 
 // Environment discovery may refine a Word result to the target's fixed width.
 // Both describe the same scalar ABI here, but narrower claims must still agree.
-const fn abi_class(class: Class, word: u16) -> Class {
+fn abi_class(class: Class, word: u16) -> Class {
     match class {
-        Class::Fixed { bits } if bits == word => Class::Word,
+        Class::Held(_) if matches!(class.width(), Some(bits) if bits == word) => Class::Word,
         class => class,
     }
 }
@@ -256,7 +256,7 @@ fn accepts_class(name: &str, word: u16, class: Class) -> Result<(), String> {
             "{name} raw emission requires legalization of arbitrary-precision naturals"
         ));
     }
-    if let Class::Fixed { bits } = class
+    if let Some(bits) = class.width()
         && bits > word
     {
         return Err(format!(

@@ -114,8 +114,8 @@ fn successful_retry_uses_the_same_parameters_and_installs_only_its_body() {
 fn scalar_calls_emit_the_same_ir_as_general_single_result_calls() {
     for class in [
         Class::Word,
-        Class::Fixed { bits: 0 },
-        Class::Fixed { bits: 7 },
+        Class::fixed(0),
+        Class::fixed(7),
         Class::Address,
         Class::Natural,
     ] {
@@ -143,11 +143,7 @@ fn scalar_calls_emit_the_same_ir_as_general_single_result_calls() {
         assert_eq!(scalar.operands, general.operands);
         assert_eq!(scalar.classes, general.classes);
         assert_eq!(scalar.regions, general.regions);
-        let expected = if class == (Class::Fixed { bits: 0 }) {
-            0
-        } else {
-            7
-        };
+        let expected = if class == (Class::fixed(0)) { 0 } else { 7 };
         assert_eq!(answer(&scalar), expected);
         assert_eq!(answer(&general), expected);
     }

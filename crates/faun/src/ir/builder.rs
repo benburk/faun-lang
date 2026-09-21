@@ -60,7 +60,7 @@ impl Builder<'_> {
 
     pub fn constant(&mut self, class: Class, value: u64) -> ValueId {
         let value = wrap(class, value);
-        self.push_one(Op::Constant { class, value }, class)
+        self.push_one(Op::Constant { value }, class)
     }
 
     /// An arbitrary-precision constant, kept compactly in the data pool.
@@ -134,7 +134,7 @@ impl Builder<'_> {
     }
 
     pub fn convert(&mut self, class: Class, value: ValueId) -> ValueId {
-        self.push_one(Op::Convert { class, value }, class)
+        self.push_one(Op::Convert { value }, class)
     }
 
     pub fn call(&mut self, function: FunctionId, args: &[ValueId]) -> Vec<ValueId> {

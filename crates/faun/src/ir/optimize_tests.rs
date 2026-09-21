@@ -12,7 +12,7 @@ use super::{
     validate,
 };
 
-const BIT: Class = Class::Fixed { bits: 1 };
+const BIT: Class = Class::fixed(1);
 
 /// A host that answers nothing, for programs that call nothing.
 struct Silent;
@@ -48,6 +48,18 @@ fn settled(p: &Program) -> Program {
 fn count(p: &Program, wanted: impl Fn(&Op) -> bool) -> usize {
     let body = p.function(p.entry()).body().expect("a body");
     p.every(body).filter(|op| wanted(op)).count()
+}
+
+/// The same, where what an instruction writes is held at decides.
+fn count_at(p: &Program, wanted: impl Fn(&Op, Class) -> bool) -> usize {
+    let body = p.function(p.entry()).body().expect("a body");
+    p.walk_within(body)
+        .filter(|(op, results)| {
+            results
+                .first()
+                .is_some_and(|&value| wanted(op, p.class(value)))
+        })
+        .count()
 }
 
 const fn is_if(op: &Op) -> bool {
@@ -176,10 +188,10 @@ fn a_tag_read_elsewhere_survives_the_branch_that_no_longer_needs_it() {
 
 #[test]
 fn a_constant_is_written_at_the_width_it_is_read_at() {
-    let wide = Class::Fixed { bits: 9 };
+    let wide = Class::fixed(9);
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
-        let narrow = b.constant(Class::Fixed { bits: 3 }, 5);
+        let narrow = b.constant(Class::fixed(3), 5);
         let read = b.convert(wide, narrow);
         let other = b.constant(wide, 256);
         let total = b.binary(Binary::Add, read, other);
@@ -188,19 +200,16 @@ fn a_constant_is_written_at_the_width_it_is_read_at() {
     });
     let held = settled(&p);
     assert_eq!(
-        count(
-            &held,
-            |op| matches!(*op, Op::Convert { class, .. } if class == wide)
-        ),
+        count_at(&held, |op, class| {
+            matches!(*op, Op::Convert { .. }) && class == wide
+        }),
         0,
         "the constant arrives wide rather than being widened"
     );
     assert_eq!(
-        count(&held, |op| *op
-            == Op::Constant {
-                class: wide,
-                value: 5
-            }),
+        count_at(&held, |op, class| {
+            *op == Op::Constant { value: 5 } && class == wide
+        }),
         1
     );
     assert_eq!(returns(&held), BigUint::from(261u16));
@@ -210,10 +219,10 @@ fn a_constant_is_written_at_the_width_it_is_read_at() {
 /// it at that width already means.
 #[test]
 fn a_constant_read_narrower_is_the_number_that_fits() {
-    let narrow = Class::Fixed { bits: 3 };
+    let narrow = Class::fixed(3);
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
-        let wide = b.constant(Class::Fixed { bits: 9 }, 13);
+        let wide = b.constant(Class::fixed(9), 13);
         let read = b.convert(narrow, wide);
         let answer = b.convert(Class::Word, read);
         b.ret(&[answer]);
@@ -232,7 +241,7 @@ fn what_nothing_reads_goes_and_what_reads_it_keeps_it() {
         let kept = b.constant(Class::Word, 7);
         let dead = b.constant(Class::Word, 9);
         let also_dead = b.binary(Binary::Add, dead, dead);
-        b.convert(Class::Fixed { bits: 4 }, also_dead);
+        b.convert(Class::fixed(4), also_dead);
         b.ret(&[kept]);
     });
     let held = settled(&p);
@@ -323,11 +332,9 @@ fn a_run_of_steps_past_a_value_is_one_step() {
     let held = settled(&stepped(WIDE, &[1, 1, 1, 1]));
     assert_eq!(count(&held, is_add), 1, "one step, not four");
     assert_eq!(
-        count(&held, |op| *op
-            == Op::Constant {
-                class: WIDE,
-                value: 4
-            }),
+        count_at(&held, |op, class| {
+            *op == Op::Constant { value: 4 } && class == WIDE
+        }),
         1
     );
     assert_eq!(
@@ -345,7 +352,7 @@ fn a_run_of_steps_past_a_value_is_one_step() {
 /// valid-looking one that answers something else.
 #[test]
 fn a_run_that_would_not_fit_its_width_is_left_alone() {
-    let narrow = Class::Fixed { bits: 3 };
+    let narrow = Class::fixed(3);
     // Three, and eight past it, which three bits do not hold.
     let held = optimize(&stepped(narrow, &[4, 4]), &OptimizeOptions::default());
     validate(&held).expect("a sound program");
@@ -358,7 +365,7 @@ fn a_run_that_would_not_fit_its_width_is_left_alone() {
 fn a_run_that_changes_width_is_two_runs() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
-        let narrow = Class::Fixed { bits: 3 };
+        let narrow = Class::fixed(3);
         let start = b.constant(narrow, 1);
         let one = b.constant(narrow, 1);
         let held = b.binary_at(narrow, Binary::Add, start, one);
@@ -409,7 +416,7 @@ fn a_step_of_something_worked_out_is_left_alone() {
     assert_eq!(returns(&held), BigUint::from(4u8));
 }
 
-const WIDE: Class = Class::Fixed { bits: 9 };
+const WIDE: Class = Class::fixed(9);
 
 const fn is_add(op: &Op) -> bool {
     matches!(

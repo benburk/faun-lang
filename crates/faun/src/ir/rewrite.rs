@@ -194,7 +194,7 @@ impl<'a> Rebuild<'a> {
     /// first because a region is walked rather than named.
     fn plain(&self, b: &mut Builder, op: Op, results: &[ValueId]) -> Vec<ValueId> {
         match op {
-            Op::Constant { class, value } => vec![b.constant(class, value)],
+            Op::Constant { value } => vec![b.constant(self.source.class(results[0]), value)],
             Op::NaturalConstant(data) => vec![b.kept_natural(data)],
             Op::AddressOf(data) => vec![b.address_of(data)],
             Op::Binary { op, left, right } => vec![b.binary_at(
@@ -222,7 +222,9 @@ impl<'a> Rebuild<'a> {
                 b.store(width, self.value(address), offset, self.value(value));
                 Vec::new()
             }
-            Op::Convert { class, value } => vec![b.convert(class, self.value(value))],
+            Op::Convert { value } => {
+                vec![b.convert(self.source.class(results[0]), self.value(value))]
+            }
             Op::Call { function, args } => b.call(function, &self.args(args)),
             Op::If { .. } | Op::Loop { .. } => unreachable!("a region is walked, not written"),
         }

@@ -89,10 +89,16 @@ impl Routine {
     /// a program adds to is a count it has a bound for. One that answers
     /// nothing, or answers something that is not a number, bounds nothing.
     #[must_use]
-    pub const fn bounds(&self) -> Option<crate::barb::Bounds> {
+    pub fn bounds(&self) -> Option<crate::barb::Bounds> {
         let high = match self.returns {
-            Returns::Value(Class::Fixed { bits }) if bits < 64 => Some((1u64 << bits) - 1),
-            Returns::Value(Class::Word | Class::Fixed { bits: 64 }) => Some(u64::MAX),
+            Returns::Value(Class::Word) => Some(u64::MAX),
+            Returns::Value(held @ Class::Held(_)) => held.width().map(|bits| {
+                if bits < 64 {
+                    (1u64 << bits) - 1
+                } else {
+                    u64::MAX
+                }
+            }),
             // A natural, an address, or a width no machine here has: a
             // number with no bound rather than no number.
             Returns::Value(_) => None,
@@ -146,7 +152,7 @@ impl Routines {
     pub fn with_word(mut self, bits: u16) -> Self {
         for routine in &mut self.0 {
             if routine.returns == Returns::Value(Class::Word) {
-                routine.returns = Returns::Value(Class::Fixed { bits });
+                routine.returns = Returns::Value(Class::fixed(bits));
             }
         }
         self
@@ -206,7 +212,10 @@ pub fn reads(classes: &[Class]) -> String {
             Class::Natural => "an arbitrary-precision natural".to_owned(),
             Class::Word => "a word".to_owned(),
             Class::Address => "an address".to_owned(),
-            Class::Fixed { bits } => format!("{bits} bits"),
+            Class::Held(_) => class.width().map_or_else(
+                || "a number with no greatest".to_owned(),
+                |bits| format!("{bits} bits"),
+            ),
         })
         .collect::<Vec<_>>()
         .join(" and ")

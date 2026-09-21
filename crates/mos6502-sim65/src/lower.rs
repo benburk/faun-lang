@@ -1706,8 +1706,8 @@ impl Lowering<'_> {
                 offset,
                 value,
             } => self.store_at(*width, *address, *offset, *value),
-            Op::Convert { class, value } => {
-                self.convert(*class, *value, results[0]);
+            Op::Convert { value } => {
+                self.convert(program.class(results[0]), *value, results[0]);
             }
             Op::Call { function, args } => {
                 if let Some(symbol) = program.function(*function).external() {
@@ -1778,7 +1778,7 @@ impl Lowering<'_> {
 }
 
 /// How wide a class is held, which for anything unfixed is a word.
-const fn bits(class: Class) -> u16 {
+fn bits(class: Class) -> u16 {
     class.bits(WORD_BITS)
 }
 

@@ -128,10 +128,20 @@ impl Program {
     ///
     /// Never: what it reads back is what it just read.
     pub fn every(&self, region: RegionId) -> impl Iterator<Item = &Op> {
+        self.walk_within(region).map(|(op, _)| op)
+    }
+
+    /// The same, each with what it defines, for anything that has to read a
+    /// value's class to know what an instruction meant.
+    ///
+    /// # Panics
+    /// Never: what it reads back is what it just read.
+    pub fn walk_within(&self, region: RegionId) -> impl Iterator<Item = (&Op, &[ValueId])> {
         let mut stack = vec![(region, 0usize)];
         std::iter::from_fn(move || {
             loop {
                 let (region, at) = *stack.last()?;
+                let ops = self.regions[region].ops;
                 let Some(op) = self.ops(region).get(at) else {
                     stack.pop();
                     continue;
@@ -149,7 +159,12 @@ impl Program {
                     Op::Loop { body, .. } => stack.push((body, 0)),
                     _ => {}
                 }
-                return Some(op);
+                return Some((
+                    op,
+                    &self.operands[self.results
+                        [usize::try_from(ops.start()).expect("an index that fits") + at]
+                        .range()],
+                ));
             }
         })
     }

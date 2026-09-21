@@ -162,7 +162,7 @@ fn widened_loop(initial_bits: u16) -> Program {
     p.define(main, |b, _| {
         let one = b.constant(Class::Word, 1);
         b.convert(Class::Natural, one); // Force representation rebuilding.
-        let initial = b.constant(Class::Fixed { bits: initial_bits }, 0);
+        let initial = b.constant(Class::fixed(initial_bits), 0);
         let limit = b.constant(Class::Word, 260);
         let answer = b.loop_(&[initial], &[Class::Word], |b, state| {
             parameter = Some(state[0]);

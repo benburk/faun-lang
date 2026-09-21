@@ -6,7 +6,7 @@
 //! `x%0=x`). Only explicit conversions truncate values. Builders normalize Fixed
 //! constants before storing them; encoded constants must fit, just as with
 //! `Target::accepts`. In particular, an oversized Word constant is an error,
-//! not an implicit conversion. `Fixed { bits: 0 }` holds only zero.
+//! not an implicit conversion. `fixed(0)` holds only zero.
 //! Memory is byte-addressed, unaligned access is allowed, address
 //! zero is invalid, and Data is read-only. These addresses are interpreter-local.
 //!
@@ -275,12 +275,14 @@ impl<H: Host> Machine<'_, H> {
             .ok_or_else(|| invalid("value id"))
     }
 
-    const fn width(&self, class: Class) -> Result<Option<u16>, Error> {
+    fn width(&self, class: Class) -> Result<Option<u16>, Error> {
         match class {
             Class::Natural => Ok(None),
             Class::Word | Class::Address => Ok(Some(self.config.word_bits)),
-            Class::Fixed { bits } if bits <= self.config.word_bits => Ok(Some(bits)),
-            Class::Fixed { .. } => Err(Error::DoesNotFit(class)),
+            Class::Held(_) => match class.width() {
+                Some(bits) if bits <= self.config.word_bits => Ok(Some(bits)),
+                _ => Err(Error::DoesNotFit(class)),
+            },
         }
     }
 
@@ -626,9 +628,23 @@ impl<H: Host> Machine<'_, H> {
         Ok(None)
     }
 
+    /// Which of two a comparison says, as the nought or one it answers.
+    fn compared(
+        &self,
+        relation: Relation,
+        left: ValueId,
+        right: ValueId,
+    ) -> Result<BigUint, Error> {
+        let (left, right) = (self.value(left)?, self.value(right)?);
+        Ok(BigUint::from(u8::from(match relation {
+            Relation::Equal => left == right,
+            Relation::Less => left < right,
+        })))
+    }
+
     fn scalar(&mut self, op: Op, results: Range) -> Result<Vec<BigUint>, Error> {
         let value = match op {
-            Op::Constant { class, value } => self.constant(class, value)?,
+            Op::Constant { value } => self.constant(self.result_class(results)?, value)?,
             Op::NaturalConstant(id) => self.natural(id)?,
             Op::AddressOf(id) => BigUint::from(self.datum_address(id)?),
             Op::Binary { op, left, right } => self.binary(
@@ -641,14 +657,10 @@ impl<H: Host> Machine<'_, H> {
                 relation,
                 left,
                 right,
-            } => {
-                let (left, right) = (self.value(left)?, self.value(right)?);
-                BigUint::from(u8::from(match relation {
-                    Relation::Equal => left == right,
-                    Relation::Less => left < right,
-                }))
+            } => self.compared(relation, left, right)?,
+            Op::Convert { value } => {
+                self.convert(self.result_class(results)?, self.value(value)?)?
             }
-            Op::Convert { class, value } => self.convert(class, self.value(value)?)?,
             Op::Load {
                 width,
                 address,

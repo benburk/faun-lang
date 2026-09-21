@@ -177,9 +177,9 @@ fn natural_constants_and_fixed_arithmetic_check_their_fit() {
     let large = (BigUint::from(1u8) << 150usize) + BigUint::from(511u16);
     p.define(main, |b, _| {
         let large = b.natural(&large);
-        let byte = b.convert(Class::Fixed { bits: 8 }, large);
-        let one = b.constant(Class::Fixed { bits: 8 }, 1);
-        let sum = b.binary_at(Class::Fixed { bits: 9 }, Binary::Add, byte, one);
+        let byte = b.convert(Class::fixed(8), large);
+        let one = b.constant(Class::fixed(8), 1);
+        let sum = b.binary_at(Class::fixed(9), Binary::Add, byte, one);
         let word = b.convert(Class::Word, sum);
         b.ret(&[word]);
     });
@@ -190,25 +190,25 @@ fn natural_constants_and_fixed_arithmetic_check_their_fit() {
         );
     }
     p.define(main, |b, _| {
-        let max = b.constant(Class::Fixed { bits: 8 }, 255);
-        let one = b.constant(Class::Fixed { bits: 8 }, 1);
+        let max = b.constant(Class::fixed(8), 255);
+        let one = b.constant(Class::fixed(8), 1);
         let overflow = b.binary(Binary::Add, max, one);
         let word = b.convert(Class::Word, overflow);
         b.ret(&[word]);
     });
     assert_eq!(
         run(&p, main, &[], 64),
-        Err(Error::DoesNotFit(Class::Fixed { bits: 8 }))
+        Err(Error::DoesNotFit(Class::fixed(8)))
     );
     p.define(main, |b, _| {
-        let zero = b.constant(Class::Fixed { bits: 8 }, 0);
-        let one = b.constant(Class::Fixed { bits: 8 }, 1);
+        let zero = b.constant(Class::fixed(8), 0);
+        let one = b.constant(Class::fixed(8), 1);
         let underflow = b.binary(Binary::Sub, zero, one);
         b.ret(&[underflow]);
     });
     assert_eq!(
         run(&p, main, &[], 64),
-        Err(Error::DoesNotFit(Class::Fixed { bits: 8 }))
+        Err(Error::DoesNotFit(Class::fixed(8)))
     );
 }
 
@@ -315,12 +315,12 @@ fn invalid_memory_widths_and_missing_terminators_are_errors() {
     });
     assert_eq!(run(&p, main, &[], 64), Err(Error::ReadOnlyMemory));
     p.define(main, |b, _| {
-        let n = b.constant(Class::Fixed { bits: 17 }, 1);
+        let n = b.constant(Class::fixed(17), 1);
         b.ret(&[n]);
     });
     assert_eq!(
         run(&p, main, &[], 16),
-        Err(Error::DoesNotFit(Class::Fixed { bits: 17 }))
+        Err(Error::DoesNotFit(Class::fixed(17)))
     );
     assert_eq!(run(&p, main, &[], 8), Err(Error::InvalidConfig));
     p.define(main, |_, _| ());
@@ -432,7 +432,6 @@ fn malformed_executed_ids_and_exit_arities_do_not_panic() {
         .range()
         .start;
     p.ops[op] = Op::Convert {
-        class: Class::Word,
         value: ValueId(u32::MAX),
     };
     assert!(matches!(
@@ -641,11 +640,11 @@ fn natural_multiplication_size_guard_accepts_exact_boundary_and_zero() {
 
 #[test]
 fn fixed_products_require_a_fitting_result_class() {
-    let class = Class::Fixed { bits: 8 };
+    let class = Class::fixed(8);
     let (mut p, f) = binary_program(class, Binary::Mul);
-    let wide = p.declare("wide", &[class, class], &[Class::Fixed { bits: 9 }]);
+    let wide = p.declare("wide", &[class, class], &[Class::fixed(9)]);
     p.define(wide, |b, args| {
-        let product = b.binary_at(Class::Fixed { bits: 9 }, Binary::Mul, args[0], args[1]);
+        let product = b.binary_at(Class::fixed(9), Binary::Mul, args[0], args[1]);
         b.ret(&[product]);
     });
     for bits in [16, 32, 64] {
@@ -663,7 +662,7 @@ fn fixed_products_require_a_fitting_result_class() {
 
 #[test]
 fn zero_bit_fixed_values_constants_and_conversions_are_always_zero() {
-    let class = Class::Fixed { bits: 0 };
+    let class = Class::fixed(0);
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let zero = b.constant(class, u64::MAX);
@@ -713,7 +712,7 @@ fn oversized_word_and_address_constants_are_rejected_not_truncated() {
     }
     // Fixed constants are normalized by Builder, before any target sees them.
     p.define(main, |b, _| {
-        let byte = b.constant(Class::Fixed { bits: 8 }, 256);
+        let byte = b.constant(Class::fixed(8), 256);
         b.ret(&[byte]);
     });
     for bits in [16, 32, 64] {
@@ -726,13 +725,12 @@ fn oversized_word_and_address_constants_are_rejected_not_truncated() {
         .ops
         .range()
         .start;
-    p.ops[op] = Op::Constant {
-        class: Class::Fixed { bits: 8 },
-        value: 256,
-    };
+    // The builder normalized it; writing the number back behind its back
+    // is the only way to hand the interpreter one that does not fit.
+    p.ops[op] = Op::Constant { value: 256 };
     assert_eq!(
         run(&p, main, &[], 64),
-        Err(Error::DoesNotFit(Class::Fixed { bits: 8 }))
+        Err(Error::DoesNotFit(Class::fixed(8)))
     );
 }
 

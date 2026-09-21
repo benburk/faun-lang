@@ -183,7 +183,9 @@ impl Plan {
                 Op::AddressOf(data) => self.source[results[0].index()] = Source::Addr(data),
                 // A conversion that narrows nothing leaves the bits alone,
                 // so the result can live wherever the operand does.
-                Op::Convert { class, value } if bits(class) >= bits(program.class(value)) => {
+                Op::Convert { value }
+                    if bits(program.class(results[0])) >= bits(program.class(value)) =>
+                {
                     let result = results[0];
                     self.source[result.index()] = self.source[value.index()];
                     // The storage is shared, so its readers are too, and
@@ -265,7 +267,7 @@ impl Plan {
 }
 
 /// How wide a class is held, which for anything unfixed is a word.
-const fn bits(class: Class) -> u16 {
+fn bits(class: Class) -> u16 {
     class.bits(WORD_BITS)
 }
 
@@ -425,11 +427,11 @@ impl Lowering<'_> {
                 offset,
                 value,
             } => self.store_at(*width, *address, *offset, *value),
-            Op::Convert { class, value } => {
+            Op::Convert { value } => {
                 // Whatever the source made meaningful, kept as far as the
                 // target is wide. When that takes no instruction, the plan
                 // has already given the result the operand's storage.
-                let kept = bits(*class);
+                let kept = bits(self.program.class(results[0]));
                 if kept < bits(self.program.class(*value)) {
                     self.read(Reg::Rax, *value);
                     self.asm.narrow(kept);

@@ -72,7 +72,7 @@ impl Program {
                 if !results.is_empty() {
                     let _ = write!(out, "{} = ", self.bindings(results));
                 }
-                let _ = writeln!(out, "{}", self.render_op(*op));
+                let _ = writeln!(out, "{}", self.render_op(*op, results));
             }
             if let Some(term) = region.terminator {
                 let _ = writeln!(
@@ -99,7 +99,7 @@ impl Program {
         clippy::too_many_lines,
         reason = "one textual form per operation in an exhaustive match"
     )]
-    fn render_op(&self, op: Op) -> String {
+    fn render_op(&self, op: Op, results: &[ValueId]) -> String {
         match op {
             Op::Constant { value, .. } => format!("const {value}"),
             Op::NaturalConstant(data) => format!("natural d{}", data.index()),
@@ -127,9 +127,14 @@ impl Program {
                 address.index(),
                 value.index()
             ),
-            Op::Convert { class: to, value } => {
-                format!("convert v{} to {}", value.index(), class(to))
-            }
+            // The class is the one the value it writes is held at, shown
+            // beside that value already; saying it again here is for whoever
+            // reads a conversion and wants to see what it converts to.
+            Op::Convert { value } => format!(
+                "convert v{} to {}",
+                value.index(),
+                class(self.class(results[0]))
+            ),
             Op::Call { function, args } => format!(
                 "call {}({})  # f{}",
                 self.name(self.function(function).name),
@@ -160,7 +165,9 @@ fn class(held: Class) -> String {
         Class::Natural => "natural".to_owned(),
         Class::Word => "word".to_owned(),
         Class::Address => "address".to_owned(),
-        Class::Fixed { bits } => format!("fixed{bits}"),
+        Class::Held(_) => held
+            .width()
+            .map_or_else(|| "unbounded".to_owned(), |bits| format!("fixed{bits}")),
     }
 }
 

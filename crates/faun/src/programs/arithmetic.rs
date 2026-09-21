@@ -48,7 +48,7 @@ pub fn boundaries(bits: u16, op: Binary) -> Program {
 /// If an input overflows u64 arithmetic or subtraction is not guarded.
 #[must_use]
 pub fn cases(bits: u16, op: Binary, pairs: &[(u64, u64)]) -> Program {
-    let class = Class::Fixed { bits };
+    let class = Class::fixed(bits);
     let (mut program, main) = Program::new("main");
     let check = program.declare("check", &[class, class, class], &[Class::Word]);
     program.define(check, |b, args| {
@@ -84,8 +84,8 @@ pub fn cases(bits: u16, op: Binary, pairs: &[(u64, u64)]) -> Program {
 /// wider class. Promotion must not truncate to the operand's old width.
 #[must_use]
 pub fn odd_conversion() -> Program {
-    let small = Class::Fixed { bits: 7 };
-    let wide = Class::Fixed { bits: 15 };
+    let small = Class::fixed(7);
+    let wide = Class::fixed(15);
     let (mut program, main) = Program::new("main");
     let check = program.declare("convert", &[wide], &[Class::Word]);
     program.define(check, |b, args| {
@@ -112,7 +112,7 @@ pub fn zero_conversion() -> Program {
     let (mut program, main) = Program::new("main");
     let check = program.declare("convert", &[Class::Word], &[Class::Word]);
     program.define(check, |b, args| {
-        let narrowed = b.convert(Class::Fixed { bits: 0 }, args[0]);
+        let narrowed = b.convert(Class::fixed(0), args[0]);
         let promoted = b.convert(Class::Word, narrowed);
         let zero = b.constant(Class::Word, 0);
         let equal = b.compare(Relation::Equal, promoted, zero);

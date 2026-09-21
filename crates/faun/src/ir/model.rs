@@ -2,6 +2,7 @@
 //!
 //! [`super::Program`] owns the pools these values refer to.
 
+use crate::facts::Facts;
 pub use crate::index::Range;
 use crate::index::index;
 
@@ -35,20 +36,49 @@ pub enum Class {
     Natural,
     /// As wide as an address, whatever the target's is.
     Word,
-    /// A value needing at least this many bits, and never more. It is a
-    /// requirement rather than a modulus: a target may hold one in anything
-    /// wider, since what it holds above those bits is nought. Zero bits
-    /// admits only zero; it is still a scalar, not an erased value.
+    /// What a number can be, as the tier above worked it out.
+    ///
+    /// One with no greatest is [`Self::Natural`], and the two say the same
+    /// thing: the variants stay apart only while the tiers below read them
+    /// apart, and nothing constructs this one without a greatest.
+    ///
+    /// It is a requirement rather than a modulus: a target may hold one in
+    /// anything wide enough, since what it holds above is nought. A value
+    /// that can only be nought needs no bits at all; it is still a scalar,
+    /// not an erased value.
     ///
     /// So nothing wraps of its own accord. Arithmetic on values that fit
     /// answers a value that fits, because the tier above worked out what
-    /// they could be before saying how wide to hold them, and taking one
-    /// modulo a width is what [`Op::Convert`] is for -- a program asking,
-    /// rather than a machine deciding.
-    Fixed {
-        bits: u16,
-    },
+    /// they could be before anything said how wide to hold them, and taking
+    /// one modulo a width is what [`Op::Convert`] is for -- a program
+    /// asking, rather than a machine deciding.
+    Held(Facts),
     Address,
+}
+
+impl Class {
+    /// A value of no more than this many bits, which is what a width says
+    /// when a width is all that is known.
+    #[must_use]
+    pub const fn fixed(bits: u16) -> Self {
+        Self::Held(Facts {
+            low: 0,
+            high: Some(if bits >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << bits) - 1
+            }),
+        })
+    }
+
+    /// What is known about it, where it is a number worked out here.
+    #[must_use]
+    pub const fn facts(self) -> Option<Facts> {
+        match self {
+            Self::Held(facts) => Some(facts),
+            Self::Natural | Self::Word | Self::Address => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,8 +118,9 @@ pub enum Offset {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
+    /// A number known before the program runs. What it is held at is the
+    /// class of the value it writes, said there and not here as well.
     Constant {
-        class: Class,
         value: u64,
     },
     /// Unsigned magnitude in little-endian bytes, held in the data pool.
@@ -116,11 +147,11 @@ pub enum Op {
         offset: Offset,
         value: ValueId,
     },
-    /// `value` read as `class`, which is the only place a width changes.
-    /// Everything else works at the width its operands already have, so a
-    /// target need not normalise after each operation.
+    /// `value` read as the class of what this writes, which is the only
+    /// place a width changes. Everything else works at the width its
+    /// operands already have, so a target need not normalise after each
+    /// operation.
     Convert {
-        class: Class,
         value: ValueId,
     },
     Call {
@@ -236,11 +267,23 @@ impl Class {
     /// If asked for the width of an arbitrary-precision natural. Targets
     /// without that representation must reject it before selecting widths.
     #[must_use]
-    pub const fn bits(self, word: u16) -> u16 {
+    pub fn bits(self, word: u16) -> u16 {
         match self {
-            Self::Fixed { bits } => bits,
+            Self::Held(facts) => facts
+                .width()
+                .expect("a number with no greatest has no fixed width"),
             Self::Word | Self::Address => word,
             Self::Natural => panic!("an arbitrary-precision integer has no fixed width"),
+        }
+    }
+
+    /// How many bits hold every number it can be, where it is a number and
+    /// something says how big it gets.
+    #[must_use]
+    pub fn width(self) -> Option<u16> {
+        match self {
+            Self::Held(facts) => facts.width(),
+            Self::Natural | Self::Word | Self::Address => None,
         }
     }
 
@@ -250,13 +293,24 @@ impl Class {
     /// wider one; the other way needs taking modulo, which is an operation
     /// rather than an assumption.
     #[must_use]
-    pub const fn fits(self, wanted: Self) -> bool {
+    pub fn fits(self, wanted: Self) -> bool {
         match (self, wanted) {
             (Self::Address, Self::Address)
             | (Self::Word, Self::Word)
             | (Self::Natural, Self::Natural) => true,
-            (Self::Fixed { bits }, Self::Word) => bits <= 64,
-            (Self::Fixed { bits }, Self::Fixed { bits: wanted }) => bits <= wanted,
+            // Every number a machine word holds is one, and a number with
+            // no greatest is not something a word is known to hold.
+            (Self::Held(facts), Self::Word) => matches!(facts.width(), Some(bits) if bits <= 64),
+            // Room, not range: a value is already read as anything with
+            // room for it, and two numbers needing the same bits need the
+            // same bits whatever else is known about them. Whether a
+            // narrowing takes anything off is a different question, asked
+            // of the facts by whoever wants to know.
+            (Self::Held(held), Self::Held(wanted)) => match (held.width(), wanted.width()) {
+                (_, None) => true,
+                (None, Some(_)) => false,
+                (Some(held), Some(wanted)) => held <= wanted,
+            },
             _ => false,
         }
     }
@@ -266,9 +320,9 @@ impl Class {
 /// construction; a constant is where a builder could write one that does
 /// not, and this is what it means if it does.
 #[must_use]
-pub(super) const fn wrap(class: Class, value: u64) -> u64 {
-    match class {
-        Class::Fixed { bits } if bits < 64 => value & ((1 << bits) - 1),
+pub(super) fn wrap(class: Class, value: u64) -> u64 {
+    match class.width() {
+        Some(bits) if bits < 64 => value & ((1 << bits) - 1),
         _ => value,
     }
 }

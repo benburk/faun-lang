@@ -150,7 +150,7 @@ fn all_leaf_operations_check_result_arity_and_class() {
         b.compare(Relation::Equal, value, value);
         b.load(Width::Byte, address, Offset::Bytes(0));
         b.store(Width::Byte, address, Offset::Bytes(0), value);
-        b.convert(Class::Fixed { bits: 8 }, value);
+        b.convert(Class::fixed(8), value);
         b.call(other, &[]);
         b.call(argc, &[]);
         b.ret(&[value]);
@@ -165,16 +165,30 @@ fn all_leaf_operations_check_result_arity_and_class() {
         }
         assert!(validate(&wrong_arity).is_err(), "{:?}", p.ops[at]);
 
-        if let Some(&value) = p.values(p.results[at]).first() {
-            let mut wrong_class = p.clone();
-            wrong_class.classes[value] = if p.class(value) == Class::Address {
-                Class::Word
-            } else {
-                Class::Address
-            };
-            assert!(validate(&wrong_class).is_err(), "{:?}", p.ops[at]);
-        }
+        wrong_class(&p, at);
     }
+}
+
+/// Hold what an instruction writes at another class, where the instruction
+/// says what it writes.
+///
+/// A constant and a conversion are held at whatever the value they write is
+/// held at, and an address is one of the things either may answer, so there
+/// is nothing about those two for a class to be wrong about.
+fn wrong_class(p: &Program, at: usize) {
+    if matches!(p.ops[at], Op::Constant { .. } | Op::Convert { .. }) {
+        return;
+    }
+    let Some(&value) = p.values(p.results[at]).first() else {
+        return;
+    };
+    let mut held = p.clone();
+    held.classes[value] = if p.class(value) == Class::Address {
+        Class::Word
+    } else {
+        Class::Address
+    };
+    assert!(validate(&held).is_err(), "{:?}", p.ops[at]);
 }
 
 #[test]
@@ -330,13 +344,13 @@ fn conversions_pointer_memory_and_narrow_control_values_remain_valid() {
     let (mut p, main) = Program::new("main");
     let data = p.global(&[0; 8]);
     p.define(main, |b, _| {
-        let byte = b.constant(Class::Fixed { bits: 8 }, 1);
+        let byte = b.constant(Class::fixed(8), 1);
         let address = b.address_of(data);
         b.store(Width::Word, address, Offset::Words(0), address);
         let word = b.convert(Class::Word, address);
         b.convert(Class::Address, word);
         let natural = b.convert(Class::Natural, byte);
-        b.convert(Class::Fixed { bits: 8 }, natural);
+        b.convert(Class::fixed(8), natural);
         let answer = b.if_(
             byte,
             &[Class::Word],

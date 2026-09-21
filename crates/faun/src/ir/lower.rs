@@ -365,11 +365,16 @@ fn erased(program: &barb::Program, id: barb::TypeId) -> bool {
 /// Where nothing bounds the values, only an arbitrary-precision natural
 /// preserves the semantics. A target may reject it, but may not wrap it.
 fn width(held: barb::Bounds) -> Class {
-    held.width().map_or(Class::Natural, |bits| Class::Fixed {
-        // The singleton zero needs no value bits. It remains a scalar value;
-        // physical storage and calling-convention slots are target decisions.
-        bits: u16::try_from(bits).expect("a width a machine has"),
-    })
+    // Everything worked out above is carried, not just how wide it makes
+    // the value: what a value can be is what says whether reading it at
+    // another width takes anything off it. The singleton zero needs no
+    // value bits and is still a scalar; physical storage and
+    // calling-convention slots are target decisions.
+    if held.width().is_some() {
+        Class::Held(held)
+    } else {
+        Class::Natural
+    }
 }
 
 /// A type with no constructors has no values, so nothing holds one and

@@ -15,17 +15,17 @@ fn tag_planning_visits_each_body_once_and_preserves_every_suffix_join() {
         vec![Never, Never, Never],
         vec![Nothing, Never, Nothing],
         vec![
-            Value(Class::Fixed { bits: 17 }),
+            Value(Class::fixed(17)),
             Never,
-            Value(Class::Fixed { bits: 9 }),
-            Value(Class::Fixed { bits: 1 }),
-            Value(Class::Fixed { bits: 0 }),
+            Value(Class::fixed(9)),
+            Value(Class::fixed(1)),
+            Value(Class::fixed(0)),
         ],
         (0..128)
             .map(|at| match at % 3 {
                 0 => Never,
                 1 => Value(Class::Natural),
-                _ => Value(Class::Fixed { bits: 8 }),
+                _ => Value(Class::fixed(8)),
             })
             .collect(),
     ] {
@@ -132,7 +132,7 @@ fn nested_tagged_matches_keep_narrow_suffixes_and_local_scopes() {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(machine.class(result), Class::Fixed { bits });
+        assert_eq!(machine.class(result).width(), Some(bits));
         region = otherwise;
     }
     for (outer, expected) in [65536u32, 256, 1, 0].into_iter().enumerate() {

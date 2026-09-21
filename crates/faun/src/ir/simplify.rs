@@ -44,11 +44,15 @@ struct Simplify {
 /// A value reached by adding a known number to another value, all at one
 /// width. The width is part of it: a step taken wider than the one before
 /// asserts something the narrower one did not.
+///
+/// The width and not the class. Two steps of a run are held at what each
+/// can be, which differs along the run even where the room they need does
+/// not, and what a step asserts is the room.
 #[derive(Clone, Copy)]
 struct Step {
     from: ValueId,
     by: u64,
-    class: Class,
+    width: Option<u16>,
 }
 
 impl rewrite::Pass for Simplify {
@@ -60,10 +64,11 @@ impl rewrite::Pass for Simplify {
         results: &[ValueId],
     ) -> bool {
         match op {
-            Op::Convert {
-                class: class @ Class::Fixed { .. },
-                value,
-            } => self.widened(rebuild, b, class, value, results[0]),
+            Op::Convert { value } => {
+                let class = rebuild.source().class(results[0]);
+                matches!(class, Class::Held(_))
+                    && self.widened(rebuild, b, class, value, results[0])
+            }
             Op::Binary {
                 op: Binary::Add,
                 left,
@@ -150,22 +155,23 @@ impl Simplify {
     /// continues. Nothing is answered for an addition of something worked
     /// out, or for one whose run would not fit the width it is taken at.
     fn stepped(&self, left: ValueId, right: ValueId, class: Class) -> Option<Step> {
-        if !matches!(class, Class::Word | Class::Fixed { .. }) {
+        if !matches!(class, Class::Word | Class::Held(_)) {
             return None;
         }
         let by = self.wrote.number(right)?;
+        let width = class.width();
         let held = match self.steps[left.index()] {
-            Some(held) if held.class == class => Step {
+            Some(held) if held.width == width => Step {
                 from: held.from,
                 by: held.by.checked_add(by)?,
-                class,
+                width,
             },
             // The first step of a run, which is written as it stands and is
             // only worth knowing because of what may come after it.
             _ => Step {
                 from: left,
                 by,
-                class,
+                width,
             },
         };
         // A run wider than the width it is taken at is not the same run.
@@ -175,7 +181,7 @@ impl Simplify {
 
 /// What wrote each value, which is what lets one instruction be read
 /// together with the ones it reads.
-struct Wrote(Vec<Option<Op>>);
+struct Wrote(Vec<Option<(Op, Class)>>);
 
 impl Wrote {
     fn of(source: &Program) -> Self {
@@ -186,7 +192,7 @@ impl Wrote {
             };
             for (op, results) in every(source, body) {
                 for value in results {
-                    held[value.index()] = Some(op);
+                    held[value.index()] = Some((op, source.class(value)));
                 }
             }
         }
@@ -196,11 +202,9 @@ impl Wrote {
     /// The number a value is, where a constant wrote it. A natural is held
     /// in the data pool rather than as a number here, and says nothing.
     fn number(&self, value: ValueId) -> Option<u64> {
-        match self.0[value.index()]? {
-            Op::Constant {
-                class: Class::Word | Class::Fixed { .. },
-                value,
-            } => Some(value),
+        let (op, class) = self.0[value.index()]?;
+        match op {
+            Op::Constant { value } if matches!(class, Class::Word | Class::Held(_)) => Some(value),
             _ => None,
         }
     }
@@ -213,7 +217,7 @@ impl Wrote {
             relation: super::Relation::Equal,
             left,
             right,
-        } = self.0[condition.index()]?
+        } = self.0[condition.index()]?.0
         else {
             return None;
         };
@@ -240,7 +244,7 @@ impl Wrote {
             condition,
             then_region,
             else_region,
-        } = self.0[value.index()]?
+        } = self.0[value.index()]?.0
         else {
             return None;
         };

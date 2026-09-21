@@ -7,6 +7,7 @@
 //! compiles for is a fact about a build rather than about the compiler.
 
 pub mod barb;
+pub mod facts;
 pub mod index;
 pub mod ir;
 pub mod platform;
