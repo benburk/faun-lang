@@ -473,18 +473,16 @@ impl Lowering<'_> {
         if self.program.reaches("grow") {
             self.set_pair(HEAP, heap);
         }
-        // The hook writes the arguments themselves wherever it is told, and
-        // nothing has asked for memory yet, so it is told the heap. What is
-        // wanted is the count, which comes back in `A` and `X`.
+        // The hook is handed where to write the arguments themselves, in `A`
+        // and `X`, and reads where the argument stack is from the pair the
+        // image header named. Nothing has asked for memory yet, so it is
+        // told the heap. What is wanted back is the count, which it leaves
+        // in `A` and `X`.
         if self.program.reaches("argc!") {
             let [low, high] = heap.to_le_bytes();
             self.set_pair(CSP, CSTACK_TOP - 2);
-            self.asm.ldy_imm(0);
             self.asm.lda_imm(low);
-            self.asm.sta_ind_y(CSP);
-            self.asm.iny();
-            self.asm.lda_imm(high);
-            self.asm.sta_ind_y(CSP);
+            self.asm.ldx_imm(high);
             self.jsr_hook(HOOK_ARGS);
             self.asm.sta_zp(ARGC);
             // The high half only where something reads more of the count

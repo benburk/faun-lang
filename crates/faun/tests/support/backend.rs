@@ -481,7 +481,15 @@ fn it_compiles_the_ladder_to_the_sizes_recorded() {
 /// is a size anybody can reach by writing the wrong program.
 #[test]
 fn the_ladder_answers_what_its_programs_say() {
-    const COUNTS: &[u16] = &[1, 3, 4, 5];
+    // The last is far past the guard, and makes a host that lays the
+    // arguments out itself write a couple of hundred bytes below wherever it
+    // was told the stack is, rather than a handful. A stack pointing at the
+    // wrong place shows up there and not at three arguments.
+    //
+    // It is 62 because every answer has to come back as an exit status:
+    // twice the count is the largest of them, and wasmtime refuses to report
+    // a status of 126 or above.
+    const COUNTS: &[u16] = &[1, 3, 4, 5, 62];
     let routines = TARGET.routines();
     for (name, barb) in programs::ladder::every(&routines) {
         let program = lowered(barb, &routines);

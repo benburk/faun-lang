@@ -16,9 +16,9 @@ const RUNNER: Option<&str> = Some("sim65");
 /// thing small enough to read.
 const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 17),
-    ("the count", 40),
-    ("the count and more", 75),
-    ("the low bits of a sum", 45),
+    ("the count", 33),
+    ("the count and more", 68),
+    ("the low bits of a sum", 38),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("empty", 28),
@@ -47,11 +47,11 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("two-and-two", 17),
     ("double", 17),
     ("leave", 17),
-    ("bool", 169),
-    ("nat", 560),
-    ("width", 80),
-    ("argc", 89),
-    ("expressions", 78),
+    ("bool", 162),
+    ("nat", 553),
+    ("width", 73),
+    ("argc", 82),
+    ("expressions", 71),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [209, 248, 246];
 
