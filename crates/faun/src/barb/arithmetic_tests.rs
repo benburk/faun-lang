@@ -288,18 +288,22 @@ fn arithmetic_interval_bounds_contain_every_small_answer() {
 /// machine word.
 #[test]
 fn a_sum_modulo_a_power_of_two_is_a_sum_of_remainders() {
+    // One side reduced, added to itself, and that reduced: both sides being
+    // the same side, one remainder of it does for both.
     let held = reduced("mod(add(n n) two_fifty_six)");
-    // The reduction pushed inward: two remainders, a sum of them, and the
-    // remainder of that.
-    assert_eq!(held.matches("mod(").count(), 3, "{held}");
+    assert_eq!(held.matches("mod(").count(), 2, "{held}");
     assert!(held.contains("add(v"), "{held}");
+
+    // Two sides, and so a remainder of each.
+    let held = reduced("mod(add(n four) two_fifty_six)");
+    assert_eq!(held.matches("mod(").count(), 3, "{held}");
 }
 
 /// A product too, for the same reason.
 #[test]
 fn a_product_modulo_a_power_of_two_is_a_product_of_remainders() {
     let held = reduced("mod(mul(n n) two_fifty_six)");
-    assert_eq!(held.matches("mod(").count(), 3, "{held}");
+    assert_eq!(held.matches("mod(").count(), 2, "{held}");
 }
 
 /// Not by anything else. Reducing each side first leaves three divisions

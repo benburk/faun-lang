@@ -32,7 +32,7 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("a global", 144),
     ("writing the heap", 177),
     ("a computed length", 190),
-    ("eight bits", 63),
+    ("eight bits", 55),
     ("less", 61),
     ("two worked out", 89),
     ("a flag", 119),

@@ -233,9 +233,15 @@ impl Rewrite<'_> {
             return None;
         };
         let args = self.held(&[left, modulus]);
-        let left = self.push(Expr::Call(called, args), scope);
-        let args = self.held(&[right, modulus]);
-        let right = self.push(Expr::Call(called, args), scope);
+        let reduced = self.push(Expr::Call(called, args), scope);
+        // One side reduced twice where both sides are the same side.
+        let right = if left == right {
+            reduced
+        } else {
+            let args = self.held(&[right, modulus]);
+            self.push(Expr::Call(called, args), scope)
+        };
+        let left = reduced;
         let args = self.held(&[left, right]);
         let sum = self.push(Expr::Call(inner, args), scope);
         let args = self.held(&[sum, modulus]);

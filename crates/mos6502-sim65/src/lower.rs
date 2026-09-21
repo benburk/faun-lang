@@ -220,6 +220,56 @@ fn path_to_continue(
 }
 
 /// Every value an operation reads, nested regions excluded.
+/// How many bits of each value anything reads.
+///
+/// A value may be able to be more than anything ever looks at: a sum
+/// narrowed as soon as it is worked out is read at the width it is narrowed
+/// to, and whatever it carried above that was worked out for nobody. Asking
+/// what is read rather than what can be there is what keeps a machine from
+/// carrying the second.
+fn reads(program: &Program) -> Vec<u16> {
+    let mut needs = vec![0u16; program.values_count()];
+    let mut regions = Vec::new();
+    for function in program.functions() {
+        let Some(body) = function.body() else {
+            continue;
+        };
+        regions.push(body);
+        for (op, results) in program.walk_within(body) {
+            if let Op::If {
+                then_region,
+                else_region,
+                ..
+            } = *op
+            {
+                regions.extend([then_region, else_region]);
+            }
+            if let Op::Loop { body, .. } = *op {
+                regions.push(body);
+            }
+            // A conversion looks at the bits it keeps and no more.
+            if let Op::Convert { value } = *op {
+                let kept = bits(program.class(results[0])).min(bits(program.class(value)));
+                let at = value.index();
+                needs[at] = needs[at].max(kept);
+                continue;
+            }
+            for_each_operand(op, program, |value| {
+                let at = value.index();
+                needs[at] = needs[at].max(bits(program.class(value)));
+            });
+        }
+    }
+    // What a region carries out of it is read whole wherever it lands.
+    for region in regions {
+        for &value in program.outgoing(region) {
+            let at = value.index();
+            needs[at] = bits(program.class(value));
+        }
+    }
+    needs
+}
+
 fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     match op {
         Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) => {}
@@ -329,6 +379,7 @@ fn assemble(program: &Program, heap: u16, stack: bool) -> Code {
                 .map(|body| state.plan(body).expect("accepted frame size"))
         })
         .collect();
+    state.needs = reads(program);
     state.reset(heap, stack);
     // The entry goes first, so the reset routine runs into it rather than
     // jumping to it. Everything else follows in the order it was declared.
@@ -359,6 +410,8 @@ struct Lowering<'a> {
     homes: Vec<u8>,
     /// Every function's plan, worked out before any code is emitted.
     plans: Vec<Option<Plan>>,
+    /// How many bits of each value anything reads.
+    needs: Vec<u16>,
     /// Argument blocks the target lays down itself, one per distinct pair of
     /// constant arguments, emitted after the code.
     pool: Vec<(super::asm::Label, [u16; 2])>,
@@ -386,6 +439,7 @@ impl<'a> Lowering<'a> {
             frame: 0,
             homes: Vec::new(),
             plans: Vec::new(),
+            needs: Vec::new(),
             pool: Vec::new(),
             fused: std::collections::HashSet::new(),
             pending: None,
@@ -1026,7 +1080,28 @@ impl Lowering<'_> {
     /// above worked out what every value can be, so this is a question
     /// already answered rather than one a target decides.
     fn wide(&self, value: ValueId) -> bool {
-        bits(self.program.class(value)) > 8
+        self.needed(value) > 8
+    }
+
+    /// How many bits of a value are actually there.
+    ///
+    /// A place holds whole bytes, so a value nothing reads above its eighth
+    /// bit still has eight of them, and whatever the value was above those
+    /// eight is in the one byte kept. Asking what is read rather than what
+    /// is there is how a mask gets left out that was doing something.
+    fn stored(&self, value: ValueId) -> u16 {
+        let held = bits(self.program.class(value));
+        if self.wide(value) { held } else { held.min(8) }
+    }
+
+    /// How many bits of a value anything reads, which is never more than it
+    /// can be and is sometimes fewer.
+    fn needed(&self, value: ValueId) -> u16 {
+        let held = bits(self.program.class(value));
+        self.needs
+            .get(value.index())
+            .copied()
+            .map_or(held, |needs| needs.min(held))
     }
 
     /// `value` where an instruction can read it, copied into `scratch` only
@@ -1414,7 +1489,7 @@ impl Lowering<'_> {
     /// The same, where the answer is one byte: read the byte it is worked
     /// out of, take off what the width does not keep, and write it down.
     fn narrow(&mut self, kept: u16, value: ValueId, result: ValueId) {
-        let held = bits(self.program.class(value));
+        let held = self.stored(value);
         let from = self.operand(value, T0);
         let dest = self.dest(result);
         if kept == 0 {
@@ -1669,7 +1744,10 @@ impl Lowering<'_> {
                 }
                 let left = self.operand(*left, T0);
                 let right = self.operand(*right, T1);
-                let width = if bits(self.program.class(results[0])) <= 8 {
+                // As wide as anything reads the answer, which is not always
+                // as wide as the answer can be: a sum narrowed straight away
+                // has a high half nobody looks at and nothing writes it.
+                let width = if self.needed(results[0]) <= 8 {
                     Width::Byte
                 } else {
                     Width::Word
