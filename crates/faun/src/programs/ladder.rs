@@ -110,8 +110,12 @@ pub fn exits_with_the_count(routines: &Routines) -> Program {
 /// it.
 ///
 /// A count is as wide as the machine, so a number past one needs a bit the
-/// machine has not got. The guard is what buys that bit back, which is why
-/// no program reading a count does arithmetic on it without one.
+/// machine has not got. The guard is what buys that bit back, which is the
+/// other answer to the one a remainder gives: prove the bit is not needed
+/// rather than say it may go.
+///
+/// A `more` of nought is the guard on its own, with nothing worked out past
+/// it, which is the rung between the two.
 ///
 /// # Panics
 /// If `limit` does not fit the declared natural shape.
@@ -154,6 +158,55 @@ pub fn exits_with_the_count_and_more(routines: &Routines, limit: u64, more: u64)
             total = b.con(succ, &[total]);
         }
         b.call(exit, &[host, total])
+    });
+    program.set_entry(main);
+    program
+}
+
+/// Leave with the count and a number known before the program ran, keeping
+/// only the bits below `bits`.
+///
+/// One thing more than leaving with the count, and the smallest program that
+/// does arithmetic on something it was handed. A count is as wide as the
+/// machine, so the sum needs a bit the machine has not got; asking for the
+/// remainder says that bit may go, where a guard would buy it back. Nothing
+/// branches, so what a target writes is a load, an addition and the way out.
+///
+/// # Panics
+/// If `bits` or `more` does not describe something the declared shape holds.
+#[must_use]
+pub fn exits_with_the_count_and_a_constant(routines: &Routines, bits: u32, more: u64) -> Program {
+    let Ground {
+        mut program,
+        host,
+        nat,
+        never,
+        exit,
+        argc,
+    } = ground(routines);
+    let truth = program.declare_type("Bool");
+    program.define_type(truth, &[("False", &[]), ("True", &[])]);
+    let adding = adds(&mut program, nat);
+    let remainder = remainders(&mut program, nat, truth, adding);
+    let modulus = program
+        .intern_number(nat, 1 << bits)
+        .expect("the declared natural shape");
+    // Counting onto the count rather than the other way about: what `add`
+    // goes round on is its second argument, and the one that is known is the
+    // one whose steps can be run together before anything runs.
+    let more = program
+        .intern_number(nat, more)
+        .expect("the declared natural shape");
+
+    let main = program.declare("main!", &[host], never);
+    program.define(main, |b, args| {
+        let host = args[0];
+        let count = b.call(argc, &[host]);
+        let more = b.known(more);
+        let sum = b.call(adding, &[count, more]);
+        let modulus = b.known(modulus);
+        let low = b.call(remainder, &[sum, modulus]);
+        b.call(exit, &[host, low])
     });
     program.set_entry(main);
     program
@@ -311,23 +364,34 @@ fn comparing(program: &mut Program, nat: TypeId, truth: TypeId) -> FnId {
     id
 }
 
-/// Every rung, smallest first, each named as the size baselines name it.
+/// Every rung, in the order each does one thing more than the last, and each
+/// named as the size baselines name it.
 ///
-/// `limit` and `more` are small enough that what the guard proves is a few
-/// bits rather than a machine word, which is what a program reading a count
-/// and adding to it looks like when it is written to be compiled.
+/// Arithmetic comes before branching: the two wrapping rungs work something
+/// out from the count without asking anything about it, and the two guarded
+/// ones ask. `limit` and `more` are small enough that what the guard proves
+/// is a few bits rather than a machine word, which is what a program reading
+/// a count and adding to it looks like when it is written to be compiled.
 #[must_use]
 pub fn every(routines: &Routines) -> Vec<(&'static str, Program)> {
     vec![
         ("a constant", exits_with_a_constant(routines, 0)),
         ("the count", exits_with_the_count(routines)),
         (
-            "the count and more",
-            exits_with_the_count_and_more(routines, 4, 4),
+            "the count and a constant",
+            exits_with_the_count_and_a_constant(routines, 8, 4),
         ),
         (
             "the low bits of a sum",
             exits_with_the_low_bits_of_a_sum(routines, 8),
+        ),
+        (
+            "the count under a guard",
+            exits_with_the_count_and_more(routines, 4, 0),
+        ),
+        (
+            "the count and more",
+            exits_with_the_count_and_more(routines, 4, 4),
         ),
     ]
 }

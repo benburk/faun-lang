@@ -18,11 +18,12 @@ const RUNNER: Option<&str> = Some("wasmtime");
 const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 36),
     ("the count", 158),
-    ("the count and more", 191),
+    ("the count and a constant", 192),
     ("the low bits of a sum", 181),
+    ("the count under a guard", 184),
+    ("the count and more", 191),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
-    ("empty", 36),
     ("exit zero", 36),
     ("two and two", 105),
     ("hello world", 141),

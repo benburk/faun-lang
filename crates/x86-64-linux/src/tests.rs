@@ -17,11 +17,12 @@ const RUNNER: Option<&str> = None;
 const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 127),
     ("the count", 144),
-    ("the count and more", 208),
+    ("the count and a constant", 182),
     ("the low bits of a sum", 161),
+    ("the count under a guard", 193),
+    ("the count and more", 208),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
-    ("empty", 127),
     ("exit zero", 127),
     ("two and two", 134),
     ("hello world", 158),

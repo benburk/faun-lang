@@ -19,9 +19,8 @@ pub(super) const EXIT_ZERO: &str = "type Nat Zero Succ(Nat)
 
                                    main!(h) -> exit!(h Zero)";
 
-fn corpus() -> [(&'static str, Program); 20] {
+fn corpus() -> [(&'static str, Program); 19] {
     [
-        ("empty", programs::empty()),
         ("exit zero", read(EXIT_ZERO).expect("a program")),
         ("two and two", programs::two_and_two()),
         ("hello world", programs::hello_world()),
@@ -497,10 +496,14 @@ fn the_ladder_answers_what_its_programs_say() {
             let answer = match name {
                 "a constant" => 0,
                 "the count" => i32::from(argc),
-                // Twice the count, and every bit of that below the eighth.
+                // Four past the count, and twice it, each keeping every bit
+                // below the eighth and throwing the rest away.
+                "the count and a constant" => i32::from(argc.wrapping_add(4) % 256),
                 "the low bits of a sum" => i32::from(argc.wrapping_mul(2) % 256),
-                // Under the ceiling, the count and four past it. At or above
-                // it the guard leaves with nought instead.
+                // Under the ceiling, the count, and four past it where the
+                // rung asks for that. At or above it neither guarded rung
+                // has the bits to say anything, so both leave with nought.
+                "the count under a guard" if argc < 4 => i32::from(argc),
                 _ if argc < 4 => i32::from(argc) + 4,
                 _ => 0,
             };

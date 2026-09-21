@@ -267,7 +267,14 @@ pub fn counts_down_before_it_branches(times: u64) -> Program {
     program
 }
 
-/// Nothing at all. A target's floor: headers, and whatever it takes to stop.
+/// An entry that returns nought rather than leaving through the exit
+/// routine.
+///
+/// Not the smallest program: `exit!(Zero)` is, and is what the ladder
+/// measures. This is the same answer reached the other way, kept because on
+/// a target where returning and leaving are the same thing it has to compile
+/// to the same module, and on one where they are not it is the floor of the
+/// returning shape.
 #[must_use]
 pub fn empty() -> Program {
     let (mut program, main) = Program::new("main");
