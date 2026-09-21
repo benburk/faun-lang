@@ -81,7 +81,13 @@ enum Source {
 #[derive(Clone, Copy)]
 enum Operand {
     Imm(u16),
-    Zp(u8),
+    /// A zero-page place, and whether a second byte of it is worth reading.
+    /// What a class of eight bits or fewer can be has a high half of
+    /// nought, so nothing keeps one and nothing reads one back.
+    Zp {
+        at: u8,
+        wide: bool,
+    },
 }
 
 /// One byte of an operand, as the instruction reading it takes it.
@@ -92,6 +98,11 @@ enum Byte {
 }
 
 impl Operand {
+    /// A scratch pair, which holds two bytes whatever is put in it.
+    const fn pair(at: u8) -> Self {
+        Self::Zp { at, wide: true }
+    }
+
     /// The byte at `index`, low first.
     const fn byte(self, index: u8) -> Byte {
         match self {
@@ -99,7 +110,15 @@ impl Operand {
                 let [low, high] = value.to_le_bytes();
                 Byte::Imm(if index == 0 { low } else { high })
             }
-            Self::Zp(at) => Byte::Zp(at + index),
+            Self::Zp { at, wide } => {
+                if index == 0 {
+                    Byte::Zp(at)
+                } else if wide {
+                    Byte::Zp(at + 1)
+                } else {
+                    Byte::Imm(0)
+                }
+            }
         }
     }
 }
@@ -417,13 +436,21 @@ impl Lowering<'_> {
     }
 
     fn set_pair(&mut self, pair: u8, value: u16) {
+        self.set_place(pair, value, true);
+    }
+
+    /// A known number where a place holds it, in one byte or two.
+    fn set_place(&mut self, at: u8, value: u16, wide: bool) {
         let [low, high] = value.to_le_bytes();
         self.asm.lda_imm(low);
-        self.asm.sta_zp(pair);
+        self.asm.sta_zp(at);
+        if !wide {
+            return;
+        }
         if high != low {
             self.asm.lda_imm(high);
         }
-        self.asm.sta_zp(pair + 1);
+        self.asm.sta_zp(at + 1);
     }
 
     fn function(&mut self, id: FunctionId) {
@@ -891,7 +918,12 @@ impl Lowering<'_> {
         }
     }
 
-    /// Read `value` into a zero-page pair.
+    /// Read `value` into a zero-page pair, both bytes of it.
+    ///
+    /// A scratch pair is read at whatever width the instruction reading it
+    /// works at, which is not something the value being read knows, so a
+    /// value narrower than a pair is widened on the way in. Nothing else
+    /// widens one: a place that holds a narrow value keeps one byte.
     fn read(&mut self, pair: u8, value: ValueId) {
         match self.source[value.index()] {
             Source::Const(word) => {
@@ -906,18 +938,35 @@ impl Lowering<'_> {
             Source::Home(home) => {
                 self.asm.lda_zp(home);
                 self.asm.sta_zp(pair);
-                self.asm.lda_zp(home + 1);
+                if self.wide(value) {
+                    self.asm.lda_zp(home + 1);
+                } else {
+                    self.asm.lda_imm(0);
+                }
                 self.asm.sta_zp(pair + 1);
             }
             Source::Slot(offset) => {
                 self.asm.ldy_imm(offset);
                 self.asm.lda_ind_y(FP);
                 self.asm.sta_zp(pair);
-                self.asm.iny();
-                self.asm.lda_ind_y(FP);
+                if self.wide(value) {
+                    self.asm.iny();
+                    self.asm.lda_ind_y(FP);
+                } else {
+                    self.asm.lda_imm(0);
+                }
                 self.asm.sta_zp(pair + 1);
             }
         }
+    }
+
+    /// Whether a value wants both bytes of a place.
+    ///
+    /// What a class of eight bits or fewer can be fits one, and the tier
+    /// above worked out what every value can be, so this is a question
+    /// already answered rather than one a target decides.
+    fn wide(&self, value: ValueId) -> bool {
+        bits(self.program.class(value)) > 8
     }
 
     /// `value` where an instruction can read it, copied into `scratch` only
@@ -928,10 +977,13 @@ impl Lowering<'_> {
                 Operand::Imm(u16::try_from(word).expect("a word this target can hold"))
             }
             Source::Addr(id) => Operand::Imm(self.address(id)),
-            Source::Home(home) => Operand::Zp(home),
+            Source::Home(home) => Operand::Zp {
+                at: home,
+                wide: self.wide(value),
+            },
             Source::Slot(_) => {
                 self.read(scratch, value);
-                Operand::Zp(scratch)
+                Operand::pair(scratch)
             }
         }
     }
@@ -959,22 +1011,31 @@ impl Lowering<'_> {
     }
 
     /// A pair holding `value`'s result reaches wherever the value lives.
+    ///
+    /// Only as much of it as the value can be: a place holding a value of
+    /// eight bits or fewer keeps one byte, and whatever the pair had above
+    /// it was nought and is not worth writing down.
     fn commit(&mut self, value: ValueId, pair: u8) {
+        let wide = self.wide(value);
         match self.source[value.index()] {
             Source::Home(home) if home == pair => {}
             Source::Home(home) => {
                 self.asm.lda_zp(pair);
                 self.asm.sta_zp(home);
-                self.asm.lda_zp(pair + 1);
-                self.asm.sta_zp(home + 1);
+                if wide {
+                    self.asm.lda_zp(pair + 1);
+                    self.asm.sta_zp(home + 1);
+                }
             }
             Source::Slot(offset) => {
                 self.asm.ldy_imm(offset);
                 self.asm.lda_zp(pair);
                 self.asm.sta_ind_y(FP);
-                self.asm.iny();
-                self.asm.lda_zp(pair + 1);
-                self.asm.sta_ind_y(FP);
+                if wide {
+                    self.asm.iny();
+                    self.asm.lda_zp(pair + 1);
+                    self.asm.sta_ind_y(FP);
+                }
             }
             Source::Const(_) | Source::Addr(_) => panic!("a computed value needs a place"),
         }
@@ -1090,7 +1151,7 @@ impl Lowering<'_> {
                 continue;
             }
             match self.operand(source, T0) {
-                Operand::Zp(at) => self.commit(destinations[index], at),
+                Operand::Zp { at, .. } => self.commit(destinations[index], at),
                 Operand::Imm(value) => {
                     let scratch = if index == 0 { T0 } else { T1 };
                     self.set_pair(scratch, value);
@@ -1260,9 +1321,10 @@ impl Lowering<'_> {
     fn convert(&mut self, class: Class, value: ValueId, result: ValueId) {
         self.read(T0, value);
         let kept = bits(class);
+        let wide = self.wide(result);
         if kept == 0 {
             // Fixed0 has exactly one inhabitant: reduction modulo one.
-            self.set_pair(T0, 0);
+            self.set_place(T0, 0, wide);
         } else if kept < bits(self.program.class(value)) {
             let byte = if kept <= 8 { T0 } else { T0 + 1 };
             let mask = ((1u16 << ((kept - 1) % 8 + 1)) - 1).to_le_bytes()[0];
@@ -1271,7 +1333,9 @@ impl Lowering<'_> {
                 self.asm.and_imm(mask);
                 self.asm.sta_zp(byte);
             }
-            if kept <= 8 {
+            // What is left above the bits kept is dropped by not writing it
+            // down, wherever the answer is narrow enough not to have any.
+            if kept <= 8 && wide {
                 self.asm.lda_imm(0);
                 self.asm.sta_zp(T0 + 1);
             }
@@ -1282,7 +1346,7 @@ impl Lowering<'_> {
     fn arithmetic(&mut self, op: Binary, left: Operand, right: Operand, dest: u8, width: Width) {
         // A step of one over a pair the result already occupies is an
         // increment, which carries into the high byte only on a wrap.
-        if let (Operand::Zp(at), Operand::Imm(1), Width::Word) = (left, right, width)
+        if let (Operand::Zp { at, .. }, Operand::Imm(1), Width::Word) = (left, right, width)
             && at == dest
         {
             let done = self.asm.label();
@@ -1316,12 +1380,13 @@ impl Lowering<'_> {
         }
         self.accumulate(op, right.byte(0));
         self.asm.sta_zp(dest);
+        // An answer of eight bits or fewer has nothing above them to write,
+        // and the place it goes to keeps nothing above them either.
         if width == Width::Byte {
-            self.asm.lda_imm(0);
-        } else {
-            self.load(left.byte(1));
-            self.accumulate(op, right.byte(1));
+            return;
         }
+        self.load(left.byte(1));
+        self.accumulate(op, right.byte(1));
         self.asm.sta_zp(dest + 1);
     }
 
@@ -1339,8 +1404,8 @@ impl Lowering<'_> {
         self.asm.branch(Cc::NoCarry, skip);
         self.arithmetic(
             Binary::Add,
-            Operand::Zp(PTR),
-            Operand::Zp(T0),
+            Operand::pair(PTR),
+            Operand::pair(T0),
             PTR,
             Width::Word,
         );
@@ -1372,12 +1437,12 @@ impl Lowering<'_> {
         self.asm.rol_zp(PTR);
         self.asm.rol_zp(PTR + 1);
         self.asm.branch(Cc::Carry, subtract);
-        self.holds(Relation::Less, Operand::Zp(PTR), Operand::Zp(T1), next);
+        self.holds(Relation::Less, Operand::pair(PTR), Operand::pair(T1), next);
         self.asm.bind(subtract);
         self.arithmetic(
             Binary::Sub,
-            Operand::Zp(PTR),
-            Operand::Zp(T1),
+            Operand::pair(PTR),
+            Operand::pair(T1),
             PTR,
             Width::Word,
         );

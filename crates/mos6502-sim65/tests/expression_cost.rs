@@ -17,11 +17,11 @@ use expressions::{CASES, COUNTS, Case};
 
 // Case, image bytes, maximum cycles over COUNTS (including rejected inputs).
 const BASELINES: &[(Case, usize, u64)] = &[
-    (Case::Chain, 113, 132),
-    (Case::Shared, 135, 164),
-    (Case::ConstantLeft, 124, 147),
-    (Case::Carry, 196, 222),
-    (Case::Monus, 155, 164),
+    (Case::Chain, 97, 110),
+    (Case::Shared, 111, 132),
+    (Case::ConstantLeft, 104, 120),
+    (Case::Carry, 176, 193),
+    (Case::Monus, 131, 135),
 ];
 
 #[test]
