@@ -108,7 +108,9 @@ fn range_proven_zero_arithmetic_selects_fixed0() {
         .unwrap();
         validate(&p).unwrap();
         let body = p.function(p.entry()).body().unwrap();
-        assert!(p.every(body).any(|op| matches!(
+        // A remainder by one is every bit below the first, which is none of
+        // them: read at no width at all rather than divided by anything.
+        assert!(!p.every(body).any(|op| matches!(
             op,
             Op::Binary {
                 op: super::Binary::Mod,

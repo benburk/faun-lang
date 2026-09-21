@@ -66,14 +66,18 @@ impl rewrite::Pass for Simplify {
         match op {
             Op::Convert { value } => {
                 let class = rebuild.source().class(results[0]);
-                matches!(class, Class::Held(_))
-                    && self.widened(rebuild, b, class, value, results[0])
+                self.widened(rebuild, b, class, value, results[0])
             }
             Op::Binary {
                 op: Binary::Add,
                 left,
                 right,
             } => self.stepping(rebuild, b, left, right, results[0]),
+            Op::Binary {
+                op: Binary::Mod,
+                left,
+                right,
+            } => self.remainder(rebuild, b, left, right, results[0]),
             Op::If {
                 condition,
                 then_region,
@@ -85,11 +89,13 @@ impl rewrite::Pass for Simplify {
 }
 
 impl Simplify {
-    /// A constant read at another width is that constant, written at the
-    /// width it is read at.
+    /// A conversion that takes nothing off, and a constant read at another
+    /// width.
     ///
-    /// Only a `Fixed` sink is written here: it says its own width, where a
-    /// word's is the machine's and is not something this tier knows.
+    /// A value already narrow enough is read where it stands. One that is
+    /// not, and is a number known before the program runs, is written at the
+    /// width it is read at -- where that width is one this tier knows, which
+    /// a machine word's is not.
     fn widened(
         &self,
         rebuild: &rewrite::Rebuild<'_>,
@@ -98,10 +104,52 @@ impl Simplify {
         value: ValueId,
         result: ValueId,
     ) -> bool {
-        let Some(held) = self.wrote.number(value) else {
+        // A value already narrow enough is read as it stands: what it can
+        // be, the wider class admits, so nothing happens in between. What it
+        // is held at is asked of the program being written, since a rule
+        // before this one may have made it narrower than it was.
+        let held = rebuild.value(value);
+        if b.class(held).fits(class) {
+            rebuild.stands_for(result, held);
+            return true;
+        }
+        let Some(number) = self.wrote.number(value) else {
             return false;
         };
-        rebuild.stands_for(result, b.constant(class, wrap(class, held)));
+        if !matches!(class, Class::Held(_)) {
+            return false;
+        }
+        rebuild.stands_for(result, b.constant(class, wrap(class, number)));
+        true
+    }
+
+    /// A remainder by a power of two is the bits below it, which is what
+    /// reading a value at that width already means.
+    ///
+    /// This is how a language whose only number counts without a last step
+    /// says a machine word. Left as a remainder it is a division: on a
+    /// machine with no divide instruction, a loop over every bit of it.
+    fn remainder(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        left: ValueId,
+        right: ValueId,
+        result: ValueId,
+    ) -> bool {
+        let Some(by) = self.wrote.number(right) else {
+            return false;
+        };
+        if !by.is_power_of_two() {
+            return false;
+        }
+        let Ok(bits) = u16::try_from(by.trailing_zeros()) else {
+            return false;
+        };
+        // Narrower than what the remainder was worked out at, which is what
+        // taking a remainder does and what anything reading it allows.
+        let class = Class::fixed(bits);
+        rebuild.stands_for(result, b.convert(class, rebuild.value(left)));
         true
     }
 

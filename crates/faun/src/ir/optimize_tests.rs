@@ -199,16 +199,18 @@ fn a_constant_is_written_at_the_width_it_is_read_at() {
         b.ret(&[answer]);
     });
     let held = settled(&p);
+    // Nothing widens it: what three bits can be, nine bits admit, so the
+    // constant is read where it stands and stays as narrow as it is.
     assert_eq!(
         count_at(&held, |op, class| {
             matches!(*op, Op::Convert { .. }) && class == wide
         }),
         0,
-        "the constant arrives wide rather than being widened"
+        "nothing is widened to be read"
     );
     assert_eq!(
         count_at(&held, |op, class| {
-            *op == Op::Constant { value: 5 } && class == wide
+            *op == Op::Constant { value: 5 } && class == Class::fixed(3)
         }),
         1
     );
@@ -439,6 +441,77 @@ fn stepped(class: Class, by: &[u64]) -> Program {
             held = b.binary_at(class, Binary::Add, held, step);
         }
         let answer = b.convert(Class::Word, held);
+        b.ret(&[answer]);
+    });
+    p
+}
+
+/// A remainder by a power of two is every bit below it, which is what
+/// reading a value at that width already means.
+#[test]
+fn a_remainder_by_a_power_of_two_is_a_width() {
+    for (by, bits) in [(256u64, 8), (4, 2), (1, 0)] {
+        let held = settled(&remainder(by, 300));
+        assert_eq!(
+            count(&held, |op| matches!(
+                *op,
+                Op::Binary {
+                    op: Binary::Mod,
+                    ..
+                }
+            )),
+            0,
+            "by {by}"
+        );
+        assert_eq!(returns(&held), BigUint::from(300 % by), "by {by}");
+        assert!(
+            count_at(&held, |_, class| class == Class::fixed(bits)) > 0,
+            "by {by}: read at {bits} bits"
+        );
+    }
+}
+
+/// By anything else it is a division, and stays one.
+#[test]
+fn a_remainder_by_anything_else_is_left_as_it_stands() {
+    let held = settled(&remainder(10, 300));
+    assert_eq!(
+        count(&held, |op| matches!(
+            *op,
+            Op::Binary {
+                op: Binary::Mod,
+                ..
+            }
+        )),
+        1
+    );
+    assert_eq!(returns(&held), BigUint::from(0u8), "300 mod 10");
+}
+
+/// A value already narrow enough is read where it stands.
+#[test]
+fn a_conversion_that_takes_nothing_off_is_not_written() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let held = b.constant(Class::fixed(3), 5);
+        let wider = b.convert(Class::fixed(9), held);
+        let answer = b.convert(Class::Word, wider);
+        b.ret(&[answer]);
+    });
+    let held = settled(&p);
+    assert_eq!(count(&held, |op| matches!(*op, Op::Convert { .. })), 0);
+    assert_eq!(returns(&held), BigUint::from(5u8));
+}
+
+/// `value % by`, answered as a word.
+fn remainder(by: u64, value: u64) -> Program {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let class = Class::fixed(9);
+        let held = b.constant(class, value);
+        let by = b.constant(class, by);
+        let answer = b.binary_at(class, Binary::Mod, held, by);
+        let answer = b.convert(Class::Word, answer);
         b.ret(&[answer]);
     });
     p

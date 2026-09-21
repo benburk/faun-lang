@@ -282,3 +282,71 @@ fn arithmetic_interval_bounds_contain_every_small_answer() {
     assert_eq!(Bounds::ANY.remainder(Bounds::at(0)), Bounds::ANY);
     assert_eq!(Bounds::ANY.quotient(Bounds::at(0)), Bounds::at(0));
 }
+
+/// A sum taken modulo a power of two is worked out modulo that power of two
+/// throughout, which is how a number counting without a last step says a
+/// machine word.
+#[test]
+fn a_sum_modulo_a_power_of_two_is_a_sum_of_remainders() {
+    let held = reduced("mod(add(n n) two_fifty_six)");
+    // The reduction pushed inward: two remainders, a sum of them, and the
+    // remainder of that.
+    assert_eq!(held.matches("mod(").count(), 3, "{held}");
+    assert!(held.contains("add(v"), "{held}");
+}
+
+/// A product too, for the same reason.
+#[test]
+fn a_product_modulo_a_power_of_two_is_a_product_of_remainders() {
+    let held = reduced("mod(mul(n n) two_fifty_six)");
+    assert_eq!(held.matches("mod(").count(), 3, "{held}");
+}
+
+/// Not by anything else. Reducing each side first leaves three divisions
+/// where there was one, and divides nothing away.
+#[test]
+fn a_sum_modulo_anything_else_is_left_as_it_stands() {
+    let held = reduced("mod(add(n n) ten)");
+    assert_eq!(held.matches("mod(").count(), 1, "{held}");
+}
+
+/// And not truncated subtraction, which stops at nought rather than
+/// carrying through a remainder, nor the division or remainder themselves.
+#[test]
+fn only_what_carries_through_a_remainder_is_pushed_inside_one() {
+    // Two different values, so that nothing collapses for being the same.
+    for held in ["sub(n four)", "div(n four)", "mod(n four)"] {
+        let rendered = reduced(&format!("mod({held} two_fifty_six)"));
+        let wanted = usize::from(held.starts_with("mod")) + 1;
+        assert_eq!(
+            rendered.matches("mod(").count(),
+            wanted,
+            "{held}: {rendered}"
+        );
+    }
+}
+
+/// `main!` as the optimizer leaves it, for a program working `held` out of
+/// the count it was handed.
+fn reduced(held: &str) -> String {
+    let source = format!(
+        "{LIBRARY}
+         main!(h) ->
+           n = argc!(h)
+           two = Succ(Succ(Zero))
+           four = mul(two two)
+           sixteen = mul(four four)
+           two_fifty_six = mul(sixteen sixteen)
+           ten = add(four add(four two))
+           exit!(h {held})"
+    );
+    let program = crate::read_barb_with_options(
+        &source,
+        &crate::platform::Routines::builtin(),
+        &OptimizeOptions::default(),
+    )
+    .expect("a program");
+    let rendered = program.render();
+    let (_, main) = rendered.split_once("main!(v0: Host)").expect("an entry");
+    main.to_owned()
+}
