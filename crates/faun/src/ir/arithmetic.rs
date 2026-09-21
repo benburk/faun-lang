@@ -22,6 +22,23 @@ pub(super) fn widest(a: Class, b: Class) -> Class {
 /// value that does not fit is converted, which is what `met` says about the
 /// same question one tier along -- and what the two of them agreeing saves
 /// is a width change that changes no width.
+/// A class with room for every value either of two can be.
+///
+/// Not a class either of them is: what a sum can be is narrower than what
+/// it is worked out in, and the tier above said which. This answers only
+/// the room.
+fn room(a: Class, b: Class) -> Class {
+    match (a, b) {
+        (Class::Natural, _) | (_, Class::Natural) => Class::Natural,
+        (Class::Word, _) | (_, Class::Word) => Class::Word,
+        (Class::Held(a), Class::Held(b)) => Class::Held(crate::facts::Facts {
+            low: 0,
+            high: a.high.zip(b.high).map(|(a, b)| a.max(b)),
+        }),
+        _ => a,
+    }
+}
+
 fn at(b: &mut Builder, value: ValueId, class: Class) -> ValueId {
     if b.class(value).fits(class) {
         value
@@ -49,7 +66,16 @@ pub(super) fn lower(
     left: ValueId,
     right: ValueId,
 ) -> ValueId {
-    let class = widest(result, widest(b.class(left), b.class(right)));
+    // Where the answer lives, if there is room there for what either side
+    // brings: then nothing is converted afterwards and the answer says what
+    // the tier above proved it can be, rather than what it needed room for.
+    // Otherwise somewhere with the room, and narrowed after.
+    let brought = room(b.class(left), b.class(right));
+    let class = if brought.fits(result) {
+        result
+    } else {
+        room(result, brought)
+    };
     let left = at(b, left, class);
     let right = at(b, right, class);
     // An operand may be narrower than the width the answer is worked out

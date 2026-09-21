@@ -18,6 +18,8 @@
 //! addition to fold four of those into; this one does, so four steps of one
 //! are a step of four.
 
+use crate::facts::Facts;
+
 use super::{Binary, Builder, Class, Exit, Op, Program, RegionId, ValueId, model::wrap, rewrite};
 
 /// Rebuild `source` with those shapes read as what they mean.
@@ -171,7 +173,11 @@ impl Simplify {
             return false;
         };
         self.steps[result.index()] = Some(step);
-        let by = b.constant(class, step.by);
+        // The number it steps by can be nothing else, and saying so is what
+        // keeps a constant from taking the range of whatever it stands
+        // beside. Anything reading it has room, the run having been checked
+        // to fit the width the step is taken at.
+        let by = b.constant(Class::Held(Facts::at(step.by)), step.by);
         let from = rebuild.value(step.from);
         rebuild.stands_for(result, b.binary_at(class, Binary::Add, from, by));
         true

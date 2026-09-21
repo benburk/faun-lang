@@ -7,6 +7,8 @@
 
 use num_bigint::BigUint;
 
+use crate::facts::Facts;
+
 use super::{
     Binary, Class, Op, OptimizeOptions, Program, Relation, Returns, ValueId, evaluate, optimize,
     validate,
@@ -333,9 +335,10 @@ fn each_stage_can_be_left_out() {
 fn a_run_of_steps_past_a_value_is_one_step() {
     let held = settled(&stepped(WIDE, &[1, 1, 1, 1]));
     assert_eq!(count(&held, is_add), 1, "one step, not four");
+    // The number it steps by can be nothing but four.
     assert_eq!(
         count_at(&held, |op, class| {
-            *op == Op::Constant { value: 4 } && class == WIDE
+            *op == Op::Constant { value: 4 } && class == Class::Held(Facts::at(4))
         }),
         1
     );
