@@ -18,7 +18,7 @@ const RUNNER: Option<&str> = Some("wasmtime");
 const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 36),
     ("the count", 158),
-    ("the count and more", 216),
+    ("the count and more", 195),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("empty", 36),

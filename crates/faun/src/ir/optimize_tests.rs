@@ -313,3 +313,126 @@ fn each_stage_can_be_left_out() {
         assert_eq!(returns(held), BigUint::from(20u8));
     }
 }
+
+/// A number reached by adding one four times is that number plus four.
+///
+/// One past another is a constructor where a program is written, and the
+/// tier above has no addition to fold a run of them into. This one does.
+#[test]
+fn a_run_of_steps_past_a_value_is_one_step() {
+    let held = settled(&stepped(WIDE, &[1, 1, 1, 1]));
+    assert_eq!(count(&held, is_add), 1, "one step, not four");
+    assert_eq!(
+        count(&held, |op| *op
+            == Op::Constant {
+                class: WIDE,
+                value: 4
+            }),
+        1
+    );
+    assert_eq!(
+        returns(&held),
+        BigUint::from(7u8),
+        "three, and four past it"
+    );
+}
+
+/// A run whose total does not fit the width it is taken at is not a run
+/// this can say anything about.
+///
+/// No valid program has one: where each step fits, so does their total. So
+/// what this is about is an invalid program not being quietly turned into a
+/// valid-looking one that answers something else.
+#[test]
+fn a_run_that_would_not_fit_its_width_is_left_alone() {
+    let narrow = Class::Fixed { bits: 3 };
+    // Three, and eight past it, which three bits do not hold.
+    let held = optimize(&stepped(narrow, &[4, 4]), &OptimizeOptions::default());
+    validate(&held).expect("a sound program");
+    assert_eq!(count(&held, is_add), 2, "eight would not fit three bits");
+}
+
+/// One taken at a wider width than the step before it asserts something the
+/// narrower one did not, so the two are not one step.
+#[test]
+fn a_run_that_changes_width_is_two_runs() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let narrow = Class::Fixed { bits: 3 };
+        let start = b.constant(narrow, 1);
+        let one = b.constant(narrow, 1);
+        let held = b.binary_at(narrow, Binary::Add, start, one);
+        let wide = b.convert(WIDE, held);
+        let two = b.constant(WIDE, 2);
+        let total = b.binary_at(WIDE, Binary::Add, wide, two);
+        let answer = b.convert(Class::Word, total);
+        b.ret(&[answer]);
+    });
+    let held = settled(&p);
+    assert_eq!(count(&held, is_add), 2);
+    assert_eq!(returns(&held), BigUint::from(4u8));
+}
+
+/// A value part way along a run is still worked out for whoever reads it.
+#[test]
+fn a_step_something_reads_survives_the_run_it_is_part_of() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let start = b.constant(WIDE, 0);
+        let one = b.constant(WIDE, 1);
+        let first = b.binary_at(WIDE, Binary::Add, start, one);
+        let second = b.binary_at(WIDE, Binary::Add, first, one);
+        // Both ends of the run are read, so both are written.
+        let total = b.binary_at(WIDE, Binary::Add, first, second);
+        let answer = b.convert(Class::Word, total);
+        b.ret(&[answer]);
+    });
+    let held = settled(&p);
+    assert_eq!(count(&held, is_add), 3, "the run, and what reads into it");
+    assert_eq!(returns(&held), BigUint::from(3u8), "one and two");
+}
+
+/// A step of something worked out is not a step of a known number.
+#[test]
+fn a_step_of_something_worked_out_is_left_alone() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let start = b.constant(WIDE, 1);
+        let one = b.constant(WIDE, 1);
+        let held = b.binary_at(WIDE, Binary::Add, start, one);
+        let doubled = b.binary_at(WIDE, Binary::Add, held, held);
+        let answer = b.convert(Class::Word, doubled);
+        b.ret(&[answer]);
+    });
+    let held = settled(&p);
+    assert_eq!(count(&held, is_add), 2);
+    assert_eq!(returns(&held), BigUint::from(4u8));
+}
+
+const WIDE: Class = Class::Fixed { bits: 9 };
+
+const fn is_add(op: &Op) -> bool {
+    matches!(
+        *op,
+        Op::Binary {
+            op: Binary::Add,
+            ..
+        }
+    )
+}
+
+/// Three, then each of `by` added to it in turn, answered as a word.
+fn stepped(class: Class, by: &[u64]) -> Program {
+    let (mut p, main) = Program::new("main");
+    let by = by.to_vec();
+    p.define(main, |b, _| {
+        let mut held = b.constant(class, 3);
+        for step in by {
+            let step = b.constant(class, step);
+            held = b.binary_at(class, Binary::Add, held, step);
+        }
+        let answer = b.convert(Class::Word, held);
+        b.ret(&[answer]);
+    });
+    p
+}

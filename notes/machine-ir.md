@@ -110,7 +110,9 @@ validation, in this order, each stage at most once:
    whose condition only asks which tag an earlier comparison answered becomes
    a branch on that comparison, with its arms in whichever order the tags say.
    A constant read at a `Fixed` width is written at that width instead of
-   being converted to it.
+   being converted to it. A run of additions of known numbers, all at one
+   width, is one addition -- a number one past another is a constructor in
+   Barb, which has no addition to fold a run of them into.
 2. `prune`: drop instructions nothing reads. A call may do something while
    answering and a store does nothing else, so neither is dropped, and an `if`
    holding either stays for what it holds rather than for what it answers.

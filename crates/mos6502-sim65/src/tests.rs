@@ -17,7 +17,7 @@ const RUNNER: Option<&str> = Some("sim65");
 const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 17),
     ("the count", 54),
-    ("the count and more", 170),
+    ("the count and more", 137),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("empty", 30),

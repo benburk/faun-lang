@@ -12,8 +12,13 @@
 //! needs, since that is what the tier above proved about it, and then read
 //! at whatever width the thing reading it holds. Writing it at that width to
 //! begin with says the same and asks a target for nothing.
+//!
+//! And the same for a run of them. A number one past another is a
+//! constructor where a program is written, and the tier above has no
+//! addition to fold four of those into; this one does, so four steps of one
+//! are a step of four.
 
-use super::{Builder, Class, Exit, Op, Program, RegionId, ValueId, model::wrap, rewrite};
+use super::{Binary, Builder, Class, Exit, Op, Program, RegionId, ValueId, model::wrap, rewrite};
 
 /// Rebuild `source` with those shapes read as what they mean.
 ///
@@ -23,12 +28,27 @@ use super::{Builder, Class, Exit, Op, Program, RegionId, ValueId, model::wrap, r
 pub(super) fn simplify(source: &Program) -> Program {
     let mut pass = Simplify {
         wrote: Wrote::of(source),
+        steps: vec![None; source.values_count()],
     };
     rewrite::rebuild(source, &mut pass)
 }
 
 struct Simplify {
     wrote: Wrote,
+    /// What each old value is a fixed step past, once anything has been
+    /// found to be a step past anything. Written as the walk goes, since
+    /// what a step is past is whatever the walk has already written.
+    steps: Vec<Option<Step>>,
+}
+
+/// A value reached by adding a known number to another value, all at one
+/// width. The width is part of it: a step taken wider than the one before
+/// asserts something the narrower one did not.
+#[derive(Clone, Copy)]
+struct Step {
+    from: ValueId,
+    by: u64,
+    class: Class,
 }
 
 impl rewrite::Pass for Simplify {
@@ -39,46 +59,117 @@ impl rewrite::Pass for Simplify {
         op: Op,
         results: &[ValueId],
     ) -> bool {
-        let source = rebuild.source();
         match op {
-            // A constant read at another width is that constant, written at
-            // the width it is read at. Only a `Fixed` sink is written here:
-            // it says its own width, where a word's is the machine's and is
-            // not something this tier knows.
             Op::Convert {
                 class: class @ Class::Fixed { .. },
                 value,
-            } => {
-                let Some(held) = self.wrote.number(value) else {
-                    return false;
-                };
-                rebuild.stands_for(results[0], b.constant(class, wrap(class, held)));
-                true
-            }
-            // A branch asking which constructor a comparison answered is the
-            // comparison, and the arms stand in whichever order its tags say.
+            } => self.widened(rebuild, b, class, value, results[0]),
+            Op::Binary {
+                op: Binary::Add,
+                left,
+                right,
+            } => self.stepping(rebuild, b, left, right, results[0]),
             Op::If {
                 condition,
                 then_region,
                 else_region,
-            } => {
-                let Some((test, swapped)) = self.wrote.asks(source, condition) else {
-                    return false;
-                };
-                let arms = if swapped {
-                    (else_region, then_region)
-                } else {
-                    (then_region, else_region)
-                };
-                let test = rebuild.value(test);
-                let fresh = rebuild.if_(b, test, results, arms.0, arms.1, self);
-                for (&was, now) in results.iter().zip(fresh) {
-                    rebuild.stands_for(was, now);
-                }
-                true
-            }
+            } => self.branching(rebuild, b, condition, [then_region, else_region], results),
             _ => false,
         }
+    }
+}
+
+impl Simplify {
+    /// A constant read at another width is that constant, written at the
+    /// width it is read at.
+    ///
+    /// Only a `Fixed` sink is written here: it says its own width, where a
+    /// word's is the machine's and is not something this tier knows.
+    fn widened(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        class: Class,
+        value: ValueId,
+        result: ValueId,
+    ) -> bool {
+        let Some(held) = self.wrote.number(value) else {
+            return false;
+        };
+        rebuild.stands_for(result, b.constant(class, wrap(class, held)));
+        true
+    }
+
+    /// A step past a step is one step.
+    ///
+    /// Every one of them is still written, since something may read a value
+    /// part way along the run. What nothing reads goes when the leftovers
+    /// do.
+    fn stepping(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        left: ValueId,
+        right: ValueId,
+        result: ValueId,
+    ) -> bool {
+        let class = rebuild.source().class(result);
+        let Some(step) = self.stepped(left, right, class) else {
+            return false;
+        };
+        self.steps[result.index()] = Some(step);
+        let by = b.constant(class, step.by);
+        let from = rebuild.value(step.from);
+        rebuild.stands_for(result, b.binary_at(class, Binary::Add, from, by));
+        true
+    }
+
+    /// A branch asking which constructor a comparison answered is the
+    /// comparison, with its arms in whichever order the tags say.
+    fn branching(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        condition: ValueId,
+        arms: [RegionId; 2],
+        results: &[ValueId],
+    ) -> bool {
+        let Some((test, swapped)) = self.wrote.asks(rebuild.source(), condition) else {
+            return false;
+        };
+        let [then_region, else_region] = if swapped { [arms[1], arms[0]] } else { arms };
+        let test = rebuild.value(test);
+        let fresh = rebuild.if_(b, test, results, then_region, else_region, self);
+        for (&was, now) in results.iter().zip(fresh) {
+            rebuild.stands_for(was, now);
+        }
+        true
+    }
+
+    /// Where an addition of a known number leaves off, counting the run it
+    /// continues. Nothing is answered for an addition of something worked
+    /// out, or for one whose run would not fit the width it is taken at.
+    fn stepped(&self, left: ValueId, right: ValueId, class: Class) -> Option<Step> {
+        if !matches!(class, Class::Word | Class::Fixed { .. }) {
+            return None;
+        }
+        let by = self.wrote.number(right)?;
+        let held = match self.steps[left.index()] {
+            Some(held) if held.class == class => Step {
+                from: held.from,
+                by: held.by.checked_add(by)?,
+                class,
+            },
+            // The first step of a run, which is written as it stands and is
+            // only worth knowing because of what may come after it.
+            _ => Step {
+                from: left,
+                by,
+                class,
+            },
+        };
+        // A run wider than the width it is taken at is not the same run.
+        (wrap(class, held.by) == held.by).then_some(held)
     }
 }
 
