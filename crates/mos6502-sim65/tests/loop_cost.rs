@@ -1,7 +1,11 @@
 //! What a tight loop costs on the 6502, in cycles per iteration.
 //!
 //! One iteration count is subtracted from another so that startup, the
-//! frame, and exit all cancel and what is left is the body alone. The
+//! frame, and exit all cancel and what is left is the body alone. Both
+//! counts are above 255, so that the bound the loop tests against is two
+//! bytes in each and the two bodies are the same code; one either side of
+//! that line compiles to different loops and subtracting them measures
+//! nothing. The
 //! ceiling is a ratchet, not a goal: lower it when the target improves,
 //! and do not raise it without saying why. For scale, `cc65 -O` compiles
 //! the same loop to 45 cycles an iteration.
@@ -80,7 +84,7 @@ fn run(program: &Program) -> (u64, i32) {
 #[test]
 fn a_loop_iteration_stays_within_its_cycle_ceiling() {
     const CEILING: u64 = 38;
-    let (low, high) = (100u64, 1100u64);
+    let (low, high) = (300u64, 1300u64);
 
     let (cheap, small) = run(&summing_loop(low));
     let (dear, large) = run(&summing_loop(high));
@@ -89,12 +93,12 @@ fn a_loop_iteration_stays_within_its_cycle_ceiling() {
     // the low byte is all an exit status carries.
     assert_eq!(
         small,
-        i32::from(4950u16.to_le_bytes()[0]),
+        i32::from(44850u16.to_le_bytes()[0]),
         "the sum to {low}"
     );
     assert_eq!(
         large,
-        i32::from(14626u16.to_le_bytes()[0]),
+        i32::from(57918u16.to_le_bytes()[0]),
         "the sum to {high}"
     );
 

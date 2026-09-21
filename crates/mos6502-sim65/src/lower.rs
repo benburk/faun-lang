@@ -116,6 +116,14 @@ impl Operand {
     }
 }
 
+/// Whether a byte is the number nought, known before the program runs.
+///
+/// Nothing unsigned is under nought, so a branch saying something is under
+/// this one never runs and is not written.
+const fn nought(byte: Held) -> bool {
+    matches!(byte, Held::Imm(0))
+}
+
 /// Whether `value` is read anywhere in `region`, nested regions included.
 fn region_reads(program: &Program, region: RegionId, value: ValueId) -> bool {
     program.outgoing(region).contains(&value)
@@ -123,6 +131,14 @@ fn region_reads(program: &Program, region: RegionId, value: ValueId) -> bool {
             .ops(region)
             .iter()
             .any(|op| op_reads(program, op, value))
+}
+
+/// Whether a region works `value` out itself, rather than reading one from
+/// somewhere it can see.
+fn written_in(program: &Program, region: RegionId, value: ValueId) -> bool {
+    program
+        .walk(region)
+        .any(|(_, results)| results.contains(&value))
 }
 
 fn op_reads(program: &Program, op: &Op, value: ValueId) -> bool {
@@ -320,8 +336,9 @@ fn assemble(program: &Program, heap: u16, stack: bool) -> Code {
     let rest = (0..program.functions().len())
         .map(FunctionId::at)
         .filter(|id| id.index() != entry.index());
+    let fallen = stack && !program.comes_back(entry);
     for id in std::iter::once(entry).chain(rest) {
-        state.function(id);
+        state.function(id, fallen && id.index() == entry.index());
     }
     state.emit_pool();
 
@@ -441,11 +458,18 @@ impl Lowering<'_> {
         }
     }
 
-    fn function(&mut self, id: FunctionId) {
+    /// `fallen` says the reset routine ran into this one rather than
+    /// calling it, which is the one way a body is reached from a place that
+    /// knows what it left in the accumulator.
+    fn function(&mut self, id: FunctionId, fallen: bool) {
         let function = self.program.function(id);
         let Some(body) = function.body() else { return };
         let start = self.starts[id.index()];
-        self.asm.bind(start);
+        if fallen {
+            self.asm.bind_fallen_into(start);
+        } else {
+            self.asm.bind(start);
+        }
 
         let plan = self.plans[id.index()]
             .as_ref()
@@ -757,7 +781,7 @@ impl Lowering<'_> {
         let mut out: Vec<(ValueId, ValueId)> = Vec::new();
         let mut loops = vec![region];
         while let Some(region) = loops.pop() {
-            for op in program.ops(region) {
+            for (op, results) in program.walk(region) {
                 match *op {
                     Op::If {
                         then_region,
@@ -766,6 +790,7 @@ impl Lowering<'_> {
                     } => {
                         loops.push(then_region);
                         loops.push(else_region);
+                        self.share_if(results, [then_region, else_region], &mut out);
                     }
                     Op::Loop { body, .. } => {
                         loops.push(body);
@@ -776,6 +801,54 @@ impl Lowering<'_> {
             }
         }
         out
+    }
+
+    /// An arm's answer worked out where the branch's answer lives, so that
+    /// leaving the arm moves nothing.
+    ///
+    /// The two are never both wanted: what a branch answers is not read
+    /// until the branch is over, and what an arm works out is not read once
+    /// it has left. Both arms may do it, being alternatives rather than a
+    /// sequence.
+    fn share_if(
+        &self,
+        results: &[ValueId],
+        arms: [RegionId; 2],
+        out: &mut Vec<(ValueId, ValueId)>,
+    ) {
+        let program = self.program;
+        for arm in arms {
+            let carried = program.outgoing(arm);
+            for (slot, &value) in carried.iter().enumerate() {
+                let Some(&result) = results.get(slot) else {
+                    continue;
+                };
+                if value == result
+                    || matches!(
+                        self.source[value.index()],
+                        Source::Const(_) | Source::Addr(_)
+                    )
+                    || out
+                        .iter()
+                        .any(|(v, p)| *v == value || *v == result || *p == value)
+                {
+                    continue;
+                }
+                // Only what the arm works out itself, and only where
+                // leaving is all the arm does with it. Anything else has a
+                // reader this knows nothing about.
+                if !written_in(program, arm, value)
+                    || carried.iter().filter(|&&held| held == value).count() != 1
+                    || program
+                        .ops(arm)
+                        .iter()
+                        .any(|op| op_reads(program, op, value))
+                {
+                    continue;
+                }
+                out.push((value, result));
+            }
+        }
     }
 
     fn share_loop(&self, body: RegionId, out: &mut Vec<(ValueId, ValueId)>) {
@@ -1516,7 +1589,9 @@ impl Lowering<'_> {
             // Unsigned, high byte first; the low byte only decides a tie.
             Relation::Less => {
                 self.compare_byte(left.byte(1), right.byte(1));
-                self.asm.branch(Cc::NoCarry, yes);
+                if !nought(right.byte(1)) {
+                    self.asm.branch(Cc::NoCarry, yes);
+                }
                 self.asm.branch(Cc::NotEqual, no);
                 self.compare_byte(left.byte(0), right.byte(0));
                 self.asm.branch(Cc::NoCarry, yes);
@@ -1544,7 +1619,9 @@ impl Lowering<'_> {
             Relation::Less => {
                 let yes = self.asm.label();
                 self.compare_byte(left.byte(1), right.byte(1));
-                self.asm.branch(Cc::NoCarry, yes);
+                if !nought(right.byte(1)) {
+                    self.asm.branch(Cc::NoCarry, yes);
+                }
                 self.asm.branch(Cc::NotEqual, no);
                 self.compare_byte(left.byte(0), right.byte(0));
                 self.asm.branch(Cc::Carry, no);

@@ -91,9 +91,28 @@ fn execute(
         for _ in 0..extra {
             command.arg("dynamic-input");
         }
-        verify(extra, command.output().expect("target runner"));
+        verify(extra, output(&mut command));
     }
     fs::remove_dir_all(dir).unwrap();
+}
+
+/// Run it, retrying while the kernel still counts the file as open for
+/// writing.
+///
+/// Tests run beside each other, and a process forked by one of them holds
+/// every file the others had open at that moment. The exec of a file so
+/// held is refused until that process is on its way, which is a race
+/// between tests rather than anything a program did.
+fn output(command: &mut std::process::Command) -> std::process::Output {
+    for _ in 0..64 {
+        match command.output() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            held => return held.expect("target runner"),
+        }
+    }
+    panic!("the target runner stayed busy")
 }
 
 fn check(target: &dyn Target, runner: Option<&str>) {

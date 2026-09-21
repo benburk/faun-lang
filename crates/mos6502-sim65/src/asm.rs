@@ -244,6 +244,8 @@ pub(crate) struct Assembler {
     /// Kept while instructions are written rather than worked out after,
     /// since every one of them goes through here and nothing else does.
     acc: Acc,
+    /// Labels said to be reached only by running into them.
+    fallen: Vec<usize>,
 }
 
 impl Assembler {
@@ -274,6 +276,17 @@ impl Assembler {
     pub(crate) fn bind(&mut self, label: Label) {
         self.acc = Acc::NOTHING;
         self.labels[label.0] = Some(self.insts.len());
+    }
+
+    /// The same, for a label nothing jumps to.
+    ///
+    /// What is known about the accumulator survives it, there being no
+    /// other way to arrive. Saying so is a claim about the whole program
+    /// rather than about what has been written so far, so [`Self::finish`]
+    /// checks it before writing anything down.
+    pub(crate) fn bind_fallen_into(&mut self, label: Label) {
+        self.labels[label.0] = Some(self.insts.len());
+        self.fallen.push(label.0);
     }
 
     /// Read a byte into the accumulator, unless it already holds it.
@@ -354,49 +367,76 @@ impl Assembler {
     ///
     /// If a label was never bound, or the image outgrew the machine.
     pub(crate) fn finish(self) -> Vec<u8> {
+        self.check_nothing_jumps_where_nothing_should();
         let (far, at) = self.settled();
-
         let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
         for (id, inst) in self.insts.iter().enumerate() {
-            match *inst {
-                Inst::Op { mnemonic, operand } => {
-                    bytes.push(opcode(mnemonic, operand));
-                    match operand {
-                        Operand::Implied => {}
-                        Operand::Imm(held) | Operand::Zero(held) | Operand::Indirect(held) => {
-                            bytes.push(held);
-                        }
-                        Operand::Abs(held) => bytes.extend_from_slice(&held.to_le_bytes()),
+            self.write(*inst, id, &far, &at, &mut bytes);
+        }
+        bytes
+    }
+
+    /// One instruction's bytes, now that every address is known.
+    fn write(&self, inst: Inst, id: usize, far: &[bool], at: &[usize], bytes: &mut Vec<u8>) {
+        match inst {
+            Inst::Op { mnemonic, operand } => {
+                bytes.push(opcode(mnemonic, operand));
+                match operand {
+                    Operand::Implied => {}
+                    Operand::Imm(held) | Operand::Zero(held) | Operand::Indirect(held) => {
+                        bytes.push(held);
                     }
+                    Operand::Abs(held) => bytes.extend_from_slice(&held.to_le_bytes()),
                 }
-                Inst::Word(held) => bytes.extend_from_slice(&held.to_le_bytes()),
-                Inst::Absolute { mnemonic, to } => {
-                    bytes.push(opcode(mnemonic, Operand::Abs(0)));
-                    bytes.extend_from_slice(&self.address(&at, to).to_le_bytes());
-                }
-                Inst::Half { to, half } => {
-                    let [low, held] = self.address(&at, to).to_le_bytes();
-                    let byte = match half {
-                        Half::Low => low,
-                        Half::High => held,
-                    };
-                    bytes.extend_from_slice(&[0xA9, byte]);
-                }
-                Inst::Branch { cc, to } => {
-                    if far[id] {
-                        // The inverse branch over a `jmp`, which is three
-                        // bytes, so the hop is three.
-                        bytes.extend_from_slice(&[cc.inverse(), 3, 0x4C]);
-                        bytes.extend_from_slice(&self.address(&at, to).to_le_bytes());
-                    } else {
-                        let step = self.step_to(&at, id, to, 2);
-                        let step = i8::try_from(step).expect("a branch that reaches");
-                        bytes.extend_from_slice(&[cc.taken(), step.cast_unsigned()]);
-                    }
+            }
+            Inst::Word(held) => bytes.extend_from_slice(&held.to_le_bytes()),
+            Inst::Absolute { mnemonic, to } => {
+                bytes.push(opcode(mnemonic, Operand::Abs(0)));
+                bytes.extend_from_slice(&self.address(at, to).to_le_bytes());
+            }
+            Inst::Half { to, half } => {
+                let [low, held] = self.address(at, to).to_le_bytes();
+                let byte = match half {
+                    Half::Low => low,
+                    Half::High => held,
+                };
+                bytes.extend_from_slice(&[0xA9, byte]);
+            }
+            Inst::Branch { cc, to } => {
+                if far[id] {
+                    // The inverse branch over a `jmp`, which is three
+                    // bytes, so the hop is three.
+                    bytes.extend_from_slice(&[cc.inverse(), 3, 0x4C]);
+                    bytes.extend_from_slice(&self.address(at, to).to_le_bytes());
+                } else {
+                    let step = self.step_to(at, id, to, 2);
+                    let step = i8::try_from(step).expect("a branch that reaches");
+                    bytes.extend_from_slice(&[cc.taken(), step.cast_unsigned()]);
                 }
             }
         }
-        bytes
+    }
+
+    /// Check that every label said to be only fallen into really is.
+    ///
+    /// What [`Self::bind_fallen_into`] claims cannot be known while the
+    /// instructions are being written, since what jumps where is only
+    /// settled once they all are.
+    ///
+    /// # Panics
+    /// If anything names such a label.
+    fn check_nothing_jumps_where_nothing_should(&self) {
+        for inst in &self.insts {
+            let (Inst::Branch { to, .. } | Inst::Absolute { to, .. } | Inst::Half { to, .. }) =
+                *inst
+            else {
+                continue;
+            };
+            assert!(
+                !self.fallen.contains(&to.0),
+                "something jumps to a label said to be only fallen into"
+            );
+        }
     }
 
     /// Which branches do not reach, and where every step lands once they
