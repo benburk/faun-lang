@@ -80,8 +80,8 @@ pub use layout::{Endian, Layout};
 pub use legalize::legalize;
 pub use lower::lower;
 pub use model::{
-    Binary, Class, DataId, Definition, Exit, Function, FunctionId, Offset, Op, Origin, Range,
-    Region, RegionId, Relation, Returns, Span, Terminator, ValueId, Width,
+    Binary, Class, DataId, Definition, Direction, Exit, Function, FunctionId, Offset, Op, Origin,
+    Range, Region, RegionId, Relation, Returns, Span, Terminator, ValueId, Width,
 };
 pub use optimize::{OptimizeOptions, optimize};
 pub use program::Program;

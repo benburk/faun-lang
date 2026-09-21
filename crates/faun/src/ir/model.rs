@@ -102,6 +102,15 @@ pub enum Relation {
     Less,
 }
 
+/// Which way a shift moves the bits it keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    /// Toward the high bits: a product by two to the power of the distance.
+    Up,
+    /// Toward the low bits: the unsigned quotient by the same.
+    Down,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Width {
     Byte,
@@ -146,6 +155,26 @@ pub enum Op {
         address: ValueId,
         offset: Offset,
         value: ValueId,
+    },
+    /// A product or quotient by a power of two, said the way a machine says
+    /// it: `value` with its bits moved `by` places.
+    ///
+    /// The distance is known before the program runs, always. Nothing in the
+    /// language shifts by a number it works out, and a target handed one
+    /// would need a loop where it otherwise needs an instruction; this is
+    /// written by recognising a product or quotient, so there is nothing for
+    /// it to be but a number.
+    ///
+    /// Over a value the machine holds and not an arbitrary-precision
+    /// natural, whose products go through the helpers and stay products.
+    ///
+    /// The class is a fit requirement, exactly as `Binary`'s is: a shift up
+    /// past what the class holds is a program saying something untrue, not a
+    /// modulus.
+    Shift {
+        direction: Direction,
+        value: ValueId,
+        by: u16,
     },
     /// `value` read as the class of what this writes, which is the only
     /// place a width changes. Everything else works at the width its

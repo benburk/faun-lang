@@ -212,7 +212,9 @@ const fn opcode(mnemonic: Mnemonic, operand: Operand) -> u8 {
         (M::Asl, O::Zero(_)) => 0x06,
         (M::Rol, O::Implied) => 0x2A,
         (M::Rol, O::Zero(_)) => 0x26,
+        (M::Lsr, O::Implied) => 0x4A,
         (M::Lsr, O::Zero(_)) => 0x46,
+        (M::Ror, O::Implied) => 0x6A,
         (M::Ror, O::Zero(_)) => 0x66,
         (M::And, O::Imm(_)) => 0x29,
         (M::Ora, O::Zero(_)) => 0x05,
@@ -686,6 +688,17 @@ impl Assembler {
     /// The same, taking the carry in at the bottom.
     pub(crate) fn rol(&mut self) {
         self.op(Mnemonic::Rol, Operand::Implied);
+    }
+
+    /// Shift the accumulator down one, the bit leaving the bottom becoming
+    /// the carry.
+    pub(crate) fn lsr(&mut self) {
+        self.op(Mnemonic::Lsr, Operand::Implied);
+    }
+
+    /// The same, taking the carry in at the top.
+    pub(crate) fn ror(&mut self) {
+        self.op(Mnemonic::Ror, Operand::Implied);
     }
 
     pub(crate) fn asl_zp(&mut self, at: u8) {

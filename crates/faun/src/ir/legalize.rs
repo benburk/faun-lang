@@ -379,6 +379,13 @@ impl Pass<'_> {
             Op::Binary { op, left, right } => {
                 b.binary_at(self.source.class(results[0]), op, v(left), v(right))
             }
+            // A shift is never over a natural, so there is no helper for it
+            // and nothing to choose between here.
+            Op::Shift {
+                direction,
+                value,
+                by,
+            } => b.shift(self.source.class(results[0]), direction, v(value), by),
             Op::Compare {
                 relation,
                 left,

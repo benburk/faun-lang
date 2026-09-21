@@ -178,6 +178,62 @@ pub fn doubles_across_bytes() -> Program {
     program
 }
 
+/// Products and quotients by powers of two, which every target has an
+/// instruction for and reads as a shift.
+///
+/// The distances sit either side of a byte, because a target holding this in
+/// two bytes moves the halves one at a time and the boundary between them is
+/// where a bit has to cross. Going down, a value with bits below the
+/// distance says they are dropped rather than carried anywhere.
+///
+/// # Panics
+/// If there are more cases than a count can hold.
+#[must_use]
+pub fn shifts_by_powers_of_two() -> Program {
+    const PLACES: [u32; 5] = [1, 2, 7, 8, 14];
+    let wide = Class::fixed(16);
+    let (mut program, main) = Program::new("main");
+    let mut checks = vec![];
+    for by in PLACES {
+        let up = program.declare(&format!("up{by}"), &[wide, wide], &[Class::Word]);
+        program.define(up, |b, args| {
+            let places = b.constant(wide, 1 << by);
+            let moved = b.binary_at(wide, Binary::Mul, args[0], places);
+            let equal = b.compare(Relation::Equal, moved, args[1]);
+            b.ret(&[equal]);
+        });
+        let down = program.declare(&format!("down{by}"), &[wide, wide], &[Class::Word]);
+        program.define(down, |b, args| {
+            let places = b.constant(wide, 1 << by);
+            let moved = b.binary_at(wide, Binary::Div, args[0], places);
+            let equal = b.compare(Relation::Equal, moved, args[1]);
+            b.ret(&[equal]);
+        });
+        checks.push((by, up, down));
+    }
+    program.define(main, |b, _| {
+        let mut passed = b.constant(Class::Word, 0);
+        for &(by, up, down) in &checks {
+            // Three, so that going up puts a bit in every byte it reaches.
+            let args = [b.constant(wide, 3), b.constant(wide, 3 << by)];
+            let answer = b.call_one(up, &args);
+            passed = b.binary(Binary::Add, passed, answer);
+            // Odd and high, so that going down drops bits off the bottom and
+            // brings bits across the boundary.
+            let args = [b.constant(wide, 0xBEEF), b.constant(wide, 0xBEEF >> by)];
+            let answer = b.call_one(down, &args);
+            passed = b.binary(Binary::Add, passed, answer);
+        }
+        let count = b.constant(
+            Class::Word,
+            u64::try_from(2 * checks.len()).expect("a few cases"),
+        );
+        let failures = b.binary(Binary::Sub, count, passed);
+        b.ret(&[failures]);
+    });
+    program
+}
+
 /// A byte doubled, and then the number it was doubled from read again.
 ///
 /// Doubling a byte can be one shift, which leaves an answer where the number

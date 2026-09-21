@@ -4,6 +4,7 @@
 //! this module's.
 
 use faun::index::Range;
+use faun::ir::Direction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -317,11 +318,39 @@ impl Encoder {
                 self.emit(&((1u32 << bits) - 1).to_le_bytes());
             }
             33..=63 => {
-                let shift = u8::try_from(64 - bits).expect("a register shift");
-                self.emit(&[0x48, 0xC1, 0xE0, shift]); // shl rax, shift
-                self.emit(&[0x48, 0xC1, 0xE8, shift]); // shr rax, shift
+                let by = u8::try_from(64 - bits).expect("a register shift");
+                self.moved(Direction::Up, by, 64);
+                self.moved(Direction::Down, by, 64);
             }
             other => panic!("no {other}-bit form on this target"),
+        }
+    }
+
+    /// `rax` with its bits moved `by` places, which is a product or quotient
+    /// by a power of two.
+    pub(crate) fn shift(&mut self, direction: Direction, by: u8, bits: u16) {
+        self.step();
+        self.moved(direction, by, bits);
+    }
+
+    /// The bytes of one shift, opening no instruction of its own, so that a
+    /// pair of them can stand as the one thing they are written for.
+    ///
+    /// One place has a form of its own that carries no distance, and it is
+    /// the common one: a doubling is a shift by one, and that form is as
+    /// short as the addition it stands in for.
+    fn moved(&mut self, direction: Direction, by: u8, bits: u16) {
+        let form = match direction {
+            Direction::Up => 0xE0,
+            Direction::Down => 0xE8,
+        };
+        if bits > 32 {
+            self.emit(&[0x48]);
+        }
+        if by == 1 {
+            self.emit(&[0xD1, form]);
+        } else {
+            self.emit(&[0xC1, form, by]);
         }
     }
 

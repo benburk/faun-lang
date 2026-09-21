@@ -12,8 +12,8 @@ use super::{
 };
 use crate::WORD_BITS;
 use faun::ir::{
-    Binary, Class, DataId, Exit, FunctionId, Offset, Op, Origin, Program, RegionId, Relation,
-    Terminator, ValueId, Width,
+    Binary, Class, DataId, Direction, Exit, FunctionId, Offset, Op, Origin, Program, RegionId,
+    Relation, Terminator, ValueId, Width,
 };
 
 /// A word here is the width of an address.
@@ -282,7 +282,7 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
             each(*address);
             each(*value);
         }
-        Op::Convert { value, .. } => each(*value),
+        Op::Convert { value, .. } | Op::Shift { value, .. } => each(*value),
         Op::Call { args, .. } => {
             program.values(*args).iter().copied().for_each(each);
         }
@@ -1585,13 +1585,13 @@ impl Lowering<'_> {
     }
 
     fn arithmetic(&mut self, op: Binary, left: Operand, right: Operand, dest: u8, width: Width) {
-        // A value added to itself is that value shifted up one, and the bit
-        // the shift puts in the carry is the bit an addition would have
-        // carried out -- thrown away at the top byte, taken in at the next.
-        // Reading the one value twice is what says this, so two values
-        // sharing a place say it too, and a place holds what it holds.
+        // A value added to itself is that value moved up one place.
+        // `simplify` says so wherever it can see one value read twice; what
+        // it cannot see is two values given the same place, and a place
+        // holds what it holds. It also never sees a program handed straight
+        // to a target.
         if op == Binary::Add && left == right {
-            self.double(left, dest, width);
+            self.shifted(Direction::Up, left, dest, 1, width);
             return;
         }
         // A step of one over a pair the result already occupies is an
@@ -1646,22 +1646,58 @@ impl Lowering<'_> {
         }
     }
 
-    /// A value added to itself, as a shift of the accumulator.
+    /// A value with its bits moved, which this processor does one place at
+    /// a time.
     ///
-    /// Neither the store of one byte nor the load of the next touches the
-    /// carry, so the bit leaving the low byte is still there to enter the
-    /// high one. A narrow operand reads as nought above its first byte, which
-    /// is what leaves the carry alone as the whole of a wider answer's top.
-    fn double(&mut self, value: Operand, dest: u8, width: Width) {
-        self.load(value.byte(0));
-        self.asm.asl();
-        self.asm.sta_zp(dest);
+    /// A byte stays in the accumulator throughout: one instruction a place,
+    /// and a single store at the end. Wider than that it cannot, so the
+    /// first move reads the value into the answer and the rest move the
+    /// answer where it lies, two instructions a place.
+    ///
+    /// The carry is what joins the halves. Neither the store of one byte nor
+    /// the load of the next touches it, so the bit leaving one is still
+    /// there to enter the other; moving up that means starting at the low
+    /// byte, and moving down, at the high one.
+    fn shifted(&mut self, direction: Direction, value: Operand, dest: u8, by: u16, width: Width) {
         if width == Width::Byte {
+            self.load(value.byte(0));
+            for _ in 0..by {
+                match direction {
+                    Direction::Up => self.asm.asl(),
+                    Direction::Down => self.asm.lsr(),
+                }
+            }
+            self.asm.sta_zp(dest);
             return;
         }
-        self.load(value.byte(1));
-        self.asm.rol();
-        self.asm.sta_zp(dest + 1);
+        let (first, second) = match direction {
+            Direction::Up => (0, 1),
+            Direction::Down => (1, 0),
+        };
+        self.load(value.byte(first));
+        match direction {
+            Direction::Up => self.asm.asl(),
+            Direction::Down => self.asm.lsr(),
+        }
+        self.asm.sta_zp(dest + first);
+        self.load(value.byte(second));
+        match direction {
+            Direction::Up => self.asm.rol(),
+            Direction::Down => self.asm.ror(),
+        }
+        self.asm.sta_zp(dest + second);
+        for _ in 1..by {
+            match direction {
+                Direction::Up => {
+                    self.asm.asl_zp(dest);
+                    self.asm.rol_zp(dest + 1);
+                }
+                Direction::Down => {
+                    self.asm.lsr_zp(dest + 1);
+                    self.asm.ror_zp(dest);
+                }
+            }
+        }
     }
 
     /// Shift/add in exactly sixteen rounds, independent of operand values.
@@ -1860,6 +1896,21 @@ impl Lowering<'_> {
                 };
                 let dest = self.dest(results[0]);
                 self.arithmetic(*op, left, right, dest, width);
+                self.commit(results[0], dest);
+            }
+            Op::Shift {
+                direction,
+                value,
+                by,
+            } => {
+                let value = self.operand(*value, T0);
+                let width = if self.needed(results[0]) <= 8 {
+                    Width::Byte
+                } else {
+                    Width::Word
+                };
+                let dest = self.dest(results[0]);
+                self.shifted(*direction, value, dest, *by, width);
                 self.commit(results[0], dest);
             }
             Op::Compare {

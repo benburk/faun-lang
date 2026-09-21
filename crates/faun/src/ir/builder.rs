@@ -4,8 +4,8 @@
 //! module owns the temporary instructions, results, and transfer state.
 
 use super::model::{
-    Binary, Class, DataId, Exit, FunctionId, Offset, Op, Range, Region, RegionId, Relation,
-    Terminator, ValueId, Width, wrap,
+    Binary, Class, DataId, Direction, Exit, FunctionId, Offset, Op, Range, Region, RegionId,
+    Relation, Terminator, ValueId, Width, wrap,
 };
 use super::program::Program;
 
@@ -103,6 +103,28 @@ impl Builder<'_> {
         right: ValueId,
     ) -> ValueId {
         self.push_one(Op::Binary { op, left, right }, class)
+    }
+
+    /// A value with its bits moved, written at `class`.
+    ///
+    /// The distance is a number here rather than a value, because a shift is
+    /// only ever written by recognising a product or quotient by a power of
+    /// two known before the program runs.
+    pub fn shift(
+        &mut self,
+        class: Class,
+        direction: Direction,
+        value: ValueId,
+        by: u16,
+    ) -> ValueId {
+        self.push_one(
+            Op::Shift {
+                direction,
+                value,
+                by,
+            },
+            class,
+        )
     }
 
     pub fn compare(&mut self, relation: Relation, left: ValueId, right: ValueId) -> ValueId {

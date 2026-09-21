@@ -16,8 +16,8 @@
 //! themselves terminate; their internal work cannot be metered by this evaluator.
 
 use super::{
-    Binary, Class, Definition, Exit, FunctionId, Offset, Op, Origin, Program, Range, RegionId,
-    Relation, Returns, ValueId, Width,
+    Binary, Class, Definition, Direction, Exit, FunctionId, Offset, Op, Origin, Program, Range,
+    RegionId, Relation, Returns, ValueId, Width,
 };
 use num_bigint::BigUint;
 
@@ -568,6 +568,28 @@ impl<H: Host> Machine<'_, H> {
         }
     }
 
+    /// A value with its bits moved, which is a product or quotient by a
+    /// power of two and answers to the same fit rule as one.
+    fn shifted(
+        &self,
+        direction: Direction,
+        class: Class,
+        value: BigUint,
+        by: u16,
+    ) -> Result<BigUint, Error> {
+        self.fit(class, &value)?;
+        let held = match direction {
+            Direction::Up => value << usize::from(by),
+            Direction::Down => value >> usize::from(by),
+        };
+        if class == Class::Word {
+            self.convert(class, held)
+        } else {
+            self.fit(class, &held)?;
+            Ok(held)
+        }
+    }
+
     fn multiply(&self, class: Class, left: BigUint, right: BigUint) -> Result<BigUint, Error> {
         // A nonzero product needs m+n-1 or m+n bits. Reject obviously oversized
         // products before allocating them, without rejecting any fitting value.
@@ -642,6 +664,10 @@ impl<H: Host> Machine<'_, H> {
         })))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per instruction; the length is the patterns"
+    )]
     fn scalar(&mut self, op: Op, results: Range) -> Result<Vec<BigUint>, Error> {
         let value = match op {
             Op::Constant { value } => self.constant(self.result_class(results)?, value)?,
@@ -652,6 +678,16 @@ impl<H: Host> Machine<'_, H> {
                 self.result_class(results)?,
                 self.value(left)?,
                 self.value(right)?,
+            )?,
+            Op::Shift {
+                direction,
+                value,
+                by,
+            } => self.shifted(
+                direction,
+                self.result_class(results)?,
+                self.value(value)?,
+                by,
             )?,
             Op::Compare {
                 relation,

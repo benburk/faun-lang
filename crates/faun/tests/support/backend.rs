@@ -126,6 +126,15 @@ pub(super) fn status(program: &Program) -> i32 {
     execute(program).0
 }
 
+/// The program a target is handed once the machine passes have read it.
+///
+/// Most of the corpus is measured and run as written, which is the question
+/// "what does a backend do with this"; a shape only the passes produce has
+/// to be asked for separately.
+fn optimized(program: &Program) -> Program {
+    faun::ir::optimize(program, &faun::ir::OptimizeOptions::default())
+}
+
 pub(super) fn bytes(program: &Program) -> Vec<u8> {
     TARGET.emit(program).remove(0).bytes
 }
@@ -389,6 +398,12 @@ fn runtime_arithmetic_boundaries_and_odd_widths() {
             );
         }
     }
+    // Through the machine passes, because a shift is what they make of a
+    // product by a power of two and nothing writes one directly.
+    assert_eq!(
+        status(&optimized(&programs::arithmetic::shifts_by_powers_of_two())),
+        0
+    );
     assert_eq!(status(&programs::arithmetic::doubles_across_bytes()), 0);
     assert_eq!(
         status(&programs::arithmetic::doubles_then_reads_the_same_number()),

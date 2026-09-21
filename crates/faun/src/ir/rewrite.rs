@@ -192,6 +192,10 @@ impl<'a> Rebuild<'a> {
     /// # Panics
     /// If handed one that does hold a region, which [`Self::copy`] takes
     /// first because a region is walked rather than named.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per instruction; the length is the patterns"
+    )]
     fn plain(&self, b: &mut Builder, op: Op, results: &[ValueId]) -> Vec<ValueId> {
         match op {
             Op::Constant { value } => vec![b.constant(self.source.class(results[0]), value)],
@@ -225,6 +229,16 @@ impl<'a> Rebuild<'a> {
             Op::Convert { value } => {
                 vec![b.convert(self.source.class(results[0]), self.value(value))]
             }
+            Op::Shift {
+                direction,
+                value,
+                by,
+            } => vec![b.shift(
+                self.source.class(results[0]),
+                direction,
+                self.value(value),
+                by,
+            )],
             Op::Call { function, args } => b.call(function, &self.args(args)),
             Op::If { .. } | Op::Loop { .. } => unreachable!("a region is walked, not written"),
         }

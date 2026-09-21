@@ -404,7 +404,8 @@ fn a_step_something_reads_survives_the_run_it_is_part_of() {
     assert_eq!(returns(&held), BigUint::from(3u8), "one and two");
 }
 
-/// A step of something worked out is not a step of a known number.
+/// A step of something worked out is not a step of a known number. It is a
+/// doubling, which is a shift, and the run it steps from stays a run.
 #[test]
 fn a_step_of_something_worked_out_is_left_alone() {
     let (mut p, main) = Program::new("main");
@@ -417,8 +418,49 @@ fn a_step_of_something_worked_out_is_left_alone() {
         b.ret(&[answer]);
     });
     let held = settled(&p);
-    assert_eq!(count(&held, is_add), 2);
+    assert_eq!(count(&held, is_add), 1, "the run it steps from");
+    assert_eq!(count(&held, is_shift), 1, "the doubling");
     assert_eq!(returns(&held), BigUint::from(4u8));
+}
+
+/// A product or quotient by a power of two is the shift it is, and by
+/// anything else is left where it stands.
+#[test]
+fn a_product_by_a_power_of_two_is_a_shift() {
+    for (by, shifts, adds) in [(2u64, 1, 0), (8, 1, 0), (3, 0, 0), (1, 0, 0)] {
+        let (mut p, main) = Program::new("main");
+        p.define(main, |b, _| {
+            let start = b.constant(WIDE, 1);
+            let places = b.constant(WIDE, by);
+            let held = b.binary_at(WIDE, Binary::Mul, start, places);
+            let answer = b.convert(Class::Word, held);
+            b.ret(&[answer]);
+        });
+        let held = settled(&p);
+        assert_eq!(count(&held, is_shift), shifts, "a product by {by}");
+        assert_eq!(count(&held, is_add), adds, "a product by {by}");
+        assert_eq!(returns(&held), BigUint::from(by), "one times {by}");
+    }
+}
+
+/// A quotient too, and the distance has to be one every target can take.
+#[test]
+fn a_quotient_by_a_power_of_two_is_a_shift() {
+    // Nine bits wide, so eight places is a shift and nine is not: a machine
+    // told to move a value further than it is wide answers something else.
+    for (by, shifts) in [(2u64, 1), (256, 1), (512, 0), (6, 0)] {
+        let (mut p, main) = Program::new("main");
+        p.define(main, |b, _| {
+            let start = b.constant(WIDE, 384);
+            let places = b.constant(WIDE, by);
+            let held = b.binary_at(WIDE, Binary::Div, start, places);
+            let answer = b.convert(Class::Word, held);
+            b.ret(&[answer]);
+        });
+        let held = settled(&p);
+        assert_eq!(count(&held, is_shift), shifts, "a quotient by {by}");
+        assert_eq!(returns(&held), BigUint::from(384 / by), "384 over {by}");
+    }
 }
 
 const WIDE: Class = Class::fixed(9);
@@ -431,6 +473,10 @@ const fn is_add(op: &Op) -> bool {
             ..
         }
     )
+}
+
+const fn is_shift(op: &Op) -> bool {
+    matches!(*op, Op::Shift { .. })
 }
 
 /// Three, then each of `by` added to it in turn, answered as a word.

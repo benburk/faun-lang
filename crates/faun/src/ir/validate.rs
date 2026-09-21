@@ -161,7 +161,9 @@ impl References<'_> {
                 self.value(left)?;
                 self.value(right)?;
             }
-            Op::Load { address: value, .. } | Op::Convert { value, .. } => self.value(value)?,
+            Op::Load { address: value, .. }
+            | Op::Convert { value, .. }
+            | Op::Shift { value, .. } => self.value(value)?,
             Op::Call { function, args } => {
                 reference(&p.functions, function, "function")?;
                 self.values(args)?;
@@ -409,6 +411,7 @@ impl Checker<'_> {
             Op::NaturalConstant(_) => self.results(results, &[Class::Natural])?,
             Op::AddressOf(_) => self.results(results, &[Class::Address])?,
             Op::Binary { left, right, .. } => self.binary(left, right, results)?,
+            Op::Shift { value, by, .. } => self.shift(value, by, results)?,
             Op::Compare { left, right, .. } => {
                 self.comparison(left, right)?;
                 self.results(results, &[Class::Word])?;
@@ -535,6 +538,28 @@ impl Checker<'_> {
         }
         self.require(left, held)?;
         self.require(right, held)
+    }
+
+    /// A shift moves a value the machine holds, by a distance it does not
+    /// have to work out.
+    ///
+    /// Nought places is not a shift, and nothing writes one: a product by one
+    /// is the value, and a rule saying so leaves the value rather than an
+    /// instruction that does nothing. An arbitrary-precision natural has no
+    /// bits to move -- its products go through the helpers -- and neither has
+    /// an address.
+    fn shift(&self, value: ValueId, by: u16, results: &[ValueId]) -> Result<(), String> {
+        let [result] = results else {
+            return Err("shift must have one result".into());
+        };
+        if by == 0 {
+            return Err("shift must move at least one place".into());
+        }
+        let held = self.program.class(*result);
+        if !matches!(held, Class::Held(_) | Class::Word) {
+            return Err("shift must be over a value the machine holds".into());
+        }
+        self.require(value, held)
     }
 
     /// Two values may be compared where they are the same sort of thing.

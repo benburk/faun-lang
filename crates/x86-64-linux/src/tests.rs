@@ -18,7 +18,7 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 127),
     ("the count", 144),
     ("the count and a constant", 159),
-    ("the low bits of a sum", 161),
+    ("the low bits of a sum", 156),
     ("the count under a guard", 193),
     ("the count and more", 208),
 ];
@@ -50,7 +50,7 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("leave", 128),
     ("bool", 326),
     ("nat", 805),
-    ("width", 212),
+    ("width", 207),
     ("argc", 234),
     ("expressions", 215),
 ];

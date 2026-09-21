@@ -144,7 +144,7 @@ fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
         Op::Binary { left, right, .. } | Op::Compare { left, right, .. } => vec![left, right],
         Op::Load { address, .. } => vec![address],
         Op::Store { address, value, .. } => vec![address, value],
-        Op::Convert { value, .. } => vec![value],
+        Op::Convert { value, .. } | Op::Shift { value, .. } => vec![value],
         Op::Call { args, .. } => source.values(args).to_vec(),
         Op::If { condition, .. } => vec![condition],
         Op::Loop { initial, .. } => source.values(initial).to_vec(),

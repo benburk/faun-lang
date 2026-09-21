@@ -233,7 +233,9 @@ impl Plan {
                 }
                 Op::Load { address, .. } => read(&mut self.uses, &[address]),
                 Op::Store { address, value, .. } => read(&mut self.uses, &[address, value]),
-                Op::Convert { value, .. } => read(&mut self.uses, &[value]),
+                Op::Convert { value, .. } | Op::Shift { value, .. } => {
+                    read(&mut self.uses, &[value]);
+                }
                 Op::Call { args, .. } => {
                     read(&mut self.uses, program.values(args));
                 }
@@ -410,6 +412,19 @@ impl Lowering<'_> {
             Op::Constant { .. } | Op::AddressOf(_) => {}
             Op::Binary { op, left, right } => {
                 self.binary(*op, *left, *right, results[0]);
+            }
+            Op::Shift {
+                direction,
+                value,
+                by,
+            } => {
+                self.read(Reg::Rax, *value);
+                self.asm.shift(
+                    *direction,
+                    u8::try_from(*by).expect("a register shift"),
+                    bits(self.program.class(results[0])),
+                );
+                self.keep(results[0]);
             }
             Op::Compare {
                 relation,

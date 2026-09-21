@@ -20,7 +20,18 @@
 
 use crate::facts::Facts;
 
-use super::{Binary, Builder, Class, Exit, Op, Program, RegionId, ValueId, model::wrap, rewrite};
+use super::{
+    Binary, Builder, Class, Direction, Exit, Op, Program, RegionId, ValueId, model::wrap, rewrite,
+};
+
+/// The fewest bits a machine word has on any target this compiles for.
+///
+/// A shift by fewer places than that is one every target takes as written. A
+/// machine asked to move a value further than it is wide does not answer
+/// nought: it takes the distance modulo its own width and answers something
+/// else entirely, so a distance this tier cannot vouch for is left as the
+/// product or quotient it was.
+const WORD_FLOOR: u16 = 16;
 
 /// Rebuild `source` with those shapes read as what they mean.
 ///
@@ -74,7 +85,27 @@ impl rewrite::Pass for Simplify {
                 op: Binary::Add,
                 left,
                 right,
-            } => self.stepping(rebuild, b, left, right, results[0]),
+            } => {
+                // A value added to itself is that value moved up one place,
+                // whatever it is. Anything else may be a step, and a run of
+                // steps folds into one where a shift would end it.
+                (left == right && shifting(rebuild, b, Direction::Up, left, 1, results[0]))
+                    || self.stepping(rebuild, b, left, right, results[0])
+            }
+            Op::Binary {
+                op: Binary::Mul,
+                left,
+                right,
+            } => self
+                .places(right)
+                .is_some_and(|by| shifting(rebuild, b, Direction::Up, left, by, results[0])),
+            Op::Binary {
+                op: Binary::Div,
+                left,
+                right,
+            } => self
+                .places(right)
+                .is_some_and(|by| shifting(rebuild, b, Direction::Down, left, by, results[0])),
             Op::Binary {
                 op: Binary::Mod,
                 left,
@@ -88,6 +119,40 @@ impl rewrite::Pass for Simplify {
             _ => false,
         }
     }
+}
+
+/// A product or quotient by a power of two, and a value added to itself,
+/// written as the shift each of them is.
+///
+/// Every target has an instruction for this and none has one for the
+/// product, so leaving it a product is asking three backends for a loop
+/// where one instruction does. The answer is the same and so is the
+/// class: a shift neither widens nor narrows, and what it may come to is
+/// the fit requirement the product already carried.
+///
+/// Only over a value the machine holds. An arbitrary-precision natural
+/// has no width to move within, and its products go to the helpers.
+fn shifting(
+    rebuild: &rewrite::Rebuild<'_>,
+    b: &mut Builder,
+    direction: Direction,
+    value: ValueId,
+    by: u32,
+    result: ValueId,
+) -> bool {
+    let class = rebuild.source().class(result);
+    if !matches!(class, Class::Held(_) | Class::Word) {
+        return false;
+    }
+    let Ok(by) = u16::try_from(by) else {
+        return false;
+    };
+    if by == 0 || by >= class.width().unwrap_or(WORD_FLOOR) {
+        return false;
+    }
+    let held = b.shift(class, direction, rebuild.value(value), by);
+    rebuild.stands_for(result, held);
+    true
 }
 
 impl Simplify {
@@ -123,6 +188,13 @@ impl Simplify {
         }
         rebuild.stands_for(result, b.constant(class, wrap(class, number)));
         true
+    }
+
+    /// How many places a value multiplies or divides by, where it is a power
+    /// of two known before the program runs.
+    fn places(&self, value: ValueId) -> Option<u32> {
+        let number = self.wrote.number(value)?;
+        number.is_power_of_two().then(|| number.trailing_zeros())
     }
 
     /// A remainder by a power of two is the bits below it, which is what

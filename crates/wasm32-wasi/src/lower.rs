@@ -11,8 +11,8 @@
 use super::{Body, CALL, Code, DROP, END, I32_CONST, Segment};
 use crate::WORD_BITS;
 use faun::ir::{
-    Binary, Class, DataId, Exit, FunctionId, Offset, Op, Origin, Program, Range, RegionId,
-    Relation, Terminator, ValueId, Width,
+    Binary, Class, DataId, Direction, Exit, FunctionId, Offset, Op, Origin, Program, Range,
+    RegionId, Relation, Terminator, ValueId, Width,
 };
 use faun::targets::bytes::{Bytes, len32};
 
@@ -427,6 +427,19 @@ impl Lowering<'_> {
                     }
                 };
                 self.binary(opcode, *left, *right, results[0]);
+            }
+            Op::Shift {
+                direction,
+                value,
+                by,
+            } => {
+                self.push(*value);
+                self.constant_i32(i32::from(*by));
+                self.body.byte(match direction {
+                    Direction::Up => I32_SHL,
+                    Direction::Down => I32_SHR_U,
+                });
+                self.set(results[0]);
             }
             Op::Compare {
                 relation,
