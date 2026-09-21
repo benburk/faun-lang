@@ -136,7 +136,7 @@ fn function_and_branch_parameters_must_match_their_owner() {
 fn all_leaf_operations_check_result_arity_and_class() {
     let (mut p, main) = Program::new("main");
     let datum = p.intern(&[0; 8]);
-    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
+    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc!");
     let other = p.declare("other", &[], &[Class::Word]);
     p.define(other, |b, _| {
         let value = b.constant(Class::Word, 1);
@@ -291,7 +291,7 @@ fn loop_initial_continue_and_break_values_are_checked() {
 #[test]
 fn nested_controls_use_the_nearest_loop_and_allow_early_return() {
     let (mut p, main) = Program::new("main");
-    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit!");
     p.define(main, |b, _| {
         let word = b.constant(Class::Word, 1);
         let result = b.loop_(&[word], &[Class::Word], |b, params| {
@@ -407,7 +407,7 @@ fn corrupt_declaration_and_storage_pools_are_rejected() {
     });
     rejects(&p, "invalid pool range");
     let mut p = simple();
-    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
+    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc!");
     p.functions[argc].name = model::Symbol(u32::MAX);
     rejects(&p, "invalid symbol");
 }

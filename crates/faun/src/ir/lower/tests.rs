@@ -69,7 +69,7 @@ fn selection() -> Program {
     source.define_type(choice, &[("A", &[]), ("B", &[]), ("C", &[]), ("D", &[])]);
     let first = source.ctor_at(choice, 0).index();
     let values = [65536, 256, 1, 0].map(|n| source.intern_number(nat, n).unwrap());
-    let read = source.declare("argc", &[], choice);
+    let read = source.declare("argc!", &[], choice);
     source.bound(
         read,
         barb::Bounds {

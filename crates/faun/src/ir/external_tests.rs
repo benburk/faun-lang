@@ -71,7 +71,7 @@ impl Target for Provider {
         self.0
     }
     fn provides(&self) -> &'static [&'static str] {
-        &["exit", "argc", "write"]
+        &["exit!", "argc!", "write"]
     }
     fn emit(&self, _: &Program) -> Vec<Artifact> {
         Vec::new()
@@ -252,7 +252,7 @@ fn target_contracts_check_parameters_results_and_returning_behavior() {
         (&[Class::Word][..], Returns::Values(&[Class::Word][..])),
     ] {
         let mut p = program();
-        let external = p.external("exit", params, returns);
+        let external = p.external("exit!", params, returns);
         call_external(&mut p, external);
         validate(&p).unwrap();
         assert!(
@@ -269,13 +269,13 @@ fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not(
     for bits in [16, 32, 64] {
         for class in [Class::Word, Class::Fixed { bits }] {
             let mut p = program();
-            let external = p.external("argc", &[], Returns::Values(&[class]));
+            let external = p.external("argc!", &[], Returns::Values(&[class]));
             call_external(&mut p, external);
             Provider(bits).compile(&p).unwrap();
         }
         let mut p = program();
         let external = p.external(
-            "argc",
+            "argc!",
             &[],
             Returns::Values(&[Class::Fixed { bits: bits - 1 }]),
         );
@@ -292,7 +292,7 @@ fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not(
 #[test]
 fn a_body_named_like_an_external_function_is_still_a_body() {
     let mut p = program();
-    let internal = p.declare("argc", &[], &[Class::Word]);
+    let internal = p.declare("argc!", &[], &[Class::Word]);
     p.define(internal, |b, _| {
         let zero = b.constant(Class::Word, 0);
         b.ret(&[zero]);
@@ -301,7 +301,7 @@ fn a_body_named_like_an_external_function_is_still_a_body() {
         let result = b.call(internal, &[]);
         b.ret(&result);
     });
-    assert!(!p.reaches("argc"));
+    assert!(!p.reaches("argc!"));
     Provider(64).compile(&p).unwrap();
     let mut host = reply(|_| HostResult::Return(vec![BigUint::from(7u8)]));
     assert_eq!(
@@ -312,12 +312,12 @@ fn a_body_named_like_an_external_function_is_still_a_body() {
         [BigUint::from(0u8)]
     );
     assert!(host.calls.is_empty());
-    let external = p.external("argc", &[], Returns::Values(&[Class::Word]));
+    let external = p.external("argc!", &[], Returns::Values(&[Class::Word]));
     p.define(p.entry(), |b, _| {
         let result = b.call(external, &[]);
         b.ret(&result);
     });
-    assert!(p.reaches("argc"));
+    assert!(p.reaches("argc!"));
     Provider(64).compile(&p).unwrap();
     assert_eq!(
         run(&p, p.entry(), &[], &mut host)
@@ -326,7 +326,7 @@ fn a_body_named_like_an_external_function_is_still_a_body() {
             .unwrap(),
         [BigUint::from(7u8)]
     );
-    assert_eq!(host.calls, ["argc"]);
+    assert_eq!(host.calls, ["argc!"]);
 }
 
 #[test]
@@ -350,7 +350,7 @@ fn source_externals_check_unit_against_nonreturning_provider_contracts() {
         let mut routines = platform::Routines::default();
         routines.push(platform::Routine {
             name: "foreign".into(),
-            called: None,
+            offered: false,
             takes: vec![],
             returns,
         });

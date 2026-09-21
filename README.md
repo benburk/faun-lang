@@ -44,8 +44,9 @@ cargo run -- inspect --target mos6502-sim65 --emit ir examples/expressions.fn
 
 Dumps go to stdout, so they can be redirected to files. `barb` stops after the
 normal optimization schedule; look at `main!` for the folded constants 2 and 32.
-It preserves source names such as `exit!`, uses indentation for matches, and
-prints bodyless declarations inline as `= <elsewhere>`.
+It preserves source names such as `exit!` -- which is also the name every tier
+below reads -- uses indentation for matches, and prints bodyless declarations
+inline as `= <elsewhere>`.
 `ir` is structurally validated machine IR before target preparation, useful even
 when a target cannot represent it. Use `--emit prepared-ir` for the legalized,
 target-accepted IR that emission consumes. All stages honor the selected target's

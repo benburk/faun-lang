@@ -99,7 +99,7 @@ pub(crate) fn lower(program: &Program) -> Code {
     if state.needs_proc_exit() {
         state.imports.push("proc_exit");
     }
-    if program.reaches("argc") {
+    if program.reaches("argc!") {
         state.imports.push("args_sizes_get");
     }
 
@@ -293,7 +293,7 @@ impl Lowering<'_> {
                     self.program
                         .function(function)
                         .external()
-                        .is_some_and(|symbol| self.program.name(symbol) == "exit")
+                        .is_some_and(|symbol| self.program.name(symbol) == "exit!")
                         && !(role == FunctionRole::Entry && self.leaves_with_nought(args))
                 }
                 Op::If {
@@ -717,8 +717,8 @@ impl Lowering<'_> {
                 self.call(fd_write);
                 self.body.byte(DROP); // The errno, which there is nobody to tell.
             }
-            "exit" => self.leave(args[0], position),
-            "argc" => self.count(results[0]),
+            "exit!" => self.leave(args[0], position),
+            "argc!" => self.count(results[0]),
             // Handed straight back: nothing is asked of the outside, and
             // all this says is that nothing worked the value out.
             "grow" => {
@@ -890,7 +890,7 @@ mod tests {
     #[test]
     fn leaving_with_nought_is_the_end_of_the_entry() {
         let (mut program, main) = Program::new("main");
-        let exit = faun::platform::Routines::builtin().declare(&mut program, "exit");
+        let exit = faun::platform::Routines::builtin().declare(&mut program, "exit!");
         program.define(main, |b, _| {
             let status = b.constant(Class::Word, 0);
             b.call(exit, &[status]);
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn leaving_with_nought_from_elsewhere_is_a_call() {
         let (mut program, main) = Program::new("main");
-        let exit = faun::platform::Routines::builtin().declare(&mut program, "exit");
+        let exit = faun::platform::Routines::builtin().declare(&mut program, "exit!");
         let leave = program.declare_never("leave", &[]);
         program.define(leave, |b, _| {
             let status = b.constant(Class::Word, 0);

@@ -372,8 +372,8 @@ impl Host for TestHost {
     ) -> Result<HostResult, Error> {
         self.calls.push(name.to_owned());
         match name {
-            "argc" => Ok(HostResult::Return(vec![BigUint::from(7u8)])),
-            "exit" => Ok(HostResult::Halt(args.to_vec())),
+            "argc!" => Ok(HostResult::Return(vec![BigUint::from(7u8)])),
+            "exit!" => Ok(HostResult::Halt(args.to_vec())),
             _ => Err(Error::Host(name.to_owned())),
         }
     }
@@ -382,8 +382,8 @@ impl Host for TestHost {
 #[test]
 fn deterministic_host_can_return_values_and_halt_callers() {
     let (mut p, main) = Program::new("main");
-    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
-    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit");
+    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc!");
+    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit!");
     let f = p.declare_never("stop", &[]);
     p.define(f, |b, _| {
         let count = b.call(argc, &[]);
@@ -406,7 +406,7 @@ fn deterministic_host_can_return_values_and_halt_callers() {
         )
         .unwrap();
         assert_eq!(result.halted().unwrap(), vec![BigUint::from(7u8)]);
-        assert_eq!(host.calls, ["argc", "exit"]);
+        assert_eq!(host.calls, ["argc!", "exit!"]);
     }
     assert!(matches!(run(&p, main, &[], 64), Err(Error::Host(_))));
 }
@@ -784,7 +784,7 @@ impl Host for OversizedHost {
 #[test]
 fn host_results_do_not_implicitly_fit_a_word() {
     let (mut p, main) = Program::new("main");
-    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc");
+    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc!");
     p.define(main, |b, _| {
         let count = b.call(argc, &[]);
         b.ret(&count);

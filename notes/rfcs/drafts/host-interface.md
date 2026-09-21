@@ -189,7 +189,7 @@ the frontend now keeps it.
   `Convert` when a value does not fit what a routine takes, which is the
   machine deciding where `Op::Convert`'s own doc says a program asks. Latent
   while every routine takes a word.
-- **Only the count reads input.** `argc` is what every machine can be asked
+- **Only the count reads input.** `argc!` is what every machine can be asked
   and every one answers differently: linux leaves it on the stack it starts
   a program on, wasi reports it through a call, the simulator has a hook.
   `args` themselves need computed aggregates to have a representation.

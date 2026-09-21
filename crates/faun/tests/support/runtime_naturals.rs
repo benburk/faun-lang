@@ -9,7 +9,7 @@ use faun::targets::Target;
 fn program() -> Program {
     let (mut p, main) = Program::new("main");
     let routines = faun::platform::Routines::builtin();
-    let argc = routines.declare(&mut p, "argc");
+    let argc = routines.declare(&mut p, "argc!");
     let write = routines.declare(&mut p, "write");
     let bytes = p.global(&[0; 80]);
     p.define(main, |b, _| {

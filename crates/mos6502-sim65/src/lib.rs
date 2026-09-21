@@ -76,7 +76,7 @@ impl Target for Mos6502Sim65 {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write", "exit", "grow", "argc"]
+        &["write", "exit!", "grow", "argc!"]
     }
 
     fn limits(&self, program: &Program) -> Result<(), String> {

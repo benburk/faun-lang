@@ -30,21 +30,21 @@ pub enum Returns {
 /// A routine, as every tier that reads one reads it.
 #[derive(Clone, Debug)]
 pub struct Routine {
-    /// What a target answers to. Two names in a program may pick out the
-    /// same routine, which is how one serves a program at more than one
-    /// type: there is no body to copy, so nothing is duplicated by it.
-    pub name: String,
-    /// What a program calls it, where a program may call it at all.
-    ///
-    /// A routine with no name here is one a target answers for and no
-    /// program may reach: the heap's own hook, or anything a target uses to
-    /// build what it offers. The tier below still reaches it, since a
-    /// program built rather than written is a program too.
+    /// The one name it has: what a program writes, and what a target is
+    /// asked by. Nothing translates between those, so no two tiers can
+    /// disagree about which routine a call meant.
     ///
     /// The `!` in one is this language's, and a target knowing it is the
     /// coupling between a frontend and a target that the host interface
     /// gave up trying to avoid.
-    pub called: Option<String>,
+    pub name: String,
+    /// Whether a program may name it.
+    ///
+    /// One offered to nothing is a routine a target answers for and no
+    /// program may reach: the heap's own hook, or anything a target uses to
+    /// build what it offers. The tier below still reaches it, since a
+    /// program built rather than written is a program too.
+    pub offered: bool,
     /// What it reads and what it leaves, in the machine's terms.
     ///
     /// How many arguments a program hands it is `takes.len()`, which holds
@@ -100,22 +100,24 @@ impl Routines {
     /// its own machine, rather than by reaching a name somebody wrote down.
     #[must_use]
     pub fn builtin() -> Self {
-        let held = |name: &str, called: Option<&str>, takes: &[Class], returns| Routine {
+        let held = |name: &str, offered, takes: &[Class], returns| Routine {
             name: name.to_owned(),
-            called: called.map(str::to_owned),
+            offered,
             takes: takes.to_vec(),
             returns,
         };
+        let offered = |name: &str, takes: &[Class], returns| held(name, true, takes, returns);
+        let hidden = |name: &str, takes: &[Class], returns| held(name, false, takes, returns);
         Self(vec![
-            held("write", None, &[Class::Address, Class::Word], Returns::Unit),
-            held("exit", Some("exit!"), &[Class::Word], Returns::Never),
+            hidden("write", &[Class::Address, Class::Word], Returns::Unit),
+            offered("exit!", &[Class::Word], Returns::Never),
             // The kernel picks the address, so nothing asking for a page
             // says where.
-            held("grow", None, &[Class::Word], Returns::Value(Class::Address)),
+            hidden("grow", &[Class::Word], Returns::Value(Class::Address)),
             // How many arguments a program was handed, which is the one
             // thing every machine here can be asked and the only thing a
             // program can be told that it did not work out itself.
-            held("argc", Some("argc!"), &[], Returns::Value(Class::Word)),
+            offered("argc!", &[], Returns::Value(Class::Word)),
         ])
     }
 
@@ -131,11 +133,9 @@ impl Routines {
         self
     }
 
-    /// Every routine a program may call by name, and what each is called.
-    pub fn offered(&self) -> impl Iterator<Item = (&str, &Routine)> {
-        self.0
-            .iter()
-            .filter_map(|routine| Some((routine.called.as_deref()?, routine)))
+    /// Every routine a program may call by name.
+    pub fn offered(&self) -> impl Iterator<Item = &Routine> {
+        self.0.iter().filter(|routine| routine.offered)
     }
 
     /// The routine a target answers to by `name`.

@@ -28,14 +28,14 @@ impl Host for Observer {
     ) -> Result<HostResult, evaluate::Error> {
         self.calls.push(name.to_owned());
         match name {
-            "argc" => Ok(HostResult::Return(vec![BigUint::from(self.argc)])),
+            "argc!" => Ok(HostResult::Return(vec![BigUint::from(self.argc)])),
             "write" => {
                 let address = u64::try_from(word(&args[0].to_bytes_le())).unwrap();
                 let len = word(&args[1].to_bytes_le());
                 self.bytes.extend_from_slice(memory.read(address, len)?);
                 Ok(HostResult::Return(vec![]))
             }
-            "exit" => Ok(HostResult::Halt(args.to_vec())),
+            "exit!" => Ok(HostResult::Halt(args.to_vec())),
             _ => Err(evaluate::Error::Host(name.to_owned())),
         }
     }
@@ -90,7 +90,7 @@ fn nested_lifetimes_preserve_full_values_and_free_every_mortal_claim() {
                     after_host.bytes, before_host.bytes,
                     "{bits}-bit, early={early}, argc={argc}"
                 );
-                assert_eq!(before_host.calls, ["argc", "write"]);
+                assert_eq!(before_host.calls, ["argc!", "write"]);
                 assert_eq!(after_host.calls, before_host.calls);
                 no_live_objects(&scalar, &after, config);
             }

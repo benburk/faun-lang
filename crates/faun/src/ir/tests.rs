@@ -105,7 +105,7 @@ fn a_call_gives_a_name_what_it_takes() {
 #[test]
 fn a_platform_call_gives_a_routine_what_it_takes() {
     let (mut program, main) = Program::new("main");
-    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit!");
     program.define(main, |b, _| {
         b.call(exit, &[]);
         let status = b.constant(Class::Word, 0);
@@ -113,7 +113,7 @@ fn a_platform_call_gives_a_routine_what_it_takes() {
     });
 
     let error = validate(&program).unwrap_err();
-    assert!(error.contains("main calls `exit`"), "{error}");
+    assert!(error.contains("main calls `exit!`"), "{error}");
 }
 
 /// A routine that does not come back is the end of its region. A program
@@ -122,7 +122,7 @@ fn a_platform_call_gives_a_routine_what_it_takes() {
 #[test]
 fn nothing_is_written_after_a_routine_that_does_not_come_back() {
     let (mut program, main) = Program::new("main");
-    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit!");
     program.define(main, |b, _| {
         let status = b.constant(Class::Word, 0);
         b.call(exit, &[status]);
@@ -134,7 +134,7 @@ fn nothing_is_written_after_a_routine_that_does_not_come_back() {
     assert!(error.contains("does not come back"), "{error}");
 
     let (mut program, main) = Program::new("main");
-    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut program, "exit!");
     program.define(main, |b, _| {
         let status = b.constant(Class::Word, 0);
         b.call(exit, &[status]);
@@ -178,7 +178,7 @@ fn two_names_may_give_the_same_routine() {
     let mut routines = crate::platform::Routines::builtin();
     routines.push(crate::platform::Routine {
         name: "hold".to_owned(),
-        called: None,
+        offered: false,
         takes: vec![Class::Word],
         returns: crate::platform::Returns::Value(Class::Word),
     });
@@ -209,7 +209,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
     let mut routines = crate::platform::Routines::builtin();
     routines.push(crate::platform::Routine {
         name: "narrow".to_owned(),
-        called: None,
+        offered: false,
         takes: vec![Class::Fixed { bits: 4 }],
         returns: crate::platform::Returns::Unit,
     });
@@ -275,7 +275,7 @@ fn an_effect_hands_over_what_the_routine_reads() {
     )
     .unwrap_err();
     assert!(
-        refused.contains("`exit` reads a word, and is handed nothing"),
+        refused.contains("`exit!` reads a word, and is handed nothing"),
         "{refused}"
     );
 }

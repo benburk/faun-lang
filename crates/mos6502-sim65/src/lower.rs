@@ -354,7 +354,7 @@ impl Lowering<'_> {
         // The hook writes the arguments themselves wherever it is told, and
         // nothing has asked for memory yet, so it is told the heap. What is
         // wanted is the count, which comes back in `A` and `X`.
-        if self.program.reaches("argc") {
+        if self.program.reaches("argc!") {
             let [low, high] = heap.to_le_bytes();
             self.set_pair(CSP, CSTACK_TOP - 2);
             self.asm.ldy_imm(0);
@@ -1160,8 +1160,8 @@ impl Lowering<'_> {
         match name {
             "write" => self.write(args),
             // Read at reset and kept since, so nothing is asked here.
-            "argc" => self.commit(results[0], ARGC),
-            "exit" => {
+            "argc!" => self.commit(results[0], ARGC),
+            "exit!" => {
                 let status = self.operand(args[0], T0);
                 self.load(status.byte(0));
                 self.asm.jmp_abs(HOOK_EXIT);

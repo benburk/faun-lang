@@ -18,7 +18,7 @@ impl Target for TargetAt {
         self.0.endian
     }
     fn provides(&self) -> &'static [&'static str] {
-        &["exit"]
+        &["exit!"]
     }
     fn emit(&self, _: &Program) -> Vec<Artifact> {
         Vec::new()

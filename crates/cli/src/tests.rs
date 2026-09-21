@@ -60,8 +60,8 @@ fn inspection_uses_normal_optimization_and_target_widths() {
             "# Classes are per-value representation requirements, not source types.\n"
         ));
         assert!(ir.contains("fn f0 main!() -> (word) = r0"));
-        assert!(ir.contains(&format!("argc() -> (fixed{})", target.word())));
-        assert!(ir.contains("call argc()  # f2"));
+        assert!(ir.contains(&format!("argc!() -> (fixed{})", target.word())));
+        assert!(ir.contains("call argc!()  # f2"));
         assert_eq!(ir.matches("= Add ").count(), 2);
         assert!(ir.contains("fixed0 = const 0"), "known zero selects fixed0");
         assert!(

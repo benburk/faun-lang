@@ -34,7 +34,7 @@ impl Target for Wasm32Wasi {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write", "exit", "grow", "argc"]
+        &["write", "exit!", "grow", "argc!"]
     }
 
     fn emit(&self, program: &Program) -> Vec<Artifact> {

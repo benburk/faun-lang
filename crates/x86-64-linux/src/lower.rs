@@ -103,7 +103,7 @@ fn assemble(program: &Program, framed: &[bool]) -> (Code, Vec<bool>) {
         program,
         entry,
         in_entry: true,
-        counts: program.reaches("argc"),
+        counts: program.reaches("argc!"),
         plan: Plan::empty(program),
         asm: Encoder::default(),
         framed: framed.to_vec(),
@@ -563,7 +563,7 @@ impl Lowering<'_> {
         // one it was, and all this says is that nothing worked it out.
         // Read once at the entry and kept since, so nothing is asked of
         // the kernel here.
-        if name == "argc" {
+        if name == "argc!" {
             self.flush();
             self.asm.mov_reg(Reg::Rax, ARGC, true);
             self.known[Reg::Rax.index()] = None;
@@ -579,7 +579,7 @@ impl Lowering<'_> {
                 self.read(Reg::Rsi, args[0]);
                 self.read(Reg::Rdx, args[1]);
             }
-            "exit" => {
+            "exit!" => {
                 self.load_const(Reg::Rax, SYS_EXIT);
                 self.read(Reg::Rdi, args[0]);
             }

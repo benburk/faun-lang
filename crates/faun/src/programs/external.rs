@@ -7,16 +7,16 @@ use crate::ir::{Binary, Class, Program, Returns};
 #[must_use]
 pub fn interleaved() -> Program {
     let (mut p, main) = Program::new("main");
-    let count = p.external("argc", &[], Returns::Values(&[Class::Word]));
-    let increment = p.declare("argc", &[Class::Word], &[Class::Word]);
+    let count = p.external("argc!", &[], Returns::Values(&[Class::Word]));
+    let increment = p.declare("argc!", &[Class::Word], &[Class::Word]);
     let write = p.external(
         "write",
         &[Class::Address, Class::Word],
         Returns::Values(&[]),
     );
-    let wrapper = p.declare("exit", &[Class::Word], &[Class::Word]);
-    let again = p.external("argc", &[], Returns::Values(&[Class::Word]));
-    let exit = p.external("exit", &[Class::Word], Returns::Never);
+    let wrapper = p.declare("exit!", &[Class::Word], &[Class::Word]);
+    let again = p.external("argc!", &[], Returns::Values(&[Class::Word]));
+    let exit = p.external("exit!", &[Class::Word], Returns::Never);
     let data = p.intern(b"externals\n");
     p.define(increment, |b, args| {
         let one = b.constant(Class::Word, 1);

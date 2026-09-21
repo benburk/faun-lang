@@ -632,8 +632,8 @@ fn a_routine_written_down_is_one_a_program_may_name() {
 
     let mut routines = crate::platform::Routines::builtin();
     routines.push(crate::platform::Routine {
-        name: "clock_tick".to_owned(),
-        called: Some("tick!".to_owned()),
+        name: "tick!".to_owned(),
+        offered: true,
         takes: Vec::new(),
         returns: crate::platform::Returns::Unit,
     });
@@ -647,7 +647,8 @@ fn a_routine_written_down_is_one_a_program_may_name() {
     let Definition::External { symbol, .. } = tick.definition else {
         panic!("an external declaration");
     };
-    assert_eq!(program.name(symbol), "clock_tick");
+    // The name written down is the name every tier below reads.
+    assert_eq!(program.name(symbol), "tick!");
     assert!(
         program
             .render()
@@ -664,7 +665,7 @@ fn a_routine_written_down_is_one_a_program_may_name() {
         .filter_map(crate::ir::Function::external)
         .map(|symbol| machine.name(symbol))
         .collect();
-    assert_eq!(providers, ["exit", "clock_tick"]);
+    assert_eq!(providers, ["exit!", "tick!"]);
 }
 
 /// An effect stands on its own: as the whole of a step, or as what a clause

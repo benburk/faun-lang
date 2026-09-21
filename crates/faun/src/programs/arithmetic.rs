@@ -137,7 +137,7 @@ pub fn zero_conversion() -> Program {
 #[must_use]
 pub fn preserves_host_count() -> Program {
     let (mut program, main) = Program::new("main");
-    let argc = crate::platform::Routines::builtin().declare(&mut program, "argc");
+    let argc = crate::platform::Routines::builtin().declare(&mut program, "argc!");
     program.define(main, |b, _| {
         let before = b.call_one(argc, &[]);
         let two = b.constant(Class::Word, 2);

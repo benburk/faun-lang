@@ -84,9 +84,10 @@ x    ::= a parameter, a binding, or a field an arm bound
 without braces. Bodyless declarations keep `= <elsewhere>` on the signature
 line. The text is a diagnostic view, not surface syntax or a serialization.
 Frontend-created declarations retain their source names, including `!` on
-platform calls such as `exit!` and `argc!`. The external provider symbol is
-stored separately: machine lowering uses `exit` and `argc` for linkage, never
-inferring a provider or an effect from the display name.
+platform calls such as `exit!` and `argc!`, and those are the names machine
+lowering carries through for linkage. A declaration may still name a different
+provider symbol -- `answered_by` is how two declarations reach one routine at
+two types -- so nothing infers a provider or an effect from the display name.
 
 ## Optimization passes
 

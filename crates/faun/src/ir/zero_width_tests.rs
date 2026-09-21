@@ -129,7 +129,7 @@ fn range_proven_zero_arithmetic_selects_fixed0() {
             };
             let result = evaluate_entry(&p, word_bits, &mut host);
             assert_eq!(result.halted().unwrap(), [BigUint::from(0u8)]);
-            assert_eq!(host.calls, ["argc", "exit"]);
+            assert_eq!(host.calls, ["argc!", "exit!"]);
         }
     }
 }
@@ -219,7 +219,7 @@ fn comparison_arms_use_minimal_constants_and_a_wide_enough_join() {
                         [BigUint::from(answer)],
                         "{constructors}: {expression}, argc={argc}"
                     );
-                    assert_eq!(host.calls, ["argc", "exit"]);
+                    assert_eq!(host.calls, ["argc!", "exit!"]);
                 }
             }
         }
@@ -256,11 +256,11 @@ impl evaluate::Host for Host {
     ) -> Result<evaluate::HostResult, evaluate::Error> {
         self.calls.push(name.to_owned());
         match name {
-            "argc" if self.halt_on_read == Some(self.calls.len()) => {
+            "argc!" if self.halt_on_read == Some(self.calls.len()) => {
                 Ok(evaluate::HostResult::Halt(vec![BigUint::from(7u8)]))
             }
-            "argc" => Ok(evaluate::HostResult::Return(vec![BigUint::from(self.argc)])),
-            "exit" => Ok(evaluate::HostResult::Halt(args.to_vec())),
+            "argc!" => Ok(evaluate::HostResult::Return(vec![BigUint::from(self.argc)])),
+            "exit!" => Ok(evaluate::HostResult::Halt(args.to_vec())),
             _ => Err(evaluate::Error::Host(name.to_owned())),
         }
     }
@@ -286,9 +286,9 @@ fn zero_results_preserve_eager_calls_and_nonreturning_execution() {
                     };
                     let result = evaluate_entry(&p, word_bits, &mut host);
                     let (answer, calls): (u8, &[&str]) = if halt_on_read.is_some() {
-                        (7, &["argc", "argc"])
+                        (7, &["argc!", "argc!"])
                     } else {
-                        (u8::from(argc == 1), &["argc", "argc", "exit"])
+                        (u8::from(argc == 1), &["argc!", "argc!", "exit!"])
                     };
                     assert_eq!(result.halted().unwrap(), [BigUint::from(answer)]);
                     assert_eq!(host.calls, calls);

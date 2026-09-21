@@ -309,14 +309,14 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
     validate(source, &clauses, &arity)?;
     let told = infer(source, routines, &clauses, &program, &ctors, &arity)?;
     let mut functions: HashMap<&str, FnId> = HashMap::new();
-    for (called, routine) in routines.offered() {
+    for routine in routines.offered() {
+        let called = routine.name.as_str();
         let Some((params, result)) = told.get(called) else {
             continue;
         };
-        // Keep the source spelling for diagnostics, including its `!`.
-        // Linkage uses the separate provider symbol, not this display name.
+        // The name a program writes is the name a target is asked by, `!`
+        // and all, so the declaration needs nothing said about linkage.
         let id = program.declare(called, params, *result);
-        program.answered_by(id, &routine.name);
         if let Some(class) = routine.answers() {
             program.bound(id, host_bound(class));
         }
@@ -460,8 +460,8 @@ fn arities<'a>(
         }
         arity.insert(name.as_str(), width);
     }
-    for (called, routine) in routines.offered() {
-        arity.insert(called, routine.takes.len() + 1);
+    for routine in routines.offered() {
+        arity.insert(&routine.name, routine.takes.len() + 1);
     }
     Ok(arity)
 }
@@ -1028,7 +1028,7 @@ fn infer(
     }
     // An effect no program calls settles nothing, and needs to: there is
     // nothing to declare and nothing to answer for.
-    for (called, _) in routines.offered() {
+    for called in routines.offered().map(|routine| routine.name.as_str()) {
         match reading.settled(&mut unify, called) {
             Ok(held) => {
                 told.insert(called.to_owned(), held);
@@ -1063,7 +1063,7 @@ fn slots<'a>(
     // An effect is handed the authority; what either takes after that is
     // whatever it is given, which the argument settles, and what it answers
     // is either nothing ever or one of those arguments.
-    for (called, routine) in routines.offered() {
+    for routine in routines.offered() {
         let at = unify.parent.len();
         // Every one of them is handed the authority, since every one of them
         // is something a program may be watched doing.
@@ -1083,7 +1083,7 @@ fn slots<'a>(
         // And one that answers a value says nothing here about which type
         // holds it, there being no type below this tier. What it answers
         // is whatever it stands beside, the same as anything else.
-        base.insert(called, at);
+        base.insert(&routine.name, at);
     }
     Ok(base)
 }
@@ -1107,8 +1107,8 @@ fn diverging<'a>(
     }
     let mut held: HashSet<&str> = routines
         .offered()
-        .filter(|(_, routine)| !routine.comes_back())
-        .map(|(called, _)| called)
+        .filter(|routine| !routine.comes_back())
+        .map(|routine| routine.name.as_str())
         .collect();
     let mut growing = true;
     while growing {

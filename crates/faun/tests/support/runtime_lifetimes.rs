@@ -22,7 +22,7 @@ pub(super) fn program(early_return: bool) -> Program {
     p.define(identity, |b, args| b.ret(&[args[0]]));
     let accumulate = accumulator(&mut p, identity, early_return);
     let serialize = serializer(&mut p);
-    let argc = p.external("argc", &[], Returns::Values(&[Class::Word]));
+    let argc = p.external("argc!", &[], Returns::Values(&[Class::Word]));
     let write = p.external(
         "write",
         &[Class::Address, Class::Word],

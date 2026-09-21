@@ -276,7 +276,7 @@ mod reading {
     #[test]
     fn a_program_reads_against_the_routines_of_one_target() {
         let spartan = tests::Spartan.routines();
-        assert!(spartan.get("exit").is_some());
+        assert!(spartan.get("exit!").is_some());
         assert!(spartan.get("write").is_none(), "one it does not answer for");
         assert!(
             crate::platform::Routines::builtin().get("write").is_some(),
@@ -311,7 +311,7 @@ mod tests {
         }
 
         fn provides(&self) -> &'static [&'static str] {
-            &["exit"]
+            &["exit!"]
         }
 
         fn emit(&self, _: &Program) -> Vec<Artifact> {
@@ -352,7 +352,7 @@ mod tests {
             Spartan.accepts(&program)
         };
 
-        held("exit").expect("a routine it answers for");
+        held("exit!").expect("a routine it answers for");
 
         let refused = held("write").unwrap_err();
         assert!(

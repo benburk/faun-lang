@@ -20,7 +20,7 @@ impl Host for TestHost {
         _: &mut Memory<'_>,
     ) -> Result<HostResult, evaluate::Error> {
         self.calls.push(name.to_owned());
-        if name == "exit" {
+        if name == "exit!" {
             Ok(HostResult::Halt(args.to_vec()))
         } else if name == "mark" {
             Ok(HostResult::Return(vec![]))
@@ -369,7 +369,7 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
     let (mut p, main) = Program::new("main");
     let data = p.intern(b"unaligned");
     let global = p.global(&[7, 8, 9]);
-    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit");
+    let exit = crate::platform::Routines::builtin().declare(&mut p, "exit!");
     p.define(main, |b, _| {
         b.address_of(data);
         b.address_of(global);
@@ -402,7 +402,7 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
     let result =
         evaluate::evaluate(&scalar, main, &[], evaluate::Config::default(), &mut host).unwrap();
     assert_eq!(result.halted().unwrap(), [BigUint::from(42u8)]);
-    assert_eq!(host.calls, ["exit"]);
+    assert_eq!(host.calls, ["exit!"]);
 }
 
 #[test]
@@ -453,7 +453,7 @@ fn natural_host_signatures_do_not_become_address_signatures() {
     let mut routines = crate::platform::Routines::builtin();
     routines.push(crate::platform::Routine {
         name: "foreign".into(),
-        called: None,
+        offered: false,
         takes: vec![Class::Natural],
         returns: crate::platform::Returns::Value(Class::Natural),
     });
@@ -486,7 +486,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
         let mut routines = crate::platform::Routines::builtin();
         routines.push(crate::platform::Routine {
             name: "mark".into(),
-            called: None,
+            offered: false,
             takes: vec![],
             returns: crate::platform::Returns::Unit,
         });
@@ -521,7 +521,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
         )
         .unwrap();
         assert_eq!(result.halted().unwrap(), [BigUint::from(2u8)]);
-        assert_eq!(host.calls, ["mark", "exit"]);
+        assert_eq!(host.calls, ["mark", "exit!"]);
     }
 }
 

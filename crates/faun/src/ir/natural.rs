@@ -303,7 +303,7 @@ pub(super) fn append(
 }
 
 fn claims(program: &mut Program, max: u64) -> (FunctionId, FunctionId, FunctionId) {
-    let exit = program.external("exit", &[W], super::Returns::Never);
+    let exit = program.external("exit!", &[W], super::Returns::Never);
     let fail = program.declare_never("nat.fail", &[]);
     program.define(fail, |b, _| {
         let status = number(b, 2);

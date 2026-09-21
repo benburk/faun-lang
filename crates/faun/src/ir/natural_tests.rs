@@ -27,7 +27,7 @@ impl Host for Observer {
         memory: &mut Memory<'_>,
     ) -> Result<HostResult, evaluate::Error> {
         match name {
-            "exit" => Ok(HostResult::Halt(args.to_vec())),
+            "exit!" => Ok(HostResult::Halt(args.to_vec())),
             "observe" => {
                 let address = args[0].to_u64_digits()[0];
                 let header = memory.read(address, 3 * self.word)?;
