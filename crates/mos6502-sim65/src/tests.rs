@@ -13,7 +13,7 @@ const RUNNER: Option<&str> = Some("sim65");
 // Lower baselines when emission improves; explain any increase.
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("empty", 30),
-    ("exit zero", 28),
+    ("exit zero", 20),
     ("two and two", 45),
     ("hello world", 63),
     ("a call", 81),
@@ -34,15 +34,15 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("a long arm", 1008),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
-    ("exit", 28),
-    ("two-and-two", 28),
-    ("double", 28),
-    ("leave", 28),
-    ("bool", 211),
-    ("nat", 887),
-    ("width", 204),
-    ("argc", 247),
-    ("expressions", 188),
+    ("exit", 20),
+    ("two-and-two", 20),
+    ("double", 20),
+    ("leave", 20),
+    ("bool", 203),
+    ("nat", 879),
+    ("width", 196),
+    ("argc", 239),
+    ("expressions", 180),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [209, 248, 248];
 

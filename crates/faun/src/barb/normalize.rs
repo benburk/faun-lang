@@ -19,6 +19,35 @@ pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
     rewrite(program, inlining);
 }
 
+/// Whether every arm puts back the constructor it took apart, out of that
+/// constructor's own fields and nothing else.
+///
+/// A match like that asks which one it is and answers with the one it is, so
+/// it is the value it took apart. Nothing is dropped by saying so: an arm
+/// shaped this way holds no bindings, so there is nothing in it to evaluate,
+/// and validation has already said the arms cover the type. A type with no
+/// constructors is left alone -- a match on one never answers, and the value
+/// it took apart does.
+///
+/// `level` is the local the first arm binds its fields at.
+fn rebuilt(program: &Program, arms: &[Arm], level: usize) -> bool {
+    !arms.is_empty()
+        && arms.iter().all(|arm| {
+            arm.body.bindings.is_empty()
+                && match program.expr(arm.body.tail) {
+                    Expr::Con(ctor, fields) => {
+                        ctor == arm.ctor
+                            && program
+                                .atoms(fields)
+                                .iter()
+                                .enumerate()
+                                .all(|(at, held)| held.0.index() == level + at)
+                    }
+                    _ => false,
+                }
+        })
+}
+
 fn rewrite(program: &mut Program, inlining: Option<Inlining>) {
     let operations = super::arithmetic::recognise(program);
     let mut rewrite = Rewrite {
@@ -100,21 +129,11 @@ impl Rewrite<'_> {
                 }
                 Expr::Call(called, self.program.terms.hold_atoms(args.into_iter()))
             }
-            Expr::Match(value, arms) => {
-                let mut found = vec![];
-                for at in arms.range() {
-                    let arm = self.program.terms.arm(at);
-                    let fields = self.program.fields(arm.ctor).len();
-                    let mut inner = locals.to_vec();
-                    inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
-                    found.push(Arm {
-                        ctor: arm.ctor,
-                        body: self.body(arm.body, inner, scope.level + fields),
-                    });
-                }
-                let arms = self.program.terms.hold_arms(&found);
-                Expr::Match(locals[value.0.index()], arms)
-            }
+            Expr::Match(value, arms) => match self.matching(value, arms, locals, scope) {
+                Some(held) => held,
+                // One that puts back what it took apart is what it took apart.
+                None => return locals[value.0.index()],
+            },
         };
         let id = self.program.terms.push(expr);
         scope.bindings.push(id);
@@ -122,6 +141,33 @@ impl Rewrite<'_> {
         scope.level += 1;
         value
     }
+    /// Rebuild a match's arms, or nothing at all where every arm puts back
+    /// the constructor it took apart and the match is its own scrutinee.
+    fn matching(
+        &mut self,
+        value: Atom,
+        arms: Range,
+        locals: &[Atom],
+        scope: &Scope,
+    ) -> Option<Expr> {
+        let mut found = vec![];
+        for at in arms.range() {
+            let arm = self.program.terms.arm(at);
+            let fields = self.program.fields(arm.ctor).len();
+            let mut inner = locals.to_vec();
+            inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
+            found.push(Arm {
+                ctor: arm.ctor,
+                body: self.body(arm.body, inner, scope.level + fields),
+            });
+        }
+        if rebuilt(self.program, &found, scope.level) {
+            return None;
+        }
+        let arms = self.program.terms.hold_arms(&found);
+        Some(Expr::Match(locals[value.0.index()], arms))
+    }
+
     fn callee(&mut self, called: FnId) -> Option<Body> {
         if self.operations[called.index()].is_some() {
             return None;

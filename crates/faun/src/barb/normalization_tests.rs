@@ -105,3 +105,105 @@ fn each_zero_inline_limit_uses_structural_rebuilding_without_an_inlining_plan() 
         assert_eq!(actual, expected, "{limits:?}");
     }
 }
+
+/// A match that asks which constructor it has and answers with the one it
+/// has is the value it asked about.
+#[test]
+fn a_match_that_puts_back_what_it_took_apart_is_what_it_took_apart() {
+    let (mut program, nat, _, _) = super::tests::types();
+    let id = program.declare("id", &[nat], nat);
+    program.define(id, |b, args| {
+        b.match_(args[0], nat, super::builder::Builder::con)
+    });
+    program.set_entry(id);
+    validate(&program).unwrap();
+
+    structural(&mut program);
+    validate(&program).unwrap();
+    let body = program.function(id).body().unwrap();
+    assert!(
+        program.bindings(body.bindings).is_empty(),
+        "nothing is left"
+    );
+    assert_eq!(program.expr(body.tail), Expr::Atom(Atom(Local::at(0))));
+}
+
+/// One that puts back a different constructor, or the right one out of
+/// other fields, is not. Both are what the rule would get wrong if it read
+/// only the shape and not the fields.
+#[test]
+fn a_match_that_puts_back_something_else_stays() {
+    let mut program = Program::default();
+    let bool_ = program.declare_type("Bool");
+    program.define_type(bool_, &[("False", &[]), ("True", &[])]);
+    let pair = program.declare_type("Pair");
+    program.define_type(pair, &[("Both", &[bool_, bool_])]);
+
+    // `not`: each arm answers the other constructor.
+    let (no, yes) = (program.ctor_at(bool_, 0), program.ctor_at(bool_, 1));
+    let not = program.declare("not", &[bool_], bool_);
+    program.define(not, |b, args| {
+        b.match_(args[0], bool_, |b, ctor, _| {
+            b.con(if ctor == no { yes } else { no }, &[])
+        })
+    });
+    // `swap`: the right constructor, out of its fields the other way round.
+    let swap = program.declare("swap", &[pair], pair);
+    program.define(swap, |b, args| {
+        b.match_(args[0], pair, |b, ctor, fields| {
+            b.con(ctor, &[fields[1], fields[0]])
+        })
+    });
+    program.set_entry(not);
+    validate(&program).unwrap();
+
+    structural(&mut program);
+    validate(&program).unwrap();
+    for held in [not, swap] {
+        let body = program.function(held).body().unwrap();
+        assert!(
+            matches!(program.expr(body.tail), Expr::Match(..)),
+            "the match stays"
+        );
+    }
+}
+
+/// And one whose arms work before answering stays, since the work is what
+/// the match is for.
+#[test]
+fn a_match_whose_arms_do_something_stays() {
+    let (mut program, nat, _, _) = super::tests::types();
+    let effect = program.declare("effect", &[], nat);
+    let held = program.declare("held", &[nat], nat);
+    program.define(held, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            b.call(effect, &[]);
+            b.con(ctor, fields)
+        })
+    });
+    program.set_entry(held);
+    validate(&program).unwrap();
+
+    structural(&mut program);
+    validate(&program).unwrap();
+    let body = program.function(held).body().unwrap();
+    assert!(matches!(program.expr(body.tail), Expr::Match(..)));
+}
+
+/// A match with no arms never answers, and the value it took apart does, so
+/// reading one as the other would be wrong. It is also not something a
+/// program may say: this is why the rule asks, and why nothing it runs on
+/// can answer yes.
+#[test]
+fn a_match_on_a_type_with_no_constructors_is_not_a_program() {
+    let mut program = Program::default();
+    let never = program.declare_type("Never");
+    program.define_type(never, &[]);
+    let held = program.declare("held", &[never], never);
+    program.define(held, |b, args| {
+        b.match_(args[0], never, |_, _, _| unreachable!("no arm to build"))
+    });
+    program.set_entry(held);
+    let refused = validate(&program).unwrap_err();
+    assert!(refused.contains("matches on nothing at all"), "{refused}");
+}

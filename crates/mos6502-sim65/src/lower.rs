@@ -281,8 +281,14 @@ fn assemble(program: &Program, heap: u16) -> Code {
         })
         .collect();
     state.reset(heap);
-    for id in 0..program.functions().len() {
-        state.function(FunctionId::at(id));
+    // The entry goes first, so the reset routine runs into it rather than
+    // jumping to it. Everything else follows in the order it was declared.
+    let entry = program.entry();
+    let rest = (0..program.functions().len())
+        .map(FunctionId::at)
+        .filter(|id| id.index() != entry.index());
+    for id in std::iter::once(entry).chain(rest) {
+        state.function(id);
     }
     state.emit_pool();
 
@@ -368,6 +374,13 @@ impl Lowering<'_> {
             self.asm.stx_zp(ARGC + 1);
         }
 
+        // An entry that leaves through the exit hook itself never comes back
+        // here, so there is nothing to write for after it: no result to read
+        // out of `R0`, and no second way out. It is written next, so running
+        // off the end of this is entering it.
+        if !self.program.comes_back(self.program.entry()) {
+            return;
+        }
         let entry = self.starts[self.program.entry().index()];
         self.asm.jsr(entry);
         self.asm.lda_zp(R0);

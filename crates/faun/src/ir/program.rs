@@ -2,8 +2,8 @@
 
 use super::builder::Builder;
 use super::model::{
-    Class, DataId, Definition, Function, FunctionId, Op, Origin, Range, Region, RegionId, Returns,
-    Span, Symbol, ValueId,
+    Class, DataId, Definition, Exit, Function, FunctionId, Op, Origin, Range, Region, RegionId,
+    Returns, Span, Symbol, ValueId,
 };
 use crate::index::{Pool, append_range};
 
@@ -219,6 +219,45 @@ impl Program {
     #[must_use]
     pub const fn values_count(&self) -> usize {
         self.classes.len()
+    }
+
+    /// Whether a function's body ever comes back.
+    ///
+    /// A body leaving through a routine that answers `Never` falls off the
+    /// end of its region rather than returning, and so does every region it
+    /// could have left from. Nothing reads what such a body would have
+    /// answered with, so a target may enter it rather than call it, and has
+    /// nothing to write for after it.
+    ///
+    /// A declaration with no body answers yes: what something outside does
+    /// is said by its contract, not read off a body that is not here.
+    #[must_use]
+    pub fn comes_back(&self, function: FunctionId) -> bool {
+        let Some(body) = self.functions[function].body() else {
+            return true;
+        };
+        let mut held = vec![body];
+        while let Some(region) = held.pop() {
+            let region = self.regions[region];
+            if region
+                .terminator
+                .is_some_and(|held| held.exit == Exit::Return)
+            {
+                return true;
+            }
+            for op in &self.ops[region.ops.range()] {
+                match *op {
+                    Op::If {
+                        then_region,
+                        else_region,
+                        ..
+                    } => held.extend([then_region, else_region]),
+                    Op::Loop { body, .. } => held.push(body),
+                    _ => {}
+                }
+            }
+        }
+        false
     }
 }
 
