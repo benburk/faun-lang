@@ -17,7 +17,7 @@ const RUNNER: Option<&str> = None;
 const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 127),
     ("the count", 144),
-    ("the count and a constant", 182),
+    ("the count and a constant", 159),
     ("the low bits of a sum", 161),
     ("the count under a guard", 193),
     ("the count and more", 208),

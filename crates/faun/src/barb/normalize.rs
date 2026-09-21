@@ -271,9 +271,22 @@ impl Rewrite<'_> {
         self.push(Expr::Call(called, args), scope)
     }
 
-    /// Whether a local was written as a remainder by this same modulus, and
-    /// so is already every bit of itself that the modulus keeps.
+    /// Whether a side of a sum is already every bit of itself the modulus
+    /// keeps, and so needs no remainder of its own.
+    ///
+    /// Two ways of being that, and both have to be asked. A side written as a
+    /// remainder by this same modulus has been round this law already, which
+    /// is what stops it nesting one inside another; and a side known to be
+    /// under the modulus before the program runs was never going to lose
+    /// anything to it. Asking only the first wraps a constant in a remainder
+    /// that cannot do anything, and what the tier below reads then is a
+    /// number widened to the modulus and narrowed back.
     fn within(&self, scope: &Scope, atom: Atom, modulus: Atom) -> bool {
+        self.reduced_by(scope, atom, modulus) || self.under(scope, atom, modulus)
+    }
+
+    /// Whether a local was written as a remainder by this same modulus.
+    fn reduced_by(&self, scope: &Scope, atom: Atom, modulus: Atom) -> bool {
         let Some(Expr::Call(called, args)) = scope.wrote(atom).map(|id| self.program.expr(id))
         else {
             return false;
@@ -282,16 +295,31 @@ impl Rewrite<'_> {
             && self.program.atoms(args).last() == Some(&modulus)
     }
 
+    /// Whether both locals are numbers known before the program runs, the
+    /// first under the second.
+    fn under(&self, scope: &Scope, atom: Atom, modulus: Atom) -> bool {
+        match (self.number(scope, atom), self.number(scope, modulus)) {
+            (Some(held), Some(limit)) => held < limit,
+            _ => false,
+        }
+    }
+
     /// Whether a local was written as a power of two, known before the
     /// program runs.
     fn power_of_two(&self, scope: &Scope, atom: Atom) -> bool {
+        self.number(scope, atom).is_some_and(u64::is_power_of_two)
+    }
+
+    /// The number a local is, where it is one known before the program runs
+    /// and small enough to work out with.
+    fn number(&self, scope: &Scope, atom: Atom) -> Option<u64> {
         let Some(Expr::Static(value)) = scope.wrote(atom).map(|id| self.program.expr(id)) else {
-            return false;
+            return None;
         };
         let super::ConstantView::Natural(number) = self.program.constant(value).view() else {
-            return false;
+            return None;
         };
-        matches!(number.try_u64(), Ok(held) if held.is_power_of_two())
+        number.try_u64().ok()
     }
 
     fn held(&mut self, atoms: &[Atom]) -> Range {

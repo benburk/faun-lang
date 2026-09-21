@@ -294,8 +294,18 @@ fn a_sum_modulo_a_power_of_two_is_a_sum_of_remainders() {
     assert_eq!(held.matches("mod(").count(), 2, "{held}");
     assert!(held.contains("add(v"), "{held}");
 
-    // Two sides, and so a remainder of each.
+    // A side known before the program runs, and under the modulus, is
+    // already every bit of itself the modulus keeps. Only the count takes a
+    // remainder of its own; the constant is added as it stands, and wrapping
+    // it in one would have the tier below reading a number widened to the
+    // modulus and narrowed straight back.
     let held = reduced("mod(add(n four) two_fifty_six)");
+    assert_eq!(held.matches("mod(").count(), 2, "{held}");
+    assert!(held.contains("add(v"), "{held}");
+
+    // Under it is what buys that, not being known: one as big as the modulus
+    // loses something to it, so it takes a remainder like anything else.
+    let held = reduced("mod(add(n sixteen) sixteen)");
     assert_eq!(held.matches("mod(").count(), 3, "{held}");
 }
 
