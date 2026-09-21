@@ -232,20 +232,54 @@ impl Rewrite<'_> {
         let [left, right] = *self.program.atoms(held) else {
             return None;
         };
-        let args = self.held(&[left, modulus]);
-        let reduced = self.push(Expr::Call(called, args), scope);
-        // One side reduced twice where both sides are the same side.
+        // A side already within the modulus is left alone, and where both
+        // are there is nothing to do: saying it twice says no more, and
+        // this walk happens more than once.
+        let done = (
+            self.within(scope, left, modulus),
+            self.within(scope, right, modulus),
+        );
+        if done.0 && done.1 {
+            return None;
+        }
+        let low = self.reduce_side(called, left, modulus, done.0, scope);
+        // One side reduced once where both sides are the same side.
         let right = if left == right {
-            reduced
+            low
         } else {
-            let args = self.held(&[right, modulus]);
-            self.push(Expr::Call(called, args), scope)
+            self.reduce_side(called, right, modulus, done.1, scope)
         };
-        let left = reduced;
-        let args = self.held(&[left, right]);
+        let args = self.held(&[low, right]);
         let sum = self.push(Expr::Call(inner, args), scope);
         let args = self.held(&[sum, modulus]);
         Some(self.push(Expr::Call(called, args), scope))
+    }
+
+    /// One side of it, reduced unless it already is.
+    fn reduce_side(
+        &mut self,
+        called: FnId,
+        side: Atom,
+        modulus: Atom,
+        done: bool,
+        scope: &mut Scope,
+    ) -> Atom {
+        if done {
+            return side;
+        }
+        let args = self.held(&[side, modulus]);
+        self.push(Expr::Call(called, args), scope)
+    }
+
+    /// Whether a local was written as a remainder by this same modulus, and
+    /// so is already every bit of itself that the modulus keeps.
+    fn within(&self, scope: &Scope, atom: Atom, modulus: Atom) -> bool {
+        let Some(Expr::Call(called, args)) = scope.wrote(atom).map(|id| self.program.expr(id))
+        else {
+            return false;
+        };
+        self.operations[called.index()] == Some(super::Operation::Mod)
+            && self.program.atoms(args).last() == Some(&modulus)
     }
 
     /// Whether a local was written as a power of two, known before the

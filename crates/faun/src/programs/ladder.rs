@@ -159,6 +159,130 @@ pub fn exits_with_the_count_and_more(routines: &Routines, limit: u64, more: u64)
     program
 }
 
+/// Leave with the low byte of a sum.
+///
+/// A number counting without a last step says eight-bit wrapping arithmetic
+/// by adding and asking for the remainder modulo two hundred and fifty-six.
+/// Read the other way round that is two arbitrary-precision numbers, a heap
+/// to hold them, and a division to finish; read as what it says, it is one
+/// addition that throws its carry away.
+///
+/// # Panics
+/// If `bits` does not describe a power of two the declared shape holds.
+#[must_use]
+pub fn exits_with_the_low_bits_of_a_sum(routines: &Routines, bits: u32) -> Program {
+    let Ground {
+        mut program,
+        host,
+        nat,
+        never,
+        exit,
+        argc,
+    } = ground(routines);
+    let truth = program.declare_type("Bool");
+    program.define_type(truth, &[("False", &[]), ("True", &[])]);
+    let adding = adds(&mut program, nat);
+    let remainder = remainders(&mut program, nat, truth, adding);
+    let modulus = program
+        .intern_number(nat, 1 << bits)
+        .expect("the declared natural shape");
+
+    let main = program.declare("main!", &[host], never);
+    program.define(main, |b, args| {
+        let host = args[0];
+        let count = b.call(argc, &[host]);
+        let sum = b.call(adding, &[count, count]);
+        let modulus = b.known(modulus);
+        let low = b.call(remainder, &[sum, modulus]);
+        b.call(exit, &[host, low])
+    });
+    program.set_entry(main);
+    program
+}
+
+/// The sum of two counts, by counting one of them onto the other.
+fn adds(program: &mut Program, nat: TypeId) -> FnId {
+    let succ = program.ctor_at(nat, 1);
+    let id = program.declare("add", &[nat, nat], nat);
+    program.define(id, |b, args| {
+        let (left, right) = (args[0], args[1]);
+        b.match_(right, nat, |b, _, counted| match counted.first() {
+            // Nothing added to it is it.
+            None => left,
+            Some(&less) => {
+                let rest = b.call(id, &[left, less]);
+                b.con(succ, &[rest])
+            }
+        })
+    });
+    id
+}
+
+/// What is left of one count after as many of another as fit.
+///
+/// Recursion on the dividend, so that what stops it is the shape of the
+/// number rather than anything worked out while going round.
+fn remainders(program: &mut Program, nat: TypeId, truth: TypeId, adding: FnId) -> FnId {
+    let _ = adding;
+    let (zero, succ) = (program.ctor_at(nat, 0), program.ctor_at(nat, 1));
+    let (no, _) = (program.ctor_at(truth, 0), program.ctor_at(truth, 1));
+    let same = alike(program, nat, truth);
+
+    // One more than what is left, unless what is left has reached the
+    // divisor, when nothing is.
+    let step = program.declare("mod_step", &[truth, nat], nat);
+    program.define(step, |b, args| {
+        b.match_(args[0], truth, |b, ctor, _| {
+            if ctor == no {
+                b.con(succ, &[args[1]])
+            } else {
+                b.con(zero, &[])
+            }
+        })
+    });
+
+    let id = program.declare("mod", &[nat, nat], nat);
+    program.define(id, |b, args| {
+        let (left, right) = (args[0], args[1]);
+        b.match_(right, nat, move |b, _, divisor| {
+            // Nothing goes into it no times, leaving all of it.
+            let Some(&less) = divisor.first() else {
+                return left;
+            };
+            b.match_(left, nat, move |b, _, counted| {
+                let Some(&fewer) = counted.first() else {
+                    return b.con(zero, &[]);
+                };
+                let rest = b.call(id, &[fewer, right]);
+                let reached = b.call(same, &[rest, less]);
+                b.call(step, &[reached, rest])
+            })
+        })
+    });
+    id
+}
+
+/// Whether two counts are the same count, by counting both down together.
+fn alike(program: &mut Program, nat: TypeId, truth: TypeId) -> FnId {
+    let (no, yes) = (program.ctor_at(truth, 0), program.ctor_at(truth, 1));
+    let id = program.declare("equals", &[nat, nat], truth);
+    program.define(id, |b, args| {
+        let (left, right) = (args[0], args[1]);
+        b.match_(left, nat, move |b, _, counted| {
+            let Some(&fewer) = counted.first() else {
+                return b.match_(right, nat, |b, _, counted| {
+                    b.con(if counted.is_empty() { yes } else { no }, &[])
+                });
+            };
+            b.match_(right, nat, move |b, _, counted| match counted.first() {
+                None => b.con(no, &[]),
+                Some(&other) => b.call(id, &[fewer, other]),
+            })
+        })
+    });
+    id
+}
+
 /// Whether the first of two counts is under the second, by counting both of
 /// them down together.
 ///
@@ -200,6 +324,10 @@ pub fn every(routines: &Routines) -> Vec<(&'static str, Program)> {
         (
             "the count and more",
             exits_with_the_count_and_more(routines, 4, 4),
+        ),
+        (
+            "the low bits of a sum",
+            exits_with_the_low_bits_of_a_sum(routines, 8),
         ),
     ]
 }

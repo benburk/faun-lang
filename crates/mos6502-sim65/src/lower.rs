@@ -483,7 +483,11 @@ impl Lowering<'_> {
             self.asm.sta_ind_y(CSP);
             self.jsr_hook(HOOK_ARGS);
             self.asm.sta_zp(ARGC);
-            self.asm.stx_zp(ARGC + 1);
+            // The high half only where something reads more of the count
+            // than its low byte.
+            if self.counts_wide() {
+                self.asm.stx_zp(ARGC + 1);
+            }
         }
 
         // An entry that leaves through the exit hook itself never comes back
@@ -497,6 +501,24 @@ impl Lowering<'_> {
         self.asm.jsr(entry);
         self.asm.lda_zp(R0);
         self.asm.jmp_abs(HOOK_EXIT);
+    }
+
+    /// Whether anything reads more of the count than its low byte.
+    ///
+    /// The simulator answers in two registers and the reset routine keeps
+    /// what it answered, which is a byte nobody wants wherever every
+    /// program that asks the count narrows it.
+    fn counts_wide(&self) -> bool {
+        let program = self.program;
+        program
+            .functions()
+            .iter()
+            .filter_map(faun::ir::Function::body)
+            .flat_map(|body| program.walk_within(body))
+            .any(|(op, results)| {
+                matches!(*op, Op::Call { function, .. } if counted(program, function))
+                    && results.first().is_some_and(|&held| self.wide(held))
+            })
     }
 
     fn set_pair(&mut self, pair: u8, value: u16) {

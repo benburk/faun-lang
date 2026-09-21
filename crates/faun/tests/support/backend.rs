@@ -464,8 +464,7 @@ fn it_compiles_the_ladder_to_the_sizes_recorded() {
         .zip(LADDER_SIZES)
         .filter_map(|((name, barb), &(expected, size))| {
             assert_eq!(name, expected, "size baselines must match the ladder");
-            faun::barb::validate(&barb).expect("a sound program");
-            let program = faun::machine(&barb, &routines).expect("a representable program");
+            let program = lowered(barb, &routines);
             let actual = TARGET.compile(&program).expect("compilation")[0]
                 .bytes
                 .len();
@@ -485,11 +484,13 @@ fn the_ladder_answers_what_its_programs_say() {
     const COUNTS: &[u16] = &[1, 3, 4, 5];
     let routines = TARGET.routines();
     for (name, barb) in programs::ladder::every(&routines) {
-        let program = faun::machine(&barb, &routines).expect("a representable program");
+        let program = lowered(barb, &routines);
         for (&argc, (status, _)) in COUNTS.iter().zip(execute_counts(&program, COUNTS)) {
             let answer = match name {
                 "a constant" => 0,
                 "the count" => i32::from(argc),
+                // Twice the count, and every bit of that below the eighth.
+                "the low bits of a sum" => i32::from(argc.wrapping_mul(2) % 256),
                 // Under the ceiling, the count and four past it. At or above
                 // it the guard leaves with nought instead.
                 _ if argc < 4 => i32::from(argc) + 4,
@@ -498,6 +499,18 @@ fn the_ladder_answers_what_its_programs_say() {
             assert_eq!(status, answer, "{name}, argc={argc}");
         }
     }
+}
+
+/// A program as the machine tier is handed one: validated, optimized where
+/// it was written, and then lowered and optimized again below.
+///
+/// Both halves, because a program arriving at Barb has not been through
+/// Barb's own schedule yet, and lowering one that has not is lowering a
+/// program nothing writes.
+fn lowered(mut barb: faun::barb::Program, routines: &faun::platform::Routines) -> Program {
+    faun::barb::validate(&barb).expect("a sound program");
+    faun::barb::optimize(&mut barb, &faun::barb::OptimizeOptions::default());
+    faun::machine(&barb, routines).expect("a representable program")
 }
 
 #[test]
