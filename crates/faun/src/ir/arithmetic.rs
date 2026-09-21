@@ -13,8 +13,15 @@ pub(super) fn widest(a: Class, b: Class) -> Class {
     }
 }
 
+/// A value read as `class`.
+///
+/// One already narrow enough is read as it stands: a class is what a value
+/// can be, so anything that fits is already something this reads. Only a
+/// value that does not fit is converted, which is what `met` says about the
+/// same question one tier along -- and what the two of them agreeing saves
+/// is a width change that changes no width.
 fn at(b: &mut Builder, value: ValueId, class: Class) -> ValueId {
-    if b.class(value) == class {
+    if b.class(value).fits(class) {
         value
     } else {
         b.convert(class, value)
@@ -43,12 +50,15 @@ pub(super) fn lower(
     let class = widest(result, widest(b.class(left), b.class(right)));
     let left = at(b, left, class);
     let right = at(b, right, class);
+    // An operand may be narrower than the width the answer is worked out
+    // at, so the width is said rather than taken from whichever operand
+    // happens to be on the left.
     let answer = match op {
-        Operation::Add => b.binary(Binary::Add, left, right),
+        Operation::Add => b.binary_at(class, Binary::Add, left, right),
         Operation::Monus => monus(b, class, left, right),
-        Operation::Mul => b.binary(Binary::Mul, left, right),
-        Operation::Div => b.binary(Binary::Div, left, right),
-        Operation::Mod => b.binary(Binary::Mod, left, right),
+        Operation::Mul => b.binary_at(class, Binary::Mul, left, right),
+        Operation::Div => b.binary_at(class, Binary::Div, left, right),
+        Operation::Mod => b.binary_at(class, Binary::Mod, left, right),
         Operation::Equals { .. } | Operation::LessThan { .. } => {
             unreachable!("comparison lowered separately")
         }
@@ -66,7 +76,7 @@ fn monus(b: &mut Builder, class: Class, left: ValueId, right: ValueId) -> ValueI
             b.yield_(&[zero]);
         },
         |b| {
-            let value = b.binary(Binary::Sub, left, right);
+            let value = b.binary_at(class, Binary::Sub, left, right);
             b.yield_(&[value]);
         },
     )[0]

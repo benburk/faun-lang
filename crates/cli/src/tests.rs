@@ -65,14 +65,19 @@ fn inspection_uses_normal_optimization_and_target_widths() {
         assert_eq!(ir.matches("= Add ").count(), 2);
         assert!(ir.contains("fixed0 = const 0"), "known zero selects fixed0");
         assert!(
-            ir.contains("v2: word = Less v0, v1\n  v5: fixed5 = if v2 then r1 else r2"),
+            ir.contains("v2: word = Less v1, v0\n  v5: fixed5 = if v2 then r1 else r2"),
             "the guard branches on its comparison, with no tag in between"
         );
         assert_eq!(ir.matches(" = if ").count(), 1, "one branch, not two");
         assert!(ir.contains("fixed5"), "the guarded value is narrowed");
         assert!(
-            ir.contains(&format!("v1: fixed{} = const 32", target.word())),
-            "a constant is written at the width it is read at"
+            ir.contains("v0: fixed6 = const 32"),
+            "a constant is written as narrow as it is, and read as it stands"
+        );
+        assert_eq!(
+            ir.matches(" = convert ").count(),
+            1,
+            "only the narrowing the guard proves, never a widening"
         );
         assert_eq!(ir, inspect(EXAMPLE, target, Stage::PreparedIr).unwrap());
     }
