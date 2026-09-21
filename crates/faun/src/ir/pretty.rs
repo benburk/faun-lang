@@ -6,8 +6,9 @@ use super::{Class, Definition, Op, Program, Returns, ValueId};
 
 const CLASS_LEGEND: &str = "\
 # Classes are per-value representation requirements, not source types.
-# fixedN means 0 <= value < 2^N; it is a fit requirement, not a wrapping type.
-# A narrower sink requires a fit proof or an explicit conversion.
+# low..high is every value one can be; it is a fit requirement, not a
+# wrapping type, and a target holds one in whatever it has that is wide
+# enough. A narrower sink requires a fit proof or an explicit conversion.
 
 ";
 
@@ -165,9 +166,13 @@ fn class(held: Class) -> String {
         Class::Natural => "natural".to_owned(),
         Class::Word => "word".to_owned(),
         Class::Address => "address".to_owned(),
-        Class::Held(_) => held
-            .width()
-            .map_or_else(|| "unbounded".to_owned(), |bits| format!("fixed{bits}")),
+        // What is known, not how wide it makes the value. A width rounds
+        // the greatest up to the next power of two and says nothing of the
+        // least, so it hides what this tier was told.
+        Class::Held(facts) => facts.high.map_or_else(
+            || format!("{}..", facts.low),
+            |high| format!("{}..{high}", facts.low),
+        ),
     }
 }
 

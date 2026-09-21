@@ -13,10 +13,11 @@ fn renders_value_classes_and_resolved_transfers_without_pool_runs() {
         program.render(),
         concat!(
             "# Classes are per-value representation requirements, not source types.\n",
-            "# fixedN means 0 <= value < 2^N; it is a fit requirement, not a wrapping type.\n",
-            "# A narrower sink requires a fit proof or an explicit conversion.\n\n",
+            "# low..high is every value one can be; it is a fit requirement, not a\n",
+            "# wrapping type, and a target holds one in whatever it has that is wide\n",
+            "# enough. A narrower sink requires a fit proof or an explicit conversion.\n\n",
             "fn f0 main() -> (word) = r0\n\nr0():\n",
-            "  v0: fixed1 = const 1\n",
+            "  v0: 0..1 = const 1\n",
             "  v1: word = convert v0 to word\n",
             "  Return(v1)\n",
         )

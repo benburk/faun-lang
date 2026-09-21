@@ -55,24 +55,40 @@ fn inspection_uses_normal_optimization_and_target_widths() {
         assert!(!barb.contains(['{', '}']));
         assert_eq!(main.matches("= add(").count(), 2);
 
+        machine_ir(target);
+    }
+}
+
+/// What the machine tier is handed for the same example.
+fn machine_ir(target: &'static dyn Target) {
+    {
         let ir = inspect(EXAMPLE, target, Stage::Ir).unwrap();
         assert!(ir.starts_with(
             "# Classes are per-value representation requirements, not source types.\n"
         ));
         assert!(ir.contains("fn f0 main!() -> (word) = r0"));
-        assert!(ir.contains(&format!("argc!() -> (fixed{})", target.word())));
+        // Every count the machine can report, which is every number its
+        // word holds.
+        let count = u64::MAX >> (64 - target.word());
+        assert!(ir.contains(&format!("argc!() -> (0..{count})")));
         assert!(ir.contains("call argc!()  # f2"));
         assert_eq!(ir.matches("= Add ").count(), 2);
-        assert!(ir.contains("fixed0 = const 0"), "known zero selects fixed0");
         assert!(
-            ir.contains("v2: word = Less v1, v0\n  v5: fixed5 = if v2 then r1 else r2"),
+            ir.contains("0..0 = const 0"),
+            "a known zero can be nothing else"
+        );
+        assert!(
+            ir.contains("v2: word = Less v1, v0\n  v5: 0..31 = if v2 then r1 else r2"),
             "the guard branches on its comparison, with no tag in between"
         );
         assert_eq!(ir.matches(" = if ").count(), 1, "one branch, not two");
-        assert!(ir.contains("fixed5"), "the guarded value is narrowed");
         assert!(
-            ir.contains("v0: fixed6 = const 32"),
-            "a constant is written as narrow as it is, and read as it stands"
+            ir.contains("0..31"),
+            "the guard proves the count is under thirty-two"
+        );
+        assert!(
+            ir.contains("v0: 32..32 = const 32"),
+            "a known number can be nothing but itself"
         );
         assert_eq!(
             ir.matches(" = convert ").count(),
@@ -111,7 +127,7 @@ fn lowered_ir_can_be_inspected_before_target_acceptance() {
     assert!(
         inspect(source, &Mos6502Sim65, Stage::Ir)
             .unwrap()
-            .contains("fixed17")
+            .contains("0..131070")
     );
     let error = inspect(source, &Mos6502Sim65, Stage::PreparedIr).unwrap_err();
     assert!(error.contains("17"), "{error}");
