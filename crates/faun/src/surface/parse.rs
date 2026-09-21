@@ -317,8 +317,8 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
         // The name a program writes is the name a target is asked by, `!`
         // and all, so the declaration needs nothing said about linkage.
         let id = program.declare(called, params, *result);
-        if let Some(class) = routine.answers() {
-            program.bound(id, host_bound(class));
+        if let Some(bounds) = routine.bounds() {
+            program.bound(id, bounds);
         }
         functions.insert(called, id);
     }
@@ -330,15 +330,6 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
     let main = starts(&program, &functions, &told)?;
     program.set_entry(main);
     define(&mut program, source, &clauses, &told, &functions)
-}
-
-const fn host_bound(class: crate::ir::Class) -> crate::barb::Bounds {
-    let high = match class {
-        crate::ir::Class::Fixed { bits } if bits < 64 => Some((1u64 << bits) - 1),
-        crate::ir::Class::Word | crate::ir::Class::Fixed { bits: 64 } => Some(u64::MAX),
-        _ => None,
-    };
-    crate::barb::Bounds { low: 0, high }
 }
 
 /// Where a program starts, since nothing in the text says so.

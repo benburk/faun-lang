@@ -12,6 +12,14 @@ const TARGET: Wasm32Wasi = Wasm32Wasi;
 const RUNNER: Option<&str> = Some("wasmtime");
 
 // Lower baselines when emission improves; explain any increase.
+/// The ladder of simplest programs, from Barb. Lower these when the
+/// compiler improves; a rise is the compiler getting worse at the one
+/// thing small enough to read.
+const LADDER_SIZES: &[(&str, usize)] = &[
+    ("a constant", 36),
+    ("the count", 158),
+    ("the count and more", 216),
+];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("empty", 36),
     ("exit zero", 36),

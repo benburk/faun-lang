@@ -14,6 +14,7 @@ pub mod abi;
 pub mod arithmetic;
 pub mod control;
 pub mod external;
+pub mod ladder;
 
 use crate::ir::Class::Word;
 use crate::ir::{Binary, Builder, Class, Offset, Program, Relation, Width};

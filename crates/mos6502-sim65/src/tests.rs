@@ -11,6 +11,14 @@ const TARGET: Mos6502Sim65 = Mos6502Sim65;
 const RUNNER: Option<&str> = Some("sim65");
 
 // Lower baselines when emission improves; explain any increase.
+/// The ladder of simplest programs, from Barb. Lower these when the
+/// compiler improves; a rise is the compiler getting worse at the one
+/// thing small enough to read.
+const LADDER_SIZES: &[(&str, usize)] = &[
+    ("a constant", 17),
+    ("the count", 54),
+    ("the count and more", 170),
+];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("empty", 30),
     ("exit zero", 17),

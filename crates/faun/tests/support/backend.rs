@@ -10,7 +10,7 @@ use faun::ir::{Binary, Class, Program};
 use faun::programs;
 use faun::targets::Target;
 
-use super::{ARITHMETIC_SIZES, CORPUS_SIZES, EXAMPLE_SIZES, RUNNER, TARGET};
+use super::{ARITHMETIC_SIZES, CORPUS_SIZES, EXAMPLE_SIZES, LADDER_SIZES, RUNNER, TARGET};
 
 #[path = "expressions.rs"]
 mod expressions;
@@ -448,6 +448,56 @@ fn external_declarations_interleave_with_internal_function_ids() {
     let (status, stdout) = execute(&programs::external::interleaved());
     assert_eq!(status, 42);
     assert_eq!(stdout, "externals\n");
+}
+
+/// The simplest programs there are, from the tier a program arrives at.
+///
+/// Everything else measured here is written at the tier a target reads, so
+/// it says what a backend does with IR it was handed. These say what the
+/// compiler does, which is the question worth asking of a program small
+/// enough that the answer can be read off the disassembly.
+#[test]
+fn it_compiles_the_ladder_to_the_sizes_recorded() {
+    let routines = TARGET.routines();
+    let changed: Vec<_> = programs::ladder::every(&routines)
+        .into_iter()
+        .zip(LADDER_SIZES)
+        .filter_map(|((name, barb), &(expected, size))| {
+            assert_eq!(name, expected, "size baselines must match the ladder");
+            faun::barb::validate(&barb).expect("a sound program");
+            let program = faun::machine(&barb, &routines).expect("a representable program");
+            let actual = TARGET.compile(&program).expect("compilation")[0]
+                .bytes
+                .len();
+            (actual != size).then_some((name, actual, size))
+        })
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "(program, actual, expected): {changed:?}"
+    );
+}
+
+/// And what each of them answers, since a size nothing checks the meaning of
+/// is a size anybody can reach by writing the wrong program.
+#[test]
+fn the_ladder_answers_what_its_programs_say() {
+    const COUNTS: &[u16] = &[1, 3, 4, 5];
+    let routines = TARGET.routines();
+    for (name, barb) in programs::ladder::every(&routines) {
+        let program = faun::machine(&barb, &routines).expect("a representable program");
+        for (&argc, (status, _)) in COUNTS.iter().zip(execute_counts(&program, COUNTS)) {
+            let answer = match name {
+                "a constant" => 0,
+                "the count" => i32::from(argc),
+                // Under the ceiling, the count and four past it. At or above
+                // it the guard leaves with nought instead.
+                _ if argc < 4 => i32::from(argc) + 4,
+                _ => 0,
+            };
+            assert_eq!(status, answer, "{name}, argc={argc}");
+        }
+    }
 }
 
 #[test]

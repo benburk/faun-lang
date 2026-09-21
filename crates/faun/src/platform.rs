@@ -81,6 +81,25 @@ impl Routine {
     pub const fn comes_back(&self) -> bool {
         !matches!(self.returns, Returns::Never)
     }
+
+    /// What a program may assume about the number it answers with.
+    ///
+    /// A target answers in a machine's width, so nothing wider than that
+    /// width comes back, and the tier above is entitled to know it: a count
+    /// a program adds to is a count it has a bound for. One that answers
+    /// nothing, or answers something that is not a number, bounds nothing.
+    #[must_use]
+    pub const fn bounds(&self) -> Option<crate::barb::Bounds> {
+        let high = match self.returns {
+            Returns::Value(Class::Fixed { bits }) if bits < 64 => Some((1u64 << bits) - 1),
+            Returns::Value(Class::Word | Class::Fixed { bits: 64 }) => Some(u64::MAX),
+            // A natural, an address, or a width no machine here has: a
+            // number with no bound rather than no number.
+            Returns::Value(_) => None,
+            Returns::Unit | Returns::Never => return None,
+        };
+        Some(crate::barb::Bounds { low: 0, high })
+    }
 }
 
 /// The routines a program is read against.

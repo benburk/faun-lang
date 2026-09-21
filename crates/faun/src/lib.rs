@@ -36,13 +36,28 @@ pub fn read_with_options(
     routines: &platform::Routines,
     options: &barb::OptimizeOptions,
 ) -> Result<ir::Program, String> {
-    let program = read_barb_with_options(text, routines, options)?;
-    let facts = barb::analyze(&program);
-    let machine = ir::lower(&program, &facts, routines)?;
+    machine(&read_barb_with_options(text, routines, options)?, routines)
+}
+
+/// Lower a validated, optimized Barb program to the machine IR a target
+/// reads, and run the machine passes over it.
+///
+/// This is the rest of [`read_with_options`] once there is a Barb program
+/// to do it to, and it is the whole compiler for anything written at that
+/// tier rather than in the surface.
+///
+/// # Errors
+/// Names what it cannot represent.
+pub fn machine(
+    program: &barb::Program,
+    routines: &platform::Routines,
+) -> Result<ir::Program, String> {
+    let facts = barb::analyze(program);
+    let held = ir::lower(program, &facts, routines)?;
     // Machine passes read a structurally sound program and say nothing
     // useful about one that is not, so this is where it is said.
-    ir::validate(&machine)?;
-    Ok(ir::optimize(&machine, &ir::OptimizeOptions::default()))
+    ir::validate(&held)?;
+    Ok(ir::optimize(&held, &ir::OptimizeOptions::default()))
 }
 
 /// Read, validate and optimize Barb, stopping before representation selection.

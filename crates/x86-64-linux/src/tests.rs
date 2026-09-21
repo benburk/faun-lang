@@ -11,6 +11,14 @@ const TARGET: X86_64Linux = X86_64Linux;
 const RUNNER: Option<&str> = None;
 
 // Lower baselines when emission improves; explain any increase.
+/// The ladder of simplest programs, from Barb. Lower these when the
+/// compiler improves; a rise is the compiler getting worse at the one
+/// thing small enough to read.
+const LADDER_SIZES: &[(&str, usize)] = &[
+    ("a constant", 127),
+    ("the count", 144),
+    ("the count and more", 214),
+];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("empty", 127),
     ("exit zero", 127),
