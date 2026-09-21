@@ -94,6 +94,41 @@ impl Mnemonic {
     }
 }
 
+/// One byte where the machine can read it without working anything out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Held {
+    Imm(u8),
+    Zero(u8),
+}
+
+/// What the accumulator is known to be.
+///
+/// A number and a place answer different questions -- is this the number it
+/// already holds, is this the place it already equals -- and both can be
+/// true at once, so keeping one is no reason to give up the other.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Acc {
+    number: Option<u8>,
+    place: Option<u8>,
+}
+
+impl Acc {
+    /// Nothing known, which is where a label leaves it.
+    const NOTHING: Self = Self {
+        number: None,
+        place: None,
+    };
+
+    /// Whether reading this byte would tell the accumulator what it already
+    /// holds.
+    const fn holds(self, held: Held) -> bool {
+        match held {
+            Held::Imm(value) => matches!(self.number, Some(known) if known == value),
+            Held::Zero(at) => matches!(self.place, Some(known) if known == at),
+        }
+    }
+}
+
 /// What an instruction does it to, which is also how wide it is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Operand {
@@ -204,6 +239,11 @@ pub(crate) struct Assembler {
     /// Which instruction each label stands before, once it has been bound.
     labels: Vec<Option<usize>>,
     origin: u16,
+    /// What is known about the accumulator.
+    ///
+    /// Kept while instructions are written rather than worked out after,
+    /// since every one of them goes through here and nothing else does.
+    acc: Acc,
 }
 
 impl Assembler {
@@ -232,7 +272,78 @@ impl Assembler {
 
     /// Say that a label stands here, which is before whatever comes next.
     pub(crate) fn bind(&mut self, label: Label) {
+        self.acc = Acc::NOTHING;
         self.labels[label.0] = Some(self.insts.len());
+    }
+
+    /// Read a byte into the accumulator, unless it already holds it.
+    ///
+    /// The load left out is one that would have set the negative and zero
+    /// flags from the value they already reflect. Nothing between here and
+    /// whatever reads those reads them: every branch this target writes is
+    /// reached through a compare, a bit test or a decrement, each of which
+    /// writes the flags itself.
+    pub(crate) fn load(&mut self, held: Held) {
+        if self.acc.holds(held) {
+            return;
+        }
+        match held {
+            Held::Imm(value) => self.lda_imm(value),
+            Held::Zero(at) => self.lda_zp(at),
+        }
+    }
+
+    /// Put what `from` holds at `to`.
+    pub(crate) fn carry(&mut self, from: Held, to: u8) {
+        self.load(from);
+        self.sta_zp(to);
+    }
+
+    /// What is known about the accumulator once an instruction has run.
+    fn after(&self, mnemonic: Mnemonic, operand: Operand) -> Acc {
+        use Mnemonic as M;
+        let held = self.acc;
+        match mnemonic {
+            M::Lda => match operand {
+                Operand::Imm(value) => Acc {
+                    number: Some(value),
+                    place: None,
+                },
+                Operand::Zero(at) => Acc {
+                    number: None,
+                    place: Some(at),
+                },
+                _ => Acc::NOTHING,
+            },
+            // Reading is the whole of what these do.
+            M::Cmp | M::Ldx | M::Ldy | M::Iny | M::Dex | M::Txs | M::Clc | M::Sec => held,
+            // Writing the accumulator somewhere says it equals that place,
+            // and says nothing less about the number it holds.
+            M::Sta => match operand {
+                Operand::Zero(at) => Acc {
+                    place: Some(at),
+                    ..held
+                },
+                // Through a pointer it could have written anywhere, so a
+                // place the accumulator equalled may have parted from it.
+                _ => Acc {
+                    place: None,
+                    ..held
+                },
+            },
+            // Every other way of writing a place, which the accumulator
+            // does not follow.
+            M::Stx | M::Inc | M::Dec | M::Asl | M::Rol | M::Lsr | M::Ror => match operand {
+                Operand::Zero(at) if held.place == Some(at) => Acc {
+                    place: None,
+                    ..held
+                },
+                _ => held,
+            },
+            // An answer worked out rather than fetched, and leaving
+            // altogether.
+            M::And | M::Ora | M::Adc | M::Sbc | M::Jsr | M::Jmp | M::Rts => Acc::NOTHING,
+        }
     }
 
     /// Fill every hole with the address its label ended up at, and report
@@ -358,11 +469,13 @@ impl Assembler {
 
     /// Half of a label's address, as an immediate.
     pub(crate) fn lda_imm_half(&mut self, label: Label, half: Half) {
+        self.acc = Acc::NOTHING;
         self.insts.push(Inst::Half { to: label, half });
     }
 
     /// A literal word, for data the target lays down itself.
     pub(crate) fn word(&mut self, value: u16) {
+        self.acc = Acc::NOTHING;
         self.insts.push(Inst::Word(value));
     }
 
@@ -502,14 +615,17 @@ impl Assembler {
     }
 
     pub(crate) fn branch(&mut self, cc: Cc, label: Label) {
+        self.acc = Acc::NOTHING;
         self.insts.push(Inst::Branch { cc, to: label });
     }
 
     fn op(&mut self, mnemonic: Mnemonic, operand: Operand) {
+        self.acc = self.after(mnemonic, operand);
         self.insts.push(Inst::Op { mnemonic, operand });
     }
 
     fn absolute(&mut self, mnemonic: Mnemonic, to: Label) {
+        self.acc = Acc::NOTHING;
         self.insts.push(Inst::Absolute { mnemonic, to });
     }
 }
