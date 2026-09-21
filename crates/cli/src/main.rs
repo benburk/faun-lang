@@ -182,7 +182,8 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
 }
 
 /// Stop at the requested tier; Barb inspection does not require a runtime
-/// representation, while prepared IR establishes target acceptance as well.
+/// representation, machine IR has been through its own passes, and prepared
+/// IR establishes target acceptance as well.
 fn inspect(text: &str, target: &dyn Target, stage: Stage) -> Result<String, String> {
     let routines = target.routines();
     match stage {

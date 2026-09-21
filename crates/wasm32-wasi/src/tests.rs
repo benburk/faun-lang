@@ -39,11 +39,11 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("two-and-two", 96),
     ("double", 96),
     ("leave", 96),
-    ("bool", 235),
-    ("nat", 466),
-    ("width", 239),
-    ("argc", 254),
-    ("expressions", 239),
+    ("bool", 228),
+    ("nat", 434),
+    ("width", 214),
+    ("argc", 229),
+    ("expressions", 210),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [156, 164, 162];
 

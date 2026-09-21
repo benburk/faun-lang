@@ -69,6 +69,13 @@ impl Builder<'_> {
         self.push_one(Op::NaturalConstant(data), Class::Natural)
     }
 
+    /// One already placed in the data pool, which is how a pass rebuilding
+    /// a program keeps the bytes it was given rather than placing a second
+    /// copy of them beside the first.
+    pub fn kept_natural(&mut self, data: DataId) -> ValueId {
+        self.push_one(Op::NaturalConstant(data), Class::Natural)
+    }
+
     pub fn address_of(&mut self, data: DataId) -> ValueId {
         self.push_one(Op::AddressOf(data), Class::Address)
     }

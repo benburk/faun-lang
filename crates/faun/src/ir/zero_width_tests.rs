@@ -134,7 +134,13 @@ fn range_proven_zero_arithmetic_selects_fixed0() {
     }
 }
 
-fn comparison_program(word_bits: u16, constructors: &str, expression: &str) -> Program {
+/// The program as lowering leaves it, and as the machine passes leave it.
+///
+/// Lowering writes a comparison as the tag it answers with, whatever reads
+/// it; the passes read a match on that tag together with it. Both are worth
+/// holding here, since what says a pass changed the shape and not the
+/// answer is running the two of them against each other.
+fn comparison_programs(word_bits: u16, constructors: &str, expression: &str) -> (Program, Program) {
     let library = include_str!("../../../../standard/nat.fn")
         .replace("type Bool False True", &format!("type Bool {constructors}"));
     let source = format!(
@@ -143,9 +149,10 @@ fn comparison_program(word_bits: u16, constructors: &str, expression: &str) -> P
          status!(h True) -> exit!(h Succ(Zero))\n\
          main!(h) ->\n  n = argc!(h)\n  status!(h probe(n))"
     );
-    let p = crate::read_with_options(
+    let routines = Routines::builtin().with_word(word_bits);
+    let barb = crate::read_barb_with_options(
         &source,
-        &Routines::builtin().with_word(word_bits),
+        &routines,
         &OptimizeOptions {
             arithmetic_laws: false,
             constant_fold: false,
@@ -153,8 +160,12 @@ fn comparison_program(word_bits: u16, constructors: &str, expression: &str) -> P
         },
     )
     .unwrap();
-    validate(&p).unwrap();
-    p
+    let facts = crate::barb::analyze(&barb);
+    let lowered = crate::ir::lower(&barb, &facts, &routines).unwrap();
+    validate(&lowered).unwrap();
+    let optimized = crate::ir::optimize(&lowered, &crate::ir::OptimizeOptions::default());
+    validate(&optimized).unwrap();
+    (lowered, optimized)
 }
 
 fn comparison_arms(p: &Program, yes_tag: u64) {
@@ -198,28 +209,31 @@ fn comparison_arms_use_minimal_constants_and_a_wide_enough_join() {
                 ("equals(mod(n Succ(Zero)) Zero)", [1, 1, 1, 1], Some(true)),
                 ("less_than(n Zero)", [0, 0, 0, 0], Some(false)),
             ] {
-                let p = comparison_program(word_bits, constructors, expression);
-                comparison_arms(&p, yes_tag);
+                let (lowered, optimized) = comparison_programs(word_bits, constructors, expression);
+                comparison_arms(&lowered, yes_tag);
                 if known.is_some_and(|yes| if yes { yes_tag == 0 } else { yes_tag == 1 }) {
-                    let body = p.function(p.entry()).body().unwrap();
+                    let body = lowered.function(lowered.entry()).body().unwrap();
                     assert!(
-                        p.every(body)
+                        lowered
+                            .every(body)
                             .any(|op| matches!(op, Op::Convert { class, .. } if *class == ZERO)),
                         "a proven zero is narrowed after the join"
                     );
                 }
                 for (argc, answer) in [0, 1, 2, 33].into_iter().zip(answers) {
-                    let mut host = Host {
-                        argc,
-                        ..Host::default()
-                    };
-                    let result = evaluate_entry(&p, word_bits, &mut host);
-                    assert_eq!(
-                        result.halted().unwrap(),
-                        [BigUint::from(answer)],
-                        "{constructors}: {expression}, argc={argc}"
-                    );
-                    assert_eq!(host.calls, ["argc!", "exit!"]);
+                    for p in [&lowered, &optimized] {
+                        let mut host = Host {
+                            argc,
+                            ..Host::default()
+                        };
+                        let result = evaluate_entry(p, word_bits, &mut host);
+                        assert_eq!(
+                            result.halted().unwrap(),
+                            [BigUint::from(answer)],
+                            "{constructors}: {expression}, argc={argc}"
+                        );
+                        assert_eq!(host.calls, ["argc!", "exit!"]);
+                    }
                 }
             }
         }

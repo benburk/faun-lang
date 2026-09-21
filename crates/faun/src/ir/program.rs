@@ -106,7 +106,11 @@ impl Program {
     }
 
     /// The instructions of a region, each with what it defines.
-    pub fn walk(&self, region: RegionId) -> impl Iterator<Item = (&Op, &[ValueId])> {
+    ///
+    /// Backwards as well as forwards: which instruction a value is read by
+    /// is something a pass works out by reading a region the other way.
+    #[must_use]
+    pub fn walk(&self, region: RegionId) -> impl DoubleEndedIterator<Item = (&Op, &[ValueId])> {
         let ops = self.regions[region].ops;
         self.ops[ops.range()]
             .iter()

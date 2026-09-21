@@ -101,6 +101,36 @@ catalog. Source lowering only declares demanded functions. Targets own external
 call emission and internal function numbering; source IDs need not be dense
 emitted-body indices.
 
+## Passes
+
+`ir::optimize(program, &OptimizeOptions)` runs a small fixed schedule after
+validation, in this order, each stage at most once:
+
+1. `simplify`: recognise what lowering had no way to avoid writing. A branch
+   whose condition only asks which tag an earlier comparison answered becomes
+   a branch on that comparison, with its arms in whichever order the tags say.
+   A constant read at a `Fixed` width is written at that width instead of
+   being converted to it.
+2. `prune`: drop instructions nothing reads. A call may do something while
+   answering and a store does nothing else, so neither is dropped, and an `if`
+   holding either stays for what it holds rather than for what it answers.
+   A loop stays either way: this does not decide whether one comes back.
+
+Nothing here is a fixed point and nothing changes what a program means.
+Validation must precede it: a pass reads a program as structurally sound.
+
+A pass reads one program and writes another, because values, instructions and
+regions live in arenas addressed by position: removing an instruction where it
+stands would renumber every value after it. `ir::rewrite` owns the walk between
+the two -- the descent past `If` and `Loop`, and the map from an old value to
+whatever stands for it -- so a pass is only the decision it came to make. Data,
+globals, names, function declarations and function IDs survive a pass; values,
+instructions and regions do not, so nothing held across one names the same
+thing afterwards.
+
+`read` runs this schedule, so `--emit ir` shows the optimized program. The
+corpus in `faun::programs` is written directly in machine IR and does not.
+
 Source demand discovery, answer analysis, and emission share a lazy reachable-arm
 walk. Tagged matches analyze each arm once when planning that match, then compute
 suffix join widths backward; nested tests retain their narrower joins. Answer

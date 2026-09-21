@@ -67,8 +67,12 @@ mod legalize;
 mod lower;
 mod model;
 pub mod natural;
+mod optimize;
 mod pretty;
 mod program;
+mod prune;
+mod rewrite;
+mod simplify;
 mod validate;
 
 pub use builder::Builder;
@@ -79,6 +83,7 @@ pub use model::{
     Binary, Class, DataId, Definition, Exit, Function, FunctionId, Offset, Op, Origin, Range,
     Region, RegionId, Relation, Returns, Span, Terminator, ValueId, Width,
 };
+pub use optimize::{OptimizeOptions, optimize};
 pub use program::Program;
 pub use validate::validate;
 
@@ -98,6 +103,8 @@ mod layout_tests;
 mod legalize_tests;
 #[cfg(test)]
 mod natural_tests;
+#[cfg(test)]
+mod optimize_tests;
 #[cfg(test)]
 mod ownership_tests;
 #[cfg(test)]

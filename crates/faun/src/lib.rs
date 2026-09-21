@@ -38,7 +38,11 @@ pub fn read_with_options(
 ) -> Result<ir::Program, String> {
     let program = read_barb_with_options(text, routines, options)?;
     let facts = barb::analyze(&program);
-    ir::lower(&program, &facts, routines)
+    let machine = ir::lower(&program, &facts, routines)?;
+    // Machine passes read a structurally sound program and say nothing
+    // useful about one that is not, so this is where it is said.
+    ir::validate(&machine)?;
+    Ok(ir::optimize(&machine, &ir::OptimizeOptions::default()))
 }
 
 /// Read, validate and optimize Barb, stopping before representation selection.

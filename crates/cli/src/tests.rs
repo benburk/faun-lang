@@ -65,10 +65,15 @@ fn inspection_uses_normal_optimization_and_target_widths() {
         assert_eq!(ir.matches("= Add ").count(), 2);
         assert!(ir.contains("fixed0 = const 0"), "known zero selects fixed0");
         assert!(
-            ir.contains("v6: fixed0 = const 0\n  Yield(v6)"),
-            "the comparison's zero arm is narrow even though its join is fixed1"
+            ir.contains("v2: word = Less v0, v1\n  v5: fixed5 = if v2 then r1 else r2"),
+            "the guard branches on its comparison, with no tag in between"
         );
+        assert_eq!(ir.matches(" = if ").count(), 1, "one branch, not two");
         assert!(ir.contains("fixed5"), "the guarded value is narrowed");
+        assert!(
+            ir.contains(&format!("v1: fixed{} = const 32", target.word())),
+            "a constant is written at the width it is read at"
+        );
         assert_eq!(ir, inspect(EXAMPLE, target, Stage::PreparedIr).unwrap());
     }
 }
@@ -96,7 +101,7 @@ fn lowered_ir_can_be_inspected_before_target_acceptance() {
                   main!(h) ->
                     n = argc!(h)
                     too_wide = add(n n)
-                    exit!(h Zero)";
+                    exit!(h too_wide)";
     assert!(inspect(source, &Mos6502Sim65, Stage::Barb).is_ok());
     assert!(
         inspect(source, &Mos6502Sim65, Stage::Ir)
