@@ -370,6 +370,7 @@ fn assemble(program: &Program, heap: u16, stack: bool) -> Code {
     state.starts = (0..program.functions().len())
         .map(|_| state.asm.label())
         .collect();
+    state.needs = reads(program);
     state.plans = program
         .functions()
         .iter()
@@ -379,7 +380,6 @@ fn assemble(program: &Program, heap: u16, stack: bool) -> Code {
                 .map(|body| state.plan(body).expect("accepted frame size"))
         })
         .collect();
-    state.needs = reads(program);
     state.reset(heap, stack);
     // The entry goes first, so the reset routine runs into it rather than
     // jumping to it. Everything else follows in the order it was declared.
@@ -850,6 +850,9 @@ impl Lowering<'_> {
                         loops.push(body);
                         self.share_loop(body, &mut out);
                     }
+                    Op::Convert { value } => {
+                        self.share_convert(region, value, results[0], &mut out);
+                    }
                     _ => {}
                 }
             }
@@ -903,6 +906,44 @@ impl Lowering<'_> {
                 out.push((value, result));
             }
         }
+    }
+
+    /// A conversion that takes nothing off lives where what it converts
+    /// lives.
+    ///
+    /// Reading a value at a width it already fits is not something a machine
+    /// does; it is something a program says. Where the two are in one place
+    /// nothing is said at all.
+    fn share_convert(
+        &self,
+        region: RegionId,
+        value: ValueId,
+        result: ValueId,
+        out: &mut Vec<(ValueId, ValueId)>,
+    ) {
+        // Nothing taken off, and nothing wanted that the source has not
+        // got: a place holding one byte is not a place a two-byte reader
+        // can be pointed at, however little the value in it needs.
+        if bits(self.program.class(result)) < self.stored(value)
+            || (self.wide(result) && !self.wide(value))
+        {
+            return;
+        }
+        // What the region works out itself, so that nothing writes it again
+        // while the answer is still wanted -- a loop's parameter is written
+        // every time round.
+        if !written_in(self.program, region, value)
+            || !matches!(
+                self.source[value.index()],
+                Source::Home(_) | Source::Slot(_)
+            )
+            || out
+                .iter()
+                .any(|(v, p)| *v == value || *v == result || *p == result)
+        {
+            return;
+        }
+        out.push((result, value));
     }
 
     fn share_loop(&self, body: RegionId, out: &mut Vec<(ValueId, ValueId)>) {
@@ -1459,6 +1500,14 @@ impl Lowering<'_> {
     /// may be the high one.
     fn convert(&mut self, class: Class, value: ValueId, result: ValueId) {
         let kept = bits(class);
+        // Nothing to take off, nothing wanted that is not there, and
+        // already where it is going.
+        if kept >= self.stored(value)
+            && (!self.wide(result) || self.wide(value))
+            && self.same_place(value, result)
+        {
+            return;
+        }
         if kept <= 8 {
             self.narrow(kept, value, result);
             return;
