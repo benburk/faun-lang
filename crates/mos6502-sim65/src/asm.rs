@@ -1,8 +1,11 @@
-//! 6502 instruction encodings, and the labels that tie them together.
+//! 6502 instructions, and the labels that tie them together.
 //!
-//! The steps are kept before any of them is written, in the shape every
-//! tier above keeps a program: one array of them, another of the bytes the
-//! fixed ones are, and an index rather than a pointer to say which.
+//! An instruction is kept as what it does and what it does it to, not as
+//! the bytes it becomes, so that something reading these back can tell a
+//! load from a store without decoding one. Bytes are written once, at the
+//! end, when every address is known. The shape is the one every tier above
+//! keeps a program in: one array of them, and an index rather than a
+//! pointer to say which.
 //!
 //! A conditional is two bytes when its target is within the 127 the
 //! machine's relative branches reach, and five when it is not: the inverse
@@ -10,13 +13,11 @@
 //! are, and the addresses cannot be known until it is. So the widths settle
 //! first, by measuring the steps rather than by writing any of them.
 
-use faun::index::Range;
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Label(usize);
 
 /// A condition, as the branch that takes it.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Cc {
     Equal,
     NotEqual,
@@ -46,63 +47,175 @@ impl Cc {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Half {
     Low,
     High,
 }
 
+/// What an instruction does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Mnemonic {
+    Lda,
+    Sta,
+    Ldx,
+    Stx,
+    Ldy,
+    Iny,
+    Dex,
+    Asl,
+    Rol,
+    Lsr,
+    Ror,
+    And,
+    Ora,
+    Txs,
+    Clc,
+    Sec,
+    Adc,
+    Sbc,
+    Cmp,
+    Inc,
+    Dec,
+    Rts,
+    Jsr,
+    Jmp,
+}
+
+impl Mnemonic {
+    /// Whether it writes the hardware stack.
+    ///
+    /// Said here rather than where one is written, so that adding an
+    /// instruction that pushes -- `pha`, `php`, a software interrupt --
+    /// means saying so beside the instruction rather than remembering to
+    /// say so at every place that writes one.
+    const fn pushes(self) -> bool {
+        matches!(self, Self::Jsr)
+    }
+}
+
+/// What an instruction does it to, which is also how wide it is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Operand {
+    /// The instruction is the whole of it.
+    Implied,
+    Imm(u8),
+    /// A zero-page byte.
+    Zero(u8),
+    /// The byte at the address in a zero-page pair, stepped by `Y`.
+    Indirect(u8),
+    /// An address written out, for the simulator's hooks.
+    Abs(u16),
+}
+
+impl Operand {
+    const fn len(self) -> usize {
+        match self {
+            Self::Implied => 0,
+            Self::Imm(_) | Self::Zero(_) | Self::Indirect(_) => 1,
+            Self::Abs(_) => 2,
+        }
+    }
+}
+
 /// One step the lowering asked for, before anything says where it sits.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Inst {
-    /// Bytes that are the same wherever they land.
-    Fixed(Range),
+    /// An instruction, as the machine reads it.
+    Op {
+        mnemonic: Mnemonic,
+        operand: Operand,
+    },
     /// A conditional, which is two bytes where it reaches and five where it
     /// does not.
     Branch { cc: Cc, to: Label },
-    /// A `jmp` or a `jsr`, which spends two bytes on an address either way.
-    Absolute { opcode: u8, to: Label },
+    /// A `jmp` or a `jsr` naming a label, which spends two bytes on an
+    /// address either way.
+    Absolute { mnemonic: Mnemonic, to: Label },
     /// Half of an address, as an immediate.
     Half { to: Label, half: Half },
+    /// A literal word, for data the target lays down itself.
+    Word(u16),
 }
 
 impl Inst {
     /// What it costs, given whether a branch was found not to reach.
-    fn len(&self, far: bool) -> usize {
+    const fn len(&self, far: bool) -> usize {
         match *self {
-            Self::Fixed(bytes) => bytes.len(),
+            Self::Op { operand, .. } => 1 + operand.len(),
             Self::Branch { .. } if far => 5,
             Self::Absolute { .. } => 3,
-            // A branch that reaches, and an immediate: an opcode and one
-            // byte either way.
-            Self::Branch { .. } | Self::Half { .. } => 2,
+            // A branch that reaches, an immediate, and a word: two either
+            // way.
+            Self::Branch { .. } | Self::Half { .. } | Self::Word(_) => 2,
         }
+    }
+}
+
+/// The byte the machine reads for an instruction and the way it names what
+/// it works on.
+///
+/// # Panics
+/// On a pairing the machine has not got, which nothing here writes: the
+/// methods below are the only way to make one.
+const fn opcode(mnemonic: Mnemonic, operand: Operand) -> u8 {
+    use Mnemonic as M;
+    use Operand as O;
+    match (mnemonic, operand) {
+        (M::Lda, O::Imm(_)) => 0xA9,
+        (M::Lda, O::Zero(_)) => 0xA5,
+        (M::Lda, O::Indirect(_)) => 0xB1,
+        (M::Sta, O::Zero(_)) => 0x85,
+        (M::Sta, O::Indirect(_)) => 0x91,
+        (M::Ldx, O::Imm(_)) => 0xA2,
+        (M::Ldx, O::Zero(_)) => 0xA6,
+        (M::Stx, O::Zero(_)) => 0x86,
+        (M::Ldy, O::Imm(_)) => 0xA0,
+        (M::Iny, O::Implied) => 0xC8,
+        (M::Dex, O::Implied) => 0xCA,
+        (M::Asl, O::Zero(_)) => 0x06,
+        (M::Rol, O::Zero(_)) => 0x26,
+        (M::Lsr, O::Zero(_)) => 0x46,
+        (M::Ror, O::Zero(_)) => 0x66,
+        (M::And, O::Imm(_)) => 0x29,
+        (M::Ora, O::Zero(_)) => 0x05,
+        (M::Txs, O::Implied) => 0x9A,
+        (M::Clc, O::Implied) => 0x18,
+        (M::Sec, O::Implied) => 0x38,
+        (M::Adc, O::Zero(_)) => 0x65,
+        (M::Adc, O::Imm(_)) => 0x69,
+        (M::Sbc, O::Zero(_)) => 0xE5,
+        (M::Sbc, O::Imm(_)) => 0xE9,
+        (M::Cmp, O::Imm(_)) => 0xC9,
+        (M::Cmp, O::Zero(_)) => 0xC5,
+        (M::Inc, O::Zero(_)) => 0xE6,
+        (M::Dec, O::Zero(_)) => 0xC6,
+        (M::Rts, O::Implied) => 0x60,
+        (M::Jsr, O::Abs(_)) => 0x20,
+        (M::Jmp, O::Abs(_)) => 0x4C,
+        _ => panic!("no such instruction on this machine"),
     }
 }
 
 #[derive(Default)]
 pub(crate) struct Assembler {
-    /// The steps, in the order they were asked for.
+    /// The instructions, in the order they were asked for.
     insts: Vec<Inst>,
-    /// Every fixed step's bytes, end to end.
-    pool: Vec<u8>,
-    /// Where the step now being written began, if one is open.
-    open: Option<usize>,
-    /// Which step each label stands before, once it has been bound.
+    /// Which instruction each label stands before, once it has been bound.
     labels: Vec<Option<usize>>,
     origin: u16,
-    /// Whether anything written so far pushes onto the hardware stack.
-    ///
-    /// `jsr` is the only thing here that does, and `rts` the only thing that
-    /// pulls. Anything added that touches it -- `pha`, `php`, a software
-    /// interrupt -- says so here, or a program that needs a stack will be
-    /// written without one.
-    pushes: bool,
 }
 
 impl Assembler {
     /// Whether anything written pushes onto the hardware stack.
-    pub(crate) const fn pushes(&self) -> bool {
-        self.pushes
+    ///
+    /// Read off what was written rather than remembered while writing it,
+    /// so that nothing has to say it twice.
+    pub(crate) fn pushes(&self) -> bool {
+        self.insts.iter().any(|inst| match *inst {
+            Inst::Op { mnemonic, .. } | Inst::Absolute { mnemonic, .. } => mnemonic.pushes(),
+            Inst::Branch { .. } | Inst::Half { .. } | Inst::Word(_) => false,
+        })
     }
 
     pub(crate) fn new(origin: u16) -> Self {
@@ -112,23 +225,6 @@ impl Assembler {
         }
     }
 
-    /// Close the step being written, keeping what it wrote.
-    fn close(&mut self) {
-        if let Some(start) = self.open.take()
-            && self.pool.len() > start
-        {
-            self.insts
-                .push(Inst::Fixed(Range::of(start, self.pool.len() - start)));
-        }
-    }
-
-    /// Close the step being written and begin another. Every method below
-    /// starts with this, which is what makes a step a step.
-    fn step(&mut self) {
-        self.close();
-        self.open = Some(self.pool.len());
-    }
-
     pub(crate) fn label(&mut self) -> Label {
         self.labels.push(None);
         Label(self.labels.len() - 1)
@@ -136,7 +232,6 @@ impl Assembler {
 
     /// Say that a label stands here, which is before whatever comes next.
     pub(crate) fn bind(&mut self, label: Label) {
-        self.close();
         self.labels[label.0] = Some(self.insts.len());
     }
 
@@ -147,16 +242,25 @@ impl Assembler {
     /// # Panics
     ///
     /// If a label was never bound, or the image outgrew the machine.
-    pub(crate) fn finish(mut self) -> Vec<u8> {
-        self.close();
+    pub(crate) fn finish(self) -> Vec<u8> {
         let (far, at) = self.settled();
 
         let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
         for (id, inst) in self.insts.iter().enumerate() {
             match *inst {
-                Inst::Fixed(held) => bytes.extend_from_slice(&self.pool[held.range()]),
-                Inst::Absolute { opcode, to } => {
-                    bytes.push(opcode);
+                Inst::Op { mnemonic, operand } => {
+                    bytes.push(opcode(mnemonic, operand));
+                    match operand {
+                        Operand::Implied => {}
+                        Operand::Imm(held) | Operand::Zero(held) | Operand::Indirect(held) => {
+                            bytes.push(held);
+                        }
+                        Operand::Abs(held) => bytes.extend_from_slice(&held.to_le_bytes()),
+                    }
+                }
+                Inst::Word(held) => bytes.extend_from_slice(&held.to_le_bytes()),
+                Inst::Absolute { mnemonic, to } => {
+                    bytes.push(opcode(mnemonic, Operand::Abs(0)));
                     bytes.extend_from_slice(&self.address(&at, to).to_le_bytes());
                 }
                 Inst::Half { to, half } => {
@@ -249,202 +353,163 @@ impl Assembler {
     // Loads and stores. A pair is two zero-page bytes, low first.
 
     pub(crate) fn lda_imm(&mut self, value: u8) {
-        self.step();
-        self.emit(&[0xA9, value]);
+        self.op(Mnemonic::Lda, Operand::Imm(value));
     }
 
     /// Half of a label's address, as an immediate.
     pub(crate) fn lda_imm_half(&mut self, label: Label, half: Half) {
-        self.close();
         self.insts.push(Inst::Half { to: label, half });
     }
 
     /// A literal word, for data the target lays down itself.
     pub(crate) fn word(&mut self, value: u16) {
-        self.step();
-        self.emit(&value.to_le_bytes());
+        self.insts.push(Inst::Word(value));
     }
 
     pub(crate) fn lda_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0xA5, at]);
+        self.op(Mnemonic::Lda, Operand::Zero(at));
     }
 
     pub(crate) fn sta_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0x85, at]);
+        self.op(Mnemonic::Sta, Operand::Zero(at));
     }
 
     pub(crate) fn stx_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0x86, at]);
+        self.op(Mnemonic::Stx, Operand::Zero(at));
     }
 
     /// `a = [pair + y]`, and its mirror: the only way to reach a computed
     /// address, since the machine has no sixteen-bit register.
     pub(crate) fn lda_ind_y(&mut self, pair: u8) {
-        self.step();
-        self.emit(&[0xB1, pair]);
+        self.op(Mnemonic::Lda, Operand::Indirect(pair));
     }
 
     pub(crate) fn sta_ind_y(&mut self, pair: u8) {
-        self.step();
-        self.emit(&[0x91, pair]);
+        self.op(Mnemonic::Sta, Operand::Indirect(pair));
     }
 
     pub(crate) fn ldx_imm(&mut self, value: u8) {
-        self.step();
-        self.emit(&[0xA2, value]);
+        self.op(Mnemonic::Ldx, Operand::Imm(value));
     }
 
     pub(crate) fn ldx_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0xA6, at]);
+        self.op(Mnemonic::Ldx, Operand::Zero(at));
     }
 
     pub(crate) fn ldy_imm(&mut self, value: u8) {
-        self.step();
-        self.emit(&[0xA0, value]);
+        self.op(Mnemonic::Ldy, Operand::Imm(value));
     }
 
     pub(crate) fn iny(&mut self) {
-        self.step();
-        self.emit(&[0xC8]);
+        self.op(Mnemonic::Iny, Operand::Implied);
     }
 
     pub(crate) fn dex(&mut self) {
-        self.step();
-        self.emit(&[0xCA]);
+        self.op(Mnemonic::Dex, Operand::Implied);
     }
 
     pub(crate) fn asl_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0x06, at]);
+        self.op(Mnemonic::Asl, Operand::Zero(at));
     }
 
     pub(crate) fn rol_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0x26, at]);
+        self.op(Mnemonic::Rol, Operand::Zero(at));
     }
 
     pub(crate) fn lsr_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0x46, at]);
+        self.op(Mnemonic::Lsr, Operand::Zero(at));
     }
 
     pub(crate) fn ror_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0x66, at]);
+        self.op(Mnemonic::Ror, Operand::Zero(at));
     }
 
     pub(crate) fn and_imm(&mut self, value: u8) {
-        self.step();
-        self.emit(&[0x29, value]);
+        self.op(Mnemonic::And, Operand::Imm(value));
     }
 
     pub(crate) fn txs(&mut self) {
-        self.step();
-        self.emit(&[0x9A]);
+        self.op(Mnemonic::Txs, Operand::Implied);
     }
 
     // Arithmetic and comparison, all through the accumulator.
 
     pub(crate) fn clc(&mut self) {
-        self.step();
-        self.emit(&[0x18]);
+        self.op(Mnemonic::Clc, Operand::Implied);
     }
 
     pub(crate) fn sec(&mut self) {
-        self.step();
-        self.emit(&[0x38]);
+        self.op(Mnemonic::Sec, Operand::Implied);
     }
 
     pub(crate) fn adc_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0x65, at]);
+        self.op(Mnemonic::Adc, Operand::Zero(at));
     }
 
     pub(crate) fn adc_imm(&mut self, value: u8) {
-        self.step();
-        self.emit(&[0x69, value]);
+        self.op(Mnemonic::Adc, Operand::Imm(value));
     }
 
     pub(crate) fn sbc_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0xE5, at]);
+        self.op(Mnemonic::Sbc, Operand::Zero(at));
     }
 
     pub(crate) fn sbc_imm(&mut self, value: u8) {
-        self.step();
-        self.emit(&[0xE9, value]);
+        self.op(Mnemonic::Sbc, Operand::Imm(value));
     }
 
     pub(crate) fn cmp_imm(&mut self, value: u8) {
-        self.step();
-        self.emit(&[0xC9, value]);
+        self.op(Mnemonic::Cmp, Operand::Imm(value));
     }
 
     pub(crate) fn inc_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0xE6, at]);
+        self.op(Mnemonic::Inc, Operand::Zero(at));
     }
 
     pub(crate) fn dec_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0xC6, at]);
+        self.op(Mnemonic::Dec, Operand::Zero(at));
     }
 
     pub(crate) fn cmp_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0xC5, at]);
+        self.op(Mnemonic::Cmp, Operand::Zero(at));
     }
 
     pub(crate) fn ora_zp(&mut self, at: u8) {
-        self.step();
-        self.emit(&[0x05, at]);
+        self.op(Mnemonic::Ora, Operand::Zero(at));
     }
 
     // Control flow.
 
     pub(crate) fn jsr(&mut self, label: Label) {
-        self.pushes = true;
-        self.absolute(0x20, label);
+        self.absolute(Mnemonic::Jsr, label);
     }
 
     pub(crate) fn jmp(&mut self, label: Label) {
-        self.absolute(0x4C, label);
+        self.absolute(Mnemonic::Jmp, label);
     }
 
     /// A call to a fixed address, such as one of the simulator's hooks.
     pub(crate) fn jsr_abs(&mut self, at: u16, _back: Label) {
-        self.pushes = true;
-        self.step();
-        self.emit(&[0x20]);
-        self.emit(&at.to_le_bytes());
+        self.op(Mnemonic::Jsr, Operand::Abs(at));
     }
 
     pub(crate) fn jmp_abs(&mut self, at: u16) {
-        self.step();
-        self.emit(&[0x4C]);
-        self.emit(&at.to_le_bytes());
+        self.op(Mnemonic::Jmp, Operand::Abs(at));
     }
 
     pub(crate) fn rts(&mut self) {
-        self.step();
-        self.emit(&[0x60]);
+        self.op(Mnemonic::Rts, Operand::Implied);
     }
 
     pub(crate) fn branch(&mut self, cc: Cc, label: Label) {
-        self.close();
         self.insts.push(Inst::Branch { cc, to: label });
     }
 
-    fn absolute(&mut self, opcode: u8, label: Label) {
-        self.close();
-        self.insts.push(Inst::Absolute { opcode, to: label });
+    fn op(&mut self, mnemonic: Mnemonic, operand: Operand) {
+        self.insts.push(Inst::Op { mnemonic, operand });
     }
 
-    fn emit(&mut self, bytes: &[u8]) {
-        self.pool.extend_from_slice(bytes);
+    fn absolute(&mut self, mnemonic: Mnemonic, to: Label) {
+        self.insts.push(Inst::Absolute { mnemonic, to });
     }
 }
