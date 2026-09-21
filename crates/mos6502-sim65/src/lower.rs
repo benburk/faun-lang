@@ -370,6 +370,10 @@ fn assemble(program: &Program, heap: u16, stack: bool) -> Code {
     state.starts = (0..program.functions().len())
         .map(|_| state.asm.label())
         .collect();
+    // The simulator is told where the stack its hooks take arguments on is,
+    // and reads it without any instruction here saying so.
+    state.asm.read_outside(CSP);
+    state.asm.read_outside(CSP + 1);
     state.needs = reads(program);
     state.plans = program
         .functions()

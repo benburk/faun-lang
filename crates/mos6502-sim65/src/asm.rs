@@ -246,6 +246,13 @@ pub(crate) struct Assembler {
     acc: Acc,
     /// Labels said to be reached only by running into them.
     fallen: Vec<usize>,
+    /// Zero-page bytes something outside the program reads.
+    ///
+    /// What reads a byte is otherwise read off the instructions, and an
+    /// instruction is not the only thing that can: the simulator is told
+    /// where to find the stack it takes a hook's arguments on, and reads it
+    /// without any instruction here saying so.
+    outside: Vec<u8>,
 }
 
 impl Assembler {
@@ -258,6 +265,12 @@ impl Assembler {
             Inst::Op { mnemonic, .. } | Inst::Absolute { mnemonic, .. } => mnemonic.pushes(),
             Inst::Branch { .. } | Inst::Half { .. } | Inst::Word(_) => false,
         })
+    }
+
+    /// Say that something outside the program reads this byte, so that
+    /// nothing here takes a store to it for a store nobody wanted.
+    pub(crate) fn read_outside(&mut self, at: u8) {
+        self.outside.push(at);
     }
 
     pub(crate) fn new(origin: u16) -> Self {
@@ -366,8 +379,9 @@ impl Assembler {
     /// # Panics
     ///
     /// If a label was never bound, or the image outgrew the machine.
-    pub(crate) fn finish(self) -> Vec<u8> {
+    pub(crate) fn finish(mut self) -> Vec<u8> {
         self.check_nothing_jumps_where_nothing_should();
+        self.drop_unread_stores();
         let (far, at) = self.settled();
         let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
         for (id, inst) in self.insts.iter().enumerate() {
@@ -415,6 +429,89 @@ impl Assembler {
                 }
             }
         }
+    }
+
+    /// Leave out a store to a place nothing ever reads.
+    ///
+    /// The only reason to keep what the accumulator worked out is that
+    /// something reads it back, and where every reader took it from a
+    /// register the place it was kept in is written and never looked at.
+    ///
+    /// Whether anything reads one is a question about the whole program and
+    /// not about what follows the store, which is what makes it answerable
+    /// here: zero page is only ever reached directly. Every base an indirect
+    /// access goes through holds an address above the first page -- the
+    /// simulator's argument stack, a frame, a datum, or the heap -- so no
+    /// load through one can be the load of a byte kept here.
+    fn drop_unread_stores(&mut self) {
+        let read = self.bytes_read();
+        let kept: Vec<bool> = self
+            .insts
+            .iter()
+            .map(|inst| match *inst {
+                Inst::Op {
+                    mnemonic: Mnemonic::Sta | Mnemonic::Stx,
+                    operand: Operand::Zero(at),
+                } => read[usize::from(at)],
+                _ => true,
+            })
+            .collect();
+        if kept.iter().all(|held| *held) {
+            return;
+        }
+        self.keeping(&kept);
+    }
+
+    /// Which zero-page bytes anything reads.
+    fn bytes_read(&self) -> [bool; 256] {
+        let mut read = [false; 256];
+        for &at in &self.outside {
+            read[usize::from(at)] = true;
+        }
+        for inst in &self.insts {
+            let Inst::Op { mnemonic, operand } = *inst else {
+                continue;
+            };
+            match (mnemonic, operand) {
+                // A store is the one thing that reads nothing here.
+                (Mnemonic::Sta | Mnemonic::Stx, Operand::Zero(_)) => {}
+                // Through a pointer it reads the pointer, not what it points
+                // at, and what it points at is not here.
+                (_, Operand::Indirect(at)) => {
+                    read[usize::from(at)] = true;
+                    read[usize::from(at.wrapping_add(1))] = true;
+                }
+                // Everything else that names a byte here reads it, a
+                // read-modify-write included.
+                (_, Operand::Zero(at)) => read[usize::from(at)] = true,
+                _ => {}
+            }
+        }
+        read
+    }
+
+    /// Keep the instructions said to be kept, and move every label that
+    /// stood before one that is not.
+    ///
+    /// A label stands before whatever comes next, so one standing before an
+    /// instruction that goes stands before whatever that instruction stood
+    /// before.
+    fn keeping(&mut self, kept: &[bool]) {
+        let mut moved = Vec::with_capacity(kept.len() + 1);
+        let mut at = 0;
+        for held in kept {
+            moved.push(at);
+            at += usize::from(*held);
+        }
+        moved.push(at);
+        for label in self.labels.iter_mut().flatten() {
+            *label = moved[*label];
+        }
+        let mut insts = std::mem::take(&mut self.insts).into_iter();
+        self.insts = kept
+            .iter()
+            .filter_map(|held| insts.next().filter(|_| *held))
+            .collect();
     }
 
     /// Check that every label said to be only fallen into really is.
