@@ -154,4 +154,6 @@ struct Code {
     /// Where the code begins, which is after the data, and so where the
     /// machine has to be started.
     reset: u16,
+    /// Whether anything in it pushes onto the hardware stack.
+    pushes: bool,
 }

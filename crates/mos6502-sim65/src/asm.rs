@@ -90,9 +90,21 @@ pub(crate) struct Assembler {
     /// Which step each label stands before, once it has been bound.
     labels: Vec<Option<usize>>,
     origin: u16,
+    /// Whether anything written so far pushes onto the hardware stack.
+    ///
+    /// `jsr` is the only thing here that does, and `rts` the only thing that
+    /// pulls. Anything added that touches it -- `pha`, `php`, a software
+    /// interrupt -- says so here, or a program that needs a stack will be
+    /// written without one.
+    pushes: bool,
 }
 
 impl Assembler {
+    /// Whether anything written pushes onto the hardware stack.
+    pub(crate) const fn pushes(&self) -> bool {
+        self.pushes
+    }
+
     pub(crate) fn new(origin: u16) -> Self {
         Self {
             origin,
@@ -395,6 +407,7 @@ impl Assembler {
     // Control flow.
 
     pub(crate) fn jsr(&mut self, label: Label) {
+        self.pushes = true;
         self.absolute(0x20, label);
     }
 
@@ -404,6 +417,7 @@ impl Assembler {
 
     /// A call to a fixed address, such as one of the simulator's hooks.
     pub(crate) fn jsr_abs(&mut self, at: u16, _back: Label) {
+        self.pushes = true;
         self.step();
         self.emit(&[0x20]);
         self.emit(&at.to_le_bytes());

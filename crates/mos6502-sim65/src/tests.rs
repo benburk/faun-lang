@@ -13,7 +13,7 @@ const RUNNER: Option<&str> = Some("sim65");
 // Lower baselines when emission improves; explain any increase.
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("empty", 30),
-    ("exit zero", 20),
+    ("exit zero", 17),
     ("two and two", 45),
     ("hello world", 63),
     ("a call", 81),
@@ -34,10 +34,10 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("a long arm", 1008),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
-    ("exit", 20),
-    ("two-and-two", 20),
-    ("double", 20),
-    ("leave", 20),
+    ("exit", 17),
+    ("two-and-two", 17),
+    ("double", 17),
+    ("leave", 17),
     ("bool", 203),
     ("nat", 879),
     ("width", 196),
@@ -56,4 +56,31 @@ fn it_holds_what_a_program_holds() {
         refused.contains("holds 16 bits, and a value here needs 32"),
         "{refused}"
     );
+}
+
+/// Setting the stack pointer costs three bytes, and there is no cheaper way
+/// to reach a known one: nothing may assume where the simulator left it, and
+/// `X` is the only thing it can be set from. What a program can do is not
+/// need one -- nothing here pushes but `jsr`, so one that calls nothing has
+/// nothing to push.
+#[test]
+fn only_a_program_that_calls_something_sets_the_stack() {
+    // ldx #$FF, txs.
+    const SETS_IT: &[u8] = &[0xA2, 0xFF, 0x9A];
+    let held = |program: &faun::ir::Program| {
+        let artifacts = TARGET.compile(program).expect("scalar compilation");
+        let code = 12 + program.data().len() + program.globals().len();
+        artifacts[0].bytes[code..].starts_with(SETS_IT)
+    };
+    assert!(
+        !held(&shared::read(shared::EXIT_ZERO).expect("a program")),
+        "one that calls nothing"
+    );
+    assert!(
+        held(&faun::programs::calls_a_function()),
+        "one that calls something"
+    );
+    // A hook is reached by `jsr` like anything else, so asking the simulator
+    // for something counts as calling something.
+    assert!(held(&faun::programs::hello_world()), "one that writes");
 }

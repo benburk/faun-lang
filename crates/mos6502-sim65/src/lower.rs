@@ -230,8 +230,17 @@ const ROUNDS: usize = 32;
 /// itself rather than anything a program did.
 pub(crate) fn lower(program: &Program) -> Code {
     let mut heap = LOAD;
+    // Nothing here knows yet whether the program calls anything, and one
+    // that calls nothing needs no stack to call with. The first round asks
+    // the assembling, and dropping the two steps that set it can only take
+    // a call away, never add one, so the question is asked once.
+    let mut stack = true;
     for _ in 0..ROUNDS {
-        let code = assemble(program, heap);
+        let code = assemble(program, heap, stack);
+        if stack && !code.pushes {
+            stack = false;
+            continue;
+        }
         let end = code.reset + u16::try_from(code.bytes.len()).expect("an image within 64 KiB");
         if end <= heap {
             return code;
@@ -260,7 +269,7 @@ pub(crate) fn check_frames(program: &Program) -> Result<(), String> {
     Ok(())
 }
 
-fn assemble(program: &Program, heap: u16) -> Code {
+fn assemble(program: &Program, heap: u16, stack: bool) -> Code {
     // The data sits at the front of the image and the code after it, so the
     // code's own addresses depend on how much data there is.
     let data = LOAD;
@@ -280,7 +289,7 @@ fn assemble(program: &Program, heap: u16) -> Code {
                 .map(|body| state.plan(body).expect("accepted frame size"))
         })
         .collect();
-    state.reset(heap);
+    state.reset(heap, stack);
     // The entry goes first, so the reset routine runs into it rather than
     // jumping to it. Everything else follows in the order it was declared.
     let entry = program.entry();
@@ -293,6 +302,7 @@ fn assemble(program: &Program, heap: u16) -> Code {
     state.emit_pool();
 
     Code {
+        pushes: state.asm.pushes(),
         bytes: state.asm.finish(),
         reset: origin,
     }
@@ -346,11 +356,18 @@ impl<'a> Lowering<'a> {
 }
 
 impl Lowering<'_> {
-    /// The hardware stack, the two software stacks, the heap past the end
-    /// of the image, then the entry; its result is the program's status.
-    fn reset(&mut self, heap: u16) {
-        self.asm.ldx_imm(0xFF);
-        self.asm.txs();
+    /// The hardware stack where one is needed, the two software stacks, the
+    /// heap past the end of the image, then the entry; its result is the
+    /// program's status.
+    fn reset(&mut self, heap: u16, stack: bool) {
+        // Where the simulator leaves the stack pointer is not something a
+        // program may read, and there is no way to set it but through `X`.
+        // One that never calls anything never pushes, and then what it says
+        // about a stack nothing uses is nothing.
+        if stack {
+            self.asm.ldx_imm(0xFF);
+            self.asm.txs();
+        }
         if self.plans.iter().flatten().any(|plan| plan.frame > 0) {
             self.set_pair(FP, FRAMES_TOP);
         }
