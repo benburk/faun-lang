@@ -213,6 +213,18 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     }
 }
 
+/// Whether a call is the one asking how many arguments a program was handed.
+///
+/// It is the one routine here whose answer is the same every time it is
+/// asked, and the reset routine asks it once. What a call to it wants is
+/// where that answer was put.
+fn counted(program: &Program, function: FunctionId) -> bool {
+    program
+        .function(function)
+        .external()
+        .is_some_and(|symbol| program.name(symbol) == "argc!")
+}
+
 /// What a round may learn and never unlearn: that the heap has to start
 /// further up. It is not taken back, and an address is two bytes however
 /// high it is, so a heap further out never makes the code that names it
@@ -541,20 +553,29 @@ impl Lowering<'_> {
         }
 
         for (op, results) in program.walk(region) {
-            match *op {
+            let settled = match *op {
                 Op::Constant { value, .. } => {
                     self.source[results[0].index()] = Source::Const(value);
-                    continue;
+                    true
                 }
                 Op::AddressOf(data) => {
                     self.source[results[0].index()] = Source::Addr(data);
-                    continue;
+                    true
                 }
-                _ => {}
-            }
-            for &result in results {
-                held.push(result);
-                weight[result.index()] += each;
+                // The count was read once at reset and left at a pair
+                // nothing writes again, so a value asking for it is already
+                // where it lives and wants no place of its own.
+                Op::Call { function, .. } if counted(program, function) => {
+                    self.source[results[0].index()] = Source::Home(ARGC);
+                    true
+                }
+                _ => false,
+            };
+            if !settled {
+                for &result in results {
+                    held.push(result);
+                    weight[result.index()] += each;
+                }
             }
             for_each_operand(op, program, |value| {
                 weight[value.index()] += each;
