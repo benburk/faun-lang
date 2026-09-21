@@ -132,6 +132,78 @@ pub fn zero_conversion() -> Program {
     program
 }
 
+/// A value added to itself, where the low byte carries into the high one.
+///
+/// A doubling is a shift, and a target that says so has to put the bit
+/// leaving one byte into the next; only an input with a bit in the top of its
+/// low byte says whether it does. The value arrives as a parameter, because
+/// two constants are added before the program runs and nothing is shifted.
+///
+/// # Panics
+/// If there are more cases than a count can hold.
+#[must_use]
+pub fn doubles_across_bytes() -> Program {
+    let narrow = Class::fixed(15);
+    let wide = Class::fixed(16);
+    let (mut program, main) = Program::new("main");
+    let check = program.declare("double", &[narrow, wide], &[Class::Word]);
+    program.define(check, |b, args| {
+        let doubled = b.binary_at(wide, Binary::Add, args[0], args[0]);
+        let equal = b.compare(Relation::Equal, doubled, args[1]);
+        b.ret(&[equal]);
+    });
+    program.define(main, |b, _| {
+        let mut passed = b.constant(Class::Word, 0);
+        // Nothing to carry, the lowest bit that carries, a byte of them, and
+        // every bit the narrow class holds.
+        let cases = [
+            (0x0034, 0x0068),
+            (0x0080, 0x0100),
+            (0x00ff, 0x01fe),
+            (0x7fff, 0xfffe),
+        ];
+        for (input, expected) in cases {
+            let input = b.constant(narrow, input);
+            let expected = b.constant(wide, expected);
+            let equal = b.call_one(check, &[input, expected]);
+            passed = b.binary(Binary::Add, passed, equal);
+        }
+        let count = b.constant(
+            Class::Word,
+            u64::try_from(cases.len()).expect("a few cases"),
+        );
+        let failures = b.binary(Binary::Sub, count, passed);
+        b.ret(&[failures]);
+    });
+    program
+}
+
+/// A byte doubled, and then the number it was doubled from read again.
+///
+/// Doubling a byte can be one shift, which leaves an answer where the number
+/// that went in was. A target keeping track of what it has to hand has to say
+/// so, or the next read of that same number is left out as already there and
+/// the shifted answer stands in for it. Every operand here is known before
+/// the program runs on purpose: it is the number believed to be to hand that
+/// goes stale, so a runtime one would not say this.
+#[must_use]
+pub fn doubles_then_reads_the_same_number() -> Program {
+    let byte = Class::fixed(8);
+    let (mut program, main) = Program::new("main");
+    program.define(main, |b, _| {
+        let two = b.constant(byte, 2);
+        let doubled = b.binary_at(byte, Binary::Add, two, two);
+        let five = b.constant(byte, 5);
+        let apart = b.binary_at(byte, Binary::Add, two, five);
+        let total = b.binary_at(byte, Binary::Add, doubled, apart);
+        let expected = b.constant(byte, 11);
+        let wrong = b.binary_at(byte, Binary::Sub, total, expected);
+        let wrong = b.convert(Class::Word, wrong);
+        b.ret(&[wrong]);
+    });
+    program
+}
+
 /// Enough live products to occupy the 6502 home that once overlapped ARGC.
 /// Arithmetic must preserve platform state, not only its own answers.
 #[must_use]

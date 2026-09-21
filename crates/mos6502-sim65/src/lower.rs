@@ -78,7 +78,7 @@ enum Source {
 }
 
 /// Where an instruction can read a value without copying it anywhere first.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Operand {
     Imm(u16),
     /// A zero-page place, and whether a second byte of it is worth reading.
@@ -1585,29 +1585,21 @@ impl Lowering<'_> {
     }
 
     fn arithmetic(&mut self, op: Binary, left: Operand, right: Operand, dest: u8, width: Width) {
+        // A value added to itself is that value shifted up one, and the bit
+        // the shift puts in the carry is the bit an addition would have
+        // carried out -- thrown away at the top byte, taken in at the next.
+        // Reading the one value twice is what says this, so two values
+        // sharing a place say it too, and a place holds what it holds.
+        if op == Binary::Add && left == right {
+            self.double(left, dest, width);
+            return;
+        }
         // A step of one over a pair the result already occupies is an
         // increment, which carries into the high byte only on a wrap.
         if let (Operand::Zp { at, .. }, Operand::Imm(1), Width::Word) = (left, right, width)
             && at == dest
         {
-            let done = self.asm.label();
-            match op {
-                Binary::Add => {
-                    self.asm.inc_zp(dest);
-                    self.asm.branch(Cc::NotEqual, done);
-                    self.asm.inc_zp(dest + 1);
-                }
-                Binary::Sub => {
-                    self.asm.lda_zp(dest);
-                    self.asm.branch(Cc::NotEqual, done);
-                    self.asm.dec_zp(dest + 1);
-                }
-                _ => unreachable!("multiply/divide use bitwise legalization"),
-            }
-            self.asm.bind(done);
-            if matches!(op, Binary::Sub) {
-                self.asm.dec_zp(dest);
-            }
+            self.step(op, dest);
             return;
         }
         // Both low bytes are read before the low result is written, and both
@@ -1628,6 +1620,47 @@ impl Lowering<'_> {
         }
         self.load(left.byte(1));
         self.accumulate(op, right.byte(1));
+        self.asm.sta_zp(dest + 1);
+    }
+
+    /// A step of one over a pair, which reaches the high byte only where the
+    /// low one wrapped.
+    fn step(&mut self, op: Binary, dest: u8) {
+        let done = self.asm.label();
+        match op {
+            Binary::Add => {
+                self.asm.inc_zp(dest);
+                self.asm.branch(Cc::NotEqual, done);
+                self.asm.inc_zp(dest + 1);
+            }
+            Binary::Sub => {
+                self.asm.lda_zp(dest);
+                self.asm.branch(Cc::NotEqual, done);
+                self.asm.dec_zp(dest + 1);
+            }
+            _ => unreachable!("multiply/divide use bitwise legalization"),
+        }
+        self.asm.bind(done);
+        if matches!(op, Binary::Sub) {
+            self.asm.dec_zp(dest);
+        }
+    }
+
+    /// A value added to itself, as a shift of the accumulator.
+    ///
+    /// Neither the store of one byte nor the load of the next touches the
+    /// carry, so the bit leaving the low byte is still there to enter the
+    /// high one. A narrow operand reads as nought above its first byte, which
+    /// is what leaves the carry alone as the whole of a wider answer's top.
+    fn double(&mut self, value: Operand, dest: u8, width: Width) {
+        self.load(value.byte(0));
+        self.asm.asl();
+        self.asm.sta_zp(dest);
+        if width == Width::Byte {
+            return;
+        }
+        self.load(value.byte(1));
+        self.asm.rol();
         self.asm.sta_zp(dest + 1);
     }
 

@@ -208,7 +208,9 @@ const fn opcode(mnemonic: Mnemonic, operand: Operand) -> u8 {
         (M::Ldy, O::Imm(_)) => 0xA0,
         (M::Iny, O::Implied) => 0xC8,
         (M::Dex, O::Implied) => 0xCA,
+        (M::Asl, O::Implied) => 0x0A,
         (M::Asl, O::Zero(_)) => 0x06,
+        (M::Rol, O::Implied) => 0x2A,
         (M::Rol, O::Zero(_)) => 0x26,
         (M::Lsr, O::Zero(_)) => 0x46,
         (M::Ror, O::Zero(_)) => 0x66,
@@ -357,6 +359,22 @@ impl Assembler {
                     ..held
                 },
             },
+            // A shift of the accumulator itself works an answer out there,
+            // so neither the number it held nor the place it equalled is
+            // still true of it.
+            // A shift of the accumulator itself works an answer out there,
+            // so neither the number it held nor the place it equalled is
+            // still true of it. Without this a doubling of a byte leaves the
+            // tracker holding what went in, and the next read of that same
+            // number is left out as already loaded.
+            // A shift of the accumulator itself works an answer out there,
+            // so neither the number it held nor the place it equalled is
+            // still true of it. Without this a doubling of a byte leaves the
+            // tracker holding what went in, and the next read of that same
+            // number is left out as already loaded.
+            M::Asl | M::Rol | M::Lsr | M::Ror if matches!(operand, Operand::Implied) => {
+                Acc::NOTHING
+            }
             // Every other way of writing a place, which the accumulator
             // does not follow.
             M::Stx | M::Inc | M::Dec | M::Asl | M::Rol | M::Lsr | M::Ror => match operand {
@@ -656,6 +674,18 @@ impl Assembler {
 
     pub(crate) fn dex(&mut self) {
         self.op(Mnemonic::Dex, Operand::Implied);
+    }
+
+    /// Shift the accumulator up one. The bit leaving the top becomes the
+    /// carry, which is what a doubling throws away and what the next byte of
+    /// a wider one takes in.
+    pub(crate) fn asl(&mut self) {
+        self.op(Mnemonic::Asl, Operand::Implied);
+    }
+
+    /// The same, taking the carry in at the bottom.
+    pub(crate) fn rol(&mut self) {
+        self.op(Mnemonic::Rol, Operand::Implied);
     }
 
     pub(crate) fn asl_zp(&mut self, at: u8) {

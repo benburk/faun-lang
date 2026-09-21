@@ -389,6 +389,11 @@ fn runtime_arithmetic_boundaries_and_odd_widths() {
             );
         }
     }
+    assert_eq!(status(&programs::arithmetic::doubles_across_bytes()), 0);
+    assert_eq!(
+        status(&programs::arithmetic::doubles_then_reads_the_same_number()),
+        0
+    );
     assert_eq!(status(&programs::arithmetic::odd_conversion()), 0);
     assert_eq!(status(&programs::arithmetic::zero_conversion()), 0);
     assert_eq!(status(&programs::arithmetic::preserves_host_count()), 0);
