@@ -28,9 +28,9 @@ Applications define a bodyful `main! : Host -> []` and import their target-selec
 interface from `std.host`. The empty structural variant type `[]` has no values,
 so it marks computations that cannot return. `Host` currently contains immutable
 `argc: Nat`; its constructor stays private, while `exit! : Host Nat -> []` carries authority
-explicitly. Lowering synthesizes a
-parameterless `_start` entry, reads `argc!`, and erases the one-field startup
-record before Barb reaches machine IR.
+explicitly. Barb keeps `main!(host: Host)` as the entry and preserves ordinary
+record projection. Machine lowering represents the current one-field `Host`
+transparently; each target constructs it from its process startup convention.
 
 Lowering monomorphizes reachable globals and data types, compiles clause and
 record patterns, and defunctionalizes global functions, constructors, and

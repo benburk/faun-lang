@@ -30,8 +30,9 @@ pub struct Artifact {
 /// A machine, and everything below the IR that reaching it takes.
 ///
 /// Shared preparation checks layout and representation; each target checks
-/// its own ABI and image limits before emission. Register placement, calling
-/// sequences and file formats remain target-specific.
+/// its own ABI and image limits before emission. Named parameters on the
+/// logical entry are supplied by the target's process startup convention.
+/// Register placement, calling sequences and file formats remain target-specific.
 pub trait Target: fmt::Debug {
     /// What names it on a command line and in what a message says.
     fn name(&self) -> &'static str;
@@ -69,7 +70,7 @@ pub trait Target: fmt::Debug {
     /// Prefer [`Self::compile`], which establishes these preconditions.
     fn emit(&self, program: &Program) -> Vec<Artifact>;
 
-    /// Target-specific calling-convention and representation limits.
+    /// Target-specific calling-convention, logical-entry, and representation limits.
     ///
     /// This runs from [`Self::accepts`] after scalar class checks. The IR
     /// itself permits multivalue functions and regions; a target that cannot

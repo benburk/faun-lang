@@ -23,5 +23,6 @@ applications; it needs no blessed standard-library name. `Never` remains an
 ordinary available constructor spelling. Files under `hosts/`
 are target-selected modules mounted at `std.host`; each initial module provides
 `Host : {argc: Nat}` and bodyless `exit! : Host Nat -> []`. The
-`Host` constructor remains private, so only the synthesized startup adapter can
-create that authority value.
+`Host` constructor remains private. Barb nevertheless retains the target-provided
+value and its projections; the target constructs the represented `host` entry
+parameter in its physical startup adapter.

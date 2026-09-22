@@ -20,13 +20,16 @@
 
 use super::model::{Body, CtorId, Expr, ExprId, FnId, Range};
 use super::program::Program;
-use super::{Shape, shape};
+use super::{Shape, shape, single_field};
 pub use crate::facts::Facts as Bounds;
 
 /// Whether a value these bounds hold could be built with this constructor.
 /// Nought is not a `Succ` of anything and nothing above nought is `Zero`,
 /// and a tag is the one number it is.
 fn reaches(program: &Program, held: Bounds, spine: Shape, ctor: CtorId) -> bool {
+    if single_field(program, program.ctor(ctor).owner).is_some() {
+        return true;
+    }
     match spine {
         Shape::Spine { nil, .. } if ctor == nil => held.low == 0,
         Shape::Spine { .. } => held.high != Some(0),
@@ -66,9 +69,15 @@ pub(super) fn analyze(program: &Program, operations: &[Option<super::Operation>]
     let mut held = Propagation {
         params: (0..count)
             .map(|at| {
-                let held = program.params(FnId::at(at)).len();
-                let outside = entry == Some(FnId::at(at));
-                vec![outside.then_some(Bounds::ANY); held]
+                let id = FnId::at(at);
+                if entry == Some(id) {
+                    program
+                        .parameter_bounds(id)
+                        .map(|bounds| Some(bounds.unwrap_or(Bounds::ANY)))
+                        .collect()
+                } else {
+                    vec![None; program.params(id).len()]
+                }
             })
             .collect(),
         results: vec![None; count],
@@ -291,26 +300,7 @@ impl FunctionWalk<'_> {
     fn worked(&mut self, id: ExprId) -> Bounds {
         match self.program.expr(id) {
             Expr::Atom(atom) => self.scope[atom.0.index()],
-            Expr::Static(value) => {
-                let value = self.program.constant(value);
-                match value.view() {
-                    super::ConstantView::Natural(number) => {
-                        number.try_u64().map_or(Bounds::ANY, Bounds::at)
-                    }
-                    super::ConstantView::Constructor(ctor)
-                        if self
-                            .program
-                            .ctors(value.owner())
-                            .iter()
-                            .all(|c| self.program.types_of(c.fields).is_empty()) =>
-                    {
-                        Bounds::at(u64::from(self.program.tag(ctor.constructor())))
-                    }
-                    super::ConstantView::Constructor(_) | super::ConstantView::Spine(_) => {
-                        Bounds::ANY
-                    }
-                }
-            }
+            Expr::Static(value) => constant_bounds(self.program, self.program.constant(value)),
             Expr::Con(ctor, args) => self.built(ctor, args),
             Expr::Call(called, args) => self.call(called, args),
             Expr::Match(scrutinee, arms) => {
@@ -348,6 +338,13 @@ impl FunctionWalk<'_> {
     /// than what it wraps. A tag is which constructor it is.
     fn built(&self, ctor: CtorId, args: Range) -> Bounds {
         let owner = self.program.ctor(ctor).owner;
+        if single_field(self.program, owner).is_some() {
+            return self
+                .program
+                .atoms(args)
+                .first()
+                .map_or(Bounds::ANY, |atom| self.scope[atom.0.index()]);
+        }
         let Shape::Spine { nil, cons, .. } = shape(self.program, owner) else {
             return Bounds::at(u64::from(self.program.tag(ctor)));
         };
@@ -399,25 +396,30 @@ impl FunctionWalk<'_> {
 
     fn enter(&mut self, scrutinee: usize, ctor: CtorId) -> bool {
         let held = self.scope[scrutinee];
-        let spine = shape(self.program, self.program.ctor(ctor).owner);
+        let owner = self.program.ctor(ctor).owner;
+        let spine = shape(self.program, owner);
         if !reaches(self.program, held, spine, ctor) {
             return false;
         }
-        let field = match spine {
-            Shape::Spine { nil, .. } if ctor == nil => {
-                self.scope[scrutinee] = Bounds::at(0);
-                Bounds::NOTHING
-            }
-            Shape::Spine { .. } => {
-                self.scope[scrutinee] = Bounds {
-                    low: held.low.max(1),
-                    high: held.high,
-                };
-                self.scope[scrutinee].down()
-            }
-            Shape::Tagged => {
-                self.scope[scrutinee] = Bounds::at(u64::from(self.program.tag(ctor)));
-                Bounds::ANY
+        let field = if single_field(self.program, owner).is_some() {
+            held
+        } else {
+            match spine {
+                Shape::Spine { nil, .. } if ctor == nil => {
+                    self.scope[scrutinee] = Bounds::at(0);
+                    Bounds::NOTHING
+                }
+                Shape::Spine { .. } => {
+                    self.scope[scrutinee] = Bounds {
+                        low: held.low.max(1),
+                        high: held.high,
+                    };
+                    self.scope[scrutinee].down()
+                }
+                Shape::Tagged => {
+                    self.scope[scrutinee] = Bounds::at(u64::from(self.program.tag(ctor)));
+                    Bounds::ANY
+                }
             }
         };
         self.scope
@@ -432,6 +434,22 @@ impl FunctionWalk<'_> {
         }
         self.predicates.resize(self.scope.len(), None);
         true
+    }
+}
+
+fn constant_bounds(program: &Program, value: super::Constant<'_>) -> Bounds {
+    let value = super::single_field_constant(program, value);
+    match value.view() {
+        super::ConstantView::Natural(number) => number.try_u64().map_or(Bounds::ANY, Bounds::at),
+        super::ConstantView::Constructor(ctor)
+            if program
+                .ctors(value.owner())
+                .iter()
+                .all(|c| program.types_of(c.fields).is_empty()) =>
+        {
+            Bounds::at(u64::from(program.tag(ctor.constructor())))
+        }
+        super::ConstantView::Constructor(_) | super::ConstantView::Spine(_) => Bounds::ANY,
     }
 }
 

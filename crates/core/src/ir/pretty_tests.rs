@@ -31,8 +31,8 @@ fn distinguishes_pending_external_unit_and_never() {
     let stop = program.external("exit", &[Class::Word], Returns::Never);
     let pending = program.render();
     assert!(pending.contains("= pending r0"));
-    assert!(pending.contains("observe(address) -> () = external"));
-    assert!(pending.contains("exit(word) -> never = external"));
+    assert!(pending.contains("observe(v0: address) -> () = external"));
+    assert!(pending.contains("exit(v0: word) -> never = external"));
     program.define(main, |b, _| {
         let zero = b.constant(Class::Word, 0);
         b.call(stop, &[zero]);
@@ -52,7 +52,7 @@ fn named_calls_keep_ids_to_distinguish_duplicate_names() {
     let text = program.render();
     for fragment in [
         "fn f1 argc!() -> (word) = external",
-        "fn f2 argc!(word) -> (word) = r1",
+        "fn f2 argc!(v0: word) -> (word) = r1",
         "fn f5 argc!() -> (word) = external",
         "call argc!()  # f1",
         "call argc!()  # f5",

@@ -5,7 +5,7 @@
 pub use crate::index::Range;
 use crate::index::index;
 
-// `Symbol` is a name. The IR never reads the characters of one: names are
+// `Symbol` is a name. Most IR passes do not read the characters of one: names are
 // compared, hashed and copied as integers, and the string is read back only
 // to render it. The table belongs to the program, like every other pool
 // here, so a program is a self-contained value and two of them cannot
@@ -112,6 +112,12 @@ pub enum Definition {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Parameter {
+    pub name: Symbol,
+    pub bounds: Option<super::Bounds>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
     /// Diagnostic name; frontend declarations preserve the source spelling.
@@ -119,6 +125,8 @@ pub struct Function {
     pub name: Symbol,
     /// The types of its parameters, which are the first locals.
     pub params: Range,
+    /// Names and optional incoming range contracts, parallel to `params`.
+    pub(super) parameters: Range,
     pub result: TypeId,
     pub definition: Definition,
 }

@@ -66,6 +66,16 @@ fn loop_parameters_and_locals_do_not_escape() {
 }
 
 #[test]
+fn only_the_target_may_enter_the_logical_entry() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let values = b.call(main, &[]);
+        b.ret(&values);
+    });
+    rejects(&p, "only the target may enter");
+}
+
+#[test]
 fn values_from_another_function_are_not_in_scope() {
     let (mut p, main) = Program::new("main");
     let other = p.declare("other", &[Class::Word], &[]);

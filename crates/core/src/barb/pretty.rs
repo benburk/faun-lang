@@ -52,10 +52,9 @@ impl Program {
     fn render_function(&self, id: FnId, out: &mut String) {
         let function = self.function(id);
         let params: Vec<String> = self
-            .params(id)
-            .iter()
-            .enumerate()
-            .map(|(at, type_)| format!("v{at}: {}", self.name(self.type_(*type_).name)))
+            .parameter_names(id)
+            .zip(self.params(id))
+            .map(|(name, type_)| format!("{name}: {}", self.name(self.type_(*type_).name)))
             .collect();
         let _ = write!(
             out,

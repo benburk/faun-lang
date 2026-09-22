@@ -54,19 +54,17 @@ struct Code {
 
 #[cfg(test)]
 mod tests {
+    use faun_core::ir::Class;
     use faun_core::programs;
     use faun_core::targets::Target;
 
     use super::*;
 
-    fn exits_with_argc() -> Program {
-        let (mut program, main) = Program::new("main");
-        let routines = Aarch64Macos.routines();
-        let argc = routines.declare(&mut program, "argc!");
-        let exit = routines.declare(&mut program, "exit!");
-        program.define(main, |b, _| {
-            let count = b.call_one(argc, &[]);
-            b.call(exit, &[count]);
+    fn exits_with_host() -> Program {
+        let (mut program, main) = Program::new_with_params("main", &[("host", Class::Word)]);
+        let exit = Aarch64Macos.routines().declare(&mut program, "exit!");
+        program.define(main, |b, params| {
+            b.call(exit, &[params[0]]);
         });
         program
     }
@@ -87,7 +85,7 @@ mod tests {
             [0xD280_0000, 0xD280_0030, 0xD400_1001]
         );
         assert_eq!(
-            emitted_words(&exits_with_argc(), 4),
+            emitted_words(&exits_with_host(), 4),
             [0xAA00_03F3, 0xAA13_03E0, 0xD280_0030, 0xD400_1001]
         );
         assert_eq!(

@@ -6,7 +6,7 @@ use super::constant::{
     self, Constant, ConstantPool, ConstructionError, DecodeError, Held, Shape, Value,
 };
 use super::model::{
-    Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Symbol, Type,
+    Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Parameter, Symbol, Type,
     TypeDefinition, TypeId,
 };
 use super::terms::TermArena;
@@ -22,6 +22,8 @@ pub struct Program {
     pub(super) terms: TermArena,
     /// Field and parameter types.
     pub(super) types_pool: Vec<TypeId>,
+    /// Function parameter names and incoming range contracts.
+    pub(super) parameters: Vec<Parameter>,
     /// Known values, encoded. See [`super::constant`].
     pub(super) constants: ConstantPool,
     /// Every name the program uses, each once, end to end. A [`Symbol`] is
@@ -36,6 +38,42 @@ pub struct Program {
 #[must_use]
 pub fn shape(program: &Program, id: TypeId) -> Shape {
     constant::shape(program.type_info(), id)
+}
+
+/// The sole constructor and field of a one-field product.
+#[must_use]
+pub(crate) fn single_field(program: &Program, id: TypeId) -> Option<(CtorId, TypeId)> {
+    if program.ctors(id).len() != 1 {
+        return None;
+    }
+    let ctor = program.ctor_at(id, 0);
+    let [field] = program.fields(ctor) else {
+        return None;
+    };
+    Some((ctor, *field))
+}
+
+/// Peel nested one-field products from an already validated constant.
+#[must_use]
+pub(crate) fn single_field_constant<'a>(
+    program: &'a Program,
+    mut value: Constant<'a>,
+) -> Constant<'a> {
+    let mut budget = Budget::new(super::FoldLimits {
+        work: u64::MAX,
+        max_bytes: usize::MAX,
+        max_depth: program.types().len(),
+    });
+    while single_field(program, value.owner()).is_some() {
+        let super::ConstantView::Constructor(product) = value.view() else {
+            unreachable!("a one-field product is constructor encoded")
+        };
+        let fields = product
+            .fields(&mut budget)
+            .expect("validated constant fields can be revisited");
+        value = fields[0];
+    }
+    value
 }
 
 impl Program {
@@ -128,6 +166,22 @@ impl Program {
     #[must_use]
     pub fn params(&self, id: FnId) -> &[TypeId] {
         &self.types_pool[self.function(id).params.range()]
+    }
+
+    /// Parameter names, in signature order.
+    pub fn parameter_names(&self, id: FnId) -> impl Iterator<Item = &str> {
+        self.parameters[self.function(id).parameters.range()]
+            .iter()
+            .map(|parameter| self.name(parameter.name))
+    }
+
+    pub(super) fn parameter_bounds(
+        &self,
+        id: FnId,
+    ) -> impl Iterator<Item = Option<super::Bounds>> + '_ {
+        self.parameters[self.function(id).parameters.range()]
+            .iter()
+            .map(|parameter| parameter.bounds)
     }
 
     #[must_use]
@@ -245,11 +299,35 @@ impl Program {
     ///
     /// If the program outgrew the pools it may have.
     pub fn declare(&mut self, name: &str, params: &[TypeId], result: TypeId) -> FnId {
+        let names: Vec<_> = (0..params.len()).map(|at| format!("v{at}")).collect();
+        let params: Vec<_> = names
+            .iter()
+            .zip(params)
+            .map(|(name, &ty)| (name.as_str(), ty))
+            .collect();
+        self.declare_named(name, &params, result)
+    }
+
+    /// Declare a function with source-level parameter names.
+    pub fn declare_named(&mut self, name: &str, params: &[(&str, TypeId)], result: TypeId) -> FnId {
         let name = self.symbol(name);
-        let params = append_range(&mut self.types_pool, params);
+        let types: Vec<_> = params.iter().map(|(_, ty)| *ty).collect();
+        let types = append_range(&mut self.types_pool, &types);
+        let names: Vec<_> = params
+            .iter()
+            .map(|(parameter, _)| self.symbol(parameter))
+            .collect();
+        let start = self.parameters.len();
+        self.parameters.extend(
+            names
+                .into_iter()
+                .map(|name| Parameter { name, bounds: None }),
+        );
+        let parameters = Range::of(start, params.len());
         self.functions.push(Function {
             name,
-            params,
+            params: types,
+            parameters,
             result,
             definition: super::Definition::External {
                 symbol: name,
@@ -284,6 +362,16 @@ impl Program {
             panic!("only an external declaration can carry a range contract");
         };
         *contract = Some(bounds);
+    }
+
+    /// Supply the range promised for one incoming parameter.
+    ///
+    /// # Panics
+    /// If `at` is outside the function signature.
+    pub fn bound_parameter(&mut self, id: FnId, at: usize, bounds: super::Bounds) {
+        let range = self.functions[id].parameters;
+        assert!(at < range.len(), "parameter outside the function signature");
+        self.parameters[range.range().start + at].bounds = Some(bounds);
     }
 
     /// The function a target enters.

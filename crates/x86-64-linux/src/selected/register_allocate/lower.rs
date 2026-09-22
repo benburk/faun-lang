@@ -92,9 +92,7 @@ impl<'a> Lowering<'a> {
                 .iter()
                 .find(|function| function.entry == layout.block)
             {
-                if function.source == entry && self.argument_count_in_rbx {
-                    self.asm.load_stack(Reg::Rbx, 0);
-                }
+                self.enter_function(function.source, entry);
                 let spill_slots = self.spill_slots(function.source);
                 if spill_slots > 0 {
                     self.asm.open_frame(spill_slots);
@@ -116,6 +114,12 @@ impl<'a> Lowering<'a> {
             self.asm.syscall();
         }
         self.asm.finish()
+    }
+
+    fn enter_function(&mut self, function: FunctionId, entry: FunctionId) {
+        if function == entry && self.argument_count_in_rbx {
+            self.asm.load_stack(Reg::Rbx, 0);
+        }
     }
 
     fn configure_program(&mut self, entry: FunctionId) {

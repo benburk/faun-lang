@@ -37,6 +37,18 @@ impl Target for Wasm32Wasi {
         &["write", "exit!", "grow", "argc!"]
     }
 
+    fn limits(&self, program: &Program) -> Result<(), String> {
+        let entry = program.entry();
+        for (at, name) in program.parameter_names(entry).enumerate() {
+            if at != 0 || name != "host" {
+                return Err(format!(
+                    "wasm32-wasi cannot supply entry parameter {at} `{name}`"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn emit(&self, program: &Program) -> Vec<Artifact> {
         vec![Artifact {
             extension: ".wasm",

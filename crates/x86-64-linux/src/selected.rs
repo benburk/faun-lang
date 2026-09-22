@@ -1106,17 +1106,8 @@ pub(crate) fn select(source: &Program) -> Result<Selected, String> {
         let Some(body) = function.body() else {
             continue;
         };
-        let entry = selector.block(source_id, source.values(source.region(body).params));
-        for (at, spec) in selector.blocks[entry.index()]
-            .param_specs
-            .iter_mut()
-            .enumerate()
-        {
-            spec.constraint =
-                Constraint::Fixed(abi_register(at).ok_or_else(|| {
-                    "x86 function has more than six selected parameters".to_owned()
-                })?);
-        }
+        let params = source.values(source.region(body).params);
+        let entry = selector.function_entry(source_id, source_id == entry, params)?;
         selector.functions.push(Function {
             source: source_id,
             entry,
@@ -1136,6 +1127,39 @@ pub(crate) fn select(source: &Program) -> Result<Selected, String> {
 }
 
 impl Selector<'_> {
+    fn function_entry(
+        &mut self,
+        owner: FunctionId,
+        program_entry: bool,
+        params: &[ValueId],
+    ) -> Result<BlockId, String> {
+        if program_entry {
+            let block = self.block(owner, &[]);
+            for &value in params {
+                self.emit(
+                    block,
+                    Opcode::ArgumentCount,
+                    Some(value),
+                    &[],
+                    Immediate::None,
+                );
+            }
+            return Ok(block);
+        }
+        let block = self.block(owner, params);
+        for (at, spec) in self.blocks[block.index()]
+            .param_specs
+            .iter_mut()
+            .enumerate()
+        {
+            spec.constraint =
+                Constraint::Fixed(abi_register(at).ok_or_else(|| {
+                    "x86 function has more than six selected parameters".to_owned()
+                })?);
+        }
+        Ok(block)
+    }
+
     fn finish(self) -> Result<Selected, String> {
         let mut order = Vec::new();
         let mut block_params = Vec::new();

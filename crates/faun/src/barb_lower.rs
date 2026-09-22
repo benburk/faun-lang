@@ -56,9 +56,9 @@ pub fn program(
 
 /// Lower a checked `main! : Host -> []` application.
 ///
-/// The source entry keeps its explicit authority parameter. Lowering synthesizes
-/// a parameterless entry, obtains `argc` from the selected routine set, and
-/// represents the one-field startup record by that `Nat`.
+/// The source entry keeps its explicit `Host` parameter and ordinary record
+/// projection. Its target-supplied range contract follows that parameter into
+/// representation lowering.
 ///
 /// # Errors
 ///
@@ -196,7 +196,6 @@ struct Lowerer<'a> {
     constructor_ids: HashMap<(Symbol, Type), CtorId>,
     record_constructor_ids: HashMap<Type, CtorId>,
     record_wrappers: HashMap<Type, Type>,
-    erased_host_types: HashSet<Type>,
     closure_constructor_ids: HashMap<ClosureKey, CtorId>,
     function_ids: HashMap<FunctionKey, FnId>,
     apply_ids: HashMap<Type, FnId>,
@@ -222,22 +221,12 @@ impl<'a> Lowerer<'a> {
             constructor_ids: HashMap::new(),
             record_constructor_ids: HashMap::new(),
             record_wrappers: HashMap::new(),
-            erased_host_types: HashSet::new(),
             closure_constructor_ids: HashMap::new(),
             function_ids: HashMap::new(),
             apply_ids: HashMap::new(),
             output: barb::Program::default(),
         };
         lowerer.discover()?;
-        if let Some(host) = lowerer.host {
-            let host_ty = Type::Named(host.ids.host, Vec::new());
-            let record_ty = lowerer
-                .record_wrappers
-                .get(&host_ty)
-                .ok_or_else(|| error("Host must wrap its startup record"))?
-                .clone();
-            lowerer.erased_host_types.extend([host_ty, record_ty]);
-        }
         Ok(lowerer)
     }
 
@@ -245,13 +234,10 @@ impl<'a> Lowerer<'a> {
         self.declare_types();
         self.define_types()?;
         self.declare_functions()?;
+        self.configure_host_entry()?;
         self.define_functions()?;
         self.define_apply_functions()?;
-        let entry = if self.host.is_some() {
-            self.define_host_entry()?
-        } else {
-            self.function_ids[&self.specialized.entry]
-        };
+        let entry = self.function_ids[&self.specialized.entry];
         self.output.set_entry(entry);
         barb::validate(&self.output).map_err(error)?;
         Ok(self.output)
@@ -422,31 +408,19 @@ impl<'a> Lowerer<'a> {
 
     fn declare_types(&mut self) {
         for ty in &self.types {
-            if self.erased_host_types.contains(ty) {
-                continue;
-            }
             let name = type_name(ty, &self.resolved.symbols);
-            let id = if matches!(ty, Type::Empty) {
+            let id = if matches!(ty, Type::Empty | Type::Record(_)) {
                 self.output.declare_inline_type(&name)
             } else {
                 self.output.declare_type(&name)
             };
             self.type_ids.insert(ty.clone(), id);
         }
-        if !self.erased_host_types.is_empty() {
-            let nat = self.type_ids[&Type::Named(self.prelude.nat, Vec::new())];
-            for ty in &self.erased_host_types {
-                self.type_ids.insert(ty.clone(), nat);
-            }
-        }
     }
 
     fn define_types(&mut self) -> Result<(), LowerError> {
         let types: Vec<_> = self.types.iter().cloned().collect();
         for ty in types {
-            if self.erased_host_types.contains(&ty) {
-                continue;
-            }
             let id = self.type_ids[&ty];
             match &ty {
                 Type::Named(_, _) => {
@@ -538,10 +512,26 @@ impl<'a> Lowerer<'a> {
                         .is_some_and(|host| function.key.name == host.ids.exit && *index == 0)
                 })
                 .map(|(_, parameter)| self.type_ids[parameter])
+                .enumerate()
+                .map(|(index, parameter)| {
+                    let name = if self
+                        .host
+                        .is_some_and(|_| function.key == self.specialized.entry && index == 0)
+                    {
+                        "host".to_owned()
+                    } else {
+                        format!("v{index}")
+                    };
+                    (name, parameter)
+                })
+                .collect();
+            let borrowed: Vec<_> = parameters
+                .iter()
+                .map(|(name, ty)| (name.as_str(), *ty))
                 .collect();
             let result = self.type_ids[result];
             let name = function_name(&function.key, &self.resolved.symbols);
-            let id = self.output.declare(&name, &parameters, result);
+            let id = self.output.declare_named(&name, &borrowed, result);
             if let Some(provider) = function.provider {
                 self.output
                     .answered_by(id, self.resolved.symbols.text(provider));
@@ -604,7 +594,6 @@ impl<'a> Lowerer<'a> {
                 constructor_ids: &self.constructor_ids,
                 record_constructor_ids: &self.record_constructor_ids,
                 record_wrappers: &self.record_wrappers,
-                erased_host_types: &self.erased_host_types,
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
                 apply_ids: &self.apply_ids,
@@ -625,16 +614,17 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    fn define_host_entry(&mut self) -> Result<FnId, LowerError> {
-        let context = self.host.expect("called only for an application");
+    fn configure_host_entry(&mut self) -> Result<(), LowerError> {
+        let Some(context) = self.host else {
+            return Ok(());
+        };
         let host = context.ids;
         let host_ty = Type::Named(host.host, Vec::new());
         let record_ty = self
             .record_wrappers
             .get(&host_ty)
-            .ok_or_else(|| error("Host must wrap its startup record"))?
-            .clone();
-        let Type::Record(fields) = &record_ty else {
+            .ok_or_else(|| error("Host must wrap its startup record"))?;
+        let Type::Record(fields) = record_ty else {
             unreachable!("record wrappers map to record types")
         };
         if !matches!(fields.as_slice(), [(name, Type::Named(nat, arguments))]
@@ -642,27 +632,18 @@ impl<'a> Lowerer<'a> {
         {
             return Err(error("Host must contain exactly `argc: Nat`"));
         }
-        let nat_ty = Type::Named(host.nat, Vec::new());
-        let empty_ty = Type::Empty;
-        let argc = self.output.declare("argc!", &[], self.type_ids[&nat_ty]);
-        self.output.answered_by(argc, "argc!");
         let routine = context
             .routines
             .get("argc!")
-            .ok_or_else(|| error("the selected target does not provide `argc!`"))?;
+            .ok_or_else(|| error("the selected target cannot construct `Host`"))?;
         if context.routines.get("exit!").is_none() {
             return Err(error("the selected target does not provide `exit!`"));
         }
         if let Some(bounds) = routine.bounds() {
-            self.output.bound(argc, bounds);
+            let entry = self.function_ids[&self.specialized.entry];
+            self.output.bound_parameter(entry, 0, bounds);
         }
-        let entry = self.output.declare("_start", &[], self.type_ids[&empty_ty]);
-        let source_main = self.function_ids[&self.specialized.entry];
-        self.output.define(entry, |builder, _| {
-            let host = builder.call(argc, &[]);
-            builder.call(source_main, &[host])
-        });
-        Ok(entry)
+        Ok(())
     }
 
     fn define_apply_functions(&mut self) -> Result<(), LowerError> {
@@ -677,7 +658,6 @@ impl<'a> Lowerer<'a> {
                 constructor_ids: &self.constructor_ids,
                 record_constructor_ids: &self.record_constructor_ids,
                 record_wrappers: &self.record_wrappers,
-                erased_host_types: &self.erased_host_types,
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
                 apply_ids: &self.apply_ids,
@@ -1066,7 +1046,6 @@ struct EmitContext<'a> {
     constructor_ids: &'a HashMap<(Symbol, Type), CtorId>,
     record_constructor_ids: &'a HashMap<Type, CtorId>,
     record_wrappers: &'a HashMap<Type, Type>,
-    erased_host_types: &'a HashSet<Type>,
     closure_constructor_ids: &'a HashMap<ClosureKey, CtorId>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
     apply_ids: &'a HashMap<Type, FnId>,
@@ -1113,28 +1092,17 @@ fn emit_decision(
             owner,
             fields,
             decision,
-        } => {
-            if context.erased_host_types.contains(owner) {
-                let [field] = fields.as_slice() else {
-                    unreachable!("the startup record has one field")
-                };
+        } => builder.match_(
+            values[subject],
+            context.type_ids[owner],
+            |builder, _, atoms| {
                 let mut nested = values.clone();
-                nested.insert(*field, values[subject]);
+                for (value, atom) in fields.iter().zip(atoms) {
+                    nested.insert(*value, *atom);
+                }
                 emit_decision(context, builder, decision, &nested)
-            } else {
-                builder.match_(
-                    values[subject],
-                    context.type_ids[owner],
-                    |builder, _, atoms| {
-                        let mut nested = values.clone();
-                        for (value, atom) in fields.iter().zip(atoms) {
-                            nested.insert(*value, *atom);
-                        }
-                        emit_decision(context, builder, decision, &nested)
-                    },
-                )
-            }
-        }
+            },
+        ),
         Decision::Guard {
             condition,
             locals,
@@ -1229,14 +1197,7 @@ fn emit_expr(
                 .collect::<Vec<_>>();
             fields.sort_by_key(|(name, _)| *name);
             let fields: Vec<_> = fields.into_iter().map(|(_, field)| field).collect();
-            if context.erased_host_types.contains(&expression.ty) {
-                let [field] = fields.as_slice() else {
-                    unreachable!("the startup record has one field")
-                };
-                *field
-            } else {
-                builder.con(context.record_constructor_ids[&expression.ty], &fields)
-            }
+            builder.con(context.record_constructor_ids[&expression.ty], &fields)
         }
         ExprKind::Project(receiver, field) => {
             let atom = emit_expr(context, builder, receiver, locals);
@@ -1273,9 +1234,6 @@ fn emit_projection(
     receiver_ty: &Type,
     field: Symbol,
 ) -> Atom {
-    if context.erased_host_types.contains(receiver_ty) {
-        return receiver;
-    }
     if let Type::Record(fields) = receiver_ty {
         let index = fields
             .iter()
@@ -1523,12 +1481,15 @@ mod tests {
             let mut program = application(&resolved, &checked, &prelude, &host, &routines).unwrap();
             barb::optimize(&mut program, &barb::OptimizeOptions::default());
             let rendered = program.render();
-            assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\n\n"));
-            assert!(rendered.contains("main!(v0: Nat) -> [] =\n  exit!(v0)"));
-            assert!(rendered.contains("_start() -> [] =\n  v0 = argc!\n  exit!(v0)"));
+            assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\nHost = Host({argc: Nat})\n\n"));
+            assert!(rendered.contains("main!(host: Host) -> [] ="));
+            assert!(rendered.contains("Host(v1) =>\n      match v1\n        Record(v2)"));
+            assert!(!rendered.contains("argc!"));
+            assert!(!rendered.contains("_start"));
             assert!(!rendered.lines().any(|line| line == "[]"));
             assert!(!rendered.contains('$'));
-            faun_core::machine(&program, &routines).unwrap();
+            let machine = faun_core::machine(&program, &routines).unwrap();
+            assert_eq!(machine.parameter_name(machine.entry(), 0), "host");
         }
     }
 

@@ -21,11 +21,10 @@ pub fn validate(program: &Program) -> Result<(), String> {
         return Err("missing entry function".into());
     };
     if entry.body().is_none()
-        || !program.signature(entry.params).is_empty()
         || !matches!(entry.returns, Returns::Values(_))
         || program.signature(entry.returns.classes()) != [Class::Word]
     {
-        return Err("entry must take nothing and return one word".into());
+        return Err("entry must have a body and return one word".into());
     }
     let mut checker = Checker {
         program,
@@ -122,7 +121,16 @@ impl References<'_> {
             if matches!(function.definition, Definition::Declared(_)) {
                 return Err(format!("function `{name}` has not been defined"));
             }
-            slice(&p.signature, function.params)?;
+            let params = slice(&p.signature, function.params)?;
+            let names = slice(&p.parameters, function.parameters)?;
+            if params.len() != names.len() {
+                return Err(format!(
+                    "function `{name}` has the wrong number of parameter names"
+                ));
+            }
+            for parameter in names {
+                self.symbol(parameter.name)?;
+            }
             slice(&p.signature, function.returns.classes())?;
             if let Some(body) = function.body() {
                 self.region(body)?;
@@ -507,6 +515,9 @@ impl Checker<'_> {
         let Op::Call { function, args } = op else {
             unreachable!("only calls")
         };
+        if function == p.entry() {
+            return Err("calls the logical entry, which only the target may enter".into());
+        }
         let callee = &p.functions[function];
         let what = format!("calls `{}`", p.name(callee.name));
         self.given(p.values(args), p.signature(callee.params), &what)?;

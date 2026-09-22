@@ -113,9 +113,10 @@ reachable calls, specializes polymorphic globals and nominal data, then
 optimizes and prints the resulting Barb program. `--emit machine` continues
 through representation selection and machine-IR optimization, stopping before
 target preparation. Ordinary `faun build` continues through preparation and
-artifact emission. Lowering synthesizes a
-parameterless `_start` entry which calls the target's `argc!` provider. The one-field
-`Host` record is represented by that `Nat`, while source calls to `exit!` erase
+artifact emission. Barb keeps `main!(host: Host)` as its entry and preserves
+`Host` construction and record projection. Machine lowering represents the current
+one-field host transparently, and each target constructs the named `host` entry
+value from its physical startup convention. Source calls to `exit!` erase
 the authority argument before machine IR checks the provider signature.
 
 Global functions, constructor functions, and lambdas with captures all use the

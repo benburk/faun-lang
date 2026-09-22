@@ -2,13 +2,16 @@
 
 use super::builder::Builder;
 use super::model::{
-    Class, DataId, Definition, Exit, Function, FunctionId, Op, Origin, Range, Region, RegionId,
-    Returns, Span, Symbol, ValueId,
+    Class, DataId, Definition, Exit, Function, FunctionId, Op, Origin, Parameter, Range, Region,
+    RegionId, Returns, Span, Symbol, ValueId,
 };
 use crate::index::{Pool, append_range};
 
-/// An empty construction state by default. The first function is the entry;
-/// validation requires it to have a body, no parameters, and one Word result.
+/// An empty construction state by default.
+///
+/// The first function is the logical entry; validation requires it to have a
+/// body and one Word result, and rejects ordinary calls to it. Targets alone
+/// enter it and supply named parameters from their process startup convention.
 #[derive(Clone, Debug, Default)]
 pub struct Program {
     /// Absent until a representation pass serializes target-sized data.
@@ -24,6 +27,9 @@ pub struct Program {
     pub(super) classes: Pool<ValueId, Class>,
     /// The classes a function takes and answers.
     pub(super) signature: Vec<Class>,
+    /// Logical parameter names, in one run per function. Targets may use
+    /// entry names to choose values from their startup convention.
+    pub(super) parameters: Vec<Parameter>,
     pub(super) ops: Vec<Op>,
     /// What each instruction defines, beside it rather than in it: a pass
     /// that does not care never reads this array.
@@ -72,6 +78,24 @@ impl Program {
     #[must_use]
     pub fn signature(&self, range: Range) -> &[Class] {
         &self.signature[range.range()]
+    }
+
+    /// Parameter names, in signature order.
+    pub fn parameter_names(&self, function: FunctionId) -> impl Iterator<Item = &str> {
+        self.parameters[self.functions[function].parameters.range()]
+            .iter()
+            .map(|parameter| self.name(parameter.name))
+    }
+
+    /// The name of one parameter.
+    ///
+    /// # Panics
+    /// If `function` is invalid or `at` is outside its signature.
+    #[must_use]
+    pub fn parameter_name(&self, function: FunctionId, at: usize) -> &str {
+        self.parameter_names(function)
+            .nth(at)
+            .expect("a parameter in the function signature")
     }
 
     /// The name a symbol stands for.
@@ -277,13 +301,18 @@ impl Program {
 }
 
 impl Program {
-    /// A program and its entry function, which takes nothing and returns one
-    /// word, the exit status. Unlike `default`, this reserves the entry before
-    /// other declarations. No environment or builtin catalog is installed.
+    /// A program and its parameterless entry function, returning one word.
     #[must_use]
     pub fn new(entry: &str) -> (Self, FunctionId) {
+        Self::new_with_params(entry, &[])
+    }
+
+    /// A program and its logical entry function. Targets supply these named
+    /// parameters from their process startup convention.
+    #[must_use]
+    pub fn new_with_params(entry: &str, params: &[(&str, Class)]) -> (Self, FunctionId) {
         let mut program = Self::default();
-        let entry = program.declare(entry, &[], &[Class::Word]);
+        let entry = program.declare_named(entry, params, &[Class::Word]);
         (program, entry)
     }
 
@@ -341,8 +370,24 @@ impl Program {
         params: &[Class],
         returns: Returns<&[Class]>,
     ) -> FunctionId {
+        let names: Vec<_> = (0..params.len()).map(|at| format!("v{at}")).collect();
+        let params: Vec<_> = names
+            .iter()
+            .zip(params)
+            .map(|(name, &class)| (name.as_str(), class))
+            .collect();
+        self.external_named(name, &params, returns)
+    }
+
+    /// Declare an external with explicit parameter names.
+    pub fn external_named(
+        &mut self,
+        name: &str,
+        params: &[(&str, Class)],
+        returns: Returns<&[Class]>,
+    ) -> FunctionId {
         let name = self.symbol(name);
-        let params = self.sign(params);
+        let (params, parameters) = self.sign_named(params);
         let returns = match returns {
             Returns::Never => Returns::Never,
             Returns::Values(classes) => Returns::Values(self.sign(classes)),
@@ -350,6 +395,7 @@ impl Program {
         self.functions.push(Function {
             name,
             params,
+            parameters,
             returns,
             definition: Definition::External,
         })
@@ -358,8 +404,25 @@ impl Program {
     /// Reserve parameters and a root slot, so a body may call a function
     /// declared after it, or itself. Validation rejects unbuilt declarations.
     pub fn declare(&mut self, name: &str, params: &[Class], returns: &[Class]) -> FunctionId {
-        let values = self.mint(params);
-        let params = self.sign(params);
+        let names: Vec<_> = (0..params.len()).map(|at| format!("v{at}")).collect();
+        let params: Vec<_> = names
+            .iter()
+            .zip(params)
+            .map(|(name, &class)| (name.as_str(), class))
+            .collect();
+        self.declare_named(name, &params, returns)
+    }
+
+    /// Reserve a function whose parameters retain the supplied names.
+    pub fn declare_named(
+        &mut self,
+        name: &str,
+        params: &[(&str, Class)],
+        returns: &[Class],
+    ) -> FunctionId {
+        let classes: Vec<_> = params.iter().map(|(_, class)| *class).collect();
+        let values = self.mint(&classes);
+        let (params, parameters) = self.sign_named(params);
         let body = self.regions.push(Region {
             params: values,
             ops: Range::default(),
@@ -370,6 +433,7 @@ impl Program {
         self.functions.push(Function {
             name,
             params,
+            parameters,
             returns: Returns::Values(returns),
             definition: Definition::Declared(body),
         })
@@ -378,7 +442,18 @@ impl Program {
     /// Declare a function that never returns. Like `declare`, it must be
     /// defined before validation, even when nothing calls it yet.
     pub fn declare_never(&mut self, name: &str, params: &[Class]) -> FunctionId {
-        let id = self.declare(name, params, &[]);
+        let names: Vec<_> = (0..params.len()).map(|at| format!("v{at}")).collect();
+        let params: Vec<_> = names
+            .iter()
+            .zip(params)
+            .map(|(name, &class)| (name.as_str(), class))
+            .collect();
+        self.declare_never_named(name, &params)
+    }
+
+    /// Reserve a nonreturning function with explicit parameter names.
+    pub fn declare_never_named(&mut self, name: &str, params: &[(&str, Class)]) -> FunctionId {
+        let id = self.declare_named(name, params, &[]);
         self.functions[id].returns = Returns::Never;
         id
     }
@@ -433,6 +508,16 @@ impl Program {
     /// Hold a run of classes, for a signature.
     fn sign(&mut self, classes: &[Class]) -> Range {
         append_range(&mut self.signature, classes)
+    }
+
+    fn sign_named(&mut self, params: &[(&str, Class)]) -> (Range, Range) {
+        let classes: Vec<_> = params.iter().map(|(_, class)| *class).collect();
+        let classes = self.sign(&classes);
+        let names: Vec<_> = params.iter().map(|(name, _)| self.symbol(name)).collect();
+        let start = self.parameters.len();
+        self.parameters
+            .extend(names.into_iter().map(|name| Parameter { name }));
+        (classes, Range::of(start, params.len()))
     }
 
     /// One value of `class`, and the run of one that names it.

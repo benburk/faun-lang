@@ -176,10 +176,11 @@ the frontend now keeps it.
 - Primary applications define the exact, bodyful entry `main! : Host -> []`
   and import `Host` and `exit!` from the compiler-mounted `std.host` module.
 - Each initial host declares private-constructor `Host : {argc: Nat}` and
-  bodyless `exit! : Host Nat -> []`. Lowering synthesizes `_start`, reads the
-  target's `argc!` provider, represents the one-field startup record as that
-  `Nat`, and removes the
-  authority argument before calling the machine provider.
+  bodyless `exit! : Host Nat -> []`. Barb keeps `main!(host: Host)` as its
+  entry, including the `Host` wrapper, startup record, and projections. Machine
+  lowering represents the current one-field host transparently; each target
+  constructs the named `host` entry value, while lowering removes the authority
+  argument before calling the machine provider.
 - `platform::Routines`, a set a program is read against, with `builtin()`
   and `push`. The set moves into the targets.
 - `Target::provides`, the names a target answers for. `accepts` refuses the
@@ -196,8 +197,8 @@ the frontend now keeps it.
   `Convert` when a value does not fit what a routine takes, which is the
   machine deciding where `Op::Convert`'s own doc says a program asks. Latent
   while every routine takes a word.
-- **Only the count is exposed.** `argc!` is the private provider used to build
-  `Host.argc`, and every machine answers it differently: Linux leaves it on the
+- **Only the count is exposed.** The target constructs the represented `host`
+  entry value from `argc`, and every machine obtains it differently: Linux leaves it on the
   startup stack, WASI reports it through a call, and the simulator has a hook.
   Argument strings still need computed aggregates to have a representation.
 - **Narrowing needs recognition.** A program proves a value fits by clamping

@@ -8,6 +8,8 @@
 //!   `Zero` is nought, `Succ(n)` is `n + 1`, and a match tests for nought.
 //! - a type with no constructors has no values, so a term answering one
 //!   does not answer: what it does is laid out, and nothing after it is.
+//! - a one-constructor, one-field product has the representation of its field;
+//!   construction and projection add no machine operation.
 //!
 //! Targets without arbitrary-precision support reject that class explicitly.
 
@@ -41,13 +43,20 @@ pub fn lower(
     // Only values actually lowered need a representation. Merely declaring
     // a library type (or retaining an old expression in the arena) does not.
     let demand = Demand::discover(program, facts, entry)?;
-    let (mut machine, main) = Program::new(program.name(program.function(entry).name));
+    let entry_params = demand.named_params(entry);
+    let borrowed: Vec<_> = entry_params
+        .iter()
+        .map(|(name, class)| (name.as_str(), *class))
+        .collect();
+    let (mut machine, main) =
+        Program::new_with_params(program.name(program.function(entry).name), &borrowed);
     let callees = declare(&demand, routines, &mut machine, (entry, main))?;
 
     let lowering = Lowering {
         barb: program,
         facts,
         carries: demand.carries,
+        takes: demand.takes,
         callees,
     };
     for (at, callee) in lowering.callees.iter().enumerate() {
@@ -103,15 +112,20 @@ fn declare<'a>(
         }
         let function = program.function(id);
         let (params, returns) = demand.signature(id);
+        let named = demand.named_params(id);
+        let named: Vec<_> = named
+            .iter()
+            .map(|(name, class)| (name.as_str(), *class))
+            .collect();
         let name = program.name(function.name);
         // External functions carry the provider's machine contract. They
         // share function IDs and calls with bodies, not the narrowing policy.
         callees.push(match function.definition {
             barb::Definition::Body(_) => {
                 Callee::Function(if uninhabited(program, function.result) {
-                    machine.declare_never(name, &params)
+                    machine.declare_never_named(name, &named)
                 } else {
-                    machine.declare(name, &params, &returns)
+                    machine.declare_named(name, &named, &returns)
                 })
             }
             barb::Definition::External { symbol, .. } => {
@@ -123,8 +137,9 @@ fn declare<'a>(
                         "`{outside}` disagrees with `{name}` about returning"
                     ));
                 }
+                let parameter_names: Vec<_> = named.iter().map(|(name, _)| *name).collect();
                 Callee::External {
-                    id: wanted.declare(machine),
+                    id: wanted.declare_named(machine, &parameter_names),
                     routine: wanted,
                 }
             }
@@ -207,6 +222,8 @@ struct Demand<'a> {
     facts: &'a barb::Facts,
     reached: Vec<bool>,
     waiting: Vec<barb::FnId>,
+    /// Parameters whose values survive into the machine calling convention.
+    takes: Vec<Vec<bool>>,
     // Every lowered introduction must demand its type first. Undemanded is
     // distinct from erased, so a missed visit cannot silently discard a value.
     carries: Vec<Storage>,
@@ -223,6 +240,18 @@ impl<'a> Demand<'a> {
             facts,
             reached: vec![false; program.functions().len()],
             waiting: vec![entry],
+            takes: program
+                .functions()
+                .iter()
+                .enumerate()
+                .map(|(at, function)| {
+                    let id = barb::FnId::at(at);
+                    vec![
+                        function.body().is_none() || facts.operation(id).is_some();
+                        program.params(id).len()
+                    ]
+                })
+                .collect(),
             carries: vec![Storage::Undemanded; program.types().len()],
         };
         while let Some(id) = demand.waiting.pop() {
@@ -230,27 +259,86 @@ impl<'a> Demand<'a> {
                 continue;
             }
             let function = program.function(id);
-            for &ty in program.params(id).iter().chain([&function.result]) {
-                demand.type_(ty)?;
-            }
+            demand.type_(function.result)?;
             if facts.operation(id).is_none()
                 && let Some(body) = function.body()
             {
                 demand.body(body)?;
             }
         }
+        demand.discover_parameters();
+        demand.represent_parameters()?;
         Ok(demand)
     }
 
-    /// Erased parameters and results take no machine slot.
+    fn represent_parameters(&mut self) -> Result<(), String> {
+        for at in 0..self.program.functions().len() {
+            if !self.reached[at] {
+                continue;
+            }
+            let id = barb::FnId::at(at);
+            let types: Vec<_> = self
+                .program
+                .params(id)
+                .iter()
+                .zip(&self.takes[at])
+                .filter_map(|(&ty, &used)| used.then_some(ty))
+                .collect();
+            for ty in types {
+                self.type_(ty)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn discover_parameters(&mut self) {
+        loop {
+            let previous = self.takes.clone();
+            let mut changed = false;
+            for at in 0..self.program.functions().len() {
+                let id = barb::FnId::at(at);
+                if !self.reached[at] || self.facts.operation(id).is_some() {
+                    continue;
+                }
+                let Some(body) = self.program.function(id).body() else {
+                    continue;
+                };
+                let mut found = vec![false; self.program.params(id).len()];
+                self.demanded_parameters(body, &previous, &mut found);
+                for (held, found) in self.takes[at].iter_mut().zip(found) {
+                    if found && !*held {
+                        *held = true;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    fn named_params(&self, id: barb::FnId) -> Vec<(String, Class)> {
+        self.program
+            .parameter_names(id)
+            .zip(self.program.params(id))
+            .zip(self.facts.takes(id))
+            .zip(&self.takes[id.index()])
+            .filter(|(((_, ty), _), used)| **used && self.carries[ty.index()].carried())
+            .map(|(((name, _), held), _)| (name.to_owned(), width(*held)))
+            .collect()
+    }
+
+    /// Erased and unused parameters take no machine slot.
     fn signature(&self, id: barb::FnId) -> (Vec<Class>, Vec<Class>) {
         let params = self
             .program
             .params(id)
             .iter()
             .zip(self.facts.takes(id))
-            .filter(|(ty, _)| self.carries[ty.index()].carried())
-            .map(|(_, held)| width(*held))
+            .zip(&self.takes[id.index()])
+            .filter(|((ty, _), used)| **used && self.carries[ty.index()].carried())
+            .map(|((_, held), _)| width(*held))
             .collect();
         let result = self.program.function(id).result;
         let returns = self.carries[result.index()]
@@ -264,6 +352,54 @@ impl<'a> Demand<'a> {
     fn type_(&mut self, ty: barb::TypeId) -> Result<(), String> {
         self.carries[ty.index()] = represent(self.program, ty)?;
         Ok(())
+    }
+
+    /// Mark parameters read on paths that can actually execute.
+    fn demanded_parameters(
+        &self,
+        body: barb::Body,
+        takes: &[Vec<bool>],
+        found: &mut [bool],
+    ) -> bool {
+        for &expr in self
+            .program
+            .bindings(body.bindings)
+            .iter()
+            .chain([&body.tail])
+        {
+            match self.program.expr(expr) {
+                barb::Expr::Atom(atom) => mark_parameter(atom, found),
+                barb::Expr::Static(_) => {}
+                barb::Expr::Con(_, args) => {
+                    for &atom in self.program.atoms(args) {
+                        mark_parameter(atom, found);
+                    }
+                }
+                barb::Expr::Call(called, args) => {
+                    for (&atom, &needed) in
+                        self.program.atoms(args).iter().zip(&takes[called.index()])
+                    {
+                        if needed {
+                            mark_parameter(atom, found);
+                        }
+                    }
+                    if uninhabited(self.program, self.program.function(called).result) {
+                        return false;
+                    }
+                }
+                barb::Expr::Match(scrutinee, arms) => {
+                    mark_parameter(scrutinee, found);
+                    let mut returns = false;
+                    for arm in reachable(self.program, arms, self.facts.matched(expr)) {
+                        returns |= self.demanded_parameters(arm.body, takes, found);
+                    }
+                    if !returns {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
     }
 
     /// Whether this body can return, matching `Lowering::body`.
@@ -306,6 +442,12 @@ impl<'a> Demand<'a> {
     }
 }
 
+fn mark_parameter(atom: barb::Atom, found: &mut [bool]) {
+    if let Some(used) = found.get_mut(atom.0.index()) {
+        *used = true;
+    }
+}
+
 /// Shared by demand discovery, answer analysis, and emission: types in an
 /// impossible arm do not need storage any more than its calls need code.
 fn reachable(
@@ -314,7 +456,11 @@ fn reachable(
     bounds: barb::Bounds,
 ) -> impl Iterator<Item = barb::Arm> + '_ {
     program.arms(arms).iter().copied().filter(move |arm| {
-        match barb::shape(program, program.ctor(arm.ctor).owner) {
+        let owner = program.ctor(arm.ctor).owner;
+        if barb::single_field(program, owner).is_some() {
+            return true;
+        }
+        match barb::shape(program, owner) {
             barb::Shape::Spine { nil, .. } if arm.ctor == nil => bounds.low == 0,
             barb::Shape::Spine { .. } => bounds.high != Some(0),
             barb::Shape::Tagged => {
@@ -328,25 +474,33 @@ fn reachable(
 /// The class a type's values take. Numbers and tags are decided so far.
 fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, String> {
     let name = program.name(program.type_(id).name);
-    if uninhabited(program, id) || erased(program, id) {
-        return Ok(Storage::Erased);
+    let mut represented = id;
+    for _ in 0..program.types().len() {
+        if uninhabited(program, represented) || erased(program, represented) {
+            return Ok(Storage::Erased);
+        }
+        if tagged(program, represented) {
+            return Ok(Storage::Carried);
+        }
+        if let Some((_, field)) = barb::single_field(program, represented) {
+            represented = field;
+            continue;
+        }
+        let barb::Shape::Spine { cons, .. } = barb::shape(program, represented) else {
+            return Err(format!("`{name}` has no representation in this tier yet"));
+        };
+        if program.fields(cons).len() == 1 {
+            // A number takes a place. How wide is not a question about the type
+            // -- every `Nat` is the same type and they are not all the same
+            // size -- so it is asked of each value, where the tier above
+            // answered it.
+            return Ok(Storage::Carried);
+        }
+        return Err(format!(
+            "`{name}` carries something per element, which has no representation in this tier yet"
+        ));
     }
-    if tagged(program, id) {
-        return Ok(Storage::Carried);
-    }
-    let barb::Shape::Spine { cons, .. } = barb::shape(program, id) else {
-        return Err(format!("`{name}` has no representation in this tier yet"));
-    };
-    if program.fields(cons).len() == 1 {
-        // A number takes a place. How wide is not a question about the type
-        // -- every `Nat` is the same type and they are not all the same
-        // size -- so it is asked of each value, where the tier above
-        // answered it.
-        return Ok(Storage::Carried);
-    }
-    Err(format!(
-        "`{name}` carries something per element, which has no representation in this tier yet"
-    ))
+    Err(format!("`{name}` has a cyclic transparent representation"))
 }
 
 /// A type with one constructor and no fields says nothing by being one value
@@ -556,6 +710,8 @@ struct Lowering<'a> {
     facts: &'a barb::Facts,
     /// Whether a value of each barb type takes a place, by type.
     carries: Vec<Storage>,
+    /// Which source parameters survive into each machine signature.
+    takes: Vec<Vec<bool>>,
     callees: Vec<Callee<'a>>,
 }
 
@@ -591,9 +747,9 @@ impl Lowering<'_> {
                 .barb
                 .params(id)
                 .iter()
-                .map(|ty| {
-                    self.carries[ty.index()]
-                        .carried()
+                .zip(&self.takes[id.index()])
+                .map(|(ty, used)| {
+                    (*used && self.carries[ty.index()].carried())
                         .then(|| taken.next().expect("a parameter"))
                 })
                 .collect();
@@ -638,26 +794,34 @@ impl Lowering<'_> {
                 if !self.carries[id.index()].carried() {
                     return Answer::Nothing;
                 }
-                let class = self.width(expr);
-                match value.view() {
-                    barb::ConstantView::Constructor(ctor) => {
-                        let tag = u64::from(self.barb.tag(ctor.constructor()));
-                        Answer::Value(b.constant(class, tag))
-                    }
-                    barb::ConstantView::Natural(number) => match number.try_u64() {
-                        Ok(held) => Answer::Value(b.constant(class, held)),
-                        Err(barb::TooWide) => Answer::Value(b.natural(&number.to_biguint())),
-                    },
-                    barb::ConstantView::Spine(_) => {
-                        unreachable!("unsupported constants were rejected by demand")
-                    }
-                }
+                Answer::Value(self.static_value(b, self.width(expr), value))
             }
             barb::Expr::Con(ctor, args) => self.construct(b, expr, ctor, args, locals).into(),
             barb::Expr::Call(function, args) => self.call(b, expr, function, args, locals),
             barb::Expr::Match(scrutinee, arms) => {
                 let scrutinee = locals[scrutinee.0.index()].expect("a scrutinee to match");
                 self.branch(b, scrutinee, arms, locals, self.facts.matched(expr))
+            }
+        }
+    }
+
+    fn static_value(
+        &self,
+        b: &mut super::Builder,
+        class: Class,
+        value: barb::Constant<'_>,
+    ) -> ValueId {
+        let value = barb::single_field_constant(self.barb, value);
+        match value.view() {
+            barb::ConstantView::Constructor(ctor) => {
+                b.constant(class, u64::from(self.barb.tag(ctor.constructor())))
+            }
+            barb::ConstantView::Natural(number) => match number.try_u64() {
+                Ok(held) => b.constant(class, held),
+                Err(barb::TooWide) => b.natural(&number.to_biguint()),
+            },
+            barb::ConstantView::Spine(_) => {
+                unreachable!("unsupported constants were rejected by demand")
             }
         }
     }
@@ -673,12 +837,7 @@ impl Lowering<'_> {
         args: barb::Range,
         locals: &[Option<ValueId>],
     ) -> Answer<ValueId> {
-        let mut args: Vec<ValueId> = self
-            .barb
-            .atoms(args)
-            .iter()
-            .filter_map(|atom| locals[atom.0.index()])
-            .collect();
+        let mut args = self.call_arguments(function, args, locals);
         let (results, answers) = match self.callees[function.index()] {
             Callee::Instruction(operation) => {
                 if matches!(operation, barb::Operation::Add | barb::Operation::Mul)
@@ -712,6 +871,24 @@ impl Lowering<'_> {
                 held
             }
         })
+    }
+
+    fn call_arguments(
+        &self,
+        function: barb::FnId,
+        args: barb::Range,
+        locals: &[Option<ValueId>],
+    ) -> Vec<ValueId> {
+        self.barb
+            .atoms(args)
+            .iter()
+            .zip(self.barb.params(function))
+            .zip(&self.takes[function.index()])
+            .filter(|((_, ty), used)| **used && self.carries[ty.index()].carried())
+            .map(|((atom, _), _)| {
+                locals[atom.0.index()].expect("a demanded call argument to carry a value")
+            })
+            .collect()
     }
 
     /// Materialize a target-independent affine summary as machine arithmetic.
@@ -817,6 +994,10 @@ impl Lowering<'_> {
             return None;
         }
         let class = self.width(expr);
+        if barb::single_field(self.barb, owner).is_some() {
+            let atom = self.barb.atoms(args)[0];
+            return Some(locals[atom.0.index()].expect("a transparent field to carry a value"));
+        }
         if tagged(self.barb, owner) {
             return Some(b.constant(class, u64::from(self.barb.tag(ctor))));
         }
@@ -923,8 +1104,10 @@ impl Lowering<'_> {
         locals: &[Option<ValueId>],
     ) -> Answer<ValueId> {
         let mut inner = locals.to_vec();
-        if let barb::Shape::Spine { cons, .. } =
-            barb::shape(self.barb, self.barb.ctor(arm.ctor).owner)
+        let owner = self.barb.ctor(arm.ctor).owner;
+        if barb::single_field(self.barb, owner).is_some() {
+            inner.push(Some(scrutinee));
+        } else if let barb::Shape::Spine { cons, .. } = barb::shape(self.barb, owner)
             && arm.ctor == cons
         {
             let one = b.constant(b.class(scrutinee), 1);

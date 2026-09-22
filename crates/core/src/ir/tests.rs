@@ -192,9 +192,9 @@ fn two_names_may_give_the_same_routine() {
         .map(|f| machine.name(f.name))
         .collect();
     // Lowering resolves source aliases; machine declarations retain only the
-    // provider name. The source spellings are not interned in the machine IR.
+    // provider name. Parameter names are shared diagnostic symbols.
     assert_eq!(held, ["hold", "hold"], "both answered elsewhere");
-    assert_eq!(machine.symbols.len(), 2, "main and hold only");
+    assert_eq!(machine.symbols.len(), 3, "main, hold, and v0 only");
 }
 
 /// A value too wide for what a routine reads is refused, not narrowed.

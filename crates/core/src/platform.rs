@@ -69,6 +69,31 @@ impl Routine {
         program.external(&self.name, &self.takes, returns)
     }
 
+    /// Copy this contract while retaining parameter names from the source
+    /// declaration.
+    ///
+    /// # Panics
+    /// If there is not exactly one name for each parameter.
+    pub fn declare_named(
+        &self,
+        program: &mut crate::ir::Program,
+        names: &[&str],
+    ) -> crate::ir::FunctionId {
+        assert_eq!(names.len(), self.takes.len(), "one name per parameter");
+        let params: Vec<_> = names
+            .iter()
+            .copied()
+            .zip(self.takes.iter().copied())
+            .collect();
+        let answers = self.answers();
+        let returns = if self.comes_back() {
+            crate::ir::Returns::Values(answers.as_slice())
+        } else {
+            crate::ir::Returns::Never
+        };
+        program.external_named(&self.name, &params, returns)
+    }
+
     #[must_use]
     pub const fn answers(&self) -> Option<Class> {
         match self.returns {

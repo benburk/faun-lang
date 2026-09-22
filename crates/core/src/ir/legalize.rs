@@ -83,6 +83,7 @@ fn skeleton(source: &Program) -> Program {
             .copied()
             .map(representation)
             .collect(),
+        parameters: source.parameters.clone(),
         ops: Vec::new(),
         results: Vec::new(),
         operands: Vec::new(),

@@ -67,13 +67,17 @@ machine declaration stores no second source name. A function with a body has a
 descriptive name, which does not select a host operation.
 
 `Program::default()` is an empty construction state. Its first function must
-be the entry: validation rejects a missing entry or one without a body, with
-parameters, or without exactly one Word result. `Program::new(name)` uses that
-empty state and declares the entry immediately; it still returns the program
-and entry ID together.
+be the logical entry: validation rejects a missing entry, one without a body,
+or one without exactly one Word result. The entry may have named parameters;
+targets bind those from their process startup convention and reject names they
+cannot supply. Ordinary calls cannot name the logical entry: only the target's
+physical startup adapter enters it. `Program::new(name)` declares a parameterless entry, while
+`Program::new_with_params` declares that logical startup signature. Both return
+the program and entry ID together.
 
-Parameter classes and returning result classes occupy the signature pool.
-A body's parameter values belong to its root region. External declarations
+Parameter classes and returning result classes occupy the signature pool;
+parameter names occupy parallel declaration metadata and survive rewriting and
+legalization. A body's parameter values belong to its root region. External declarations
 allocate neither parameter values nor dummy regions. `Returns::Never` is
 distinct from `Returns::Values` with an empty class list: the latter returns
 normally, while the former has no continuation. `declare_never` declares an

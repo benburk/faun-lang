@@ -63,6 +63,17 @@ fn bits(class: Class) -> u16 {
     class.bits(WORD_BITS)
 }
 
+fn entry_host(program: &Program) -> Option<ValueId> {
+    let entry = program.entry();
+    (program.parameter_names(entry).next() == Some("host")).then(|| {
+        let body = program
+            .function(entry)
+            .body()
+            .expect("the entry has a body");
+        program.values(program.region(body).params)[0]
+    })
+}
+
 #[derive(Clone, Copy)]
 enum Source {
     Const(u64),
@@ -99,7 +110,7 @@ pub(crate) fn lower(program: &Program) -> Code {
     if state.needs_proc_exit() {
         state.imports.push("proc_exit");
     }
-    if program.reaches("argc!") {
+    if program.reaches("argc!") || entry_host(program).is_some() {
         state.imports.push("args_sizes_get");
     }
 
@@ -323,6 +334,11 @@ impl Lowering<'_> {
             };
             self.role = FunctionRole::at(id, self.entry);
             self.body = Bytes::default();
+            if self.role == FunctionRole::Entry
+                && let Some(host) = entry_host(self.program)
+            {
+                self.count(host);
+            }
             self.region(body);
             // Wasm does not infer that both branches return, or that a
             // void host import never returns. Supply its stack-polymorphic
@@ -334,7 +350,12 @@ impl Lowering<'_> {
                 self.body.byte(UNREACHABLE);
             }
 
-            let params = len32(function.params.len());
+            let declared = len32(function.params.len());
+            let params = if self.role == FunctionRole::Entry {
+                0
+            } else {
+                declared
+            };
             bodies.push(Body {
                 params,
                 locals: self.plan.functions[id].expect("a body has a frame").locals - params,

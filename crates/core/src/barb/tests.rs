@@ -94,6 +94,15 @@ fn a_defined_function_cannot_acquire_a_host_range_contract() {
 }
 
 #[test]
+#[should_panic(expected = "parameter outside the function signature")]
+fn a_parameter_bound_cannot_escape_into_the_next_declaration() {
+    let (mut program, nat, _, _) = types();
+    let first = program.declare("first", &[nat], nat);
+    program.declare("second", &[nat], nat);
+    program.bound_parameter(first, 1, Bounds::at(7));
+}
+
+#[test]
 #[should_panic(expected = "only an external declaration can name a provider")]
 fn a_defined_function_cannot_acquire_a_host_provider() {
     let (mut program, nat, _, _) = types();

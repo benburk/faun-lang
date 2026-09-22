@@ -40,6 +40,14 @@ impl Target for X86_64Linux {
     }
 
     fn limits(&self, program: &Program) -> Result<(), String> {
+        let entry = program.entry();
+        for (at, name) in program.parameter_names(entry).enumerate() {
+            if at != 0 || name != "host" {
+                return Err(format!(
+                    "x86-64-linux cannot supply entry parameter {at} `{name}`"
+                ));
+            }
+        }
         for function in program.functions() {
             let name = program.name(function.name);
             if function.params.len() > 6 {

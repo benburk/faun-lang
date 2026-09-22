@@ -80,6 +80,14 @@ impl Target for Mos6502Sim65 {
     }
 
     fn limits(&self, program: &Program) -> Result<(), String> {
+        let entry = program.entry();
+        for (at, name) in program.parameter_names(entry).enumerate() {
+            if at != 0 || name != "host" {
+                return Err(format!(
+                    "mos6502-sim65 cannot supply entry parameter {at} `{name}`"
+                ));
+            }
+        }
         for function in program.functions() {
             let name = program.name(function.name);
             if function.params.len() > usize::from(ARG_COUNT) {

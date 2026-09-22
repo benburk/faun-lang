@@ -247,6 +247,11 @@ fn reads(program: &Program) -> Vec<u16> {
             if let Op::Loop { body, .. } = *op {
                 regions.push(body);
             }
+            // The simulator's exit hook reads only its one-byte status.
+            if let Some(value) = exit_status(program, op) {
+                needs[value.index()] = needs[value.index()].max(8);
+                continue;
+            }
             // A conversion looks at the bits it keeps and no more.
             if let Op::Convert { value } = *op {
                 let kept = bits(program.class(results[0])).min(bits(program.class(value)));
@@ -260,14 +265,29 @@ fn reads(program: &Program) -> Vec<u16> {
             });
         }
     }
-    // What a region carries out of it is read whole wherever it lands.
-    for region in regions {
+    mark_region_outputs(program, &regions, &mut needs);
+    needs
+}
+
+/// What a region carries out of it is read whole wherever it lands.
+fn mark_region_outputs(program: &Program, regions: &[RegionId], needs: &mut [u16]) {
+    for &region in regions {
         for &value in program.outgoing(region) {
-            let at = value.index();
-            needs[at] = bits(program.class(value));
+            needs[value.index()] = bits(program.class(value));
         }
     }
-    needs
+}
+
+fn exit_status(program: &Program, op: &Op) -> Option<ValueId> {
+    let Op::Call { function, args } = *op else {
+        return None;
+    };
+    program
+        .function(function)
+        .external()
+        .is_some_and(|symbol| program.name(symbol) == "exit!")
+        .then(|| program.values(args).first().copied())
+        .flatten()
 }
 
 fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
@@ -482,7 +502,7 @@ impl Lowering<'_> {
         // image header named. Nothing has asked for memory yet, so it is
         // told the heap. What is wanted back is the count, which it leaves
         // in `A` and `X`.
-        if self.program.reaches("argc!") {
+        if self.program.reaches("argc!") || self.entry_host().is_some() {
             let [low, high] = heap.to_le_bytes();
             self.set_pair(CSP, CSTACK_TOP - 2);
             self.asm.lda_imm(low);
@@ -516,15 +536,28 @@ impl Lowering<'_> {
     /// program that asks the count narrows it.
     fn counts_wide(&self) -> bool {
         let program = self.program;
-        program
-            .functions()
-            .iter()
-            .filter_map(faun_core::ir::Function::body)
-            .flat_map(|body| program.walk_within(body))
-            .any(|(op, results)| {
-                matches!(*op, Op::Call { function, .. } if counted(program, function))
-                    && results.first().is_some_and(|&held| self.wide(held))
-            })
+        self.entry_host().is_some_and(|value| self.wide(value))
+            || program
+                .functions()
+                .iter()
+                .filter_map(faun_core::ir::Function::body)
+                .flat_map(|body| program.walk_within(body))
+                .any(|(op, results)| {
+                    matches!(*op, Op::Call { function, .. } if counted(program, function))
+                        && results.first().is_some_and(|&held| self.wide(held))
+                })
+    }
+
+    fn entry_host(&self) -> Option<ValueId> {
+        let entry = self.program.entry();
+        (self.program.parameter_names(entry).next() == Some("host")).then(|| {
+            let body = self
+                .program
+                .function(entry)
+                .body()
+                .expect("the entry has a body");
+            self.program.values(self.program.region(body).params)[0]
+        })
     }
 
     fn set_pair(&mut self, pair: u8, value: u16) {
@@ -568,7 +601,12 @@ impl Lowering<'_> {
         // before anything it calls can overwrite them.
         let params = self.program.values(self.program.region(body).params);
         for (index, &param) in params.to_vec().iter().enumerate() {
-            let pair = ARGS + 2 * u8::try_from(index).expect("a few arguments");
+            let pair =
+                if id == self.program.entry() && self.program.parameter_name(id, index) == "host" {
+                    ARGC
+                } else {
+                    ARGS + 2 * u8::try_from(index).expect("a few arguments")
+                };
             self.commit(param, pair);
         }
         self.region(body);

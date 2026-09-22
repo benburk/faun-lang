@@ -71,6 +71,7 @@ fn skeleton(source: &Program) -> Program {
         functions: source.functions.clone(),
         classes: Pool::default(),
         signature: source.signature.clone(),
+        parameters: source.parameters.clone(),
         ops: Vec::new(),
         results: Vec::new(),
         operands: Vec::new(),

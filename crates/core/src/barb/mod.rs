@@ -117,6 +117,7 @@ pub use model::{
 pub use normalize::{normalize_with_limits, structural};
 pub use optimize::{OptimizeOptions, optimize};
 pub use program::{Program, shape};
+pub(crate) use program::{single_field, single_field_constant};
 pub use validate::validate;
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use super::{Class, Definition, Op, Program, Returns, ValueId};
+use super::{Class, Definition, FunctionId, Op, Program, Returns, ValueId};
 
 const CLASS_LEGEND: &str = "\
 # Classes are per-value representation requirements, not source types.
@@ -39,7 +39,7 @@ impl Program {
             let _ = writeln!(out, "d{id} = {:?}[{}..{end}]", span.origin, span.start);
         }
         for (id, function) in self.functions().iter().enumerate() {
-            let params = class_list(self.signature(function.params));
+            let params = self.render_params(FunctionId::at(id));
             let returns = match function.returns {
                 Returns::Never => "never".to_owned(),
                 Returns::Values(classes) => format!("({})", class_list(self.signature(classes))),
@@ -57,6 +57,15 @@ impl Program {
         }
         self.render_regions(&mut out);
         out
+    }
+
+    fn render_params(&self, id: FunctionId) -> String {
+        let function = self.function(id);
+        self.parameter_names(id)
+            .zip(self.signature(function.params))
+            .map(|(name, held)| format!("{name}: {}", class(*held)))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     fn render_regions(&self, out: &mut String) {

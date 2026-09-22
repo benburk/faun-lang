@@ -7,8 +7,8 @@ pub use crate::index::Range;
 use crate::index::index;
 
 // `Symbol` is a name, held as a run of characters in the program's own
-// pool. The IR never reads those characters: names are compared and copied
-// as integers, and the text comes back only to render one.
+// pool. Most passes compare and copy symbols as integers; renderers read
+// function names, and targets read logical-entry parameter names.
 index!(ValueId, DataId, FunctionId, RegionId, Symbol);
 
 /// Which of a program's two regions a datum sits in.
@@ -254,6 +254,11 @@ pub enum Definition {
     External,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Parameter {
+    pub name: Symbol,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
     /// The provider symbol for an external, or a descriptive name for a body.
@@ -262,6 +267,8 @@ pub struct Function {
     /// Parameter classes in the signature pool. A body's parameter values
     /// belong to its root region; external declarations need no SSA values.
     pub params: Range,
+    /// Diagnostic names, parallel to `params`.
+    pub(super) parameters: Range,
     pub returns: Returns<Range>,
     pub definition: Definition,
 }

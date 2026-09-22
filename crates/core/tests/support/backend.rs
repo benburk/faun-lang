@@ -126,6 +126,24 @@ pub(super) fn status(program: &Program) -> i32 {
     execute(program).0
 }
 
+#[test]
+fn target_supplies_named_entry_parameters() {
+    let (mut program, main) = Program::new_with_params("main", &[("host", Class::Word)]);
+    let exit = TARGET.routines().declare(&mut program, "exit!");
+    program.define(main, |b, params| {
+        b.call(exit, &[params[0]]);
+    });
+    faun_core::ir::validate(&program).unwrap();
+    let answers = execute_counts(&program, &[1, 4, 9]);
+    assert_eq!(
+        answers
+            .iter()
+            .map(|(status, _)| *status)
+            .collect::<Vec<_>>(),
+        [1, 4, 9]
+    );
+}
+
 /// The program a target is handed once the machine passes have read it.
 ///
 /// Most of the corpus is measured and run as written, which is the question

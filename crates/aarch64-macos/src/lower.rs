@@ -14,6 +14,17 @@ enum Source {
     Argc,
 }
 
+fn entry_host(program: &Program) -> Option<ValueId> {
+    let entry = program.entry();
+    (program.parameter_names(entry).next() == Some("host")).then(|| {
+        let body = program
+            .function(entry)
+            .body()
+            .expect("the entry has a body");
+        program.values(program.region(body).params)[0]
+    })
+}
+
 pub(crate) fn lower(program: &Program) -> Code {
     let mut lowering = Lowering {
         program,
@@ -21,7 +32,7 @@ pub(crate) fn lower(program: &Program) -> Code {
         encoder: Encoder::default(),
     };
 
-    if program.reaches("argc!") {
+    if program.reaches("argc!") || entry_host(program).is_some() {
         // dyld's LC_MAIN convention supplies argc in x0. Keep it away from
         // syscall arguments for the rest of the process.
         lowering.encoder.mov_reg(Reg::X19, Reg::X0);
@@ -31,6 +42,9 @@ pub(crate) fn lower(program: &Program) -> Code {
         .function(program.entry())
         .body()
         .expect("validation requires an entry body");
+    if let Some(host) = entry_host(program) {
+        lowering.sources[host.index()] = Some(Source::Argc);
+    }
     for (op, results) in program.walk(body) {
         lowering.instruction(op, results);
     }
@@ -114,6 +128,13 @@ pub(crate) fn check(program: &Program) -> Result<(), String> {
     }
 
     let entry = program.entry();
+    for (at, name) in program.parameter_names(entry).enumerate() {
+        if at != 0 || name != "host" {
+            return Err(format!(
+                "aarch64-macos cannot supply entry parameter {at} `{name}`"
+            ));
+        }
+    }
     for (index, function) in program.functions().iter().enumerate() {
         let Some(body) = function.body() else {
             continue;
@@ -126,6 +147,9 @@ pub(crate) fn check(program: &Program) -> Result<(), String> {
         }
 
         let mut sources = vec![false; program.values_count()];
+        if let Some(host) = entry_host(program) {
+            sources[host.index()] = true;
+        }
         for (op, results) in program.walk(body) {
             match *op {
                 Op::Constant { .. } => sources[results[0].index()] = true,
