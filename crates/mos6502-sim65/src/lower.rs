@@ -1957,6 +1957,16 @@ impl Lowering<'_> {
     }
 
     fn compare_byte(&mut self, left: Held, right: Held) {
+        // Comparing through X preserves a different byte already in A. The
+        // argument hook returns a word in A:X, so this can test its high half
+        // without spilling either register merely to load it back.
+        if self.asm.needs_load(left) && self.asm.x_holds(left) {
+            match right {
+                Held::Imm(value) => self.asm.cpx_imm(value),
+                Held::Zero(at) => self.asm.cpx_zp(at),
+            }
+            return;
+        }
         self.load(left);
         match right {
             Held::Imm(value) => self.asm.cmp_imm(value),

@@ -75,6 +75,7 @@ pub(crate) enum Mnemonic {
     Adc,
     Sbc,
     Cmp,
+    Cpx,
     Inc,
     Dec,
     Rts,
@@ -101,18 +102,18 @@ pub(crate) enum Held {
     Zero(u8),
 }
 
-/// What the accumulator is known to be.
+/// What an eight-bit register is known to be.
 ///
 /// A number and a place answer different questions -- is this the number it
 /// already holds, is this the place it already equals -- and both can be
 /// true at once, so keeping one is no reason to give up the other.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct Acc {
+struct Register {
     number: Option<u8>,
     place: Option<u8>,
 }
 
-impl Acc {
+impl Register {
     /// Nothing known, which is where a label leaves it.
     const NOTHING: Self = Self {
         number: None,
@@ -133,7 +134,7 @@ impl Acc {
         }
     }
 
-    /// Whether reading this byte would tell the accumulator what it already
+    /// Whether reading this byte would tell the register what it already
     /// holds.
     const fn holds(self, held: Held) -> bool {
         match held {
@@ -188,16 +189,49 @@ fn same<T: Copy + PartialEq>(left: Option<T>, right: Option<T>) -> Option<T> {
     if left == right { left } else { None }
 }
 
+/// Retain a register's value while updating whether it still equals memory.
+const fn stored(register: Register, operand: Operand) -> Register {
+    match operand {
+        Operand::Zero(at) => Register {
+            place: Some(at),
+            ..register
+        },
+        Operand::Implied | Operand::Imm(_) | Operand::Indirect(_) | Operand::Abs(_) => Register {
+            place: None,
+            ..register
+        },
+    }
+}
+
+/// A write to a register's remembered place breaks that equality.
+fn overwritten(register: Register, operand: Operand) -> Register {
+    match operand {
+        Operand::Zero(at) if register.place == Some(at) => Register {
+            place: None,
+            ..register
+        },
+        // Indirect stores do not reach zero page in this target, but the
+        // assembler does not carry that address-space proof.
+        Operand::Indirect(_) => Register {
+            place: None,
+            ..register
+        },
+        Operand::Implied | Operand::Imm(_) | Operand::Zero(_) | Operand::Abs(_) => register,
+    }
+}
+
 /// Machine state carried between adjacent selected instructions.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct MachineState {
-    acc: Acc,
+    acc: Register,
+    x: Register,
     flags: Flags,
 }
 
 impl MachineState {
     const UNKNOWN: Self = Self {
-        acc: Acc::NOTHING,
+        acc: Register::NOTHING,
+        x: Register::NOTHING,
         flags: Flags {
             carry: None,
             zero: None,
@@ -209,6 +243,7 @@ impl MachineState {
     pub(crate) fn join(self, other: Self) -> Self {
         Self {
             acc: self.acc.join(other.acc),
+            x: self.x.join(other.x),
             flags: self.flags.join(other.flags),
         }
     }
@@ -288,6 +323,10 @@ impl Inst {
 /// # Panics
 /// On a pairing the machine has not got, which nothing here writes: the
 /// methods below are the only way to make one.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the exhaustive instruction encoding table is clearer in one place"
+)]
 const fn opcode(mnemonic: Mnemonic, operand: Operand) -> u8 {
     use Mnemonic as M;
     use Operand as O;
@@ -322,6 +361,8 @@ const fn opcode(mnemonic: Mnemonic, operand: Operand) -> u8 {
         (M::Sbc, O::Imm(_)) => 0xE9,
         (M::Cmp, O::Imm(_)) => 0xC9,
         (M::Cmp, O::Zero(_)) => 0xC5,
+        (M::Cpx, O::Imm(_)) => 0xE0,
+        (M::Cpx, O::Zero(_)) => 0xE4,
         (M::Inc, O::Zero(_)) => 0xE6,
         (M::Dec, O::Zero(_)) => 0xC6,
         (M::Rts, O::Implied) => 0x60,
@@ -402,8 +443,8 @@ impl Assembler {
 
     /// The same, for a label nothing jumps to.
     ///
-    /// What is known about the accumulator survives it, there being no
-    /// other way to arrive. Saying so is a claim about the whole program
+    /// What is known about the registers survives it, there being no other
+    /// way to arrive. Saying so is a claim about the whole program
     /// rather than about what has been written so far, so [`Self::finish`]
     /// checks it before writing anything down.
     pub(crate) fn bind_fallen_into(&mut self, label: Label) {
@@ -423,6 +464,11 @@ impl Assembler {
     /// writes the chosen sequence.
     pub(crate) const fn needs_load(&self, held: Held) -> bool {
         !self.state.acc.holds(held)
+    }
+
+    /// Whether `X` already holds this byte.
+    pub(crate) const fn x_holds(&self, held: Held) -> bool {
+        self.state.x.holds(held)
     }
 
     /// Read a byte into the accumulator, unless it already holds it.
@@ -452,8 +498,14 @@ impl Assembler {
     fn number(&self, operand: Operand) -> Option<u8> {
         match operand {
             Operand::Imm(value) => Some(value),
-            Operand::Zero(at) if self.state.acc.place == Some(at) => self.state.acc.number,
-            Operand::Implied | Operand::Zero(_) | Operand::Indirect(_) | Operand::Abs(_) => None,
+            Operand::Zero(at) => [self.state.acc, self.state.x]
+                .into_iter()
+                .find_map(|register| {
+                    (register.place == Some(at))
+                        .then_some(register.number)
+                        .flatten()
+                }),
+            Operand::Implied | Operand::Indirect(_) | Operand::Abs(_) => None,
         }
     }
 
@@ -467,29 +519,36 @@ impl Assembler {
         let before = self.state;
         match mnemonic {
             M::Lda => self.after_load(operand),
+            M::Ldx => self.after_load_x(operand),
             M::Sta => {
-                let acc = match operand {
-                    Operand::Zero(at) => Acc {
-                        place: Some(at),
-                        ..before.acc
-                    },
-                    // Through a pointer it could have written anywhere, so a
-                    // place the accumulator equalled may have parted from it.
-                    _ => Acc {
-                        place: None,
-                        ..before.acc
-                    },
-                };
-                MachineState { acc, ..before }
+                let acc = stored(before.acc, operand);
+                let x = overwritten(before.x, operand);
+                MachineState { acc, x, ..before }
             }
-            M::Ldx | M::Ldy => MachineState {
+            M::Stx => {
+                let acc = overwritten(before.acc, operand);
+                let x = stored(before.x, operand);
+                MachineState { acc, x, ..before }
+            }
+            M::Ldy => MachineState {
                 flags: before.flags.with_nz(self.number(operand)),
                 ..before
             },
-            M::Iny | M::Dex => MachineState {
+            M::Iny => MachineState {
                 flags: before.flags.with_nz(None),
                 ..before
             },
+            M::Dex => {
+                let number = before.x.number.map(|value| value.wrapping_sub(1));
+                MachineState {
+                    x: Register {
+                        number,
+                        place: None,
+                    },
+                    flags: before.flags.with_nz(number),
+                    ..before
+                }
+            }
             M::Clc | M::Sec => MachineState {
                 flags: Flags {
                     carry: Some(mnemonic == M::Sec),
@@ -497,68 +556,63 @@ impl Assembler {
                 },
                 ..before
             },
-            M::Cmp => self.after_compare(operand),
+            M::Cmp => self.after_compare(before.acc, operand),
+            M::Cpx => self.after_compare(before.x, operand),
             M::And | M::Ora => self.after_logic(mnemonic, operand),
             M::Adc | M::Sbc => self.after_arithmetic(mnemonic, operand),
             M::Asl | M::Rol | M::Lsr | M::Ror => self.after_shift(mnemonic, operand),
-            // These alter a memory byte and N/Z, but not A, C or V.
-            M::Inc | M::Dec => {
-                let acc = match operand {
-                    Operand::Zero(at) if before.acc.place == Some(at) => Acc {
-                        place: None,
-                        ..before.acc
-                    },
-                    _ => before.acc,
-                };
-                MachineState {
-                    acc,
-                    flags: before.flags.with_nz(None),
-                }
-            }
+            // These alter a memory byte and N/Z, but not A, X, C or V.
+            M::Inc | M::Dec => MachineState {
+                acc: overwritten(before.acc, operand),
+                x: overwritten(before.x, operand),
+                flags: before.flags.with_nz(None),
+            },
             // Calls may answer with anything. The jumps themselves preserve
             // state, but no emitted instruction follows them by fallthrough.
             M::Jsr => MachineState::UNKNOWN,
             M::Txs | M::Jmp | M::Rts => before,
-            M::Stx => {
-                let acc = match operand {
-                    Operand::Zero(at) if before.acc.place == Some(at) => Acc {
-                        place: None,
-                        ..before.acc
-                    },
-                    _ => before.acc,
-                };
-                MachineState { acc, ..before }
-            }
+        }
+    }
+
+    fn loaded(&self, operand: Operand) -> Register {
+        let number = self.number(operand);
+        match operand {
+            Operand::Imm(value) => Register::holding(Held::Imm(value)),
+            Operand::Zero(at) => Register {
+                number,
+                place: Some(at),
+            },
+            Operand::Implied | Operand::Indirect(_) | Operand::Abs(_) => Register {
+                number,
+                place: None,
+            },
         }
     }
 
     fn after_load(&self, operand: Operand) -> MachineState {
-        let number = self.number(operand);
-        let acc = match operand {
-            Operand::Imm(value) => Acc::holding(Held::Imm(value)),
-            Operand::Zero(at) => Acc {
-                number,
-                place: Some(at),
-            },
-            Operand::Implied | Operand::Indirect(_) | Operand::Abs(_) => Acc {
-                number,
-                place: None,
-            },
-        };
+        let acc = self.loaded(operand);
         MachineState {
             acc,
-            flags: self.state.flags.with_nz(number),
+            flags: self.state.flags.with_nz(acc.number),
+            ..self.state
         }
     }
 
-    fn after_compare(&self, operand: Operand) -> MachineState {
-        let flags = match (self.state.acc.number, self.number(operand)) {
+    fn after_load_x(&self, operand: Operand) -> MachineState {
+        let x = self.loaded(operand);
+        MachineState {
+            x,
+            flags: self.state.flags.with_nz(x.number),
+            ..self.state
+        }
+    }
+
+    fn after_compare(&self, register: Register, operand: Operand) -> MachineState {
+        let flags = match (register.number, self.number(operand)) {
             (Some(left), Some(right)) => self.state.flags.with_nz(Some(left.wrapping_sub(right))),
             _ => self.state.flags.with_nz(None),
         };
-        let carry = self
-            .state
-            .acc
+        let carry = register
             .number
             .zip(self.number(operand))
             .map(|(left, right)| left >= right);
@@ -580,11 +634,12 @@ impl Assembler {
                 _ => unreachable!("a logical instruction"),
             });
         MachineState {
-            acc: Acc {
+            acc: Register {
                 number,
                 place: None,
             },
             flags: self.state.flags.with_nz(number),
+            ..self.state
         }
     }
 
@@ -597,8 +652,9 @@ impl Assembler {
             .zip(self.state.flags.carry);
         let Some(((left, right), carry)) = known else {
             return MachineState {
-                acc: Acc::NOTHING,
+                acc: Register::NOTHING,
                 flags: Flags::default(),
+                ..self.state
             };
         };
         let (number, carry, overflow) = match mnemonic {
@@ -617,7 +673,7 @@ impl Assembler {
             _ => unreachable!("an arithmetic instruction"),
         };
         MachineState {
-            acc: Acc {
+            acc: Register {
                 number: Some(number),
                 place: None,
             },
@@ -626,6 +682,7 @@ impl Assembler {
                 overflow: Some(overflow),
                 ..self.state.flags.with_nz(Some(number))
             },
+            ..self.state
         }
     }
 
@@ -649,18 +706,15 @@ impl Assembler {
         });
         let number = result.map(|(number, _)| number);
         let acc = match operand {
-            Operand::Implied => Acc {
+            Operand::Implied => Register {
                 number,
                 place: None,
             },
-            Operand::Zero(at) if before.acc.place == Some(at) => Acc {
-                place: None,
-                ..before.acc
-            },
-            _ => before.acc,
+            _ => overwritten(before.acc, operand),
         };
         MachineState {
             acc,
+            x: overwritten(before.x, operand),
             flags: Flags {
                 carry: result.map(|(_, carry)| carry),
                 ..before.flags.with_nz(number)
@@ -729,9 +783,9 @@ impl Assembler {
 
     /// Leave out a store to a place nothing ever reads.
     ///
-    /// The only reason to keep what the accumulator worked out is that
-    /// something reads it back, and where every reader took it from a
-    /// register the place it was kept in is written and never looked at.
+    /// The only reason to keep what a register held is that something reads
+    /// it back, and where every reader took it directly from a register the
+    /// place it was kept in is written and never looked at.
     ///
     /// Whether anything reads one is a question about the whole program and
     /// not about what follows the store, which is what makes it answerable
@@ -903,8 +957,9 @@ impl Assembler {
     /// Half of a label's address, as an immediate.
     pub(crate) fn lda_imm_half(&mut self, label: Label, half: Half) {
         self.state = MachineState {
-            acc: Acc::NOTHING,
+            acc: Register::NOTHING,
             flags: self.state.flags.with_nz(None),
+            ..self.state
         };
         self.insts.push(Inst::Half { to: label, half });
     }
@@ -1043,6 +1098,14 @@ impl Assembler {
         self.op(Mnemonic::Cmp, Operand::Imm(value));
     }
 
+    pub(crate) fn cpx_imm(&mut self, value: u8) {
+        self.op(Mnemonic::Cpx, Operand::Imm(value));
+    }
+
+    pub(crate) fn cpx_zp(&mut self, at: u8) {
+        self.op(Mnemonic::Cpx, Operand::Zero(at));
+    }
+
     pub(crate) fn inc_zp(&mut self, at: u8) {
         self.op(Mnemonic::Inc, Operand::Zero(at));
     }
@@ -1126,6 +1189,25 @@ mod tests {
         // ADC proved carry clear, so ensuring it again emits nothing.
         asm.clc();
         assert_eq!(asm.finish(), [0xA9, 0x7F, 0x18, 0x69, 0x01]);
+    }
+
+    #[test]
+    fn x_comparison_preserves_the_accumulator_and_makes_register_spills_dead() {
+        let mut asm = Assembler::new(0x200);
+        asm.lda_imm(7);
+        asm.sta_zp(0x20);
+        asm.ldx_imm(0);
+        asm.stx_zp(0x21);
+
+        assert!(!asm.needs_load(Held::Zero(0x20)));
+        assert!(asm.x_holds(Held::Zero(0x21)));
+        asm.cpx_imm(0);
+        assert!(!asm.needs_load(Held::Zero(0x20)));
+        assert_eq!(asm.state.flags.zero, Some(true));
+        assert_eq!(asm.state.flags.carry, Some(true));
+
+        // Neither remembered place is read from memory, so both stores leave.
+        assert_eq!(asm.finish(), [0xA9, 0x07, 0xA2, 0x00, 0xE0, 0x00]);
     }
 
     #[test]
