@@ -4,12 +4,13 @@ Faun has two source frontends while the Ori-compatible one is built out.
 
 ## Ori-compatible frontend
 
-`faun check PATH` loads, parses, links, resolves, and performs the currently
-available signature-directed checks on `.ori` source. Set `ORI_STD` to a
+`faun check PATH` loads, parses, links, resolves, and performs polymorphic type
+inference on `.ori` source. Set `ORI_STD` to a
 standard-library root when the program needs an implicit prelude:
 
 ```sh
 ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/literals.ori
+ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/utilities.ori
 ```
 
 The accepted language remains a subset of Ori, but now includes:
@@ -23,9 +24,11 @@ The accepted language remains a subset of Ori, but now includes:
 
 The parser can read Ori's current `standard.ori`, `nat.ori`, `int.ori`, and
 `str.ori` files individually. `standard/ori/` supplies a bootstrap prelude with
-the same `Nat`, `Int`, `U8`, `List`, and `Str` representations and the methods
-needed by literal elaboration. The complete Ori standard package still contains
-forms outside this slice, including records and tuples.
+`Bool`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str`. It includes concrete
+arithmetic, Boolean, collection, and result utilities that avoid hashing,
+records, tuples, and postfix propagation. Concrete equality implementations
+replace bodyless derivation where no method constraint is needed. The complete
+Ori standard package still contains forms outside this slice.
 
 ### Module and name model
 
@@ -62,9 +65,28 @@ contract is deliberately narrow:
 
 These expansions lower through ordinary Barb constants, constructors, and
 calls. `Nat` arithmetic and the constructors of `Int` are not compiler
-intrinsics. Contextual checking currently covers explicitly signed first-order
-functions; full polymorphic inference, method resolution, interpolation calls,
-and complete HIR-to-Barb lowering remain.
+intrinsics.
+
+### Type inference and methods
+
+Signatures quantify their lowercase type variables and instantiate them at each
+use. Unsigned definitions use Hindley–Milner inference: call-graph components
+are checked monomorphically for recursion and generalized when each component
+closes. Local bindings are generalized as well. Constructors participate with
+schemes derived from their data declaration.
+
+Dotted calls and operators resolve against the nominal head of their inferred
+receiver type. Resolution may wait for argument, result, or literal constraints;
+an otherwise unconstrained numeral defaults to `Nat` (or `Int` when negative)
+before the final method choice. The checked result records each canonical method
+target for later lowering, retains principal global schemes, and rejects calls
+that remain ambiguous.
+
+Method constraints are not implemented: a signature containing `where` is
+rejected during checking. Bodyless signatures do not derive implementations;
+the bootstrap prelude writes concrete `Bool`, `Nat`, and `Int` equality and
+omits generic equality requiring bounds. Interpolation calls and complete
+HIR-to-Barb lowering also remain.
 
 ### Performance
 

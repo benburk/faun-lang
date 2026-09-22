@@ -1,5 +1,44 @@
-# The constructors are exposed for list syntax and pattern matching.
+# Polymorphic list utilities that need neither tuples, records, constraints,
+# nor postfix propagation.
 
 exports {List.*}
 
-List(a) : [Nil Cons(a List(a))]
+List(a) : [Nil Cons(a List(a))].(
+  len : List(a) -> Nat
+  len([]) -> 0
+  len([_ *tail]) -> 1 + len(tail)
+
+  is_empty : List(a) -> Bool
+  is_empty([]) -> True
+  is_empty([_ *_]) -> False
+
+  append : List(a) a -> List(a)
+  append([] value) -> [value]
+  append([head *tail] value) -> [head *append(tail value)]
+
+  extend : List(a) List(a) -> List(a)
+  extend([] right) -> right
+  extend([head *tail] right) -> [head *extend(tail right)]
+
+  prepend : List(a) a -> List(a)
+  prepend(values value) -> [value *values]
+
+  map : List(a) (a -> b) -> List(b)
+  map([] _) -> []
+  map([head *tail] f) -> [f(head) *map(tail f)]
+
+  flat_map : List(a) (a -> List(b)) -> List(b)
+  flat_map([] _) -> []
+  flat_map([head *tail] f) -> extend(f(head) flat_map(tail f))
+
+  fold : List(a) b (b a -> b) -> b
+  fold([] state _) -> state
+  fold([head *tail] state f) -> fold(tail f(state head) f)
+
+  reverse : List(a) -> List(a)
+  reverse(values) -> reverse_into(values [])
+)
+
+reverse_into : List(a) List(a) -> List(a)
+reverse_into([] output) -> output
+reverse_into([head *tail] output) -> reverse_into(tail [head *output])

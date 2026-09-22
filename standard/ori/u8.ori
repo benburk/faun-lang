@@ -2,4 +2,10 @@
 
 exports {U8}
 
-U8 : Nat
+U8 : Nat.(
+  to_nat : U8 -> Nat
+  to_nat(U8(value)) -> value
+
+  equals : U8 U8 -> Bool
+  equals(U8(a) U8(b)) -> a.equals(b)
+)

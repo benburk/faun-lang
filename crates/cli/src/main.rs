@@ -53,7 +53,7 @@ fn dispatch(command: Command) -> Result<(), String> {
             let resolved =
                 faun::surface::resolve::resolve(loaded).map_err(|error| error.to_string())?;
             if let Some(blessed) = blessed {
-                faun::surface::check::literals(&resolved.program, &blessed)
+                faun::surface::check::program(&resolved, &blessed)
                     .map_err(|error| error.to_string())?;
             }
             Ok(())

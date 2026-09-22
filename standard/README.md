@@ -2,19 +2,25 @@
 
 ## Ori-compatible bootstrap prelude
 
-`standard/ori/standard.ori` is the first usable module prelude for the primary
-frontend. It defines the Ori-compatible representations of `Nat`, `Int`, `U8`,
-`List`, and `Str`, plus `Int.of_nat` and `Int.neg`, which contextual literal
-elaboration needs. It is deliberately a bootstrap representation slice, not a
-claim to be the complete Ori standard library.
+`standard/ori/standard.ori` is the bootstrap module prelude for the primary
+frontend. It defines `Bool`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str` with
+Ori-compatible representations. `Nat`, `Int`, and `Bool` provide a small
+arithmetic and logic kernel; `List` and `Result` provide polymorphic utilities
+that do not need tuples, records, postfix `?`, or method constraints. It also
+provides `Int.of_nat` and `Int.neg`, which contextual literal elaboration needs.
+It is not a claim to be the complete Ori standard library.
 
 ```sh
 ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/literals.ori
+ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/utilities.ori
 ```
 
 The loader treats this as an ordinary disk-backed package. Its exported names
 are implicit in the checked program; private `Str` and `U8` wrappers remain
-available only to blessed string construction.
+available only to their modules and blessed string construction. Hashing and
+bodyless method derivation are omitted. Equality is implemented manually for
+concrete core types; generic equality for `List` and `Result` waits for method
+constraints.
 
 ## Arithmetic for the simple frontend
 

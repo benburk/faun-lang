@@ -101,8 +101,16 @@ fn resolve_module(
             s::Item::Header(_) | s::Item::Import(_) | s::Item::Exports(_) => {}
         }
     }
+    let mut visible_methods: Vec<_> = scope
+        .types
+        .values()
+        .flat_map(|binding| binding.methods.values().copied())
+        .collect();
+    visible_methods.sort_unstable();
+    visible_methods.dedup();
     Ok(h::Module {
         source: module.id,
+        visible_methods,
         items,
     })
 }
@@ -148,13 +156,10 @@ fn resolve_data(
         ),
         s::DataRepresentation::Wrapper(representation) => (
             Vec::new(),
-            Some(resolve_type(
-                module,
-                representation,
-                source,
-                scope,
-                symbols,
-            )?),
+            Some(h::WrapperDecl {
+                constructor: binding.constructors[&local],
+                field: resolve_type(module, representation, source, scope, symbols)?,
+            }),
         ),
     };
     let mut methods = Vec::with_capacity(data.methods.len());
@@ -201,6 +206,7 @@ fn resolve_signature(
     Ok(h::SignatureDecl {
         span: signature.span,
         name,
+        spelling: symbols.intern(signature.name.text(source)),
         parameters: signature
             .parameters
             .iter()

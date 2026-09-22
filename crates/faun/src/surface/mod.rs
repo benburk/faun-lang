@@ -1,9 +1,10 @@
 //! The primary Faun frontend, following Ori's source language.
 //!
 //! Parsing retains compact source spans. Module loading and qualification then
-//! produce symbol-based HIR without merging raw ASTs. The first checking slice
-//! supplies contextual `Nat`, `Int`, and `Str` literal elaboration; full type
-//! inference and whole-program Barb lowering remain separate work.
+//! produce symbol-based HIR without merging raw ASTs. Checking performs
+//! Hindley–Milner inference, nominal receiver-directed method resolution, and
+//! contextual literal elaboration. Whole-program Barb lowering remains
+//! separate work.
 
 pub mod ast;
 pub mod blessed;

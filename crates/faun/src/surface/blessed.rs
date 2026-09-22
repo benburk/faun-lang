@@ -15,6 +15,7 @@ use super::{Symbol, Symbols};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreludeIds {
+    pub bool_: Symbol,
     pub nat: Symbol,
     pub int: Symbol,
     pub str_: Symbol,
@@ -22,6 +23,7 @@ pub struct PreludeIds {
     pub list: Symbol,
     pub int_of_nat: Symbol,
     pub int_neg: Symbol,
+    pub bool_not: Symbol,
     pub str_constructor: Symbol,
     pub u8_constructor: Symbol,
     pub list_nil: Symbol,
@@ -51,12 +53,14 @@ impl PreludeIds {
     ///
     /// Reports the first missing standard type, constructor, or method.
     pub fn resolve(program: &LoadedProgram) -> Result<Self, PreludeError> {
+        let bool_ = binding(program, "Bool")?;
         let nat = binding(program, "Nat")?;
         let int = binding(program, "Int")?;
         let str_ = binding_with_private_constructor(program, "Str")?;
         let u8_ = binding_with_private_constructor(program, "U8")?;
         let list = binding(program, "List")?;
         Ok(Self {
+            bool_: bool_.canonical,
             nat: nat.canonical,
             int: int.canonical,
             str_: str_.canonical,
@@ -64,6 +68,7 @@ impl PreludeIds {
             list: list.canonical,
             int_of_nat: method(program, &int, "Int", "of_nat")?,
             int_neg: method(program, &int, "Int", "neg")?,
+            bool_not: method(program, &bool_, "Bool", "not")?,
             str_constructor: constructor(program, &str_, "Str", "Str")?,
             u8_constructor: constructor(program, &u8_, "U8", "U8")?,
             list_nil: constructor(program, &list, "List", "Nil")?,
@@ -249,6 +254,7 @@ mod tests {
 
     fn loaded() -> LoadedProgram {
         let fixture = Fixture::new();
+        fixture.write("bool.ori", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
         fixture.write("nat.ori", "exports {Nat.*}\nNat : [Zero Succ(Nat)]\n");
         fixture.write(
             "int.ori",
@@ -262,7 +268,7 @@ mod tests {
         fixture.write("str.ori", "exports {Str}\nStr : List(U8)\n");
         let root = fixture.write(
             "standard.ori",
-            "lib {}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Nat.* Int.* U8 List.* Str}\n",
+            "lib {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
         );
         let entry = fixture.write("main.ori", "id(x) -> x\n");
         // The loader owns all source text, so removing the fixture afterwards

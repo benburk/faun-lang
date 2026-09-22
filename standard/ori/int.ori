@@ -1,14 +1,51 @@
-# Signed integers use the same canonical representation as Ori: Pos(n) is n,
-# and NegSucc(n) is -(n + 1).
+# Signed integers over Nat. Mixed-sign addition delegates to a structural
+# magnitude walk, avoiding ordering and guards in the bootstrap subset.
 
 exports {Int.*}
 
 Int : [Pos(Nat) NegSucc(Nat)].(
+  zero : Int
+  zero() -> Pos(0)
+
   of_nat : Nat -> Int
   of_nat(n) -> Pos(n)
 
+  abs : Int -> Nat
+  abs(Pos(n)) -> n
+  abs(NegSucc(n)) -> n + 1
+
+  is_negative : Int -> Bool
+  is_negative(Pos(_)) -> False
+  is_negative(NegSucc(_)) -> True
+
   neg : Int -> Int
   neg(Pos(0)) -> Pos(0)
-  neg(Pos(Succ(m))) -> NegSucc(m)
-  neg(NegSucc(m)) -> Pos(Succ(m))
+  neg(Pos(Succ(n))) -> NegSucc(n)
+  neg(NegSucc(n)) -> Pos(n + 1)
+
+  add : Int Int -> Int
+  add(Pos(a) Pos(b)) -> Pos(a + b)
+  add(NegSucc(a) NegSucc(b)) -> NegSucc(a + b + 1)
+  add(Pos(a) NegSucc(b)) -> difference(a Succ(b))
+  add(NegSucc(a) Pos(b)) -> difference(b Succ(a))
+
+  sub : Int Int -> Int
+  sub(a b) -> a + neg(b)
+
+  mul : Int Int -> Int
+  mul(Pos(a) Pos(b)) -> Pos(a * b)
+  mul(Pos(a) NegSucc(b)) -> neg(of_nat(a * (b + 1)))
+  mul(NegSucc(a) Pos(b)) -> neg(of_nat((a + 1) * b))
+  mul(NegSucc(a) NegSucc(b)) -> Pos((a + 1) * (b + 1))
+
+  equals : Int Int -> Bool
+  equals(Pos(a) Pos(b)) -> a.equals(b)
+  equals(NegSucc(a) NegSucc(b)) -> a.equals(b)
+  equals(_ _) -> False
 )
+
+difference : Nat Nat -> Int
+difference(0 0) -> Pos(0)
+difference(Succ(a) 0) -> Pos(Succ(a))
+difference(0 Succ(b)) -> NegSucc(b)
+difference(Succ(a) Succ(b)) -> difference(a b)

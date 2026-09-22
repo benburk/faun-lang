@@ -1,0 +1,41 @@
+# Result utilities whose polymorphism needs no method constraints.
+
+exports {Result.*}
+
+Result(a e) : [Ok(a) Err(e)].(
+  map_ok : Result(a e) (a -> b) -> Result(b e)
+  map_ok(Ok(value) f) -> Ok(f(value))
+  map_ok(Err(error) _) -> Err(error)
+
+  map_err : Result(a e) (e -> f) -> Result(a f)
+  map_err(Ok(value) _) -> Ok(value)
+  map_err(Err(error) f) -> Err(f(error))
+
+  err_as : Result(a e) f -> Result(a f)
+  err_as(Ok(value) _) -> Ok(value)
+  err_as(Err(_) error) -> Err(error)
+
+  and_then : Result(a e) (a -> Result(b e)) -> Result(b e)
+  and_then(Ok(value) f) -> f(value)
+  and_then(Err(error) _) -> Err(error)
+
+  map2 : Result(a e) Result(b e) (a b -> c) -> Result(c e)
+  map2(Ok(a) Ok(b) f) -> Ok(f(a b))
+  map2(Err(error) _ _) -> Err(error)
+  map2(_ Err(error) _) -> Err(error)
+
+  is_ok : Result(a e) -> Bool
+  is_ok(Ok(_)) -> True
+  is_ok(Err(_)) -> False
+
+  is_err : Result(a e) -> Bool
+  is_err(value) -> is_ok(value).not()
+
+  ok_or : Result(a e) a -> a
+  ok_or(Ok(value) _) -> value
+  ok_or(Err(_) fallback) -> fallback
+
+  err_or : Result(a e) e -> e
+  err_or(Ok(_) fallback) -> fallback
+  err_or(Err(error) _) -> error
+)

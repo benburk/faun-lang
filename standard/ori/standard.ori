@@ -1,12 +1,15 @@
-# Bootstrap prelude for the Ori-compatible frontend. This is deliberately the
-# representation and literal protocol slice, not yet the complete library.
+# Bootstrap standard package for the Ori-compatible frontend. It keeps the
+# useful arithmetic and polymorphic utilities that do not need records,
+# tuples, method constraints, hashing, or bodyless derivation.
 
 lib {}
 
+import bool {Bool.*}
 import nat {Nat.*}
 import int {Int.*}
 import u8 {U8}
 import list {List.*}
+import result {Result.*}
 import str {Str}
 
-exports {Nat.* Int.* U8 List.* Str}
+exports {Bool.* Nat.* Int.* U8 List.* Result.* Str}

@@ -1,0 +1,36 @@
+# Concrete Boolean utilities. Equality is written out while bodyless method
+# derivation remains outside the bootstrap frontend.
+
+exports {Bool.*}
+
+Bool : [False True].(
+  not : Bool -> Bool
+  not(False) -> True
+  not(True) -> False
+
+  and : Bool Bool -> Bool
+  and(True True) -> True
+  and(_ _) -> False
+
+  or : Bool Bool -> Bool
+  or(False False) -> False
+  or(_ _) -> True
+
+  xor : Bool Bool -> Bool
+  xor(True False) -> True
+  xor(False True) -> True
+  xor(_ _) -> False
+
+  select : Bool a a -> a
+  select(True yes _) -> yes
+  select(False _ no) -> no
+
+  to_nat : Bool -> Nat
+  to_nat(False) -> 0
+  to_nat(True) -> 1
+
+  equals : Bool Bool -> Bool
+  equals(False False) -> True
+  equals(True True) -> True
+  equals(_ _) -> False
+)

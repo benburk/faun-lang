@@ -17,6 +17,8 @@ pub struct Program {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Module {
     pub source: ModuleId,
+    /// Canonical method definitions reachable through this module's scope.
+    pub visible_methods: Vec<Symbol>,
     pub items: Vec<Item>,
 }
 
@@ -33,8 +35,14 @@ pub struct DataDecl {
     pub name: Symbol,
     pub parameters: Vec<Symbol>,
     pub constructors: Vec<ConstructorDecl>,
-    pub wrapper: Option<Type>,
+    pub wrapper: Option<WrapperDecl>,
     pub methods: Vec<MethodItem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WrapperDecl {
+    pub constructor: Symbol,
+    pub field: Type,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +61,8 @@ pub enum MethodItem {
 pub struct SignatureDecl {
     pub span: Span,
     pub name: Symbol,
+    /// The source-level spelling, retained for method lookup and diagnostics.
+    pub spelling: Symbol,
     pub parameters: Vec<Type>,
     pub result: Type,
     pub constraints: Vec<Constraint>,
@@ -84,6 +94,13 @@ pub struct Clause {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalId(pub u32);
+
+impl LocalId {
+    #[must_use]
+    pub(crate) fn index(self) -> usize {
+        usize::try_from(self.0).expect("u32 fits usize")
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
