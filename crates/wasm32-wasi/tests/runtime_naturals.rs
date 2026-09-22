@@ -1,4 +1,4 @@
-include!("../../faun/tests/support/runtime_naturals.rs");
+include!("../../core/tests/support/runtime_naturals.rs");
 
 #[test]
 fn source_runtime_naturals_can_be_compared_before_a_bounded_host_effect() {
@@ -7,7 +7,7 @@ fn source_runtime_naturals_can_be_compared_before_a_bounded_host_effect() {
 
 #[test]
 fn compilation_wrappers_preserve_supported_multivalue_abis() {
-    use faun::programs::abi;
+    use faun_core::programs::abi;
     let target = faun_wasm32_wasi::Wasm32Wasi;
     for p in [
         abi::function(7, 3),

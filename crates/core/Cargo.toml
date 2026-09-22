@@ -1,0 +1,12 @@
+[package]
+name = "faun-core"
+version.workspace = true
+edition.workspace = true
+description = "The shared Barb and machine compiler core for Faun"
+
+[dependencies]
+num-bigint = "0.4.8"
+num-traits = "0.2"
+
+[lints]
+workspace = true

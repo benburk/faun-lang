@@ -45,6 +45,8 @@ u8_add_wrapping(a b) -> u8_from_nat_wrapping(add(u8_to_nat(a) u8_to_nat(b)))
 u8_sub_wrapping(a b) ->
   u8_from_nat_wrapping(sub(add(u8_to_nat(a) u8_modulus()) u8_to_nat(b)))
 u8_mul_wrapping(a b) -> u8_from_nat_wrapping(mul(u8_to_nat(a) u8_to_nat(b)))
+u8_div_wrapping(a b) -> u8_from_nat_wrapping(div(u8_to_nat(a) u8_to_nat(b)))
+u8_mod_wrapping(a b) -> u8_from_nat_wrapping(mod(u8_to_nat(a) u8_to_nat(b)))
 
 u8_equals(a b) -> equals(u8_to_nat(a) u8_to_nat(b))
 u8_less_than(a b) -> less_than(u8_to_nat(a) u8_to_nat(b))

@@ -4,8 +4,8 @@
 //! `__LINKEDIT` payload is therefore a minimal ad-hoc SHA-256 code directory,
 //! not a library dependency or a developer identity.
 
-use faun::ir::{Origin, Program};
-use faun::targets::bytes::{Bytes, len32};
+use faun_core::ir::{Origin, Program};
+use faun_core::targets::bytes::{Bytes, len32};
 use sha2::{Digest, Sha256};
 
 use crate::Code;
@@ -242,8 +242,8 @@ fn signature(text: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use faun::programs;
-    use faun::targets::Target;
+    use faun_core::programs;
+    use faun_core::targets::Target;
 
     use super::{PAGE, signature_size};
     use crate::Aarch64Macos;

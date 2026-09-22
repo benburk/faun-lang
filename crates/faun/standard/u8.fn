@@ -1,0 +1,26 @@
+# The private wrapper is available to string syntax, not to importers.
+
+exports {U8}
+
+U8 : Nat.(
+  to_nat : U8 -> Nat
+  to_nat(U8(value)) -> value
+
+  add : U8 U8 -> U8
+  add(U8(a) U8(b)) -> U8((a + b) % 256)
+
+  sub : U8 U8 -> U8
+  sub(U8(a) U8(b)) -> U8((a + 256 - b) % 256)
+
+  mul : U8 U8 -> U8
+  mul(U8(a) U8(b)) -> U8((a * b) % 256)
+
+  div : U8 U8 -> U8
+  div(U8(a) U8(b)) -> U8((a / b) % 256)
+
+  mod : U8 U8 -> U8
+  mod(U8(a) U8(b)) -> U8((a % b) % 256)
+
+  equals : U8 U8 -> Bool
+  equals(U8(a) U8(b)) -> a.equals(b)
+)

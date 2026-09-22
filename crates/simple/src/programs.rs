@@ -1,10 +1,10 @@
 //! Shared executable fixtures written in the simple source language.
 
-use faun::ir::Program;
+use faun_core::ir::Program;
 
 /// A program read from text, against what a compiler knows.
 fn read(text: &str) -> Program {
-    crate::read(text, &faun::platform::Routines::builtin())
+    crate::read(text, &faun_core::platform::Routines::builtin())
         .unwrap_or_else(|error| panic!("{error}\n{text}"))
 }
 
@@ -28,37 +28,37 @@ pub fn running() -> Vec<(&'static str, Program, i32)> {
 
 fn answers_built() -> Vec<(&'static str, Program, i32)> {
     vec![
-        ("two and two", faun::programs::two_and_two(), 4),
+        ("two and two", faun_core::programs::two_and_two(), 4),
         (
             "a long arm first",
-            faun::programs::a_branch_over_a_long_arm(40, true),
+            faun_core::programs::a_branch_over_a_long_arm(40, true),
             40,
         ),
         (
             "a long arm last",
-            faun::programs::a_branch_over_a_long_arm(40, false),
+            faun_core::programs::a_branch_over_a_long_arm(40, false),
             40,
         ),
-        ("a global", faun::programs::counts_in_a_global(), 3),
-        ("eight bits", faun::programs::wraps_at_eight_bits(), 4),
+        ("a global", faun_core::programs::counts_in_a_global(), 3),
+        ("eight bits", faun_core::programs::wraps_at_eight_bits(), 4),
         (
             "values across a call",
-            faun::programs::values_survive_a_call(),
+            faun_core::programs::values_survive_a_call(),
             45,
         ),
         (
             "a comparison",
-            faun::programs::compares_two_worked_out_values(),
+            faun_core::programs::compares_two_worked_out_values(),
             1,
         ),
         (
             "a flag it read",
-            faun::programs::branches_on_a_flag_it_read(),
+            faun_core::programs::branches_on_a_flag_it_read(),
             7,
         ),
         (
             "a total into an arm",
-            faun::programs::carries_a_total_into_an_arm(3),
+            faun_core::programs::carries_a_total_into_an_arm(3),
             3,
         ),
     ]

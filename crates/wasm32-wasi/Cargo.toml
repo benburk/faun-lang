@@ -5,7 +5,7 @@ edition.workspace = true
 description = "The wasm32-wasi target for Faun"
 
 [dependencies]
-faun.workspace = true
+faun-core.workspace = true
 
 [dev-dependencies]
 faun-simple.workspace = true

@@ -10,7 +10,7 @@ use crate::machine::{
 };
 use crate::parallel_copy::{self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place};
 use crate::selected::{BlockId, Immediate, Opcode, Requirements, Selected, Terminator, VReg};
-use faun::ir::{DataId, FunctionId, Offset, Width};
+use faun_core::ir::{DataId, FunctionId, Offset, Width};
 
 const SYS_WRITE: u64 = 1;
 const SYS_MMAP: u64 = 9;

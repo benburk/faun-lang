@@ -11,7 +11,7 @@ use super::{
     HOOK_ARGS, HOOK_EXIT, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
 };
 use crate::WORD_BITS;
-use faun::ir::{
+use faun_core::ir::{
     Binary, Class, DataId, Direction, Exit, FunctionId, Offset, Op, Origin, Program, RegionId,
     Relation, Terminator, ValueId, Width,
 };
@@ -519,7 +519,7 @@ impl Lowering<'_> {
         program
             .functions()
             .iter()
-            .filter_map(faun::ir::Function::body)
+            .filter_map(faun_core::ir::Function::body)
             .flat_map(|body| program.walk_within(body))
             .any(|(op, results)| {
                 matches!(*op, Op::Call { function, .. } if counted(program, function))

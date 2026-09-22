@@ -173,6 +173,8 @@ fn byte_arithmetic_wraps_instead_of_using_monus_or_escaping_the_type() {
                 ("u8_add_wrapping", a.wrapping_add(b)),
                 ("u8_sub_wrapping", a.wrapping_sub(b)),
                 ("u8_mul_wrapping", a.wrapping_mul(b)),
+                ("u8_div_wrapping", a.checked_div(b).unwrap_or(0)),
+                ("u8_mod_wrapping", a.checked_rem(b).unwrap_or(a)),
             ] {
                 same(&lib.call(name, &args), &lib.byte(expected));
             }
@@ -183,7 +185,7 @@ fn byte_arithmetic_wraps_instead_of_using_monus_or_escaping_the_type() {
 }
 
 #[test]
-fn signed_arithmetic_comparisons_and_conversions_have_canonical_zero() {
+fn signed_conversions_have_canonical_zero() {
     let lib = Library::new();
     same(&lib.call("int_zero", &[]), &lib.integer(0));
     for a in -16i64..=16 {
@@ -212,9 +214,22 @@ fn signed_arithmetic_comparisons_and_conversions_have_canonical_zero() {
                 &lib.integer(a),
             );
         }
+    }
+}
+
+#[test]
+fn signed_arithmetic_comparisons_and_zero_divisors() {
+    let lib = Library::new();
+    for a in -16i64..=16 {
         for b in -16i64..=16 {
             let args = [lib.integer(a), lib.integer(b)];
-            for (name, expected) in [("int_add", a + b), ("int_sub", a - b), ("int_mul", a * b)] {
+            for (name, expected) in [
+                ("int_add", a + b),
+                ("int_sub", a - b),
+                ("int_mul", a * b),
+                ("int_div", a.checked_div(b).unwrap_or(0)),
+                ("int_mod", a.checked_rem(b).unwrap_or(a)),
+            ] {
                 same(&lib.call(name, &args), &lib.integer(expected));
             }
             same(&lib.call("int_equals", &args), &lib.boolean(a == b));
@@ -230,7 +245,13 @@ fn small_library_calls_also_evaluate_without_arithmetic_recognition() {
     for a in -3i64..=3 {
         for b in -3i64..=3 {
             let args = [lib.integer(a), lib.integer(b)];
-            for (name, expected) in [("int_add", a + b), ("int_sub", a - b), ("int_mul", a * b)] {
+            for (name, expected) in [
+                ("int_add", a + b),
+                ("int_sub", a - b),
+                ("int_mul", a * b),
+                ("int_div", a.checked_div(b).unwrap_or(0)),
+                ("int_mod", a.checked_rem(b).unwrap_or(a)),
+            ] {
                 same(&lib.call(name, &args), &lib.integer(expected));
             }
         }
@@ -241,7 +262,12 @@ fn small_library_calls_also_evaluate_without_arithmetic_recognition() {
             &lib.byte(n),
         );
     }
-    for (name, expected) in [("u8_add_wrapping", 5), ("u8_mul_wrapping", 6)] {
+    for (name, expected) in [
+        ("u8_add_wrapping", 5),
+        ("u8_mul_wrapping", 6),
+        ("u8_div_wrapping", 0),
+        ("u8_mod_wrapping", 2),
+    ] {
         same(
             &lib.call(name, &[lib.byte(2), lib.byte(3)]),
             &lib.byte(expected),
@@ -283,6 +309,10 @@ fn library_products_sums_and_large_magnitudes_fold_as_ordinary_calls() {
         ("u8_from_nat_checked", vec![lib.natural(256u32)]),
         ("int_negate", vec![lib.integer(0)]),
         ("int_sub", vec![lib.integer(-3), lib.integer(5)]),
+        ("int_div", vec![lib.integer(-7), lib.integer(3)]),
+        ("int_mod", vec![lib.integer(-7), lib.integer(0)]),
+        ("u8_div_wrapping", vec![lib.byte(255), lib.byte(0)]),
+        ("u8_mod_wrapping", vec![lib.byte(255), lib.byte(0)]),
         (
             "int_mul",
             vec![

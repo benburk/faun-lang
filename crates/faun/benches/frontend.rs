@@ -27,18 +27,18 @@ fn main() {
 }
 
 fn benchmark(name: &str, source: &str) {
-    let tokens = faun_frontend::lex::lex(black_box(source)).expect("benchmark source lexes");
+    let tokens = faun::lex::lex(black_box(source)).expect("benchmark source lexes");
     black_box(tokens);
-    let module = faun_frontend::parse(black_box(source)).expect("benchmark source parses");
+    let module = faun::parse(black_box(source)).expect("benchmark source parses");
     assert_eq!(module.items.len(), LINES);
     black_box(module);
 
     let lex = best_of(|| {
-        let tokens = faun_frontend::lex::lex(black_box(source)).expect("benchmark source lexes");
+        let tokens = faun::lex::lex(black_box(source)).expect("benchmark source lexes");
         black_box(tokens);
     });
     let parse = best_of(|| {
-        let module = faun_frontend::parse(black_box(source)).expect("benchmark source parses");
+        let module = faun::parse(black_box(source)).expect("benchmark source parses");
         black_box(module);
     });
 

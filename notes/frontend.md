@@ -5,12 +5,12 @@ Faun has two source frontends while the Ori-compatible one is built out.
 ## Ori-compatible frontend
 
 `faun check PATH` loads, parses, links, resolves, and performs polymorphic type
-inference on `.fn` source. Set `ORI_STD` to a
-standard-library root when the program needs an implicit prelude:
+inference on `.fn` source. The primary `faun` crate supplies its standard package,
+so commands need no environment setup:
 
 ```sh
-ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/literals.fn
-ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/utilities.fn
+cargo run -- check notes/examples/literals.fn
+cargo run -- check notes/examples/utilities.fn
 ```
 
 The accepted language remains a subset of Ori, but now includes:
@@ -23,7 +23,7 @@ The accepted language remains a subset of Ori, but now includes:
 - records, field projection, lists, lambdas in call arguments, calls, static members, methods, and operators.
 
 The grammar follows Ori's source language, while Faun source and package files
-use the `.fn` extension. `crates/frontend/standard/` supplies a bootstrap
+use the `.fn` extension. `crates/faun/standard/` supplies a bootstrap
 prelude with
 `Bool`, `Never`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str`. It includes concrete
 arithmetic, Boolean, collection, and result utilities that avoid hashing,
@@ -107,7 +107,7 @@ explicit `Host` argument is authority to perform the effect. Pure definitions
 cannot call names ending in `!`, and an effect call must stand alone as a local
 binding or clause result.
 
-`faun lower --host HOST PATH` discovers `main!`, follows reachable calls,
+`faun lower --target TARGET PATH` discovers `main!`, follows reachable calls,
 specializes polymorphic globals and nominal data, then defunctionalizes function
 values into concrete closure types and apply functions. Lowering synthesizes a
 parameterless entry which calls the target's `argc!` provider. The one-field
@@ -132,7 +132,7 @@ earlier frontend gaps.
 Run the frontend throughput benchmark in an optimized build:
 
 ```sh
-cargo bench -p faun-frontend --bench frontend
+cargo bench -p faun --bench frontend
 ```
 
 It measures lexing and complete single-file parsing over three 100,000-line
@@ -175,5 +175,6 @@ cargo run --bin faun-simple -- inspect --emit barb examples/expressions.fn
 
 The library crate is `faun-simple`; it owns this syntax, its pipeline entry
 points, and `crates/simple/standard/`. The primary syntax and
-`crates/frontend/standard/` belong to the separate `faun-frontend` crate. Both
-frontends depend on the shared `faun` compiler core.
+`crates/faun/standard/` belong to the `faun` crate. Both frontends depend on
+the shared `faun-core` compiler core; the separate `faun-driver` crate composes
+the primary frontend with whichever targets an executable registers.

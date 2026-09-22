@@ -1,10 +1,10 @@
 //! Target-specific limits and size baselines; conformance cases are shared.
-use faun::targets::Target;
+use faun_core::targets::Target;
 
 use crate::X86_64Linux;
 use shared::{narrow, wide};
 
-#[path = "../../faun/tests/support/backend.rs"]
+#[path = "../../core/tests/support/backend.rs"]
 mod shared;
 
 const TARGET: X86_64Linux = X86_64Linux;
@@ -61,9 +61,9 @@ const ARITHMETIC_SIZES: [usize; 3] = [204, 215, 216];
 fn ladder_code_size_ratchets() {
     let routines = TARGET.routines();
     let mut code = Vec::new();
-    for (name, mut barb) in faun::programs::ladder::every(&routines) {
-        faun::barb::optimize(&mut barb, &faun::barb::OptimizeOptions::default());
-        let machine = faun::machine(&barb, &routines).unwrap();
+    for (name, mut barb) in faun_core::programs::ladder::every(&routines) {
+        faun_core::barb::optimize(&mut barb, &faun_core::barb::OptimizeOptions::default());
+        let machine = faun_core::machine(&barb, &routines).unwrap();
         let prepared = TARGET.prepare(&machine).unwrap();
         let allocated = crate::selected::select_and_allocate(&prepared).unwrap();
         code.push((name, crate::encode::encode(&allocated).bytes));

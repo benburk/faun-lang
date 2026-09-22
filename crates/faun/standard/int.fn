@@ -38,6 +38,18 @@ Int : [Pos(Nat) NegSucc(Nat)].(
   mul(NegSucc(a) Pos(b)) -> neg(of_nat((a + 1) * b))
   mul(NegSucc(a) NegSucc(b)) -> Pos((a + 1) * (b + 1))
 
+  div : Int Int -> Int
+  div(Pos(a) Pos(b)) -> Pos(a / b)
+  div(Pos(a) NegSucc(b)) -> neg(of_nat(a / (b + 1)))
+  div(NegSucc(a) Pos(b)) -> neg(of_nat((a + 1) / b))
+  div(NegSucc(a) NegSucc(b)) -> Pos((a + 1) / (b + 1))
+
+  mod : Int Int -> Int
+  mod(Pos(a) Pos(b)) -> Pos(a % b)
+  mod(Pos(a) NegSucc(b)) -> Pos(a % (b + 1))
+  mod(NegSucc(a) Pos(b)) -> neg(of_nat((a + 1) % b))
+  mod(NegSucc(a) NegSucc(b)) -> neg(of_nat((a + 1) % (b + 1)))
+
   equals : Int Int -> Bool
   equals(Pos(a) Pos(b)) -> a.equals(b)
   equals(NegSucc(a) NegSucc(b)) -> a.equals(b)

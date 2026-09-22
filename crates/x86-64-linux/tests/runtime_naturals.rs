@@ -1,4 +1,4 @@
-include!("../../faun/tests/support/runtime_naturals.rs");
+include!("../../core/tests/support/runtime_naturals.rs");
 
 #[test]
 fn source_runtime_naturals_can_be_compared_before_a_bounded_host_effect() {
@@ -20,7 +20,7 @@ fn native_compilation_rejects_unimplemented_multiple_return_abi() {
 
 #[test]
 fn compilation_wrappers_apply_native_abi_limits() {
-    use faun::programs::abi;
+    use faun_core::programs::abi;
     let target = faun_x86_64_linux::X86_64Linux;
     for (p, accepted) in [
         (abi::function(6, 1), true),

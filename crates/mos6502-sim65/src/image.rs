@@ -1,7 +1,7 @@
 //! The sim65 container: a twelve-byte header, then the data and the code.
 
 use super::{CSP, Code, LOAD};
-use faun::ir::Program;
+use faun_core::ir::Program;
 
 pub(crate) fn image(code: &Code, program: &Program) -> Vec<u8> {
     let mut out = Vec::with_capacity(12 + program.data().len() + code.bytes.len());

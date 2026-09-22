@@ -1,6 +1,6 @@
 // Shared native-backend runtime bigint fixture (included by integration tests).
-use faun::ir::{Binary, Class, Offset, Program, Width};
-use faun::targets::Target;
+use faun_core::ir::{Binary, Class, Offset, Program, Width};
+use faun_core::targets::Target;
 
 #[expect(
     clippy::too_many_lines,
@@ -8,7 +8,7 @@ use faun::targets::Target;
 )]
 fn program() -> Program {
     let (mut p, main) = Program::new("main");
-    let routines = faun::platform::Routines::builtin();
+    let routines = faun_core::platform::Routines::builtin();
     let argc = routines.declare(&mut p, "argc!");
     let write = routines.declare(&mut p, "write");
     let bytes = p.global(&[0; 80]);
@@ -147,16 +147,16 @@ fn source_check(target: &dyn Target, runner: Option<&str>) {
     let p = faun_simple::read(&text, &target.routines()).expect("bounded effect after runtime arithmetic");
     for wanted in [Binary::Mul, Binary::Div] {
         assert!(
-            p.functions().iter().filter_map(faun::ir::Function::body).any(|body| p.every(body).any(|op| {
-                matches!(*op, faun::ir::Op::Binary { op, left, .. }
+            p.functions().iter().filter_map(faun_core::ir::Function::body).any(|body| p.every(body).any(|op| {
+                matches!(*op, faun_core::ir::Op::Binary { op, left, .. }
                 if op == wanted && p.class(left) == Class::Natural)
             })),
             "runtime {wanted:?} must survive source optimization"
         );
     }
     assert!(
-        p.functions().iter().filter_map(faun::ir::Function::body).any(|body| p.every(body).any(|op| {
-            matches!(*op, faun::ir::Op::NaturalConstant(data) if p.datum(data).len >= 17)
+        p.functions().iter().filter_map(faun_core::ir::Function::body).any(|body| p.every(body).any(|op| {
+            matches!(*op, faun_core::ir::Op::NaturalConstant(data) if p.datum(data).len >= 17)
         })),
         "ordinary repeated squaring must construct at least 2^128"
     );

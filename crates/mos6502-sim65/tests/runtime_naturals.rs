@@ -1,10 +1,10 @@
-use faun::ir::{Class, Program};
-use faun::targets::Target;
+use faun_core::ir::{Class, Program};
+use faun_core::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
 
 #[test]
 fn compilation_wrappers_apply_native_abi_and_transfer_limits() {
-    use faun::programs::abi;
+    use faun_core::programs::abi;
     for (p, accepted) in [
         (abi::function(4, 1), true),
         (abi::function(5, 1), false),

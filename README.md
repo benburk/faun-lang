@@ -3,17 +3,18 @@
 A work-in-progress compiled, statically typed, functional programming language,
 targeting x86-64 Linux, AArch64 macOS, wasm32 WASI, and MOS 6502 sim65.
 
-The primary frontend is being replaced with an Ori-compatible language. The
+The primary frontend implements an in-progress Ori-compatible language. The
 `faun` command loads modules, parses, links, resolves names, infers polymorphic
 types, and resolves methods in the current subset:
 
 ```sh
 cargo run -- check notes/examples/frontend.fn
-ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/literals.fn
-ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/utilities.fn
-ORI_STD=crates/frontend/standard/standard.fn cargo run -- check --host x86-64-linux notes/examples/main.fn
-ORI_STD=crates/frontend/standard/standard.fn cargo run -- lower --host x86-64-linux notes/examples/main.fn
-cargo bench -p faun-frontend --bench frontend
+cargo run -- check notes/examples/literals.fn
+cargo run -- check notes/examples/utilities.fn
+cargo run -- check --target x86_64-linux notes/examples/main.fn
+cargo run -- lower --target x86_64-linux notes/examples/main.fn
+cargo run -- build --target x86_64-linux notes/examples/main.fn
+cargo bench -p faun --bench frontend
 ```
 
 It supports package interfaces, nominal types and method blocks, closed records,
@@ -35,10 +36,31 @@ capturing lambdas. Literal expansions remain ordinary Barb operations. Ranges,
 interpolated strings, local destructuring bindings, structural variants,
 record updates and rows, and locally let-polymorphic values are not lowered yet. See the [frontend status and benchmark contract](notes/frontend.md) for the exact boundary.
 
-The source frontends are separate crates. `faun-frontend` owns the primary
-syntax, inference, module loader, and its standard package. `faun-simple` owns
-the archived syntax, its standard sources, and the complete old compilation
-pipeline. The `faun` crate starts at Barb and contains the shared compiler core.
+The source frontends are separate crates. `faun` owns the primary language:
+syntax, inference, module loading, lowering, and its standard package.
+`faun-simple` owns the archived syntax and standard sources. Both lower into
+`faun-core`, which owns Barb, machine IR, analysis, and the target interface.
+
+`faun-driver` is the reusable source-to-artifact command driver. The `faun-cli`
+package supplies the small official executable that registers the four bundled
+target crates. A custom target can depend on `faun-driver`, register its target
+and source host module, and obtain the same `check`, `lower`, `build`, and `run`
+commands without modifying the official executable:
+
+```rust
+use faun_driver::Backend;
+use my_faun_target::MyTarget;
+
+const BACKENDS: [Backend; 1] = [Backend::external(
+    &MyTarget,
+    concat!(env!("CARGO_MANIFEST_DIR"), "/host.fn"),
+    true,
+)];
+
+fn main() -> std::process::ExitCode {
+    faun_driver::run(&BACKENDS)
+}
+```
 
 The archived `faun-simple` command validates definitions, runs a bounded optimization
 schedule, recognizes arithmetic structurally, derives ranges, and lowers to
@@ -46,7 +68,7 @@ validated machine IR. Targets then prepare representations, check their limits,
 and emit. A reference machine-IR interpreter supports 16-, 32-, and 64-bit
 configurations.
 
-See the [primary standard package](crates/frontend/standard/README.md) and
+See the [primary standard package](crates/faun/standard/README.md) and
 [simple standard sources](crates/simple/standard/README.md). The simple
 frontend has no automatic prelude or import syntax: prepend the needed library
 files explicitly.
@@ -61,8 +83,9 @@ wider than a target word are still rejected.
 uses after folding and dead-binding cleanup. Runtime product/sum packing and
 signed lowering are not implemented.
 
-Compiler clients should use `Target::compile`, or `Target::prepare` to inspect
-the prepared IR; raw `emit` does not legalize naturals or establish its validation
+Compiler clients should use `faun_core::targets::Target::compile`, or use
+`Target::prepare` to inspect the prepared IR. Raw `emit` does not legalize
+naturals or establish its validation
 and target-acceptance preconditions. See [machine IR contracts](notes/machine-ir.md)
 for external declarations, function construction, and representation rebuilding.
 

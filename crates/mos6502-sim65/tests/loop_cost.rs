@@ -13,9 +13,9 @@
 use std::fs;
 use std::process::Command;
 
-use faun::ir::Class::Word;
-use faun::ir::{Binary, Program, Relation};
-use faun::targets::Target;
+use faun_core::ir::Class::Word;
+use faun_core::ir::{Binary, Program, Relation};
+use faun_core::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
 
 /// `for (i = 0; i < limit; i++) acc += i;`, answering `acc`'s low byte.
@@ -47,7 +47,7 @@ fn summing_loop(limit: u64) -> Program {
 
 /// The cycles the image took, and the status it left with.
 fn run(program: &Program) -> (u64, i32) {
-    faun::ir::validate(program).expect("a well-formed program");
+    faun_core::ir::validate(program).expect("a well-formed program");
     let dir = std::env::temp_dir().join(format!(
         "faun-cost-{}-{}",
         std::process::id(),
@@ -121,7 +121,7 @@ fn arithmetic_cost_is_bounded_by_word_bits_not_values() {
         (Binary::Div, (65535, 32768)),
         (Binary::Mod, (65535, 0)),
     ] {
-        let program = faun::programs::arithmetic::cases(16, op, &[pair]);
+        let program = faun_core::programs::arithmetic::cases(16, op, &[pair]);
         let (cycles, status) = run(&program);
         assert_eq!(status, 0, "{op:?} {pair:?}");
         assert!(cycles <= 1400, "{op:?} {pair:?}: {cycles} cycles");

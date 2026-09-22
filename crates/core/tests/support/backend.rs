@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, PoisonError};
 
-use faun::ir::{Binary, Class, Op, Program, ValueId};
-use faun::programs;
-use faun::targets::Target;
+use faun_core::ir::{Binary, Class, Op, Program, ValueId};
+use faun_core::programs;
+use faun_core::targets::Target;
 
 use super::{ARITHMETIC_SIZES, CORPUS_SIZES, EXAMPLE_SIZES, LADDER_SIZES, RUNNER, TARGET};
 
@@ -68,7 +68,7 @@ pub(super) fn execute(program: &Program) -> (i32, String) {
 fn execute_counts(program: &Program, counts: &[u16]) -> Vec<(i32, String)> {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-    faun::ir::validate(program).expect("a well-formed program");
+    faun_core::ir::validate(program).expect("a well-formed program");
     TARGET
         .accepts(program)
         .expect("a program this machine holds");
@@ -132,7 +132,7 @@ pub(super) fn status(program: &Program) -> i32 {
 /// "what does a backend do with this"; a shape only the passes produce has
 /// to be asked for separately.
 fn optimized(program: &Program) -> Program {
-    faun::ir::optimize(program, &faun::ir::OptimizeOptions::default())
+    faun_core::ir::optimize(program, &faun_core::ir::OptimizeOptions::default())
 }
 
 pub(super) fn bytes(program: &Program) -> Vec<u8> {
@@ -284,15 +284,15 @@ fn it_lays_out_a_chain_as_the_number_it_builds() {
 #[test]
 fn it_runs_a_program_built_rather_than_written() {
     let barb = programs::two_and_two_in_barb();
-    let facts = faun::barb::analyze(&barb);
+    let facts = faun_core::barb::analyze(&barb);
     let machine =
-        faun::ir::lower(&barb, &facts, &TARGET.routines()).expect("a representable program");
+        faun_core::ir::lower(&barb, &facts, &TARGET.routines()).expect("a representable program");
     // Recognized addition becomes an instruction; only the entry survives.
     assert_eq!(
         machine
             .functions()
             .iter()
-            .filter_map(faun::ir::Function::body)
+            .filter_map(faun_core::ir::Function::body)
             .count(),
         1
     );
@@ -312,7 +312,7 @@ fn guarded_argc_expressions_fold_constants_but_compute_runtime_inputs() {
         let instructions: Vec<_> = program
             .functions()
             .iter()
-            .filter_map(faun::ir::Function::body)
+            .filter_map(faun_core::ir::Function::body)
             .flat_map(|body| program.walk_within(body))
             .collect();
         assert!(
@@ -374,9 +374,9 @@ fn source_zero_width_scalars_cross_calls_and_joins() {
         let program = faun_simple::read_with_options(
             source,
             &TARGET.routines(),
-            &faun::barb::OptimizeOptions {
+            &faun_core::barb::OptimizeOptions {
                 inline_helpers,
-                ..faun::barb::OptimizeOptions::default()
+                ..faun_core::barb::OptimizeOptions::default()
             },
         )
         .unwrap();
@@ -555,10 +555,13 @@ fn the_ladder_answers_what_its_programs_say() {
 /// Both halves, because a program arriving at Barb has not been through
 /// Barb's own schedule yet, and lowering one that has not is lowering a
 /// program nothing writes.
-fn lowered(mut barb: faun::barb::Program, routines: &faun::platform::Routines) -> Program {
-    faun::barb::validate(&barb).expect("a sound program");
-    faun::barb::optimize(&mut barb, &faun::barb::OptimizeOptions::default());
-    faun::machine(&barb, routines).expect("a representable program")
+fn lowered(
+    mut barb: faun_core::barb::Program,
+    routines: &faun_core::platform::Routines,
+) -> Program {
+    faun_core::barb::validate(&barb).expect("a sound program");
+    faun_core::barb::optimize(&mut barb, &faun_core::barb::OptimizeOptions::default());
+    faun_core::machine(&barb, routines).expect("a representable program")
 }
 
 #[test]

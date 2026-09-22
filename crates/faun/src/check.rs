@@ -2157,6 +2157,40 @@ mod tests {
     }
 
     #[test]
+    fn repository_bootstrap_exposes_arithmetic_for_nat_int_and_u8() {
+        let fixture = Fixture::new();
+        let entry = fixture.write(
+            "arithmetic.fn",
+            "nat_ops : Nat Nat -> Nat\n\
+             nat_ops(a b) -> ((((a + b) - b) * b) / b) % b\n\
+             int_ops : Int Int -> Int\n\
+             int_ops(a b) -> ((((a + b) - b) * b) / b) % b\n\
+             u8_ops : U8 U8 -> U8\n\
+             u8_ops(a b) -> ((((a + b) - b) * b) / b) % b\n",
+        );
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
+        let loaded = modules::load(&[entry], Some(&root)).unwrap();
+        let prelude = PreludeIds::resolve(&loaded).unwrap();
+        let resolved = resolve::resolve(loaded).unwrap();
+        let checked = program(&resolved, &prelude).unwrap();
+        let methods: HashSet<_> = checked
+            .methods
+            .iter()
+            .map(|site| resolved.symbols.text(site.target))
+            .collect();
+        for ty in ["Nat", "Int", "U8"] {
+            for operation in ["add", "sub", "mul", "div", "mod"] {
+                assert!(
+                    methods
+                        .iter()
+                        .any(|name| name.ends_with(&format!("{ty}.{operation}"))),
+                    "missing {ty}.{operation}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn pure_definitions_and_nested_expressions_cannot_hide_effects() {
         let fixture = Fixture::new();
         let (prelude, resolved) =

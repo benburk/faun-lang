@@ -2,7 +2,7 @@
 //! come out empty are left out entirely.
 
 use super::{Code, END, FUNC_TYPE, I32, I32_CONST};
-use faun::targets::bytes::{Bytes, len32};
+use faun_core::targets::bytes::{Bytes, len32};
 
 /// Section ids, in the order a module must list them.
 const TYPE: u8 = 1;
@@ -157,13 +157,13 @@ fn pages(code: &Code) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use faun::targets::Target;
+    use faun_core::targets::Target;
 
     use super::*;
 
     fn hello() -> Vec<u8> {
         crate::Wasm32Wasi
-            .emit(&faun::programs::hello_world())
+            .emit(&faun_core::programs::hello_world())
             .pop()
             .unwrap()
             .bytes
@@ -193,7 +193,9 @@ mod tests {
     #[test]
     fn one_page_holds_a_greeting() {
         assert_eq!(
-            pages(&super::super::lower::lower(&faun::programs::hello_world())),
+            pages(&super::super::lower::lower(
+                &faun_core::programs::hello_world()
+            )),
             1
         );
     }

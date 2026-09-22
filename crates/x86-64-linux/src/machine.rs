@@ -4,7 +4,7 @@
 //! physical registers, while labels, frame slots, and data references remain
 //! symbolic until encoding.
 
-use faun::ir::DataId;
+use faun_core::ir::DataId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]

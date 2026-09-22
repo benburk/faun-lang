@@ -12,8 +12,8 @@ mod encode;
 mod lower;
 mod macho;
 
-use faun::ir::Program;
-use faun::targets::{Artifact, Target};
+use faun_core::ir::Program;
+use faun_core::targets::{Artifact, Target};
 
 pub(crate) const WORD_BITS: u16 = 64;
 
@@ -54,8 +54,8 @@ struct Code {
 
 #[cfg(test)]
 mod tests {
-    use faun::programs;
-    use faun::targets::Target;
+    use faun_core::programs;
+    use faun_core::targets::Target;
 
     use super::*;
 

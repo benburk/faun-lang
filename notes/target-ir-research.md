@@ -11,7 +11,7 @@ Use LLVM's machine-code architecture for an opt-in register-machine toolkit, MLI
 The only mandatory target boundary should remain the existing one:
 
 ```text
-prepared faun::ir::Program -> target-owned lowering -> Artifact
+prepared faun_core::ir::Program -> target-owned lowering -> Artifact
 ```
 
 A backend may opt into a register-machine library providing:
@@ -35,7 +35,7 @@ LLVM keeps a target-independent `MachineFunction` container whose instructions a
 That separation fits Faun:
 
 ```text
-prepared faun::ir::Program
+prepared faun_core::ir::Program
     -> selected target function
     -> allocated target function
     -> laid-out encoding instructions and fixups
@@ -247,7 +247,7 @@ Nesfab's search should be adopted selectively. Its bounded candidate count, stat
 
 ## Proposed opt-in shape
 
-Keep `faun::targets::Target` unchanged: a target owns everything below machine IR and only promises checked preparation and artifact emission. Initially, put the register-machine implementation inside the x86 crate. That gives its storage and phase contracts one real caller before an abstraction is chosen.
+Keep `faun_core::targets::Target` unchanged: a target owns everything below machine IR and only promises checked preparation and artifact emission. Initially, put the register-machine implementation inside the x86 crate. That gives its storage and phase contracts one real caller before an abstraction is chosen.
 
 ```text
 crates/x86-64-linux/src/

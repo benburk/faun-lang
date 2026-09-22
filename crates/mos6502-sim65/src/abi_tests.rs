@@ -1,6 +1,6 @@
-use faun::ir::{Binary, Class, Program, validate};
-use faun::programs::abi::{self, Transfer};
-use faun::targets::Target;
+use faun_core::ir::{Binary, Class, Program, validate};
+use faun_core::programs::abi::{self, Transfer};
+use faun_core::targets::Target;
 
 use crate::Mos6502Sim65;
 

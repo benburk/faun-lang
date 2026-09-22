@@ -23,8 +23,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use faun::barb::{Atom, CtorId, FnId, Program, TypeId};
-use faun::platform::Routines;
+use faun_core::barb::{Atom, CtorId, FnId, Program, TypeId};
+use faun_core::platform::Routines;
 
 /// What a clause matches in one argument: a name, or a constructor and the
 /// names its fields take.
@@ -758,7 +758,9 @@ impl Lowering<'_> {
                 Ok(atom) => atom,
                 Err(error) => {
                     failed = Some(error);
-                    args.first().copied().unwrap_or(Atom(faun::barb::Local(0)))
+                    args.first()
+                        .copied()
+                        .unwrap_or(Atom(faun_core::barb::Local(0)))
                 }
             }
         });
@@ -782,7 +784,7 @@ impl Lowering<'_> {
     /// reaches here answers here.
     fn rows(
         &self,
-        b: &mut faun::barb::Builder,
+        b: &mut faun_core::barb::Builder,
         rows: &[Row],
         args: &[Atom],
         types: &[TypeId],
@@ -871,7 +873,7 @@ impl Lowering<'_> {
     /// happen first is written first.
     fn body(
         &self,
-        b: &mut faun::barb::Builder,
+        b: &mut faun_core::barb::Builder,
         clause: &Clause,
         scope: Scope,
     ) -> Result<Atom, String> {
@@ -885,7 +887,7 @@ impl Lowering<'_> {
 
     fn term(
         &self,
-        b: &mut faun::barb::Builder,
+        b: &mut faun_core::barb::Builder,
         term: &Term,
         scope: &Scope,
     ) -> Result<Atom, String> {

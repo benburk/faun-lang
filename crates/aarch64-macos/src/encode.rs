@@ -1,4 +1,4 @@
-use faun::ir::DataId;
+use faun_core::ir::DataId;
 
 const SVC_0X80: u32 = 0xD400_1001;
 

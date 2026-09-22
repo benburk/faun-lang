@@ -1,5 +1,5 @@
-use faun::ir::{Class, Program, legalize, natural::Config};
-use faun::targets::Target;
+use faun_core::ir::{Class, Program, legalize, natural::Config};
+use faun_core::targets::Target;
 use faun_x86_64_linux::X86_64Linux;
 
 #[test]

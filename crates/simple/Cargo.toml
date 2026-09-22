@@ -5,7 +5,7 @@ edition.workspace = true
 description = "The archived simple Faun source frontend"
 
 [dependencies]
-faun.workspace = true
+faun-core.workspace = true
 
 [lints]
 workspace = true

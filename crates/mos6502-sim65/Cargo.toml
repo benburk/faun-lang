@@ -5,7 +5,7 @@ edition.workspace = true
 description = "The mos6502-sim65 target for Faun"
 
 [dependencies]
-faun.workspace = true
+faun-core.workspace = true
 
 [dev-dependencies]
 faun-simple.workspace = true

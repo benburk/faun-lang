@@ -10,11 +10,11 @@
 
 use super::{Body, CALL, Code, DROP, END, I32_CONST, Segment};
 use crate::WORD_BITS;
-use faun::ir::{
+use faun_core::ir::{
     Binary, Class, DataId, Direction, Exit, FunctionId, Offset, Op, Origin, Program, Range,
     RegionId, Relation, Terminator, ValueId, Width,
 };
-use faun::targets::bytes::{Bytes, len32};
+use faun_core::targets::bytes::{Bytes, len32};
 
 const STDOUT: i32 = 1;
 
@@ -850,18 +850,18 @@ impl Lowering<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faun::ir::Class;
+    use faun_core::ir::Class;
 
-    fn entry(build: impl FnOnce(&mut faun::ir::Builder)) -> Program {
+    fn entry(build: impl FnOnce(&mut faun_core::ir::Builder)) -> Program {
         let (mut program, main) = Program::new("main");
         program.define(main, |b, _| build(b));
-        faun::ir::validate(&program).unwrap();
+        faun_core::ir::validate(&program).unwrap();
         program
     }
 
     #[test]
     fn hello_world_needs_no_exit_call() {
-        let code = lower(&faun::programs::hello_world());
+        let code = lower(&faun_core::programs::hello_world());
         assert_eq!(code.imports, ["fd_write"], "no proc_exit");
         assert_eq!(code.bodies[0].locals, 0, "constants need no locals");
 
@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn the_vector_points_at_the_message() {
-        let code = lower(&faun::programs::hello_world());
+        let code = lower(&faun_core::programs::hello_world());
         assert_eq!(code.data[0].offset, IOVECS);
         // Base 16 is the first byte past the vector itself, length 14.
         assert_eq!(code.data[0].bytes, [16, 0, 0, 0, 14, 0, 0, 0]);
@@ -903,7 +903,7 @@ mod tests {
     #[test]
     fn leaving_with_nought_is_the_end_of_the_entry() {
         let (mut program, main) = Program::new("main");
-        let exit = faun::platform::Routines::builtin().declare(&mut program, "exit!");
+        let exit = faun_core::platform::Routines::builtin().declare(&mut program, "exit!");
         program.define(main, |b, _| {
             let status = b.constant(Class::Word, 0);
             b.call(exit, &[status]);
@@ -919,7 +919,7 @@ mod tests {
     #[test]
     fn leaving_with_nought_from_elsewhere_is_a_call() {
         let (mut program, main) = Program::new("main");
-        let exit = faun::platform::Routines::builtin().declare(&mut program, "exit!");
+        let exit = faun_core::platform::Routines::builtin().declare(&mut program, "exit!");
         let leave = program.declare_never("leave", &[]);
         program.define(leave, |b, _| {
             let status = b.constant(Class::Word, 0);
@@ -928,7 +928,7 @@ mod tests {
         program.define(main, |b, _| {
             b.call(leave, &[]);
         });
-        faun::ir::validate(&program).unwrap();
+        faun_core::ir::validate(&program).unwrap();
 
         let code = lower(&program);
         assert_eq!(code.imports, ["proc_exit"]);

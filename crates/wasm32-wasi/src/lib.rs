@@ -6,8 +6,8 @@ mod module;
 #[cfg(test)]
 mod tests;
 
-use faun::ir::Program;
-use faun::targets::{Artifact, Target};
+use faun_core::ir::Program;
+use faun_core::targets::{Artifact, Target};
 
 const I32: u8 = 0x7F;
 const FUNC_TYPE: u8 = 0x60;

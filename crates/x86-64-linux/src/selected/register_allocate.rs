@@ -12,8 +12,8 @@ use crate::machine::FrameSlot;
 use crate::parallel_copy::{
     self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place, TransitionCost,
 };
-use faun::index::Range;
-use faun::ir::FunctionId;
+use faun_core::index::Range;
+use faun_core::ir::FunctionId;
 
 const REGISTERS: [Reg; 8] = [
     Reg::Rax,
@@ -1331,11 +1331,11 @@ impl From<parallel_copy::PlanError> for String {
 mod tests {
     use super::*;
     use crate::selected::select;
-    use faun::ir::{Binary, Class, Program};
+    use faun_core::ir::{Binary, Class, Program};
 
     #[test]
     fn loops_produce_segmented_live_ranges_and_edge_costs() {
-        let program = faun::programs::carries_a_total_into_an_arm(3);
+        let program = faun_core::programs::carries_a_total_into_an_arm(3);
         let selected = select(&program).unwrap();
         let liveness = Liveness::build(&selected).unwrap();
         let allocation = Allocator::new(&selected, &liveness, program.entry())

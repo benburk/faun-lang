@@ -72,15 +72,18 @@ dependencies = [
 name = "faun"
 version = "0.1.0"
 dependencies = [
+ "faun-core",
+ "mimalloc",
  "num-bigint",
  "num-traits",
+ "peg",
 ]
 
 [[package]]
 name = "faun-aarch64-macos"
 version = "0.1.0"
 dependencies = [
- "faun",
+ "faun-core",
  "sha2",
 ]
 
@@ -89,9 +92,9 @@ name = "faun-cli"
 version = "0.1.0"
 dependencies = [
  "bpaf",
- "faun",
  "faun-aarch64-macos",
- "faun-frontend",
+ "faun-core",
+ "faun-driver",
  "faun-mos6502-sim65",
  "faun-simple",
  "faun-wasm32-wasi",
@@ -100,21 +103,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "faun-frontend"
+name = "faun-core"
 version = "0.1.0"
 dependencies = [
- "faun",
- "mimalloc",
  "num-bigint",
  "num-traits",
- "peg",
+]
+
+[[package]]
+name = "faun-driver"
+version = "0.1.0"
+dependencies = [
+ "bpaf",
+ "faun",
+ "faun-core",
 ]
 
 [[package]]
 name = "faun-mos6502-sim65"
 version = "0.1.0"
 dependencies = [
- "faun",
+ "faun-core",
  "faun-simple",
 ]
 
@@ -122,14 +131,14 @@ dependencies = [
 name = "faun-simple"
 version = "0.1.0"
 dependencies = [
- "faun",
+ "faun-core",
 ]
 
 [[package]]
 name = "faun-wasm32-wasi"
 version = "0.1.0"
 dependencies = [
- "faun",
+ "faun-core",
  "faun-simple",
 ]
 
@@ -137,7 +146,7 @@ dependencies = [
 name = "faun-x86-64-linux"
 version = "0.1.0"
 dependencies = [
- "faun",
+ "faun-core",
  "faun-simple",
 ]
 

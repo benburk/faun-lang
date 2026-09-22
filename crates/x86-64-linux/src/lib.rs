@@ -15,8 +15,8 @@ mod selected;
 #[cfg(test)]
 mod tests;
 
-use faun::ir::{DataId, Program};
-use faun::targets::{Artifact, Target};
+use faun_core::ir::{DataId, Program};
+use faun_core::targets::{Artifact, Target};
 
 /// How wide this machine's own word is, which is the widest value it holds
 /// and what any class but a fixed one means here.

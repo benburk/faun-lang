@@ -1,11 +1,11 @@
 //! Target-specific limits and size baselines; conformance cases are shared.
-use faun::programs;
-use faun::targets::Target;
+use faun_core::programs;
+use faun_core::targets::Target;
 
 use crate::Wasm32Wasi;
 use shared::{EXIT_ZERO, bytes, execute, narrow, read, status, wide};
 
-#[path = "../../faun/tests/support/backend.rs"]
+#[path = "../../core/tests/support/backend.rs"]
 mod shared;
 
 const TARGET: Wasm32Wasi = Wasm32Wasi;

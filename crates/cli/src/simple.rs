@@ -13,8 +13,8 @@ use bpaf::long;
 use bpaf::positional;
 use bpaf::short;
 
-use faun::targets::Target;
 use faun_aarch64_macos::Aarch64Macos;
+use faun_core::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
@@ -196,12 +196,12 @@ fn inspect(text: &str, target: &dyn Target, stage: Stage) -> Result<String, Stri
         Stage::Barb => Ok(faun_simple::read_barb_with_options(
             text,
             &routines,
-            &faun::barb::OptimizeOptions::default(),
+            &faun_core::barb::OptimizeOptions::default(),
         )?
         .render()),
         Stage::Ir => {
             let program = faun_simple::read(text, &routines)?;
-            faun::ir::validate(&program)?;
+            faun_core::ir::validate(&program)?;
             Ok(program.render())
         }
         Stage::PreparedIr => {
@@ -212,7 +212,7 @@ fn inspect(text: &str, target: &dyn Target, stage: Stage) -> Result<String, Stri
 }
 
 /// The program at `path`, read and lowered.
-fn read(path: &Path, target: &dyn Target) -> Result<faun::ir::Program, Box<dyn Error>> {
+fn read(path: &Path, target: &dyn Target) -> Result<faun_core::ir::Program, Box<dyn Error>> {
     let text = fs::read_to_string(path)?;
     faun_simple::read(&text, &target.routines())
         .map_err(|error| format!("{}: {error}", path.display()).into())
@@ -221,7 +221,7 @@ fn read(path: &Path, target: &dyn Target) -> Result<faun::ir::Program, Box<dyn E
 fn write(
     target: &'static dyn Target,
     output: &Path,
-    program: &faun::ir::Program,
+    program: &faun_core::ir::Program,
 ) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let artifacts = target.compile(program)?;
     let mut written = Vec::new();

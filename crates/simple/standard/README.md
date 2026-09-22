@@ -74,7 +74,7 @@ assertions. Interpreter support does not imply native target support.
 
 ### Guarded runtime expression probes
 
-The [shared expression corpus](../crates/faun/tests/support/expressions.rs) uses
+The [shared expression corpus](../../core/tests/support/expressions.rs) uses
 `argc!` with a guard requiring `count < 32`; rejected counts exit with status 100.
 Normal optimization stays enabled: constants fold, while input-dependent
 addition chains, shared intermediates, constant-left addition, carry and monus
@@ -159,8 +159,11 @@ semantic representation, not a promise about memory layout.
 - `u8_from_nat_wrapping(n)` returns `n` modulo 256, even for huge naturals.
 - `u8_from_nat_checked(n)` returns `U8Value(byte)` for `n < 256`, otherwise
   `U8Overflow`. Checked narrowing never silently wraps.
-- `u8_add_wrapping(a b)`, `u8_sub_wrapping(a b)`, and `u8_mul_wrapping(a b)`
-  operate modulo 256. In particular, byte `0 - 1` is 255, not natural monus zero.
+- `u8_add_wrapping(a b)`, `u8_sub_wrapping(a b)`, `u8_mul_wrapping(a b)`,
+  `u8_div_wrapping(a b)`, and `u8_mod_wrapping(a b)` operate on unsigned
+  representatives and return values modulo 256. In particular, byte `0 - 1` is
+  255, not natural monus zero. Division by zero returns zero; remainder by zero
+  returns the dividend.
 - `u8_equals(a b)` and `u8_less_than(a b)` compare the unsigned representatives
   and return `Bool`.
 
@@ -175,8 +178,7 @@ main!(h) ->
 The explicit wrapping/checked distinction follows Ori's modular-byte approach,
 but the finite structural representation does not depend on module privacy.
 There is no byte literal syntax, implicit conversion, or spelling-based compiler
-intrinsic. Division, remainder, bitwise operations, and checked arithmetic are
-not provided yet.
+intrinsic. Bitwise operations and checked arithmetic are not provided yet.
 
 ## Signed integers: `crates/simple/standard/int.fn`
 
@@ -198,14 +200,15 @@ requires no hidden invariant or compiler rewrite of observable constructors.
 - `int_abs(a)` returns a natural magnitude; `int_is_negative(a)` returns `Bool`.
 - `int_to_nat_checked(a)` returns `IntNatural(n)` for nonnegative values,
   otherwise `IntNegative`; it neither clamps nor drops the sign.
-- `int_add(a b)`, `int_sub(a b)`, and `int_mul(a b)` implement unbounded signed
-  arithmetic with no overflow/wrapping. Signed subtraction is not monus.
+- `int_add(a b)`, `int_sub(a b)`, `int_mul(a b)`, `int_div(a b)`, and
+  `int_mod(a b)` implement unbounded signed arithmetic with no overflow/wrapping.
+  Signed subtraction is not monus. Division truncates toward zero, and a nonzero
+  remainder has the dividend's sign. Division by zero returns zero; remainder by
+  zero returns the dividend.
 - `int_equals(a b)` and `int_less_than(a b)` return `Bool`; ordering reverses the
   natural magnitudes for two negatives.
 
-Signed division/remainder are deliberately absent: neither truncating nor
-Euclidean semantics have been selected by these definitions. Parsing, formatting,
-and signed literals are also outside this slice.
+Parsing, formatting, and signed literals are outside this slice.
 
 The library tests validate the concatenated source, enumerate every byte
 representation, exercise wrap/checked boundaries and signed zero/sign cases,

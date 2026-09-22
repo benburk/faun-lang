@@ -1,6 +1,6 @@
-use faun::ir::validate;
-use faun::programs::abi::{self, Transfer};
-use faun::targets::Target;
+use faun_core::ir::validate;
+use faun_core::programs::abi::{self, Transfer};
+use faun_core::targets::Target;
 
 use crate::X86_64Linux;
 

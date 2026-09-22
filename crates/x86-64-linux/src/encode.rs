@@ -7,7 +7,7 @@ use super::machine::{
     Allocated, Alu, Condition, Inst, MemoryWidth, Reg, RegisterWidth, ShiftDirection,
 };
 use super::{Code, Reloc};
-use faun::index::Range;
+use faun_core::index::Range;
 
 #[expect(
     clippy::too_many_lines,

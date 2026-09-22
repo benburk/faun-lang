@@ -74,7 +74,7 @@ normally, while the former has no continuation. `declare_never` declares an
 internal function with that same nonreturning contract.
 
 ```rust
-use faun::ir::{Class, Program, Returns};
+use faun_core::ir::{Class, Program, Returns};
 
 let (mut program, main) = Program::new("main");
 let stop = program.external("exit!", &[Class::Word], Returns::Never);
@@ -134,7 +134,7 @@ instructions and regions do not, so nothing held across one names the same
 thing afterwards.
 
 `read` runs this schedule, so `--emit ir` shows the optimized program. The
-corpus in `faun::programs` is written directly in machine IR and does not.
+corpus in `faun_core::programs` is written directly in machine IR and does not.
 
 Source lowering may bypass a tree of recognized natural additions with Barb's
 bounded affine summary. The summary remains a fact rather than a sixth Barb term:

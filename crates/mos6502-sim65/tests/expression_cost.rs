@@ -7,10 +7,10 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use faun::targets::Target;
+use faun_core::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
 
-#[path = "../../faun/tests/support/expressions.rs"]
+#[path = "../../core/tests/support/expressions.rs"]
 mod expressions;
 
 use expressions::{CASES, COUNTS, Case};

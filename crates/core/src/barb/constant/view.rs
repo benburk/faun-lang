@@ -16,7 +16,7 @@ use crate::barb::{CtorId, TypeId};
 /// rather than attaching a type to bytes or replacing its validated encoding.
 ///
 /// ```compile_fail
-/// use faun::barb::Constant;
+/// use faun_core::barb::Constant;
 /// fn forge(mut value: Constant<'_>) { value.bytes = &[0]; }
 /// ```
 #[derive(Clone, Copy, Debug)]

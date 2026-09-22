@@ -31,8 +31,8 @@
 //!   `mmap` and the stack from the kernel, so neither needs a segment.
 
 use super::Code;
-use faun::ir::{Origin, Program};
-use faun::targets::bytes::{Bytes, len32};
+use faun_core::ir::{Origin, Program};
+use faun_core::targets::bytes::{Bytes, len32};
 
 pub(crate) const EHDR_LEN: u16 = 64;
 pub(crate) const PHDR_LEN: u16 = 56;
@@ -187,13 +187,13 @@ fn len16(count: usize) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use faun::targets::Target;
+    use faun_core::targets::Target;
 
     use super::*;
 
     fn hello() -> Vec<u8> {
         crate::X86_64Linux
-            .emit(&faun::programs::hello_world())
+            .emit(&faun_core::programs::hello_world())
             .pop()
             .unwrap()
             .bytes

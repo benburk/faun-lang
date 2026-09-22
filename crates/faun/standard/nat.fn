@@ -20,6 +20,20 @@ Nat : [Zero Succ(Nat)].(
   mul(0 _) -> 0
   mul(Succ(m) y) -> y + m * y
 
+  div : Nat Nat -> Nat
+  div(_ 0) -> 0
+  div(0 Succ(_)) -> 0
+  div(Succ(a) Succ(b)) ->
+    quotient = div(a Succ(b))
+    div_step(equals(mod(a Succ(b)) b) quotient)
+
+  mod : Nat Nat -> Nat
+  mod(a 0) -> a
+  mod(0 Succ(_)) -> 0
+  mod(Succ(a) Succ(b)) ->
+    remainder = mod(a Succ(b))
+    mod_step(equals(remainder b) remainder)
+
   pow : Nat Nat -> Nat
   pow(_ 0) -> 1
   pow(base Succ(exponent)) -> base * pow(base exponent)
@@ -34,3 +48,9 @@ Nat : [Zero Succ(Nat)].(
   equals(Succ(_) 0) -> False
   equals(Succ(a) Succ(b)) -> equals(a b)
 )
+
+div_step(True quotient) -> Succ(quotient)
+div_step(False quotient) -> quotient
+
+mod_step(True _) -> 0
+mod_step(False remainder) -> Succ(remainder)

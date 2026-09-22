@@ -5,6 +5,11 @@ use super::ast::{
 use super::{Sources, parse, parse_in};
 
 #[test]
+fn primary_standard_package_is_available_without_environment_setup() {
+    assert!(super::standard_path().is_file());
+}
+
+#[test]
 fn parses_the_first_order_ori_slice() {
     let source = r"
         Nat : [Zero Succ(Nat)]

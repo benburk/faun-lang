@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use faun::barb::{Atom, Builder, ConstructionError, CtorId, FnId, TypeId};
+use faun_core::barb::{Atom, Builder, ConstructionError, CtorId, FnId, TypeId};
 
 use super::Symbol;
 use super::blessed::LiteralExpr;
@@ -144,7 +144,7 @@ impl std::error::Error for LiteralLowerError {}
 mod tests {
     use super::*;
     use crate::Symbols;
-    use faun::barb;
+    use faun_core::barb;
     use num_bigint::BigUint;
 
     #[test]

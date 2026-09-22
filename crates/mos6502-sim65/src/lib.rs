@@ -18,8 +18,8 @@ mod lower;
 #[cfg(test)]
 mod tests;
 
-use faun::ir::{Op, Program, RegionId};
-use faun::targets::{Artifact, Target};
+use faun_core::ir::{Op, Program, RegionId};
+use faun_core::targets::{Artifact, Target};
 
 /// Where sim65 loads the image, and the zero-page pairs below it.
 const LOAD: u16 = 0x0200;

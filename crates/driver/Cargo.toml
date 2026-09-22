@@ -1,0 +1,13 @@
+[package]
+name = "faun-driver"
+version.workspace = true
+edition.workspace = true
+description = "Reusable command driver for Faun frontends and targets"
+
+[dependencies]
+bpaf = "0.9"
+faun.workspace = true
+faun-core.workspace = true
+
+[lints]
+workspace = true

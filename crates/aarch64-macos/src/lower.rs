@@ -1,4 +1,4 @@
-use faun::ir::{DataId, Exit, Op, Origin, Program, Terminator, ValueId};
+use faun_core::ir::{DataId, Exit, Op, Origin, Program, Terminator, ValueId};
 
 use crate::Code;
 use crate::encode::{Encoder, Reg};

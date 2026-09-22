@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
-use faun::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
+use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
 use num_traits::ToPrimitive;
 
 use crate::blessed::PreludeIds;
@@ -68,7 +68,7 @@ pub fn application(
     checked: &crate::check::CheckedProgram,
     prelude: &PreludeIds,
     host: &crate::host::HostIds,
-    routines: &faun::platform::Routines,
+    routines: &faun_core::platform::Routines,
 ) -> Result<barb::Program, LowerError> {
     crate::check::application(resolved, checked, host).map_err(|cause| error(cause.to_string()))?;
     let specialized = specialize::application(resolved, checked, prelude, host)?;
@@ -181,7 +181,7 @@ struct DecisionArm {
 #[derive(Clone, Copy)]
 struct HostContext<'a> {
     ids: &'a crate::host::HostIds,
-    routines: &'a faun::platform::Routines,
+    routines: &'a faun_core::platform::Routines,
 }
 
 struct Lowerer<'a> {
@@ -1499,10 +1499,29 @@ mod tests {
         let checked = crate::check::program(&resolved, &prelude).unwrap();
         crate::check::application(&resolved, &checked, &host).unwrap();
         for bits in [16, 32, 64] {
-            let routines = faun::platform::Routines::builtin().with_word(bits);
+            let routines = faun_core::platform::Routines::builtin().with_word(bits);
             let mut program = application(&resolved, &checked, &prelude, &host, &routines).unwrap();
             barb::optimize(&mut program, &barb::OptimizeOptions::default());
-            faun::machine(&program, &routines).unwrap();
+            faun_core::machine(&program, &routines).unwrap();
+        }
+    }
+
+    #[test]
+    fn folds_standard_division_remainder_and_their_zero_cases() {
+        let (resolved, checked, prelude) = checked_example("arithmetic.fn");
+        for (suffix, expected) in [("$$natural_arithmetic", 14), ("$$signed_arithmetic", 10)] {
+            let entry = named(&resolved, &checked, suffix);
+            let mut program = program(&resolved, &checked, &prelude, entry).unwrap();
+            barb::optimize(&mut program, &barb::OptimizeOptions::default());
+            barb::validate(&program).unwrap();
+            let body = program.function(program.entry().unwrap()).body().unwrap();
+            let barb::Expr::Static(value) = program.expr(body.tail) else {
+                panic!("{suffix} did not fold\n{}", program.render());
+            };
+            let barb::ConstantView::Natural(value) = program.constant(value).view() else {
+                panic!("{suffix} did not return a natural");
+            };
+            assert_eq!(value.try_u64(), Ok(expected));
         }
     }
 

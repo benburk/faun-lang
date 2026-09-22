@@ -1,10 +1,10 @@
 //! Target-specific limits and size baselines; conformance cases are shared.
-use faun::targets::Target;
+use faun_core::targets::Target;
 
 use crate::Mos6502Sim65;
 use shared::{narrow, wide};
 
-#[path = "../../faun/tests/support/backend.rs"]
+#[path = "../../core/tests/support/backend.rs"]
 mod shared;
 
 const TARGET: Mos6502Sim65 = Mos6502Sim65;
@@ -78,7 +78,7 @@ fn it_holds_what_a_program_holds() {
 fn only_a_program_that_calls_something_sets_the_stack() {
     // ldx #$FF, txs.
     const SETS_IT: &[u8] = &[0xA2, 0xFF, 0x9A];
-    let held = |program: &faun::ir::Program| {
+    let held = |program: &faun_core::ir::Program| {
         let artifacts = TARGET.compile(program).expect("scalar compilation");
         let code = 12 + program.data().len() + program.globals().len();
         artifacts[0].bytes[code..].starts_with(SETS_IT)
@@ -88,10 +88,10 @@ fn only_a_program_that_calls_something_sets_the_stack() {
         "one that calls nothing"
     );
     assert!(
-        held(&faun::programs::calls_a_function()),
+        held(&faun_core::programs::calls_a_function()),
         "one that calls something"
     );
     // A hook is reached by `jsr` like anything else, so asking the simulator
     // for something counts as calling something.
-    assert!(held(&faun::programs::hello_world()), "one that writes");
+    assert!(held(&faun_core::programs::hello_world()), "one that writes");
 }
