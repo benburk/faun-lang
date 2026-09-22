@@ -119,6 +119,20 @@ impl Acc {
         place: None,
     };
 
+    /// What is known after this byte was loaded.
+    const fn holding(held: Held) -> Self {
+        match held {
+            Held::Imm(number) => Self {
+                number: Some(number),
+                place: None,
+            },
+            Held::Zero(place) => Self {
+                number: None,
+                place: Some(place),
+            },
+        }
+    }
+
     /// Whether reading this byte would tell the accumulator what it already
     /// holds.
     const fn holds(self, held: Held) -> bool {
@@ -126,6 +140,87 @@ impl Acc {
             Held::Imm(value) => matches!(self.number, Some(known) if known == value),
             Held::Zero(at) => matches!(self.place, Some(known) if known == at),
         }
+    }
+
+    fn join(self, other: Self) -> Self {
+        Self {
+            number: same(self.number, other.number),
+            place: same(self.place, other.place),
+        }
+    }
+}
+
+/// What is known about the status bits instructions and branches observe.
+/// Interrupt and decimal mode are environment controls this target never
+/// changes or branches on; the break bit is not persistent processor state.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Flags {
+    carry: Option<bool>,
+    zero: Option<bool>,
+    negative: Option<bool>,
+    overflow: Option<bool>,
+}
+
+impl Flags {
+    const fn with_nz(mut self, value: Option<u8>) -> Self {
+        self.zero = match value {
+            Some(value) => Some(value == 0),
+            None => None,
+        };
+        self.negative = match value {
+            Some(value) => Some(value & 0x80 != 0),
+            None => None,
+        };
+        self
+    }
+
+    fn join(self, other: Self) -> Self {
+        Self {
+            carry: same(self.carry, other.carry),
+            zero: same(self.zero, other.zero),
+            negative: same(self.negative, other.negative),
+            overflow: same(self.overflow, other.overflow),
+        }
+    }
+}
+
+fn same<T: Copy + PartialEq>(left: Option<T>, right: Option<T>) -> Option<T> {
+    if left == right { left } else { None }
+}
+
+/// Machine state carried between adjacent selected instructions.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct MachineState {
+    acc: Acc,
+    flags: Flags,
+}
+
+impl MachineState {
+    const UNKNOWN: Self = Self {
+        acc: Acc::NOTHING,
+        flags: Flags {
+            carry: None,
+            zero: None,
+            negative: None,
+            overflow: None,
+        },
+    };
+
+    pub(crate) fn join(self, other: Self) -> Self {
+        Self {
+            acc: self.acc.join(other.acc),
+            flags: self.flags.join(other.flags),
+        }
+    }
+
+    const fn on_branch(mut self, cc: Cc, taken: bool) -> Self {
+        match cc {
+            Cc::Equal => self.flags.zero = Some(taken),
+            Cc::NotEqual => self.flags.zero = Some(!taken),
+            Cc::NoCarry => self.flags.carry = Some(!taken),
+            Cc::Carry => self.flags.carry = Some(taken),
+        }
+        self
     }
 }
 
@@ -243,11 +338,11 @@ pub(crate) struct Assembler {
     /// Which instruction each label stands before, once it has been bound.
     labels: Vec<Option<usize>>,
     origin: u16,
-    /// What is known about the accumulator.
+    /// What is known about the accumulator and status flags.
     ///
-    /// Kept while instructions are written rather than worked out after,
-    /// since every one of them goes through here and nothing else does.
-    acc: Acc,
+    /// Kept while instructions are selected rather than recovered afterward,
+    /// since every emitted instruction passes through this owner.
+    state: MachineState,
     /// Labels said to be reached only by running into them.
     fallen: Vec<usize>,
     /// Zero-page bytes something outside the program reads.
@@ -291,7 +386,17 @@ impl Assembler {
 
     /// Say that a label stands here, which is before whatever comes next.
     pub(crate) fn bind(&mut self, label: Label) {
-        self.acc = Acc::NOTHING;
+        self.state = MachineState::UNKNOWN;
+        self.labels[label.0] = Some(self.insts.len());
+    }
+
+    /// Bind a label after joining all of its incoming edge states.
+    ///
+    /// The caller also proves there is no unrepresented fallthrough. This is
+    /// used both for a branch around a terminal arm and for comparison
+    /// sequences that merge several edges explicitly.
+    pub(crate) fn bind_with(&mut self, label: Label, state: MachineState) {
+        self.state = state;
         self.labels[label.0] = Some(self.insts.len());
     }
 
@@ -306,6 +411,20 @@ impl Assembler {
         self.fallen.push(label.0);
     }
 
+    /// State on the current fallthrough edge.
+    pub(crate) const fn state(&self) -> MachineState {
+        self.state
+    }
+
+    /// Whether reading this byte would change the accumulator.
+    ///
+    /// Instruction selection asks before choosing which side of a commutative
+    /// operation to read first; [`Self::load`] makes the same decision when it
+    /// writes the chosen sequence.
+    pub(crate) const fn needs_load(&self, held: Held) -> bool {
+        !self.state.acc.holds(held)
+    }
+
     /// Read a byte into the accumulator, unless it already holds it.
     ///
     /// The load left out is one that would have set the negative and zero
@@ -314,7 +433,7 @@ impl Assembler {
     /// reached through a compare, a bit test or a decrement, each of which
     /// writes the flags itself.
     pub(crate) fn load(&mut self, held: Held) {
-        if self.acc.holds(held) {
+        if !self.needs_load(held) {
             return;
         }
         match held {
@@ -329,66 +448,223 @@ impl Assembler {
         self.sta_zp(to);
     }
 
-    /// What is known about the accumulator once an instruction has run.
-    fn after(&self, mnemonic: Mnemonic, operand: Operand) -> Acc {
+    /// A byte's numeric value where current machine state proves one.
+    fn number(&self, operand: Operand) -> Option<u8> {
+        match operand {
+            Operand::Imm(value) => Some(value),
+            Operand::Zero(at) if self.state.acc.place == Some(at) => self.state.acc.number,
+            Operand::Implied | Operand::Zero(_) | Operand::Indirect(_) | Operand::Abs(_) => None,
+        }
+    }
+
+    /// What is known once an instruction has run.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive arm per machine instruction family"
+    )]
+    fn after(&self, mnemonic: Mnemonic, operand: Operand) -> MachineState {
         use Mnemonic as M;
-        let held = self.acc;
+        let before = self.state;
         match mnemonic {
-            M::Lda => match operand {
-                Operand::Imm(value) => Acc {
-                    number: Some(value),
-                    place: None,
-                },
-                Operand::Zero(at) => Acc {
-                    number: None,
-                    place: Some(at),
-                },
-                _ => Acc::NOTHING,
-            },
-            // Reading is the whole of what these do.
-            M::Cmp | M::Ldx | M::Ldy | M::Iny | M::Dex | M::Txs | M::Clc | M::Sec => held,
-            // Writing the accumulator somewhere says it equals that place,
-            // and says nothing less about the number it holds.
-            M::Sta => match operand {
-                Operand::Zero(at) => Acc {
-                    place: Some(at),
-                    ..held
-                },
-                // Through a pointer it could have written anywhere, so a
-                // place the accumulator equalled may have parted from it.
-                _ => Acc {
-                    place: None,
-                    ..held
-                },
-            },
-            // A shift of the accumulator itself works an answer out there,
-            // so neither the number it held nor the place it equalled is
-            // still true of it.
-            // A shift of the accumulator itself works an answer out there,
-            // so neither the number it held nor the place it equalled is
-            // still true of it. Without this a doubling of a byte leaves the
-            // tracker holding what went in, and the next read of that same
-            // number is left out as already loaded.
-            // A shift of the accumulator itself works an answer out there,
-            // so neither the number it held nor the place it equalled is
-            // still true of it. Without this a doubling of a byte leaves the
-            // tracker holding what went in, and the next read of that same
-            // number is left out as already loaded.
-            M::Asl | M::Rol | M::Lsr | M::Ror if matches!(operand, Operand::Implied) => {
-                Acc::NOTHING
+            M::Lda => self.after_load(operand),
+            M::Sta => {
+                let acc = match operand {
+                    Operand::Zero(at) => Acc {
+                        place: Some(at),
+                        ..before.acc
+                    },
+                    // Through a pointer it could have written anywhere, so a
+                    // place the accumulator equalled may have parted from it.
+                    _ => Acc {
+                        place: None,
+                        ..before.acc
+                    },
+                };
+                MachineState { acc, ..before }
             }
-            // Every other way of writing a place, which the accumulator
-            // does not follow.
-            M::Stx | M::Inc | M::Dec | M::Asl | M::Rol | M::Lsr | M::Ror => match operand {
-                Operand::Zero(at) if held.place == Some(at) => Acc {
-                    place: None,
-                    ..held
-                },
-                _ => held,
+            M::Ldx | M::Ldy => MachineState {
+                flags: before.flags.with_nz(self.number(operand)),
+                ..before
             },
-            // An answer worked out rather than fetched, and leaving
-            // altogether.
-            M::And | M::Ora | M::Adc | M::Sbc | M::Jsr | M::Jmp | M::Rts => Acc::NOTHING,
+            M::Iny | M::Dex => MachineState {
+                flags: before.flags.with_nz(None),
+                ..before
+            },
+            M::Clc | M::Sec => MachineState {
+                flags: Flags {
+                    carry: Some(mnemonic == M::Sec),
+                    ..before.flags
+                },
+                ..before
+            },
+            M::Cmp => self.after_compare(operand),
+            M::And | M::Ora => self.after_logic(mnemonic, operand),
+            M::Adc | M::Sbc => self.after_arithmetic(mnemonic, operand),
+            M::Asl | M::Rol | M::Lsr | M::Ror => self.after_shift(mnemonic, operand),
+            // These alter a memory byte and N/Z, but not A, C or V.
+            M::Inc | M::Dec => {
+                let acc = match operand {
+                    Operand::Zero(at) if before.acc.place == Some(at) => Acc {
+                        place: None,
+                        ..before.acc
+                    },
+                    _ => before.acc,
+                };
+                MachineState {
+                    acc,
+                    flags: before.flags.with_nz(None),
+                }
+            }
+            // Calls may answer with anything. The jumps themselves preserve
+            // state, but no emitted instruction follows them by fallthrough.
+            M::Jsr => MachineState::UNKNOWN,
+            M::Txs | M::Jmp | M::Rts => before,
+            M::Stx => {
+                let acc = match operand {
+                    Operand::Zero(at) if before.acc.place == Some(at) => Acc {
+                        place: None,
+                        ..before.acc
+                    },
+                    _ => before.acc,
+                };
+                MachineState { acc, ..before }
+            }
+        }
+    }
+
+    fn after_load(&self, operand: Operand) -> MachineState {
+        let number = self.number(operand);
+        let acc = match operand {
+            Operand::Imm(value) => Acc::holding(Held::Imm(value)),
+            Operand::Zero(at) => Acc {
+                number,
+                place: Some(at),
+            },
+            Operand::Implied | Operand::Indirect(_) | Operand::Abs(_) => Acc {
+                number,
+                place: None,
+            },
+        };
+        MachineState {
+            acc,
+            flags: self.state.flags.with_nz(number),
+        }
+    }
+
+    fn after_compare(&self, operand: Operand) -> MachineState {
+        let flags = match (self.state.acc.number, self.number(operand)) {
+            (Some(left), Some(right)) => self.state.flags.with_nz(Some(left.wrapping_sub(right))),
+            _ => self.state.flags.with_nz(None),
+        };
+        let carry = self
+            .state
+            .acc
+            .number
+            .zip(self.number(operand))
+            .map(|(left, right)| left >= right);
+        MachineState {
+            flags: Flags { carry, ..flags },
+            ..self.state
+        }
+    }
+
+    fn after_logic(&self, mnemonic: Mnemonic, operand: Operand) -> MachineState {
+        let number = self
+            .state
+            .acc
+            .number
+            .zip(self.number(operand))
+            .map(|(left, right)| match mnemonic {
+                Mnemonic::And => left & right,
+                Mnemonic::Ora => left | right,
+                _ => unreachable!("a logical instruction"),
+            });
+        MachineState {
+            acc: Acc {
+                number,
+                place: None,
+            },
+            flags: self.state.flags.with_nz(number),
+        }
+    }
+
+    fn after_arithmetic(&self, mnemonic: Mnemonic, operand: Operand) -> MachineState {
+        let known = self
+            .state
+            .acc
+            .number
+            .zip(self.number(operand))
+            .zip(self.state.flags.carry);
+        let Some(((left, right), carry)) = known else {
+            return MachineState {
+                acc: Acc::NOTHING,
+                flags: Flags::default(),
+            };
+        };
+        let (number, carry, overflow) = match mnemonic {
+            Mnemonic::Adc => {
+                let sum = u16::from(left) + u16::from(right) + u16::from(carry);
+                let number = sum.to_le_bytes()[0];
+                let overflow = (!(left ^ right) & (left ^ number) & 0x80) != 0;
+                (number, sum > 0xFF, overflow)
+            }
+            Mnemonic::Sbc => {
+                let subtrahend = u16::from(right) + u16::from(!carry);
+                let number = left.wrapping_sub(subtrahend.to_le_bytes()[0]);
+                let overflow = ((left ^ number) & (left ^ right) & 0x80) != 0;
+                (number, u16::from(left) >= subtrahend, overflow)
+            }
+            _ => unreachable!("an arithmetic instruction"),
+        };
+        MachineState {
+            acc: Acc {
+                number: Some(number),
+                place: None,
+            },
+            flags: Flags {
+                carry: Some(carry),
+                overflow: Some(overflow),
+                ..self.state.flags.with_nz(Some(number))
+            },
+        }
+    }
+
+    fn after_shift(&self, mnemonic: Mnemonic, operand: Operand) -> MachineState {
+        let before = self.state;
+        let value = match operand {
+            Operand::Implied => before.acc.number,
+            _ => self.number(operand),
+        };
+        let known = value.zip(match mnemonic {
+            Mnemonic::Rol | Mnemonic::Ror => before.flags.carry,
+            Mnemonic::Asl | Mnemonic::Lsr => Some(false),
+            _ => unreachable!("a shift instruction"),
+        });
+        let result = known.map(|(value, carry)| match mnemonic {
+            Mnemonic::Asl => (value << 1, value & 0x80 != 0),
+            Mnemonic::Rol => ((value << 1) | u8::from(carry), value & 0x80 != 0),
+            Mnemonic::Lsr => (value >> 1, value & 1 != 0),
+            Mnemonic::Ror => ((value >> 1) | (u8::from(carry) << 7), value & 1 != 0),
+            _ => unreachable!("a shift instruction"),
+        });
+        let number = result.map(|(number, _)| number);
+        let acc = match operand {
+            Operand::Implied => Acc {
+                number,
+                place: None,
+            },
+            Operand::Zero(at) if before.acc.place == Some(at) => Acc {
+                place: None,
+                ..before.acc
+            },
+            _ => before.acc,
+        };
+        MachineState {
+            acc,
+            flags: Flags {
+                carry: result.map(|(_, carry)| carry),
+                ..before.flags.with_nz(number)
+            },
         }
     }
 
@@ -626,13 +902,16 @@ impl Assembler {
 
     /// Half of a label's address, as an immediate.
     pub(crate) fn lda_imm_half(&mut self, label: Label, half: Half) {
-        self.acc = Acc::NOTHING;
+        self.state = MachineState {
+            acc: Acc::NOTHING,
+            flags: self.state.flags.with_nz(None),
+        };
         self.insts.push(Inst::Half { to: label, half });
     }
 
     /// A literal word, for data the target lays down itself.
     pub(crate) fn word(&mut self, value: u16) {
-        self.acc = Acc::NOTHING;
+        self.state = MachineState::UNKNOWN;
         self.insts.push(Inst::Word(value));
     }
 
@@ -728,11 +1007,20 @@ impl Assembler {
     // Arithmetic and comparison, all through the accumulator.
 
     pub(crate) fn clc(&mut self) {
-        self.op(Mnemonic::Clc, Operand::Implied);
+        if self.state.flags.carry != Some(false) {
+            self.op(Mnemonic::Clc, Operand::Implied);
+        }
     }
 
     pub(crate) fn sec(&mut self) {
-        self.op(Mnemonic::Sec, Operand::Implied);
+        if self.state.flags.carry != Some(true) {
+            self.op(Mnemonic::Sec, Operand::Implied);
+        }
+    }
+
+    /// Record a carry result proved by the value bounds used for selection.
+    pub(crate) const fn carry_is(&mut self, set: bool) {
+        self.state.flags.carry = Some(set);
     }
 
     pub(crate) fn adc_zp(&mut self, at: u8) {
@@ -795,17 +1083,63 @@ impl Assembler {
     }
 
     pub(crate) fn branch(&mut self, cc: Cc, label: Label) {
-        self.acc = Acc::NOTHING;
+        let _ = self.branch_state(cc, label);
+    }
+
+    /// Branch and return what its taken edge establishes. The state retained
+    /// here is the inverse fact established on the fallthrough edge.
+    pub(crate) fn branch_state(&mut self, cc: Cc, label: Label) -> MachineState {
+        let taken = self.state.on_branch(cc, true);
+        self.state = self.state.on_branch(cc, false);
         self.insts.push(Inst::Branch { cc, to: label });
+        taken
     }
 
     fn op(&mut self, mnemonic: Mnemonic, operand: Operand) {
-        self.acc = self.after(mnemonic, operand);
+        self.state = self.after(mnemonic, operand);
         self.insts.push(Inst::Op { mnemonic, operand });
     }
 
     fn absolute(&mut self, mnemonic: Mnemonic, to: Label) {
-        self.acc = Acc::NOTHING;
+        self.state = MachineState::UNKNOWN;
         self.insts.push(Inst::Absolute { mnemonic, to });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arithmetic_tracks_every_result_flag() {
+        let mut asm = Assembler::new(0x200);
+        asm.lda_imm(0x7F);
+        asm.clc();
+        asm.adc_imm(1);
+
+        assert_eq!(asm.state.acc.number, Some(0x80));
+        assert_eq!(asm.state.flags.carry, Some(false));
+        assert_eq!(asm.state.flags.zero, Some(false));
+        assert_eq!(asm.state.flags.negative, Some(true));
+        assert_eq!(asm.state.flags.overflow, Some(true));
+
+        // ADC proved carry clear, so ensuring it again emits nothing.
+        asm.clc();
+        assert_eq!(asm.finish(), [0xA9, 0x7F, 0x18, 0x69, 0x01]);
+    }
+
+    #[test]
+    fn a_branch_refines_both_edges_and_joins_only_agreement() {
+        let mut asm = Assembler::new(0x200);
+        let target = asm.label();
+        let taken = asm.branch_state(Cc::NoCarry, target);
+        let fallthrough = asm.state();
+        assert_eq!(taken.flags.carry, Some(false));
+        assert_eq!(fallthrough.flags.carry, Some(true));
+        assert_eq!(taken.join(fallthrough).flags.carry, None);
+
+        asm.bind_with(target, taken);
+        assert_eq!(asm.state.flags.carry, Some(false));
+        assert_eq!(asm.finish(), [0x90, 0x00]);
     }
 }

@@ -22,6 +22,7 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("the low bits of a sum", 181),
     ("the count under a guard", 184),
     ("the count and more", 191),
+    ("a shared intermediate", 205),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("exit zero", 36),

@@ -163,6 +163,58 @@ pub fn exits_with_the_count_and_more(routines: &Routines, limit: u64, more: u64)
     program
 }
 
+/// Leave with a sum in which one intermediate is read twice.
+///
+/// The guard and first addition are already on earlier rungs. This adds a
+/// fork to the value graph: `a` feeds both `b` and the final addition. A target
+/// with one accumulator has to choose which side of that final addition to
+/// load first, and need not store the side it already holds.
+///
+/// # Panics
+/// If `limit` or three does not fit the declared natural shape.
+#[must_use]
+pub fn exits_with_a_shared_intermediate(routines: &Routines, limit: u64) -> Program {
+    let Ground {
+        mut program,
+        host,
+        nat,
+        never,
+        exit,
+        argc,
+    } = ground(routines);
+    let truth = program.declare_type("Bool");
+    program.define_type(truth, &[("False", &[]), ("True", &[])]);
+    let (no, _) = (program.ctor_at(truth, 0), program.ctor_at(truth, 1));
+    let below = comparing(&mut program, nat, truth);
+    let adding = adds(&mut program, nat);
+    let [ceiling, three] =
+        [limit, 3].map(|n| program.intern_number(nat, n).expect("the natural shape"));
+
+    let main = program.declare("main!", &[host], never);
+    program.define(main, |b, args| {
+        let host = args[0];
+        let count = b.call(argc, &[host]);
+        let ceiling = b.known(ceiling);
+        let under = b.call(below, &[count, ceiling]);
+        let kept = b.match_(under, truth, |b, ctor, _| {
+            if ctor == no {
+                let nought = b.number(nat, 0).expect("the declared natural shape");
+                let nought = b.known(nought);
+                b.call(exit, &[host, nought])
+            } else {
+                count
+            }
+        });
+        let three = b.known(three);
+        let a = b.call(adding, &[kept, three]);
+        let b_value = b.call(adding, &[a, kept]);
+        let answer = b.call(adding, &[a, b_value]);
+        b.call(exit, &[host, answer])
+    });
+    program.set_entry(main);
+    program
+}
+
 /// Leave with the count and a number known before the program ran, keeping
 /// only the bits below `bits`.
 ///
@@ -392,6 +444,10 @@ pub fn every(routines: &Routines) -> Vec<(&'static str, Program)> {
         (
             "the count and more",
             exits_with_the_count_and_more(routines, 4, 4),
+        ),
+        (
+            "a shared intermediate",
+            exits_with_a_shared_intermediate(routines, 32),
         ),
     ]
 }

@@ -478,7 +478,9 @@ fn external_declarations_interleave_with_internal_function_ids() {
 #[test]
 fn it_compiles_the_ladder_to_the_sizes_recorded() {
     let routines = TARGET.routines();
-    let changed: Vec<_> = programs::ladder::every(&routines)
+    let ladder = programs::ladder::every(&routines);
+    assert_eq!(ladder.len(), LADDER_SIZES.len());
+    let changed: Vec<_> = ladder
         .into_iter()
         .zip(LADDER_SIZES)
         .filter_map(|((name, barb), &(expected, size))| {
@@ -514,12 +516,14 @@ fn the_ladder_answers_what_its_programs_say() {
         let program = lowered(barb, &routines);
         for (&argc, (status, _)) in COUNTS.iter().zip(execute_counts(&program, COUNTS)) {
             let answer = match name {
-                "a constant" => 0,
                 "the count" => i32::from(argc),
                 // Four past the count, and twice it, each keeping every bit
                 // below the eighth and throwing the rest away.
                 "the count and a constant" => i32::from(argc.wrapping_add(4) % 256),
                 "the low bits of a sum" => i32::from(argc.wrapping_mul(2) % 256),
+                // `a = n + 3`, `b = a + n`, then `a + b`.
+                "a shared intermediate" if argc < 32 => 3 * i32::from(argc) + 6,
+                "a constant" | "a shared intermediate" => 0,
                 // Under the ceiling, the count, and four past it where the
                 // rung asks for that. At or above it neither guarded rung
                 // has the bits to say anything, so both leave with nought.

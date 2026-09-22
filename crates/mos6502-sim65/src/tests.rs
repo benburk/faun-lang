@@ -19,8 +19,9 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("the count", 33),
     ("the count and a constant", 36),
     ("the low bits of a sum", 34),
-    ("the count under a guard", 65),
-    ("the count and more", 68),
+    ("the count under a guard", 54),
+    ("the count and more", 56),
+    ("a shared intermediate", 64),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("exit zero", 17),
@@ -36,23 +37,23 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("a computed length", 188),
     ("eight bits", 49),
     ("less", 59),
-    ("two worked out", 84),
+    ("two worked out", 83),
     ("a flag", 117),
     ("a countdown", 94),
     ("a carried total", 100),
-    ("a step first", 97),
-    ("a long arm", 989),
+    ("a step first", 94),
+    ("a long arm", 982),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("exit", 17),
     ("two-and-two", 17),
     ("double", 17),
     ("leave", 17),
-    ("bool", 162),
-    ("nat", 551),
-    ("width", 67),
-    ("argc", 78),
-    ("expressions", 71),
+    ("bool", 160),
+    ("nat", 539),
+    ("width", 56),
+    ("argc", 65),
+    ("expressions", 60),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [209, 248, 246];
 
