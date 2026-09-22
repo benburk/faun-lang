@@ -51,16 +51,22 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 MemoryWidth::Byte => asm.store_byte(src, base, displacement),
                 MemoryWidth::Word => asm.store_word(src, base, displacement),
             },
-            Inst::Narrow { bits } => asm.narrow(bits),
+            Inst::Narrow { dst, bits } => asm.narrow(dst, bits),
             Inst::Shift {
                 direction,
+                dst,
                 by,
                 bits,
-            } => asm.shift(direction, by, bits),
+            } => asm.shift(direction, dst, by, bits),
             Inst::Multiply => asm.multiply(),
             Inst::Divide => asm.divide(),
             Inst::Syscall => asm.syscall(),
             Inst::LoadStack { dst, displacement } => asm.load_slot(dst, displacement),
+            Inst::LoadStackNarrow {
+                dst,
+                displacement,
+                bits,
+            } => asm.load_stack_narrow(dst, displacement, bits),
             Inst::LoadFrame { dst, slot } => asm.load_slot(dst, slot.offset()),
             Inst::StoreFrame { src, slot } => asm.store_slot(src, slot.offset()),
             Inst::OpenFrame { slots } => asm.open_frame(frame_bytes(slots)),
@@ -68,6 +74,12 @@ pub(crate) fn encode(program: &Allocated) -> Code {
             Inst::Alu { op, dst, src, bits } => {
                 asm.alu_sized(alu_opcode(op), dst, src, bits);
             }
+            Inst::AluImmediate {
+                op,
+                dst,
+                immediate,
+                bits,
+            } => asm.alu_immediate(op, dst, immediate, bits),
             Inst::SetIf { condition, dst } => asm.set_if(condition_code(condition), dst),
             Inst::LoadDataAddress { dst, data } => {
                 let step = asm.lea_rip(dst);
@@ -123,6 +135,7 @@ const fn condition_code(condition: Condition) -> u8 {
         Condition::Equal => 0x4,
         Condition::NotEqual => 0x5,
         Condition::Below => 0x2,
+        Condition::NotBelow => 0x3,
     }
 }
 
@@ -371,34 +384,54 @@ impl RawEncoder {
         self.emit(&disp.to_le_bytes());
     }
 
-    /// `rax` explicitly taken modulo two to the `bits`, including odd widths.
-    fn narrow(&mut self, bits: u16) {
+    /// `dst` explicitly taken modulo two to the `bits`, including odd widths.
+    fn narrow(&mut self, dst: Reg, bits: u16) {
         self.step();
         match bits {
-            0 => self.emit(&[0x31, 0xC0]), // xor eax, eax: modulo one is zero
-            8 => self.emit(&[0x48, 0x0F, 0xB6, 0xC0]), // movzx rax, al
-            16 => self.emit(&[0x48, 0x0F, 0xB7, 0xC0]), // movzx rax, ax
-            32 => self.emit(&[0x89, 0xC0]), // mov eax, eax
+            0 => {
+                self.rex(false, Some(dst), dst);
+                self.emit(&[0x31, modrm(dst, dst)]);
+            }
+            8 => {
+                self.rex_byte(Some(dst), dst);
+                self.emit(&[0x0F, 0xB6, modrm(dst, dst)]);
+            }
+            16 => {
+                self.rex(false, Some(dst), dst);
+                self.emit(&[0x0F, 0xB7, modrm(dst, dst)]);
+            }
+            32 => {
+                self.rex(false, Some(dst), dst);
+                self.emit(&[0x89, modrm(dst, dst)]);
+            }
             64 => {}
-            1..=7 => self.emit(&[0x83, 0xE0, (1u8 << bits) - 1]), // and eax, imm8
+            1..=7 => {
+                self.rex(false, None, dst);
+                self.emit(&[0x83, 0xE0 | dst.low(), (1u8 << bits) - 1]);
+            }
             9..=31 => {
-                self.emit(&[0x25]); // and eax, imm32, zero extending
+                if dst == Reg::Rax {
+                    self.emit(&[0x25]);
+                } else {
+                    self.rex(false, None, dst);
+                    self.emit(&[0x81, 0xE0 | dst.low()]);
+                }
                 self.emit(&((1u32 << bits) - 1).to_le_bytes());
             }
             33..=63 => {
                 let by = u8::try_from(64 - bits).expect("a register shift");
-                self.moved(ShiftDirection::Left, by, 64);
-                self.moved(ShiftDirection::Right, by, 64);
+                self.moved(ShiftDirection::Left, dst, by, 64);
+                self.moved(ShiftDirection::Right, dst, by, 64);
             }
             other => panic!("no {other}-bit form on this target"),
         }
     }
 
-    /// `rax` with its bits moved `by` places, which is a product or quotient
+    /// `dst` with its bits moved `by` places, which is a product or quotient
     /// by a power of two.
-    fn shift(&mut self, direction: ShiftDirection, by: u8, bits: u16) {
+    fn shift(&mut self, direction: ShiftDirection, dst: Reg, by: u8, bits: u16) {
         self.step();
-        self.moved(direction, by, bits);
+        self.moved(direction, dst, by, bits);
     }
 
     /// The bytes of one shift, opening no instruction of its own, so that a
@@ -407,18 +440,17 @@ impl RawEncoder {
     /// One place has a form of its own that carries no distance, and it is
     /// the common one: a doubling is a shift by one, and that form is as
     /// short as the addition it stands in for.
-    fn moved(&mut self, direction: ShiftDirection, by: u8, bits: u16) {
-        let form = match direction {
-            ShiftDirection::Left => 0xE0,
-            ShiftDirection::Right => 0xE8,
+    fn moved(&mut self, direction: ShiftDirection, dst: Reg, by: u8, bits: u16) {
+        let extension = match direction {
+            ShiftDirection::Left => 4,
+            ShiftDirection::Right => 5,
         };
-        if bits > 32 {
-            self.emit(&[0x48]);
-        }
+        self.rex(bits > 32, None, dst);
+        let operand = 0xC0 | (extension << 3) | dst.low();
         if by == 1 {
-            self.emit(&[0xD1, form]);
+            self.emit(&[0xD1, operand]);
         } else {
-            self.emit(&[0xC1, form, by]);
+            self.emit(&[0xC1, operand, by]);
         }
     }
 
@@ -449,6 +481,27 @@ impl RawEncoder {
     fn store_slot(&mut self, src: Reg, disp: u32) {
         self.step();
         self.slot(0x89, src, disp);
+    }
+
+    fn load_stack_narrow(&mut self, dst: Reg, disp: u32, bits: u16) {
+        self.step();
+        let mode = match disp {
+            0 => 0x00,
+            1..=0x7F => 0x40,
+            _ => 0x80,
+        };
+        self.rex(false, Some(dst), Reg::Rax);
+        self.emit(&[
+            0x0F,
+            if bits == 8 { 0xB6 } else { 0xB7 },
+            mode | (dst.low() << 3) | 4,
+            0x24,
+        ]);
+        match mode {
+            0x00 => {}
+            0x40 => self.emit(&[disp.to_le_bytes()[0]]),
+            _ => self.emit(&disp.to_le_bytes()),
+        }
     }
 
     /// The `ModRM` mode says how much displacement follows, so a slot near
@@ -489,6 +542,24 @@ impl RawEncoder {
             self.emit(&[opcode, modrm(src, dst)]);
         } else {
             self.alu(opcode, dst, src);
+        }
+    }
+
+    fn alu_immediate(&mut self, op: Alu, dst: Reg, immediate: i32, bits: u16) {
+        self.step();
+        let extension = match op {
+            Alu::Add => 0,
+            Alu::Subtract => 5,
+            Alu::Compare => 7,
+            Alu::Test => panic!("no immediate form requested for {op:?}"),
+        };
+        self.rex(bits > 32, None, dst);
+        let operand = 0xC0 | (extension << 3) | dst.low();
+        if let Ok(immediate) = i8::try_from(immediate) {
+            self.emit(&[0x83, operand, immediate.cast_unsigned()]);
+        } else {
+            self.emit(&[0x81, operand]);
+            self.emit(&immediate.to_le_bytes());
         }
     }
 
@@ -633,10 +704,15 @@ mod tests {
         assert_eq!(encoded(|a| a.push_imm8(-5)), [0x6A, 0xFB]);
         assert_eq!(encoded(AllocatedBuilder::multiply), [0x48, 0xF7, 0xE1]);
         assert_eq!(encoded(AllocatedBuilder::divide), [0x48, 0xF7, 0xF1]);
-        assert_eq!(encoded(|a| a.narrow(0)), [0x31, 0xC0]);
-        assert_eq!(encoded(|a| a.narrow(7)), [0x83, 0xE0, 0x7F]);
-        assert_eq!(encoded(|a| a.narrow(9)), [0x25, 0xFF, 0x01, 0x00, 0x00]);
-        assert_eq!(encoded(|a| a.narrow(32)), [0x89, 0xC0]);
+        assert_eq!(encoded(|a| a.narrow(Reg::Rax, 0)), [0x31, 0xC0]);
+        assert_eq!(encoded(|a| a.narrow(Reg::Rdi, 7)), [0x83, 0xE7, 0x7F]);
+        assert_eq!(encoded(|a| a.narrow(Reg::Rdi, 8)), [0x40, 0x0F, 0xB6, 0xFF]);
+        assert_eq!(encoded(|a| a.narrow(Reg::R8, 16)), [0x45, 0x0F, 0xB7, 0xC0]);
+        assert_eq!(
+            encoded(|a| a.narrow(Reg::Rax, 9)),
+            [0x25, 0xFF, 0x01, 0x00, 0x00]
+        );
+        assert_eq!(encoded(|a| a.narrow(Reg::Rdi, 32)), [0x89, 0xFF]);
         assert_eq!(
             encoded(|a| a.mov_reg(Reg::Rdi, Reg::Rax, RegisterWidth::Low32)),
             [0x89, 0xC7]
@@ -651,6 +727,25 @@ mod tests {
         #[rustfmt::skip]
         assert_eq!(encoded(|a| a.mov_imm64(Reg::Rdx, 0x7FFF_FFFF_FFFF_FFFF)),
             [0x48, 0xBA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]);
+    }
+
+    #[test]
+    fn folded_ladder_forms_use_the_short_encodings() {
+        assert_eq!(
+            encoded(|a| {
+                a.load_stack(Reg::Rax, 0);
+                a.narrow(Reg::Rax, 8);
+            }),
+            [0x0F, 0xB6, 0x04, 0x24]
+        );
+        assert_eq!(
+            encoded(|a| {
+                a.push_imm8(4);
+                a.pop(Reg::Rcx);
+                assert!(a.fold_alu_immediate(Alu::Add, Reg::Rax, Reg::Rcx, 9));
+            }),
+            [0x83, 0xC0, 0x04]
+        );
     }
 
     #[test]

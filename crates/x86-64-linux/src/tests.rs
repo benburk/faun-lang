@@ -16,45 +16,79 @@ const RUNNER: Option<&str> = None;
 /// thing small enough to read.
 const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 127),
-    ("the count", 135),
-    ("the count and a constant", 148),
-    ("the low bits of a sum", 145),
-    ("the count under a guard", 166),
-    ("the count and more", 171),
+    ("the count", 129),
+    ("the count and a constant", 134),
+    ("the low bits of a sum", 133),
+    ("the count under a guard", 147),
+    ("the count and more", 150),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("exit zero", 127),
     ("two and two", 134),
     ("hello world", 158),
     ("a call", 143),
-    ("recursion", 200),
+    ("recursion", 191),
     ("values across a call", 256),
     ("the heap", 178),
     ("a byte", 209),
-    ("a global", 246),
+    ("a global", 244),
     ("writing the heap", 196),
-    ("a computed length", 205),
-    ("eight bits", 142),
-    ("less", 142),
+    ("a computed length", 203),
+    ("eight bits", 135),
+    ("less", 140),
     ("two worked out", 169),
-    ("a flag", 221),
-    ("a countdown", 199),
-    ("a carried total", 169),
-    ("a step first", 206),
-    ("a long arm", 277),
+    ("a flag", 219),
+    ("a countdown", 190),
+    ("a carried total", 160),
+    ("a step first", 197),
+    ("a long arm", 266),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("exit", 128),
     ("two-and-two", 128),
     ("double", 128),
     ("leave", 128),
-    ("bool", 212),
-    ("nat", 537),
-    ("width", 170),
-    ("argc", 196),
-    ("expressions", 197),
+    ("bool", 174),
+    ("nat", 453),
+    ("width", 151),
+    ("argc", 178),
+    ("expressions", 181),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [204, 215, 216];
+
+#[test]
+fn ladder_code_size_ratchets() {
+    let routines = TARGET.routines();
+    let mut code = Vec::new();
+    for (name, mut barb) in faun::programs::ladder::every(&routines) {
+        faun::barb::optimize(&mut barb, &faun::barb::OptimizeOptions::default());
+        let machine = faun::machine(&barb, &routines).unwrap();
+        let prepared = TARGET.prepare(&machine).unwrap();
+        let allocated = crate::selected::select_and_allocate(&prepared).unwrap();
+        code.push((name, crate::encode::encode(&allocated).bytes));
+    }
+
+    let sizes: Vec<_> = code
+        .iter()
+        .map(|(name, bytes)| (*name, bytes.len()))
+        .collect();
+    assert_eq!(
+        sizes,
+        [
+            ("a constant", 7),
+            ("the count", 9),
+            ("the count and a constant", 14),
+            ("the low bits of a sum", 13),
+            ("the count under a guard", 27),
+            ("the count and more", 30),
+        ]
+    );
+    assert_eq!(code[0].1, [0x31, 0xFF, 0x6A, 0x3C, 0x58, 0x0F, 0x05]);
+    assert_eq!(
+        code[1].1,
+        [0x48, 0x8B, 0x3C, 0x24, 0x6A, 0x3C, 0x58, 0x0F, 0x05]
+    );
+}
 
 #[test]
 fn it_holds_what_a_program_holds() {

@@ -43,6 +43,10 @@ struct Lowering<'a> {
     block_labels: Vec<Label>,
     function_labels: Vec<Option<Label>>,
     known: [Option<Known>; 16],
+    argument_count_in_rbx: bool,
+    pending_condition: Option<(VReg, Condition)>,
+    exit_epilogue: Option<Label>,
+    final_block: Option<BlockId>,
 }
 
 impl<'a> Lowering<'a> {
@@ -67,27 +71,28 @@ impl<'a> Lowering<'a> {
             block_labels,
             function_labels,
             known: [None; 16],
+            argument_count_in_rbx: false,
+            pending_condition: None,
+            exit_epilogue: None,
+            final_block: None,
         }
     }
 
     fn run(mut self, entry: FunctionId) -> Result<Allocated, String> {
-        let reads_argument_count = self
-            .selected
-            .instructions
-            .iter()
-            .any(|inst| inst.opcode == Opcode::ArgumentCount);
+        self.configure_program(entry);
         for (at, layout) in self.liveness.blocks.iter().enumerate() {
             let block = self.selected.blocks[layout.block.index()];
             let next = self.liveness.blocks.get(at + 1).map(|layout| layout.block);
             self.asm.bind(self.block_labels[layout.block.index()]);
             self.known.fill(None);
+            self.pending_condition = None;
             if let Some(function) = self
                 .selected
                 .functions
                 .iter()
                 .find(|function| function.entry == layout.block)
             {
-                if function.source == entry && reads_argument_count {
+                if function.source == entry && self.argument_count_in_rbx {
                     self.asm.load_stack(Reg::Rbx, 0);
                 }
                 let spill_slots = self.spill_slots(function.source);
@@ -104,7 +109,39 @@ impl<'a> Lowering<'a> {
             self.emit_transitions(layout.terminator)?;
             self.emit_terminator(layout, block.terminator, next, entry)?;
         }
+        if let Some(epilogue) = self.exit_epilogue {
+            self.asm.bind(epilogue);
+            self.known.fill(None);
+            self.materialize(Reg::Rax, SYS_EXIT);
+            self.asm.syscall();
+        }
         self.asm.finish()
+    }
+
+    fn configure_program(&mut self, entry: FunctionId) {
+        self.argument_count_in_rbx = self.liveness.blocks.iter().any(|layout| {
+            self.selected.blocks[layout.block.index()].owner != entry
+                && layout.instructions.iter().any(|points| {
+                    self.selected.instructions[points.instruction.index()].opcode
+                        == Opcode::ArgumentCount
+                })
+        });
+        let exits = self
+            .selected
+            .instructions
+            .iter()
+            .filter(|instruction| instruction.opcode == Opcode::Exit)
+            .count();
+        let returns = self
+            .selected
+            .blocks
+            .iter()
+            .filter(|block| {
+                block.owner == entry && matches!(block.terminator, Terminator::Return { .. })
+            })
+            .count();
+        self.exit_epilogue = (exits + returns > 1).then(|| self.asm.label());
+        self.final_block = self.liveness.blocks.last().map(|layout| layout.block);
     }
 
     fn emit_instruction_setup(&mut self, points: &InstPoints) -> Result<(), String> {
@@ -173,17 +210,81 @@ impl<'a> Lowering<'a> {
         Ok(())
     }
 
-    fn owner_at(&self, point: Point) -> FunctionId {
-        let block = self
-            .liveness
+    fn block_at(&self, point: Point) -> BlockId {
+        self.liveness
             .blocks
             .iter()
             .find(|layout| {
                 layout.entry.index() <= point.index() && point.index() <= layout.terminator.index()
             })
             .expect("every allocation point belongs to a block")
-            .block;
-        self.selected.blocks[block.index()].owner
+            .block
+    }
+
+    fn owner_at(&self, point: Point) -> FunctionId {
+        self.selected.blocks[self.block_at(point).index()].owner
+    }
+
+    fn is_unique_constant(&self, value: VReg) -> bool {
+        let Some((definition_id, definition)) = self
+            .selected
+            .instructions
+            .iter()
+            .enumerate()
+            .find(|(_, instruction)| instruction.result == Some(value))
+        else {
+            return false;
+        };
+        let Immediate::Integer(integer) = definition.immediate else {
+            return false;
+        };
+        let Some(block) = self.selected.blocks.iter().find(|block| {
+            self.selected.order[block.instructions.range()]
+                .iter()
+                .any(|instruction| instruction.index() == definition_id)
+        }) else {
+            return false;
+        };
+        self.selected.order[block.instructions.range()]
+            .iter()
+            .filter(|instruction| {
+                let instruction = self.selected.instructions[instruction.index()];
+                instruction.opcode == Opcode::Constant
+                    && instruction.immediate == Immediate::Integer(integer)
+            })
+            .count()
+            == 1
+            && self
+                .selected
+                .operands
+                .iter()
+                .filter(|&&operand| operand == value)
+                .count()
+                == 1
+    }
+
+    fn is_branch_only_result(&self, points: &InstPoints, result: VReg) -> bool {
+        let block = self.selected.blocks[self.block_at(points.late).index()];
+        let is_last = self.selected.order[block.instructions.range()]
+            .last()
+            .is_some_and(|&instruction| instruction == points.instruction);
+        let is_condition =
+            matches!(block.terminator, Terminator::Branch { condition, .. } if condition == result);
+        let uses = self
+            .selected
+            .operands
+            .iter()
+            .filter(|&&operand| operand == result)
+            .count()
+            + self
+                .selected
+                .blocks
+                .iter()
+                .filter(|block| {
+                    matches!(block.terminator, Terminator::Branch { condition, .. } if condition == result)
+                })
+                .count();
+        is_last && is_condition && uses == 1
     }
 
     fn spill_slots(&self, owner: FunctionId) -> u32 {
@@ -248,11 +349,21 @@ impl<'a> Lowering<'a> {
             (Opcode::DataAddress, Immediate::Data(data)) => {
                 self.load_data_address(result()?, data);
             }
-            (Opcode::Add, Immediate::Bits(bits)) => {
-                self.asm.alu(Alu::Add, result()?, reg(1)?, bits);
-            }
-            (Opcode::Subtract, Immediate::Bits(bits)) => {
-                self.asm.alu(Alu::Subtract, result()?, reg(1)?, bits);
+            (Opcode::Add | Opcode::Subtract, Immediate::Bits(bits)) => {
+                let op = if inst.opcode == Opcode::Add {
+                    Alu::Add
+                } else {
+                    Alu::Subtract
+                };
+                let source = self.selected.operands[inst.operands.range()][1];
+                let source_reg = reg(1)?;
+                if self.is_unique_constant(source)
+                    && self.asm.fold_alu_immediate(op, result()?, source_reg, bits)
+                {
+                    self.forget(source_reg);
+                } else {
+                    self.asm.alu(op, result()?, source_reg, bits);
+                }
             }
             (Opcode::Multiply, Immediate::Bits(_)) => {
                 self.asm.multiply();
@@ -262,15 +373,29 @@ impl<'a> Lowering<'a> {
                 self.emit_division(inst.opcode == Opcode::Modulo);
             }
             (Opcode::Equal | Opcode::Below, Immediate::Bits(bits)) => {
-                self.asm.alu(Alu::Compare, reg(0)?, reg(1)?, bits);
-                self.asm.set_if(
-                    if inst.opcode == Opcode::Equal {
-                        Condition::Equal
-                    } else {
-                        Condition::Below
-                    },
-                    result()?,
-                );
+                let source = self.selected.operands[inst.operands.range()][1];
+                let source_reg = reg(1)?;
+                if self.is_unique_constant(source)
+                    && self
+                        .asm
+                        .fold_alu_immediate(Alu::Compare, reg(0)?, source_reg, bits)
+                {
+                    self.forget(source_reg);
+                } else {
+                    self.asm.alu(Alu::Compare, reg(0)?, source_reg, bits);
+                }
+                let condition = if inst.opcode == Opcode::Equal {
+                    Condition::Equal
+                } else {
+                    Condition::Below
+                };
+                let result = result()?;
+                if self.is_branch_only_result(points, inst.result.expect("a compared result")) {
+                    self.pending_condition =
+                        Some((inst.result.expect("a compared result"), condition));
+                } else {
+                    self.asm.set_if(condition, result);
+                }
             }
             (Opcode::Load, Immediate::Memory { width, offset }) => self.asm.load(
                 memory_width(width),
@@ -285,7 +410,7 @@ impl<'a> Lowering<'a> {
             (Opcode::Convert, Immediate::Bits(bits)) => {
                 let input = self.selected.operands[inst.operands.range()][0];
                 if bits < self.selected.widths[input.index()] {
-                    self.asm.narrow(bits);
+                    self.asm.narrow(result()?, bits);
                 }
             }
             (Opcode::Shift, Immediate::Shift { up, by, bits }) => self.asm.shift(
@@ -294,6 +419,7 @@ impl<'a> Lowering<'a> {
                 } else {
                     ShiftDirection::Right
                 },
+                result()?,
                 by,
                 bits,
             ),
@@ -314,9 +440,16 @@ impl<'a> Lowering<'a> {
                 self.forget_call_clobbers();
             }
             (Opcode::Exit, Immediate::None) => {
-                self.materialize(Reg::Rax, SYS_EXIT);
-                self.asm.syscall();
-                self.forget_call_clobbers();
+                self.asm.omit_redundant_exit_narrow();
+                if let Some(epilogue) = self.exit_epilogue {
+                    if Some(self.block_at(points.late)) != self.final_block {
+                        self.asm.jump(epilogue);
+                    }
+                } else {
+                    self.materialize(Reg::Rax, SYS_EXIT);
+                    self.asm.syscall();
+                    self.forget_call_clobbers();
+                }
             }
             (Opcode::Grow, Immediate::None) => {
                 self.materialize(Reg::Rax, SYS_MMAP);
@@ -329,7 +462,18 @@ impl<'a> Lowering<'a> {
                 self.forget_call_clobbers();
             }
             (Opcode::ArgumentCount, Immediate::None) => {
-                self.mov_reg(Reg::Rax, Reg::Rbx, RegisterWidth::Word);
+                let dst = result()?;
+                if self.argument_count_in_rbx {
+                    self.mov_reg(dst, Reg::Rbx, RegisterWidth::Word);
+                } else {
+                    let owner = self.owner_at(points.late);
+                    let displacement = self
+                        .spill_slots(owner)
+                        .checked_mul(8)
+                        .ok_or_else(|| "x86 entry frame displacement overflows".to_owned())?;
+                    self.asm.load_stack(dst, displacement);
+                    self.forget(dst);
+                }
             }
             _ => return Err("x86 selected opcode has an invalid late expansion".to_owned()),
         }
@@ -455,28 +599,46 @@ impl<'a> Lowering<'a> {
                 else_target,
                 ..
             } => {
-                let condition = match self.location(layout.terminator, condition)? {
-                    Location::Register(reg) => reg,
-                    Location::Spill(_) => return Err("x86 branch condition is spilled".to_owned()),
+                let (when_true, when_false) = if let Some((pending, condition_code)) =
+                    self.pending_condition.take()
+                    && pending == condition
+                {
+                    (condition_code, inverse(condition_code))
+                } else {
+                    let condition = match self.location(layout.terminator, condition)? {
+                        Location::Register(reg) => reg,
+                        Location::Spill(_) => {
+                            return Err("x86 branch condition is spilled".to_owned());
+                        }
+                    };
+                    self.asm.alu(Alu::Test, condition, condition, 64);
+                    (Condition::NotEqual, Condition::Equal)
                 };
-                self.asm.alu(Alu::Test, condition, condition, 64);
-                if Some(then_target) == next {
+                let edges_are_empty = self.edge_moves(layout.block, then_target)?.is_empty()
+                    && self.edge_moves(layout.block, else_target)?.is_empty();
+                if Some(then_target) == next && edges_are_empty {
+                    self.asm
+                        .jump_if(when_false, self.block_labels[else_target.index()]);
+                } else if Some(else_target) == next && edges_are_empty {
+                    self.asm
+                        .jump_if(when_true, self.block_labels[then_target.index()]);
+                } else if Some(then_target) == next {
                     let then_path = self.asm.label();
-                    self.asm.jump_if(Condition::NotEqual, then_path);
+                    self.asm.jump_if(when_true, then_path);
                     self.emit_edge(layout.block, else_target)?;
                     self.asm.jump(self.block_labels[else_target.index()]);
                     self.asm.bind(then_path);
                     self.emit_edge(layout.block, then_target)?;
                 } else if Some(else_target) == next {
                     let else_path = self.asm.label();
-                    self.asm.jump_if(Condition::Equal, else_path);
+                    self.asm.jump_if(when_false, else_path);
                     self.emit_edge(layout.block, then_target)?;
                     self.asm.jump(self.block_labels[then_target.index()]);
                     self.asm.bind(else_path);
                     self.emit_edge(layout.block, else_target)?;
                 } else {
                     let otherwise = self.asm.label();
-                    self.asm.jump_if(Condition::Equal, otherwise);
+                    self.asm.jump_if(when_false, otherwise);
                     self.emit_edge(layout.block, then_target)?;
                     self.asm.jump(self.block_labels[then_target.index()]);
                     self.asm.bind(otherwise);
@@ -489,9 +651,17 @@ impl<'a> Lowering<'a> {
                 if owner == entry {
                     if values.is_empty() {
                         self.materialize(Reg::Rdi, 0);
+                    } else {
+                        self.asm.omit_redundant_exit_narrow();
                     }
-                    self.materialize(Reg::Rax, SYS_EXIT);
-                    self.asm.syscall();
+                    if let Some(epilogue) = self.exit_epilogue {
+                        if Some(layout.block) != self.final_block {
+                            self.asm.jump(epilogue);
+                        }
+                    } else {
+                        self.materialize(Reg::Rax, SYS_EXIT);
+                        self.asm.syscall();
+                    }
                 } else {
                     let spill_slots = self.spill_slots(owner);
                     if spill_slots > 0 {
@@ -505,20 +675,24 @@ impl<'a> Lowering<'a> {
         Ok(())
     }
 
-    fn emit_edge(&mut self, from: BlockId, target: BlockId) -> Result<(), String> {
-        let edge = self
-            .allocation
+    fn edge_moves(&self, from: BlockId, target: BlockId) -> Result<&[CopyMove], String> {
+        self.allocation
             .edge_moves
             .iter()
             .find(|edge| edge.from == from && edge.target == target)
+            .map(|edge| edge.moves.as_slice())
             .ok_or_else(|| {
                 format!(
                     "x86 b{} has no move plan to b{}",
                     from.index(),
                     target.index()
                 )
-            })?;
-        self.emit_moves(&edge.moves);
+            })
+    }
+
+    fn emit_edge(&mut self, from: BlockId, target: BlockId) -> Result<(), String> {
+        let moves = self.edge_moves(from, target)?.to_vec();
+        self.emit_moves(&moves);
         Ok(())
     }
 
@@ -533,6 +707,15 @@ impl<'a> Lowering<'a> {
             })
             .map(|segment| segment.location)
             .ok_or_else(|| format!("x86 v{} has no allocated segment", value.index()))
+    }
+}
+
+const fn inverse(condition: Condition) -> Condition {
+    match condition {
+        Condition::Equal => Condition::NotEqual,
+        Condition::NotEqual => Condition::Equal,
+        Condition::Below => Condition::NotBelow,
+        Condition::NotBelow => Condition::Below,
     }
 }
 

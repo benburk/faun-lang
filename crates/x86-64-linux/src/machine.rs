@@ -72,6 +72,7 @@ pub(crate) enum Condition {
     Equal,
     NotEqual,
     Below,
+    NotBelow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,10 +168,12 @@ pub(crate) enum Inst {
         displacement: i32,
     },
     Narrow {
+        dst: Reg,
         bits: u16,
     },
     Shift {
         direction: ShiftDirection,
+        dst: Reg,
         by: u8,
         bits: u16,
     },
@@ -180,6 +183,11 @@ pub(crate) enum Inst {
     LoadStack {
         dst: Reg,
         displacement: u32,
+    },
+    LoadStackNarrow {
+        dst: Reg,
+        displacement: u32,
+        bits: u16,
     },
     LoadFrame {
         dst: Reg,
@@ -199,6 +207,12 @@ pub(crate) enum Inst {
         op: Alu,
         dst: Reg,
         src: Reg,
+        bits: u16,
+    },
+    AluImmediate {
+        op: Alu,
+        dst: Reg,
+        immediate: i32,
         bits: u16,
     },
     SetIf {
@@ -234,6 +248,10 @@ impl Allocated {
         self.labels[label.index()]
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one local validity check per allocated instruction family"
+    )]
     fn verify(&self) -> Result<(), String> {
         for (at, inst) in self.instructions.iter().enumerate() {
             match *inst {
@@ -242,11 +260,20 @@ impl Allocated {
                 {
                     return Err(format!("x86 instruction {at} refers to an unknown label"));
                 }
-                Inst::Narrow { bits } | Inst::Alu { bits, .. } if bits > 64 => {
+                Inst::Narrow { bits, .. }
+                | Inst::Alu { bits, .. }
+                | Inst::AluImmediate { bits, .. }
+                    if bits > 64 =>
+                {
                     return Err(format!("x86 instruction {at} has unsupported width {bits}"));
                 }
                 Inst::Shift { bits, .. } if bits == 0 || bits > 64 => {
                     return Err(format!("x86 instruction {at} has unsupported width {bits}"));
+                }
+                Inst::LoadStackNarrow { bits, .. } if !matches!(bits, 8 | 16) => {
+                    return Err(format!(
+                        "x86 instruction {at} has unsupported stack-load width {bits}"
+                    ));
                 }
                 Inst::OpenFrame { slots } | Inst::CloseFrame { slots } if slots == 0 => {
                     return Err(format!(
@@ -368,13 +395,28 @@ impl AllocatedBuilder {
         });
     }
 
-    pub(crate) fn narrow(&mut self, bits: u16) {
-        self.push(Inst::Narrow { bits });
+    pub(crate) fn narrow(&mut self, dst: Reg, bits: u16) {
+        if matches!(bits, 8 | 16)
+            && let Some(Inst::LoadStack {
+                dst: loaded,
+                displacement,
+            }) = self.instructions.last().copied()
+            && loaded == dst
+        {
+            *self.instructions.last_mut().expect("the matched load") = Inst::LoadStackNarrow {
+                dst,
+                displacement,
+                bits,
+            };
+            return;
+        }
+        self.push(Inst::Narrow { dst, bits });
     }
 
-    pub(crate) fn shift(&mut self, direction: ShiftDirection, by: u8, bits: u16) {
+    pub(crate) fn shift(&mut self, direction: ShiftDirection, dst: Reg, by: u8, bits: u16) {
         self.push(Inst::Shift {
             direction,
+            dst,
             by,
             bits,
         });
@@ -390,6 +432,42 @@ impl AllocatedBuilder {
 
     pub(crate) fn syscall(&mut self) {
         self.push(Inst::Syscall);
+    }
+
+    pub(crate) fn omit_redundant_exit_narrow(&mut self) {
+        let len = self.instructions.len();
+        match self.instructions.get(len.saturating_sub(2)..) {
+            Some(
+                [
+                    Inst::Narrow {
+                        dst: narrowed,
+                        bits,
+                    },
+                    Inst::Move {
+                        dst: Reg::Rdi,
+                        src,
+                        width: RegisterWidth::Word,
+                    },
+                ],
+            ) if narrowed == src && *bits <= 8 => {
+                self.instructions.remove(len - 2);
+                let Some(Inst::Move { width, .. }) = self.instructions.last_mut() else {
+                    unreachable!("the matched exit transfer remains last");
+                };
+                *width = RegisterWidth::Low32;
+            }
+            _ if matches!(
+                self.instructions.last(),
+                Some(Inst::Narrow {
+                    dst: Reg::Rdi,
+                    bits: 0..=8
+                })
+            ) =>
+            {
+                self.instructions.pop();
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn load_stack(&mut self, dst: Reg, displacement: u32) {
@@ -414,6 +492,27 @@ impl AllocatedBuilder {
 
     pub(crate) fn alu(&mut self, op: Alu, dst: Reg, src: Reg, bits: u16) {
         self.push(Inst::Alu { op, dst, src, bits });
+    }
+
+    pub(crate) fn fold_alu_immediate(&mut self, op: Alu, dst: Reg, src: Reg, bits: u16) -> bool {
+        let len = self.instructions.len();
+        let immediate = match self.instructions.get(len.wrapping_sub(2)..) {
+            Some(
+                [
+                    Inst::PushImmediate(immediate),
+                    Inst::Pop { dst: materialized },
+                ],
+            ) if *materialized == src => i32::from(*immediate),
+            _ => return false,
+        };
+        self.instructions.truncate(len - 2);
+        self.push(Inst::AluImmediate {
+            op,
+            dst,
+            immediate,
+            bits,
+        });
+        true
     }
 
     pub(crate) fn set_if(&mut self, condition: Condition, dst: Reg) {
@@ -471,6 +570,23 @@ mod tests {
             &[Inst::LoadFrame {
                 dst: Reg::Rax,
                 slot
+            }]
+        );
+    }
+
+    #[test]
+    fn exit_status_does_not_need_to_be_zero_extended() {
+        let mut builder = AllocatedBuilder::default();
+        builder.narrow(Reg::Rax, 8);
+        builder.mov_reg(Reg::Rdi, Reg::Rax, RegisterWidth::Word);
+        builder.omit_redundant_exit_narrow();
+        let program = builder.finish().unwrap();
+        assert_eq!(
+            program.instructions(),
+            &[Inst::Move {
+                dst: Reg::Rdi,
+                src: Reg::Rax,
+                width: RegisterWidth::Low32
             }]
         );
     }

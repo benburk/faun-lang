@@ -196,9 +196,9 @@ impl Opcode {
             ]),
         };
         let effects = match self {
-            // Compatibility lowering may rematerialize a small constant with
-            // push/pop. The selected contract therefore exposes the possible
-            // stack traffic even though other recipes are one instruction.
+            // A small constant may use push/pop, so the selected contract
+            // exposes possible stack traffic even when other recipes need one
+            // instruction.
             Self::Constant => Effects {
                 memory: Access::ReadWrite,
                 ..Effects::PURE
@@ -298,8 +298,7 @@ impl Inst {
                 | Opcode::Convert
                 | Opcode::Shift
                 | Opcode::Call
-                | Opcode::Grow
-                | Opcode::ArgumentCount => Constraint::Fixed(Reg::Rax),
+                | Opcode::Grow => Constraint::Fixed(Reg::Rax),
                 _ => Constraint::Any,
             };
             return Some(OperandSpec {
