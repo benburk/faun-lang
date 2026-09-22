@@ -398,6 +398,29 @@ struct Definition {
 }
 
 #[derive(Debug)]
+struct Dominators {
+    immediate: Vec<Option<BlockId>>,
+}
+
+impl Dominators {
+    fn contains(&self, dominator: BlockId, block: BlockId) -> bool {
+        let mut cursor = block;
+        loop {
+            if cursor == dominator {
+                return true;
+            }
+            let Some(parent) = self.immediate[cursor.index()] else {
+                return false;
+            };
+            if parent == cursor {
+                return false;
+            }
+            cursor = parent;
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct Selected {
     widths: Vec<u16>,
     operands: Vec<VReg>,
@@ -514,7 +537,7 @@ impl Selected {
             }
             self.verify_inst_shape(*inst, InstId::at(at))?;
         }
-        let dominators = self.dominators();
+        let dominators = self.dominators()?;
         for (at, block) in self.blocks.iter().enumerate() {
             self.verify_uses(
                 block.owner,
@@ -717,62 +740,98 @@ impl Selected {
         Ok(())
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "small fixed-point dominance calculation is kept as one operation"
-    )]
-    fn dominators(&self) -> Vec<Vec<bool>> {
-        let count = self.blocks.len();
-        let mut predecessors = vec![Vec::new(); count];
-        for (at, block) in self.blocks.iter().enumerate() {
-            for target in successors(block.terminator).into_iter().flatten() {
-                predecessors[target.index()].push(at);
-            }
-        }
-        let mut dominators = vec![vec![false; count]; count];
+    fn dominators(&self) -> Result<Dominators, String> {
+        let predecessors = self.predecessors();
+        let mut immediate = vec![None; self.blocks.len()];
         for function in &self.functions {
-            let members: Vec<_> = self
-                .blocks
-                .iter()
-                .enumerate()
-                .filter_map(|(at, block)| (block.owner == function.source).then_some(at))
-                .collect();
-            for &block in &members {
-                for &member in &members {
-                    dominators[block][member] = true;
-                }
+            let (rpo, roots) = self.reverse_postorder(*function);
+            let mut order = vec![None; self.blocks.len()];
+            for (at, &block) in rpo.iter().enumerate() {
+                order[block.index()] = Some(at);
             }
-            dominators[function.entry.index()].fill(false);
-            dominators[function.entry.index()][function.entry.index()] = true;
+            for &root in &roots {
+                immediate[root.index()] = Some(root);
+            }
             loop {
-                let previous = dominators.clone();
                 let mut changed = false;
-                for &block in &members {
-                    if block == function.entry.index() {
+                for &block in &rpo {
+                    if roots.contains(&block) {
                         continue;
                     }
-                    let mut row = vec![false; count];
-                    let mut incoming = predecessors[block].iter().copied();
-                    if let Some(first) = incoming.next() {
-                        row.clone_from(&previous[first]);
-                        for predecessor in incoming {
-                            for (held, &other) in row.iter_mut().zip(&previous[predecessor]) {
-                                *held &= other;
-                            }
-                        }
-                    }
-                    row[block] = true;
-                    if row != previous[block] {
+                    let mut incoming = predecessors[block.index()]
+                        .iter()
+                        .copied()
+                        .filter(|predecessor| immediate[predecessor.index()].is_some());
+                    let first = incoming.next().ok_or_else(|| {
+                        format!("x86 block b{} has no reachable predecessor", block.index())
+                    })?;
+                    let dominator = incoming.fold(first, |held, predecessor| {
+                        intersect_dominators(held, predecessor, &immediate, &order)
+                    });
+                    if immediate[block.index()] != Some(dominator) {
+                        immediate[block.index()] = Some(dominator);
                         changed = true;
                     }
-                    dominators[block] = row;
                 }
                 if !changed {
                     break;
                 }
             }
         }
-        dominators
+        Ok(Dominators { immediate })
+    }
+
+    fn predecessors(&self) -> Vec<Vec<BlockId>> {
+        let mut predecessors = vec![Vec::new(); self.blocks.len()];
+        for (at, block) in self.blocks.iter().enumerate() {
+            for target in successors(block.terminator).into_iter().flatten() {
+                predecessors[target.index()].push(BlockId::at(at));
+            }
+        }
+        predecessors
+    }
+
+    fn reverse_postorder(&self, function: Function) -> (Vec<BlockId>, Vec<BlockId>) {
+        let mut seen = vec![false; self.blocks.len()];
+        let mut roots = Vec::new();
+        let mut rpo = Vec::new();
+        let candidates = std::iter::once(function.entry).chain(
+            self.blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, block)| block.owner == function.source)
+                .map(|(at, _)| BlockId::at(at)),
+        );
+        for root in candidates {
+            if seen[root.index()] {
+                continue;
+            }
+            roots.push(root);
+            let mut stack = vec![(root, false)];
+            let mut postorder = Vec::new();
+            while let Some((block, expanded)) = stack.pop() {
+                if expanded {
+                    postorder.push(block);
+                    continue;
+                }
+                if seen[block.index()] {
+                    continue;
+                }
+                seen[block.index()] = true;
+                stack.push((block, true));
+                for successor in successors(self.blocks[block.index()].terminator)
+                    .into_iter()
+                    .flatten()
+                {
+                    if !seen[successor.index()] {
+                        stack.push((successor, false));
+                    }
+                }
+            }
+            postorder.reverse();
+            rpo.extend(postorder);
+        }
+        (rpo, roots)
     }
 
     fn width(&self, value: VReg) -> Result<u16, String> {
@@ -792,7 +851,7 @@ impl Selected {
         terminator: Terminator,
         definitions: &[Option<Definition>],
         block: BlockId,
-        dominators: &[Vec<bool>],
+        dominators: &Dominators,
     ) -> Result<(), String> {
         let check = |value: VReg, position: usize| {
             let definition = definitions
@@ -815,7 +874,7 @@ impl Selected {
             let dominates = if definition.block == block {
                 definition.position.is_none_or(|defined| defined < position)
             } else {
-                dominators[block.index()][definition.block.index()]
+                dominators.contains(definition.block, block)
             };
             if !dominates {
                 return Err(format!(
@@ -863,6 +922,23 @@ impl Selected {
         }
         Ok(())
     }
+}
+
+fn intersect_dominators(
+    mut left: BlockId,
+    mut right: BlockId,
+    immediate: &[Option<BlockId>],
+    order: &[Option<usize>],
+) -> BlockId {
+    while left != right {
+        while order[left.index()] > order[right.index()] {
+            left = immediate[left.index()].expect("a processed dominator");
+        }
+        while order[right.index()] > order[left.index()] {
+            right = immediate[right.index()].expect("a processed dominator");
+        }
+    }
+    left
 }
 
 const fn successors(terminator: Terminator) -> [Option<BlockId>; 2] {
