@@ -1,10 +1,11 @@
 //! The compiler, down to the tier a target reads.
 //!
-//! Three tiers and the interface below them. [`surface`] is the language,
-//! [`barb`] the core it lowers to, [`ir`] the tier that decides how a value
-//! is held, and [`platform`] what a target answers for. A target is not
-//! here: it is a crate implementing [`targets::Target`], so what this
-//! compiles for is a fact about a build rather than about the compiler.
+//! The new [`surface`] frontend is growing toward Ori's source language.
+//! [`simple`] preserves the original first-order test frontend and still feeds
+//! [`barb`], the core it lowers to. [`ir`] decides how a value is held, while
+//! [`platform`] describes what a target answers for. A target is not here: it
+//! is a crate implementing [`targets::Target`], so what this compiles for is a
+//! fact about a build rather than about the compiler.
 
 pub mod barb;
 pub mod facts;
@@ -12,11 +13,12 @@ pub mod index;
 pub mod ir;
 pub mod platform;
 pub mod programs;
+pub mod simple;
 pub mod surface;
 pub mod targets;
 
-/// Read a program and lower it to the tier a target compiles: what it says,
-/// then what each definition computes, then how to compute it.
+/// Read a program in the archived [`simple`] language and lower it to the
+/// tier a target compiles.
 ///
 /// # Errors
 ///
@@ -25,8 +27,8 @@ pub fn read(text: &str, routines: &platform::Routines) -> Result<ir::Program, St
     read_with_options(text, routines, &barb::OptimizeOptions::default())
 }
 
-/// Compile with deterministic optimization controls. Totality checking always
-/// runs, even when all optional passes are disabled.
+/// Compile a [`simple`] program with deterministic optimization controls.
+/// Totality checking always runs, even when all optional passes are disabled.
 ///
 /// # Errors
 ///
@@ -45,7 +47,7 @@ pub fn read_with_options(
 ///
 /// This is the rest of [`read_with_options`] once there is a Barb program
 /// to do it to, and it is the whole compiler for anything written at that
-/// tier rather than in the surface.
+/// tier rather than in a surface language.
 ///
 /// # Errors
 /// Names what it cannot represent.
@@ -61,10 +63,12 @@ pub fn machine(
     Ok(ir::optimize(&held, &ir::OptimizeOptions::default()))
 }
 
-/// Read, validate and optimize Barb, stopping before representation selection.
+/// Read a [`simple`] program, validate and optimize Barb, then stop before
+/// representation selection.
 ///
-/// This is the same front-end pipeline used by [`read_with_options`], exposed
-/// for inspection. Analyze the returned program before machine lowering.
+/// This is the same archived frontend pipeline used by [`read_with_options`],
+/// exposed for inspection. Analyze the returned program before machine
+/// lowering.
 ///
 /// # Errors
 /// Reports parsing, typing, structural or totality errors. Inspection never
@@ -74,7 +78,7 @@ pub fn read_barb_with_options(
     routines: &platform::Routines,
     options: &barb::OptimizeOptions,
 ) -> Result<barb::Program, String> {
-    let mut program = surface::parse(text, routines)?;
+    let mut program = simple::parse(text, routines)?;
     barb::validate(&program)?;
     barb::optimize(&mut program, options);
     Ok(program)

@@ -3,12 +3,27 @@
 A work-in-progress compiled, statically typed, functional programming language,
 targeting x86-64 Linux, wasm32 WASI, and MOS 6502 sim65.
 
-The compiler validates source definitions, runs a bounded optimization schedule,
-recognizes arithmetic structurally, derives ranges, and lowers to validated
-machine IR. Targets then prepare representations, check their limits, and emit.
-A reference machine-IR interpreter supports 16-, 32-, and 64-bit configurations.
+The primary frontend is being replaced with an Ori-compatible language. The
+`faun` command currently lexes and parses a strict subset:
 
-See [arithmetic and source libraries](standard/README.md) for unbounded `Nat`,
+```sh
+cargo run -- check notes/examples/frontend.ori
+cargo bench -p faun --bench frontend
+```
+
+The parser supports nominal constructor types, first-order signatures, clauses,
+bindings, calls, methods, and operators. It does not lower programs yet. See the
+[frontend status and benchmark contract](notes/frontend.md) for the exact
+boundary.
+
+The archived `faun-simple` command keeps the original `.fn` frontend and complete
+compiler pipeline. It validates definitions, runs a bounded optimization
+schedule, recognizes arithmetic structurally, derives ranges, and lowers to
+validated machine IR. Targets then prepare representations, check their limits,
+and emit. A reference machine-IR interpreter supports 16-, 32-, and 64-bit
+configurations.
+
+See [arithmetic and simple-frontend libraries](standard/README.md) for unbounded `Nat`,
 monus and zero-divisor semantics, native arithmetic, and ordinary `U8`/`Int`
 definitions. There is no automatic prelude or import syntax: prepend the needed
 library files explicitly.
@@ -38,8 +53,8 @@ Enter the development shell, then inspect optimized Barb and lowered machine IR:
 
 ```sh
 nix develop
-cargo run -- inspect --target mos6502-sim65 --emit barb examples/expressions.fn
-cargo run -- inspect --target mos6502-sim65 --emit ir examples/expressions.fn
+cargo run --bin faun-simple -- inspect --target mos6502-sim65 --emit barb examples/expressions.fn
+cargo run --bin faun-simple -- inspect --target mos6502-sim65 --emit ir examples/expressions.fn
 ```
 
 Dumps go to stdout, so they can be redirected to files. `barb` stops after the
@@ -55,7 +70,7 @@ host contracts and retain source validation and totality checks.
 Build and run the 6502 image, then disassemble its actual emitted bytes:
 
 ```sh
-cargo run -- build --target mos6502-sim65 -o /tmp/faun-expressions examples/expressions.fn
+cargo run --bin faun-simple -- build --target mos6502-sim65 -o /tmp/faun-expressions examples/expressions.fn
 sim65 /tmp/faun-expressions.bin a b
 echo $? # 8 (the result is an exit status, not printed output)
 

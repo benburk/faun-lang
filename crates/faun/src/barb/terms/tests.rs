@@ -7,7 +7,7 @@ use crate::barb::{
 };
 
 fn library() -> Program {
-    crate::surface::parse(
+    crate::simple::parse(
         &format!(
             "{}\nmain!(h) -> exit!(h Zero)",
             include_str!("../../../../../standard/nat.fn")

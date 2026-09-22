@@ -1,6 +1,7 @@
-# Arithmetic
+# Arithmetic for the simple frontend
 
-`nat.fn` contains ordinary source definitions, not compiler intrinsics:
+These `.fn` libraries belong to the archived `faun-simple` frontend. They remain
+ordinary source definitions rather than compiler intrinsics. `nat.fn` provides:
 
 - `Nat = Zero | Succ(Nat)` is unbounded.
 - `add`, `sub`, and `mul` are natural arithmetic; `sub` is monus.

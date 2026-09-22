@@ -252,7 +252,7 @@ fn internal_never_contracts_propagate_but_cannot_return_unit() {
 #[test]
 fn source_never_functions_keep_their_contract_without_inlining() {
     let routines = crate::platform::Routines::builtin().with_word(64);
-    let source = crate::surface::parse(
+    let source = crate::simple::parse(
         "type Nat Zero Succ(Nat)\nfinish!(h) -> exit!(h Zero)\nmain!(h) -> finish!(h)",
         &routines,
     )

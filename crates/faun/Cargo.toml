@@ -4,9 +4,17 @@ version.workspace = true
 edition.workspace = true
 description = "The Faun compiler, up to the tier a target reads"
 
+[[bench]]
+name = "frontend"
+harness = false
+
 [dependencies]
 num-bigint = "0.4.8"
 num-traits = "0.2"
+peg = "0.8.6"
+
+[dev-dependencies]
+mimalloc = "0.1.52"
 
 [lints]
 workspace = true

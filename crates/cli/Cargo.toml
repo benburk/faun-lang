@@ -1,13 +1,19 @@
 [package]
 name = "faun-cli"
 version.workspace = true
+default-run = "faun"
 edition.workspace = true
-description = "The Faun compiler as a command"
+description = "The Faun compiler as commands"
 
 [[bin]]
 name = "faun"
 path = "src/main.rs"
 # The command and library share a name; only the library has an API to document.
+doc = false
+
+[[bin]]
+name = "faun-simple"
+path = "src/simple.rs"
 doc = false
 
 [dependencies]
@@ -16,6 +22,7 @@ faun.workspace = true
 faun-mos6502-sim65.workspace = true
 faun-wasm32-wasi.workspace = true
 faun-x86-64-linux.workspace = true
+mimalloc = "0.1.52"
 
 [lints]
 workspace = true

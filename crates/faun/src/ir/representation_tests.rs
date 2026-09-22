@@ -26,7 +26,7 @@ fn library(main: &str) -> String {
 }
 
 fn parse(text: &str) -> barb::Program {
-    crate::surface::parse(text, &Routines::builtin().with_word(64)).unwrap()
+    crate::simple::parse(text, &Routines::builtin().with_word(64)).unwrap()
 }
 
 fn lower_program(source: &barb::Program) -> Result<Program, String> {

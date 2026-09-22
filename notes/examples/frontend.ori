@@ -1,0 +1,5 @@
+Nat : [Zero Succ(Nat)]
+
+add : Nat Nat -> Nat
+add(Zero y) -> y
+add(Succ(x) y) -> Succ(add(x y))

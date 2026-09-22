@@ -16,7 +16,7 @@ struct Library {
 impl Library {
     fn new() -> Self {
         let text = format!("{NAT}\n{U8}\n{INT}\nmain!(h) -> exit!(h Zero)");
-        let program = crate::surface::parse(&text, &crate::platform::Routines::builtin()).unwrap();
+        let program = crate::simple::parse(&text, &crate::platform::Routines::builtin()).unwrap();
         validate(&program).unwrap();
         let operations = arithmetic::recognise(&program);
         Self {
@@ -354,8 +354,7 @@ fn library_meaning_does_not_depend_on_names_or_constructor_order() {
         )
         .replace("u8_", "byte_")
         .replace("int_", "signed_");
-    let mut program =
-        crate::surface::parse(&source, &crate::platform::Routines::builtin()).unwrap();
+    let mut program = crate::simple::parse(&source, &crate::platform::Routines::builtin()).unwrap();
     normalize_with_limits(&mut program, InlineLimits::default());
     fold(&mut program);
     validate(&program).unwrap();

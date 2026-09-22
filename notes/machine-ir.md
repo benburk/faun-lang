@@ -22,10 +22,11 @@ means `0 <= value < 2^N`, not wrapping arithmetic or an exact inferred interval.
 A narrower sink requires a fit proof or an explicit conversion. The legend does
 not add range analysis or change the classes printed on definitions and signatures.
 
-The CLI's `inspect --emit ir` validates lowered IR without requiring target
-acceptance; `--emit prepared-ir` prints the result of `Target::prepare` instead.
-`--emit barb` uses `read_barb_with_options` with the default optimization options,
-sharing the front-end pipeline with ordinary compilation. See the
+The archived simple frontend's `faun-simple inspect --emit ir` validates lowered
+IR without requiring target acceptance; `--emit prepared-ir` prints the result
+of `Target::prepare` instead. `--emit barb` uses `read_barb_with_options` with
+the default optimization options, sharing that frontend's pipeline with ordinary
+compilation. See the
 [runnable inspection example](../README.md#inspecting-a-runtime-expression).
 
 ## Zero-width scalars

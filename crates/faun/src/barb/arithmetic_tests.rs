@@ -15,7 +15,7 @@ use num_bigint::BigUint;
 const LIBRARY: &str = include_str!("../../../../standard/nat.fn");
 
 fn source(library: &str) -> Program {
-    crate::surface::parse(
+    crate::simple::parse(
         &format!("{library}\nmain!(h) -> exit!(h Zero)"),
         &crate::platform::Routines::builtin(),
     )
@@ -174,7 +174,7 @@ fn an_early_exit_refines_the_continuation() {
     let text = format!(
         "{LIBRARY}\nbounded!(h True n) -> n\nbounded!(h False n) -> exit!(h Zero)\nmain!(h) -> count = argc!(h) n = bounded!(h less_than(count Succ(Succ(Zero))) count) exit!(h add(n n))"
     );
-    let mut program = crate::surface::parse(&text, &routines).unwrap();
+    let mut program = crate::simple::parse(&text, &routines).unwrap();
     normalize_with_limits(&mut program, InlineLimits::default());
     fold(&mut program);
     let facts = analyze(&program);

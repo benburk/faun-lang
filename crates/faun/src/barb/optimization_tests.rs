@@ -9,7 +9,7 @@ use super::{
 const LIBRARY: &str = include_str!("../../../../standard/nat.fn");
 
 fn library() -> Program {
-    crate::surface::parse(
+    crate::simple::parse(
         &format!("{LIBRARY}\nmain!(h) -> exit!(h Zero)"),
         &crate::platform::Routines::builtin(),
     )
