@@ -14,6 +14,7 @@ use bpaf::positional;
 use bpaf::short;
 
 use faun::targets::Target;
+use faun_aarch64_macos::Aarch64Macos;
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
@@ -26,15 +27,17 @@ mod tests;
 
 /// Every target this was built with, in the order they were written.
 ///
-/// Nothing else names all three. A compiler for three machines has to hold
-/// three backends, and this is the thing that has to: what a target is, and
+/// Nothing else names all four. A compiler for four machines has to hold
+/// four backends, and this is the thing that has to: what a target is, and
 /// how to reach one, are questions every other crate answers for itself.
-const ALL: [&dyn Target; 3] = [&X86_64Linux, &Wasm32Wasi, &Mos6502Sim65];
+const ALL: [&dyn Target; 4] = [&X86_64Linux, &Wasm32Wasi, &Mos6502Sim65, &Aarch64Macos];
 
 /// The one native to the machine this is running on, if there is one here
 /// for it. `None` means `--target` is not optional here.
 const HOST: Option<&dyn Target> = if cfg!(all(target_arch = "x86_64", target_os = "linux")) {
     Some(&X86_64Linux)
+} else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+    Some(&Aarch64Macos)
 } else {
     None
 };

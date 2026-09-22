@@ -113,9 +113,10 @@ Runtime `Natural` is supported on x86-64 Linux and wasm32 WASI through shared
 runtime legalization. It uses exact byte-limb magnitudes and a reusable,
 reference-counted private heap, **64 KiB by default**. Allocation or reference-count
 exhaustion exits with **status 2**, never a wrapped or fabricated result. The heap
-has fixed capacity; it does not grow through an OS allocator. Native 6502 runtime
-naturals remain disabled pending audited image/frame/hardware-stack capacity,
-even though the shared runtime can be exercised by the 16-bit interpreter.
+has fixed capacity; it does not grow through an OS allocator. AArch64 macOS is
+currently limited to its syscall baselines, and native 6502 runtime naturals
+remain disabled pending audited image/frame/hardware-stack capacity, even though
+the shared runtime can be exercised by the 16-bit interpreter.
 
 `Fixed` values wider than the target word are still rejected, even when a
 `Natural` object could hold the magnitude. Native calling-convention and frame

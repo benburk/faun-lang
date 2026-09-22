@@ -1,7 +1,7 @@
 # Faun
 
 A work-in-progress compiled, statically typed, functional programming language,
-targeting x86-64 Linux, wasm32 WASI, and MOS 6502 sim65.
+targeting x86-64 Linux, AArch64 macOS, wasm32 WASI, and MOS 6502 sim65.
 
 The primary frontend is being replaced with an Ori-compatible language. The
 `faun` command currently lexes and parses a strict subset:
@@ -30,8 +30,9 @@ library files explicitly.
 
 [Runtime naturals](notes/runtime-naturals.md) work on x86-64 and wasm32 using a
 reusable private heap, 64 KiB by default; exhaustion exits with status 2 rather
-than wrapping. Native 6502 runtime naturals remain disabled pending image/stack
-capacity checks. Fixed-width values wider than a target word are still rejected.
+than wrapping. Native AArch64 macOS and 6502 runtime naturals remain disabled
+while those backends have narrower implementation limits. Fixed-width values
+wider than a target word are still rejected.
 
 `U8` and `Int` enforce their invariants structurally and support pure compile-time
 uses after folding and dead-binding cleanup. Runtime product/sum packing and
@@ -41,6 +42,25 @@ Compiler clients should use `Target::compile`, or `Target::prepare` to inspect
 the prepared IR; raw `emit` does not legalize naturals or establish its validation
 and target-acceptance preconditions. See [machine IR contracts](notes/machine-ir.md)
 for external declarations, function construction, and representation rebuilding.
+
+## Trying the AArch64 macOS baseline
+
+The first macOS slice supports `exit!`, `argc!`, and writing static data. It emits
+an ad-hoc-signed Mach-O that loads through `/usr/lib/dyld`, but imports no symbols
+and links no libraries; output and termination use raw Darwin syscalls.
+
+Build on another host, copy the executable, and run it on an Apple Silicon Mac:
+
+```sh
+cargo run --bin faun-simple -- build --target aarch64-macos \
+  -o /tmp/faun-exit examples/exit.fn
+scp /tmp/faun-exit your-mac:/tmp/faun-exit
+ssh your-mac 'chmod +x /tmp/faun-exit; /tmp/faun-exit; echo $?'
+```
+
+The backend currently rejects internal functions, arithmetic, mutable globals,
+and heap allocation before emission. This keeps `exit(0)`, `exit(argc)`, and
+hello-world programs as explicit baselines while instruction lowering grows.
 
 ## Inspecting a runtime expression
 

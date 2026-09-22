@@ -19,6 +19,7 @@ doc = false
 [dependencies]
 bpaf = "0.9"
 faun.workspace = true
+faun-aarch64-macos.workspace = true
 faun-mos6502-sim65.workspace = true
 faun-wasm32-wasi.workspace = true
 faun-x86-64-linux.workspace = true
