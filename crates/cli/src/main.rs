@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -19,10 +18,10 @@ enum Command {
 }
 
 fn cli() -> OptionParser<Command> {
-    let source = positional::<PathBuf>("PATH").help("The Ori-syntax source file to parse");
+    let source = positional::<PathBuf>("PATH").help("The Ori-syntax source file to check");
     construct!(Command::Check { source })
         .to_options()
-        .descr("Parse a Faun program without compiling it")
+        .descr("Load and check a Faun program without compiling it")
         .command("check")
         .to_options()
         .descr("The Faun compiler")
@@ -42,9 +41,21 @@ fn main() -> ExitCode {
 fn dispatch(command: Command) -> Result<(), String> {
     match command {
         Command::Check { source } => {
-            let text = fs::read_to_string(&source)
-                .map_err(|error| format!("{}: {error}", source.display()))?;
-            faun::surface::parse(&text).map_err(|error| format!("{}:{error}", source.display()))?;
+            let prelude = std::env::var_os("ORI_STD").map(PathBuf::from);
+            let loaded =
+                faun::surface::modules::load(std::slice::from_ref(&source), prelude.as_deref())
+                    .map_err(|error| error.to_string())?;
+            let blessed = loaded
+                .prelude
+                .map(|_| faun::surface::blessed::PreludeIds::resolve(&loaded))
+                .transpose()
+                .map_err(|error| error.to_string())?;
+            let resolved =
+                faun::surface::resolve::resolve(loaded).map_err(|error| error.to_string())?;
+            if let Some(blessed) = blessed {
+                faun::surface::check::literals(&resolved.program, &blessed)
+                    .map_err(|error| error.to_string())?;
+            }
             Ok(())
         }
     }

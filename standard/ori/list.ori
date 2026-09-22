@@ -1,0 +1,5 @@
+# The constructors are exposed for list syntax and pattern matching.
+
+exports {List.*}
+
+List(a) : [Nil Cons(a List(a))]

@@ -1,8 +1,10 @@
 //! Syntax retained by the Ori-compatible frontend.
 //!
-//! Names are source spans rather than allocated strings. A parsed module is
-//! therefore cheap to build and callers resolve spelling against the source
-//! text only when they need it.
+//! Parsed modules own a source identity, while names and literals retain
+//! compact byte ranges into that source. Resolution replaces these ranges with
+//! interned symbols; the parser does not allocate a string for every name.
+
+use super::source::SourceId;
 
 /// A half-open byte range in one source file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -58,23 +60,85 @@ impl Name {
 /// A parsed source file, before name resolution or type checking.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Module {
+    pub source: SourceId,
     pub items: Vec<Item>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
+    Header(HeaderDecl),
+    Import(ImportDecl),
+    Exports(ExportsDecl),
     Data(DataDecl),
     Signature(SignatureDecl),
     Clause(Clause),
 }
 
-/// `Name(a) : [First Second(a)]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderKind {
+    Lib,
+}
+
+/// A package root. Dependency entries will be added when package dependency
+/// syntax is needed; an empty `lib {}` already establishes the root boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeaderDecl {
+    pub span: Span,
+    pub kind: HeaderKind,
+}
+
+/// `import foo.bar {Name Other.* source: local}`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportDecl {
+    pub span: Span,
+    pub path: Vec<Name>,
+    pub exposures: Vec<Exposure>,
+}
+
+/// `exports {Name Other.*}`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportsDecl {
+    pub span: Span,
+    pub exports: Vec<Export>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Exposure {
+    pub exported: Name,
+    pub local: Name,
+    pub constructors: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Export {
+    pub name: Name,
+    pub constructors: bool,
+}
+
+/// `Name(a) : [First Second(a)].(methods)` or `Name : Repr.(methods)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataDecl {
     pub span: Span,
     pub name: Name,
     pub params: Vec<Name>,
-    pub constructors: Vec<ConstructorDecl>,
+    pub representation: DataRepresentation,
+    pub methods: Vec<MethodItem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DataRepresentation {
+    Sum(Vec<ConstructorDecl>),
+    Wrapper(Type),
+}
+
+impl DataDecl {
+    #[must_use]
+    pub fn constructors(&self) -> &[ConstructorDecl] {
+        match &self.representation {
+            DataRepresentation::Sum(constructors) => constructors,
+            DataRepresentation::Wrapper(_) => &[],
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,13 +147,28 @@ pub struct ConstructorDecl {
     pub fields: Vec<Type>,
 }
 
-/// A first-order signature such as `add : Nat Nat -> Nat`.
+/// A method-block item. Module directives and nested types cannot occur here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MethodItem {
+    Signature(SignatureDecl),
+    Clause(Clause),
+}
+
+/// A signature such as `add : Nat Nat -> Nat where Hashable(a)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignatureDecl {
     pub span: Span,
     pub name: Name,
     pub parameters: Vec<Type>,
     pub result: Type,
+    pub constraints: Vec<Constraint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Constraint {
+    pub span: Span,
+    pub name: Name,
+    pub arguments: Vec<Type>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,14 +178,24 @@ pub enum Type {
         name: Name,
         arguments: Vec<Self>,
     },
+    Function {
+        span: Span,
+        parameters: Vec<Self>,
+        result: Box<Self>,
+    },
+    Variants {
+        span: Span,
+        constructors: Vec<ConstructorDecl>,
+    },
 }
 
-/// One `name(patterns) -> body` row. Consecutive rows are grouped later.
+/// One `name(patterns) if guard -> body` row. Consecutive rows are grouped later.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Clause {
     pub span: Span,
     pub name: Name,
     pub patterns: Vec<Pattern>,
+    pub guard: Option<Expr>,
     pub body: Body,
 }
 
@@ -122,6 +211,47 @@ pub struct Binding {
     pub value: Expr,
 }
 
+/// A written integer. Its type and magnitude are deliberately not decided by
+/// parsing; `span` retains every digit and radix marker for later elaboration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Numeral {
+    pub span: Span,
+    pub kind: NumeralKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumeralKind {
+    Number,
+    Character,
+}
+
+impl Numeral {
+    #[must_use]
+    pub fn text(self, source: &str) -> &str {
+        self.span.text(source)
+    }
+
+    #[must_use]
+    pub fn radix(self, source: &str) -> u32 {
+        let text = self.text(source);
+        if text.starts_with("0x") {
+            16
+        } else if text.starts_with("0b") {
+            2
+        } else {
+            10
+        }
+    }
+
+    #[must_use]
+    pub fn digits(self, source: &str) -> &str {
+        let text = self.text(source);
+        text.strip_prefix("0x")
+            .or_else(|| text.strip_prefix("0b"))
+            .unwrap_or(text)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
     Wild(Span),
@@ -133,7 +263,18 @@ pub enum Pattern {
     },
     Number {
         span: Span,
+        numeral: Numeral,
         negative: bool,
+    },
+    Range {
+        span: Span,
+        start: Numeral,
+        end: Numeral,
+    },
+    List {
+        span: Span,
+        elements: Vec<Self>,
+        rest: Option<Box<Self>>,
     },
 }
 
@@ -146,11 +287,23 @@ pub struct Expr {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
     Name(Name),
-    Number,
+    Number(Numeral),
+    String(Vec<StringPart>),
+    List(Vec<Expr>, Option<Box<Expr>>),
+    Lambda(Vec<Pattern>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
+    Member(Box<Expr>, Name),
     Method(Box<Expr>, Name, Vec<Expr>),
     Unary(UnaryOp, Box<Expr>),
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StringPart {
+    /// Raw source text, including any written escapes. Decoding is explicit so
+    /// parsing a large source does not allocate a second copy of every string.
+    Text(Span),
+    Splice(Expr),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

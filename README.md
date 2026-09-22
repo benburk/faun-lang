@@ -4,17 +4,20 @@ A work-in-progress compiled, statically typed, functional programming language,
 targeting x86-64 Linux, AArch64 macOS, wasm32 WASI, and MOS 6502 sim65.
 
 The primary frontend is being replaced with an Ori-compatible language. The
-`faun` command currently lexes and parses a strict subset:
+`faun` command loads modules, parses, links, resolves names, and checks the
+current signature-directed subset:
 
 ```sh
 cargo run -- check notes/examples/frontend.ori
+ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/literals.ori
 cargo bench -p faun --bench frontend
 ```
 
-The parser supports nominal constructor types, first-order signatures, clauses,
-bindings, calls, methods, and operators. It does not lower programs yet. See the
-[frontend status and benchmark contract](notes/frontend.md) for the exact
-boundary.
+It supports package interfaces, nominal types and method blocks, clauses,
+guards, constraints, lists, strings, literals, calls, methods, and operators.
+`Nat`, `Int`, and `Str` literal elaboration is defined, including lowering those
+expansions through ordinary Barb operations. Full type inference and complete
+program lowering are not implemented yet. See the [frontend status and benchmark contract](notes/frontend.md) for the exact boundary.
 
 The archived `faun-simple` command keeps the original `.fn` frontend and complete
 compiler pipeline. It validates definitions, runs a bounded optimization

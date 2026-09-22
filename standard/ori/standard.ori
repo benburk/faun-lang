@@ -1,0 +1,12 @@
+# Bootstrap prelude for the Ori-compatible frontend. This is deliberately the
+# representation and literal protocol slice, not yet the complete library.
+
+lib {}
+
+import nat {Nat.*}
+import int {Int.*}
+import u8 {U8}
+import list {List.*}
+import str {Str}
+
+exports {Nat.* Int.* U8 List.* Str}

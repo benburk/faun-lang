@@ -1,15 +1,17 @@
-//! The initial Ori grammar over lexer tokens.
+//! The Ori grammar over compact lexer tokens.
 //!
-//! This deliberately accepts a strict subset: nominal constructor types,
-//! first-order signatures, clause patterns, local bindings, calls, methods,
-//! and operators. Unsupported Ori forms fail in the parser rather than being
-//! accepted into an AST that later stages cannot represent.
+//! Alternatives are dispatched by their leading token wherever possible. In
+//! particular, module directives, types, signatures, clauses, and literal
+//! kinds do not retry one another after constructing syntax trees.
 
 use super::ast::{
-    BinaryOp, Binding, Body, Clause, ConstructorDecl, DataDecl, Expr, ExprKind, Item, Module, Name,
-    Pattern, SignatureDecl, Span, Type, UnaryOp,
+    BinaryOp, Binding, Body, Clause, Constraint, ConstructorDecl, DataDecl, DataRepresentation,
+    Export, ExportsDecl, Exposure, Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, Item,
+    MethodItem, Module, Name, Numeral, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type,
+    UnaryOp,
 };
 use super::lex::{Kind, Token};
+use super::source::SourceId;
 
 fn name(token: Token) -> Name {
     Name(token.span())
@@ -20,6 +22,17 @@ fn named_type(token: Token, arguments: Vec<Type>, end: Span) -> Type {
         span: token.span().through(end),
         name: name(token),
         arguments,
+    }
+}
+
+fn numeral(token: Token) -> Numeral {
+    Numeral {
+        span: token.span(),
+        kind: if token.kind == Kind::Char {
+            NumeralKind::Character
+        } else {
+            NumeralKind::Number
+        },
     }
 }
 
@@ -45,8 +58,8 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 }
 
 enum TermDeclaration {
-    Signature(Vec<Type>, Type, Span),
-    Clause(Vec<Pattern>, Body),
+    Signature(Vec<Type>, Type, Vec<Constraint>, Span),
+    Clause(Vec<Pattern>, Option<Expr>, Body),
 }
 
 /// Return whether the next pattern-shaped token run is followed by `=`.
@@ -54,8 +67,6 @@ enum TermDeclaration {
 /// A constructor expression and a constructor pattern have the same spelling.
 /// Letting `binding()*` discover the difference through PEG backtracking builds
 /// and drops the entire pattern tree before parsing a body's final expression.
-/// This scan follows only the delimiters needed to locate the possible `=`;
-/// the ordinary pattern rule remains the authority on whether the run is valid.
 fn binding_ahead(tokens: &[Token], at: usize) -> bool {
     let Some(first) = tokens.get(at) else {
         return false;
@@ -119,8 +130,10 @@ peg::parser! {
               / expected!("the end of the file")
         rule lparen() -> Token = tok(Kind::LParen) / expected!("`(`")
         rule rparen() -> Token = tok(Kind::RParen) / expected!("`)`")
-        rule lbracket() -> Token = tok(Kind::LBracket) / expected!("`[`")
+        rule lbracket() -> Token = tok(Kind::LBracket) / expected!("`[")
         rule rbracket() -> Token = tok(Kind::RBracket) / expected!("`]`")
+        rule lbrace() -> Token = tok(Kind::LBrace) / expected!("`{")
+        rule rbrace() -> Token = tok(Kind::RBrace) / expected!("`}`")
         rule colon() = tok(Kind::Colon) / expected!("`:`")
         rule arrow() = tok(Kind::Arrow) / expected!("`->`")
         rule equals() = tok(Kind::Eq) / expected!("`=`")
@@ -129,23 +142,87 @@ peg::parser! {
         rule term_name() -> Token
             = quiet!{[token if matches!(token.kind, Kind::Ident | Kind::EffectIdent)]}
               / expected!("a term name")
+        rule source_name() -> Token
+            = quiet!{[token if matches!(token.kind,
+                Kind::TypeIdent | Kind::Ident | Kind::EffectIdent)]}
+              / expected!("a name")
 
         pub rule program() -> Module
-            = items:item()* eof() { Module { items } }
+            = items:item()* eof() { Module { source: SourceId::DETACHED, items } }
 
         rule item() -> Item
-            = data:data_decl() { Item::Data(data) }
-            / declaration:term_declaration() { declaration }
+            = header:header() { Item::Header(header) }
+            / import:import_decl() { Item::Import(import) }
+            / exports:exports_decl() { Item::Exports(exports) }
+            / data:data_decl() { Item::Data(data) }
+            / declaration:term_declaration() { term_item(declaration) }
+
+        rule header() -> HeaderDecl
+            = start:tok(Kind::KwLib) lbrace() close:rbrace() {
+                HeaderDecl { span: start.span().through(close.span()), kind: HeaderKind::Lib }
+            }
+
+        rule import_decl() -> ImportDecl
+            = start:tok(Kind::KwImport) path:module_path()
+              lbrace() exposures:(exposure() ** sep()) close:rbrace() {
+                ImportDecl {
+                    span: start.span().through(close.span()),
+                    path,
+                    exposures,
+                }
+            }
+
+        rule module_path() -> Vec<Name>
+            = first:ident() rest:(adj(Kind::Dot) next:adj(Kind::Ident) { next })* {
+                std::iter::once(first).chain(rest).map(name).collect()
+            }
+
+        rule exposure() -> Exposure
+            = exported:source_name() constructors:adj(Kind::DotStar)?
+              local:(colon() local:source_name() { local })? {
+                Exposure {
+                    exported: name(exported),
+                    local: name(local.unwrap_or(exported)),
+                    constructors: constructors.is_some(),
+                }
+            }
+
+        rule exports_decl() -> ExportsDecl
+            = start:tok(Kind::KwExports) lbrace()
+              exports:(export() ** sep()) close:rbrace() {
+                ExportsDecl {
+                    span: start.span().through(close.span()),
+                    exports,
+                }
+            }
+
+        rule export() -> Export
+            = exported:source_name() constructors:adj(Kind::DotStar)? {
+                Export { name: name(exported), constructors: constructors.is_some() }
+            }
 
         rule data_decl() -> DataDecl
             = head:type_ident() params:type_params()? colon()
-              lbracket() constructors:(constructor() ** sep()) close:rbracket() {
+              representation:data_representation()
+              methods:method_block()?
+              {
+                let end = methods.as_ref().map_or(representation.1, |methods| methods.1);
                 DataDecl {
-                    span: head.span().through(close.span()),
+                    span: head.span().through(end),
                     name: name(head),
                     params: params.unwrap_or_default(),
-                    constructors,
+                    representation: representation.0,
+                    methods: methods.map_or_else(Vec::new, |methods| methods.0),
                 }
+            }
+
+        rule data_representation() -> (DataRepresentation, Span)
+            = lbracket() constructors:(constructor() ** sep()) close:rbracket() {
+                (DataRepresentation::Sum(constructors), close.span())
+            }
+            / represented:ty() {
+                let span = type_span(&represented);
+                (DataRepresentation::Wrapper(represented), span)
             }
 
         rule type_params() -> Vec<Name>
@@ -162,42 +239,58 @@ peg::parser! {
                 }
             }
 
-        rule term_declaration() -> Item
-            = head:term_name() declaration:(
-                colon() signature:signature_type() {
-                    TermDeclaration::Signature(signature.0, signature.1, signature.2)
-                }
-                / adj(Kind::LParen) patterns:(pattern() ** sep()) rparen()
-                  arrow() body:body() {
-                    TermDeclaration::Clause(patterns, body)
-                }
-            ) {
-                match declaration {
-                    TermDeclaration::Signature(parameters, result, end) => {
-                        Item::Signature(SignatureDecl {
-                            span: head.span().through(end),
-                            name: name(head),
-                            parameters,
-                            result,
-                        })
-                    }
-                    TermDeclaration::Clause(patterns, body) => Item::Clause(Clause {
-                        span: head.span().through(body.result.span),
-                        name: name(head),
-                        patterns,
-                        body,
-                    }),
-                }
+        rule method_block() -> (Vec<MethodItem>, Span)
+            = tok(Kind::DotParen) methods:method_declaration()* close:rparen() {
+                (methods, close.span())
             }
 
-        rule signature_type() -> (Vec<Type>, Type, Span)
-            = parameters:(ty() ++ sep()) arrow() result:ty() {
-                let end = type_span(&result);
-                (parameters, result, end)
+        rule method_declaration() -> MethodItem
+            = declaration:term_declaration() { method_item(declaration) }
+
+        rule term_declaration() -> (Token, TermDeclaration)
+            = head:term_name() declaration:term_tail() { (head, declaration) }
+
+        rule term_tail() -> TermDeclaration
+            = colon() signature:signature_type() {
+                TermDeclaration::Signature(signature.0, signature.1, signature.2, signature.3)
             }
-            / result:ty() {
-                let end = type_span(&result);
-                (Vec::new(), result, end)
+            / adj(Kind::LParen) patterns:(pattern() ** sep()) rparen()
+              guard:(tok(Kind::KwIf) guard:expr() { guard })?
+              arrow() body:body() {
+                TermDeclaration::Clause(patterns, guard, body)
+            }
+
+        rule signature_type() -> (Vec<Type>, Type, Vec<Constraint>, Span)
+            = parameters:(ty() ++ sep()) arrow() result:ty()
+              constraints:constraints()? {
+                let end = constraints.as_ref().map_or_else(
+                    || type_span(&result),
+                    |constraints| constraints.1,
+                );
+                (parameters, result, constraints.map_or_else(Vec::new, |value| value.0), end)
+            }
+            / result:ty() constraints:constraints()? {
+                let end = constraints.as_ref().map_or_else(
+                    || type_span(&result),
+                    |constraints| constraints.1,
+                );
+                (Vec::new(), result, constraints.map_or_else(Vec::new, |value| value.0), end)
+            }
+
+        rule constraints() -> (Vec<Constraint>, Span)
+            = tok(Kind::KwWhere) constraints:(constraint() ++ sep()) {
+                let end = constraints.last().map_or_else(Span::default, |constraint| constraint.span);
+                (constraints, end)
+            }
+
+        rule constraint() -> Constraint
+            = head:type_ident() adj(Kind::LParen)
+              arguments:(ty() ++ sep()) close:rparen() {
+                Constraint {
+                    span: head.span().through(close.span()),
+                    name: name(head),
+                    arguments,
+                }
             }
 
         rule ty() -> Type
@@ -209,6 +302,19 @@ peg::parser! {
                 }
             }
             / variable:ident() { named_type(variable, Vec::new(), variable.span()) }
+            / open:lparen() parameters:(ty() ++ sep()) arrow() result:ty() close:rparen() {
+                Type::Function {
+                    span: open.span().through(close.span()),
+                    parameters,
+                    result: Box::new(result),
+                }
+            }
+            / open:lbracket() constructors:(constructor() ** sep()) close:rbracket() {
+                Type::Variants {
+                    span: open.span().through(close.span()),
+                    constructors,
+                }
+            }
 
         rule body() -> Body
             = bindings:(binding_ahead() binding:binding() { binding })*
@@ -227,14 +333,36 @@ peg::parser! {
             = pattern:pattern() equals() value:expr() { Binding { pattern, value } }
 
         rule pattern() -> Pattern
-            = minus:tok(Kind::Minus) number:adj(Kind::Number) {
+            = start:(tok(Kind::Number) / tok(Kind::Char)) adj(Kind::DotDot)
+              end:(adj(Kind::Number) / adj(Kind::Char)) {
+                Pattern::Range {
+                    span: start.span().through(end.span()),
+                    start: numeral(start),
+                    end: numeral(end),
+                }
+            }
+            / minus:tok(Kind::Minus) value:(adj(Kind::Number) / adj(Kind::Char)) {
                 Pattern::Number {
-                    span: minus.span().through(number.span()),
+                    span: minus.span().through(value.span()),
+                    numeral: numeral(value),
                     negative: true,
                 }
             }
-            / number:tok(Kind::Number) {
-                Pattern::Number { span: number.span(), negative: false }
+            / value:(tok(Kind::Number) / tok(Kind::Char)) {
+                Pattern::Number {
+                    span: value.span(),
+                    numeral: numeral(value),
+                    negative: false,
+                }
+            }
+            / open:lbracket() elements:(pattern() ** sep())
+              rest:(sep()? tok(Kind::Star) tight() rest:pattern() { rest })?
+              close:rbracket() {
+                Pattern::List {
+                    span: open.span().through(close.span()),
+                    elements,
+                    rest: rest.map(Box::new),
+                }
             }
             / head:type_ident()
               fields:(adj(Kind::LParen) fields:(pattern() ++ sep()) close:rparen() {
@@ -278,11 +406,17 @@ peg::parser! {
                 let span = head.span.through(args.1);
                 Expr { span, kind: ExprKind::Call(Box::new(head), args.0) }
             }
-            head:@ member:dot_call() {
+            head:@ member:dot_access() {
                 let span = head.span.through(member.2);
-                Expr {
-                    span,
-                    kind: ExprKind::Method(Box::new(head), name(member.0), member.1),
+                match member.1 {
+                    Some(arguments) => Expr {
+                        span,
+                        kind: ExprKind::Method(Box::new(head), name(member.0), arguments),
+                    },
+                    None => Expr {
+                        span,
+                        kind: ExprKind::Member(Box::new(head), name(member.0)),
+                    },
                 }
             }
             --
@@ -294,18 +428,33 @@ peg::parser! {
         rule star_sep() = adj(Kind::Star) / tok(Kind::Star) sep()
 
         rule call_args() -> (Vec<Expr>, Span)
-            = adj(Kind::LParen) args:(expr() ** sep()) close:rparen() {
+            = adj(Kind::LParen) args:(argument() ** sep()) close:rparen() {
                 (args, close.span())
             }
 
-        rule dot_call() -> (Token, Vec<Expr>, Span)
+        rule argument() -> Expr = lambda() / expr()
+
+        rule lambda() -> Expr
+            = open:tok(Kind::Bar) patterns:(pattern() ++ sep()) tok(Kind::Bar) body:expr() {
+                Expr {
+                    span: open.span().through(body.span),
+                    kind: ExprKind::Lambda(patterns, Box::new(body)),
+                }
+            }
+
+        rule dot_access() -> (Token, Option<Vec<Expr>>, Span)
             = chain_dot() member:(adj(Kind::Ident) / adj(Kind::EffectIdent))
-              args:call_args() {
-                (member, args.0, args.1)
+              args:call_args()? {
+                let end = args.as_ref().map_or_else(|| member.span(), |args| args.1);
+                (member, args.map(|args| args.0), end)
             }
 
         rule primary() -> Expr
-            = number:tok(Kind::Number) { atom(number, ExprKind::Number) }
+            = value:(tok(Kind::Number) / tok(Kind::Char)) {
+                atom(value, ExprKind::Number(numeral(value)))
+            }
+            / string:string() { string }
+            / list:list() { list }
             / open:lparen() value:expr() close:rparen() {
                 Expr { span: open.span().through(close.span()), ..value }
             }
@@ -314,11 +463,66 @@ peg::parser! {
                 atom(token, ExprKind::Name(name(token)))
             }
             / expected!("an expression")
+
+        rule string() -> Expr
+            = open:tok(Kind::StrStart) parts:string_part()* close:tok(Kind::StrEnd) {
+                Expr {
+                    span: open.span().through(close.span()),
+                    kind: ExprKind::String(parts),
+                }
+            }
+
+        rule string_part() -> StringPart
+            = text:tok(Kind::StrText) { StringPart::Text(text.span()) }
+            / tok(Kind::SpliceStart) value:expr() tok(Kind::SpliceEnd) {
+                StringPart::Splice(value)
+            }
+
+        rule list() -> Expr
+            = open:lbracket() elements:(expr() ** sep())
+              rest:(sep()? tok(Kind::Star) tight() rest:expr() { rest })?
+              close:rbracket() {
+                Expr {
+                    span: open.span().through(close.span()),
+                    kind: ExprKind::List(elements, rest.map(Box::new)),
+                }
+            }
+    }
+}
+
+fn term_item((head, declaration): (Token, TermDeclaration)) -> Item {
+    match declaration {
+        TermDeclaration::Signature(parameters, result, constraints, end) => {
+            Item::Signature(SignatureDecl {
+                span: head.span().through(end),
+                name: name(head),
+                parameters,
+                result,
+                constraints,
+            })
+        }
+        TermDeclaration::Clause(patterns, guard, body) => Item::Clause(Clause {
+            span: head.span().through(body.result.span),
+            name: name(head),
+            patterns,
+            guard,
+            body,
+        }),
+    }
+}
+
+fn method_item((head, declaration): (Token, TermDeclaration)) -> MethodItem {
+    match term_item((head, declaration)) {
+        Item::Signature(signature) => MethodItem::Signature(signature),
+        Item::Clause(clause) => MethodItem::Clause(clause),
+        _ => unreachable!("term items are signatures or clauses"),
     }
 }
 
 const fn type_span(ty: &Type) -> Span {
     match ty {
-        Type::Named { span, .. } => *span,
+        Type::Named { span, .. } | Type::Function { span, .. } | Type::Variants { span, .. } => {
+            *span
+        }
     }
 }

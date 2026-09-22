@@ -1,0 +1,5 @@
+# The substrate of every written integer numeral.
+
+exports {Nat.*}
+
+Nat : [Zero Succ(Nat)]

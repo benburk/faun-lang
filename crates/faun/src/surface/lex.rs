@@ -73,6 +73,7 @@ pub enum Kind {
     Bang,
     Question,
     KwIf,
+    KwLib,
     KwImport,
     KwExports,
     KwWhere,
@@ -398,6 +399,7 @@ impl Lexer<'_> {
         let kind = match text {
             "_" => return Kind::Wild,
             "if" => Kind::KwIf,
+            "lib" => Kind::KwLib,
             "import" => Kind::KwImport,
             "exports" => Kind::KwExports,
             "where" => Kind::KwWhere,

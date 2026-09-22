@@ -1,4 +1,22 @@
-# Arithmetic for the simple frontend
+# Standard libraries
+
+## Ori-compatible bootstrap prelude
+
+`standard/ori/standard.ori` is the first usable module prelude for the primary
+frontend. It defines the Ori-compatible representations of `Nat`, `Int`, `U8`,
+`List`, and `Str`, plus `Int.of_nat` and `Int.neg`, which contextual literal
+elaboration needs. It is deliberately a bootstrap representation slice, not a
+claim to be the complete Ori standard library.
+
+```sh
+ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/literals.ori
+```
+
+The loader treats this as an ordinary disk-backed package. Its exported names
+are implicit in the checked program; private `Str` and `U8` wrappers remain
+available only to blessed string construction.
+
+## Arithmetic for the simple frontend
 
 These `.fn` libraries belong to the archived `faun-simple` frontend. They remain
 ordinary source definitions rather than compiler intrinsics. `nat.fn` provides:

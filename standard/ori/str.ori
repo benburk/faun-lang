@@ -1,0 +1,6 @@
+# Strings are UTF-8 bytes in a nominal wrapper. String syntax alone may build
+# the private Str and U8 wrappers directly.
+
+exports {Str}
+
+Str : List(U8)

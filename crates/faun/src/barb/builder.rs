@@ -60,6 +60,18 @@ impl Builder<'_> {
         self.program.intern_number(id, value)
     }
 
+    /// Hold an arbitrary-precision natural in the program's pool.
+    ///
+    /// # Errors
+    /// If the type is undefined or is not a natural-number shape.
+    pub fn natural(
+        &mut self,
+        id: TypeId,
+        value: &num_bigint::BigUint,
+    ) -> Result<ConstId, ConstructionError> {
+        self.program.intern_natural(id, value)
+    }
+
     /// A value known outright.
     pub fn known(&mut self, value: ConstId) -> Atom {
         self.emit(Expr::Static(value))

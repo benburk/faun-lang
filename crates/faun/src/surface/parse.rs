@@ -3,6 +3,8 @@ use std::fmt;
 use super::ast::Module;
 use super::grammar;
 use super::lex::{self, Kind, Token};
+use super::literal;
+use super::source::SourceId;
 
 /// A lexical or grammatical error at a source position.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,8 +33,37 @@ impl std::error::Error for ParseError {}
 /// Returns the first lexical or grammatical error with a one-based line and
 /// column. Forms outside the subset are syntax errors for now.
 pub fn parse(source: &str) -> Result<Module, ParseError> {
+    parse_in(source, SourceId::DETACHED)
+}
+
+/// Parse source already owned by a source collection.
+///
+/// The returned module records `source_id`; all spans inside it are byte ranges
+/// into `source`.
+///
+/// # Errors
+///
+/// Returns the first lexical or grammatical error.
+///
+/// # Panics
+///
+/// Panics only on a target whose address space cannot represent a `u32` byte
+/// offset; such a target cannot hold a maximum-size accepted source.
+pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError> {
     let tokens = lex::lex(source).map_err(|error| error_at(source, 0, error.to_string()))?;
-    grammar::source::program(&tokens).map_err(|error| syntax_error(source, &tokens, &error))
+    let validate_literals = tokens
+        .iter()
+        .any(|token| matches!(token.kind, Kind::Char | Kind::StrText));
+    let mut module =
+        grammar::source::program(&tokens).map_err(|error| syntax_error(source, &tokens, &error))?;
+    if validate_literals {
+        literal::validate(&module, source).map_err(|error| {
+            let offset = usize::try_from(error.span.start).expect("u32 fits usize");
+            error_at(source, offset, error.message)
+        })?;
+    }
+    module.source = source_id;
+    Ok(module)
 }
 
 fn syntax_error(

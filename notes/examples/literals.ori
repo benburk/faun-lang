@@ -1,0 +1,8 @@
+natural : Nat
+natural() -> 42
+
+integer : Int
+integer() -> -42
+
+text : Str
+text() -> "Faun 🦌"
