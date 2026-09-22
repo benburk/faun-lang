@@ -79,15 +79,30 @@ schemes derived from their data declaration.
 Dotted calls and operators resolve against the nominal head of their inferred
 receiver type. Resolution may wait for argument, result, or literal constraints;
 an otherwise unconstrained numeral defaults to `Nat` (or `Int` when negative)
-before the final method choice. The checked result records each canonical method
-target for later lowering, retains principal global schemes, and rejects calls
-that remain ambiguous.
+before the final method choice. The checked result records each expression and
+clause type together with canonical method targets and principal global schemes;
+calls that remain ambiguous are rejected.
 
 Method constraints are not implemented: a signature containing `where` is
 rejected during checking. Bodyless signatures do not derive implementations;
 the bootstrap prelude writes concrete `Bool`, `Nat`, and `Int` equality and
-omits generic equality requiring bounds. Interpolation calls and complete
-HIR-to-Barb lowering also remain.
+omits generic equality requiring bounds.
+
+### Specialization and Barb lowering
+
+`faun lower --entry NAME PATH` starts from a monomorphic, parameterless value.
+It follows reachable calls, specializes polymorphic globals and nominal data,
+then defunctionalizes function values into concrete closure types and apply
+functions. Global functions, constructor functions, and lambdas with captures
+all use the same first-order representation. Clause matrices become exhaustive
+Barb matches; direct calls, methods, list syntax, wrappers, and elaborated
+literals become ordinary Barb constructors, calls, and constants. Reachable
+bodyless signatures remain external Barb declarations.
+
+Lowering currently rejects ranges, interpolated strings, refutable local
+bindings, structural variants, polymorphic entries, and local bindings whose
+generalized value itself requires multiple specializations. Records, tuples,
+constraints, and postfix propagation remain earlier frontend gaps.
 
 ### Performance
 

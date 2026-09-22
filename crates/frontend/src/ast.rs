@@ -7,7 +7,7 @@
 use super::source::SourceId;
 
 /// A half-open byte range in one source file.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Span {
     pub start: u32,
     pub end: u32,

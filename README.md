@@ -11,6 +11,7 @@ types, and resolves methods in the current subset:
 cargo run -- check notes/examples/frontend.fn
 ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/literals.fn
 ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/utilities.fn
+ORI_STD=crates/frontend/standard/standard.fn cargo run -- lower --entry mapped notes/examples/utilities.fn
 cargo bench -p faun-frontend --bench frontend
 ```
 
@@ -20,9 +21,12 @@ Hindley–Milner inference across recursive definition groups, instantiates
 polymorphic signatures and constructors, and chooses nominal methods from the
 receiver type. Parsed `where` constraints are not checked yet.
 
-`Nat`, `Int`, and `Str` literal elaboration is defined, including lowering those
-expansions through ordinary Barb operations. Complete program lowering is not
-implemented yet. See the [frontend status and benchmark contract](notes/frontend.md) for the exact boundary.
+Checked programs can be specialized and lowered to Barb from a monomorphic,
+parameterless entry. Lowering monomorphizes reachable globals and data types,
+compiles clause patterns, and defunctionalizes global functions, constructors,
+and capturing lambdas. Literal expansions remain ordinary Barb operations.
+Ranges, interpolated strings, refutable local bindings, structural variants,
+and locally let-polymorphic values are not lowered yet. See the [frontend status and benchmark contract](notes/frontend.md) for the exact boundary.
 
 The source frontends are separate crates. `faun-frontend` owns the primary
 syntax, inference, module loader, and its standard package. `faun-simple` owns

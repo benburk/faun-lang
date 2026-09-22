@@ -3,10 +3,11 @@
 //! Parsing retains compact source spans. Module loading and qualification then
 //! produce symbol-based HIR without merging raw ASTs. Checking performs
 //! Hindley–Milner inference, nominal receiver-directed method resolution, and
-//! contextual literal elaboration. Whole-program Barb lowering remains
-//! separate work.
+//! contextual literal elaboration. Reachable monomorphic entries can then be
+//! specialized, defunctionalized, and lowered to Barb.
 
 pub mod ast;
+mod barb_lower;
 pub mod blessed;
 pub mod check;
 mod grammar;
@@ -18,6 +19,7 @@ pub mod modules;
 mod parse;
 pub mod resolve;
 pub mod source;
+mod specialize;
 pub mod symbol;
 
 pub use modules::ModuleId;

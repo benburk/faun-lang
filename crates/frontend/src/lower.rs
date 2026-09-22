@@ -1,8 +1,9 @@
-//! Lower elaborated literals into Barb terms.
+//! Lower checked frontend programs and elaborated literals to Barb.
 //!
-//! General HIR lowering will eventually own declaration translation. This
-//! narrow boundary already proves that blessed literal expansion uses ordinary
-//! Barb constants, constructors, and calls rather than backend intrinsics.
+//! [`program`] specializes and defunctionalizes a reachable program. The
+//! literal-only declaration map remains useful as the narrow contract proving
+//! that blessed expansion uses ordinary Barb constants, constructors, and calls
+//! rather than backend intrinsics.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -11,6 +12,8 @@ use faun::barb::{Atom, Builder, ConstructionError, CtorId, FnId, TypeId};
 
 use super::Symbol;
 use super::blessed::LiteralExpr;
+
+pub use super::barb_lower::{LowerError, named_program, program};
 
 #[derive(Clone, Debug)]
 pub struct LiteralDeclarations {

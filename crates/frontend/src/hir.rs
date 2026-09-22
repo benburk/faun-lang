@@ -92,7 +92,7 @@ pub struct Clause {
     pub locals: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalId(pub u32);
 
 impl LocalId {

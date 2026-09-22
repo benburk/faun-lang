@@ -33,7 +33,10 @@ pub struct MethodSite {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TypeVariable(u32);
+pub struct TypeVariable {
+    index: u32,
+    rigid: bool,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InferredType {
@@ -49,10 +52,28 @@ pub struct InferredScheme {
     pub ty: InferredType,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpressionSite {
+    pub module: ModuleId,
+    pub span: super::ast::Span,
+    pub ty: InferredType,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClauseSite {
+    pub module: ModuleId,
+    pub span: super::ast::Span,
+    pub ty: InferredType,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CheckedProgram {
     /// Principal schemes for signed and inferred global values.
     pub values: HashMap<Symbol, InferredScheme>,
+    /// Instantiated types for every expression occurrence.
+    pub expressions: Vec<ExpressionSite>,
+    /// The function type used while checking each clause.
+    pub clauses: Vec<ClauseSite>,
     pub literals: Vec<LiteralSite>,
     pub methods: Vec<MethodSite>,
 }
@@ -298,6 +319,8 @@ struct Checker<'a> {
     visible_methods: HashMap<ModuleId, HashSet<Symbol>>,
     pending_methods: Vec<PendingMethod>,
     pending_numerals: Vec<PendingNumeral>,
+    expression_types: Vec<(ModuleId, super::ast::Span, Ty)>,
+    clause_types: Vec<(ModuleId, super::ast::Span, Ty)>,
     checked: CheckedProgram,
 }
 
@@ -326,6 +349,8 @@ impl<'a> Checker<'a> {
                 .collect(),
             pending_methods: Vec::new(),
             pending_numerals: Vec::new(),
+            expression_types: Vec::new(),
+            clause_types: Vec::new(),
             checked: CheckedProgram::default(),
         };
         for module in &program.modules {
@@ -585,12 +610,38 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|(&name, scheme)| (name, self.public_scheme(scheme)))
             .collect();
+        self.checked.expressions = self
+            .expression_types
+            .iter()
+            .map(|(module, span, ty)| ExpressionSite {
+                module: *module,
+                span: *span,
+                ty: public_type(&self.infer.resolve(ty)),
+            })
+            .collect();
+        self.checked.clauses = self
+            .clause_types
+            .iter()
+            .map(|(module, span, ty)| ClauseSite {
+                module: *module,
+                span: *span,
+                ty: public_type(&self.infer.resolve(ty)),
+            })
+            .collect();
         Ok(self.checked)
     }
 
     fn public_scheme(&self, scheme: &Scheme) -> InferredScheme {
         InferredScheme {
-            variables: scheme.variables.iter().copied().map(TypeVariable).collect(),
+            variables: scheme
+                .variables
+                .iter()
+                .copied()
+                .map(|index| TypeVariable {
+                    index,
+                    rigid: false,
+                })
+                .collect(),
             ty: public_type(&self.infer.resolve(&scheme.ty)),
         }
     }
@@ -601,6 +652,8 @@ impl<'a> Checker<'a> {
         clause: &h::Clause,
         function: &Ty,
     ) -> Result<(), CheckError> {
+        self.clause_types
+            .push((module, clause.span, function.clone()));
         let Ty::Function(parameters, result) = self.infer.resolve(function) else {
             return Err(failure(module, clause.span, "definition is not a function"));
         };
@@ -732,6 +785,18 @@ impl<'a> Checker<'a> {
     }
 
     fn expr(
+        &mut self,
+        module: ModuleId,
+        expression: &h::Expr,
+        locals: &mut Vec<Option<Scheme>>,
+    ) -> Result<Ty, CheckError> {
+        let ty = self.infer_expr(module, expression, locals)?;
+        self.expression_types
+            .push((module, expression.span, ty.clone()));
+        Ok(ty)
+    }
+
+    fn infer_expr(
         &mut self,
         module: ModuleId,
         expression: &h::Expr,
@@ -1197,8 +1262,14 @@ fn apply_signature(
 
 fn public_type(ty: &Ty) -> InferredType {
     match ty {
-        Ty::Var(variable) => InferredType::Variable(TypeVariable(*variable)),
-        Ty::Rigid(_) => unreachable!("rigid variables never enter global schemes"),
+        Ty::Var(variable) => InferredType::Variable(TypeVariable {
+            index: *variable,
+            rigid: false,
+        }),
+        Ty::Rigid(variable) => InferredType::Variable(TypeVariable {
+            index: *variable,
+            rigid: true,
+        }),
         Ty::Named(name, arguments) => {
             InferredType::Named(*name, arguments.iter().map(public_type).collect())
         }

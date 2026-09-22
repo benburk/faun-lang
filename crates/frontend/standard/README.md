@@ -6,6 +6,8 @@
 ```sh
 ORI_STD=crates/frontend/standard/standard.fn \
   cargo run -- check notes/examples/utilities.fn
+ORI_STD=crates/frontend/standard/standard.fn \
+  cargo run -- lower --entry mapped notes/examples/utilities.fn
 ```
 
 The package deliberately omits hashing, records, tuples, method constraints,
