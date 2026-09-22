@@ -19,7 +19,7 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("the count", 33),
     ("the count and a constant", 36),
     ("the low bits of a sum", 34),
-    ("the count under a guard", 46),
+    ("the count under a guard", 43),
     ("the count and more", 48),
     ("a shared intermediate", 53),
 ];

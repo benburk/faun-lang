@@ -304,6 +304,20 @@ enum Inst {
 }
 
 impl Inst {
+    /// Whether execution continues somewhere else rather than after this.
+    const fn is_jump(self) -> bool {
+        matches!(
+            self,
+            Self::Op {
+                mnemonic: Mnemonic::Jmp,
+                ..
+            } | Self::Absolute {
+                mnemonic: Mnemonic::Jmp,
+                ..
+            }
+        )
+    }
+
     /// What it costs, given whether a branch was found not to reach.
     const fn len(&self, far: bool) -> usize {
         match *self {
@@ -732,6 +746,7 @@ impl Assembler {
     pub(crate) fn finish(mut self) -> Vec<u8> {
         self.check_nothing_jumps_where_nothing_should();
         self.drop_unread_stores();
+        self.drop_repeated_jumps();
         let (far, at) = self.settled();
         let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
         for (id, inst) in self.insts.iter().enumerate() {
@@ -804,6 +819,25 @@ impl Assembler {
                     operand: Operand::Zero(at),
                 } => read[usize::from(at)],
                 _ => true,
+            })
+            .collect();
+        if kept.iter().all(|held| *held) {
+            return;
+        }
+        self.keeping(&kept);
+    }
+
+    /// Merge adjacent copies of the same unconditional jump.
+    ///
+    /// A terminal branch arm and the continuation beside it can end at the
+    /// same hook or label. Keeping the later jump gives both entries the same
+    /// tail: execution that reached the first now falls into the second, and
+    /// labels before either instruction move with [`Self::keeping`].
+    fn drop_repeated_jumps(&mut self) {
+        let kept: Vec<_> = (0..self.insts.len())
+            .map(|at| {
+                at + 1 == self.insts.len()
+                    || !(self.insts[at].is_jump() && self.insts[at] == self.insts[at + 1])
             })
             .collect();
         if kept.iter().all(|held| *held) {
@@ -1208,6 +1242,19 @@ mod tests {
 
         // Neither remembered place is read from memory, so both stores leave.
         assert_eq!(asm.finish(), [0xA9, 0x07, 0xA2, 0x00, 0xE0, 0x00]);
+    }
+
+    #[test]
+    fn adjacent_equal_jumps_share_one_tail() {
+        let mut asm = Assembler::new(0x200);
+        let common = asm.label();
+        asm.branch(Cc::Equal, common);
+        asm.lda_imm(0);
+        asm.jmp_abs(0xFFF9);
+        asm.bind(common);
+        asm.jmp_abs(0xFFF9);
+
+        assert_eq!(asm.finish(), [0xF0, 0x02, 0xA9, 0x00, 0x4C, 0xF9, 0xFF]);
     }
 
     #[test]
