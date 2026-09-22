@@ -62,8 +62,11 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `arithmetic.rs`: recognize induction equations, without range analysis.
 - `bounds.rs`: interval arithmetic and interprocedural range propagation.
   `Propagation` is the evolving state; `Ranges` is the conservative final result.
-- `facts.rs`: `analyze` combines recognition and ranges for the final program.
-  Run it after optimization; facts must be recomputed after rewriting.
+- `affine.rs`: derive small affine summaries from recognized natural addition and
+  multiplication by constants, without adding an expression kind or expanding
+  nonlinear products.
+- `facts.rs`: `analyze` combines recognition, ranges and affine summaries for the
+  final program. Run it after optimization; facts must be recomputed after rewriting.
 - `normalize.rs`: capture-free structural rebuilding; `inline.rs`: expansion
   eligibility, copy costs and budgets. Structural-only normalization does not
   construct an inlining plan or compute its recursion/copy-cost tables.
@@ -75,7 +78,7 @@ x    ::= a parameter, a binding, or a field an arm bound
   `Program` keeps this pool paired with its own declarations; callers cannot
   substitute a different catalogue. The codec and views borrow only type metadata.
 - `evaluate.rs`, `budget.rs`: evaluation and its shared work/size/depth policy.
-- `laws.rs`, `fold.rs`, `cleanup.rs`: separate optimizing rewrites.
+- `laws.rs`, `fold.rs`, `normalize.rs`, `cleanup.rs`: separate optimizing rewrites.
 - `optimize.rs`: the fixed schedule below; `pretty.rs`: rendering.
 
 ## Diagnostic rendering
@@ -97,7 +100,11 @@ two types -- so nothing infers a provider or an effect from the display name.
 2. Optional helper inlining: nonrecursive, non-arithmetic helpers only.
 3. Arithmetic identities justified by structurally recognized `Operation` facts.
 4. Constant folding with one shared evaluation budget for the entire pass.
-5. Effect-safe cleanup: remove aliases and unused atoms, constants and constructors.
+5. Bounded algebraic normalization: combine constants across recognized associative
+   operations and directional monus/division chains, then push power-of-two moduli
+   through sums and products.
+6. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+   pure arithmetic; retain calls of unknown meaning and matches.
 
 Each stage runs once and can be disabled programmatically. `read_with_options` exposes
 these controls without bypassing validation or totality checking. Disabling helper
@@ -118,15 +125,30 @@ limits. Superseded slots remain until cleanup.
 includes expression visits, copied bytes and conservative bigint word-operation
 estimates. Result-size and work checks precede native arithmetic and constructor
 concatenation. Limits are optimization policy, never language integer limits; a
-refused fold retains the original expression. Traversing/recognizing the input is
-not covered by evaluator fuel.
+refused fold retains the original expression. Algebraic normalization starts a
+separate budget with the same limits; a refused constant combination is left
+uncombined. Traversing/recognizing the input is not covered by evaluator
+fuel.
+
+Final-program analysis also records bounded affine forms of recognized natural
+arithmetic. A form holds a `u64` constant and at most eight local terms with `u64`
+coefficients. Addition combines forms; multiplication scales one only when the
+other is constant. Overflow, a ninth term, a nonlinear product, monus, division,
+modulus, comparison or control flow ends the summary. This is deliberately not a
+polynomial normalizer: it scales affine forms by constants but never multiplies two
+nonconstant forms or changes Barb's five expression kinds. Machine lowering
+materializes summaries as arithmetic on their original leaf locals; dead source
+operations then leave during machine-IR pruning. Source functions named like arithmetic remain ordinary calls unless their
+equations are structurally recognized.
 
 Cleanup walks bindings backward, accounting for captures in nested match arms, then
 renames retained locals. Dead constructor chains disappear in this single traversal;
-there is no fixed-point loop. Every call and match is conservatively retained, even
-when its result is unused. In particular, dropping a constructor does not drop the
-eager calls that computed its fields. Folded, now-unused product constants no longer
-demand runtime representations; live products still require backend support.
+there is no fixed-point loop. Matches and calls of unknown meaning are conservatively
+retained even when their results are unused. Calls structurally recognized as pure,
+total arithmetic are inert and may go. In particular, dropping a constructor does
+not drop opaque eager calls that computed its fields. Folded, now-unused product
+constants no longer demand runtime representations; live products still require
+backend support.
 
 Cleanup is also the term-arena compaction point. It borrows the original program,
 builds a fresh `TermArena`, then hands it and all remapped function roots to

@@ -681,6 +681,11 @@ impl Lowering<'_> {
             .collect();
         let (results, answers) = match self.callees[function.index()] {
             Callee::Instruction(operation) => {
+                if matches!(operation, barb::Operation::Add | barb::Operation::Mul)
+                    && let Some(affine) = self.facts.affine(expr)
+                {
+                    return Answer::Value(self.affine(b, expr, affine, locals));
+                }
                 return Answer::Value(self.operation(b, operation, self.width(expr), &args));
             }
             Callee::External { id, routine } => (b.call(id, &args), routine.answers()),
@@ -707,6 +712,48 @@ impl Lowering<'_> {
                 held
             }
         })
+    }
+
+    /// Materialize a target-independent affine summary as machine arithmetic.
+    /// Earlier bindings may still have emitted their source operations; the
+    /// machine optimizer removes those when this expression bypasses them.
+    fn affine(
+        &self,
+        b: &mut super::Builder,
+        expr: barb::ExprId,
+        affine: &barb::Affine,
+        locals: &[Option<ValueId>],
+    ) -> ValueId {
+        let class = self.width(expr);
+        let mut answer = None;
+        for &(atom, coefficient) in &affine.terms {
+            let value = locals[atom.0.index()].expect("an affine term to carry a value");
+            let term = match coefficient {
+                1 => value,
+                // Preserve the primitive operation already present in x+x.
+                // Machine simplification can make fixed-width doubling a
+                // shift, while runtime naturals retain their cheaper add.
+                2 => super::arithmetic::lower(b, barb::Operation::Add, class, value, value),
+                _ => {
+                    let coefficient = b.constant(width(barb::Bounds::at(coefficient)), coefficient);
+                    super::arithmetic::lower(b, barb::Operation::Mul, class, value, coefficient)
+                }
+            };
+            answer = Some(answer.map_or(term, |held| {
+                super::arithmetic::lower(b, barb::Operation::Add, class, held, term)
+            }));
+        }
+        if affine.constant != 0 || answer.is_none() {
+            let constant = b.constant(width(barb::Bounds::at(affine.constant)), affine.constant);
+            answer = Some(answer.map_or(constant, |held| {
+                super::arithmetic::lower(b, barb::Operation::Add, class, held, constant)
+            }));
+        }
+        met(
+            b,
+            answer.expect("an affine form has a term or constant"),
+            class,
+        )
     }
 
     fn operation(

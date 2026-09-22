@@ -4,28 +4,31 @@
 //! Expanding rewrites use the policy in `inline`; both preserve eager bindings
 //! and protect recognized arithmetic definitions from changes to their equations.
 
+use super::budget::{Budget, FoldLimits};
+use super::evaluate::Evaluator;
 use super::inline::{InlineLimits, Inlining};
-use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
+use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Operation, Program, Range};
 
 /// Remove local aliases without expanding calls or dropping eager bindings.
 pub fn structural(program: &mut Program) {
-    rewrite(program, None);
+    rewrite(program, None, None);
 }
 
 /// The same walk again, for what folding made knowable.
 ///
-/// A program says a modulus by working one out, and what a sum modulo a
-/// power of two is worth knowing about cannot be seen until that power of
-/// two is a number rather than a run of products.
-pub(super) fn reduce(program: &mut Program) {
-    rewrite(program, None);
+/// Recognized addition and multiplication are associative and commutative, so
+/// constants separated by one of them can be combined. A program also says a
+/// modulus by working one out, and what a sum modulo a power of two is worth
+/// knowing about cannot be seen until that power is folded.
+pub(super) fn algebra(program: &mut Program, limits: FoldLimits) {
+    rewrite(program, None, Some(limits));
 }
 
 /// Normalize aliases and inline nonrecursive helpers within the supplied limits.
 /// A zero limit disables expansion without computing recursion or copy costs.
 pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
     let inlining = Inlining::new(program, limits);
-    rewrite(program, inlining);
+    rewrite(program, inlining, None);
 }
 
 /// Whether every arm puts back the constructor it took apart, out of that
@@ -57,12 +60,13 @@ fn rebuilt(program: &Program, arms: &[Arm], level: usize) -> bool {
         })
 }
 
-fn rewrite(program: &mut Program, inlining: Option<Inlining>) {
+fn rewrite(program: &mut Program, inlining: Option<Inlining>, algebra_limits: Option<FoldLimits>) {
     let operations = super::arithmetic::recognise(program);
     let mut rewrite = Rewrite {
         program,
         operations,
         inlining,
+        algebra: algebra_limits.map(Budget::new),
         inline_depth: 0,
     };
     // Reads name existing entries; writes only append. Keep all function roots
@@ -90,8 +94,11 @@ fn rewrite(program: &mut Program, inlining: Option<Inlining>) {
 
 struct Rewrite<'a> {
     program: &'a mut Program,
-    operations: Vec<Option<super::Operation>>,
+    operations: Vec<Option<Operation>>,
     inlining: Option<Inlining>,
+    /// One shared resource budget for this algebra pass. Its absence means a
+    /// structural or inlining walk that must not perform algebraic rewrites.
+    algebra: Option<Budget>,
     inline_depth: usize,
 }
 struct Scope {
@@ -149,8 +156,16 @@ impl Rewrite<'_> {
                     self.inline_depth -= 1;
                     return answer;
                 }
-                if let Some(held) = self.reduced(called, &args, scope) {
-                    return held;
+                if self.algebra.is_some() {
+                    if let Some(held) = self.chained(called, &args, scope) {
+                        return held;
+                    }
+                    if let Some(held) = self.associated(called, &args, scope) {
+                        return held;
+                    }
+                    if let Some(held) = self.reduced(called, &args, scope) {
+                        return held;
+                    }
                 }
                 Expr::Call(called, self.program.terms.hold_atoms(args.into_iter()))
             }
@@ -193,6 +208,144 @@ impl Rewrite<'_> {
         Some(Expr::Match(locals[value.0.index()], arms))
     }
 
+    /// Combine the constants in a left-associated monus or quotient.
+    ///
+    /// Natural monus is truncated at zero, and division by zero answers zero.
+    /// Those definitions make both directional laws total, including where
+    /// either constant is zero:
+    ///
+    /// ```text
+    /// (x monus a) monus b = x monus (a + b)
+    /// (x / a) / b         = x / (a * b)
+    /// ```
+    fn chained(&mut self, called: FnId, args: &[Atom], scope: &mut Scope) -> Option<Atom> {
+        let op @ (Operation::Monus | Operation::Div) = self.operations[called.index()]? else {
+            return None;
+        };
+        let [inner, outer_constant] = *args else {
+            return None;
+        };
+        self.constant(scope, outer_constant)?;
+        let Expr::Call(inner_called, inner_args) = self.program.expr(scope.wrote(inner)?) else {
+            return None;
+        };
+        if self.operations[inner_called.index()] != Some(op) {
+            return None;
+        }
+        let [dynamic, inner_constant] = *self.program.atoms(inner_args) else {
+            return None;
+        };
+        self.constant(scope, inner_constant)?;
+        let combine = match op {
+            Operation::Monus => Operation::Add,
+            Operation::Div => Operation::Mul,
+            _ => unreachable!("a directional arithmetic chain"),
+        };
+        let combined = self.calculate(combine, called, inner_constant, outer_constant, scope)?;
+        let args = self.held(&[dynamic, combined]);
+        Some(self.push(Expr::Call(called, args), scope))
+    }
+
+    /// Combine constants across one nested associative operation.
+    ///
+    /// Calls are A-normal, so `3 + (x + 5)` is an outer call whose second
+    /// argument names an earlier call. Recognition proves both calls are the
+    /// same pure, total operation; rewriting them neither drops nor reorders
+    /// observable work. Constants are combined under the same bounded
+    /// evaluator as ordinary folding.
+    fn associated(&mut self, called: FnId, args: &[Atom], scope: &mut Scope) -> Option<Atom> {
+        let op @ (Operation::Add | Operation::Mul) = self.operations[called.index()]? else {
+            return None;
+        };
+        let [left, right] = *args else {
+            return None;
+        };
+        let (outer_constant, inner, swap) = match (
+            self.constant(scope, left).is_some(),
+            self.constant(scope, right).is_some(),
+        ) {
+            (true, false) => (left, right, true),
+            (false, true) => (right, left, false),
+            _ => return None,
+        };
+        let Some(inner_expr) = scope.wrote(inner) else {
+            return self.commuted(called, inner, outer_constant, swap, scope);
+        };
+        let Expr::Call(inner_called, inner_args) = self.program.expr(inner_expr) else {
+            return self.commuted(called, inner, outer_constant, swap, scope);
+        };
+        if self.operations[inner_called.index()] != Some(op) {
+            return self.commuted(called, inner, outer_constant, swap, scope);
+        }
+        let [inner_left, inner_right] = *self.program.atoms(inner_args) else {
+            return None;
+        };
+        let (dynamic, inner_constant) = match (
+            self.constant(scope, inner_left).is_some(),
+            self.constant(scope, inner_right).is_some(),
+        ) {
+            (true, false) => (inner_right, inner_left),
+            (false, true) => (inner_left, inner_right),
+            _ => return None,
+        };
+        let combined = self.calculate(op, called, outer_constant, inner_constant, scope)?;
+        let args = self.held(&[dynamic, combined]);
+        Some(self.push(Expr::Call(called, args), scope))
+    }
+
+    /// Put a lone constant on the right, leaving an already canonical call
+    /// for the ordinary rebuilding path.
+    fn commuted(
+        &mut self,
+        called: FnId,
+        dynamic: Atom,
+        constant: Atom,
+        swap: bool,
+        scope: &mut Scope,
+    ) -> Option<Atom> {
+        if !swap {
+            return None;
+        }
+        let args = self.held(&[dynamic, constant]);
+        Some(self.push(Expr::Call(called, args), scope))
+    }
+
+    /// Evaluate two known operands under this pass's shared folding budget.
+    fn calculate(
+        &mut self,
+        op: Operation,
+        called: FnId,
+        left: Atom,
+        right: Atom,
+        scope: &mut Scope,
+    ) -> Option<Atom> {
+        let (left, right) = (self.constant(scope, left)?, self.constant(scope, right)?);
+        let budget = self.algebra.as_mut()?;
+        let left = self.program.constant(left).to_owned(budget).ok()?;
+        let right = self.program.constant(right).to_owned(budget).ok()?;
+        let value = Evaluator {
+            program: self.program,
+            operations: &self.operations,
+        }
+        .arithmetic(
+            op,
+            self.program.function(called).result,
+            &[left, right],
+            budget,
+        )
+        .ok()?;
+        let value = self.program.intern_held(&value);
+        Some(self.push(Expr::Static(value), scope))
+    }
+
+    /// Which constant wrote a local, if one did.
+    fn constant(&self, scope: &Scope, atom: Atom) -> Option<super::ConstId> {
+        let Expr::Static(value) = self.program.expr(scope.wrote(atom)?) else {
+            return None;
+        };
+        Some(value)
+    }
+
     /// A sum or a product taken modulo a power of two, worked out modulo
     /// that power of two throughout.
     ///
@@ -211,7 +364,7 @@ impl Rewrite<'_> {
     /// there was one. And not truncated subtraction, which stops at nought
     /// rather than carrying through, nor division or the remainder itself.
     fn reduced(&mut self, called: FnId, args: &[Atom], scope: &mut Scope) -> Option<Atom> {
-        if self.operations[called.index()] != Some(super::Operation::Mod) {
+        if self.operations[called.index()] != Some(Operation::Mod) {
             return None;
         }
         let [held, modulus] = *args else {
@@ -225,7 +378,7 @@ impl Rewrite<'_> {
         };
         if !matches!(
             self.operations[inner.index()],
-            Some(super::Operation::Add | super::Operation::Mul)
+            Some(Operation::Add | Operation::Mul)
         ) {
             return None;
         }
@@ -291,7 +444,7 @@ impl Rewrite<'_> {
         else {
             return false;
         };
-        self.operations[called.index()] == Some(super::Operation::Mod)
+        self.operations[called.index()] == Some(Operation::Mod)
             && self.program.atoms(args).last() == Some(&modulus)
     }
 

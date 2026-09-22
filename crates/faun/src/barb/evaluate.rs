@@ -115,7 +115,7 @@ impl Evaluator<'_> {
         self.body(arm.body, inner, budget)
     }
 
-    fn arithmetic(
+    pub(super) fn arithmetic(
         &self,
         op: Operation,
         result: TypeId,

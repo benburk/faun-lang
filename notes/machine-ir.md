@@ -112,8 +112,9 @@ validation, in this order, each stage at most once:
    a branch on that comparison, with its arms in whichever order the tags say.
    A constant read at a `Fixed` width is written at that width instead of
    being converted to it. A run of additions of known numbers, all at one
-   width, is one addition -- a number one past another is a constructor in
-   Barb, which has no addition to fold a run of them into.
+   width, is one addition. Barb normalizes calls it recognizes as arithmetic;
+   this lower-tier rule also covers constructor steps introduced by lowering
+   and programs built directly in machine IR.
 2. `prune`: drop instructions nothing reads. A call may do something while
    answering and a store does nothing else, so neither is dropped, and an `if`
    holding either stays for what it holds rather than for what it answers.
@@ -133,6 +134,15 @@ thing afterwards.
 
 `read` runs this schedule, so `--emit ir` shows the optimized program. The
 corpus in `faun::programs` is written directly in machine IR and does not.
+
+Source lowering may bypass a tree of recognized natural additions with Barb's
+bounded affine summary. The summary remains a fact rather than a sixth Barb term:
+lowering writes machine `Mul` and `Add` operations against the original leaf values,
+and pruning removes bypassed intermediates. A coefficient of two remains an `Add`
+so arbitrary-precision naturals do not acquire a multiplication helper merely for
+doubling. Other constant products stay explicit for target selection; the 6502
+currently strength-reduces a byte-sized product by three to one shift and one add.
+An unrecognized source function named like multiplication is never involved.
 
 Source demand discovery, answer analysis, and emission share a lazy reachable-arm
 walk. Tagged matches analyze each arm once when planning that match, then compute

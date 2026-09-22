@@ -32,6 +32,7 @@ fn off() -> OptimizeOptions {
         inline_helpers: false,
         arithmetic_laws: false,
         constant_fold: false,
+        algebra: false,
         cleanup: false,
         ..OptimizeOptions::default()
     }
@@ -113,13 +114,14 @@ fn schedule_ablations_preserve_small_arithmetic_and_recognition() {
     let (original, probes) = arithmetic_probes();
     let ty = original.params(named(&original, "add"))[0];
     let mut variants = vec![off(), OptimizeOptions::default()];
-    for pass in 0..5 {
+    for pass in 0..6 {
         let mut options = OptimizeOptions::default();
         match pass {
             0 => options.structural = false,
             1 => options.inline_helpers = false,
             2 => options.arithmetic_laws = false,
             3 => options.constant_fold = false,
+            4 => options.algebra = false,
             _ => options.cleanup = false,
         }
         variants.push(options);
@@ -147,6 +149,151 @@ fn schedule_ablations_preserve_small_arithmetic_and_recognition() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn algebraic_arithmetic_collects_constants_in_safe_directions() {
+    let mut original = library();
+    let add = named(&original, "add");
+    let mul = named(&original, "mul");
+    let monus = named(&original, "sub");
+    let div = named(&original, "div");
+    let ty = original.params(add)[0];
+    let three = original.intern_number(ty, 3).unwrap();
+    let five = original.intern_number(ty, 5).unwrap();
+    let mut probes = vec![];
+    for (name, called, expected) in [
+        ("sum", add, 8),
+        ("product", mul, 15),
+        ("monus", monus, 8),
+        ("quotient", div, 15),
+    ] {
+        let id = algebra_probe(&mut original, name, called, ty, three, five);
+        probes.push((name, id, called, expected));
+    }
+    validate(&original).unwrap();
+
+    let mut optimized = original.clone();
+    optimize(&mut optimized, &OptimizeOptions::default());
+    validate(&optimized).unwrap();
+
+    for probe in probes {
+        assert_normalized_arithmetic(&original, &optimized, ty, probe);
+    }
+}
+
+#[test]
+fn affine_facts_collect_shared_linear_terms_without_synthesizing_calls() {
+    let mut program = library();
+    let add = named(&program, "add");
+    let ty = program.params(add)[0];
+    let three = program.intern_number(ty, 3).unwrap();
+    let test = program.declare("shared_affine", &[ty], ty);
+    program.define(test, |b, args| {
+        let three = b.known(three);
+        let a = b.call(add, &[args[0], three]);
+        let sum = b.call(add, &[a, args[0]]);
+        b.call(add, &[a, sum])
+    });
+    validate(&program).unwrap();
+
+    let facts = super::analyze(&program);
+    let tail = program.function(test).body().unwrap().tail;
+    let affine = facts.affine(tail).expect("a bounded affine summary");
+    assert_eq!(affine.constant, 6);
+    assert_eq!(affine.terms, vec![(super::Atom(super::Local::at(0)), 3)]);
+}
+
+#[test]
+fn affine_facts_stop_at_nonlinear_products_and_the_term_limit() {
+    let mut program = library();
+    let add = named(&program, "add");
+    let mul = named(&program, "mul");
+    let ty = program.params(add)[0];
+
+    let nonlinear = program.declare("nonlinear", &[ty, ty], ty);
+    program.define(nonlinear, |b, args| b.call(mul, args));
+
+    let params = vec![ty; 9];
+    let crowded = program.declare("crowded", &params, ty);
+    program.define(crowded, |b, args| {
+        args[1..]
+            .iter()
+            .fold(args[0], |sum, &term| b.call(add, &[sum, term]))
+    });
+    validate(&program).unwrap();
+
+    let facts = super::analyze(&program);
+    for id in [nonlinear, crowded] {
+        let tail = program.function(id).body().unwrap().tail;
+        assert!(facts.affine(tail).is_none(), "{}", program.render());
+    }
+}
+
+fn algebra_probe(
+    program: &mut Program,
+    name: &str,
+    called: FnId,
+    ty: super::TypeId,
+    three: super::ConstId,
+    five: super::ConstId,
+) -> FnId {
+    let id = program.declare(name, &[ty], ty);
+    program.define(id, |b, args| {
+        let three = b.known(three);
+        let five = b.known(five);
+        match name {
+            "sum" => {
+                let inner = b.call(called, &[args[0], five]);
+                b.call(called, &[three, inner])
+            }
+            "product" => {
+                let inner = b.call(called, &[five, args[0]]);
+                b.call(called, &[inner, three])
+            }
+            "monus" | "quotient" => {
+                let inner = b.call(called, &[args[0], three]);
+                b.call(called, &[inner, five])
+            }
+            _ => unreachable!("an arithmetic probe"),
+        }
+    });
+    id
+}
+
+fn assert_normalized_arithmetic(
+    original: &Program,
+    optimized: &Program,
+    ty: super::TypeId,
+    (name, id, called, expected): (&str, FnId, FnId, u64),
+) {
+    assert_eq!(calls_to(optimized, id, called), 1, "{}", optimized.render());
+    let body = optimized.function(id).body().unwrap();
+    let Expr::Call(actual, args) = optimized.expr(body.tail) else {
+        panic!("normalized arithmetic is one call\n{}", optimized.render());
+    };
+    assert_eq!(actual, called);
+    let [dynamic, constant] = optimized.atoms(args) else {
+        panic!("binary arithmetic");
+    };
+    assert_eq!(dynamic.0.index(), 0, "constant belongs on the right");
+    let binding = optimized.bindings(body.bindings)[constant.0.index() - 1];
+    let Expr::Static(value) = optimized.expr(binding) else {
+        panic!("combined constant\n{}", optimized.render());
+    };
+    let ConstantView::Natural(value) = optimized.constant(value).view() else {
+        panic!("a natural constant");
+    };
+    assert_eq!(value.try_u64(), Ok(expected));
+
+    for n in [0, 1, 5, 8, 14, 15, 16, 31] {
+        let args = vec![super::tests::nat(original, ty, n)];
+        assert_eq!(
+            run(optimized, id, args.clone(), &mut vec![]),
+            run(original, id, args, &mut vec![]),
+            "{name}({n})"
+        );
     }
 }
 
@@ -741,7 +888,7 @@ fn cleanup_retains_unused_calls_and_matches_in_order() {
             ..off()
         },
     );
-    // Even a pure call is retained.
+    // Even a pure call is retained when no analysis classifies it as inert.
     assert_eq!(calls_to(&program, test, pure), 1);
     assert_eq!(
         expressions(&program, test)

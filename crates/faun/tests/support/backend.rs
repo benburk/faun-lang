@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, PoisonError};
 
-use faun::ir::{Binary, Class, Program};
+use faun::ir::{Binary, Class, Op, Program, ValueId};
 use faun::programs;
 use faun::targets::Target;
 
@@ -301,8 +301,6 @@ fn it_runs_a_program_built_rather_than_written() {
 
 #[test]
 fn guarded_argc_expressions_fold_constants_but_compute_runtime_inputs() {
-    use faun::ir::{Op, ValueId};
-
     for case in expressions::CASES {
         // Normal reading keeps every optimization enabled. The guard must
         // prove scalar bounds even on targets with runtime Natural support.
@@ -311,24 +309,20 @@ fn guarded_argc_expressions_fold_constants_but_compute_runtime_inputs() {
             (0..program.values_count()).all(|at| program.class(ValueId::at(at)) != Class::Natural),
             "{case:?}: guarded arithmetic should not need runtime naturals"
         );
-        let ops: Vec<_> = program
+        let instructions: Vec<_> = program
             .functions()
             .iter()
             .filter_map(faun::ir::Function::body)
-            .flat_map(|body| program.every(body))
+            .flat_map(|body| program.walk_within(body))
             .collect();
         assert!(
-            ops.iter().any(|op| matches!(op, Op::Binary { .. })),
+            instructions
+                .iter()
+                .any(|(op, _)| matches!(op, Op::Binary { .. })),
             "{case:?}: runtime arithmetic must survive folding"
         );
         assert!(
-            !ops.iter().any(|op| matches!(
-                op,
-                Op::Binary {
-                    op: Binary::Mul,
-                    ..
-                }
-            )),
+            !has_constant_only_multiply(&program, &instructions),
             "{case:?}: constant-only multiplication must fold"
         );
         let answers = execute_counts(&program, expressions::COUNTS);
@@ -337,6 +331,25 @@ fn guarded_argc_expressions_fold_constants_but_compute_runtime_inputs() {
             assert!(stdout.is_empty(), "{case:?}, argc={argc}: {stdout:?}");
         }
     }
+}
+
+fn has_constant_only_multiply(program: &Program, instructions: &[(&Op, &[ValueId])]) -> bool {
+    let mut constants = vec![false; program.values_count()];
+    for (op, results) in instructions {
+        if matches!(op, Op::Constant { .. } | Op::NaturalConstant(_)) {
+            constants[results[0].index()] = true;
+        }
+    }
+    instructions.iter().any(|(op, _)| {
+        matches!(
+            op,
+            Op::Binary {
+                op: Binary::Mul,
+                left,
+                right,
+            } if constants[left.index()] && constants[right.index()]
+        )
+    })
 }
 
 #[test]
@@ -369,7 +382,7 @@ fn source_zero_width_scalars_cross_calls_and_joins() {
         .unwrap();
         assert!(
             (0..program.values_count())
-                .any(|at| { program.class(faun::ir::ValueId::at(at)) == Class::fixed(0) })
+                .any(|at| { program.class(ValueId::at(at)) == Class::fixed(0) })
         );
         let counts = [1, 2, 3, 33];
         for (argc, (status, stdout)) in counts.into_iter().zip(execute_counts(&program, &counts)) {

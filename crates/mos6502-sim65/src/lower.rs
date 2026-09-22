@@ -1842,6 +1842,34 @@ impl Lowering<'_> {
         }
     }
 
+    /// Use the accumulator's shift for a byte-sized multiplication by three.
+    /// The original remains in its home until the final store, so the result
+    /// may share that home without losing the addend.
+    fn multiply_by_three(&mut self, value: ValueId, result: ValueId) -> bool {
+        if self.needed(result) > 8 {
+            return false;
+        }
+        let from = self.operand(value, T0);
+        let dest = self.dest(result);
+        self.load(from.byte(0));
+        self.asm.asl();
+        if self.upper_bound(value).is_some_and(|high| high < 128) {
+            self.asm.carry_is(false);
+        }
+        self.asm.clc();
+        self.accumulate(Binary::Add, from.byte(0));
+        if self
+            .upper_bound(value)
+            .and_then(|high| high.checked_mul(3))
+            .is_some_and(|high| high < 256)
+        {
+            self.asm.carry_is(false);
+        }
+        self.asm.sta_zp(dest);
+        self.commit(result, dest);
+        true
+    }
+
     /// Shift/add in exactly sixteen rounds, independent of operand values.
     /// Only scratch pairs and X are destroyed; homes, ARGC and call arguments
     /// are untouched. The fit proof guarantees the final product fits.
@@ -2025,6 +2053,16 @@ impl Lowering<'_> {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
             Op::Constant { .. } | Op::AddressOf(_) => {}
             Op::Binary { op, left, right } => {
+                if *op == Binary::Mul {
+                    let scaled = match (self.constant(*left), self.constant(*right)) {
+                        (Some(3), _) => Some(*right),
+                        (_, Some(3)) => Some(*left),
+                        _ => None,
+                    };
+                    if scaled.is_some_and(|value| self.multiply_by_three(value, results[0])) {
+                        return;
+                    }
+                }
                 if matches!(op, Binary::Mul | Binary::Div | Binary::Mod) {
                     // Copy both operands before touching any destination: loop
                     // coalescing may give it the same home as an input.

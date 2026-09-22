@@ -77,6 +77,7 @@
 //! The machine IR follows the same split. Public types are re-exported here;
 //! the file layout is not part of the public API.
 
+mod affine;
 mod arithmetic;
 mod bounds;
 mod budget;
@@ -98,6 +99,7 @@ mod terms;
 mod types;
 mod validate;
 
+pub(crate) use affine::Affine;
 pub use bounds::Bounds;
 pub use budget::{Budget, FoldLimits, LimitExceeded};
 pub use builder::Builder;

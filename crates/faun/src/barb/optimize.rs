@@ -12,9 +12,11 @@ pub struct OptimizeOptions {
     pub inline_helpers: bool,
     pub arithmetic_laws: bool,
     pub constant_fold: bool,
-    /// Work a sum or a product modulo a power of two out modulo that power
-    /// of two throughout, which is only visible once the modulus is folded.
-    pub reduce: bool,
+    /// Normalize recognized arithmetic after constants have been folded.
+    /// This combines constants across associative operations and directional
+    /// monus/division chains, and works sums and products modulo a power of
+    /// two out modulo that power throughout.
+    pub algebra: bool,
     pub cleanup: bool,
     pub inline_limits: InlineLimits,
     pub fold_limits: FoldLimits,
@@ -27,7 +29,7 @@ impl Default for OptimizeOptions {
             inline_helpers: true,
             arithmetic_laws: true,
             constant_fold: true,
-            reduce: true,
+            algebra: true,
             cleanup: true,
             inline_limits: InlineLimits::default(),
             fold_limits: FoldLimits::default(),
@@ -58,8 +60,8 @@ pub fn optimize(program: &mut Program, options: &OptimizeOptions) {
     if options.constant_fold {
         super::fold_with_limits(program, options.fold_limits);
     }
-    if options.reduce {
-        super::normalize::reduce(program);
+    if options.algebra {
+        super::normalize::algebra(program, options.fold_limits);
     }
     if options.cleanup {
         super::cleanup::cleanup(program);

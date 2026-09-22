@@ -22,7 +22,7 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("the low bits of a sum", 181),
     ("the count under a guard", 184),
     ("the count and more", 191),
-    ("a shared intermediate", 205),
+    ("a shared intermediate", 198),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("exit zero", 36),
@@ -52,8 +52,8 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("leave", 96),
     ("bool", 228),
     ("nat", 406),
-    ("width", 198),
-    ("argc", 205),
+    ("width", 191),
+    ("argc", 191),
     ("expressions", 198),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [156, 164, 162];

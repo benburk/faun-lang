@@ -72,7 +72,8 @@ fn machine_ir(target: &'static dyn Target) {
         let count = u64::MAX >> (64 - target.word());
         assert!(ir.contains(&format!("argc!() -> (0..{count})")));
         assert!(ir.contains("call argc!()  # f2"));
-        assert_eq!(ir.matches("= Add ").count(), 2);
+        assert_eq!(ir.matches("= Up ").count(), 1);
+        assert_eq!(ir.matches("= Add ").count(), 1);
         assert!(
             ir.contains("0..0 = const 0"),
             "a known zero can be nothing else"

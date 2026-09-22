@@ -1,8 +1,9 @@
-//! Final-program analysis: recognized equations and conservative value ranges.
+//! Final-program analysis: recognized equations, value ranges and affine forms.
 
 use num_bigint::BigUint;
 use num_traits::Zero;
 
+use super::affine::Affine;
 use super::bounds::{Bounds, Ranges};
 use super::model::{CtorId, ExprId, FnId};
 use super::program::Program;
@@ -71,6 +72,7 @@ impl Operation {
 pub struct Facts {
     operations: Vec<Option<Operation>>,
     ranges: Ranges,
+    affine: Vec<Option<Affine>>,
 }
 
 impl Facts {
@@ -99,6 +101,10 @@ impl Facts {
         self.ranges.takes.get(id.index()).map_or(&[], Vec::as_slice)
     }
     #[must_use]
+    pub(crate) fn affine(&self, id: ExprId) -> Option<&Affine> {
+        self.affine.get(id.index())?.as_ref()
+    }
+    #[must_use]
     pub fn answers(&self, id: FnId) -> Bounds {
         self.ranges
             .answers
@@ -109,10 +115,15 @@ impl Facts {
 }
 
 /// Analyze the final Barb program before lowering. Recompute after rewriting:
-/// recognition identifies equations; range propagation uses those equations.
+/// recognition identifies equations; ranges and affine forms use those equations.
 #[must_use]
 pub fn analyze(program: &Program) -> Facts {
     let operations = super::arithmetic::recognise(program);
     let ranges = super::bounds::analyze(program, &operations);
-    Facts { operations, ranges }
+    let affine = super::affine::analyze(program, &operations);
+    Facts {
+        operations,
+        ranges,
+        affine,
+    }
 }

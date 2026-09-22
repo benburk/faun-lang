@@ -21,7 +21,7 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("the low bits of a sum", 133),
     ("the count under a guard", 147),
     ("the count and more", 150),
-    ("a shared intermediate", 160),
+    ("a shared intermediate", 156),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("exit zero", 127),
@@ -51,9 +51,9 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("leave", 128),
     ("bool", 174),
     ("nat", 453),
-    ("width", 151),
-    ("argc", 178),
-    ("expressions", 181),
+    ("width", 150),
+    ("argc", 150),
+    ("expressions", 169),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [204, 215, 216];
 
@@ -82,6 +82,7 @@ fn ladder_code_size_ratchets() {
             ("the low bits of a sum", 13),
             ("the count under a guard", 27),
             ("the count and more", 30),
+            ("a shared intermediate", 36),
         ]
     );
     assert_eq!(code[0].1, [0x31, 0xFF, 0x6A, 0x3C, 0x58, 0x0F, 0x05]);

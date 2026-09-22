@@ -13,10 +13,10 @@
 //! at whatever width the thing reading it holds. Writing it at that width to
 //! begin with says the same and asks a target for nothing.
 //!
-//! And the same for a run of them. A number one past another is a
-//! constructor where a program is written, and the tier above has no
-//! addition to fold four of those into; this one does, so four steps of one
-//! are a step of four.
+//! And the same for a run of them. Barb combines calls it recognizes as
+//! arithmetic, but lowering can still introduce constructor steps and callers
+//! can build machine IR directly. Here four steps of one become a step of
+//! four regardless of where they came from.
 
 use crate::facts::Facts;
 
