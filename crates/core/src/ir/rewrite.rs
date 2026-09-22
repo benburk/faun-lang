@@ -65,6 +65,8 @@ pub(super) fn rebuild<P: Pass>(source: &Program, pass: &mut P) -> Program {
 fn skeleton(source: &Program) -> Program {
     let mut output = Program {
         layout: source.layout,
+        runtime_cells: source.runtime_cells,
+        runtime_naturals: source.runtime_naturals,
         data: source.data.clone(),
         globals: source.globals.clone(),
         spans: source.spans.clone(),
@@ -202,6 +204,11 @@ impl<'a> Rebuild<'a> {
             Op::Constant { value } => vec![b.constant(self.source.class(results[0]), value)],
             Op::NaturalConstant(data) => vec![b.kept_natural(data)],
             Op::AddressOf(data) => vec![b.address_of(data)],
+            Op::Cell { tag, fields } => vec![b.cell(tag, &self.args(fields))],
+            Op::CellTag { cell } => vec![b.cell_tag(self.value(cell))],
+            Op::CellField { cell, index } => {
+                vec![b.cell_field(self.source.class(results[0]), self.value(cell), index)]
+            }
             Op::Binary { op, left, right } => vec![b.binary_at(
                 self.source.class(results[0]),
                 op,

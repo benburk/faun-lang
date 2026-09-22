@@ -243,23 +243,23 @@ fn a_value_too_wide_for_a_routine_is_refused() {
     assert!(refused.contains("`narrow`"), "{refused}");
 }
 
-/// What a tag is not: a constructor carrying something has no
-/// representation here yet, however many of them there are.
+/// A payload-carrying constructor is a cell, not merely its tag.
 #[test]
 fn a_constructor_that_carries_something_is_not_a_tag() {
-    let refused = read(
+    let routines = crate::platform::Routines::builtin();
+    let source = crate::simple::parse(
         "type Nat Zero Succ(Nat)
          type Maybe None Some(Nat)
          unwrap(None) -> Zero
          unwrap(Some(n)) -> n
 
-         main!(h) -> n = argc!(h) exit!(h unwrap(Some(n)))",
+         main!(h) -> n = argc!(h) value = unwrap(Some(n)) exit!(h Zero)",
+        &routines,
     )
-    .unwrap_err();
-    assert!(
-        refused.contains("`Maybe` has no representation"),
-        "{refused}"
-    );
+    .unwrap();
+    let program = lower(&source, &crate::barb::analyze(&source), &routines).unwrap();
+    assert!(program.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
+    assert!(program.classes.as_slice().contains(&Class::Cell));
 }
 
 /// What a routine reads is what the name means, not what a program hands

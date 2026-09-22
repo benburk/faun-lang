@@ -85,6 +85,22 @@ impl Builder<'_> {
         self.push_one(Op::AddressOf(data), Class::Address)
     }
 
+    /// Construct an immutable algebraic object from borrowed fields.
+    pub fn cell(&mut self, tag: u32, fields: &[ValueId]) -> ValueId {
+        let fields = self.program.hold(fields);
+        self.push_one(Op::Cell { tag, fields }, Class::Cell)
+    }
+
+    /// Read a cell's constructor tag.
+    pub fn cell_tag(&mut self, cell: ValueId) -> ValueId {
+        self.push_one(Op::CellTag { cell }, Class::Word)
+    }
+
+    /// Read one field as `class`.
+    pub fn cell_field(&mut self, class: Class, cell: ValueId, index: u32) -> ValueId {
+        self.push_one(Op::CellField { cell, index }, class)
+    }
+
     pub fn data_len(&mut self, data: DataId) -> ValueId {
         let len = self.program.datum(data).len;
         self.constant(Class::Word, u64::from(len))

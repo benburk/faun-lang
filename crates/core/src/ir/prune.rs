@@ -141,6 +141,8 @@ fn acts(source: &Program, region: RegionId) -> bool {
 fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
     match *op {
         Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) => Vec::new(),
+        Op::Cell { fields, .. } => source.values(fields).to_vec(),
+        Op::CellTag { cell } | Op::CellField { cell, .. } => vec![cell],
         Op::Binary { left, right, .. } | Op::Compare { left, right, .. } => vec![left, right],
         Op::Load { address, .. } => vec![address],
         Op::Store { address, value, .. } => vec![address, value],

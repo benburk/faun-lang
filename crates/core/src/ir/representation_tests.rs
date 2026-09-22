@@ -97,52 +97,39 @@ fn default_pipeline_removes_folded_library_temporaries() {
                 .every(machine.function(machine.entry()).body().unwrap())
                 .any(|op| matches!(op, Op::Constant { value, .. } if *value == expected))
         );
-        assert!(
-            crate::read_with_options(
-                &text,
-                &routines,
-                &barb::OptimizeOptions {
-                    cleanup: false,
-                    ..barb::OptimizeOptions::default()
-                }
-            )
-            .is_err(),
-            "without cleanup, dead products still demand storage"
-        );
+        let uncleaned = crate::read_with_options(
+            &text,
+            &routines,
+            &barb::OptimizeOptions {
+                cleanup: false,
+                ..barb::OptimizeOptions::default()
+            },
+        )
+        .unwrap();
+        validate(&uncleaned).unwrap();
     }
 }
 
 #[test]
-fn default_pipeline_still_rejects_runtime_products() {
+fn default_pipeline_accepts_runtime_product_programs() {
     for main in [
-        "main!(h) -> n = argc!(h) byte = u8_from_nat_wrapping(n) exit!(h u8_to_nat(byte))",
-        "main!(h) -> n = argc!(h) signed = int_from_nat(n) exit!(h int_abs(signed))",
+        "main!(h) -> n = argc!(h) byte = u8_from_nat_wrapping(n) converted = u8_to_nat(byte) exit!(h Zero)",
+        "main!(h) -> n = argc!(h) signed = int_from_nat(n) magnitude = int_abs(signed) exit!(h Zero)",
     ] {
-        let error = crate::read(&library(main), &Routines::builtin().with_word(64)).unwrap_err();
-        assert!(error.contains("has no representation"), "{error}");
+        let machine = crate::read(&library(main), &Routines::builtin().with_word(64)).unwrap();
+        validate(&machine).unwrap();
     }
 }
 
 #[test]
-fn runtime_products_and_signed_sums_are_still_rejected() {
-    for (name, text) in [
-        (
-            "U8",
-            "main!(h) -> n = argc!(h) byte = u8_from_nat_wrapping(n) exit!(h u8_to_nat(byte))",
-        ),
-        (
-            "Int",
-            "main!(h) -> n = argc!(h) signed = int_from_nat(n) exit!(h int_abs(signed))",
-        ),
-        ("U8", "main!(h) -> byte = u8_zero() exit!(h Zero)"),
+fn runtime_products_and_signed_sums_lower_without_erasing_unused_bindings() {
+    for text in [
+        "main!(h) -> n = argc!(h) byte = u8_from_nat_wrapping(n) converted = u8_to_nat(byte) exit!(h Zero)",
+        "main!(h) -> n = argc!(h) signed = int_from_nat(n) magnitude = int_abs(signed) exit!(h Zero)",
+        "main!(h) -> byte = u8_zero() exit!(h Zero)",
     ] {
-        // Even an unused binding still demands storage until an optimizer
-        // actually removes it; lowering must never pretend it is erased.
-        let error = lower_program(&parse(&library(text))).unwrap_err();
-        assert!(
-            error.contains(&format!("`{name}` has no representation")),
-            "{error}"
-        );
+        let machine = lower_program(&parse(&library(text))).unwrap();
+        assert!(machine.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
     }
 }
 

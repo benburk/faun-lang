@@ -193,12 +193,19 @@ enum Task {
     },
 }
 
+#[derive(Clone, Debug)]
+struct CellValue {
+    tag: u32,
+    fields: Vec<BigUint>,
+}
+
 struct Machine<'a, H> {
     program: &'a Program,
     config: Config,
     host: &'a mut H,
     memory: Memory<'a>,
     frames: Vec<Vec<Option<BigUint>>>,
+    cells: Vec<CellValue>,
     tasks: Vec<Task>,
 }
 
@@ -247,6 +254,7 @@ pub fn evaluate(
             globals_base,
         },
         frames: Vec::new(),
+        cells: Vec::new(),
         tasks: Vec::new(),
     };
     if let Some(outcome) = machine.call(function, args, None)? {
@@ -278,7 +286,7 @@ impl<H: Host> Machine<'_, H> {
     fn width(&self, class: Class) -> Result<Option<u16>, Error> {
         match class {
             Class::Natural => Ok(None),
-            Class::Word | Class::Address => Ok(Some(self.config.word_bits)),
+            Class::Cell | Class::Word | Class::Address => Ok(Some(self.config.word_bits)),
             Class::Held(_) => match class.width() {
                 Some(bits) if bits <= self.config.word_bits => Ok(Some(bits)),
                 _ => Err(Error::DoesNotFit(class)),
@@ -673,6 +681,18 @@ impl<H: Host> Machine<'_, H> {
             Op::Constant { value } => self.constant(self.result_class(results)?, value)?,
             Op::NaturalConstant(id) => self.natural(id)?,
             Op::AddressOf(id) => BigUint::from(self.datum_address(id)?),
+            Op::Cell { tag, fields } => {
+                let fields = self.values(fields)?;
+                self.cells.push(CellValue { tag, fields });
+                BigUint::from(self.cells.len())
+            }
+            Op::CellTag { cell } => BigUint::from(self.cell(cell)?.tag),
+            Op::CellField { cell, index } => self
+                .cell(cell)?
+                .fields
+                .get(usize::try_from(index).map_err(|_| invalid("cell field index"))?)
+                .cloned()
+                .ok_or_else(|| invalid("cell field index"))?,
             Op::Binary { op, left, right } => self.binary(
                 op,
                 self.result_class(results)?,
@@ -714,6 +734,14 @@ impl<H: Host> Machine<'_, H> {
             _ => return Err(invalid("expected scalar instruction")),
         };
         Ok(vec![value])
+    }
+
+    fn cell(&self, id: ValueId) -> Result<&CellValue, Error> {
+        let handle = usize::try_from(self.value(id)?).map_err(|_| invalid("cell handle"))?;
+        let index = handle
+            .checked_sub(1)
+            .ok_or_else(|| invalid("cell handle"))?;
+        self.cells.get(index).ok_or_else(|| invalid("cell handle"))
     }
 
     fn natural(&self, id: super::DataId) -> Result<BigUint, Error> {

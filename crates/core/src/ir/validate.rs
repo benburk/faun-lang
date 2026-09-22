@@ -159,6 +159,8 @@ impl References<'_> {
             Op::Constant { .. } => {}
             Op::NaturalConstant(id) => self.natural_datum(id)?,
             Op::AddressOf(id) => return self.datum(id).map(|_| ()),
+            Op::Cell { fields, .. } => self.values(fields)?,
+            Op::CellTag { cell } | Op::CellField { cell, .. } => self.value(cell)?,
             Op::Binary { left, right, .. }
             | Op::Compare { left, right, .. }
             | Op::Store {
@@ -399,6 +401,10 @@ impl Checker<'_> {
         )
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive operation validation keeps each result and operand contract adjacent"
+    )]
     fn instruction(
         &mut self,
         op: &Op,
@@ -410,6 +416,22 @@ impl Checker<'_> {
             // What one is held at is the class of the value it writes, so
             // there is nothing here for the two of them to disagree about.
             Op::Constant { .. } => {
+                if self.one(results)? == Class::Cell {
+                    return Err("a cell cannot be fabricated by a scalar constant".into());
+                }
+            }
+            Op::Cell { fields, .. } => {
+                for &field in self.program.values(fields) {
+                    self.read(field)?;
+                }
+                self.results(results, &[Class::Cell])?;
+            }
+            Op::CellTag { cell } => {
+                self.require(cell, Class::Cell)?;
+                self.results(results, &[Class::Word])?;
+            }
+            Op::CellField { cell, .. } => {
+                self.require(cell, Class::Cell)?;
                 self.one(results)?;
             }
             Op::Convert { value } => {
@@ -526,7 +548,7 @@ impl Checker<'_> {
 
     fn conversion(&self, value: ValueId, class: Class) -> Result<(), String> {
         let from = self.read(value)?;
-        let numeric = |c| c != Class::Address;
+        let numeric = |c| !matches!(c, Class::Address | Class::Cell);
         if !(numeric(from) && numeric(class)
             || from == class
             || matches!(
@@ -544,7 +566,7 @@ impl Checker<'_> {
             return Err("binary operation must have one result".into());
         };
         let held = self.program.class(*result);
-        if held == Class::Address {
+        if matches!(held, Class::Address | Class::Cell) {
             return Err("arithmetic result must be numeric".into());
         }
         self.require(left, held)?;

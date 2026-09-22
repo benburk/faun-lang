@@ -293,6 +293,10 @@ fn exit_status(program: &Program, op: &Op) -> Option<ValueId> {
 fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     match op {
         Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) => {}
+        Op::Cell { fields, .. } => {
+            program.values(*fields).iter().copied().for_each(&mut each);
+        }
+        Op::CellTag { cell } | Op::CellField { cell, .. } => each(*cell),
         Op::Binary { left, right, .. } | Op::Compare { left, right, .. } => {
             each(*left);
             each(*right);
@@ -2233,6 +2237,9 @@ impl Lowering<'_> {
         let program = self.program;
         match op {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
+            Op::Cell { .. } | Op::CellTag { .. } | Op::CellField { .. } => {
+                unreachable!("target preparation legalizes abstract cells")
+            }
             Op::Constant { .. } | Op::AddressOf(_) => {}
             Op::Binary { op, left, right } => {
                 if self.halved_sums[results[0].index()].is_some() {

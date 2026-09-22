@@ -29,6 +29,7 @@ pub struct Config {
 /// One inventory for helper requests, generated handles and omission tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Helper {
+    Allocate,
     Add,
     Sub,
     Mul,
@@ -40,7 +41,8 @@ pub(super) enum Helper {
 }
 
 impl Helper {
-    pub(super) const ALL: [Self; 8] = [
+    pub(super) const ALL: [Self; 9] = [
+        Self::Allocate,
         Self::Add,
         Self::Sub,
         Self::Mul,
@@ -282,11 +284,15 @@ pub(super) fn append(
     if needs.contains(Helper::ToWord) {
         library.insert(Helper::ToWord, narrowing(program, word));
     }
-    if Helper::ALL
-        .into_iter()
-        .any(|helper| needs.contains(helper) && !matches!(helper, Helper::Compare | Helper::ToWord))
+    if Helper::ALL.into_iter().any(|helper| {
+        needs.contains(helper)
+            && !matches!(helper, Helper::Allocate | Helper::Compare | Helper::ToWord)
+    }) || needs.contains(Helper::Allocate)
     {
         let alloc = allocator(program, config, word, zero, fail)?;
+        if needs.contains(Helper::Allocate) {
+            library.insert(Helper::Allocate, alloc);
+        }
         let trim = trimming(program, word);
         let finish = finishing(program, trim, release, zero);
         let storage = Storage {

@@ -243,14 +243,24 @@ enum Storage {
     Undemanded,
     Erased,
     Static,
-    Carried,
+    Scalar,
+    Cell,
 }
 
 impl Storage {
     fn carried(self) -> bool {
         match self {
-            Self::Carried => true,
+            Self::Scalar | Self::Cell => true,
             Self::Erased | Self::Static => false,
+            Self::Undemanded => panic!("a lowered type must have been demanded"),
+        }
+    }
+
+    fn class(self, bounds: barb::Bounds) -> Option<Class> {
+        match self {
+            Self::Scalar => Some(width(bounds)),
+            Self::Cell => Some(Class::Cell),
+            Self::Erased | Self::Static => None,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
         }
     }
@@ -367,7 +377,14 @@ impl<'a> Demand<'a> {
             .zip(self.facts.takes(id))
             .zip(&self.takes[id.index()])
             .filter(|(((_, ty), _), used)| **used && self.carries[ty.index()].carried())
-            .map(|(((name, _), held), _)| (name.to_owned(), width(*held)))
+            .map(|(((name, ty), held), _)| {
+                (
+                    name.to_owned(),
+                    self.carries[ty.index()]
+                        .class(*held)
+                        .expect("a carried parameter has a class"),
+                )
+            })
             .collect()
     }
 
@@ -380,19 +397,44 @@ impl<'a> Demand<'a> {
             .zip(self.facts.takes(id))
             .zip(&self.takes[id.index()])
             .filter(|((ty, _), used)| **used && self.carries[ty.index()].carried())
-            .map(|((_, held), _)| width(*held))
+            .map(|((ty, held), _)| {
+                self.carries[ty.index()]
+                    .class(*held)
+                    .expect("a carried parameter has a class")
+            })
             .collect();
         let result = self.program.function(id).result;
         let returns = self.carries[result.index()]
-            .carried()
-            .then(|| width(self.facts.answers(id)))
+            .class(self.facts.answers(id))
             .into_iter()
             .collect();
         (params, returns)
     }
 
     fn type_(&mut self, ty: barb::TypeId) -> Result<(), String> {
-        self.carries[ty.index()] = represent(self.program, ty)?;
+        if self.carries[ty.index()] != Storage::Undemanded {
+            return Ok(());
+        }
+        let storage = represent(self.program, ty)?;
+        self.carries[ty.index()] = storage;
+        if storage == Storage::Cell {
+            let fields: Vec<_> = self
+                .program
+                .ctors(ty)
+                .iter()
+                .flat_map(|ctor| self.program.types_of(ctor.fields))
+                .copied()
+                .collect();
+            for field in fields {
+                self.type_(field)?;
+                if self.carries[field.index()] == Storage::Static {
+                    return Err(format!(
+                        "`{}` contains a compile-time-only field",
+                        self.program.name(self.program.type_(ty).name)
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -525,13 +567,13 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, Strin
             barb::TypeShape::Uninhabited | barb::TypeShape::Unit { .. } => {
                 return Ok(Storage::Erased);
             }
-            barb::TypeShape::Enumeration => return Ok(Storage::Carried),
+            barb::TypeShape::Enumeration => return Ok(Storage::Scalar),
             barb::TypeShape::Wrapper { field, .. } => represented = field,
             barb::TypeShape::Natural { .. } => {
                 // A number takes a place. How wide is not a question about the
                 // type -- every natural has the same type and they are not all
                 // the same size -- so it is asked of each value.
-                return Ok(Storage::Carried);
+                return Ok(Storage::Scalar);
             }
             barb::TypeShape::Sequence { element, .. }
                 if matches!(
@@ -547,7 +589,7 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, Strin
                 ));
             }
             barb::TypeShape::Product { .. } | barb::TypeShape::Sum => {
-                return Err(format!("`{name}` has no representation in this tier yet"));
+                return Ok(Storage::Cell);
             }
         }
     }
@@ -755,8 +797,31 @@ struct Lowering<'a> {
 
 impl Lowering<'_> {
     /// The class a term answers at, which is how wide what it answers can
-    /// be. Two values of one type may be held differently, since what makes
-    /// them wide is what was done with them and not what they are.
+    /// be. Two scalar values of one type may be held differently, while an
+    /// aggregate keeps the cell class selected for its source type.
+    fn class(&self, ty: barb::TypeId, bounds: barb::Bounds) -> Class {
+        self.carries[ty.index()]
+            .class(bounds)
+            .expect("a carried type has a class")
+    }
+
+    fn field_class(&self, ty: barb::TypeId) -> Option<Class> {
+        match self.carries[ty.index()] {
+            Storage::Cell => Some(Class::Cell),
+            Storage::Scalar
+                if matches!(
+                    barb::type_shape(self.barb, ty),
+                    barb::TypeShape::Enumeration
+                ) =>
+            {
+                Some(Class::Word)
+            }
+            Storage::Scalar => Some(Class::Natural),
+            Storage::Erased | Storage::Static => None,
+            Storage::Undemanded => panic!("a bound field type must have been demanded"),
+        }
+    }
+
     fn width(&self, id: barb::ExprId) -> Class {
         width(self.facts.held(id))
     }
@@ -776,7 +841,12 @@ impl Lowering<'_> {
         let destination = if entry {
             ReturnTo::Entry
         } else {
-            ReturnTo::Function(width(self.facts.answers(id)))
+            let result = self.barb.function(id).result;
+            ReturnTo::Function(
+                self.carries[result.index()]
+                    .class(self.facts.answers(id))
+                    .unwrap_or(Class::Word),
+            )
         };
         machine.try_define(into, |b, params| {
             let mut taken = params.iter().copied();
@@ -853,7 +923,8 @@ impl Lowering<'_> {
                 if !self.carries[id.index()].carried() {
                     return Answer::Nothing;
                 }
-                Answer::Value(self.static_value(b, self.width(expr), value))
+                let class = self.class(id, self.facts.held(expr));
+                Answer::Value(self.static_value(b, class, value))
             }
             barb::Expr::Con(ctor, args) => self.construct(b, expr, ctor, args, locals).into(),
             barb::Expr::Call(function, args) => self.call(b, expr, function, args, locals, statics),
@@ -879,6 +950,27 @@ impl Lowering<'_> {
     ) -> ValueId {
         let value = barb::single_field_constant(self.barb, value);
         match value.view() {
+            barb::ConstantView::Constructor(ctor) if class == Class::Cell => {
+                let mut budget = barb::Budget::new(barb::FoldLimits {
+                    work: u64::MAX,
+                    max_bytes: usize::MAX,
+                    max_depth: usize::MAX,
+                });
+                let values = ctor
+                    .fields(&mut budget)
+                    .expect("validated constants can be revisited");
+                let fields: Vec<_> = self
+                    .barb
+                    .fields(ctor.constructor())
+                    .iter()
+                    .zip(values)
+                    .filter_map(|(&ty, value)| {
+                        self.field_class(ty)
+                            .map(|class| self.static_value(b, class, value))
+                    })
+                    .collect();
+                b.cell(self.barb.tag(ctor.constructor()), &fields)
+            }
             barb::ConstantView::Constructor(ctor) => {
                 b.constant(class, u64::from(self.barb.tag(ctor.constructor())))
             }
@@ -932,7 +1024,7 @@ impl Lowering<'_> {
         // where that type has no values -- and it answers at the width the
         // name it calls was declared at, which the caller may hold wider.
         self.answer(self.barb.function(function).result).map(|_| {
-            let class = self.width(expr);
+            let class = self.class(self.barb.function(function).result, self.facts.held(expr));
             let held = *results.first().expect("a result where a type carries one");
             if answers == Some(Class::Word) {
                 held
@@ -1093,10 +1185,21 @@ impl Lowering<'_> {
         if !self.carries[owner.index()].carried() {
             return None;
         }
-        let class = self.width(expr);
+        let class = self.class(owner, self.facts.held(expr));
         if barb::single_field(self.barb, owner).is_some() {
             let atom = self.barb.atoms(args)[0];
             return Some(locals[atom.0.index()].expect("a transparent field to carry a value"));
+        }
+        if class == Class::Cell {
+            let fields: Vec<_> = self
+                .barb
+                .atoms(args)
+                .iter()
+                .zip(self.barb.fields(ctor))
+                .filter(|(_, ty)| self.carries[ty.index()].carried())
+                .map(|(atom, _)| locals[atom.0.index()].expect("a carried cell field"))
+                .collect();
+            return Some(b.cell(self.barb.tag(ctor), &fields));
         }
         if tagged(self.barb, owner) {
             return Some(b.constant(class, u64::from(self.barb.tag(ctor))));
@@ -1117,6 +1220,10 @@ impl Lowering<'_> {
 
     /// Matching a number asks whether it is nought; the other arm counts the
     /// scrutinee back down to what it wraps.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "shape dispatch keeps natural, scalar-tag, and cell matches visibly distinct"
+    )]
     fn branch(
         &self,
         b: &mut super::Builder,
@@ -1133,7 +1240,40 @@ impl Lowering<'_> {
         let Some(second) = arms.next() else {
             return self.only_arm(b, scrutinee, &first, locals, statics);
         };
-        match barb::shape(self.barb, self.barb.ctor(first.ctor).owner) {
+        let owner = self.barb.ctor(first.ctor).owner;
+        if self.carries[owner.index()] == Storage::Cell {
+            let planned = {
+                let mut carried: Vec<_> = locals
+                    .iter()
+                    .map(|value| value.map(|value| b.class(value)))
+                    .collect();
+                let base = carried.len();
+                let mut planned: Vec<_> = [first, second]
+                    .into_iter()
+                    .chain(arms)
+                    .map(|arm| {
+                        carried.extend(
+                            self.barb
+                                .fields(arm.ctor)
+                                .iter()
+                                .map(|&ty| self.field_class(ty)),
+                        );
+                        let suffix = self.body_answer(arm.body, &mut carried);
+                        carried.truncate(base);
+                        TagArm { arm, suffix }
+                    })
+                    .collect();
+                let mut suffix = Answer::Never;
+                for arm in planned.iter_mut().rev() {
+                    suffix = widest(arm.suffix, suffix);
+                    arm.suffix = suffix;
+                }
+                planned
+            };
+            let tag = b.cell_tag(scrutinee);
+            return self.cell_tags(b, scrutinee, tag, &planned, locals, statics);
+        }
+        match barb::shape(self.barb, owner) {
             barb::Shape::Spine { nil, .. } => {
                 // A spine has exactly these two arms, regardless of their tags.
                 let (empty, counted) = if first.ctor == nil {
@@ -1145,7 +1285,10 @@ impl Lowering<'_> {
             }
             barb::Shape::Tagged => {
                 let arms = {
-                    let mut carried = locals.iter().map(Option::is_some).collect();
+                    let mut carried = locals
+                        .iter()
+                        .map(|value| value.map(|value| b.class(value)))
+                        .collect();
                     tag_plan([first, second].into_iter().chain(arms), |body| {
                         self.body_answer(body, &mut carried)
                     })
@@ -1171,9 +1314,12 @@ impl Lowering<'_> {
         // The counting arm binds what the scrutinee wraps, which holds what
         // the scrutinee holds.
         let answer = {
-            let mut carried = locals.iter().map(Option::is_some).collect();
+            let mut carried = locals
+                .iter()
+                .map(|value| value.map(|value| b.class(value)))
+                .collect();
             let answer = self.body_answer(empty.body, &mut carried);
-            carried.push(true);
+            carried.push(Some(class));
             widest(answer, self.body_answer(counted.body, &mut carried))
         };
         let held = answer.held();
@@ -1212,7 +1358,9 @@ impl Lowering<'_> {
         let mut inner = locals.to_vec();
         let mut inner_statics = statics.to_vec();
         let owner = self.barb.ctor(arm.ctor).owner;
-        if barb::single_field(self.barb, owner).is_some() {
+        if self.carries[owner.index()] == Storage::Cell {
+            self.bind_cell_fields(b, scrutinee, arm.ctor, &mut inner, &mut inner_statics);
+        } else if barb::single_field(self.barb, owner).is_some() {
             inner.push(Some(scrutinee));
             inner_statics.push(None);
         } else if let barb::Shape::Spine { cons, .. } = barb::shape(self.barb, owner)
@@ -1223,6 +1371,26 @@ impl Lowering<'_> {
             inner_statics.push(None);
         }
         self.body(b, arm.body, &mut inner, &mut inner_statics)
+    }
+
+    fn bind_cell_fields(
+        &self,
+        b: &mut super::Builder,
+        scrutinee: ValueId,
+        ctor: barb::CtorId,
+        locals: &mut Vec<Option<ValueId>>,
+        statics: &mut Vec<Option<barb::ConstId>>,
+    ) {
+        let mut index = 0;
+        for &ty in self.barb.fields(ctor) {
+            let field = self.field_class(ty).map(|class| {
+                let field = b.cell_field(class, scrutinee, index);
+                index += 1;
+                field
+            });
+            locals.push(field);
+            statics.push(None);
+        }
     }
 
     /// Matching a tag asks which one it is, arm by arm. The last needs no
@@ -1273,12 +1441,49 @@ impl Lowering<'_> {
         answer.map(|_| *results.first().expect("a result where the arms carry one"))
     }
 
+    fn cell_tags(
+        &self,
+        b: &mut super::Builder,
+        scrutinee: ValueId,
+        discriminator: ValueId,
+        arms: &[TagArm],
+        locals: &[Option<ValueId>],
+        statics: &[Option<barb::ConstId>],
+    ) -> Answer<ValueId> {
+        let (
+            TagArm {
+                arm,
+                suffix: answer,
+            },
+            rest,
+        ) = arms.split_first().expect("an arm to match");
+        if rest.is_empty() {
+            return self.only_arm(b, scrutinee, arm, locals, statics);
+        }
+        let held = answer.held();
+        let tag = b.constant(Class::Word, u64::from(self.barb.tag(arm.ctor)));
+        let is_this_one = b.compare(Relation::Equal, discriminator, tag);
+        let results = b.if_(
+            is_this_one,
+            held.as_slice(),
+            |b| {
+                let answer = self.only_arm(b, scrutinee, arm, locals, statics);
+                yielded(b, answer, held.as_slice());
+            },
+            |b| {
+                let answer = self.cell_tags(b, scrutinee, discriminator, rest, locals, statics);
+                yielded(b, answer, held.as_slice());
+            },
+        );
+        answer.map(|_| *results.first().expect("a result where the arms carry one"))
+    }
+
     /// What a body answers, read off its shape: an `if` has to be told what
     /// its arms leave with before either of them is lowered.
     ///
     /// Local presence is occurrence-specific, not an `ExprId` cache. Reuse the
     /// scratch stack across siblings, restoring it even when a binding exits.
-    fn body_answer(&self, body: barb::Body, carried: &mut Vec<bool>) -> Answer<Class> {
+    fn body_answer(&self, body: barb::Body, carried: &mut Vec<Option<Class>>) -> Answer<Class> {
         let base = carried.len();
         let answer = 'body: {
             for &binding in self.barb.bindings(body.bindings) {
@@ -1286,7 +1491,7 @@ impl Lowering<'_> {
                 if matches!(answer, Answer::Never) {
                     break 'body answer;
                 }
-                carried.push(answer.held().is_some());
+                carried.push(answer.held());
             }
             self.expr_answer(body.tail, carried)
         };
@@ -1294,17 +1499,23 @@ impl Lowering<'_> {
         answer
     }
 
-    fn expr_answer(&self, expr: barb::ExprId, carried: &mut Vec<bool>) -> Answer<Class> {
+    fn expr_answer(&self, expr: barb::ExprId, carried: &mut Vec<Option<Class>>) -> Answer<Class> {
         match self.barb.expr(expr) {
-            barb::Expr::Static(value) => self
-                .answer(self.barb.constant(value).owner())
-                .map(|_| self.width(expr)),
-            barb::Expr::Con(ctor, _) => self
-                .answer(self.barb.ctor(ctor).owner)
-                .map(|_| self.width(expr)),
-            barb::Expr::Call(function, _) => self
-                .answer(self.barb.function(function).result)
-                .map(|_| self.width(expr)),
+            barb::Expr::Static(value) => {
+                let ty = self.barb.constant(value).owner();
+                self.answer(ty)
+                    .map(|_| self.class(ty, self.facts.held(expr)))
+            }
+            barb::Expr::Con(ctor, _) => {
+                let ty = self.barb.ctor(ctor).owner;
+                self.answer(ty)
+                    .map(|_| self.class(ty, self.facts.held(expr)))
+            }
+            barb::Expr::Call(function, _) => {
+                let ty = self.barb.function(function).result;
+                self.answer(ty)
+                    .map(|_| self.class(ty, self.facts.held(expr)))
+            }
             barb::Expr::Match(_, arms) => {
                 let base = carried.len();
                 let mut answer = Answer::Never;
@@ -1313,20 +1524,18 @@ impl Lowering<'_> {
                         self.barb
                             .fields(arm.ctor)
                             .iter()
-                            .map(|ty| self.carries[ty.index()].carried()),
+                            .map(|&ty| self.field_class(ty)),
                     );
                     answer = widest(answer, self.body_answer(arm.body, carried));
                     carried.truncate(base);
                 }
                 answer
             }
-            barb::Expr::Atom(atom) => {
-                if carried[atom.0.index()] {
-                    Answer::Value(self.width(expr))
-                } else {
-                    Answer::Nothing
-                }
-            }
+            barb::Expr::Atom(atom) => match carried[atom.0.index()] {
+                Some(Class::Cell) => Answer::Value(Class::Cell),
+                Some(_) => Answer::Value(self.width(expr)),
+                None => Answer::Nothing,
+            },
         }
     }
 

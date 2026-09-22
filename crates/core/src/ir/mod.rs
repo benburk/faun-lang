@@ -61,6 +61,7 @@
 
 mod arithmetic;
 mod builder;
+mod cell;
 pub mod evaluate;
 mod layout;
 mod legalize;

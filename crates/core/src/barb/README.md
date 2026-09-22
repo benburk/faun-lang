@@ -160,8 +160,8 @@ there is no fixed-point loop. Matches and calls of unknown meaning are conservat
 retained even when their results are unused. Calls structurally recognized as pure,
 total arithmetic are inert and may go. In particular, dropping a constructor does
 not drop opaque eager calls that computed its fields. Folded, now-unused product
-constants no longer demand runtime representations; live products still require
-backend support.
+constants no longer demand runtime representations; live products and
+payload-carrying sums lower to machine cells.
 
 Cleanup is also the term-arena compaction point. It borrows the original program,
 builds a fresh `TermArena`, then hands it and all remapped function roots to
@@ -193,6 +193,9 @@ sum. A sequence is exactly an empty constructor plus a step with one payload and
 one recursive field; its element may be any type. Names and constructor order do
 not participate. Machine representation selection uses this exhaustive view
 instead of rediscovering products, naturals, and byte spines independently.
+Units are erased, wrappers remain transparent, naturals and enumerations are
+scalar, and products and general sums become managed cells. Generic sequences
+still have no runtime representation.
 
 `Program::constant(id).view()` classifies a validated value as `Natural`, `Spine`,
 or `Constructor`, with private, shape-specific handles. A natural is a zero-payload

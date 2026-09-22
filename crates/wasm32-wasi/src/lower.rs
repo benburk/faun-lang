@@ -475,6 +475,9 @@ impl Lowering<'_> {
         let program = self.program;
         match op {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
+            Op::Cell { .. } | Op::CellTag { .. } | Op::CellField { .. } => {
+                unreachable!("target preparation legalizes abstract cells")
+            }
             Op::Constant { .. } | Op::AddressOf(_) => {}
             Op::Binary { op, left, right } => {
                 let opcode = match op {

@@ -7,6 +7,38 @@ use super::natural::Config;
 use super::test_support::{no_live_objects, word};
 use super::*;
 
+#[test]
+#[expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "the builder method is not lifetime-general enough as a direct callback"
+)]
+fn nested_cells_are_legalized_to_managed_objects_and_released() {
+    let (mut source, main) = Program::new("main");
+    let identity = source.declare("identity", &[Class::Cell], &[Class::Cell]);
+    source.define(identity, |b, params| b.ret(params));
+    source.define(main, |b, _| {
+        let answer = b.constant(Class::Word, 42);
+        let inner = b.cell(7, &[answer]);
+        let outer = b.cell(3, &[inner]);
+        let returned = b.call_one(identity, &[outer]);
+        let projected = b.cell_field(Class::Cell, returned, 0);
+        let result = b.cell_field(Class::Word, projected, 0);
+        b.ret(&[result]);
+    });
+    let config = Config {
+        word_bits: 64,
+        heap_bytes: 512,
+    };
+    let legalized = legalize(&source, config).unwrap();
+    assert!(legalized.ops.iter().all(|op| !matches!(
+        op,
+        Op::Cell { .. } | Op::CellTag { .. } | Op::CellField { .. }
+    )));
+    let evaluation = run(&legalized, main, &[], 64);
+    assert_eq!(evaluation.returned().unwrap(), &[BigUint::from(42u8)]);
+    no_live_objects(&legalized, &evaluation, config);
+}
+
 #[derive(Default)]
 struct TestHost {
     calls: Vec<String>,

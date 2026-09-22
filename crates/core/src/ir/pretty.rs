@@ -114,6 +114,13 @@ impl Program {
             Op::Constant { value, .. } => format!("const {value}"),
             Op::NaturalConstant(data) => format!("natural d{}", data.index()),
             Op::AddressOf(data) => format!("address d{}", data.index()),
+            Op::Cell { tag, fields } => {
+                format!("cell {tag}({})", arguments(self.values(fields)))
+            }
+            Op::CellTag { cell } => format!("cell_tag v{}", cell.index()),
+            Op::CellField { cell, index } => {
+                format!("cell_field v{}, {index}", cell.index())
+            }
             Op::Binary { op, left, right } => {
                 format!("{op:?} v{}, v{}", left.index(), right.index())
             }
@@ -177,6 +184,7 @@ impl Program {
 
 fn class(held: Class) -> String {
     match held {
+        Class::Cell => "cell".to_owned(),
         Class::Natural => "natural".to_owned(),
         Class::Word => "word".to_owned(),
         Class::Address => "address".to_owned(),

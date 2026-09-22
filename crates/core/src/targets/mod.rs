@@ -223,9 +223,14 @@ fn accepts_externals<T: Target + ?Sized>(target: &T, program: &Program) -> Resul
 
 fn accepts_layout(name: &str, layout: Layout, program: &Program) -> Result<(), String> {
     program.check_layout(layout)?;
-    // Currently only natural-runtime generation binds serialized layouts.
-    // Prelegalized input needs the same image/stack audit as Natural IR.
-    if layout.word_bits == 16 && program.layout().is_some() {
+    // Cell-only preparation uses the bounded 8 KiB heap and its generated
+    // release walk is exercised by the 6502 conformance suite. Arbitrary
+    // naturals still enter through the guard in `prepare`; prelegalized
+    // natural programs do not carry the cell-runtime marker.
+    if layout.word_bits == 16
+        && program.layout().is_some()
+        && (program.has_runtime_naturals() || !program.has_runtime_cells())
+    {
         return Err(format!(
             "{name} runtime naturals await checked image/frame limits"
         ));
@@ -252,6 +257,11 @@ fn abi_class(class: Class, word: u16) -> Class {
 }
 
 fn accepts_class(name: &str, word: u16, class: Class) -> Result<(), String> {
+    if class == Class::Cell {
+        return Err(format!(
+            "{name} raw emission requires legalization of algebraic cells"
+        ));
+    }
     if class == Class::Natural {
         return Err(format!(
             "{name} raw emission requires legalization of arbitrary-precision naturals"
@@ -318,6 +328,23 @@ mod tests {
         fn emit(&self, _: &Program) -> Vec<Artifact> {
             Vec::new()
         }
+    }
+
+    #[test]
+    fn abstract_cells_require_preparation_before_raw_emission() {
+        let (mut program, main) = Program::new("main");
+        program.define(main, |b, _| {
+            let field = b.constant(Class::Word, 1);
+            b.cell(0, &[field]);
+            let status = b.constant(Class::Word, 0);
+            b.ret(&[status]);
+        });
+        assert!(
+            Spartan
+                .accepts(&program)
+                .unwrap_err()
+                .contains("legalization of algebraic cells")
+        );
     }
 
     #[test]

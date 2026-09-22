@@ -78,12 +78,15 @@ files explicitly.
 [Runtime naturals](notes/runtime-naturals.md) work on x86-64 and wasm32 using a
 reusable private heap, 64 KiB by default; exhaustion exits with status 2 rather
 than wrapping. Native AArch64 macOS and 6502 runtime naturals remain disabled
-while those backends have narrower implementation limits. Fixed-width values
+while those backends have narrower implementation limits. Cell-only managed
+heaps are enabled on 6502 with an 8 KiB bound. Fixed-width values
 wider than a target word are still rejected.
 
-`U8` and `Int` enforce their invariants structurally and support pure compile-time
-uses after folding and dead-binding cleanup. Runtime product/sum packing and
-signed lowering are not implemented.
+`U8`, `Int`, and other structurally recognized products and payload sums use
+managed one-word cells at runtime. Constructors, matches, calls, branches, and
+returns preserve value semantics; target preparation lowers cells to the shared
+reference-counted heap representation. Generic sequences and runtime strings
+remain future work.
 
 Compiler clients should use `faun_core::targets::Target::compile`, or use
 `Target::prepare` to inspect the prepared IR. Raw `emit` does not legalize

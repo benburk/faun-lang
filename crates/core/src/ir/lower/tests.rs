@@ -54,6 +54,91 @@ fn tag_planning_visits_each_body_once_and_preserves_every_suffix_join() {
     }
 }
 
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture covers product construction, sum tags, projection, calls, and evaluation"
+)]
+fn products_and_payload_sums_cross_calls_and_matches_as_cells() {
+    let mut source = barb::Program::default();
+    let nat = source.declare_type("Nat");
+    source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let pair = source.declare_type("Pair");
+    source.define_type(pair, &[("Pair", &[nat, nat])]);
+    let pair_ctor = source.ctor_at(pair, 0);
+    let maybe = source.declare_type("MaybePair");
+    source.define_type(maybe, &[("None", &[]), ("Some", &[pair])]);
+    let some = source.ctor_at(maybe, 1);
+    let zero = source.intern_number(nat, 0).unwrap();
+    let forty = source.intern_number(nat, 40).unwrap();
+    let two = source.intern_number(nat, 2).unwrap();
+
+    let second = source.declare("second", &[pair], nat);
+    source.define(second, |b, args| {
+        b.match_(args[0], pair, |_, _, fields| fields[1])
+    });
+    let value = source.declare("value", &[maybe], nat);
+    source.define(value, |b, args| {
+        b.match_(args[0], maybe, |b, ctor, fields| {
+            if ctor == some {
+                b.call(second, &[fields[0]])
+            } else {
+                b.known(zero)
+            }
+        })
+    });
+    let run = source.declare("run", &[], nat);
+    source.define(run, |b, _| {
+        let first = b.known(forty);
+        let second = b.known(two);
+        let pair = b.con(pair_ctor, &[first, second]);
+        let some = b.con(some, &[pair]);
+        b.call(value, &[some])
+    });
+    let main = source.declare("main", &[], nat);
+    source.define(main, |b, _| {
+        b.call(run, &[]);
+        b.known(zero)
+    });
+    source.set_entry(main);
+
+    let machine = lower(
+        &source,
+        &barb::analyze(&source),
+        &Routines::builtin().with_word(64),
+    )
+    .unwrap();
+    assert!(machine.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
+    assert!(
+        machine
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::CellTag { .. }))
+    );
+    assert!(
+        machine
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::CellField { .. }))
+    );
+    let run = FunctionId::at(
+        machine
+            .functions()
+            .iter()
+            .position(|function| machine.name(function.name) == "run")
+            .unwrap(),
+    );
+    let result = evaluate::evaluate(
+        &machine,
+        run,
+        &[],
+        evaluate::Config::default(),
+        &mut evaluate::RejectHost,
+    )
+    .unwrap();
+    assert_eq!(result.returned().unwrap(), &[BigUint::from(2u8)]);
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one nested-match fixture with erased locals and descending result widths"
@@ -189,9 +274,9 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
         callees: vec![],
     };
     let body = source.function(entry).body().unwrap();
-    let mut carried = vec![true, false];
+    let mut carried = vec![Some(Class::Word), None];
     assert_eq!(lowering.body_answer(body, &mut carried), Answer::Nothing);
-    assert_eq!(carried, [true, false]);
+    assert_eq!(carried, [Some(Class::Word), None]);
     let barb::Expr::Match(_, arms) = source.expr(body.tail) else {
         panic!("a match");
     };
@@ -201,7 +286,7 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
         .zip([Answer::Never, Answer::Nothing])
     {
         assert_eq!(lowering.body_answer(arm.body, &mut carried), expected);
-        assert_eq!(carried, [true, false]);
+        assert_eq!(carried, [Some(Class::Word), None]);
     }
 }
 

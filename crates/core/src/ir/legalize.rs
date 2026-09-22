@@ -11,10 +11,11 @@ use std::{cell::Cell, collections::BTreeMap};
 
 use num_bigint::BigUint;
 
+use super::cell::{self, Library as CellLibrary};
 use super::natural::{self, Config, Helper, Library, Needs};
 use super::{
-    Builder, Class, DataId, Definition, Exit, Op, Origin, Program, RegionId, Relation, Terminator,
-    ValueId, validate,
+    Builder, Class, DataId, Definition, Exit, Op, Origin, Program, Range, RegionId, Relation,
+    Terminator, ValueId, Width, validate,
 };
 
 /// Rebuild a validated program with naturals represented by immutable objects.
@@ -40,18 +41,25 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     }
     source.check_layout(config.layout())?;
     let needs = inspect(source, config)?;
-    if !source.classes.as_slice().contains(&Class::Natural)
-        && !source.signature.contains(&Class::Natural)
-    {
+    let has_naturals = source.classes.as_slice().contains(&Class::Natural)
+        || source.signature.contains(&Class::Natural);
+    let has_cells =
+        source.classes.as_slice().contains(&Class::Cell) || source.signature.contains(&Class::Cell);
+    if !has_naturals && !has_cells {
         return Ok(source.clone());
     }
 
     let mut output = skeleton(source);
+    output.runtime_cells |= has_cells;
+    output.runtime_naturals |= has_naturals;
     let library = natural::append(&mut output, config, needs)?;
+    let cells = has_cells.then(|| cell::append(&mut output, &library, config.word_bits));
     let constants = constants(source, &mut output, config)?;
     let pass = Pass {
         source,
         library,
+        cells,
+        word_bytes: u64::from(config.word_bits / 8),
         constants,
         values: vec![Cell::new(None); source.values_count()],
     };
@@ -72,6 +80,8 @@ fn skeleton(source: &Program) -> Program {
     // so neither their contents nor their old capacity belongs in the skeleton.
     let mut output = Program {
         layout: source.layout,
+        runtime_cells: source.runtime_cells,
+        runtime_naturals: source.runtime_naturals,
         data: source.data.clone(),
         globals: source.globals.clone(),
         spans: source.spans.clone(),
@@ -96,7 +106,7 @@ fn skeleton(source: &Program) -> Program {
             let params = output.mint_from(output.functions[id].params);
             let body = output.regions.push(super::Region {
                 params,
-                ops: super::Range::EMPTY,
+                ops: Range::EMPTY,
                 terminator: None,
             });
             output.functions[id].definition = Definition::Declared(body);
@@ -105,8 +115,8 @@ fn skeleton(source: &Program) -> Program {
     output
 }
 
-fn representation(class: Class) -> Class {
-    if class == Class::Natural {
+const fn representation(class: Class) -> Class {
+    if matches!(class, Class::Cell | Class::Natural) {
         Class::Address
     } else {
         class
@@ -125,21 +135,35 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
         }
     }
     for function in source.functions().iter().filter(|f| f.external().is_some()) {
-        if source
+        for &class in source
             .signature(function.params)
             .iter()
             .chain(source.signature(function.returns.classes()))
-            .any(|&c| c == Class::Natural)
         {
-            return Err("host signatures containing Natural have no bigint ABI".into());
+            match class {
+                Class::Cell => {
+                    return Err("host signatures containing cells have no aggregate ABI".into());
+                }
+                Class::Natural => {
+                    return Err("host signatures containing naturals have no bigint ABI".into());
+                }
+                _ => {}
+            }
         }
     }
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scan collects natural helpers and checks each abstract cell operation"
+)]
 fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
     check_classes(source, config)?;
     let mut needs = Needs::default();
+    if source.classes.as_slice().contains(&Class::Cell) || source.signature.contains(&Class::Cell) {
+        needs.insert(Helper::Allocate);
+    }
     for body in source.functions().iter().filter_map(super::Function::body) {
         for (op, results) in source.walk_within(body) {
             match *op {
@@ -160,8 +184,27 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
                     (Class::Natural, _) => needs.insert(Helper::ToWord),
                     _ => {}
                 },
-                Op::Store { value, .. } if source.class(value) == Class::Natural => {
-                    return Err("storing a Natural has no scalar memory representation".into());
+                Op::Store { value, .. }
+                    if matches!(source.class(value), Class::Cell | Class::Natural) =>
+                {
+                    return Err(
+                        "storing a managed value has no scalar memory representation".into(),
+                    );
+                }
+                Op::Cell { fields, .. } => {
+                    let arity = source.values(fields).len();
+                    let words = arity
+                        .checked_mul(2)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or_else(|| "cell payload size overflow".to_owned())?;
+                    let bytes = words
+                        .checked_mul(usize::from(config.word_bits / 8))
+                        .ok_or_else(|| "cell payload size overflow".to_owned())?;
+                    if u64::try_from(bytes).is_err()
+                        || i32::try_from(arity.saturating_mul(2).saturating_add(5)).is_err()
+                    {
+                        return Err("cell payload does not fit the target".into());
+                    }
                 }
                 _ => {}
             }
@@ -237,6 +280,8 @@ fn magnitude(source: &Program, op: Op, class: Class) -> Option<BigUint> {
 struct Pass<'a> {
     source: &'a Program,
     library: Library,
+    cells: Option<CellLibrary>,
+    word_bytes: u64,
     constants: BTreeMap<ValueId, DataId>,
     // Validation establishes globally unique SSA definitions and lexical use.
     // Mapping is monotonic across functions and sibling regions, not path-local.
@@ -254,7 +299,7 @@ enum ScopeKind {
 
 #[derive(Clone)]
 struct Scope {
-    owners: Vec<ValueId>,
+    owners: Vec<(Class, ValueId)>,
     kind: ScopeKind,
 }
 
@@ -272,8 +317,73 @@ impl Pass<'_> {
         );
     }
 
-    fn retained(&self, b: &mut Builder, value: ValueId) -> ValueId {
-        b.call_one(self.library.retain, &[value])
+    fn retained(&self, b: &mut Builder, class: Class, value: ValueId) -> ValueId {
+        let function = match class {
+            Class::Natural => self.library.retain,
+            Class::Cell => self.cells.expect("cell helpers were requested").retain,
+            _ => return value,
+        };
+        b.call_one(function, &[value])
+    }
+
+    fn release(&self, b: &mut Builder, class: Class, value: ValueId) {
+        let function = match class {
+            Class::Natural => self.library.release,
+            Class::Cell => self.cells.expect("cell helpers were requested").release,
+            _ => return,
+        };
+        b.call(function, &[value]);
+    }
+
+    fn construct_cell(&self, b: &mut Builder, tag: u32, fields: Range) -> ValueId {
+        let fields = self.source.values(fields);
+        let payload_words = fields.len() * 2 + 1;
+        let payload_bytes =
+            u64::try_from(payload_words).expect("checked cell payload") * self.word_bytes;
+        let library = self.cells.expect("cell helpers were requested");
+        let bytes = b.constant(Class::Word, payload_bytes);
+        let object = b.call_one(library.allocate, &[bytes]);
+        let tag = b.constant(Class::Word, u64::from(tag));
+        b.store(Width::Word, object, super::Offset::Words(2), tag);
+        let arity = b.constant(
+            Class::Word,
+            u64::try_from(fields.len()).expect("checked cell arity"),
+        );
+        b.store(Width::Word, object, super::Offset::Words(3), arity);
+        for (index, &old) in fields.iter().enumerate() {
+            let class = self.source.class(old);
+            let kind = match class {
+                Class::Natural => cell::NATURAL,
+                Class::Cell => cell::CELL,
+                _ => cell::SCALAR,
+            };
+            let kind = b.constant(Class::Word, kind);
+            let at = i32::try_from(index * 2 + 4).expect("checked cell field offset");
+            b.store(Width::Word, object, super::Offset::Words(at), kind);
+            let value = self.retained(b, class, self.value(old));
+            b.store(Width::Word, object, super::Offset::Words(at + 1), value);
+        }
+        object
+    }
+
+    fn cell_field(
+        &self,
+        b: &mut Builder,
+        old_result: ValueId,
+        cell: ValueId,
+        index: u32,
+    ) -> ValueId {
+        let index = usize::try_from(index).expect("checked cell field index");
+        let at = i32::try_from(index * 2 + 5).expect("checked cell field offset");
+        let value = b.load(Width::Word, self.value(cell), super::Offset::Words(at));
+        let class = self.source.class(old_result);
+        let represented = representation(class);
+        let value = if represented == Class::Word {
+            value
+        } else {
+            b.convert(represented, value)
+        };
+        self.retained(b, class, value)
     }
 
     fn region(
@@ -288,8 +398,10 @@ impl Pass<'_> {
         let mut owners = Vec::new();
         for (&old, &new) in self.source.values(old.params).iter().zip(params) {
             self.mapped(old, new);
-            if kind == ScopeKind::Loop && self.source.class(old) == Class::Natural {
-                owners.push(new);
+            if kind == ScopeKind::Loop
+                && matches!(self.source.class(old), Class::Cell | Class::Natural)
+            {
+                owners.push((self.source.class(old), new));
             }
         }
         scopes.push(Scope { owners, kind });
@@ -297,8 +409,12 @@ impl Pass<'_> {
             let fresh = self.op(b, *op, results, scopes);
             for (&old, new) in results.iter().zip(fresh) {
                 self.mapped(old, new);
-                if self.source.class(old) == Class::Natural {
-                    scopes.last_mut().expect("current scope").owners.push(new);
+                if matches!(self.source.class(old), Class::Cell | Class::Natural) {
+                    scopes
+                        .last_mut()
+                        .expect("current scope")
+                        .owners
+                        .push((self.source.class(old), new));
                 }
             }
         }
@@ -317,11 +433,7 @@ impl Pass<'_> {
             .iter()
             .map(|&old| {
                 let value = self.value(old);
-                if self.source.class(old) == Class::Natural {
-                    self.retained(b, value)
-                } else {
-                    value
-                }
+                self.retained(b, self.source.class(old), value)
             })
             .collect();
         let start = match terminator.exit {
@@ -333,8 +445,8 @@ impl Pass<'_> {
                 .expect("validated loop exit"),
         };
         for scope in scopes[start..].iter().rev() {
-            for &value in scope.owners.iter().rev() {
-                b.call(self.library.release, &[value]);
+            for &(class, value) in scope.owners.iter().rev() {
+                self.release(b, class, value);
             }
         }
         match terminator.exit {
@@ -373,6 +485,9 @@ impl Pass<'_> {
             Op::Constant { value } => b.constant(self.source.class(results[0]), value),
             Op::NaturalConstant(data) => b.kept_natural(data),
             Op::AddressOf(data) => b.address_of(data),
+            Op::Cell { tag, fields } => self.construct_cell(b, tag, fields),
+            Op::CellTag { cell } => b.load(Width::Word, v(cell), super::Offset::Words(2)),
+            Op::CellField { cell, index } => self.cell_field(b, results[0], cell, index),
             Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => {
                 let function = self.library.require(Helper::arithmetic(op));
                 b.call_one(function, &[v(left), v(right)])
@@ -405,7 +520,8 @@ impl Pass<'_> {
             Op::Convert { value } => {
                 let class = self.source.class(results[0]);
                 match (self.source.class(value), class) {
-                    (Class::Natural, Class::Natural) => self.retained(b, v(value)),
+                    (Class::Natural, Class::Natural) => self.retained(b, Class::Natural, v(value)),
+                    (Class::Cell, Class::Cell) => self.retained(b, Class::Cell, v(value)),
                     (_, Class::Natural) => {
                         b.call_one(self.library.require(Helper::FromWord), &[v(value)])
                     }
@@ -473,11 +589,7 @@ impl Pass<'_> {
                     .iter()
                     .zip(self.source.values(self.source.region(body).params))
                     .map(|(&old, &parameter)| {
-                        let value = if self.source.class(old) == Class::Natural {
-                            self.retained(b, v(old))
-                        } else {
-                            v(old)
-                        };
+                        let value = self.retained(b, self.source.class(old), v(old));
                         // Builder derives loop parameter classes from initial
                         // values. Valid IR may initialize a wider carried slot
                         // from a narrower scalar, so preserve the declared slot.

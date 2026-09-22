@@ -148,6 +148,64 @@ pub(super) fn status(program: &Program) -> i32 {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one cross-target fixture covers allocation, tags, fields, calls, release, and execution"
+)]
+fn target_runs_managed_products_across_calls_and_matches() {
+    let (mut machine, main) = Program::new("main");
+    let value = machine.declare("value", &[Class::Cell], &[Class::Word]);
+    machine.define(value, |b, params| {
+        let tag = b.cell_tag(params[0]);
+        let wanted = b.constant(Class::Word, 1);
+        let matches = b.compare(faun_core::ir::Relation::Equal, tag, wanted);
+        let result = b.if_(
+            matches,
+            &[Class::Word],
+            |b| {
+                let field = b.cell_field(Class::Word, params[0], 0);
+                b.yield_(&[field]);
+            },
+            |b| {
+                let zero = b.constant(Class::Word, 0);
+                b.yield_(&[zero]);
+            },
+        )[0];
+        b.ret(&[result]);
+    });
+    let exit = TARGET.routines().declare(&mut machine, "exit!");
+    machine.define(main, |b, _| {
+        let field = b.constant(Class::Word, 42);
+        let cell = b.cell(1, &[field]);
+        let result = b.call_one(value, &[cell]);
+        b.call(exit, &[result]);
+    });
+
+    let has_cells = |program: &Program| {
+        program
+            .functions()
+            .iter()
+            .filter_map(faun_core::ir::Function::body)
+            .flat_map(|body| program.every(body))
+            .any(|op| {
+                matches!(
+                    op,
+                    Op::Cell { .. } | Op::CellTag { .. } | Op::CellField { .. }
+                )
+            })
+    };
+    assert!(has_cells(&machine));
+    assert!(
+        (0..machine.values_count()).all(|at| machine.class(ValueId::at(at)) != Class::Natural),
+        "{}",
+        machine.render()
+    );
+    let prepared = TARGET.prepare(&machine).unwrap();
+    assert!(!has_cells(&prepared));
+    assert_eq!(status(&prepared), 42);
+}
+
+#[test]
 fn target_supplies_named_entry_parameters() {
     let (mut program, main) = Program::new_with_params("main", &[("host", Class::Word)]);
     let exit = TARGET.routines().declare(&mut program, "exit!");

@@ -16,6 +16,11 @@ use crate::index::{Pool, append_range};
 pub struct Program {
     /// Absent until a representation pass serializes target-sized data.
     pub(super) layout: Option<super::Layout>,
+    /// Which managed representations caused runtime generation. Narrow
+    /// targets use these markers to distinguish cell-only preparation from
+    /// any runtime that must hold arbitrary-precision naturals.
+    pub(super) runtime_cells: bool,
+    pub(super) runtime_naturals: bool,
     /// Every datum end to end. A target adds its own base and nothing else,
     /// so two of them cannot disagree about the layout between.
     pub(super) data: Vec<u8>,
@@ -45,6 +50,16 @@ impl Program {
     #[must_use]
     pub const fn layout(&self) -> Option<super::Layout> {
         self.layout
+    }
+
+    #[must_use]
+    pub(crate) const fn has_runtime_cells(&self) -> bool {
+        self.runtime_cells
+    }
+
+    #[must_use]
+    pub(crate) const fn has_runtime_naturals(&self) -> bool {
+        self.runtime_naturals
     }
 
     /// # Errors

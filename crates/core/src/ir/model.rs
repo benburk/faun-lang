@@ -32,6 +32,9 @@ pub struct Span {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
+    /// An immutable algebraic value. Ownership is tracked for this class;
+    /// its object address and layout remain private to legalization.
+    Cell,
     /// An arbitrary-precision nonnegative integer. Never a wrapping word.
     Natural,
     /// As wide as an address, whatever the target's is.
@@ -76,7 +79,7 @@ impl Class {
     pub const fn facts(self) -> Option<Facts> {
         match self {
             Self::Held(facts) => Some(facts),
-            Self::Natural | Self::Word | Self::Address => None,
+            Self::Cell | Self::Natural | Self::Word | Self::Address => None,
         }
     }
 }
@@ -135,6 +138,21 @@ pub enum Op {
     /// Unsigned magnitude in little-endian bytes, held in the data pool.
     NaturalConstant(DataId),
     AddressOf(DataId),
+    /// Construct one immutable algebraic object. Fields retain their own
+    /// classes; `tag` is meaningful only within the erased source type.
+    Cell {
+        tag: u32,
+        fields: Range,
+    },
+    /// Read the constructor tag of a cell.
+    CellTag {
+        cell: ValueId,
+    },
+    /// Read one field. The result value says the field's class.
+    CellField {
+        cell: ValueId,
+        index: u32,
+    },
     Binary {
         op: Binary,
         left: ValueId,
@@ -308,7 +326,7 @@ impl Class {
             Self::Held(facts) => facts
                 .width()
                 .expect("a number with no greatest has no fixed width"),
-            Self::Word | Self::Address => word,
+            Self::Cell | Self::Word | Self::Address => word,
             Self::Natural => panic!("an arbitrary-precision integer has no fixed width"),
         }
     }
@@ -319,7 +337,7 @@ impl Class {
     pub fn width(self) -> Option<u16> {
         match self {
             Self::Held(facts) => facts.width(),
-            Self::Natural | Self::Word | Self::Address => None,
+            Self::Cell | Self::Natural | Self::Word | Self::Address => None,
         }
     }
 
@@ -332,6 +350,7 @@ impl Class {
     pub fn fits(self, wanted: Self) -> bool {
         match (self, wanted) {
             (Self::Address, Self::Address)
+            | (Self::Cell, Self::Cell)
             | (Self::Word, Self::Word)
             | (Self::Natural, Self::Natural) => true,
             // Every number a machine word holds is one, and a number with

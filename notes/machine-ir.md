@@ -124,6 +124,33 @@ returns it is rejected before machine construction.
 at EOF or one plus the byte read. The native targets map read errors to EOF;
 there is no error channel or aggregate buffer in this contract.
 
+## Managed cells
+
+`Class::Cell` is the abstract one-word representation for source products and
+payload-carrying sums. `Cell { tag, fields }` constructs a value, `CellTag` reads
+its constructor tag, and `CellField` projects a zero-based represented field.
+These operations expose neither pointers nor target layout. Unit fields are
+omitted, wrappers are transparent, and each projection has the class selected
+for that field. Cells may cross internal calls, structured branches, loops, and
+returns. Host signatures cannot contain cells.
+
+The reference interpreter keeps abstract cell values in a private handle table.
+Target preparation instead lowers every cell to an address in the same private
+heap used by runtime naturals. A mortal object has a block size and reference
+count followed by its tag, represented-field count, and pairs of field kind and
+word value. Field kinds distinguish unmanaged scalars, naturals, and cells so
+recursive release can release managed children before freeing the block.
+Construction and projection retain managed fields; ownership placement releases
+locals in reverse scope order and transfers returned, yielded, broken, and
+continued values. Heap exhaustion follows the natural runtime contract and exits
+with status 2.
+
+Cell payload sizes and offsets are checked before rebuilding. After preparation,
+`Class::Cell` and all three abstract operations are gone; targets receive ordinary
+word-sized addresses, loads, stores, and calls to generated allocation and
+ownership helpers. Generic sequence buffers and runtime strings are not covered
+by this representation yet.
+
 ## Passes
 
 `ir::optimize(program, &OptimizeOptions)` runs a small fixed schedule after
