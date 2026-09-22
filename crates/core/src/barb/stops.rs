@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::model::{Atom, Body, Expr, ExprId, FnId};
 use super::program::Program;
+use super::{ConstantView, Operation};
 
 /// What a value is, against a parameter it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -33,6 +34,23 @@ enum Step {
     /// Nothing that can be said. What a call answers is this, until
     /// something says what a call answers.
     Unknown,
+}
+
+/// A local's constructor depth relative to one parameter. Keeping the
+/// distance until a call matrix is built lets `Succ(m)` retain one decrease
+/// after `m` was taken through two constructors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Bound {
+    Unknown,
+    /// No deeper than the parameter plus this signed distance.
+    Offset(i64),
+}
+
+#[derive(Clone, Debug)]
+struct LocalFacts {
+    bounds: Vec<Bound>,
+    /// A proven lower bound for a natural, capped at two.
+    minimum: u8,
 }
 
 impl Step {
@@ -98,12 +116,13 @@ pub(super) fn recursive(program: &Program) -> Vec<bool> {
 /// Refuse a definition nothing shows stops.
 pub(super) fn stops(program: &Program) -> Result<(), String> {
     let calls = graph(program);
+    let operations = super::arithmetic::recognise(program);
     for round in rounds(&calls) {
         // One definition on its own goes round only if it calls itself.
         if round.len() == 1 && !calls[round[0].index()].contains(&round[0]) {
             continue;
         }
-        descends(program, &round)?;
+        descends(program, &round, &operations)?;
     }
     Ok(())
 }
@@ -207,9 +226,15 @@ impl Rounds<'_> {
 }
 
 /// Close the call matrices and require every repeatable path to descend.
-fn descends(program: &Program, round: &[FnId]) -> Result<(), String> {
+fn descends(
+    program: &Program,
+    round: &[FnId],
+    operations: &[Option<Operation>],
+) -> Result<(), String> {
     let within: HashSet<FnId> = round.iter().copied().collect();
-    let direct = round.iter().flat_map(|id| matrices(program, *id, &within));
+    let direct = round
+        .iter()
+        .flat_map(|id| matrices(program, *id, &within, operations));
     if Closure::new().proves(direct) {
         return Ok(());
     }
@@ -328,39 +353,67 @@ fn compose(first: &Graph, second: &Graph) -> Graph {
 }
 
 /// A graph per call this definition makes to one it goes round with.
-fn matrices(program: &Program, id: FnId, within: &HashSet<FnId>) -> Vec<Graph> {
+fn matrices(
+    program: &Program,
+    id: FnId,
+    within: &HashSet<FnId>,
+    operations: &[Option<Operation>],
+) -> Vec<Graph> {
     let params = program.params(id).len();
     let mut held = Vec::new();
     let Some(body) = program.function(id).body() else {
         return held;
     };
-    // A parameter is itself and no part of itself: going round on the whole
-    // of what you were handed is going round for ever.
-    let mut sizes: Vec<Vec<Step>> = (0..params)
+    // A parameter starts at distance zero from itself. Distances are kept
+    // through local construction and become the three-valued matrix only at
+    // an in-round call.
+    let mut locals: Vec<LocalFacts> = (0..params)
         .map(|at| {
-            let mut row = vec![Step::Unknown; params];
-            row[at] = Step::Same;
-            row
+            let mut bounds = vec![Bound::Unknown; params];
+            bounds[at] = Bound::Offset(0);
+            LocalFacts { bounds, minimum: 0 }
         })
         .collect();
-    read(program, body, id, within, (&mut sizes, &mut held, params));
+    read(
+        program,
+        body,
+        id,
+        within,
+        operations,
+        (&mut locals, &mut held, params),
+    );
     held
 }
 
-/// Each binding takes the next level, and what an arm takes apart is
-/// smaller than what it took it out of.
+/// Each binding takes the next level, and what an arm takes apart is one
+/// constructor smaller than its scrutinee.
 fn read(
     program: &Program,
     body: Body,
     from: FnId,
     within: &HashSet<FnId>,
-    (sizes, held, params): (&mut Vec<Vec<Step>>, &mut Vec<Graph>, usize),
+    operations: &[Option<Operation>],
+    (locals, held, params): (&mut Vec<LocalFacts>, &mut Vec<Graph>, usize),
 ) {
     for &binding in program.bindings(body.bindings) {
-        let relation = term(program, binding, from, within, (sizes, held, params));
-        sizes.push(relation);
+        let facts = term(
+            program,
+            binding,
+            from,
+            within,
+            operations,
+            (locals, held, params),
+        );
+        locals.push(facts);
     }
-    let _ = term(program, body.tail, from, within, (sizes, held, params));
+    let _ = term(
+        program,
+        body.tail,
+        from,
+        within,
+        operations,
+        (locals, held, params),
+    );
 }
 
 fn term(
@@ -368,57 +421,183 @@ fn term(
     id: ExprId,
     from: FnId,
     within: &HashSet<FnId>,
-    (sizes, held, params): (&mut Vec<Vec<Step>>, &mut Vec<Graph>, usize),
-) -> Vec<Step> {
+    operations: &[Option<Operation>],
+    (locals, held, params): (&mut Vec<LocalFacts>, &mut Vec<Graph>, usize),
+) -> LocalFacts {
+    let unknown = || LocalFacts {
+        bounds: vec![Bound::Unknown; params],
+        minimum: 0,
+    };
     match program.expr(id) {
-        Expr::Atom(atom) => sizes
-            .get(atom.0.index())
-            .cloned()
-            .unwrap_or_else(|| vec![Step::Unknown; params]),
+        Expr::Atom(atom) => locals.get(atom.0.index()).cloned().unwrap_or_else(unknown),
+        Expr::Static(value) => LocalFacts {
+            minimum: natural_minimum(program, value),
+            ..unknown()
+        },
+        Expr::Con(ctor, args) => constructed(program, ctor, program.atoms(args), locals, unknown()),
         Expr::Call(to, args) => {
+            let args = program.atoms(args);
             if within.contains(&to) {
-                held.push(matrix(from, to, sizes, program.atoms(args), params));
+                held.push(matrix(from, to, locals, args, params));
             }
-            vec![Step::Unknown; params]
+            operations[to.index()].map_or_else(unknown, |operation| {
+                arithmetic_result(operation, args, locals, unknown())
+            })
         }
         Expr::Match(scrutinee, arms) => {
-            let of = taken(sizes, scrutinee);
-            for arm in program.arms(arms) {
-                let level = sizes.len();
-                sizes.resize(level + program.fields(arm.ctor).len(), of.clone());
-                read(program, arm.body, from, within, (sizes, held, params));
-                sizes.truncate(level);
-            }
-            vec![Step::Unknown; params]
+            read_arms(
+                program,
+                scrutinee,
+                arms,
+                from,
+                within,
+                operations,
+                (locals, held, params),
+            );
+            unknown()
         }
-        Expr::Con(..) | Expr::Static(..) => vec![Step::Unknown; params],
     }
 }
 
-/// What a constructor's fields are, against the parameters the value it was
-/// taken out of came from: smaller than whatever that was, and smaller than
-/// what that was already smaller than.
-fn taken(sizes: &[Vec<Step>], scrutinee: Atom) -> Vec<Step> {
-    let held = sizes.get(scrutinee.0.index());
-    held.map_or_else(Vec::new, |held| {
-        held.iter()
-            .map(|step| match step {
-                Step::Same | Step::Smaller => Step::Smaller,
-                Step::Unknown => Step::Unknown,
+fn read_arms(
+    program: &Program,
+    scrutinee: Atom,
+    arms: super::Range,
+    from: FnId,
+    within: &HashSet<FnId>,
+    operations: &[Option<Operation>],
+    (locals, held, params): (&mut Vec<LocalFacts>, &mut Vec<Graph>, usize),
+) {
+    for arm in program.arms(arms) {
+        let at = scrutinee.0.index();
+        let level = locals.len();
+        let previous_minimum = locals[at].minimum;
+        if natural_successor(program, arm.ctor) {
+            locals[at].minimum = locals[at].minimum.max(1);
+        }
+        let field = taken(&locals[at]);
+        locals.resize(level + program.fields(arm.ctor).len(), field);
+        read(
+            program,
+            arm.body,
+            from,
+            within,
+            operations,
+            (locals, held, params),
+        );
+        locals.truncate(level);
+        locals[at].minimum = previous_minimum;
+    }
+}
+
+const fn step(bound: Bound) -> Step {
+    match bound {
+        Bound::Offset(offset) if offset < 0 => Step::Smaller,
+        Bound::Offset(0) => Step::Same,
+        Bound::Unknown | Bound::Offset(_) => Step::Unknown,
+    }
+}
+
+fn taken(value: &LocalFacts) -> LocalFacts {
+    LocalFacts {
+        bounds: value
+            .bounds
+            .iter()
+            .map(|bound| match bound {
+                Bound::Unknown => Bound::Unknown,
+                Bound::Offset(offset) => Bound::Offset(offset - 1),
             })
-            .collect()
+            .collect(),
+        minimum: 0,
+    }
+}
+
+/// A constructor adds one to the deepest field. A nullary constructor has no
+/// useful bound against an arbitrary parameter.
+fn constructed(
+    program: &Program,
+    ctor: super::CtorId,
+    args: &[Atom],
+    locals: &[LocalFacts],
+    mut result: LocalFacts,
+) -> LocalFacts {
+    if args.is_empty() {
+        return result;
+    }
+    for row in 0..result.bounds.len() {
+        let deepest = args
+            .iter()
+            .map(|arg| locals[arg.0.index()].bounds[row])
+            .try_fold(i64::MIN, |deepest, bound| match bound {
+                Bound::Unknown => None,
+                Bound::Offset(offset) => Some(deepest.max(offset)),
+            });
+        if let Some(deepest) = deepest {
+            result.bounds[row] = Bound::Offset(deepest + 1);
+        }
+    }
+    if natural_successor(program, ctor) {
+        result.minimum = locals[args[0].0.index()].minimum.saturating_add(1).min(2);
+    }
+    result
+}
+
+fn natural_successor(program: &Program, ctor: super::CtorId) -> bool {
+    super::arithmetic::natural(program, program.ctor(ctor).owner)
+        .is_some_and(|(_, successor)| successor == ctor)
+}
+
+fn natural_minimum(program: &Program, value: super::ConstId) -> u8 {
+    let ConstantView::Natural(value) = program.constant(value).view() else {
+        return 0;
+    };
+    value.try_u64().map_or(2, |value| {
+        u8::try_from(value.min(2)).expect("a value capped at two")
     })
 }
 
-/// What one call hands on, read off the sizes of what it hands.
-fn matrix(from: FnId, to: FnId, sizes: &[Vec<Step>], args: &[Atom], params: usize) -> Graph {
+/// Bounds guaranteed by structurally recognized natural arithmetic. These are
+/// semantic properties of the recognized equations, not source-level names.
+fn arithmetic_result(
+    operation: Operation,
+    args: &[Atom],
+    locals: &[LocalFacts],
+    mut result: LocalFacts,
+) -> LocalFacts {
+    let argument = |at: usize| &locals[args[at].0.index()];
+    let candidates: &[(&LocalFacts, bool)] = match operation {
+        Operation::Monus => &[(argument(0), false)],
+        Operation::Div => &[(
+            argument(0),
+            argument(0).minimum > 0 && argument(1).minimum >= 2,
+        )],
+        Operation::Mod => &[(argument(0), false), (argument(1), argument(1).minimum > 0)],
+        Operation::Add | Operation::Mul | Operation::Equals { .. } | Operation::LessThan { .. } => {
+            return result;
+        }
+    };
+    for row in 0..result.bounds.len() {
+        result.bounds[row] = candidates
+            .iter()
+            .filter_map(|(argument, strict)| match argument.bounds[row] {
+                Bound::Unknown => None,
+                Bound::Offset(offset) => Some(offset - i64::from(*strict)),
+            })
+            .min()
+            .map_or(Bound::Unknown, Bound::Offset);
+    }
+    result
+}
+
+/// What one call hands on, read off the bounds of what it hands.
+fn matrix(from: FnId, to: FnId, locals: &[LocalFacts], args: &[Atom], params: usize) -> Graph {
     let mut cells = vec![Step::Unknown; params * args.len()];
     for (column, arg) in args.iter().enumerate() {
-        let Some(held) = sizes.get(arg.0.index()) else {
+        let Some(facts) = locals.get(arg.0.index()) else {
             continue;
         };
-        for (row, step) in held.iter().enumerate() {
-            cells[row * args.len() + column] = *step;
+        for (row, bound) in facts.bounds.iter().enumerate() {
+            cells[row * args.len() + column] = step(*bound);
         }
     }
     Graph {

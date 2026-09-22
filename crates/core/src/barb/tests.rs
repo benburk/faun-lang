@@ -459,6 +459,94 @@ fn a_definition_that_does_not_stop_is_refused() {
     .expect("an alias retains the field's descent");
 }
 
+/// Constructor distances survive partial reconstruction: the recursive value
+/// below removes two constructors and puts one back.
+#[test]
+fn size_change_accepts_reconstructed_subterms() {
+    let (mut program, nat, _, _) = types();
+    let zero = program.ctor_at(nat, 0);
+    let successor = program.ctor_at(nat, 1);
+    let descend = program.declare("descend", &[nat], nat);
+    program.define(descend, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                return b.con(zero, &[]);
+            }
+            b.match_(fields[0], nat, |b, ctor, fields| {
+                if ctor == zero {
+                    b.con(zero, &[])
+                } else {
+                    let predecessor = b.con(successor, &[fields[0]]);
+                    b.call(descend, &[predecessor])
+                }
+            })
+        })
+    });
+    program.set_entry(descend);
+
+    validate(&program).expect("two constructors taken and one rebuilt is a decrease");
+}
+
+/// Recognized arithmetic bounds preserve decreases that are not visible as a
+/// bare pattern field at the recursive call.
+#[test]
+fn size_change_accepts_arithmetic_recursion() {
+    crate::read(
+        include_str!("../../tests/support/termination_arithmetic.fn"),
+        &crate::platform::Routines::builtin(),
+    )
+    .expect("modulo, Fibonacci, factorial, GCD, and popcount all stop");
+}
+
+/// Weak arithmetic bounds are not strict decreases. Dividing by one and
+/// taking a remainder with zero therefore cannot disguise an unchanged
+/// recursive argument.
+#[test]
+fn size_change_rejects_non_decreasing_arithmetic() {
+    let refused = crate::read(
+        "type Nat Zero Succ(Nat)
+         type Bool False True
+
+         equals(Zero Zero) -> True
+         equals(Zero Succ(_)) -> False
+         equals(Succ(_) Zero) -> False
+         equals(Succ(a) Succ(b)) -> equals(a b)
+
+         modulo(a Zero) -> a
+         modulo(Zero Succ(_)) -> Zero
+         modulo(Succ(a) Succ(b)) ->
+           rest = modulo(a Succ(b))
+           choose_mod(equals(rest b) rest)
+         choose_mod(True _) -> Zero
+         choose_mod(False rest) -> Succ(rest)
+
+         divide(_ Zero) -> Zero
+         divide(Zero Succ(_)) -> Zero
+         divide(Succ(a) Succ(b)) ->
+           quotient = divide(a Succ(b))
+           choose_div(equals(modulo(a Succ(b)) b) quotient)
+         choose_div(True quotient) -> Succ(quotient)
+         choose_div(False quotient) -> quotient
+
+         stall(Zero) -> Zero
+         stall(Succ(n)) ->
+           value = Succ(n)
+           one = Succ(Zero)
+           stall_mod(divide(value one))
+         stall_mod(n) ->
+           zero = Zero
+           stall(modulo(n zero))
+
+         main!(h) -> exit!(h Zero)",
+        &crate::platform::Routines::builtin(),
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("nothing here shows `stall`, `stall_mod` stops"),
+        "{refused}"
+    );
+}
+
 /// Names that go round together are one round, however many of them there
 /// are and whichever of them is reached first. What every definition in one
 /// reaches is every other, so a round is found the way a program's calls

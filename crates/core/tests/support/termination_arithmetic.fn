@@ -1,0 +1,59 @@
+type Nat Zero Succ(Nat)
+type Bool False True
+
+equals(Zero Zero) -> True
+equals(Zero Succ(_)) -> False
+equals(Succ(_) Zero) -> False
+equals(Succ(a) Succ(b)) -> equals(a b)
+
+add(Zero b) -> b
+add(Succ(a) b) -> Succ(add(a b))
+
+mul(Zero _) -> Zero
+mul(Succ(a) b) -> add(b mul(a b))
+
+sub(Zero _) -> Zero
+sub(Succ(a) Zero) -> Succ(a)
+sub(Succ(a) Succ(b)) -> sub(a b)
+
+mod_step(True _) -> Zero
+mod_step(False rest) -> Succ(rest)
+
+modulo(a Zero) -> a
+modulo(Zero Succ(_)) -> Zero
+modulo(Succ(a) Succ(b)) ->
+  rest = modulo(a Succ(b))
+  mod_step(equals(rest b) rest)
+
+div_step(True quotient) -> Succ(quotient)
+div_step(False quotient) -> quotient
+
+divide(_ Zero) -> Zero
+divide(Zero Succ(_)) -> Zero
+divide(Succ(a) Succ(b)) ->
+  quotient = divide(a Succ(b))
+  div_step(equals(modulo(a Succ(b)) b) quotient)
+
+fibonacci(Zero) -> Zero
+fibonacci(Succ(n)) -> fibonacci_step(n)
+fibonacci_step(Zero) -> Succ(Zero)
+fibonacci_step(Succ(n)) ->
+  previous = Succ(n)
+  add(fibonacci(previous) fibonacci(n))
+
+factorial(Zero) -> Succ(Zero)
+factorial(Succ(n)) -> mul(Succ(n) factorial(n))
+
+gcd(a Zero) -> a
+gcd(a Succ(b)) ->
+  divisor = Succ(b)
+  gcd(divisor modulo(a divisor))
+
+popcount(Zero) -> Zero
+popcount(Succ(n)) ->
+  value = Succ(n)
+  two = Succ(Succ(Zero))
+  half = divide(value two)
+  add(modulo(value two) popcount(half))
+
+main!(h) -> exit!(h Zero)

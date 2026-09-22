@@ -58,9 +58,15 @@ x    ::= a parameter, a binding, or a field an arm bound
   reads from writes. Keep fields and construction machinery private or narrowly
   visible within the tier, and re-export the public API from `mod.rs`.
 - `validate.rs`, `stops.rs`: structural checks and size-change termination.
-  The termination pass closes call matrices within each recursive component and
-  requires every idempotent self-path to have a strict diagonal. Matrices are flat
-  and endpoint-indexed, so closure considers only composable paths and stops at the
+  The termination pass keeps signed constructor-depth bounds for locals, so taking
+  two fields and rebuilding one constructor still records a decrease. Structurally
+  recognized natural arithmetic contributes its semantic result bounds: monus and
+  division do not exceed the dividend, division by at least two strictly reduces a
+  positive dividend, and a remainder is below a positive divisor. This proves such
+  definitions as Fibonacci, GCD, and popcount without trusting their source names.
+  The pass then closes call matrices within each recursive component and requires
+  every idempotent self-path to have a strict diagonal. Matrices are flat and
+  endpoint-indexed, so closure considers only composable paths and stops at the
   first counterexample. Frontend typing and well-formed arena references remain
   preconditions, not proofs supplied here.
 - `arithmetic.rs`: recognize induction equations, without range analysis.
