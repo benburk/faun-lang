@@ -3,7 +3,7 @@
 //! Calls take runtime parameters, not folded Barb constants. Each program returns zero only if every full-width
 //! answer agrees, so checking an eight-bit process status loses no coverage.
 
-use crate::ir::{Binary, Class, Program, Relation};
+use crate::ir::{Binary, Class, Direction, Program, Relation};
 
 /// Boundary checks at a target-supported width. No multiplication here
 /// overflows its declared class; division includes the unsigned high bit.
@@ -73,6 +73,100 @@ pub fn cases(bits: u16, op: Binary, pairs: &[(u64, u64)]) -> Program {
         let count = b.constant(
             Class::Word,
             u64::try_from(pairs.len()).expect("a few cases"),
+        );
+        let failures = b.binary(Binary::Sub, count, passed);
+        b.ret(&[failures]);
+    });
+    program
+}
+
+/// Runtime byte products observed only after reduction modulo 256.
+///
+/// The product itself is wide enough for both inputs. Its explicit conversion
+/// permits a target to calculate only the low byte; `Fixed` alone never makes
+/// arithmetic wrap.
+///
+/// # Panics
+/// If the fixed test corpus cannot fit in a machine word.
+#[must_use]
+pub fn byte_products() -> Program {
+    let byte = Class::fixed(8);
+    let product = Class::fixed(16);
+    let (mut program, main) = Program::new("main");
+    let check = program.declare("low_product", &[byte, byte, byte], &[Class::Word]);
+    program.define(check, |b, args| {
+        let wide = b.binary_at(product, Binary::Mul, args[0], args[1]);
+        let low = b.convert(byte, wide);
+        let equal = b.compare(Relation::Equal, low, args[2]);
+        b.ret(&[equal]);
+    });
+    program.define(main, |b, _| {
+        let cases: [(u64, u64); 7] = [
+            (0, 255),
+            (1, 255),
+            (2, 128),
+            (3, 85),
+            (17, 17),
+            (129, 2),
+            (255, 255),
+        ];
+        let mut passed = b.constant(Class::Word, 0);
+        for (left, right) in cases {
+            let expected = (left * right) & 0xff;
+            let args = [left, right, expected].map(|value| b.constant(byte, value));
+            let equal = b.call_one(check, &args);
+            passed = b.binary(Binary::Add, passed, equal);
+        }
+        let count = b.constant(
+            Class::Word,
+            u64::try_from(cases.len()).expect("a few cases"),
+        );
+        let failures = b.binary(Binary::Sub, count, passed);
+        b.ret(&[failures]);
+    });
+    program
+}
+
+/// Average two bytes in widened natural arithmetic.
+///
+/// The nine-bit sum is divided before the result returns to eight bits. This
+/// differs from adding modulo 256 and then dividing whenever the sum carries.
+///
+/// # Panics
+/// If the fixed test corpus cannot fit in a machine word.
+#[must_use]
+pub fn widened_byte_average() -> Program {
+    let byte = Class::fixed(8);
+    let sum = Class::fixed(9);
+    let (mut program, main) = Program::new("main");
+    let check = program.declare("average", &[byte, byte, byte], &[Class::Word]);
+    program.define(check, |b, args| {
+        let wide = b.binary_at(sum, Binary::Add, args[0], args[1]);
+        let shifted = b.shift(sum, Direction::Down, wide, 1);
+        let average = b.convert(byte, shifted);
+        let equal = b.compare(Relation::Equal, average, args[2]);
+        b.ret(&[equal]);
+    });
+    program.define(main, |b, _| {
+        let cases: [(u64, u64); 7] = [
+            (0, 0),
+            (0, 255),
+            (1, 2),
+            (100, 200),
+            (127, 129),
+            (254, 255),
+            (255, 255),
+        ];
+        let mut passed = b.constant(Class::Word, 0);
+        for (left, right) in cases {
+            let expected = left.midpoint(right);
+            let args = [left, right, expected].map(|value| b.constant(byte, value));
+            let equal = b.call_one(check, &args);
+            passed = b.binary(Binary::Add, passed, equal);
+        }
+        let count = b.constant(
+            Class::Word,
+            u64::try_from(cases.len()).expect("a few cases"),
         );
         let failures = b.binary(Binary::Sub, count, passed);
         b.ret(&[failures]);

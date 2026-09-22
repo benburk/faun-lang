@@ -1,7 +1,7 @@
 //! Target-specific limits and size baselines; conformance cases are shared.
 use faun_core::targets::Target;
 
-use crate::Mos6502Sim65;
+use crate::{Mos6502Sim65, T0, T1};
 use shared::{narrow, wide};
 
 #[path = "../../core/tests/support/backend.rs"]
@@ -50,12 +50,42 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("double", 17),
     ("leave", 17),
     ("bool", 154),
-    ("nat", 535),
+    ("nat", 473),
     ("width", 48),
     ("argc", 48),
     ("expressions", 50),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [209, 248, 246];
+
+fn code(program: &faun_core::ir::Program) -> Vec<u8> {
+    TARGET.compile(program).expect("scalar compilation")[0]
+        .bytes
+        .clone()
+}
+
+#[test]
+fn byte_arithmetic_uses_the_6502_carry_and_early_exit_loop() {
+    // White Flame's fifteen-byte loop: initialize A, enter at the multiplier
+    // shift, and leave as soon as its remaining bits are zero.
+    const BYTE_MULTIPLY: &[u8] = &[
+        0xA9, 0x00, 0xF0, 0x05, 0x18, 0x65, T0, 0x06, T0, 0x46, T1, 0xB0, 0xF7, 0xD0, 0xF8,
+    ];
+    let product = code(&faun_core::programs::arithmetic::byte_products());
+    assert!(
+        product
+            .windows(BYTE_MULTIPLY.len())
+            .any(|bytes| bytes == BYTE_MULTIPLY),
+        "low-byte products should use the fifteen-byte loop"
+    );
+
+    let average = code(&faun_core::programs::arithmetic::widened_byte_average());
+    assert!(
+        average
+            .windows(6)
+            .any(|bytes| { matches!(bytes, [0x18, 0x65, _, 0x6A, 0x85, _]) }),
+        "a widened byte sum should rotate its carry directly into the quotient"
+    );
+}
 
 #[test]
 fn it_holds_what_a_program_holds() {

@@ -365,6 +365,7 @@ pub(crate) fn lower(program: &Program) -> Code {
 /// This does not prove recursion stack depth or image/stack separation.
 pub(crate) fn check_frames(program: &Program) -> Result<(), String> {
     let mut state = Lowering::new(program, Assembler::new(0), 0);
+    state.needs = reads(program);
     for function in program.functions() {
         let Some(body) = function.body() else {
             continue;
@@ -439,9 +440,12 @@ struct Lowering<'a> {
     /// Argument blocks the target lays down itself, one per distinct pair of
     /// constant arguments, emitted after the code.
     pool: Vec<(super::asm::Label, [u16; 2])>,
-    /// Comparisons that answer in the flags, by value index, and the one
-    /// waiting for the `if` that reads it.
+    /// Intermediates answered directly by their sole consumer, by value index.
     fused: std::collections::HashSet<usize>,
+    /// A byte sum consumed only by a one-place downward shift. The sum's
+    /// ninth bit can remain in carry until the shift reads it.
+    halved_sums: Vec<Option<(ValueId, ValueId)>>,
+    /// A comparison waiting for the `if` that reads its flags.
     pending: Option<(ValueId, Relation, ValueId, ValueId)>,
     starts: Vec<super::asm::Label>,
     loops: Vec<(
@@ -469,6 +473,7 @@ impl<'a> Lowering<'a> {
             needs: Vec::new(),
             pool: Vec::new(),
             fused: std::collections::HashSet::new(),
+            halved_sums: vec![None; program.values_count()],
             pending: None,
             starts: Vec::new(),
             loops: Vec::new(),
@@ -1100,28 +1105,60 @@ impl Lowering<'_> {
         !after && !deeper
     }
 
-    /// Comparisons the `if` that follows is the only reader of. Such a
-    /// comparison answers in the flags, so it builds neither the one-or-zero
-    /// word nor the place to keep it in.
+    /// Mark adjacent producer/consumer pairs that can share machine state
+    /// instead of materializing their intermediate.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "producer and consumer patterns share one ordered region scan"
+    )]
     fn mark(&mut self, region: RegionId, uses: &[u32]) {
         let program = self.program;
         let ops: Vec<&Op> = program.ops(region).iter().collect();
-        for (index, (op, results)) in program.walk(region).enumerate() {
-            let (Op::Compare { .. }, [result]) = (op, results) else {
-                continue;
-            };
+        let results: Vec<&[ValueId]> = program.walk(region).map(|(_, results)| results).collect();
+        for (index, (op, values)) in program.walk(region).enumerate() {
+            let [result] = values else { continue };
             if uses[result.index()] != 1 {
                 continue;
             }
-            // A constant emits nothing, so one between the two leaves the
-            // flags alone; anything else does not.
+            // Constants and addresses emit nothing, so one between the pair
+            // cannot disturb accumulator or flags.
             let next = ops[index + 1..]
                 .iter()
-                .find(|op| !matches!(op, Op::Constant { .. } | Op::AddressOf(_)));
-            if let Some(Op::If { condition, .. }) = next
-                && condition == result
-            {
-                self.fused.insert(result.index());
+                .enumerate()
+                .find(|(_, op)| !matches!(op, Op::Constant { .. } | Op::AddressOf(_)))
+                .map(|(after, op)| (index + 1 + after, *op));
+            match (op, next) {
+                (Op::Compare { .. }, Some((_, Op::If { condition, .. })))
+                    if condition == result =>
+                {
+                    self.fused.insert(result.index());
+                }
+                (
+                    Op::Binary {
+                        op: Binary::Add,
+                        left,
+                        right,
+                    },
+                    Some((
+                        next,
+                        Op::Shift {
+                            direction: Direction::Down,
+                            value,
+                            by: 1,
+                        },
+                    )),
+                ) if value == result
+                    && bits(program.class(*left)) <= 8
+                    && bits(program.class(*right)) <= 8
+                    && bits(program.class(*result)) <= 9
+                    && results[next]
+                        .first()
+                        .is_some_and(|shifted| self.needed(*shifted) <= 8) =>
+                {
+                    self.fused.insert(result.index());
+                    self.halved_sums[result.index()] = Some((*left, *right));
+                }
+                _ => {}
             }
         }
         for op in ops {
@@ -1908,6 +1945,62 @@ impl Lowering<'_> {
         true
     }
 
+    /// Keep a byte sum's ninth bit in carry while dividing it by two.
+    /// Both source bytes are consumed before the answer is written, so the
+    /// answer may share either source's home.
+    fn halve_sum(&mut self, left: ValueId, right: ValueId, result: ValueId) {
+        let mut left = self.operand(left, T0);
+        let mut right = self.operand(right, T1);
+        if self.asm.needs_load(left.byte(0)) && !self.asm.needs_load(right.byte(0)) {
+            (left, right) = (right, left);
+        }
+        self.load(left.byte(0));
+        self.asm.clc();
+        self.accumulate(Binary::Add, right.byte(0));
+        self.asm.ror();
+        let dest = self.dest(result);
+        self.asm.sta_zp(dest);
+        self.commit(result, dest);
+    }
+
+    /// Shift/add until an eight-bit multiplier is exhausted. Only the low
+    /// product byte is retained, so overflow and signedness do not matter.
+    /// Source values survive in their homes; the scratch bytes are clobbered.
+    /// This is White Flame's 2003 early-exit layout, with target-owned scratch.
+    fn multiply_byte(&mut self, left: ValueId, right: ValueId, result: ValueId) {
+        let (mut multiplicand, mut multiplier) = (left, right);
+        let left_high = self.upper_bound(left);
+        let right_high = self.upper_bound(right);
+        if left_high.is_some_and(|left| right_high.is_none_or(|right| left < right)) {
+            (multiplicand, multiplier) = (multiplier, multiplicand);
+        }
+        let multiplicand = self.operand(multiplicand, T0);
+        let multiplier = self.operand(multiplier, T1);
+        self.load(multiplicand.byte(0));
+        self.asm.sta_zp(T0);
+        self.load(multiplier.byte(0));
+        self.asm.sta_zp(T1);
+
+        let add = self.asm.label();
+        let loop_ = self.asm.label();
+        let enter = self.asm.label();
+        self.asm.lda_imm(0);
+        self.asm.branch(Cc::Equal, enter);
+        self.asm.bind(add);
+        self.asm.clc();
+        self.asm.adc_zp(T0);
+        self.asm.bind(loop_);
+        self.asm.asl_zp(T0);
+        self.asm.bind(enter);
+        self.asm.lsr_zp(T1);
+        self.asm.branch(Cc::Carry, add);
+        self.asm.branch(Cc::NotEqual, loop_);
+
+        let dest = self.dest(result);
+        self.asm.sta_zp(dest);
+        self.commit(result, dest);
+    }
+
     /// Shift/add in exactly sixteen rounds, independent of operand values.
     /// Only scratch pairs and X are destroyed; homes, ARGC and call arguments
     /// are untouched. The fit proof guarantees the final product fits.
@@ -2101,6 +2194,9 @@ impl Lowering<'_> {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
             Op::Constant { .. } | Op::AddressOf(_) => {}
             Op::Binary { op, left, right } => {
+                if self.halved_sums[results[0].index()].is_some() {
+                    return;
+                }
                 if *op == Binary::Mul {
                     let scaled = match (self.constant(*left), self.constant(*right)) {
                         (Some(3), _) => Some(*right),
@@ -2108,6 +2204,10 @@ impl Lowering<'_> {
                         _ => None,
                     };
                     if scaled.is_some_and(|value| self.multiply_by_three(value, results[0])) {
+                        return;
+                    }
+                    if self.needed(results[0]) <= 8 {
+                        self.multiply_byte(*left, *right, results[0]);
                         return;
                     }
                 }
@@ -2157,6 +2257,13 @@ impl Lowering<'_> {
                 value,
                 by,
             } => {
+                if *direction == Direction::Down
+                    && *by == 1
+                    && let Some((left, right)) = self.halved_sums[value.index()]
+                {
+                    self.halve_sum(left, right, results[0]);
+                    return;
+                }
                 let value = self.operand(*value, T0);
                 let width = if self.needed(results[0]) <= 8 {
                     Width::Byte
