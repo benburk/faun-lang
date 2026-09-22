@@ -42,15 +42,15 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("a countdown", 94),
     ("a carried total", 100),
     ("a step first", 94),
-    ("a long arm", 982),
+    ("a long arm", 975),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("exit", 17),
     ("two-and-two", 17),
     ("double", 17),
     ("leave", 17),
-    ("bool", 154),
-    ("nat", 473),
+    ("bool", 150),
+    ("nat", 433),
     ("width", 48),
     ("argc", 48),
     ("expressions", 50),
@@ -84,6 +84,21 @@ fn byte_arithmetic_uses_the_6502_carry_and_early_exit_loop() {
             .windows(6)
             .any(|bytes| { matches!(bytes, [0x18, 0x65, _, 0x6A, 0x85, _]) }),
         "a widened byte sum should rotate its carry directly into the quotient"
+    );
+}
+
+#[test]
+fn narrow_equality_does_not_compare_known_zero_high_bytes() {
+    let code = code(&faun_core::programs::arithmetic::widened_byte_average());
+    assert!(
+        code.windows(2).any(|bytes| matches!(bytes, [0xC5, _])),
+        "the fixture should compare its byte result"
+    );
+    assert!(
+        !code
+            .windows(4)
+            .any(|bytes| bytes == [0xA9, 0x00, 0xC9, 0x00]),
+        "equal known high bytes need no comparison"
     );
 }
 

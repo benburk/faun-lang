@@ -2118,8 +2118,12 @@ impl Lowering<'_> {
         let at_yes = match relation {
             Relation::Equal => {
                 self.compare_byte(left.byte(0), right.byte(0));
-                self.asm.branch(Cc::NotEqual, no);
-                self.compare_byte(left.byte(1), right.byte(1));
+                // Narrow values both name immediate zero above their low
+                // byte; the same place or literal is necessarily equal too.
+                if left.byte(1) != right.byte(1) {
+                    self.asm.branch(Cc::NotEqual, no);
+                    self.compare_byte(left.byte(1), right.byte(1));
+                }
                 self.asm.branch_state(Cc::Equal, yes)
             }
             // Unsigned, high byte first; the low byte only decides a tie.
@@ -2150,8 +2154,12 @@ impl Lowering<'_> {
             Relation::Equal => {
                 self.compare_byte(left.byte(0), right.byte(0));
                 let low = self.asm.branch_state(Cc::NotEqual, no);
-                self.compare_byte(left.byte(1), right.byte(1));
-                low.join(self.asm.branch_state(Cc::NotEqual, no))
+                if left.byte(1) == right.byte(1) {
+                    low
+                } else {
+                    self.compare_byte(left.byte(1), right.byte(1));
+                    low.join(self.asm.branch_state(Cc::NotEqual, no))
+                }
             }
             Relation::Less => {
                 self.compare_byte(left.byte(1), right.byte(1));
