@@ -58,6 +58,9 @@ pub struct Arm {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Type {
     pub name: Symbol,
+    /// Whether diagnostic rendering writes this type at each use rather than
+    /// as a separate declaration.
+    pub(super) inline: bool,
     pub(super) definition: TypeDefinition,
 }
 
@@ -68,6 +71,12 @@ pub(super) enum TypeDefinition {
 }
 
 impl Type {
+    /// Return whether diagnostic rendering omits a separate declaration.
+    #[must_use]
+    pub const fn is_inline(&self) -> bool {
+        self.inline
+    }
+
     /// Constructors are assigned once, including an empty run for an empty type.
     ///
     /// # Panics

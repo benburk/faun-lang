@@ -4,4 +4,4 @@ exports {Host exit!}
 
 Host : {argc: Nat}
 
-exit! : Host Nat -> Never
+exit! : Host Nat -> []

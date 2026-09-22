@@ -22,6 +22,12 @@ means `0 <= value < 2^N`, not wrapping arithmetic or an exact inferred interval.
 A narrower sink requires a fit proof or an explicit conversion. The legend does
 not add range analysis or change the classes printed on definitions and signatures.
 
+The primary frontend's `faun build --emit machine` prints validated, optimized
+machine IR before target preparation; `--emit barb` stops after the Barb
+optimization schedule. Both write to stdout and use the selected target's host
+contract. Ordinary `faun build` continues through `Target::prepare` and artifact
+emission.
+
 The archived simple frontend's `faun-simple inspect --emit ir` validates lowered
 IR without requiring target acceptance; `--emit prepared-ir` prints the result
 of `Target::prepare` instead. `--emit barb` uses

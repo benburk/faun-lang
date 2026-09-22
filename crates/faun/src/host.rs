@@ -18,7 +18,6 @@ pub struct HostIds {
     pub host: Symbol,
     pub argc: Symbol,
     pub exit: Symbol,
-    pub never: Symbol,
     pub nat: Symbol,
 }
 
@@ -105,7 +104,6 @@ impl HostIds {
             host: binding.canonical,
             argc,
             exit,
-            never: prelude.never,
             nat: prelude.nat,
         })
     }
@@ -189,14 +187,15 @@ mod tests {
         }
     }
 
-    const ENTRY: &str = "import std.host {Host exit!}\nmain! : Host -> Never\nmain!(host) -> exit!(host host.argc)\n";
-    const HOST: &str = "exports {Host exit!}\nHost : {argc: Nat}\nexit! : Host Nat -> Never\n";
+    const ENTRY: &str =
+        "import std.host {Host exit!}\nmain! : Host -> []\nmain!(host) -> exit!(host host.argc)\n";
+    const HOST: &str = "exports {Host exit!}\nHost : {argc: Nat}\nexit! : Host Nat -> []\n";
 
     #[test]
     fn application_entry_requires_a_clause() {
         let fixture = Fixture::new();
         let failure = fixture
-            .resolve(HOST, "import std.host {Host}\nmain! : Host -> Never\n")
+            .resolve(HOST, "import std.host {Host}\nmain! : Host -> []\n")
             .unwrap_err();
         assert!(failure.message.contains("define `main!`"));
     }
@@ -206,7 +205,7 @@ mod tests {
         let fixture = Fixture::new();
         let exported = fixture
             .resolve(
-                "exports {Host.* exit!}\nHost : {argc: Nat}\nexit! : Host Nat -> Never\n",
+                "exports {Host.* exit!}\nHost : {argc: Nat}\nexit! : Host Nat -> []\n",
                 ENTRY,
             )
             .unwrap_err();
@@ -214,7 +213,7 @@ mod tests {
 
         let bodyful = fixture
             .resolve(
-                "exports {Host exit!}\nHost : {argc: Nat}\nexit! : Host Nat -> Never\nexit!(host code) -> exit!(host code)\n",
+                "exports {Host exit!}\nHost : {argc: Nat}\nexit! : Host Nat -> []\nexit!(host code) -> exit!(host code)\n",
                 ENTRY,
             )
             .unwrap_err();

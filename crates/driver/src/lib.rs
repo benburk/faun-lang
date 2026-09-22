@@ -78,19 +78,22 @@ enum Command {
         target: Option<&'static Backend>,
         source: PathBuf,
     },
-    Lower {
-        target: &'static Backend,
-        source: PathBuf,
-    },
     Build {
         target: &'static Backend,
         source: PathBuf,
-        output: PathBuf,
+        output: Option<PathBuf>,
+        emit: Option<Emit>,
     },
     Run {
         target: &'static Backend,
         source: PathBuf,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Emit {
+    Barb,
+    Machine,
 }
 
 fn selected_target(backends: &'static [Backend]) -> impl Parser<&'static Backend> {
@@ -116,6 +119,34 @@ fn target_parser(backends: &'static [Backend]) -> impl Parser<&'static Backend> 
         .debug_fallback()
 }
 
+fn build_parser(backends: &'static [Backend]) -> impl Parser<Command> {
+    let target = target_parser(backends);
+    let source = positional::<PathBuf>("PATH").help("The source file to compile");
+    let output = short('o')
+        .long("output")
+        .help("Where to write artifacts (default: a.out)")
+        .argument::<PathBuf>("PATH")
+        .optional();
+    let emit = long("emit")
+        .help("Print an intermediate stage: barb or machine")
+        .argument::<String>("STAGE")
+        .parse(|stage| match stage.as_str() {
+            "barb" => Ok(Emit::Barb),
+            "machine" => Ok(Emit::Machine),
+            _ => Err("expected barb or machine"),
+        })
+        .optional();
+    construct!(Command::Build {
+        output,
+        emit,
+        target,
+        source,
+    })
+    .to_options()
+    .descr("Compile a Faun program")
+    .command("build")
+}
+
 fn cli(backends: &'static [Backend]) -> OptionParser<Command> {
     let target = selected_target(backends).optional();
     let source = positional::<PathBuf>("PATH").help("The source file to check");
@@ -125,37 +156,13 @@ fn cli(backends: &'static [Backend]) -> OptionParser<Command> {
         .command("check");
 
     let target = target_parser(backends);
-    let source = positional::<PathBuf>("PATH").help("The source file to lower");
-    let lower = construct!(Command::Lower { target, source })
-        .to_options()
-        .descr("Specialize a checked program and print Barb")
-        .command("lower");
-
-    let target = target_parser(backends);
-    let source = positional::<PathBuf>("PATH").help("The source file to compile");
-    let output = short('o')
-        .long("output")
-        .help("Where to write the result")
-        .argument::<PathBuf>("PATH")
-        .fallback(PathBuf::from("a.out"))
-        .debug_fallback();
-    let build = construct!(Command::Build {
-        output,
-        target,
-        source,
-    })
-    .to_options()
-    .descr("Compile a Faun program")
-    .command("build");
-
-    let target = target_parser(backends);
     let source = positional::<PathBuf>("PATH").help("The source file to compile and run");
     let run = construct!(Command::Run { target, source })
         .to_options()
         .descr("Compile a Faun program for the selected machine and run it")
         .command("run");
 
-    choice([check.boxed(), lower.boxed(), build.boxed(), run.boxed()])
+    choice([check.boxed(), build_parser(backends).boxed(), run.boxed()])
         .to_options()
         .descr("The Faun compiler")
         .version(env!("CARGO_PKG_VERSION"))
@@ -219,20 +226,13 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
             check(&source, target.copied())?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Lower { source, target } => {
-            let program = lower_application(&source, *target)?;
-            print!("{}", program.render());
-            Ok(ExitCode::SUCCESS)
-        }
         Command::Build {
             source,
             output,
+            emit,
             target,
         } => {
-            let artifacts = compile(&source, *target)?;
-            for artifact in write_artifacts(&output, artifacts)? {
-                println!("wrote {}", artifact.path.display());
-            }
+            build(&source, *target, output, emit)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Run { source, target } => {
@@ -253,6 +253,29 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
             Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
         }
     }
+}
+
+fn build(
+    source: &Path,
+    backend: Backend,
+    output: Option<PathBuf>,
+    emit: Option<Emit>,
+) -> Result<(), Box<dyn Error>> {
+    if emit.is_some() && output.is_some() {
+        return Err("--output cannot be used with --emit; redirect stdout instead".into());
+    }
+    match emit {
+        Some(Emit::Barb) => print!("{}", optimized_application(source, backend)?.render()),
+        Some(Emit::Machine) => print!("{}", machine(source, backend)?.render()),
+        None => {
+            let artifacts = compile(source, backend)?;
+            let output = output.unwrap_or_else(|| PathBuf::from("a.out"));
+            for artifact in write_artifacts(&output, artifacts)? {
+                println!("wrote {}", artifact.path.display());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn check(source: &Path, backend: Option<Backend>) -> Result<(), String> {
@@ -296,11 +319,22 @@ fn lower_application(source: &Path, backend: Backend) -> Result<faun_core::barb:
     .map_err(|error| error.to_string())
 }
 
-fn compile(source: &Path, backend: Backend) -> Result<Vec<Artifact>, String> {
+fn optimized_application(
+    source: &Path,
+    backend: Backend,
+) -> Result<faun_core::barb::Program, String> {
     let mut program = lower_application(source, backend)?;
     faun_core::barb::optimize(&mut program, &faun_core::barb::OptimizeOptions::default());
-    let machine = faun_core::machine(&program, &backend.target.routines())?;
-    backend.target.compile(&machine)
+    Ok(program)
+}
+
+fn machine(source: &Path, backend: Backend) -> Result<faun_core::ir::Program, String> {
+    let program = optimized_application(source, backend)?;
+    faun_core::machine(&program, &backend.target.routines())
+}
+
+fn compile(source: &Path, backend: Backend) -> Result<Vec<Artifact>, String> {
+    backend.target.compile(&machine(source, backend)?)
 }
 
 struct WrittenArtifact {
@@ -360,15 +394,62 @@ mod tests {
     const BACKENDS: [Backend; 1] = [Backend::standard(&TEST_TARGET, "test-target", true)];
 
     #[test]
-    fn commands_select_registered_targets() {
-        let parsed = cli(&BACKENDS)
-            .run_inner(&["lower", "--target", "test-target", "example.fn"])
+    fn build_emits_intermediate_stages_for_registered_targets() {
+        let barb = cli(&BACKENDS)
+            .run_inner(&[
+                "build",
+                "--target",
+                "test-target",
+                "--emit",
+                "barb",
+                "example.fn",
+            ])
             .unwrap();
         assert!(matches!(
-            parsed,
-            Command::Lower { target, source }
-                if target.target.name() == "test-target" && source == Path::new("example.fn")
+            barb,
+            Command::Build {
+                target,
+                source,
+                emit: Some(Emit::Barb),
+                output: None,
+            } if target.target.name() == "test-target" && source == Path::new("example.fn")
         ));
+
+        let machine = cli(&BACKENDS)
+            .run_inner(&["build", "--emit", "machine", "example.fn"])
+            .unwrap();
+        assert!(matches!(
+            machine,
+            Command::Build {
+                emit: Some(Emit::Machine),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn build_rejects_unknown_emit_stages() {
+        let error = cli(&BACKENDS)
+            .run_inner(&["build", "--emit", "ir", "example.fn"])
+            .unwrap_err()
+            .unwrap_stderr();
+        assert!(error.contains("expected barb or machine"), "{error}");
+    }
+
+    #[test]
+    fn build_rejects_an_output_path_for_stdout_ir() {
+        let command = cli(&BACKENDS)
+            .run_inner(&[
+                "build",
+                "--emit",
+                "barb",
+                "--output",
+                "program.barb",
+                "example.fn",
+            ])
+            .unwrap();
+        let error = dispatch(command).unwrap_err().to_string();
+        assert!(error.contains("redirect stdout"), "{error}");
     }
 
     #[test]

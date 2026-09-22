@@ -54,7 +54,7 @@ pub fn program(
     Lowerer::new(resolved, prelude, None, specialized)?.lower()
 }
 
-/// Lower a checked `main! : Host -> Never` application.
+/// Lower a checked `main! : Host -> []` application.
 ///
 /// The source entry keeps its explicit authority parameter. Lowering synthesizes
 /// a parameterless entry, obtains `argc` from the selected routine set, and
@@ -410,6 +410,7 @@ impl<'a> Lowerer<'a> {
                 }
                 self.collect_type(result)?;
             }
+            Type::Empty => {}
             Type::Record(fields) => {
                 for (_, field) in fields {
                     self.collect_type(field)?;
@@ -425,7 +426,11 @@ impl<'a> Lowerer<'a> {
                 continue;
             }
             let name = type_name(ty, &self.resolved.symbols);
-            let id = self.output.declare_type(&name);
+            let id = if matches!(ty, Type::Empty) {
+                self.output.declare_inline_type(&name)
+            } else {
+                self.output.declare_type(&name)
+            };
             self.type_ids.insert(ty.clone(), id);
         }
         if !self.erased_host_types.is_empty() {
@@ -450,7 +455,7 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .map(|(name, fields)| {
                             (
-                                self.resolved.symbols.text(*name).to_string(),
+                                source_name(*name, &self.resolved.symbols).to_string(),
                                 fields
                                     .iter()
                                     .map(|field| self.type_ids[field])
@@ -469,6 +474,7 @@ impl<'a> Lowerer<'a> {
                             .insert((*name, ty.clone()), self.output.ctor_at(id, tag));
                     }
                 }
+                Type::Empty => self.output.define_type(id, &[]),
                 Type::Record(fields) => {
                     let field_types: Vec<_> = fields
                         .iter()
@@ -552,10 +558,9 @@ impl<'a> Lowerer<'a> {
             let mut signature = Vec::with_capacity(parameters.len() + 1);
             signature.push(self.type_ids[ty]);
             signature.extend(parameters.iter().map(|parameter| self.type_ids[parameter]));
-            let name = format!("apply$${}", type_name(ty, &self.resolved.symbols));
             let id = self
                 .output
-                .declare(&name, &signature, self.type_ids[result]);
+                .declare("apply", &signature, self.type_ids[result]);
             self.apply_ids.insert(ty.clone(), id);
         }
         Ok(())
@@ -638,7 +643,7 @@ impl<'a> Lowerer<'a> {
             return Err(error("Host must contain exactly `argc: Nat`"));
         }
         let nat_ty = Type::Named(host.nat, Vec::new());
-        let never_ty = Type::Named(host.never, Vec::new());
+        let empty_ty = Type::Empty;
         let argc = self.output.declare("argc!", &[], self.type_ids[&nat_ty]);
         self.output.answered_by(argc, "argc!");
         let routine = context
@@ -651,7 +656,7 @@ impl<'a> Lowerer<'a> {
         if let Some(bounds) = routine.bounds() {
             self.output.bound(argc, bounds);
         }
-        let entry = self.output.declare("main!", &[], self.type_ids[&never_ty]);
+        let entry = self.output.declare("_start", &[], self.type_ids[&empty_ty]);
         let source_main = self.function_ids[&self.specialized.entry];
         self.output.define(entry, |builder, _| {
             let host = builder.call(argc, &[]);
@@ -1389,54 +1394,69 @@ const fn irrefutable(pattern: &Pattern) -> bool {
     matches!(pattern, Pattern::Wild | Pattern::Bind(_))
 }
 
+fn source_name(symbol: Symbol, symbols: &crate::Symbols) -> &str {
+    // Resolution prefixes globals with a module identity separated by `$$`.
+    // Barb IDs retain identity, while signatures show each specialization, so
+    // the diagnostic name can return to the spelling the programmer wrote.
+    let canonical = symbols.text(symbol);
+    canonical
+        .rsplit_once("$$")
+        .map_or(canonical, |(_, spelling)| spelling)
+}
+
 fn type_name(ty: &Type, symbols: &crate::Symbols) -> String {
     match ty {
-        Type::Named(name, arguments) if arguments.is_empty() => symbols.text(*name).to_string(),
+        Type::Named(name, arguments) if arguments.is_empty() => {
+            source_name(*name, symbols).to_string()
+        }
         Type::Named(name, arguments) => format!(
-            "{}$${}",
-            symbols.text(*name),
+            "{}<{}>",
+            source_name(*name, symbols),
             arguments
                 .iter()
                 .map(|argument| type_name(argument, symbols))
                 .collect::<Vec<_>>()
-                .join("$")
+                .join(", ")
         ),
         Type::Function(parameters, result) => format!(
-            "Fn$${}$to${}",
+            "({}) -> {}",
             parameters
                 .iter()
                 .map(|parameter| type_name(parameter, symbols))
                 .collect::<Vec<_>>()
-                .join("$"),
+                .join(", "),
             type_name(result, symbols)
         ),
+        Type::Empty => "[]".to_string(),
         Type::Record(fields) => format!(
-            "Record$${}",
+            "{{{}}}",
             fields
                 .iter()
-                .map(|(name, ty)| format!("{}${}", symbols.text(*name), type_name(ty, symbols)))
+                .map(|(name, ty)| format!(
+                    "{}: {}",
+                    source_name(*name, symbols),
+                    type_name(ty, symbols)
+                ))
                 .collect::<Vec<_>>()
-                .join("$")
+                .join(", ")
         ),
     }
 }
 
 fn function_name(key: &FunctionKey, symbols: &crate::Symbols) -> String {
-    format!(
-        "{}$${}",
-        symbols.text(key.name),
-        type_name(&key.ty, symbols)
-    )
+    source_name(key.name, symbols).to_string()
 }
 
 fn closure_name(key: &ClosureKey, symbols: &crate::Symbols) -> String {
     match key {
-        ClosureKey::Global(function) => format!("Global$${}", symbols.text(function.name)),
+        ClosureKey::Global(function) => {
+            format!("Global({})", source_name(function.name, symbols))
+        }
         ClosureKey::Constructor(constructor, _) => {
-            format!("Constructor$${}", symbols.text(*constructor))
+            format!("Constructor({})", source_name(*constructor, symbols))
         }
         ClosureKey::Lambda(module, span, _) => {
-            format!("Lambda$${module:?}$${}", span.start)
+            format!("Lambda(m{}:{})", module.index(), span.start)
         }
     }
 }
@@ -1502,6 +1522,12 @@ mod tests {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
             let mut program = application(&resolved, &checked, &prelude, &host, &routines).unwrap();
             barb::optimize(&mut program, &barb::OptimizeOptions::default());
+            let rendered = program.render();
+            assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\n\n"));
+            assert!(rendered.contains("main!(v0: Nat) -> [] =\n  exit!(v0)"));
+            assert!(rendered.contains("_start() -> [] =\n  v0 = argc!\n  exit!(v0)"));
+            assert!(!rendered.lines().any(|line| line == "[]"));
+            assert!(!rendered.contains('$'));
             faun_core::machine(&program, &routines).unwrap();
         }
     }

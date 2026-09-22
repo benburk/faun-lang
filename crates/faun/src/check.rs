@@ -127,7 +127,7 @@ pub fn program(
 /// # Errors
 ///
 /// Rejects host declarations or an entry whose checked type differs from the
-/// canonical `Host`, `Nat`, and `Never` identities selected during loading.
+/// canonical `Host` and `Nat` identities or the structural empty variant type.
 pub fn application(
     resolved: &ResolvedProgram,
     checked: &CheckedProgram,
@@ -173,9 +173,9 @@ pub fn application(
             host.main,
             InferredType::Function(
                 vec![InferredType::Named(host.host, Vec::new())],
-                Box::new(InferredType::Named(host.never, Vec::new())),
+                Box::new(InferredType::Variants(Vec::new())),
             ),
-            "main! : Host -> Never",
+            "main! : Host -> []",
         ),
         (
             host.exit,
@@ -184,9 +184,9 @@ pub fn application(
                     InferredType::Named(host.host, Vec::new()),
                     InferredType::Named(host.nat, Vec::new()),
                 ],
-                Box::new(InferredType::Named(host.never, Vec::new())),
+                Box::new(InferredType::Variants(Vec::new())),
             ),
-            "exit! : Host Nat -> Never",
+            "exit! : Host Nat -> []",
         ),
     ] {
         let Some(scheme) = checked.values.get(&name) else {
@@ -1996,7 +1996,6 @@ mod tests {
 
         fn load(&self, entry_source: &str) -> (PreludeIds, ResolvedProgram) {
             self.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
-            self.write("never.fn", "exports {Never}\nNever : []\n");
             self.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)].(add : Nat Nat -> Nat add(0 y) -> y add(Succ(n) y) -> Succ(n.add(y)))\n");
             self.write(
                 "int.fn",
@@ -2010,7 +2009,7 @@ mod tests {
             self.write("str.fn", "exports {Str}\nStr : List(U8)\n");
             let standard = self.write(
                 "standard.fn",
-                "lib {}\nimport bool {Bool.*}\nimport never {Never}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Never Nat.* Int.* U8 List.* Str}\n",
+                "lib {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
             );
             let entry = self.write("main.fn", entry_source);
             let loaded = modules::load(&[entry], Some(&standard)).unwrap();
@@ -2043,6 +2042,14 @@ mod tests {
         assert!(entry_sites.iter().any(|site| site.ty == prelude.str_));
         assert!(entry_sites.iter().any(|site| site.ty == prelude.nat));
         assert!(entry_sites.iter().any(|site| site.ty == prelude.int));
+    }
+
+    #[test]
+    fn never_is_an_ordinary_constructor_name() {
+        let fixture = Fixture::new();
+        let (prelude, resolved) =
+            fixture.load("Outcome : [Never]\nvalue : Outcome\nvalue() -> Never\n");
+        program(&resolved, &prelude).unwrap();
     }
 
     #[test]

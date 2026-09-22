@@ -22,6 +22,7 @@ use crate::{ModuleId, Symbol};
 pub(crate) enum Type {
     Named(Symbol, Vec<Self>),
     Function(Vec<Self>, Box<Self>),
+    Empty,
     Record(Vec<(Symbol, Self)>),
 }
 
@@ -746,8 +747,9 @@ fn substitute_type(
                 .collect::<Result<_, _>>()?,
             Box::new(substitute_type(result, substitution)?),
         )),
+        InferredType::Variants(constructors) if constructors.is_empty() => Ok(Type::Empty),
         InferredType::Variants(_) => Err(error(
-            "structural variant types are not supported by Barb lowering yet",
+            "nonempty structural variant types are not supported by Barb lowering yet",
         )),
         InferredType::Record(fields) => Ok(Type::Record(
             fields
@@ -788,6 +790,7 @@ fn match_type(
             }
             match_type(ar, br, substitution)
         }
+        (InferredType::Variants(constructors), Type::Empty) if constructors.is_empty() => Ok(()),
         (InferredType::Record(a), Type::Record(b)) if a.len() == b.len() => {
             for ((an, at), (bn, bt)) in a.iter().zip(b) {
                 if an != bn {
@@ -833,8 +836,9 @@ pub(crate) fn surface_type(
                 .collect::<Result<_, _>>()?,
             Box::new(surface_type(result, variables)?),
         )),
+        h::Type::Variants(constructors) if constructors.is_empty() => Ok(Type::Empty),
         h::Type::Variants(_) => Err(error(
-            "structural variant fields are not supported by Barb lowering yet",
+            "nonempty structural variant fields are not supported by Barb lowering yet",
         )),
         h::Type::Record(fields) => Ok(Type::Record(
             fields

@@ -11,7 +11,10 @@ impl Program {
     pub fn render(&self) -> String {
         let mut out = String::new();
         for id in 0..self.types().len() {
-            self.render_type(TypeId::at(id), &mut out);
+            let id = TypeId::at(id);
+            if !self.type_(id).is_inline() {
+                self.render_type(id, &mut out);
+            }
         }
         for id in 0..self.functions().len() {
             out.push('\n');

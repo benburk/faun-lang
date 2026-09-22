@@ -140,6 +140,7 @@ mod tests {
         let mut types = Pool::default();
         let nat = types.push(Type {
             name: Symbol::at(0),
+            inline: false,
             definition: TypeDefinition::Defined(Range::of(0, 2)),
         });
         let mut ctors = Pool::default();

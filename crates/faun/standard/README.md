@@ -1,11 +1,11 @@
 # Primary frontend standard library
 
-`standard.fn` is the bootstrap package root. It exports `Bool`, `Never`, `Nat`,
-`Int`, `U8`, `List`, `Result`, and `Str` from sibling modules.
+`standard.fn` is the bootstrap package root. It exports `Bool`, `Nat`, `Int`,
+`U8`, `List`, `Result`, and `Str` from sibling modules.
 
 ```sh
 cargo run -- check crates/faun/examples/utilities.fn
-cargo run -- lower --target x86_64-linux crates/faun/examples/main.fn
+cargo run -- build --emit barb --target x86_64-linux crates/faun/examples/main.fn
 ```
 
 The package deliberately omits hashing, tuples, record rows and updates, method
@@ -18,8 +18,10 @@ sign. For every type, division by zero returns zero and `a % 0` returns `a`.
 `U8` arithmetic uses unsigned representatives and wraps modulo 256; in particular,
 `0 - 1` is 255 rather than natural zero.
 
-`Never` is the uninhabited result type used by applications. Files under
-`hosts/` are target-selected modules mounted at `std.host`; each initial module
-provides `Host : {argc: Nat}` and bodyless `exit! : Host Nat -> Never`. The
+The structural empty variant type `[]` is the uninhabited result used by
+applications; it needs no blessed standard-library name. `Never` remains an
+ordinary available constructor spelling. Files under `hosts/`
+are target-selected modules mounted at `std.host`; each initial module provides
+`Host : {argc: Nat}` and bodyless `exit! : Host Nat -> []`. The
 `Host` constructor remains private, so only the synthesized startup adapter can
 create that authority value.

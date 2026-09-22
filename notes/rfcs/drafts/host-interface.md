@@ -173,11 +173,12 @@ the frontend now keeps it.
 
 ## What exists
 
-- Primary applications define the exact, bodyful entry `main! : Host -> Never`
+- Primary applications define the exact, bodyful entry `main! : Host -> []`
   and import `Host` and `exit!` from the compiler-mounted `std.host` module.
 - Each initial host declares private-constructor `Host : {argc: Nat}` and
-  bodyless `exit! : Host Nat -> Never`. Lowering reads the target's `argc!` provider,
-  represents the one-field startup record as that `Nat`, and removes the
+  bodyless `exit! : Host Nat -> []`. Lowering synthesizes `_start`, reads the
+  target's `argc!` provider, represents the one-field startup record as that
+  `Nat`, and removes the
   authority argument before calling the machine provider.
 - `platform::Routines`, a set a program is read against, with `builtin()`
   and `push`. The set moves into the targets.
@@ -214,5 +215,5 @@ the frontend now keeps it.
    names lands with them.
 3. Imports in surface, which is also what lets a prelude exist. The entry
    rule stays either way: a program leaves through an effect answering
-   `Never`, which asks for nothing a machine cannot do.
+   the empty structural variant type `[]`, which asks for nothing a machine cannot do.
 4. `Standard`, and borrow checking over resources.

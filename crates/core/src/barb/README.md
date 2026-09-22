@@ -89,7 +89,9 @@ x    ::= a parameter, a binding, or a field an arm bound
 
 `Program::render` uses indentation to delimit match arms and nested bodies,
 without braces. Bodyless declarations keep `= <elsewhere>` on the signature
-line. The text is a diagnostic view, not surface syntax or a serialization.
+line. Types reserved with `declare_inline_type` carry their complete structural
+spelling at each use and omit a redundant top-level declaration. The text is a
+diagnostic view, not surface syntax or a serialization.
 Frontend-created declarations retain their source names, including `!` on
 platform calls such as `exit!` and `argc!`, and those are the names machine
 lowering carries through for linkage. A declaration may still name a different

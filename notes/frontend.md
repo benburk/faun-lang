@@ -25,7 +25,7 @@ The accepted language remains a subset of Ori, but now includes:
 The grammar follows Ori's source language, while Faun source and package files
 use the `.fn` extension. `crates/faun/standard/` supplies a bootstrap
 prelude with
-`Bool`, `Never`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str`. It includes concrete
+`Bool`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str`. It includes concrete
 arithmetic, Boolean, collection, and result utilities that avoid hashing,
 tuples, record rows and updates, and postfix propagation. Concrete equality implementations
 replace bodyless derivation where no method constraint is needed. The complete
@@ -97,20 +97,24 @@ one entry with the exact canonical signature:
 ```faun
 import std.host {Host exit!}
 
-main! : Host -> Never
+main! : Host -> []
 main!(host) -> exit!(host host.argc)
 ```
 
 Each target-owned host module declares `Host : {argc: Nat}` and
-`exit! : Host Nat -> Never`. The record field is immutable startup data; the
+`exit! : Host Nat -> []`. The empty structural variant type has no values, so
+these computations cannot return. The record field is immutable startup data; the
 explicit `Host` argument is authority to perform the effect. Pure definitions
 cannot call names ending in `!`, and an effect call must stand alone as a local
 binding or clause result.
 
-`faun lower --target TARGET PATH` discovers `main!`, follows reachable calls,
-specializes polymorphic globals and nominal data, then defunctionalizes function
-values into concrete closure types and apply functions. Lowering synthesizes a
-parameterless entry which calls the target's `argc!` provider. The one-field
+`faun build --emit barb --target TARGET PATH` discovers `main!`, follows
+reachable calls, specializes polymorphic globals and nominal data, then
+optimizes and prints the resulting Barb program. `--emit machine` continues
+through representation selection and machine-IR optimization, stopping before
+target preparation. Ordinary `faun build` continues through preparation and
+artifact emission. Lowering synthesizes a
+parameterless `_start` entry which calls the target's `argc!` provider. The one-field
 `Host` record is represented by that `Nat`, while source calls to `exit!` erase
 the authority argument before machine IR checks the provider signature.
 
@@ -122,7 +126,7 @@ calls, and constants. Reachable bodyless signatures remain external Barb
 declarations.
 
 Lowering currently rejects ranges, interpolated strings, local destructuring
-bindings, structural variants, polymorphic non-application entries, record
+bindings, nonempty structural variants, polymorphic non-application entries, record
 updates and rows, and local bindings whose generalized value itself requires
 multiple specializations. Tuples, constraints, and postfix propagation remain
 earlier frontend gaps.

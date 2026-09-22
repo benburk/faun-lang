@@ -278,6 +278,15 @@ main() -> Nat =
 }
 
 #[test]
+fn inline_types_are_written_at_their_uses_not_as_declarations() {
+    let mut program = Program::default();
+    let empty = program.declare_inline_type("[]");
+    program.define_type(empty, &[]);
+    program.declare("stop", &[], empty);
+    assert_eq!(program.render(), "\nstop() -> [] = <elsewhere>\n");
+}
+
+#[test]
 fn addition_is_recognised_and_its_near_miss_is_not() {
     let program = crate::programs::two_and_two_in_barb();
     let facts = analyze(&program);

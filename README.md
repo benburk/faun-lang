@@ -12,7 +12,8 @@ cargo run -- check crates/faun/examples/frontend.fn
 cargo run -- check crates/faun/examples/literals.fn
 cargo run -- check crates/faun/examples/utilities.fn
 cargo run -- check --target x86_64-linux crates/faun/examples/main.fn
-cargo run -- lower --target x86_64-linux crates/faun/examples/main.fn
+cargo run -- build --emit barb --target x86_64-linux crates/faun/examples/main.fn
+cargo run -- build --emit machine --target x86_64-linux crates/faun/examples/main.fn
 cargo run -- build --target x86_64-linux crates/faun/examples/main.fn
 cargo bench -p faun --bench frontend
 ```
@@ -23,17 +24,18 @@ Hindley–Milner inference across recursive definition groups, instantiates
 polymorphic signatures and constructors, and chooses nominal methods from the
 receiver type. Parsed `where` constraints are not checked yet.
 
-Applications define a bodyful `main! : Host -> Never` and import their target-selected
-interface from `std.host`. `Host` currently contains immutable `argc: Nat`; its
-constructor stays private, while `exit! : Host Nat -> Never` carries authority
+Applications define a bodyful `main! : Host -> []` and import their target-selected
+interface from `std.host`. The empty structural variant type `[]` has no values,
+so it marks computations that cannot return. `Host` currently contains immutable
+`argc: Nat`; its constructor stays private, while `exit! : Host Nat -> []` carries authority
 explicitly. Lowering synthesizes a
-parameterless machine entry, reads `argc!`, and erases the one-field startup
+parameterless `_start` entry, reads `argc!`, and erases the one-field startup
 record before Barb reaches machine IR.
 
 Lowering monomorphizes reachable globals and data types, compiles clause and
 record patterns, and defunctionalizes global functions, constructors, and
 capturing lambdas. Literal expansions remain ordinary Barb operations. Ranges,
-interpolated strings, local destructuring bindings, structural variants,
+interpolated strings, local destructuring bindings, nonempty structural variants,
 record updates and rows, and locally let-polymorphic values are not lowered yet. See the [frontend status and benchmark contract](notes/frontend.md) for the exact boundary.
 
 The source frontends are separate crates. `faun` owns the primary language:
@@ -44,8 +46,8 @@ syntax, inference, module loading, lowering, and its standard package.
 `faun-driver` is the reusable source-to-artifact command driver. The `faun-cli`
 package supplies the small official executable that registers the four bundled
 target crates. A custom target can depend on `faun-driver`, register its target
-and source host module, and obtain the same `check`, `lower`, `build`, and `run`
-commands without modifying the official executable:
+and source host module, and obtain the same `check`, `build`, and `run` commands,
+including `build --emit barb|machine`, without modifying the official executable:
 
 ```rust
 use faun_driver::Backend;

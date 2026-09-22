@@ -10,14 +10,12 @@ use std::fmt;
 
 use num_bigint::BigUint;
 
-use super::ast::{DataRepresentation, Item};
 use super::modules::{LoadedProgram, TypeBinding};
 use super::{Symbol, Symbols};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreludeIds {
     pub bool_: Symbol,
-    pub never: Symbol,
     pub nat: Symbol,
     pub int: Symbol,
     pub str_: Symbol,
@@ -58,8 +56,6 @@ impl PreludeIds {
     /// Reports the first missing standard type, constructor, or method.
     pub fn resolve(program: &LoadedProgram) -> Result<Self, PreludeError> {
         let bool_ = binding(program, "Bool")?;
-        let never = binding(program, "Never")?;
-        validate_never(program, never.canonical)?;
         let nat = binding(program, "Nat")?;
         let int = binding(program, "Int")?;
         let str_ = binding_with_private_constructor(program, "Str")?;
@@ -67,7 +63,6 @@ impl PreludeIds {
         let list = binding(program, "List")?;
         Ok(Self {
             bool_: bool_.canonical,
-            never: never.canonical,
             nat: nat.canonical,
             int: int.canonical,
             str_: str_.canonical,
@@ -152,45 +147,6 @@ pub fn string(bytes: &[u8], prelude: &PreludeIds) -> LiteralExpr {
         list = LiteralExpr::Construct(prelude.list_cons, vec![byte, list]);
     }
     LiteralExpr::Construct(prelude.str_constructor, vec![list])
-}
-
-fn validate_never(program: &LoadedProgram, canonical: Symbol) -> Result<(), PreludeError> {
-    for module in &program.modules {
-        let source = program
-            .sources
-            .get(module.source)
-            .ok_or_else(|| PreludeError {
-                message: "the Never module has no loaded source".to_string(),
-            })?;
-        for item in &module.syntax.items {
-            let Item::Data(data) = item else {
-                continue;
-            };
-            let Some(local) = program.symbols.find(data.name.text(source.text())) else {
-                continue;
-            };
-            let is_never = module
-                .scope
-                .types
-                .get(&local)
-                .is_some_and(|binding| binding.canonical == canonical);
-            if is_never {
-                return if data.params.is_empty()
-                    && matches!(&data.representation, DataRepresentation::Sum(variants) if variants.is_empty())
-                {
-                    Ok(())
-                } else {
-                    Err(PreludeError {
-                        message: "standard type `Never` must be an uninhabited, parameterless sum"
-                            .to_string(),
-                    })
-                };
-            }
-        }
-    }
-    Err(PreludeError {
-        message: "standard type `Never` has no defining declaration".to_string(),
-    })
 }
 
 fn binding(program: &LoadedProgram, name: &str) -> Result<TypeBinding, PreludeError> {
@@ -301,13 +257,8 @@ mod tests {
     }
 
     fn loaded() -> LoadedProgram {
-        loaded_with_never("Never : []")
-    }
-
-    fn loaded_with_never(declaration: &str) -> LoadedProgram {
         let fixture = Fixture::new();
         fixture.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
-        fixture.write("never.fn", &format!("exports {{Never}}\n{declaration}\n"));
         fixture.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)]\n");
         fixture.write(
             "int.fn",
@@ -321,20 +272,12 @@ mod tests {
         fixture.write("str.fn", "exports {Str}\nStr : List(U8)\n");
         let root = fixture.write(
             "standard.fn",
-            "lib {}\nimport bool {Bool.*}\nimport never {Never}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Never Nat.* Int.* U8 List.* Str}\n",
+            "lib {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
         );
         let entry = fixture.write("main.fn", "id(x) -> x\n");
         // The loader owns all source text, so removing the fixture afterwards
         // does not invalidate the program.
         modules::load(&[entry], Some(&root)).unwrap()
-    }
-
-    #[test]
-    fn never_must_be_an_uninhabited_parameterless_sum() {
-        for declaration in ["Never : [Return]", "Never(a) : []", "Never : Nat"] {
-            let failure = PreludeIds::resolve(&loaded_with_never(declaration)).unwrap_err();
-            assert!(failure.message.contains("uninhabited, parameterless sum"));
-        }
     }
 
     #[test]

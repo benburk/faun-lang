@@ -192,12 +192,23 @@ impl Program {
         self.symbols.push(name)
     }
 
-    /// Reserve a type. Its constructors follow, so that a field may name the
-    /// type being declared.
+    /// Reserve a nominal type. Its constructors follow, so that a field may
+    /// name the type being declared.
     pub fn declare_type(&mut self, name: &str) -> TypeId {
+        self.declare_type_with_display(name, false)
+    }
+
+    /// Reserve a structural type whose diagnostic name is its complete inline
+    /// spelling. Rendering omits a redundant top-level declaration.
+    pub fn declare_inline_type(&mut self, name: &str) -> TypeId {
+        self.declare_type_with_display(name, true)
+    }
+
+    fn declare_type_with_display(&mut self, name: &str, inline: bool) -> TypeId {
         let name = self.symbol(name);
         self.types.push(Type {
             name,
+            inline,
             definition: TypeDefinition::Declared,
         })
     }
