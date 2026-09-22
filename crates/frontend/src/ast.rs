@@ -187,6 +187,10 @@ pub enum Type {
         span: Span,
         constructors: Vec<ConstructorDecl>,
     },
+    Record {
+        span: Span,
+        fields: Vec<(Name, Self)>,
+    },
 }
 
 /// One `name(patterns) if guard -> body` row. Consecutive rows are grouped later.
@@ -276,6 +280,10 @@ pub enum Pattern {
         elements: Vec<Self>,
         rest: Option<Box<Self>>,
     },
+    Record {
+        span: Span,
+        fields: Vec<(Name, Self)>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -290,6 +298,7 @@ pub enum ExprKind {
     Number(Numeral),
     String(Vec<StringPart>),
     List(Vec<Expr>, Option<Box<Expr>>),
+    Record(Vec<(Name, Expr)>),
     Lambda(Vec<Pattern>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     Member(Box<Expr>, Name),

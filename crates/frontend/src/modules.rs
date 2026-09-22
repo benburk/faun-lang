@@ -90,6 +90,8 @@ pub struct LoadedProgram {
     pub modules: Vec<LoadedModule>,
     pub entries: Vec<ModuleId>,
     pub prelude: Option<ModuleId>,
+    /// The target-selected module mounted at `std.host`, when loading an application.
+    pub host: Option<ModuleId>,
 }
 
 impl LoadedProgram {
@@ -131,17 +133,41 @@ impl std::error::Error for LoadError {}
 /// Reports I/O, parse, cycle, duplicate declaration, visibility, and ambiguous
 /// module-path failures.
 pub fn load(entries: &[PathBuf], prelude: Option<&Path>) -> Result<LoadedProgram, LoadError> {
+    load_with_host(entries, prelude, None)
+}
+
+/// Load entry files with an optional prelude and target-selected `std.host` module.
+///
+/// The host is loaded as an ordinary module, but its public interface is reached
+/// through the stable virtual path `std.host` rather than its disk location.
+///
+/// # Errors
+///
+/// Reports the same failures as [`load`], plus conflicting or missing host imports.
+pub fn load_with_host(
+    entries: &[PathBuf],
+    prelude: Option<&Path>,
+    host: Option<&Path>,
+) -> Result<LoadedProgram, LoadError> {
     let mut loader = Loader::default();
     let prelude_id = match prelude {
         Some(path) => Some(loader.load_module(path, &Root::at(path), true)?),
         None => None,
     };
     loader.prelude = prelude_id.map(|id| loader.pending[id.index()].public.clone());
+    let host_id = match host {
+        Some(path) => {
+            let root = prelude.map_or_else(|| Root::at(path), Root::at);
+            Some(loader.load_module(path, &root, false)?)
+        }
+        None => None,
+    };
+    loader.host = host_id;
     let mut entry_ids = Vec::with_capacity(entries.len());
     for entry in entries {
         entry_ids.push(loader.load_module(entry, &Root::at(entry), false)?);
     }
-    Ok(loader.finish(entry_ids, prelude_id))
+    Ok(loader.finish(entry_ids, prelude_id, host_id))
 }
 
 #[derive(Clone, Debug)]
@@ -180,11 +206,17 @@ struct Loader {
     loaded: HashMap<PathBuf, ModuleId>,
     visiting: Vec<PathBuf>,
     prelude: Option<Interface>,
+    host: Option<ModuleId>,
     standard_root: Option<PathBuf>,
 }
 
 impl Loader {
-    fn finish(self, entries: Vec<ModuleId>, prelude: Option<ModuleId>) -> LoadedProgram {
+    fn finish(
+        self,
+        entries: Vec<ModuleId>,
+        prelude: Option<ModuleId>,
+        host: Option<ModuleId>,
+    ) -> LoadedProgram {
         let modules = self
             .pending
             .into_iter()
@@ -204,6 +236,7 @@ impl Loader {
             modules,
             entries,
             prelude,
+            host,
         }
     }
 
@@ -272,8 +305,14 @@ impl Loader {
             .collect();
         let mut linked_imports = Vec::with_capacity(imports.len());
         for (index, path_parts) in imports {
-            let dependency_path = module_path(&root.directory, &path_parts)?;
-            let dependency = self.load_module(&dependency_path, root, false)?;
+            let dependency = if path_parts == ["std", "host"] {
+                self.host.ok_or_else(|| {
+                    LoadError::new("import `std.host` requires a selected host module")
+                })?
+            } else {
+                let dependency_path = module_path(&root.directory, &path_parts)?;
+                self.load_module(&dependency_path, root, false)?
+            };
             linked_imports.push((index, dependency));
         }
         self.visiting.pop();
@@ -410,7 +449,8 @@ fn declare_data(
                 binding.constructors.insert(spelling, canonical);
             }
         }
-        DataRepresentation::Wrapper(_) => {
+        DataRepresentation::Wrapper(representation) => {
+            intern_record_fields(representation, source, symbols);
             let canonical = symbols.intern(&format!(
                 "{namespace}$${}$${}",
                 data.name.text(source),
@@ -449,6 +489,37 @@ fn declare_data(
     }
     own.types.insert(local, binding);
     Ok(())
+}
+
+fn intern_record_fields(ty: &super::ast::Type, source: &str, symbols: &mut Symbols) {
+    match ty {
+        super::ast::Type::Named { arguments, .. } => {
+            for argument in arguments {
+                intern_record_fields(argument, source, symbols);
+            }
+        }
+        super::ast::Type::Function {
+            parameters, result, ..
+        } => {
+            for parameter in parameters {
+                intern_record_fields(parameter, source, symbols);
+            }
+            intern_record_fields(result, source, symbols);
+        }
+        super::ast::Type::Variants { constructors, .. } => {
+            for constructor in constructors {
+                for field in &constructor.fields {
+                    intern_record_fields(field, source, symbols);
+                }
+            }
+        }
+        super::ast::Type::Record { fields, .. } => {
+            for (name, field) in fields {
+                symbols.intern(name.text(source));
+                intern_record_fields(field, source, symbols);
+            }
+        }
+    }
 }
 
 fn declare_value(
@@ -702,6 +773,25 @@ mod tests {
         fixture.write("second.fn", "import first {}\n");
         let error = load(&[first], None).unwrap_err();
         assert!(error.message.contains("import cycle"));
+    }
+
+    #[test]
+    fn std_host_is_a_compiler_selected_virtual_module() {
+        let fixture = Fixture::new();
+        let host = fixture.write("target/host.fn", "exports {Host}\nHost : {argc: Nat}\n");
+        let entry = fixture.write(
+            "main.fn",
+            "import std.host {Host}\nid : Host -> Host\nid(h) -> h\n",
+        );
+        let missing = load(std::slice::from_ref(&entry), None).unwrap_err();
+        assert!(missing.message.contains("requires a selected host"));
+
+        let loaded = load_with_host(&[entry], None, Some(&host)).unwrap();
+        let canonical = host.canonicalize().unwrap();
+        assert_eq!(
+            loaded.host.map(|id| loaded.module(id).path.as_path()),
+            Some(canonical.as_path())
+        );
     }
 
     #[test]

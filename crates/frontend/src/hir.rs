@@ -80,6 +80,7 @@ pub enum Type {
     Variable(Symbol),
     Function(Vec<Self>, Box<Self>),
     Variants(Vec<ConstructorDecl>),
+    Record(Vec<(Symbol, Self)>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,6 +111,7 @@ pub enum Pattern {
     Number { magnitude: BigUint, negative: bool },
     Range(BigUint, BigUint),
     List(Vec<Self>, Option<Box<Self>>),
+    Record(Vec<(Symbol, Self)>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +140,7 @@ pub enum ExprKind {
     Number(BigUint),
     String(Vec<StringPart>),
     List(Vec<Expr>, Option<Box<Expr>>),
+    Record(Vec<(Symbol, Expr)>),
     Lambda(Vec<Pattern>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     Member(Box<Expr>, Symbol),

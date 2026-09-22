@@ -173,6 +173,12 @@ the frontend now keeps it.
 
 ## What exists
 
+- Primary applications define the exact, bodyful entry `main! : Host -> Never`
+  and import `Host` and `exit!` from the compiler-mounted `std.host` module.
+- Each initial host declares private-constructor `Host : {argc: Nat}` and
+  bodyless `exit! : Host Nat -> Never`. Lowering reads the target's `argc!` provider,
+  represents the one-field startup record as that `Nat`, and removes the
+  authority argument before calling the machine provider.
 - `platform::Routines`, a set a program is read against, with `builtin()`
   and `push`. The set moves into the targets.
 - `Target::provides`, the names a target answers for. `accepts` refuses the
@@ -189,10 +195,10 @@ the frontend now keeps it.
   `Convert` when a value does not fit what a routine takes, which is the
   machine deciding where `Op::Convert`'s own doc says a program asks. Latent
   while every routine takes a word.
-- **Only the count reads input.** `argc!` is what every machine can be asked
-  and every one answers differently: linux leaves it on the stack it starts
-  a program on, wasi reports it through a call, the simulator has a hook.
-  `args` themselves need computed aggregates to have a representation.
+- **Only the count is exposed.** `argc!` is the private provider used to build
+  `Host.argc`, and every machine answers it differently: Linux leaves it on the
+  startup stack, WASI reports it through a call, and the simulator has a hook.
+  Argument strings still need computed aggregates to have a representation.
 - **Narrowing needs recognition.** A program proves a value fits by clamping
   or taking a modulus, and `facts` recognises `add` and nothing else.
 - **faun needs a prelude.** `Standard.number` has to point at a type, and

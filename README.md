@@ -11,22 +11,29 @@ types, and resolves methods in the current subset:
 cargo run -- check notes/examples/frontend.fn
 ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/literals.fn
 ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/utilities.fn
-ORI_STD=crates/frontend/standard/standard.fn cargo run -- lower --entry mapped notes/examples/utilities.fn
+ORI_STD=crates/frontend/standard/standard.fn cargo run -- check --host x86-64-linux notes/examples/main.fn
+ORI_STD=crates/frontend/standard/standard.fn cargo run -- lower --host x86-64-linux notes/examples/main.fn
 cargo bench -p faun-frontend --bench frontend
 ```
 
-It supports package interfaces, nominal types and method blocks, clauses,
-guards, lists, strings, literals, calls, methods, and operators. It performs
+It supports package interfaces, nominal types and method blocks, closed records,
+clauses, guards, lists, strings, literals, calls, methods, and operators. It performs
 Hindley–Milner inference across recursive definition groups, instantiates
 polymorphic signatures and constructors, and chooses nominal methods from the
 receiver type. Parsed `where` constraints are not checked yet.
 
-Checked programs can be specialized and lowered to Barb from a monomorphic,
-parameterless entry. Lowering monomorphizes reachable globals and data types,
-compiles clause patterns, and defunctionalizes global functions, constructors,
-and capturing lambdas. Literal expansions remain ordinary Barb operations.
-Ranges, interpolated strings, refutable local bindings, structural variants,
-and locally let-polymorphic values are not lowered yet. See the [frontend status and benchmark contract](notes/frontend.md) for the exact boundary.
+Applications define a bodyful `main! : Host -> Never` and import their target-selected
+interface from `std.host`. `Host` currently contains immutable `argc: Nat`; its
+constructor stays private, while `exit! : Host Nat -> Never` carries authority
+explicitly. Lowering synthesizes a
+parameterless machine entry, reads `argc!`, and erases the one-field startup
+record before Barb reaches machine IR.
+
+Lowering monomorphizes reachable globals and data types, compiles clause and
+record patterns, and defunctionalizes global functions, constructors, and
+capturing lambdas. Literal expansions remain ordinary Barb operations. Ranges,
+interpolated strings, local destructuring bindings, structural variants,
+record updates and rows, and locally let-polymorphic values are not lowered yet. See the [frontend status and benchmark contract](notes/frontend.md) for the exact boundary.
 
 The source frontends are separate crates. `faun-frontend` owns the primary
 syntax, inference, module loader, and its standard package. `faun-simple` owns

@@ -51,7 +51,37 @@ pub fn program(
     entry: Symbol,
 ) -> Result<barb::Program, LowerError> {
     let specialized = specialize::program(resolved, checked, prelude, entry)?;
-    Lowerer::new(resolved, prelude, specialized)?.lower()
+    Lowerer::new(resolved, prelude, None, specialized)?.lower()
+}
+
+/// Lower a checked `main! : Host -> Never` application.
+///
+/// The source entry keeps its explicit authority parameter. Lowering synthesizes
+/// a parameterless entry, obtains `argc` from the selected routine set, and
+/// represents the one-field startup record by that `Nat`.
+///
+/// # Errors
+///
+/// Reports specialization and Barb construction failures.
+pub fn application(
+    resolved: &ResolvedProgram,
+    checked: &crate::check::CheckedProgram,
+    prelude: &PreludeIds,
+    host: &crate::host::HostIds,
+    routines: &faun::platform::Routines,
+) -> Result<barb::Program, LowerError> {
+    crate::check::application(resolved, checked, host).map_err(|cause| error(cause.to_string()))?;
+    let specialized = specialize::application(resolved, checked, prelude, host)?;
+    Lowerer::new(
+        resolved,
+        prelude,
+        Some(HostContext {
+            ids: host,
+            routines,
+        }),
+        specialized,
+    )?
+    .lower()
 }
 
 /// Select a uniquely named checked value and lower it as the entry.
@@ -125,6 +155,12 @@ enum Decision {
         owner: Type,
         arms: Vec<DecisionArm>,
     },
+    Record {
+        subject: Value,
+        owner: Type,
+        fields: Vec<Value>,
+        decision: Box<Self>,
+    },
     Guard {
         condition: Expr,
         locals: HashMap<LocalId, Value>,
@@ -142,15 +178,25 @@ struct DecisionArm {
     decision: Box<Decision>,
 }
 
+#[derive(Clone, Copy)]
+struct HostContext<'a> {
+    ids: &'a crate::host::HostIds,
+    routines: &'a faun::platform::Routines,
+}
+
 struct Lowerer<'a> {
     resolved: &'a ResolvedProgram,
     prelude: &'a PreludeIds,
+    host: Option<HostContext<'a>>,
     specialized: specialize::Program,
     closures: BTreeMap<Type, Vec<ClosureVariant>>,
     invoked: BTreeSet<Type>,
     types: BTreeSet<Type>,
     type_ids: HashMap<Type, TypeId>,
     constructor_ids: HashMap<(Symbol, Type), CtorId>,
+    record_constructor_ids: HashMap<Type, CtorId>,
+    record_wrappers: HashMap<Type, Type>,
+    erased_host_types: HashSet<Type>,
     closure_constructor_ids: HashMap<ClosureKey, CtorId>,
     function_ids: HashMap<FunctionKey, FnId>,
     apply_ids: HashMap<Type, FnId>,
@@ -161,23 +207,37 @@ impl<'a> Lowerer<'a> {
     fn new(
         resolved: &'a ResolvedProgram,
         prelude: &'a PreludeIds,
+        host: Option<HostContext<'a>>,
         specialized: specialize::Program,
     ) -> Result<Self, LowerError> {
         let mut lowerer = Self {
             resolved,
             prelude,
+            host,
             specialized,
             closures: BTreeMap::new(),
             invoked: BTreeSet::new(),
             types: BTreeSet::new(),
             type_ids: HashMap::new(),
             constructor_ids: HashMap::new(),
+            record_constructor_ids: HashMap::new(),
+            record_wrappers: HashMap::new(),
+            erased_host_types: HashSet::new(),
             closure_constructor_ids: HashMap::new(),
             function_ids: HashMap::new(),
             apply_ids: HashMap::new(),
             output: barb::Program::default(),
         };
         lowerer.discover()?;
+        if let Some(host) = lowerer.host {
+            let host_ty = Type::Named(host.ids.host, Vec::new());
+            let record_ty = lowerer
+                .record_wrappers
+                .get(&host_ty)
+                .ok_or_else(|| error("Host must wrap its startup record"))?
+                .clone();
+            lowerer.erased_host_types.extend([host_ty, record_ty]);
+        }
         Ok(lowerer)
     }
 
@@ -187,7 +247,11 @@ impl<'a> Lowerer<'a> {
         self.declare_functions()?;
         self.define_functions()?;
         self.define_apply_functions()?;
-        let entry = self.function_ids[&self.specialized.entry];
+        let entry = if self.host.is_some() {
+            self.define_host_entry()?
+        } else {
+            self.function_ids[&self.specialized.entry]
+        };
         self.output.set_entry(entry);
         barb::validate(&self.output).map_err(error)?;
         Ok(self.output)
@@ -216,11 +280,18 @@ impl<'a> Lowerer<'a> {
             let before = self.types.len();
             let types: Vec<_> = self.types.iter().cloned().collect();
             for ty in types {
-                if let Type::Named(_, _) = &ty {
-                    for (_, fields) in self.constructors_of(&ty)? {
+                if let Type::Named(name, _) = &ty {
+                    let constructors = self.constructors_of(&ty)?;
+                    for (_, fields) in &constructors {
                         for field in fields {
-                            self.collect_type(&field)?;
+                            self.collect_type(field)?;
                         }
+                    }
+                    if self.specialized.data[name].wrapper.is_some()
+                        && let [(_, fields)] = constructors.as_slice()
+                        && let [field @ Type::Record(_)] = fields.as_slice()
+                    {
+                        self.record_wrappers.insert(ty, field.clone());
                     }
                 }
             }
@@ -282,6 +353,12 @@ impl<'a> Lowerer<'a> {
                     self.collect_expr(field)?;
                 }
             }
+            ExprKind::Record(fields) => {
+                for (_, field) in fields {
+                    self.collect_expr(field)?;
+                }
+            }
+            ExprKind::Project(receiver, _) => self.collect_expr(receiver)?,
             ExprKind::Invoke(head, arguments) => {
                 self.invoked.insert(head.ty.clone());
                 self.collect_expr(head)?;
@@ -333,21 +410,38 @@ impl<'a> Lowerer<'a> {
                 }
                 self.collect_type(result)?;
             }
+            Type::Record(fields) => {
+                for (_, field) in fields {
+                    self.collect_type(field)?;
+                }
+            }
         }
         Ok(())
     }
 
     fn declare_types(&mut self) {
         for ty in &self.types {
+            if self.erased_host_types.contains(ty) {
+                continue;
+            }
             let name = type_name(ty, &self.resolved.symbols);
             let id = self.output.declare_type(&name);
             self.type_ids.insert(ty.clone(), id);
+        }
+        if !self.erased_host_types.is_empty() {
+            let nat = self.type_ids[&Type::Named(self.prelude.nat, Vec::new())];
+            for ty in &self.erased_host_types {
+                self.type_ids.insert(ty.clone(), nat);
+            }
         }
     }
 
     fn define_types(&mut self) -> Result<(), LowerError> {
         let types: Vec<_> = self.types.iter().cloned().collect();
         for ty in types {
+            if self.erased_host_types.contains(&ty) {
+                continue;
+            }
             let id = self.type_ids[&ty];
             match &ty {
                 Type::Named(_, _) => {
@@ -374,6 +468,16 @@ impl<'a> Lowerer<'a> {
                         self.constructor_ids
                             .insert((*name, ty.clone()), self.output.ctor_at(id, tag));
                     }
+                }
+                Type::Record(fields) => {
+                    let field_types: Vec<_> = fields
+                        .iter()
+                        .map(|(_, field)| self.type_ids[field])
+                        .collect();
+                    self.output
+                        .define_type(id, &[("Record", field_types.as_slice())]);
+                    self.record_constructor_ids
+                        .insert(ty.clone(), self.output.ctor_at(id, 0));
                 }
                 Type::Function(_, _) => {
                     let variants = self.closures.get(&ty).cloned().unwrap_or_default();
@@ -421,7 +525,13 @@ impl<'a> Lowerer<'a> {
                 .ok_or_else(|| error("specialized global is not a function"))?;
             let parameters: Vec<_> = parameters
                 .iter()
-                .map(|parameter| self.type_ids[parameter])
+                .enumerate()
+                .filter(|(index, _)| {
+                    !self
+                        .host
+                        .is_some_and(|host| function.key.name == host.ids.exit && *index == 0)
+                })
+                .map(|(_, parameter)| self.type_ids[parameter])
                 .collect();
             let result = self.type_ids[result];
             let name = function_name(&function.key, &self.resolved.symbols);
@@ -484,8 +594,12 @@ impl<'a> Lowerer<'a> {
             let decision = self.plan(&rows, &subjects, &mut next)?;
             let function_id = self.function_ids[&function.key];
             let context = EmitContext {
+                host: self.host.map(|host| host.ids),
                 type_ids: &self.type_ids,
                 constructor_ids: &self.constructor_ids,
+                record_constructor_ids: &self.record_constructor_ids,
+                record_wrappers: &self.record_wrappers,
+                erased_host_types: &self.erased_host_types,
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
                 apply_ids: &self.apply_ids,
@@ -506,6 +620,46 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    fn define_host_entry(&mut self) -> Result<FnId, LowerError> {
+        let context = self.host.expect("called only for an application");
+        let host = context.ids;
+        let host_ty = Type::Named(host.host, Vec::new());
+        let record_ty = self
+            .record_wrappers
+            .get(&host_ty)
+            .ok_or_else(|| error("Host must wrap its startup record"))?
+            .clone();
+        let Type::Record(fields) = &record_ty else {
+            unreachable!("record wrappers map to record types")
+        };
+        if !matches!(fields.as_slice(), [(name, Type::Named(nat, arguments))]
+            if *name == host.argc && *nat == host.nat && arguments.is_empty())
+        {
+            return Err(error("Host must contain exactly `argc: Nat`"));
+        }
+        let nat_ty = Type::Named(host.nat, Vec::new());
+        let never_ty = Type::Named(host.never, Vec::new());
+        let argc = self.output.declare("argc!", &[], self.type_ids[&nat_ty]);
+        self.output.answered_by(argc, "argc!");
+        let routine = context
+            .routines
+            .get("argc!")
+            .ok_or_else(|| error("the selected target does not provide `argc!`"))?;
+        if context.routines.get("exit!").is_none() {
+            return Err(error("the selected target does not provide `exit!`"));
+        }
+        if let Some(bounds) = routine.bounds() {
+            self.output.bound(argc, bounds);
+        }
+        let entry = self.output.declare("main!", &[], self.type_ids[&never_ty]);
+        let source_main = self.function_ids[&self.specialized.entry];
+        self.output.define(entry, |builder, _| {
+            let host = builder.call(argc, &[]);
+            builder.call(source_main, &[host])
+        });
+        Ok(entry)
+    }
+
     fn define_apply_functions(&mut self) -> Result<(), LowerError> {
         let invoked: Vec<_> = self.invoked.iter().cloned().collect();
         for ty in invoked {
@@ -513,8 +667,12 @@ impl<'a> Lowerer<'a> {
             let apply = self.apply_ids[&ty];
             let closure_type = self.type_ids[&ty];
             let context = EmitContext {
+                host: self.host.map(|host| host.ids),
                 type_ids: &self.type_ids,
                 constructor_ids: &self.constructor_ids,
+                record_constructor_ids: &self.record_constructor_ids,
+                record_wrappers: &self.record_wrappers,
+                erased_host_types: &self.erased_host_types,
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
                 apply_ids: &self.apply_ids,
@@ -663,6 +821,50 @@ impl<'a> Lowerer<'a> {
             .map(|(column, _)| column)
             .expect("a refutable pattern exists");
         let subject = &subjects[column];
+        if let Type::Record(record_fields) = &subject.ty {
+            let fields: Vec<_> = record_fields
+                .iter()
+                .map(|_| {
+                    let value = Value(*next);
+                    *next = next.checked_add(1).expect("fewer than 2^32 plan values");
+                    value
+                })
+                .collect();
+            let mut specialized = Vec::with_capacity(rows.len());
+            for mut row in rows.iter().cloned() {
+                let normalized =
+                    self.normalize_pattern(row.patterns[column].clone(), &subject.ty)?;
+                let replacement = match normalized {
+                    Pattern::Wild => vec![Pattern::Wild; fields.len()],
+                    Pattern::Bind(local) => {
+                        row.locals.insert(local, subject.value);
+                        vec![Pattern::Wild; fields.len()]
+                    }
+                    Pattern::Product(patterns) => patterns,
+                    _ => unreachable!("record patterns normalize to a product"),
+                };
+                if replacement.len() != fields.len() {
+                    return Err(error("record pattern has the wrong field count"));
+                }
+                row.patterns.splice(column..=column, replacement);
+                specialized.push(row);
+            }
+            let mut nested_subjects = subjects.to_vec();
+            nested_subjects.splice(
+                column..=column,
+                fields
+                    .iter()
+                    .copied()
+                    .zip(record_fields.iter().map(|(_, ty)| ty.clone()))
+                    .map(|(value, ty)| Subject { value, ty }),
+            );
+            return Ok(Decision::Record {
+                subject: subject.value,
+                owner: subject.ty.clone(),
+                fields,
+                decision: Box::new(self.plan(&specialized, &nested_subjects, next)?),
+            });
+        }
         let constructors = self.constructors_of(&subject.ty)?;
         let mut arms = Vec::with_capacity(constructors.len());
         for (constructor, field_types) in constructors {
@@ -735,6 +937,23 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(tail)
             }
+            Pattern::Record(fields) => {
+                let Type::Record(expected) = expected else {
+                    return Err(error("record pattern does not have a record type"));
+                };
+                if fields.len() != expected.len()
+                    || fields
+                        .iter()
+                        .zip(expected)
+                        .any(|((found, _), (wanted, _))| found != wanted)
+                {
+                    return Err(error("record pattern fields do not match its type"));
+                }
+                Ok(Pattern::Product(
+                    fields.into_iter().map(|(_, pattern)| pattern).collect(),
+                ))
+            }
+            product @ Pattern::Product(_) => Ok(product),
             other => Ok(other),
         }
     }
@@ -837,8 +1056,12 @@ impl<'a> Lowerer<'a> {
 }
 
 struct EmitContext<'a> {
+    host: Option<&'a crate::host::HostIds>,
     type_ids: &'a HashMap<Type, TypeId>,
     constructor_ids: &'a HashMap<(Symbol, Type), CtorId>,
+    record_constructor_ids: &'a HashMap<Type, CtorId>,
+    record_wrappers: &'a HashMap<Type, Type>,
+    erased_host_types: &'a HashSet<Type>,
     closure_constructor_ids: &'a HashMap<ClosureKey, CtorId>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
     apply_ids: &'a HashMap<Type, FnId>,
@@ -879,6 +1102,33 @@ fn emit_decision(
                 }
                 emit_decision(context, builder, &arm.decision, &nested)
             })
+        }
+        Decision::Record {
+            subject,
+            owner,
+            fields,
+            decision,
+        } => {
+            if context.erased_host_types.contains(owner) {
+                let [field] = fields.as_slice() else {
+                    unreachable!("the startup record has one field")
+                };
+                let mut nested = values.clone();
+                nested.insert(*field, values[subject]);
+                emit_decision(context, builder, decision, &nested)
+            } else {
+                builder.match_(
+                    values[subject],
+                    context.type_ids[owner],
+                    |builder, _, atoms| {
+                        let mut nested = values.clone();
+                        for (value, atom) in fields.iter().zip(atoms) {
+                            nested.insert(*value, *atom);
+                        }
+                        emit_decision(context, builder, decision, &nested)
+                    },
+                )
+            }
         }
         Decision::Guard {
             condition,
@@ -967,10 +1217,36 @@ fn emit_expr(
                 &fields,
             )
         }
+        ExprKind::Record(fields) => {
+            let mut fields = fields
+                .iter()
+                .map(|(name, field)| (*name, emit_expr(context, builder, field, locals)))
+                .collect::<Vec<_>>();
+            fields.sort_by_key(|(name, _)| *name);
+            let fields: Vec<_> = fields.into_iter().map(|(_, field)| field).collect();
+            if context.erased_host_types.contains(&expression.ty) {
+                let [field] = fields.as_slice() else {
+                    unreachable!("the startup record has one field")
+                };
+                *field
+            } else {
+                builder.con(context.record_constructor_ids[&expression.ty], &fields)
+            }
+        }
+        ExprKind::Project(receiver, field) => {
+            let atom = emit_expr(context, builder, receiver, locals);
+            emit_projection(context, builder, atom, &receiver.ty, *field)
+        }
         ExprKind::DirectCall(key, arguments) => {
             let arguments = arguments
                 .iter()
-                .map(|argument| emit_expr(context, builder, argument, locals))
+                .enumerate()
+                .filter(|(index, _)| {
+                    !context
+                        .host
+                        .is_some_and(|host| key.name == host.exit && *index == 0)
+                })
+                .map(|(_, argument)| emit_expr(context, builder, argument, locals))
                 .collect::<Vec<_>>();
             builder.call(context.function_ids[key], &arguments)
         }
@@ -983,6 +1259,38 @@ fn emit_expr(
             builder.call(context.apply_ids[&head.ty], &lowered)
         }
     }
+}
+
+fn emit_projection(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    receiver: Atom,
+    receiver_ty: &Type,
+    field: Symbol,
+) -> Atom {
+    if context.erased_host_types.contains(receiver_ty) {
+        return receiver;
+    }
+    if let Type::Record(fields) = receiver_ty {
+        let index = fields
+            .iter()
+            .position(|(name, _)| *name == field)
+            .expect("checked projection names a record field");
+        return builder.match_(receiver, context.type_ids[receiver_ty], |_, _, values| {
+            values[index]
+        });
+    }
+    let record = &context.record_wrappers[receiver_ty];
+    builder.match_(
+        receiver,
+        context.type_ids[receiver_ty],
+        |builder, _, fields| {
+            let [record_value] = fields else {
+                unreachable!("a record wrapper has one field")
+            };
+            emit_projection(context, builder, *record_value, record, field)
+        },
+    )
 }
 
 fn captures_for_key(
@@ -1028,6 +1336,12 @@ fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap
                 free_locals(field, bound, found);
             }
         }
+        ExprKind::Record(fields) => {
+            for (_, field) in fields {
+                free_locals(field, bound, found);
+            }
+        }
+        ExprKind::Project(receiver, _) => free_locals(receiver, bound, found),
         ExprKind::Invoke(head, arguments) => {
             free_locals(head, bound, found);
             for argument in arguments {
@@ -1049,7 +1363,9 @@ fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
         Pattern::Bind(local) => {
             output.insert(*local);
         }
-        Pattern::Constructor(_, fields) | Pattern::List(fields, None) => {
+        Pattern::Constructor(_, fields)
+        | Pattern::List(fields, None)
+        | Pattern::Product(fields) => {
             for field in fields {
                 pattern_locals(field, output);
             }
@@ -1059,6 +1375,11 @@ fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
                 pattern_locals(field, output);
             }
             pattern_locals(rest, output);
+        }
+        Pattern::Record(fields) => {
+            for (_, pattern) in fields {
+                pattern_locals(pattern, output);
+            }
         }
         Pattern::Wild | Pattern::Number { .. } | Pattern::Range(_, _) => {}
     }
@@ -1088,6 +1409,14 @@ fn type_name(ty: &Type, symbols: &crate::Symbols) -> String {
                 .collect::<Vec<_>>()
                 .join("$"),
             type_name(result, symbols)
+        ),
+        Type::Record(fields) => format!(
+            "Record$${}",
+            fields
+                .iter()
+                .map(|(name, ty)| format!("{}${}", symbols.text(*name), type_name(ty, symbols)))
+                .collect::<Vec<_>>()
+                .join("$")
         ),
     }
 }
@@ -1159,6 +1488,25 @@ mod tests {
     }
 
     #[test]
+    fn lowers_the_host_entry_through_the_machine_boundary() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
+        let host = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/hosts/x86-64-linux.fn");
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../notes/examples/main.fn");
+        let loaded = crate::modules::load_with_host(&[entry], Some(&root), Some(&host)).unwrap();
+        let prelude = PreludeIds::resolve(&loaded).unwrap();
+        let host = crate::host::HostIds::resolve(&loaded, &prelude).unwrap();
+        let resolved = crate::resolve::resolve(loaded).unwrap();
+        let checked = crate::check::program(&resolved, &prelude).unwrap();
+        crate::check::application(&resolved, &checked, &host).unwrap();
+        for bits in [16, 32, 64] {
+            let routines = faun::platform::Routines::builtin().with_word(bits);
+            let mut program = application(&resolved, &checked, &prelude, &host, &routines).unwrap();
+            barb::optimize(&mut program, &barb::OptimizeOptions::default());
+            faun::machine(&program, &routines).unwrap();
+        }
+    }
+
+    #[test]
     fn specializes_polymorphic_data_and_defunctionalizes_lambdas() {
         let (resolved, checked, prelude) = checked_example("utilities.fn");
         for suffix in ["$$mapped", "$$combined", "$$signed_sum"] {
@@ -1178,10 +1526,15 @@ mod tests {
             "$$wrapped_each",
             "$$from_external",
             "$$guarded_entry",
+            "$$record_entry",
         ] {
             let entry = named(&resolved, &checked, suffix);
             let program = program(&resolved, &checked, &prelude, entry).unwrap();
             barb::validate(&program).unwrap();
+            if suffix == "$$record_entry" {
+                let rendered = program.render();
+                assert!(rendered.find("= 22").unwrap() < rendered.find("= 20").unwrap());
+            }
         }
     }
 }

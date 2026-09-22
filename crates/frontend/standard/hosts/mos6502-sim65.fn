@@ -1,0 +1,7 @@
+# Startup values and effects supplied by the MOS 6502 sim65 target.
+
+exports {Host exit!}
+
+Host : {argc: Nat}
+
+exit! : Host Nat -> Never

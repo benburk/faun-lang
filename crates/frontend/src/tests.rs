@@ -87,12 +87,19 @@ fn constructor_shaped_bindings_and_results_stay_distinct() {
 }
 
 #[test]
-fn commas_and_records_outside_the_subset_are_rejected() {
+fn commas_are_rejected_and_records_are_parsed() {
     let comma = parse("f(x, y) -> x").unwrap_err();
     assert!(comma.message.contains("invalid token `,`"));
 
-    let record = parse("point() -> {x: 1}").unwrap_err();
-    assert!(record.offset > 0);
+    let module = parse("Point : {x: Nat}\npoint() -> {x: 1}").unwrap();
+    assert!(matches!(
+        &module.items[0],
+        Item::Data(data) if matches!(data.representation, DataRepresentation::Wrapper(Type::Record { .. }))
+    ));
+    assert!(matches!(
+        &module.items[1],
+        Item::Clause(clause) if matches!(clause.body.result.kind, ExprKind::Record(_))
+    ));
 }
 
 #[test]

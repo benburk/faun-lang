@@ -1,0 +1,5 @@
+# The uninhabited result of a computation that does not return.
+
+exports {Never}
+
+Never : []

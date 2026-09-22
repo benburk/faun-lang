@@ -81,10 +81,29 @@ fn binding_ahead(tokens: &[Token], at: usize) -> bool {
             Some(at + 2)
         }
         Kind::TypeIdent => constructor_pattern_end(tokens, at),
+        Kind::LBrace => record_pattern_end(tokens, at),
         _ => None,
     };
     end.and_then(|end| tokens.get(end))
         .is_some_and(|token| token.kind == Kind::Eq)
+}
+
+fn record_pattern_end(tokens: &[Token], at: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (offset, token) in tokens.get(at..)?.iter().enumerate() {
+        match token.kind {
+            Kind::LBrace => depth += 1,
+            Kind::RBrace => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at + offset + 1);
+                }
+            }
+            Kind::Eof => return None,
+            _ => {}
+        }
+    }
+    None
 }
 
 fn constructor_pattern_end(tokens: &[Token], at: usize) -> Option<usize> {
@@ -315,6 +334,15 @@ peg::parser! {
                     constructors,
                 }
             }
+            / open:lbrace() fields:(record_type_field() ** sep()) close:rbrace() {
+                Type::Record {
+                    span: open.span().through(close.span()),
+                    fields,
+                }
+            }
+
+        rule record_type_field() -> (Name, Type)
+            = field:ident() colon() value:ty() { (name(field), value) }
 
         rule body() -> Body
             = bindings:(binding_ahead() binding:binding() { binding })*
@@ -364,6 +392,12 @@ peg::parser! {
                     rest: rest.map(Box::new),
                 }
             }
+            / open:lbrace() fields:(record_pattern_field() ** sep()) close:rbrace() {
+                Pattern::Record {
+                    span: open.span().through(close.span()),
+                    fields,
+                }
+            }
             / head:type_ident()
               fields:(adj(Kind::LParen) fields:(pattern() ++ sep()) close:rparen() {
                   (fields, close.span())
@@ -377,6 +411,12 @@ peg::parser! {
             }
             / wild:tok(Kind::Wild) { Pattern::Wild(wild.span()) }
             / bind:ident() { Pattern::Bind(name(bind)) }
+
+        rule record_pattern_field() -> (Name, Pattern)
+            = field:ident() value:(colon() value:pattern() { value })? {
+                let field = name(field);
+                (field, value.unwrap_or(Pattern::Bind(field)))
+            }
 
         pub rule expr() -> Expr = precedence! {
             left:(@) bar_sep() right:@ { binary(BinaryOp::Or, left, right) }
@@ -455,6 +495,7 @@ peg::parser! {
             }
             / string:string() { string }
             / list:list() { list }
+            / record:record() { record }
             / open:lparen() value:expr() close:rparen() {
                 Expr { span: open.span().through(close.span()), ..value }
             }
@@ -476,6 +517,21 @@ peg::parser! {
             = text:tok(Kind::StrText) { StringPart::Text(text.span()) }
             / tok(Kind::SpliceStart) value:expr() tok(Kind::SpliceEnd) {
                 StringPart::Splice(value)
+            }
+
+        rule record() -> Expr
+            = open:lbrace() fields:(record_expr_field() ** sep()) close:rbrace() {
+                Expr {
+                    span: open.span().through(close.span()),
+                    kind: ExprKind::Record(fields),
+                }
+            }
+
+        rule record_expr_field() -> (Name, Expr)
+            = field:ident() value:(colon() value:expr() { value })? {
+                let field_name = name(field);
+                let value = value.unwrap_or_else(|| atom(field, ExprKind::Name(field_name)));
+                (field_name, value)
             }
 
         rule list() -> Expr
@@ -521,8 +577,9 @@ fn method_item((head, declaration): (Token, TermDeclaration)) -> MethodItem {
 
 const fn type_span(ty: &Type) -> Span {
     match ty {
-        Type::Named { span, .. } | Type::Function { span, .. } | Type::Variants { span, .. } => {
-            *span
-        }
+        Type::Named { span, .. }
+        | Type::Function { span, .. }
+        | Type::Variants { span, .. }
+        | Type::Record { span, .. } => *span,
     }
 }

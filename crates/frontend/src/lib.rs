@@ -12,6 +12,7 @@ pub mod blessed;
 pub mod check;
 mod grammar;
 pub mod hir;
+pub mod host;
 pub mod lex;
 pub mod literal;
 pub mod lower;

@@ -167,9 +167,13 @@ fn validate_pattern(pattern: &Pattern, source: &str) -> Result<(), LiteralError>
             rest.as_deref()
                 .map_or(Ok(()), |rest| validate_pattern(rest, source))
         }
+        Pattern::Record { fields, .. } => fields
+            .iter()
+            .try_for_each(|(_, pattern)| validate_pattern(pattern, source)),
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_expr(expression: &Expr, source: &str) -> Result<(), LiteralError> {
     match &expression.kind {
         ExprKind::Name(_) => Ok(()),
@@ -192,6 +196,9 @@ fn validate_expr(expression: &Expr, source: &str) -> Result<(), LiteralError> {
             rest.as_deref()
                 .map_or(Ok(()), |rest| validate_expr(rest, source))
         }
+        ExprKind::Record(fields) => fields
+            .iter()
+            .try_for_each(|(_, value)| validate_expr(value, source)),
         ExprKind::Lambda(patterns, body) => {
             patterns
                 .iter()

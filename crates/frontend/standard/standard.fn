@@ -5,6 +5,7 @@
 lib {}
 
 import bool {Bool.*}
+import never {Never}
 import nat {Nat.*}
 import int {Int.*}
 import u8 {U8}
@@ -12,4 +13,4 @@ import list {List.*}
 import result {Result.*}
 import str {Str}
 
-exports {Bool.* Nat.* Int.* U8 List.* Result.* Str}
+exports {Bool.* Never Nat.* Int.* U8 List.* Result.* Str}

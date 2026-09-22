@@ -299,6 +299,22 @@ fn resolve_type(
                 })
                 .collect::<Result<_, ResolveError>>()?,
         )),
+        s::Type::Record { span, fields } => {
+            let mut resolved = fields
+                .iter()
+                .map(|(name, ty)| {
+                    Ok((
+                        symbols.intern(name.text(source)),
+                        resolve_type(module, ty, source, scope, symbols)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ResolveError>>()?;
+            resolved.sort_by_key(|(name, _)| *name);
+            if resolved.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+                return Err(error(module, *span, "record type repeats a field"));
+            }
+            Ok(h::Type::Record(resolved))
+        }
     }
 }
 
@@ -422,6 +438,22 @@ impl ClauseResolver<'_> {
                     .map(|rest| self.pattern(rest).map(Box::new))
                     .transpose()?,
             )),
+            s::Pattern::Record { span, fields } => {
+                let mut resolved = fields
+                    .iter()
+                    .map(|(name, pattern)| {
+                        Ok((
+                            self.symbols.intern(name.text(self.source)),
+                            self.pattern(pattern)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                resolved.sort_by_key(|(name, _)| *name);
+                if resolved.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+                    return Err(error(self.module, *span, "record pattern repeats a field"));
+                }
+                Ok(h::Pattern::Record(resolved))
+            }
         }
     }
 
@@ -457,6 +489,22 @@ impl ClauseResolver<'_> {
                     .map(|rest| self.expr(rest).map(Box::new))
                     .transpose()?,
             ),
+            s::ExprKind::Record(fields) => {
+                let mut seen = std::collections::HashSet::new();
+                let mut resolved = Vec::with_capacity(fields.len());
+                for (name, value) in fields {
+                    let name = self.symbols.intern(name.text(self.source));
+                    if !seen.insert(name) {
+                        return Err(error(
+                            self.module,
+                            expression.span,
+                            "record expression repeats a field",
+                        ));
+                    }
+                    resolved.push((name, self.expr(value)?));
+                }
+                h::ExprKind::Record(resolved)
+            }
             s::ExprKind::Lambda(patterns, body) => {
                 let saved = self.locals.clone();
                 let patterns = patterns

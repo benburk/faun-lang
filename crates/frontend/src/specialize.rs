@@ -22,6 +22,7 @@ use crate::{ModuleId, Symbol};
 pub(crate) enum Type {
     Named(Symbol, Vec<Self>),
     Function(Vec<Self>, Box<Self>),
+    Record(Vec<(Symbol, Self)>),
 }
 
 impl Type {
@@ -74,6 +75,8 @@ pub(crate) enum Pattern {
     Number { magnitude: BigUint, negative: bool },
     Range(BigUint, BigUint),
     List(Vec<Self>, Option<Box<Self>>),
+    Record(Vec<(Symbol, Self)>),
+    Product(Vec<Self>),
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +106,8 @@ pub(crate) enum ExprKind {
     ConstructorFunction(Symbol),
     Construct(Symbol, Vec<Expr>),
     Natural(BigUint),
+    Record(Vec<(Symbol, Expr)>),
+    Project(Box<Expr>, Symbol),
     DirectCall(FunctionKey, Vec<Expr>),
     Invoke(Box<Expr>, Vec<Expr>),
     Lambda(Vec<Pattern>, Box<Expr>),
@@ -127,7 +132,16 @@ pub(crate) fn program(
     prelude: &PreludeIds,
     entry: Symbol,
 ) -> Result<Program, SpecializeError> {
-    Specializer::new(resolved, checked, prelude)?.run(entry)
+    Specializer::new(resolved, checked, prelude)?.run(entry, None)
+}
+
+pub(crate) fn application(
+    resolved: &ResolvedProgram,
+    checked: &CheckedProgram,
+    prelude: &PreludeIds,
+    host: &crate::host::HostIds,
+) -> Result<Program, SpecializeError> {
+    Specializer::new(resolved, checked, prelude)?.run(host.main, Some(host.host))
 }
 
 struct Specializer<'a> {
@@ -137,6 +151,7 @@ struct Specializer<'a> {
     clause_types: HashMap<(ModuleId, crate::ast::Span), &'a InferredType>,
     literal_sites: HashMap<(ModuleId, crate::ast::Span), &'a LiteralExpr>,
     method_sites: HashMap<(ModuleId, crate::ast::Span), Symbol>,
+    projection_sites: HashMap<(ModuleId, crate::ast::Span), Symbol>,
     definitions: HashMap<Symbol, Vec<(ModuleId, &'a h::Clause)>>,
     signatures: HashMap<Symbol, Symbol>,
     data: HashMap<Symbol, h::DataDecl>,
@@ -224,6 +239,11 @@ impl<'a> Specializer<'a> {
             .iter()
             .map(|site| ((site.module, site.span), site.target))
             .collect();
+        let projection_sites = checked
+            .projections
+            .iter()
+            .map(|site| ((site.module, site.span), site.field))
+            .collect();
         Ok(Self {
             checked,
             prelude,
@@ -231,6 +251,7 @@ impl<'a> Specializer<'a> {
             clause_types,
             literal_sites,
             method_sites,
+            projection_sites,
             definitions,
             signatures,
             data,
@@ -241,7 +262,11 @@ impl<'a> Specializer<'a> {
         })
     }
 
-    fn run(mut self, entry: Symbol) -> Result<Program, SpecializeError> {
+    fn run(
+        mut self,
+        entry: Symbol,
+        application_host: Option<Symbol>,
+    ) -> Result<Program, SpecializeError> {
         let scheme = self
             .checked
             .values
@@ -251,8 +276,16 @@ impl<'a> Specializer<'a> {
         let (parameters, _) = entry_ty
             .function()
             .ok_or_else(|| error("entry is not a function"))?;
-        if !parameters.is_empty() {
-            return Err(error("Barb entry functions cannot take parameters"));
+        let valid_parameters = match (application_host, parameters) {
+            (None, []) => true,
+            (Some(host), [Type::Named(found, arguments)]) => *found == host && arguments.is_empty(),
+            _ => false,
+        };
+        if !valid_parameters {
+            return Err(error(match application_host {
+                Some(_) => "application entry must take exactly one Host",
+                None => "Barb entry functions cannot take parameters",
+            }));
         }
         let entry = FunctionKey {
             name: entry,
@@ -402,6 +435,12 @@ impl<'a> Specializer<'a> {
                 }
                 return Ok(tail);
             }
+            h::ExprKind::Record(fields) => ExprKind::Record(
+                fields
+                    .iter()
+                    .map(|(name, value)| Ok((*name, self.expr(module, value, substitution)?)))
+                    .collect::<Result<_, SpecializeError>>()?,
+            ),
             h::ExprKind::Lambda(patterns, body) => ExprKind::Lambda(
                 patterns.iter().map(convert_pattern).collect(),
                 Box::new(self.expr(module, body, substitution)?),
@@ -431,11 +470,15 @@ impl<'a> Specializer<'a> {
                 }
             }
             h::ExprKind::Member(receiver, _) => {
-                let target = self.method_site(module, expression.span)?;
                 let receiver = self.expr(module, receiver, substitution)?;
-                let key = self.method_key(target, &receiver.ty, &[], &ty)?;
-                self.request(key.clone());
-                ExprKind::DirectCall(key, vec![receiver])
+                if let Some(field) = self.projection_sites.get(&(module, expression.span)) {
+                    ExprKind::Project(Box::new(receiver), *field)
+                } else {
+                    let target = self.method_site(module, expression.span)?;
+                    let key = self.method_key(target, &receiver.ty, &[], &ty)?;
+                    self.request(key.clone());
+                    ExprKind::DirectCall(key, vec![receiver])
+                }
             }
             h::ExprKind::Method(receiver, _, arguments) => {
                 let target = self.method_site(module, expression.span)?;
@@ -664,6 +707,12 @@ fn convert_pattern(pattern: &h::Pattern) -> Pattern {
             elements.iter().map(convert_pattern).collect(),
             rest.as_deref().map(convert_pattern).map(Box::new),
         ),
+        h::Pattern::Record(fields) => Pattern::Record(
+            fields
+                .iter()
+                .map(|(name, pattern)| (*name, convert_pattern(pattern)))
+                .collect(),
+        ),
     }
 }
 
@@ -700,6 +749,12 @@ fn substitute_type(
         InferredType::Variants(_) => Err(error(
             "structural variant types are not supported by Barb lowering yet",
         )),
+        InferredType::Record(fields) => Ok(Type::Record(
+            fields
+                .iter()
+                .map(|(name, ty)| Ok((*name, substitute_type(ty, substitution)?)))
+                .collect::<Result<_, SpecializeError>>()?,
+        )),
     }
 }
 
@@ -732,6 +787,15 @@ fn match_type(
                 match_type(a, b, substitution)?;
             }
             match_type(ar, br, substitution)
+        }
+        (InferredType::Record(a), Type::Record(b)) if a.len() == b.len() => {
+            for ((an, at), (bn, bt)) in a.iter().zip(b) {
+                if an != bn {
+                    return Err(error("record specialization has different fields"));
+                }
+                match_type(at, bt, substitution)?;
+            }
+            Ok(())
         }
         _ => Err(error("a concrete use does not match its inferred scheme")),
     }
@@ -771,6 +835,12 @@ pub(crate) fn surface_type(
         )),
         h::Type::Variants(_) => Err(error(
             "structural variant fields are not supported by Barb lowering yet",
+        )),
+        h::Type::Record(fields) => Ok(Type::Record(
+            fields
+                .iter()
+                .map(|(name, ty)| Ok((*name, surface_type(ty, variables)?)))
+                .collect::<Result<_, SpecializeError>>()?,
         )),
     }
 }

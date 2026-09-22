@@ -32,6 +32,13 @@ pub struct MethodSite {
     pub target: Symbol,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectionSite {
+    pub module: ModuleId,
+    pub span: super::ast::Span,
+    pub field: Symbol,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TypeVariable {
     index: u32,
@@ -44,6 +51,7 @@ pub enum InferredType {
     Named(Symbol, Vec<Self>),
     Function(Vec<Self>, Box<Self>),
     Variants(Vec<(Symbol, Vec<Self>)>),
+    Record(Vec<(Symbol, Self)>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +84,7 @@ pub struct CheckedProgram {
     pub clauses: Vec<ClauseSite>,
     pub literals: Vec<LiteralSite>,
     pub methods: Vec<MethodSite>,
+    pub projections: Vec<ProjectionSite>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,7 +118,93 @@ pub fn program(
     resolved: &ResolvedProgram,
     prelude: &PreludeIds,
 ) -> Result<CheckedProgram, CheckError> {
+    validate_effects(&resolved.program, &resolved.symbols)?;
     Checker::new(&resolved.program, &resolved.symbols, prelude)?.check(&resolved.program)
+}
+
+/// Validate the selected host ABI and the application's `main!` signature.
+///
+/// # Errors
+///
+/// Rejects host declarations or an entry whose checked type differs from the
+/// canonical `Host`, `Nat`, and `Never` identities selected during loading.
+pub fn application(
+    resolved: &ResolvedProgram,
+    checked: &CheckedProgram,
+    host: &crate::host::HostIds,
+) -> Result<(), CheckError> {
+    let module = host.entry_module;
+    let span = resolved
+        .program
+        .modules
+        .iter()
+        .flat_map(|module| &module.items)
+        .find_map(|item| match item {
+            h::Item::Signature(signature) if signature.name == host.main => Some(signature.span),
+            h::Item::Clause(clause) if clause.name == host.main => Some(clause.span),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let host_shape = resolved
+        .program
+        .modules
+        .iter()
+        .flat_map(|module| &module.items)
+        .find_map(|item| match item {
+            h::Item::Data(data) if data.name == host.host => data.wrapper.as_ref(),
+            _ => None,
+        })
+        .map(|wrapper| &wrapper.field);
+    if !matches!(
+        host_shape,
+        Some(h::Type::Record(fields))
+            if matches!(fields.as_slice(), [(name, h::Type::Named(nat, arguments))]
+                if *name == host.argc && *nat == host.nat && arguments.is_empty())
+    ) {
+        return Err(failure(
+            module,
+            span,
+            "the application ABI requires `Host : {argc: Nat}`",
+        ));
+    }
+
+    for (name, expected, written) in [
+        (
+            host.main,
+            InferredType::Function(
+                vec![InferredType::Named(host.host, Vec::new())],
+                Box::new(InferredType::Named(host.never, Vec::new())),
+            ),
+            "main! : Host -> Never",
+        ),
+        (
+            host.exit,
+            InferredType::Function(
+                vec![
+                    InferredType::Named(host.host, Vec::new()),
+                    InferredType::Named(host.nat, Vec::new()),
+                ],
+                Box::new(InferredType::Named(host.never, Vec::new())),
+            ),
+            "exit! : Host Nat -> Never",
+        ),
+    ] {
+        let Some(scheme) = checked.values.get(&name) else {
+            return Err(failure(
+                module,
+                span,
+                format!("the application ABI requires `{written}`"),
+            ));
+        };
+        if !scheme.variables.is_empty() || scheme.ty != expected {
+            return Err(failure(
+                module,
+                span,
+                format!("the application ABI requires `{written}`"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,6 +214,7 @@ enum Ty {
     Named(Symbol, Vec<Self>),
     Function(Vec<Self>, Box<Self>),
     Variants(Vec<(Symbol, Vec<Self>)>),
+    Record(Vec<(Symbol, Self)>),
 }
 
 #[derive(Clone, Debug)]
@@ -135,6 +231,12 @@ struct MethodImpl {
 }
 
 #[derive(Clone, Debug)]
+struct FieldImpl {
+    owner: Symbol,
+    scheme: Scheme,
+}
+
+#[derive(Clone, Debug)]
 struct PendingMethod {
     module: ModuleId,
     span: super::ast::Span,
@@ -142,6 +244,7 @@ struct PendingMethod {
     receiver: Ty,
     arguments: Vec<Ty>,
     result: Ty,
+    member: bool,
     resolved: bool,
 }
 
@@ -189,6 +292,12 @@ impl Infer {
                     })
                     .collect(),
             ),
+            Ty::Record(fields) => Ty::Record(
+                fields
+                    .iter()
+                    .map(|(name, ty)| (*name, self.resolve(ty)))
+                    .collect(),
+            ),
         }
     }
 
@@ -226,6 +335,15 @@ impl Infer {
                     for (a, b) in af.iter().zip(bf) {
                         self.unify(a, b)?;
                     }
+                }
+                Ok(())
+            }
+            (Ty::Record(a), Ty::Record(b)) if a.len() == b.len() => {
+                for ((an, at), (bn, bt)) in a.iter().zip(b) {
+                    if an != bn {
+                        return Err("different record fields".to_string());
+                    }
+                    self.unify(at, bt)?;
                 }
                 Ok(())
             }
@@ -271,6 +389,7 @@ fn contains(ty: &Ty, variable: u32) -> bool {
             .iter()
             .flat_map(|(_, fields)| fields)
             .any(|ty| contains(ty, variable)),
+        Ty::Record(fields) => fields.iter().any(|(_, ty)| contains(ty, variable)),
     }
 }
 
@@ -306,6 +425,12 @@ fn substitute(ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
                 })
                 .collect(),
         ),
+        Ty::Record(fields) => Ty::Record(
+            fields
+                .iter()
+                .map(|(name, ty)| (*name, substitute(ty, replacements)))
+                .collect(),
+        ),
     }
 }
 
@@ -316,6 +441,7 @@ struct Checker<'a> {
     values: HashMap<Symbol, Scheme>,
     constructors: HashMap<Symbol, Scheme>,
     methods: HashMap<Symbol, Vec<MethodImpl>>,
+    fields: HashMap<Symbol, Vec<FieldImpl>>,
     visible_methods: HashMap<ModuleId, HashSet<Symbol>>,
     pending_methods: Vec<PendingMethod>,
     pending_numerals: Vec<PendingNumeral>,
@@ -337,6 +463,7 @@ impl<'a> Checker<'a> {
             values: HashMap::new(),
             constructors: HashMap::new(),
             methods: HashMap::new(),
+            fields: HashMap::new(),
             visible_methods: program
                 .modules
                 .iter()
@@ -401,6 +528,18 @@ impl<'a> Checker<'a> {
         }
         if let Some(wrapper) = &data.wrapper {
             let field = self.surface_type(&wrapper.field, &mut variables);
+            if let Ty::Record(fields) = &field {
+                for (name, field_ty) in fields {
+                    let ty = Ty::Function(vec![result.clone()], Box::new(field_ty.clone()));
+                    self.fields.entry(*name).or_default().push(FieldImpl {
+                        owner: data.name,
+                        scheme: Scheme {
+                            variables: free_variables(&ty),
+                            ty,
+                        },
+                    });
+                }
+            }
             let ty = Ty::Function(vec![field], Box::new(result));
             self.constructors.insert(
                 wrapper.constructor,
@@ -490,6 +629,12 @@ impl<'a> Checker<'a> {
                                 .collect(),
                         )
                     })
+                    .collect(),
+            ),
+            h::Type::Record(fields) => Ty::Record(
+                fields
+                    .iter()
+                    .map(|(name, ty)| (*name, self.surface_type(ty, variables)))
                     .collect(),
             ),
         }
@@ -781,6 +926,17 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
+            h::Pattern::Record(fields) => {
+                let field_types: Vec<_> = fields
+                    .iter()
+                    .map(|(name, _)| (*name, self.infer.fresh()))
+                    .collect();
+                self.unify_at(module, span, expected, &Ty::Record(field_types.clone()))?;
+                for ((_, pattern), (_, ty)) in fields.iter().zip(field_types) {
+                    self.pattern(module, pattern, &ty, locals, span)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -885,6 +1041,14 @@ impl<'a> Checker<'a> {
                 }
                 Ok(list)
             }
+            h::ExprKind::Record(fields) => {
+                let mut inferred = Vec::with_capacity(fields.len());
+                for (name, value) in fields {
+                    inferred.push((*name, self.expr(module, value, locals)?));
+                }
+                inferred.sort_by_key(|(name, _)| *name);
+                Ok(Ty::Record(inferred))
+            }
             h::ExprKind::Lambda(patterns, body) => {
                 let parameters: Vec<_> = patterns.iter().map(|_| self.infer.fresh()).collect();
                 let mut bound = Vec::new();
@@ -909,8 +1073,9 @@ impl<'a> Checker<'a> {
                 self.unify_at(module, expression.span, &head_type, &function)?;
                 Ok(result)
             }
-            h::ExprKind::Member(receiver, method) => {
-                self.method(module, expression.span, receiver, *method, &[], locals)
+            h::ExprKind::Member(receiver, member) => {
+                let receiver = self.expr(module, receiver, locals)?;
+                Ok(self.defer_method(module, expression.span, receiver, *member, Vec::new(), true))
             }
             h::ExprKind::Method(receiver, method, arguments) => self.method(
                 module,
@@ -1006,17 +1171,30 @@ impl<'a> Checker<'a> {
         for argument in arguments {
             argument_types.push(self.expr(module, argument, locals)?);
         }
+        Ok(self.defer_method(module, span, receiver, name, argument_types, false))
+    }
+
+    fn defer_method(
+        &mut self,
+        module: ModuleId,
+        span: super::ast::Span,
+        receiver: Ty,
+        name: Symbol,
+        arguments: Vec<Ty>,
+        member: bool,
+    ) -> Ty {
         let result = self.infer.fresh();
         self.pending_methods.push(PendingMethod {
             module,
             span,
             name,
             receiver,
-            arguments: argument_types,
+            arguments,
             result: result.clone(),
+            member,
             resolved: false,
         });
-        Ok(result)
+        result
     }
 
     fn finish_pending(
@@ -1088,6 +1266,17 @@ impl<'a> Checker<'a> {
             let mut next = Vec::new();
             for index in unresolved {
                 let pending = self.pending_methods[index].clone();
+                let fields = self.field_candidates(&pending);
+                if let [field] = fields.as_slice() {
+                    self.apply_field(&pending, field)?;
+                    self.pending_methods[index].resolved = true;
+                    progress = true;
+                    continue;
+                }
+                if fields.len() > 1 {
+                    next.push(index);
+                    continue;
+                }
                 let candidates = self.method_candidates(&pending);
                 match candidates.as_slice() {
                     [] => {
@@ -1095,7 +1284,7 @@ impl<'a> Checker<'a> {
                             pending.module,
                             pending.span,
                             format!(
-                                "no type-compatible method `{}` is in scope",
+                                "no type-compatible field or method `{}` is in scope",
                                 self.symbols.text(pending.name)
                             ),
                         ));
@@ -1129,6 +1318,40 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn field_candidates(&self, pending: &PendingMethod) -> Vec<Scheme> {
+        if !pending.member || !pending.arguments.is_empty() {
+            return Vec::new();
+        }
+        let receiver = self.infer.resolve(&pending.receiver);
+        if let Ty::Record(fields) = &receiver {
+            return fields
+                .iter()
+                .find(|(name, _)| *name == pending.name)
+                .map(|(_, field)| Scheme {
+                    variables: Vec::new(),
+                    ty: Ty::Function(vec![receiver.clone()], Box::new(field.clone())),
+                })
+                .into_iter()
+                .collect();
+        }
+        let Some(fields) = self.fields.get(&pending.name) else {
+            return Vec::new();
+        };
+        fields
+            .iter()
+            .filter(|field| match &receiver {
+                Ty::Named(owner, _) => field.owner == *owner,
+                Ty::Var(_) => true,
+                _ => false,
+            })
+            .filter(|field| {
+                let mut trial = self.infer.clone();
+                apply_signature(&mut trial, pending, &field.scheme).is_ok()
+            })
+            .map(|field| field.scheme.clone())
+            .collect()
+    }
+
     fn method_candidates(&self, pending: &PendingMethod) -> Vec<MethodImpl> {
         let Some(implementations) = self.methods.get(&pending.name) else {
             return Vec::new();
@@ -1149,6 +1372,17 @@ impl<'a> Checker<'a> {
             })
             .cloned()
             .collect()
+    }
+
+    fn apply_field(&mut self, pending: &PendingMethod, scheme: &Scheme) -> Result<(), CheckError> {
+        apply_signature(&mut self.infer, pending, scheme)
+            .map_err(|message| failure(pending.module, pending.span, message))?;
+        self.checked.projections.push(ProjectionSite {
+            module: pending.module,
+            span: pending.span,
+            field: pending.name,
+        });
+        Ok(())
     }
 
     fn apply_method(
@@ -1283,6 +1517,12 @@ fn public_type(ty: &Ty) -> InferredType {
                 .map(|(name, fields)| (*name, fields.iter().map(public_type).collect()))
                 .collect(),
         ),
+        Ty::Record(fields) => InferredType::Record(
+            fields
+                .iter()
+                .map(|(name, ty)| (*name, public_type(ty)))
+                .collect(),
+        ),
     }
 }
 
@@ -1313,6 +1553,11 @@ fn free_variables(ty: &Ty) -> Vec<u32> {
                     }
                 }
             }
+            Ty::Record(fields) => {
+                for (_, ty) in fields {
+                    collect(ty, output);
+                }
+            }
         }
     }
     let mut output = Vec::new();
@@ -1325,6 +1570,183 @@ fn free_scheme(scheme: &Scheme) -> HashSet<u32> {
         .into_iter()
         .filter(|variable| !scheme.variables.contains(variable))
         .collect()
+}
+
+fn validate_effects(program: &h::Program, symbols: &Symbols) -> Result<(), CheckError> {
+    for module in &program.modules {
+        for item in &module.items {
+            match item {
+                h::Item::Clause(clause) => validate_effect_clause(module.source, clause, symbols)?,
+                h::Item::Data(data) => {
+                    for method in &data.methods {
+                        if let h::MethodItem::Clause(clause) = method {
+                            validate_effect_clause(module.source, clause, symbols)?;
+                        }
+                    }
+                }
+                h::Item::Signature(_) => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_effect_clause(
+    module: ModuleId,
+    clause: &h::Clause,
+    symbols: &Symbols,
+) -> Result<(), CheckError> {
+    let effectful = symbols.text(clause.name).ends_with('!');
+    if let Some(guard) = &clause.guard {
+        validate_effect_expr(module, guard, effectful, false, symbols)?;
+    }
+    for binding in &clause.body.bindings {
+        validate_effect_expr(module, &binding.value, effectful, true, symbols)?;
+    }
+    validate_effect_expr(module, &clause.body.result, effectful, true, symbols)
+}
+
+fn validate_effect_expr(
+    module: ModuleId,
+    expression: &h::Expr,
+    owner_effectful: bool,
+    stands_alone: bool,
+    symbols: &Symbols,
+) -> Result<(), CheckError> {
+    match &expression.kind {
+        h::ExprKind::Global(name) if symbols.text(*name).ends_with('!') => Err(failure(
+            module,
+            expression.span,
+            format!(
+                "effect `{}` must be called and stand on its own",
+                source_name(symbols, *name)
+            ),
+        )),
+        h::ExprKind::Call(head, arguments) => {
+            let effect = match &head.kind {
+                h::ExprKind::Global(name) if symbols.text(*name).ends_with('!') => Some(*name),
+                _ => None,
+            };
+            if let Some(effect) = effect {
+                validate_effect_call(
+                    module,
+                    expression.span,
+                    effect,
+                    owner_effectful,
+                    stands_alone,
+                    symbols,
+                )?;
+            } else {
+                validate_effect_expr(module, head, owner_effectful, false, symbols)?;
+            }
+            for argument in arguments {
+                validate_effect_expr(module, argument, owner_effectful, false, symbols)?;
+            }
+            Ok(())
+        }
+        h::ExprKind::Member(receiver, name) => {
+            if symbols.text(*name).ends_with('!') {
+                validate_effect_call(
+                    module,
+                    expression.span,
+                    *name,
+                    owner_effectful,
+                    stands_alone,
+                    symbols,
+                )?;
+            }
+            validate_effect_expr(module, receiver, owner_effectful, false, symbols)
+        }
+        h::ExprKind::Method(receiver, name, arguments) => {
+            if symbols.text(*name).ends_with('!') {
+                validate_effect_call(
+                    module,
+                    expression.span,
+                    *name,
+                    owner_effectful,
+                    stands_alone,
+                    symbols,
+                )?;
+            }
+            validate_effect_expr(module, receiver, owner_effectful, false, symbols)?;
+            for argument in arguments {
+                validate_effect_expr(module, argument, owner_effectful, false, symbols)?;
+            }
+            Ok(())
+        }
+        h::ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
+            h::StringPart::Text(_) => Ok(()),
+            h::StringPart::Splice(expression) => {
+                validate_effect_expr(module, expression, owner_effectful, false, symbols)
+            }
+        }),
+        h::ExprKind::List(elements, rest) => {
+            for element in elements {
+                validate_effect_expr(module, element, owner_effectful, false, symbols)?;
+            }
+            if let Some(rest) = rest {
+                validate_effect_expr(module, rest, owner_effectful, false, symbols)?;
+            }
+            Ok(())
+        }
+        h::ExprKind::Record(fields) => fields.iter().try_for_each(|(_, value)| {
+            validate_effect_expr(module, value, owner_effectful, false, symbols)
+        }),
+        h::ExprKind::Lambda(_, body) => validate_effect_expr(module, body, false, false, symbols),
+        h::ExprKind::Unary(_, value) => {
+            validate_effect_expr(module, value, owner_effectful, false, symbols)
+        }
+        h::ExprKind::Binary(_, left, right) => {
+            validate_effect_expr(module, left, owner_effectful, false, symbols)?;
+            validate_effect_expr(module, right, owner_effectful, false, symbols)
+        }
+        h::ExprKind::Local(_)
+        | h::ExprKind::Global(_)
+        | h::ExprKind::Constructor(_)
+        | h::ExprKind::Number(_) => Ok(()),
+    }
+}
+
+fn validate_effect_call(
+    module: ModuleId,
+    span: super::ast::Span,
+    effect: Symbol,
+    owner_effectful: bool,
+    stands_alone: bool,
+    symbols: &Symbols,
+) -> Result<(), CheckError> {
+    if !owner_effectful {
+        return Err(failure(
+            module,
+            span,
+            format!(
+                "pure definitions cannot call effect `{}`",
+                source_name(symbols, effect)
+            ),
+        ));
+    }
+    if !stands_alone {
+        return Err(failure(
+            module,
+            span,
+            format!(
+                "effect `{}` must stand on its own",
+                source_name(symbols, effect)
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn source_name(symbols: &Symbols, symbol: Symbol) -> &str {
+    symbols
+        .text(symbol)
+        .rsplit("$$")
+        .next()
+        .expect("split always has one item")
+        .rsplit('.')
+        .next()
+        .expect("split always has one item")
 }
 
 fn definitions(program: &h::Program) -> HashMap<Symbol, Vec<(ModuleId, &h::Clause)>> {
@@ -1452,6 +1874,11 @@ fn expr_globals(expression: &h::Expr, output: &mut HashSet<Symbol>) {
                 expr_globals(rest, output);
             }
         }
+        h::ExprKind::Record(fields) => {
+            for (_, value) in fields {
+                expr_globals(value, output);
+            }
+        }
         h::ExprKind::Lambda(_, body) | h::ExprKind::Unary(_, body) => expr_globals(body, output),
         h::ExprKind::Call(head, arguments) | h::ExprKind::Method(head, _, arguments) => {
             expr_globals(head, output);
@@ -1482,6 +1909,11 @@ fn collect_pattern_locals(pattern: &h::Pattern, output: &mut Vec<h::LocalId>) {
             }
             if let Some(rest) = rest {
                 collect_pattern_locals(rest, output);
+            }
+        }
+        h::Pattern::Record(fields) => {
+            for (_, pattern) in fields {
+                collect_pattern_locals(pattern, output);
             }
         }
         h::Pattern::Wild | h::Pattern::Number { .. } | h::Pattern::Range(..) => {}
@@ -1516,6 +1948,14 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
             show(result, symbols)
         ),
         Ty::Variants(_) => "a structural variant".to_string(),
+        Ty::Record(fields) => format!(
+            "{{{}}}",
+            fields
+                .iter()
+                .map(|(name, ty)| format!("{}: {}", symbols.text(*name), show(ty, symbols)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
     }
 }
 
@@ -1556,6 +1996,7 @@ mod tests {
 
         fn load(&self, entry_source: &str) -> (PreludeIds, ResolvedProgram) {
             self.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
+            self.write("never.fn", "exports {Never}\nNever : []\n");
             self.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)].(add : Nat Nat -> Nat add(0 y) -> y add(Succ(n) y) -> Succ(n.add(y)))\n");
             self.write(
                 "int.fn",
@@ -1569,7 +2010,7 @@ mod tests {
             self.write("str.fn", "exports {Str}\nStr : List(U8)\n");
             let standard = self.write(
                 "standard.fn",
-                "lib {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
+                "lib {}\nimport bool {Bool.*}\nimport never {Never}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Never Nat.* Int.* U8 List.* Str}\n",
             );
             let entry = self.write("main.fn", entry_source);
             let loaded = modules::load(&[entry], Some(&standard)).unwrap();
@@ -1713,6 +2154,25 @@ mod tests {
         let resolved = resolve::resolve(loaded).unwrap();
         let checked = program(&resolved, &prelude).unwrap();
         assert!(!checked.methods.is_empty());
+    }
+
+    #[test]
+    fn pure_definitions_and_nested_expressions_cannot_hide_effects() {
+        let fixture = Fixture::new();
+        let (prelude, resolved) =
+            fixture.load("stop! : Nat -> Nat\nbad : Nat\nbad() -> stop!(0)\n");
+        let failure = program(&resolved, &prelude).unwrap_err();
+        assert!(
+            failure
+                .message
+                .contains("pure definitions cannot call effect")
+        );
+
+        let (prelude, resolved) = fixture.load(
+            "stop! : Nat -> Nat\nid : Nat -> Nat\nid(n) -> n\nbad! : Nat\nbad!() -> id(stop!(0))\n",
+        );
+        let failure = program(&resolved, &prelude).unwrap_err();
+        assert!(failure.message.contains("must stand on its own"));
     }
 
     #[test]

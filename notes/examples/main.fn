@@ -1,0 +1,4 @@
+import std.host {Host exit!}
+
+main! : Host -> Never
+main!(host) -> exit!(host host.argc)

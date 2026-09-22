@@ -17,17 +17,17 @@ The accepted language remains a subset of Ori, but now includes:
 
 - package roots with `lib {}`, imports, exports, and `Type.*` interfaces;
 - nominal sum and wrapper types, type parameters, and method blocks;
-- signatures, function types, structural variant types, and `where` constraints;
-- clauses, guards, constructor/list/range/numeral patterns, and local bindings;
+- signatures, function types, closed record types, structural variant types, and `where` constraints;
+- clauses, guards, constructor/list/record/range/numeral patterns, and local bindings;
 - names, arbitrary-size integer and character literals, strings and interpolation;
-- lists, lambdas in call arguments, calls, static members, methods, and operators.
+- records, field projection, lists, lambdas in call arguments, calls, static members, methods, and operators.
 
 The grammar follows Ori's source language, while Faun source and package files
 use the `.fn` extension. `crates/frontend/standard/` supplies a bootstrap
 prelude with
-`Bool`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str`. It includes concrete
+`Bool`, `Never`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str`. It includes concrete
 arithmetic, Boolean, collection, and result utilities that avoid hashing,
-records, tuples, and postfix propagation. Concrete equality implementations
+tuples, record rows and updates, and postfix propagation. Concrete equality implementations
 replace bodyless derivation where no method constraint is needed. The complete
 Ori standard package still contains forms outside this slice.
 
@@ -44,8 +44,9 @@ symbols and locals become clause-local integer IDs. This avoids allocating names
 in the parser or repeatedly rewriting the surface tree as modules are merged.
 
 The loader currently supports package-relative disk modules in either
-`path.fn` or `path/name.fn` form. Dependency maps in package headers and
-compiler-provided host modules remain to be added.
+`path.fn` or `path/name.fn` form. For applications it also mounts one
+compiler-selected source module at the virtual path `std.host`. Dependency maps
+in package headers remain to be added.
 
 ### Blessed literals
 
@@ -88,21 +89,43 @@ rejected during checking. Bodyless signatures do not derive implementations;
 the bootstrap prelude writes concrete `Bool`, `Nat`, and `Int` equality and
 omits generic equality requiring bounds.
 
-### Specialization and Barb lowering
+### Application and host contract
 
-`faun lower --entry NAME PATH` starts from a monomorphic, parameterless value.
-It follows reachable calls, specializes polymorphic globals and nominal data,
-then defunctionalizes function values into concrete closure types and apply
-functions. Global functions, constructor functions, and lambdas with captures
-all use the same first-order representation. Clause matrices become exhaustive
-Barb matches; direct calls, methods, list syntax, wrappers, and elaborated
-literals become ordinary Barb constructors, calls, and constants. Reachable
-bodyless signatures remain external Barb declarations.
+An application imports its compiler-selected interface explicitly and defines
+one entry with the exact canonical signature:
 
-Lowering currently rejects ranges, interpolated strings, refutable local
-bindings, structural variants, polymorphic entries, and local bindings whose
-generalized value itself requires multiple specializations. Records, tuples,
-constraints, and postfix propagation remain earlier frontend gaps.
+```faun
+import std.host {Host exit!}
+
+main! : Host -> Never
+main!(host) -> exit!(host host.argc)
+```
+
+Each target-owned host module declares `Host : {argc: Nat}` and
+`exit! : Host Nat -> Never`. The record field is immutable startup data; the
+explicit `Host` argument is authority to perform the effect. Pure definitions
+cannot call names ending in `!`, and an effect call must stand alone as a local
+binding or clause result.
+
+`faun lower --host HOST PATH` discovers `main!`, follows reachable calls,
+specializes polymorphic globals and nominal data, then defunctionalizes function
+values into concrete closure types and apply functions. Lowering synthesizes a
+parameterless entry which calls the target's `argc!` provider. The one-field
+`Host` record is represented by that `Nat`, while source calls to `exit!` erase
+the authority argument before machine IR checks the provider signature.
+
+Global functions, constructor functions, and lambdas with captures all use the
+same first-order representation. Clause matrices become exhaustive Barb
+matches; direct calls, methods, records, field projection, list syntax,
+wrappers, and elaborated literals become ordinary Barb constructors, matches,
+calls, and constants. Reachable bodyless signatures remain external Barb
+declarations.
+
+Lowering currently rejects ranges, interpolated strings, local destructuring
+bindings, structural variants, polymorphic non-application entries, record
+updates and rows, and local bindings whose generalized value itself requires
+multiple specializations. Tuples, constraints, and postfix propagation remain
+earlier frontend gaps.
 
 ### Performance
 
