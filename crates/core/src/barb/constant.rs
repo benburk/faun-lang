@@ -23,7 +23,7 @@ use num_bigint::BigUint;
 
 #[cfg(test)]
 use super::Program;
-use super::types::TypeInfo;
+use super::types::{TypeInfo, TypeShape};
 use super::{CtorId, TypeId};
 
 mod checked;
@@ -72,28 +72,34 @@ pub enum Shape {
 pub struct Value(pub CtorId, pub Vec<Self>);
 
 pub(super) fn shape(types: TypeInfo<'_>, id: TypeId) -> Shape {
-    if types.ctors(id).len() != 2 {
-        return Shape::Tagged;
-    }
-    let (first, second) = (types.ctor_at(id, 0), types.ctor_at(id, 1));
-    for (nil, cons) in [(first, second), (second, first)] {
-        if !types.fields(nil).is_empty() {
-            continue;
+    match types.shape(id) {
+        TypeShape::Natural {
+            empty,
+            push,
+            recursive,
         }
-        let mut recursive = types
-            .fields(cons)
-            .iter()
-            .enumerate()
-            .filter(|(_, field)| **field == id);
-        if let (Some((at, _)), None) = (recursive.next(), recursive.next()) {
-            return Shape::Spine {
-                nil,
-                cons,
-                recursive: at,
-            };
+        | TypeShape::Sequence {
+            empty,
+            push,
+            recursive,
+            ..
         }
+        | TypeShape::Spine {
+            empty,
+            push,
+            recursive,
+        } => Shape::Spine {
+            nil: empty,
+            cons: push,
+            recursive,
+        },
+        TypeShape::Uninhabited
+        | TypeShape::Unit { .. }
+        | TypeShape::Wrapper { .. }
+        | TypeShape::Product { .. }
+        | TypeShape::Enumeration
+        | TypeShape::Sum => Shape::Tagged,
     }
-    Shape::Tagged
 }
 
 /// Encode an already-validated constructor tree without materializing a spine.

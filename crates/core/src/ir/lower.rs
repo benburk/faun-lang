@@ -498,17 +498,20 @@ fn reachable(
     bounds: barb::Bounds,
 ) -> impl Iterator<Item = barb::Arm> + '_ {
     program.arms(arms).iter().copied().filter(move |arm| {
-        let owner = program.ctor(arm.ctor).owner;
-        if barb::single_field(program, owner).is_some() {
-            return true;
-        }
-        match barb::shape(program, owner) {
-            barb::Shape::Spine { nil, .. } if arm.ctor == nil => bounds.low == 0,
-            barb::Shape::Spine { .. } => bounds.high != Some(0),
-            barb::Shape::Tagged => {
+        match barb::type_shape(program, program.ctor(arm.ctor).owner) {
+            barb::TypeShape::Natural { empty, .. } if arm.ctor == empty => bounds.low == 0,
+            barb::TypeShape::Natural { .. } => bounds.high != Some(0),
+            barb::TypeShape::Enumeration => {
                 let tag = u64::from(program.tag(arm.ctor));
                 tag >= bounds.low && bounds.high.is_none_or(|high| tag <= high)
             }
+            barb::TypeShape::Uninhabited
+            | barb::TypeShape::Unit { .. }
+            | barb::TypeShape::Wrapper { .. }
+            | barb::TypeShape::Product { .. }
+            | barb::TypeShape::Sequence { .. }
+            | barb::TypeShape::Spine { .. }
+            | barb::TypeShape::Sum => true,
         }
     })
 }
@@ -518,54 +521,37 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, Strin
     let name = program.name(program.type_(id).name);
     let mut represented = id;
     for _ in 0..program.types().len() {
-        if uninhabited(program, represented) || erased(program, represented) {
-            return Ok(Storage::Erased);
+        match barb::type_shape(program, represented) {
+            barb::TypeShape::Uninhabited | barb::TypeShape::Unit { .. } => {
+                return Ok(Storage::Erased);
+            }
+            barb::TypeShape::Enumeration => return Ok(Storage::Carried),
+            barb::TypeShape::Wrapper { field, .. } => represented = field,
+            barb::TypeShape::Natural { .. } => {
+                // A number takes a place. How wide is not a question about the
+                // type -- every natural has the same type and they are not all
+                // the same size -- so it is asked of each value.
+                return Ok(Storage::Carried);
+            }
+            barb::TypeShape::Sequence { element, .. }
+                if matches!(
+                    barb::type_shape(program, element),
+                    barb::TypeShape::Natural { .. }
+                ) =>
+            {
+                return Ok(Storage::Static);
+            }
+            barb::TypeShape::Sequence { .. } | barb::TypeShape::Spine { .. } => {
+                return Err(format!(
+                    "`{name}` carries something per element, which has no representation in this tier yet"
+                ));
+            }
+            barb::TypeShape::Product { .. } | barb::TypeShape::Sum => {
+                return Err(format!("`{name}` has no representation in this tier yet"));
+            }
         }
-        if tagged(program, represented) {
-            return Ok(Storage::Carried);
-        }
-        if let Some((_, field)) = barb::single_field(program, represented) {
-            represented = field;
-            continue;
-        }
-        let barb::Shape::Spine {
-            cons, recursive, ..
-        } = barb::shape(program, represented)
-        else {
-            return Err(format!("`{name}` has no representation in this tier yet"));
-        };
-        if program.fields(cons).len() == 1 {
-            // A number takes a place. How wide is not a question about the type
-            // -- every `Nat` is the same type and they are not all the same
-            // size -- so it is asked of each value, where the tier above
-            // answered it.
-            return Ok(Storage::Carried);
-        }
-        let mut elements = program
-            .fields(cons)
-            .iter()
-            .enumerate()
-            .filter(|(at, _)| *at != recursive);
-        let byte_elements = elements.next().is_some_and(|(_, element)| {
-            matches!(barb::shape(program, *element), barb::Shape::Spine { cons, .. } if program.fields(cons).len() == 1)
-        }) && elements.next().is_none();
-        if byte_elements {
-            return Ok(Storage::Static);
-        }
-        return Err(format!(
-            "`{name}` carries something per element, which has no representation in this tier yet"
-        ));
     }
     Err(format!("`{name}` has a cyclic transparent representation"))
-}
-
-/// A type with one constructor and no fields says nothing by being one value
-/// rather than another, so it needs no bits and no argument. The authority a
-/// program is handed is such a type, and so is what a routine answers when it
-/// answers nothing.
-fn erased(program: &barb::Program, id: barb::TypeId) -> bool {
-    let ctors = program.ctors(id);
-    ctors.len() == 1 && program.types_of(ctors[0].fields).is_empty()
 }
 
 /// The narrowest class holding every value a term answers. A width is what
@@ -590,7 +576,7 @@ fn width(held: barb::Bounds) -> Class {
 /// A type with no constructors has no values, so nothing holds one and
 /// nothing is passed. What is said to answer one does not answer.
 fn uninhabited(program: &barb::Program, id: barb::TypeId) -> bool {
-    program.ctors(id).is_empty()
+    barb::type_shape(program, id) == barb::TypeShape::Uninhabited
 }
 
 /// A type whose constructors all carry nothing says which one it is and
@@ -598,14 +584,10 @@ fn uninhabited(program: &barb::Program, id: barb::TypeId) -> bool {
 /// `Bool` is such a type, and so is an ordering, and so is anything a
 /// program writes as a run of bare names.
 ///
-/// One such constructor is [`erased`] rather than tagged: a value that
+/// A single nullary constructor is erased rather than tagged: a value that
 /// could not have been anything else says nothing by being itself.
 fn tagged(program: &barb::Program, id: barb::TypeId) -> bool {
-    let ctors = program.ctors(id);
-    ctors.len() > 1
-        && ctors
-            .iter()
-            .all(|ctor| program.types_of(ctor.fields).is_empty())
+    barb::type_shape(program, id) == barb::TypeShape::Enumeration
 }
 
 /// What a term answers: a value, nothing because its type carries nothing,

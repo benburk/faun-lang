@@ -138,6 +138,51 @@ fn a_spine_is_recognised_and_a_branching_type_is_not() {
 }
 
 #[test]
+fn runtime_shapes_distinguish_sequences_from_other_spines_and_aggregates() {
+    let (mut program, nat, byte, list) = types();
+    assert!(matches!(
+        type_shape(&program, nat),
+        TypeShape::Natural { .. }
+    ));
+    assert!(matches!(
+        type_shape(&program, list),
+        TypeShape::Sequence { element, .. } if element == byte
+    ));
+
+    let empty = program.declare_type("Empty");
+    program.define_type(empty, &[]);
+    let unit = program.declare_type("Unitish");
+    program.define_type(unit, &[("Only", &[])]);
+    let wrapper = program.declare_type("Wrapped");
+    program.define_type(wrapper, &[("Wrap", &[nat])]);
+    let product = program.declare_type("Pair");
+    program.define_type(product, &[("Pair", &[nat, nat])]);
+    let enumeration = program.declare_type("Choice");
+    program.define_type(enumeration, &[("Left", &[]), ("Right", &[])]);
+    let sum = program.declare_type("Maybe");
+    program.define_type(sum, &[("None", &[]), ("Some", &[nat])]);
+    let wide = program.declare_type("WideSpine");
+    program.define_type(wide, &[("Push", &[wide, nat, nat]), ("Empty", &[])]);
+
+    assert_eq!(type_shape(&program, empty), TypeShape::Uninhabited);
+    assert!(matches!(type_shape(&program, unit), TypeShape::Unit { .. }));
+    assert!(matches!(
+        type_shape(&program, wrapper),
+        TypeShape::Wrapper { field, .. } if field == nat
+    ));
+    assert!(matches!(
+        type_shape(&program, product),
+        TypeShape::Product { .. }
+    ));
+    assert_eq!(type_shape(&program, enumeration), TypeShape::Enumeration);
+    assert_eq!(type_shape(&program, sum), TypeShape::Sum);
+    assert!(matches!(
+        type_shape(&program, wide),
+        TypeShape::Spine { .. }
+    ));
+}
+
+#[test]
 fn a_natural_costs_the_logarithm_of_its_value() {
     let (mut program, nat_id, _, _) = types();
     let thousand = nat(&program, nat_id, 1000);

@@ -187,10 +187,17 @@ Constants carry their types in the pool: `Expr::Static(ConstId)` and
 constructors are assigned once; a pending declaration is distinct from a defined
 empty type. Recursive and mutually recursive declarations remain possible.
 
+`type_shape(program, id)` classifies declarations structurally as uninhabited,
+unit, wrapper, product, natural, sequence, wider spine, enumeration, or general
+sum. A sequence is exactly an empty constructor plus a step with one payload and
+one recursive field; its element may be any type. Names and constructor order do
+not participate. Machine representation selection uses this exhaustive view
+instead of rediscovering products, naturals, and byte spines independently.
+
 `Program::constant(id).view()` classifies a validated value as `Natural`, `Spine`,
 or `Constructor`, with private, shape-specific handles. A natural is a zero-payload
-spine; the `Spine` case has element payloads. Classification is structural, never
-based on source names. `NaturalView::try_u64()` can fail only with `TooWide`;
+spine; the `Spine` case has element payloads. Constant encoding is structural,
+never based on source names. `NaturalView::try_u64()` can fail only with `TooWide`;
 `to_biguint()` reads the magnitude without expanding the spine. `SpineView` supplies
 its length and an explicit `ByteView` capability. Every constant has a total
 `constructor()` query that inspects the header without allocating a bigint or

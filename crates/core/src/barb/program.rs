@@ -10,7 +10,7 @@ use super::model::{
     TypeDefinition, TypeId,
 };
 use super::terms::TermArena;
-use super::types::TypeInfo;
+use super::types::{TypeInfo, TypeShape};
 use crate::index::{Pool, Range, append_range};
 
 /// A program, and the pools every part of it lives in.
@@ -40,17 +40,19 @@ pub fn shape(program: &Program, id: TypeId) -> Shape {
     constant::shape(program.type_info(), id)
 }
 
+/// Classify a type for representation selection from its declaration alone.
+#[must_use]
+pub fn type_shape(program: &Program, id: TypeId) -> TypeShape {
+    program.type_info().shape(id)
+}
+
 /// The sole constructor and field of a one-field product.
 #[must_use]
 pub(crate) fn single_field(program: &Program, id: TypeId) -> Option<(CtorId, TypeId)> {
-    if program.ctors(id).len() != 1 {
-        return None;
+    match type_shape(program, id) {
+        TypeShape::Wrapper { constructor, field } => Some((constructor, field)),
+        _ => None,
     }
-    let ctor = program.ctor_at(id, 0);
-    let [field] = program.fields(ctor) else {
-        return None;
-    };
-    Some((ctor, *field))
 }
 
 /// Peel nested one-field products from an already validated constant.

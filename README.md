@@ -167,7 +167,6 @@ printf 'status: %s\n' "$?"
 This is byte input rather than a runtime string. Reading a whole stream still
 needs a runtime sequence representation.
 
-
 ## Inspecting a runtime expression
 
 [`crates/simple/examples/expressions.fn`](crates/simple/examples/expressions.fn) computes `(argc + 2) + argc`
