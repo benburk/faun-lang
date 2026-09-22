@@ -1,0 +1,21 @@
+[package]
+name = "faun-frontend"
+version.workspace = true
+edition.workspace = true
+description = "The primary Faun source frontend"
+
+[[bench]]
+name = "frontend"
+harness = false
+
+[dependencies]
+faun.workspace = true
+num-bigint = "0.4.8"
+num-traits = "0.2"
+peg = "0.8.6"
+
+[dev-dependencies]
+mimalloc = "0.1.52"
+
+[lints]
+workspace = true

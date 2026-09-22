@@ -43,17 +43,17 @@ fn dispatch(command: Command) -> Result<(), String> {
         Command::Check { source } => {
             let prelude = std::env::var_os("ORI_STD").map(PathBuf::from);
             let loaded =
-                faun::surface::modules::load(std::slice::from_ref(&source), prelude.as_deref())
+                faun_frontend::modules::load(std::slice::from_ref(&source), prelude.as_deref())
                     .map_err(|error| error.to_string())?;
             let blessed = loaded
                 .prelude
-                .map(|_| faun::surface::blessed::PreludeIds::resolve(&loaded))
+                .map(|_| faun_frontend::blessed::PreludeIds::resolve(&loaded))
                 .transpose()
                 .map_err(|error| error.to_string())?;
             let resolved =
-                faun::surface::resolve::resolve(loaded).map_err(|error| error.to_string())?;
+                faun_frontend::resolve::resolve(loaded).map_err(|error| error.to_string())?;
             if let Some(blessed) = blessed {
-                faun::surface::check::program(&resolved, &blessed)
+                faun_frontend::check::program(&resolved, &blessed)
                     .map_err(|error| error.to_string())?;
             }
             Ok(())
@@ -66,7 +66,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn check_takes_an_ori_source_path() {
+    fn check_takes_a_source_path() {
         cli().check_invariants(false);
         let command = cli().run_inner(&["check", "example.fn"][..]).unwrap();
         let Command::Check { source } = command;

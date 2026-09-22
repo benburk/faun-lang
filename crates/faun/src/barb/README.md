@@ -106,7 +106,8 @@ two types -- so nothing infers a provider or an effect from the display name.
 6. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
    pure arithmetic; retain calls of unknown meaning and matches.
 
-Each stage runs once and can be disabled programmatically. `read_with_options` exposes
+Each stage runs once and can be disabled programmatically.
+`faun_simple::read_with_options` exposes
 these controls without bypassing validation or totality checking. Disabling helper
 inlining may reduce range analysis precision and backend representability, not alter
 Barb semantics. `normalize_with_limits` does structural-only rebuilding when any inline limit is

@@ -9,8 +9,8 @@ inference on `.fn` source. Set `ORI_STD` to a
 standard-library root when the program needs an implicit prelude:
 
 ```sh
-ORI_STD=standard/standard.fn cargo run -- check notes/examples/literals.fn
-ORI_STD=standard/standard.fn cargo run -- check notes/examples/utilities.fn
+ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/literals.fn
+ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/utilities.fn
 ```
 
 The accepted language remains a subset of Ori, but now includes:
@@ -23,7 +23,8 @@ The accepted language remains a subset of Ori, but now includes:
 - lists, lambdas in call arguments, calls, static members, methods, and operators.
 
 The grammar follows Ori's source language, while Faun source and package files
-use the `.fn` extension. `standard/` supplies a bootstrap prelude with
+use the `.fn` extension. `crates/frontend/standard/` supplies a bootstrap
+prelude with
 `Bool`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str`. It includes concrete
 arithmetic, Boolean, collection, and result utilities that avoid hashing,
 records, tuples, and postfix propagation. Concrete equality implementations
@@ -93,7 +94,7 @@ HIR-to-Barb lowering also remain.
 Run the frontend throughput benchmark in an optimized build:
 
 ```sh
-cargo bench -p faun --bench frontend
+cargo bench -p faun-frontend --bench frontend
 ```
 
 It measures lexing and complete single-file parsing over three 100,000-line
@@ -134,5 +135,7 @@ cargo run --bin faun-simple -- run examples/exit.fn
 cargo run --bin faun-simple -- inspect --emit barb examples/expressions.fn
 ```
 
-The library module is `faun::simple`. Existing `faun::read*` functions still
-run this frontend until the Ori-compatible frontend can lower complete programs.
+The library crate is `faun-simple`; it owns this syntax, its pipeline entry
+points, and `crates/simple/standard/`. The primary syntax and
+`crates/frontend/standard/` belong to the separate `faun-frontend` crate. Both
+frontends depend on the shared `faun` compiler core.

@@ -9,9 +9,9 @@ types, and resolves methods in the current subset:
 
 ```sh
 cargo run -- check notes/examples/frontend.fn
-ORI_STD=standard/standard.fn cargo run -- check notes/examples/literals.fn
-ORI_STD=standard/standard.fn cargo run -- check notes/examples/utilities.fn
-cargo bench -p faun --bench frontend
+ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/literals.fn
+ORI_STD=crates/frontend/standard/standard.fn cargo run -- check notes/examples/utilities.fn
+cargo bench -p faun-frontend --bench frontend
 ```
 
 It supports package interfaces, nominal types and method blocks, clauses,
@@ -24,17 +24,21 @@ receiver type. Parsed `where` constraints are not checked yet.
 expansions through ordinary Barb operations. Complete program lowering is not
 implemented yet. See the [frontend status and benchmark contract](notes/frontend.md) for the exact boundary.
 
-The archived `faun-simple` command keeps the original `.fn` frontend and complete
-compiler pipeline. It validates definitions, runs a bounded optimization
+The source frontends are separate crates. `faun-frontend` owns the primary
+syntax, inference, module loader, and its standard package. `faun-simple` owns
+the archived syntax, its standard sources, and the complete old compilation
+pipeline. The `faun` crate starts at Barb and contains the shared compiler core.
+
+The archived `faun-simple` command validates definitions, runs a bounded optimization
 schedule, recognizes arithmetic structurally, derives ranges, and lowers to
 validated machine IR. Targets then prepare representations, check their limits,
 and emit. A reference machine-IR interpreter supports 16-, 32-, and 64-bit
 configurations.
 
-See [arithmetic and simple-frontend libraries](standard/README.md) for unbounded `Nat`,
-monus and zero-divisor semantics, native arithmetic, and ordinary `U8`/`Int`
-definitions. There is no automatic prelude or import syntax: prepend the needed
-library files explicitly.
+See the [primary standard package](crates/frontend/standard/README.md) and
+[simple standard sources](crates/simple/standard/README.md). The simple
+frontend has no automatic prelude or import syntax: prepend the needed library
+files explicitly.
 
 [Runtime naturals](notes/runtime-naturals.md) work on x86-64 and wasm32 using a
 reusable private heap, 64 KiB by default; exhaustion exits with status 2 rather

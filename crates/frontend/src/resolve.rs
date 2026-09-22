@@ -619,7 +619,7 @@ fn error(module: ModuleId, span: s::Span, message: impl Into<String>) -> Resolve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::modules;
+    use crate::modules;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};

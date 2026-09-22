@@ -193,19 +193,19 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
 fn inspect(text: &str, target: &dyn Target, stage: Stage) -> Result<String, String> {
     let routines = target.routines();
     match stage {
-        Stage::Barb => Ok(faun::read_barb_with_options(
+        Stage::Barb => Ok(faun_simple::read_barb_with_options(
             text,
             &routines,
             &faun::barb::OptimizeOptions::default(),
         )?
         .render()),
         Stage::Ir => {
-            let program = faun::read(text, &routines)?;
+            let program = faun_simple::read(text, &routines)?;
             faun::ir::validate(&program)?;
             Ok(program.render())
         }
         Stage::PreparedIr => {
-            let program = faun::read(text, &routines)?;
+            let program = faun_simple::read(text, &routines)?;
             Ok(target.prepare(&program)?.render())
         }
     }
@@ -214,7 +214,7 @@ fn inspect(text: &str, target: &dyn Target, stage: Stage) -> Result<String, Stri
 /// The program at `path`, read and lowered.
 fn read(path: &Path, target: &dyn Target) -> Result<faun::ir::Program, Box<dyn Error>> {
     let text = fs::read_to_string(path)?;
-    faun::read(&text, &target.routines())
+    faun_simple::read(&text, &target.routines())
         .map_err(|error| format!("{}: {error}", path.display()).into())
 }
 

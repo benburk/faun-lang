@@ -51,7 +51,7 @@ fn written() -> PathBuf {
 }
 
 pub(super) fn read(text: &str) -> Result<Program, String> {
-    faun::read(text, &TARGET.routines())
+    faun_simple::read(text, &TARGET.routines())
 }
 
 pub(super) fn execute(program: &Program) -> (i32, String) {
@@ -141,7 +141,7 @@ pub(super) fn bytes(program: &Program) -> Vec<u8> {
 
 #[test]
 fn it_answers_what_a_program_says() {
-    for (name, program, answer) in programs::running() {
+    for (name, program, answer) in faun_simple::programs::running() {
         assert_eq!(status(&program), answer, "{name}");
     }
 }
@@ -371,7 +371,7 @@ fn runnable_expression_example_uses_runtime_arguments() {
 fn source_zero_width_scalars_cross_calls_and_joins() {
     let source = include_str!("zero_width.fn");
     for inline_helpers in [true, false] {
-        let program = faun::read_with_options(
+        let program = faun_simple::read_with_options(
             source,
             &TARGET.routines(),
             &faun::barb::OptimizeOptions {

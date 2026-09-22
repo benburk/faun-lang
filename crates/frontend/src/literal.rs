@@ -223,7 +223,7 @@ fn validate_numeral(numeral: Numeral, source: &str) -> Result<(), LiteralError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::ast::{Numeral, NumeralKind, Span};
+    use crate::ast::{Numeral, NumeralKind, Span};
 
     #[test]
     fn decoding_borrows_plain_text_and_allocates_escapes() {

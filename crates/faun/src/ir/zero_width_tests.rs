@@ -94,7 +94,7 @@ fn zero_parameters_results_and_joins_are_not_erased() {
 fn range_proven_zero_arithmetic_selects_fixed0() {
     let source = format!(
         "{}\nmain!(h) ->\n  n = argc!(h)\n  exit!(h mod(n Succ(Zero)))",
-        include_str!("../../../../standard/simple/nat.fn")
+        include_str!("../../../../crates/simple/standard/nat.fn")
     );
     for word_bits in [16, 32, 64] {
         let p = crate::read_with_options(
@@ -139,7 +139,7 @@ fn range_proven_zero_arithmetic_selects_fixed0() {
 /// holding here, since what says a pass changed the shape and not the
 /// answer is running the two of them against each other.
 fn comparison_programs(word_bits: u16, constructors: &str, expression: &str) -> (Program, Program) {
-    let library = include_str!("../../../../standard/simple/nat.fn")
+    let library = include_str!("../../../../crates/simple/standard/nat.fn")
         .replace("type Bool False True", &format!("type Bool {constructors}"));
     let source = format!(
         "{library}\nprobe(n) -> {expression}\n\

@@ -1,32 +1,8 @@
-# Standard libraries
+# Simple frontend standard library
 
-## Ori-compatible bootstrap prelude
-
-`standard/standard.fn` is the bootstrap module prelude for the primary
-frontend. It defines `Bool`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str` with
-Ori-compatible representations. `Nat`, `Int`, and `Bool` provide a small
-arithmetic and logic kernel; `List` and `Result` provide polymorphic utilities
-that do not need tuples, records, postfix `?`, or method constraints. It also
-provides `Int.of_nat` and `Int.neg`, which contextual literal elaboration needs.
-It is not a claim to be the complete Ori standard library.
-
-```sh
-ORI_STD=standard/standard.fn cargo run -- check notes/examples/literals.fn
-ORI_STD=standard/standard.fn cargo run -- check notes/examples/utilities.fn
-```
-
-The loader treats this as an ordinary disk-backed package. Its exported names
-are implicit in the checked program; private `Str` and `U8` wrappers remain
-available only to their modules and blessed string construction. Hashing and
-bodyless method derivation are omitted. Equality is implemented manually for
-concrete core types; generic equality for `List` and `Result` waits for method
-constraints.
-
-## Arithmetic for the simple frontend
-
-The files under `standard/simple/` belong to the archived `faun-simple`
+The files under `crates/simple/standard/` belong to the archived `faun-simple`
 frontend. They remain ordinary source definitions rather than compiler
-intrinsics. `standard/simple/nat.fn` provides:
+intrinsics. `crates/simple/standard/nat.fn` provides:
 
 - `Nat = Zero | Succ(Nat)` is unbounded.
 - `add`, `sub`, and `mul` are natural arithmetic; `sub` is monus.
@@ -34,7 +10,7 @@ intrinsics. `standard/simple/nat.fn` provides:
 - `equals` and `less_than` return `Bool`.
 
 There is no import syntax or automatic prelude yet. Prepend
-`standard/simple/nat.fn` to a program's source before parsing it; do not also
+`crates/simple/standard/nat.fn` to a program's source before parsing it; do not also
 declare its types or functions.
 Expressions currently use calls and constructors, for example:
 
@@ -164,9 +140,9 @@ Any remaining runtime `U8` or `Int` value is still rejected, not silently erased
 The definitions below do not add runtime product/sum packing or signed machine
 lowering, nor do they make unbounded signed magnitudes fit a machine word.
 
-## Bytes: `standard/simple/u8.fn`
+## Bytes: `crates/simple/standard/u8.fn`
 
-Prepend `standard/simple/nat.fn`, then `standard/simple/u8.fn`. All functions
+Prepend `crates/simple/standard/nat.fn`, then `crates/simple/standard/u8.fn`. All functions
 are ordinary source definitions.
 `U8` has eight `Bool` fields, **least significant bit first**:
 
@@ -202,11 +178,11 @@ There is no byte literal syntax, implicit conversion, or spelling-based compiler
 intrinsic. Division, remainder, bitwise operations, and checked arithmetic are
 not provided yet.
 
-## Signed integers: `standard/simple/int.fn`
+## Signed integers: `crates/simple/standard/int.fn`
 
-Prepend `standard/simple/nat.fn`, then `standard/simple/int.fn` (independently
-of `standard/simple/u8.fn`). Both libraries can also be concatenated together
-after a **single** copy of `standard/simple/nat.fn`; all new functions
+Prepend `crates/simple/standard/nat.fn`, then `crates/simple/standard/int.fn` (independently
+of `crates/simple/standard/u8.fn`). Both libraries can also be concatenated together
+after a **single** copy of `crates/simple/standard/nat.fn`; all new functions
 and helper names are prefixed `u8_` or `int_`. Helpers remain publicly callable
 because there are no modules yet.
 

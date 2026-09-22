@@ -454,11 +454,7 @@ fn cyclic_and_shared_regions_are_rejected() {
 
 #[test]
 fn existing_target_fixture_programs_validate() {
-    for (name, p, _) in crate::programs::running().into_iter().chain(
-        crate::programs::printing()
-            .into_iter()
-            .map(|(n, p, _)| (n, p, 0)),
-    ) {
+    for (name, p, _) in crate::programs::printing() {
         validate(&p).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 }

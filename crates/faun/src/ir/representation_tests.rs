@@ -1,9 +1,9 @@
 use super::*;
 use crate::{barb, platform::Routines};
 
-const NAT: &str = include_str!("../../../../standard/simple/nat.fn");
-const BYTE: &str = include_str!("../../../../standard/simple/u8.fn");
-const INT: &str = include_str!("../../../../standard/simple/int.fn");
+const NAT: &str = include_str!("../../../../crates/simple/standard/nat.fn");
+const BYTE: &str = include_str!("../../../../crates/simple/standard/u8.fn");
+const INT: &str = include_str!("../../../../crates/simple/standard/int.fn");
 
 fn bodies(program: &Program) -> usize {
     program

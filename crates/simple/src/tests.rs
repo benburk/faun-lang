@@ -1,9 +1,9 @@
-use crate::barb::*;
+use faun::barb::*;
 
 /// Every test here reads against what a compiler knows, since none of them
 /// is about a routine somebody wrote down.
 fn parse(text: &str) -> Result<Program, String> {
-    super::parse(text, &crate::platform::Routines::builtin())
+    super::parse(text, &faun::platform::Routines::builtin())
 }
 
 #[test]
@@ -630,12 +630,12 @@ fn a_routine_written_down_is_one_a_program_may_name() {
     let refused = parse(held).unwrap_err();
     assert!(refused.contains("nothing named `tick!`"), "{refused}");
 
-    let mut routines = crate::platform::Routines::builtin();
-    routines.push(crate::platform::Routine {
+    let mut routines = faun::platform::Routines::builtin();
+    routines.push(faun::platform::Routine {
         name: "tick!".to_owned(),
         offered: true,
         takes: Vec::new(),
-        returns: crate::platform::Returns::Unit,
+        returns: faun::platform::Returns::Unit,
     });
 
     let program = super::parse(held, &routines).expect("a program naming it");
@@ -657,12 +657,12 @@ fn a_routine_written_down_is_one_a_program_may_name() {
     assert!(program.render().contains("tick!(v0)"));
 
     let facts = analyze(&program);
-    let machine = crate::ir::lower(&program, &facts, &routines).unwrap();
-    crate::ir::validate(&machine).unwrap();
+    let machine = faun::ir::lower(&program, &facts, &routines).unwrap();
+    faun::ir::validate(&machine).unwrap();
     let providers: Vec<_> = machine
         .functions()
         .iter()
-        .filter_map(crate::ir::Function::external)
+        .filter_map(faun::ir::Function::external)
         .map(|symbol| machine.name(symbol))
         .collect();
     assert_eq!(providers, ["exit!", "tick!"]);

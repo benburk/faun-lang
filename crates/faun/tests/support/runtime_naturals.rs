@@ -141,10 +141,10 @@ fn check(target: &dyn Target, runner: Option<&str>) {
 fn source_check(target: &dyn Target, runner: Option<&str>) {
     let text = format!(
         "{}\n{}",
-        include_str!("../../../../standard/simple/nat.fn"),
+        include_str!("../../../../crates/simple/standard/nat.fn"),
         include_str!("runtime_naturals.fn")
     );
-    let p = faun::read(&text, &target.routines()).expect("bounded effect after runtime arithmetic");
+    let p = faun_simple::read(&text, &target.routines()).expect("bounded effect after runtime arithmetic");
     for wanted in [Binary::Mul, Binary::Div] {
         assert!(
             p.functions().iter().filter_map(faun::ir::Function::body).any(|body| p.every(body).any(|op| {

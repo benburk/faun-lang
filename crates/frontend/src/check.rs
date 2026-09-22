@@ -1459,7 +1459,7 @@ fn failure(module: ModuleId, span: super::ast::Span, message: impl Into<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::{blessed::PreludeIds, modules, resolve};
+    use crate::{blessed::PreludeIds, modules, resolve};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1634,7 +1634,7 @@ mod tests {
 
     #[test]
     fn repository_bootstrap_checks_polymorphic_utilities() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../standard/standard.fn");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
         let entry =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../notes/examples/utilities.fn");
         let loaded = modules::load(&[entry], Some(&root)).unwrap();

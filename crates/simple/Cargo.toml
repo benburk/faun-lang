@@ -1,0 +1,11 @@
+[package]
+name = "faun-simple"
+version.workspace = true
+edition.workspace = true
+description = "The archived simple Faun source frontend"
+
+[dependencies]
+faun.workspace = true
+
+[lints]
+workspace = true

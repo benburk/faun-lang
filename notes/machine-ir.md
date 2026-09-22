@@ -24,7 +24,8 @@ not add range analysis or change the classes printed on definitions and signatur
 
 The archived simple frontend's `faun-simple inspect --emit ir` validates lowered
 IR without requiring target acceptance; `--emit prepared-ir` prints the result
-of `Target::prepare` instead. `--emit barb` uses `read_barb_with_options` with
+of `Target::prepare` instead. `--emit barb` uses
+`faun_simple::read_barb_with_options` with
 the default optimization options, sharing that frontend's pipeline with ordinary
 compilation. See the
 [runnable inspection example](../README.md#inspecting-a-runtime-expression).

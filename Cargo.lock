@@ -72,10 +72,8 @@ dependencies = [
 name = "faun"
 version = "0.1.0"
 dependencies = [
- "mimalloc",
  "num-bigint",
  "num-traits",
- "peg",
 ]
 
 [[package]]
@@ -93,14 +91,35 @@ dependencies = [
  "bpaf",
  "faun",
  "faun-aarch64-macos",
+ "faun-frontend",
  "faun-mos6502-sim65",
+ "faun-simple",
  "faun-wasm32-wasi",
  "faun-x86-64-linux",
  "mimalloc",
 ]
 
 [[package]]
+name = "faun-frontend"
+version = "0.1.0"
+dependencies = [
+ "faun",
+ "mimalloc",
+ "num-bigint",
+ "num-traits",
+ "peg",
+]
+
+[[package]]
 name = "faun-mos6502-sim65"
+version = "0.1.0"
+dependencies = [
+ "faun",
+ "faun-simple",
+]
+
+[[package]]
+name = "faun-simple"
 version = "0.1.0"
 dependencies = [
  "faun",
@@ -111,6 +130,7 @@ name = "faun-wasm32-wasi"
 version = "0.1.0"
 dependencies = [
  "faun",
+ "faun-simple",
 ]
 
 [[package]]
@@ -118,6 +138,7 @@ name = "faun-x86-64-linux"
 version = "0.1.0"
 dependencies = [
  "faun",
+ "faun-simple",
 ]
 
 [[package]]

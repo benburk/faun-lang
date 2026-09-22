@@ -1,4 +1,4 @@
-# Prepend standard/simple/nat.fn. Ordinary repeated squaring builds 2^128.
+# Prepend crates/simple/standard/nat.fn. Ordinary repeated squaring builds 2^128.
 square(n) -> mul(n n)
 
 status(False) -> Zero

@@ -1,7 +1,7 @@
 //! Source-level codegen probes: fold constants normally, but take n from argc.
 //! Shared by backend conformance and the 6502 cost measurements.
 
-const LIBRARY: &str = include_str!("../../../../standard/simple/nat.fn");
+const LIBRARY: &str = include_str!("../../../../crates/simple/standard/nat.fn");
 
 /// Includes monus and carry boundaries, the last accepted count, and both
 /// the guard boundary and a count beyond it. Counts include the program name.

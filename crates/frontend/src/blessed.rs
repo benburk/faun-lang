@@ -221,7 +221,7 @@ fn symbol(symbols: &Symbols, name: &str) -> Result<Symbol, PreludeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::modules;
+    use crate::modules;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
