@@ -1,12 +1,17 @@
-//! `lower` turns the IR into instructions but cannot know where the data
-//! will sit, so it leaves a `Reloc` wherever an address belongs; `elf`
-//! chooses the layout and fills them in.
+//! `selected` flattens machine-IR regions into a verified target-local SSA
+//! CFG. Its allocator computes segmented liveness, splits around constraints
+//! and clobbers, plans transfers through `parallel_copy`, and lowers a fully
+//! verified symbolic `machine::Allocated` sequence. `encode` alone lays that
+//! sequence out as bytes. Data addresses remain `Reloc`s until `elf` chooses
+//! the image layout and fills them in.
 
 #[cfg(test)]
 mod abi_tests;
 mod elf;
 mod encode;
-mod lower;
+mod machine;
+mod parallel_copy;
+mod selected;
 #[cfg(test)]
 mod tests;
 
@@ -54,9 +59,12 @@ impl Target for X86_64Linux {
     }
 
     fn emit(&self, program: &Program) -> Vec<Artifact> {
+        let allocated = selected::select_and_allocate(program)
+            .expect("accepted machine IR has a valid x86 selected allocation");
+        let code = encode::encode(&allocated);
         vec![Artifact {
             extension: "",
-            bytes: elf::image(&lower::lower(program), program),
+            bytes: elf::image(&code, program),
             executable: true,
         }]
     }

@@ -226,9 +226,13 @@ mod tests {
             "the entry point is an offset, not an address"
         );
 
-        // `lea rsi, [rip+disp]` starts five bytes into the code and puts its
-        // displacement three bytes later, counted from its own end.
-        let at = text + 8;
+        // Find `lea rsi, [rip+disp]`; the displacement follows its three-byte
+        // opcode and is counted from the end of the instruction.
+        let lea = image[text..]
+            .windows(3)
+            .position(|bytes| bytes == [0x48, 0x8D, 0x35])
+            .expect("the message address load");
+        let at = text + lea + 3;
         let displacement = i32::from_le_bytes(image[at..at + 4].try_into().unwrap());
         let target = (at + 4).wrapping_add_signed(isize::try_from(displacement).unwrap());
         assert_eq!(&image[target..], b"Hello, World!\n");

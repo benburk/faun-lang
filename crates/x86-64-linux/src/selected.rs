@@ -1,0 +1,1541 @@
+//! Selected x86-64 SSA instructions and control-flow.
+//!
+//! This target-owned phase turns structured machine-IR regions into ordinary
+//! target blocks and edges. Source value identity remains virtual-register
+//! identity until segmented allocation lowers the CFG to
+//! [`super::machine::Allocated`].
+
+mod register_allocate;
+
+use super::machine::Reg;
+use crate::WORD_BITS;
+use faun::index::Range;
+use faun::ir::{
+    Binary, Class, DataId, Exit, FunctionId, Offset, Op as SourceOp, Program, RegionId, Relation,
+    Terminator as SourceTerminator, ValueId, Width,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct VReg(u32);
+
+impl VReg {
+    fn from_value(value: ValueId) -> Self {
+        Self(u32::try_from(value.index()).expect("an x86 function within 4G values"))
+    }
+
+    fn index(self) -> usize {
+        usize::try_from(self.0).expect("a virtual-register index that fits")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct BlockId(u32);
+
+impl BlockId {
+    fn at(index: usize) -> Self {
+        Self(u32::try_from(index).expect("an x86 function within 4G blocks"))
+    }
+
+    fn index(self) -> usize {
+        usize::try_from(self.0).expect("a block index that fits")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct InstId(u32);
+
+impl InstId {
+    fn at(index: usize) -> Self {
+        Self(u32::try_from(index).expect("an x86 function within 4G instructions"))
+    }
+
+    fn index(self) -> usize {
+        usize::try_from(self.0).expect("an instruction index that fits")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Constraint {
+    Any,
+    Fixed(Reg),
+    Tied(u8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Role {
+    Def,
+    Use,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Timing {
+    Early,
+    Late,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OperandSpec {
+    pub role: Role,
+    pub timing: Timing,
+    pub constraint: Constraint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Access {
+    None,
+    Read,
+    Write,
+    ReadWrite,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RegSet(u16);
+
+impl RegSet {
+    #[expect(
+        clippy::as_conversions,
+        reason = "register discriminants are bit indices"
+    )]
+    const fn of(regs: &[Reg]) -> Self {
+        let mut bits = 0;
+        let mut at = 0;
+        while at < regs.len() {
+            bits |= 1 << (regs[at] as u8);
+            at += 1;
+        }
+        Self(bits)
+    }
+
+    #[expect(
+        clippy::as_conversions,
+        reason = "register discriminants are bit indices"
+    )]
+    pub(crate) const fn contains(self, reg: Reg) -> bool {
+        self.0 & (1 << (reg as u8)) != 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Effects {
+    pub memory: Access,
+    pub flags: Access,
+    pub control: bool,
+    pub clobbers: RegSet,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Expansion {
+    Single,
+    Optional,
+    Sequence,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Requirements {
+    pub expansion: Expansion,
+    pub scratch: RegSet,
+    pub effects: Effects,
+}
+
+impl Effects {
+    const PURE: Self = Self {
+        memory: Access::None,
+        flags: Access::None,
+        control: false,
+        clobbers: RegSet(0),
+    };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Opcode {
+    Constant,
+    DataAddress,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Modulo,
+    Equal,
+    Below,
+    Load,
+    Store,
+    Convert,
+    Shift,
+    Call,
+    Write,
+    Exit,
+    Grow,
+    ArgumentCount,
+}
+
+impl Opcode {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one centralized expansion, scratch, and effect declaration per selected opcode"
+    )]
+    pub(crate) const fn requirements(self) -> Requirements {
+        let arithmetic = Effects {
+            flags: Access::Write,
+            ..Effects::PURE
+        };
+        let call = Effects {
+            memory: Access::Unknown,
+            flags: Access::Unknown,
+            control: true,
+            clobbers: RegSet::of(&[
+                Reg::Rax,
+                Reg::Rcx,
+                Reg::Rdx,
+                Reg::Rsi,
+                Reg::Rdi,
+                Reg::R8,
+                Reg::R9,
+                Reg::R10,
+                Reg::R11,
+            ]),
+        };
+        let effects = match self {
+            // Compatibility lowering may rematerialize a small constant with
+            // push/pop. The selected contract therefore exposes the possible
+            // stack traffic even though other recipes are one instruction.
+            Self::Constant => Effects {
+                memory: Access::ReadWrite,
+                ..Effects::PURE
+            },
+            Self::DataAddress
+            | Self::Convert
+            | Self::ArgumentCount
+            // Comparison and setcc are one atomic selected pseudo. Their
+            // internal flags do not escape the pseudo.
+            | Self::Equal
+            | Self::Below => Effects::PURE,
+            Self::Add | Self::Subtract | Self::Shift => arithmetic,
+            Self::Multiply | Self::Divide | Self::Modulo => Effects {
+                clobbers: RegSet::of(&[Reg::Rdx]),
+                ..arithmetic
+            },
+            Self::Load => Effects {
+                memory: Access::Read,
+                ..Effects::PURE
+            },
+            Self::Store => Effects {
+                memory: Access::Write,
+                ..Effects::PURE
+            },
+            Self::Call => call,
+            Self::Write | Self::Exit | Self::Grow => {
+                let scratch = match self {
+                    Self::Write => RegSet::of(&[Reg::Rax, Reg::Rdi]),
+                    Self::Exit => RegSet::of(&[Reg::Rax]),
+                    Self::Grow => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10, Reg::R8, Reg::R9]),
+                    _ => RegSet(0),
+                };
+                Effects {
+                    memory: Access::Unknown,
+                    flags: Access::Unknown,
+                    control: true,
+                    clobbers: RegSet(
+                        scratch.0 | RegSet::of(&[Reg::Rax, Reg::Rcx, Reg::R11]).0,
+                    ),
+                }
+            }
+        };
+        let expansion = match self {
+            Self::Convert => Expansion::Optional,
+            Self::Constant
+            | Self::Divide
+            | Self::Modulo
+            | Self::Equal
+            | Self::Below
+            | Self::Write
+            | Self::Exit
+            | Self::Grow => Expansion::Sequence,
+            _ => Expansion::Single,
+        };
+        let scratch = match self {
+            Self::Multiply | Self::Divide | Self::Modulo => RegSet::of(&[Reg::Rdx]),
+            Self::Write => RegSet::of(&[Reg::Rax, Reg::Rdi]),
+            Self::Exit => RegSet::of(&[Reg::Rax]),
+            Self::Grow => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10, Reg::R8, Reg::R9]),
+            _ => RegSet(0),
+        };
+        Requirements {
+            expansion,
+            scratch,
+            effects,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Immediate {
+    None,
+    Integer(u64),
+    Data(DataId),
+    Bits(u16),
+    Memory { width: Width, offset: Offset },
+    Shift { up: bool, by: u8, bits: u16 },
+    Function(FunctionId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Inst {
+    opcode: Opcode,
+    result: Option<VReg>,
+    operands: Range,
+    immediate: Immediate,
+}
+
+impl Inst {
+    fn operand_spec(self, at: usize) -> Option<OperandSpec> {
+        let def = usize::from(self.result.is_some());
+        if at < def {
+            let constraint = match self.opcode {
+                Opcode::Multiply
+                | Opcode::Divide
+                | Opcode::Modulo
+                | Opcode::Convert
+                | Opcode::Shift
+                | Opcode::Call
+                | Opcode::Grow
+                | Opcode::ArgumentCount => Constraint::Fixed(Reg::Rax),
+                _ => Constraint::Any,
+            };
+            return Some(OperandSpec {
+                role: Role::Def,
+                timing: Timing::Late,
+                constraint,
+            });
+        }
+        let use_at = at.checked_sub(def)?;
+        let constraint = match self.opcode {
+            Opcode::Add | Opcode::Subtract if use_at == 0 => Constraint::Tied(0),
+            Opcode::Convert | Opcode::Shift if use_at == 0 => Constraint::Fixed(Reg::Rax),
+            Opcode::Multiply | Opcode::Divide | Opcode::Modulo if use_at == 0 => {
+                Constraint::Fixed(Reg::Rax)
+            }
+            Opcode::Multiply | Opcode::Divide | Opcode::Modulo if use_at == 1 => {
+                Constraint::Fixed(Reg::Rcx)
+            }
+            Opcode::Call => abi_register(use_at).map(Constraint::Fixed)?,
+            Opcode::Write | Opcode::Grow if use_at == 0 => Constraint::Fixed(Reg::Rsi),
+            Opcode::Write if use_at == 1 => Constraint::Fixed(Reg::Rdx),
+            Opcode::Exit if use_at == 0 => Constraint::Fixed(Reg::Rdi),
+            _ => Constraint::Any,
+        };
+        Some(OperandSpec {
+            role: Role::Use,
+            timing: Timing::Early,
+            constraint,
+        })
+    }
+}
+
+const fn abi_register(at: usize) -> Option<Reg> {
+    match at {
+        0 => Some(Reg::Rdi),
+        1 => Some(Reg::Rsi),
+        2 => Some(Reg::Rdx),
+        3 => Some(Reg::Rcx),
+        4 => Some(Reg::R8),
+        5 => Some(Reg::R9),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Terminator {
+    Jump {
+        target: BlockId,
+        args: Range,
+    },
+    Branch {
+        condition: VReg,
+        then_target: BlockId,
+        then_args: Range,
+        else_target: BlockId,
+        else_args: Range,
+    },
+    Return {
+        values: Range,
+    },
+    Halt,
+}
+
+impl Terminator {
+    fn return_operand_spec(self, at: usize) -> Option<OperandSpec> {
+        match self {
+            Self::Return { values } if at < values.len() => Some(OperandSpec {
+                role: Role::Use,
+                timing: Timing::Early,
+                constraint: Constraint::Fixed(Reg::Rax),
+            }),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Block {
+    owner: FunctionId,
+    params: Range,
+    instructions: Range,
+    terminator: Terminator,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Function {
+    source: FunctionId,
+    entry: BlockId,
+}
+
+#[derive(Clone, Debug)]
+struct Definition {
+    owner: FunctionId,
+    block: BlockId,
+    position: Option<usize>,
+    description: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct Selected {
+    widths: Vec<u16>,
+    operands: Vec<VReg>,
+    instructions: Vec<Inst>,
+    order: Vec<InstId>,
+    block_params: Vec<VReg>,
+    block_param_specs: Vec<OperandSpec>,
+    blocks: Vec<Block>,
+    functions: Vec<Function>,
+}
+
+impl Selected {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the phase boundary verifies all flat pools in one pass"
+    )]
+    fn verify(&self) -> Result<(), String> {
+        if self.widths.iter().any(|&width| width > WORD_BITS) {
+            return Err("x86 selected value is wider than 64 bits".to_owned());
+        }
+        let mut definitions = vec![None; self.widths.len()];
+        let mut instruction_owners = vec![0_u8; self.instructions.len()];
+        for function in &self.functions {
+            let entry = self
+                .blocks
+                .get(function.entry.index())
+                .ok_or_else(|| format!("x86 function {:?} has no entry block", function.source))?;
+            if entry.owner != function.source {
+                return Err(format!(
+                    "x86 function {:?} has a foreign entry block",
+                    function.source
+                ));
+            }
+            for (at, spec) in self.block_param_specs[entry.params.range()]
+                .iter()
+                .enumerate()
+            {
+                if spec.constraint
+                    != Constraint::Fixed(
+                        abi_register(at).ok_or_else(|| {
+                            "x86 entry block has more than six parameters".to_owned()
+                        })?,
+                    )
+                {
+                    return Err(format!(
+                        "x86 function {:?} parameter {at} lacks its ABI register",
+                        function.source
+                    ));
+                }
+            }
+        }
+        for (at, block) in self.blocks.iter().enumerate() {
+            let block_id = BlockId::at(at);
+            if !self
+                .functions
+                .iter()
+                .any(|function| function.source == block.owner)
+            {
+                return Err(format!("x86 block b{at} has no owning function"));
+            }
+            Self::verify_range(block.params, self.block_params.len(), "block parameters")?;
+            Self::verify_range(
+                block.params,
+                self.block_param_specs.len(),
+                "block parameter constraints",
+            )?;
+            for spec in &self.block_param_specs[block.params.range()] {
+                if spec.role != Role::Def || spec.timing != Timing::Late {
+                    return Err(format!(
+                        "x86 block b{at} has an invalid parameter constraint"
+                    ));
+                }
+            }
+            Self::verify_range(block.instructions, self.order.len(), "block instructions")?;
+            for &param in &self.block_params[block.params.range()] {
+                define(
+                    &mut definitions,
+                    param,
+                    Definition {
+                        owner: block.owner,
+                        block: block_id,
+                        position: None,
+                        description: format!("block b{at}"),
+                    },
+                )?;
+            }
+            for (position, &instruction) in
+                self.order[block.instructions.range()].iter().enumerate()
+            {
+                let Some(owners) = instruction_owners.get_mut(instruction.index()) else {
+                    return Err(format!("x86 block b{at} refers to an unknown instruction"));
+                };
+                *owners = owners
+                    .checked_add(1)
+                    .ok_or_else(|| "x86 instruction has too many owners".to_owned())?;
+                let inst = self.instructions[instruction.index()];
+                self.verify_inst(
+                    inst,
+                    &mut definitions,
+                    instruction,
+                    block.owner,
+                    block_id,
+                    position,
+                )?;
+            }
+            self.verify_terminator(block.owner, block.terminator)?;
+        }
+        for (at, inst) in self.instructions.iter().enumerate() {
+            if instruction_owners[at] != 1 {
+                return Err(format!(
+                    "x86 instruction i{at} belongs to {} blocks",
+                    instruction_owners[at]
+                ));
+            }
+            self.verify_inst_shape(*inst, InstId::at(at))?;
+        }
+        let dominators = self.dominators();
+        for (at, block) in self.blocks.iter().enumerate() {
+            self.verify_uses(
+                block.owner,
+                block.terminator,
+                &definitions,
+                BlockId::at(at),
+                &dominators,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn verify_range(range: Range, len: usize, what: &str) -> Result<(), String> {
+        if range.range().end > len {
+            return Err(format!("x86 {what} range is outside its pool"));
+        }
+        Ok(())
+    }
+
+    fn verify_inst(
+        &self,
+        inst: Inst,
+        definitions: &mut [Option<Definition>],
+        id: InstId,
+        owner: FunctionId,
+        block: BlockId,
+        position: usize,
+    ) -> Result<(), String> {
+        Self::verify_range(inst.operands, self.operands.len(), "operand")?;
+        if let Some(result) = inst.result {
+            define(
+                definitions,
+                result,
+                Definition {
+                    owner,
+                    block,
+                    position: Some(position),
+                    description: format!("instruction i{}", id.index()),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "selected instruction shape, constraints, and effects are verified together"
+    )]
+    fn verify_inst_shape(&self, inst: Inst, id: InstId) -> Result<(), String> {
+        let uses = self.operands[inst.operands.range()].len();
+        let expected = match inst.opcode {
+            Opcode::Constant | Opcode::DataAddress | Opcode::ArgumentCount => 0,
+            Opcode::Load | Opcode::Convert | Opcode::Shift | Opcode::Exit | Opcode::Grow => 1,
+            Opcode::Add
+            | Opcode::Subtract
+            | Opcode::Multiply
+            | Opcode::Divide
+            | Opcode::Modulo
+            | Opcode::Equal
+            | Opcode::Below
+            | Opcode::Store
+            | Opcode::Write => 2,
+            Opcode::Call => uses,
+        };
+        if uses != expected {
+            return Err(format!(
+                "x86 instruction i{} has {uses} uses, expected {expected}",
+                id.index()
+            ));
+        }
+        let result_is_valid = match inst.opcode {
+            Opcode::Store | Opcode::Write | Opcode::Exit => inst.result.is_none(),
+            Opcode::Call => true,
+            _ => inst.result.is_some(),
+        };
+        if !result_is_valid {
+            return Err(format!(
+                "x86 instruction i{} has the wrong result arity",
+                id.index()
+            ));
+        }
+        verify_immediate(inst, id)?;
+        self.verify_inst_widths(inst, id)?;
+        verify_effects(inst.opcode, id)?;
+        let operands = uses + usize::from(inst.result.is_some());
+        for at in 0..operands {
+            let spec = inst.operand_spec(at).ok_or_else(|| {
+                format!(
+                    "x86 instruction i{} has no constraint for operand {at}",
+                    id.index()
+                )
+            })?;
+            if let Constraint::Tied(other) = spec.constraint
+                && usize::from(other) >= operands
+            {
+                return Err(format!(
+                    "x86 instruction i{} has an invalid tie",
+                    id.index()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_inst_widths(&self, inst: Inst, id: InstId) -> Result<(), String> {
+        let declared = match inst.immediate {
+            Immediate::Bits(bits) | Immediate::Shift { bits, .. } => Some(bits),
+            _ => None,
+        };
+        if matches!(inst.immediate, Immediate::Shift { bits: 0, .. })
+            || declared.is_some_and(|bits| bits > WORD_BITS)
+        {
+            return Err(format!(
+                "x86 instruction i{} has an unsupported width",
+                id.index()
+            ));
+        }
+        let represented = match inst.opcode {
+            Opcode::Equal | Opcode::Below => self
+                .operands
+                .get(inst.operands.range().start)
+                .map(|&value| self.width(value))
+                .transpose()?,
+            Opcode::Add
+            | Opcode::Subtract
+            | Opcode::Multiply
+            | Opcode::Divide
+            | Opcode::Modulo
+            | Opcode::Convert
+            | Opcode::Shift => inst.result.map(|value| self.width(value)).transpose()?,
+            _ => None,
+        };
+        if let (Some(declared), Some(represented)) = (declared, represented)
+            && declared != represented
+        {
+            return Err(format!(
+                "x86 instruction i{} declares {declared} bits for a {represented}-bit value",
+                id.index()
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_terminator(&self, owner: FunctionId, terminator: Terminator) -> Result<(), String> {
+        match terminator {
+            Terminator::Jump { target, args } => self.verify_edge(owner, target, args),
+            Terminator::Branch {
+                then_target,
+                then_args,
+                else_target,
+                else_args,
+                ..
+            } => {
+                self.verify_edge(owner, then_target, then_args)?;
+                self.verify_edge(owner, else_target, else_args)
+            }
+            Terminator::Return { values } => {
+                Self::verify_range(values, self.operands.len(), "return")?;
+                if values.len() > 1 {
+                    return Err("x86 return has more than one value".to_owned());
+                }
+                for at in 0..values.len() {
+                    let spec = terminator
+                        .return_operand_spec(at)
+                        .ok_or_else(|| format!("x86 return value {at} has no ABI constraint"))?;
+                    if spec.constraint != Constraint::Fixed(Reg::Rax) {
+                        return Err(format!("x86 return value {at} is not in rax"));
+                    }
+                }
+                Ok(())
+            }
+            Terminator::Halt => Ok(()),
+        }
+    }
+
+    fn verify_edge(&self, owner: FunctionId, target: BlockId, args: Range) -> Result<(), String> {
+        Self::verify_range(args, self.operands.len(), "edge argument")?;
+        let target = self
+            .blocks
+            .get(target.index())
+            .ok_or_else(|| "x86 edge refers to an unknown block".to_owned())?;
+        if target.owner != owner {
+            return Err("x86 edge crosses a function boundary".to_owned());
+        }
+        if args.len() != target.params.len() {
+            return Err(format!(
+                "x86 edge supplies {} values to {} parameters",
+                args.len(),
+                target.params.len()
+            ));
+        }
+        for (&argument, &parameter) in self.operands[args.range()]
+            .iter()
+            .zip(&self.block_params[target.params.range()])
+        {
+            if self.width(argument)? > self.width(parameter)? {
+                return Err("x86 edge argument does not fit its parameter".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "small fixed-point dominance calculation is kept as one operation"
+    )]
+    fn dominators(&self) -> Vec<Vec<bool>> {
+        let count = self.blocks.len();
+        let mut predecessors = vec![Vec::new(); count];
+        for (at, block) in self.blocks.iter().enumerate() {
+            for target in successors(block.terminator).into_iter().flatten() {
+                predecessors[target.index()].push(at);
+            }
+        }
+        let mut dominators = vec![vec![false; count]; count];
+        for function in &self.functions {
+            let members: Vec<_> = self
+                .blocks
+                .iter()
+                .enumerate()
+                .filter_map(|(at, block)| (block.owner == function.source).then_some(at))
+                .collect();
+            for &block in &members {
+                for &member in &members {
+                    dominators[block][member] = true;
+                }
+            }
+            dominators[function.entry.index()].fill(false);
+            dominators[function.entry.index()][function.entry.index()] = true;
+            loop {
+                let previous = dominators.clone();
+                let mut changed = false;
+                for &block in &members {
+                    if block == function.entry.index() {
+                        continue;
+                    }
+                    let mut row = vec![false; count];
+                    let mut incoming = predecessors[block].iter().copied();
+                    if let Some(first) = incoming.next() {
+                        row.clone_from(&previous[first]);
+                        for predecessor in incoming {
+                            for (held, &other) in row.iter_mut().zip(&previous[predecessor]) {
+                                *held &= other;
+                            }
+                        }
+                    }
+                    row[block] = true;
+                    if row != previous[block] {
+                        changed = true;
+                    }
+                    dominators[block] = row;
+                }
+                if !changed {
+                    break;
+                }
+            }
+        }
+        dominators
+    }
+
+    fn width(&self, value: VReg) -> Result<u16, String> {
+        self.widths
+            .get(value.index())
+            .copied()
+            .ok_or_else(|| format!("x86 refers to unknown v{}", value.index()))
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "all instruction and terminator use forms are checked in one walk"
+    )]
+    fn verify_uses(
+        &self,
+        owner: FunctionId,
+        terminator: Terminator,
+        definitions: &[Option<Definition>],
+        block: BlockId,
+        dominators: &[Vec<bool>],
+    ) -> Result<(), String> {
+        let check = |value: VReg, position: usize| {
+            let definition = definitions
+                .get(value.index())
+                .and_then(Option::as_ref)
+                .ok_or_else(|| {
+                    format!(
+                        "x86 block b{} uses undefined v{}",
+                        block.index(),
+                        value.index()
+                    )
+                })?;
+            if definition.owner != owner {
+                return Err(format!(
+                    "x86 block b{} uses v{} from another function",
+                    block.index(),
+                    value.index()
+                ));
+            }
+            let dominates = if definition.block == block {
+                definition.position.is_none_or(|defined| defined < position)
+            } else {
+                dominators[block.index()][definition.block.index()]
+            };
+            if !dominates {
+                return Err(format!(
+                    "x86 {} does not dominate the use of v{} in b{}",
+                    definition.description,
+                    value.index(),
+                    block.index()
+                ));
+            }
+            Ok(())
+        };
+        for (position, inst) in self.blocks[block.index()].instructions.range().enumerate() {
+            let id = self.order[inst];
+            for &value in &self.operands[self.instructions[id.index()].operands.range()] {
+                check(value, position)?;
+            }
+        }
+        let after_instructions = self.blocks[block.index()].instructions.len();
+        match terminator {
+            Terminator::Jump { args, .. } => {
+                for &value in &self.operands[args.range()] {
+                    check(value, after_instructions)?;
+                }
+            }
+            Terminator::Branch {
+                condition,
+                then_args,
+                else_args,
+                ..
+            } => {
+                check(condition, after_instructions)?;
+                for &value in self.operands[then_args.range()]
+                    .iter()
+                    .chain(&self.operands[else_args.range()])
+                {
+                    check(value, after_instructions)?;
+                }
+            }
+            Terminator::Return { values } => {
+                for &value in &self.operands[values.range()] {
+                    check(value, after_instructions)?;
+                }
+            }
+            Terminator::Halt => {}
+        }
+        Ok(())
+    }
+}
+
+const fn successors(terminator: Terminator) -> [Option<BlockId>; 2] {
+    match terminator {
+        Terminator::Jump { target, .. } => [Some(target), None],
+        Terminator::Branch {
+            then_target,
+            else_target,
+            ..
+        } => [Some(then_target), Some(else_target)],
+        Terminator::Return { .. } | Terminator::Halt => [None, None],
+    }
+}
+
+fn define(
+    definitions: &mut [Option<Definition>],
+    value: VReg,
+    definition: Definition,
+) -> Result<(), String> {
+    let Some(held) = definitions.get_mut(value.index()) else {
+        return Err(format!("x86 defines unknown v{}", value.index()));
+    };
+    if let Some(first) = held {
+        return Err(format!(
+            "x86 v{} is defined by {} and {}",
+            value.index(),
+            first.description,
+            definition.description
+        ));
+    }
+    *held = Some(definition);
+    Ok(())
+}
+
+fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
+    let requirements = opcode.requirements();
+    let effects = requirements.effects;
+    let scratch_is_clobbered = requirements.scratch.0 & !effects.clobbers.0 == 0;
+    let valid = scratch_is_clobbered
+        && match opcode {
+            Opcode::Constant => {
+                requirements.expansion == Expansion::Sequence && effects.memory == Access::ReadWrite
+            }
+            Opcode::Load => effects.memory == Access::Read,
+            Opcode::Store => effects.memory == Access::Write,
+            Opcode::Call | Opcode::Write | Opcode::Exit | Opcode::Grow => {
+                effects.control
+                    && effects.memory == Access::Unknown
+                    && effects.clobbers.contains(Reg::Rax)
+                    && effects.clobbers.contains(Reg::R11)
+            }
+            Opcode::Add
+            | Opcode::Subtract
+            | Opcode::Multiply
+            | Opcode::Divide
+            | Opcode::Modulo
+            | Opcode::Shift => effects.flags == Access::Write,
+            Opcode::DataAddress
+            | Opcode::Equal
+            | Opcode::Below
+            | Opcode::Convert
+            | Opcode::ArgumentCount => effects == Effects::PURE,
+        };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "x86 instruction i{} has an inconsistent effect declaration",
+            id.index()
+        ))
+    }
+}
+
+fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
+    let valid = matches!(
+        (inst.opcode, inst.immediate),
+        (Opcode::Constant, Immediate::Integer(_))
+            | (Opcode::DataAddress, Immediate::Data(_))
+            | (
+                Opcode::Add
+                    | Opcode::Subtract
+                    | Opcode::Multiply
+                    | Opcode::Divide
+                    | Opcode::Modulo
+                    | Opcode::Equal
+                    | Opcode::Below
+                    | Opcode::Convert,
+                Immediate::Bits(_)
+            )
+            | (Opcode::Load | Opcode::Store, Immediate::Memory { .. })
+            | (Opcode::Shift, Immediate::Shift { .. })
+            | (Opcode::Call, Immediate::Function(_))
+            | (
+                Opcode::Write | Opcode::Exit | Opcode::Grow | Opcode::ArgumentCount,
+                Immediate::None
+            )
+    );
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "x86 instruction i{} has an immediate for another opcode",
+            id.index()
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct BlockDraft {
+    owner: FunctionId,
+    params: Vec<VReg>,
+    param_specs: Vec<OperandSpec>,
+    instructions: Vec<InstId>,
+    terminator: Option<Terminator>,
+}
+
+#[derive(Clone, Copy)]
+struct Flow {
+    join: Option<BlockId>,
+    repeat: Option<BlockId>,
+    leave: Option<BlockId>,
+}
+
+struct Selector<'a> {
+    source: &'a Program,
+    widths: Vec<u16>,
+    operands: Vec<VReg>,
+    instructions: Vec<Inst>,
+    blocks: Vec<BlockDraft>,
+    functions: Vec<Function>,
+}
+
+pub(crate) fn select_and_allocate(source: &Program) -> Result<crate::machine::Allocated, String> {
+    let selected = select(source)?;
+    register_allocate::allocate(&selected, source.entry())
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "selection initializes value classes and each function entry"
+)]
+pub(crate) fn select(source: &Program) -> Result<Selected, String> {
+    let mut widths = Vec::with_capacity(source.values_count());
+    for at in 0..source.values_count() {
+        let class = source.class(ValueId::at(at));
+        if class == Class::Natural {
+            return Err("x86 selection received an arbitrary-precision value".to_owned());
+        }
+        widths.push(class.bits(WORD_BITS));
+    }
+    let mut selector = Selector {
+        source,
+        widths,
+        operands: Vec::new(),
+        instructions: Vec::new(),
+        blocks: Vec::new(),
+        functions: Vec::new(),
+    };
+    let entry = source.entry();
+    let rest = (0..source.functions().len())
+        .map(FunctionId::at)
+        .filter(|&id| id != entry);
+    for source_id in std::iter::once(entry).chain(rest) {
+        let function = source.function(source_id);
+        let Some(body) = function.body() else {
+            continue;
+        };
+        let entry = selector.block(source_id, source.values(source.region(body).params));
+        for (at, spec) in selector.blocks[entry.index()]
+            .param_specs
+            .iter_mut()
+            .enumerate()
+        {
+            spec.constraint =
+                Constraint::Fixed(abi_register(at).ok_or_else(|| {
+                    "x86 function has more than six selected parameters".to_owned()
+                })?);
+        }
+        selector.functions.push(Function {
+            source: source_id,
+            entry,
+        });
+        selector.region(
+            source_id,
+            body,
+            entry,
+            Flow {
+                join: None,
+                repeat: None,
+                leave: None,
+            },
+        )?;
+    }
+    selector.finish()
+}
+
+impl Selector<'_> {
+    fn finish(self) -> Result<Selected, String> {
+        let mut order = Vec::new();
+        let mut block_params = Vec::new();
+        let mut block_param_specs = Vec::new();
+        let mut blocks = Vec::with_capacity(self.blocks.len());
+        for (at, block) in self.blocks.into_iter().enumerate() {
+            let params = append(&mut block_params, &block.params);
+            let specs = append(&mut block_param_specs, &block.param_specs);
+            assert_eq!(
+                params, specs,
+                "block parameter values and specs stay parallel"
+            );
+            let instructions = append(&mut order, &block.instructions);
+            let terminator = block
+                .terminator
+                .ok_or_else(|| format!("x86 block b{at} has no terminator"))?;
+            blocks.push(Block {
+                owner: block.owner,
+                params,
+                instructions,
+                terminator,
+            });
+        }
+        let selected = Selected {
+            widths: self.widths,
+            operands: self.operands,
+            instructions: self.instructions,
+            order,
+            block_params,
+            block_param_specs,
+            blocks,
+            functions: self.functions,
+        };
+        selected.verify()?;
+        Ok(selected)
+    }
+
+    fn block(&mut self, owner: FunctionId, params: &[ValueId]) -> BlockId {
+        let id = BlockId::at(self.blocks.len());
+        self.blocks.push(BlockDraft {
+            owner,
+            params: params.iter().copied().map(VReg::from_value).collect(),
+            param_specs: vec![
+                OperandSpec {
+                    role: Role::Def,
+                    timing: Timing::Late,
+                    constraint: Constraint::Any,
+                };
+                params.len()
+            ],
+            instructions: Vec::new(),
+            terminator: None,
+        });
+        id
+    }
+
+    fn result_block(&mut self, owner: FunctionId, results: &[ValueId]) -> BlockId {
+        self.block(owner, results)
+    }
+
+    fn emit(
+        &mut self,
+        block: BlockId,
+        opcode: Opcode,
+        result: Option<ValueId>,
+        operands: &[ValueId],
+        immediate: Immediate,
+    ) {
+        let id = InstId::at(self.instructions.len());
+        let operands: Vec<_> = operands.iter().copied().map(VReg::from_value).collect();
+        let operands = append(&mut self.operands, &operands);
+        self.instructions.push(Inst {
+            opcode,
+            result: result.map(VReg::from_value),
+            operands,
+            immediate,
+        });
+        self.blocks[block.index()].instructions.push(id);
+    }
+
+    fn terminate(&mut self, block: BlockId, terminator: Terminator) {
+        let held = &mut self.blocks[block.index()].terminator;
+        assert!(held.is_none(), "an x86 block is terminated once");
+        *held = Some(terminator);
+    }
+
+    fn edge_args(&mut self, values: &[ValueId]) -> Range {
+        let values: Vec<_> = values.iter().copied().map(VReg::from_value).collect();
+        append(&mut self.operands, &values)
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one selection arm per machine-IR operation"
+    )]
+    fn region(
+        &mut self,
+        owner: FunctionId,
+        region: RegionId,
+        mut block: BlockId,
+        flow: Flow,
+    ) -> Result<(), String> {
+        let source = self.source;
+        for (op, results) in source.walk(region) {
+            match *op {
+                SourceOp::NaturalConstant(_) => {
+                    return Err("x86 selection received an arbitrary-precision constant".to_owned());
+                }
+                SourceOp::Constant { value } => self.emit(
+                    block,
+                    Opcode::Constant,
+                    results.first().copied(),
+                    &[],
+                    Immediate::Integer(value),
+                ),
+                SourceOp::AddressOf(data) => self.emit(
+                    block,
+                    Opcode::DataAddress,
+                    results.first().copied(),
+                    &[],
+                    Immediate::Data(data),
+                ),
+                SourceOp::Binary { op, left, right } => {
+                    let opcode = match op {
+                        Binary::Add => Opcode::Add,
+                        Binary::Sub => Opcode::Subtract,
+                        Binary::Mul => Opcode::Multiply,
+                        Binary::Div => Opcode::Divide,
+                        Binary::Mod => Opcode::Modulo,
+                    };
+                    self.emit(
+                        block,
+                        opcode,
+                        results.first().copied(),
+                        &[left, right],
+                        Immediate::Bits(source.class(results[0]).bits(WORD_BITS)),
+                    );
+                }
+                SourceOp::Compare {
+                    relation,
+                    left,
+                    right,
+                } => {
+                    let opcode = match relation {
+                        Relation::Equal => Opcode::Equal,
+                        Relation::Less => Opcode::Below,
+                    };
+                    self.emit(
+                        block,
+                        opcode,
+                        results.first().copied(),
+                        &[left, right],
+                        Immediate::Bits(source.class(left).bits(WORD_BITS)),
+                    );
+                }
+                SourceOp::Load {
+                    width,
+                    address,
+                    offset,
+                } => self.emit(
+                    block,
+                    Opcode::Load,
+                    results.first().copied(),
+                    &[address],
+                    Immediate::Memory { width, offset },
+                ),
+                SourceOp::Store {
+                    width,
+                    address,
+                    offset,
+                    value,
+                } => self.emit(
+                    block,
+                    Opcode::Store,
+                    None,
+                    &[address, value],
+                    Immediate::Memory { width, offset },
+                ),
+                SourceOp::Convert { value } => self.emit(
+                    block,
+                    Opcode::Convert,
+                    results.first().copied(),
+                    &[value],
+                    Immediate::Bits(source.class(results[0]).bits(WORD_BITS)),
+                ),
+                SourceOp::Shift {
+                    direction,
+                    value,
+                    by,
+                } => self.emit(
+                    block,
+                    Opcode::Shift,
+                    results.first().copied(),
+                    &[value],
+                    Immediate::Shift {
+                        up: matches!(direction, faun::ir::Direction::Up),
+                        by: u8::try_from(by).map_err(|_| "x86 shift distance exceeds 255")?,
+                        bits: source.class(results[0]).bits(WORD_BITS),
+                    },
+                ),
+                SourceOp::Call { function, args } => {
+                    let callee = source.function(function);
+                    let opcode = if let Some(symbol) = callee.external() {
+                        match source.name(symbol) {
+                            "write" => Opcode::Write,
+                            "exit!" => Opcode::Exit,
+                            "grow" => Opcode::Grow,
+                            "argc!" => Opcode::ArgumentCount,
+                            other => return Err(format!("x86 has no selected call for `{other}`")),
+                        }
+                    } else {
+                        Opcode::Call
+                    };
+                    self.emit(
+                        block,
+                        opcode,
+                        results.first().copied(),
+                        source.values(args),
+                        if opcode == Opcode::Call {
+                            Immediate::Function(function)
+                        } else {
+                            Immediate::None
+                        },
+                    );
+                }
+                SourceOp::If {
+                    condition,
+                    then_region,
+                    else_region,
+                } => {
+                    let then_params = source.values(source.region(then_region).params);
+                    let else_params = source.values(source.region(else_region).params);
+                    if !then_params.is_empty() || !else_params.is_empty() {
+                        return Err("x86 if-arm parameters have no incoming values".to_owned());
+                    }
+                    let then_target = self.block(owner, then_params);
+                    let else_target = self.block(owner, else_params);
+                    let join = self.result_block(owner, results);
+                    self.terminate(
+                        block,
+                        Terminator::Branch {
+                            condition: VReg::from_value(condition),
+                            then_target,
+                            then_args: Range::EMPTY,
+                            else_target,
+                            else_args: Range::EMPTY,
+                        },
+                    );
+                    self.region(
+                        owner,
+                        then_region,
+                        then_target,
+                        Flow {
+                            join: Some(join),
+                            ..flow
+                        },
+                    )?;
+                    self.region(
+                        owner,
+                        else_region,
+                        else_target,
+                        Flow {
+                            join: Some(join),
+                            ..flow
+                        },
+                    )?;
+                    block = join;
+                }
+                SourceOp::Loop { initial, body } => {
+                    let head = self.block(owner, source.values(source.region(body).params));
+                    let exit = self.result_block(owner, results);
+                    let args = self.edge_args(source.values(initial));
+                    self.terminate(block, Terminator::Jump { target: head, args });
+                    self.region(
+                        owner,
+                        body,
+                        head,
+                        Flow {
+                            join: None,
+                            repeat: Some(head),
+                            leave: Some(exit),
+                        },
+                    )?;
+                    block = exit;
+                }
+            }
+        }
+        if let Some(terminator) = source.region(region).terminator {
+            self.source_terminator(block, terminator, flow)
+        } else {
+            self.terminate(block, Terminator::Halt);
+            Ok(())
+        }
+    }
+
+    fn source_terminator(
+        &mut self,
+        block: BlockId,
+        terminator: SourceTerminator,
+        flow: Flow,
+    ) -> Result<(), String> {
+        let values = self.source.values(terminator.values);
+        match terminator.exit {
+            Exit::Yield => {
+                let target = flow
+                    .join
+                    .ok_or_else(|| "x86 yield has no selected join".to_owned())?;
+                let args = self.edge_args(values);
+                self.terminate(block, Terminator::Jump { target, args });
+            }
+            Exit::Continue => {
+                let target = flow
+                    .repeat
+                    .ok_or_else(|| "x86 continue has no selected loop".to_owned())?;
+                let args = self.edge_args(values);
+                self.terminate(block, Terminator::Jump { target, args });
+            }
+            Exit::Break => {
+                let target = flow
+                    .leave
+                    .ok_or_else(|| "x86 break has no selected loop".to_owned())?;
+                let args = self.edge_args(values);
+                self.terminate(block, Terminator::Jump { target, args });
+            }
+            Exit::Return => {
+                let values = self.edge_args(values);
+                self.terminate(block, Terminator::Return { values });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn append<T: Clone>(pool: &mut Vec<T>, values: &[T]) -> Range {
+    let range = Range::of(pool.len(), values.len());
+    pool.extend_from_slice(values);
+    range
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use faun::ir::validate;
+
+    #[test]
+    fn selected_allocation_lowers_to_an_encodable_symbolic_sequence() {
+        let program = faun::programs::carries_a_total_into_an_arm(3);
+        let allocated = select_and_allocate(&program).unwrap();
+        let code = crate::encode::encode(&allocated);
+        assert!(!code.bytes.is_empty());
+    }
+
+    #[test]
+    fn call_splits_store_before_the_call_and_reload_after_it() {
+        let (mut program, main) = Program::new("main");
+        let helper = program.declare("helper", &[], &[Class::Word]);
+        program.define(helper, |builder, _| {
+            let answer = builder.constant(Class::Word, 3);
+            builder.ret(&[answer]);
+        });
+        program.define(main, |builder, _| {
+            let one = builder.constant(Class::Word, 1);
+            let two = builder.constant(Class::Word, 2);
+            let across = builder.binary(Binary::Add, one, two);
+            let answer = builder.call_one(helper, &[]);
+            let sum = builder.binary(Binary::Add, across, answer);
+            builder.ret(&[sum]);
+        });
+
+        let allocated = select_and_allocate(&program).unwrap();
+        let instructions = allocated.instructions();
+        let call = instructions
+            .iter()
+            .position(|inst| matches!(inst, crate::machine::Inst::Call { .. }))
+            .unwrap();
+        assert!(
+            instructions[..call]
+                .iter()
+                .any(|inst| matches!(inst, crate::machine::Inst::StoreFrame { .. }))
+        );
+        assert!(
+            instructions[call + 1..]
+                .iter()
+                .any(|inst| matches!(inst, crate::machine::Inst::LoadFrame { .. }))
+        );
+    }
+
+    #[test]
+    fn structured_regions_become_blocks_with_parallel_edge_arguments() {
+        let program = faun::programs::carries_a_total_into_an_arm(3);
+        validate(&program).unwrap();
+        let selected = select(&program).unwrap();
+        assert!(selected.blocks.len() > program.functions().len());
+        assert!(selected.blocks.iter().any(|block| {
+            matches!(block.terminator, Terminator::Jump { args, .. } if !args.is_empty())
+        }));
+    }
+
+    #[test]
+    fn function_boundaries_name_the_system_v_registers() {
+        let program = faun::programs::abi::function(2, 1);
+        let selected = select(&program).unwrap();
+        let function = selected
+            .functions
+            .iter()
+            .find(|function| selected.blocks[function.entry.index()].params.len() == 2)
+            .unwrap();
+        let entry = selected.blocks[function.entry.index()];
+        let specs = &selected.block_param_specs[entry.params.range()];
+        assert_eq!(specs[0].constraint, Constraint::Fixed(Reg::Rdi));
+        assert_eq!(specs[1].constraint, Constraint::Fixed(Reg::Rsi));
+        let returned = selected.blocks.iter().find_map(|block| {
+            (block.owner == function.source)
+                .then_some(block.terminator)
+                .and_then(|terminator| terminator.return_operand_spec(0))
+        });
+        assert_eq!(returned.unwrap().constraint, Constraint::Fixed(Reg::Rax));
+    }
+
+    #[test]
+    fn verifier_rejects_a_use_not_dominated_by_its_definition() {
+        let program = faun::programs::carries_a_total_into_an_arm(3);
+        let mut selected = select(&program).unwrap();
+        let inst = selected
+            .instructions
+            .iter()
+            .copied()
+            .find(|inst| inst.result.is_some() && !inst.operands.is_empty())
+            .unwrap();
+        selected.operands[inst.operands.range().start] = inst.result.unwrap();
+        assert!(selected.verify().unwrap_err().contains("does not dominate"));
+    }
+
+    #[test]
+    fn call_constraints_name_the_system_v_argument_registers() {
+        let inst = Inst {
+            opcode: Opcode::Call,
+            result: Some(VReg(2)),
+            operands: Range::of(0, 2),
+            immediate: Immediate::Function(FunctionId::at(0)),
+        };
+        assert_eq!(
+            inst.operand_spec(0).unwrap().constraint,
+            Constraint::Fixed(Reg::Rax)
+        );
+        assert_eq!(
+            inst.operand_spec(1).unwrap().constraint,
+            Constraint::Fixed(Reg::Rdi)
+        );
+        assert_eq!(
+            inst.operand_spec(2).unwrap().constraint,
+            Constraint::Fixed(Reg::Rsi)
+        );
+    }
+
+    #[test]
+    fn calls_declare_hidden_clobbers_and_memory_effects() {
+        let requirements = Opcode::Call.requirements();
+        assert_eq!(requirements.expansion, Expansion::Single);
+        assert_eq!(requirements.effects.memory, Access::Unknown);
+        assert!(requirements.effects.control);
+        assert!(requirements.effects.clobbers.contains(Reg::R11));
+
+        let write = Opcode::Write.requirements();
+        assert!(write.effects.clobbers.contains(Reg::Rcx));
+        assert!(write.effects.clobbers.contains(Reg::R11));
+        assert!(!write.effects.clobbers.contains(Reg::Rsi));
+        assert!(!write.effects.clobbers.contains(Reg::Rdx));
+    }
+
+    #[test]
+    fn division_declares_its_expansion_and_scratch_register() {
+        let requirements = Opcode::Divide.requirements();
+        assert_eq!(requirements.expansion, Expansion::Sequence);
+        assert!(requirements.scratch.contains(Reg::Rdx));
+        assert!(requirements.effects.clobbers.contains(Reg::Rdx));
+    }
+}

@@ -1,47 +1,128 @@
-//! Each method appends exactly one step, and a step is one instruction
-//! except where a caller asked for something that takes two. Choosing
-//! between two encodings of the same value is [`super::lower`]'s job, not
-//! this module's.
+//! Encoding of an already selected x86-64 instruction sequence.
+//!
+//! Branch widths and data positions are layout facts, so symbolic labels,
+//! frame slots, and data references become bytes only here.
 
+use super::machine::{
+    Allocated, Alu, Condition, Inst, MemoryWidth, Reg, RegisterWidth, ShiftDirection,
+};
+use super::{Code, Reloc};
 use faun::index::Range;
-use faun::ir::Direction;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub(crate) enum Reg {
-    Rax = 0,
-    Rcx = 1,
-    Rdx = 2,
-    /// Nothing here tracks or clobbers it, which is what makes it somewhere
-    /// to keep a value for as long as the program runs.
-    Rbx = 3,
-    Rsi = 6,
-    Rdi = 7,
-    R8 = 8,
-    R9 = 9,
-    R10 = 10,
-    R11 = 11,
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exhaustive encoding arm per x86 target instruction"
+)]
+pub(crate) fn encode(program: &Allocated) -> Code {
+    let mut asm = RawEncoder::default();
+    let mut positions = Vec::with_capacity(program.instructions().len() + 1);
+    let mut branches = Vec::new();
+    let mut data_references = Vec::new();
+
+    for inst in program.instructions() {
+        positions.push(asm.here());
+        match *inst {
+            Inst::XorSelf { dst } => asm.xor_self(dst),
+            Inst::Move { dst, src, width } => {
+                asm.mov_reg(dst, src, width == RegisterWidth::Word);
+            }
+            Inst::PushImmediate(value) => asm.push_imm8(value),
+            Inst::Pop { dst } => asm.pop(dst),
+            Inst::MoveImmediate32 { dst, value } => asm.mov_imm32(dst, value),
+            Inst::MoveSignExtendedImmediate32 { dst, value } => {
+                asm.mov_sext_imm32(dst, value);
+            }
+            Inst::MoveImmediate64 { dst, value } => asm.mov_imm64(dst, value),
+            Inst::Load {
+                width,
+                dst,
+                base,
+                displacement,
+            } => match width {
+                MemoryWidth::Byte => asm.load_byte(dst, base, displacement),
+                MemoryWidth::Word => asm.load_word(dst, base, displacement),
+            },
+            Inst::Store {
+                width,
+                src,
+                base,
+                displacement,
+            } => match width {
+                MemoryWidth::Byte => asm.store_byte(src, base, displacement),
+                MemoryWidth::Word => asm.store_word(src, base, displacement),
+            },
+            Inst::Narrow { bits } => asm.narrow(bits),
+            Inst::Shift {
+                direction,
+                by,
+                bits,
+            } => asm.shift(direction, by, bits),
+            Inst::Multiply => asm.multiply(),
+            Inst::Divide => asm.divide(),
+            Inst::Syscall => asm.syscall(),
+            Inst::LoadStack { dst, displacement } => asm.load_slot(dst, displacement),
+            Inst::LoadFrame { dst, slot } => asm.load_slot(dst, slot.offset()),
+            Inst::StoreFrame { src, slot } => asm.store_slot(src, slot.offset()),
+            Inst::OpenFrame { slots } => asm.open_frame(frame_bytes(slots)),
+            Inst::CloseFrame { slots } => asm.close_frame(frame_bytes(slots)),
+            Inst::Alu { op, dst, src, bits } => {
+                asm.alu_sized(alu_opcode(op), dst, src, bits);
+            }
+            Inst::SetIf { condition, dst } => asm.set_if(condition_code(condition), dst),
+            Inst::LoadDataAddress { dst, data } => {
+                let step = asm.lea_rip(dst);
+                data_references.push((step, data));
+            }
+            Inst::Call { target } => {
+                let hole = asm.call();
+                branches.push((hole, target));
+            }
+            Inst::Return => asm.ret(),
+            Inst::Jump { condition, target } => {
+                let hole = match condition {
+                    Some(condition) => asm.jump_if(condition_code(condition)),
+                    None => asm.jump(),
+                };
+                branches.push((hole, target));
+            }
+        }
+    }
+    positions.push(asm.here());
+
+    for (hole, target) in branches {
+        asm.patch(hole, positions[program.label_position(target)]);
+    }
+
+    let (bytes, raw_positions) = asm.finish();
+    let relocs = data_references
+        .into_iter()
+        .map(|(step, data)| Reloc {
+            // The displacement is the last four bytes of the instruction.
+            offset: raw_positions[step + 1] - 4,
+            data,
+        })
+        .collect();
+    Code { bytes, relocs }
 }
 
-impl From<Reg> for u8 {
-    #[expect(clippy::as_conversions, reason = "reading a repr(u8) discriminant")]
-    fn from(reg: Reg) -> Self {
-        reg as Self
+const fn frame_bytes(slots: u32) -> u32 {
+    slots.checked_mul(8).expect("an x86 frame below 4 GiB")
+}
+
+const fn alu_opcode(op: Alu) -> u8 {
+    match op {
+        Alu::Add => 0x01,
+        Alu::Subtract => 0x29,
+        Alu::Compare => 0x39,
+        Alu::Test => 0x85,
     }
 }
 
-impl Reg {
-    pub(crate) fn index(self) -> usize {
-        usize::from(u8::from(self))
-    }
-
-    /// The low three bits, which is all `ModRM` and `+r` have room for.
-    fn low(self) -> u8 {
-        u8::from(self) & 7
-    }
-
-    fn extended(self) -> bool {
-        u8::from(self) >= 8
+const fn condition_code(condition: Condition) -> u8 {
+    match condition {
+        Condition::Equal => 0x4,
+        Condition::NotEqual => 0x5,
+        Condition::Below => 0x2,
     }
 }
 
@@ -51,7 +132,7 @@ impl Reg {
 /// as the bytes it is. A jump is not: how far it reaches decides whether it
 /// spends one byte on the displacement or four, and how far it reaches is
 /// not known until everything before it has a width.
-enum Inst {
+enum RawInst {
     Fixed(Range),
     Jump {
         cc: Option<u8>,
@@ -64,7 +145,7 @@ enum Inst {
     },
 }
 
-impl Inst {
+impl RawInst {
     /// What it costs, given whether a jump was found to need four bytes.
     fn len(&self, far: bool) -> usize {
         match *self {
@@ -81,26 +162,23 @@ impl Inst {
 }
 
 #[derive(Default)]
-pub(crate) struct Encoder {
+struct RawEncoder {
     /// The steps, in the order they were asked for.
-    insts: Vec<Inst>,
+    insts: Vec<RawInst>,
     /// Every fixed step's bytes, end to end.
     pool: Vec<u8>,
     /// Where the step now being written began, if one is open.
     open: Option<usize>,
-    /// Whether anything was written to a frame slot, which is what says a
-    /// frame was needed at all.
-    spilled: bool,
 }
 
-impl Encoder {
+impl RawEncoder {
     /// Close whatever step was being written, keeping what it wrote.
     fn close(&mut self) {
         if let Some(start) = self.open.take()
             && self.pool.len() > start
         {
             self.insts
-                .push(Inst::Fixed(Range::of(start, self.pool.len() - start)));
+                .push(RawInst::Fixed(Range::of(start, self.pool.len() - start)));
         }
     }
 
@@ -109,16 +187,6 @@ impl Encoder {
     fn step(&mut self) {
         self.close();
         self.open = Some(self.pool.len());
-    }
-
-    pub(crate) const fn spilled(&self) -> bool {
-        self.spilled
-    }
-
-    /// Forget what was written to a frame, so that the next function's
-    /// answer is about that function alone.
-    pub(crate) const fn forget_spilled(&mut self) {
-        self.spilled = false;
     }
 
     /// Where every step lands, and the bytes they come to.
@@ -133,14 +201,14 @@ impl Encoder {
     /// # Panics
     ///
     /// If a jump was never aimed, or reaches further than two gigabytes.
-    pub(crate) fn finish(mut self) -> (Vec<u8>, Vec<usize>) {
+    fn finish(mut self) -> (Vec<u8>, Vec<usize>) {
         self.close();
         let (far, at) = self.settled();
         let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
         for (id, inst) in self.insts.iter().enumerate() {
             match *inst {
-                Inst::Fixed(held) => bytes.extend_from_slice(&self.pool[held.range()]),
-                Inst::Call { to } => {
+                RawInst::Fixed(held) => bytes.extend_from_slice(&self.pool[held.range()]),
+                RawInst::Call { to } => {
                     let to = to.expect("every call is aimed");
                     let from = at[id] + 5;
                     let step = i64::try_from(at[to]).expect("a reachable offset")
@@ -149,7 +217,7 @@ impl Encoder {
                     bytes.push(0xE8);
                     bytes.extend_from_slice(&step.to_le_bytes());
                 }
-                Inst::Jump { cc, to } => {
+                RawInst::Jump { cc, to } => {
                     let to = to.expect("every jump is aimed");
                     let from = at[id] + inst.len(far[id]);
                     let step = i64::try_from(at[to]).expect("a reachable offset")
@@ -189,7 +257,7 @@ impl Encoder {
             let at = self.positions(&far);
             let mut again = false;
             for (id, inst) in self.insts.iter().enumerate() {
-                let Inst::Jump { to, .. } = *inst else {
+                let RawInst::Jump { to, .. } = *inst else {
                     continue;
                 };
                 if far[id] {
@@ -224,32 +292,32 @@ impl Encoder {
 
     /// The shortest zeroing, and it clears all 64 bits despite naming the
     /// 32-bit half.
-    pub(crate) fn xor_self(&mut self, dst: Reg) {
+    fn xor_self(&mut self, dst: Reg) {
         self.step();
         self.rex(false, Some(dst), dst);
         self.emit(&[0x31, modrm(dst, dst)]);
     }
 
-    pub(crate) fn mov_reg(&mut self, dst: Reg, src: Reg, wide: bool) {
+    fn mov_reg(&mut self, dst: Reg, src: Reg, wide: bool) {
         self.step();
         self.rex(wide, Some(src), dst);
         self.emit(&[0x89, modrm(src, dst)]);
     }
 
     /// Sign-extends to a full 64-bit stack slot.
-    pub(crate) fn push_imm8(&mut self, value: i8) {
+    fn push_imm8(&mut self, value: i8) {
         self.step();
         self.emit(&[0x6A, value.cast_unsigned()]);
     }
 
-    pub(crate) fn pop(&mut self, dst: Reg) {
+    fn pop(&mut self, dst: Reg) {
         self.step();
         self.rex(false, None, dst);
         self.emit(&[0x58 + dst.low()]);
     }
 
     /// Zero-extends to 64 bits.
-    pub(crate) fn mov_imm32(&mut self, dst: Reg, value: u32) {
+    fn mov_imm32(&mut self, dst: Reg, value: u32) {
         self.step();
         self.rex(false, None, dst);
         self.emit(&[0xB8 + dst.low()]);
@@ -257,7 +325,7 @@ impl Encoder {
     }
 
     /// Sign-extended to 64 bits, for negative constants.
-    pub(crate) fn mov_sext_imm32(&mut self, dst: Reg, value: i32) {
+    fn mov_sext_imm32(&mut self, dst: Reg, value: i32) {
         self.step();
         // ModRM.reg holds the opcode extension /0, not a register.
         self.rex(true, None, dst);
@@ -266,7 +334,7 @@ impl Encoder {
     }
 
     /// The only form that carries a full 64-bit value.
-    pub(crate) fn mov_imm64(&mut self, dst: Reg, value: u64) {
+    fn mov_imm64(&mut self, dst: Reg, value: u64) {
         self.step();
         self.emit(&[0x48 | u8::from(dst.extended()), 0xB8 + dst.low()]);
         self.emit(&value.to_le_bytes());
@@ -275,23 +343,23 @@ impl Encoder {
     /// `dst = [base + disp]` and its mirror, in whole words. A `ModRM` mod
     /// of 10 takes a 32-bit displacement; rsp and rbp are not addressable
     /// this way, and nothing here asks to be.
-    pub(crate) fn load_word(&mut self, dst: Reg, base: Reg, disp: i32) {
+    fn load_word(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.step();
         self.at(&[0x8B], dst, base, disp);
     }
 
-    pub(crate) fn store_word(&mut self, src: Reg, base: Reg, disp: i32) {
+    fn store_word(&mut self, src: Reg, base: Reg, disp: i32) {
         self.step();
         self.at(&[0x89], src, base, disp);
     }
 
     /// The low byte, zero-extended on the way in.
-    pub(crate) fn load_byte(&mut self, dst: Reg, base: Reg, disp: i32) {
+    fn load_byte(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.step();
         self.at(&[0x0F, 0xB6], dst, base, disp);
     }
 
-    pub(crate) fn store_byte(&mut self, src: Reg, base: Reg, disp: i32) {
+    fn store_byte(&mut self, src: Reg, base: Reg, disp: i32) {
         self.step();
         self.at(&[0x88], src, base, disp);
     }
@@ -304,7 +372,7 @@ impl Encoder {
     }
 
     /// `rax` explicitly taken modulo two to the `bits`, including odd widths.
-    pub(crate) fn narrow(&mut self, bits: u16) {
+    fn narrow(&mut self, bits: u16) {
         self.step();
         match bits {
             0 => self.emit(&[0x31, 0xC0]), // xor eax, eax: modulo one is zero
@@ -319,8 +387,8 @@ impl Encoder {
             }
             33..=63 => {
                 let by = u8::try_from(64 - bits).expect("a register shift");
-                self.moved(Direction::Up, by, 64);
-                self.moved(Direction::Down, by, 64);
+                self.moved(ShiftDirection::Left, by, 64);
+                self.moved(ShiftDirection::Right, by, 64);
             }
             other => panic!("no {other}-bit form on this target"),
         }
@@ -328,7 +396,7 @@ impl Encoder {
 
     /// `rax` with its bits moved `by` places, which is a product or quotient
     /// by a power of two.
-    pub(crate) fn shift(&mut self, direction: Direction, by: u8, bits: u16) {
+    fn shift(&mut self, direction: ShiftDirection, by: u8, bits: u16) {
         self.step();
         self.moved(direction, by, bits);
     }
@@ -339,10 +407,10 @@ impl Encoder {
     /// One place has a form of its own that carries no distance, and it is
     /// the common one: a doubling is a shift by one, and that form is as
     /// short as the addition it stands in for.
-    fn moved(&mut self, direction: Direction, by: u8, bits: u16) {
+    fn moved(&mut self, direction: ShiftDirection, by: u8, bits: u16) {
         let form = match direction {
-            Direction::Up => 0xE0,
-            Direction::Down => 0xE8,
+            ShiftDirection::Left => 0xE0,
+            ShiftDirection::Right => 0xE8,
         };
         if bits > 32 {
             self.emit(&[0x48]);
@@ -355,30 +423,30 @@ impl Encoder {
     }
 
     /// Unsigned RDX:RAX = RAX * RCX; both result registers are clobbered.
-    pub(crate) fn multiply(&mut self) {
+    fn multiply(&mut self) {
         self.step();
         self.emit(&[0x48, 0xF7, 0xE1]);
     }
 
     /// Unsigned RAX = RDX:RAX / RCX, RDX = remainder. The caller guards zero.
-    pub(crate) fn divide(&mut self) {
+    fn divide(&mut self) {
         self.step();
         self.emit(&[0x48, 0xF7, 0xF1]);
     }
 
-    pub(crate) fn syscall(&mut self) {
+    fn syscall(&mut self) {
         self.step();
         self.emit(&[0x0F, 0x05]);
     }
 
     /// A `ModRM` `rm` of 100 means a SIB byte follows; 0x24 is rsp as the
     /// base with no index.
-    pub(crate) fn load_slot(&mut self, dst: Reg, disp: u32) {
+    fn load_slot(&mut self, dst: Reg, disp: u32) {
         self.step();
         self.slot(0x8B, dst, disp);
     }
 
-    pub(crate) fn store_slot(&mut self, src: Reg, disp: u32) {
+    fn store_slot(&mut self, src: Reg, disp: u32) {
         self.step();
         self.slot(0x89, src, disp);
     }
@@ -386,7 +454,6 @@ impl Encoder {
     /// The `ModRM` mode says how much displacement follows, so a slot near
     /// the stack pointer costs less to reach than a distant one.
     fn slot(&mut self, opcode: u8, reg: Reg, disp: u32) {
-        self.spilled = true;
         let mode = match disp {
             0 => 0x00,
             1..=0x7F => 0x40,
@@ -401,7 +468,7 @@ impl Encoder {
         }
     }
 
-    pub(crate) fn open_frame(&mut self, bytes: u32) {
+    fn open_frame(&mut self, bytes: u32) {
         self.step();
         self.adjust_rsp(0xEC, bytes);
     }
@@ -415,7 +482,7 @@ impl Encoder {
     /// thirty-two-bit one zero-extends into the whole of it, which is both
     /// shorter than the sixty-four-bit form and what keeps a value holding
     /// nothing above what it needs.
-    pub(crate) fn alu_sized(&mut self, opcode: u8, dst: Reg, src: Reg, bits: u16) {
+    fn alu_sized(&mut self, opcode: u8, dst: Reg, src: Reg, bits: u16) {
         self.step();
         if bits <= 32 {
             self.rex(false, Some(src), dst);
@@ -426,18 +493,18 @@ impl Encoder {
     }
 
     /// `dst = dst op src`.
-    pub(crate) fn alu(&mut self, opcode: u8, dst: Reg, src: Reg) {
+    fn alu(&mut self, opcode: u8, dst: Reg, src: Reg) {
         self.step();
         self.rex(true, Some(src), dst);
         self.emit(&[opcode, modrm(src, dst)]);
     }
 
     /// `dst = 1` when the flags satisfy `cc`, else 0, zero-extended.
-    pub(crate) fn set_if(&mut self, cc: u8, dst: Reg) {
+    fn set_if(&mut self, cc: u8, dst: Reg) {
         self.step();
-        self.rex(false, None, dst);
+        self.rex_byte(None, dst);
         self.emit(&[0x0F, 0x90 | cc, 0xC0 | dst.low()]);
-        self.rex(false, Some(dst), dst);
+        self.rex_byte(Some(dst), dst);
         self.emit(&[0x0F, 0xB6, modrm(dst, dst)]);
     }
 
@@ -445,9 +512,9 @@ impl Encoder {
     /// its offset is returned. `REX.W` is not optional: without it the
     /// address truncates to 32 bits, which ASLR makes fatal.
     /// Answers which step it is. What fills the hole is the layout rather
-    /// than [`Encoder::patch`], so what a caller keeps is the step, and
+    /// than [`RawEncoder::patch`], so what a caller keeps is the step, and
     /// where in the file it lands is read off the finished positions.
-    pub(crate) fn lea_rip(&mut self, dst: Reg) -> usize {
+    fn lea_rip(&mut self, dst: Reg) -> usize {
         self.step();
         self.rex(true, Some(dst), Reg::Rax);
         self.emit(&[0x8D, (dst.low() << 3) | 5]);
@@ -455,21 +522,21 @@ impl Encoder {
         self.insts.len()
     }
 
-    /// Leaves a hole for [`Encoder::patch`], like any other displacement.
+    /// Leaves a hole for [`RawEncoder::patch`], like any other displacement.
     /// There is no short form of a call, so this is always a full
     /// displacement.
-    pub(crate) fn call(&mut self) -> usize {
+    fn call(&mut self) -> usize {
         self.close();
-        self.insts.push(Inst::Call { to: None });
+        self.insts.push(RawInst::Call { to: None });
         self.insts.len() - 1
     }
 
-    pub(crate) fn ret(&mut self) {
+    fn ret(&mut self) {
         self.step();
         self.emit(&[0xC3]);
     }
 
-    pub(crate) fn close_frame(&mut self, bytes: u32) {
+    fn close_frame(&mut self, bytes: u32) {
         self.step();
         self.adjust_rsp(0xC4, bytes);
     }
@@ -488,22 +555,22 @@ impl Encoder {
 
     /// Unconditional, or taken when the flags satisfy `cc`. Both answer
     /// which step they are, for saying later where they go.
-    pub(crate) fn jump(&mut self) -> usize {
+    fn jump(&mut self) -> usize {
         self.branch(None)
     }
 
-    pub(crate) fn jump_if(&mut self, cc: u8) -> usize {
+    fn jump_if(&mut self, cc: u8) -> usize {
         self.branch(Some(cc))
     }
 
     fn branch(&mut self, cc: Option<u8>) -> usize {
         self.close();
-        self.insts.push(Inst::Jump { cc, to: None });
+        self.insts.push(RawInst::Jump { cc, to: None });
         self.insts.len() - 1
     }
 
     /// Which step comes next, for aiming a jump at it.
-    pub(crate) fn here(&mut self) -> usize {
+    fn here(&mut self) -> usize {
         self.close();
         self.open = Some(self.pool.len());
         self.insts.len()
@@ -514,8 +581,8 @@ impl Encoder {
     /// # Panics
     ///
     /// If what was handed over is not a jump.
-    pub(crate) fn patch(&mut self, jump: usize, target: usize) {
-        let (Inst::Jump { to, .. } | Inst::Call { to }) = &mut self.insts[jump] else {
+    fn patch(&mut self, jump: usize, target: usize) {
+        let (RawInst::Jump { to, .. } | RawInst::Call { to }) = &mut self.insts[jump] else {
             panic!("only a jump or a call goes anywhere");
         };
         *to = Some(target);
@@ -527,6 +594,14 @@ impl Encoder {
         let reg = reg.is_some_and(Reg::extended);
         let bits = (u8::from(wide) << 3) | (u8::from(reg) << 2) | u8::from(rm.extended());
         if bits != 0 {
+            self.emit(&[0x40 | bits]);
+        }
+    }
+
+    fn rex_byte(&mut self, reg: Option<Reg>, rm: Reg) {
+        let reg = reg.is_some_and(Reg::extended);
+        let bits = (u8::from(reg) << 2) | u8::from(rm.extended());
+        if bits != 0 || rm.low() >= 4 {
             self.emit(&[0x40 | bits]);
         }
     }
@@ -543,11 +618,12 @@ fn modrm(reg: Reg, rm: Reg) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::AllocatedBuilder;
 
-    fn encoded(build: impl FnOnce(&mut Encoder)) -> Vec<u8> {
-        let mut asm = Encoder::default();
-        build(&mut asm);
-        asm.finish().0
+    fn encoded(build: impl FnOnce(&mut AllocatedBuilder)) -> Vec<u8> {
+        let mut instructions = AllocatedBuilder::default();
+        build(&mut instructions);
+        encode(&instructions.finish().unwrap()).bytes
     }
 
     #[test]
@@ -555,18 +631,18 @@ mod tests {
         assert_eq!(encoded(|a| a.xor_self(Reg::Rdi)), [0x31, 0xFF]);
         assert_eq!(encoded(|a| a.pop(Reg::Rdx)), [0x5A]);
         assert_eq!(encoded(|a| a.push_imm8(-5)), [0x6A, 0xFB]);
-        assert_eq!(encoded(Encoder::multiply), [0x48, 0xF7, 0xE1]);
-        assert_eq!(encoded(Encoder::divide), [0x48, 0xF7, 0xF1]);
+        assert_eq!(encoded(AllocatedBuilder::multiply), [0x48, 0xF7, 0xE1]);
+        assert_eq!(encoded(AllocatedBuilder::divide), [0x48, 0xF7, 0xF1]);
         assert_eq!(encoded(|a| a.narrow(0)), [0x31, 0xC0]);
         assert_eq!(encoded(|a| a.narrow(7)), [0x83, 0xE0, 0x7F]);
         assert_eq!(encoded(|a| a.narrow(9)), [0x25, 0xFF, 0x01, 0x00, 0x00]);
         assert_eq!(encoded(|a| a.narrow(32)), [0x89, 0xC0]);
         assert_eq!(
-            encoded(|a| a.mov_reg(Reg::Rdi, Reg::Rax, false)),
+            encoded(|a| a.mov_reg(Reg::Rdi, Reg::Rax, RegisterWidth::Low32)),
             [0x89, 0xC7]
         );
         assert_eq!(
-            encoded(|a| a.mov_reg(Reg::Rdx, Reg::Rax, true)),
+            encoded(|a| a.mov_reg(Reg::Rdx, Reg::Rax, RegisterWidth::Word)),
             [0x48, 0x89, 0xC2]
         );
         #[rustfmt::skip]
@@ -575,6 +651,18 @@ mod tests {
         #[rustfmt::skip]
         assert_eq!(encoded(|a| a.mov_imm64(Reg::Rdx, 0x7FFF_FFFF_FFFF_FFFF)),
             [0x48, 0xBA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]);
+    }
+
+    #[test]
+    fn byte_registers_that_need_rex_never_name_legacy_high_bytes() {
+        assert_eq!(
+            encoded(|a| a.set_if(Condition::Below, Reg::Rsi)),
+            [0x40, 0x0F, 0x92, 0xC6, 0x40, 0x0F, 0xB6, 0xF6]
+        );
+        assert_eq!(
+            encoded(|a| a.set_if(Condition::Below, Reg::R8)),
+            [0x41, 0x0F, 0x92, 0xC0, 0x45, 0x0F, 0xB6, 0xC0]
+        );
     }
 
     #[test]
