@@ -286,6 +286,41 @@ fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not(
 }
 
 #[test]
+fn the_reference_host_reads_all_bytes_and_repeats_eof() {
+    struct Input(std::collections::VecDeque<u8>);
+
+    impl Host for Input {
+        fn call(
+            &mut self,
+            name: &str,
+            args: &[BigUint],
+            _: &mut Memory<'_>,
+        ) -> Result<HostResult, Error> {
+            assert_eq!(name, "read_byte!");
+            assert!(args.is_empty());
+            let value = self.0.pop_front().map_or(0, |byte| u16::from(byte) + 1);
+            Ok(HostResult::Return(vec![BigUint::from(value)]))
+        }
+    }
+
+    let program = crate::programs::external::reads_bytes();
+    let mut input = Input([0, 127, 255].into());
+    assert_eq!(
+        evaluate::evaluate(
+            &program,
+            program.entry(),
+            &[],
+            evaluate::Config::default(),
+            &mut input,
+        )
+        .unwrap()
+        .returned()
+        .unwrap(),
+        [BigUint::from(0u8)]
+    );
+}
+
+#[test]
 fn a_body_named_like_an_external_function_is_still_a_body() {
     let mut p = program();
     let internal = p.declare("argc!", &[], &[Class::Word]);

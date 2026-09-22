@@ -14,6 +14,8 @@ pub(crate) enum Reg {
     Rdx = 2,
     /// Reserved for the process argument count.
     Rbx = 3,
+    /// Named for target adapters that use temporary stack storage.
+    Rsp = 4,
     Rsi = 6,
     Rdi = 7,
     R8 = 8,
@@ -40,6 +42,7 @@ impl Reg {
             1 => Some(Self::Rcx),
             2 => Some(Self::Rdx),
             3 => Some(Self::Rbx),
+            4 => Some(Self::Rsp),
             6 => Some(Self::Rsi),
             7 => Some(Self::Rdi),
             8 => Some(Self::R8),

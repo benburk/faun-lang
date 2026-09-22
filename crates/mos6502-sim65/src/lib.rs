@@ -54,6 +54,7 @@ const HOME_COUNT: u8 = 16;
 const ARGC: u8 = HOMES + 2 * HOME_COUNT;
 
 /// The simulator's hooks: a `jmp` or `jsr` to one is answered by the host.
+const HOOK_READ: u16 = 0xFFF6;
 const HOOK_WRITE: u16 = 0xFFF7;
 const HOOK_ARGS: u16 = 0xFFF8;
 const HOOK_EXIT: u16 = 0xFFF9;
@@ -76,7 +77,7 @@ impl Target for Mos6502Sim65 {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write", "exit!", "grow", "argc!"]
+        &["write", "exit!", "grow", "argc!", "read_byte!"]
     }
 
     fn limits(&self, program: &Program) -> Result<(), String> {

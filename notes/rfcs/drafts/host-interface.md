@@ -197,10 +197,12 @@ the frontend now keeps it.
   `Convert` when a value does not fit what a routine takes, which is the
   machine deciding where `Op::Convert`'s own doc says a program asks. Latent
   while every routine takes a word.
-- **Only the count is exposed.** The target constructs the represented `host`
-  entry value from `argc`, and every machine obtains it differently: Linux leaves it on the
-  startup stack, WASI reports it through a call, and the simulator has a hook.
-  Argument strings still need computed aggregates to have a representation.
+- **Only scalar input is represented.** The target constructs the represented
+  `host` entry value from `argc`, and every machine obtains it differently:
+  Linux leaves it on the startup stack, WASI reports it through a call, and the
+  simulator has a hook. `read_byte!` consumes stdin one byte at a time,
+  answering zero at EOF or the byte plus one. Argument strings, whole input
+  buffers, and strings still need computed aggregates to have a representation.
 - **Narrowing needs recognition.** A program proves a value fits by clamping
   or taking a modulus, and `facts` recognises `add` and nothing else.
 - **faun needs a prelude.** `Standard.number` has to point at a type, and

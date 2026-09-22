@@ -95,6 +95,45 @@ impl<'a> SpineView<'a> {
             _ => ByteView::NeedsDecoding,
         }
     }
+
+    /// Decode a spine whose one element field is a natural no greater than
+    /// 255. The shape, not a source type name, establishes byte capability.
+    #[must_use]
+    pub fn to_bytes(self) -> Option<Vec<u8>> {
+        let Shape::Spine {
+            cons, recursive, ..
+        } = shape(self.0.types, self.0.owner)
+        else {
+            return None;
+        };
+        let mut elements = self
+            .0
+            .types
+            .fields(cons)
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| *at != recursive);
+        let (_, &element) = elements.next()?;
+        if elements.next().is_some() {
+            return None;
+        }
+        let Shape::Spine { cons, .. } = shape(self.0.types, element) else {
+            return None;
+        };
+        if self.0.types.fields(cons).len() != 1 {
+            return None;
+        }
+
+        let (count, mut at) = read_u64(self.0.bytes);
+        let count = usize::try_from(count?).ok()?;
+        let mut bytes = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (value, took) = read_u64(&self.0.bytes[at..]);
+            bytes.push(u8::try_from(value?).ok()?);
+            at += took;
+        }
+        (at == self.0.bytes.len()).then_some(bytes)
+    }
 }
 
 impl<'a> ConstructorView<'a> {

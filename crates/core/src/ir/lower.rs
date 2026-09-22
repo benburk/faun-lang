@@ -79,6 +79,10 @@ enum Callee<'a> {
         id: FunctionId,
         routine: &'a Routine,
     },
+    Print {
+        write: FunctionId,
+        exit: FunctionId,
+    },
 }
 
 #[expect(
@@ -111,13 +115,50 @@ fn declare<'a>(
             continue;
         }
         let function = program.function(id);
+        let name = program.name(function.name);
+        if matches!(
+            function.definition,
+            barb::Definition::External { symbol, .. }
+                if program.name(symbol) == crate::platform::PRINT_ADAPTER
+        ) {
+            let static_params = program
+                .params(id)
+                .iter()
+                .filter(|ty| demand.carries[ty.index()] == Storage::Static)
+                .count();
+            if program.params(id).len() != 2
+                || static_params != 1
+                || !uninhabited(program, function.result)
+            {
+                return Err("the static print adapter requires authority, one byte string, and a nonreturning result".to_owned());
+            }
+            let write = routines
+                .get("write")
+                .ok_or_else(|| "nothing answers for `print!`: `write` is unavailable".to_owned())?
+                .declare(machine);
+            let exit = routines
+                .get("exit!")
+                .ok_or_else(|| "nothing answers for `print!`: `exit!` is unavailable".to_owned())?
+                .declare(machine);
+            callees.push(Callee::Print { write, exit });
+            continue;
+        }
+        if program
+            .params(id)
+            .iter()
+            .chain([&function.result])
+            .any(|ty| demand.carries[ty.index()] == Storage::Static)
+        {
+            return Err(format!(
+                "`{name}` carries a static byte string outside `print!`, which has no runtime representation yet"
+            ));
+        }
         let (params, returns) = demand.signature(id);
         let named = demand.named_params(id);
         let named: Vec<_> = named
             .iter()
             .map(|(name, class)| (name.as_str(), *class))
             .collect();
-        let name = program.name(function.name);
         // External functions carry the provider's machine contract. They
         // share function IDs and calls with bodies, not the narrowing policy.
         callees.push(match function.definition {
@@ -201,6 +242,7 @@ fn provided<'a>(
 enum Storage {
     Undemanded,
     Erased,
+    Static,
     Carried,
 }
 
@@ -208,7 +250,7 @@ impl Storage {
     fn carried(self) -> bool {
         match self {
             Self::Carried => true,
-            Self::Erased => false,
+            Self::Erased | Self::Static => false,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
         }
     }
@@ -486,7 +528,10 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, Strin
             represented = field;
             continue;
         }
-        let barb::Shape::Spine { cons, .. } = barb::shape(program, represented) else {
+        let barb::Shape::Spine {
+            cons, recursive, ..
+        } = barb::shape(program, represented)
+        else {
             return Err(format!("`{name}` has no representation in this tier yet"));
         };
         if program.fields(cons).len() == 1 {
@@ -495,6 +540,17 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, Strin
             // size -- so it is asked of each value, where the tier above
             // answered it.
             return Ok(Storage::Carried);
+        }
+        let mut elements = program
+            .fields(cons)
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| *at != recursive);
+        let byte_elements = elements.next().is_some_and(|(_, element)| {
+            matches!(barb::shape(program, *element), barb::Shape::Spine { cons, .. } if program.fields(cons).len() == 1)
+        }) && elements.next().is_none();
+        if byte_elements {
+            return Ok(Storage::Static);
         }
         return Err(format!(
             "`{name}` carries something per element, which has no representation in this tier yet"
@@ -753,7 +809,8 @@ impl Lowering<'_> {
                         .then(|| taken.next().expect("a parameter"))
                 })
                 .collect();
-            let answer = self.body(b, body, &mut locals);
+            let mut statics = vec![None; locals.len()];
+            let answer = self.body(b, body, &mut locals, &mut statics);
             returned(b, answer, destination)
         })
     }
@@ -764,17 +821,36 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         body: barb::Body,
         locals: &mut Vec<Option<ValueId>>,
+        statics: &mut Vec<Option<barb::ConstId>>,
     ) -> Answer<ValueId> {
         for &binding in self.barb.bindings(body.bindings) {
-            match self.expr(b, binding, locals) {
+            let static_value = self.propagate_static(binding, statics);
+            match self.expr(b, binding, locals, statics) {
                 Answer::Value(value) => locals.push(Some(value)),
                 Answer::Nothing => locals.push(None),
                 // A body leaves where its bindings do: nothing after this
                 // one is reached, so nothing after it is lowered.
                 Answer::Never => return Answer::Never,
             }
+            statics.push(static_value);
         }
-        self.expr(b, body.tail, locals)
+        self.expr(b, body.tail, locals, statics)
+    }
+
+    fn propagate_static(
+        &self,
+        expr: barb::ExprId,
+        statics: &[Option<barb::ConstId>],
+    ) -> Option<barb::ConstId> {
+        match self.barb.expr(expr) {
+            barb::Expr::Static(value)
+                if self.carries[self.barb.constant(value).owner().index()] == Storage::Static =>
+            {
+                Some(value)
+            }
+            barb::Expr::Atom(atom) => statics[atom.0.index()],
+            _ => None,
+        }
     }
 
     fn expr(
@@ -782,6 +858,7 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         expr: barb::ExprId,
         locals: &[Option<ValueId>],
+        statics: &[Option<barb::ConstId>],
     ) -> Answer<ValueId> {
         match self.barb.expr(expr) {
             barb::Expr::Atom(atom) => locals[atom.0.index()].into(),
@@ -797,10 +874,17 @@ impl Lowering<'_> {
                 Answer::Value(self.static_value(b, self.width(expr), value))
             }
             barb::Expr::Con(ctor, args) => self.construct(b, expr, ctor, args, locals).into(),
-            barb::Expr::Call(function, args) => self.call(b, expr, function, args, locals),
+            barb::Expr::Call(function, args) => self.call(b, expr, function, args, locals, statics),
             barb::Expr::Match(scrutinee, arms) => {
                 let scrutinee = locals[scrutinee.0.index()].expect("a scrutinee to match");
-                self.branch(b, scrutinee, arms, locals, self.facts.matched(expr))
+                self.branch(
+                    b,
+                    scrutinee,
+                    arms,
+                    locals,
+                    statics,
+                    self.facts.matched(expr),
+                )
             }
         }
     }
@@ -834,10 +918,14 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         expr: barb::ExprId,
         function: barb::FnId,
-        args: barb::Range,
+        arguments: barb::Range,
         locals: &[Option<ValueId>],
+        statics: &[Option<barb::ConstId>],
     ) -> Answer<ValueId> {
-        let mut args = self.call_arguments(function, args, locals);
+        if let Callee::Print { write, exit } = self.callees[function.index()] {
+            return self.print(b, arguments, statics, write, exit);
+        }
+        let mut args = self.call_arguments(function, arguments, locals);
         let (results, answers) = match self.callees[function.index()] {
             Callee::Instruction(operation) => {
                 if matches!(operation, barb::Operation::Add | barb::Operation::Mul)
@@ -856,6 +944,7 @@ impl Lowering<'_> {
                 (b.call(callee, &args), None)
             }
             Callee::Unreachable => unreachable!("a lowered call must have been demanded"),
+            Callee::Print { .. } => unreachable!("print was lowered before ordinary calls"),
         };
         // A call answers what its result type does, which is nothing ever
         // where that type has no values -- and it answers at the width the
@@ -931,6 +1020,35 @@ impl Lowering<'_> {
             answer.expect("an affine form has a term or constant"),
             class,
         )
+    }
+
+    fn print(
+        &self,
+        b: &mut super::Builder,
+        arguments: barb::Range,
+        statics: &[Option<barb::ConstId>],
+        write: FunctionId,
+        exit: FunctionId,
+    ) -> Answer<ValueId> {
+        let literal = self
+            .barb
+            .atoms(arguments)
+            .iter()
+            .find_map(|atom| statics[atom.0.index()])
+            .expect("print! takes a static string after checked lowering");
+        let barb::ConstantView::Spine(string) = self.barb.constant(literal).view() else {
+            unreachable!("print! takes the built-in string spine");
+        };
+        let bytes = string
+            .to_bytes()
+            .expect("the source string spine contains byte naturals");
+        let data = b.data(&bytes);
+        let address = b.address_of(data);
+        let length = b.data_len(data);
+        b.call(write, &[address, length]);
+        let status = b.constant(Class::Word, 0);
+        b.call(exit, &[status]);
+        Answer::Never
     }
 
     fn operation(
@@ -1023,6 +1141,7 @@ impl Lowering<'_> {
         scrutinee: ValueId,
         arms: barb::Range,
         locals: &[Option<ValueId>],
+        statics: &[Option<barb::ConstId>],
         bounds: barb::Bounds,
     ) -> Answer<ValueId> {
         let mut arms = reachable(self.barb, arms, bounds);
@@ -1030,7 +1149,7 @@ impl Lowering<'_> {
             return Answer::Never;
         };
         let Some(second) = arms.next() else {
-            return self.only_arm(b, scrutinee, &first, locals);
+            return self.only_arm(b, scrutinee, &first, locals, statics);
         };
         match barb::shape(self.barb, self.barb.ctor(first.ctor).owner) {
             barb::Shape::Spine { nil, .. } => {
@@ -1040,7 +1159,7 @@ impl Lowering<'_> {
                 } else {
                     (second, first)
                 };
-                self.natural_branch(b, scrutinee, &empty, &counted, locals)
+                self.natural_branch(b, scrutinee, &empty, &counted, locals, statics)
             }
             barb::Shape::Tagged => {
                 let arms = {
@@ -1050,7 +1169,7 @@ impl Lowering<'_> {
                     })
                 };
                 let class = b.class(scrutinee);
-                self.tags(b, scrutinee, class, &arms, locals)
+                self.tags(b, scrutinee, class, &arms, locals, statics)
             }
         }
     }
@@ -1062,6 +1181,7 @@ impl Lowering<'_> {
         empty: &barb::Arm,
         counted: &barb::Arm,
         locals: &[Option<ValueId>],
+        statics: &[Option<barb::ConstId>],
     ) -> Answer<ValueId> {
         let class = b.class(scrutinee);
         // Both arms answer alike, so whichever of them comes back says what
@@ -1082,14 +1202,17 @@ impl Lowering<'_> {
             held.as_slice(),
             |b| {
                 let mut inner = locals.to_vec();
-                let answer = self.body(b, empty.body, &mut inner);
+                let mut inner_statics = statics.to_vec();
+                let answer = self.body(b, empty.body, &mut inner, &mut inner_statics);
                 yielded(b, answer, held.as_slice());
             },
             |b| {
                 let mut inner = locals.to_vec();
+                let mut inner_statics = statics.to_vec();
                 let one = b.constant(class, 1);
                 inner.push(Some(b.binary(Binary::Sub, scrutinee, one)));
-                let answer = self.body(b, counted.body, &mut inner);
+                inner_statics.push(None);
+                let answer = self.body(b, counted.body, &mut inner, &mut inner_statics);
                 yielded(b, answer, held.as_slice());
             },
         );
@@ -1102,18 +1225,22 @@ impl Lowering<'_> {
         scrutinee: ValueId,
         arm: &barb::Arm,
         locals: &[Option<ValueId>],
+        statics: &[Option<barb::ConstId>],
     ) -> Answer<ValueId> {
         let mut inner = locals.to_vec();
+        let mut inner_statics = statics.to_vec();
         let owner = self.barb.ctor(arm.ctor).owner;
         if barb::single_field(self.barb, owner).is_some() {
             inner.push(Some(scrutinee));
+            inner_statics.push(None);
         } else if let barb::Shape::Spine { cons, .. } = barb::shape(self.barb, owner)
             && arm.ctor == cons
         {
             let one = b.constant(b.class(scrutinee), 1);
             inner.push(Some(b.binary(Binary::Sub, scrutinee, one)));
+            inner_statics.push(None);
         }
-        self.body(b, arm.body, &mut inner)
+        self.body(b, arm.body, &mut inner, &mut inner_statics)
     }
 
     /// Matching a tag asks which one it is, arm by arm. The last needs no
@@ -1130,6 +1257,7 @@ impl Lowering<'_> {
         class: Class,
         arms: &[TagArm],
         locals: &[Option<ValueId>],
+        statics: &[Option<barb::ConstId>],
     ) -> Answer<ValueId> {
         let (
             TagArm {
@@ -1140,7 +1268,8 @@ impl Lowering<'_> {
         ) = arms.split_first().expect("an arm to match");
         if rest.is_empty() {
             let mut inner = locals.to_vec();
-            return self.body(b, arm.body, &mut inner);
+            let mut inner_statics = statics.to_vec();
+            return self.body(b, arm.body, &mut inner, &mut inner_statics);
         }
         let held = answer.held();
         let tag = b.constant(class, u64::from(self.barb.tag(arm.ctor)));
@@ -1150,11 +1279,12 @@ impl Lowering<'_> {
             held.as_slice(),
             |b| {
                 let mut inner = locals.to_vec();
-                let answer = self.body(b, arm.body, &mut inner);
+                let mut inner_statics = statics.to_vec();
+                let answer = self.body(b, arm.body, &mut inner, &mut inner_statics);
                 yielded(b, answer, held.as_slice());
             },
             |b| {
-                let answer = self.tags(b, scrutinee, class, rest, locals);
+                let answer = self.tags(b, scrutinee, class, rest, locals, statics);
                 yielded(b, answer, held.as_slice());
             },
         );

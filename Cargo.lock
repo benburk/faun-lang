@@ -132,6 +132,7 @@ name = "faun-simple"
 version = "0.1.0"
 dependencies = [
  "faun-core",
+ "num-bigint",
 ]
 
 [[package]]

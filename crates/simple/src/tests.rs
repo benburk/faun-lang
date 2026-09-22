@@ -48,6 +48,64 @@ main!(v0: Host) -> Never =
 }
 
 #[test]
+fn literals_and_method_calls_reach_machine_data() {
+    let source = "main!(host) -> host.print!(\"Hello, world!\\n\")";
+    let program = parse(source).expect("a source-level greeting");
+    let rendered = program.render();
+    assert!(rendered.contains("v1 = \"Hello, world!\\n\""), "{rendered}");
+    assert!(rendered.contains("print!(v0, v1)"), "{rendered}");
+
+    let facts = analyze(&program);
+    let machine = faun_core::ir::lower(&program, &facts, &faun_core::platform::Routines::builtin())
+        .expect("a lowered greeting");
+    assert_eq!(machine.data(), b"Hello, world!\n");
+    assert!(machine.reaches("write"));
+    assert!(machine.reaches("exit!"));
+
+    let unavailable = super::parse(source, &faun_core::platform::Routines::default()).unwrap_err();
+    assert!(
+        unavailable.contains("nothing named `print!`"),
+        "{unavailable}"
+    );
+}
+
+#[test]
+fn natural_literals_accept_decimal_hex_binary_and_large_values() {
+    for (written, rendered) in [
+        ("42", "42"),
+        ("0x2a", "42"),
+        ("0b101010", "42"),
+        ("18446744073709551616", "18446744073709551616"),
+    ] {
+        let source = format!("type Nat Zero Succ(Nat)\nmain!(host) -> host.exit!({written})");
+        let program = parse(&source).expect("a natural literal");
+        assert!(
+            program.render().contains(&format!("v1 = {rendered}")),
+            "{}",
+            program.render()
+        );
+    }
+}
+
+#[test]
+fn string_escapes_are_checked_while_reading() {
+    let unknown = parse("main!(host) -> host.print!(\"bad\\q\")").unwrap_err();
+    assert!(unknown.contains("unknown string escape"), "{unknown}");
+    let open = parse("main!(host) -> host.print!(\"open)").unwrap_err();
+    assert!(open.contains("no closing"), "{open}");
+
+    let source = "main!(host) -> host.print!(\"answer: ${answer}\\n\")";
+    let program = parse(source).expect("dollar and braces are literal text");
+    let machine = faun_core::ir::lower(
+        &program,
+        &analyze(&program),
+        &faun_core::platform::Routines::builtin(),
+    )
+    .expect("literal text lowers");
+    assert_eq!(machine.data(), b"answer: ${answer}\n");
+}
+
+#[test]
 fn what_the_surface_will_not_read_it_names() {
     // A pattern is one constructor deep: anything further is a name, and
     // a name is a word rather than something applied.

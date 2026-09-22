@@ -8,9 +8,11 @@
 //! whoever constructs it. A caller never names a local and never sees an
 //! [`ExprId`].
 
-use super::ConstructionError;
+use num_bigint::BigUint;
+
 use super::model::{Arm, Atom, Body, ConstId, CtorId, Expr, ExprId, FnId, Local, TypeId};
 use super::program::Program;
+use super::{ConstructionError, Value};
 
 /// Builds one function's body.
 ///
@@ -64,12 +66,24 @@ impl Builder<'_> {
     ///
     /// # Errors
     /// If the type is undefined or is not a natural-number shape.
-    pub fn natural(
-        &mut self,
-        id: TypeId,
-        value: &num_bigint::BigUint,
-    ) -> Result<ConstId, ConstructionError> {
+    pub fn natural(&mut self, id: TypeId, value: &BigUint) -> Result<ConstId, ConstructionError> {
         self.program.intern_natural(id, value)
+    }
+
+    /// Validate and hold a constructor value in the program's pool.
+    ///
+    /// # Errors
+    /// If the value does not have the declared type and shape.
+    pub fn value(&mut self, id: TypeId, value: &Value) -> Result<ConstId, ConstructionError> {
+        self.program.intern(id, value)
+    }
+
+    /// Hold bytes in a spine with one natural element field.
+    ///
+    /// # Errors
+    /// If the type is undefined or does not have that structural shape.
+    pub fn bytes(&mut self, id: TypeId, bytes: &[u8]) -> Result<ConstId, ConstructionError> {
+        self.program.intern_byte_spine(id, bytes)
     }
 
     /// A value known outright.

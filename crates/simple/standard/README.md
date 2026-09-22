@@ -11,14 +11,23 @@ intrinsics. `crates/simple/standard/nat.fn` provides:
 
 There is no import syntax or automatic prelude yet. Prepend
 `crates/simple/standard/nat.fn` to a program's source before parsing it; do not also
-declare its types or functions.
-Expressions currently use calls and constructors, for example:
+declare its types or functions. Decimal, hexadecimal, and binary literals build
+this `Nat` compactly, so the same program can mix literals with ordinary calls
+and constructors:
 
 ```text
-main!(h) ->
-  two = Succ(Succ(Zero))
-  exit!(h mod(mul(two Succ(two)) Succ(Succ(two))))
+main!(host) -> host.exit!(mod(mul(2 Succ(2)) 4))
 ```
+
+A literal defaults to the declared type named `Nat`; it does not implicitly
+convert to `U8` or `Int`. Negative and decimal-fraction literals are not
+implemented.
+
+The portable source-visible host input operation is `read_byte!`. It takes the
+implicit `Host` authority and answers a `Nat`: zero at EOF, or one plus the byte
+read. The offset leaves room for EOF without sacrificing byte zero. Read errors
+currently share the EOF answer because this scalar interface has no error
+channel. It does not construct `U8`, `Str`, or a list.
 
 ## Compilation
 

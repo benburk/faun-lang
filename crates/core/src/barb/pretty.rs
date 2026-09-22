@@ -148,8 +148,8 @@ impl Program {
         match known.view() {
             super::ConstantView::Natural(number) => number.to_biguint().to_string(),
             super::ConstantView::Spine(spine) => {
-                if let super::ByteView::Borrowed(run) = spine.byte_slice()
-                    && let Ok(text) = std::str::from_utf8(run)
+                if let Some(run) = spine.to_bytes()
+                    && let Ok(text) = std::str::from_utf8(&run)
                 {
                     return format!("{text:?}");
                 }

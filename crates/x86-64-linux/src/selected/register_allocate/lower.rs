@@ -12,9 +12,11 @@ use crate::parallel_copy::{self, Copy as ParallelCopy, CopySource, Move as CopyM
 use crate::selected::{BlockId, Immediate, Opcode, Requirements, Selected, Terminator, VReg};
 use faun_core::ir::{DataId, FunctionId, Offset, Width};
 
+const SYS_READ: u64 = 0;
 const SYS_WRITE: u64 = 1;
 const SYS_MMAP: u64 = 9;
 const SYS_EXIT: u64 = 60;
+const STDIN: u64 = 0;
 const STDOUT: u64 = 1;
 const PROT_READ_WRITE: u64 = 0x3;
 const MAP_PRIVATE_ANONYMOUS: u64 = 0x22;
@@ -478,6 +480,23 @@ impl<'a> Lowering<'a> {
                     self.asm.load_stack(dst, displacement);
                     self.forget(dst);
                 }
+            }
+            (Opcode::ReadByte, Immediate::None) => {
+                let dst = result()?;
+                debug_assert_eq!(dst, Reg::Rdx);
+                self.materialize(Reg::Rax, SYS_READ);
+                self.materialize(Reg::Rdi, STDIN);
+                self.materialize(Reg::Rdx, 1);
+                self.asm.push_imm8(0);
+                self.asm.mov_reg(Reg::Rsi, Reg::Rsp, RegisterWidth::Word);
+                self.asm.syscall();
+                self.forget_call_clobbers();
+                self.asm.pop(dst);
+                self.materialize(Reg::Rcx, 1);
+                self.asm.alu(Alu::Compare, Reg::Rax, Reg::Rcx, 64);
+                self.asm.set_if(Condition::Equal, Reg::Rax);
+                self.asm.alu(Alu::Add, dst, Reg::Rax, 64);
+                self.forget(dst);
             }
             _ => return Err("x86 selected opcode has an invalid late expansion".to_owned()),
         }

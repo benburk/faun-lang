@@ -438,6 +438,19 @@ impl Program {
         pool.natural(types, id, value)
     }
 
+    /// Encode bytes as a spine whose one element field is a natural.
+    ///
+    /// # Errors
+    /// If the owner is undefined or does not have that structural shape.
+    pub fn intern_byte_spine(
+        &mut self,
+        owner: TypeId,
+        bytes: &[u8],
+    ) -> Result<ConstId, ConstructionError> {
+        let (types, pool) = self.constant_parts();
+        pool.byte_spine(types, owner, bytes)
+    }
+
     pub(super) fn intern_held(&mut self, value: &Held) -> ConstId {
         self.constants.intern_held(value)
     }

@@ -13,6 +13,7 @@ use crate::barb::{ConstId, CtorId, TypeId};
 pub enum ConstructionError {
     UndefinedType(TypeId),
     NotNatural(TypeId),
+    NotByteSpine(TypeId),
     UnknownConstructor(CtorId),
     UnknownConstant(ConstId),
     FieldCount { expected: usize, actual: usize },
@@ -73,6 +74,30 @@ pub(super) fn natural(types: TypeInfo<'_>, owner: TypeId) -> Result<(), Construc
         Shape::Spine { cons, .. } if types.fields(cons).len() == 1 => Ok(()),
         _ => Err(ConstructionError::NotNatural(owner)),
     }
+}
+
+pub(super) fn byte_spine(types: TypeInfo<'_>, owner: TypeId) -> Result<(), ConstructionError> {
+    if !defined(types, owner) {
+        return Err(ConstructionError::UndefinedType(owner));
+    }
+    let Shape::Spine {
+        cons, recursive, ..
+    } = shape(types, owner)
+    else {
+        return Err(ConstructionError::NotByteSpine(owner));
+    };
+    let mut elements = types
+        .fields(cons)
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| *at != recursive);
+    let Some((_, &element)) = elements.next() else {
+        return Err(ConstructionError::NotByteSpine(owner));
+    };
+    if elements.next().is_some() || natural(types, element).is_err() {
+        return Err(ConstructionError::NotByteSpine(owner));
+    }
+    Ok(())
 }
 
 pub(super) fn tree(

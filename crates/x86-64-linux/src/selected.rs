@@ -167,6 +167,7 @@ pub(crate) enum Opcode {
     Exit,
     Grow,
     ArgumentCount,
+    ReadByte,
 }
 
 impl Opcode {
@@ -224,11 +225,12 @@ impl Opcode {
                 ..Effects::PURE
             },
             Self::Call => call,
-            Self::Write | Self::Exit | Self::Grow => {
+            Self::Write | Self::Exit | Self::Grow | Self::ReadByte => {
                 let scratch = match self {
                     Self::Write => RegSet::of(&[Reg::Rax, Reg::Rdi]),
                     Self::Exit => RegSet::of(&[Reg::Rax]),
                     Self::Grow => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10, Reg::R8, Reg::R9]),
+                    Self::ReadByte => RegSet::of(&[Reg::Rax, Reg::Rcx, Reg::Rdi, Reg::Rsi]),
                     _ => RegSet(0),
                 };
                 Effects {
@@ -250,7 +252,8 @@ impl Opcode {
             | Self::Below
             | Self::Write
             | Self::Exit
-            | Self::Grow => Expansion::Sequence,
+            | Self::Grow
+            | Self::ReadByte => Expansion::Sequence,
             _ => Expansion::Single,
         };
         let scratch = match self {
@@ -258,6 +261,7 @@ impl Opcode {
             Self::Write => RegSet::of(&[Reg::Rax, Reg::Rdi]),
             Self::Exit => RegSet::of(&[Reg::Rax]),
             Self::Grow => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10, Reg::R8, Reg::R9]),
+            Self::ReadByte => RegSet::of(&[Reg::Rax, Reg::Rcx, Reg::Rdi, Reg::Rsi]),
             _ => RegSet(0),
         };
         Requirements {
@@ -299,6 +303,7 @@ impl Inst {
                 | Opcode::Shift
                 | Opcode::Call
                 | Opcode::Grow => Constraint::Fixed(Reg::Rax),
+                Opcode::ReadByte => Constraint::Fixed(Reg::Rdx),
                 _ => Constraint::Any,
             };
             return Some(OperandSpec {
@@ -589,7 +594,7 @@ impl Selected {
     fn verify_inst_shape(&self, inst: Inst, id: InstId) -> Result<(), String> {
         let uses = self.operands[inst.operands.range()].len();
         let expected = match inst.opcode {
-            Opcode::Constant | Opcode::DataAddress | Opcode::ArgumentCount => 0,
+            Opcode::Constant | Opcode::DataAddress | Opcode::ArgumentCount | Opcode::ReadByte => 0,
             Opcode::Load | Opcode::Convert | Opcode::Shift | Opcode::Exit | Opcode::Grow => 1,
             Opcode::Add
             | Opcode::Subtract
@@ -984,7 +989,7 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             }
             Opcode::Load => effects.memory == Access::Read,
             Opcode::Store => effects.memory == Access::Write,
-            Opcode::Call | Opcode::Write | Opcode::Exit | Opcode::Grow => {
+            Opcode::Call | Opcode::Write | Opcode::Exit | Opcode::Grow | Opcode::ReadByte => {
                 effects.control
                     && effects.memory == Access::Unknown
                     && effects.clobbers.contains(Reg::Rax)
@@ -1032,7 +1037,11 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
             | (Opcode::Shift, Immediate::Shift { .. })
             | (Opcode::Call, Immediate::Function(_))
             | (
-                Opcode::Write | Opcode::Exit | Opcode::Grow | Opcode::ArgumentCount,
+                Opcode::Write
+                    | Opcode::Exit
+                    | Opcode::Grow
+                    | Opcode::ArgumentCount
+                    | Opcode::ReadByte,
                 Immediate::None
             )
     );
@@ -1368,6 +1377,7 @@ impl Selector<'_> {
                             "exit!" => Opcode::Exit,
                             "grow" => Opcode::Grow,
                             "argc!" => Opcode::ArgumentCount,
+                            "read_byte!" => Opcode::ReadByte,
                             other => return Err(format!("x86 has no selected call for `{other}`")),
                         }
                     } else {

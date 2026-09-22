@@ -8,7 +8,7 @@
 use super::asm::{Assembler, Cc, Half, Held, MachineState};
 use super::{
     ARG_COUNT, ARGC, ARGS, CSP, CSTACK_TOP, Code, FP, FRAMES_TOP, HEAP, HOME_COUNT, HOMES,
-    HOOK_ARGS, HOOK_EXIT, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
+    HOOK_ARGS, HOOK_EXIT, HOOK_READ, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
 };
 use crate::WORD_BITS;
 use faun_core::ir::{
@@ -1370,6 +1370,38 @@ impl Lowering<'_> {
         self.jsr_hook(HOOK_WRITE);
     }
 
+    /// Read one byte through sim65's `read(0, buffer, 1)` hook. Its result
+    /// count is at most one, so a low-byte comparison distinguishes success,
+    /// EOF, and the hook's `-1` error result.
+    fn read_byte(&mut self, result: ValueId) {
+        let block = self.intern([u16::from(T0), 0]);
+        self.asm.lda_imm_half(block, Half::Low);
+        self.asm.sta_zp(CSP);
+        self.asm.lda_imm_half(block, Half::High);
+        self.asm.sta_zp(CSP + 1);
+        self.asm.lda_imm(1);
+        self.asm.ldx_imm(0);
+        self.jsr_hook(HOOK_READ);
+
+        let eof = self.asm.label();
+        let done = self.asm.label();
+        self.asm.cmp_imm(1);
+        self.asm.branch(Cc::NotEqual, eof);
+        self.asm.lda_zp(T0);
+        self.asm.clc();
+        self.asm.adc_imm(1);
+        self.asm.sta_zp(T0);
+        self.asm.lda_imm(0);
+        self.asm.adc_imm(0);
+        self.asm.sta_zp(T0 + 1);
+        self.asm.jmp(done);
+
+        self.asm.bind(eof);
+        self.set_pair(T0, 0);
+        self.asm.bind(done);
+        self.commit(result, T0);
+    }
+
     /// A computed buffer, written into the block below the C stack top.
     fn build_arguments(&mut self, buffer: Operand) {
         self.set_pair(CSP, CSTACK_TOP - 4);
@@ -1657,6 +1689,7 @@ impl Lowering<'_> {
     fn platform_call(&mut self, name: &str, args: &[ValueId], results: &[ValueId]) {
         match name {
             "write" => self.write(args),
+            "read_byte!" => self.read_byte(results[0]),
             // Read at reset and kept since, so nothing is asked here.
             "argc!" => self.commit(results[0], ARGC),
             "exit!" => {

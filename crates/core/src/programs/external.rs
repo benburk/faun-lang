@@ -41,3 +41,29 @@ pub fn interleaved() -> Program {
     });
     p
 }
+
+/// Read three arbitrary bytes, then observe EOF twice. Answers zero only when
+/// the host preserves every byte and keeps EOF stable across repeated reads.
+#[must_use]
+pub fn reads_bytes() -> Program {
+    let (mut program, main) = Program::new("main");
+    let read = crate::platform::Routines::builtin().declare(&mut program, "read_byte!");
+    let byte = Class::fixed(9);
+
+    program.define(main, |b, _| {
+        let expected = [1, 128, 256, 0, 0];
+        let mut correct = b.constant(Class::fixed(1), 1);
+        for wanted in expected {
+            let got = b.call_one(read, &[]);
+            let wanted = b.constant(byte, wanted);
+            let same = b.compare(crate::ir::Relation::Equal, got, wanted);
+            let same = b.convert(Class::fixed(1), same);
+            correct = b.binary(Binary::Mul, correct, same);
+        }
+        let one = b.constant(Class::fixed(1), 1);
+        let status = b.binary(Binary::Sub, one, correct);
+        let status = b.convert(Class::Word, status);
+        b.ret(&[status]);
+    });
+    program
+}

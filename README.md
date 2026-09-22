@@ -110,6 +110,64 @@ The backend currently rejects internal functions, arithmetic, mutable globals,
 and heap allocation before emission. This keeps `exit(0)`, `exit(argc)`, and
 hello-world programs as explicit baselines while instruction lowering grows.
 
+## Simple frontend literals and input
+
+[`crates/simple/examples/hello.fn`](crates/simple/examples/hello.fn) is a complete
+source program:
+
+```text
+main!(host) -> host.print!("Hello, world!\n")
+```
+
+Run it on the native backend with
+`cargo run --bin faun-simple -- run crates/simple/examples/hello.fn`. A string
+literal is UTF-8 and accepts `\n`, `\r`, `\t`, `\"`, `\\`, and `\'` escapes.
+`host.print!(text)` is method-call syntax for `print!(host text)`; it writes a
+static literal and completes the program with status zero. Strings do not yet
+have a runtime representation, so they cannot be passed through user functions
+or computed at runtime.
+
+Decimal, hexadecimal, and binary natural literals are arbitrary precision:
+
+```text
+main!(host) -> host.exit!(0x2a)
+```
+
+A natural literal requires a declared `Nat` with the usual empty/successor
+shape. It is stored compactly rather than expanded into a constructor chain.
+There is no automatic prelude yet, so programs using numbers still prepend
+[`crates/simple/standard/nat.fn`](crates/simple/standard/nat.fn).
+
+String literals are useful but deliberately narrow. They may be bound locally
+and passed directly to `print!`, but there is no concatenation, indexing,
+length, UTF-8 traversal, runtime construction, or interpolation. In particular,
+`"answer: ${answer}"` contains those dollar and brace characters literally.
+Passing a string through a user function is rejected because `Str` has no
+runtime representation yet.
+
+[`crates/simple/examples/stdin.fn`](crates/simple/examples/stdin.fn) reads one
+byte from standard input:
+
+```text
+main!(host) ->
+  byte = host.read_byte!()
+  host.exit!(add(byte 4))
+```
+
+`host.read_byte!()` returns `0` at EOF and `byte + 1` otherwise, so all 256
+byte values remain distinct. The current one-result interface maps host read
+errors to EOF. It is implemented by x86-64 Linux, wasm32 WASI, MOS 6502 sim65,
+and the reference interpreter host contract. For ASCII `A`, this exits 70:
+
+```sh
+printf A | cargo run --bin faun-simple -- run crates/simple/examples/stdin.fn
+printf 'status: %s\n' "$?"
+```
+
+This is byte input rather than a runtime string. Reading a whole stream still
+needs a runtime sequence representation.
+
+
 ## Inspecting a runtime expression
 
 [`crates/simple/examples/expressions.fn`](crates/simple/examples/expressions.fn) computes `(argc + 2) + argc`

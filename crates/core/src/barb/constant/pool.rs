@@ -107,6 +107,22 @@ impl ConstantPool {
         Ok(self.hold(owner, |out| write_natural(value, out)))
     }
 
+    pub(in crate::barb) fn byte_spine(
+        &mut self,
+        types: TypeInfo<'_>,
+        owner: TypeId,
+        bytes: &[u8],
+    ) -> Result<ConstId, ConstructionError> {
+        checked::byte_spine(types, owner)?;
+        let count = u64::try_from(bytes.len()).map_err(|_| LimitExceeded::ValueSize)?;
+        Ok(self.hold(owner, |out| {
+            write_number(count, out);
+            for &byte in bytes {
+                write_number(u64::from(byte), out);
+            }
+        }))
+    }
+
     pub(in crate::barb) fn intern_held(&mut self, value: &Held) -> ConstId {
         self.hold(value.owner(), |out| out.extend_from_slice(value.encoded()))
     }

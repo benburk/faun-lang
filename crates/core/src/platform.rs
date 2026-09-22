@@ -19,6 +19,10 @@
 
 use crate::ir::Class;
 
+/// Private Barb provider lowered into `write` followed by `exit!`.
+/// Compiler adapter that completes a program by writing one static byte string.
+pub const PRINT_ADAPTER: &str = "$print-static";
+
 /// A host call's control-flow and result contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Returns {
@@ -164,10 +168,11 @@ impl Routines {
             // The kernel picks the address, so nothing asking for a page
             // says where.
             hidden("grow", &[Class::Word], Returns::Value(Class::Address)),
-            // How many arguments a program was handed, which is the one
-            // thing every machine here can be asked and the only thing a
-            // program can be told that it did not work out itself.
+            // How many arguments a program was handed.
             offered("argc!", &[], Returns::Value(Class::Word)),
+            // One byte from standard input, offset by one so nought can say
+            // EOF without losing the byte whose bits are all nought.
+            offered("read_byte!", &[], Returns::Value(Class::fixed(9))),
         ])
     }
 

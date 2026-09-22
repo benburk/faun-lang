@@ -76,6 +76,11 @@ impl Builder<'_> {
         self.push_one(Op::NaturalConstant(data), Class::Natural)
     }
 
+    /// Place immutable bytes in the program and return their datum handle.
+    pub fn data(&mut self, bytes: &[u8]) -> DataId {
+        self.program.intern(bytes)
+    }
+
     pub fn address_of(&mut self, data: DataId) -> ValueId {
         self.push_one(Op::AddressOf(data), Class::Address)
     }

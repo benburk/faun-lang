@@ -2,8 +2,9 @@
 //! baselines; every test here still runs independently against every emitter.
 
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, PoisonError};
 
 use faun_core::ir::{Binary, Class, Op, Program, ValueId};
@@ -58,14 +59,23 @@ pub(super) fn execute(program: &Program) -> (i32, String) {
     execute_counts(program, &[1]).remove(0)
 }
 
-/// Emit once, then run that same artifact with each argument count. Exercise
+fn execute_counts(program: &Program, counts: &[u16]) -> Vec<(i32, String)> {
+    let cases: Vec<_> = counts.iter().map(|&count| (count, &[][..])).collect();
+    execute_cases(program, &cases)
+}
+
+fn execute_with_input(program: &Program, input: &[u8]) -> (i32, String) {
+    execute_cases(program, &[(1, input)]).remove(0)
+}
+
+/// Emit once, then run that artifact for each argument/input case. Exercise
 /// raw emission after explicitly establishing its preconditions; integration
 /// tests separately cover the checked compilation wrappers.
 #[expect(
     clippy::too_many_lines,
     reason = "one test artifact's write/run/cleanup lifecycle"
 )]
-fn execute_counts(program: &Program, counts: &[u16]) -> Vec<(i32, String)> {
+fn execute_cases(program: &Program, cases: &[(u16, &[u8])]) -> Vec<(i32, String)> {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     faun_core::ir::validate(program).expect("a well-formed program");
@@ -92,9 +102,9 @@ fn execute_counts(program: &Program, counts: &[u16]) -> Vec<(i32, String)> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("a runnable file");
     }
-    let answers = counts
+    let answers = cases
         .iter()
-        .map(|&argc| {
+        .map(|&(argc, input)| {
             assert!(argc >= 1, "the program name is an argument");
             let mut command = RUNNER.map_or_else(
                 || Command::new(&path),
@@ -104,8 +114,19 @@ fn execute_counts(program: &Program, counts: &[u16]) -> Vec<(i32, String)> {
                     command
                 },
             );
-            command.args((1..argc).map(|_| "dummy"));
-            let output = command.output().expect("a machine to run it");
+            command
+                .args((1..argc).map(|_| "dummy"))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut child = command.spawn().expect("a machine to run it");
+            child
+                .stdin
+                .take()
+                .expect("piped stdin")
+                .write_all(input)
+                .expect("input for the program");
+            let output = child.wait_with_output().expect("a machine to finish");
             let code = output.status.code().unwrap_or_else(|| {
                 panic!(
                     "the program was signalled: {}",
@@ -172,12 +193,30 @@ fn it_writes_what_a_program_writes() {
 }
 
 #[test]
+fn it_reads_standard_input_one_byte_at_a_time() {
+    let program = programs::external::reads_bytes();
+    assert_eq!(
+        execute_with_input(&program, &[0, 127, 255]),
+        (0, String::new())
+    );
+
+    let text = fs::read_to_string(written().join("stdin.fn")).expect("the stdin example");
+    let source = read(&text).expect("a source program that reads a byte");
+    assert_eq!(execute_with_input(&source, b"A"), (70, String::new()));
+    assert_eq!(execute_with_input(&source, b""), (4, String::new()));
+}
+
+#[test]
 fn it_runs_every_example() {
     for entry in fs::read_dir(written()).expect("the examples") {
         let path = entry.expect("an example").path();
         let text = fs::read_to_string(&path).expect("an example to read");
         let program = read(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        assert_eq!(status(&program), 4, "{}", path.display());
+        if path.file_stem().and_then(|name| name.to_str()) == Some("hello") {
+            assert_eq!(execute(&program), (0, "Hello, world!\n".to_owned()));
+        } else {
+            assert_eq!(status(&program), 4, "{}", path.display());
+        }
     }
 }
 

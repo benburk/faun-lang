@@ -45,6 +45,28 @@ fn numeric_construction_rejects_bad_types_without_mutating_storage() {
 }
 
 #[test]
+fn byte_spine_construction_checks_shape_before_mutating_storage() {
+    let (mut program, nat, _, list) = super::tests::types();
+    let unit = program.declare_type("Unit");
+    program.define_type(unit, &[("Only", &[])]);
+    let pending = program.declare_type("Pending");
+    let before = program.clone();
+    for (owner, error) in [
+        (nat, ConstructionError::NotByteSpine(nat)),
+        (unit, ConstructionError::NotByteSpine(unit)),
+        (pending, ConstructionError::UndefinedType(pending)),
+    ] {
+        assert_eq!(program.intern_byte_spine(owner, b"hello"), Err(error));
+        assert_eq!(program, before);
+    }
+    let value = program.intern_byte_spine(list, b"hello").unwrap();
+    let ConstantView::Spine(value) = program.constant(value).view() else {
+        panic!("a byte spine");
+    };
+    assert_eq!(value.to_bytes().as_deref(), Some(b"hello".as_slice()));
+}
+
+#[test]
 fn checked_import_borrows_input_until_it_is_committed_to_the_pool() {
     let (mut program, nat, _, _) = super::tests::types();
     let mut bytes = vec![0x81, 0];

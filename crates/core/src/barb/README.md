@@ -199,9 +199,11 @@ Ordinary constructor fields can be borrowed with a budget.
 
 `Program::intern` checks constructor trees; `construct` checks the arity and type
 identity of constant fields; `decode_constant` validates exactly one encoded value.
-`intern_number`, `intern_natural` and `Builder::number` return `Result`, rejecting
-undefined types and non-natural shapes (`NotNatural`) before writing any bytes.
-Failed construction/import never changes the pools. Unchecked raw-byte queries
+`intern_number`, `intern_natural`, `intern_byte_spine`, and their builder entry
+points return `Result`. Number insertion rejects undefined and non-natural shapes;
+byte-spine insertion requires one natural element field and one recursive field.
+All checks run before bytes are written. Failed construction/import never changes
+the pools. Unchecked raw-byte queries
 and constant constructors are not exposed. The byte format and
 `known_bytes` remain unchanged; a tree decoder remains only as an independent test
 oracle. IDs are still unbranded and must be used with their owning program; this

@@ -1,9 +1,11 @@
 //! A small surface for writing barb programs as text.
 //!
-//! Nothing is blessed: there are inductive types and there are rewrites, and
-//! a number is whatever a program builds out of its own constructors. Types
-//! are inferred, since every one of them is a name a declaration already
-//! gave, so there is nothing to infer but which.
+//! Most values come from inductive types and rewrites. Natural literals are
+//! compact spellings for a program's `Nat` constructors. String literals are
+//! the one blessed value: they build a private byte spine so `print!` can place
+//! the bytes directly in the machine program. Types are inferred, since every
+//! one of them is a name a declaration already gave, so there is nothing to
+//! infer but which.
 //!
 //! A clause matches as many arguments as it likes, with patterns one
 //! constructor deep. Clauses are tried in the order they are written, and
@@ -24,7 +26,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use faun_core::barb::{Atom, CtorId, FnId, Program, TypeId};
-use faun_core::platform::Routines;
+use faun_core::platform::{PRINT_ADAPTER, Routines};
+use num_bigint::BigUint;
 
 /// What a clause matches in one argument: a name, or a constructor and the
 /// names its fields take.
@@ -34,9 +37,23 @@ enum Pattern {
     Ctor(String, Vec<String>),
 }
 
-/// A name applied to arguments, of which there may be none.
+/// A source term. Calls keep the surface name at their head; literals are
+/// values in their own right rather than names the program might declare.
 #[derive(Clone, Debug)]
-struct Term(String, Vec<Self>);
+enum Term {
+    Apply(String, Vec<Self>),
+    Number(BigUint),
+    String(String),
+}
+
+impl Term {
+    fn arguments(&self) -> &[Self] {
+        match self {
+            Self::Apply(_, args) => args,
+            Self::Number(_) | Self::String(_) => &[],
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct Clause {
@@ -68,7 +85,7 @@ struct Source {
 ///
 /// Names what it could not read, or what it read and cannot represent.
 pub fn parse(text: &str, routines: &Routines) -> Result<Program, String> {
-    let mut words = Words::new(text);
+    let mut words = Words::new(text)?;
     let mut source = Source::default();
 
     while let Some(word) = words.peek() {
@@ -158,32 +175,81 @@ fn read_patterns(words: &mut Words) -> Result<Vec<Pattern>, String> {
 /// Well past anything written by hand. A number is a chain of constructors
 /// until there is a shorter way to say one, so this is not as far off as it
 /// looks.
-const DEEPEST: usize = 1024;
+const DEEPEST: usize = 512;
 
 fn read_term(words: &mut Words) -> Result<Term, String> {
     read_term_at(words, 0)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "primary and method arguments share one recursion frame for the nesting limit"
+)]
 fn read_term_at(words: &mut Words, depth: usize) -> Result<Term, String> {
-    let head = words.word()?;
-    if words.peek() != Some("(") {
-        return Ok(Term(head, Vec::new()));
+    let head = words.value()?;
+    let mut term = if let Some(text) = head.strip_prefix(STRING_TOKEN) {
+        Term::String(text.to_owned())
+    } else if let Some(number) = number(&head)? {
+        Term::Number(number)
+    } else if words.peek() == Some("(") {
+        if depth == DEEPEST {
+            return Err(format!(
+                "`{head}` is nested more than {DEEPEST} deep, which is deeper than this reads"
+            ));
+        }
+        words.take();
+        let mut args = Vec::new();
+        while words.peek() != Some(")") {
+            args.push(read_term_at(words, depth + 1)?);
+        }
+        words.expect(")")?;
+        Term::Apply(head, args)
+    } else {
+        Term::Apply(head, Vec::new())
+    };
+
+    while words.peek() == Some(".") {
+        words.take();
+        let method = words.word()?;
+        if words.peek() != Some("(") {
+            return Err(format!("expected `(` after `{method}`"));
+        }
+        if depth == DEEPEST {
+            return Err(format!(
+                "`{method}` is nested more than {DEEPEST} deep, which is deeper than this reads"
+            ));
+        }
+        words.take();
+        let mut args = vec![term];
+        while words.peek() != Some(")") {
+            args.push(read_term_at(words, depth + 1)?);
+        }
+        words.expect(")")?;
+        term = Term::Apply(method, args);
     }
-    if depth == DEEPEST {
-        return Err(format!(
-            "`{head}` is nested more than {DEEPEST} deep, which is deeper than this reads"
-        ));
-    }
-    words.take();
-    let mut args = Vec::new();
-    while words.peek() != Some(")") {
-        args.push(read_term_at(words, depth + 1)?);
-    }
-    words.expect(")")?;
-    Ok(Term(head, args))
+    Ok(term)
 }
 
-const PUNCTUATION: [&str; 7] = ["(", ")", ",", "=", "|", ":", "->"];
+fn number(word: &str) -> Result<Option<BigUint>, String> {
+    let Some(first) = word.chars().next() else {
+        return Ok(None);
+    };
+    if !first.is_ascii_digit() {
+        return Ok(None);
+    }
+    let (radix, digits) = match (word.strip_prefix("0x"), word.strip_prefix("0b")) {
+        (Some(digits), _) => (16, digits),
+        (_, Some(digits)) => (2, digits),
+        (None, None) => (10, word),
+    };
+    let digits = digits.replace('_', "");
+    BigUint::parse_bytes(digits.as_bytes(), radix)
+        .map(Some)
+        .ok_or_else(|| format!("`{word}` is not a base-{radix} number"))
+}
+
+const STRING_TOKEN: char = '\0';
+const PUNCTUATION: [&str; 8] = ["(", ")", ",", ".", "=", "|", ":", "->"];
 
 /// Words and punctuation, in order.
 struct Words {
@@ -192,7 +258,7 @@ struct Words {
 }
 
 impl Words {
-    fn new(text: &str) -> Self {
+    fn new(text: &str) -> Result<Self, String> {
         let mut words = Vec::new();
         let mut held = String::new();
         let mut rest = text.chars().peekable();
@@ -202,11 +268,14 @@ impl Words {
                 while rest.peek().is_some_and(|held| *held != '\n') {
                     rest.next();
                 }
+            } else if character == '"' {
+                flush(&mut held, &mut words);
+                words.push(read_string(&mut rest)?);
             } else if character == '-' && rest.peek() == Some(&'>') {
                 rest.next();
                 flush(&mut held, &mut words);
                 words.push("->".to_owned());
-            } else if "(),=|:".contains(character) {
+            } else if "(),.=|:".contains(character) {
                 flush(&mut held, &mut words);
                 words.push(character.to_string());
             } else if character.is_whitespace() {
@@ -216,7 +285,7 @@ impl Words {
             }
         }
         flush(&mut held, &mut words);
-        Self { words, at: 0 }
+        Ok(Self { words, at: 0 })
     }
 
     fn peek(&self) -> Option<&str> {
@@ -238,8 +307,21 @@ impl Words {
     /// than bound as though it were a variable.
     fn word(&mut self) -> Result<String, String> {
         match self.take() {
+            Some(word) if PUNCTUATION.contains(&word.as_str()) => {
+                Err(format!("expected a name, found `{word}`"))
+            }
+            Some(word) if word.starts_with(STRING_TOKEN) || number(&word)?.is_some() => {
+                Err("expected a name, found a literal".to_owned())
+            }
+            Some(word) => Ok(word),
+            None => Err("the program ends early".to_owned()),
+        }
+    }
+
+    fn value(&mut self) -> Result<String, String> {
+        match self.take() {
             Some(word) if !PUNCTUATION.contains(&word.as_str()) => Ok(word),
-            Some(word) => Err(format!("expected a name, found `{word}`")),
+            Some(word) => Err(format!("expected a value, found `{word}`")),
             None => Err("the program ends early".to_owned()),
         }
     }
@@ -277,6 +359,30 @@ impl Words {
     }
 }
 
+fn read_string(rest: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String, String> {
+    let mut text = String::from(STRING_TOKEN);
+    loop {
+        match rest.next() {
+            Some('"') => return Ok(text),
+            Some('\\') => {
+                let escaped = match rest.next() {
+                    Some('n') => '\n',
+                    Some('r') => '\r',
+                    Some('t') => '\t',
+                    Some('"') => '"',
+                    Some('\\') => '\\',
+                    Some('\'') => '\'',
+                    Some(other) => return Err(format!("unknown string escape `\\{other}`")),
+                    None => return Err("a string ends after `\\`".to_owned()),
+                };
+                text.push(escaped);
+            }
+            Some(character) => text.push(character),
+            None => return Err("an opening `\"` has no closing `\"`".to_owned()),
+        }
+    }
+}
+
 fn flush(held: &mut String, words: &mut Vec<String>) {
     if !held.is_empty() {
         words.push(std::mem::take(held));
@@ -284,9 +390,13 @@ fn flush(held: &mut String, words: &mut Vec<String>) {
 }
 
 /// Turn what was read into a program.
+#[expect(
+    clippy::too_many_lines,
+    reason = "source declarations, inferred signatures, and bodies are one ordered build"
+)]
 fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
     let mut program = Program::default();
-    declare_builtin(&mut program, source)?;
+    let literals = declare_builtin(&mut program, source)?;
     declare_types(&mut program, source)?;
     let ctors = catalogue(&program);
     // A bare name in a pattern is a constructor if one is declared with that
@@ -304,9 +414,23 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
         })
         .collect();
 
-    let arity = arities(source, &clauses, routines)?;
+    let printing =
+        literals.is_some() && routines.get("write").is_some() && routines.get("exit!").is_some();
+    if printing && source.clauses.contains_key(PRINT) {
+        return Err("`print!` is the compiler's string completion operation".to_owned());
+    }
+    let arity = arities(source, &clauses, routines, printing)?;
     validate(source, &clauses, &arity)?;
-    let told = infer(source, routines, &clauses, &program, &ctors, &arity)?;
+    let told = infer(
+        source,
+        routines,
+        &clauses,
+        &program,
+        &ctors,
+        &arity,
+        literals.as_ref(),
+        printing,
+    )?;
     let mut functions: HashMap<&str, FnId> = HashMap::new();
     for routine in routines.offered() {
         let called = routine.name.as_str();
@@ -321,6 +445,13 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
         }
         functions.insert(called, id);
     }
+    if let Some(literals) = &literals
+        && told.contains_key(PRINT)
+    {
+        let print = program.declare(PRINT, &[HOST, literals.string], NEVER);
+        program.answered_by(print, PRINT_ADAPTER);
+        functions.insert(PRINT, print);
+    }
     for name in &source.order {
         let (params, result) = &told[name];
         functions.insert(name, program.declare(name, params, *result));
@@ -328,7 +459,14 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
 
     let main = starts(&program, &functions, &told)?;
     program.set_entry(main);
-    define(&mut program, source, &clauses, &told, &functions)
+    define(
+        &mut program,
+        source,
+        &clauses,
+        &told,
+        &functions,
+        literals.as_ref(),
+    )
 }
 
 /// Where a program starts, since nothing in the text says so.
@@ -374,11 +512,15 @@ fn define(
     clauses: &HashMap<&str, Vec<Clause>>,
     told: &HashMap<String, Inferred>,
     functions: &HashMap<&str, FnId>,
+    literals: Option<&LiteralTypes>,
 ) -> Result<Program, String> {
     let ctors = catalogue(program);
+    let natural = type_named(program, "Nat");
     let lowering = Lowering {
         ctors: &ctors,
         functions,
+        natural,
+        literals,
     };
     for name in &source.order {
         let held = &clauses[name.as_str()];
@@ -393,7 +535,12 @@ fn define(
 /// `Host`, because its constructor is not among the names a term may use, so
 /// the only way to hold one is to have been handed it. Nothing can build a
 /// `Never` either, and for a stronger reason: it has no constructors at all.
-fn declare_builtin(program: &mut Program, source: &Source) -> Result<(), String> {
+#[derive(Clone, Copy)]
+struct LiteralTypes {
+    string: TypeId,
+}
+
+fn declare_builtin(program: &mut Program, source: &Source) -> Result<Option<LiteralTypes>, String> {
     for name in BUILTIN {
         if source.types.iter().any(|held| held.name == name) {
             return Err(format!("`{name}` is the compiler's, not a program's"));
@@ -404,7 +551,40 @@ fn declare_builtin(program: &mut Program, source: &Source) -> Result<(), String>
         let ctors: &[(&str, &[TypeId])] = if id == NEVER { &[] } else { &[(name, &[])] };
         program.define_type(id, ctors);
     }
-    Ok(())
+    if !has_strings(source) {
+        return Ok(None);
+    }
+    for name in [BYTE, STRING] {
+        if source.types.iter().any(|held| held.name == name) {
+            return Err(format!("`{name}` is the compiler's, not a program's"));
+        }
+    }
+    let byte = program.declare_type(BYTE);
+    program.define_type(byte, &[("$ByteZero", &[]), ("$ByteSucc", &[byte])]);
+    let string = program.declare_type(STRING);
+    program.define_type(
+        string,
+        &[("$StringEmpty", &[]), ("$StringPush", &[byte, string])],
+    );
+    Ok(Some(LiteralTypes { string }))
+}
+
+fn has_strings(source: &Source) -> bool {
+    fn within(term: &Term) -> bool {
+        match term {
+            Term::String(_) => true,
+            Term::Apply(_, args) => args.iter().any(within),
+            Term::Number(_) => false,
+        }
+    }
+    source.clauses.values().flatten().any(|clause| {
+        clause
+            .steps
+            .iter()
+            .map(|(_, term)| term)
+            .chain([&clause.body])
+            .any(within)
+    })
 }
 
 /// Every type the program declares, then the constructors of each, so that
@@ -440,6 +620,7 @@ fn arities<'a>(
     source: &'a Source,
     clauses: &HashMap<&str, Vec<Clause>>,
     routines: &'a Routines,
+    printing: bool,
 ) -> Result<HashMap<&'a str, usize>, String> {
     let mut arity = HashMap::new();
     for name in &source.order {
@@ -452,6 +633,9 @@ fn arities<'a>(
     }
     for routine in routines.offered() {
         arity.insert(&routine.name, routine.takes.len() + 1);
+    }
+    if printing {
+        arity.insert(PRINT, 2);
     }
     Ok(arity)
 }
@@ -512,7 +696,9 @@ fn calls_are_saturated(
         bound: &HashSet<&str>,
         arity: &HashMap<&str, usize>,
     ) -> Result<(), String> {
-        let Term(name, args) = term;
+        let Term::Apply(name, args) = term else {
+            return Ok(());
+        };
         // A name a clause binds is a value, and shadows the one declared.
         if !bound.contains(name.as_str())
             && let Some(&takes) = arity.get(name.as_str())
@@ -552,9 +738,11 @@ fn calls_are_saturated(
 /// not may not call one that does. One colour, stated where it is written.
 fn colour(source: &Source) -> Result<(), String> {
     fn calls(term: &Term, each: &mut impl FnMut(&str)) {
-        each(&term.0);
-        for arg in &term.1 {
-            calls(arg, each);
+        if let Term::Apply(name, args) = term {
+            each(name);
+            for arg in args {
+                calls(arg, each);
+            }
         }
     }
     for name in &source.order {
@@ -593,11 +781,12 @@ fn colour(source: &Source) -> Result<(), String> {
 /// below it has to: what reaches the tier below is already in an order.
 fn standing(source: &Source) -> Result<(), String> {
     fn within(term: &Term, name: &str) -> Result<(), String> {
-        for held in &term.1 {
-            if held.0.ends_with('!') {
+        for held in term.arguments() {
+            if let Term::Apply(called, _) = held
+                && called.ends_with('!')
+            {
                 return Err(format!(
-                    "`{name}` hands over `{}`, and an effect stands on its own",
-                    held.0
+                    "`{name}` hands over `{called}`, and an effect stands on its own"
                 ));
             }
             within(held, name)?;
@@ -622,7 +811,12 @@ fn standing(source: &Source) -> Result<(), String> {
 /// Whether anything in the program calls a name.
 fn calls(source: &Source, name: &str) -> bool {
     fn within(term: &Term, name: &str) -> bool {
-        term.0 == name || term.1.iter().any(|held| within(held, name))
+        match term {
+            Term::Apply(called, args) => {
+                called == name || args.iter().any(|held| within(held, name))
+            }
+            Term::Number(_) | Term::String(_) => false,
+        }
     }
     source.clauses.values().flatten().any(|clause| {
         clause
@@ -660,6 +854,9 @@ fn resolve(clause: &Clause, ctors: &HashMap<String, CtorId>) -> Clause {
 /// carries anything, so all are erased, and `Host`'s constructor is left out
 /// of the names a term may use so that no program can make one for itself.
 const BUILTIN: [&str; 3] = ["Host", "Unit", "Never"];
+const BYTE: &str = "$Byte";
+const STRING: &str = "Str";
+const PRINT: &str = "print!";
 
 /// Two of them are named here as well as declared above, since the rules
 /// below are written in terms of them. The order `BUILTIN` is declared in is
@@ -676,10 +873,21 @@ fn catalogue(program: &Program) -> HashMap<String, CtorId> {
         let id = TypeId::at(at);
         for tag in 0..u32::try_from(program.ctors(id).len()).expect("a sane count") {
             let ctor = program.ctor_at(id, tag);
-            ctors.insert(program.name(program.ctor(ctor).name).to_owned(), ctor);
+            let name = program.name(program.ctor(ctor).name);
+            if !name.starts_with('$') {
+                ctors.insert(name.to_owned(), ctor);
+            }
         }
     }
     ctors
+}
+
+fn type_named(program: &Program, wanted: &str) -> Option<TypeId> {
+    program
+        .types()
+        .iter()
+        .position(|ty| program.name(ty.name) == wanted)
+        .map(TypeId::at)
 }
 
 fn look<T: Copy>(table: &HashMap<&str, T>, name: &str, what: &str) -> Result<T, String> {
@@ -692,6 +900,8 @@ fn look<T: Copy>(table: &HashMap<&str, T>, name: &str, what: &str) -> Result<T, 
 struct Lowering<'a> {
     ctors: &'a HashMap<String, CtorId>,
     functions: &'a HashMap<&'a str, FnId>,
+    natural: Option<TypeId>,
+    literals: Option<&'a LiteralTypes>,
 }
 
 /// The names a clause has bound, and what each stands for.
@@ -891,21 +1101,42 @@ impl Lowering<'_> {
         term: &Term,
         scope: &Scope,
     ) -> Result<Atom, String> {
-        let Term(name, args) = term;
-        if args.is_empty()
-            && let Some((_, atom)) = scope.iter().rev().find(|(held, _)| held == name)
-        {
-            return Ok(*atom);
+        match term {
+            Term::Number(value) => {
+                let natural = self
+                    .natural
+                    .ok_or_else(|| "a number literal needs a `Nat` type".to_owned())?;
+                let value = b
+                    .natural(natural, value)
+                    .map_err(|error| error.to_string())?;
+                Ok(b.known(value))
+            }
+            Term::String(text) => {
+                let types = self
+                    .literals
+                    .ok_or_else(|| "string literal types were not declared".to_owned())?;
+                let value = b
+                    .bytes(types.string, text.as_bytes())
+                    .map_err(|error| error.to_string())?;
+                Ok(b.known(value))
+            }
+            Term::Apply(name, args) => {
+                if args.is_empty()
+                    && let Some((_, atom)) = scope.iter().rev().find(|(held, _)| held == name)
+                {
+                    return Ok(*atom);
+                }
+                let args: Vec<Atom> = args
+                    .iter()
+                    .map(|arg| self.term(b, arg, scope))
+                    .collect::<Result<_, _>>()?;
+                if let Some(ctor) = self.ctors.get(name) {
+                    return Ok(b.con(*ctor, &args));
+                }
+                let id = look(self.functions, name, "function")?;
+                Ok(b.call(id, &args))
+            }
         }
-        let args: Vec<Atom> = args
-            .iter()
-            .map(|arg| self.term(b, arg, scope))
-            .collect::<Result<_, _>>()?;
-        if let Some(ctor) = self.ctors.get(name) {
-            return Ok(b.con(*ctor, &args));
-        }
-        let id = look(self.functions, name, "function")?;
-        Ok(b.call(id, &args))
     }
 }
 
@@ -978,6 +1209,11 @@ fn agree(one: TypeId, other: TypeId) -> Result<TypeId, String> {
 }
 
 /// Work out what every function takes and answers.
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "one inference run owns its source tables, slot creation, constraints, and settled signatures"
+)]
 fn infer(
     source: &Source,
     routines: &Routines,
@@ -985,14 +1221,16 @@ fn infer(
     program: &Program,
     ctors: &HashMap<String, CtorId>,
     arity: &HashMap<&str, usize>,
+    literals: Option<&LiteralTypes>,
+    printing: bool,
 ) -> Result<HashMap<String, Inferred>, String> {
     let mut unify = Unify {
         parent: Vec::new(),
         known: Vec::new(),
     };
     // Each function takes a run of slots: one per argument, then its result.
-    let base = slots(source, routines, arity, &mut unify)?;
-    let leaving = diverging(source, clauses, routines);
+    let base = slots(source, routines, arity, literals, printing, &mut unify)?;
+    let leaving = diverging(source, clauses, routines, printing);
 
     let reading = Reading {
         program,
@@ -1000,6 +1238,8 @@ fn infer(
         base: &base,
         arity,
         leaving: &leaving,
+        natural: type_named(program, "Nat"),
+        string: literals.map(|types| types.string),
     };
     for name in &source.order {
         for clause in &clauses[name.as_str()] {
@@ -1020,7 +1260,11 @@ fn infer(
     }
     // An effect no program calls settles nothing, and needs to: there is
     // nothing to declare and nothing to answer for.
-    for called in routines.offered().map(|routine| routine.name.as_str()) {
+    for called in routines
+        .offered()
+        .map(|routine| routine.name.as_str())
+        .chain(printing.then_some(PRINT))
+    {
         match reading.settled(&mut unify, called) {
             Ok(held) => {
                 told.insert(called.to_owned(), held);
@@ -1042,6 +1286,8 @@ fn slots<'a>(
     source: &'a Source,
     routines: &'a Routines,
     arity: &HashMap<&str, usize>,
+    literals: Option<&LiteralTypes>,
+    printing: bool,
     unify: &mut Unify,
 ) -> Result<HashMap<&'a str, usize>, String> {
     let mut base = HashMap::new();
@@ -1077,6 +1323,16 @@ fn slots<'a>(
         // is whatever it stands beside, the same as anything else.
         base.insert(&routine.name, at);
     }
+    if let Some(literals) = literals.filter(|_| printing) {
+        let at = unify.parent.len();
+        let host = unify.fresh();
+        unify.pin(host, HOST)?;
+        let string = unify.fresh();
+        unify.pin(string, literals.string)?;
+        let answer = unify.fresh();
+        unify.pin(answer, NEVER)?;
+        base.insert(PRINT, at);
+    }
     Ok(base)
 }
 
@@ -1093,15 +1349,24 @@ fn diverging<'a>(
     source: &'a Source,
     clauses: &HashMap<&str, Vec<Clause>>,
     routines: &'a Routines,
+    printing: bool,
 ) -> HashSet<&'a str> {
     fn leaves(term: &Term, held: &HashSet<&str>) -> bool {
-        held.contains(term.0.as_str()) || term.1.iter().any(|argument| leaves(argument, held))
+        match term {
+            Term::Apply(name, args) => {
+                held.contains(name.as_str()) || args.iter().any(|argument| leaves(argument, held))
+            }
+            Term::Number(_) | Term::String(_) => false,
+        }
     }
     let mut held: HashSet<&str> = routines
         .offered()
         .filter(|routine| !routine.comes_back())
         .map(|routine| routine.name.as_str())
         .collect();
+    if printing {
+        held.insert(PRINT);
+    }
     let mut growing = true;
     while growing {
         growing = false;
@@ -1140,6 +1405,8 @@ struct Reading<'a> {
     base: &'a HashMap<&'a str, usize>,
     arity: &'a HashMap<&'a str, usize>,
     leaving: &'a HashSet<&'a str>,
+    natural: Option<TypeId>,
+    string: Option<TypeId>,
 }
 
 impl Reading<'_> {
@@ -1187,13 +1454,35 @@ impl Reading<'_> {
     }
 
     /// The slot a term's type lives in, constraining what it is built from.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive term match applies every source typing rule"
+    )]
     fn term(
         &self,
         held: &Term,
         scope: &HashMap<&str, usize>,
         unify: &mut Unify,
     ) -> Result<usize, String> {
-        let Term(name, args) = held;
+        let (name, args) = match held {
+            Term::Number(_) => {
+                let natural = self
+                    .natural
+                    .ok_or_else(|| "a number literal needs a `Nat` type".to_owned())?;
+                let answer = unify.fresh();
+                unify.pin(answer, natural)?;
+                return Ok(answer);
+            }
+            Term::String(_) => {
+                let string = self
+                    .string
+                    .ok_or_else(|| "string literal types were not declared".to_owned())?;
+                let answer = unify.fresh();
+                unify.pin(answer, string)?;
+                return Ok(answer);
+            }
+            Term::Apply(name, args) => (name, args),
+        };
         if let Some(slot) = scope.get(name.as_str()) {
             if args.is_empty() {
                 return Ok(*slot);

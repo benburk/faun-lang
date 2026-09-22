@@ -8,7 +8,7 @@
 //!   that is there anyway. A program that only ever leaves with nought
 //!   imports nothing, which is most of a small module.
 
-use super::{Body, CALL, Code, DROP, END, I32_CONST, Segment};
+use super::{Body, CALL, Code, DROP, END, I32, I32_CONST, Segment};
 use crate::WORD_BITS;
 use faun_core::ir::{
     Binary, Class, DataId, Direction, Exit, FunctionId, Offset, Op, Origin, Program, Range,
@@ -16,10 +16,11 @@ use faun_core::ir::{
 };
 use faun_core::targets::bytes::{Bytes, len32};
 
+const STDIN: i32 = 0;
 const STDOUT: i32 = 1;
 
-/// Linear memory: the cell `fd_write` reports its byte count into, then the
-/// vectors, four-byte aligned as WASI requires, then the data.
+/// Linear memory: the cell `fd_write`/`fd_read` reports its byte count into,
+/// then argument scratch, four-byte aligned WASI vectors, then program data.
 const NWRITTEN: i32 = 0;
 /// Where `args_sizes_get` reports the count. The cell beside it is the one
 /// `fd_write` reports into, and neither is live while the other is called,
@@ -81,10 +82,20 @@ enum Source {
     Local(u32),
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "memory scratch and import indices must be planned before bodies"
+)]
 pub(crate) fn lower(program: &Program) -> Code {
     let plan = Plan::new(program);
 
-    let data_start = IOVECS + IOVEC_LEN * len32(plan.writes);
+    let after_writes = IOVECS + IOVEC_LEN * len32(plan.writes);
+    let read = plan.reads.then_some(ReadScratch {
+        iovec: after_writes,
+        byte: after_writes + IOVEC_LEN,
+    });
+    // Keep following words aligned; the read buffer itself is one byte.
+    let data_start = after_writes + read.map_or(0, |_| IOVEC_LEN + 4);
 
     let writes = plan.writes > 0;
     let mut state = Lowering {
@@ -92,6 +103,7 @@ pub(crate) fn lower(program: &Program) -> Code {
         entry: program.entry(),
         role: FunctionRole::Entry,
         iovecs: vec![None; plan.writes],
+        read,
         plan,
         data_start,
         body: Bytes::default(),
@@ -106,6 +118,9 @@ pub(crate) fn lower(program: &Program) -> Code {
     // before anything calls one.
     if writes {
         state.imports.push("fd_write");
+    }
+    if state.read.is_some() {
+        state.imports.push("fd_read");
     }
     if state.needs_proc_exit() {
         state.imports.push("proc_exit");
@@ -138,6 +153,7 @@ struct Plan {
     source: Vec<Source>,
     locals: u32,
     writes: usize,
+    reads: bool,
     functions: Vec<Option<Frame>>,
 }
 
@@ -149,6 +165,7 @@ impl Plan {
             source: vec![Source::Local(0); program.values_count()],
             locals: 0,
             writes: 0,
+            reads: false,
             functions: Vec::new(),
         };
         let mut index = 0;
@@ -168,6 +185,10 @@ impl Plan {
         plan
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive walk assigns value storage and counts platform calls"
+    )]
     fn walk(&mut self, program: &Program, region: RegionId) {
         for &param in program.values(program.region(region).params) {
             self.give_local(param);
@@ -192,6 +213,14 @@ impl Plan {
                         .is_some_and(|symbol| program.name(symbol) == "write") =>
                 {
                     self.writes += 1;
+                }
+                Op::Call { function, .. }
+                    if program
+                        .function(function)
+                        .external()
+                        .is_some_and(|symbol| program.name(symbol) == "read_byte!") =>
+                {
+                    self.reads = true;
                 }
                 Op::If {
                     then_region,
@@ -245,6 +274,12 @@ enum Position {
     EntryEnd,
 }
 
+#[derive(Clone, Copy)]
+struct ReadScratch {
+    iovec: u32,
+    byte: u32,
+}
+
 struct Lowering<'a> {
     program: &'a Program,
     data_start: u32,
@@ -254,6 +289,7 @@ struct Lowering<'a> {
     body: Bytes,
     /// Each call's vector, where its contents were known.
     iovecs: Vec<Option<(u32, u32)>>,
+    read: Option<ReadScratch>,
     written: usize,
     /// How many labels enclose the instruction being emitted.
     depth: usize,
@@ -384,6 +420,15 @@ impl Lowering<'_> {
             data.push(Segment {
                 offset: IOVECS,
                 bytes: vectors,
+            });
+        }
+        if let Some(read) = self.read {
+            let mut iovec = Vec::with_capacity(8);
+            iovec.extend_from_slice(&read.byte.to_le_bytes());
+            iovec.extend_from_slice(&1u32.to_le_bytes());
+            data.push(Segment {
+                offset: read.iovec,
+                bytes: iovec,
             });
         }
         let mut blob = self.program.data().to_vec();
@@ -753,6 +798,7 @@ impl Lowering<'_> {
             }
             "exit!" => self.leave(args[0], position),
             "argc!" => self.count(results[0]),
+            "read_byte!" => self.read_byte(results[0]),
             // Handed straight back: nothing is asked of the outside, and
             // all this says is that nothing worked the value out.
             "grow" => {
@@ -769,6 +815,44 @@ impl Lowering<'_> {
             }
             other => panic!("`{other}` is not one this answers for, which `accepts` says first"),
         }
+    }
+
+    /// Return zero at EOF or on a host error, and otherwise the byte plus
+    /// one. The offset preserves all 256 byte values in one scalar result.
+    fn read_byte(&mut self, result: ValueId) {
+        let read = self.read.expect("a byte read reserves its scratch");
+        self.constant_i32(STDIN);
+        self.constant_i32(read.iovec.cast_signed());
+        self.constant_i32(1);
+        self.constant_i32(NWRITTEN);
+        let fd_read = self.import("fd_read").expect("a byte read imports fd_read");
+        self.call(fd_read);
+
+        self.constant_i32(0);
+        self.body.byte(I32_EQ); // errno == 0
+        self.body.byte(IF);
+        self.body.byte(I32); // one i32 result
+        self.open();
+
+        self.constant_i32(NWRITTEN);
+        self.access(Width::Word, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.constant_i32(1);
+        self.body.byte(I32_EQ);
+        self.body.byte(IF);
+        self.body.byte(I32); // one i32 result
+        self.open();
+        self.constant_i32(read.byte.cast_signed());
+        self.access(Width::Byte, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.constant_i32(1);
+        self.body.byte(I32_ADD);
+        self.body.byte(ELSE);
+        self.constant_i32(0);
+        self.close();
+
+        self.body.byte(ELSE);
+        self.constant_i32(0);
+        self.close();
+        self.set(result);
     }
 
     /// Hand `sources` over as `destinations`. Every source is pushed before

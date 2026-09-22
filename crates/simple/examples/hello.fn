@@ -1,0 +1,1 @@
+main!(host) -> host.print!("Hello, world!\n")

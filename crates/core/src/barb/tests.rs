@@ -188,6 +188,11 @@ fn a_string_past_ascii_is_not_liftable() {
         panic!("a spine");
     };
     assert_eq!(spine.byte_slice(), ByteView::NeedsDecoding);
+    assert_eq!(spine.to_bytes().as_deref(), Some("café".as_bytes()));
+    let direct = program
+        .intern_byte_spine(list_id, "café".as_bytes())
+        .expect("a spine of natural bytes");
+    assert_eq!(program.known_bytes(direct), program.known_bytes(id));
     assert_eq!(decode(&program, list_id, program.known_bytes(id)).0, cafe);
 }
 

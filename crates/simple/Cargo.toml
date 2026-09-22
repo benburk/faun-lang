@@ -6,6 +6,7 @@ description = "The archived simple Faun source frontend"
 
 [dependencies]
 faun-core.workspace = true
+num-bigint = "0.4.8"
 
 [lints]
 workspace = true

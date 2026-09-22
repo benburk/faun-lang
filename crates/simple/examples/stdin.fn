@@ -1,0 +1,12 @@
+# Read one byte from standard input. Nought means EOF; every byte is offset by
+# one so all 256 values fit beside it. With no input this exits 4; with `A` it
+# exits 70 (`A` is 65, the host answers 66, then this adds four).
+
+type Nat Zero Succ(Nat)
+
+add(a Zero) -> a
+add(a Succ(k)) -> Succ(add(a k))
+
+main!(host) ->
+  byte = host.read_byte!()
+  host.exit!(add(byte 4))

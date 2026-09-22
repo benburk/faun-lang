@@ -113,6 +113,17 @@ catalog. Source lowering only declares demanded functions. Targets own external
 call emission and internal function numbering; source IDs need not be dense
 emitted-body indices.
 
+Surface `host.print!("…")` is a frontend completion operation rather than a new
+machine routine. Lowering places the literal's UTF-8 bytes in machine data, calls
+the existing `write(address, length)` routine, then calls `exit!(0)`. The source
+`Str` is static-only in this slice: any reached user function that takes or
+returns it is rejected before machine construction.
+
+`read_byte!` is an ordinary returning external with no machine operands: source
+`Host` authority is erased before this tier. Its nine-bit scalar answer is zero
+at EOF or one plus the byte read. The native targets map read errors to EOF;
+there is no error channel or aggregate buffer in this contract.
+
 ## Passes
 
 `ir::optimize(program, &OptimizeOptions)` runs a small fixed schedule after
