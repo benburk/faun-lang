@@ -1,7 +1,7 @@
 //! Programs at the tier a target reads, for the things a language cannot
 //! say yet.
 //!
-//! `examples/` holds programs somebody wrote, and everything in one of
+//! `crates/simple/examples/` holds programs somebody wrote, and everything in one of
 //! those is something the language has a spelling for. These are the rest:
 //! the heap, a global counted in place, a byte stored and read back, an arm
 //! that leaves. A target has to lay all of it out whether or not anything

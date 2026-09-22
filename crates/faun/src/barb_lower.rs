@@ -1455,7 +1455,7 @@ mod tests {
     fn checked_example(name: &str) -> (ResolvedProgram, crate::check::CheckedProgram, PreludeIds) {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../notes/examples")
+            .join("examples")
             .join(name);
         let loaded = crate::modules::load(&[entry], Some(&root)).unwrap();
         let prelude = PreludeIds::resolve(&loaded).unwrap();
@@ -1491,7 +1491,7 @@ mod tests {
     fn lowers_the_host_entry_through_the_machine_boundary() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
         let host = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/hosts/x86-64-linux.fn");
-        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../notes/examples/main.fn");
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/main.fn");
         let loaded = crate::modules::load_with_host(&[entry], Some(&root), Some(&host)).unwrap();
         let prelude = PreludeIds::resolve(&loaded).unwrap();
         let host = crate::host::HostIds::resolve(&loaded, &prelude).unwrap();

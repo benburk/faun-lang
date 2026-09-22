@@ -9,8 +9,8 @@ inference on `.fn` source. The primary `faun` crate supplies its standard packag
 so commands need no environment setup:
 
 ```sh
-cargo run -- check notes/examples/literals.fn
-cargo run -- check notes/examples/utilities.fn
+cargo run -- check crates/faun/examples/literals.fn
+cargo run -- check crates/faun/examples/utilities.fn
 ```
 
 The accepted language remains a subset of Ori, but now includes:
@@ -169,8 +169,8 @@ one input position.
 Use it for backend development and the existing examples:
 
 ```sh
-cargo run --bin faun-simple -- run examples/exit.fn
-cargo run --bin faun-simple -- inspect --emit barb examples/expressions.fn
+cargo run --bin faun-simple -- run crates/simple/examples/exit.fn
+cargo run --bin faun-simple -- inspect --emit barb crates/simple/examples/expressions.fn
 ```
 
 The library crate is `faun-simple`; it owns this syntax, its pipeline entry

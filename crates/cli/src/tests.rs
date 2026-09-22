@@ -1,6 +1,6 @@
 use super::*;
 
-const EXAMPLE: &str = include_str!("../../../examples/expressions.fn");
+const EXAMPLE: &str = include_str!("../../simple/examples/expressions.fn");
 
 #[test]
 fn inspection_parses_each_stage_and_target_before_the_source_path() {
@@ -18,7 +18,7 @@ fn inspection_parses_each_stage_and_target_before_the_source_path() {
                     "mos6502-sim65",
                     "--emit",
                     flag,
-                    "examples/expressions.fn",
+                    "crates/simple/examples/expressions.fn",
                 ][..],
             )
             .unwrap();
@@ -30,7 +30,10 @@ fn inspection_parses_each_stage_and_target_before_the_source_path() {
         else {
             panic!("inspection command expected");
         };
-        assert_eq!(source, PathBuf::from("examples/expressions.fn"));
+        assert_eq!(
+            source,
+            PathBuf::from("crates/simple/examples/expressions.fn")
+        );
         assert_eq!(target.name(), "mos6502-sim65");
         assert_eq!(stage, expected);
     }

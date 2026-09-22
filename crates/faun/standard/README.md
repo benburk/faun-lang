@@ -4,8 +4,8 @@
 `Int`, `U8`, `List`, `Result`, and `Str` from sibling modules.
 
 ```sh
-cargo run -- check notes/examples/utilities.fn
-cargo run -- lower --target x86_64-linux notes/examples/main.fn
+cargo run -- check crates/faun/examples/utilities.fn
+cargo run -- lower --target x86_64-linux crates/faun/examples/main.fn
 ```
 
 The package deliberately omits hashing, tuples, record rows and updates, method

@@ -8,12 +8,12 @@ The primary frontend implements an in-progress Ori-compatible language. The
 types, and resolves methods in the current subset:
 
 ```sh
-cargo run -- check notes/examples/frontend.fn
-cargo run -- check notes/examples/literals.fn
-cargo run -- check notes/examples/utilities.fn
-cargo run -- check --target x86_64-linux notes/examples/main.fn
-cargo run -- lower --target x86_64-linux notes/examples/main.fn
-cargo run -- build --target x86_64-linux notes/examples/main.fn
+cargo run -- check crates/faun/examples/frontend.fn
+cargo run -- check crates/faun/examples/literals.fn
+cargo run -- check crates/faun/examples/utilities.fn
+cargo run -- check --target x86_64-linux crates/faun/examples/main.fn
+cargo run -- lower --target x86_64-linux crates/faun/examples/main.fn
+cargo run -- build --target x86_64-linux crates/faun/examples/main.fn
 cargo bench -p faun --bench frontend
 ```
 
@@ -99,7 +99,7 @@ Build on another host, copy the executable, and run it on an Apple Silicon Mac:
 
 ```sh
 cargo run --bin faun-simple -- build --target aarch64-macos \
-  -o /tmp/faun-exit examples/exit.fn
+  -o /tmp/faun-exit crates/simple/examples/exit.fn
 scp /tmp/faun-exit your-mac:/tmp/faun-exit
 ssh your-mac 'chmod +x /tmp/faun-exit; /tmp/faun-exit; echo $?'
 ```
@@ -110,7 +110,7 @@ hello-world programs as explicit baselines while instruction lowering grows.
 
 ## Inspecting a runtime expression
 
-[`examples/expressions.fn`](examples/expressions.fn) computes `(argc + 2) + argc`
+[`crates/simple/examples/expressions.fn`](crates/simple/examples/expressions.fn) computes `(argc + 2) + argc`
 with a guard requiring `argc < 32`. Counts include the program name: no extra
 arguments gives exit status 4, two gives 8, and rejected counts give 0. Constant
 arithmetic folds normally; the argument-dependent additions remain.
@@ -119,8 +119,8 @@ Enter the development shell, then inspect optimized Barb and lowered machine IR:
 
 ```sh
 nix develop
-cargo run --bin faun-simple -- inspect --target mos6502-sim65 --emit barb examples/expressions.fn
-cargo run --bin faun-simple -- inspect --target mos6502-sim65 --emit ir examples/expressions.fn
+cargo run --bin faun-simple -- inspect --target mos6502-sim65 --emit barb crates/simple/examples/expressions.fn
+cargo run --bin faun-simple -- inspect --target mos6502-sim65 --emit ir crates/simple/examples/expressions.fn
 ```
 
 Dumps go to stdout, so they can be redirected to files. `barb` stops after the
@@ -136,7 +136,7 @@ host contracts and retain source validation and totality checks.
 Build and run the 6502 image, then disassemble its actual emitted bytes:
 
 ```sh
-cargo run --bin faun-simple -- build --target mos6502-sim65 -o /tmp/faun-expressions examples/expressions.fn
+cargo run --bin faun-simple -- build --target mos6502-sim65 -o /tmp/faun-expressions crates/simple/examples/expressions.fn
 sim65 /tmp/faun-expressions.bin a b
 echo $? # 8 (the result is an exit status, not printed output)
 

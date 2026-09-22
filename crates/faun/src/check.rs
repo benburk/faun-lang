@@ -2147,8 +2147,7 @@ mod tests {
     #[test]
     fn repository_bootstrap_checks_polymorphic_utilities() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-        let entry =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../notes/examples/utilities.fn");
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/utilities.fn");
         let loaded = modules::load(&[entry], Some(&root)).unwrap();
         let prelude = PreludeIds::resolve(&loaded).unwrap();
         let resolved = resolve::resolve(loaded).unwrap();

@@ -47,7 +47,7 @@ fn corpus() -> [(&'static str, Program); 19] {
 }
 
 fn written() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../simple/examples")
 }
 
 pub(super) fn read(text: &str) -> Result<Program, String> {
@@ -354,7 +354,7 @@ fn has_constant_only_multiply(program: &Program, instructions: &[(&Op, &[ValueId
 
 #[test]
 fn runnable_expression_example_uses_runtime_arguments() {
-    let program = read(include_str!("../../../../examples/expressions.fn")).unwrap();
+    let program = read(include_str!("../../../simple/examples/expressions.fn")).unwrap();
     let counts = [1, 2, 3, 31, 32, 33];
     for (argc, (status, stdout)) in counts.into_iter().zip(execute_counts(&program, &counts)) {
         let expected = if argc < 32 {
