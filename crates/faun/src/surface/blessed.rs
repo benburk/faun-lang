@@ -254,23 +254,23 @@ mod tests {
 
     fn loaded() -> LoadedProgram {
         let fixture = Fixture::new();
-        fixture.write("bool.ori", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
-        fixture.write("nat.ori", "exports {Nat.*}\nNat : [Zero Succ(Nat)]\n");
+        fixture.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
+        fixture.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)]\n");
         fixture.write(
-            "int.ori",
+            "int.fn",
             "exports {Int.*}\nInt : [Pos(Nat) NegSucc(Nat)].(of_nat : Nat -> Int of_nat(n) -> Pos(n) neg : Int -> Int neg(i) -> i)\n",
         );
-        fixture.write("u8.ori", "exports {U8}\nU8 : Nat\n");
+        fixture.write("u8.fn", "exports {U8}\nU8 : Nat\n");
         fixture.write(
-            "list.ori",
+            "list.fn",
             "exports {List.*}\nList(a) : [Nil Cons(a List(a))]\n",
         );
-        fixture.write("str.ori", "exports {Str}\nStr : List(U8)\n");
+        fixture.write("str.fn", "exports {Str}\nStr : List(U8)\n");
         let root = fixture.write(
-            "standard.ori",
+            "standard.fn",
             "lib {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
         );
-        let entry = fixture.write("main.ori", "id(x) -> x\n");
+        let entry = fixture.write("main.fn", "id(x) -> x\n");
         // The loader owns all source text, so removing the fixture afterwards
         // does not invalidate the program.
         modules::load(&[entry], Some(&root)).unwrap()

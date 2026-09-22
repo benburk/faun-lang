@@ -6,7 +6,7 @@ use super::{
     Value, arithmetic, decode, fold, fold_with_limits, normalize_with_limits, optimize, validate,
 };
 
-const LIBRARY: &str = include_str!("../../../../standard/nat.fn");
+const LIBRARY: &str = include_str!("../../../../standard/simple/nat.fn");
 
 fn library() -> Program {
     crate::simple::parse(

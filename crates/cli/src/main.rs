@@ -68,8 +68,8 @@ mod tests {
     #[test]
     fn check_takes_an_ori_source_path() {
         cli().check_invariants(false);
-        let command = cli().run_inner(&["check", "example.ori"][..]).unwrap();
+        let command = cli().run_inner(&["check", "example.fn"][..]).unwrap();
         let Command::Check { source } = command;
-        assert_eq!(source, PathBuf::from("example.ori"));
+        assert_eq!(source, PathBuf::from("example.fn"));
     }
 }

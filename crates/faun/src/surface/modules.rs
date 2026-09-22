@@ -123,8 +123,8 @@ impl std::error::Error for LoadError {}
 /// Load entry files and an optional standard-library root.
 ///
 /// Imports are rooted at the importing package directory. Each path component
-/// maps to a directory and the final module is either `path.ori` or
-/// `path/name.ori`; finding both is an error.
+/// maps to a directory and the final module is either `path.fn` or
+/// `path/name.fn`; finding both is an error.
 ///
 /// # Errors
 ///
@@ -326,10 +326,10 @@ fn module_path(root: &Path, parts: &[String]) -> Result<PathBuf, LoadError> {
     let joined = parts
         .iter()
         .fold(root.to_path_buf(), |path, part| path.join(part));
-    let flat = joined.with_extension("ori");
+    let flat = joined.with_extension("fn");
     let nested = joined
         .join(parts.last().expect("nonempty path"))
-        .with_extension("ori");
+        .with_extension("fn");
     match (flat.is_file(), nested.is_file()) {
         (true, false) => Ok(flat),
         (false, true) => Ok(nested),
@@ -674,10 +674,10 @@ mod tests {
     fn imports_only_the_public_interface() {
         let fixture = Fixture::new();
         fixture.write(
-            "numbers.ori",
+            "numbers.fn",
             "exports {Nat.*}\nNat : [Zero Succ(Nat)]\nsecret() -> Zero\n",
         );
-        let entry = fixture.write("main.ori", "import numbers {Nat.*}\nid(x) -> Succ(x)\n");
+        let entry = fixture.write("main.fn", "import numbers {Nat.*}\nid(x) -> Succ(x)\n");
         let loaded = load(&[entry], None).unwrap();
         let entry = loaded.module(loaded.entries[0]);
         let succ = loaded.symbols.find("Succ").unwrap();
@@ -689,8 +689,8 @@ mod tests {
     #[test]
     fn private_names_cannot_be_imported() {
         let fixture = Fixture::new();
-        fixture.write("hidden.ori", "secret() -> 0\n");
-        let entry = fixture.write("main.ori", "import hidden {secret}\nmain() -> secret()\n");
+        fixture.write("hidden.fn", "secret() -> 0\n");
+        let entry = fixture.write("main.fn", "import hidden {secret}\nmain() -> secret()\n");
         let error = load(&[entry], None).unwrap_err();
         assert!(error.message.contains("not exported"));
     }
@@ -698,8 +698,8 @@ mod tests {
     #[test]
     fn import_cycles_are_rejected_before_reloading_a_source() {
         let fixture = Fixture::new();
-        let first = fixture.write("first.ori", "import second {}\n");
-        fixture.write("second.ori", "import first {}\n");
+        let first = fixture.write("first.fn", "import second {}\n");
+        fixture.write("second.fn", "import first {}\n");
         let error = load(&[first], None).unwrap_err();
         assert!(error.message.contains("import cycle"));
     }
@@ -707,17 +707,17 @@ mod tests {
     #[test]
     fn standard_namespaces_are_path_stable() {
         let fixture = Fixture::new();
-        fixture.write("nat.ori", "exports {Nat.*}\nNat : [Zero Succ(Nat)]\n");
+        fixture.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)]\n");
         let root = fixture.write(
-            "standard.ori",
+            "standard.fn",
             "lib {}\nimport nat {Nat.*}\nexports {Nat.*}\n",
         );
-        let entry = fixture.write("main.ori", "id(x) -> x\n");
+        let entry = fixture.write("main.fn", "id(x) -> x\n");
         let loaded = load(&[entry], Some(&root)).unwrap();
         let nat = loaded
             .modules
             .iter()
-            .find(|module| module.path.ends_with("nat.ori"))
+            .find(|module| module.path.ends_with("nat.fn"))
             .unwrap();
         assert_eq!(loaded.symbols.text(nat.namespace), "Mstd_nat");
     }

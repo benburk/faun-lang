@@ -5,12 +5,12 @@ Faun has two source frontends while the Ori-compatible one is built out.
 ## Ori-compatible frontend
 
 `faun check PATH` loads, parses, links, resolves, and performs polymorphic type
-inference on `.ori` source. Set `ORI_STD` to a
+inference on `.fn` source. Set `ORI_STD` to a
 standard-library root when the program needs an implicit prelude:
 
 ```sh
-ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/literals.ori
-ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/utilities.ori
+ORI_STD=standard/standard.fn cargo run -- check notes/examples/literals.fn
+ORI_STD=standard/standard.fn cargo run -- check notes/examples/utilities.fn
 ```
 
 The accepted language remains a subset of Ori, but now includes:
@@ -22,8 +22,8 @@ The accepted language remains a subset of Ori, but now includes:
 - names, arbitrary-size integer and character literals, strings and interpolation;
 - lists, lambdas in call arguments, calls, static members, methods, and operators.
 
-The parser can read Ori's current `standard.ori`, `nat.ori`, `int.ori`, and
-`str.ori` files individually. `standard/ori/` supplies a bootstrap prelude with
+The grammar follows Ori's source language, while Faun source and package files
+use the `.fn` extension. `standard/` supplies a bootstrap prelude with
 `Bool`, `Nat`, `Int`, `U8`, `List`, `Result`, and `Str`. It includes concrete
 arithmetic, Boolean, collection, and result utilities that avoid hashing,
 records, tuples, and postfix propagation. Concrete equality implementations
@@ -43,7 +43,7 @@ symbols and locals become clause-local integer IDs. This avoids allocating names
 in the parser or repeatedly rewriting the surface tree as modules are merged.
 
 The loader currently supports package-relative disk modules in either
-`path.ori` or `path/name.ori` form. Dependency maps in package headers and
+`path.fn` or `path/name.fn` form. Dependency maps in package headers and
 compiler-provided host modules remain to be added.
 
 ### Blessed literals

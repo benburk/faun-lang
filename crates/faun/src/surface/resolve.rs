@@ -654,25 +654,25 @@ mod tests {
     fn resolves_prelude_types_constructors_and_static_methods() {
         let fixture = Fixture::new();
         fixture.write(
-            "nat.ori",
+            "nat.fn",
             "exports {Nat.*}\nNat : [Zero Succ(Nat)].(of_nat : Nat -> Nat of_nat(n) -> n)\n",
         );
         fixture.write(
-            "int.ori",
+            "int.fn",
             "exports {Int.*}\nInt : [Pos(Nat) NegSucc(Nat)].(of_nat : Nat -> Int of_nat(n) -> Pos(n) neg : Int -> Int neg(i) -> i)\n",
         );
-        fixture.write("u8.ori", "exports {U8.*}\nU8 : Nat\n");
+        fixture.write("u8.fn", "exports {U8.*}\nU8 : Nat\n");
         fixture.write(
-            "list.ori",
+            "list.fn",
             "exports {List.*}\nList(a) : [Nil Cons(a List(a))]\n",
         );
-        fixture.write("str.ori", "exports {Str}\nStr : List(U8)\n");
+        fixture.write("str.fn", "exports {Str}\nStr : List(U8)\n");
         let standard = fixture.write(
-            "standard.ori",
+            "standard.fn",
             "lib {}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8.*}\nimport list {List.*}\nimport str {Str}\nexports {Nat.* Int.* U8.* List.* Str}\n",
         );
         let entry = fixture.write(
-            "main.ori",
+            "main.fn",
             "number : Int\nnumber() -> Int.of_nat(42)\ntext : Str\ntext() -> \"é\"\n",
         );
         let loaded = modules::load(&[entry], Some(&standard)).unwrap();
@@ -698,7 +698,7 @@ mod tests {
     #[test]
     fn rejects_an_unresolved_name_at_its_span() {
         let fixture = Fixture::new();
-        let entry = fixture.write("main.ori", "f() -> missing\n");
+        let entry = fixture.write("main.fn", "f() -> missing\n");
         let loaded = modules::load(&[entry], None).unwrap();
         let failure = resolve(loaded).unwrap_err();
         assert_eq!(failure.span.text("f() -> missing\n"), "missing");

@@ -12,7 +12,7 @@ fn budget(work: u64) -> Budget {
 use super::*;
 use num_bigint::BigUint;
 
-const LIBRARY: &str = include_str!("../../../../standard/nat.fn");
+const LIBRARY: &str = include_str!("../../../../standard/simple/nat.fn");
 
 fn source(library: &str) -> Program {
     crate::simple::parse(

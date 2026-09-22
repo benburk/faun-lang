@@ -166,6 +166,6 @@ fn literals_retain_spelling_and_validate_escapes() {
 #[test]
 fn parsed_module_carries_source_identity_once() {
     let mut sources = Sources::default();
-    let source = sources.add("test.ori", "id(x) -> x");
+    let source = sources.add("test.fn", "id(x) -> x");
     assert_eq!(parse_in("id(x) -> x", source).unwrap().source, source);
 }

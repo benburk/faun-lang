@@ -141,7 +141,7 @@ fn check(target: &dyn Target, runner: Option<&str>) {
 fn source_check(target: &dyn Target, runner: Option<&str>) {
     let text = format!(
         "{}\n{}",
-        include_str!("../../../../standard/nat.fn"),
+        include_str!("../../../../standard/simple/nat.fn"),
         include_str!("runtime_naturals.fn")
     );
     let p = faun::read(&text, &target.routines()).expect("bounded effect after runtime arithmetic");

@@ -1484,23 +1484,23 @@ mod tests {
         }
 
         fn load(&self, entry_source: &str) -> (PreludeIds, ResolvedProgram) {
-            self.write("bool.ori", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
-            self.write("nat.ori", "exports {Nat.*}\nNat : [Zero Succ(Nat)].(add : Nat Nat -> Nat add(0 y) -> y add(Succ(n) y) -> Succ(n.add(y)))\n");
+            self.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
+            self.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)].(add : Nat Nat -> Nat add(0 y) -> y add(Succ(n) y) -> Succ(n.add(y)))\n");
             self.write(
-                "int.ori",
+                "int.fn",
                 "exports {Int.*}\nInt : [Pos(Nat) NegSucc(Nat)].(of_nat : Nat -> Int of_nat(n) -> Pos(n) neg : Int -> Int neg(i) -> i)\n",
             );
-            self.write("u8.ori", "exports {U8}\nU8 : Nat\n");
+            self.write("u8.fn", "exports {U8}\nU8 : Nat\n");
             self.write(
-                "list.ori",
+                "list.fn",
                 "exports {List.*}\nList(a) : [Nil Cons(a List(a))]\n",
             );
-            self.write("str.ori", "exports {Str}\nStr : List(U8)\n");
+            self.write("str.fn", "exports {Str}\nStr : List(U8)\n");
             let standard = self.write(
-                "standard.ori",
+                "standard.fn",
                 "lib {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
             );
-            let entry = self.write("main.ori", entry_source);
+            let entry = self.write("main.fn", entry_source);
             let loaded = modules::load(&[entry], Some(&standard)).unwrap();
             let prelude = PreludeIds::resolve(&loaded).unwrap();
             let resolved = resolve::resolve(loaded).unwrap();
@@ -1619,7 +1619,7 @@ mod tests {
     fn methods_of_unexposed_types_are_not_candidates() {
         let fixture = Fixture::new();
         fixture.write(
-            "hidden.ori",
+            "hidden.fn",
             "exports {helper}\nSecret : [Hidden].(not : Secret -> Secret not(Hidden) -> Hidden)\nhelper : Nat\nhelper() -> 0\n",
         );
         let (prelude, resolved) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
@@ -1634,10 +1634,9 @@ mod tests {
 
     #[test]
     fn repository_bootstrap_checks_polymorphic_utilities() {
-        let root =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../standard/ori/standard.ori");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../standard/standard.fn");
         let entry =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../notes/examples/utilities.ori");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../notes/examples/utilities.fn");
         let loaded = modules::load(&[entry], Some(&root)).unwrap();
         let prelude = PreludeIds::resolve(&loaded).unwrap();
         let resolved = resolve::resolve(loaded).unwrap();

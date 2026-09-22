@@ -8,9 +8,9 @@ The primary frontend is being replaced with an Ori-compatible language. The
 types, and resolves methods in the current subset:
 
 ```sh
-cargo run -- check notes/examples/frontend.ori
-ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/literals.ori
-ORI_STD=standard/ori/standard.ori cargo run -- check notes/examples/utilities.ori
+cargo run -- check notes/examples/frontend.fn
+ORI_STD=standard/standard.fn cargo run -- check notes/examples/literals.fn
+ORI_STD=standard/standard.fn cargo run -- check notes/examples/utilities.fn
 cargo bench -p faun --bench frontend
 ```
 

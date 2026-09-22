@@ -1,41 +1,36 @@
-# Naturals are unbounded. Constructor order is not a representation.
-type Nat Zero Succ(Nat)
-type Bool False True
+# Unary naturals and the small arithmetic kernel used by the bootstrap
+# standard library.
 
-add(a Zero) -> a
-add(a Succ(b)) -> Succ(add(a b))
+exports {Nat.*}
 
-sub(Zero b) -> Zero
-sub(Succ(a) Zero) -> Succ(a)
-sub(Succ(a) Succ(b)) -> sub(a b)
+Nat : [Zero Succ(Nat)].(
+  zero : Nat
+  zero() -> 0
 
-mul(a Zero) -> Zero
-mul(a Succ(b)) -> add(a mul(a b))
+  add : Nat Nat -> Nat
+  add(0 y) -> y
+  add(Succ(n) y) -> Succ(n + y)
 
-equals(Zero Zero) -> True
-equals(Zero Succ(b)) -> False
-equals(Succ(a) Zero) -> False
-equals(Succ(a) Succ(b)) -> equals(a b)
+  sub : Nat Nat -> Nat
+  sub(0 _) -> 0
+  sub(Succ(m) 0) -> Succ(m)
+  sub(Succ(m) Succ(n)) -> m - n
 
-less_than(Zero Zero) -> False
-less_than(Zero Succ(b)) -> True
-less_than(Succ(a) Zero) -> False
-less_than(Succ(a) Succ(b)) -> less_than(a b)
+  mul : Nat Nat -> Nat
+  mul(0 _) -> 0
+  mul(Succ(m) y) -> y + m * y
 
-# Primitive recursion on the dividend keeps termination structural.
-# The helpers choose whether the next step completes another divisor.
-mod(a Zero) -> a
-mod(Zero Succ(b)) -> Zero
-mod(Succ(a) Succ(b)) ->
-  r = mod(a Succ(b))
-  mod_step(equals(r b) r)
-mod_step(True r) -> Zero
-mod_step(False r) -> Succ(r)
+  pow : Nat Nat -> Nat
+  pow(_ 0) -> 1
+  pow(base Succ(exponent)) -> base * pow(base exponent)
 
-div(a Zero) -> Zero
-div(Zero Succ(b)) -> Zero
-div(Succ(a) Succ(b)) ->
-  q = div(a Succ(b))
-  div_step(equals(mod(a Succ(b)) b) q)
-div_step(True q) -> Succ(q)
-div_step(False q) -> q
+  times : Nat a (a -> a) -> a
+  times(0 value _) -> value
+  times(Succ(count) value f) -> times(count f(value) f)
+
+  equals : Nat Nat -> Bool
+  equals(0 0) -> True
+  equals(0 Succ(_)) -> False
+  equals(Succ(_) 0) -> False
+  equals(Succ(a) Succ(b)) -> equals(a b)
+)

@@ -1,0 +1,50 @@
+# Prepend nat.fn. Every U8 has exactly eight bits, least significant first.
+# Unlike a public U8(Nat) wrapper, no constructor can escape 0..255.
+type U8 U8(Bool Bool Bool Bool Bool Bool Bool Bool)
+type U8Conversion U8Overflow U8Value(U8)
+
+u8_zero() -> U8(False False False False False False False False)
+
+# Read a binary digit onto the low end of a natural.
+u8_digit(False n) -> add(n n)
+u8_digit(True n) -> Succ(add(n n))
+
+u8_to_nat(U8(a b c d e f g h)) ->
+  u8_digit(a u8_digit(b u8_digit(c u8_digit(d u8_digit(e u8_digit(f u8_digit(g u8_digit(h Zero))))))))
+
+u8_modulus() ->
+  two = Succ(Succ(Zero))
+  four = add(two two)
+  eight = add(four four)
+  sixteen = add(eight eight)
+  thirty_two = add(sixteen sixteen)
+  sixty_four = add(thirty_two thirty_two)
+  one_twenty_eight = add(sixty_four sixty_four)
+  add(one_twenty_eight one_twenty_eight)
+
+u8_low_bit(n) -> equals(mod(n Succ(Succ(Zero))) Succ(Zero))
+
+# Explicit narrowing modulo 256, for every unbounded natural.
+u8_from_nat_wrapping(n) ->
+  two = Succ(Succ(Zero))
+  b = div(n two)
+  c = div(b two)
+  d = div(c two)
+  e = div(d two)
+  f = div(e two)
+  g = div(f two)
+  h = div(g two)
+  U8(u8_low_bit(n) u8_low_bit(b) u8_low_bit(c) u8_low_bit(d) u8_low_bit(e) u8_low_bit(f) u8_low_bit(g) u8_low_bit(h))
+
+# Checked narrowing never silently wraps.
+u8_from_nat_checked(n) -> u8_checked_step(less_than(n u8_modulus()) n)
+u8_checked_step(False n) -> U8Overflow
+u8_checked_step(True n) -> U8Value(u8_from_nat_wrapping(n))
+
+u8_add_wrapping(a b) -> u8_from_nat_wrapping(add(u8_to_nat(a) u8_to_nat(b)))
+u8_sub_wrapping(a b) ->
+  u8_from_nat_wrapping(sub(add(u8_to_nat(a) u8_modulus()) u8_to_nat(b)))
+u8_mul_wrapping(a b) -> u8_from_nat_wrapping(mul(u8_to_nat(a) u8_to_nat(b)))
+
+u8_equals(a b) -> equals(u8_to_nat(a) u8_to_nat(b))
+u8_less_than(a b) -> less_than(u8_to_nat(a) u8_to_nat(b))

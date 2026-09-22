@@ -103,8 +103,8 @@ mod tests {
     #[test]
     fn equal_ranges_belong_to_their_module_source() {
         let mut sources = Sources::default();
-        let first = sources.add("first.ori", "Alpha");
-        let second = sources.add("second.ori", "Bravo");
+        let first = sources.add("first.fn", "Alpha");
+        let second = sources.add("second.fn", "Bravo");
         let span = Span::new(0, 5);
         assert_eq!(sources.get(first).unwrap().get(span), "Alpha");
         assert_eq!(sources.get(second).unwrap().get(span), "Bravo");

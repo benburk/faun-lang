@@ -82,7 +82,7 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
              main!(h) ->\n  count = argc!(h)\n\
                n = bounded!(h less_than(count Succ(Succ(Zero))) count)\n\
                exit!(h {name}(n n))",
-            include_str!("../../../../standard/nat.fn")
+            include_str!("../../../../standard/simple/nat.fn")
         );
         // Isolate lowering from laws such as mod(n, n) = 0.
         let machine = crate::read_with_options(

@@ -785,7 +785,7 @@ fn answers_tagged() -> Vec<(&'static str, Program, i32)> {
 }
 
 fn rejected_count() -> Program {
-    let library = include_str!("../../../standard/nat.fn");
+    let library = include_str!("../../../standard/simple/nat.fn");
     let source = format!(
         "{library}\n
         bounded!(h True n) -> n
@@ -802,7 +802,7 @@ fn rejected_count() -> Program {
 /// its subsequent arithmetic fit even on the smallest target.
 #[must_use]
 pub fn arithmetic_cases() -> Vec<(&'static str, Program, i32)> {
-    let library = include_str!("../../../standard/nat.fn");
+    let library = include_str!("../../../standard/simple/nat.fn");
     let setup = "
         bounded!(h True n) -> n
         bounded!(h False n) -> exit!(h Zero)

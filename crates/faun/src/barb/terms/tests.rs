@@ -10,7 +10,7 @@ fn library() -> Program {
     crate::simple::parse(
         &format!(
             "{}\nmain!(h) -> exit!(h Zero)",
-            include_str!("../../../../../standard/nat.fn")
+            include_str!("../../../../../standard/simple/nat.fn")
         ),
         &crate::platform::Routines::builtin(),
     )

@@ -4,9 +4,9 @@ use super::evaluate::Evaluator;
 use super::*;
 use num_bigint::BigUint;
 
-const NAT: &str = include_str!("../../../../standard/nat.fn");
-const U8: &str = include_str!("../../../../standard/u8.fn");
-const INT: &str = include_str!("../../../../standard/int.fn");
+const NAT: &str = include_str!("../../../../standard/simple/nat.fn");
+const U8: &str = include_str!("../../../../standard/simple/u8.fn");
+const INT: &str = include_str!("../../../../standard/simple/int.fn");
 
 struct Library {
     program: Program,
