@@ -57,8 +57,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   core API with its definition; separate substantial named algorithms, not
   reads from writes. Keep fields and construction machinery private or narrowly
   visible within the tier, and re-export the public API from `mod.rs`.
-- `validate.rs`, `stops.rs`: structural checks and termination. Frontend typing
-  and well-formed arena references remain preconditions, not proofs supplied here.
+- `validate.rs`, `stops.rs`: structural checks and size-change termination.
+  The termination pass closes call matrices within each recursive component and
+  requires every idempotent self-path to have a strict diagonal. Matrices are flat
+  and endpoint-indexed, so closure considers only composable paths and stops at the
+  first counterexample. Frontend typing and well-formed arena references remain
+  preconditions, not proofs supplied here.
 - `arithmetic.rs`: recognize induction equations, without range analysis.
 - `bounds.rs`: interval arithmetic and interprocedural range propagation.
   `Propagation` is the evolving state; `Ranges` is the conservative final result.

@@ -426,6 +426,19 @@ fn a_definition_that_does_not_stop_is_refused() {
            exit!(h twice(two))",
     )
     .expect("a program that stops");
+
+    // A local alias does not hide that the recursive argument was a field.
+    read(
+        "type Nat Zero Succ(Nat)
+
+         down(Zero) -> Zero
+         down(Succ(k)) ->
+           alias = k
+           down(alias)
+
+         main!(h) -> exit!(h down(Zero))",
+    )
+    .expect("an alias retains the field's descent");
 }
 
 /// Names that go round together are one round, however many of them there
@@ -468,4 +481,53 @@ fn a_round_is_every_name_that_goes_round_together() {
     )
     .unwrap_err();
     assert!(refused.contains("`one`, `two`, `three` stops"), "{refused}");
+}
+
+/// Size-change termination follows each repeatable path rather than demanding
+/// that one argument decrease at every recursive call site.
+#[test]
+fn size_change_accepts_descent_on_alternative_arguments() {
+    let (mut program, _, _, list) = types();
+    let choice = program.declare_type("Choice");
+    program.define_type(choice, &[("Left", &[]), ("Right", &[])]);
+
+    let merge = program.declare("merge", &[list, list, choice], list);
+    let left_choice = program.ctor_at(choice, 0);
+    program.define(merge, |b, args| {
+        let (left, right, choose) = (args[0], args[1], args[2]);
+        b.match_(choose, choice, |b, ctor, _| {
+            if ctor == left_choice {
+                b.match_(left, list, |b, _, fields| match fields {
+                    [] => right,
+                    [_, tail] => b.call(merge, &[*tail, right, choose]),
+                    _ => unreachable!("a list has zero or two fields"),
+                })
+            } else {
+                b.match_(right, list, |b, _, fields| match fields {
+                    [] => left,
+                    [_, tail] => b.call(merge, &[left, *tail, choose]),
+                    _ => unreachable!("a list has zero or two fields"),
+                })
+            }
+        })
+    });
+    program.set_entry(merge);
+
+    validate(&program).expect("each path through merge descends on one list");
+}
+
+/// A decrease somewhere in a matrix is not enough: only a strict diagonal in
+/// every idempotent composition proves that repeated calls run out.
+#[test]
+fn size_change_rejects_an_unchanged_permutation() {
+    let (mut program, nat, _, _) = types();
+    let swap = program.declare("swap", &[nat, nat], nat);
+    program.define(swap, |b, args| b.call(swap, &[args[1], args[0]]));
+    program.set_entry(swap);
+
+    let refused = validate(&program).unwrap_err();
+    assert!(
+        refused.contains("nothing here shows `swap` stops"),
+        "{refused}"
+    );
 }

@@ -6,26 +6,25 @@
 //! holds, what it is against the parameters it came from; and knowing, of
 //! every way round the call graph, that something gets smaller.
 //!
-//! Those two are kept apart here because the second is where this grows.
 //! What a call does to the sizes it carries is read into a matrix -- rows
-//! the parameters it was handed, columns the arguments it hands on -- and
-//! the verdict is read off the matrices. Today it is read off each of them
-//! on its own: a way round descends when one column descends in every call
-//! along it.
+//! are the parameters it was handed and columns are the arguments it hands
+//! on. Size-change termination closes those matrices under composition. Every
+//! idempotent path from a definition back to itself must have a strict
+//! decrease on its diagonal; such a path can repeat, but its decreasing value
+//! cannot do so forever.
 //!
-//! Size-change termination is the same reading over the *closure of those
-//! matrices under composition*. A pair of definitions shrinking different
-//! arguments by turns -- `merge` taking one list apart in one arm and the
-//! other in the other -- descends every way round without descending at any
-//! single call, and no reading of one matrix at a time can see it. Composing
-//! them is what this grows into, and the matrices are the seam: what the
-//! walk below answers would not change, only what is asked of it.
+//! Closure can be much larger than the source call graph. Barb keeps matrices
+//! flat and indexes graphs by both endpoints, so a new graph is composed only
+//! with graphs that can actually precede or follow it. A failing idempotent is
+//! reported as soon as it appears rather than after the closure is complete.
+
+use std::collections::{HashMap, HashSet};
 
 use super::model::{Atom, Body, Expr, ExprId, FnId};
 use super::program::Program;
 
 /// What a value is, against a parameter it came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Step {
     /// Taken out of it, and so strictly smaller than it.
     Smaller,
@@ -36,20 +35,50 @@ enum Step {
     Unknown,
 }
 
-/// What one call does to the sizes it carries: a row per parameter it was
-/// handed, a column per argument it hands on.
-#[derive(Debug)]
-struct Matrix {
+impl Step {
+    /// Compose two legs of a path. An unknown leg breaks the fact; otherwise
+    /// one strict leg makes the whole path strict.
+    const fn then(self, next: Self) -> Self {
+        match (self, next) {
+            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
+            (Self::Smaller, _) | (_, Self::Smaller) => Self::Smaller,
+            (Self::Same, Self::Same) => Self::Same,
+        }
+    }
+
+    /// Keep the strongest of several paths between the same two values.
+    const fn stronger(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Smaller, _) | (_, Self::Smaller) => Self::Smaller,
+            (Self::Same, _) | (_, Self::Same) => Self::Same,
+            (Self::Unknown, Self::Unknown) => Self::Unknown,
+        }
+    }
+}
+
+/// One call or composed path, from caller parameters to callee parameters.
+/// Flat cells avoid the allocation per row used by the more general Ori
+/// checker; Barb has no synthesized measures or row labels to retain.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Graph {
+    caller: FnId,
+    callee: FnId,
+    rows: usize,
     columns: usize,
     cells: Vec<Step>,
 }
 
-impl Matrix {
+impl Graph {
     fn at(&self, row: usize, column: usize) -> Step {
-        self.cells
-            .get(row * self.columns + column)
-            .copied()
-            .unwrap_or(Step::Unknown)
+        self.cells[row * self.columns + column]
+    }
+
+    fn strict_diagonal(&self) -> bool {
+        (0..self.rows.min(self.columns)).any(|at| self.at(at, at) == Step::Smaller)
+    }
+
+    fn idempotent(&self) -> bool {
+        self.caller == self.callee && compose(self, self) == *self
     }
 }
 
@@ -177,30 +206,12 @@ impl Rounds<'_> {
     }
 }
 
-/// One column that descends at every call round, which is this reading of
-/// the matrices. The column is the same one throughout on purpose: one
-/// definition taking its first argument apart and the next taking its
-/// second is two things getting smaller by turns, and reading the calls one
-/// at a time cannot tell that from neither of them running out.
+/// Close the call matrices and require every repeatable path to descend.
 fn descends(program: &Program, round: &[FnId]) -> Result<(), String> {
-    let held: Vec<Vec<Matrix>> = round
-        .iter()
-        .map(|id| matrices(program, *id, round))
-        .collect();
-    let widest = round
-        .iter()
-        .map(|id| program.params(*id).len())
-        .min()
-        .unwrap_or(0);
-
-    for column in 0..widest {
-        if held
-            .iter()
-            .flatten()
-            .all(|matrix| matrix.at(column, column) == Step::Smaller)
-        {
-            return Ok(());
-        }
+    let within: HashSet<FnId> = round.iter().copied().collect();
+    let direct = round.iter().flat_map(|id| matrices(program, *id, &within));
+    if Closure::new().proves(direct) {
+        return Ok(());
     }
 
     let named: Vec<&str> = round
@@ -213,8 +224,111 @@ fn descends(program: &Program, round: &[FnId]) -> Result<(), String> {
     ))
 }
 
-/// A matrix per call this definition makes to one it goes round with.
-fn matrices(program: &Program, id: FnId, round: &[FnId]) -> Vec<Matrix> {
+/// The finite closure of one component's size-change graphs.
+///
+/// The endpoint indexes are authoritative only for entries in `graphs`; an
+/// insertion updates all three together. IDs in each index are increasing,
+/// which lets `products` pair a graph only with earlier entries and avoid
+/// recomputing every ordered pair as the closure grows.
+struct Closure {
+    graphs: Vec<Graph>,
+    seen: HashSet<Graph>,
+    by_caller: HashMap<FnId, Vec<usize>>,
+    by_callee: HashMap<FnId, Vec<usize>>,
+}
+
+impl Closure {
+    fn new() -> Self {
+        Self {
+            graphs: Vec::new(),
+            seen: HashSet::new(),
+            by_caller: HashMap::new(),
+            by_callee: HashMap::new(),
+        }
+    }
+
+    fn proves(mut self, direct: impl IntoIterator<Item = Graph>) -> bool {
+        for graph in direct {
+            if self.insert(graph).is_err() {
+                return false;
+            }
+        }
+
+        let mut at = 0;
+        while at < self.graphs.len() {
+            for product in self.products(at) {
+                if self.insert(product).is_err() {
+                    return false;
+                }
+            }
+            at += 1;
+        }
+        true
+    }
+
+    /// Add one unique graph, or report an idempotent path with no descent.
+    fn insert(&mut self, graph: Graph) -> Result<(), ()> {
+        if !self.seen.insert(graph.clone()) {
+            return Ok(());
+        }
+        if !graph.strict_diagonal() && graph.idempotent() {
+            return Err(());
+        }
+
+        let at = self.graphs.len();
+        self.by_caller.entry(graph.caller).or_default().push(at);
+        self.by_callee.entry(graph.callee).or_default().push(at);
+        self.graphs.push(graph);
+        Ok(())
+    }
+
+    /// Compose `at` in both orders with compatible graphs already processed.
+    fn products(&self, at: usize) -> Vec<Graph> {
+        let graph = &self.graphs[at];
+        let mut products = Vec::new();
+
+        for &before in self.by_callee.get(&graph.caller).into_iter().flatten() {
+            if before > at {
+                break;
+            }
+            products.push(compose(&self.graphs[before], graph));
+        }
+        for &after in self.by_caller.get(&graph.callee).into_iter().flatten() {
+            if after >= at {
+                break;
+            }
+            products.push(compose(graph, &self.graphs[after]));
+        }
+        products
+    }
+}
+
+/// Compose paths `a → b` and `b → c`.
+fn compose(first: &Graph, second: &Graph) -> Graph {
+    debug_assert_eq!(first.callee, second.caller);
+    debug_assert_eq!(first.columns, second.rows);
+
+    let mut cells = vec![Step::Unknown; first.rows * second.columns];
+    for row in 0..first.rows {
+        for column in 0..second.columns {
+            let mut best = Step::Unknown;
+            for middle in 0..first.columns {
+                best = best.stronger(first.at(row, middle).then(second.at(middle, column)));
+            }
+            cells[row * second.columns + column] = best;
+        }
+    }
+    Graph {
+        caller: first.caller,
+        callee: second.callee,
+        rows: first.rows,
+        columns: second.columns,
+        cells,
+    }
+}
+
+/// A graph per call this definition makes to one it goes round with.
+fn matrices(program: &Program, id: FnId, within: &HashSet<FnId>) -> Vec<Graph> {
     let params = program.params(id).len();
     let mut held = Vec::new();
     let Some(body) = program.function(id).body() else {
@@ -229,7 +343,7 @@ fn matrices(program: &Program, id: FnId, round: &[FnId]) -> Vec<Matrix> {
             row
         })
         .collect();
-    read(program, body, round, (&mut sizes, &mut held, params));
+    read(program, body, id, within, (&mut sizes, &mut held, params));
     held
 }
 
@@ -238,36 +352,46 @@ fn matrices(program: &Program, id: FnId, round: &[FnId]) -> Vec<Matrix> {
 fn read(
     program: &Program,
     body: Body,
-    round: &[FnId],
-    (sizes, held, params): (&mut Vec<Vec<Step>>, &mut Vec<Matrix>, usize),
+    from: FnId,
+    within: &HashSet<FnId>,
+    (sizes, held, params): (&mut Vec<Vec<Step>>, &mut Vec<Graph>, usize),
 ) {
     for &binding in program.bindings(body.bindings) {
-        term(program, binding, round, (sizes, held, params));
-        sizes.push(vec![Step::Unknown; params]);
+        let relation = term(program, binding, from, within, (sizes, held, params));
+        sizes.push(relation);
     }
-    term(program, body.tail, round, (sizes, held, params));
+    let _ = term(program, body.tail, from, within, (sizes, held, params));
 }
 
 fn term(
     program: &Program,
     id: ExprId,
-    round: &[FnId],
-    (sizes, held, params): (&mut Vec<Vec<Step>>, &mut Vec<Matrix>, usize),
-) {
+    from: FnId,
+    within: &HashSet<FnId>,
+    (sizes, held, params): (&mut Vec<Vec<Step>>, &mut Vec<Graph>, usize),
+) -> Vec<Step> {
     match program.expr(id) {
-        Expr::Call(called, args) if round.contains(&called) => {
-            held.push(matrix(sizes, program.atoms(args), params));
+        Expr::Atom(atom) => sizes
+            .get(atom.0.index())
+            .cloned()
+            .unwrap_or_else(|| vec![Step::Unknown; params]),
+        Expr::Call(to, args) => {
+            if within.contains(&to) {
+                held.push(matrix(from, to, sizes, program.atoms(args), params));
+            }
+            vec![Step::Unknown; params]
         }
         Expr::Match(scrutinee, arms) => {
             let of = taken(sizes, scrutinee);
             for arm in program.arms(arms) {
                 let level = sizes.len();
                 sizes.resize(level + program.fields(arm.ctor).len(), of.clone());
-                read(program, arm.body, round, (sizes, held, params));
+                read(program, arm.body, from, within, (sizes, held, params));
                 sizes.truncate(level);
             }
+            vec![Step::Unknown; params]
         }
-        Expr::Atom(_) | Expr::Con(..) | Expr::Static(..) | Expr::Call(..) => {}
+        Expr::Con(..) | Expr::Static(..) => vec![Step::Unknown; params],
     }
 }
 
@@ -287,7 +411,7 @@ fn taken(sizes: &[Vec<Step>], scrutinee: Atom) -> Vec<Step> {
 }
 
 /// What one call hands on, read off the sizes of what it hands.
-fn matrix(sizes: &[Vec<Step>], args: &[Atom], params: usize) -> Matrix {
+fn matrix(from: FnId, to: FnId, sizes: &[Vec<Step>], args: &[Atom], params: usize) -> Graph {
     let mut cells = vec![Step::Unknown; params * args.len()];
     for (column, arg) in args.iter().enumerate() {
         let Some(held) = sizes.get(arg.0.index()) else {
@@ -297,7 +421,10 @@ fn matrix(sizes: &[Vec<Step>], args: &[Atom], params: usize) -> Matrix {
             cells[row * args.len() + column] = *step;
         }
     }
-    Matrix {
+    Graph {
+        caller: from,
+        callee: to,
+        rows: params,
         columns: args.len(),
         cells,
     }

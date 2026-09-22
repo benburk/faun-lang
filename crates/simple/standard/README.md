@@ -25,6 +25,9 @@ main!(h) ->
 The pipeline is validation/totality checking → bounded Barb optimization →
 arithmetic recognition and range analysis → machine lowering/validation →
 target preparation/runtime legalization → target acceptance and emission.
+Totality uses size-change termination over each recursive call component, so
+branches may descend on different arguments as long as every repeatable composed
+path has a strict decrease.
 
 `barb::optimize` runs each stage once: structural normalization, nonrecursive
 helper inlining, recognized arithmetic identities, constant folding, then
