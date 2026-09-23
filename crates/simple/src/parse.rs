@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use faun_core::barb::{Atom, CtorId, FnId, Program, TypeId};
-use faun_core::platform::{PRINT_ADAPTER, Routines};
+use faun_core::platform::Routines;
 use num_bigint::BigUint;
 
 /// What a clause matches in one argument: a name, or a constructor and the
@@ -414,12 +414,7 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
         })
         .collect();
 
-    let printing =
-        literals.is_some() && routines.get("write").is_some() && routines.get("exit!").is_some();
-    if printing && source.clauses.contains_key(PRINT) {
-        return Err("`print!` is the compiler's string completion operation".to_owned());
-    }
-    let arity = arities(source, &clauses, routines, printing)?;
+    let arity = arities(source, &clauses, routines)?;
     validate(source, &clauses, &arity)?;
     let told = infer(
         source,
@@ -429,7 +424,6 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
         &ctors,
         &arity,
         literals.as_ref(),
-        printing,
     )?;
     let mut functions: HashMap<&str, FnId> = HashMap::new();
     for routine in routines.offered() {
@@ -444,13 +438,6 @@ fn build(source: &Source, routines: &Routines) -> Result<Program, String> {
             program.bound(id, bounds);
         }
         functions.insert(called, id);
-    }
-    if let Some(literals) = &literals
-        && told.contains_key(PRINT)
-    {
-        let print = program.declare(PRINT, &[HOST, literals.string], NEVER);
-        program.answered_by(print, PRINT_ADAPTER);
-        functions.insert(PRINT, print);
     }
     for name in &source.order {
         let (params, result) = &told[name];
@@ -620,7 +607,6 @@ fn arities<'a>(
     source: &'a Source,
     clauses: &HashMap<&str, Vec<Clause>>,
     routines: &'a Routines,
-    printing: bool,
 ) -> Result<HashMap<&'a str, usize>, String> {
     let mut arity = HashMap::new();
     for name in &source.order {
@@ -633,9 +619,6 @@ fn arities<'a>(
     }
     for routine in routines.offered() {
         arity.insert(&routine.name, routine.takes.len() + 1);
-    }
-    if printing {
-        arity.insert(PRINT, 2);
     }
     Ok(arity)
 }
@@ -856,7 +839,6 @@ fn resolve(clause: &Clause, ctors: &HashMap<String, CtorId>) -> Clause {
 const BUILTIN: [&str; 3] = ["Host", "Unit", "Never"];
 const BYTE: &str = "$Byte";
 const STRING: &str = "Str";
-const PRINT: &str = "print!";
 
 /// Two of them are named here as well as declared above, since the rules
 /// below are written in terms of them. The order `BUILTIN` is declared in is
@@ -1210,7 +1192,6 @@ fn agree(one: TypeId, other: TypeId) -> Result<TypeId, String> {
 
 /// Work out what every function takes and answers.
 #[expect(
-    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "one inference run owns its source tables, slot creation, constraints, and settled signatures"
 )]
@@ -1222,15 +1203,14 @@ fn infer(
     ctors: &HashMap<String, CtorId>,
     arity: &HashMap<&str, usize>,
     literals: Option<&LiteralTypes>,
-    printing: bool,
 ) -> Result<HashMap<String, Inferred>, String> {
     let mut unify = Unify {
         parent: Vec::new(),
         known: Vec::new(),
     };
     // Each function takes a run of slots: one per argument, then its result.
-    let base = slots(source, routines, arity, literals, printing, &mut unify)?;
-    let leaving = diverging(source, clauses, routines, printing);
+    let base = slots(source, routines, arity, &mut unify)?;
+    let leaving = diverging(source, clauses, routines);
 
     let reading = Reading {
         program,
@@ -1260,11 +1240,7 @@ fn infer(
     }
     // An effect no program calls settles nothing, and needs to: there is
     // nothing to declare and nothing to answer for.
-    for called in routines
-        .offered()
-        .map(|routine| routine.name.as_str())
-        .chain(printing.then_some(PRINT))
-    {
+    for called in routines.offered().map(|routine| routine.name.as_str()) {
         match reading.settled(&mut unify, called) {
             Ok(held) => {
                 told.insert(called.to_owned(), held);
@@ -1286,8 +1262,6 @@ fn slots<'a>(
     source: &'a Source,
     routines: &'a Routines,
     arity: &HashMap<&str, usize>,
-    literals: Option<&LiteralTypes>,
-    printing: bool,
     unify: &mut Unify,
 ) -> Result<HashMap<&'a str, usize>, String> {
     let mut base = HashMap::new();
@@ -1323,16 +1297,6 @@ fn slots<'a>(
         // is whatever it stands beside, the same as anything else.
         base.insert(&routine.name, at);
     }
-    if let Some(literals) = literals.filter(|_| printing) {
-        let at = unify.parent.len();
-        let host = unify.fresh();
-        unify.pin(host, HOST)?;
-        let string = unify.fresh();
-        unify.pin(string, literals.string)?;
-        let answer = unify.fresh();
-        unify.pin(answer, NEVER)?;
-        base.insert(PRINT, at);
-    }
     Ok(base)
 }
 
@@ -1349,7 +1313,6 @@ fn diverging<'a>(
     source: &'a Source,
     clauses: &HashMap<&str, Vec<Clause>>,
     routines: &'a Routines,
-    printing: bool,
 ) -> HashSet<&'a str> {
     fn leaves(term: &Term, held: &HashSet<&str>) -> bool {
         match term {
@@ -1364,9 +1327,6 @@ fn diverging<'a>(
         .filter(|routine| !routine.comes_back())
         .map(|routine| routine.name.as_str())
         .collect();
-    if printing {
-        held.insert(PRINT);
-    }
     let mut growing = true;
     while growing {
         growing = false;

@@ -24,7 +24,7 @@ pub(super) fn program(early_return: bool) -> Program {
     let serialize = serializer(&mut p);
     let argc = p.external("argc!", &[], Returns::Values(&[Class::Word]));
     let write = p.external(
-        "write",
+        "write!",
         &[Class::Address, Class::Word],
         Returns::Values(&[]),
     );

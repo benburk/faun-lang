@@ -1,15 +1,30 @@
 //! Lowering barb into the machine tier.
 //!
 //! This is where a value stops being a term and becomes storage, which is
-//! this tier's job rather than barb's or a target's. Two rules so far:
+//! this tier's job rather than barb's or a target's. The rules so far:
 //!
 //! - a spine-shaped type whose elements carry nothing is an unbounded
 //!   natural. Proven bounds can select a fixed width; unknown bounds cannot.
 //!   `Zero` is nought, `Succ(n)` is `n + 1`, and a match tests for nought.
 //! - a type with no constructors has no values, so a term answering one
 //!   does not answer: what it does is laid out, and nothing after it is.
+//! - a type with one value says nothing by being itself, so it is not held:
+//!   nothing is passed, nothing is tested, and its one arm runs.
 //! - a one-constructor, one-field product has the representation of its field;
-//!   construction and projection add no machine operation.
+//!   construction and projection add no machine operation. This is asked
+//!   before anything asks whether a value is held as a cell, since a wrapper
+//!   around a product is held as that product.
+//! - everything else with fields is a managed cell, a sequence included. A
+//!   sequence is a two-constructor sum whose step holds the rest of itself,
+//!   so it is one object per element. That is what it costs; a packed run
+//!   of bytes would cost less and does not exist yet.
+//! - a cell's fields are held at the class the cell says, which is the class
+//!   a projection reads them back at.
+//!
+//! Nothing here recognises a routine by name. What a call to something
+//! outside hands over is read off that routine's contract, so a byte string
+//! becoming an address and a length is one entry in [`crate::platform::Takes`]
+//! rather than a rule about one routine.
 //!
 //! Targets without arbitrary-precision support reject that class explicitly.
 
@@ -18,7 +33,7 @@ use crate::barb;
 use super::model::{Binary, Class, FunctionId, Relation, ValueId};
 use super::program::Program;
 use super::validate::validate;
-use crate::platform::{Routine, Routines, reads};
+use crate::platform::{Routine, Routines, Takes, reads, takes as takes_sentence};
 
 #[cfg(test)]
 mod tests;
@@ -58,6 +73,7 @@ pub fn lower(
         carries: demand.carries,
         takes: demand.takes,
         callees,
+        refused: std::cell::RefCell::default(),
     };
     for (at, callee) in lowering.callees.iter().enumerate() {
         let id = barb::FnId::at(at);
@@ -70,7 +86,7 @@ pub fn lower(
 }
 
 /// One entry per source function; no fabricated IDs for non-functions.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Callee<'a> {
     Unreachable,
     Instruction(barb::Operation),
@@ -78,11 +94,35 @@ enum Callee<'a> {
     External {
         id: FunctionId,
         routine: &'a Routine,
+        /// What each argument it is handed becomes, after erasure.
+        handed: Vec<Handed>,
     },
-    Print {
-        write: FunctionId,
-        exit: FunctionId,
-    },
+}
+
+/// What one argument of a call to something outside becomes.
+///
+/// A byte string is not one machine value, so what a routine is handed is
+/// not always what a program wrote. This is read from the routine's
+/// contract, so a second routine taking a string needs nothing added here.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Handed {
+    Value(Class),
+    Bytes,
+}
+
+/// What a call hands over, for saying so beside what a routine reads.
+fn handed_sentence(handed: &[Handed]) -> String {
+    if handed.is_empty() {
+        return "nothing".to_owned();
+    }
+    handed
+        .iter()
+        .map(|handed| match handed {
+            Handed::Bytes => "a byte string".to_owned(),
+            Handed::Value(class) => reads(std::slice::from_ref(class)),
+        })
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 #[expect(
@@ -116,44 +156,7 @@ fn declare<'a>(
         }
         let function = program.function(id);
         let name = program.name(function.name);
-        if matches!(
-            function.definition,
-            barb::Definition::External { symbol, .. }
-                if program.name(symbol) == crate::platform::PRINT_ADAPTER
-        ) {
-            let static_params = program
-                .params(id)
-                .iter()
-                .filter(|ty| demand.carries[ty.index()] == Storage::Static)
-                .count();
-            if program.params(id).len() != 2
-                || static_params != 1
-                || !uninhabited(program, function.result)
-            {
-                return Err("the static print adapter requires authority, one byte string, and a nonreturning result".to_owned());
-            }
-            let write = routines
-                .get("write")
-                .ok_or_else(|| "nothing answers for `print!`: `write` is unavailable".to_owned())?
-                .declare(machine);
-            let exit = routines
-                .get("exit!")
-                .ok_or_else(|| "nothing answers for `print!`: `exit!` is unavailable".to_owned())?
-                .declare(machine);
-            callees.push(Callee::Print { write, exit });
-            continue;
-        }
-        if program
-            .params(id)
-            .iter()
-            .chain([&function.result])
-            .any(|ty| demand.carries[ty.index()] == Storage::Static)
-        {
-            return Err(format!(
-                "`{name}` carries a static byte string outside `print!`, which has no runtime representation yet"
-            ));
-        }
-        let (params, returns) = demand.signature(id);
+        let (_, returns) = demand.signature(id);
         let named = demand.named_params(id);
         let named: Vec<_> = named
             .iter()
@@ -172,16 +175,22 @@ fn declare<'a>(
             barb::Definition::External { symbol, .. } => {
                 // A provider may answer for several source declarations.
                 let outside = program.name(symbol);
-                let wanted = provided(routines, name, outside, &params, &returns)?;
+                let Some(wanted) = routines.get(outside) else {
+                    return Err(format!("nothing answers for `{name}`"));
+                };
+                let handed = demand.handed(id, wanted)?;
+                provided(wanted, &handed, &returns)?;
                 if wanted.comes_back() == uninhabited(program, function.result) {
                     return Err(format!(
                         "`{outside}` disagrees with `{name}` about returning"
                     ));
                 }
-                let parameter_names: Vec<_> = named.iter().map(|(name, _)| *name).collect();
+                let taken = demand.handed_names(id);
+                let borrowed: Vec<_> = taken.iter().map(String::as_str).collect();
                 Callee::External {
-                    id: wanted.declare_named(machine, &parameter_names),
+                    id: wanted.declare_named(machine, &borrowed),
                     routine: wanted,
+                    handed,
                 }
             }
         });
@@ -196,36 +205,27 @@ fn declare<'a>(
 /// carries nothing is not handed over at all. So a status that carries
 /// nothing is no status, and saying so here beats three targets reading
 /// past the end of their arguments.
-fn provided<'a>(
-    routines: &'a Routines,
-    name: &str,
-    outside: &str,
-    params: &[Class],
-    returns: &[Class],
-) -> Result<&'a Routine, String> {
-    let Some(wanted) = routines.get(outside) else {
-        return Err(format!("nothing answers for `{name}`"));
-    };
+fn provided(wanted: &Routine, handed: &[Handed], returns: &[Class]) -> Result<(), String> {
     let held = wanted.name.as_str();
-    // What is handed over is converted to what the routine reads, so what
-    // has to agree is how many of them: a value of a type carrying nothing
-    // is not handed over at all, and then there is no value where one is
-    // read.
-    if params.len() != wanted.takes.len() {
-        return Err(format!(
-            "`{held}` reads {}, and is handed {}",
-            reads(&wanted.takes),
-            reads(params),
-        ));
-    }
     // Unlike internal range-proven narrowing, a host signature is not a
     // proof that its argument fits. In particular runtime Natural support
     // must never turn an implicit effect argument into modulo-word Convert.
-    for (&actual, &expected) in params.iter().zip(&wanted.takes) {
-        if !actual.fits(expected) {
-            return Err(format!(
-                "`{held}` requires {expected:?}, but its argument needs {actual:?}; host arguments must be proven to fit"
-            ));
+    for (actual, &expected) in handed.iter().zip(&wanted.takes) {
+        match (actual, expected) {
+            (Handed::Bytes, Takes::StaticBytes) => {}
+            (Handed::Value(actual), Takes::Scalar(expected)) if actual.fits(expected) => {}
+            (Handed::Value(actual), Takes::Scalar(expected)) => {
+                return Err(format!(
+                    "`{held}` requires {expected:?}, but its argument needs {actual:?}; host arguments must be proven to fit"
+                ));
+            }
+            (actual, expected) => {
+                return Err(format!(
+                    "`{held}` reads {}, and is handed {}",
+                    takes_sentence(std::slice::from_ref(&expected)),
+                    handed_sentence(std::slice::from_ref(actual)),
+                ));
+            }
         }
     }
     if returns.len() != wanted.answers().iter().len() {
@@ -235,14 +235,13 @@ fn provided<'a>(
             reads(returns),
         ));
     }
-    Ok(wanted)
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Storage {
     Undemanded,
     Erased,
-    Static,
     Scalar,
     Cell,
 }
@@ -251,7 +250,7 @@ impl Storage {
     fn carried(self) -> bool {
         match self {
             Self::Scalar | Self::Cell => true,
-            Self::Erased | Self::Static => false,
+            Self::Erased => false,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
         }
     }
@@ -260,7 +259,7 @@ impl Storage {
         match self {
             Self::Scalar => Some(width(bounds)),
             Self::Cell => Some(Class::Cell),
-            Self::Erased | Self::Static => None,
+            Self::Erased => None,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
         }
     }
@@ -388,6 +387,85 @@ impl<'a> Demand<'a> {
             .collect()
     }
 
+    /// What each argument a call to something outside hands over, after
+    /// erasure.
+    ///
+    /// What a byte string becomes is read off the routine's contract rather
+    /// than off the type, because the same run of bytes is a managed value
+    /// where a program holds one and an address and a length where
+    /// something outside reads one.
+    /// What one carried argument is, for saying so where a routine reads
+    /// something else. A managed value is the only thing a byte string can
+    /// be, so it is named as one here.
+    fn carried_as(&self, ty: barb::TypeId, bounds: barb::Bounds) -> Handed {
+        match self.carries[ty.index()] {
+            Storage::Cell => Handed::Bytes,
+            storage => Handed::Value(
+                storage
+                    .class(bounds)
+                    .expect("a carried argument has a class"),
+            ),
+        }
+    }
+
+    fn handed(&self, id: barb::FnId, wanted: &Routine) -> Result<Vec<Handed>, String> {
+        let carried: Vec<_> = self
+            .program
+            .params(id)
+            .iter()
+            .zip(self.facts.takes(id))
+            .filter(|(ty, _)| self.carries[ty.index()] != Storage::Erased)
+            .collect();
+        let held = wanted.name.as_str();
+        // What is handed over is converted to what the routine reads, so
+        // what has to agree is how many of them: a value of a type carrying
+        // nothing is not handed over at all, and then there is no value
+        // where one is read. An argument is counted once here even where a
+        // machine reads it as two, which a byte string is.
+        if carried.len() != wanted.takes.len() {
+            let handed: Vec<_> = carried
+                .iter()
+                .map(|(ty, bounds)| self.carried_as(**ty, **bounds))
+                .collect();
+            return Err(format!(
+                "`{held}` reads {}, and is handed {}",
+                takes_sentence(&wanted.takes),
+                handed_sentence(&handed),
+            ));
+        }
+        carried
+            .into_iter()
+            .zip(&wanted.takes)
+            .map(|((ty, bounds), takes)| match takes {
+                Takes::StaticBytes => {
+                    if byte_shaped(self.program, *ty) {
+                        Ok(Handed::Bytes)
+                    } else {
+                        Err(format!(
+                            "`{held}` reads a byte string, and `{}` is not one",
+                            self.program.name(self.program.type_(*ty).name)
+                        ))
+                    }
+                }
+                Takes::Scalar(_) => Ok(Handed::Value(
+                    self.carries[ty.index()]
+                        .class(*bounds)
+                        .expect("a carried argument has a class"),
+                )),
+            })
+            .collect()
+    }
+
+    /// One diagnostic name per handed argument, in the same order.
+    fn handed_names(&self, id: barb::FnId) -> Vec<String> {
+        self.program
+            .parameter_names(id)
+            .zip(self.program.params(id))
+            .filter(|(_, ty)| self.carries[ty.index()] != Storage::Erased)
+            .map(|(name, _)| name.to_owned())
+            .collect()
+    }
+
     /// Erased and unused parameters take no machine slot.
     fn signature(&self, id: barb::FnId) -> (Vec<Class>, Vec<Class>) {
         let params = self
@@ -427,12 +505,6 @@ impl<'a> Demand<'a> {
                 .collect();
             for field in fields {
                 self.type_(field)?;
-                if self.carries[field.index()] == Storage::Static {
-                    return Err(format!(
-                        "`{}` contains a compile-time-only field",
-                        self.program.name(self.program.type_(ty).name)
-                    ));
-                }
             }
         }
         Ok(())
@@ -575,25 +647,50 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, Strin
                 // the same size -- so it is asked of each value.
                 return Ok(Storage::Scalar);
             }
-            barb::TypeShape::Sequence { element, .. }
-                if matches!(
-                    barb::type_shape(program, element),
-                    barb::TypeShape::Natural { .. }
-                ) =>
-            {
-                return Ok(Storage::Static);
-            }
-            barb::TypeShape::Sequence { .. } | barb::TypeShape::Spine { .. } => {
-                return Err(format!(
-                    "`{name}` carries something per element, which has no representation in this tier yet"
-                ));
-            }
-            barb::TypeShape::Product { .. } | barb::TypeShape::Sum => {
+            // A sequence is a two-constructor sum whose step happens to
+            // hold the rest of itself, so it is held the way any other sum
+            // is: one managed object per step. What that costs per element
+            // is why a packed run of bytes is still worth having; what it
+            // buys now is that a program holding one can be compiled.
+            barb::TypeShape::Sequence { .. }
+            | barb::TypeShape::Spine { .. }
+            | barb::TypeShape::Product { .. }
+            | barb::TypeShape::Sum => {
                 return Ok(Storage::Cell);
             }
         }
     }
     Err(format!("`{name}` has a cyclic transparent representation"))
+}
+
+/// Whether a type's values are a run of bytes: a sequence whose element is
+/// a number no wider than one. Wrappers are read through, since one adds
+/// nothing to what a value is.
+fn byte_shaped(program: &barb::Program, id: barb::TypeId) -> bool {
+    let Some(id) = peeled(program, id) else {
+        return false;
+    };
+    let barb::TypeShape::Sequence { element, .. } = barb::type_shape(program, id) else {
+        return false;
+    };
+    peeled(program, element).is_some_and(|element| {
+        matches!(
+            barb::type_shape(program, element),
+            barb::TypeShape::Natural { .. }
+        )
+    })
+}
+
+/// Read through one-field products. Bounded by the declared types, so a
+/// cycle ends the walk rather than running forever.
+fn peeled(program: &barb::Program, mut id: barb::TypeId) -> Option<barb::TypeId> {
+    for _ in 0..=program.types().len() {
+        match barb::type_shape(program, id) {
+            barb::TypeShape::Wrapper { field, .. } => id = field,
+            _ => return Some(id),
+        }
+    }
+    None
 }
 
 /// The narrowest class holding every value a term answers. A width is what
@@ -793,6 +890,10 @@ struct Lowering<'a> {
     /// Which source parameters survive into each machine signature.
     takes: Vec<Vec<bool>>,
     callees: Vec<Callee<'a>>,
+    /// The first thing emission found it cannot lay out, read back once a
+    /// body is built. Region callbacks answer values rather than results,
+    /// so a refusal is kept here instead of returned from each of them.
+    refused: std::cell::RefCell<Option<String>>,
 }
 
 impl Lowering<'_> {
@@ -817,7 +918,7 @@ impl Lowering<'_> {
                 Some(Class::Word)
             }
             Storage::Scalar => Some(Class::Natural),
-            Storage::Erased | Storage::Static => None,
+            Storage::Erased => None,
             Storage::Undemanded => panic!("a bound field type must have been demanded"),
         }
     }
@@ -864,7 +965,11 @@ impl Lowering<'_> {
             let mut statics = vec![None; locals.len()];
             let answer = self.body(b, body, &mut locals, &mut statics);
             returned(b, answer, destination)
-        })
+        })?;
+        // A body is built before this can be read: emission answers values,
+        // and what it could not lay out is said once, here, where lowering
+        // can still refuse the program.
+        self.refused.borrow_mut().take().map_or(Ok(()), Err)
     }
 
     /// Each binding takes the next local, then the tail answers.
@@ -895,8 +1000,10 @@ impl Lowering<'_> {
         statics: &[Option<barb::ConstId>],
     ) -> Option<barb::ConstId> {
         match self.barb.expr(expr) {
+            // Only a run of bytes is worth following: it is the one thing
+            // something outside reads where it lies rather than as a value.
             barb::Expr::Static(value)
-                if self.carries[self.barb.constant(value).owner().index()] == Storage::Static =>
+                if byte_shaped(self.barb, self.barb.constant(value).owner()) =>
             {
                 Some(value)
             }
@@ -928,17 +1035,18 @@ impl Lowering<'_> {
             }
             barb::Expr::Con(ctor, args) => self.construct(b, expr, ctor, args, locals).into(),
             barb::Expr::Call(function, args) => self.call(b, expr, function, args, locals, statics),
-            barb::Expr::Match(scrutinee, arms) => {
-                let scrutinee = locals[scrutinee.0.index()].expect("a scrutinee to match");
-                self.branch(
-                    b,
-                    scrutinee,
-                    arms,
-                    locals,
-                    statics,
-                    self.facts.matched(expr),
-                )
-            }
+            // A value of a type with one inhabitant says nothing by being
+            // itself, so it is not held and there is nothing to test: the
+            // one arm runs. Asking for a value here would refuse a match
+            // that is already decided.
+            barb::Expr::Match(scrutinee, arms) => self.branch(
+                b,
+                locals[scrutinee.0.index()],
+                arms,
+                locals,
+                statics,
+                self.facts.matched(expr),
+            ),
         }
     }
 
@@ -951,25 +1059,7 @@ impl Lowering<'_> {
         let value = barb::single_field_constant(self.barb, value);
         match value.view() {
             barb::ConstantView::Constructor(ctor) if class == Class::Cell => {
-                let mut budget = barb::Budget::new(barb::FoldLimits {
-                    work: u64::MAX,
-                    max_bytes: usize::MAX,
-                    max_depth: usize::MAX,
-                });
-                let values = ctor
-                    .fields(&mut budget)
-                    .expect("validated constants can be revisited");
-                let fields: Vec<_> = self
-                    .barb
-                    .fields(ctor.constructor())
-                    .iter()
-                    .zip(values)
-                    .filter_map(|(&ty, value)| {
-                        self.field_class(ty)
-                            .map(|class| self.static_value(b, class, value))
-                    })
-                    .collect();
-                b.cell(self.barb.tag(ctor.constructor()), &fields)
+                self.static_cell(b, ctor)
             }
             barb::ConstantView::Constructor(ctor) => {
                 b.constant(class, u64::from(self.barb.tag(ctor.constructor())))
@@ -978,9 +1068,85 @@ impl Lowering<'_> {
                 Ok(held) => b.constant(class, held),
                 Err(barb::TooWide) => b.natural(&number.to_biguint()),
             },
-            barb::ConstantView::Spine(_) => {
-                unreachable!("unsupported constants were rejected by demand")
+            // A run of bytes known before the program runs is still a
+            // sequence, and a sequence is steps: this builds them, from the
+            // end, so nothing about a constant needs a second representation.
+            barb::ConstantView::Spine(spine) => {
+                let owner = value.owner();
+                let Some(bytes) = spine.to_bytes() else {
+                    self.refuse(format!(
+                        "`{}` holds something per element that is not a byte, which this tier cannot lay out yet",
+                        self.barb.name(self.barb.type_(owner).name)
+                    ));
+                    return b.constant(Class::Word, 0);
+                };
+                self.static_spine(b, owner, &bytes)
             }
+        }
+    }
+
+    /// Build one known object, its fields at the classes the cell says.
+    fn static_cell(&self, b: &mut super::Builder, ctor: barb::ConstructorView<'_>) -> ValueId {
+        let mut budget = barb::Budget::new(barb::FoldLimits {
+            work: u64::MAX,
+            max_bytes: usize::MAX,
+            max_depth: usize::MAX,
+        });
+        let values = ctor
+            .fields(&mut budget)
+            .expect("validated constants can be revisited");
+        let fields: Vec<_> = self
+            .barb
+            .fields(ctor.constructor())
+            .iter()
+            .zip(values)
+            .filter_map(|(&ty, value)| {
+                self.field_class(ty)
+                    .map(|class| self.static_value(b, class, value))
+            })
+            .collect();
+        b.cell(self.barb.tag(ctor.constructor()), &fields)
+    }
+
+    /// Build a sequence constant as the steps it is, from its end back.
+    ///
+    /// # Panics
+    /// If the type is not the sequence its encoding says it is.
+    fn static_spine(&self, b: &mut super::Builder, owner: barb::TypeId, bytes: &[u8]) -> ValueId {
+        let owner = peeled(self.barb, owner).expect("a byte string is not cyclic");
+        let barb::TypeShape::Sequence {
+            empty,
+            push,
+            recursive,
+            element,
+        } = barb::type_shape(self.barb, owner)
+        else {
+            unreachable!("a spine-encoded constant has a sequence type");
+        };
+        let element = self.field_class(element);
+        let mut held = b.cell(self.barb.tag(empty), &[]);
+        for &byte in bytes.iter().rev() {
+            let mut fields = Vec::with_capacity(2);
+            for (at, _) in self.barb.fields(push).iter().enumerate() {
+                if at == recursive {
+                    fields.push(held);
+                } else if let Some(element) = element {
+                    fields.push(b.constant(element, u64::from(byte)));
+                }
+            }
+            held = b.cell(self.barb.tag(push), &fields);
+        }
+        held
+    }
+
+    /// Record the first thing this tier cannot lay out. Emission has no
+    /// error channel of its own -- a region is built by callbacks that
+    /// answer values -- so the failure is kept here and read back once the
+    /// body is built, which is where lowering can still refuse the program.
+    fn refuse(&self, why: String) {
+        let mut held = self.refused.borrow_mut();
+        if held.is_none() {
+            *held = Some(why);
         }
     }
 
@@ -996,21 +1162,27 @@ impl Lowering<'_> {
         locals: &[Option<ValueId>],
         statics: &[Option<barb::ConstId>],
     ) -> Answer<ValueId> {
-        if let Callee::Print { write, exit } = self.callees[function.index()] {
-            return self.print(b, arguments, statics, write, exit);
-        }
-        let mut args = self.call_arguments(function, arguments, locals);
-        let (results, answers) = match self.callees[function.index()] {
+        let (results, answers) = match &self.callees[function.index()] {
             Callee::Instruction(operation) => {
+                let args = self.call_arguments(function, arguments, locals);
                 if matches!(operation, barb::Operation::Add | barb::Operation::Mul)
                     && let Some(affine) = self.facts.affine(expr)
                 {
                     return Answer::Value(self.affine(b, expr, affine, locals));
                 }
-                return Answer::Value(self.operation(b, operation, self.width(expr), &args));
+                return Answer::Value(self.operation(b, *operation, self.width(expr), &args));
             }
-            Callee::External { id, routine } => (b.call(id, &args), routine.answers()),
+            Callee::External {
+                id,
+                routine,
+                handed,
+            } => {
+                let args = self.outside_arguments(b, function, arguments, locals, statics, handed);
+                (b.call(*id, &args), routine.answers())
+            }
             Callee::Function(callee) => {
+                let callee = *callee;
+                let mut args = self.call_arguments(function, arguments, locals);
                 for (at, arg) in args.iter_mut().enumerate() {
                     let wanted = b.takes(callee)[at];
                     *arg = met(b, *arg, wanted);
@@ -1018,7 +1190,6 @@ impl Lowering<'_> {
                 (b.call(callee, &args), None)
             }
             Callee::Unreachable => unreachable!("a lowered call must have been demanded"),
-            Callee::Print { .. } => unreachable!("print was lowered before ordinary calls"),
         };
         // A call answers what its result type does, which is nothing ever
         // where that type has no values -- and it answers at the width the
@@ -1096,33 +1267,69 @@ impl Lowering<'_> {
         )
     }
 
-    fn print(
+    /// The machine values a call to something outside hands over.
+    ///
+    /// A byte string is handed over where it lies: its bytes go in machine
+    /// data and the routine reads the address and the length. Nothing about
+    /// this is one routine's rule -- it is what the contract said the
+    /// routine reads, so a second one taking a string needs nothing here.
+    fn outside_arguments(
         &self,
         b: &mut super::Builder,
+        function: barb::FnId,
         arguments: barb::Range,
+        locals: &[Option<ValueId>],
         statics: &[Option<barb::ConstId>],
-        write: FunctionId,
-        exit: FunctionId,
-    ) -> Answer<ValueId> {
-        let literal = self
+        handed: &[Handed],
+    ) -> Vec<ValueId> {
+        let mut args = Vec::with_capacity(handed.len());
+        let carried = self
             .barb
             .atoms(arguments)
             .iter()
-            .find_map(|atom| statics[atom.0.index()])
-            .expect("print! takes a static string after checked lowering");
+            .zip(self.barb.params(function))
+            .filter(|(_, ty)| self.carries[ty.index()] != Storage::Erased);
+        for ((atom, _), handed) in carried.zip(handed) {
+            match handed {
+                Handed::Value(_) => args.push(
+                    locals[atom.0.index()].expect("a demanded call argument to carry a value"),
+                ),
+                Handed::Bytes => {
+                    // Something outside reads bytes where they lie, which
+                    // is somewhere only a value known before the program
+                    // runs is. One worked out while it runs would have to
+                    // be copied somewhere contiguous first, and nothing
+                    // below here does that yet.
+                    let bytes = statics[atom.0.index()].map_or_else(
+                        || {
+                            self.refuse(format!(
+                                "`{}` reads a byte string where it lies, and this one is worked out while the program runs",
+                                self.barb.name(self.barb.function(function).name)
+                            ));
+                            Vec::new()
+                        },
+                        |literal| self.bytes(literal),
+                    );
+                    let data = b.data(&bytes);
+                    args.push(b.address_of(data));
+                    args.push(b.data_len(data));
+                }
+            }
+        }
+        args
+    }
+
+    /// The bytes a compile-time byte string holds, read off its encoding.
+    ///
+    /// # Panics
+    /// If the constant is not the byte string its declaration said it is.
+    fn bytes(&self, literal: barb::ConstId) -> Vec<u8> {
         let barb::ConstantView::Spine(string) = self.barb.constant(literal).view() else {
-            unreachable!("print! takes the built-in string spine");
+            unreachable!("a byte string is spine encoded");
         };
-        let bytes = string
+        string
             .to_bytes()
-            .expect("the source string spine contains byte naturals");
-        let data = b.data(&bytes);
-        let address = b.address_of(data);
-        let length = b.data_len(data);
-        b.call(write, &[address, length]);
-        let status = b.constant(Class::Word, 0);
-        b.call(exit, &[status]);
-        Answer::Never
+            .expect("a byte string's elements are byte-wide naturals")
     }
 
     fn operation(
@@ -1191,15 +1398,7 @@ impl Lowering<'_> {
             return Some(locals[atom.0.index()].expect("a transparent field to carry a value"));
         }
         if class == Class::Cell {
-            let fields: Vec<_> = self
-                .barb
-                .atoms(args)
-                .iter()
-                .zip(self.barb.fields(ctor))
-                .filter(|(_, ty)| self.carries[ty.index()].carried())
-                .map(|(atom, _)| locals[atom.0.index()].expect("a carried cell field"))
-                .collect();
-            return Some(b.cell(self.barb.tag(ctor), &fields));
+            return Some(self.build_cell(b, ctor, args, locals));
         }
         if tagged(self.barb, owner) {
             return Some(b.constant(class, u64::from(self.barb.tag(ctor))));
@@ -1218,6 +1417,36 @@ impl Lowering<'_> {
         ))
     }
 
+    /// Build one object, its fields at the classes the cell says.
+    ///
+    /// What a value was worked out as says how wide it needs to be, not
+    /// where it is kept: storing a number where a projection expects an
+    /// arbitrary-precision one and reading it back would read a count as
+    /// though it were an address.
+    fn build_cell(
+        &self,
+        b: &mut super::Builder,
+        ctor: barb::CtorId,
+        args: barb::Range,
+        locals: &[Option<ValueId>],
+    ) -> ValueId {
+        let held: Vec<_> = self
+            .barb
+            .atoms(args)
+            .iter()
+            .zip(self.barb.fields(ctor))
+            .filter_map(|(atom, ty)| {
+                let class = self.field_class(*ty)?;
+                Some((locals[atom.0.index()].expect("a carried cell field"), class))
+            })
+            .collect();
+        let fields: Vec<_> = held
+            .into_iter()
+            .map(|(value, class)| met(b, value, class))
+            .collect();
+        b.cell(self.barb.tag(ctor), &fields)
+    }
+
     /// Matching a number asks whether it is nought; the other arm counts the
     /// scrutinee back down to what it wraps.
     #[expect(
@@ -1227,7 +1456,7 @@ impl Lowering<'_> {
     fn branch(
         &self,
         b: &mut super::Builder,
-        scrutinee: ValueId,
+        scrutinee: Option<ValueId>,
         arms: barb::Range,
         locals: &[Option<ValueId>],
         statics: &[Option<barb::ConstId>],
@@ -1240,6 +1469,8 @@ impl Lowering<'_> {
         let Some(second) = arms.next() else {
             return self.only_arm(b, scrutinee, &first, locals, statics);
         };
+        // More than one arm means the value says which, so it is held.
+        let scrutinee = scrutinee.expect("a tested value is carried");
         let owner = self.barb.ctor(first.ctor).owner;
         if self.carries[owner.index()] == Storage::Cell {
             let planned = {
@@ -1271,32 +1502,32 @@ impl Lowering<'_> {
                 planned
             };
             let tag = b.cell_tag(scrutinee);
-            return self.cell_tags(b, scrutinee, tag, &planned, locals, statics);
+            return self.cell_tags(b, Some(scrutinee), tag, &planned, locals, statics);
         }
-        match barb::shape(self.barb, owner) {
-            barb::Shape::Spine { nil, .. } => {
-                // A spine has exactly these two arms, regardless of their tags.
-                let (empty, counted) = if first.ctor == nil {
-                    (first, second)
-                } else {
-                    (second, first)
-                };
-                self.natural_branch(b, scrutinee, &empty, &counted, locals, statics)
-            }
-            barb::Shape::Tagged => {
-                let arms = {
-                    let mut carried = locals
-                        .iter()
-                        .map(|value| value.map(|value| b.class(value)))
-                        .collect();
-                    tag_plan([first, second].into_iter().chain(arms), |body| {
-                        self.body_answer(body, &mut carried)
-                    })
-                };
-                let class = b.class(scrutinee);
-                self.tags(b, scrutinee, class, &arms, locals, statics)
-            }
+        // A number is the one thing left that is held as a scalar and still
+        // has two arms: which constructor it is, is whether it is nought.
+        // This asks the classifier representation selection asks, not the
+        // one the constant codec asks, which answers about encodings.
+        if let barb::TypeShape::Natural { empty: nil, .. } = barb::type_shape(self.barb, owner) {
+            // A number has exactly these two arms, whatever their tags.
+            let (empty, counted) = if first.ctor == nil {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            return self.natural_branch(b, scrutinee, &empty, &counted, locals, statics);
         }
+        let arms = {
+            let mut carried = locals
+                .iter()
+                .map(|value| value.map(|value| b.class(value)))
+                .collect();
+            tag_plan([first, second].into_iter().chain(arms), |body| {
+                self.body_answer(body, &mut carried)
+            })
+        };
+        let class = b.class(scrutinee);
+        self.tags(b, scrutinee, class, &arms, locals, statics)
     }
 
     fn natural_branch(
@@ -1350,7 +1581,7 @@ impl Lowering<'_> {
     fn only_arm(
         &self,
         b: &mut super::Builder,
-        scrutinee: ValueId,
+        scrutinee: Option<ValueId>,
         arm: &barb::Arm,
         locals: &[Option<ValueId>],
         statics: &[Option<barb::ConstId>],
@@ -1358,17 +1589,39 @@ impl Lowering<'_> {
         let mut inner = locals.to_vec();
         let mut inner_statics = statics.to_vec();
         let owner = self.barb.ctor(arm.ctor).owner;
-        if self.carries[owner.index()] == Storage::Cell {
-            self.bind_cell_fields(b, scrutinee, arm.ctor, &mut inner, &mut inner_statics);
-        } else if barb::single_field(self.barb, owner).is_some() {
-            inner.push(Some(scrutinee));
-            inner_statics.push(None);
-        } else if let barb::Shape::Spine { cons, .. } = barb::shape(self.barb, owner)
-            && arm.ctor == cons
-        {
-            let one = b.constant(b.class(scrutinee), 1);
-            inner.push(Some(b.binary(Binary::Sub, scrutinee, one)));
-            inner_statics.push(None);
+        // Only a step that binds something reads the value it steps into,
+        // and a type carrying nothing has no such step.
+        if let Some(scrutinee) = scrutinee {
+            // Ask transparency first, the way construction does. A wrapper
+            // around a product is held as that product, so its storage
+            // class is the product's -- and taking one apart here would
+            // take the product apart a step early.
+            if barb::single_field(self.barb, owner).is_some() {
+                inner.push(Some(scrutinee));
+                inner_statics.push(None);
+            } else if self.carries[owner.index()] == Storage::Cell {
+                self.bind_cell_fields(b, scrutinee, arm.ctor, &mut inner, &mut inner_statics);
+            } else if let barb::TypeShape::Sequence { push, .. }
+            | barb::TypeShape::Natural { push, .. }
+            | barb::TypeShape::Spine { push, .. } = barb::type_shape(self.barb, owner)
+                && arm.ctor == push
+            {
+                let one = b.constant(b.class(scrutinee), 1);
+                inner.push(Some(b.binary(Binary::Sub, scrutinee, one)));
+                inner_statics.push(None);
+            }
+        } else {
+            // The arm still binds what its constructor declares, and a
+            // constructor of a type carrying nothing declares nothing that
+            // is carried either.
+            for &ty in self.barb.fields(arm.ctor) {
+                inner.push(None);
+                inner_statics.push(None);
+                debug_assert!(
+                    self.field_class(ty).is_none(),
+                    "a carried field belongs to a carried type"
+                );
+            }
         }
         self.body(b, arm.body, &mut inner, &mut inner_statics)
     }
@@ -1444,7 +1697,7 @@ impl Lowering<'_> {
     fn cell_tags(
         &self,
         b: &mut super::Builder,
-        scrutinee: ValueId,
+        scrutinee: Option<ValueId>,
         discriminator: ValueId,
         arms: &[TagArm],
         locals: &[Option<ValueId>],

@@ -117,6 +117,12 @@ impl<'a> SpineView<'a> {
         if elements.next().is_some() {
             return None;
         }
+        // A one-constructor, one-field wrapper encodes as the value it
+        // wraps: no tag is written where nothing else could have been
+        // there. So a spine of wrapped bytes is a spine of bytes, and
+        // saying otherwise would make `U8` a different run of bytes from
+        // the `Nat` it is.
+        let element = peeled(self.0.types, element)?;
         let Shape::Spine { cons, .. } = shape(self.0.types, element) else {
             return None;
         };
@@ -295,6 +301,18 @@ impl<'a> Constant<'a> {
         }
         Ok((ctor, fields))
     }
+}
+
+/// Read through one-field products, which add nothing to an encoding.
+/// Bounded by the number of declared types, so a cycle ends the walk.
+fn peeled(types: TypeInfo<'_>, mut id: TypeId) -> Option<TypeId> {
+    for _ in 0..=types.count() {
+        match types.shape(id) {
+            crate::barb::TypeShape::Wrapper { field, .. } => id = field,
+            _ => return Some(id),
+        }
+    }
+    None
 }
 
 /// Locate a field's end before creating a view of exactly one value.

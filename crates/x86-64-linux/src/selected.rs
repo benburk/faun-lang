@@ -1376,7 +1376,7 @@ impl Selector<'_> {
                     let callee = source.function(function);
                     let opcode = if let Some(symbol) = callee.external() {
                         match source.name(symbol) {
-                            "write" => Opcode::Write,
+                            "write!" => Opcode::Write,
                             "exit!" => Opcode::Exit,
                             "grow" => Opcode::Grow,
                             "argc!" => Opcode::ArgumentCount,

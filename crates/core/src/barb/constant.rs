@@ -56,7 +56,7 @@ impl Held {
 
 /// How a type's values are encoded, read off its declaration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Shape {
+pub(crate) enum Shape {
     /// `nil` takes nothing; `cons` takes the rest of the value at `recursive`
     /// and carries its element in whatever fields remain.
     Spine {

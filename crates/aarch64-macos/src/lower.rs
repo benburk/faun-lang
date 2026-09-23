@@ -81,7 +81,7 @@ impl Lowering<'_> {
                     "argc!" => {
                         self.sources[results[0].index()] = Some(Source::Argc);
                     }
-                    "write" => {
+                    "write!" => {
                         self.encoder.mov_imm(Reg::X0, STDOUT);
                         self.read(Reg::X1, args[0]);
                         self.read(Reg::X2, args[1]);
@@ -185,7 +185,7 @@ pub(crate) fn check(program: &Program) -> Result<(), String> {
                     }
                     match program.name(symbol) {
                         "argc!" => sources[results[0].index()] = true,
-                        "write" | "exit!" => {}
+                        "write!" | "exit!" => {}
                         name => {
                             return Err(format!(
                                 "aarch64-macos baseline emission does not implement `{name}`"

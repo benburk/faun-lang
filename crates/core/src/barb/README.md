@@ -194,8 +194,10 @@ one recursive field; its element may be any type. Names and constructor order do
 not participate. Machine representation selection uses this exhaustive view
 instead of rediscovering products, naturals, and byte spines independently.
 Units are erased, wrappers remain transparent, naturals and enumerations are
-scalar, and products and general sums become managed cells. Generic sequences
-still have no runtime representation.
+scalar, and everything else carrying fields -- products, general sums, and
+sequences alike -- becomes a managed cell. `Shape` is the constant codec's own
+view of an encoding and answers a different question; representation selection
+does not read it.
 
 `Program::constant(id).view()` classifies a validated value as `Natural`, `Spine`,
 or `Constructor`, with private, shape-specific handles. A natural is a zero-payload

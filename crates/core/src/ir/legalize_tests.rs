@@ -39,6 +39,30 @@ fn nested_cells_are_legalized_to_managed_objects_and_released() {
     no_live_objects(&legalized, &evaluation, config);
 }
 
+/// A managed field is not always a scalar: a cell holding an
+/// arbitrary-precision natural has to retain and release that field the way
+/// it retains and releases a nested cell.
+#[test]
+fn a_cell_holding_a_natural_retains_and_releases_that_field() {
+    let (mut source, main) = Program::new("main");
+    source.define(main, |b, _| {
+        let word = b.constant(Class::Word, 42);
+        let counted = b.convert(Class::Natural, word);
+        let cell = b.cell(1, &[counted]);
+        let field = b.cell_field(Class::Natural, cell, 0);
+        let answer = b.convert(Class::Word, field);
+        b.ret(&[answer]);
+    });
+    let config = Config {
+        word_bits: 64,
+        heap_bytes: 512,
+    };
+    let legalized = legalize(&source, config).unwrap();
+    let evaluation = run(&legalized, main, &[], 64);
+    assert_eq!(evaluation.returned().unwrap(), &[BigUint::from(42u8)]);
+    no_live_objects(&legalized, &evaluation, config);
+}
+
 #[derive(Default)]
 struct TestHost {
     calls: Vec<String>,
@@ -490,7 +514,7 @@ fn natural_host_signatures_do_not_become_address_signatures() {
     routines.push(crate::platform::Routine {
         name: "foreign".into(),
         offered: false,
-        takes: vec![Class::Natural],
+        takes: vec![crate::platform::Takes::Scalar(Class::Natural)],
         returns: crate::platform::Returns::Value(Class::Natural),
     });
     let (mut p, main) = Program::new("main");

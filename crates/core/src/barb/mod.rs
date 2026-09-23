@@ -105,8 +105,12 @@ pub use budget::{Budget, FoldLimits, LimitExceeded};
 pub use builder::Builder;
 pub use constant::{
     ByteView, Constant, ConstantView, ConstructionError, ConstructorView, DecodeError, NaturalView,
-    Shape, SpineView, TooWide, Value,
+    SpineView, TooWide, Value,
 };
+// `Shape` is how the constant codec reads an encoding, which is a different
+// question from how a value is held. Representation selection asks
+// `TypeShape`, so nothing outside this tier needs this one.
+pub(crate) use constant::Shape;
 pub use facts::{Facts, Operation, analyze};
 pub use fold::{fold, fold_with_limits};
 pub use inline::InlineLimits;
@@ -116,7 +120,8 @@ pub use model::{
 };
 pub use normalize::{normalize_with_limits, structural};
 pub use optimize::{OptimizeOptions, optimize};
-pub use program::{Program, shape, type_shape};
+pub(crate) use program::shape;
+pub use program::{Program, type_shape};
 pub(crate) use program::{single_field, single_field_constant};
 pub use types::TypeShape;
 pub use validate::validate;

@@ -1692,7 +1692,7 @@ impl Lowering<'_> {
 
     fn platform_call(&mut self, name: &str, args: &[ValueId], results: &[ValueId]) {
         match name {
-            "write" => self.write(args),
+            "write!" => self.write(args),
             "read_byte!" => self.read_byte(results[0]),
             // Read at reset and kept since, so nothing is asked here.
             "argc!" => self.commit(results[0], ARGC),

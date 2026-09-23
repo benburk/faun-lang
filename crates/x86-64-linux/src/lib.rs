@@ -36,7 +36,7 @@ impl Target for X86_64Linux {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write", "exit!", "grow", "argc!", "read_byte!"]
+        &["write!", "exit!", "grow", "argc!", "read_byte!"]
     }
 
     fn limits(&self, program: &Program) -> Result<(), String> {

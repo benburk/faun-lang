@@ -210,7 +210,7 @@ impl Plan {
                     if program
                         .function(function)
                         .external()
-                        .is_some_and(|symbol| program.name(symbol) == "write") =>
+                        .is_some_and(|symbol| program.name(symbol) == "write!") =>
                 {
                     self.writes += 1;
                 }
@@ -776,7 +776,7 @@ impl Lowering<'_> {
         position: Position,
     ) {
         match name {
-            "write" => {
+            "write!" => {
                 let index = self.written;
                 self.written += 1;
                 let iovec = IOVECS + IOVEC_LEN * len32(index);

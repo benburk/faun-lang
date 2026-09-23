@@ -272,6 +272,7 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
         carries: demand.carries,
         takes: demand.takes,
         callees: vec![],
+        refused: std::cell::RefCell::default(),
     };
     let body = source.function(entry).body().unwrap();
     let mut carried = vec![Some(Class::Word), None];
@@ -486,7 +487,7 @@ fn external_parameter_names_survive_machine_lowering() {
     routines.push(Routine {
         name: "stop".to_owned(),
         offered: true,
-        takes: vec![Class::fixed(0)],
+        takes: vec![Takes::Scalar(Class::fixed(0))],
         returns: crate::platform::Returns::Never,
     });
 

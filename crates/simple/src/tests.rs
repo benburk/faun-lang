@@ -49,22 +49,31 @@ main!(v0: Host) -> Never =
 
 #[test]
 fn literals_and_method_calls_reach_machine_data() {
-    let source = "main!(host) -> host.print!(\"Hello, world!\\n\")";
+    // A byte string is an ordinary argument to an ordinary routine: what
+    // says it is handed over as an address and a length is the routine's
+    // contract, not its name.
+    let source = "type Nat Zero Succ(Nat)\nmain!(host) -> said = host.write!(\"Hello, world!\\n\") host.exit!(0)";
     let program = parse(source).expect("a source-level greeting");
     let rendered = program.render();
     assert!(rendered.contains("v1 = \"Hello, world!\\n\""), "{rendered}");
-    assert!(rendered.contains("print!(v0, v1)"), "{rendered}");
+    assert!(rendered.contains("write!(v0, v1)"), "{rendered}");
 
     let facts = analyze(&program);
     let machine = faun_core::ir::lower(&program, &facts, &faun_core::platform::Routines::builtin())
         .expect("a lowered greeting");
     assert_eq!(machine.data(), b"Hello, world!\n");
-    assert!(machine.reaches("write"));
+    assert!(machine.reaches("write!"));
     assert!(machine.reaches("exit!"));
+    // One source argument, two machine values, said by the contract.
+    let rendered = machine.render();
+    assert!(
+        rendered.contains("fn f1 write!(v1.at: address, v1.len: word)"),
+        "{rendered}"
+    );
 
     let unavailable = super::parse(source, &faun_core::platform::Routines::default()).unwrap_err();
     assert!(
-        unavailable.contains("nothing named `print!`"),
+        unavailable.contains("nothing named `write!`"),
         "{unavailable}"
     );
 }
@@ -89,12 +98,12 @@ fn natural_literals_accept_decimal_hex_binary_and_large_values() {
 
 #[test]
 fn string_escapes_are_checked_while_reading() {
-    let unknown = parse("main!(host) -> host.print!(\"bad\\q\")").unwrap_err();
+    let unknown = parse("main!(host) -> host.write!(\"bad\\q\")").unwrap_err();
     assert!(unknown.contains("unknown string escape"), "{unknown}");
-    let open = parse("main!(host) -> host.print!(\"open)").unwrap_err();
+    let open = parse("main!(host) -> host.write!(\"open)").unwrap_err();
     assert!(open.contains("no closing"), "{open}");
 
-    let source = "main!(host) -> host.print!(\"answer: ${answer}\\n\")";
+    let source = "type Nat Zero Succ(Nat)\nmain!(host) -> said = host.write!(\"answer: ${answer}\\n\") host.exit!(0)";
     let program = parse(source).expect("dollar and braces are literal text");
     let machine = faun_core::ir::lower(
         &program,
@@ -785,4 +794,54 @@ fn a_pure_name_cannot_call_an_effect() {
         refused.contains("`quietly` is pure and calls `exit!`"),
         "{refused}"
     );
+}
+
+/// A byte string is read where it lies, which is somewhere only a value
+/// known before the program runs is. Refusing one worked out while the
+/// program runs is a statement about this tier, not about one routine.
+#[test]
+fn a_byte_string_worked_out_while_running_is_refused_by_name() {
+    let source = "type Nat Zero Succ(Nat)
+
+         choose(Zero a b) -> a
+         choose(Succ(n) a b) -> b
+
+         main!(h) -> n = h.argc!() s = choose(n \"ab\\n\" \"cd\\n\") said = h.write!(s) h.exit!(0)";
+    let program = parse(source).expect("a program that selects between two strings");
+    let refused = faun_core::ir::lower(
+        &program,
+        &analyze(&program),
+        &faun_core::platform::Routines::builtin(),
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("worked out while the program runs"),
+        "{refused}"
+    );
+    assert!(refused.contains("write!"), "{refused}");
+}
+
+/// Nothing recognises a routine by name: what a call hands over is read off
+/// the routine's contract, so a second routine reading a byte string needs
+/// nothing added to lowering.
+#[test]
+fn a_second_routine_reading_a_byte_string_needs_nothing_added() {
+    let mut routines = faun_core::platform::Routines::builtin();
+    routines.push(faun_core::platform::Routine {
+        name: "log!".to_owned(),
+        offered: true,
+        takes: vec![faun_core::platform::Takes::StaticBytes],
+        returns: faun_core::platform::Returns::Unit,
+    });
+    let source = "type Nat Zero Succ(Nat)
+         main!(h) -> said = h.log!(\"note\\n\") h.exit!(0)";
+    let program = super::parse(source, &routines).expect("a program calling the new routine");
+    let machine = faun_core::ir::lower(&program, &analyze(&program), &routines).expect("it lowers");
+    assert_eq!(machine.data(), b"note\n");
+    let rendered = machine.render();
+    assert!(
+        rendered.contains("log!(v1.at: address, v1.len: word)"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("call log!("), "{rendered}");
 }

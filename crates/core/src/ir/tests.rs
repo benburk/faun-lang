@@ -179,7 +179,7 @@ fn two_names_may_give_the_same_routine() {
     routines.push(crate::platform::Routine {
         name: "hold".to_owned(),
         offered: false,
-        takes: vec![Class::Word],
+        takes: vec![crate::platform::Takes::Scalar(Class::Word)],
         returns: crate::platform::Returns::Value(Class::Word),
     });
 
@@ -210,7 +210,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
     routines.push(crate::platform::Routine {
         name: "narrow".to_owned(),
         offered: false,
-        takes: vec![Class::fixed(4)],
+        takes: vec![crate::platform::Takes::Scalar(Class::fixed(4))],
         returns: crate::platform::Returns::Unit,
     });
 

@@ -1,1 +1,3 @@
-main!(host) -> host.print!("Hello, world!\n")
+type Nat Zero Succ(Nat)
+
+main!(host) -> said = host.write!("Hello, world!\n") host.exit!(0)

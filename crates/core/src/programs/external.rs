@@ -10,7 +10,7 @@ pub fn interleaved() -> Program {
     let count = p.external("argc!", &[], Returns::Values(&[Class::Word]));
     let increment = p.declare("argc!", &[Class::Word], &[Class::Word]);
     let write = p.external(
-        "write",
+        "write!",
         &[Class::Address, Class::Word],
         Returns::Values(&[]),
     );

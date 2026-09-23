@@ -206,7 +206,7 @@ fn accepts_externals<T: Target + ?Sized>(target: &T, program: &Program) -> Resul
                 .map(|&c| abi_class(c, word))
                 .eq(right.iter().map(|&c| abi_class(c, word)))
         };
-        if !classes_agree(program.signature(function.params), &routine.takes)
+        if !classes_agree(program.signature(function.params), &routine.reads())
             || !classes_agree(
                 program.signature(function.returns.classes()),
                 routine.answers().as_slice(),
@@ -288,9 +288,12 @@ mod reading {
     fn a_program_reads_against_the_routines_of_one_target() {
         let spartan = tests::Spartan.routines();
         assert!(spartan.get("exit!").is_some());
-        assert!(spartan.get("write").is_none(), "one it does not answer for");
         assert!(
-            crate::platform::Routines::builtin().get("write").is_some(),
+            spartan.get("write!").is_none(),
+            "one it does not answer for"
+        );
+        assert!(
+            crate::platform::Routines::builtin().get("write!").is_some(),
             "which something else does"
         );
     }
@@ -382,9 +385,9 @@ mod tests {
 
         held("exit!").expect("a routine it answers for");
 
-        let refused = held("write").unwrap_err();
+        let refused = held("write!").unwrap_err();
         assert!(
-            refused.contains("spartan answers for nothing called `write`"),
+            refused.contains("spartan answers for nothing called `write!`"),
             "{refused}"
         );
     }

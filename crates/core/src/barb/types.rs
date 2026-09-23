@@ -63,6 +63,11 @@ impl<'a> TypeInfo<'a> {
         }
     }
 
+    /// How many types are declared, which bounds any walk through them.
+    pub(super) const fn count(self) -> usize {
+        self.types.len()
+    }
+
     pub(super) fn get_type(self, id: TypeId) -> Option<&'a Type> {
         self.types.get(id)
     }

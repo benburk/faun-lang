@@ -217,3 +217,83 @@ fn detached_arena_expressions_do_not_demand_a_representation() {
     assert_eq!(bodies(&machine), 1);
     assert_eq!(externals(&machine), 1);
 }
+
+/// A wrapper around a product is held as that product, so matching one binds
+/// the product itself rather than taking a step into it. Reading it as a
+/// cell would project a field a step early and hand a count back where an
+/// address was expected.
+#[test]
+fn a_wrapper_around_a_product_stays_transparent_when_matched() {
+    let text = library(
+        "type Pair MkPair(Nat Nat)
+         type Boxed MkBoxed(Pair)
+         unbox(MkBoxed(p)) -> p
+         first(MkPair(a b)) -> a
+         main!(h) ->
+           n = argc!(h)
+           held = MkBoxed(MkPair(n Zero))
+           inner = unbox(held)
+           exit!(h mod(first(inner) Succ(Succ(Zero))))",
+    );
+    let machine = lower_program(&parse(&text)).unwrap();
+    validate(&machine).unwrap();
+    let rendered = machine.render();
+    // One object is built for the product; the wrapper adds none, so
+    // nothing steps into the wrapper. Taking it apart as though it were a
+    // cell would project the product out of itself, which shows up as a
+    // projection answering another cell.
+    assert_eq!(rendered.matches("= cell ").count(), 1, "{rendered}");
+    for (op, results) in machine
+        .functions()
+        .iter()
+        .filter_map(Function::body)
+        .flat_map(|body| machine.walk_within(body))
+    {
+        assert!(
+            !matches!(op, Op::CellField { .. }) || machine.class(results[0]) != Class::Cell,
+            "{rendered}"
+        );
+    }
+}
+
+/// A cell's fields are held at the class the cell says, which is the class a
+/// projection reads them back at. Storing a value at whatever width it was
+/// worked out as would let a projection read a count as an address.
+#[test]
+fn cell_fields_are_held_at_the_class_their_projection_reads() {
+    let text = library(
+        "type Pair MkPair(Nat Nat)
+         first(MkPair(a b)) -> a
+         main!(h) ->
+           n = argc!(h)
+           held = MkPair(n Zero)
+           exit!(h mod(first(held) Succ(Succ(Zero))))",
+    );
+    let machine = lower_program(&parse(&text)).unwrap();
+    validate(&machine).unwrap();
+    let mut built = 0;
+    let mut read = 0;
+    for (op, results) in machine
+        .functions()
+        .iter()
+        .filter_map(Function::body)
+        .flat_map(|body| machine.walk_within(body))
+    {
+        if let Op::Cell { fields, .. } = op {
+            for &field in machine.values(*fields) {
+                built += 1;
+                assert_eq!(machine.class(field), Class::Natural, "{}", machine.render());
+            }
+        }
+        if matches!(op, Op::CellField { .. }) {
+            read += 1;
+            assert_eq!(
+                machine.class(results[0]),
+                Class::Natural,
+                "{}",
+                machine.render()
+            );
+        }
+    }
+    assert!(built > 0 && read > 0, "{}", machine.render());
+}

@@ -39,7 +39,7 @@ pub fn function_returns(condition: u64) -> Program {
 #[must_use]
 pub fn early_success(condition: u64) -> Program {
     let (mut p, main) = Program::new("main");
-    let write = Routines::builtin().declare(&mut p, "write");
+    let write = Routines::builtin().declare(&mut p, "write!");
     let text = p.intern(b"continued\n");
     p.define(main, |b, _| {
         let condition = b.constant(Class::Word, condition);

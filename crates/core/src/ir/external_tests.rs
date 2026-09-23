@@ -71,7 +71,7 @@ impl Target for Provider {
         self.0
     }
     fn provides(&self) -> &'static [&'static str] {
-        &["exit!", "argc!", "write"]
+        &["exit!", "argc!", "write!"]
     }
     fn emit(&self, _: &Program) -> Vec<Artifact> {
         Vec::new()

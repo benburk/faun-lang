@@ -19,9 +19,43 @@
 
 use crate::ir::Class;
 
-/// Private Barb provider lowered into `write` followed by `exit!`.
-/// Compiler adapter that completes a program by writing one static byte string.
-pub const PRINT_ADAPTER: &str = "$print-static";
+/// What one of a routine's parameters is handed.
+///
+/// A routine reads machine values, and a source value is not always one of
+/// them. A byte string is the case that matters here: a machine reads where
+/// it starts and how long it is, which is two values where a program wrote
+/// one. Saying that here means lowering reads a contract rather than
+/// recognising a name, and a second routine taking a string needs nothing
+/// added to the tier below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Takes {
+    /// One value, in the machine's terms.
+    Scalar(Class),
+    /// A run of bytes known before the program runs, handed over as the
+    /// address it starts at and the number of bytes it is.
+    StaticBytes,
+}
+
+impl Takes {
+    /// The machine values one source argument becomes, in order. A byte
+    /// string becomes two; everything else so far becomes itself.
+    #[must_use]
+    pub fn classes(self) -> Vec<Class> {
+        match self {
+            Self::Scalar(class) => vec![class],
+            Self::StaticBytes => vec![Class::Address, Class::Word],
+        }
+    }
+
+    /// How many machine values one source argument becomes.
+    #[must_use]
+    pub const fn width(self) -> usize {
+        match self {
+            Self::Scalar(_) => 1,
+            Self::StaticBytes => 2,
+        }
+    }
+}
 
 /// A host call's control-flow and result contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,13 +83,13 @@ pub struct Routine {
     /// build what it offers. The tier below still reaches it, since a
     /// program built rather than written is a program too.
     pub offered: bool,
-    /// What it reads and what it leaves, in the machine's terms.
+    /// What it reads and what it leaves.
     ///
-    /// How many arguments a program hands it is `takes.len()`, which holds
-    /// while everything handed over is carried. A token carrying nothing
-    /// would take no slot here and still be written at the call, and then
-    /// this would have to say both.
-    pub takes: Vec<Class>,
+    /// One entry per argument a program hands it, which is not always one
+    /// machine value: [`Takes::StaticBytes`] is two. A token carrying
+    /// nothing takes no slot here and is still written at the call, so what
+    /// this counts is what a machine reads rather than what a source wrote.
+    pub takes: Vec<Takes>,
     pub returns: Returns,
 }
 
@@ -70,7 +104,17 @@ impl Routine {
         } else {
             crate::ir::Returns::Never
         };
-        program.external(&self.name, &self.takes, returns)
+        program.external(&self.name, &self.reads(), returns)
+    }
+
+    /// The machine classes it reads, one argument expanded at a time.
+    #[must_use]
+    pub fn reads(&self) -> Vec<Class> {
+        self.takes
+            .iter()
+            .copied()
+            .flat_map(Takes::classes)
+            .collect()
     }
 
     /// Copy this contract while retaining parameter names from the source
@@ -83,11 +127,23 @@ impl Routine {
         program: &mut crate::ir::Program,
         names: &[&str],
     ) -> crate::ir::FunctionId {
-        assert_eq!(names.len(), self.takes.len(), "one name per parameter");
-        let params: Vec<_> = names
+        assert_eq!(names.len(), self.takes.len(), "one name per argument");
+        // An argument becoming two machine values needs a name for each. The
+        // source wrote one, so the second is derived from it rather than
+        // asked for: a name is diagnostic here, not part of the contract.
+        let mut owned: Vec<(String, Class)> = Vec::with_capacity(self.takes.len());
+        for (&name, takes) in names.iter().zip(&self.takes) {
+            match takes {
+                Takes::Scalar(class) => owned.push((name.to_owned(), *class)),
+                Takes::StaticBytes => {
+                    owned.push((format!("{name}.at"), Class::Address));
+                    owned.push((format!("{name}.len"), Class::Word));
+                }
+            }
+        }
+        let params: Vec<(&str, Class)> = owned
             .iter()
-            .copied()
-            .zip(self.takes.iter().copied())
+            .map(|(name, class)| (name.as_str(), *class))
             .collect();
         let answers = self.answers();
         let returns = if self.comes_back() {
@@ -154,20 +210,23 @@ impl Routines {
     /// its own machine, rather than by reaching a name somebody wrote down.
     #[must_use]
     pub fn builtin() -> Self {
-        let held = |name: &str, offered, takes: &[Class], returns| Routine {
+        let held = |name: &str, offered, takes: &[Takes], returns| Routine {
             name: name.to_owned(),
             offered,
             takes: takes.to_vec(),
             returns,
         };
-        let offered = |name: &str, takes: &[Class], returns| held(name, true, takes, returns);
-        let hidden = |name: &str, takes: &[Class], returns| held(name, false, takes, returns);
+        let offered = |name: &str, takes: &[Takes], returns| held(name, true, takes, returns);
+        let hidden = |name: &str, takes: &[Takes], returns| held(name, false, takes, returns);
+        let word = Takes::Scalar(Class::Word);
         Self(vec![
-            hidden("write", &[Class::Address, Class::Word], Returns::Unit),
-            offered("exit!", &[Class::Word], Returns::Never),
+            // One argument, two machine values: a program hands over a
+            // string and a machine reads where it starts and how long it is.
+            offered("write!", &[Takes::StaticBytes], Returns::Unit),
+            offered("exit!", &[word], Returns::Never),
             // The kernel picks the address, so nothing asking for a page
             // says where.
-            hidden("grow", &[Class::Word], Returns::Value(Class::Address)),
+            hidden("grow", &[word], Returns::Value(Class::Address)),
             // How many arguments a program was handed.
             offered("argc!", &[], Returns::Value(Class::Word)),
             // One byte from standard input, offset by one so nought can say
@@ -227,6 +286,22 @@ impl Routines {
     pub fn push(&mut self, routine: Routine) {
         self.0.push(routine);
     }
+}
+
+/// A run of arguments as a sentence, for saying what a routine wanted.
+#[must_use]
+pub fn takes(takes: &[Takes]) -> String {
+    if takes.is_empty() {
+        return "nothing".to_owned();
+    }
+    takes
+        .iter()
+        .map(|takes| match takes {
+            Takes::StaticBytes => "a byte string".to_owned(),
+            Takes::Scalar(class) => reads(std::slice::from_ref(class)),
+        })
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 /// A run of classes as a sentence, for saying what a routine wanted and

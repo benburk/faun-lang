@@ -465,7 +465,7 @@ impl Host for MemoryHost {
         args: &[BigUint],
         memory: &mut Memory<'_>,
     ) -> Result<HostResult, Error> {
-        assert_eq!(name, "write");
+        assert_eq!(name, "write!");
         let address = u64::try_from(&args[0]).map_err(|_| Error::InvalidMemory)?;
         let len = usize::try_from(&args[1]).map_err(|_| Error::InvalidMemory)?;
         self.0.extend_from_slice(memory.read(address, len)?);
@@ -478,7 +478,7 @@ fn host_observes_data_and_byte_stores_truncate_only_the_written_byte() {
     let (mut p, main) = Program::new("main");
     let data = p.intern(b"hello");
     let global = p.global(&[0; 2]);
-    let write = crate::platform::Routines::builtin().declare(&mut p, "write");
+    let write = crate::platform::Routines::builtin().declare(&mut p, "write!");
     p.define(main, |b, _| {
         let address = b.address_of(data);
         let len = b.data_len(data);

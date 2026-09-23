@@ -113,16 +113,21 @@ catalog. Source lowering only declares demanded functions. Targets own external
 call emission and internal function numbering; source IDs need not be dense
 emitted-body indices.
 
-Surface `host.print!("…")` is a frontend completion operation rather than a new
-machine routine. Lowering places the literal's UTF-8 bytes in machine data, calls
-the existing `write(address, length)` routine, then calls `exit!(0)`. The source
-`Str` is static-only in this slice: any reached user function that takes or
-returns it is rejected before machine construction.
+A routine's contract says what each argument it is handed becomes, not just
+what class it is. `platform::Takes::StaticBytes` is one argument a program
+writes and two machine values a routine reads: the address the bytes start at
+and how many there are. Lowering places those bytes in machine data and hands
+over both. Nothing about this names a routine, so a second routine taking a
+byte string needs nothing added here; `write!(bytes)` is the one that does
+today. A byte string worked out while the program runs is refused rather than
+copied -- marshalling a managed sequence into a contiguous buffer belongs to
+`legalize`, which owns layout, and does not exist yet.
 
 `read_byte!` is an ordinary returning external with no machine operands: source
-`Host` authority is erased before this tier. Its nine-bit scalar answer is zero
-at EOF or one plus the byte read. The native targets map read errors to EOF;
-there is no error channel or aggregate buffer in this contract.
+`Host` authority carries nothing and is erased before this tier. Its nine-bit
+scalar answer is zero at EOF or one plus the byte read. The native targets map
+read errors to EOF; there is no error channel or aggregate buffer in this
+contract.
 
 ## Managed cells
 
@@ -148,8 +153,16 @@ with status 2.
 Cell payload sizes and offsets are checked before rebuilding. After preparation,
 `Class::Cell` and all three abstract operations are gone; targets receive ordinary
 word-sized addresses, loads, stores, and calls to generated allocation and
-ownership helpers. Generic sequence buffers and runtime strings are not covered
-by this representation yet.
+ownership helpers.
+
+Sequences are cells too. A sequence is a two-constructor sum whose step holds
+the rest of itself, so `List(a)` and `Str` are one managed object per element,
+each field held at the class the cell declares. That is what makes a program
+holding one compilable; it is not what makes one cheap. A packed run of bytes,
+with a length and contiguous elements, is the representation this is waiting
+for, and releasing a long one still recurses once per element. Until then a
+`Str` costs an object per character and a target with a small heap or a shallow
+stack will feel it.
 
 ## Passes
 

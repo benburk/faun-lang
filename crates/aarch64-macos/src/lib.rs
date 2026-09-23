@@ -30,7 +30,7 @@ impl Target for Aarch64Macos {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write", "exit!", "argc!"]
+        &["write!", "exit!", "argc!"]
     }
 
     fn limits(&self, program: &Program) -> Result<(), String> {

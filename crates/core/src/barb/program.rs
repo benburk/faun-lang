@@ -36,7 +36,7 @@ pub struct Program {
 
 /// How a type's constants are encoded, derived from its declaration.
 #[must_use]
-pub fn shape(program: &Program, id: TypeId) -> Shape {
+pub(crate) fn shape(program: &Program, id: TypeId) -> Shape {
     constant::shape(program.type_info(), id)
 }
 

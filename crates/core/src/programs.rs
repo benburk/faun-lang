@@ -25,7 +25,7 @@ const MESSAGE: &[u8] = b"Hello, World!\n";
 pub fn hello_world() -> Program {
     let (mut program, main) = Program::new("main");
     let message = program.intern(MESSAGE);
-    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write!");
 
     program.define(main, |b, _| {
         let buf = b.address_of(message);
@@ -174,7 +174,7 @@ pub fn branches_on_a_flag_it_read() -> Program {
 pub fn writes_a_length_it_worked_out() -> Program {
     let (mut program, main) = Program::new("main");
     let grow = crate::platform::Routines::builtin().declare(&mut program, "grow");
-    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write!");
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
@@ -237,7 +237,7 @@ pub fn carries_a_total_into_an_arm(times: u64) -> Program {
 pub fn counts_down_before_it_branches(times: u64) -> Program {
     let (mut program, main) = Program::new("main");
     let tick = program.intern(b"tick\n".as_slice());
-    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write!");
 
     program.define(main, |b, _| {
         let start = b.constant(Word, times);
@@ -430,7 +430,7 @@ pub fn values_survive_a_call() -> Program {
 pub fn writes_from_the_heap() -> Program {
     let (mut program, main) = Program::new("main");
     let grow = crate::platform::Routines::builtin().declare(&mut program, "grow");
-    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write!");
 
     program.define(main, |b, _| {
         let size = b.constant(Word, 4096);
@@ -546,7 +546,7 @@ pub fn less(left: u64, right: u64) -> Program {
 pub fn countdown(times: u64) -> Program {
     let (mut program, main) = Program::new("main");
     let tick = program.intern(b"tick\n".as_slice());
-    let write = crate::platform::Routines::builtin().declare(&mut program, "write");
+    let write = crate::platform::Routines::builtin().declare(&mut program, "write!");
 
     program.define(main, |b, _| {
         let start = b.constant(Word, times);

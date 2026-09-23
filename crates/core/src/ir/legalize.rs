@@ -618,7 +618,7 @@ mod tests {
         let (mut p, main) = Program::new("main");
         p.intern(b"unaligned data");
         p.global(&[1, 2, 3]);
-        crate::platform::Routines::builtin().declare(&mut p, "write");
+        crate::platform::Routines::builtin().declare(&mut p, "write!");
         p.symbol("unused name");
         let identity = p.declare("identity", &[Class::Natural], &[Class::Natural]);
         p.define(identity, |b, args| b.ret(&[args[0]]));
