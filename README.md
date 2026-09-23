@@ -25,7 +25,7 @@ Faun is equally defined by the features it does not have
 
 - No source-level mutation, pointers, references, borrow syntax, or lifetime annotations.
 - No tracing garbage collector, reference cycles, or manual memory management.
-- No implicit cleanup or hidden control flow: no constructors, destructors, RAII hooks, exceptions, or other user-defined code that runs implicitly. Resource lifetimes are explicit and checked with linear types.
+- No hidden semantic control flow: function and host calls happen only where written. There are no implicit constructors, destructors, exceptions, coercion hooks, or cleanup callbacks. Resource cleanup is explicit and statically enforced by linear resource types.c
 - No null or unchecked partial pattern matches.
 - No inheritance, nominal subtyping, or implicit type conversions.
 - No first-class closures, currying, or higher-kinded types.
