@@ -145,7 +145,10 @@ pub fn application(
             _ => None,
         })
         .unwrap_or_default();
-    let host_shape = resolved
+    // `Host` is authority and nothing else: it carries no startup payload,
+    // so a host module says what it offers with ordinary bodyless routines
+    // taking one rather than with a record this has to agree about.
+    let carries = resolved
         .program
         .modules
         .iter()
@@ -153,18 +156,12 @@ pub fn application(
         .find_map(|item| match item {
             h::Item::Data(data) if data.name == host.host => data.wrapper.as_ref(),
             _ => None,
-        })
-        .map(|wrapper| &wrapper.field);
-    if !matches!(
-        host_shape,
-        Some(h::Type::Record(fields))
-            if matches!(fields.as_slice(), [(name, h::Type::Named(nat, arguments))]
-                if *name == host.argc && *nat == host.nat && arguments.is_empty())
-    ) {
+        });
+    if carries.is_some() {
         return Err(failure(
             module,
             span,
-            "the application ABI requires `Host : {argc: Nat}`",
+            "the application ABI requires `Host` to carry no startup payload",
         ));
     }
 

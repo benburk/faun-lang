@@ -22,7 +22,12 @@ The structural empty variant type `[]` is the uninhabited result used by
 applications; it needs no blessed standard-library name. `Never` remains an
 ordinary available constructor spelling. Files under `hosts/`
 are target-selected modules mounted at `std.host`; each initial module provides
-`Host : {argc: Nat}` and bodyless `exit! : Host Nat -> []`. The
-`Host` constructor remains private. Barb nevertheless retains the target-provided
-value and its projections; the target constructs the represented `host` entry
-parameter in its physical startup adapter.
+a `Host` carrying nothing and bodyless `argc! : Host -> Nat` and
+`exit! : Host Nat -> []`. The `Host` constructor remains private.
+
+`Host` is authority and nothing else. It carries no startup payload, so what a
+host module offers it offers as ordinary bodyless declarations taking one, and
+a program orders its effects by threading that authority through them. Barb
+retains the parameter and the threading; both are erased below it, because a
+type with one value says nothing by being itself. So the machine entry takes
+nothing and no target binds a startup parameter by name to supply it.

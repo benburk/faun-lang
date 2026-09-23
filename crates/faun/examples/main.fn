@@ -1,4 +1,6 @@
-import std.host {Host exit!}
+import std.host {Host argc! exit!}
 
 main! : Host -> []
-main!(host) -> exit!(host host.argc)
+main!(host) ->
+  count = argc!(host)
+  exit!(host count)

@@ -1,7 +1,8 @@
 # Startup values and effects supplied by the wasm32 WASI target.
 
-exports {Host exit!}
+exports {Host argc! exit!}
 
-Host : {argc: Nat}
+Host : [Host]
 
+argc! : Host -> Nat
 exit! : Host Nat -> []

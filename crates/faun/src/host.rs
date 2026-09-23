@@ -11,13 +11,16 @@ use crate::blessed::PreludeIds;
 use crate::modules::LoadedProgram;
 
 /// Source identities required by the initial host ABI.
+///
+/// `Host` is authority and carries no startup payload: startup values are
+/// ordinary bodyless routines taking it, so nothing here names one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostIds {
     pub entry_module: crate::ModuleId,
     pub main: Symbol,
     pub host: Symbol,
-    pub argc: Symbol,
     pub exit: Symbol,
+    /// The prelude's `Nat`, which `exit!`'s status is written at.
     pub nat: Symbol,
 }
 
@@ -84,7 +87,6 @@ impl HostIds {
         if exposes_constructor {
             return Err(error("the `Host` constructor must not be publicly exposed"));
         }
-        let argc = symbol(program, "argc")?;
         let exit_name = symbol(program, "exit!")?;
         let exit = selected_host
             .public
@@ -102,7 +104,6 @@ impl HostIds {
             entry_module: *entry,
             main,
             host: binding.canonical,
-            argc,
             exit,
             nat: prelude.nat,
         })

@@ -4,9 +4,8 @@ use std::process::Command;
 
 const CONSTANT: &str =
     "import std.host {Host exit!}\n\nmain! : Host -> []\nmain!(host) -> exit!(host 0)\n";
-const COUNT: &str =
-    "import std.host {Host exit!}\n\nmain! : Host -> []\nmain!(host) -> exit!(host host.argc)\n";
-const ARITHMETIC: &str = "import std.host {Host exit!}\n\nmain! : Host -> []\nmain!(host) -> exit!(host (host.argc + 4) % 256)\n";
+const COUNT: &str = "import std.host {Host argc! exit!}\n\nmain! : Host -> []\nmain!(host) ->\n  count = argc!(host)\n  exit!(host count)\n";
+const ARITHMETIC: &str = "import std.host {Host argc! exit!}\n\nmain! : Host -> []\nmain!(host) ->\n  count = argc!(host)\n  exit!(host (count + 4) % 256)\n";
 
 #[test]
 fn primary_frontend_preserves_initial_size_ratchets() {
