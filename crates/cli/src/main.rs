@@ -1,7 +1,6 @@
 //! The Faun compiler's command line: check, build, run, or print a stage of
 //! a Faun program for one of the targets this binary holds.
 
-use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
@@ -54,8 +53,10 @@ enum Stage {
 }
 
 fn main() -> ExitCode {
-    match dispatch(cli().run()) {
-        Ok(code) => code,
+    let command = cli().run();
+    let outcome = dispatch(command);
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("faun: {error}");
             ExitCode::FAILURE
@@ -155,11 +156,10 @@ fn unknown_target(name: &str) -> String {
     format!("unknown target `{name}`, expected: {known}")
 }
 
-fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
+fn dispatch(command: Command) -> Result<(), String> {
     match command {
         Command::Check { source, target } => {
             faun::barb(&source, target)?;
-            Ok(ExitCode::SUCCESS)
         }
         Command::Build {
             source,
@@ -167,46 +167,51 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
             target,
         } => {
             let image = target.compile(&faun::machine(&source, target)?)?;
-            let written = target.write(&image, &output)?;
+            let written = target
+                .write(&image, &output)
+                .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
             println!("wrote {}", written.display());
-            Ok(ExitCode::SUCCESS)
         }
-        Command::Run { source, target } => run(&source, target),
+        Command::Run { source, target } => run(&source, target)?,
         Command::Emit {
             target,
             stage,
             source,
-        } => {
-            match stage {
-                Stage::Barb => {
-                    let mut program = faun::barb(&source, target)?;
-                    faun_core::barb::optimize(&mut program);
-                    print!("{}", program.render());
-                }
-                Stage::Machine => print!("{}", faun::machine(&source, target)?.render()),
-                Stage::Target => {
-                    let prepared = target.prepare(&faun::machine(&source, target)?)?;
-                    print!("{}", target.render(&prepared));
-                }
+        } => match stage {
+            Stage::Barb => {
+                let mut program = faun::barb(&source, target)?;
+                faun_core::barb::optimize(&mut program);
+                print!("{}", program.render());
             }
-            Ok(ExitCode::SUCCESS)
-        }
+            Stage::Machine => print!("{}", faun::machine(&source, target)?.render()),
+            Stage::Target => {
+                let prepared = target.prepare(&faun::machine(&source, target)?)?;
+                print!("{}", target.render(&prepared));
+            }
+        },
     }
+    Ok(())
 }
 
 /// Compile for the machine this runs on, run it, and exit as it did.
-fn run(source: &Path, target: &dyn Target) -> Result<ExitCode, Box<dyn Error>> {
+fn run(source: &Path, target: &dyn Target) -> Result<(), String> {
     if NATIVE.is_none_or(|native| native.name() != target.name()) {
-        return Err(format!("{} programs do not run on this machine", target.name()).into());
+        return Err(format!(
+            "{} programs do not run on this machine",
+            target.name()
+        ));
     }
     let image = target.compile(&faun::machine(source, target)?)?;
     let directory = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
-    fs::create_dir_all(&directory)?;
+    let cannot = |doing: &str, error: std::io::Error| {
+        format!("cannot {doing} {}: {error}", directory.display())
+    };
+    fs::create_dir_all(&directory).map_err(|error| cannot("create", error))?;
     let written = target.write(&image, &directory.join("program"));
     let status = written.and_then(|path| Process::new(path).status());
-    fs::remove_dir_all(directory)?;
-    let code = status?.code().unwrap_or(1);
-    Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
+    fs::remove_dir_all(&directory).map_err(|error| cannot("remove", error))?;
+    let status = status.map_err(|error| cannot("run the program in", error))?;
+    std::process::exit(status.code().unwrap_or(1))
 }
 
 #[cfg(test)]
@@ -277,7 +282,7 @@ mod tests {
         let command = cli()
             .run_inner(&["run", "--target", "wasm32-wasi", "example.fn"])
             .unwrap();
-        let error = dispatch(command).unwrap_err().to_string();
+        let error = dispatch(command).unwrap_err();
         assert!(error.contains("do not run on this machine"), "{error}");
     }
 

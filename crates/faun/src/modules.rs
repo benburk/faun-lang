@@ -9,11 +9,11 @@
 #![allow(clippy::too_many_lines, clippy::useless_let_if_seq)]
 
 use std::collections::HashMap;
-use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::ast::{DataDecl, DataRepresentation, Export, Item, MethodItem, Module, Name};
+use super::ast::{DataDecl, DataRepresentation, Export, Item, MethodItem, Module, Name, Span};
+use super::diagnostic::Diagnostic;
 use super::{SourceId, Sources, Symbol, Symbols, parse_in};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -46,7 +46,7 @@ impl Interface {
         other: &Self,
         symbols: &Symbols,
         context: &str,
-    ) -> Result<(), LoadError> {
+    ) -> Result<(), Diagnostic> {
         merge_map(&mut self.values, &other.values, symbols, context, "value")?;
         merge_map(
             &mut self.constructors,
@@ -59,7 +59,7 @@ impl Interface {
             if let Some(previous) = self.types.get(&local)
                 && previous.canonical != binding.canonical
             {
-                return Err(LoadError::new(format!(
+                return Err(Diagnostic::new(format!(
                     "{context} binds type `{}` more than once",
                     symbols.text(local)
                 )));
@@ -101,27 +101,6 @@ impl LoadedProgram {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LoadError {
-    pub message: String,
-}
-
-impl LoadError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for LoadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for LoadError {}
-
 /// Load entry files and an optional standard-library root.
 ///
 /// Imports are rooted at the importing package directory. Each path component
@@ -132,7 +111,7 @@ impl std::error::Error for LoadError {}
 ///
 /// Reports I/O, parse, cycle, duplicate declaration, visibility, and ambiguous
 /// module-path failures.
-pub fn load(entries: &[PathBuf], prelude: Option<&Path>) -> Result<LoadedProgram, LoadError> {
+pub fn load(entries: &[PathBuf], prelude: Option<&Path>) -> Result<LoadedProgram, Diagnostic> {
     load_with_host(entries, prelude, None)
 }
 
@@ -148,7 +127,7 @@ pub fn load_with_host(
     entries: &[PathBuf],
     prelude: Option<&Path>,
     host: Option<&Path>,
-) -> Result<LoadedProgram, LoadError> {
+) -> Result<LoadedProgram, Diagnostic> {
     let mut loader = Loader::default();
     let prelude_id = match prelude {
         Some(path) => Some(loader.load_module(path, &Root::at(path), true)?),
@@ -245,15 +224,15 @@ impl Loader {
         written: &Path,
         root: &Root,
         standard_root: bool,
-    ) -> Result<ModuleId, LoadError> {
+    ) -> Result<ModuleId, Diagnostic> {
         let path = written.canonicalize().map_err(|error| {
-            LoadError::new(format!("cannot read {}: {error}", written.display()))
+            Diagnostic::new(format!("cannot read {}: {error}", written.display()))
         })?;
         if let Some(&id) = self.loaded.get(&path) {
             return Ok(id);
         }
         if self.visiting.contains(&path) {
-            return Err(LoadError::new(format!(
+            return Err(Diagnostic::new(format!(
                 "import cycle through {}",
                 path.display()
             )));
@@ -262,10 +241,13 @@ impl Loader {
             self.standard_root = path.parent().map(Path::to_path_buf);
         }
         let text = fs::read_to_string(&path)
-            .map_err(|error| LoadError::new(format!("cannot read {}: {error}", path.display())))?;
+            .map_err(|error| Diagnostic::new(format!("cannot read {}: {error}", path.display())))?;
         let source = self.sources.add(path.clone(), text.clone());
-        let syntax = parse_in(&text, source)
-            .map_err(|error| LoadError::new(format!("{}:{error}", path.display())))?;
+        let syntax = parse_in(&text, source).map_err(|error| {
+            let at = Span::new(error.offset, error.offset);
+            let text = self.sources.get(source).expect("the source just added");
+            Diagnostic::new(error.message).at(text, at)
+        })?;
         let id =
             ModuleId(u32::try_from(self.pending.len()).expect("fewer than 2^32 loaded modules"));
         let namespace_text = self.namespace(&path, id);
@@ -307,7 +289,7 @@ impl Loader {
         for (index, path_parts) in imports {
             let dependency = if path_parts == ["std", "host"] {
                 self.host.ok_or_else(|| {
-                    LoadError::new("import `std.host` requires a selected host module")
+                    Diagnostic::new("import `std.host` requires a selected host module")
                 })?
             } else {
                 let dependency_path = module_path(&root.directory, &path_parts)?;
@@ -358,9 +340,9 @@ impl Loader {
     }
 }
 
-fn module_path(root: &Path, parts: &[String]) -> Result<PathBuf, LoadError> {
+fn module_path(root: &Path, parts: &[String]) -> Result<PathBuf, Diagnostic> {
     if parts.is_empty() {
-        return Err(LoadError::new("an import names no module"));
+        return Err(Diagnostic::new("an import names no module"));
     }
     let joined = parts
         .iter()
@@ -372,13 +354,13 @@ fn module_path(root: &Path, parts: &[String]) -> Result<PathBuf, LoadError> {
     match (flat.is_file(), nested.is_file()) {
         (true, false) => Ok(flat),
         (false, true) => Ok(nested),
-        (true, true) => Err(LoadError::new(format!(
+        (true, true) => Err(Diagnostic::new(format!(
             "import `{}` is ambiguous between {} and {}",
             parts.join("."),
             flat.display(),
             nested.display()
         ))),
-        (false, false) => Err(LoadError::new(format!(
+        (false, false) => Err(Diagnostic::new(format!(
             "import `{}` finds neither {} nor {}",
             parts.join("."),
             flat.display(),
@@ -392,7 +374,7 @@ fn declarations(
     source: &str,
     namespace: Symbol,
     symbols: &mut Symbols,
-) -> Result<Interface, LoadError> {
+) -> Result<Interface, Diagnostic> {
     let namespace = symbols.text(namespace).to_string();
     let mut own = Interface::default();
     for item in &module.items {
@@ -416,10 +398,10 @@ fn declare_data(
     source: &str,
     namespace: &str,
     symbols: &mut Symbols,
-) -> Result<(), LoadError> {
+) -> Result<(), Diagnostic> {
     let local = symbols.intern(data.name.text(source));
     if own.types.contains_key(&local) {
-        return Err(LoadError::new(format!(
+        return Err(Diagnostic::new(format!(
             "type `{}` is declared more than once",
             data.name.text(source)
         )));
@@ -480,7 +462,7 @@ fn declare_data(
         if let Some(previous) = binding.methods.get(&spelling)
             && *previous != canonical
         {
-            return Err(LoadError::new(format!(
+            return Err(Diagnostic::new(format!(
                 "method `{}` is declared by conflicting definitions",
                 method_name.text(source)
             )));
@@ -528,13 +510,13 @@ fn declare_value(
     source: &str,
     namespace: &str,
     symbols: &mut Symbols,
-) -> Result<(), LoadError> {
+) -> Result<(), Diagnostic> {
     let local = symbols.intern(name.text(source));
     let canonical = symbols.intern(&format!("{namespace}$${}", name.text(source)));
     if let Some(previous) = own.values.get(&local)
         && *previous != canonical
     {
-        return Err(LoadError::new(format!(
+        return Err(Diagnostic::new(format!(
             "value `{}` is declared more than once",
             name.text(source)
         )));
@@ -548,7 +530,7 @@ fn exports(
     source: &str,
     scope: &Interface,
     symbols: &mut Symbols,
-) -> Result<Interface, LoadError> {
+) -> Result<Interface, Diagnostic> {
     let declarations: Vec<&Export> = module
         .items
         .iter()
@@ -592,7 +574,7 @@ fn exports(
             }
         }
         if !scope.values.contains_key(&local) && !scope.types.contains_key(&local) {
-            return Err(LoadError::new(format!(
+            return Err(Diagnostic::new(format!(
                 "`{}` is not visible and cannot be exported",
                 export.name.text(source)
             )));
@@ -607,7 +589,7 @@ fn expose_import(
     import: &super::ast::ImportDecl,
     source: &str,
     symbols: &mut Symbols,
-) -> Result<(), LoadError> {
+) -> Result<(), Diagnostic> {
     for exposure in &import.exposures {
         let exported = symbols.intern(exposure.exported.text(source));
         let local = symbols.intern(exposure.local.text(source));
@@ -630,7 +612,7 @@ fn expose_import(
             if let Some(previous) = scope.types.get(&local)
                 && previous.canonical != imported.canonical
             {
-                return Err(LoadError::new(format!(
+                return Err(Diagnostic::new(format!(
                     "imported type `{}` conflicts with an existing type",
                     symbols.text(local)
                 )));
@@ -650,7 +632,7 @@ fn expose_import(
             found = true;
         }
         if !found {
-            return Err(LoadError::new(format!(
+            return Err(Diagnostic::new(format!(
                 "`{}` is not exported by import `{}`",
                 exposure.exported.text(source),
                 import
@@ -671,12 +653,12 @@ fn merge_map(
     symbols: &Symbols,
     context: &str,
     kind: &str,
-) -> Result<(), LoadError> {
+) -> Result<(), Diagnostic> {
     for (&local, &canonical) in from {
         if let Some(previous) = into.get(&local)
             && *previous != canonical
         {
-            return Err(LoadError::new(format!(
+            return Err(Diagnostic::new(format!(
                 "{context} binds {kind} `{}` more than once",
                 symbols.text(local)
             )));
@@ -692,11 +674,11 @@ fn insert_unique(
     canonical: Symbol,
     symbols: &Symbols,
     kind: &str,
-) -> Result<(), LoadError> {
+) -> Result<(), Diagnostic> {
     if let Some(previous) = map.get(&local)
         && *previous != canonical
     {
-        return Err(LoadError::new(format!(
+        return Err(Diagnostic::new(format!(
             "{kind} `{}` conflicts with another declaration",
             symbols.text(local)
         )));

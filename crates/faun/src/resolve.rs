@@ -8,16 +8,35 @@ use std::collections::HashMap;
 use std::fmt;
 
 use super::ast as s;
+use super::diagnostic::Diagnostic;
 use super::hir as h;
 use super::literal;
 use super::modules::{Interface, LoadedModule, LoadedProgram, ModuleId, TypeBinding};
-use super::{Sources, Symbol, Symbols};
+use super::{SourceId, Sources, Symbol, Symbols};
 
 #[derive(Clone, Debug)]
 pub struct ResolvedProgram {
     pub sources: Sources,
     pub symbols: Symbols,
     pub program: h::Program,
+    /// Each module's source, by module.
+    module_sources: Vec<SourceId>,
+}
+
+impl ResolvedProgram {
+    /// A diagnostic at `span` in `module`.
+    ///
+    /// # Panics
+    /// If `module` is not one of this program's.
+    #[must_use]
+    pub fn diagnostic(&self, module: ModuleId, span: s::Span, message: String) -> Diagnostic {
+        let source = self.module_sources[module.index()];
+        let source = self
+            .sources
+            .get(source)
+            .expect("a resolved module has a source");
+        Diagnostic::new(message).at(source, span)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,13 +58,14 @@ impl std::error::Error for ResolveError {}
 ///
 /// # Errors
 ///
-/// Reports an unknown or duplicate local, global, constructor, type, or method.
+/// Reports an unknown or duplicate local, global, constructor, type, or method,
+/// at the span it is written.
 ///
 /// # Panics
 ///
 /// Panics only if a [`LoadedProgram`] was manually built with a module whose
 /// source identity is absent from its source collection.
-pub fn resolve(mut loaded: LoadedProgram) -> Result<ResolvedProgram, ResolveError> {
+pub fn resolve(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagnostic> {
     let prelude = loaded
         .prelude
         .map(|id| loaded.module(id).public.clone())
@@ -58,16 +78,18 @@ pub fn resolve(mut loaded: LoadedProgram) -> Result<ResolvedProgram, ResolveErro
             .expect("loaded module has source")
             .text();
         let mut scope = prelude.clone();
-        scope
-            .merge(&module.scope, &loaded.symbols, "module scope")
-            .map_err(|error| ResolveError {
-                module: module.id,
-                span: s::Span::default(),
-                message: error.message,
-            })?;
-        modules.push(resolve_module(module, source, &scope, &mut loaded.symbols)?);
+        scope.merge(&module.scope, &loaded.symbols, "module scope")?;
+        let resolved = resolve_module(module, source, &scope, &mut loaded.symbols);
+        modules.push(resolved.map_err(|error| {
+            let source = loaded
+                .sources
+                .get(module.source)
+                .expect("loaded module has source");
+            Diagnostic::new(error.message).at(source, error.span)
+        })?);
     }
     Ok(ResolvedProgram {
+        module_sources: loaded.modules.iter().map(|module| module.source).collect(),
         sources: loaded.sources,
         symbols: loaded.symbols,
         program: h::Program { modules },
@@ -749,6 +771,7 @@ mod tests {
         let entry = fixture.write("main.fn", "f() -> missing\n");
         let loaded = modules::load(&[entry], None).unwrap();
         let failure = resolve(loaded).unwrap_err();
-        assert_eq!(failure.span.text("f() -> missing\n"), "missing");
+        let at = failure.location.expect("a place in the source");
+        assert_eq!((at.line, at.column, at.width), (1, 8, 7));
     }
 }

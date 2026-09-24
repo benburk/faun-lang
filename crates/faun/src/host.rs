@@ -4,10 +4,9 @@
 //! discovers their identities once so entry validation and lowering do not
 //! infer authority or providers from coincidental spellings elsewhere.
 
-use std::fmt;
-
 use crate::Symbol;
 use crate::blessed::PreludeIds;
+use crate::diagnostic::Diagnostic;
 use crate::modules::LoadedProgram;
 
 /// Source identities required by the initial host ABI.
@@ -24,19 +23,6 @@ pub struct HostIds {
     pub nat: Symbol,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HostError {
-    pub message: String,
-}
-
-impl fmt::Display for HostError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for HostError {}
-
 impl HostIds {
     /// Resolve the entry and selected host module's required interface.
     ///
@@ -45,7 +31,7 @@ impl HostIds {
     /// Rejects library loads, multiple application entries, malformed host
     /// interfaces, and entries without a bodyful `main!`.
     #[allow(clippy::too_many_lines)]
-    pub fn resolve(program: &LoadedProgram, prelude: &PreludeIds) -> Result<Self, HostError> {
+    pub fn resolve(program: &LoadedProgram, prelude: &PreludeIds) -> Result<Self, Diagnostic> {
         let [entry] = program.entries.as_slice() else {
             return Err(error("an application must have exactly one entry module"));
         };
@@ -62,7 +48,8 @@ impl HostIds {
             matches!(item, crate::ast::Item::Clause(clause) if clause.name.text(entry_source) == "main!")
         });
         if !defines_main {
-            return Err(error("the entry module must define `main!`"));
+            return Err(error("the entry module must define `main!`")
+                .help("write `main! : Host -> []` and a clause `main!(host) -> ...`"));
         }
         let main_name = symbol(program, "main!")?;
         let main = entry_module
@@ -70,7 +57,10 @@ impl HostIds {
             .values
             .get(&main_name)
             .copied()
-            .ok_or_else(|| error("the entry module must define `main!`"))?;
+            .ok_or_else(|| {
+                error("the entry module must define `main!`")
+                    .help("write `main! : Host -> []` and a clause `main!(host) -> ...`")
+            })?;
 
         let host_name = symbol(program, "Host")?;
         let selected_host = program.module(host_module);
@@ -112,7 +102,7 @@ fn has_method_clause(
     program: &LoadedProgram,
     module: crate::ModuleId,
     name: &str,
-) -> Result<bool, HostError> {
+) -> Result<bool, Diagnostic> {
     let module = program.module(module);
     let source = program
         .sources
@@ -127,17 +117,15 @@ fn has_method_clause(
     }))
 }
 
-fn symbol(program: &LoadedProgram, name: &str) -> Result<Symbol, HostError> {
+fn symbol(program: &LoadedProgram, name: &str) -> Result<Symbol, Diagnostic> {
     program
         .symbols
         .find(name)
         .ok_or_else(|| error(format!("host name `{name}` was never declared")))
 }
 
-fn error(message: impl Into<String>) -> HostError {
-    HostError {
-        message: message.into(),
-    }
+fn error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(message)
 }
 
 #[cfg(test)]
@@ -167,7 +155,7 @@ mod tests {
             path
         }
 
-        fn resolve(&self, host: &str, entry: &str) -> Result<HostIds, HostError> {
+        fn resolve(&self, host: &str, entry: &str) -> Result<HostIds, Diagnostic> {
             let host = self.write("host.fn", host);
             let entry = self.write("main.fn", entry);
             let standard = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");

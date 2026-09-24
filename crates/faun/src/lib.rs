@@ -14,6 +14,7 @@ pub mod ast;
 mod barb_lower;
 pub mod blessed;
 pub mod check;
+pub mod diagnostic;
 mod grammar;
 pub mod hir;
 pub mod host;
@@ -27,6 +28,7 @@ pub mod source;
 mod specialize;
 pub mod symbol;
 
+pub use diagnostic::Diagnostic;
 pub use modules::ModuleId;
 pub use parse::{ParseError, parse, parse_in};
 pub use source::{Source, SourceId, Sources};
@@ -51,7 +53,7 @@ fn host_path(target: &dyn Target) -> PathBuf {
 ///
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
-pub fn barb(source: &Path, target: &dyn Target) -> Result<faun_core::barb::Program, String> {
+pub fn barb(source: &Path, target: &dyn Target) -> Result<faun_core::barb::Program, Diagnostic> {
     let loaded = load(source, target)?;
     lower::application(
         &loaded.resolved,
@@ -60,17 +62,17 @@ pub fn barb(source: &Path, target: &dyn Target) -> Result<faun_core::barb::Progr
         &loaded.host,
         &target.routines(),
     )
-    .map_err(text)
+    .map_err(|error| Diagnostic::new(error.message))
 }
 
 /// Compile a Faun application to the machine IR `target` compiles.
 ///
 /// # Errors
 /// Reports any error [`barb`] does, or what the machine tier cannot represent.
-pub fn machine(source: &Path, target: &dyn Target) -> Result<faun_core::ir::Program, String> {
+pub fn machine(source: &Path, target: &dyn Target) -> Result<faun_core::ir::Program, Diagnostic> {
     let mut program = barb(source, target)?;
     faun_core::barb::optimize(&mut program);
-    faun_core::machine(&mut program, &target.routines())
+    faun_core::machine(&mut program, &target.routines()).map_err(Diagnostic::new)
 }
 
 /// An application loaded, resolved and checked against its target's host.
@@ -81,33 +83,31 @@ struct Loaded {
     host: host::HostIds,
 }
 
-fn load(source: &Path, target: &dyn Target) -> Result<Loaded, String> {
+fn load(source: &Path, target: &dyn Target) -> Result<Loaded, Diagnostic> {
     let prelude = standard_path();
     let host_module = host_path(target);
     if !host_module.is_file() {
-        return Err(format!(
+        return Err(Diagnostic::new(format!(
             "no Faun host module for target `{}`",
             target.name()
-        ));
+        )));
     }
     let loaded =
-        modules::load_with_host(&[source.to_path_buf()], Some(prelude), Some(&host_module))
-            .map_err(text)?;
-    let blessed = blessed::PreludeIds::resolve(&loaded).map_err(text)?;
-    let host = host::HostIds::resolve(&loaded, &blessed).map_err(text)?;
-    let resolved = resolve::resolve(loaded).map_err(text)?;
-    let checked = check::program(&resolved, &blessed).map_err(text)?;
-    check::application(&resolved, &checked, &host).map_err(text)?;
+        modules::load_with_host(&[source.to_path_buf()], Some(prelude), Some(&host_module))?;
+    let blessed =
+        blessed::PreludeIds::resolve(&loaded).map_err(|error| Diagnostic::new(error.message))?;
+    let host = host::HostIds::resolve(&loaded, &blessed)?;
+    let resolved = resolve::resolve(loaded)?;
+    let placed =
+        |error: check::CheckError| resolved.diagnostic(error.module, error.span, error.message);
+    let checked = check::program(&resolved, &blessed).map_err(placed)?;
+    check::application(&resolved, &checked, &host).map_err(placed)?;
     Ok(Loaded {
         resolved,
         checked,
         blessed,
         host,
     })
-}
-
-fn text(error: impl std::fmt::Display) -> String {
-    error.to_string()
 }
 
 #[cfg(test)]

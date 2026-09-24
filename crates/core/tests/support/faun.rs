@@ -14,7 +14,7 @@ pub(crate) fn machine(text: &str, target: &dyn Target) -> Result<Program, String
     let (dir, path) = source_file(text);
     let machine = ::faun::machine(&path, target);
     fs::remove_dir_all(dir).expect("the scratch source to go");
-    machine
+    Ok(machine?)
 }
 
 /// The same, lowered without optimizing, for a test of shapes the
