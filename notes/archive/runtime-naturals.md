@@ -62,8 +62,10 @@ acceptance checks the provider contract, not a catalog retained in the IR.
   target placement. Preexisting pools, all appended constants, code/image origin
   and reserved stack/frame areas must fit together; a valid runtime Config alone
   is not a proof of this aggregate layout.
-  Existing target calling-convention/stack limits still apply. Native x86-64
-  compilation rejects functions with more than six arguments or one result;
-  shared legalization and the interpreter also support multiple results.
+  Existing target stack limits still apply. Calling-convention limits do not
+  refuse a program: `Target::prepare` packs parameters and results past a
+  target's budget into a cell before legalization, so a natural result beside
+  another travels in one. Shared legalization and the interpreter also support
+  multiple results directly.
   Runtime helpers use borrowed arguments and a single owned result, not a host
   bigint ABI.

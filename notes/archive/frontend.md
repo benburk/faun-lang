@@ -62,8 +62,8 @@ contract is deliberately narrow:
 - a numeral expected as `Int` becomes `Int.of_nat(<Nat literal>)`;
 - a directly negative `Int` additionally calls `Int.neg`;
 - a negative `Nat` is rejected rather than losing its sign;
-- a plain string builds the private `Str`, `List`, and `U8` cells directly from
-  its UTF-8 bytes.
+- a plain string builds the private `Str` and `List` cells directly from its
+  UTF-8 bytes, each element a `U8` held flat inside its step.
 
 These expansions lower through ordinary Barb constants, constructors, and
 calls. `Nat` arithmetic and the constructors of `Int` are not compiler

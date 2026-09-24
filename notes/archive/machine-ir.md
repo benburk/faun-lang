@@ -129,15 +129,57 @@ scalar answer is zero at EOF or one plus the byte read. The native targets map
 read errors to EOF; there is no error channel or aggregate buffer in this
 contract.
 
+## Flat products
+
+A source product -- one constructor, several fields -- has no machine value of
+its own. Lowering holds it as its fields' values end to end: a nested product
+contributes its own leaves, a unit contributes none, and a wrapper around a
+product is that product. Construction and matching emit no instruction, so a
+product costs no allocation, reference count or release walk. A parameter,
+result, `if` join or cell field of product type is one machine value per leaf;
+a flat entry parameter's leaves are named `name.0`, `name.1`, and so on.
+
+Whether a product is flat is read off the type alone. A leaf is held at the
+class Barb's range analysis gives that field of that constructor: every value
+built into it anywhere in the program, so a number only ever built small is a
+small fixed width, and one grown round a recursion is a `Natural`. A tag with
+no better bound is a `Word`, and a sum or sequence is a `Cell`. Cell fields
+take their classes the same way. Two kinds of product
+remain cells: one with more than eight leaves, which is cheaper shared than
+copied, and one reaching itself through products alone, which has no values.
+Host routines read scalars and byte strings, so a product handed to one is
+refused.
+
+## Fitting boundaries
+
+The IR lets a function take and answer any number of values and a region carry
+any number across an edge; flat products rely on that. A target declares what
+its convention carries with `Target::budget` -- the 6502 passes four parameters,
+answers one result and carries two values across a region edge, and x86-64
+passes six and answers one. `Target::prepare` runs `ir::fit` before
+legalization: where more values cross a boundary than the budget allows, the
+last place holds one cell carrying the rest, tag zero, and the other side reads
+them back with `CellField`. The logical entry and external declarations keep
+their signatures. Values that fit stay where they are, so `fit` changes nothing
+on a program within its budget, and wasm, which carries multiple values
+natively, declares no limit.
+
+A pack is an ordinary cell, so ownership placement and release treat it like
+any other: a packed natural or cell is retained when packed and released with
+the pack. `Target::limits` still checks the prepared program against the same
+numbers; raw emission of an unfitted program is refused as before.
+
 ## Managed cells
 
-`Class::Cell` is the abstract one-word representation for source products and
-payload-carrying sums. `Cell { tag, fields }` constructs a value, `CellTag` reads
+`Class::Cell` is the abstract one-word representation for payload-carrying
+sums, products too wide to hold flat, and the packs `fit` introduces.
+`Cell { tag, fields }` constructs a value, `CellTag` reads
 its constructor tag, and `CellField` projects a zero-based represented field.
 These operations expose neither pointers nor target layout. Unit fields are
-omitted, wrappers are transparent, and each projection has the class selected
-for that field. Cells may cross internal calls, structured branches, loops, and
-returns. Host signatures cannot contain cells.
+omitted, wrappers are transparent, a flat product field is laid inline as its
+leaves, and each projection has the class selected for that field. Cells may
+cross internal calls, structured branches, loops, and returns. Host signatures
+cannot contain cells.
 
 The reference interpreter keeps abstract cell values in a private handle table.
 Target preparation instead lowers every cell to an address in the same private
