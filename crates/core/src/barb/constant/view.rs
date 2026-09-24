@@ -324,7 +324,7 @@ fn field_extent(
 ) -> Result<usize, LimitExceeded> {
     checked::extent(types, owner, bytes, budget).map_err(|error| match error {
         super::DecodeError::Limit(limit) => limit,
-        _ => unreachable!("a field of a validated constant: {error}"),
+        _ => unreachable!("a field of a validated constant: {error:?}"),
     })
 }
 

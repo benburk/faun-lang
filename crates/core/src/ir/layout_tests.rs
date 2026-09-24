@@ -1,6 +1,6 @@
 use super::evaluate::{self, Config as EvaluationConfig, Error, RejectHost};
 use super::natural::{self, Config, Needs};
-use super::{Class, Endian, Layout, Program, legalize};
+use super::{Class, Layout, Program, legalize};
 use crate::targets::{Artifact, Target};
 use num_bigint::BigUint;
 
@@ -13,9 +13,6 @@ impl Target for TargetAt {
     }
     fn word(&self) -> u16 {
         self.0.word_bits
-    }
-    fn endian(&self) -> Endian {
-        self.0.endian
     }
     fn provides(&self) -> &'static [&'static str] {
         &["exit!"]
@@ -43,38 +40,31 @@ fn natural_program() -> Program {
 }
 
 #[test]
-fn interpretation_checks_serialized_width_and_byte_order_before_execution() {
+fn interpretation_checks_serialized_width_before_execution() {
     let portable = natural_program();
     assert_eq!(portable.layout(), None);
     for word_bits in [16, 32, 64] {
         let scalar = legalize(&portable, config(word_bits)).unwrap();
-        let expected = Layout {
-            word_bits,
-            endian: Endian::Little,
-        };
+        let expected = Layout { word_bits };
         assert_eq!(scalar.layout(), Some(expected));
         for actual_bits in [16, 32, 64] {
-            for endian in [Endian::Little, Endian::Big] {
-                let actual = Layout {
+            let actual = Layout {
+                word_bits: actual_bits,
+            };
+            let result = evaluate::evaluate(
+                &scalar,
+                scalar.entry(),
+                &[],
+                EvaluationConfig {
                     word_bits: actual_bits,
-                    endian,
-                };
-                let result = evaluate::evaluate(
-                    &scalar,
-                    scalar.entry(),
-                    &[],
-                    EvaluationConfig {
-                        word_bits: actual_bits,
-                        endian,
-                        ..Default::default()
-                    },
-                    &mut RejectHost,
-                );
-                if expected == actual {
-                    assert_eq!(result.unwrap().returned().unwrap(), [BigUint::from(7u8)]);
-                } else {
-                    assert_eq!(result, Err(Error::LayoutMismatch { expected, actual }));
-                }
+                    ..Default::default()
+                },
+                &mut RejectHost,
+            );
+            if expected == actual {
+                assert_eq!(result.unwrap().returned().unwrap(), [BigUint::from(7u8)]);
+            } else {
+                assert_eq!(result, Err(Error::LayoutMismatch { expected, actual }));
             }
         }
     }
@@ -98,13 +88,11 @@ fn relegalization_and_compilation_cannot_forget_a_bound_layout() {
             .contains("layout")
     );
     for word_bits in [32, 64] {
-        for endian in [Endian::Little, Endian::Big] {
-            let target = TargetAt(Layout { word_bits, endian });
-            let matches = word_bits == 32 && endian == Endian::Little;
-            assert_eq!(target.accepts(&scalar).is_ok(), matches);
-            assert_eq!(target.prepare(&scalar).is_ok(), matches);
-            assert_eq!(target.compile(&scalar).is_ok(), matches);
-        }
+        let target = TargetAt(Layout { word_bits });
+        let matches = word_bits == 32;
+        assert_eq!(target.accepts(&scalar).is_ok(), matches);
+        assert_eq!(target.prepare(&scalar).is_ok(), matches);
+        assert_eq!(target.compile(&scalar).is_ok(), matches);
     }
 }
 
@@ -155,12 +143,6 @@ fn scalar_only_legalization_does_not_bind_a_portable_program() {
     let scalar = legalize(&program, config(32)).unwrap();
     assert_eq!(scalar.layout(), None);
     for word_bits in [16, 32, 64] {
-        for endian in [Endian::Little, Endian::Big] {
-            assert!(
-                TargetAt(Layout { word_bits, endian })
-                    .compile(&scalar)
-                    .is_ok()
-            );
-        }
+        assert!(TargetAt(Layout { word_bits }).compile(&scalar).is_ok());
     }
 }

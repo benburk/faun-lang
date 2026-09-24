@@ -9,10 +9,7 @@ use num_bigint::BigUint;
 
 use crate::facts::Facts;
 
-use super::{
-    Binary, Class, Op, OptimizeOptions, Program, Relation, Returns, ValueId, evaluate, optimize,
-    validate,
-};
+use super::{Binary, Class, Op, Program, Relation, Returns, ValueId, evaluate, optimize, validate};
 
 const BIT: Class = Class::fixed(1);
 
@@ -42,7 +39,7 @@ fn returns(p: &Program) -> BigUint {
 /// Optimized, having checked that it still answers what it answered.
 fn settled(p: &Program) -> Program {
     let before = returns(p);
-    let held = optimize(p, &OptimizeOptions::default());
+    let held = optimize(p);
     assert_eq!(returns(&held), before, "a pass changed what it answers");
     held
 }
@@ -276,7 +273,7 @@ fn a_branch_nothing_reads_stays_for_what_its_arms_do() {
         b.ret(&[zero]);
     });
     validate(&p).expect("a sound program");
-    let held = optimize(&p, &OptimizeOptions::default());
+    let held = optimize(&p);
     validate(&held).expect("a sound program");
     assert_eq!(count(&held, is_if), 1, "the branch stays");
     assert_eq!(count(&held, |op| matches!(*op, Op::Call { .. })), 1);
@@ -300,26 +297,14 @@ fn a_branch_that_does_nothing_and_answers_nobody_goes() {
     assert_eq!(count(&held, |_| true), 1, "the constant it returns");
 }
 
-/// Turning a stage off leaves its shapes where they were, which is what
-/// says the schedule is two stages rather than one.
+/// Each stage alone leaves the other's shapes where they were, which is
+/// what says the schedule is two stages rather than one.
 #[test]
-fn each_stage_can_be_left_out() {
+fn each_stage_alone_does_only_its_own_part() {
     let p = tagged((1, 0));
-    let fused = optimize(
-        &p,
-        &OptimizeOptions {
-            simplify: true,
-            prune: false,
-        },
-    );
+    let fused = super::simplify::simplify(&p);
     assert_eq!(count(&fused, is_if), 2, "the tag is written and unread");
-    let swept = optimize(
-        &p,
-        &OptimizeOptions {
-            simplify: false,
-            prune: true,
-        },
-    );
+    let swept = super::prune::prune(&p);
     assert_eq!(count(&swept, is_if), 2, "nothing recognised it");
     for held in [&fused, &swept] {
         validate(held).expect("a sound program");
@@ -359,7 +344,7 @@ fn a_run_of_steps_past_a_value_is_one_step() {
 fn a_run_that_would_not_fit_its_width_is_left_alone() {
     let narrow = Class::fixed(3);
     // Three, and eight past it, which three bits do not hold.
-    let held = optimize(&stepped(narrow, &[4, 4]), &OptimizeOptions::default());
+    let held = optimize(&stepped(narrow, &[4, 4]));
     validate(&held).expect("a sound program");
     assert_eq!(count(&held, is_add), 2, "eight would not fit three bits");
 }

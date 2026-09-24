@@ -81,21 +81,12 @@ impl Library {
             self.program.fields(id),
             fields.iter().map(Held::owner).collect::<Vec<_>>()
         );
-        let mut bytes = vec![];
-        if self.program.ctors(ctor.owner).len() > 1 {
-            constant::write_natural(&BigUint::from(self.program.tag(id)), &mut bytes);
-        }
-        for field in fields {
-            bytes.extend_from_slice(field.encoded());
-        }
-        constant::read_checked(
+        Held::build(
             self.program.type_info(),
-            ctor.owner,
-            &bytes,
+            id,
+            fields,
             &mut Budget::new(FoldLimits::default()),
         )
-        .unwrap()
-        .to_owned(&mut Budget::new(FoldLimits::default()))
         .unwrap()
     }
 

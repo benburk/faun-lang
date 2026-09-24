@@ -1,6 +1,4 @@
-use super::evaluate::{
-    Config, Endian, Error, Evaluation, Host, HostResult, Memory, RejectHost, evaluate,
-};
+use super::evaluate::{Config, Error, Evaluation, Host, HostResult, Memory, RejectHost, evaluate};
 use super::*;
 use num_bigint::BigUint;
 
@@ -263,33 +261,26 @@ fn memory_program(word_bits: u16) -> (Program, FunctionId) {
 }
 
 #[test]
-fn memory_respects_endian_word_stride_and_negative_offsets() {
+fn memory_respects_word_stride_and_negative_offsets() {
     for word_bits in [16, 32, 64] {
-        for endian in [Endian::Little, Endian::Big] {
-            let (p, main) = memory_program(word_bits);
-            let result = evaluate(
-                &p,
-                main,
-                &[],
-                Config {
-                    word_bits,
-                    endian,
-                    ..Config::default()
-                },
-                &mut RejectHost,
-            )
-            .unwrap();
-            assert_eq!(result.returned().unwrap(), vec![BigUint::from(0x34u8)]);
-            let stride = usize::from(word_bits / 8);
-            let mut expected = vec![0; 32];
-            expected[0] = 0x34;
-            expected[if endian == Endian::Little {
-                stride
-            } else {
-                2 * stride - 1
-            }] = 0x34;
-            assert_eq!(result.globals, expected);
-        }
+        let (p, main) = memory_program(word_bits);
+        let result = evaluate(
+            &p,
+            main,
+            &[],
+            Config {
+                word_bits,
+                ..Config::default()
+            },
+            &mut RejectHost,
+        )
+        .unwrap();
+        assert_eq!(result.returned().unwrap(), vec![BigUint::from(0x34u8)]);
+        let stride = usize::from(word_bits / 8);
+        let mut expected = vec![0; 32];
+        expected[0] = 0x34;
+        expected[stride] = 0x34;
+        assert_eq!(result.globals, expected);
     }
 }
 

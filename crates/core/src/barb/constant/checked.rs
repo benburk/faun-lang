@@ -3,11 +3,11 @@
 
 use std::fmt;
 
-use super::{Constant, Shape, Value, header_bytes, read_u64, shape};
+use super::{Shape, Value, header_bytes, read_u64, shape};
 use crate::barb::budget::{Budget, LimitExceeded};
 use crate::barb::model::TypeDefinition;
 use crate::barb::types::TypeInfo;
-use crate::barb::{ConstId, CtorId, TypeId};
+use crate::barb::{CtorId, TypeId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConstructionError {
@@ -15,7 +15,6 @@ pub enum ConstructionError {
     NotNatural(TypeId),
     NotByteSpine(TypeId),
     UnknownConstructor(CtorId),
-    UnknownConstant(ConstId),
     FieldCount { expected: usize, actual: usize },
     FieldType { expected: TypeId, actual: TypeId },
     Limit(LimitExceeded),
@@ -36,12 +35,12 @@ impl fmt::Display for ConstructionError {
 }
 impl std::error::Error for ConstructionError {}
 
+/// Why an encoding's extent could not be walked.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DecodeError {
+pub(in crate::barb) enum DecodeError {
     UndefinedType(TypeId),
     UnterminatedHeader,
     InvalidTag(TypeId),
-    TrailingBytes,
     Limit(LimitExceeded),
 }
 
@@ -50,15 +49,6 @@ impl From<LimitExceeded> for DecodeError {
         Self::Limit(error)
     }
 }
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Limit(limit) => fmt::Display::fmt(limit, f),
-            error => write!(f, "invalid constant encoding: {error:?}"),
-        }
-    }
-}
-impl std::error::Error for DecodeError {}
 
 fn defined(types: TypeInfo<'_>, owner: TypeId) -> bool {
     types
@@ -160,27 +150,13 @@ pub(super) fn fields(
     Ok(())
 }
 
-pub(in crate::barb) fn read<'a>(
-    types: TypeInfo<'a>,
-    owner: TypeId,
-    bytes: &'a [u8],
-    budget: &mut Budget,
-) -> Result<Constant<'a>, DecodeError> {
-    budget.bytes(bytes.len())?;
-    if extent(types, owner, bytes, budget)? != bytes.len() {
-        return Err(DecodeError::TrailingBytes);
-    }
-    Ok(Constant::new(types, owner, bytes))
-}
-
 fn header(bytes: &[u8]) -> Result<usize, DecodeError> {
     Ok(header_bytes(bytes)
         .ok_or(DecodeError::UnterminatedHeader)?
         .len())
 }
 
-// Imports charge the input bytes; evaluator scans charge visits, just as before.
-// Both use this one type-directed extent walk.
+// Evaluator scans charge visits as they walk an encoding's extent.
 pub(super) fn extent(
     types: TypeInfo<'_>,
     owner: TypeId,

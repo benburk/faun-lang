@@ -53,14 +53,14 @@ fn literals_and_method_calls_reach_machine_data() {
     // says it is handed over as an address and a length is the routine's
     // contract, not its name.
     let source = "type Nat Zero Succ(Nat)\nmain!(host) -> said = host.write!(\"Hello, world!\\n\") host.exit!(0)";
-    let program = parse(source).expect("a source-level greeting");
+    let mut program = parse(source).expect("a source-level greeting");
     let rendered = program.render();
     assert!(rendered.contains("v1 = \"Hello, world!\\n\""), "{rendered}");
     assert!(rendered.contains("write!(v0, v1)"), "{rendered}");
 
-    let facts = analyze(&program);
-    let machine = faun_core::ir::lower(&program, &facts, &faun_core::platform::Routines::builtin())
-        .expect("a lowered greeting");
+    let machine =
+        faun_core::ir::lower(program.analyze(), &faun_core::platform::Routines::builtin())
+            .expect("a lowered greeting");
     assert_eq!(machine.data(), b"Hello, world!\n");
     assert!(machine.reaches("write!"));
     assert!(machine.reaches("exit!"));
@@ -104,13 +104,10 @@ fn string_escapes_are_checked_while_reading() {
     assert!(open.contains("no closing"), "{open}");
 
     let source = "type Nat Zero Succ(Nat)\nmain!(host) -> said = host.write!(\"answer: ${answer}\\n\") host.exit!(0)";
-    let program = parse(source).expect("dollar and braces are literal text");
-    let machine = faun_core::ir::lower(
-        &program,
-        &analyze(&program),
-        &faun_core::platform::Routines::builtin(),
-    )
-    .expect("literal text lowers");
+    let mut program = parse(source).expect("dollar and braces are literal text");
+    let machine =
+        faun_core::ir::lower(program.analyze(), &faun_core::platform::Routines::builtin())
+            .expect("literal text lowers");
     assert_eq!(machine.data(), b"answer: ${answer}\n");
 }
 
@@ -493,7 +490,7 @@ fn what_a_number_can_be_is_read_off_what_is_done_with_it() {
     // What a definition answers, which is what its callers hold.
     let held = |text: &str, name: &str| {
         let program = parse(text).expect("a program");
-        let facts = analyze(&program);
+        let facts = analyzed(&program);
         let at = program
             .functions()
             .iter()
@@ -544,7 +541,7 @@ fn what_a_number_can_be_is_read_off_what_is_done_with_it() {
 fn a_match_says_what_it_took_apart_could_be() {
     let held = |text: &str| {
         let program = parse(text).expect("a program");
-        let facts = analyze(&program);
+        let facts = analyzed(&program);
         (program, facts)
     };
 
@@ -705,7 +702,7 @@ fn a_routine_written_down_is_one_a_program_may_name() {
         returns: faun_core::platform::Returns::Unit,
     });
 
-    let program = super::parse(held, &routines).expect("a program naming it");
+    let mut program = super::parse(held, &routines).expect("a program naming it");
     let tick = program
         .functions()
         .iter()
@@ -723,8 +720,7 @@ fn a_routine_written_down_is_one_a_program_may_name() {
     );
     assert!(program.render().contains("tick!(v0)"));
 
-    let facts = analyze(&program);
-    let machine = faun_core::ir::lower(&program, &facts, &routines).unwrap();
+    let machine = faun_core::ir::lower(program.analyze(), &routines).unwrap();
     faun_core::ir::validate(&machine).unwrap();
     let providers: Vec<_> = machine
         .functions()
@@ -807,13 +803,10 @@ fn a_byte_string_worked_out_while_running_is_refused_by_name() {
          choose(Succ(n) a b) -> b
 
          main!(h) -> n = h.argc!() s = choose(n \"ab\\n\" \"cd\\n\") said = h.write!(s) h.exit!(0)";
-    let program = parse(source).expect("a program that selects between two strings");
-    let refused = faun_core::ir::lower(
-        &program,
-        &analyze(&program),
-        &faun_core::platform::Routines::builtin(),
-    )
-    .unwrap_err();
+    let mut program = parse(source).expect("a program that selects between two strings");
+    let refused =
+        faun_core::ir::lower(program.analyze(), &faun_core::platform::Routines::builtin())
+            .unwrap_err();
     assert!(
         refused.contains("worked out while the program runs"),
         "{refused}"
@@ -835,8 +828,8 @@ fn a_second_routine_reading_a_byte_string_needs_nothing_added() {
     });
     let source = "type Nat Zero Succ(Nat)
          main!(h) -> said = h.log!(\"note\\n\") h.exit!(0)";
-    let program = super::parse(source, &routines).expect("a program calling the new routine");
-    let machine = faun_core::ir::lower(&program, &analyze(&program), &routines).expect("it lowers");
+    let mut program = super::parse(source, &routines).expect("a program calling the new routine");
+    let machine = faun_core::ir::lower(program.analyze(), &routines).expect("it lowers");
     assert_eq!(machine.data(), b"note\n");
     let rendered = machine.render();
     assert!(
@@ -844,4 +837,12 @@ fn a_second_routine_reading_a_byte_string_needs_nothing_added() {
         "{rendered}"
     );
     assert!(rendered.contains("call log!("), "{rendered}");
+}
+
+/// What analysis finds in `program`, worked out on a copy, for a test that
+/// reads facts beside the program itself.
+fn analyzed(program: &Program) -> Facts {
+    let mut copy = program.clone();
+    copy.analyze();
+    copy.facts().expect("just analyzed").clone()
 }

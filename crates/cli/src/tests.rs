@@ -99,12 +99,7 @@ fn machine_ir(target: &'static dyn Target) {
             1,
             "only the narrowing the guard proves, never a widening"
         );
-        if target.name() == "aarch64-macos" {
-            let error = inspect(EXAMPLE, target, Stage::PreparedIr).unwrap_err();
-            assert!(error.contains("baseline emission does not yet support"));
-        } else {
-            assert_eq!(ir, inspect(EXAMPLE, target, Stage::PreparedIr).unwrap());
-        }
+        assert_eq!(ir, inspect(EXAMPLE, target, Stage::PreparedIr).unwrap());
     }
 }
 

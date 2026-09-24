@@ -183,8 +183,7 @@ fn two_names_may_give_the_same_routine() {
         returns: crate::platform::Returns::Value(Class::Word),
     });
 
-    let facts = crate::barb::analyze(&program);
-    let machine = lower(&program, &facts, &routines).expect("a representable program");
+    let machine = lower(program.analyze(), &routines).expect("a representable program");
     let held: Vec<&str> = machine
         .functions()
         .iter()
@@ -233,8 +232,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         });
         program.set_entry(main);
 
-        let facts = crate::barb::analyze(&program);
-        lower(&program, &facts, &routines)
+        lower(program.analyze(), &routines)
     };
 
     held(9).expect("a value inside four bits");
@@ -247,7 +245,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
 #[test]
 fn a_constructor_that_carries_something_is_not_a_tag() {
     let routines = crate::platform::Routines::builtin();
-    let source = crate::simple::parse(
+    let mut source = crate::simple::parse(
         "type Nat Zero Succ(Nat)
          type Maybe None Some(Nat)
          unwrap(None) -> Zero
@@ -257,7 +255,7 @@ fn a_constructor_that_carries_something_is_not_a_tag() {
         &routines,
     )
     .unwrap();
-    let program = lower(&source, &crate::barb::analyze(&source), &routines).unwrap();
+    let program = lower(source.analyze(), &routines).unwrap();
     assert!(program.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
     assert!(program.classes.as_slice().contains(&Class::Cell));
 }

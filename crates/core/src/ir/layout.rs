@@ -1,14 +1,8 @@
 //! Layout obligations introduced when symbolic values become serialized data.
+//! Every target is little-endian, so a layout is only a word width.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Endian {
-    Little,
-    Big,
-}
-
-/// A program containing target-sized data may only run at this layout.
+/// A program containing target-sized data may only run at this word width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub word_bits: u16,
-    pub endian: Endian,
 }

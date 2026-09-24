@@ -40,8 +40,7 @@ path has a strict decrease.
 
 `barb::optimize` runs each stage once: structural normalization, nonrecursive
 helper inlining, recognized arithmetic identities, constant folding, then
-cleanup. `OptimizeOptions` and `read_with_options` expose pass controls without
-bypassing validation. Inlining has per-function/program expansion budgets;
+cleanup, always in that order and never switched off. Inlining has per-function/program expansion budgets;
 folding has aggregate work, encoded-size, and depth budgets. Exhaustion leaves
 computation in place, not a numeric limit on the language. Constant evaluation
 uses compact arbitrary-precision magnitudes rather than expanded unary trees.

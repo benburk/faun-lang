@@ -125,11 +125,10 @@ impl Facts {
     }
 }
 
-/// Analyze the final Barb program before lowering. Recompute after rewriting:
-/// recognition identifies equations; ranges and affine forms use those equations.
+/// Ranges and affine forms over `program`, given which of its functions are
+/// recognised equations. [`Program::analyze`] keeps the answer.
 #[must_use]
-pub fn analyze(program: &Program) -> Facts {
-    let operations = super::arithmetic::recognise(program);
+pub(super) fn analyze(program: &Program, operations: Vec<Option<Operation>>) -> Facts {
     let ranges = super::bounds::analyze(program, &operations);
     let affine = super::affine::analyze(program, &operations);
     Facts {

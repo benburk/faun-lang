@@ -4,8 +4,8 @@ use num_traits::ToPrimitive;
 use super::budget::Budget;
 use super::constant::Held;
 use super::{
-    ByteView, ConstantView, ConstructionError, DecodeError, FoldLimits, LimitExceeded, Program,
-    TooWide, TypeId, Value, constant, decode,
+    ByteView, ConstantView, ConstructionError, FoldLimits, LimitExceeded, Program, TooWide, TypeId,
+    Value, decode,
 };
 
 #[test]
@@ -67,121 +67,18 @@ fn byte_spine_construction_checks_shape_before_mutating_storage() {
 }
 
 #[test]
-fn checked_import_borrows_input_until_it_is_committed_to_the_pool() {
-    let (mut program, nat, _, _) = super::tests::types();
-    let mut bytes = vec![0x81, 0];
-    let value = constant::read_checked(
-        program.type_info(),
-        nat,
-        &bytes,
-        &mut Budget::new(FoldLimits::default()),
-    )
-    .unwrap();
-    assert_eq!(value.encoded().as_ptr(), bytes.as_ptr());
-    assert_eq!(value.constructor(), program.ctor_at(nat, 1));
-    let id = program
-        .decode_constant(nat, &bytes, &mut Budget::new(FoldLimits::default()))
-        .unwrap();
-    bytes.fill(0);
-    assert_eq!(program.known_bytes(id), &[0x81, 0]);
-}
-
-#[test]
-fn pool_construction_preserves_reservations_including_zero_byte_fields() {
-    let (mut program, nat, _, _) = super::tests::types();
-    let unit = program.declare_type("Unit");
-    program.define_type(unit, &[("Only", &[])]);
-    for (owner, encoded, work) in [(nat, &[1][..], 11), (unit, &[][..], 7)] {
-        let pair = program.declare_type("Pair");
-        program.define_type(pair, &[("Pair", &[owner, owner])]);
-        let ctor = program.ctor_at(pair, 0);
-        let field = program
-            .decode_constant(owner, encoded, &mut Budget::new(FoldLimits::default()))
-            .unwrap();
-        let before = program.clone();
-        let mut short = Budget::new(FoldLimits {
-            work: work - 1,
-            ..FoldLimits::default()
-        });
-        assert_eq!(
-            program.construct(ctor, &[field, field], &mut short),
-            Err(ConstructionError::Limit(LimitExceeded::Work))
-        );
-        assert_eq!(short.remaining, 0);
-        assert_eq!(program, before);
-        let mut exact = Budget::new(FoldLimits {
-            work,
-            ..FoldLimits::default()
-        });
-        let id = program
-            .construct(ctor, &[field, field], &mut exact)
-            .unwrap();
-        assert_eq!(exact.remaining, 0);
-        assert_eq!(program.known_bytes(id), [encoded, encoded].concat());
-        assert_eq!(program.known_bytes(field), encoded);
-    }
-}
-
-#[test]
 fn bounded_queries_agree_with_bigints_at_every_bit_boundary() {
     let (mut program, nat, _, _) = super::tests::types();
     for bit in 0usize..=256 {
         let power = BigUint::from(1u8) << bit;
         for value in [&power - 1u8, power.clone(), power + 1u8] {
-            let mut bytes = vec![];
-            constant::write_natural(&value, &mut bytes);
-            let id = program
-                .decode_constant(nat, &bytes, &mut Budget::new(FoldLimits::default()))
-                .unwrap();
+            let id = program.intern_natural(nat, &value).unwrap();
             let ConstantView::Natural(number) = program.constant(id).view() else {
                 panic!("a natural");
             };
             assert_eq!(number.try_u64(), value.to_u64().ok_or(TooWide), "bit {bit}");
             assert_eq!(number.to_biguint(), value);
         }
-    }
-}
-
-#[test]
-fn padded_fields_are_bounded_and_imports_reject_trailing_bytes() {
-    let (mut program, nat, _, _) = super::tests::types();
-    let pair = program.declare_type("Pair");
-    program.define_type(pair, &[("Pair", &[nat, nat])]);
-    for value in [0, 1, 127, 128, u64::MAX] {
-        let mut bytes = vec![];
-        constant::write_number(value, &mut bytes);
-        *bytes.last_mut().unwrap() |= 0x80;
-        bytes.extend([0x80; 1024]);
-        bytes.push(0);
-        let length = bytes.len();
-        bytes.push(7);
-        let id = program
-            .decode_constant(pair, &bytes, &mut Budget::new(FoldLimits::default()))
-            .unwrap();
-        let ConstantView::Constructor(ctor) = program.constant(id).view() else {
-            panic!("a product");
-        };
-        let fields = ctor
-            .fields(&mut Budget::new(FoldLimits::default()))
-            .unwrap();
-        assert_eq!(fields.len(), 2);
-        assert_eq!(fields[0].encoded().len(), length);
-        assert_eq!(fields[1].encoded(), &[7]);
-        assert_eq!(
-            fields[0].constructor(),
-            program.ctor_at(nat, u32::from(value != 0))
-        );
-        let ConstantView::Natural(number) = fields[0].view() else {
-            panic!("a natural");
-        };
-        assert_eq!(number.try_u64(), Ok(value));
-        assert_eq!(number.to_biguint(), BigUint::from(value));
-        bytes.truncate(length);
-        bytes.extend([0xff; 3]); // A separate malformed value must not be scanned.
-        assert_eq!(
-            program.decode_constant(nat, &bytes, &mut Budget::new(FoldLimits::default())),
-            Err(DecodeError::TrailingBytes)
-        );
     }
 }
 
@@ -206,224 +103,35 @@ fn bounded_queries_respect_structure_not_constructor_order_or_names() {
     );
     let flag = program.declare_type("Flag");
     program.define_type(flag, &[("Off", &[]), ("On", &[])]);
-    let empty = program
-        .decode_constant(list, &[0], &mut Budget::new(FoldLimits::default()))
-        .unwrap();
+    let empty = program.intern_byte_spine(list, b"").unwrap();
     assert!(matches!(
         program.constant(empty).view(),
         ConstantView::Spine(_)
     ));
-    let (value, took) = decode(&program, flag, &[0x81, 0]);
-    let id = program
-        .decode_constant(flag, &[0x81, 0], &mut Budget::new(FoldLimits::default()))
-        .unwrap();
+    let on = program.ctor_at(flag, 1);
+    let id = program.intern(flag, &Value(on, vec![])).unwrap();
     let ConstantView::Constructor(ctor) = program.constant(id).view() else {
         panic!("a sum");
     };
-    assert_eq!(ctor.constructor(), value.0);
-    assert_eq!(value.0, program.ctor_at(flag, 1));
-    assert_eq!(took, 2);
+    assert_eq!(ctor.constructor(), on);
 }
 
 #[test]
-fn bounded_counts_preserve_byte_views_and_reject_unmaterializable_counts() {
+fn byte_views_borrow_their_bytes_and_wide_numbers_are_too_wide() {
     let (mut program, nat, _, list) = super::tests::types();
-    let id = program
-        .decode_constant(
-            list,
-            b"\x83\x00abc",
-            &mut Budget::new(FoldLimits::default()),
-        )
-        .unwrap();
+    let id = program.intern_byte_spine(list, b"abc").unwrap();
     let ConstantView::Spine(spine) = program.constant(id).view() else {
         panic!("a spine");
     };
     assert_eq!(spine.length(), BigUint::from(3u8));
     assert_eq!(spine.byte_slice(), ByteView::Borrowed(b"abc"));
-    assert_eq!(
-        program.decode_constant(list, b"\x02abc", &mut Budget::new(FoldLimits::default())),
-        Err(DecodeError::TrailingBytes)
-    );
-    let (value, took) = decode(&program, nat, &[0x82, 0]);
-    assert_eq!(value, super::tests::nat(&program, nat, 2));
-    assert_eq!(took, 2);
-    let mut overflow = vec![];
-    constant::write_natural(&(BigUint::from(1u8) << 64usize), &mut overflow);
     let id = program
-        .decode_constant(nat, &overflow, &mut Budget::new(FoldLimits::default()))
+        .intern_natural(nat, &(BigUint::from(1u8) << 64usize))
         .unwrap();
     let ConstantView::Natural(number) = program.constant(id).view() else {
         panic!("a natural");
     };
     assert_eq!(number.try_u64(), Err(TooWide));
-    assert_eq!(
-        program.decode_constant(list, &overflow, &mut Budget::new(FoldLimits::default())),
-        Err(DecodeError::Limit(LimitExceeded::Work))
-    );
-}
-
-#[test]
-fn malformed_headers_are_rejected_even_after_overflow_without_mutating_the_pool() {
-    let (mut program, nat, _, list) = super::tests::types();
-    let before = program.clone();
-    for bytes in [&[][..], &[0x80], &[0xff; 20]] {
-        for owner in [nat, list] {
-            assert_eq!(
-                program.decode_constant(owner, bytes, &mut Budget::new(FoldLimits::default())),
-                Err(DecodeError::UnterminatedHeader)
-            );
-            assert_eq!(program, before);
-        }
-    }
-}
-
-#[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "table of malformed and resource-limited imports with the same atomicity assertion"
-)]
-fn checked_imports_distinguish_invalid_shapes_from_resource_refusal() {
-    let (mut program, nat, _, list) = super::tests::types();
-    let flag = program.declare_type("Flag");
-    program.define_type(flag, &[("Off", &[]), ("On", &[])]);
-    let pair = program.declare_type("Pair");
-    program.define_type(pair, &[("Pair", &[nat, nat])]);
-    let empty = program.declare_type("Empty");
-    program.define_type(empty, &[]);
-    let pending = program.declare_type("Pending");
-    let before = program.clone();
-    for (owner, bytes, error) in [
-        (flag, &[2][..], DecodeError::InvalidTag(flag)),
-        (
-            flag,
-            &[
-                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0,
-            ][..],
-            DecodeError::InvalidTag(flag),
-        ),
-        (empty, &[0][..], DecodeError::InvalidTag(empty)),
-        (pending, &[0][..], DecodeError::UndefinedType(pending)),
-        (pair, &[1][..], DecodeError::UnterminatedHeader),
-        (list, &[2, 1][..], DecodeError::UnterminatedHeader),
-    ] {
-        assert_eq!(
-            program.decode_constant(owner, bytes, &mut Budget::new(FoldLimits::default())),
-            Err(error)
-        );
-        assert_eq!(program, before);
-    }
-    for (limits, refusal) in [
-        (
-            FoldLimits {
-                work: 0,
-                ..FoldLimits::default()
-            },
-            LimitExceeded::Work,
-        ),
-        (
-            FoldLimits {
-                max_bytes: 0,
-                ..FoldLimits::default()
-            },
-            LimitExceeded::ValueSize,
-        ),
-        (
-            FoldLimits {
-                max_depth: 0,
-                ..FoldLimits::default()
-            },
-            LimitExceeded::Depth,
-        ),
-    ] {
-        assert_eq!(
-            program.decode_constant(nat, &[1], &mut Budget::new(limits)),
-            Err(DecodeError::Limit(refusal))
-        );
-        assert_eq!(program, before);
-    }
-}
-
-#[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "checked construction boundaries reject bad inputs without changing the pool"
-)]
-fn construction_checks_type_identity_and_arity_before_mutating_the_pool() {
-    let (mut program, nat, byte, _) = super::tests::types();
-    let pair = program.declare_type("Pair");
-    program.define_type(pair, &[("Pair", &[nat, nat])]);
-    let ctor = program.ctor_at(pair, 0);
-    let one = program.intern_number(nat, 1).unwrap();
-    let two = program.intern_number(nat, 2).unwrap();
-    let octet = program.intern_number(byte, 1).unwrap();
-    // Identical shapes and identical bytes are not interchangeable types.
-    assert_eq!(program.known_bytes(one), program.known_bytes(octet));
-    let before = program.clone();
-    let mut budget = Budget::new(FoldLimits::default());
-    assert_eq!(
-        program.construct(ctor, &[one], &mut budget),
-        Err(ConstructionError::FieldCount {
-            expected: 2,
-            actual: 1
-        })
-    );
-    assert_eq!(
-        program.construct(ctor, &[one, octet], &mut budget),
-        Err(ConstructionError::FieldType {
-            expected: nat,
-            actual: byte
-        })
-    );
-    let missing = super::ConstId::at(999);
-    assert_eq!(
-        program.construct(ctor, &[one, missing], &mut budget),
-        Err(ConstructionError::UnknownConstant(missing))
-    );
-    let missing = super::CtorId::at(999);
-    assert_eq!(
-        program.construct(missing, &[], &mut budget),
-        Err(ConstructionError::UnknownConstructor(missing))
-    );
-    let wrong = Value(
-        ctor,
-        vec![
-            super::tests::nat(&program, nat, 1),
-            super::tests::nat(&program, byte, 1),
-        ],
-    );
-    assert_eq!(
-        program.intern(pair, &wrong),
-        Err(ConstructionError::FieldType {
-            expected: nat,
-            actual: byte
-        })
-    );
-    assert_eq!(
-        program.intern(pair, &Value(ctor, vec![])),
-        Err(ConstructionError::FieldCount {
-            expected: 2,
-            actual: 0
-        })
-    );
-    assert_eq!(program, before);
-    let mut tiny = Budget::new(FoldLimits {
-        max_bytes: 1,
-        ..FoldLimits::default()
-    });
-    assert_eq!(
-        program.construct(ctor, &[one, two], &mut tiny),
-        Err(ConstructionError::Limit(LimitExceeded::ValueSize))
-    );
-    assert_eq!(program, before);
-    let id = program.construct(ctor, &[one, two], &mut budget).unwrap();
-    assert_eq!(program.constant(id).owner(), pair);
-    assert_eq!(program.known_bytes(id), &[1, 2]);
-    let entry = program.declare("pair", &[], pair);
-    program.define(entry, |b, _| b.known(id));
-    assert_eq!(
-        program.expr(program.function(entry).body().unwrap().tail),
-        super::Expr::Static(id)
-    );
 }
 
 #[test]
@@ -551,9 +259,8 @@ fn constant_construction_and_decomposition_keep_their_exact_budget_charges() {
     let (mut program, nat, _, _) = super::tests::types();
     let pair = program.declare_type("Pair");
     program.define_type(pair, &[("Pair", &[nat, nat])]);
-    let id = program
-        .decode_constant(pair, &[1, 2], &mut Budget::new(FoldLimits::default()))
-        .unwrap();
+    let one_two = pair_value(&program, pair, nat);
+    let id = program.intern(pair, &one_two).unwrap();
     let view = program.constant(id);
     let mut budget = Budget::new(FoldLimits {
         work: 6,
@@ -614,17 +321,15 @@ fn field_scans_share_evaluation_depth_and_restore_it_after_refusal() {
         max_depth: 1,
         ..FoldLimits::default()
     });
-    let id = program
-        .decode_constant(outer, &[1, 2], &mut Budget::new(FoldLimits::default()))
-        .unwrap();
+    let one_two = pair_value(&program, pair, nat);
+    let wrapped = Value(program.ctor_at(outer, 0), vec![one_two.clone()]);
+    let id = program.intern(outer, &wrapped).unwrap();
     assert_eq!(
         program.constant(id).parts(&mut budget).unwrap_err(),
         LimitExceeded::Depth
     );
     assert_eq!(budget.remaining, 95);
-    let pair = program
-        .decode_constant(pair, &[1, 2], &mut Budget::new(FoldLimits::default()))
-        .unwrap();
+    let pair = program.intern(pair, &one_two).unwrap();
     let ConstantView::Constructor(pair) = program.constant(pair).view() else {
         panic!("a product");
     };
@@ -636,4 +341,15 @@ fn field_scans_share_evaluation_depth_and_restore_it_after_refusal() {
     );
     assert_eq!(pair.fields(&mut budget).unwrap().len(), 2);
     assert_eq!(budget.remaining, 77);
+}
+
+/// `Pair(1 2)`, which encodes as the two bytes `[1, 2]`.
+fn pair_value(program: &Program, pair: TypeId, nat: TypeId) -> Value {
+    Value(
+        program.ctor_at(pair, 0),
+        vec![
+            super::tests::nat(program, nat, 1),
+            super::tests::nat(program, nat, 2),
+        ],
+    )
 }

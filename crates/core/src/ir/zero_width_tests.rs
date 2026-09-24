@@ -1,5 +1,5 @@
 use super::{Class, Op, Program, Returns, evaluate, validate};
-use crate::{barb::OptimizeOptions, platform::Routines};
+use crate::platform::Routines;
 use num_bigint::BigUint;
 
 const SOURCE: &str = include_str!("../../tests/support/zero_width.fn");
@@ -15,15 +15,13 @@ fn zero_constants_choose_fixed0_but_the_entry_still_returns_a_word() {
                 "Succ(".repeat(value),
                 ")".repeat(value)
             );
-            for constant_fold in [true, false] {
-                let program = crate::read_with_options(
-                    &source,
-                    &Routines::builtin().with_word(word_bits),
-                    &OptimizeOptions {
-                        constant_fold,
-                        ..OptimizeOptions::default()
-                    },
-                )
+            for optimized in [true, false] {
+                let routines = Routines::builtin().with_word(word_bits);
+                let program = if optimized {
+                    crate::read(&source, &routines)
+                } else {
+                    crate::read_unoptimized(&source, &routines)
+                }
                 .unwrap();
                 validate(&program).unwrap();
                 let entry = program.function(program.entry());
@@ -39,10 +37,16 @@ fn zero_constants_choose_fixed0_but_the_entry_still_returns_a_word() {
     }
 }
 
-fn program(word_bits: u16, options: &OptimizeOptions) -> Program {
-    let program =
-        crate::read_with_options(SOURCE, &Routines::builtin().with_word(word_bits), options)
-            .unwrap();
+/// The fixture, optimized or not: inlining would otherwise remove the calls
+/// and joins these tests are about.
+fn program(word_bits: u16, optimized: bool) -> Program {
+    let routines = Routines::builtin().with_word(word_bits);
+    let program = if optimized {
+        crate::read(SOURCE, &routines)
+    } else {
+        crate::read_unoptimized(SOURCE, &routines)
+    }
+    .unwrap();
     validate(&program).unwrap();
     program
 }
@@ -50,13 +54,7 @@ fn program(word_bits: u16, options: &OptimizeOptions) -> Program {
 #[test]
 fn zero_parameters_results_and_joins_are_not_erased() {
     for word_bits in [16, 32, 64] {
-        let p = program(
-            word_bits,
-            &OptimizeOptions {
-                inline_helpers: false,
-                ..OptimizeOptions::default()
-            },
-        );
+        let p = program(word_bits, false);
         for (name, params, result) in [
             ("keep_zero!", vec![ZERO], ZERO),
             ("select_zero!", vec![BIT], ZERO),
@@ -97,13 +95,10 @@ fn range_proven_zero_arithmetic_selects_fixed0() {
         include_str!("../../../../crates/simple/standard/nat.fn")
     );
     for word_bits in [16, 32, 64] {
-        let p = crate::read_with_options(
+        let p = crate::read_with(
             &source,
             &Routines::builtin().with_word(word_bits),
-            &OptimizeOptions {
-                arithmetic_laws: false,
-                ..OptimizeOptions::default()
-            },
+            crate::optimize_without_laws,
         )
         .unwrap();
         validate(&p).unwrap();
@@ -148,20 +143,13 @@ fn comparison_programs(word_bits: u16, constructors: &str, expression: &str) -> 
          main!(h) ->\n  n = argc!(h)\n  status!(h probe(n))"
     );
     let routines = Routines::builtin().with_word(word_bits);
-    let barb = crate::read_barb_with_options(
-        &source,
-        &routines,
-        &OptimizeOptions {
-            arithmetic_laws: false,
-            constant_fold: false,
-            ..OptimizeOptions::default()
-        },
-    )
-    .unwrap();
-    let facts = crate::barb::analyze(&barb);
-    let lowered = crate::ir::lower(&barb, &facts, &routines).unwrap();
+    // Inlining, without the laws or folding that would decide the comparison.
+    let mut barb = crate::read_valid(&source, &routines).unwrap();
+    crate::barb::structural(&mut barb);
+    crate::barb::normalize_with_limits(&mut barb, crate::barb::InlineLimits::default());
+    let lowered = crate::ir::lower(barb.analyze(), &routines).unwrap();
     validate(&lowered).unwrap();
-    let optimized = crate::ir::optimize(&lowered, &crate::ir::OptimizeOptions::default());
+    let optimized = crate::ir::optimize(&lowered);
     validate(&optimized).unwrap();
     (lowered, optimized)
 }
@@ -281,14 +269,8 @@ impl evaluate::Host for Host {
 #[test]
 fn zero_results_preserve_eager_calls_and_nonreturning_execution() {
     for word_bits in [16, 32, 64] {
-        for inline_helpers in [true, false] {
-            let p = program(
-                word_bits,
-                &OptimizeOptions {
-                    inline_helpers,
-                    ..OptimizeOptions::default()
-                },
-            );
+        for optimized in [true, false] {
+            let p = program(word_bits, optimized);
             for argc in [1, 2, 33] {
                 for halt_on_read in [None, Some(2)] {
                     let mut host = Host {

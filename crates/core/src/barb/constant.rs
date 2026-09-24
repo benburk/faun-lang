@@ -29,9 +29,8 @@ use super::{CtorId, TypeId};
 mod checked;
 mod pool;
 mod view;
-#[cfg(test)]
-pub(super) use checked::read as read_checked;
-pub use checked::{ConstructionError, DecodeError};
+pub use checked::ConstructionError;
+pub(super) use checked::DecodeError;
 pub(super) use pool::ConstantPool;
 pub(super) use view::natural_size;
 pub use view::{

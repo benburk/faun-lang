@@ -5,12 +5,12 @@ use super::budget::{Budget, FoldLimits};
 use super::evaluate::{CannotFold, Evaluation, Evaluator};
 use super::{Body, Expr, ExprId, FnId, Operation, Program};
 
-pub fn fold(program: &mut Program) {
+pub(crate) fn fold(program: &mut Program) {
     fold_with_limits(program, FoldLimits::default());
 }
 
-pub fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
-    let operations = super::arithmetic::recognise(program);
+pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
+    let operations = program.operations().to_vec();
     let mut budget = Budget::new(limits);
     for at in 0..program.functions().len() {
         // Keep the induction equations intact for subsequent recognition.

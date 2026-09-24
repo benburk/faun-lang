@@ -1,6 +1,5 @@
 use std::process::ExitCode;
 
-use faun_aarch64_macos::Aarch64Macos;
 use faun_driver::Backend;
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
@@ -12,7 +11,7 @@ use faun_x86_64_linux::X86_64Linux;
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const BACKENDS: [Backend; 4] = [
+const BACKENDS: [Backend; 3] = [
     Backend::standard(
         &X86_64Linux,
         "x86-64-linux",
@@ -20,11 +19,6 @@ const BACKENDS: [Backend; 4] = [
     ),
     Backend::standard(&Wasm32Wasi, "wasm32-wasi", false),
     Backend::standard(&Mos6502Sim65, "mos6502-sim65", false),
-    Backend::standard(
-        &Aarch64Macos,
-        "aarch64-macos",
-        cfg!(all(target_arch = "aarch64", target_os = "macos")),
-    ),
 ];
 
 fn main() -> ExitCode {

@@ -126,7 +126,6 @@ impl Config {
     pub(super) const fn layout(self) -> super::Layout {
         super::Layout {
             word_bits: self.word_bits,
-            endian: super::Endian::Little,
         }
     }
 

@@ -4,12 +4,11 @@
 use num_bigint::BigUint;
 
 use super::{
-    Constant, ConstructionError, DecodeError, Held, Value, checked, encode, write_natural,
-    write_number,
+    Constant, ConstructionError, Held, Value, checked, encode, write_natural, write_number,
 };
-use crate::barb::budget::{Budget, LimitExceeded};
+use crate::barb::budget::LimitExceeded;
 use crate::barb::types::TypeInfo;
-use crate::barb::{ConstId, CtorId, Range, TypeId};
+use crate::barb::{ConstId, Range, TypeId};
 use crate::index::Pool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,50 +40,6 @@ impl ConstantPool {
     ) -> Result<ConstId, ConstructionError> {
         checked::tree(types, owner, value)?;
         Ok(self.hold(owner, |out| encode(types, owner, value, out)))
-    }
-
-    pub(in crate::barb) fn decode(
-        &mut self,
-        types: TypeInfo<'_>,
-        owner: TypeId,
-        bytes: &[u8],
-        budget: &mut Budget,
-    ) -> Result<ConstId, DecodeError> {
-        let value = checked::read(types, owner, bytes, budget)?;
-        Ok(self.hold(value.owner(), |out| out.extend_from_slice(value.encoded())))
-    }
-
-    pub(in crate::barb) fn construct(
-        &mut self,
-        types: TypeInfo<'_>,
-        ctor: CtorId,
-        fields: &[ConstId],
-        budget: &mut Budget,
-    ) -> Result<ConstId, ConstructionError> {
-        budget.spend(u64::try_from(fields.len()).map_err(|_| LimitExceeded::Work)?)?;
-        checked::fields(
-            types,
-            ctor,
-            fields.len(),
-            fields.iter().map(|&id| {
-                self.entries
-                    .get(id)
-                    .map(|entry| entry.owner)
-                    .ok_or(ConstructionError::UnknownConstant(id))
-            }),
-        )?;
-        // Keep the previous conservative field-copy charge even though encoding
-        // now borrows the fields. Resource policy is independent of this saving.
-        for &id in fields {
-            budget.bytes(self.bytes(id).len())?;
-        }
-        let value = Held::assemble(
-            types,
-            ctor,
-            fields.iter().map(|&id| self.get(types, id)),
-            budget,
-        )?;
-        Ok(self.intern_held(&value))
     }
 
     pub(in crate::barb) fn number(
@@ -149,7 +104,7 @@ impl ConstantPool {
 mod tests {
     use super::*;
     use crate::barb::model::TypeDefinition;
-    use crate::barb::{Ctor, FoldLimits, Symbol, Type};
+    use crate::barb::{Ctor, CtorId, Symbol, Type};
 
     #[test]
     fn a_pool_needs_only_declarations_not_a_program_or_name_table() {
@@ -173,14 +128,7 @@ mod tests {
         let mut pool = ConstantPool::default();
         let zero = pool.number(types, nat, 0).unwrap();
         assert_eq!(pool.get(types, zero).constructor(), CtorId::at(1));
-        let one = pool
-            .construct(
-                types,
-                CtorId::at(0),
-                &[zero],
-                &mut Budget::new(FoldLimits::default()),
-            )
-            .unwrap();
+        let one = pool.number(types, nat, 1).unwrap();
         assert_eq!(pool.bytes(one), &[1]);
         assert_eq!(pool.get(types, one).constructor(), CtorId::at(0));
     }

@@ -2,9 +2,8 @@
 
 use super::budget::Budget;
 use super::builder::Builder;
-use super::constant::{
-    self, Constant, ConstantPool, ConstructionError, DecodeError, Held, Shape, Value,
-};
+use super::constant::{self, Constant, ConstantPool, ConstructionError, Held, Shape, Value};
+use super::facts::{Facts, Operation};
 use super::model::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Parameter, Symbol, Type,
     TypeDefinition, TypeId,
@@ -32,7 +31,26 @@ pub struct Program {
     pub(super) names: Vec<u8>,
     pub(super) symbols: Pool<Symbol, Range>,
     pub(super) entry: Option<FnId>,
+    /// Which functions are recognised equations, one entry per function once
+    /// worked out. Rewriting a body keeps what it means, so this outlives
+    /// every optimization; only defining a body or a type forgets it.
+    operations: Derived<Vec<Option<Operation>>>,
+    /// What [`Self::analyze`] found, until anything it read changes.
+    facts: Derived<Option<Facts>>,
 }
+
+/// What was worked out from a program rather than said by it. Two programs
+/// saying the same thing are equal whatever either has worked out so far.
+#[derive(Clone, Debug, Default)]
+struct Derived<T>(T);
+
+impl<T> PartialEq for Derived<T> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for Derived<T> {}
 
 /// How a type's constants are encoded, derived from its declaration.
 #[must_use]
@@ -134,7 +152,39 @@ impl Program {
     /// than something owned, so replacing one is a store and nothing that
     /// named it has to hear about it.
     pub(super) fn write(&mut self, id: ExprId, expr: Expr) {
+        self.facts.0 = None;
         self.terms.write(id, expr);
+    }
+
+    /// Which functions are recognised equations, by function: worked out the
+    /// first time anything asks, and kept while bodies are only rewritten.
+    pub(super) fn operations(&mut self) -> &[Option<Operation>] {
+        if self.operations.0.len() != self.functions.len() {
+            self.operations.0 = super::arithmetic::recognise(self);
+        }
+        &self.operations.0
+    }
+
+    /// Work out what every term, parameter, result and field can hold, and
+    /// keep it until the program changes. Lowering reads what this found;
+    /// the program is answered back so that reading follows directly.
+    pub fn analyze(&mut self) -> &Self {
+        let operations = self.operations().to_vec();
+        self.facts.0 = Some(super::facts::analyze(self, operations));
+        self
+    }
+
+    /// What [`Self::analyze`] found, where nothing it read has changed since.
+    #[must_use]
+    pub const fn facts(&self) -> Option<&Facts> {
+        self.facts.0.as_ref()
+    }
+
+    /// Forget everything worked out about this program: a declaration or a
+    /// body now says something it did not.
+    fn redefined(&mut self) {
+        self.operations.0.clear();
+        self.facts.0 = None;
     }
 
     #[must_use]
@@ -261,6 +311,7 @@ impl Program {
     }
 
     fn declare_type_with_display(&mut self, name: &str, inline: bool) -> TypeId {
+        self.redefined();
         let name = self.symbol(name);
         self.types.push(Type {
             name,
@@ -284,6 +335,7 @@ impl Program {
                 assert!(self.types.get(*field).is_some(), "a declared field type");
             }
         }
+        self.redefined();
         let start = self.ctors.len();
         for (name, fields) in ctors {
             let name = self.symbol(name);
@@ -312,6 +364,7 @@ impl Program {
 
     /// Declare a function with source-level parameter names.
     pub fn declare_named(&mut self, name: &str, params: &[(&str, TypeId)], result: TypeId) -> FnId {
+        self.redefined();
         let name = self.symbol(name);
         let types: Vec<_> = params.iter().map(|(_, ty)| *ty).collect();
         let types = append_range(&mut self.types_pool, &types);
@@ -345,6 +398,7 @@ impl Program {
     /// # Panics
     /// If the function already has a body.
     pub fn answered_by(&mut self, id: FnId, name: &str) {
+        self.redefined();
         let name = self.symbol(name);
         let super::Definition::External { symbol, .. } = &mut self.functions[id].definition else {
             panic!("only an external declaration can name a provider");
@@ -357,6 +411,7 @@ impl Program {
     /// # Panics
     /// If the function already has a body.
     pub fn bound(&mut self, id: FnId, bounds: super::Bounds) {
+        self.redefined();
         let super::Definition::External {
             bounds: contract, ..
         } = &mut self.functions[id].definition
@@ -371,13 +426,15 @@ impl Program {
     /// # Panics
     /// If `at` is outside the function signature.
     pub fn bound_parameter(&mut self, id: FnId, at: usize, bounds: super::Bounds) {
+        self.redefined();
         let range = self.functions[id].parameters;
         assert!(at < range.len(), "parameter outside the function signature");
         self.parameters[range.range().start + at].bounds = Some(bounds);
     }
 
     /// The function a target enters.
-    pub const fn set_entry(&mut self, id: FnId) {
+    pub fn set_entry(&mut self, id: FnId) {
+        self.facts.0 = None;
         self.entry = Some(id);
     }
 
@@ -388,34 +445,6 @@ impl Program {
     pub fn intern(&mut self, id: TypeId, value: &Value) -> Result<ConstId, ConstructionError> {
         let (types, pool) = self.constant_parts();
         pool.intern(types, id, value)
-    }
-
-    /// Import exactly one encoded value without expanding its constructor tree.
-    ///
-    /// # Errors
-    /// If the encoding is malformed, has trailing bytes, or exceeds the budget.
-    pub fn decode_constant(
-        &mut self,
-        owner: TypeId,
-        bytes: &[u8],
-        budget: &mut Budget,
-    ) -> Result<ConstId, DecodeError> {
-        let (types, pool) = self.constant_parts();
-        pool.decode(types, owner, bytes, budget)
-    }
-
-    /// Construct a constant from other constants in this program.
-    ///
-    /// # Errors
-    /// If the fields do not match the constructor, or the budget is exhausted.
-    pub fn construct(
-        &mut self,
-        ctor: CtorId,
-        fields: &[ConstId],
-        budget: &mut Budget,
-    ) -> Result<ConstId, ConstructionError> {
-        let (types, pool) = self.constant_parts();
-        pool.construct(types, ctor, fields, budget)
     }
 
     /// Encode a number directly, without building its unary constructor chain.
@@ -459,6 +488,7 @@ impl Program {
 
     /// Publish roots only after a pass has finished reading the original bodies.
     pub(super) fn replace_bodies(&mut self, bodies: Vec<(FnId, Body)>) {
+        self.facts.0 = None;
         for (id, body) in bodies {
             self.functions[id].define(body);
         }
@@ -478,6 +508,7 @@ impl Program {
     ///
     /// If the function takes more parameters than the tier allows.
     pub fn define(&mut self, id: FnId, build: impl FnOnce(&mut Builder, &[Atom]) -> Atom) {
+        self.redefined();
         let arity = u32::try_from(self.params(id).len()).expect("a sane arity");
         let body = Builder::build(self, arity, build);
         self.functions[id].define(body);

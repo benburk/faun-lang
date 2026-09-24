@@ -18,20 +18,7 @@ pub fn read(
     text: &str,
     routines: &faun_core::platform::Routines,
 ) -> Result<faun_core::ir::Program, String> {
-    read_with_options(text, routines, &faun_core::barb::OptimizeOptions::default())
-}
-
-/// Compile a program with deterministic optimization controls.
-///
-/// # Errors
-///
-/// Reports parsing, typing, structural, totality, or representation errors.
-pub fn read_with_options(
-    text: &str,
-    routines: &faun_core::platform::Routines,
-    options: &faun_core::barb::OptimizeOptions,
-) -> Result<faun_core::ir::Program, String> {
-    faun_core::machine(&read_barb_with_options(text, routines, options)?, routines)
+    faun_core::machine(&mut read_barb(text, routines)?, routines)
 }
 
 /// Validate and optimize a program, stopping at Barb.
@@ -39,14 +26,13 @@ pub fn read_with_options(
 /// # Errors
 ///
 /// Reports parsing, typing, structural, or totality errors.
-pub fn read_barb_with_options(
+pub fn read_barb(
     text: &str,
     routines: &faun_core::platform::Routines,
-    options: &faun_core::barb::OptimizeOptions,
 ) -> Result<faun_core::barb::Program, String> {
     let mut program = parse(text, routines)?;
     faun_core::barb::validate(&program)?;
-    faun_core::barb::optimize(&mut program, options);
+    faun_core::barb::optimize(&mut program);
     Ok(program)
 }
 

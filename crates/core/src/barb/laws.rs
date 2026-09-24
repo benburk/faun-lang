@@ -5,7 +5,7 @@
 use super::{Atom, Body, ConstantView, Expr, ExprId, FnId, Operation, Program};
 
 pub(super) fn laws(program: &mut Program) {
-    let operations = super::arithmetic::recognise(program);
+    let operations = program.operations().to_vec();
     for at in 0..program.functions().len() {
         if operations[at].is_some() {
             continue;

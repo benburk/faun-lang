@@ -82,15 +82,21 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `affine.rs`: derive small affine summaries from recognized natural addition and
   multiplication by constants, without adding an expression kind or expanding
   nonlinear products.
-- `facts.rs`: `analyze` combines recognition, ranges and affine summaries for the
-  final program. Run it after optimization; facts must be recomputed after rewriting.
+- `facts.rs`: the fact tables. `Program` owns them. Recognition is worked out
+  the first time a pass asks and kept across rewrites, since rewriting a body
+  keeps what it means; defining a body or a type forgets it. `Program::analyze`
+  adds ranges and affine summaries, which any change to a body, declaration
+  or the entry drops, so `Program::facts` answers only facts about the program
+  as it stands. Lowering reads them there and refuses an unanalyzed program.
+  Facts attach to functions, types and fields where possible, because those
+  survive rewriting; expression-indexed facts do not.
 - `normalize.rs`: capture-free structural rebuilding; `inline.rs`: expansion
   eligibility, copy costs and budgets. Structural-only normalization does not
   construct an inlining plan or compute its recursion/copy-cost tables.
 - `constant.rs`, `constant/view.rs`, `constant/checked.rs`: compact encoding,
-  validated semantic views, and checked construction/import boundaries.
-  Views read magnitudes and constructors without materializing trees. Imports
-  and evaluator field scans share one bounded, type-directed extent walk.
+  validated semantic views, and checked construction.
+  Views read magnitudes and constructors without materializing trees.
+  Evaluator field scans walk an encoding's extent within a budget.
 - `constant/pool.rs`: owns constant entries, encoded bytes and checked insertion.
   `Program` keeps this pool paired with its own declarations; callers cannot
   substitute a different catalogue. The codec and views borrow only type metadata.
@@ -113,10 +119,10 @@ two types -- so nothing infers a provider or an effect from the display name.
 
 ## Optimization passes
 
-`optimize(program, &OptimizeOptions)` runs a small fixed schedule after validation:
+`optimize(program)` runs a small fixed schedule after validation:
 
 1. Structural normalization: substitute local aliases, without expanding calls.
-2. Optional helper inlining: nonrecursive, non-arithmetic helpers only.
+2. Helper inlining: nonrecursive, non-arithmetic helpers only.
 3. Arithmetic identities justified by structurally recognized `Operation` facts.
 4. Constant folding with one shared evaluation budget for the entire pass.
 5. Bounded algebraic normalization: combine constants across recognized associative
@@ -125,11 +131,10 @@ two types -- so nothing infers a provider or an effect from the display name.
 6. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
    pure arithmetic; retain calls of unknown meaning and matches.
 
-Each stage runs once and can be disabled programmatically.
-`faun_simple::read_with_options` exposes
-these controls without bypassing validation or totality checking. Disabling helper
-inlining may reduce range analysis precision and backend representability, not alter
-Barb semantics. `normalize_with_limits` does structural-only rebuilding when any inline limit is
+Each stage runs once, always; there are no switches. Tests isolating one stage
+call it directly within the crate. Inlining is also what gives range analysis
+most of its precision, so lowering an uninlined program can need wider values.
+`normalize_with_limits` does structural-only rebuilding when any inline limit is
 zero, without planning expansions. Recognition still runs to protect arithmetic
 definitions; this is not a claim that structural normalization performs no analysis.
 
@@ -217,26 +222,23 @@ its length and an explicit `ByteView` capability. Every constant has a total
 computing a predecessor. Tail decomposition does that work only when requested.
 Ordinary constructor fields can be borrowed with a budget.
 
-`Program::intern` checks constructor trees; `construct` checks the arity and type
-identity of constant fields; `decode_constant` validates exactly one encoded value.
-`intern_number`, `intern_natural`, `intern_byte_spine`, and their builder entry
+`Program::intern` checks constructor trees; `intern_number`, `intern_natural`, `intern_byte_spine`, and their builder entry
 points return `Result`. Number insertion rejects undefined and non-natural shapes;
 byte-spine insertion requires one natural element field and one recursive field.
-All checks run before bytes are written. Failed construction/import never changes
-the pools. Unchecked raw-byte queries
-and constant constructors are not exposed. The byte format and
+All checks run before bytes are written. Failed construction never changes the
+pools. There is no way in from raw bytes, so every constant is canonically
+encoded; the folder builds compound constants from fields it has checked. The byte format and
 `known_bytes` remain unchanged; a tree decoder remains only as an independent test
 oracle. IDs are still unbranded and must be used with their owning program; this
 is not a full type checker for dynamic Barb expressions.
 
-`ConstructionError` and `DecodeError` describe invalid input. `LimitExceeded`
+`ConstructionError` describes invalid input. `LimitExceeded`
 distinguishes work, depth and value-size refusal. Evaluation separately reports
 dynamic inputs, opaque calls and limits; only the folding driver decides to keep
 an expression. Invalid construction in otherwise well-typed Barb is an invariant
 violation, not a routine reason to decline folding. Field scans share evaluation's
 depth and work budget, and construction still reserves encoded size before copying.
-Pool construction checks fields once and assembles from borrowed inputs; imports
-validate the caller's bytes before copying directly into storage. Compound results
+Pool construction checks fields once and assembles from borrowed inputs. Compound results
 still use an owned staging buffer so pool reallocation cannot invalidate input
 slices and resource refusal leaves storage unchanged. Former field-copy charges
 remain conservative reservations: removing those temporary buffers does not alter
@@ -248,8 +250,9 @@ branding are separate decisions.
 
 Compaction invalidates old expression IDs and term ranges, including saved bodies
 and expression-indexed facts. Function, type, constructor, symbol and constant IDs
-stay stable. Recompute `analyze` after optimization. Disabling cleanup leaves the
-append-only arena history in place; memory reclamation is not required for semantics.
+stay stable; expression-indexed facts are dropped with the old arena, so
+analyze after optimizing. Until cleanup runs, the append-only arena history
+stays in place; memory reclamation is not required for semantics.
 
 Identities preserve monus and zero-divisor semantics. In particular, `x / x` is not
 rewritten to one. Argument bindings remain eager even when a law makes their values

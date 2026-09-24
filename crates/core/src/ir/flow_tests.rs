@@ -252,12 +252,12 @@ fn internal_never_contracts_propagate_but_cannot_return_unit() {
 #[test]
 fn source_never_functions_keep_their_contract_without_inlining() {
     let routines = crate::platform::Routines::builtin().with_word(64);
-    let source = crate::simple::parse(
+    let mut source = crate::simple::parse(
         "type Nat Zero Succ(Nat)\nfinish!(h) -> exit!(h Zero)\nmain!(h) -> finish!(h)",
         &routines,
     )
     .unwrap();
-    let p = lower(&source, &crate::barb::analyze(&source), &routines).unwrap();
+    let p = lower(source.analyze(), &routines).unwrap();
     validate(&p).unwrap();
     assert_eq!(
         p.functions().iter().filter(|f| f.body().is_some()).count(),

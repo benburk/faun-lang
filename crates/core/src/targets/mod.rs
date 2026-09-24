@@ -16,7 +16,7 @@ pub mod bytes;
 
 use std::fmt;
 
-use crate::ir::{Budget, Class, Endian, Layout, Op, Program, Returns, ValueId};
+use crate::ir::{Budget, Class, Layout, Op, Program, Returns, ValueId};
 
 #[derive(Debug)]
 pub struct Artifact {
@@ -40,11 +40,6 @@ pub trait Target: fmt::Debug {
     /// Width of a scalar word and address. Wider Fixed values are rejected;
     /// unbounded Naturals are legalized separately, never implicitly wrapped.
     fn word(&self) -> u16;
-
-    /// Byte order for word-sized memory accesses.
-    fn endian(&self) -> Endian {
-        Endian::Little
-    }
 
     /// The routines it answers for, by the name a target is asked by.
     ///
@@ -159,10 +154,7 @@ pub trait Target: fmt::Debug {
     /// Names the first thing it cannot hold.
     fn accepts(&self, program: &Program) -> Result<(), String> {
         let (name, word) = (self.name(), self.word());
-        let layout = Layout {
-            word_bits: word,
-            endian: self.endian(),
-        };
+        let layout = Layout { word_bits: word };
         accepts_layout(name, layout, program)?;
         for at in 0..program.values_count() {
             let class = program.class(ValueId::at(at));

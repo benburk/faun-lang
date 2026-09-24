@@ -362,7 +362,7 @@ fn target_supplies_named_entry_parameters() {
 /// "what does a backend do with this"; a shape only the passes produce has
 /// to be asked for separately.
 fn optimized(program: &Program) -> Program {
-    faun_core::ir::optimize(program, &faun_core::ir::OptimizeOptions::default())
+    faun_core::ir::optimize(program)
 }
 
 pub(super) fn bytes(program: &Program) -> Vec<u8> {
@@ -531,10 +531,9 @@ fn it_lays_out_a_chain_as_the_number_it_builds() {
 
 #[test]
 fn it_runs_a_program_built_rather_than_written() {
-    let barb = programs::two_and_two_in_barb();
-    let facts = faun_core::barb::analyze(&barb);
+    let mut barb = programs::two_and_two_in_barb();
     let machine =
-        faun_core::ir::lower(&barb, &facts, &TARGET.routines()).expect("a representable program");
+        faun_core::ir::lower(barb.analyze(), &TARGET.routines()).expect("a representable program");
     // Recognized addition becomes an instruction; only the entry survives.
     assert_eq!(
         machine
@@ -618,16 +617,16 @@ fn runnable_expression_example_uses_runtime_arguments() {
 #[test]
 fn source_zero_width_scalars_cross_calls_and_joins() {
     let source = include_str!("zero_width.fn");
-    for inline_helpers in [true, false] {
-        let program = faun_simple::read_with_options(
-            source,
-            &TARGET.routines(),
-            &faun_core::barb::OptimizeOptions {
-                inline_helpers,
-                ..faun_core::barb::OptimizeOptions::default()
-            },
-        )
-        .unwrap();
+    for optimized in [true, false] {
+        let routines = TARGET.routines();
+        let program = if optimized {
+            faun_simple::read(source, &routines).unwrap()
+        } else {
+            // Inlining would remove the calls and joins this is about.
+            let mut barb = faun_simple::parse(source, &routines).unwrap();
+            faun_core::barb::validate(&barb).unwrap();
+            faun_core::machine(&mut barb, &routines).unwrap()
+        };
         assert!(
             (0..program.values_count())
                 .any(|at| { program.class(ValueId::at(at)) == Class::fixed(0) })
@@ -637,7 +636,7 @@ fn source_zero_width_scalars_cross_calls_and_joins() {
             assert_eq!(
                 status,
                 i32::from(argc == 1),
-                "argc={argc}, inline={inline_helpers}"
+                "argc={argc}, optimized={optimized}"
             );
             assert!(stdout.is_empty());
         }
@@ -810,8 +809,8 @@ fn lowered(
     routines: &faun_core::platform::Routines,
 ) -> Program {
     faun_core::barb::validate(&barb).expect("a sound program");
-    faun_core::barb::optimize(&mut barb, &faun_core::barb::OptimizeOptions::default());
-    faun_core::machine(&barb, routines).expect("a representable program")
+    faun_core::barb::optimize(&mut barb);
+    faun_core::machine(&mut barb, routines).expect("a representable program")
 }
 
 #[test]

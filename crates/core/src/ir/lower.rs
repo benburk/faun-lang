@@ -62,12 +62,11 @@ mod tests;
 /// # Panics
 ///
 /// If `program` has no entry.
-pub fn lower(
-    program: &barb::Program,
-    facts: &barb::Facts,
-    routines: &Routines,
-) -> Result<Program, String> {
+pub fn lower(program: &barb::Program, routines: &Routines) -> Result<Program, String> {
     barb::validate(program)?;
+    let facts = program
+        .facts()
+        .ok_or_else(|| "a program is analyzed before it is lowered".to_owned())?;
     let entry = program.entry().expect("a program to lower has an entry");
     // Only values actually lowered need a representation. Merely declaring
     // a library type (or retaining an old expression in the arena) does not.

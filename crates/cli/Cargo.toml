@@ -18,7 +18,6 @@ doc = false
 
 [dependencies]
 bpaf = "0.9"
-faun-aarch64-macos.workspace = true
 faun-core.workspace = true
 faun-driver.workspace = true
 faun-mos6502-sim65.workspace = true

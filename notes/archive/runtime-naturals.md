@@ -19,9 +19,9 @@ exhaustion exits with status 2; it never returns a wrapped integer or zero in
 place of a failed allocation. Explicit `Convert` to scalar classes truncates.
 Clients can select a different budget by legalizing explicitly before emission.
 The serialized headers are **target sized**. Runtime generation records a
-`Program::layout()` obligation containing `Config.word_bits` and
-`Endian::Little`. Legalization, target acceptance and interpretation reject a
-mismatched word size or byte order before execution or emission. Cloning and
+`Program::layout()` obligation containing `Config.word_bits`; every target is
+little-endian. Legalization, target acceptance and interpretation reject a
+mismatched word size before execution or emission. Cloning and
 re-legalizing preserve this obligation; scalar-only legalization leaves portable
 programs unbound.
 This is a memory resource limit, not a numeric modulus.

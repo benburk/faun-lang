@@ -20,13 +20,13 @@ pub mod targets;
 ///
 /// Names what the machine tier cannot represent.
 pub fn machine(
-    program: &barb::Program,
+    program: &mut barb::Program,
     routines: &platform::Routines,
 ) -> Result<ir::Program, String> {
-    let facts = barb::analyze(program);
-    let held = ir::lower(program, &facts, routines)?;
+    program.analyze();
+    let held = ir::lower(program, routines)?;
     ir::validate(&held)?;
-    Ok(ir::optimize(&held, &ir::OptimizeOptions::default()))
+    Ok(ir::optimize(&held))
 }
 
 // Core unit tests still exercise source-to-machine behavior. Reuse the simple
@@ -42,28 +42,52 @@ mod simple_parse;
 
 #[cfg(test)]
 fn read(text: &str, routines: &platform::Routines) -> Result<ir::Program, String> {
-    read_with_options(text, routines, &barb::OptimizeOptions::default())
+    let mut program = read_barb(text, routines)?;
+    machine(&mut program, routines)
 }
 
 #[cfg(test)]
-fn read_with_options(
-    text: &str,
-    routines: &platform::Routines,
-    options: &barb::OptimizeOptions,
-) -> Result<ir::Program, String> {
-    machine(&read_barb_with_options(text, routines, options)?, routines)
-}
-
-#[cfg(test)]
-fn read_barb_with_options(
-    text: &str,
-    routines: &platform::Routines,
-    options: &barb::OptimizeOptions,
-) -> Result<barb::Program, String> {
-    let mut program = simple_parse::parse(text, routines)?;
-    barb::validate(&program)?;
-    barb::optimize(&mut program, options);
+fn read_barb(text: &str, routines: &platform::Routines) -> Result<barb::Program, String> {
+    let mut program = read_valid(text, routines)?;
+    barb::optimize(&mut program);
     Ok(program)
+}
+
+/// Read and check a program without optimizing it, for a test of what the
+/// tiers below make of shapes the optimizer would have removed.
+#[cfg(test)]
+fn read_valid(text: &str, routines: &platform::Routines) -> Result<barb::Program, String> {
+    let program = simple_parse::parse(text, routines)?;
+    barb::validate(&program)?;
+    Ok(program)
+}
+
+/// The same, lowered to machine IR.
+#[cfg(test)]
+fn read_unoptimized(text: &str, routines: &platform::Routines) -> Result<ir::Program, String> {
+    read_with(text, routines, |_| {})
+}
+
+/// Read and check a program, run the stages `optimize` names, and lower it:
+/// a test isolating lowering from one stage says which it runs instead.
+#[cfg(test)]
+fn read_with(
+    text: &str,
+    routines: &platform::Routines,
+    optimize: impl FnOnce(&mut barb::Program),
+) -> Result<ir::Program, String> {
+    let mut program = read_valid(text, routines)?;
+    optimize(&mut program);
+    machine(&mut program, routines)
+}
+
+/// Every stage of the Barb schedule but its arithmetic laws, for a test of
+/// lowering the operations those laws would have rewritten away.
+#[cfg(test)]
+fn optimize_without_laws(program: &mut barb::Program) {
+    barb::structural(program);
+    barb::normalize_with_limits(program, barb::InlineLimits::default());
+    barb::fold(program);
 }
 
 #[cfg(test)]

@@ -26,12 +26,9 @@ use super::{
 };
 use num_bigint::BigUint;
 
-pub use super::Endian;
-
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
     pub word_bits: u16,
-    pub endian: Endian,
     pub fuel: u64,
     pub max_natural_bits: u64,
 }
@@ -40,7 +37,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             word_bits: 64,
-            endian: Endian::Little,
             fuel: 100_000,
             max_natural_bits: 1_048_576,
         }
@@ -264,7 +260,6 @@ pub fn evaluate(
     }
     let actual = super::Layout {
         word_bits: config.word_bits,
-        endian: config.endian,
     };
     if let Some(expected) = program.layout()
         && expected != actual
@@ -875,10 +870,7 @@ impl<H: Host> Machine<'_, H> {
         let bytes = self
             .memory
             .read(self.address(address, offset)?, self.bytes(width))?;
-        Ok(match self.config.endian {
-            Endian::Little => BigUint::from_bytes_le(bytes),
-            Endian::Big => BigUint::from_bytes_be(bytes),
-        })
+        Ok(BigUint::from_bytes_le(bytes))
     }
 
     fn bytes(&self, width: Width) -> usize {
@@ -900,9 +892,6 @@ impl<H: Host> Machine<'_, H> {
         self.fit(Class::Word, &value)?;
         let mut bytes = value.to_bytes_le();
         bytes.resize(self.bytes(width), 0);
-        if self.config.endian == Endian::Big {
-            bytes.reverse();
-        }
         self.counts.stores += 1;
         self.counts.stored_bytes += u64::try_from(bytes.len()).expect("a width in bytes");
         self.memory.write(address, &bytes)

@@ -1433,7 +1433,7 @@ mod tests {
         for bits in [16, 32, 64] {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
             let mut program = application(&resolved, &checked, &prelude, &host, &routines).unwrap();
-            barb::optimize(&mut program, &barb::OptimizeOptions::default());
+            barb::optimize(&mut program);
             let rendered = program.render();
             // Authority is a value with one inhabitant: it carries no
             // startup payload, so a host module offers what it has as
@@ -1445,7 +1445,7 @@ mod tests {
             assert!(!rendered.contains("_start"));
             assert!(!rendered.lines().any(|line| line == "[]"));
             assert!(!rendered.contains('$'));
-            let machine = faun_core::machine(&program, &routines).unwrap();
+            let machine = faun_core::machine(&mut program.clone(), &routines).unwrap();
             // Nothing holds authority below Barb, so the entry takes nothing
             // and no target binds a parameter by name to supply it.
             assert_eq!(machine.parameter_names(machine.entry()).count(), 0);
@@ -1461,7 +1461,7 @@ mod tests {
         for (suffix, expected) in [("$$natural_arithmetic", 14), ("$$signed_arithmetic", 10)] {
             let entry = named(&resolved, &checked, suffix);
             let mut program = program(&resolved, &checked, &prelude, entry).unwrap();
-            barb::optimize(&mut program, &barb::OptimizeOptions::default());
+            barb::optimize(&mut program);
             barb::validate(&program).unwrap();
             let body = program.function(program.entry().unwrap()).body().unwrap();
             let barb::Expr::Static(value) = program.expr(body.tail) else {

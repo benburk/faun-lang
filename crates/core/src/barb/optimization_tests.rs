@@ -1,9 +1,10 @@
 use super::budget::{Budget, LimitExceeded};
 use super::constant::Held;
 use super::evaluate::{CannotFold, Evaluator};
+use super::fold::fold_with_limits;
 use super::{
-    Body, ConstantView, Expr, ExprId, FnId, FoldLimits, InlineLimits, OptimizeOptions, Program,
-    Value, arithmetic, decode, fold, fold_with_limits, normalize_with_limits, optimize, validate,
+    Body, ConstantView, Expr, ExprId, FnId, FoldLimits, InlineLimits, Program, Value, arithmetic,
+    decode, fold, normalize_with_limits, optimize, validate,
 };
 
 const LIBRARY: &str = include_str!("../../../../crates/simple/standard/nat.fn");
@@ -26,17 +27,28 @@ fn named(program: &Program, name: &str) -> FnId {
     )
 }
 
-fn off() -> OptimizeOptions {
-    OptimizeOptions {
-        structural: false,
-        inline_helpers: false,
-        arithmetic_laws: false,
-        constant_fold: false,
-        algebra: false,
-        cleanup: false,
-        ..OptimizeOptions::default()
-    }
+/// How a program may be optimized: not at all, by each stage of the
+/// schedule alone, and by the whole schedule. Each stage must keep what a
+/// program means on its own, not only after the stages before it.
+fn schedules() -> Vec<(&'static str, Stages)> {
+    vec![
+        ("nothing", |_| {}),
+        ("structural", super::structural),
+        ("inlining", |p| {
+            normalize_with_limits(p, InlineLimits::default());
+        }),
+        ("laws", super::laws::laws),
+        ("folding", fold),
+        ("algebra", |p| {
+            super::normalize::algebra(p, FoldLimits::default());
+        }),
+        ("cleanup", super::cleanup::cleanup),
+        ("everything", optimize),
+    ]
 }
+
+/// Some stages of the schedule, run in order on a program.
+type Stages = fn(&mut Program);
 
 // Independent, deliberately small structural oracle. It executes every eager
 // binding, records opaque calls, and does not use recognition or the folder.
@@ -113,28 +125,10 @@ fn arithmetic_probes() -> (Program, Vec<FnId>) {
 fn schedule_ablations_preserve_small_arithmetic_and_recognition() {
     let (original, probes) = arithmetic_probes();
     let ty = original.params(named(&original, "add"))[0];
-    let mut variants = vec![off(), OptimizeOptions::default()];
-    for pass in 0..6 {
-        let mut options = OptimizeOptions::default();
-        match pass {
-            0 => options.structural = false,
-            1 => options.inline_helpers = false,
-            2 => options.arithmetic_laws = false,
-            3 => options.constant_fold = false,
-            4 => options.algebra = false,
-            _ => options.cleanup = false,
-        }
-        variants.push(options);
-    }
-    // Exercise laws alone, without folding making the same answers by chance.
-    variants.push(OptimizeOptions {
-        arithmetic_laws: true,
-        ..off()
-    });
     let recognized = arithmetic::recognise(&original);
-    for options in variants {
+    for (schedule, stages) in schedules() {
         let mut optimized = original.clone();
-        optimize(&mut optimized, &options);
+        stages(&mut optimized);
         validate(&optimized).unwrap();
         assert_eq!(arithmetic::recognise(&optimized), recognized);
         for &id in &probes {
@@ -144,7 +138,7 @@ fn schedule_ablations_preserve_small_arithmetic_and_recognition() {
                 assert_eq!(
                     run(&optimized, id, args, &mut vec![]),
                     expected,
-                    "{}({n}), {options:?}",
+                    "{}({n}), {schedule}",
                     original.name(original.function(id).name)
                 );
             }
@@ -175,7 +169,7 @@ fn algebraic_arithmetic_collects_constants_in_safe_directions() {
     validate(&original).unwrap();
 
     let mut optimized = original.clone();
-    optimize(&mut optimized, &OptimizeOptions::default());
+    optimize(&mut optimized);
     validate(&optimized).unwrap();
 
     for probe in probes {
@@ -198,7 +192,7 @@ fn affine_facts_collect_shared_linear_terms_without_synthesizing_calls() {
     });
     validate(&program).unwrap();
 
-    let facts = super::analyze(&program);
+    let facts = crate::barb::analyzed(&program);
     let tail = program.function(test).body().unwrap().tail;
     let affine = facts.affine(tail).expect("a bounded affine summary");
     assert_eq!(affine.constant, 6);
@@ -224,7 +218,7 @@ fn affine_facts_stop_at_nonlinear_products_and_the_term_limit() {
     });
     validate(&program).unwrap();
 
-    let facts = super::analyze(&program);
+    let facts = crate::barb::analyzed(&program);
     for id in [nonlinear, crowded] {
         let tail = program.function(id).body().unwrap().tail;
         assert!(facts.affine(tail).is_none(), "{}", program.render());
@@ -298,39 +292,6 @@ fn assert_normalized_arithmetic(
 }
 
 #[test]
-fn arithmetic_laws_read_padded_constants_by_value_not_by_encoding() {
-    let mut program = library();
-    let ty = program.params(named(&program, "add"))[0];
-    let mut probes = vec![];
-    for (name, bytes) in [
-        ("add", [0x80, 0]),
-        ("mul", [0x81, 0]),
-        ("div", [0x81, 0]),
-        ("mod", [0x80, 0]),
-    ] {
-        let called = named(&program, name);
-        let constant = program
-            .decode_constant(ty, &bytes, &mut Budget::new(FoldLimits::default()))
-            .unwrap();
-        let probe = program.declare(&format!("padded_{name}"), &[ty], ty);
-        program.define(probe, |b, args| {
-            let constant = b.known(constant);
-            b.call(called, &[args[0], constant])
-        });
-        probes.push(probe);
-    }
-    super::laws::laws(&mut program);
-    validate(&program).unwrap();
-    for id in probes {
-        let tail = program.function(id).body().unwrap().tail;
-        assert_eq!(
-            program.expr(tail),
-            Expr::Atom(super::Atom(super::Local::at(0)))
-        );
-    }
-}
-
-#[test]
 fn self_division_is_not_one_and_misleading_names_do_not_earn_laws() {
     let mut program = library();
     let div = named(&program, "div");
@@ -345,13 +306,7 @@ fn self_division_is_not_one_and_misleading_names_do_not_earn_laws() {
         let zero = b.known(zero);
         b.call(fake, &[zero, args[0]])
     });
-    optimize(
-        &mut program,
-        &OptimizeOptions {
-            arithmetic_laws: true,
-            ..off()
-        },
-    );
+    super::laws::laws(&mut program);
     assert!(
         matches!(program.expr(program.function(test).body().unwrap().tail), Expr::Call(called, _) if called == div)
     );
@@ -392,25 +347,15 @@ fn eager_effects_survive_folding_inlining_laws_and_cleanup() {
     let test = named(&original, "eager_test");
     let helper = named(&original, "effect_then_zero");
     let ty = original.function(helper).result;
-    for options in [
-        OptimizeOptions::default(),
-        OptimizeOptions {
-            inline_helpers: false,
-            ..OptimizeOptions::default()
-        },
-        OptimizeOptions {
-            constant_fold: true,
-            ..off()
-        },
-    ] {
+    for (schedule, stages) in schedules() {
         let mut optimized = original.clone();
-        optimize(&mut optimized, &options);
+        stages(&mut optimized);
         let mut trace = vec![];
         assert_eq!(
             run(&optimized, test, vec![], &mut trace),
             super::tests::nat(&original, ty, 0)
         );
-        assert_eq!(trace, [first, second], "{options:?}");
+        assert_eq!(trace, [first, second], "{schedule}");
     }
     // The evaluator must decline the whole helper, even though its answer is
     // known: a refusal is not permission to skip an eager binding.
@@ -443,7 +388,7 @@ fn normalization_and_cleanup_keep_effects_on_their_original_paths() {
     });
     let test = program.declare("test", &[ty], ty);
     program.define(test, |b, args| b.call(helper, args));
-    optimize(&mut program, &OptimizeOptions::default());
+    optimize(&mut program);
     for (n, effect) in [(0, first), (1, second)] {
         let mut trace = vec![];
         run(
@@ -789,13 +734,7 @@ fn cleanup_preserves_nested_captures_and_eager_constructor_arguments() {
     let test = original.entry().unwrap();
     let ty = original.function(test).result;
     let mut cleaned = original.clone();
-    optimize(
-        &mut cleaned,
-        &OptimizeOptions {
-            cleanup: true,
-            ..off()
-        },
-    );
+    super::cleanup::cleanup(&mut cleaned);
     validate(&cleaned).unwrap();
     assert!(
         expressions(&cleaned, test).iter().all(|expr| match expr {
@@ -840,13 +779,7 @@ fn cleanup_substitutes_aliases_captured_across_removed_bindings() {
     let alias = program.bindings(body.bindings)[1];
     program.write(alias, Expr::Atom(super::Atom(super::Local::at(0))));
     program.set_entry(test);
-    optimize(
-        &mut program,
-        &OptimizeOptions {
-            cleanup: true,
-            ..off()
-        },
-    );
+    super::cleanup::cleanup(&mut program);
     validate(&program).unwrap();
     assert!(
         program
@@ -881,13 +814,7 @@ fn cleanup_retains_unused_calls_and_matches_in_order() {
         b.match_(args[0], ty, |b, _, _| b.call(second, &[]));
         b.known(zero)
     });
-    optimize(
-        &mut program,
-        &OptimizeOptions {
-            cleanup: true,
-            ..off()
-        },
-    );
+    super::cleanup::cleanup(&mut program);
     // Even a pure call is retained when no analysis classifies it as inert.
     assert_eq!(calls_to(&program, test, pure), 1);
     assert_eq!(
@@ -923,13 +850,7 @@ fn cleanup_removes_a_wide_dead_constructor_chain_in_one_pass() {
         }
         zero
     });
-    optimize(
-        &mut program,
-        &OptimizeOptions {
-            cleanup: true,
-            ..off()
-        },
-    );
+    super::cleanup::cleanup(&mut program);
     assert!(
         program
             .bindings(program.function(test).body().unwrap().bindings)
@@ -944,13 +865,15 @@ fn cleanup_removes_a_wide_dead_constructor_chain_in_one_pass() {
 }
 
 #[test]
-fn compiler_options_never_bypass_totality_checking() {
+fn optimizing_never_bypasses_totality_checking() {
     let text = format!(
         "{LIBRARY}\nforever(Zero) -> Succ(forever(Zero))\nforever(Succ(n)) -> Succ(forever(Succ(n)))\nmain!(h) -> exit!(h forever(Zero))"
     );
     let routines = crate::platform::Routines::builtin();
-    for options in [off(), OptimizeOptions::default()] {
-        let error = crate::read_with_options(&text, &routines, &options).unwrap_err();
+    for error in [
+        crate::read(&text, &routines).unwrap_err(),
+        crate::read_unoptimized(&text, &routines).unwrap_err(),
+    ] {
         assert!(
             error.contains("forever") && error.contains("stops"),
             "{error}"

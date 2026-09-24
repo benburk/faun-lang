@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
 
 pub(super) fn cleanup(program: &mut Program) {
-    let operations = super::arithmetic::recognise(program);
+    let operations = program.operations().to_vec();
     let mut rewrite = Rewrite {
         source: program,
         terms: TermArena::default(),

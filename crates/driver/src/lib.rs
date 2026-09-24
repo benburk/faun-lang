@@ -324,13 +324,13 @@ fn optimized_application(
     backend: Backend,
 ) -> Result<faun_core::barb::Program, String> {
     let mut program = lower_application(source, backend)?;
-    faun_core::barb::optimize(&mut program, &faun_core::barb::OptimizeOptions::default());
+    faun_core::barb::optimize(&mut program);
     Ok(program)
 }
 
 fn machine(source: &Path, backend: Backend) -> Result<faun_core::ir::Program, String> {
-    let program = optimized_application(source, backend)?;
-    faun_core::machine(&program, &backend.target.routines())
+    let mut program = optimized_application(source, backend)?;
+    faun_core::machine(&mut program, &backend.target.routines())
 }
 
 fn compile(source: &Path, backend: Backend) -> Result<Vec<Artifact>, String> {

@@ -10,7 +10,7 @@ use super::inline::{InlineLimits, Inlining};
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Operation, Program, Range};
 
 /// Remove local aliases without expanding calls or dropping eager bindings.
-pub fn structural(program: &mut Program) {
+pub(crate) fn structural(program: &mut Program) {
     rewrite(program, None, None);
 }
 
@@ -26,7 +26,7 @@ pub(super) fn algebra(program: &mut Program, limits: FoldLimits) {
 
 /// Normalize aliases and inline nonrecursive helpers within the supplied limits.
 /// A zero limit disables expansion without computing recursion or copy costs.
-pub fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
+pub(crate) fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
     let inlining = Inlining::new(program, limits);
     rewrite(program, inlining, None);
 }
@@ -61,7 +61,7 @@ fn rebuilt(program: &Program, arms: &[Arm], level: usize) -> bool {
 }
 
 fn rewrite(program: &mut Program, inlining: Option<Inlining>, algebra_limits: Option<FoldLimits>) {
-    let operations = super::arithmetic::recognise(program);
+    let operations = program.operations().to_vec();
     let mut rewrite = Rewrite {
         program,
         operations,

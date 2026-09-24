@@ -31,8 +31,7 @@ emission.
 The archived simple frontend's `faun-simple inspect --emit ir` validates lowered
 IR without requiring target acceptance; `--emit prepared-ir` prints the result
 of `Target::prepare` instead. `--emit barb` uses
-`faun_simple::read_barb_with_options` with
-the default optimization options, sharing that frontend's pipeline with ordinary
+`faun_simple::read_barb`, sharing that frontend's pipeline with ordinary
 compilation. See the
 [runnable inspection example](../README.md#inspecting-a-runtime-expression).
 
@@ -233,8 +232,8 @@ do not depend on writing in place.
 
 ## Passes
 
-`ir::optimize(program, &OptimizeOptions)` runs a small fixed schedule after
-validation, in this order, each stage at most once:
+`ir::optimize(program)` runs a small fixed schedule after validation, in this
+order, each stage once:
 
 1. `simplify`: recognise what lowering had no way to avoid writing. A branch
    whose condition only asks which tag an earlier comparison answered becomes

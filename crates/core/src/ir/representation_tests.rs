@@ -30,11 +30,7 @@ fn parse(text: &str) -> barb::Program {
 }
 
 fn lower_program(source: &barb::Program) -> Result<Program, String> {
-    lower(
-        source,
-        &barb::analyze(source),
-        &Routines::builtin().with_word(64),
-    )
+    lower(source.clone().analyze(), &Routines::builtin().with_word(64))
 }
 
 #[test]
@@ -97,15 +93,8 @@ fn default_pipeline_removes_folded_library_temporaries() {
                 .every(machine.function(machine.entry()).body().unwrap())
                 .any(|op| matches!(op, Op::Constant { value, .. } if *value == expected))
         );
-        let uncleaned = crate::read_with_options(
-            &text,
-            &routines,
-            &barb::OptimizeOptions {
-                cleanup: false,
-                ..barb::OptimizeOptions::default()
-            },
-        )
-        .unwrap();
+        // Without cleanup, which would remove what folding left behind.
+        let uncleaned = crate::read_with(&text, &routines, crate::optimize_without_laws).unwrap();
         validate(&uncleaned).unwrap();
     }
 }
@@ -176,8 +165,8 @@ fn unsupported_types_in_impossible_arms_do_not_demand_storage_or_functions() {
 fn recognized_definition_bodies_do_not_demand_runtime_representations() {
     let text = library("main!(h) -> n = argc!(h) exit!(h add(n Zero))")
         .replace("add(a Zero) -> a", "add(a Zero) -> ignored = Pos(a) a");
-    let source = parse(&text);
-    let facts = barb::analyze(&source);
+    let mut source = parse(&text);
+    let facts = barb::analyzed(&source);
     let add = barb::FnId::at(
         source
             .functions()
@@ -186,7 +175,7 @@ fn recognized_definition_bodies_do_not_demand_runtime_representations() {
             .unwrap(),
     );
     assert_eq!(facts.operation(add), Some(barb::Operation::Add));
-    let machine = lower(&source, &facts, &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(source.analyze(), &Routines::builtin().with_word(64)).unwrap();
     assert_eq!(bodies(&machine), 1, "add becomes an instruction");
 }
 

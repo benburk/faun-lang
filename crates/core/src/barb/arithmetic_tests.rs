@@ -39,7 +39,7 @@ fn library_equations_are_recognized_before_and_after_folding() {
     let mut program = source(LIBRARY);
     validate(&program).unwrap();
     for _ in 0..2 {
-        let facts = analyze(&program);
+        let facts = analyzed(&program);
         for (name, op) in [
             ("add", Operation::Add),
             ("sub", Operation::Monus),
@@ -75,11 +75,11 @@ fn recognition_is_structural_and_zero_divisor_near_misses_are_not_operations() {
         .replace("add", "plus");
     let program = source(&library);
     assert_eq!(
-        analyze(&program).operation(named(&program, "plus")),
+        analyzed(&program).operation(named(&program, "plus")),
         Some(Operation::Add)
     );
     assert_eq!(
-        analyze(&program).operation(named(&program, "mod")),
+        analyzed(&program).operation(named(&program, "mod")),
         Some(Operation::Mod)
     );
     for (old, new, name) in [
@@ -95,7 +95,7 @@ fn recognition_is_structural_and_zero_divisor_near_misses_are_not_operations() {
     ] {
         let program = source(&LIBRARY.replace(old, new));
         assert_eq!(
-            analyze(&program).operation(named(&program, name)),
+            analyzed(&program).operation(named(&program, name)),
             None,
             "{name}"
         );
@@ -177,7 +177,7 @@ fn an_early_exit_refines_the_continuation() {
     let mut program = crate::simple::parse(&text, &routines).unwrap();
     normalize_with_limits(&mut program, InlineLimits::default());
     fold(&mut program);
-    let facts = analyze(&program);
+    let facts = analyzed(&program);
     let body = program.function(program.entry().unwrap()).body().unwrap();
     let sum = program.bindings(body.bindings).iter().copied().find(|expr| {
         matches!(program.expr(*expr), Expr::Call(called, _) if facts.operation(called) == Some(Operation::Add))
@@ -189,7 +189,7 @@ fn an_early_exit_refines_the_continuation() {
             high: Some(2)
         }
     );
-    let machine = crate::ir::lower(&program, &facts, &routines).unwrap();
+    let machine = crate::ir::lower(program.analyze(), &routines).unwrap();
     assert!(
         (0..machine.values_count())
             .all(|at| machine.class(crate::ir::ValueId::at(at)) != crate::ir::Class::Natural)
@@ -235,7 +235,7 @@ fn range_propagation_observes_earlier_answers_in_the_same_round() {
     }
     program.set_entry(previous);
     validate(&program).unwrap();
-    let facts = analyze(&program);
+    let facts = analyzed(&program);
     for id in chain {
         assert_eq!(facts.answers(id), Bounds::at(7));
     }
@@ -354,12 +354,8 @@ fn reduced(held: &str) -> String {
            ten = add(four add(four two))
            exit!(h {held})"
     );
-    let program = crate::read_barb_with_options(
-        &source,
-        &crate::platform::Routines::builtin(),
-        &OptimizeOptions::default(),
-    )
-    .expect("a program");
+    let program =
+        crate::read_barb(&source, &crate::platform::Routines::builtin()).expect("a program");
     let rendered = program.render();
     let (_, main) = rendered.split_once("main!(v0: Host)").expect("an entry");
     main.to_owned()
@@ -394,7 +390,7 @@ fn a_field_holds_what_was_built_into_it() {
         b.call(outcome, &[held])
     });
     program.set_entry(main);
-    let facts = analyze(&program);
+    let facts = analyzed(&program);
     assert_eq!(facts.answers(outcome), Bounds::at(2));
     assert_eq!(facts.answers(count), Bounds::at(0));
     assert_eq!(facts.field(&program, pair_ctor, 0), Bounds::at(2));
@@ -418,7 +414,7 @@ fn a_field_built_out_of_sight_is_known_only_by_its_type() {
         b.match_(args[0], pair, |_, _, fields| fields[0])
     });
     program.set_entry(main);
-    let facts = analyze(&program);
+    let facts = analyzed(&program);
     assert_eq!(
         facts.answers(main),
         Bounds {
@@ -455,7 +451,7 @@ fn a_long_countdown_settles_with_nought_as_its_least() {
         b.call(down, &[start])
     });
     program.set_entry(main);
-    let facts = analyze(&program);
+    let facts = analyzed(&program);
     assert_eq!(
         facts.takes(down),
         [Bounds {
