@@ -65,26 +65,44 @@ fn a_natural_constant_is_compact_and_does_not_alias_a_word() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "build, lower and inspect each operation's program"
+)]
 fn runtime_arithmetic_survives_barb_lowering_as_operations() {
+    let routines = crate::platform::Routines::builtin();
     for (name, expected) in [
         ("mul", Binary::Mul),
         ("div", Binary::Div),
         ("mod", Binary::Mod),
     ] {
-        let text = format!(
-            "{}\nbounded!(h True n) -> n\nbounded!(h False n) -> exit!(h Zero)\n\
-             main!(h) ->\n  count = argc!(h)\n\
-               n = bounded!(h less_than(count Succ(Succ(Zero))) count)\n\
-               exit!(h {name}(n n))",
-            include_str!("../../../../crates/simple/standard/nat.fn")
-        );
+        let mut library = barb::fixture::Library::new();
+        let operation = match expected {
+            Binary::Mul => library.mul,
+            Binary::Div => library.div,
+            _ => library.modulo,
+        };
+        let (nat, less_than) = (library.nat, library.less_than);
+        let two = library.number(2);
+        let world = tests::host(&mut library.program, nat, &routines);
+        let bounded = tests::bounded(&mut library, &world);
+        let program = &mut library.program;
+        let main = program.declare_named("main!", &[("host", world.host)], world.never);
+        program.define(main, |b, args| {
+            let count = b.call(world.argc, &[args[0]]);
+            let two = b.known(two);
+            let small = b.call(less_than, &[count, two]);
+            let n = b.call(bounded, &[args[0], small, count]);
+            let answer = b.call(operation, &[n, n]);
+            b.call(world.exit, &[args[0], answer])
+        });
+        program.set_entry(main);
+        barb::validate(program).unwrap();
         // Isolate lowering from laws such as mod(n, n) = 0.
-        let machine = crate::read_with(
-            &text,
-            &crate::platform::Routines::builtin(),
-            crate::optimize_without_laws,
-        )
-        .unwrap();
+        barb::structural(program);
+        barb::normalize_with_limits(program, barb::InlineLimits::default());
+        barb::fold(program);
+        let machine = crate::machine(program, &routines).unwrap();
         validate(&machine).unwrap();
         let body = machine.function(machine.entry()).body().unwrap();
         assert!(

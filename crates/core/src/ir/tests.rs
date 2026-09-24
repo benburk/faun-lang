@@ -1,11 +1,77 @@
 use super::*;
-use crate::barb::Bounds;
+use crate::barb::{self, Bounds};
 
-/// A program read from text, against what a compiler knows. These are
-/// about what this tier makes of one, so which target would take it is not
-/// a question any of them asks.
-fn read(text: &str) -> Result<Program, String> {
-    crate::read(text, &crate::platform::Routines::builtin())
+/// What a frontend declares for its host: the authority a program is
+/// handed, a type with no values for what never comes back, and the
+/// routines, each bodyless and named for what answers it.
+pub(super) struct World {
+    pub host: barb::TypeId,
+    pub never: barb::TypeId,
+    pub exit: barb::FnId,
+    pub argc: barb::FnId,
+}
+
+/// Declare `exit!` and `argc!` over `nat`, bounding the count as `routines`
+/// says a machine's word does.
+pub(super) fn host(
+    program: &mut barb::Program,
+    nat: barb::TypeId,
+    routines: &crate::platform::Routines,
+) -> World {
+    let host = program.declare_type("Host");
+    program.define_type(host, &[("Host", &[])]);
+    let never = program.declare_type("Never");
+    program.define_type(never, &[]);
+    let exit = program.declare("exit!", &[host, nat], never);
+    let argc = program.declare("argc!", &[host], nat);
+    if let Some(bounds) = routines
+        .get("argc!")
+        .and_then(crate::platform::Routine::bounds)
+    {
+        program.bound(argc, bounds);
+    }
+    World {
+        host,
+        never,
+        exit,
+        argc,
+    }
+}
+
+/// `bounded!(host test n)`: `n` where `test` is true, and leaving with
+/// nought where it is false. A program writes this to prove a count small
+/// before it does arithmetic on it.
+pub(super) fn bounded(library: &mut barb::fixture::Library, world: &World) -> barb::FnId {
+    let (nat, bool_, zero, yes) = (library.nat, library.bool_, library.zero, library.true_);
+    let exit = world.exit;
+    let program = &mut library.program;
+    let bounded = program.declare_named(
+        "bounded!",
+        &[("host", world.host), ("test", bool_), ("n", nat)],
+        nat,
+    );
+    program.define(bounded, |b, args| {
+        b.match_(args[1], bool_, |b, ctor, _| {
+            if ctor == yes {
+                args[2]
+            } else {
+                let nought = b.con(zero, &[]);
+                b.call(exit, &[args[0], nought])
+            }
+        })
+    });
+    bounded
+}
+
+/// Validate and optimize a Barb program as the default pipeline does, then
+/// lower it.
+pub(super) fn machine(
+    mut program: barb::Program,
+    routines: &crate::platform::Routines,
+) -> Result<Program, String> {
+    barb::validate(&program)?;
+    barb::optimize(&mut program);
+    crate::machine(&mut program, routines)
 }
 
 /// A width is what a value needs, so a value needing fewer bits than what
@@ -148,13 +214,13 @@ fn nothing_is_written_after_a_routine_that_does_not_come_back() {
 /// nothing is duplicated by saying it twice.
 #[test]
 fn two_names_may_give_the_same_routine() {
-    let mut program = crate::barb::Program::default();
+    let mut program = barb::Program::default();
     let nat = program.declare_type("Nat");
     program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
     let bool_ = program.declare_type("Bool");
     program.define_type(bool_, &[("False", &[]), ("True", &[])]);
 
-    let holds = |program: &mut crate::barb::Program, name, type_| {
+    let holds = |program: &mut barb::Program, name, type_| {
         let id = program.declare(name, &[type_], type_);
         program.answered_by(id, "hold");
         // Builder clients supply finite host contracts, like the frontend.
@@ -214,7 +280,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
     });
 
     let held = |value: u64| {
-        let mut program = crate::barb::Program::default();
+        let mut program = barb::Program::default();
         let nat = program.declare_type("Nat");
         program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
         let unit = program.declare_type("Unit");
@@ -245,16 +311,32 @@ fn a_value_too_wide_for_a_routine_is_refused() {
 #[test]
 fn a_constructor_that_carries_something_is_not_a_tag() {
     let routines = crate::platform::Routines::builtin();
-    let mut source = crate::simple::parse(
-        "type Nat Zero Succ(Nat)
-         type Maybe None Some(Nat)
-         unwrap(None) -> Zero
-         unwrap(Some(n)) -> n
-
-         main!(h) -> n = argc!(h) value = unwrap(Some(n)) exit!(h Zero)",
-        &routines,
-    )
-    .unwrap();
+    let mut source = barb::Program::default();
+    let nat = source.declare_type("Nat");
+    source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let maybe = source.declare_type("Maybe");
+    source.define_type(maybe, &[("None", &[]), ("Some", &[nat])]);
+    let (zero, some) = (source.ctor_at(nat, 0), source.ctor_at(maybe, 1));
+    let world = host(&mut source, nat, &routines);
+    let unwrap = source.declare("unwrap", &[maybe], nat);
+    source.define(unwrap, |b, args| {
+        b.match_(args[0], maybe, |b, ctor, fields| {
+            if ctor == some {
+                fields[0]
+            } else {
+                b.con(zero, &[])
+            }
+        })
+    });
+    let main = source.declare_named("main!", &[("host", world.host)], world.never);
+    source.define(main, |b, args| {
+        let n = b.call(world.argc, &[args[0]]);
+        let held = b.con(some, &[n]);
+        b.call(unwrap, &[held]);
+        let status = b.con(zero, &[]);
+        b.call(world.exit, &[args[0], status])
+    });
+    source.set_entry(main);
     let program = lower(source.analyze(), &routines).unwrap();
     assert!(program.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
     assert!(program.classes.as_slice().contains(&Class::Cell));
@@ -266,12 +348,19 @@ fn a_constructor_that_carries_something_is_not_a_tag() {
 /// leaves `exit!` with no status to leave with.
 #[test]
 fn an_effect_hands_over_what_the_routine_reads() {
-    let refused = read(
-        "type Nat Zero
-
-         main!(h) -> exit!(h Zero)",
-    )
-    .unwrap_err();
+    let routines = crate::platform::Routines::builtin();
+    let mut source = barb::Program::default();
+    let nat = source.declare_type("Nat");
+    source.define_type(nat, &[("Zero", &[])]);
+    let zero = source.ctor_at(nat, 0);
+    let world = host(&mut source, nat, &routines);
+    let main = source.declare_named("main!", &[("host", world.host)], world.never);
+    source.define(main, |b, args| {
+        let status = b.con(zero, &[]);
+        b.call(world.exit, &[args[0], status])
+    });
+    source.set_entry(main);
+    let refused = machine(source, &routines).unwrap_err();
     assert!(
         refused.contains("`exit!` reads a word, and is handed nothing"),
         "{refused}"
@@ -284,24 +373,26 @@ fn an_effect_hands_over_what_the_routine_reads() {
 /// value nothing bounds is held in a machine word.
 #[test]
 fn how_wide_a_number_is_held_is_what_it_can_be() {
-    let widths = |text: &str| {
-        let program = read(text).expect("a program");
-        (0..program.values_count())
-            .map(|at| program.class(ValueId::at(at)))
-            .collect::<Vec<_>>()
-    };
+    let routines = crate::platform::Routines::builtin();
+    let mut library = barb::fixture::Library::new();
+    let two = library.number(2);
+    let (nat, add) = (library.nat, library.add);
+    let world = host(&mut library.program, nat, &routines);
+    let main = library
+        .program
+        .declare_named("main!", &[("host", world.host)], world.never);
+    library.program.define(main, |b, args| {
+        let two = b.known(two);
+        let four = b.call(add, &[two, two]);
+        b.call(world.exit, &[args[0], four])
+    });
+    library.program.set_entry(main);
+    let program = machine(library.program, &routines).expect("a program");
+    let held: Vec<_> = (0..program.values_count())
+        .map(|at| program.class(ValueId::at(at)))
+        .collect();
 
     // Two and two is four, which three bits hold.
-    let held = widths(
-        "type Nat Zero Succ(Nat)
-
-         add(a Zero) -> a
-         add(a Succ(k)) -> Succ(add(a k))
-
-         main!(h) ->
-           two = Succ(Succ(Zero))
-           exit!(h add(two two))",
-    );
     assert!(held.iter().any(|held| held.width() == Some(3)), "{held:?}");
     assert!(
         held.iter()

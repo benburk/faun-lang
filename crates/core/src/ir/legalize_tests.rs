@@ -590,21 +590,40 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
 
 #[test]
 fn source_host_arguments_are_not_implicitly_truncated() {
-    let source = "type Nat Zero Succ(Nat)\n\
-        add(Zero b) -> b\n\
-        add(Succ(a) b) -> Succ(add(a b))\n\
-        main!(h) -> n = argc!(h) exit!(h add(n n))";
-    let error =
-        crate::read(source, &crate::platform::Routines::builtin().with_word(64)).unwrap_err();
+    // A sum of two counts a word holds may not fit a word, and a status must.
+    let routines = crate::platform::Routines::builtin().with_word(64);
+    let mut library = crate::barb::fixture::Library::new();
+    let (nat, add) = (library.nat, library.add);
+    let world = tests::host(&mut library.program, nat, &routines);
+    let main = library
+        .program
+        .declare_named("main!", &[("host", world.host)], world.never);
+    library.program.define(main, |b, args| {
+        let n = b.call(world.argc, &[args[0]]);
+        let doubled = b.call(add, &[n, n]);
+        b.call(world.exit, &[args[0], doubled])
+    });
+    library.program.set_entry(main);
+    let error = tests::machine(library.program, &routines).unwrap_err();
     assert!(
         error.contains("host arguments must be proven to fit"),
         "{error}"
     );
-    crate::read(
-        "type Nat Zero Succ(Nat) main!(h) -> exit!(h Succ(Zero))",
-        &crate::platform::Routines::builtin().with_word(16),
-    )
-    .unwrap();
+
+    // A status known to be small fits even a narrow word.
+    let routines = crate::platform::Routines::builtin().with_word(16);
+    let mut library = crate::barb::fixture::Library::new();
+    let one = library.number(1);
+    let world = tests::host(&mut library.program, library.nat, &routines);
+    let main = library
+        .program
+        .declare_named("main!", &[("host", world.host)], world.never);
+    library.program.define(main, |b, args| {
+        let one = b.known(one);
+        b.call(world.exit, &[args[0], one])
+    });
+    library.program.set_entry(main);
+    tests::machine(library.program, &routines).unwrap();
 }
 
 #[test]
