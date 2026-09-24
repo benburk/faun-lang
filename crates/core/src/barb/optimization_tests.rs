@@ -7,14 +7,16 @@ use super::{
     decode, fold, normalize_with_limits, optimize, validate,
 };
 
-const LIBRARY: &str = include_str!("../../../../crates/simple/standard/nat.fn");
-
+/// `Nat`, `Bool` and their arithmetic, as a source library writes them,
+/// with an entry that answers nought and calls none of it.
 fn library() -> Program {
-    crate::simple::parse(
-        &format!("{LIBRARY}\nmain!(h) -> exit!(h Zero)"),
-        &crate::platform::Routines::builtin(),
-    )
-    .unwrap()
+    let library = super::fixture::Library::new();
+    let (nat, zero) = (library.nat, library.zero);
+    let mut program = library.program;
+    let main = program.declare("main", &[], nat);
+    program.define(main, |b, _| b.con(zero, &[]));
+    program.set_entry(main);
+    program
 }
 
 fn named(program: &Program, name: &str) -> FnId {
@@ -864,15 +866,37 @@ fn cleanup_removes_a_wide_dead_constructor_chain_in_one_pass() {
     );
 }
 
+/// A definition that does not stop is refused where a program is checked,
+/// and lowering checks before it reads anything, so no optimization or
+/// analysis is trusted with one.
 #[test]
 fn optimizing_never_bypasses_totality_checking() {
-    let text = format!(
-        "{LIBRARY}\nforever(Zero) -> Succ(forever(Zero))\nforever(Succ(n)) -> Succ(forever(Succ(n)))\nmain!(h) -> exit!(h forever(Zero))"
-    );
-    let routines = crate::platform::Routines::builtin();
+    let mut library = super::fixture::Library::new();
+    let (nat, zero, succ) = (library.nat, library.zero, library.succ);
+    let program = &mut library.program;
+    let forever = program.declare("forever", &[nat], nat);
+    // forever(Zero) -> Succ(forever(Zero))
+    // forever(Succ(n)) -> Succ(forever(Succ(n)))
+    program.define(forever, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            let again = if ctor == zero {
+                b.con(zero, &[])
+            } else {
+                b.con(succ, &[fields[0]])
+            };
+            let rest = b.call(forever, &[again]);
+            b.con(succ, &[rest])
+        })
+    });
+    let main = program.declare("main", &[], nat);
+    program.define(main, |b, _| {
+        let zero = b.con(zero, &[]);
+        b.call(forever, &[zero])
+    });
+    program.set_entry(main);
     for error in [
-        crate::read(&text, &routines).unwrap_err(),
-        crate::read_unoptimized(&text, &routines).unwrap_err(),
+        validate(program).unwrap_err(),
+        crate::machine(program, &crate::platform::Routines::builtin()).unwrap_err(),
     ] {
         assert!(
             error.contains("forever") && error.contains("stops"),
