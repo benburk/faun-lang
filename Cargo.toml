@@ -22,12 +22,6 @@ unused_qualifications = "warn"
 trivial_casts = "warn"
 trivial_numeric_casts = "warn"
 
-# The compiler is allocation-heavy while constructing its syntax trees. An
-# unoptimized allocator makes debug `faun check` timings describe the allocator
-# build rather than the frontend.
-[profile.dev.package.libmimalloc-sys]
-opt-level = 3
-
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }

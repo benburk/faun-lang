@@ -1,9 +1,6 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-#[global_allocator]
-static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 const LINES: usize = 100_000;
 const LINES_AS_F64: f64 = 100_000.0;
 const GOAL: f64 = 500_000.0;
