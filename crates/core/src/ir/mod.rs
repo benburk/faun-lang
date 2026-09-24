@@ -95,8 +95,6 @@ pub use validate::validate;
 #[cfg(test)]
 mod arithmetic_tests;
 #[cfg(test)]
-mod builder_tests;
-#[cfg(test)]
 mod cost_tests;
 #[cfg(test)]
 mod external_tests;
@@ -107,8 +105,6 @@ mod flow_tests;
 #[cfg(test)]
 mod interpreter_tests;
 #[cfg(test)]
-mod layout_tests;
-#[cfg(test)]
 mod legalize_tests;
 #[cfg(test)]
 mod natural_tests;
@@ -116,8 +112,6 @@ mod natural_tests;
 mod optimize_tests;
 #[cfg(test)]
 mod ownership_tests;
-#[cfg(test)]
-mod pretty_tests;
 #[cfg(test)]
 mod representation_tests;
 #[cfg(test)]

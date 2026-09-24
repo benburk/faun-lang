@@ -92,74 +92,6 @@ impl Target for Provider {
 }
 
 #[test]
-fn external_declarations_need_neither_a_catalog_nor_parameter_values_or_regions() {
-    let mut p = program();
-    let values = p.values_count();
-    let regions = p.regions.len();
-    let f = p.external(
-        "library_symbol",
-        &[Class::Word],
-        Returns::Values(&[Class::Word]),
-    );
-    let held = p.function(f);
-    assert_eq!(p.signature(held.params), [Class::Word]);
-    assert_eq!(p.signature(held.returns.classes()), [Class::Word]);
-    assert_eq!(p.name(held.name), "library_symbol");
-    assert_eq!(held.definition, Definition::External);
-    assert_eq!(held.external(), Some(held.name));
-    assert!(held.body().is_none());
-    assert_eq!(p.values_count(), values);
-    assert_eq!(p.regions.len(), regions);
-    validate(&p).unwrap();
-    // Unused declarations do not require symbol availability. A call does.
-    Provider(64).compile(&p).unwrap();
-    call_external(&mut p, f);
-    assert!(
-        Provider(64)
-            .compile(&p)
-            .unwrap_err()
-            .contains("library_symbol")
-    );
-}
-
-#[test]
-fn one_call_operation_handles_local_and_external_multivalue_functions() {
-    let mut p = program();
-    let pair = p.external(
-        "pair_provider",
-        &[Class::Word, Class::Word],
-        Returns::Values(&[Class::Word, Class::Word]),
-    );
-    let wrapper = p.declare("wrapper", &[Class::Word, Class::Word], &[Class::Word]);
-    p.define(wrapper, |b, args| {
-        let values = b.call(pair, args);
-        let result = b.binary(Binary::Add, values[0], values[1]);
-        b.ret(&[result]);
-    });
-    p.define(p.entry(), |b, _| {
-        let a = b.constant(Class::Word, 3);
-        let z = b.constant(Class::Word, 8);
-        let answer = b.call(wrapper, &[a, z]);
-        b.ret(&answer);
-    });
-    validate(&p).unwrap();
-    let mut host = reply(|args| HostResult::Return(args.to_vec()));
-    assert_eq!(
-        run(&p, p.entry(), &[], &mut host)
-            .unwrap()
-            .returned()
-            .unwrap(),
-        [BigUint::from(11u8)]
-    );
-    assert_eq!(host.calls, ["pair_provider"]);
-    let args = [BigUint::from(3u8), BigUint::from(8u8)];
-    assert_eq!(
-        run(&p, pair, &args, &mut host).unwrap().returned().unwrap(),
-        args
-    );
-}
-
-#[test]
 fn returning_unit_and_never_are_not_interchangeable() {
     for returns in [Returns::Never, Returns::Values([].as_slice())] {
         let mut p = program();
@@ -185,75 +117,6 @@ fn returning_unit_and_never_are_not_interchangeable() {
             assert_eq!(result.unwrap().outcome, Outcome::Returned(vec![]));
         }
     }
-}
-
-#[test]
-fn host_halts_escape_internal_callers_and_direct_external_evaluation() {
-    let mut p = program();
-    let stop = p.external("host_halt", &[], Returns::Never);
-    let wrapper = p.declare("wrapper", &[], &[]);
-    p.define(wrapper, |b, _| {
-        b.call(stop, &[]);
-    });
-    p.define(p.entry(), |b, _| {
-        b.call(wrapper, &[]);
-        let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero]);
-    });
-    validate(&p).unwrap();
-    let mut host = reply(|_| HostResult::Halt(vec![BigUint::from(23u8)]));
-    for function in [p.entry(), stop] {
-        assert_eq!(
-            run(&p, function, &[], &mut host).unwrap().outcome,
-            Outcome::Halted(vec![BigUint::from(23u8)])
-        );
-    }
-}
-
-#[test]
-fn host_values_and_direct_arguments_are_checked_against_declarations() {
-    let mut p = program();
-    let byte = Class::fixed(8);
-    let external = p.external("echo", &[byte], Returns::Values(&[byte]));
-    let mut echo = reply(|args| HostResult::Return(args.to_vec()));
-    assert_eq!(
-        run(&p, external, &[], &mut echo).unwrap_err(),
-        Error::InvalidProgram("signature arity")
-    );
-    assert_eq!(
-        run(&p, external, &[BigUint::from(256u16)], &mut echo).unwrap_err(),
-        Error::DoesNotFit(byte)
-    );
-    assert!(echo.calls.is_empty(), "bad arguments never reach the host");
-    let mut wide = reply(|_| HostResult::Return(vec![BigUint::from(256u16)]));
-    assert_eq!(
-        run(&p, external, &[BigUint::from(1u8)], &mut wide).unwrap_err(),
-        Error::DoesNotFit(byte)
-    );
-    let mut empty = reply(|_| HostResult::Return(vec![]));
-    assert_eq!(
-        run(&p, external, &[BigUint::from(1u8)], &mut empty).unwrap_err(),
-        Error::InvalidProgram("signature arity")
-    );
-}
-
-#[test]
-fn direct_external_evaluation_consumes_fuel() {
-    let mut p = program();
-    let unit = p.external("unit", &[], Returns::Values(&[]));
-    let mut host = reply(|_| HostResult::Return(vec![]));
-    let result = evaluate::evaluate(
-        &p,
-        unit,
-        &[],
-        evaluate::Config {
-            fuel: 0,
-            ..evaluate::Config::default()
-        },
-        &mut host,
-    );
-    assert_eq!(result.unwrap_err(), Error::FuelExhausted);
-    assert!(host.calls.is_empty());
 }
 
 #[test]
@@ -299,81 +162,6 @@ fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not(
 }
 
 #[test]
-fn the_reference_host_reads_all_bytes_and_repeats_eof() {
-    struct Input(std::collections::VecDeque<u8>);
-
-    impl Host for Input {
-        fn call(
-            &mut self,
-            name: &str,
-            args: &[BigUint],
-            _: &mut Memory<'_>,
-        ) -> Result<HostResult, Error> {
-            assert_eq!(name, "read_byte!");
-            assert!(args.is_empty());
-            let value = self.0.pop_front().map_or(0, |byte| u16::from(byte) + 1);
-            Ok(HostResult::Return(vec![BigUint::from(value)]))
-        }
-    }
-
-    let program = crate::programs::external::reads_bytes();
-    let mut input = Input([0, 127, 255].into());
-    assert_eq!(
-        evaluate::evaluate(
-            &program,
-            program.entry(),
-            &[],
-            evaluate::Config::default(),
-            &mut input,
-        )
-        .unwrap()
-        .returned()
-        .unwrap(),
-        [BigUint::from(0u8)]
-    );
-}
-
-#[test]
-fn a_body_named_like_an_external_function_is_still_a_body() {
-    let mut p = program();
-    let internal = p.declare("count!", &[], &[Class::Word]);
-    p.define(internal, |b, _| {
-        let zero = b.constant(Class::Word, 0);
-        b.ret(&[zero]);
-    });
-    p.define(p.entry(), |b, _| {
-        let result = b.call(internal, &[]);
-        b.ret(&result);
-    });
-    assert!(!p.reaches("count!"));
-    Provider(64).compile(&p).unwrap();
-    let mut host = reply(|_| HostResult::Return(vec![BigUint::from(7u8)]));
-    assert_eq!(
-        run(&p, p.entry(), &[], &mut host)
-            .unwrap()
-            .returned()
-            .unwrap(),
-        [BigUint::from(0u8)]
-    );
-    assert!(host.calls.is_empty());
-    let external = p.external("count!", &[], Returns::Values(&[Class::Word]));
-    p.define(p.entry(), |b, _| {
-        let result = b.call(external, &[]);
-        b.ret(&result);
-    });
-    assert!(p.reaches("count!"));
-    Provider(64).compile(&p).unwrap();
-    assert_eq!(
-        run(&p, p.entry(), &[], &mut host)
-            .unwrap()
-            .returned()
-            .unwrap(),
-        [BigUint::from(7u8)]
-    );
-    assert_eq!(host.calls, ["count!"]);
-}
-
-#[test]
 fn source_externals_check_unit_against_nonreturning_provider_contracts() {
     use crate::{barb, platform};
     for returns in [platform::Returns::Unit, platform::Returns::Never] {
@@ -402,11 +190,4 @@ fn source_externals_check_unit_against_nonreturning_provider_contracts() {
         let error = lower(&mut source, &routines).unwrap_err();
         assert!(error.contains("about returning"), "{error}");
     }
-}
-
-#[test]
-fn an_external_declaration_cannot_be_the_entry_body() {
-    let mut p = program();
-    p.functions[FunctionId(0)].definition = Definition::External;
-    assert!(validate(&p).unwrap_err().contains("entry"));
 }

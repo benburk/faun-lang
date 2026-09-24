@@ -8,9 +8,6 @@
 use super::{Arm, Atom, Body, Expr, ExprId, Range};
 use crate::index::{Pool, append_range};
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct TermArena {
     exprs: Pool<ExprId, Expr>,

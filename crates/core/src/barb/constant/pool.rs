@@ -90,14 +90,6 @@ impl ConstantPool {
             bytes: Range::of(start, self.bytes.len() - start),
         })
     }
-
-    #[cfg(test)]
-    pub(in crate::barb) fn allocations(&self) -> [*const (); 2] {
-        [
-            self.entries.as_slice().as_ptr().cast(),
-            self.bytes.as_ptr().cast(),
-        ]
-    }
 }
 
 #[cfg(test)]

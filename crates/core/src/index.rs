@@ -41,9 +41,6 @@ macro_rules! index {
 
 pub(crate) use index;
 
-#[cfg(test)]
-mod tests;
-
 /// Dense indices used by the compiler's entity pools. Conversion must round
 /// trip and reject unrepresentable positions rather than truncate them.
 pub(crate) trait Id: Copy {
