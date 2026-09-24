@@ -1,0 +1,37 @@
+# Arithmetic as recursion over the constructors it is written in, on a
+# count nothing knows before the program runs.
+
+import std.host {Host argc! exit!}
+
+Order : [Lt Eq Gt]
+
+cmp : Nat Nat -> Order
+cmp(0 0) -> Eq
+cmp(0 Succ(_)) -> Lt
+cmp(Succ(_) 0) -> Gt
+cmp(Succ(m) Succ(n)) -> cmp(m n)
+
+under : Order -> Bool
+under(Lt) -> True
+under(_) -> False
+
+min : Nat Nat -> Nat
+min(a b) -> under(cmp(a b)).select(a b)
+
+below : Nat Nat -> Bool
+below(_ 0) -> False
+below(0 Succ(_)) -> True
+below(Succ(a) Succ(b)) -> below(a b)
+
+finish! : Host Bool Nat -> []
+finish!(host True n) ->
+  two = n + n
+  four = two * two
+  eight = two * four
+  exit!(host min(four eight - two))
+finish!(host False _) -> exit!(host 0)
+
+main! : Host -> []
+main!(host) ->
+  count = argc!(host)
+  finish!(host below(count 2) count)

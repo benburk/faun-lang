@@ -1,10 +1,10 @@
 //! Programs at the tier a target reads, for the things a language cannot
 //! say yet.
 //!
-//! `crates/simple/examples/` holds programs somebody wrote, and everything in one of
-//! those is something the language has a spelling for. These are the rest:
-//! the heap, a global counted in place, a byte stored and read back, an arm
-//! that leaves. A target has to lay all of it out whether or not anything
+//! Faun programs in `crates/core/tests/support/` are what somebody wrote,
+//! and everything in one of those is something the language has a spelling
+//! for. These are the rest: the heap, a global counted in place, a byte
+//! stored and read back, an arm that leaves. A target has to lay all of it out whether or not anything
 //! above can ask for it.
 //!
 //! Nothing here names a machine. What each becomes is a question for
@@ -73,6 +73,52 @@ pub fn two_and_two_in_barb() -> crate::barb::Program {
     program.define(main, |b, _| {
         let value = b.known(two);
         b.call(add, &[value, value])
+    });
+    program.set_entry(main);
+    program
+}
+
+/// A function answering a number from one arm and leaving from the other.
+///
+/// Barb can say this and Faun cannot: `pick!(n)` exits with 1 at nought and
+/// answers `n - 1` otherwise, and `main!` exits with one more than what it
+/// answered. Picking nought leaves from inside `pick!`.
+///
+/// # Panics
+/// If the fixture's declarations do not describe the shapes it builds.
+#[must_use]
+pub fn an_arm_that_leaves(leave: bool) -> crate::barb::Program {
+    let mut program = crate::barb::Program::default();
+    let host = program.declare_type("Host");
+    program.define_type(host, &[("Host", &[])]);
+    let never = program.declare_type("Never");
+    program.define_type(never, &[]);
+    let nat = program.declare_type("Nat");
+    program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let (zero, succ) = (program.ctor_at(nat, 0), program.ctor_at(nat, 1));
+    let exit = program.declare("exit!", &[host, nat], never);
+    let one = program.intern_number(nat, 1).expect("a natural");
+    let which = program
+        .intern_number(nat, if leave { 0 } else { 2 })
+        .expect("a natural");
+
+    let pick = program.declare_named("pick!", &[("host", host), ("n", nat)], nat);
+    program.define(pick, |b, args| {
+        b.match_(args[1], nat, |b, ctor, fields| {
+            if ctor == zero {
+                let one = b.known(one);
+                b.call(exit, &[args[0], one])
+            } else {
+                fields[0]
+            }
+        })
+    });
+    let main = program.declare_named("main!", &[("host", host)], never);
+    program.define(main, |b, args| {
+        let which = b.known(which);
+        let held = b.call(pick, &[args[0], which]);
+        let status = b.con(succ, &[held]);
+        b.call(exit, &[args[0], status])
     });
     program.set_entry(main);
     program

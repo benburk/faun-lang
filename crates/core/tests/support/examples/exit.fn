@@ -1,0 +1,8 @@
+# Two and two, worked out before the program runs.
+
+import std.host {Host exit!}
+
+main! : Host -> []
+main!(host) ->
+  two = 2
+  exit!(host two + two)

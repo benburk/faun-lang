@@ -8,7 +8,7 @@ description = "The mos6502-sim65 target for Faun"
 faun-core.workspace = true
 
 [dev-dependencies]
-faun-simple.workspace = true
+faun-driver.workspace = true
 
 [lints]
 workspace = true

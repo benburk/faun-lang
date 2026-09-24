@@ -12,16 +12,23 @@ use faun_mos6502_sim65::Mos6502Sim65;
 
 #[path = "../../core/tests/support/expressions.rs"]
 mod expressions;
+#[path = "../../core/tests/support/faun.rs"]
+mod faun;
 
 use expressions::{CASES, COUNTS, Case};
 
 // Case, image bytes, maximum cycles over COUNTS (including rejected inputs).
+// Carry rose from 95 bytes and 80 cycles when the corpus moved to Faun: its
+// guard now branches with the count itself rather than answering a narrowed
+// copy, and lowering still adds at the count's word width inside the arm
+// that proves it small. Narrowing a refined local in its arm would win this
+// back.
 const BASELINES: &[(Case, usize, u64)] = &[
-    (Case::Chain, 48, 35),
-    (Case::Shared, 53, 43),
-    (Case::ConstantLeft, 48, 35),
-    (Case::Carry, 95, 80),
-    (Case::Monus, 82, 66),
+    (Case::Chain, 50, 36),
+    (Case::Shared, 55, 44),
+    (Case::ConstantLeft, 50, 36),
+    (Case::Carry, 121, 115),
+    (Case::Monus, 83, 64),
 ];
 
 #[test]
@@ -34,8 +41,8 @@ fn guarded_argc_expressions_stay_within_size_and_cycle_ceilings() {
 }
 
 fn measure(case: Case, size: usize, ceiling: u64) {
-    let program = faun_simple::read(&case.source(), &Mos6502Sim65.routines())
-        .expect("a guarded source expression");
+    let program =
+        faun::machine(&case.source(), &Mos6502Sim65).expect("a guarded source expression");
     // Reading (above), preparation and emission happen once per case, not
     // per input. Every invocation below executes this same image.
     let artifacts = Mos6502Sim65.compile(&program).expect("scalar compilation");

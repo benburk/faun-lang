@@ -1,3 +1,6 @@
+#[path = "../../core/tests/support/faun.rs"]
+mod faun;
+
 include!("../../core/tests/support/runtime_naturals.rs");
 
 #[test]

@@ -71,7 +71,7 @@ name = "faun-mos6502-sim65"
 version = "0.1.0"
 dependencies = [
  "faun-core",
- "faun-simple",
+ "faun-driver",
 ]
 
 [[package]]
@@ -87,7 +87,7 @@ name = "faun-wasm32-wasi"
 version = "0.1.0"
 dependencies = [
  "faun-core",
- "faun-simple",
+ "faun-driver",
 ]
 
 [[package]]
@@ -95,7 +95,7 @@ name = "faun-x86-64-linux"
 version = "0.1.0"
 dependencies = [
  "faun-core",
- "faun-simple",
+ "faun-driver",
 ]
 
 [[package]]

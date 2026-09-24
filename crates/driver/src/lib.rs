@@ -209,7 +209,7 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Run { source, target } => {
-            let artifacts = compile(&source, *target)?;
+            let artifacts = compile(&source, target.target)?;
             if !artifacts.iter().any(|artifact| artifact.executable) {
                 return Err("the selected target did not emit a native executable".into());
             }
@@ -238,10 +238,10 @@ fn build(
         return Err("--output cannot be used with --emit; redirect stdout instead".into());
     }
     match emit {
-        Some(Emit::Barb) => print!("{}", optimized_application(source, backend)?.render()),
-        Some(Emit::Machine) => print!("{}", machine(source, backend)?.render()),
+        Some(Emit::Barb) => print!("{}", optimized(source, backend.target)?.render()),
+        Some(Emit::Machine) => print!("{}", machine(source, backend.target)?.render()),
         None => {
-            let artifacts = compile(source, backend)?;
+            let artifacts = compile(source, backend.target)?;
             let output = output.unwrap_or_else(|| PathBuf::from("a.out"));
             for artifact in write_artifacts(&output, artifacts)? {
                 println!("wrote {}", artifact.path.display());
@@ -270,7 +270,12 @@ fn check(source: &Path, backend: Option<Backend>) -> Result<(), String> {
     Ok(())
 }
 
-fn lower_application(source: &Path, backend: Backend) -> Result<faun_core::barb::Program, String> {
+/// Load, check and lower a Faun application for `target`, stopping at Barb
+/// before any optimization.
+///
+/// # Errors
+/// Reports loading, resolution, checking or lowering errors.
+pub fn barb(source: &Path, target: &dyn Target) -> Result<faun_core::barb::Program, String> {
     let prelude = faun::standard_path();
     let host = host_path(prelude)?;
     let loaded = faun::modules::load_with_host(&[source.to_path_buf()], Some(prelude), Some(&host))
@@ -280,32 +285,27 @@ fn lower_application(source: &Path, backend: Backend) -> Result<faun_core::barb:
         faun::host::HostIds::resolve(&loaded, &blessed).map_err(|error| error.to_string())?;
     let resolved = faun::resolve::resolve(loaded).map_err(|error| error.to_string())?;
     let checked = faun::check::program(&resolved, &blessed).map_err(|error| error.to_string())?;
-    faun::lower::application(
-        &resolved,
-        &checked,
-        &blessed,
-        &host,
-        &backend.target.routines(),
-    )
-    .map_err(|error| error.to_string())
+    faun::lower::application(&resolved, &checked, &blessed, &host, &target.routines())
+        .map_err(|error| error.to_string())
 }
 
-fn optimized_application(
-    source: &Path,
-    backend: Backend,
-) -> Result<faun_core::barb::Program, String> {
-    let mut program = lower_application(source, backend)?;
+fn optimized(source: &Path, target: &dyn Target) -> Result<faun_core::barb::Program, String> {
+    let mut program = barb(source, target)?;
     faun_core::barb::optimize(&mut program);
     Ok(program)
 }
 
-fn machine(source: &Path, backend: Backend) -> Result<faun_core::ir::Program, String> {
-    let mut program = optimized_application(source, backend)?;
-    faun_core::machine(&mut program, &backend.target.routines())
+/// Compile a Faun application to the machine IR `target` compiles.
+///
+/// # Errors
+/// Reports any error [`barb`] does, or what the machine tier cannot represent.
+pub fn machine(source: &Path, target: &dyn Target) -> Result<faun_core::ir::Program, String> {
+    let mut program = optimized(source, target)?;
+    faun_core::machine(&mut program, &target.routines())
 }
 
-fn compile(source: &Path, backend: Backend) -> Result<Vec<Artifact>, String> {
-    backend.target.compile(&machine(source, backend)?)
+fn compile(source: &Path, target: &dyn Target) -> Result<Vec<Artifact>, String> {
+    target.compile(&machine(source, target)?)
 }
 
 struct WrittenArtifact {

@@ -1,0 +1,17 @@
+# The argument count, kept below two before arithmetic can widen it.
+
+import std.host {Host argc! exit!}
+
+below : Nat Nat -> Bool
+below(_ 0) -> False
+below(0 Succ(_)) -> True
+below(Succ(a) Succ(b)) -> below(a b)
+
+finish! : Host Bool Nat -> []
+finish!(host True n) -> exit!(host n + n + n + n)
+finish!(host False _) -> exit!(host 0)
+
+main! : Host -> []
+main!(host) ->
+  count = argc!(host)
+  finish!(host below(count 2) count)

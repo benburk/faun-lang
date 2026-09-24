@@ -1,0 +1,26 @@
+# Arithmetic on the argument count, which a guard keeps below 32. The
+# constants fold; what depends on the count is worked out as it runs.
+
+import std.host {Host argc! exit!}
+
+below : Nat Nat -> Bool
+below(_ 0) -> False
+below(0 Succ(_)) -> True
+below(Succ(a) Succ(b)) -> below(a b)
+
+finish! : Host Bool Nat -> []
+finish!(host True n) ->
+  a = n + 2
+  exit!(host a + n)
+finish!(host False _) -> exit!(host 0)
+
+main! : Host -> []
+main!(host) ->
+  one = 1
+  two = one + one
+  four = two + two
+  eight = four + four
+  sixteen = eight + eight
+  limit = sixteen + sixteen
+  count = argc!(host)
+  finish!(host below(count limit) count)

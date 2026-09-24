@@ -15,10 +15,13 @@ use super::{ARITHMETIC_SIZES, CORPUS_SIZES, EXAMPLE_SIZES, LADDER_SIZES, RUNNER,
 
 #[path = "expressions.rs"]
 mod expressions;
+#[path = "faun.rs"]
+mod faun;
 
-pub(super) const EXIT_ZERO: &str = "type Nat Zero Succ(Nat)
+pub(super) const EXIT_ZERO: &str = "import std.host {Host exit!}
 
-                                   main!(h) -> exit!(h Zero)";
+                                   main! : Host -> []
+                                   main!(host) -> exit!(host 0)";
 
 fn corpus() -> [(&'static str, Program); 19] {
     [
@@ -48,11 +51,17 @@ fn corpus() -> [(&'static str, Program); 19] {
 }
 
 fn written() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../simple/examples")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/tests/support/examples")
 }
 
+/// Compile a Faun program for this target through the primary frontend.
 pub(super) fn read(text: &str) -> Result<Program, String> {
-    faun_simple::read(text, &TARGET.routines())
+    faun::machine(text, &TARGET)
+}
+
+/// The same, lowered without optimizing.
+pub(super) fn read_unoptimized(text: &str) -> Result<Program, String> {
+    faun::unoptimized(text, &TARGET)
 }
 
 pub(super) fn execute(program: &Program) -> (i32, String) {
@@ -208,37 +217,46 @@ fn target_runs_managed_products_across_calls_and_matches() {
 /// Products held flat cross calls as arguments and results, meet at a join,
 /// and ride inside a sum's cell as their fields. The 6502 answers one value
 /// and joins two, so there the same program also runs packed.
-const PRODUCTS: &str = "type Nat Zero Succ(Nat)
-                        type Bool False True
-                        type Pair P(Bool Bool)
-                        type Triple T(Pair Bool)
-                        type Maybe Nothing Just(Triple)
+const PRODUCTS: &str = "import std.host {Host argc! exit!}
 
-                        is_zero(Zero) -> True
-                        is_zero(Succ(k)) -> False
-                        is_one(Zero) -> False
-                        is_one(Succ(k)) -> is_zero(k)
-                        and(True b) -> b
-                        and(False b) -> False
+                        Pair : [P(Bool Bool)]
+                        Triple : [T(Pair Bool)]
+                        Maybe : [Nothing Just(Triple)]
 
+                        is_one : Nat -> Bool
+                        is_one(1) -> True
+                        is_one(_) -> False
+
+                        swap : Pair -> Pair
                         swap(P(a b)) -> P(b a)
-                        second(P(a b)) -> b
+
+                        second : Pair -> Bool
+                        second(P(_ b)) -> b
+
+                        spin : Pair Bool -> Triple
                         spin(P(a b) c) -> T(P(b c) a)
+
+                        rotate : Triple -> Triple
                         rotate(T(p c)) -> spin(p c)
+
+                        choose : Bool Triple -> Triple
                         choose(True t) -> rotate(t)
                         choose(False t) -> t
+
+                        unwrap : Maybe -> Triple
                         unwrap(Nothing) -> T(P(True True) True)
                         unwrap(Just(t)) -> t
-                        four(True) -> Succ(Succ(Succ(Succ(Zero))))
-                        four(False) -> Zero
-                        status(T(p c)) -> four(and(c second(p)))
 
-                        main!(h) ->
-                          n = argc!(h)
-                          flag = is_one(n)
+                        status : Triple -> Nat
+                        status(T(p c)) -> c.and(second(p)).select(4 0)
+
+                        main! : Host -> []
+                        main!(host) ->
+                          count = argc!(host)
+                          flag = is_one(count)
                           start = T(swap(P(False flag)) True)
                           kept = unwrap(Just(start))
-                          exit!(h status(choose(flag kept)))";
+                          exit!(host status(choose(flag kept)))";
 
 #[test]
 fn products_cross_calls_joins_and_cells_as_their_fields() {
@@ -257,20 +275,25 @@ fn products_cross_calls_joins_and_cells_as_their_fields() {
 /// Numbers inside a product are as wide as what is built into them, so a
 /// pair of small counts is two small words: nothing allocated, and an exit
 /// status proven to fit.
-const NUMBER_PAIR: &str = "type Nat Zero Succ(Nat)
-                           type Pair P(Nat Nat)
+const NUMBER_PAIR: &str = "import std.host {Host argc! exit!}
 
+                           Pair : [P(Nat Nat)]
+
+                           swap : Pair -> Pair
                            swap(P(a b)) -> P(b a)
-                           sum(Zero b) -> b
-                           sum(Succ(a) b) -> Succ(sum(a b))
-                           both(P(a b)) -> sum(a b)
-                           small(Zero) -> Zero
-                           small(Succ(k)) -> Succ(Zero)
 
-                           main!(h) ->
-                             n = argc!(h)
-                             p = swap(P(small(n) Succ(Succ(Zero))))
-                             exit!(h both(p))";
+                           both : Pair -> Nat
+                           both(P(a b)) -> a + b
+
+                           small : Nat -> Nat
+                           small(0) -> 0
+                           small(Succ(_)) -> 1
+
+                           main! : Host -> []
+                           main!(host) ->
+                             count = argc!(host)
+                             p = swap(P(small(count) 2))
+                             exit!(host both(p))";
 
 #[test]
 fn a_pair_of_small_numbers_is_two_small_words() {
@@ -289,23 +312,30 @@ fn a_pair_of_small_numbers_is_two_small_words() {
 /// A list built while the program runs is a buffer: counting builds one by
 /// pushing in place, reversing builds another, and the first element is
 /// read back from where the buffer holds it.
-const LIST: &str = "type Nat Zero Succ(Nat)
-                    type List Nil Cons(Nat List)
+const LIST: &str = "import std.host {Host argc! exit!}
 
-                    small(Zero) -> Zero
-                    small(Succ(k)) -> Succ(Zero)
-                    count(Zero acc) -> acc
-                    count(Succ(k) acc) -> count(k Cons(k acc))
-                    reverse(Nil acc) -> acc
-                    reverse(Cons(h t) acc) -> reverse(t Cons(h acc))
-                    head(Nil) -> Zero
-                    head(Cons(h t)) -> h
+                    small : Nat -> Nat
+                    small(0) -> 0
+                    small(Succ(_)) -> 1
 
-                    main!(h) ->
-                      c = argc!(h)
+                    count : Nat List(Nat) -> List(Nat)
+                    count(0 acc) -> acc
+                    count(Succ(k) acc) -> count(k [k *acc])
+
+                    turn : List(Nat) List(Nat) -> List(Nat)
+                    turn([] acc) -> acc
+                    turn([h *t] acc) -> turn(t [h *acc])
+
+                    head : List(Nat) -> Nat
+                    head([]) -> 0
+                    head([h *_]) -> h
+
+                    main! : Host -> []
+                    main!(host) ->
+                      c = argc!(host)
                       n = small(c)
-                      counted = count(Succ(Succ(Succ(Succ(n)))) Nil)
-                      exit!(h head(reverse(counted Nil)))";
+                      counted = count(4 + n [])
+                      exit!(host head(turn(counted [])))";
 
 #[test]
 fn a_list_built_at_run_time_is_a_buffer() {
@@ -369,9 +399,237 @@ pub(super) fn bytes(program: &Program) -> Vec<u8> {
     TARGET.emit(program).remove(0).bytes
 }
 
+/// Every program here and what it leaves with. What a program answers is a
+/// fact about the program, so it is said once rather than once per
+/// machine, and every target has to answer the same.
+fn running() -> Vec<(&'static str, Program, i32)> {
+    let mut held = built();
+    for (name, leave, answer) in [
+        ("an arm that comes back", false, 2),
+        ("an arm that leaves", true, 1),
+    ] {
+        let mut barb = programs::an_arm_that_leaves(leave);
+        faun_core::barb::optimize(&mut barb);
+        let machine = faun_core::machine(&mut barb, &TARGET.routines()).expect("a program");
+        held.push((name, machine, answer));
+    }
+    for (name, text, answer) in WRITTEN {
+        let program = read(text).unwrap_or_else(|error| panic!("{name}: {error}\n{text}"));
+        held.push((name, program, *answer));
+    }
+    held
+}
+
+/// The programs built in machine IR, and what each leaves with.
+fn built() -> Vec<(&'static str, Program, i32)> {
+    vec![
+        ("two and two", programs::two_and_two(), 4),
+        (
+            "a long arm first",
+            programs::a_branch_over_a_long_arm(40, true),
+            40,
+        ),
+        (
+            "a long arm last",
+            programs::a_branch_over_a_long_arm(40, false),
+            40,
+        ),
+        ("a global", programs::counts_in_a_global(), 3),
+        ("eight bits", programs::wraps_at_eight_bits(), 4),
+        (
+            "values across a call",
+            programs::values_survive_a_call(),
+            45,
+        ),
+        (
+            "a comparison",
+            programs::compares_two_worked_out_values(),
+            1,
+        ),
+        ("a flag it read", programs::branches_on_a_flag_it_read(), 7),
+        (
+            "a total into an arm",
+            programs::carries_a_total_into_an_arm(3),
+            3,
+        ),
+    ]
+}
+
+/// Programs written in Faun and what each leaves with.
+const WRITTEN: &[(&str, &str, i32)] = &[
+    ("exit zero", EXIT_ZERO, 0),
+    (
+        "a status it was told",
+        "import std.host {Host exit!}
+         main! : Host -> []
+         main!(host) -> exit!(host 3)",
+        3,
+    ),
+    (
+        "a name that leaves",
+        "import std.host {Host exit!}
+         die! : Host Nat -> []
+         die!(host n) -> exit!(host n)
+         main! : Host -> []
+         main!(host) -> die!(host 2)",
+        2,
+    ),
+    (
+        "a tag from a count",
+        "import std.host {Host exit!}
+         main! : Host -> []
+         main!(host) -> exit!(host True.to_nat())",
+        1,
+    ),
+    (
+        "how many arguments",
+        "import std.host {Host argc! exit!}
+         below : Nat Nat -> Bool
+         below(_ 0) -> False
+         below(0 Succ(_)) -> True
+         below(Succ(a) Succ(b)) -> below(a b)
+         finish! : Host Bool Nat -> []
+         finish!(host True n) -> exit!(host n + n)
+         finish!(host False _) -> exit!(host 0)
+         main! : Host -> []
+         main!(host) ->
+           count = argc!(host)
+           finish!(host below(count 2) count)",
+        2,
+    ),
+    (
+        "a runtime guard exits early",
+        "import std.host {Host argc! exit!}
+         below : Nat Nat -> Bool
+         below(_ 0) -> False
+         below(0 Succ(_)) -> True
+         below(Succ(a) Succ(b)) -> below(a b)
+         finish! : Host Bool Nat -> []
+         finish!(host True n) -> exit!(host n)
+         finish!(host False _) -> exit!(host 7)
+         main! : Host -> []
+         main!(host) ->
+           count = argc!(host)
+           finish!(host below(count 1) count)",
+        7,
+    ),
+    ("a tag", ORDER_LT, 0),
+    ("a tag", ORDER_GT, 2),
+    ("two columns", COLUMNS_MONUS, 2),
+    ("two columns", COLUMNS_UNDERFLOW, 0),
+    ("two columns", COLUMNS_LESS, 0),
+    ("two columns", COLUMNS_SAME, 1),
+    ("two columns", COLUMNS_MORE, 2),
+    ("runtime addition", ARITHMETIC_ADD, 11),
+    ("runtime monus", ARITHMETIC_MONUS, 7),
+    ("runtime underflow", ARITHMETIC_UNDERFLOW, 0),
+    ("runtime multiplication", ARITHMETIC_MUL, 18),
+    ("runtime division", ARITHMETIC_DIV, 4),
+    ("runtime remainder", ARITHMETIC_MOD, 1),
+    ("runtime division by zero", ARITHMETIC_DIV_ZERO, 0),
+    ("runtime remainder by zero", ARITHMETIC_MOD_ZERO, 9),
+    ("runtime less than", ARITHMETIC_LESS, 1),
+    ("runtime equality", ARITHMETIC_EQUAL, 1),
+    ("runtime inequality", ARITHMETIC_UNEQUAL, 0),
+];
+
+/// A tag read back as the constructor it is.
+macro_rules! ordering {
+    ($which:literal) => {
+        concat!(
+            "import std.host {Host exit!}
+             Order : [Lt Eq Gt]
+             rank : Order -> Nat
+             rank(Lt) -> 0
+             rank(Eq) -> 1
+             rank(Gt) -> 2
+             pick : Nat -> Order
+             pick(0) -> Lt
+             pick(Succ(_)) -> Gt
+             main! : Host -> []
+             main!(host) -> exit!(host rank(pick(",
+            $which,
+            ")))"
+        )
+    };
+}
+const ORDER_LT: &str = ordering!("0");
+const ORDER_GT: &str = ordering!("1");
+
+/// Two columns matched at once. Subtraction stops at nought rather than
+/// wrapping, which is what the second column buys.
+macro_rules! columns {
+    ($answer:literal) => {
+        concat!(
+            "import std.host {Host exit!}
+             Order : [Lt Eq Gt]
+             sub : Nat Nat -> Nat
+             sub(0 _) -> 0
+             sub(Succ(m) 0) -> Succ(m)
+             sub(Succ(m) Succ(n)) -> sub(m n)
+             cmp : Nat Nat -> Order
+             cmp(0 0) -> Eq
+             cmp(0 Succ(_)) -> Lt
+             cmp(Succ(_) 0) -> Gt
+             cmp(Succ(m) Succ(n)) -> cmp(m n)
+             rank : Order -> Nat
+             rank(Lt) -> 0
+             rank(Eq) -> 1
+             rank(Gt) -> 2
+             main! : Host -> []
+             main!(host) -> exit!(host ",
+            $answer,
+            ")"
+        )
+    };
+}
+const COLUMNS_MONUS: &str = columns!("sub(3 1)");
+const COLUMNS_UNDERFLOW: &str = columns!("sub(1 3)");
+const COLUMNS_LESS: &str = columns!("rank(cmp(1 3))");
+const COLUMNS_SAME: &str = columns!("rank(cmp(3 3))");
+const COLUMNS_MORE: &str = columns!("rank(cmp(3 1))");
+
+/// Runtime arithmetic: the count cannot fold, and the guard is what makes
+/// what follows fit even on the smallest target.
+macro_rules! arithmetic {
+    ($answer:literal) => {
+        concat!(
+            "import std.host {Host argc! exit!}
+             below : Nat Nat -> Bool
+             below(_ 0) -> False
+             below(0 Succ(_)) -> True
+             below(Succ(a) Succ(b)) -> below(a b)
+             finish! : Host Bool Nat -> []
+             finish!(host False _) -> exit!(host 0)
+             finish!(host True n) ->
+               a = n + 8
+               b = n + 1
+               z = n - n
+               exit!(host ",
+            $answer,
+            ")
+             main! : Host -> []
+             main!(host) ->
+               count = argc!(host)
+               finish!(host below(count 2) count)"
+        )
+    };
+}
+const ARITHMETIC_ADD: &str = arithmetic!("a + b");
+const ARITHMETIC_MONUS: &str = arithmetic!("a - b");
+const ARITHMETIC_UNDERFLOW: &str = arithmetic!("b - a");
+const ARITHMETIC_MUL: &str = arithmetic!("a * b");
+const ARITHMETIC_DIV: &str = arithmetic!("a / b");
+const ARITHMETIC_MOD: &str = arithmetic!("a % b");
+const ARITHMETIC_DIV_ZERO: &str = arithmetic!("a / z");
+const ARITHMETIC_MOD_ZERO: &str = arithmetic!("a % z");
+const ARITHMETIC_LESS: &str = arithmetic!("below(b a).to_nat()");
+const ARITHMETIC_EQUAL: &str = arithmetic!("a.equals(a).to_nat()");
+const ARITHMETIC_UNEQUAL: &str = arithmetic!("a.equals(b).to_nat()");
+
 #[test]
 fn it_answers_what_a_program_says() {
-    for (name, program, answer) in faun_simple::programs::running() {
+    for (name, program, answer) in running() {
         assert_eq!(status(&program), answer, "{name}");
     }
 }
@@ -471,22 +729,20 @@ pub(super) fn narrow(bits: u16) -> Program {
 
 #[test]
 fn it_sees_nothing_of_what_was_worked_out() {
-    let arithmetic = "type Nat Zero Succ(Nat)
+    let known = read(
+        "import std.host {Host exit!}
 
-                      add(a Zero) -> a
-                      add(a Succ(k)) -> Succ(add(a k))
-
-                      mul(Zero b) -> Zero
-                      mul(Succ(k) b) -> add(b mul(k b))
-
-                      main!(h) ->
-                        two = Succ(Succ(Zero))
-                        exit!(h mul(two two))";
-    let known = read(arithmetic).expect("a program");
+         main! : Host -> []
+         main!(host) ->
+           two = 2
+           exit!(host two * two)",
+    )
+    .expect("a program");
     let four = read(
-        "type Nat Zero Succ(Nat)
+        "import std.host {Host exit!}
 
-         main!(h) -> exit!(h Succ(Succ(Succ(Succ(Zero)))))",
+         main! : Host -> []
+         main!(host) -> exit!(host 4)",
     )
     .expect("a program");
     assert_eq!(status(&known), 4);
@@ -495,17 +751,20 @@ fn it_sees_nothing_of_what_was_worked_out() {
 
 #[test]
 fn it_lays_out_nothing_that_is_not_reached() {
-    let reached = "type Nat Zero Succ(Nat)
+    let reached = "import std.host {Host exit!}
 
-                   double(n) -> add(n n)
-                   add(a Zero) -> a
-                   add(a Succ(k)) -> Succ(add(a k))
+                   double : Nat -> Nat
+                   double(n) -> n + n
 
-                   main!(h) -> exit!(h double(Succ(Succ(Zero))))";
+                   main! : Host -> []
+                   main!(host) -> exit!(host double(2))";
     let spare = format!(
         "{reached}
 
+         quadruple : Nat -> Nat
          quadruple(n) -> double(double(n))
+
+         quadruple_again : Nat -> Nat
          quadruple_again(n) -> quadruple(quadruple(n))"
     );
     let machine = read(reached).expect("a program");
@@ -518,7 +777,7 @@ fn it_lays_out_nothing_that_is_not_reached() {
 fn it_lays_out_a_chain_as_the_number_it_builds() {
     let chain = |held: usize| {
         let text = format!(
-            "type Nat Zero Succ(Nat)\n\nmain!(h) -> exit!(h {}Zero{})",
+            "import std.host {{Host exit!}}\n\nmain! : Host -> []\nmain!(host) -> exit!(host {}0{})",
             "Succ(".repeat(held),
             ")".repeat(held)
         );
@@ -601,7 +860,7 @@ fn has_constant_only_multiply(program: &Program, instructions: &[(&Op, &[ValueId
 
 #[test]
 fn runnable_expression_example_uses_runtime_arguments() {
-    let program = read(include_str!("../../../simple/examples/expressions.fn")).unwrap();
+    let program = read(include_str!("examples/expressions.fn")).unwrap();
     let counts = [1, 2, 3, 31, 32, 33];
     for (argc, (status, stdout)) in counts.into_iter().zip(execute_counts(&program, &counts)) {
         let expected = if argc < 32 {
@@ -614,18 +873,40 @@ fn runnable_expression_example_uses_runtime_arguments() {
     }
 }
 
+/// A known-zero scalar is still an argument, a result and a branch result.
+/// Computing it calls argc again: knowing the result must not erase that
+/// call.
+const ZERO_WIDTH: &str = "import std.host {Host argc! exit!}
+
+                          keep_zero! : Host Nat -> Nat
+                          keep_zero!(host n) ->
+                            observed = argc!(host)
+                            n
+
+                          select_zero! : Host Bool -> Nat
+                          select_zero!(host False) -> keep_zero!(host 0)
+                          select_zero!(host True) -> keep_zero!(host 0)
+
+                          zero_or_one : Bool Nat -> Nat
+                          zero_or_one(False n) -> n
+                          zero_or_one(True n) -> Succ(n)
+
+                          main! : Host -> []
+                          main!(host) ->
+                            count = argc!(host)
+                            first = count.equals(1)
+                            z = select_zero!(host first)
+                            exit!(host zero_or_one(first z))";
+
 #[test]
 fn source_zero_width_scalars_cross_calls_and_joins() {
-    let source = include_str!("zero_width.fn");
+    let source = ZERO_WIDTH;
     for optimized in [true, false] {
-        let routines = TARGET.routines();
         let program = if optimized {
-            faun_simple::read(source, &routines).unwrap()
+            read(source).unwrap()
         } else {
             // Inlining would remove the calls and joins this is about.
-            let mut barb = faun_simple::parse(source, &routines).unwrap();
-            faun_core::barb::validate(&barb).unwrap();
-            faun_core::machine(&mut barb, &routines).unwrap()
+            read_unoptimized(source).unwrap()
         };
         assert!(
             (0..program.values_count())

@@ -1,0 +1,6 @@
+# The same sum written inline.
+
+import std.host {Host exit!}
+
+main! : Host -> []
+main!(host) -> exit!(host 2 + 2)

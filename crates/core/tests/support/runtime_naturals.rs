@@ -138,13 +138,29 @@ fn check(target: &dyn Target, runner: Option<&str>) {
     });
 }
 
+/// Ordinary repeated squaring builds 2^128, then divides it back out of a
+/// product with the argument count: the answer is 1 exactly when the count is.
+const SQUARES: &str = "import std.host {Host argc! exit!}
+
+                       square : Nat -> Nat
+                       square(n) -> n * n
+
+                       main! : Host -> []
+                       main!(host) ->
+                         a = square(2)
+                         b = square(a)
+                         c = square(b)
+                         d = square(c)
+                         e = square(d)
+                         f = square(e)
+                         huge = square(f)
+                         count = argc!(host)
+                         product = huge * count
+                         quotient = product / huge
+                         exit!(host quotient.equals(1).to_nat())";
+
 fn source_check(target: &dyn Target, runner: Option<&str>) {
-    let text = format!(
-        "{}\n{}",
-        include_str!("../../../../crates/simple/standard/nat.fn"),
-        include_str!("runtime_naturals.fn")
-    );
-    let p = faun_simple::read(&text, &target.routines()).expect("bounded effect after runtime arithmetic");
+    let p = faun::machine(SQUARES, target).expect("bounded effect after runtime arithmetic");
     for wanted in [Binary::Mul, Binary::Div] {
         assert!(
             p.functions().iter().filter_map(faun_core::ir::Function::body).any(|body| p.every(body).any(|op| {

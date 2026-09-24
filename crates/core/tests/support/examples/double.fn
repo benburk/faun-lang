@@ -1,0 +1,11 @@
+# A helper whose body binds its answer before answering it.
+
+import std.host {Host exit!}
+
+double : Nat -> Nat
+double(n) ->
+  m = n + n
+  m
+
+main! : Host -> []
+main!(host) -> exit!(host double(2))

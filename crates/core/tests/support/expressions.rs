@@ -1,8 +1,6 @@
 //! Source-level codegen probes: fold constants normally, but take n from argc.
 //! Shared by backend conformance and the 6502 cost measurements.
 
-const LIBRARY: &str = include_str!("../../../../crates/simple/standard/nat.fn");
-
 /// Includes monus and carry boundaries, the last accepted count, and both
 /// the guard boundary and a count beyond it. Counts include the program name.
 pub(super) const COUNTS: &[u16] = &[1, 2, 4, 5, 6, 15, 16, 17, 31, 32, 33];
@@ -27,44 +25,47 @@ pub(super) const CASES: [Case; 5] = [
 impl Case {
     pub(super) fn source(self) -> String {
         let expression = match self {
-            Self::Chain => "exit!(h add(add(n three) five))",
+            Self::Chain => "exit!(host n + three + five)",
             Self::Shared => {
-                "a = add(n three)
-                 b = add(a n)
-                 exit!(h add(a b))"
+                "a = n + three
+                   b = a + n
+                   exit!(host a + b)"
             }
-            Self::ConstantLeft => "exit!(h add(five add(n three)))",
+            Self::ConstantLeft => "exit!(host five + (n + three))",
             // n + 250 crosses 255 at n = 6. Subtracting 255 makes its high
             // byte observable even though an exit status only carries eight
             // bits: a wrongly wrapped sum would yield monus zero instead.
             Self::Carry => {
-                "ten = add(five five)
-                 base = mul(five mul(five ten))
-                 boundary = add(base five)
-                 sum = add(n base)
-                 exit!(h sub(sum boundary))"
+                "ten = five + five
+                   base = five * (five * ten)
+                   boundary = base + five
+                   sum = n + base
+                   exit!(host sum - boundary)"
             }
-            Self::Monus => "exit!(h sub(n five))",
+            Self::Monus => "exit!(host n - five)",
         };
-        let natural = |n| format!("{}Zero{}", "Succ(".repeat(n), ")".repeat(n));
         format!(
-            "{LIBRARY}
+            "import std.host {{Host argc! exit!}}
 
-             bounded!(h True n) -> n
-             bounded!(h False n) ->
-               five = {five}
-               exit!(h mul(mul(five five) {four}))
+             below : Nat Nat -> Bool
+             below(_ 0) -> False
+             below(0 Succ(_)) -> True
+             below(Succ(a) Succ(b)) -> below(a b)
 
-             main!(h) ->
-               count = argc!(h)
-               n = bounded!(h less_than(count {limit}) count)
-               two = Succ(Succ(Zero))
-               three = Succ(two)
-               five = add(three two)
-               {expression}",
-            five = natural(5),
-            four = natural(4),
-            limit = natural(32),
+             finish! : Host Bool Nat -> []
+             finish!(host False _) ->
+               five = 5
+               exit!(host five * five * 4)
+             finish!(host True n) ->
+               two = 2
+               three = two + 1
+               five = three + two
+               {expression}
+
+             main! : Host -> []
+             main!(host) ->
+               count = argc!(host)
+               finish!(host below(count 32) count)"
         )
     }
 

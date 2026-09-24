@@ -1,0 +1,8 @@
+# A string known before the program runs is handed over where it lies.
+
+import std.host {Host exit! write!}
+
+main! : Host -> []
+main!(host) ->
+  said = write!(host "Hello, world!\n")
+  exit!(host 0)
