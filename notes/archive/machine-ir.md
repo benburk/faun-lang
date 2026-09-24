@@ -187,9 +187,11 @@ heap used by runtime naturals. A mortal object has a block size and reference
 count followed by its tag, represented-field count, and pairs of field kind and
 word value. Field kinds distinguish unmanaged scalars, naturals, and cells so
 recursive release can release managed children before freeing the block.
-Construction and projection retain managed fields; ownership placement releases
-locals in reverse scope order and transfers returned, yielded, broken, and
-continued values. Heap exhaustion follows the natural runtime contract and exits
+Projection retains a managed field. Construction takes its fields' claims,
+moving a field's own claim where the cell is that value's last use. Ownership
+placement releases each claim right after its value's last use and transfers
+returned, yielded, broken, and continued values; see
+[runtime naturals](runtime-naturals.md) for the schedule. Heap exhaustion follows the natural runtime contract and exits
 with status 2.
 
 Cell payload sizes and offsets are checked before rebuilding. After preparation,

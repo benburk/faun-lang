@@ -1,10 +1,13 @@
-//! Target-sized representation and structured lifetimes for unbounded naturals.
+//! Target-sized representation and reference-count placement for managed values.
 //!
-//! Function parameters borrow; every local natural result owns a claim. Region
-//! exits retain outgoing values (including duplicates) before releasing exited
-//! scopes. Loop parameters own their iteration's claims; ancestor captures do
-//! not. This deliberately keeps dead locals until their region exits, trading
-//! peak memory for a small, auditable schedule rather than a liveness analysis.
+//! Every local managed result owns a claim, and so do loop parameters and the
+//! parameters [`super::ownership`] finds owned; the rest borrow. A claim is
+//! released right after its value's last use in its region. A use that takes
+//! a claim -- an exit, a cell field, a loop's initial state, a same-class
+//! conversion, an owned parameter -- moves the value's own claim where that
+//! use is its last and retains a new one otherwise. A value whose last use is
+//! an `if` hands its claim to both arms, and each releases it at its own last
+//! use. An exit releases whatever the scopes it leaves still hold.
 
 use crate::index::Pool;
 use std::{cell::Cell, collections::BTreeMap};
@@ -13,6 +16,7 @@ use num_bigint::BigUint;
 
 use super::cell::{self, Library as CellLibrary};
 use super::natural::{self, Config, Helper, Library, Needs};
+use super::ownership::{self, Liveness, managed};
 use super::{
     Builder, Class, DataId, Definition, Exit, Op, Origin, Program, Range, RegionId, Relation,
     Terminator, ValueId, Width, validate,
@@ -62,13 +66,15 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         word_bytes: u64::from(config.word_bits / 8),
         constants,
         values: vec![Cell::new(None); source.values_count()],
+        owned: ownership::owned_parameters(source),
     };
     for (id, function) in source.functions.iter_enumerated() {
         let Some(body) = function.body() else {
             continue;
         };
+        let held = pass.owned_parameters(id, body);
         output.define(id, |b, params| {
-            pass.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params);
+            pass.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params, held);
         });
     }
     validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
@@ -113,6 +119,11 @@ fn skeleton(source: &Program) -> Program {
         }
     }
     output
+}
+
+/// The innermost scope, which is the region being walked.
+const fn top(scopes: &mut [Scope]) -> &mut Scope {
+    scopes.last_mut().expect("a region being walked")
 }
 
 const fn representation(class: Class) -> Class {
@@ -288,6 +299,8 @@ struct Pass<'a> {
     // Cells let the builder's two sequential branch callbacks share this table
     // without cloning it or borrowing a whole Pass mutably.
     values: Vec<Cell<Option<ValueId>>>,
+    /// Which parameters of each function own a claim.
+    owned: Vec<Vec<bool>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -297,13 +310,25 @@ enum ScopeKind {
     Loop,
 }
 
+/// The claims a region holds at one point of its walk, by source value.
 #[derive(Clone)]
 struct Scope {
-    owners: Vec<(Class, ValueId)>,
+    held: Vec<ValueId>,
     kind: ScopeKind,
 }
 
 impl Pass<'_> {
+    /// The parameters of a function's body that arrive holding a claim.
+    fn owned_parameters(&self, id: super::FunctionId, body: RegionId) -> Vec<ValueId> {
+        self.source
+            .values(self.source.region(body).params)
+            .iter()
+            .zip(ownership::taken(&self.owned, id))
+            .filter(|&(_, &owned)| owned)
+            .map(|(&param, _)| param)
+            .collect()
+    }
+
     fn value(&self, old: ValueId) -> ValueId {
         self.values[old.index()]
             .get()
@@ -335,7 +360,14 @@ impl Pass<'_> {
         b.call(function, &[value]);
     }
 
-    fn construct_cell(&self, b: &mut Builder, tag: u32, fields: Range) -> ValueId {
+    /// Build one object from fields whose claims it takes.
+    fn construct_cell(
+        &self,
+        b: &mut Builder,
+        tag: u32,
+        fields: Range,
+        claimed: &[ValueId],
+    ) -> ValueId {
         let fields = self.source.values(fields);
         let payload_words = fields.len() * 2 + 1;
         let payload_bytes =
@@ -350,9 +382,8 @@ impl Pass<'_> {
             u64::try_from(fields.len()).expect("checked cell arity"),
         );
         b.store(Width::Word, object, super::Offset::Words(3), arity);
-        for (index, &old) in fields.iter().enumerate() {
-            let class = self.source.class(old);
-            let kind = match class {
+        for (index, (&old, &value)) in fields.iter().zip(claimed).enumerate() {
+            let kind = match self.source.class(old) {
                 Class::Natural => cell::NATURAL,
                 Class::Cell => cell::CELL,
                 _ => cell::SCALAR,
@@ -360,7 +391,6 @@ impl Pass<'_> {
             let kind = b.constant(Class::Word, kind);
             let at = i32::try_from(index * 2 + 4).expect("checked cell field offset");
             b.store(Width::Word, object, super::Offset::Words(at), kind);
-            let value = self.retained(b, class, self.value(old));
             b.store(Width::Word, object, super::Offset::Words(at + 1), value);
         }
         object
@@ -386,6 +416,8 @@ impl Pass<'_> {
         self.retained(b, class, value)
     }
 
+    /// Walk one region holding `held` on entry: claims handed down by an
+    /// enclosing `if`, owned parameters, or a loop's carried state.
     fn region(
         &self,
         b: &mut Builder,
@@ -393,30 +425,24 @@ impl Pass<'_> {
         scopes: &mut Vec<Scope>,
         kind: ScopeKind,
         params: &[ValueId],
+        held: Vec<ValueId>,
     ) {
         let old = self.source.region(region);
-        let mut owners = Vec::new();
         for (&old, &new) in self.source.values(old.params).iter().zip(params) {
             self.mapped(old, new);
-            if kind == ScopeKind::Loop
-                && matches!(self.source.class(old), Class::Cell | Class::Natural)
-            {
-                owners.push((self.source.class(old), new));
-            }
         }
-        scopes.push(Scope { owners, kind });
-        for (op, results) in self.source.walk(region) {
-            let fresh = self.op(b, *op, results, scopes);
+        let live = Liveness::of(self.source, region);
+        scopes.push(Scope { held, kind });
+        self.release_dead(b, scopes, &live, None);
+        for (at, (op, results)) in self.source.walk(region).enumerate() {
+            let fresh = self.op(b, *op, results, scopes, &live, at);
             for (&old, new) in results.iter().zip(fresh) {
                 self.mapped(old, new);
-                if matches!(self.source.class(old), Class::Cell | Class::Natural) {
-                    scopes
-                        .last_mut()
-                        .expect("current scope")
-                        .owners
-                        .push((self.source.class(old), new));
+                if managed(self.source.class(old)) {
+                    top(scopes).held.push(old);
                 }
             }
+            self.release_dead(b, scopes, &live, Some(at));
         }
         // Terminal child transfers already cleaned their scopes. A Never
         // call must not be followed by cleanup at this region's end.
@@ -426,16 +452,47 @@ impl Pass<'_> {
         scopes.pop();
     }
 
-    fn exit(&self, b: &mut Builder, scopes: &[Scope], terminator: Terminator) {
-        let outgoing: Vec<_> = self
-            .source
-            .values(terminator.values)
-            .iter()
-            .map(|&old| {
-                let value = self.value(old);
-                self.retained(b, self.source.class(old), value)
-            })
-            .collect();
+    /// Release what the innermost scope holds and nothing reads from `at` on.
+    fn release_dead(
+        &self,
+        b: &mut Builder,
+        scopes: &mut [Scope],
+        live: &Liveness,
+        at: Option<usize>,
+    ) {
+        let scope = top(scopes);
+        let (dead, kept): (Vec<_>, Vec<_>) =
+            scope.held.iter().partition(|&&value| live.dead(value, at));
+        scope.held = kept;
+        for &value in dead.iter().rev() {
+            self.release(b, self.source.class(value), self.value(value));
+        }
+    }
+
+    /// A claim to `old` for a use at `at` that takes one: its own, where
+    /// this region holds it and this is its only and last reading, and a
+    /// new one otherwise.
+    fn take(
+        &self,
+        b: &mut Builder,
+        scopes: &mut [Scope],
+        live: &Liveness,
+        at: usize,
+        old: ValueId,
+    ) -> ValueId {
+        let class = self.source.class(old);
+        let scope = top(scopes);
+        if managed(class)
+            && live.only_last(old, at)
+            && let Some(held) = scope.held.iter().position(|&value| value == old)
+        {
+            scope.held.remove(held);
+            return self.value(old);
+        }
+        self.retained(b, class, self.value(old))
+    }
+
+    fn exit(&self, b: &mut Builder, scopes: &mut [Scope], terminator: Terminator) {
         let start = match terminator.exit {
             Exit::Return => 0,
             Exit::Yield => scopes.len() - 1,
@@ -444,9 +501,29 @@ impl Pass<'_> {
                 .rposition(|s| s.kind == ScopeKind::Loop)
                 .expect("validated loop exit"),
         };
+        let leaving = self.source.values(terminator.values);
+        let outgoing: Vec<_> = leaving
+            .iter()
+            .map(|&old| {
+                // Everything the exited scopes hold dies here, so a claim
+                // one of them holds moves out, unless it leaves twice.
+                let once = leaving.iter().filter(|&&value| value == old).count() == 1;
+                let held = scopes[start..].iter_mut().find_map(|scope| {
+                    let at = scope.held.iter().position(|&value| value == old)?;
+                    Some((scope, at))
+                });
+                match held {
+                    Some((scope, at)) if once => {
+                        scope.held.remove(at);
+                        self.value(old)
+                    }
+                    _ => self.retained(b, self.source.class(old), self.value(old)),
+                }
+            })
+            .collect();
         for scope in scopes[start..].iter().rev() {
-            for &(class, value) in scope.owners.iter().rev() {
-                self.release(b, class, value);
+            for &value in scope.held.iter().rev() {
+                self.release(b, self.source.class(value), self.value(value));
             }
         }
         match terminator.exit {
@@ -461,15 +538,16 @@ impl Pass<'_> {
         clippy::too_many_lines,
         reason = "exhaustive operation dispatch keeps scalar cloning beside each representation rewrite"
     )]
-    fn op(&self, b: &mut Builder, op: Op, results: &[ValueId], scopes: &[Scope]) -> Vec<ValueId> {
+    fn op(
+        &self,
+        b: &mut Builder,
+        op: Op,
+        results: &[ValueId],
+        scopes: &mut [Scope],
+        live: &Liveness,
+        at: usize,
+    ) -> Vec<ValueId> {
         let v = |old| self.value(old);
-        let args = |range| {
-            self.source
-                .values(range)
-                .iter()
-                .map(|&old| v(old))
-                .collect::<Vec<_>>()
-        };
         let classes = || {
             results
                 .iter()
@@ -485,7 +563,15 @@ impl Pass<'_> {
             Op::Constant { value } => b.constant(self.source.class(results[0]), value),
             Op::NaturalConstant(data) => b.kept_natural(data),
             Op::AddressOf(data) => b.address_of(data),
-            Op::Cell { tag, fields } => self.construct_cell(b, tag, fields),
+            Op::Cell { tag, fields } => {
+                let claimed: Vec<_> = self
+                    .source
+                    .values(fields)
+                    .iter()
+                    .map(|&old| self.take(b, scopes, live, at, old))
+                    .collect();
+                self.construct_cell(b, tag, fields, &claimed)
+            }
             Op::CellTag { cell } => b.load(Width::Word, v(cell), super::Offset::Words(2)),
             Op::CellField { cell, index } => self.cell_field(b, results[0], cell, index),
             Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => {
@@ -520,8 +606,9 @@ impl Pass<'_> {
             Op::Convert { value } => {
                 let class = self.source.class(results[0]);
                 match (self.source.class(value), class) {
-                    (Class::Natural, Class::Natural) => self.retained(b, Class::Natural, v(value)),
-                    (Class::Cell, Class::Cell) => self.retained(b, Class::Cell, v(value)),
+                    (Class::Natural, Class::Natural) | (Class::Cell, Class::Cell) => {
+                        self.take(b, scopes, live, at, value)
+                    }
                     (_, Class::Natural) => {
                         b.call_one(self.library.require(Helper::FromWord), &[v(value)])
                     }
@@ -553,43 +640,67 @@ impl Pass<'_> {
             Op::Call {
                 function,
                 args: held,
-            } => return b.call(function, &args(held)),
+            } => {
+                let owned = ownership::taken(&self.owned, function);
+                let args: Vec<_> = self
+                    .source
+                    .values(held)
+                    .iter()
+                    .zip(owned)
+                    .map(|(&old, &owned)| {
+                        if owned {
+                            self.take(b, scopes, live, at, old)
+                        } else {
+                            v(old)
+                        }
+                    })
+                    .collect();
+                return b.call(function, &args);
+            }
             Op::If {
                 condition,
                 then_region,
                 else_region,
             } => {
+                // What this region holds and reads last here is each arm's
+                // to release, where that arm last reads it.
+                let scope = top(scopes);
+                let (handed, kept): (Vec<_>, Vec<_>) = scope
+                    .held
+                    .iter()
+                    .partition(|&&value| live.dead(value, Some(at)));
+                scope.held = kept;
+                let arms: &[Scope] = scopes;
                 return b.if_(
                     v(condition),
                     &classes(),
                     |b| {
-                        self.region(
-                            b,
-                            then_region,
-                            &mut scopes.to_vec(),
-                            ScopeKind::Ordinary,
-                            &[],
-                        );
+                        let mut scopes = arms.to_vec();
+                        let kind = ScopeKind::Ordinary;
+                        self.region(b, then_region, &mut scopes, kind, &[], handed.clone());
                     },
                     |b| {
-                        self.region(
-                            b,
-                            else_region,
-                            &mut scopes.to_vec(),
-                            ScopeKind::Ordinary,
-                            &[],
-                        );
+                        let mut scopes = arms.to_vec();
+                        let kind = ScopeKind::Ordinary;
+                        self.region(b, else_region, &mut scopes, kind, &[], handed.clone());
                     },
                 );
             }
             Op::Loop { initial, body } => {
+                let carried: Vec<_> = self
+                    .source
+                    .values(self.source.region(body).params)
+                    .iter()
+                    .copied()
+                    .filter(|&param| managed(self.source.class(param)))
+                    .collect();
                 let initial: Vec<_> = self
                     .source
                     .values(initial)
                     .iter()
                     .zip(self.source.values(self.source.region(body).params))
                     .map(|(&old, &parameter)| {
-                        let value = self.retained(b, self.source.class(old), v(old));
+                        let value = self.take(b, scopes, live, at, old);
                         // Builder derives loop parameter classes from initial
                         // values. Valid IR may initialize a wider carried slot
                         // from a narrower scalar, so preserve the declared slot.
@@ -601,8 +712,10 @@ impl Pass<'_> {
                         }
                     })
                     .collect();
+                let outer: &[Scope] = scopes;
                 return b.loop_(&initial, &classes(), |b, params| {
-                    self.region(b, body, &mut scopes.to_vec(), ScopeKind::Loop, params);
+                    let mut scopes = outer.to_vec();
+                    self.region(b, body, &mut scopes, ScopeKind::Loop, params, carried);
                 });
             }
         };

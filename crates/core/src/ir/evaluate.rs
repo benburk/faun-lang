@@ -10,6 +10,11 @@
 //! Memory is byte-addressed, unaligned access is allowed, address
 //! zero is invalid, and Data is read-only. These addresses are interpreter-local.
 //!
+//! Every evaluation also counts what it did: how often each function was
+//! called and how many bytes were stored. Those counts are the cost oracle
+//! representation work is judged by -- an allocation count alone reads a loop
+//! that recopies its result every step as linear.
+//!
 //! Fuel charges one unit per instruction and region terminator, including calls
 //! and loop iterations. Explicit stacks avoid native-stack overflow. The natural
 //! size limit is a resource guard, not a language modulus. Host callbacks must
@@ -78,6 +83,32 @@ pub struct Evaluation {
     pub outcome: Outcome,
     pub globals: Vec<u8>,
     pub fuel_remaining: u64,
+    pub counts: Counts,
+}
+
+/// What an evaluation did, counted as it went.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    /// Calls made to each function, by function; the evaluated function's
+    /// own entry included.
+    pub calls: Vec<u64>,
+    /// Store instructions executed, and the bytes they wrote.
+    pub stores: u64,
+    pub stored_bytes: u64,
+}
+
+impl Counts {
+    /// Calls made to every function named `name`, which is how a generated
+    /// runtime helper such as `nat.allocate` is asked after.
+    #[must_use]
+    pub fn calls_to(&self, program: &Program, name: &str) -> u64 {
+        program
+            .functions
+            .iter_enumerated()
+            .filter(|(_, function)| program.name(function.name) == name)
+            .map(|(id, _)| self.calls.get(id.index()).copied().unwrap_or(0))
+            .sum()
+    }
 }
 
 impl Evaluation {
@@ -207,6 +238,7 @@ struct Machine<'a, H> {
     frames: Vec<Vec<Option<BigUint>>>,
     cells: Vec<CellValue>,
     tasks: Vec<Task>,
+    counts: Counts,
 }
 
 /// Evaluate any function, with fresh Globals for each invocation.
@@ -234,6 +266,27 @@ pub fn evaluate(
     {
         return Err(Error::LayoutMismatch { expected, actual });
     }
+    let mut machine = Machine {
+        program,
+        config,
+        host,
+        memory: memory(program, config)?,
+        frames: Vec::new(),
+        cells: Vec::new(),
+        tasks: Vec::new(),
+        counts: Counts {
+            calls: vec![0; program.functions.len()],
+            ..Counts::default()
+        },
+    };
+    if let Some(outcome) = machine.call(function, args, None)? {
+        return Ok(machine.finish(outcome));
+    }
+    machine.run()
+}
+
+/// A fresh copy of the program's memory, placed where it fits the word.
+fn memory(program: &Program, config: Config) -> Result<Memory<'_>, Error> {
     let globals_base = u64::try_from(program.data.len())
         .ok()
         .and_then(|n| n.checked_add(2))
@@ -244,23 +297,11 @@ pub fn evaluate(
     if config.word_bits < 64 && end > (1u64 << config.word_bits) {
         return Err(Error::InvalidMemory);
     }
-    let mut machine = Machine {
-        program,
-        config,
-        host,
-        memory: Memory {
-            data: &program.data,
-            globals: program.globals.clone(),
-            globals_base,
-        },
-        frames: Vec::new(),
-        cells: Vec::new(),
-        tasks: Vec::new(),
-    };
-    if let Some(outcome) = machine.call(function, args, None)? {
-        return Ok(machine.finish(outcome));
-    }
-    machine.run()
+    Ok(Memory {
+        data: &program.data,
+        globals: program.globals.clone(),
+        globals_base,
+    })
 }
 
 const fn invalid(what: &'static str) -> Error {
@@ -383,6 +424,7 @@ impl<H: Host> Machine<'_, H> {
             .get(id)
             .ok_or_else(|| invalid("function id"))?;
         self.signature(function.params, args)?;
+        self.counts.calls[id.index()] += 1;
         match function.definition {
             Definition::Declared(_) => Err(invalid("function has not been defined")),
             Definition::Body(body) => {
@@ -422,6 +464,7 @@ impl<H: Host> Machine<'_, H> {
             outcome,
             globals: self.memory.globals,
             fuel_remaining: self.config.fuel,
+            counts: self.counts,
         }
     }
 
@@ -813,6 +856,8 @@ impl<H: Host> Machine<'_, H> {
         if self.config.endian == Endian::Big {
             bytes.reverse();
         }
+        self.counts.stores += 1;
+        self.counts.stored_bytes += u64::try_from(bytes.len()).expect("a width in bytes");
         self.memory.write(address, &bytes)
     }
 

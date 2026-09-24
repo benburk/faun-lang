@@ -70,6 +70,7 @@ mod lower;
 mod model;
 pub mod natural;
 mod optimize;
+mod ownership;
 mod pretty;
 mod program;
 mod prune;
@@ -94,6 +95,8 @@ pub use validate::validate;
 mod arithmetic_tests;
 #[cfg(test)]
 mod builder_tests;
+#[cfg(test)]
+mod cost_tests;
 #[cfg(test)]
 mod external_tests;
 #[cfg(test)]

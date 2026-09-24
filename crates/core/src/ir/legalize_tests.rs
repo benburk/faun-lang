@@ -555,8 +555,11 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
         p.define(main, |b, _| {
             b.call(mark, &[]);
             let word = b.constant(Class::Word, 100);
-            b.convert(Class::Natural, word);
-            b.convert(Class::Natural, word);
+            // Both are read after the second is made, so both are live when
+            // it asks for room: a dead first one would already be released.
+            let first = b.convert(Class::Natural, word);
+            let second = b.convert(Class::Natural, word);
+            b.compare(Relation::Equal, first, second);
             b.call(mark, &[]);
             b.ret(&[word]);
         });

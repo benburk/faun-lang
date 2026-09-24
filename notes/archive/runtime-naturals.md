@@ -26,13 +26,23 @@ re-legalizing preserve this obligation; scalar-only legalization leaves portable
 programs unbound.
 This is a memory resource limit, not a numeric modulus.
 
-Each local natural result owns one reference. Function arguments are borrowed;
-function results, branch results and loop state transfer owned references.
-Outgoing aliases are retained individually before exited scopes are released.
-Nested loop exits do not release ancestor captures; function returns unwind all
-local scopes but not borrowed parameters. Dead locals remain live until their
-region exits, so peak memory can be higher than with last-use placement. Loop
-iteration cleanup reclaims dead allocations rather than accumulating history.
+Each local managed result owns one reference, and so do loop parameters and
+owned function parameters. A parameter is owned when its function takes a
+claim to it somewhere -- returns it, stores it in a cell, carries it into a
+loop, converts it, or passes it to another owned parameter -- decided to a
+fixed point across calls; every other parameter is borrowed. Function results,
+branch results and loop state transfer owned references.
+
+A claim is released right after its value's last use in the region holding
+it. A use that takes a claim moves the value's own claim where that use is its
+only and last reading, and retains a new one otherwise. A value whose last use
+is an `if` hands its claim to both arms; each arm releases it at its own last
+use, or on entry where it never reads it. A value read inside a loop body stays
+with the enclosing region and is released after the loop. An exit moves out
+claims the scopes it leaves hold, retains outgoing values it reads twice, and
+releases everything else those scopes still hold; function returns unwind all
+local scopes but not borrowed parameters. So a count of one means nothing else
+can reach a value, which updating one in place relies on.
 
 Validation establishes globally unique SSA definitions and lexical use. The
 legalizer therefore keeps one monotonic old-to-new value map for the whole

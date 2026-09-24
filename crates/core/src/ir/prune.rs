@@ -138,7 +138,7 @@ fn acts(source: &Program, region: RegionId) -> bool {
 
 /// What an instruction reads, for the ones that read a fixed few values.
 /// Containers are handled where their regions are.
-fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
+pub(super) fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
     match *op {
         Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) => Vec::new(),
         Op::Cell { fields, .. } => source.values(fields).to_vec(),

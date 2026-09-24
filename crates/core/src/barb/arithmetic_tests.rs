@@ -428,3 +428,40 @@ fn a_field_built_out_of_sight_is_known_only_by_its_type() {
     );
     assert_eq!(facts.field(&program, pair_ctor, 1), Bounds::ANY);
 }
+
+/// A recursion counting down from a large constant lowers what its argument
+/// can be by one each time round. Past widening that is given up as nought,
+/// so the walk settles instead of forgetting everything it knew.
+#[test]
+fn a_long_countdown_settles_with_nought_as_its_least() {
+    let mut program = Program::default();
+    let nat = program.declare_type("Nat");
+    program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let zero = program.ctor_at(nat, 0);
+    let start = program.intern_number(nat, 300).unwrap();
+    let down = program.declare("down", &[nat], nat);
+    program.define(down, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                b.con(zero, &[])
+            } else {
+                b.call(down, &[fields[0]])
+            }
+        })
+    });
+    let main = program.declare("main", &[], nat);
+    program.define(main, |b, _| {
+        let start = b.known(start);
+        b.call(down, &[start])
+    });
+    program.set_entry(main);
+    let facts = analyze(&program);
+    assert_eq!(
+        facts.takes(down),
+        [Bounds {
+            low: 0,
+            high: Some(300)
+        }]
+    );
+    assert_eq!(facts.answers(main), Bounds::at(0));
+}

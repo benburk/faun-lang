@@ -328,9 +328,10 @@ fn once(
 }
 
 /// Widen `held` by `found`, answering whether that changed it. Past the
-/// rounds worth being exact for, a bound that grows is given no bound: a
-/// definition counting up without a last step would otherwise be walked
-/// once for every number it can reach.
+/// rounds worth being exact for, a bound that grows is given no bound in the
+/// direction it grew: a definition counting up without a last step, or down
+/// from a large constant, would otherwise be walked once for every number
+/// it can reach.
 fn settle(held: &mut Option<Bounds>, found: Bounds, round: usize) -> bool {
     let Some(before) = *held else {
         *held = Some(found);
@@ -343,9 +344,20 @@ fn settle(held: &mut Option<Bounds>, found: Bounds, round: usize) -> bool {
     *held = Some(if round < WIDEN {
         after
     } else {
+        // Past the rounds worth being exact for, a bound that moves is given
+        // up in the direction it moved: a count going up has no greatest,
+        // and one counting down from a large constant has nought as least.
         Bounds {
-            low: after.low.min(before.low),
-            high: None,
+            low: if after.low < before.low {
+                0
+            } else {
+                before.low
+            },
+            high: if after.high == before.high {
+                before.high
+            } else {
+                None
+            },
         }
     });
     *held != Some(before)
