@@ -1,5 +1,5 @@
-//! The Faun compiler's command line: check, build and run a Faun program for
-//! one of the targets this binary holds.
+//! The Faun compiler's command line: check, build, run, or print a stage of
+//! a Faun program for one of the targets this binary holds.
 
 use std::error::Error;
 use std::fs;
@@ -31,17 +31,22 @@ enum Command {
     Build {
         target: &'static dyn Target,
         source: PathBuf,
-        output: Option<PathBuf>,
-        emit: Option<Emit>,
+        output: PathBuf,
     },
     Run {
         target: &'static dyn Target,
         source: PathBuf,
     },
+    Emit {
+        target: &'static dyn Target,
+        stage: Stage,
+        source: PathBuf,
+    },
 }
 
+/// An intermediate stage `emit` prints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Emit {
+enum Stage {
     Barb,
     Machine,
 }
@@ -76,27 +81,38 @@ fn build_parser() -> impl Parser<Command> {
     let source = positional::<PathBuf>("PATH").help("The source file to compile");
     let output = short('o')
         .long("output")
-        .help("Where to write artifacts (default: a.out)")
+        .help("Where to write artifacts")
         .argument::<PathBuf>("PATH")
-        .optional();
-    let emit = long("emit")
-        .help("Print an intermediate stage: barb or machine")
-        .argument::<String>("STAGE")
-        .parse(|stage| match stage.as_str() {
-            "barb" => Ok(Emit::Barb),
-            "machine" => Ok(Emit::Machine),
-            _ => Err("expected barb or machine"),
-        })
-        .optional();
+        .fallback(PathBuf::from("a.out"))
+        .debug_fallback();
     construct!(Command::Build {
         output,
-        emit,
         target,
         source,
     })
     .to_options()
     .descr("Compile a Faun program")
     .command("build")
+}
+
+fn emit_parser() -> impl Parser<Command> {
+    let target = target_parser();
+    let stage = positional::<String>("STAGE")
+        .help("The stage to print: barb or machine")
+        .parse(|stage| match stage.as_str() {
+            "barb" => Ok(Stage::Barb),
+            "machine" => Ok(Stage::Machine),
+            _ => Err("expected barb or machine"),
+        });
+    let source = positional::<PathBuf>("PATH").help("The source file to compile");
+    construct!(Command::Emit {
+        target,
+        stage,
+        source,
+    })
+    .to_options()
+    .descr("Print an intermediate stage of a Faun program")
+    .command("emit")
 }
 
 fn cli() -> OptionParser<Command> {
@@ -114,10 +130,15 @@ fn cli() -> OptionParser<Command> {
         .descr("Compile a Faun program for the selected machine and run it")
         .command("run");
 
-    choice([check.boxed(), build_parser().boxed(), run.boxed()])
-        .to_options()
-        .descr("The Faun compiler")
-        .version(env!("CARGO_PKG_VERSION"))
+    choice([
+        check.boxed(),
+        build_parser().boxed(),
+        run.boxed(),
+        emit_parser().boxed(),
+    ])
+    .to_options()
+    .descr("The Faun compiler")
+    .version(env!("CARGO_PKG_VERSION"))
 }
 
 const NO_NATIVE: &str = "no target runs on this machine, so --target is required";
@@ -140,41 +161,31 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
         Command::Build {
             source,
             output,
-            emit,
             target,
         } => {
-            build(&source, target, output, emit)?;
-            Ok(ExitCode::SUCCESS)
-        }
-        Command::Run { source, target } => run(&source, target),
-    }
-}
-
-fn build(
-    source: &Path,
-    target: &dyn Target,
-    output: Option<PathBuf>,
-    emit: Option<Emit>,
-) -> Result<(), Box<dyn Error>> {
-    if emit.is_some() && output.is_some() {
-        return Err("--output cannot be used with --emit; redirect stdout instead".into());
-    }
-    match emit {
-        Some(Emit::Barb) => {
-            let mut program = faun::barb(source, target)?;
-            faun_core::barb::optimize(&mut program);
-            print!("{}", program.render());
-        }
-        Some(Emit::Machine) => print!("{}", faun::machine(source, target)?.render()),
-        None => {
-            let artifacts = target.compile(&faun::machine(source, target)?)?;
-            let output = output.unwrap_or_else(|| PathBuf::from("a.out"));
+            let artifacts = target.compile(&faun::machine(&source, target)?)?;
             for artifact in write_artifacts(&output, artifacts)? {
                 println!("wrote {}", artifact.path.display());
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Run { source, target } => run(&source, target),
+        Command::Emit {
+            target,
+            stage,
+            source,
+        } => {
+            match stage {
+                Stage::Barb => {
+                    let mut program = faun::barb(&source, target)?;
+                    faun_core::barb::optimize(&mut program);
+                    print!("{}", program.render());
+                }
+                Stage::Machine => print!("{}", faun::machine(&source, target)?.render()),
+            }
+            Ok(ExitCode::SUCCESS)
         }
     }
-    Ok(())
 }
 
 /// Compile for a target with a native executable, run it, and exit as it did.
@@ -229,41 +240,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_emits_intermediate_stages_for_any_target() {
+    fn emit_prints_intermediate_stages_for_any_target() {
         let barb = cli()
-            .run_inner(&[
-                "build",
-                "--target",
-                "wasm32-wasi",
-                "--emit",
-                "barb",
-                "example.fn",
-            ])
+            .run_inner(&["emit", "--target", "wasm32-wasi", "barb", "example.fn"])
             .unwrap();
         assert!(matches!(
             barb,
-            Command::Build {
+            Command::Emit {
                 target,
+                stage: Stage::Barb,
                 source,
-                emit: Some(Emit::Barb),
-                output: None,
             } if target.name() == "wasm32-wasi" && source == Path::new("example.fn")
         ));
 
         let machine = cli()
-            .run_inner(&[
-                "build",
-                "--target",
-                "mos6502-sim65",
-                "--emit",
-                "machine",
-                "example.fn",
-            ])
+            .run_inner(&["emit", "--target", "mos6502-sim65", "machine", "example.fn"])
             .unwrap();
         assert!(matches!(
             machine,
-            Command::Build {
-                emit: Some(Emit::Machine),
+            Command::Emit {
+                stage: Stage::Machine,
                 ..
             }
         ));
@@ -289,30 +285,37 @@ mod tests {
     }
 
     #[test]
-    fn build_rejects_unknown_emit_stages() {
+    fn emit_rejects_unknown_stages() {
         let error = cli()
-            .run_inner(&["build", "--emit", "ir", "example.fn"])
+            .run_inner(&["emit", "ir", "example.fn"])
             .unwrap_err()
             .unwrap_stderr();
         assert!(error.contains("expected barb or machine"), "{error}");
     }
 
     #[test]
-    fn build_rejects_an_output_path_for_stdout_ir() {
-        let command = cli()
+    fn build_writes_to_a_out_unless_told_otherwise() {
+        let defaulted = cli()
+            .run_inner(&["build", "--target", "wasm32-wasi", "example.fn"])
+            .unwrap();
+        assert!(matches!(
+            defaulted,
+            Command::Build { output, .. } if output == Path::new("a.out")
+        ));
+        let named = cli()
             .run_inner(&[
                 "build",
                 "--target",
                 "wasm32-wasi",
-                "--emit",
-                "barb",
-                "--output",
-                "program.barb",
+                "-o",
+                "hello",
                 "example.fn",
             ])
             .unwrap();
-        let error = dispatch(command).unwrap_err().to_string();
-        assert!(error.contains("redirect stdout"), "{error}");
+        assert!(matches!(
+            named,
+            Command::Build { output, .. } if output == Path::new("hello")
+        ));
     }
 
     #[test]

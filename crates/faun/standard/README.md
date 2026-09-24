@@ -5,7 +5,7 @@
 
 ```sh
 cargo run -- check crates/faun/examples/utilities.fn
-cargo run -- build --emit barb --target x86_64-linux crates/faun/examples/main.fn
+cargo run -- emit --target x86_64-linux barb crates/faun/examples/main.fn
 ```
 
 The package deliberately omits hashing, tuples, record rows and updates, method
