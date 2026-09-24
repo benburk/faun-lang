@@ -12,7 +12,9 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-faun-driver.workspace = true
+bpaf = "0.9"
+faun.workspace = true
+faun-core.workspace = true
 faun-mos6502-sim65.workspace = true
 faun-wasm32-wasi.workspace = true
 faun-x86-64-linux.workspace = true

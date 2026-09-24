@@ -39,7 +39,9 @@ dependencies = [
 name = "faun-cli"
 version = "0.1.0"
 dependencies = [
- "faun-driver",
+ "bpaf",
+ "faun",
+ "faun-core",
  "faun-mos6502-sim65",
  "faun-wasm32-wasi",
  "faun-x86-64-linux",
@@ -55,36 +57,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "faun-driver"
-version = "0.1.0"
-dependencies = [
- "bpaf",
- "faun",
- "faun-core",
-]
-
-[[package]]
 name = "faun-mos6502-sim65"
 version = "0.1.0"
 dependencies = [
+ "faun",
  "faun-core",
- "faun-driver",
 ]
 
 [[package]]
 name = "faun-wasm32-wasi"
 version = "0.1.0"
 dependencies = [
+ "faun",
  "faun-core",
- "faun-driver",
 ]
 
 [[package]]
 name = "faun-x86-64-linux"
 version = "0.1.0"
 dependencies = [
+ "faun",
  "faun-core",
- "faun-driver",
 ]
 
 [[package]]

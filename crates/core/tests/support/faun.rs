@@ -12,7 +12,7 @@ use faun_core::targets::Target;
 /// Compile a Faun application to the machine IR `target` compiles.
 pub(crate) fn machine(text: &str, target: &dyn Target) -> Result<Program, String> {
     let (dir, path) = source_file(text);
-    let machine = faun_driver::machine(&path, target);
+    let machine = ::faun::machine(&path, target);
     fs::remove_dir_all(dir).expect("the scratch source to go");
     machine
 }
@@ -25,7 +25,7 @@ pub(crate) fn machine(text: &str, target: &dyn Target) -> Result<Program, String
 )]
 pub(crate) fn unoptimized(text: &str, target: &dyn Target) -> Result<Program, String> {
     let (dir, path) = source_file(text);
-    let barb = faun_driver::barb(&path, target);
+    let barb = ::faun::barb(&path, target);
     fs::remove_dir_all(dir).expect("the scratch source to go");
     faun_core::machine(&mut barb?, &target.routines())
 }
