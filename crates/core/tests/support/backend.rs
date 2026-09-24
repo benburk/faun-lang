@@ -421,7 +421,7 @@ fn running() -> Vec<(&'static str, Program, i32)> {
     ] {
         let mut barb = programs::an_arm_that_leaves(leave);
         faun_core::barb::optimize(&mut barb);
-        let machine = faun_core::lower(&mut barb, &TARGET.routines()).expect("a program");
+        let machine = faun_core::to_machine(&mut barb, &TARGET.routines()).expect("a program");
         held.push((name, machine, answer));
     }
     for (name, text, answer) in WRITTEN {
@@ -1101,7 +1101,7 @@ fn lowered(
 ) -> Program {
     faun_core::barb::validate(&barb).expect("a sound program");
     faun_core::barb::optimize(&mut barb);
-    faun_core::lower(&mut barb, routines).expect("a representable program")
+    faun_core::to_machine(&mut barb, routines).expect("a representable program")
 }
 
 #[test]

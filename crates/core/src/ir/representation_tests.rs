@@ -211,7 +211,7 @@ fn unused_library_types_and_functions_do_not_need_runtime_representations() {
     barb::optimize(&mut optimized);
     for machine in [
         lower_program(&source).unwrap(),
-        crate::lower(&mut optimized, &routines()).unwrap(),
+        crate::to_machine(&mut optimized, &routines()).unwrap(),
     ] {
         validate(&machine).unwrap();
         assert_eq!(bodies(&machine), 1, "only main is emitted");
@@ -260,7 +260,7 @@ fn default_pipeline_removes_folded_library_temporaries() {
         });
         let mut optimized = source.clone();
         barb::optimize(&mut optimized);
-        let machine = crate::lower(&mut optimized, &routines()).unwrap();
+        let machine = crate::to_machine(&mut optimized, &routines()).unwrap();
         validate(&machine).unwrap();
         assert_eq!(bodies(&machine), 1);
         assert_eq!(externals(&machine), 1, "only exit remains");
@@ -274,7 +274,7 @@ fn default_pipeline_removes_folded_library_temporaries() {
         barb::structural(&mut uncleaned);
         barb::normalize_with_limits(&mut uncleaned, barb::InlineLimits::default());
         barb::fold(&mut uncleaned);
-        let uncleaned = crate::lower(&mut uncleaned, &routines()).unwrap();
+        let uncleaned = crate::to_machine(&mut uncleaned, &routines()).unwrap();
         validate(&uncleaned).unwrap();
     }
 }
@@ -300,7 +300,7 @@ fn default_pipeline_accepts_runtime_product_programs() {
     for byte in [true, false] {
         let mut source = runtime_product(byte);
         barb::optimize(&mut source);
-        let machine = crate::lower(&mut source, &routines()).unwrap();
+        let machine = crate::to_machine(&mut source, &routines()).unwrap();
         validate(&machine).unwrap();
     }
 }

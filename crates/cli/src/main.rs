@@ -1,13 +1,16 @@
-//! The Faun compiler's command line: check, build, run, or print a stage of
-//! a Faun program for one of the targets this binary holds.
+//! The `faun` command: check, build, run, or print a stage of a Faun program
+//! for one of the targets this binary holds.
+//!
+//! This crate only parses arguments, knows which targets exist, and writes
+//! what the compiler makes. The compiler itself is the `faun` library.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
 
 use bpaf::{OptionParser, Parser, choice, construct, long, positional, short};
+use faun_core::barb;
 use faun_core::targets::Target;
-use faun_core::{barb, ir};
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
@@ -182,8 +185,7 @@ fn check(source: &Path, target: &dyn Target) -> Result<(), String> {
 
 /// Compile a program and write its image to `output`.
 fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), String> {
-    let machine = lower(source, target)?;
-    let image = target.compile(&machine)?;
+    let image = faun::compile(source, target)?;
     let written = write(target, &image, output)?;
     println!("wrote {}", written.display());
     Ok(())
@@ -197,8 +199,7 @@ fn run(source: &Path, target: &dyn Target) -> Result<(), String> {
             target.name()
         ));
     }
-    let machine = lower(source, target)?;
-    let image = target.compile(&machine)?;
+    let image = faun::compile(source, target)?;
     let directory = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
     fs::create_dir_all(&directory)
         .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
@@ -214,30 +215,18 @@ fn run(source: &Path, target: &dyn Target) -> Result<(), String> {
 
 /// Print one stage of a program.
 fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), String> {
+    let mut barb = faun::lower(source, target)?;
+    barb::optimize(&mut barb);
     let text = match stage {
-        Stage::Barb => {
-            let mut barb = faun::lower(source, target)?;
-            barb::optimize(&mut barb);
-            barb.render()
-        }
-        Stage::Machine => lower(source, target)?.render(),
+        Stage::Barb => barb.render(),
+        Stage::Machine => faun_core::to_machine(&mut barb, &target.routines())?.render(),
         Stage::Target => {
-            let machine = lower(source, target)?;
-            let prepared = target.prepare(&machine)?;
-            target.render(&prepared)
+            let machine = faun_core::to_machine(&mut barb, &target.routines())?;
+            target.render(&target.prepare(&machine)?)
         }
     };
     print!("{text}");
     Ok(())
-}
-
-/// Lower a program to the machine IR `target` compiles: to Barb, optimized,
-/// then to machine IR.
-fn lower(source: &Path, target: &dyn Target) -> Result<ir::Program, String> {
-    let mut barb = faun::lower(source, target)?;
-    barb::optimize(&mut barb);
-    let machine = faun_core::lower(&mut barb, &target.routines())?;
-    Ok(machine)
 }
 
 /// Write an image through its target, answering the path written.

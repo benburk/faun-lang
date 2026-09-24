@@ -13,7 +13,7 @@ use faun_core::barb::{Atom, Builder, ConstructionError, CtorId, FnId, TypeId};
 use super::Symbol;
 use super::blessed::LiteralExpr;
 
-pub use super::barb_lower::{LowerError, application, named_program, program};
+pub use super::barb_lower::{LowerError, named_program, program};
 
 #[derive(Clone, Debug)]
 pub struct LiteralDeclarations {

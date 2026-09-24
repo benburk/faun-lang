@@ -5,7 +5,6 @@
 //! infer authority or providers from coincidental spellings elsewhere.
 
 use crate::Symbol;
-use crate::blessed::PreludeIds;
 use crate::diagnostic::Diagnostic;
 use crate::modules::LoadedProgram;
 
@@ -19,8 +18,6 @@ pub struct HostIds {
     pub main: Symbol,
     pub host: Symbol,
     pub exit: Symbol,
-    /// The prelude's `Nat`, which `exit!`'s status is written at.
-    pub nat: Symbol,
 }
 
 impl HostIds {
@@ -28,17 +25,15 @@ impl HostIds {
     ///
     /// # Errors
     ///
-    /// Rejects library loads, multiple application entries, malformed host
-    /// interfaces, and entries without a bodyful `main!`.
+    /// Rejects library loads, malformed host interfaces, and entries without
+    /// a bodyful `main!`.
     #[allow(clippy::too_many_lines)]
-    pub fn resolve(program: &LoadedProgram, prelude: &PreludeIds) -> Result<Self, Diagnostic> {
-        let [entry] = program.entries.as_slice() else {
-            return Err(error("an application must have exactly one entry module"));
-        };
+    pub fn resolve(program: &LoadedProgram) -> Result<Self, Diagnostic> {
+        let entry = program.entry;
         let host_module = program
             .host
             .ok_or_else(|| error("an application requires a selected `std.host` module"))?;
-        let entry_module = program.module(*entry);
+        let entry_module = program.module(entry);
         let entry_source = program
             .sources
             .get(entry_module.source)
@@ -88,11 +83,10 @@ impl HostIds {
         }
 
         Ok(Self {
-            entry_module: *entry,
+            entry_module: entry,
             main,
             host: binding.canonical,
             exit,
-            nat: prelude.nat,
         })
     }
 }
@@ -159,9 +153,8 @@ mod tests {
             let host = self.write("host.fn", host);
             let entry = self.write("main.fn", entry);
             let standard = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-            let loaded = modules::load_with_host(&[entry], Some(&standard), Some(&host)).unwrap();
-            let prelude = PreludeIds::resolve(&loaded).unwrap();
-            HostIds::resolve(&loaded, &prelude)
+            let loaded = modules::load_with_host(&entry, &standard, &host).unwrap();
+            HostIds::resolve(&loaded)
         }
     }
 

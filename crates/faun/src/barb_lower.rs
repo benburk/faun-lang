@@ -1,18 +1,21 @@
-//! Defunctionalize concrete frontend terms and emit Barb declarations and bodies.
+//! Emit a first-order program as Barb declarations and bodies, compiling
+//! each function's clauses to a decision tree of matches.
 
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
 use num_traits::ToPrimitive;
 
+use crate::Symbol;
 use crate::blessed::PreludeIds;
+use crate::check::CheckedProgram;
+use crate::defunctionalize::{self as d, ClosureKey, Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::resolve::ResolvedProgram;
-use crate::specialize::{self, Expr, ExprKind, FunctionKey, Pattern, Type};
-use crate::{ModuleId, Symbol};
+use crate::specialize::{self, FunctionKey, Pattern, Type};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerError {
@@ -35,7 +38,7 @@ impl From<specialize::SpecializeError> for LowerError {
     }
 }
 
-/// Specialize the reachable program, defunctionalize function values, and emit Barb.
+/// Specialize the reachable program, defunctionalize it, and emit Barb.
 ///
 /// `entry` must name a monomorphic, parameterless function. The returned
 /// program contains only concrete types and saturated first-order calls.
@@ -44,17 +47,13 @@ impl From<specialize::SpecializeError> for LowerError {
 ///
 /// Reports ambiguous specialization, unsupported structural types or ranges,
 /// missing declarations, non-exhaustive clauses, and invalid literal shapes.
-pub fn program(
-    resolved: &ResolvedProgram,
-    checked: &crate::check::CheckedProgram,
-    prelude: &PreludeIds,
-    entry: Symbol,
-) -> Result<barb::Program, LowerError> {
-    let specialized = specialize::program(resolved, checked, prelude, entry)?;
-    Lowerer::new(resolved, prelude, None, specialized)?.lower()
+pub fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, LowerError> {
+    let specialized = specialize::program(checked, entry)?;
+    let first_order = crate::defunctionalize::defunctionalize(specialized);
+    Lowerer::new(checked, None, first_order)?.lower()
 }
 
-/// Lower a checked `main! : Host -> []` application.
+/// Emit a defunctionalized `main! : Host -> []` application as Barb.
 ///
 /// The Barb entry is `main!` as written. `Host` holds its fields itself, each
 /// named as the source spells it; machine lowering recognizes the startup
@@ -64,17 +63,13 @@ pub fn program(
 ///
 /// # Errors
 ///
-/// Reports specialization and Barb construction failures.
-pub fn application(
-    resolved: &ResolvedProgram,
-    checked: &crate::check::CheckedProgram,
-    prelude: &PreludeIds,
-    host: &crate::host::HostIds,
+/// Reports Barb construction failures and a target without `exit!`.
+pub(crate) fn application(
+    checked: &CheckedProgram,
+    first_order: d::Program,
     routines: &faun_core::platform::Routines,
 ) -> Result<barb::Program, LowerError> {
-    crate::check::application(resolved, checked, host).map_err(|cause| error(cause.to_string()))?;
-    let specialized = specialize::application(resolved, checked, prelude, host)?;
-    Lowerer::new(resolved, prelude, Some(routines), specialized)?.lower()
+    Lowerer::new(checked, Some(routines), first_order)?.lower()
 }
 
 /// Select a uniquely named checked value and lower it as the entry.
@@ -83,14 +78,11 @@ pub fn application(
 ///
 /// Reports a missing or ambiguous source-level name in addition to the errors
 /// from [`program`].
-pub fn named_program(
-    resolved: &ResolvedProgram,
-    checked: &crate::check::CheckedProgram,
-    prelude: &PreludeIds,
-    entry: &str,
-) -> Result<barb::Program, LowerError> {
+pub fn named_program(checked: &CheckedProgram, entry: &str) -> Result<barb::Program, LowerError> {
+    let resolved = &checked.resolved;
     let suffix = format!("$${entry}");
     let mut candidates = checked
+        .types
         .values
         .keys()
         .copied()
@@ -103,21 +95,7 @@ pub fn named_program(
             "more than one checked value is named `{entry}`"
         )));
     }
-    program(resolved, checked, prelude, selected)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum ClosureKey {
-    Global(FunctionKey),
-    Constructor(Symbol, Type),
-    Lambda(ModuleId, crate::ast::Span, Type),
-}
-
-#[derive(Clone, Debug)]
-struct ClosureVariant {
-    key: ClosureKey,
-    captures: Vec<(LocalId, Type)>,
-    lambda: Option<(Vec<Pattern>, Expr)>,
+    program(checked, selected)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -133,14 +111,14 @@ struct Subject {
 struct Row {
     patterns: Vec<Pattern>,
     guard: Option<Expr>,
-    body: specialize::Body,
+    body: d::Body,
     locals: HashMap<LocalId, Value>,
 }
 
 #[derive(Clone, Debug)]
 enum Decision {
     Body {
-        body: specialize::Body,
+        body: d::Body,
         locals: HashMap<LocalId, Value>,
     },
     Match {
@@ -174,12 +152,9 @@ struct DecisionArm {
 struct Lowerer<'a> {
     resolved: &'a ResolvedProgram,
     prelude: &'a PreludeIds,
-    /// The target and its host, present when lowering an application.
     /// The target's routines, present when lowering an application.
     routines: Option<&'a faun_core::platform::Routines>,
-    specialized: specialize::Program,
-    closures: BTreeMap<Type, Vec<ClosureVariant>>,
-    invoked: BTreeSet<Type>,
+    program: d::Program,
     types: BTreeSet<Type>,
     type_ids: HashMap<Type, TypeId>,
     constructor_ids: HashMap<(Symbol, Type), CtorId>,
@@ -193,18 +168,15 @@ struct Lowerer<'a> {
 
 impl<'a> Lowerer<'a> {
     fn new(
-        resolved: &'a ResolvedProgram,
-        prelude: &'a PreludeIds,
+        checked: &'a CheckedProgram,
         routines: Option<&'a faun_core::platform::Routines>,
-        specialized: specialize::Program,
+        program: d::Program,
     ) -> Result<Self, LowerError> {
         let mut lowerer = Self {
-            resolved,
-            prelude,
+            resolved: &checked.resolved,
+            prelude: &checked.prelude,
             routines,
-            specialized,
-            closures: BTreeMap::new(),
-            invoked: BTreeSet::new(),
+            program,
             types: BTreeSet::new(),
             type_ids: HashMap::new(),
             constructor_ids: HashMap::new(),
@@ -230,15 +202,28 @@ impl<'a> Lowerer<'a> {
         {
             return Err(error("the selected target does not provide `exit!`"));
         }
-        let entry = self.function_ids[&self.specialized.entry];
+        let entry = self.function_ids[&self.program.entry];
         self.output.set_entry(entry);
         barb::validate(&self.output).map_err(error)?;
         Ok(self.output)
     }
 
+    /// Find every type the program holds, each of which Barb declares.
     fn discover(&mut self) -> Result<(), LowerError> {
-        let functions = self.specialized.functions.clone();
-        for function in &functions {
+        let functions = std::mem::take(&mut self.program.functions);
+        let closures = std::mem::take(&mut self.program.closures);
+        let found = self.discover_in(&functions, &closures);
+        self.program.functions = functions;
+        self.program.closures = closures;
+        found
+    }
+
+    fn discover_in(
+        &mut self,
+        functions: &[d::Function],
+        closures: &std::collections::BTreeMap<Type, Vec<d::Closure>>,
+    ) -> Result<(), LowerError> {
+        for function in functions {
             let (parameters, result) = function
                 .key
                 .ty
@@ -255,6 +240,11 @@ impl<'a> Lowerer<'a> {
                 self.collect_body(&clause.body)?;
             }
         }
+        for closure in closures.values().flatten() {
+            if let Some((_, body)) = &closure.lambda {
+                self.collect_expr(body)?;
+            }
+        }
         loop {
             let before = self.types.len();
             let types: Vec<_> = self.types.iter().cloned().collect();
@@ -266,7 +256,7 @@ impl<'a> Lowerer<'a> {
                             self.collect_type(field)?;
                         }
                     }
-                    if self.specialized.data[name].wrapper.is_some()
+                    if self.program.data[name].wrapper.is_some()
                         && let [(_, fields)] = constructors.as_slice()
                         && let [field @ Type::Record(_)] = fields.as_slice()
                     {
@@ -274,15 +264,9 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            let variants: Vec<_> = self
-                .closures
-                .values()
-                .flat_map(|variants| variants.iter())
-                .cloned()
-                .collect();
-            for variant in variants {
-                for (_, ty) in variant.captures {
-                    self.collect_type(&ty)?;
+            for closure in closures.values().flatten() {
+                for (_, ty) in &closure.captures {
+                    self.collect_type(ty)?;
                 }
             }
             if self.types.len() == before {
@@ -291,7 +275,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn collect_body(&mut self, body: &specialize::Body) -> Result<(), LowerError> {
+    fn collect_body(&mut self, body: &d::Body) -> Result<(), LowerError> {
         for binding in &body.bindings {
             self.collect_expr(&binding.value)?;
             if !matches!(binding.pattern, Pattern::Wild | Pattern::Bind(_)) {
@@ -306,27 +290,7 @@ impl<'a> Lowerer<'a> {
     fn collect_expr(&mut self, expression: &Expr) -> Result<(), LowerError> {
         self.collect_type(&expression.ty)?;
         match &expression.kind {
-            ExprKind::Local(_) | ExprKind::Natural(_) => {}
-            ExprKind::Function(key) => {
-                self.add_closure(
-                    expression.ty.clone(),
-                    ClosureVariant {
-                        key: ClosureKey::Global(key.clone()),
-                        captures: Vec::new(),
-                        lambda: None,
-                    },
-                );
-            }
-            ExprKind::ConstructorFunction(constructor) => {
-                self.add_closure(
-                    expression.ty.clone(),
-                    ClosureVariant {
-                        key: ClosureKey::Constructor(*constructor, expression.ty.clone()),
-                        captures: Vec::new(),
-                        lambda: None,
-                    },
-                );
-            }
+            ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Close(_, _) => {}
             ExprKind::Construct(_, fields) | ExprKind::DirectCall(_, fields) => {
                 for field in fields {
                     self.collect_expr(field)?;
@@ -338,36 +302,14 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ExprKind::Project(receiver, _) => self.collect_expr(receiver)?,
-            ExprKind::Invoke(head, arguments) => {
-                self.invoked.insert(head.ty.clone());
+            ExprKind::Apply(head, arguments) => {
                 self.collect_expr(head)?;
                 for argument in arguments {
                     self.collect_expr(argument)?;
                 }
             }
-            ExprKind::Lambda(patterns, body) => {
-                let captures = captures(patterns, body);
-                let variant = ClosureVariant {
-                    key: ClosureKey::Lambda(
-                        expression.module,
-                        expression.span,
-                        expression.ty.clone(),
-                    ),
-                    captures,
-                    lambda: Some((patterns.clone(), (**body).clone())),
-                };
-                self.add_closure(expression.ty.clone(), variant);
-                self.collect_expr(body)?;
-            }
         }
         Ok(())
-    }
-
-    fn add_closure(&mut self, ty: Type, variant: ClosureVariant) {
-        let variants = self.closures.entry(ty).or_default();
-        if !variants.iter().any(|held| held.key == variant.key) {
-            variants.push(variant);
-        }
     }
 
     fn collect_type(&mut self, ty: &Type) -> Result<(), LowerError> {
@@ -376,7 +318,7 @@ impl<'a> Lowerer<'a> {
         }
         match ty {
             Type::Named(name, _) => {
-                if !self.specialized.data.contains_key(name) {
+                if !self.program.data.contains_key(name) {
                     return Err(error(format!(
                         "type `{}` has no data declaration",
                         self.resolved.symbols.text(*name)
@@ -453,7 +395,7 @@ impl<'a> Lowerer<'a> {
                         .insert(ty.clone(), self.output.ctor_at(id, 0));
                 }
                 Type::Function(_, _) => {
-                    let variants = self.closures.get(&ty).cloned().unwrap_or_default();
+                    let variants = self.program.closures.get(&ty).cloned().unwrap_or_default();
                     let held: Vec<_> = variants
                         .iter()
                         .map(|variant| {
@@ -510,7 +452,7 @@ impl<'a> Lowerer<'a> {
             unreachable!("record wrappers map to record types")
         };
         let held = self.named_fields(&fields);
-        let wrapper = self.specialized.data[name]
+        let wrapper = self.program.data[name]
             .wrapper
             .as_ref()
             .expect("a record wrapper")
@@ -523,7 +465,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn declare_functions(&mut self) -> Result<(), LowerError> {
-        for function in &self.specialized.functions {
+        for function in &self.program.functions {
             let (parameters, result) = function
                 .key
                 .ty
@@ -547,11 +489,11 @@ impl<'a> Lowerer<'a> {
             }
             self.function_ids.insert(function.key.clone(), id);
         }
-        for ty in &self.invoked {
+        for ty in &self.program.applied {
             let (parameters, result) = ty
                 .function()
                 .ok_or_else(|| error("invoked value is not a function"))?;
-            if self.closures.get(ty).is_none_or(Vec::is_empty) {
+            if self.program.closures.get(ty).is_none_or(Vec::is_empty) {
                 return Err(error("an invoked function type has no reachable closures"));
             }
             let mut signature = Vec::with_capacity(parameters.len() + 1);
@@ -566,7 +508,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn define_functions(&mut self) -> Result<(), LowerError> {
-        let functions = std::mem::take(&mut self.specialized.functions);
+        let functions = std::mem::take(&mut self.program.functions);
         for function in functions {
             if function.provider.is_some() {
                 continue;
@@ -605,7 +547,6 @@ impl<'a> Lowerer<'a> {
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
                 apply_ids: &self.apply_ids,
-                closures: &self.closures,
                 prelude: self.prelude,
             };
             self.output.define(function_id, |builder, parameters| {
@@ -623,9 +564,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn define_apply_functions(&mut self) -> Result<(), LowerError> {
-        let invoked: Vec<_> = self.invoked.iter().cloned().collect();
-        for ty in invoked {
-            let variants = self.closures[&ty].clone();
+        let applied: Vec<_> = self.program.applied.iter().cloned().collect();
+        for ty in applied {
+            let variants = self.program.closures[&ty].clone();
             let apply = self.apply_ids[&ty];
             let closure_type = self.type_ids[&ty];
             let context = EmitContext {
@@ -636,7 +577,6 @@ impl<'a> Lowerer<'a> {
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
                 apply_ids: &self.apply_ids,
-                closures: &self.closures,
                 prelude: self.prelude,
             };
             let mut lambda_plans = HashMap::new();
@@ -667,7 +607,7 @@ impl<'a> Lowerer<'a> {
                 let row = Row {
                     patterns: patterns.clone(),
                     guard: None,
-                    body: specialize::Body {
+                    body: d::Body {
                         bindings: Vec::new(),
                         result: body.clone(),
                     },
@@ -932,7 +872,7 @@ impl<'a> Lowerer<'a> {
             return self.natural_pattern(&magnitude);
         }
         if *name == self.prelude.int {
-            let constructors = &self.specialized.data[name].constructors;
+            let constructors = &self.program.data[name].constructors;
             if constructors.len() != 2 {
                 return Err(error("Int must have positive and negative constructors"));
             }
@@ -957,7 +897,7 @@ impl<'a> Lowerer<'a> {
             .to_usize()
             .filter(|count| *count <= MAX_PATTERN_MAGNITUDE)
             .ok_or_else(|| error("numeric pattern is too large to lower structurally"))?;
-        let constructors = &self.specialized.data[&self.prelude.nat].constructors;
+        let constructors = &self.program.data[&self.prelude.nat].constructors;
         if constructors.len() != 2
             || !constructors[0].fields.is_empty()
             || constructors[1].fields.len() != 1
@@ -976,7 +916,7 @@ impl<'a> Lowerer<'a> {
             return Err(error("pattern matching requires a named data type"));
         };
         let data = self
-            .specialized
+            .program
             .data
             .get(name)
             .ok_or_else(|| error("named type has no data declaration"))?;
@@ -1018,7 +958,6 @@ struct EmitContext<'a> {
     closure_constructor_ids: &'a HashMap<ClosureKey, CtorId>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
     apply_ids: &'a HashMap<Type, FnId>,
-    closures: &'a BTreeMap<Type, Vec<ClosureVariant>>,
     prelude: &'a PreludeIds,
 }
 
@@ -1142,7 +1081,7 @@ fn emit_decision(
 fn emit_body(
     context: &EmitContext<'_>,
     builder: &mut Builder<'_>,
-    body: &specialize::Body,
+    body: &d::Body,
     mut locals: HashMap<LocalId, Atom>,
 ) -> Atom {
     for binding in &body.bindings {
@@ -1173,19 +1112,9 @@ fn emit_expr(
                 .expect("the Nat shape was validated before emission");
             builder.known(constant)
         }
-        ExprKind::Function(key) => builder.con(
-            context.closure_constructor_ids[&ClosureKey::Global(key.clone())],
-            &[],
-        ),
-        ExprKind::ConstructorFunction(constructor) => builder.con(
-            context.closure_constructor_ids
-                [&ClosureKey::Constructor(*constructor, expression.ty.clone())],
-            &[],
-        ),
-        ExprKind::Lambda(_, _) => {
-            let key = ClosureKey::Lambda(expression.module, expression.span, expression.ty.clone());
-            let captures = captures_for_key(context, &key, locals);
-            builder.con(context.closure_constructor_ids[&key], &captures)
+        ExprKind::Close(key, captured) => {
+            let captured: Vec<_> = captured.iter().map(|local| locals[local]).collect();
+            builder.con(context.closure_constructor_ids[key], &captured)
         }
         ExprKind::Construct(constructor, fields) => {
             let fields = fields
@@ -1214,7 +1143,7 @@ fn emit_expr(
                 .collect::<Vec<_>>();
             context.call(builder, key, &arguments)
         }
-        ExprKind::Invoke(head, arguments) => {
+        ExprKind::Apply(head, arguments) => {
             let mut lowered = Vec::with_capacity(arguments.len() + 1);
             lowered.push(emit_expr(context, builder, head, locals));
             for argument in arguments {
@@ -1252,98 +1181,6 @@ fn emit_projection(
     builder.match_(receiver, context.type_ids[receiver_ty], |_, _, values| {
         values[index]
     })
-}
-
-fn captures_for_key(
-    context: &EmitContext<'_>,
-    key: &ClosureKey,
-    locals: &HashMap<LocalId, Atom>,
-) -> Vec<Atom> {
-    let ClosureKey::Lambda(_, _, ty) = key else {
-        return Vec::new();
-    };
-    let variant = context
-        .closures
-        .get(ty)
-        .and_then(|variants| variants.iter().find(|variant| &variant.key == key))
-        .expect("each emitted lambda has a discovered closure variant");
-    variant
-        .captures
-        .iter()
-        .map(|(local, _)| locals[local])
-        .collect()
-}
-
-fn captures(patterns: &[Pattern], body: &Expr) -> Vec<(LocalId, Type)> {
-    let mut bound = HashSet::new();
-    for pattern in patterns {
-        pattern_locals(pattern, &mut bound);
-    }
-    let mut found = BTreeMap::new();
-    free_locals(body, &bound, &mut found);
-    found.into_iter().collect()
-}
-
-fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap<LocalId, Type>) {
-    match &expression.kind {
-        ExprKind::Local(local) => {
-            if !bound.contains(local) {
-                found.entry(*local).or_insert_with(|| expression.ty.clone());
-            }
-        }
-        ExprKind::Function(_) | ExprKind::ConstructorFunction(_) | ExprKind::Natural(_) => {}
-        ExprKind::Construct(_, fields) | ExprKind::DirectCall(_, fields) => {
-            for field in fields {
-                free_locals(field, bound, found);
-            }
-        }
-        ExprKind::Record(fields) => {
-            for (_, field) in fields {
-                free_locals(field, bound, found);
-            }
-        }
-        ExprKind::Project(receiver, _) => free_locals(receiver, bound, found),
-        ExprKind::Invoke(head, arguments) => {
-            free_locals(head, bound, found);
-            for argument in arguments {
-                free_locals(argument, bound, found);
-            }
-        }
-        ExprKind::Lambda(patterns, body) => {
-            let mut nested = bound.clone();
-            for pattern in patterns {
-                pattern_locals(pattern, &mut nested);
-            }
-            free_locals(body, &nested, found);
-        }
-    }
-}
-
-fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
-    match pattern {
-        Pattern::Bind(local) => {
-            output.insert(*local);
-        }
-        Pattern::Constructor(_, fields)
-        | Pattern::List(fields, None)
-        | Pattern::Product(fields) => {
-            for field in fields {
-                pattern_locals(field, output);
-            }
-        }
-        Pattern::List(fields, Some(rest)) => {
-            for field in fields {
-                pattern_locals(field, output);
-            }
-            pattern_locals(rest, output);
-        }
-        Pattern::Record(fields) => {
-            for (_, pattern) in fields {
-                pattern_locals(pattern, output);
-            }
-        }
-        Pattern::Wild | Pattern::Number { .. } | Pattern::Range(_, _) => {}
-    }
 }
 
 const fn irrefutable(pattern: &Pattern) -> bool {
@@ -1428,37 +1265,33 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn checked_example(name: &str) -> (ResolvedProgram, crate::check::CheckedProgram, PreludeIds) {
+    fn checked_example(name: &str) -> CheckedProgram {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("examples")
             .join(name);
-        let loaded = crate::modules::load(&[entry], Some(&root)).unwrap();
+        let loaded = crate::modules::load(&entry, Some(&root)).unwrap();
         let prelude = PreludeIds::resolve(&loaded).unwrap();
         let resolved = crate::resolve::resolve(loaded).unwrap();
-        let checked = crate::check::program(&resolved, &prelude).unwrap();
-        (resolved, checked, prelude)
+        crate::check::program(resolved, prelude).unwrap()
     }
 
-    fn named(
-        resolved: &ResolvedProgram,
-        checked: &crate::check::CheckedProgram,
-        suffix: &str,
-    ) -> Symbol {
+    fn named(checked: &CheckedProgram, suffix: &str) -> Symbol {
         checked
+            .types
             .values
             .keys()
             .copied()
-            .find(|symbol| resolved.symbols.text(*symbol).ends_with(suffix))
+            .find(|symbol| checked.resolved.symbols.text(*symbol).ends_with(suffix))
             .unwrap()
     }
 
     #[test]
     fn lowers_literals_to_valid_barb() {
-        let (resolved, checked, prelude) = checked_example("literals.fn");
+        let checked = checked_example("literals.fn");
         for suffix in ["$$natural", "$$integer", "$$text"] {
-            let entry = named(&resolved, &checked, suffix);
-            let program = program(&resolved, &checked, &prelude, entry).unwrap();
+            let entry = named(&checked, suffix);
+            let program = program(&checked, entry).unwrap();
             barb::validate(&program).unwrap();
         }
     }
@@ -1468,15 +1301,17 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
         let host = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/hosts/x86_64-linux.fn");
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/main.fn");
-        let loaded = crate::modules::load_with_host(&[entry], Some(&root), Some(&host)).unwrap();
+        let loaded = crate::modules::load_with_host(&entry, &root, &host).unwrap();
         let prelude = PreludeIds::resolve(&loaded).unwrap();
-        let host = crate::host::HostIds::resolve(&loaded, &prelude).unwrap();
+        let host = crate::host::HostIds::resolve(&loaded).unwrap();
         let resolved = crate::resolve::resolve(loaded).unwrap();
-        let checked = crate::check::program(&resolved, &prelude).unwrap();
-        crate::check::application(&resolved, &checked, &host).unwrap();
+        let checked = crate::check::program(resolved, prelude).unwrap();
+        crate::check::application(&checked, &host).unwrap();
         for bits in [16, 32, 64] {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
-            let mut program = application(&resolved, &checked, &prelude, &host, &routines).unwrap();
+            let specialized = specialize::application(&checked, &host).unwrap();
+            let first_order = crate::defunctionalize::defunctionalize(specialized);
+            let mut program = application(&checked, first_order, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
             // `Host` holds the startup values its target produces; `main!` is
@@ -1488,7 +1323,7 @@ mod tests {
             assert!(rendered.contains("Host.exit!(v0, v1)"), "{rendered}");
             assert!(!rendered.contains("start"));
             assert!(!rendered.contains('$'));
-            let machine = faun_core::lower(&mut program.clone(), &routines).unwrap();
+            let machine = faun_core::to_machine(&mut program.clone(), &routines).unwrap();
             // The target produces `argc` into the entry's frame, as wide as
             // its word.
             let entry = machine.entry();
@@ -1503,10 +1338,10 @@ mod tests {
 
     #[test]
     fn folds_standard_division_remainder_and_their_zero_cases() {
-        let (resolved, checked, prelude) = checked_example("arithmetic.fn");
+        let checked = checked_example("arithmetic.fn");
         for (suffix, expected) in [("$$natural_arithmetic", 14), ("$$signed_arithmetic", 10)] {
-            let entry = named(&resolved, &checked, suffix);
-            let mut program = program(&resolved, &checked, &prelude, entry).unwrap();
+            let entry = named(&checked, suffix);
+            let mut program = program(&checked, entry).unwrap();
             barb::optimize(&mut program);
             barb::validate(&program).unwrap();
             let body = program.function(program.entry().unwrap()).body().unwrap();
@@ -1522,16 +1357,16 @@ mod tests {
 
     #[test]
     fn specializes_polymorphic_data_and_defunctionalizes_lambdas() {
-        let (resolved, checked, prelude) = checked_example("utilities.fn");
+        let checked = checked_example("utilities.fn");
         for suffix in ["$$mapped", "$$combined", "$$signed_sum"] {
-            let entry = named(&resolved, &checked, suffix);
-            let program = program(&resolved, &checked, &prelude, entry).unwrap();
+            let entry = named(&checked, suffix);
+            let program = program(&checked, entry).unwrap();
             barb::validate(&program).unwrap();
         }
-        let choose = named(&resolved, &checked, "$$choose");
-        assert!(program(&resolved, &checked, &prelude, choose).is_err());
+        let choose = named(&checked, "$$choose");
+        assert!(program(&checked, choose).is_err());
 
-        let (resolved, checked, prelude) = checked_example("lowering.fn");
+        let checked = checked_example("lowering.fn");
         for suffix in [
             "$$multi_specialized",
             "$$mapped_global",
@@ -1542,8 +1377,8 @@ mod tests {
             "$$guarded_entry",
             "$$record_entry",
         ] {
-            let entry = named(&resolved, &checked, suffix);
-            let program = program(&resolved, &checked, &prelude, entry).unwrap();
+            let entry = named(&checked, suffix);
+            let program = program(&checked, entry).unwrap();
             barb::validate(&program).unwrap();
             if suffix == "$$record_entry" {
                 let rendered = program.render();

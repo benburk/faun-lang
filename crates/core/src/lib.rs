@@ -13,13 +13,14 @@ pub mod platform;
 pub mod programs;
 pub mod targets;
 
-/// Lower a validated, optimized Barb program to machine IR and run the machine
-/// optimization passes.
+/// Lower a validated Barb program to machine IR and run the machine
+/// optimization passes: the middle stage of compiling, between a frontend's
+/// Barb and a target's image.
 ///
 /// # Errors
 ///
 /// Names what the machine tier cannot represent.
-pub fn lower(
+pub fn to_machine(
     program: &mut barb::Program,
     routines: &platform::Routines,
 ) -> Result<ir::Program, String> {

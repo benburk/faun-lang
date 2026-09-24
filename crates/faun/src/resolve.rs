@@ -745,7 +745,7 @@ mod tests {
             "main.fn",
             "number : Int\nnumber() -> Int.of_nat(42)\ntext : Str\ntext() -> \"é\"\n",
         );
-        let loaded = modules::load(&[entry], Some(&standard)).unwrap();
+        let loaded = modules::load(&entry, Some(&standard)).unwrap();
         let resolved = resolve(loaded).unwrap();
         let entry = &resolved.program.modules.last().unwrap().items;
         let h::Item::Clause(number) = &entry[1] else {
@@ -769,7 +769,7 @@ mod tests {
     fn rejects_an_unresolved_name_at_its_span() {
         let fixture = Fixture::new();
         let entry = fixture.write("main.fn", "f() -> missing\n");
-        let loaded = modules::load(&[entry], None).unwrap();
+        let loaded = modules::load(&entry, None).unwrap();
         let failure = resolve(loaded).unwrap_err();
         let at = failure.location.expect("a place in the source");
         assert_eq!((at.line, at.column, at.width), (1, 8, 7));

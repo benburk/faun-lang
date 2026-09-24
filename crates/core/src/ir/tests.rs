@@ -62,7 +62,7 @@ pub(super) fn machine(
 ) -> Result<Program, String> {
     barb::validate(&program)?;
     barb::optimize(&mut program);
-    crate::lower(&mut program, routines)
+    crate::to_machine(&mut program, routines)
 }
 
 /// A width is what a value needs, so a value needing fewer bits than what

@@ -88,7 +88,7 @@ pub struct LoadedProgram {
     pub sources: Sources,
     pub symbols: Symbols,
     pub modules: Vec<LoadedModule>,
-    pub entries: Vec<ModuleId>,
+    pub entry: ModuleId,
     pub prelude: Option<ModuleId>,
     /// The target-selected module mounted at `std.host`, when loading an application.
     pub host: Option<ModuleId>,
@@ -101,7 +101,8 @@ impl LoadedProgram {
     }
 }
 
-/// Load entry files and an optional standard-library root.
+/// Load a library: an entry file and an optional standard-library root,
+/// with no `std.host` to import.
 ///
 /// Imports are rooted at the importing package directory. Each path component
 /// maps to a directory and the final module is either `path.fn` or
@@ -111,11 +112,12 @@ impl LoadedProgram {
 ///
 /// Reports I/O, parse, cycle, duplicate declaration, visibility, and ambiguous
 /// module-path failures.
-pub fn load(entries: &[PathBuf], prelude: Option<&Path>) -> Result<LoadedProgram, Diagnostic> {
-    load_with_host(entries, prelude, None)
+pub fn load(entry: &Path, prelude: Option<&Path>) -> Result<LoadedProgram, Diagnostic> {
+    load_modules(entry, prelude, None)
 }
 
-/// Load entry files with an optional prelude and target-selected `std.host` module.
+/// Load an application: an entry file, the standard library, and the
+/// target-selected `std.host` module.
 ///
 /// The host is loaded as an ordinary module, but its public interface is reached
 /// through the stable virtual path `std.host` rather than its disk location.
@@ -124,7 +126,15 @@ pub fn load(entries: &[PathBuf], prelude: Option<&Path>) -> Result<LoadedProgram
 ///
 /// Reports the same failures as [`load`], plus conflicting or missing host imports.
 pub fn load_with_host(
-    entries: &[PathBuf],
+    entry: &Path,
+    prelude: &Path,
+    host: &Path,
+) -> Result<LoadedProgram, Diagnostic> {
+    load_modules(entry, Some(prelude), Some(host))
+}
+
+fn load_modules(
+    entry: &Path,
     prelude: Option<&Path>,
     host: Option<&Path>,
 ) -> Result<LoadedProgram, Diagnostic> {
@@ -142,11 +152,8 @@ pub fn load_with_host(
         None => None,
     };
     loader.host = host_id;
-    let mut entry_ids = Vec::with_capacity(entries.len());
-    for entry in entries {
-        entry_ids.push(loader.load_module(entry, &Root::at(entry), false)?);
-    }
-    Ok(loader.finish(entry_ids, prelude_id, host_id))
+    let entry_id = loader.load_module(entry, &Root::at(entry), false)?;
+    Ok(loader.finish(entry_id, prelude_id, host_id))
 }
 
 #[derive(Clone, Debug)]
@@ -192,7 +199,7 @@ struct Loader {
 impl Loader {
     fn finish(
         self,
-        entries: Vec<ModuleId>,
+        entry: ModuleId,
         prelude: Option<ModuleId>,
         host: Option<ModuleId>,
     ) -> LoadedProgram {
@@ -213,7 +220,7 @@ impl Loader {
             sources: self.sources,
             symbols: self.symbols,
             modules,
-            entries,
+            entry,
             prelude,
             host,
         }
@@ -731,8 +738,8 @@ mod tests {
             "exports {Nat.*}\nNat : [Zero Succ(Nat)]\nsecret() -> Zero\n",
         );
         let entry = fixture.write("main.fn", "import numbers {Nat.*}\nid(x) -> Succ(x)\n");
-        let loaded = load(&[entry], None).unwrap();
-        let entry = loaded.module(loaded.entries[0]);
+        let loaded = load(&entry, None).unwrap();
+        let entry = loaded.module(loaded.entry);
         let succ = loaded.symbols.find("Succ").unwrap();
         let secret = loaded.symbols.find("secret").unwrap();
         assert!(entry.scope.constructors.contains_key(&succ));
@@ -744,7 +751,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write("hidden.fn", "secret() -> 0\n");
         let entry = fixture.write("main.fn", "import hidden {secret}\nmain() -> secret()\n");
-        let error = load(&[entry], None).unwrap_err();
+        let error = load(&entry, None).unwrap_err();
         assert!(error.message.contains("not exported"));
     }
 
@@ -753,7 +760,7 @@ mod tests {
         let fixture = Fixture::new();
         let first = fixture.write("first.fn", "import second {}\n");
         fixture.write("second.fn", "import first {}\n");
-        let error = load(&[first], None).unwrap_err();
+        let error = load(&first, None).unwrap_err();
         assert!(error.message.contains("import cycle"));
     }
 
@@ -765,10 +772,10 @@ mod tests {
             "main.fn",
             "import std.host {Host}\nid : Host -> Host\nid(h) -> h\n",
         );
-        let missing = load(std::slice::from_ref(&entry), None).unwrap_err();
+        let missing = load(&entry, None).unwrap_err();
         assert!(missing.message.contains("requires a selected host"));
 
-        let loaded = load_with_host(&[entry], None, Some(&host)).unwrap();
+        let loaded = load_with_host(&entry, crate::standard_path(), &host).unwrap();
         let canonical = host.canonicalize().unwrap();
         assert_eq!(
             loaded.host.map(|id| loaded.module(id).path.as_path()),
@@ -785,7 +792,7 @@ mod tests {
             "lib {}\nimport nat {Nat.*}\nexports {Nat.*}\n",
         );
         let entry = fixture.write("main.fn", "id(x) -> x\n");
-        let loaded = load(&[entry], Some(&root)).unwrap();
+        let loaded = load(&entry, Some(&root)).unwrap();
         let nat = loaded
             .modules
             .iter()

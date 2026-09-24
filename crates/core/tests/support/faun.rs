@@ -17,7 +17,7 @@ pub(crate) fn lower(text: &str, target: &dyn Target) -> Result<Program, String> 
     fs::remove_dir_all(dir).expect("the scratch source to go");
     let mut barb = barb?;
     faun_core::barb::optimize(&mut barb);
-    faun_core::lower(&mut barb, &target.routines())
+    faun_core::to_machine(&mut barb, &target.routines())
 }
 
 /// The same, without optimizing Barb, for a test of shapes the optimizer
@@ -30,7 +30,7 @@ pub(crate) fn unoptimized(text: &str, target: &dyn Target) -> Result<Program, St
     let (dir, path) = source_file(text);
     let barb = ::faun::lower(&path, target);
     fs::remove_dir_all(dir).expect("the scratch source to go");
-    faun_core::lower(&mut barb?, &target.routines())
+    faun_core::to_machine(&mut barb?, &target.routines())
 }
 
 /// Write `text` as the entry module of a fresh scratch directory.

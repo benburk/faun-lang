@@ -277,7 +277,7 @@ mod tests {
         let entry = fixture.write("main.fn", "id(x) -> x\n");
         // The loader owns all source text, so removing the fixture afterwards
         // does not invalidate the program.
-        modules::load(&[entry], Some(&root)).unwrap()
+        modules::load(&entry, Some(&root)).unwrap()
     }
 
     #[test]

@@ -13,9 +13,8 @@ use std::fmt;
 use num_bigint::BigUint;
 
 use crate::blessed::{LiteralExpr, PreludeIds};
-use crate::check::{CheckedProgram, InferredScheme, InferredType, TypeVariable};
+use crate::check::{CheckedProgram, InferredScheme, InferredType, TypeVariable, Types};
 use crate::hir as h;
-use crate::resolve::ResolvedProgram;
 use crate::{ModuleId, Symbol};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -127,26 +126,19 @@ impl fmt::Display for SpecializeError {
 
 impl std::error::Error for SpecializeError {}
 
-pub(crate) fn program(
-    resolved: &ResolvedProgram,
-    checked: &CheckedProgram,
-    prelude: &PreludeIds,
-    entry: Symbol,
-) -> Result<Program, SpecializeError> {
-    Specializer::new(resolved, checked, prelude)?.run(entry, None)
+pub(crate) fn program(checked: &CheckedProgram, entry: Symbol) -> Result<Program, SpecializeError> {
+    Specializer::new(checked)?.run(entry, None)
 }
 
 pub(crate) fn application(
-    resolved: &ResolvedProgram,
     checked: &CheckedProgram,
-    prelude: &PreludeIds,
     host: &crate::host::HostIds,
 ) -> Result<Program, SpecializeError> {
-    Specializer::new(resolved, checked, prelude)?.run(host.main, Some(host.host))
+    Specializer::new(checked)?.run(host.main, Some(host.host))
 }
 
 struct Specializer<'a> {
-    checked: &'a CheckedProgram,
+    checked: &'a Types,
     prelude: &'a PreludeIds,
     expression_types: HashMap<(ModuleId, crate::ast::Span), &'a InferredType>,
     clause_types: HashMap<(ModuleId, crate::ast::Span), &'a InferredType>,
@@ -163,11 +155,9 @@ struct Specializer<'a> {
 }
 
 impl<'a> Specializer<'a> {
-    fn new(
-        resolved: &'a ResolvedProgram,
-        checked: &'a CheckedProgram,
-        prelude: &'a PreludeIds,
-    ) -> Result<Self, SpecializeError> {
+    fn new(checked: &'a CheckedProgram) -> Result<Self, SpecializeError> {
+        let (resolved, prelude) = (&checked.resolved, &checked.prelude);
+        let checked = &checked.types;
         let mut definitions: HashMap<_, Vec<_>> = HashMap::new();
         let mut signatures = HashMap::new();
         let mut data = HashMap::new();

@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use super::blessed::{self, LiteralExpr, NumeralType, PreludeIds};
+use super::diagnostic::Diagnostic;
 use super::hir as h;
 use super::resolve::ResolvedProgram;
 use super::{ModuleId, Symbol, Symbols};
@@ -74,8 +75,18 @@ pub struct ClauseSite {
     pub ty: InferredType,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// A resolved program with what checking learned about it.
+#[derive(Clone, Debug)]
 pub struct CheckedProgram {
+    pub resolved: ResolvedProgram,
+    /// The standard identities its literals and patterns were checked against.
+    pub prelude: PreludeIds,
+    pub types: Types,
+}
+
+/// The types checking inferred for a program's HIR, by site.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Types {
     /// Principal schemes for signed and inferred global values.
     pub values: HashMap<Symbol, InferredScheme>,
     /// Instantiated types for every expression occurrence.
@@ -115,11 +126,20 @@ impl std::error::Error for CheckError {}
 /// Reports type, arity, ambiguous-method, unsupported-constraint, and literal
 /// protocol failures.
 pub fn program(
-    resolved: &ResolvedProgram,
-    prelude: &PreludeIds,
-) -> Result<CheckedProgram, CheckError> {
-    validate_effects(&resolved.program, &resolved.symbols)?;
-    Checker::new(&resolved.program, &resolved.symbols, prelude)?.check(&resolved.program)
+    resolved: ResolvedProgram,
+    prelude: PreludeIds,
+) -> Result<CheckedProgram, Diagnostic> {
+    let types = validate_effects(&resolved.program, &resolved.symbols).and_then(|()| {
+        Checker::new(&resolved.program, &resolved.symbols, &prelude)?.check(&resolved.program)
+    });
+    match types {
+        Ok(types) => Ok(CheckedProgram {
+            resolved,
+            prelude,
+            types,
+        }),
+        Err(error) => Err(resolved.diagnostic(error.module, error.span, error.message)),
+    }
 }
 
 /// Validate the selected host ABI and the application's `main!` signature.
@@ -129,10 +149,11 @@ pub fn program(
 /// Rejects host declarations or an entry whose checked type differs from the
 /// canonical `Host` and `Nat` identities or the structural empty variant type.
 pub fn application(
-    resolved: &ResolvedProgram,
     checked: &CheckedProgram,
     host: &crate::host::HostIds,
-) -> Result<(), CheckError> {
+) -> Result<(), Diagnostic> {
+    let resolved = &checked.resolved;
+    let failure = |module, span, message: &str| resolved.diagnostic(module, span, message.into());
     let module = host.entry_module;
     let span = resolved
         .program
@@ -178,25 +199,25 @@ pub fn application(
             InferredType::Function(
                 vec![
                     InferredType::Named(host.host, Vec::new()),
-                    InferredType::Named(host.nat, Vec::new()),
+                    InferredType::Named(checked.prelude.nat, Vec::new()),
                 ],
                 Box::new(InferredType::Variants(Vec::new())),
             ),
             "exit! : Host Nat -> []",
         ),
     ] {
-        let Some(scheme) = checked.values.get(&name) else {
+        let Some(scheme) = checked.types.values.get(&name) else {
             return Err(failure(
                 module,
                 span,
-                format!("the application ABI requires `{written}`"),
+                &format!("the application ABI requires `{written}`"),
             ));
         };
         if !scheme.variables.is_empty() || scheme.ty != expected {
             return Err(failure(
                 module,
                 span,
-                format!("the application ABI requires `{written}`"),
+                &format!("the application ABI requires `{written}`"),
             ));
         }
     }
@@ -443,7 +464,7 @@ struct Checker<'a> {
     pending_numerals: Vec<PendingNumeral>,
     expression_types: Vec<(ModuleId, super::ast::Span, Ty)>,
     clause_types: Vec<(ModuleId, super::ast::Span, Ty)>,
-    checked: CheckedProgram,
+    checked: Types,
 }
 
 impl<'a> Checker<'a> {
@@ -474,7 +495,7 @@ impl<'a> Checker<'a> {
             pending_numerals: Vec::new(),
             expression_types: Vec::new(),
             clause_types: Vec::new(),
-            checked: CheckedProgram::default(),
+            checked: Types::default(),
         };
         for module in &program.modules {
             for item in &module.items {
@@ -679,7 +700,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn check(mut self, program: &h::Program) -> Result<CheckedProgram, CheckError> {
+    fn check(mut self, program: &h::Program) -> Result<Types, CheckError> {
         let definitions = definitions(program);
         let unsigned: HashSet<_> = definitions
             .keys()
@@ -2068,7 +2089,7 @@ mod tests {
                 "lib {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
             );
             let entry = self.write("main.fn", entry_source);
-            let loaded = modules::load(&[entry], Some(&standard)).unwrap();
+            let loaded = modules::load(&entry, Some(&standard)).unwrap();
             let prelude = PreludeIds::resolve(&loaded).unwrap();
             let resolved = resolve::resolve(loaded).unwrap();
             (prelude, resolved)
@@ -2087,9 +2108,10 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "natural : Nat\nnatural() -> 42\ninteger : Int\ninteger() -> -42\ntext : Str\ntext() -> \"é\"\n",
         );
-        let checked = program(&resolved, &prelude).unwrap();
-        let entry = resolved.program.modules.last().unwrap().source;
+        let checked = program(resolved, prelude.clone()).unwrap();
+        let entry = checked.resolved.program.modules.last().unwrap().source;
         let entry_sites: Vec<_> = checked
+            .types
             .literals
             .iter()
             .filter(|site| site.module == entry)
@@ -2105,7 +2127,7 @@ mod tests {
         let fixture = Fixture::new();
         let (prelude, resolved) =
             fixture.load("Outcome : [Never]\nvalue : Outcome\nvalue() -> Never\n");
-        program(&resolved, &prelude).unwrap();
+        program(resolved, prelude).unwrap();
     }
 
     #[test]
@@ -2129,8 +2151,8 @@ mod tests {
                 }
             })
             .unwrap();
-        let checked = program(&resolved, &prelude).unwrap();
-        let scheme = &checked.values[&id];
+        let checked = program(resolved, prelude).unwrap();
+        let scheme = &checked.types.values[&id];
         assert_eq!(scheme.variables.len(), 1);
         let InferredType::Function(parameters, result) = &scheme.ty else {
             panic!("id function type")
@@ -2142,7 +2164,7 @@ mod tests {
     fn a_polymorphic_signature_cannot_be_implemented_by_one_concrete_type() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("constant : a -> a\nconstant(_) -> 1\n");
-        let failure = program(&resolved, &prelude).unwrap_err();
+        let failure = program(resolved, prelude).unwrap_err();
         assert!(failure.message.contains("numeral") || failure.message.contains("mismatch"));
     }
 
@@ -2152,7 +2174,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "id(x) -> x\nnatural : Nat\nnatural() -> id(1)\ninteger : Int\ninteger() -> id(-1)\n",
         );
-        program(&resolved, &prelude).unwrap();
+        program(resolved, prelude).unwrap();
     }
 
     #[test]
@@ -2161,7 +2183,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "id : a -> a\nid(x) -> x\nlocal : Int\nlocal() ->\n  f = id\n  natural = f(1)\n  f(-1)\n",
         );
-        program(&resolved, &prelude).unwrap();
+        program(resolved, prelude).unwrap();
     }
 
     #[test]
@@ -2170,13 +2192,20 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "increment : Nat -> Nat\nincrement(n) -> n.add(1)\ntruth : Bool -> Bool\ntruth(b) -> b.not()\n",
         );
-        let checked = program(&resolved, &prelude).unwrap();
-        let targets: Vec<_> = checked.methods.iter().map(|site| site.target).collect();
+        let checked = program(resolved, prelude.clone()).unwrap();
+        let targets: Vec<_> = checked
+            .types
+            .methods
+            .iter()
+            .map(|site| site.target)
+            .collect();
         assert!(targets.contains(&prelude.bool_not));
         assert!(
-            targets
-                .iter()
-                .any(|target| resolved.symbols.text(*target).ends_with("Nat.add"))
+            targets.iter().any(|target| checked
+                .resolved
+                .symbols
+                .text(*target)
+                .ends_with("Nat.add"))
         );
     }
 
@@ -2186,7 +2215,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "Flip : [Off On].(not : Flip -> Flip not(Off) -> On not(On) -> Off)\nbad(x) -> x.not()\n",
         );
-        let failure = program(&resolved, &prelude).unwrap_err();
+        let failure = program(resolved, prelude).unwrap_err();
         assert!(failure.message.contains("ambiguous") || failure.message.contains("compatible"));
     }
 
@@ -2198,9 +2227,10 @@ mod tests {
             "exports {helper}\nSecret : [Hidden].(not : Secret -> Secret not(Hidden) -> Hidden)\nhelper : Nat\nhelper() -> 0\n",
         );
         let (prelude, resolved) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
-        let checked = program(&resolved, &prelude).unwrap();
+        let checked = program(resolved, prelude.clone()).unwrap();
         assert!(
             checked
+                .types
                 .methods
                 .iter()
                 .any(|site| site.target == prelude.bool_not)
@@ -2211,11 +2241,11 @@ mod tests {
     fn repository_bootstrap_checks_polymorphic_utilities() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/utilities.fn");
-        let loaded = modules::load(&[entry], Some(&root)).unwrap();
+        let loaded = modules::load(&entry, Some(&root)).unwrap();
         let prelude = PreludeIds::resolve(&loaded).unwrap();
         let resolved = resolve::resolve(loaded).unwrap();
-        let checked = program(&resolved, &prelude).unwrap();
-        assert!(!checked.methods.is_empty());
+        let checked = program(resolved, prelude).unwrap();
+        assert!(!checked.types.methods.is_empty());
     }
 
     #[test]
@@ -2231,14 +2261,15 @@ mod tests {
              u8_ops(a b) -> ((((a + b) - b) * b) / b) % b\n",
         );
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-        let loaded = modules::load(&[entry], Some(&root)).unwrap();
+        let loaded = modules::load(&entry, Some(&root)).unwrap();
         let prelude = PreludeIds::resolve(&loaded).unwrap();
         let resolved = resolve::resolve(loaded).unwrap();
-        let checked = program(&resolved, &prelude).unwrap();
+        let checked = program(resolved, prelude).unwrap();
         let methods: HashSet<_> = checked
+            .types
             .methods
             .iter()
-            .map(|site| resolved.symbols.text(site.target))
+            .map(|site| checked.resolved.symbols.text(site.target))
             .collect();
         for ty in ["Nat", "Int", "U8"] {
             for operation in ["add", "sub", "mul", "div", "mod"] {
@@ -2257,7 +2288,7 @@ mod tests {
         let fixture = Fixture::new();
         let (prelude, resolved) =
             fixture.load("stop! : Nat -> Nat\nbad : Nat\nbad() -> stop!(0)\n");
-        let failure = program(&resolved, &prelude).unwrap_err();
+        let failure = program(resolved, prelude).unwrap_err();
         assert!(
             failure
                 .message
@@ -2267,7 +2298,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "stop! : Nat -> Nat\nid : Nat -> Nat\nid(n) -> n\nbad! : Nat\nbad!() -> id(stop!(0))\n",
         );
-        let failure = program(&resolved, &prelude).unwrap_err();
+        let failure = program(resolved, prelude).unwrap_err();
         assert!(failure.message.contains("must stand on its own"));
     }
 
@@ -2277,7 +2308,7 @@ mod tests {
     fn a_method_given_the_wrong_argument_names_it() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> Zero.add(True)\n");
-        let failure = program(&resolved, &prelude).unwrap_err();
+        let failure = program(resolved, prelude).unwrap_err();
         assert_eq!(
             failure.message,
             "argument 1 of `add` should be Nat, but is Bool"
@@ -2288,7 +2319,7 @@ mod tests {
     fn a_negative_nat_is_rejected() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> -1\n");
-        let failure = program(&resolved, &prelude).unwrap_err();
+        let failure = program(resolved, prelude).unwrap_err();
         assert!(failure.message.contains("negative numeral"));
     }
 }
