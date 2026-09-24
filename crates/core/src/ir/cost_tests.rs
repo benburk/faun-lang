@@ -143,11 +143,63 @@ fn round_trip(n: u64) -> barb::Program {
     source
 }
 
-/// Every count at twice the size is at most twice as much, and a little.
+/// Build a list of `n` counts, then copy it the way `map` does: each step
+/// puts its element in front of what the rest of the walk answered.
+fn copied_on_the_way_out(n: u64) -> barb::Program {
+    let mut source = round_trip(n);
+    let nat = barb::TypeId::at(0);
+    let list = barb::TypeId::at(1);
+    let (nil, cons) = (source.ctor_at(list, 0), source.ctor_at(list, 1));
+    let count = source.intern_number(nat, n).unwrap();
+    let nought = source.intern_number(nat, 0).unwrap();
+    let build = barb::FnId::at(0);
+    let length = barb::FnId::at(2);
+    let copy = source.declare("copy", &[list], list);
+    source.define(copy, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == nil {
+                b.con(nil, &[])
+            } else {
+                let rest = b.call(copy, &[fields[1]]);
+                b.con(cons, &[fields[0], rest])
+            }
+        })
+    });
+    let run_it = source.declare("run copy", &[], nat);
+    source.define(run_it, |b, _| {
+        let count = b.known(count);
+        let empty = b.con(nil, &[]);
+        let listed = b.call(build, &[count, empty]);
+        let copied = b.call(copy, &[listed]);
+        b.call(length, &[copied])
+    });
+    let main = source.declare("main copy", &[], nat);
+    source.define(main, |b, _| {
+        b.call(run_it, &[]);
+        b.known(nought)
+    });
+    source.set_entry(main);
+    barb::validate(&source).unwrap();
+    source
+}
+
+/// Building on the way out, as `map` does, pushes onto a buffer the walk
+/// just answered and nothing else holds, so it writes in place: linear, not
+/// a copy of the rest at every step.
+#[test]
+fn a_list_copied_on_the_way_out_costs_linear_work() {
+    let small = cost(&copied_on_the_way_out(100));
+    let large = cost(&copied_on_the_way_out(200));
+    assert_linear("copy on the way out", small, large);
+}
+
+/// Every count at twice the size is at most a quarter more than twice as
+/// much: room for buffers doubling at different points, none for anything
+/// growing with the square of the work.
 fn assert_linear(name: &str, small: Cost, large: Cost) {
     for ((what, small), (_, large)) in small.each().into_iter().zip(large.each()) {
         assert!(
-            large <= 2 * small + 16,
+            4 * large <= 9 * small + 64,
             "{name}: {what} grew from {small} to {large} when the work doubled"
         );
     }
@@ -166,10 +218,10 @@ fn a_list_round_trip_costs_what_is_recorded() {
     assert_eq!(
         cost(&round_trip(100)),
         Cost {
-            allocations: 401,
-            retains: 400,
-            releases: 1305,
-            stored_bytes: 51656,
+            allocations: 114,
+            retains: 0,
+            releases: 215,
+            stored_bytes: 16592,
         }
     );
 }
@@ -194,9 +246,11 @@ fn only_what_a_function_consumes_is_owned() {
             .map_or_else(|| panic!("`{name}` is lowered"), |(id, _)| id);
         owned[id.index()].clone()
     };
-    assert_eq!(of("build"), [false, true]);
-    assert_eq!(of("reverse"), [false, true]);
-    assert_eq!(of("length"), [false]);
+    // A list is two parameters, its buffer and its length; only a buffer
+    // carries a claim.
+    assert_eq!(of("build"), [false, true, false]);
+    assert_eq!(of("reverse"), [false, false, true, false]);
+    assert_eq!(of("length"), [false, false]);
 }
 
 /// A value read last by an `if` is released inside each arm, where that arm
@@ -261,4 +315,96 @@ fn a_claim_read_last_by_a_branch_is_released_in_each_arm() {
     assert_eq!(releases(body), 0, "{}", scalar.render());
     assert_eq!(releases(then_region), 1, "{}", scalar.render());
     assert_eq!(releases(else_region), 1, "{}", scalar.render());
+}
+
+/// A machine program pushing `n` elements onto one sequence, each element a
+/// count and a cell holding it, then forking the result: two sequences
+/// sharing its tail, each one element longer. It answers the sum of both
+/// forks' first counts (seven each), the count in the last element's cell
+/// (nought) and the count first in the unforked sequence (`n - 1`): `n + 13`.
+fn pushes(n: u64) -> Program {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let empty = b.buffer_empty();
+        let zero = b.constant(Class::Word, 0);
+        let limit = b.constant(Class::Word, n);
+        let built = b.loop_(&[empty, zero], &[Class::Buffer, Class::Word], |b, state| {
+            let (buffer, len) = (state[0], state[1]);
+            let done = b.compare(Relation::Equal, len, limit);
+            b.if_(done, &[], |b| b.break_(&[buffer, len]), |b| b.yield_(&[]));
+            let boxed = b.cell(0, &[len]);
+            let grown = b.buffer_push(buffer, len, &[len, boxed]);
+            let one = b.constant(Class::Word, 1);
+            let longer = b.binary(Binary::Add, len, one);
+            b.continue_(&[grown, longer]);
+        });
+        let (buffer, len) = (built[0], built[1]);
+        let one = b.constant(Class::Word, 1);
+        let longer = b.binary(Binary::Add, len, one);
+        let seven = b.constant(Class::Word, 7);
+        let mark = b.cell(1, &[]);
+        let left = b.buffer_push(buffer, len, &[seven, mark]);
+        let mark = b.cell(1, &[]);
+        let right = b.buffer_push(buffer, len, &[seven, mark]);
+        let a = b.buffer_field(Class::Word, left, longer, 0);
+        let c = b.buffer_field(Class::Word, right, longer, 0);
+        let last = b.buffer_field(Class::Cell, left, one, 1);
+        let last = b.cell_field(Class::Word, last, 0);
+        let first = b.buffer_field(Class::Word, buffer, len, 0);
+        let sum = b.binary(Binary::Add, a, c);
+        let sum = b.binary(Binary::Add, sum, last);
+        let sum = b.binary(Binary::Add, sum, first);
+        b.ret(&[sum]);
+    });
+    p
+}
+
+/// Legalize and run a machine program's entry at 64 bits.
+fn run_machine(machine: &Program) -> (Vec<BigUint>, Cost) {
+    validate(machine).unwrap();
+    let expected = evaluate::evaluate(
+        machine,
+        machine.entry(),
+        &[],
+        evaluate::Config {
+            fuel: 100_000_000,
+            ..evaluate::Config::default()
+        },
+        &mut RejectHost,
+    )
+    .unwrap()
+    .returned()
+    .unwrap()
+    .to_vec();
+    let config = natural::Config {
+        word_bits: 64,
+        heap_bytes: HEAP_BYTES,
+    };
+    let scalar = legalize(machine, config).unwrap();
+    let result = evaluate::evaluate(
+        &scalar,
+        scalar.entry(),
+        &[],
+        evaluate::Config {
+            fuel: 100_000_000,
+            ..evaluate::Config::default()
+        },
+        &mut RejectHost,
+    )
+    .unwrap();
+    assert_eq!(result.returned().unwrap(), expected);
+    no_live_objects(&scalar, &result, config);
+    (expected, Cost::of(&scalar, &result.counts))
+}
+
+#[test]
+fn buffers_push_in_place_and_copy_only_what_is_shared() {
+    let (small, small_cost) = run_machine(&pushes(100));
+    let (large, large_cost) = run_machine(&pushes(200));
+    assert_eq!(small, [BigUint::from(113u8)]);
+    assert_eq!(large, [BigUint::from(213u8)]);
+    assert_linear("pushes", small_cost, large_cost);
+    // A buffer grows by doubling, so a run of pushes allocates a buffer a
+    // logarithmic number of times, beside one cell per element.
+    assert!(small_cost.allocations < 100 + 2 + 20, "{small_cost:?}");
 }

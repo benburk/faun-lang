@@ -35,6 +35,10 @@ pub enum Class {
     /// An immutable algebraic value. Ownership is tracked for this class;
     /// its object address and layout remain private to legalization.
     Cell,
+    /// Where a sequence's elements live. A sequence is a buffer and a
+    /// length, and the length says which of the buffer's elements it holds:
+    /// the last that many. Ownership is tracked; layout is legalization's.
+    Buffer,
     /// An arbitrary-precision nonnegative integer. Never a wrapping word.
     Natural,
     /// As wide as an address, whatever the target's is.
@@ -79,7 +83,7 @@ impl Class {
     pub const fn facts(self) -> Option<Facts> {
         match self {
             Self::Held(facts) => Some(facts),
-            Self::Cell | Self::Natural | Self::Word | Self::Address => None,
+            Self::Cell | Self::Buffer | Self::Natural | Self::Word | Self::Address => None,
         }
     }
 }
@@ -151,6 +155,24 @@ pub enum Op {
     /// Read one field. The result value says the field's class.
     CellField {
         cell: ValueId,
+        index: u32,
+    },
+    /// A buffer holding no elements.
+    BufferEmpty,
+    /// The buffer whose last `len + 1` elements are `fields`, one value per
+    /// leaf of the new first element, followed by the last `len` of
+    /// `buffer`. Takes a claim to `buffer` and to each field, so a buffer
+    /// nothing else holds may be written in place.
+    BufferPush {
+        buffer: ValueId,
+        len: ValueId,
+        fields: Range,
+    },
+    /// Read leaf `index` of the first of the last `len` elements of
+    /// `buffer`. The result value says the leaf's class.
+    BufferField {
+        buffer: ValueId,
+        len: ValueId,
         index: u32,
     },
     Binary {
@@ -326,7 +348,7 @@ impl Class {
             Self::Held(facts) => facts
                 .width()
                 .expect("a number with no greatest has no fixed width"),
-            Self::Cell | Self::Word | Self::Address => word,
+            Self::Cell | Self::Buffer | Self::Word | Self::Address => word,
             Self::Natural => panic!("an arbitrary-precision integer has no fixed width"),
         }
     }
@@ -337,7 +359,7 @@ impl Class {
     pub fn width(self) -> Option<u16> {
         match self {
             Self::Held(facts) => facts.width(),
-            Self::Cell | Self::Natural | Self::Word | Self::Address => None,
+            Self::Cell | Self::Buffer | Self::Natural | Self::Word | Self::Address => None,
         }
     }
 
@@ -351,6 +373,7 @@ impl Class {
         match (self, wanted) {
             (Self::Address, Self::Address)
             | (Self::Cell, Self::Cell)
+            | (Self::Buffer, Self::Buffer)
             | (Self::Word, Self::Word)
             | (Self::Natural, Self::Natural) => true,
             // Every number a machine word holds is one, and a number with

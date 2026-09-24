@@ -230,6 +230,10 @@ struct CellValue {
     fields: Vec<BigUint>,
 }
 
+/// A buffer's elements, first to last, each as its leaves. A sequence
+/// holding `len` of them holds the last `len`.
+type BufferValue = Vec<Vec<BigUint>>;
+
 struct Machine<'a, H> {
     program: &'a Program,
     config: Config,
@@ -237,6 +241,7 @@ struct Machine<'a, H> {
     memory: Memory<'a>,
     frames: Vec<Vec<Option<BigUint>>>,
     cells: Vec<CellValue>,
+    buffers: Vec<BufferValue>,
     tasks: Vec<Task>,
     counts: Counts,
 }
@@ -273,6 +278,7 @@ pub fn evaluate(
         memory: memory(program, config)?,
         frames: Vec::new(),
         cells: Vec::new(),
+        buffers: Vec::new(),
         tasks: Vec::new(),
         counts: Counts {
             calls: vec![0; program.functions.len()],
@@ -327,7 +333,9 @@ impl<H: Host> Machine<'_, H> {
     fn width(&self, class: Class) -> Result<Option<u16>, Error> {
         match class {
             Class::Natural => Ok(None),
-            Class::Cell | Class::Word | Class::Address => Ok(Some(self.config.word_bits)),
+            Class::Cell | Class::Buffer | Class::Word | Class::Address => {
+                Ok(Some(self.config.word_bits))
+            }
             Class::Held(_) => match class.width() {
                 Some(bits) if bits <= self.config.word_bits => Ok(Some(bits)),
                 _ => Err(Error::DoesNotFit(class)),
@@ -730,6 +738,29 @@ impl<H: Host> Machine<'_, H> {
                 BigUint::from(self.cells.len())
             }
             Op::CellTag { cell } => BigUint::from(self.cell(cell)?.tag),
+            Op::BufferEmpty => {
+                self.buffers.push(Vec::new());
+                BigUint::from(self.buffers.len())
+            }
+            Op::BufferPush {
+                buffer,
+                len,
+                fields,
+            } => {
+                let first = self.values(fields)?;
+                let rest = self.elements(buffer, len)?;
+                let mut elements = Vec::with_capacity(rest.len() + 1);
+                elements.push(first);
+                elements.extend_from_slice(rest);
+                self.buffers.push(elements);
+                BigUint::from(self.buffers.len())
+            }
+            Op::BufferField { buffer, len, index } => self
+                .elements(buffer, len)?
+                .first()
+                .and_then(|element| element.get(usize::try_from(index).ok()?))
+                .cloned()
+                .ok_or_else(|| invalid("buffer field"))?,
             Op::CellField { cell, index } => self
                 .cell(cell)?
                 .fields
@@ -777,6 +808,22 @@ impl<H: Host> Machine<'_, H> {
             _ => return Err(invalid("expected scalar instruction")),
         };
         Ok(vec![value])
+    }
+
+    /// The last `len` elements of a buffer: what a sequence of that length
+    /// holds.
+    fn elements(&self, buffer: ValueId, len: ValueId) -> Result<&[Vec<BigUint>], Error> {
+        let handle = usize::try_from(self.value(buffer)?).map_err(|_| invalid("buffer handle"))?;
+        let elements = handle
+            .checked_sub(1)
+            .and_then(|at| self.buffers.get(at))
+            .ok_or_else(|| invalid("buffer handle"))?;
+        let len = usize::try_from(self.value(len)?).map_err(|_| invalid("buffer length"))?;
+        let start = elements
+            .len()
+            .checked_sub(len)
+            .ok_or_else(|| invalid("buffer length"))?;
+        Ok(&elements[start..])
     }
 
     fn cell(&self, id: ValueId) -> Result<&CellValue, Error> {

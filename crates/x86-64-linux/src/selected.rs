@@ -1277,7 +1277,12 @@ impl Selector<'_> {
                 SourceOp::NaturalConstant(_) => {
                     return Err("x86 selection received an arbitrary-precision constant".to_owned());
                 }
-                SourceOp::Cell { .. } | SourceOp::CellTag { .. } | SourceOp::CellField { .. } => {
+                SourceOp::Cell { .. }
+                | SourceOp::CellTag { .. }
+                | SourceOp::CellField { .. }
+                | SourceOp::BufferEmpty
+                | SourceOp::BufferPush { .. }
+                | SourceOp::BufferField { .. } => {
                     return Err("x86 selection received an abstract cell operation".to_owned());
                 }
                 SourceOp::Constant { value } => self.emit(

@@ -315,6 +315,7 @@ pub fn reads(classes: &[Class]) -> String {
         .iter()
         .map(|class| match *class {
             Class::Cell => "an algebraic cell".to_owned(),
+            Class::Buffer => "a sequence buffer".to_owned(),
             Class::Natural => "an arbitrary-precision natural".to_owned(),
             Class::Word => "a word".to_owned(),
             Class::Address => "an address".to_owned(),

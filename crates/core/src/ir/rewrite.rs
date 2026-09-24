@@ -265,6 +265,18 @@ impl<'a> Rebuild<'a> {
             Op::AddressOf(data) => vec![b.address_of(data)],
             Op::Cell { tag, fields } => vec![b.cell(tag, &self.args(fields))],
             Op::CellTag { cell } => vec![b.cell_tag(self.value(cell))],
+            Op::BufferEmpty => vec![b.buffer_empty()],
+            Op::BufferPush {
+                buffer,
+                len,
+                fields,
+            } => vec![b.buffer_push(self.value(buffer), self.value(len), &self.args(fields))],
+            Op::BufferField { buffer, len, index } => vec![b.buffer_field(
+                self.source.class(results[0]),
+                self.value(buffer),
+                self.value(len),
+                index,
+            )],
             Op::CellField { cell, index } => {
                 vec![b.cell_field(self.source.class(results[0]), self.value(cell), index)]
             }

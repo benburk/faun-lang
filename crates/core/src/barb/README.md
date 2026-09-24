@@ -75,7 +75,9 @@ x    ::= a parameter, a binding, or a field an arm bound
   construction or in a constant; reading one back answers no more. Fields of
   values built out of sight -- entry parameters, bodyless results, spine
   constants -- hold anything, and a field of an enumeration type is also
-  bounded by its tag count. Spine fields are read as counts and say nothing.
+  bounded by its tag count. A spine's rest is read as a step of its count and
+  says nothing; a sequence's element holds what was built into it, and a
+  known byte string records the range of its bytes.
   `Propagation` is the evolving state; `Ranges` is the conservative final result.
 - `affine.rs`: derive small affine summaries from recognized natural addition and
   multiplication by constants, without adding an expression kind or expanding
@@ -200,8 +202,8 @@ not participate. Machine representation selection uses this exhaustive view
 instead of rediscovering products, naturals, and byte spines independently.
 Units are erased, wrappers remain transparent, naturals and enumerations are
 scalar, products of at most eight leaves are held flat as their fields'
-values, and everything else carrying fields -- wider products, general sums,
-and sequences alike -- becomes a managed cell. `Shape` is the constant codec's own
+values, sequences are a buffer and a length, and everything else carrying
+fields -- wider products and general sums -- becomes a managed cell. `Shape` is the constant codec's own
 view of an encoding and answers a different question; representation selection
 does not read it.
 

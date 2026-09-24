@@ -286,6 +286,41 @@ fn a_pair_of_small_numbers_is_two_small_words() {
     assert_eq!(status(&prepared), 3);
 }
 
+/// A list built while the program runs is a buffer: counting builds one by
+/// pushing in place, reversing builds another, and the first element is
+/// read back from where the buffer holds it.
+const LIST: &str = "type Nat Zero Succ(Nat)
+                    type List Nil Cons(Nat List)
+
+                    small(Zero) -> Zero
+                    small(Succ(k)) -> Succ(Zero)
+                    count(Zero acc) -> acc
+                    count(Succ(k) acc) -> count(k Cons(k acc))
+                    reverse(Nil acc) -> acc
+                    reverse(Cons(h t) acc) -> reverse(t Cons(h acc))
+                    head(Nil) -> Zero
+                    head(Cons(h t)) -> h
+
+                    main!(h) ->
+                      c = argc!(h)
+                      n = small(c)
+                      counted = count(Succ(Succ(Succ(Succ(n)))) Nil)
+                      exit!(h head(reverse(counted Nil)))";
+
+#[test]
+fn a_list_built_at_run_time_is_a_buffer() {
+    let program = read(LIST).expect("a program building a list");
+    let prepared = TARGET
+        .prepare(&program)
+        .expect("a program any target holds");
+    assert!(
+        prepared.render().contains("seq.reserve"),
+        "{}",
+        prepared.render()
+    );
+    assert_eq!(status(&prepared), 4);
+}
+
 /// A target's calling convention is not a language limit: preparation packs
 /// what a boundary cannot carry into a cell, so these run everywhere.
 #[test]

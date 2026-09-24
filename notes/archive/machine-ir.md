@@ -199,14 +199,37 @@ Cell payload sizes and offsets are checked before rebuilding. After preparation,
 word-sized addresses, loads, stores, and calls to generated allocation and
 ownership helpers.
 
-Sequences are cells too. A sequence is a two-constructor sum whose step holds
-the rest of itself, so `List(a)` and `Str` are one managed object per element,
-each field held at the class the cell declares. That is what makes a program
-holding one compilable; it is not what makes one cheap. A packed run of bytes,
-with a length and contiguous elements, is the representation this is waiting
-for, and releasing a long one still recurses once per element. Until then a
-`Str` costs an object per character and a target with a small heap or a shallow
-stack will feel it.
+## Sequence buffers
+
+A sequence -- a two-constructor sum whose step holds one element and the rest
+of itself, such as `List(a)` and `Str` -- is not a chain of cells. Lowering
+holds it flat as two values: a `Class::Buffer` and a `Word` length. The
+sequence is the buffer's last `len` elements, so every sequence sharing a
+buffer is a suffix of it. Taking one apart tests the length against nought,
+reads the first element's leaves with `BufferField`, and binds the rest as the
+same buffer with the length one less: no allocation and no retain. An element
+is its leaves, one slot each, so a flat product is laid inline.
+
+`BufferEmpty` makes a buffer holding nothing, and `BufferPush` answers the
+buffer holding one more element in front of the last `len`. It takes claims to
+the buffer and to each leaf, so ownership placement moves the buffer's own
+claim where the push is its last use. Legalization lowers a push to a
+per-layout `seq.reserve` routine and stores the leaves where it made room:
+
+- a buffer whose count is one and which has room in front of the sequence is
+  written in place, releasing whatever a longer sequence left in that slot;
+- otherwise the sequence is copied to the end of a new buffer with as much
+  room again in front, each copied managed leaf retained, and the old buffer
+  released.
+
+So pushes onto a buffer nothing else holds are amortized constant, including
+building on the way out as `map` does, since each step pushes onto the buffer
+the rest of the walk just answered. A buffer records its capacity, the lowest
+element it holds claims for, its stride and one kind per leaf; `seq.release`
+releases every held element when the last claim goes. Known byte strings are
+built by pushing their bytes from the end. The reference interpreter keeps
+each buffer as a list of elements and gives a push a fresh one, so its answers
+do not depend on writing in place.
 
 ## Passes
 

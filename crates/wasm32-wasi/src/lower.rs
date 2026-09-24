@@ -475,7 +475,12 @@ impl Lowering<'_> {
         let program = self.program;
         match op {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
-            Op::Cell { .. } | Op::CellTag { .. } | Op::CellField { .. } => {
+            Op::Cell { .. }
+            | Op::CellTag { .. }
+            | Op::CellField { .. }
+            | Op::BufferEmpty
+            | Op::BufferPush { .. }
+            | Op::BufferField { .. } => {
                 unreachable!("target preparation legalizes abstract cells")
             }
             Op::Constant { .. } | Op::AddressOf(_) => {}

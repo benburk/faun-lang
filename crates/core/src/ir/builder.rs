@@ -101,6 +101,35 @@ impl Builder<'_> {
         self.push_one(Op::CellField { cell, index }, class)
     }
 
+    /// A buffer holding no elements.
+    pub fn buffer_empty(&mut self) -> ValueId {
+        self.push_one(Op::BufferEmpty, Class::Buffer)
+    }
+
+    /// Put one element, as its leaves, before the last `len` of `buffer`.
+    pub fn buffer_push(&mut self, buffer: ValueId, len: ValueId, fields: &[ValueId]) -> ValueId {
+        let fields = self.program.hold(fields);
+        self.push_one(
+            Op::BufferPush {
+                buffer,
+                len,
+                fields,
+            },
+            Class::Buffer,
+        )
+    }
+
+    /// Read leaf `index` of the first of the last `len` elements, as `class`.
+    pub fn buffer_field(
+        &mut self,
+        class: Class,
+        buffer: ValueId,
+        len: ValueId,
+        index: u32,
+    ) -> ValueId {
+        self.push_one(Op::BufferField { buffer, len, index }, class)
+    }
+
     pub fn data_len(&mut self, data: DataId) -> ValueId {
         let len = self.program.datum(data).len;
         self.constant(Class::Word, u64::from(len))

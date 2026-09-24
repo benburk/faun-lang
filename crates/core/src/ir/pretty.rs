@@ -121,6 +121,24 @@ impl Program {
             Op::CellField { cell, index } => {
                 format!("cell_field v{}, {index}", cell.index())
             }
+            Op::BufferEmpty => "buffer_empty".to_owned(),
+            Op::BufferPush {
+                buffer,
+                len,
+                fields,
+            } => format!(
+                "buffer_push v{}, v{}, ({})",
+                buffer.index(),
+                len.index(),
+                arguments(self.values(fields))
+            ),
+            Op::BufferField { buffer, len, index } => {
+                format!(
+                    "buffer_field v{}, v{}, {index}",
+                    buffer.index(),
+                    len.index()
+                )
+            }
             Op::Binary { op, left, right } => {
                 format!("{op:?} v{}, v{}", left.index(), right.index())
             }
@@ -185,6 +203,7 @@ impl Program {
 fn class(held: Class) -> String {
     match held {
         Class::Cell => "cell".to_owned(),
+        Class::Buffer => "buffer".to_owned(),
         Class::Natural => "natural".to_owned(),
         Class::Word => "word".to_owned(),
         Class::Address => "address".to_owned(),

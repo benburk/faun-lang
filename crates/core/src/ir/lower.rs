@@ -21,10 +21,13 @@
 //!   by [`super::fit`]. A product on a cycle made only of products has no
 //!   values, and one with more than [`FLAT_LEAVES`] leaves is a cell: a
 //!   value that large is cheaper shared than copied.
-//! - everything else with fields is a managed cell, a sequence included. A
-//!   sequence is a two-constructor sum whose step holds the rest of itself,
-//!   so it is one object per element. That is what it costs; a packed run
-//!   of bytes would cost less and does not exist yet.
+//! - a sequence -- a two-constructor sum whose step holds one element and
+//!   the rest of itself -- is a buffer and a length, held flat like a
+//!   product of two leaves. The sequence is the buffer's last `len`
+//!   elements, so its rest is the same buffer one shorter: taking a sequence
+//!   apart builds nothing, and adding to one writes in place where nothing
+//!   else holds the buffer.
+//! - everything else with fields is a managed cell.
 //! - a cell's fields are held at the class the cell says, which is the class
 //!   a projection reads them back at. A field held flat is its leaves, laid
 //!   inline among the cell's own fields.
@@ -262,12 +265,22 @@ enum Storage {
     Cell,
     /// A product held as its leaves: a run in the leaf pool, never empty.
     Flat(barb::Range),
+    /// A sequence: a buffer and a length, as [`SEQUENCE_LEAVES`] says.
+    Seq,
+}
+
+/// The leaves every sequence is held as, which open every leaf pool.
+const SEQUENCE_LEAVES: [Class; 2] = [Class::Buffer, Class::Word];
+
+/// The run [`SEQUENCE_LEAVES`] occupy.
+fn sequence_run() -> barb::Range {
+    barb::Range::of(0, SEQUENCE_LEAVES.len())
 }
 
 impl Storage {
     fn carried(self) -> bool {
         match self {
-            Self::Scalar | Self::Cell | Self::Flat(_) => true,
+            Self::Scalar | Self::Cell | Self::Flat(_) | Self::Seq => true,
             Self::Erased => false,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
         }
@@ -280,6 +293,7 @@ impl Storage {
             Self::Scalar => Some(Carried::One(width(bounds))),
             Self::Cell => Some(Carried::One(Class::Cell)),
             Self::Flat(leaves) => Some(Carried::Flat(leaves)),
+            Self::Seq => Some(Carried::Flat(sequence_run())),
             Self::Erased => None,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
         }
@@ -392,7 +406,7 @@ impl<'a> Demand<'a> {
                 })
                 .collect(),
             carries: vec![Storage::Undemanded; program.types().len()],
-            leaves: Vec::new(),
+            leaves: SEQUENCE_LEAVES.to_vec(),
         };
         while let Some(id) = demand.waiting.pop() {
             if std::mem::replace(&mut demand.reached[id.index()], true) {
@@ -506,6 +520,9 @@ impl<'a> Demand<'a> {
                 |(ty, bounds)| match self.carries[ty.index()].held(**bounds) {
                     Some(Carried::One(Class::Cell)) => handed_sentence(&[Handed::Bytes]),
                     Some(Carried::One(class)) => handed_sentence(&[Handed::Value(class)]),
+                    Some(Carried::Flat(_)) if self.carries[ty.index()] == Storage::Seq => {
+                        handed_sentence(&[Handed::Bytes])
+                    }
                     Some(Carried::Flat(_)) => "a product".to_owned(),
                     None => unreachable!("an argument handed over is carried"),
                 },
@@ -612,7 +629,7 @@ impl<'a> Demand<'a> {
             self.carries[ty.index()] = flat;
             return Ok(());
         }
-        if storage == Storage::Cell {
+        if matches!(storage, Storage::Cell | Storage::Seq) {
             return self.type_fields(ty);
         }
         Ok(())
@@ -807,13 +824,9 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, Strin
                 // the same size -- so it is asked of each value.
                 return Ok(Storage::Scalar);
             }
-            // A sequence is a two-constructor sum whose step happens to
-            // hold the rest of itself, so it is held the way any other sum
-            // is: one managed object per step. What that costs per element
-            // is why a packed run of bytes is still worth having; what it
-            // buys now is that a program holding one can be compiled.
-            barb::TypeShape::Sequence { .. }
-            | barb::TypeShape::Spine { .. }
+            // A sequence is a buffer and how many of its elements it holds.
+            barb::TypeShape::Sequence { .. } => return Ok(Storage::Seq),
+            barb::TypeShape::Spine { .. }
             | barb::TypeShape::Product { .. }
             | barb::TypeShape::Sum => {
                 return Ok(Storage::Cell);
@@ -868,6 +881,7 @@ fn field_carried(
         }
         Storage::Scalar => Some(Carried::One(width(held))),
         Storage::Flat(run) => Some(Carried::Flat(run)),
+        Storage::Seq => Some(Carried::Flat(sequence_run())),
         Storage::Erased => None,
         Storage::Undemanded => panic!("a bound field type must have been demanded"),
     }
@@ -1340,19 +1354,14 @@ impl Lowering<'_> {
                 Ok(held) => b.constant(class, held),
                 Err(barb::TooWide) => b.natural(&number.to_biguint()),
             },
-            // A run of bytes known before the program runs is still a
-            // sequence, and a sequence is steps: this builds them, from the
-            // end, so nothing about a constant needs a second representation.
-            barb::ConstantView::Spine(spine) => {
-                let owner = value.owner();
-                let Some(bytes) = spine.to_bytes() else {
-                    self.refuse(format!(
-                        "`{}` holds something per element that is not a byte, which this tier cannot lay out yet",
-                        self.barb.name(self.barb.type_(owner).name)
-                    ));
-                    return b.constant(Class::Word, 0);
-                };
-                self.static_spine(b, owner, &bytes)
+            // A sequence is held as two values and never reaches here; a
+            // spine with wider steps is a cell nothing builds from bytes.
+            barb::ConstantView::Spine(_) => {
+                self.refuse(format!(
+                    "`{}` is a known spine of wide steps, which this tier cannot lay out yet",
+                    self.barb.name(self.barb.type_(value.owner()).name)
+                ));
+                b.constant(Class::Word, 0)
             }
         }
     }
@@ -1382,13 +1391,17 @@ impl Lowering<'_> {
         }
     }
 
-    /// A known product's leaves.
+    /// A known product's leaves, or a known sequence's buffer and length.
     fn static_leaves(
         &self,
         b: &mut super::Builder,
         value: barb::Constant<'_>,
         out: &mut Vec<ValueId>,
     ) {
+        if self.carries[value.owner().index()] == Storage::Seq {
+            out.extend(self.static_sequence(b, value));
+            return;
+        }
         let value = barb::single_field_constant(self.barb, value);
         let barb::ConstantView::Constructor(ctor) = value.view() else {
             unreachable!("a product constant is a constructor");
@@ -1403,41 +1416,48 @@ impl Lowering<'_> {
         b.cell(self.barb.tag(ctor.constructor()), &fields)
     }
 
-    /// Build a sequence constant as the steps it is, from its end back.
-    ///
-    /// # Panics
-    /// If the type is not the sequence its encoding says it is.
-    fn static_spine(&self, b: &mut super::Builder, owner: barb::TypeId, bytes: &[u8]) -> ValueId {
-        let owner = peeled(self.barb, owner).expect("a byte string is not cyclic");
+    /// Build a known sequence by pushing its elements, from its end back:
+    /// the buffer is nothing else's, so each push writes in place.
+    fn static_sequence(&self, b: &mut super::Builder, value: barb::Constant<'_>) -> [ValueId; 2] {
+        let owner = peeled(self.barb, value.owner()).expect("a sequence is not cyclic");
         let barb::TypeShape::Sequence {
-            empty,
-            push,
-            recursive,
-            element,
+            push, recursive, ..
         } = barb::type_shape(self.barb, owner)
         else {
-            unreachable!("a spine-encoded constant has a sequence type");
+            unreachable!("a sequence constant has a sequence type");
         };
-        let at = usize::from(recursive == 0);
-        debug_assert_eq!(self.barb.fields(push)[at], element);
-        let element = match self.field_carried(push, at) {
+        let value = barb::single_field_constant(self.barb, value);
+        let bytes = match value.view() {
+            barb::ConstantView::Spine(spine) => spine.to_bytes(),
+            _ => None,
+        };
+        let Some(bytes) = bytes else {
+            self.refuse(format!(
+                "`{}` holds something per element that is not a byte, which this tier cannot lay out yet",
+                self.barb.name(self.barb.type_(owner).name)
+            ));
+            let empty = b.buffer_empty();
+            return [empty, b.constant(Class::Word, 0)];
+        };
+        let element = match self.field_carried(push, usize::from(recursive == 0)) {
             Some(Carried::One(class)) => Some(class),
             Some(Carried::Flat(_)) => unreachable!("a byte is not a product"),
             None => None,
         };
-        let mut held = b.cell(self.barb.tag(empty), &[]);
-        for &byte in bytes.iter().rev() {
-            let mut fields = Vec::with_capacity(2);
-            for (at, _) in self.barb.fields(push).iter().enumerate() {
-                if at == recursive {
-                    fields.push(held);
-                } else if let Some(element) = element {
-                    fields.push(b.constant(element, u64::from(byte)));
-                }
-            }
-            held = b.cell(self.barb.tag(push), &fields);
+        let mut buffer = b.buffer_empty();
+        for (len, &byte) in bytes.iter().rev().enumerate() {
+            let len = b.constant(
+                Class::Word,
+                u64::try_from(len).expect("a length fits 64 bits"),
+            );
+            let fields: Vec<_> = element
+                .map(|class| b.constant(class, u64::from(byte)))
+                .into_iter()
+                .collect();
+            buffer = b.buffer_push(buffer, len, &fields);
         }
-        held
+        let len = u64::try_from(bytes.len()).expect("a length fits 64 bits");
+        [buffer, b.constant(Class::Word, len)]
     }
 
     /// Record the first thing this tier cannot lay out. Emission has no
@@ -1735,6 +1755,9 @@ impl Lowering<'_> {
                     .expect("a transparent field to carry a value"),
             );
         }
+        if self.carries[owner.index()] == Storage::Seq {
+            return Some(self.construct_sequence(b, ctor, args, locals));
+        }
         let class = match self.carried(owner, self.facts.held(expr)) {
             Carried::Flat(leaves) => {
                 let mut values = Vec::new();
@@ -1755,6 +1778,50 @@ impl Lowering<'_> {
             return Some(Held::One(b.constant(class, u64::from(self.barb.tag(ctor)))));
         }
         Some(Held::One(self.count(b, class, args, locals)))
+    }
+
+    /// An empty sequence is an empty buffer; a step pushes its element onto
+    /// the rest's buffer, taking that buffer's claim, and counts one more.
+    fn construct_sequence(
+        &self,
+        b: &mut super::Builder,
+        ctor: barb::CtorId,
+        args: barb::Range,
+        locals: &Locals,
+    ) -> Held {
+        let owner = self.barb.ctor(ctor).owner;
+        let barb::TypeShape::Sequence {
+            empty, recursive, ..
+        } = barb::type_shape(self.barb, owner)
+        else {
+            unreachable!("a sequence's constructor belongs to a sequence");
+        };
+        let values = if ctor == empty {
+            [b.buffer_empty(), b.constant(Class::Word, 0)]
+        } else {
+            let atoms = self.barb.atoms(args);
+            let rest = locals[atoms[recursive].0.index()]
+                .as_ref()
+                .expect("a sequence's rest is carried");
+            let (buffer, len) = (rest.values()[0], rest.values()[1]);
+            let element = usize::from(recursive == 0);
+            let mut fields = Vec::new();
+            if let Some(carried) = self.field_carried(ctor, element) {
+                let held = locals[atoms[element].0.index()]
+                    .as_ref()
+                    .expect("a carried element carries a value");
+                for (&value, &class) in held.values().iter().zip(self.classes(&carried)) {
+                    fields.push(met(b, value, class));
+                }
+            }
+            let pushed = b.buffer_push(buffer, len, &fields);
+            let one = b.constant(Class::Word, 1);
+            [pushed, b.binary(Binary::Add, len, one)]
+        };
+        Held::Flat {
+            leaves: sequence_run(),
+            values: values.as_slice().into(),
+        }
     }
 
     /// A number built from constructors: nought, or one more than its field.
@@ -1823,10 +1890,14 @@ impl Lowering<'_> {
         let Some(second) = arms.next() else {
             return self.only_arm(b, scrutinee, &first, locals, statics);
         };
-        // More than one arm means the value says which, so it is held, and
-        // held in one value: only a product is held flat, and it has one.
-        let scrutinee = scrutinee.expect("a tested value is carried").one();
         let owner = self.barb.ctor(first.ctor).owner;
+        let scrutinee = scrutinee.expect("a tested value is carried");
+        if self.carries[owner.index()] == Storage::Seq {
+            return self.sequence_branch(b, scrutinee, [first, second], locals, statics);
+        }
+        // More than one arm means the value says which, so it is held, and
+        // held in one value: a product is held flat, and it has one arm.
+        let scrutinee = scrutinee.one();
         if self.carries[owner.index()] == Storage::Cell {
             let planned = {
                 let mut carried: Vec<_> = locals
@@ -1878,6 +1949,58 @@ impl Lowering<'_> {
         };
         let class = b.class(scrutinee);
         self.tags(b, scrutinee, class, &arms, locals, statics)
+    }
+
+    /// Matching a sequence asks whether it is empty, which its length says;
+    /// the other arm reads the first element where the buffer holds it.
+    fn sequence_branch(
+        &self,
+        b: &mut super::Builder,
+        scrutinee: &Held,
+        arms: [barb::Arm; 2],
+        locals: &Locals,
+        statics: &[Option<barb::ConstId>],
+    ) -> Answer<Held> {
+        let answer = {
+            let mut carried: Vec<_> = locals
+                .iter()
+                .map(|value| value.as_ref().map(|value| value.carried(b)))
+                .collect();
+            let base = carried.len();
+            let mut answer = Answer::Never;
+            for arm in arms {
+                carried.extend(self.fields_carried(arm.ctor));
+                answer = widest(answer, self.body_answer(arm.body, &mut carried));
+                carried.truncate(base);
+            }
+            answer
+        };
+        let owner = self.barb.ctor(arms[0].ctor).owner;
+        let barb::TypeShape::Sequence { empty, .. } = barb::type_shape(self.barb, owner) else {
+            unreachable!("a sequence's arms belong to a sequence");
+        };
+        let (nil, step) = if arms[0].ctor == empty {
+            (arms[0], arms[1])
+        } else {
+            (arms[1], arms[0])
+        };
+        let join = self.join(answer);
+        let len = scrutinee.values()[1];
+        let nought = b.constant(Class::Word, 0);
+        let is_empty = b.compare(Relation::Equal, len, nought);
+        let results = b.if_(
+            is_empty,
+            &join,
+            |b| {
+                let answer = self.only_arm(b, Some(scrutinee), &nil, locals, statics);
+                yielded(b, answer, &join);
+            },
+            |b| {
+                let answer = self.only_arm(b, Some(scrutinee), &step, locals, statics);
+                yielded(b, answer, &join);
+            },
+        );
+        answer.map(|carried| Held::of(carried, &results))
     }
 
     fn natural_branch(
@@ -1949,6 +2072,8 @@ impl Lowering<'_> {
             if barb::single_field(self.barb, owner).is_some() {
                 inner.push(Some(scrutinee.clone()));
                 inner_statics.push(None);
+            } else if self.carries[owner.index()] == Storage::Seq {
+                self.bind_sequence_fields(b, scrutinee, arm.ctor, &mut inner, &mut inner_statics);
             } else if let Storage::Flat(_) = self.carries[owner.index()] {
                 self.bind_flat_fields(scrutinee.values(), arm.ctor, &mut inner, &mut inner_statics);
             } else if self.carries[owner.index()] == Storage::Cell {
@@ -1977,6 +2102,39 @@ impl Lowering<'_> {
             }
         }
         self.body(b, arm.body, &mut inner, &mut inner_statics)
+    }
+
+    /// A step of a sequence binds its element, read from the buffer, and its
+    /// rest, which is the same buffer one shorter. An empty one binds nothing.
+    fn bind_sequence_fields(
+        &self,
+        b: &mut super::Builder,
+        scrutinee: &Held,
+        ctor: barb::CtorId,
+        locals: &mut Vec<Option<Held>>,
+        statics: &mut Vec<Option<barb::ConstId>>,
+    ) {
+        let owner = self.barb.ctor(ctor).owner;
+        let barb::TypeShape::Sequence { recursive, .. } = barb::type_shape(self.barb, owner) else {
+            unreachable!("a sequence's constructor belongs to a sequence");
+        };
+        let (buffer, len) = (scrutinee.values()[0], scrutinee.values()[1]);
+        for (at, carried) in self.fields_carried(ctor).enumerate() {
+            let field = carried.map(|carried| {
+                if at == recursive {
+                    let one = b.constant(Class::Word, 1);
+                    let shorter = b.binary(Binary::Sub, len, one);
+                    return Held::of(carried, &[buffer, shorter]);
+                }
+                let values: Vec<_> = (0u32..)
+                    .zip(self.classes(&carried))
+                    .map(|(leaf, &class)| b.buffer_field(class, buffer, len, leaf))
+                    .collect();
+                Held::of(carried, &values)
+            });
+            locals.push(field);
+            statics.push(None);
+        }
     }
 
     /// Taking a flat product apart reads nothing: each field is the run of

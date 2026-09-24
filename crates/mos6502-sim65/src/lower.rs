@@ -292,12 +292,27 @@ fn exit_status(program: &Program, op: &Op) -> Option<ValueId> {
 
 fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     match op {
-        Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) => {}
+        Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) | Op::BufferEmpty => {}
         Op::Cell { fields, .. } => {
             program.values(*fields).iter().copied().for_each(&mut each);
         }
         Op::CellTag { cell } | Op::CellField { cell, .. } => each(*cell),
-        Op::Binary { left, right, .. } | Op::Compare { left, right, .. } => {
+        Op::BufferPush {
+            buffer,
+            len,
+            fields,
+        } => {
+            each(*buffer);
+            each(*len);
+            program.values(*fields).iter().copied().for_each(&mut each);
+        }
+        Op::Binary { left, right, .. }
+        | Op::Compare { left, right, .. }
+        | Op::BufferField {
+            buffer: left,
+            len: right,
+            ..
+        } => {
             each(*left);
             each(*right);
         }
@@ -2237,7 +2252,12 @@ impl Lowering<'_> {
         let program = self.program;
         match op {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
-            Op::Cell { .. } | Op::CellTag { .. } | Op::CellField { .. } => {
+            Op::Cell { .. }
+            | Op::CellTag { .. }
+            | Op::CellField { .. }
+            | Op::BufferEmpty
+            | Op::BufferPush { .. }
+            | Op::BufferField { .. } => {
                 unreachable!("target preparation legalizes abstract cells")
             }
             Op::Constant { .. } | Op::AddressOf(_) => {}

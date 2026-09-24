@@ -75,6 +75,7 @@ mod pretty;
 mod program;
 mod prune;
 mod rewrite;
+mod sequence;
 mod simplify;
 mod validate;
 

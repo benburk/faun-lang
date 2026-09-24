@@ -19,7 +19,7 @@ use super::{Class, FunctionId, Op, Program, RegionId, ValueId};
 
 /// Whether a value's class carries a reference count.
 pub(super) const fn managed(class: Class) -> bool {
-    matches!(class, Class::Cell | Class::Natural)
+    matches!(class, Class::Cell | Class::Buffer | Class::Natural)
 }
 
 /// Every value an instruction reads, including everything read inside the
@@ -130,6 +130,10 @@ fn consumed_in(source: &Program, region: RegionId, owned: &[Vec<bool>], out: &mu
     for (op, results) in source.walk(region) {
         match *op {
             Op::Cell { fields, .. } => out.extend_from_slice(source.values(fields)),
+            Op::BufferPush { buffer, fields, .. } => {
+                out.push(buffer);
+                out.extend_from_slice(source.values(fields));
+            }
             Op::Convert { value } if source.class(value) == source.class(results[0]) => {
                 out.push(value);
             }

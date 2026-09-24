@@ -271,7 +271,7 @@ fn abi_class(class: Class, word: u16) -> Class {
 }
 
 fn accepts_class(name: &str, word: u16, class: Class) -> Result<(), String> {
-    if class == Class::Cell {
+    if matches!(class, Class::Cell | Class::Buffer) {
         return Err(format!(
             "{name} raw emission requires legalization of algebraic cells"
         ));

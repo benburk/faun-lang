@@ -105,8 +105,8 @@ impl Facts {
         self.affine.get(id.index())?.as_ref()
     }
     /// What field `at` of `ctor` can hold: every value built into it, or
-    /// anything where a value was built out of sight or the field is a step
-    /// of a spine.
+    /// anything where a value was built out of sight or the field is the
+    /// rest of a spine.
     #[must_use]
     pub fn field(&self, program: &Program, ctor: CtorId, at: usize) -> Bounds {
         self.ranges

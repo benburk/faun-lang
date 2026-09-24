@@ -153,16 +153,34 @@ impl References<'_> {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive operation dispatch keeps each operand reference check adjacent"
+    )]
     fn op(&self, op: Op) -> Result<(), String> {
         let p = self.0;
         match op {
-            Op::Constant { .. } => {}
+            Op::Constant { .. } | Op::BufferEmpty => {}
             Op::NaturalConstant(id) => self.natural_datum(id)?,
             Op::AddressOf(id) => return self.datum(id).map(|_| ()),
             Op::Cell { fields, .. } => self.values(fields)?,
             Op::CellTag { cell } | Op::CellField { cell, .. } => self.value(cell)?,
+            Op::BufferPush {
+                buffer,
+                len,
+                fields,
+            } => {
+                self.value(buffer)?;
+                self.value(len)?;
+                self.values(fields)?;
+            }
             Op::Binary { left, right, .. }
             | Op::Compare { left, right, .. }
+            | Op::BufferField {
+                buffer: left,
+                len: right,
+                ..
+            }
             | Op::Store {
                 address: left,
                 value: right,
@@ -416,8 +434,8 @@ impl Checker<'_> {
             // What one is held at is the class of the value it writes, so
             // there is nothing here for the two of them to disagree about.
             Op::Constant { .. } => {
-                if self.one(results)? == Class::Cell {
-                    return Err("a cell cannot be fabricated by a scalar constant".into());
+                if matches!(self.one(results)?, Class::Cell | Class::Buffer) {
+                    return Err("a managed value cannot be fabricated by a scalar constant".into());
                 }
             }
             Op::Cell { fields, .. } => {
@@ -432,6 +450,24 @@ impl Checker<'_> {
             }
             Op::CellField { cell, .. } => {
                 self.require(cell, Class::Cell)?;
+                self.one(results)?;
+            }
+            Op::BufferEmpty => self.results(results, &[Class::Buffer])?,
+            Op::BufferPush {
+                buffer,
+                len,
+                fields,
+            } => {
+                self.require(buffer, Class::Buffer)?;
+                self.length(len)?;
+                for &field in self.program.values(fields) {
+                    self.read(field)?;
+                }
+                self.results(results, &[Class::Buffer])?;
+            }
+            Op::BufferField { buffer, len, .. } => {
+                self.require(buffer, Class::Buffer)?;
+                self.length(len)?;
                 self.one(results)?;
             }
             Op::Convert { value } => {
@@ -546,9 +582,19 @@ impl Checker<'_> {
         self.results(results, p.signature(callee.returns.classes()))
     }
 
+    /// A sequence length is a count a word holds.
+    fn length(&self, len: ValueId) -> Result<(), String> {
+        let class = self.read(len)?;
+        if class.fits(Class::Word) {
+            Ok(())
+        } else {
+            Err(format!("a buffer length must fit a word, not {class:?}"))
+        }
+    }
+
     fn conversion(&self, value: ValueId, class: Class) -> Result<(), String> {
         let from = self.read(value)?;
-        let numeric = |c| !matches!(c, Class::Address | Class::Cell);
+        let numeric = |c| !matches!(c, Class::Address | Class::Cell | Class::Buffer);
         if !(numeric(from) && numeric(class)
             || from == class
             || matches!(
@@ -566,7 +612,7 @@ impl Checker<'_> {
             return Err("binary operation must have one result".into());
         };
         let held = self.program.class(*result);
-        if matches!(held, Class::Address | Class::Cell) {
+        if matches!(held, Class::Address | Class::Cell | Class::Buffer) {
             return Err("arithmetic result must be numeric".into());
         }
         self.require(left, held)?;

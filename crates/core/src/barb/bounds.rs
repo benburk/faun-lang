@@ -132,14 +132,15 @@ fn unknown(program: &Program, roots: &[TypeId], fields: &mut [Option<Bounds>]) {
 
 /// What the walk worked out, as the tier below reads it.
 fn finish(program: &Program, held: Propagation) -> Ranges {
-    // Taking a spine apart reads its fields as steps of its count, not as
-    // what was built into them, so nothing is said of a spine's fields.
+    // A spine's rest is read as a step of its count, not as what was built
+    // there, so nothing is said of that field.
     let mut fields: Vec<_> = held.fields.into_iter().map(anything).collect();
     for ty in 0..program.types().len() {
-        if let Shape::Spine { .. } = shape(program, TypeId::at(ty)) {
-            for ctor in program.ctors(TypeId::at(ty)) {
-                fields[ctor.fields.range()].fill(Bounds::ANY);
-            }
+        if let Shape::Spine {
+            cons, recursive, ..
+        } = shape(program, TypeId::at(ty))
+        {
+            fields[slot(program, cons, recursive)] = Bounds::ANY;
         }
     }
     // A term nothing reached is a term nothing knows, and so is a parameter
@@ -258,6 +259,14 @@ impl Propagation {
         }
         again
     }
+}
+
+/// How a matched constructor's fields are bound: all alike, or each as what
+/// was built into it, but for a spine's rest, which is its count less one.
+#[derive(Clone, Copy)]
+enum Binding {
+    Whole(Bounds),
+    Built(Option<(usize, Bounds)>),
 }
 
 /// What one walk hands on: the arguments it called with, what it built into
@@ -477,8 +486,8 @@ impl FunctionWalk<'_> {
     /// said to be anything.
     fn constant_fields(&mut self, value: super::Constant<'_>) {
         let super::ConstantView::Constructor(ctor) = value.view() else {
-            if matches!(value.view(), super::ConstantView::Spine(_)) {
-                self.outside.push(value.owner());
+            if let super::ConstantView::Spine(spine) = value.view() {
+                self.spine_fields(value.owner(), spine);
             }
             return;
         };
@@ -496,6 +505,33 @@ impl FunctionWalk<'_> {
                 .push((place, constant_bounds(self.program, field)));
             self.constant_fields(field);
         }
+    }
+
+    /// A run of bytes holds each byte in its element field. A spine of
+    /// anything else is not read element by element here, so its fields
+    /// could hold anything.
+    fn spine_fields(&mut self, owner: TypeId, spine: super::SpineView<'_>) {
+        let (
+            Shape::Spine {
+                cons, recursive, ..
+            },
+            Some(bytes),
+        ) = (shape(self.program, owner), spine.to_bytes())
+        else {
+            self.outside.push(owner);
+            return;
+        };
+        let (Some(&low), Some(&high)) = (bytes.iter().min(), bytes.iter().max()) else {
+            return;
+        };
+        let element = usize::from(recursive == 0);
+        self.built.push((
+            slot(self.program, cons, element),
+            Bounds {
+                low: u64::from(low),
+                high: Some(u64::from(high)),
+            },
+        ));
     }
 
     /// A number's empty constructor is nought and its other one is one more
@@ -565,28 +601,28 @@ impl FunctionWalk<'_> {
         if !reaches(self.program, held, spine, ctor) {
             return false;
         }
-        let (field, tagged) = if single_field(self.program, owner).is_some() {
-            (held, false)
+        let binding = if single_field(self.program, owner).is_some() {
+            Binding::Whole(held)
         } else {
             match spine {
                 Shape::Spine { nil, .. } if ctor == nil => {
                     self.scope[scrutinee] = Bounds::at(0);
-                    (Bounds::NOTHING, false)
+                    Binding::Whole(Bounds::NOTHING)
                 }
-                Shape::Spine { .. } => {
+                Shape::Spine { recursive, .. } => {
                     self.scope[scrutinee] = Bounds {
                         low: held.low.max(1),
                         high: held.high,
                     };
-                    (self.scope[scrutinee].down(), false)
+                    Binding::Built(Some((recursive, self.scope[scrutinee].down())))
                 }
                 Shape::Tagged => {
                     self.scope[scrutinee] = Bounds::at(u64::from(self.program.tag(ctor)));
-                    (Bounds::ANY, true)
+                    Binding::Built(None)
                 }
             }
         };
-        self.bind_fields(ctor, field, tagged);
+        self.bind_fields(ctor, binding);
         if let Some((op, left, right)) = self.predicates[scrutinee] {
             let (a, b) = refine(op, ctor, self.scope[left], self.scope[right]);
             self.scope[left] = a;
@@ -599,14 +635,19 @@ impl FunctionWalk<'_> {
         true
     }
 
-    /// Bind a constructor's fields at `field`. A field of a tagged
-    /// constructor holds what was built into it -- nothing yet, where no
-    /// walk has built one -- and one whose type is a run of bare tags is
-    /// one of them besides: the type says that much alone.
-    fn bind_fields(&mut self, ctor: CtorId, field: Bounds, tagged: bool) {
+    /// Bind a constructor's fields. A field holds what was built into it --
+    /// nothing yet, where no walk has built one -- and one whose type is a
+    /// run of bare tags is one of them besides: the type says that much
+    /// alone. The rest of a spine is one step down its count instead.
+    fn bind_fields(&mut self, ctor: CtorId, binding: Binding) {
         for (at, &ty) in self.program.fields(ctor).iter().enumerate() {
-            if !tagged {
-                self.scope.push(field);
+            let counted = match binding {
+                Binding::Whole(held) => Some(held),
+                Binding::Built(Some((recursive, rest))) if recursive == at => Some(rest),
+                Binding::Built(_) => None,
+            };
+            if let Some(held) = counted {
+                self.scope.push(held);
                 continue;
             }
             let built = self.fields[slot(self.program, ctor, at)].unwrap_or(Bounds::NOTHING);

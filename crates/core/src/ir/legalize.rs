@@ -17,9 +17,10 @@ use num_bigint::BigUint;
 use super::cell::{self, Library as CellLibrary};
 use super::natural::{self, Config, Helper, Library, Needs};
 use super::ownership::{self, Liveness, managed};
+use super::sequence::{self, Library as SequenceLibrary};
 use super::{
-    Builder, Class, DataId, Definition, Exit, Op, Origin, Program, Range, RegionId, Relation,
-    Terminator, ValueId, Width, validate,
+    Binary, Builder, Class, DataId, Definition, Exit, Op, Origin, Program, Range, RegionId,
+    Relation, Terminator, ValueId, Width, validate,
 };
 
 /// Rebuild a validated program with naturals represented by immutable objects.
@@ -45,10 +46,8 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     }
     source.check_layout(config.layout())?;
     let needs = inspect(source, config)?;
-    let has_naturals = source.classes.as_slice().contains(&Class::Natural)
-        || source.signature.contains(&Class::Natural);
-    let has_cells =
-        source.classes.as_slice().contains(&Class::Cell) || source.signature.contains(&Class::Cell);
+    let has_naturals = holds(source, Class::Natural);
+    let has_cells = holds(source, Class::Cell) || holds(source, Class::Buffer);
     if !has_naturals && !has_cells {
         return Ok(source.clone());
     }
@@ -57,28 +56,52 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     output.runtime_cells |= has_cells;
     output.runtime_naturals |= has_naturals;
     let library = natural::append(&mut output, config, needs)?;
-    let cells = has_cells.then(|| cell::append(&mut output, &library, config.word_bits));
+    let (cells, sequences) = managed_runtime(&mut output, source, &library, config);
     let constants = constants(source, &mut output, config)?;
     let pass = Pass {
         source,
         library,
         cells,
         word_bytes: u64::from(config.word_bits / 8),
+        word_bits: config.word_bits,
+        sequences,
         constants,
         values: vec![Cell::new(None); source.values_count()],
         owned: ownership::owned_parameters(source),
     };
-    for (id, function) in source.functions.iter_enumerated() {
-        let Some(body) = function.body() else {
-            continue;
-        };
-        let held = pass.owned_parameters(id, body);
-        output.define(id, |b, params| {
-            pass.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params, held);
-        });
-    }
+    pass.define_bodies(&mut output);
     validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
     Ok(output)
+}
+
+/// The cell and sequence routines a program needs, beside its naturals'.
+/// A program holding buffers has cells' too, since a buffer may hold one.
+fn managed_runtime(
+    output: &mut Program,
+    source: &Program,
+    library: &Library,
+    config: Config,
+) -> (Option<CellLibrary>, Option<SequenceLibrary>) {
+    let has_buffers = holds(source, Class::Buffer);
+    let has_cells = holds(source, Class::Cell) || has_buffers;
+    let buffers = has_buffers.then(|| sequence::declare(output));
+    let cells = has_cells.then(|| cell::append(output, library, buffers, config.word_bits));
+    let sequences = buffers.zip(cells).map(|(release, cells)| {
+        sequence::append(
+            output,
+            release,
+            library,
+            cells,
+            layouts(source),
+            config.word_bits,
+        )
+    });
+    (cells, sequences)
+}
+
+/// Whether any value or signature in `source` is held at `class`.
+fn holds(source: &Program, class: Class) -> bool {
+    source.classes.as_slice().contains(&class) || source.signature.contains(&class)
 }
 
 fn skeleton(source: &Program) -> Program {
@@ -126,8 +149,28 @@ const fn top(scopes: &mut [Scope]) -> &mut Scope {
     scopes.last_mut().expect("a region being walked")
 }
 
+/// The leaf kinds of every element a program pushes onto a buffer, each once.
+fn layouts(source: &Program) -> std::collections::BTreeSet<Vec<u64>> {
+    source
+        .functions()
+        .iter()
+        .filter_map(super::Function::body)
+        .flat_map(|body| source.walk_within(body))
+        .filter_map(|(op, _)| match *op {
+            Op::BufferPush { fields, .. } => Some(
+                source
+                    .values(fields)
+                    .iter()
+                    .map(|&field| cell::kind(source.class(field)))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
 const fn representation(class: Class) -> Class {
-    if matches!(class, Class::Cell | Class::Natural) {
+    if matches!(class, Class::Cell | Class::Buffer | Class::Natural) {
         Class::Address
     } else {
         class
@@ -152,7 +195,7 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
             .chain(source.signature(function.returns.classes()))
         {
             match class {
-                Class::Cell => {
+                Class::Cell | Class::Buffer => {
                     return Err("host signatures containing cells have no aggregate ABI".into());
                 }
                 Class::Natural => {
@@ -172,7 +215,10 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
 fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
     check_classes(source, config)?;
     let mut needs = Needs::default();
-    if source.classes.as_slice().contains(&Class::Cell) || source.signature.contains(&Class::Cell) {
+    if [Class::Cell, Class::Buffer]
+        .iter()
+        .any(|class| source.classes.as_slice().contains(class) || source.signature.contains(class))
+    {
         needs.insert(Helper::Allocate);
     }
     for body in source.functions().iter().filter_map(super::Function::body) {
@@ -195,9 +241,7 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
                     (Class::Natural, _) => needs.insert(Helper::ToWord),
                     _ => {}
                 },
-                Op::Store { value, .. }
-                    if matches!(source.class(value), Class::Cell | Class::Natural) =>
-                {
+                Op::Store { value, .. } if managed(source.class(value)) => {
                     return Err(
                         "storing a managed value has no scalar memory representation".into(),
                     );
@@ -292,7 +336,9 @@ struct Pass<'a> {
     source: &'a Program,
     library: Library,
     cells: Option<CellLibrary>,
+    sequences: Option<SequenceLibrary>,
     word_bytes: u64,
+    word_bits: u16,
     constants: BTreeMap<ValueId, DataId>,
     // Validation establishes globally unique SSA definitions and lexical use.
     // Mapping is monotonic across functions and sibling regions, not path-local.
@@ -318,6 +364,19 @@ struct Scope {
 }
 
 impl Pass<'_> {
+    /// Rebuild every function body into `output`.
+    fn define_bodies(&self, output: &mut Program) {
+        for (id, function) in self.source.functions.iter_enumerated() {
+            let Some(body) = function.body() else {
+                continue;
+            };
+            let held = self.owned_parameters(id, body);
+            output.define(id, |b, params| {
+                self.region(b, body, &mut Vec::new(), ScopeKind::Ordinary, params, held);
+            });
+        }
+    }
+
     /// The parameters of a function's body that arrive holding a claim.
     fn owned_parameters(&self, id: super::FunctionId, body: RegionId) -> Vec<ValueId> {
         self.source
@@ -345,7 +404,7 @@ impl Pass<'_> {
     fn retained(&self, b: &mut Builder, class: Class, value: ValueId) -> ValueId {
         let function = match class {
             Class::Natural => self.library.retain,
-            Class::Cell => self.cells.expect("cell helpers were requested").retain,
+            Class::Cell | Class::Buffer => self.cells.expect("cell helpers were requested").retain,
             _ => return value,
         };
         b.call_one(function, &[value])
@@ -355,6 +414,12 @@ impl Pass<'_> {
         let function = match class {
             Class::Natural => self.library.release,
             Class::Cell => self.cells.expect("cell helpers were requested").release,
+            Class::Buffer => {
+                self.sequences
+                    .as_ref()
+                    .expect("buffer helpers were requested")
+                    .release
+            }
             _ => return,
         };
         b.call(function, &[value]);
@@ -383,17 +448,88 @@ impl Pass<'_> {
         );
         b.store(Width::Word, object, super::Offset::Words(3), arity);
         for (index, (&old, &value)) in fields.iter().zip(claimed).enumerate() {
-            let kind = match self.source.class(old) {
-                Class::Natural => cell::NATURAL,
-                Class::Cell => cell::CELL,
-                _ => cell::SCALAR,
-            };
-            let kind = b.constant(Class::Word, kind);
+            let kind = b.constant(Class::Word, cell::kind(self.source.class(old)));
             let at = i32::try_from(index * 2 + 4).expect("checked cell field offset");
             b.store(Width::Word, object, super::Offset::Words(at), kind);
             b.store(Width::Word, object, super::Offset::Words(at + 1), value);
         }
         object
+    }
+
+    /// Push one element, whose leaves' claims it takes, onto a buffer whose
+    /// claim it takes: make room in front of the sequence, then write there.
+    fn push(
+        &self,
+        b: &mut Builder,
+        buffer: ValueId,
+        len: ValueId,
+        fields: Range,
+        claimed: &[ValueId],
+    ) -> ValueId {
+        let kinds: Vec<_> = self
+            .source
+            .values(fields)
+            .iter()
+            .map(|&old| cell::kind(self.source.class(old)))
+            .collect();
+        let sequences = self
+            .sequences
+            .as_ref()
+            .expect("buffer helpers were requested");
+        let len = if b.class(len) == Class::Word {
+            len
+        } else {
+            b.convert(Class::Word, len)
+        };
+        let room = b.call_one(sequences.reserve(&kinds), &[buffer, len]);
+        let capacity = b.load(Width::Word, room, super::Offset::Words(2));
+        let one = b.constant(Class::Word, 1);
+        let after = b.binary(Binary::Sub, capacity, len);
+        let slot = b.binary(Binary::Sub, after, one);
+        let stride = b.constant(Class::Word, sequence::count(kinds.len()));
+        let first = sequence::element_word(b, stride, slot);
+        for (leaf, &value) in claimed.iter().enumerate() {
+            let leaf = b.constant(Class::Word, sequence::count(leaf));
+            let at = b.binary(Binary::Add, first, leaf);
+            let value = if matches!(b.class(value), Class::Word | Class::Address) {
+                value
+            } else {
+                b.convert(Class::Word, value)
+            };
+            sequence::store_word(b, room, at, value, self.word_bits);
+        }
+        room
+    }
+
+    /// Read one leaf of a sequence's first element, holding a claim to it.
+    fn buffer_field(
+        &self,
+        b: &mut Builder,
+        old_result: ValueId,
+        buffer: ValueId,
+        len: ValueId,
+        index: u32,
+    ) -> ValueId {
+        let capacity = b.load(Width::Word, buffer, super::Offset::Words(2));
+        let stride = b.load(Width::Word, buffer, super::Offset::Words(4));
+        let len = if b.class(len) == Class::Word {
+            len
+        } else {
+            b.convert(Class::Word, len)
+        };
+        let element = b.binary(Binary::Sub, capacity, len);
+        let first = sequence::element_word(b, stride, element);
+        let leaf = b.constant(Class::Word, u64::from(index));
+        let at = b.binary(Binary::Add, first, leaf);
+        let value = sequence::load_word(b, buffer, at, self.word_bits);
+        let class = self.source.class(old_result);
+        let represented = representation(class);
+        let value = if represented == Class::Word {
+            value
+        } else {
+            b.convert(represented, value)
+        };
+        self.retained(b, class, value)
     }
 
     fn cell_field(
@@ -574,6 +710,28 @@ impl Pass<'_> {
             }
             Op::CellTag { cell } => b.load(Width::Word, v(cell), super::Offset::Words(2)),
             Op::CellField { cell, index } => self.cell_field(b, results[0], cell, index),
+            Op::BufferEmpty => {
+                let library = self.cells.expect("cell helpers were requested");
+                let none = b.constant(Class::Word, 0);
+                sequence::allocate(b, library.allocate, &[], none, self.word_bytes)
+            }
+            Op::BufferPush {
+                buffer,
+                len,
+                fields,
+            } => {
+                let buffer = self.take(b, scopes, live, at, buffer);
+                let claimed: Vec<_> = self
+                    .source
+                    .values(fields)
+                    .iter()
+                    .map(|&old| self.take(b, scopes, live, at, old))
+                    .collect();
+                self.push(b, buffer, v(len), fields, &claimed)
+            }
+            Op::BufferField { buffer, len, index } => {
+                self.buffer_field(b, results[0], v(buffer), v(len), index)
+            }
             Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => {
                 let function = self.library.require(Helper::arithmetic(op));
                 b.call_one(function, &[v(left), v(right)])
