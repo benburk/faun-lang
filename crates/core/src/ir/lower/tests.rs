@@ -871,3 +871,43 @@ fn a_wrapped_byte_string_is_handed_over_as_its_bytes() {
     let machine = lower(source.analyze(), &Routines::builtin()).unwrap();
     assert_eq!(machine.data(), b"hi\n");
 }
+
+/// A field declared bounded holds what its declaration says even when its
+/// value was built outside, and an entry parameter held through it is named
+/// for the field, which is how a target supplies a startup value.
+#[test]
+fn a_declared_field_names_and_bounds_what_the_entry_is_handed() {
+    let mut library = barb::fixture::Library::new();
+    let nat = library.nat;
+    let p = &mut library.program;
+    let host = p.declare_type("Host");
+    let word = barb::Bounds {
+        low: 0,
+        high: Some(u64::from(u16::MAX)),
+    };
+    p.define_fields(
+        host,
+        &[("Host", &[barb::Field::of(nat).named("argc").bounded(word)])],
+    );
+    let never = p.declare_type("Never");
+    p.define_type(never, &[]);
+    let exit = p.declare("exit!", &[nat], never);
+    let main = p.declare_named("main!", &[("host", host)], never);
+    p.define(main, |b, args| {
+        b.match_(args[0], host, |b, _, fields| b.call(exit, &[fields[0]]))
+    });
+    p.set_entry(main);
+    assert!(
+        p.render().contains("Host = Host(argc: Nat)"),
+        "{}",
+        p.render()
+    );
+
+    let routines = Routines::builtin().with_word(16);
+    let machine = crate::lower(&mut library.program, &routines).unwrap();
+    let entry = machine.entry();
+    assert_eq!(machine.parameter_names(entry).collect::<Vec<_>>(), ["argc"]);
+    let body = machine.function(entry).body().unwrap();
+    let argc = machine.values(machine.region(body).params)[0];
+    assert_eq!(machine.class(argc), Class::Held(word));
+}

@@ -98,6 +98,32 @@ pub(super) fn analyze(program: &Program, operations: &[Option<super::Operation>]
     finish(program, held)
 }
 
+/// What a declaration with no body answers: what the tier above said of it,
+/// and what the type it answers declares.
+fn answered(program: &Program, id: FnId) -> Bounds {
+    let function = program.function(id);
+    let said = function.bounds().unwrap_or(Bounds::ANY);
+    said.and(declared(program, function.result))
+}
+
+/// What a value of `ty` is wherever it was built: anything, but for what the
+/// wrappers it is held through declare of their one field. A wrapper is its
+/// field, so its declaration bounds the value itself.
+fn declared(program: &Program, ty: TypeId) -> Bounds {
+    let mut held = Bounds::ANY;
+    let mut ty = ty;
+    for _ in 0..program.types().len() {
+        let Some((ctor, field)) = single_field(program, ty) else {
+            break;
+        };
+        if let Some(bounds) = program.field_bounds(ctor, 0) {
+            held = held.and(bounds);
+        }
+        ty = field;
+    }
+    held
+}
+
 /// How many field places the program declares, end to end.
 fn field_slots(program: &Program) -> usize {
     (0..program.types().len())
@@ -112,8 +138,9 @@ pub(super) fn slot(program: &Program, ctor: CtorId, at: usize) -> usize {
     program.ctor(ctor).fields.range().start + at
 }
 
-/// Say that every field reachable from `roots` could hold anything: values
-/// of those types were built where nothing here walks.
+/// Say that every field reachable from `roots` could hold anything its
+/// declaration allows: values of those types were built where nothing here
+/// walks.
 fn unknown(program: &Program, roots: &[TypeId], fields: &mut [Option<Bounds>]) {
     let mut seen = vec![false; program.types().len()];
     let mut waiting = roots.to_vec();
@@ -122,8 +149,9 @@ fn unknown(program: &Program, roots: &[TypeId], fields: &mut [Option<Bounds>]) {
             continue;
         }
         for ctor in program.ctors(ty) {
-            for place in &mut fields[ctor.fields.range()] {
-                *place = Some(Bounds::ANY);
+            let declared = program.declared_bounds(ctor);
+            for (place, declared) in fields[ctor.fields.range()].iter_mut().zip(declared) {
+                *place = Some(declared.unwrap_or(Bounds::ANY));
             }
             waiting.extend_from_slice(program.types_of(ctor.fields));
         }
@@ -141,6 +169,15 @@ fn finish(program: &Program, held: Propagation) -> Ranges {
         } = shape(program, TypeId::at(ty))
         {
             fields[slot(program, cons, recursive)] = Bounds::ANY;
+        }
+        // What a declaration promises holds wherever the value was built.
+        for ctor in program.ctors(TypeId::at(ty)) {
+            let declared = program.declared_bounds(ctor);
+            for (held, declared) in fields[ctor.fields.range()].iter_mut().zip(declared) {
+                if let Some(declared) = declared {
+                    *held = held.and(declared);
+                }
+            }
         }
     }
     // A term nothing reached is a term nothing knows, and so is a parameter
@@ -203,7 +240,10 @@ impl Propagation {
                     if entry == Some(id) {
                         program
                             .parameter_bounds(id)
-                            .map(|bounds| Some(bounds.unwrap_or(Bounds::ANY)))
+                            .zip(program.params(id))
+                            .map(|(bounds, &ty)| {
+                                Some(bounds.unwrap_or(Bounds::ANY).and(declared(program, ty)))
+                            })
                             .collect()
                     } else {
                         vec![None; program.params(id).len()]
@@ -290,12 +330,8 @@ fn once(
     let Some(params) = params else { return false };
     let Some(body) = program.function(id).body() else {
         // Something outside answers, and nothing about a declaration can be
-        // read, so what comes back from one is anything at all.
-        return settle(
-            &mut held.results[at],
-            program.function(id).bounds().unwrap_or(Bounds::ANY),
-            round,
-        );
+        // read, so what comes back from one is what the tier above said.
+        return settle(&mut held.results[at], answered(program, id), round);
     };
 
     // A recognized equation is evaluated as that operation, not walked as
@@ -539,11 +575,13 @@ impl FunctionWalk<'_> {
     fn built(&self, ctor: CtorId, args: Range) -> Bounds {
         let owner = self.program.ctor(ctor).owner;
         if single_field(self.program, owner).is_some() {
+            let promised = self.program.field_bounds(ctor, 0).unwrap_or(Bounds::ANY);
             return self
                 .program
                 .atoms(args)
                 .first()
-                .map_or(Bounds::ANY, |atom| self.scope[atom.0.index()]);
+                .map_or(Bounds::ANY, |atom| self.scope[atom.0.index()])
+                .and(promised);
         }
         let Shape::Spine { nil, cons, .. } = shape(self.program, owner) else {
             return Bounds::at(u64::from(self.program.tag(ctor)));
@@ -602,7 +640,8 @@ impl FunctionWalk<'_> {
             return false;
         }
         let binding = if single_field(self.program, owner).is_some() {
-            Binding::Whole(held)
+            let promised = self.program.field_bounds(ctor, 0).unwrap_or(Bounds::ANY);
+            Binding::Whole(held.and(promised))
         } else {
             match spine {
                 Shape::Spine { nil, .. } if ctor == nil => {

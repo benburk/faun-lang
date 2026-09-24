@@ -121,6 +121,7 @@ mod tests {
                 name: Symbol::at(0),
                 owner: nat,
                 fields,
+                details: Range::EMPTY,
             });
         }
         let fields = [nat];

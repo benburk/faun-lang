@@ -96,6 +96,57 @@ pub struct Ctor {
     pub owner: TypeId,
     /// The types of its fields, in order.
     pub fields: Range,
+    /// Each field's name and declared bounds, parallel to `fields`.
+    pub details: Range,
+}
+
+/// What a constructor's field is called, and what every value it holds is
+/// known to be, as its declaration said.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct FieldDetail {
+    pub name: Option<Symbol>,
+    pub bounds: Option<super::Bounds>,
+}
+
+/// One field of a constructor, as a type definition gives it: its type, and
+/// optionally the name it is read by and what every value held there is.
+///
+/// Declared bounds are trusted, including for values built where nothing in
+/// the program looks, such as a target's startup: a declaration is a promise
+/// every builder of the constructor keeps.
+#[derive(Clone, Copy, Debug)]
+pub struct Field<'a> {
+    pub ty: TypeId,
+    pub name: Option<&'a str>,
+    pub bounds: Option<super::Bounds>,
+}
+
+impl<'a> Field<'a> {
+    /// A field of type `ty`, unnamed and unbounded.
+    #[must_use]
+    pub const fn of(ty: TypeId) -> Self {
+        Self {
+            ty,
+            name: None,
+            bounds: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn named(self, name: &'a str) -> Self {
+        Self {
+            name: Some(name),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub const fn bounded(self, bounds: super::Bounds) -> Self {
+        Self {
+            bounds: Some(bounds),
+            ..self
+        }
+    }
 }
 
 /// A body or a host declaration, never both. External calls are observable:

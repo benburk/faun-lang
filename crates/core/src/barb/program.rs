@@ -5,8 +5,8 @@ use super::builder::Builder;
 use super::constant::{self, Constant, ConstantPool, ConstructionError, Held, Shape, Value};
 use super::facts::{Facts, Operation};
 use super::model::{
-    Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, FnId, Function, Parameter, Symbol, Type,
-    TypeDefinition, TypeId,
+    Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, Field, FieldDetail, FnId, Function,
+    Parameter, Symbol, Type, TypeDefinition, TypeId,
 };
 use super::terms::TermArena;
 use super::types::{TypeInfo, TypeShape};
@@ -23,6 +23,8 @@ pub struct Program {
     pub(super) types_pool: Vec<TypeId>,
     /// Function parameter names and incoming range contracts.
     pub(super) parameters: Vec<Parameter>,
+    /// Constructor field names and declared bounds.
+    pub(super) field_details: Vec<FieldDetail>,
     /// Known values, encoded. See [`super::constant`].
     pub(super) constants: ConstantPool,
     /// Every name the program uses, each once, end to end. A [`Symbol`] is
@@ -325,6 +327,23 @@ impl Program {
     /// # Panics
     /// If the type was already defined, a field is undeclared, or a pool overflows.
     pub fn define_type(&mut self, id: TypeId, ctors: &[(&str, &[TypeId])]) {
+        let fields: Vec<Vec<Field>> = ctors
+            .iter()
+            .map(|(_, fields)| fields.iter().copied().map(Field::of).collect())
+            .collect();
+        let ctors: Vec<_> = ctors
+            .iter()
+            .zip(&fields)
+            .map(|((name, _), fields)| (*name, fields.as_slice()))
+            .collect();
+        self.define_fields(id, &ctors);
+    }
+
+    /// Define a type whose constructors' fields may be named and bounded.
+    ///
+    /// # Panics
+    /// If the type is already defined, or a field's type is not declared.
+    pub fn define_fields(&mut self, id: TypeId, ctors: &[(&str, &[Field])]) {
         assert_eq!(
             self.types[id].definition,
             TypeDefinition::Declared,
@@ -332,21 +351,63 @@ impl Program {
         );
         for (_, fields) in ctors {
             for field in *fields {
-                assert!(self.types.get(*field).is_some(), "a declared field type");
+                assert!(self.types.get(field.ty).is_some(), "a declared field type");
             }
         }
         self.redefined();
         let start = self.ctors.len();
         for (name, fields) in ctors {
             let name = self.symbol(name);
-            let fields = append_range(&mut self.types_pool, fields);
+            let types: Vec<_> = fields.iter().map(|field| field.ty).collect();
+            let details: Vec<_> = fields
+                .iter()
+                .map(|field| FieldDetail {
+                    name: field.name.map(|name| self.symbol(name)),
+                    bounds: field.bounds,
+                })
+                .collect();
+            let fields = append_range(&mut self.types_pool, &types);
+            let details = append_range(&mut self.field_details, &details);
             self.ctors.push(Ctor {
                 name,
                 owner: id,
                 fields,
+                details,
             });
         }
         self.types[id].definition = TypeDefinition::Defined(Range::of(start, ctors.len()));
+    }
+
+    /// Each field's declared bounds, in order.
+    pub(super) fn declared_bounds(
+        &self,
+        ctor: &Ctor,
+    ) -> impl Iterator<Item = Option<super::Bounds>> + '_ {
+        self.field_details[ctor.details.range()]
+            .iter()
+            .map(|detail| detail.bounds)
+    }
+
+    /// Each field's name, in order, where its definition gave one.
+    pub(super) fn field_names(&self, ctor: &Ctor) -> impl Iterator<Item = Option<&str>> + '_ {
+        self.field_details[ctor.details.range()]
+            .iter()
+            .map(|detail| detail.name.map(|name| self.name(name)))
+    }
+
+    /// What field `at` of `ctor` is called, if its definition named it.
+    #[must_use]
+    pub fn field_name(&self, ctor: CtorId, at: usize) -> Option<&str> {
+        let detail = self.field_details[self.ctor(ctor).details.range()].get(at)?;
+        detail.name.map(|name| self.name(name))
+    }
+
+    /// What every value field `at` of `ctor` holds is, if its definition said.
+    #[must_use]
+    pub fn field_bounds(&self, ctor: CtorId, at: usize) -> Option<super::Bounds> {
+        self.field_details[self.ctor(ctor).details.range()]
+            .get(at)?
+            .bounds
     }
 
     /// # Panics

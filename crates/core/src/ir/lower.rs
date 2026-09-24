@@ -471,8 +471,10 @@ impl<'a> Demand<'a> {
         }
     }
 
-    /// A flat product parameter is one machine parameter per leaf, each
-    /// named for the parameter and its place.
+    /// A flat product parameter is one machine parameter per leaf. Each is
+    /// named for the field it is held in where a definition named one, so a
+    /// target can supply the entry's by name, and otherwise for the
+    /// parameter and its place.
     fn named_params(&self, id: barb::FnId) -> Vec<(String, Class)> {
         let mut named = Vec::new();
         for (((name, ty), held), _) in self
@@ -486,15 +488,12 @@ impl<'a> Demand<'a> {
             let carried = self.carries[ty.index()]
                 .held(*held)
                 .expect("a carried parameter has a class");
-            match carried {
-                Carried::One(class) => named.push((name.to_owned(), class)),
-                Carried::Flat(run) => named.extend(
-                    self.leaves[run.range()]
-                        .iter()
-                        .enumerate()
-                        .map(|(at, &class)| (format!("{name}.{at}"), class)),
-                ),
-            }
+            let leaves = leaf_names(self, *ty, carried, name);
+            named.extend(
+                leaves
+                    .into_iter()
+                    .zip(classes(&self.leaves, &carried).iter().copied()),
+            );
         }
         named
     }
@@ -883,6 +882,58 @@ fn field_carried(
         Storage::Seq => Some(Carried::Flat(sequence_run())),
         Storage::Erased => None,
         Storage::Undemanded => panic!("a bound field type must have been demanded"),
+    }
+}
+
+/// Each leaf's name, for a value of `ty` held as `carried`: the name of the
+/// field it is held in, reading through wrappers and flat products, where a
+/// definition named one, and `fallback` with its place where none did.
+fn leaf_names(
+    demand: &Demand<'_>,
+    ty: barb::TypeId,
+    carried: Carried,
+    fallback: &str,
+) -> Vec<String> {
+    let program = demand.program;
+    let count = classes(&demand.leaves, &carried).len();
+    let placed = || (0..count).map(|at| format!("{fallback}.{at}")).collect();
+    // A wrapper's one field found what it holds.
+    let mut ty = ty;
+    let mut held_as = fallback.to_owned();
+    for _ in 0..=program.types().len() {
+        let barb::TypeShape::Wrapper { constructor, field } = barb::type_shape(program, ty) else {
+            break;
+        };
+        if let Some(name) = program.field_name(constructor, 0) {
+            name.clone_into(&mut held_as);
+        }
+        ty = field;
+    }
+    let (Carried::Flat(_), barb::TypeShape::Product { constructor }) =
+        (carried, barb::type_shape(program, ty))
+    else {
+        return if count == 1 { vec![held_as] } else { placed() };
+    };
+    let mut found = Vec::with_capacity(count);
+    for at in 0..program.fields(constructor).len() {
+        let Some(inner) = field_carried(program, demand.facts, &demand.carries, constructor, at)
+        else {
+            continue;
+        };
+        let field = program
+            .field_name(constructor, at)
+            .map_or_else(|| format!("{held_as}.{at}"), str::to_owned);
+        found.extend(leaf_names(
+            demand,
+            program.fields(constructor)[at],
+            inner,
+            &field,
+        ));
+    }
+    if found.len() == count {
+        found
+    } else {
+        placed()
     }
 }
 

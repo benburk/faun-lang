@@ -28,10 +28,15 @@ impl Program {
             .ctors(id)
             .iter()
             .map(|ctor| {
-                let fields: Vec<&str> = self
+                let names = self.field_names(ctor);
+                let fields: Vec<String> = self
                     .types_of(ctor.fields)
                     .iter()
-                    .map(|field| self.name(self.type_(*field).name))
+                    .zip(names)
+                    .map(|(field, name)| {
+                        let ty = self.name(self.type_(*field).name);
+                        name.map_or_else(|| ty.to_owned(), |name| format!("{name}: {ty}"))
+                    })
                     .collect();
                 if fields.is_empty() {
                     self.name(ctor.name).to_owned()
