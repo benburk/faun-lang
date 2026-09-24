@@ -47,15 +47,12 @@ fn summing_loop(limit: u64) -> Program {
 
 /// The cycles the image took, and the status it left with.
 fn run(program: &Program) -> (u64, i32) {
+    // Tests run at once in one process, so a clock reading can repeat: a
+    // count cannot, and two runs never share a scratch directory.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     faun_core::ir::validate(program).expect("a well-formed program");
-    let dir = std::env::temp_dir().join(format!(
-        "faun-cost-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("a clock after the epoch")
-            .as_nanos()
-    ));
+    let at = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("faun-cost-{}-{at}", std::process::id()));
     fs::create_dir_all(&dir).expect("a scratch directory");
     let path = dir.join("image");
     let artifacts = Mos6502Sim65.emit(program);
