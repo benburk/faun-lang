@@ -1422,7 +1422,7 @@ mod tests {
     #[test]
     fn lowers_the_host_entry_through_the_machine_boundary() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-        let host = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/host.fn");
+        let host = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/hosts/x86_64-linux.fn");
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/main.fn");
         let loaded = crate::modules::load_with_host(&[entry], Some(&root), Some(&host)).unwrap();
         let prelude = PreludeIds::resolve(&loaded).unwrap();

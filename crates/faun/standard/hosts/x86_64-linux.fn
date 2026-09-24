@@ -1,0 +1,13 @@
+# The host x86_64-linux supplies, mounted at `std.host`: the authority a program
+# is handed, and the routines it may ask of it. `Unit` is what an effect
+# answers when it answers nothing.
+
+exports {Host Unit argc! exit! write! read_byte!}
+
+Host : [Host]
+Unit : [Unit]
+
+argc! : Host -> Nat
+exit! : Host Nat -> []
+write! : Host Str -> Unit
+read_byte! : Host -> Nat

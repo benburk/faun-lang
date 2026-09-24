@@ -6,7 +6,7 @@
 //! contextual literal elaboration. Reachable monomorphic entries can then be
 //! specialized, defunctionalized, and lowered to Barb.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use faun_core::targets::Target;
 
@@ -38,34 +38,26 @@ pub fn standard_path() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/standard/standard.fn"))
 }
 
-/// Load and check a Faun program with the standard package and `std.host`.
-/// An application is also checked for a `main!` taking the host.
-///
-/// # Errors
-/// Reports loading, resolution or checking errors.
-pub fn check(source: &Path, application: bool) -> Result<(), String> {
-    let loaded = load(source, application)?;
-    if let Some(host) = &loaded.host {
-        check::application(&loaded.resolved, &loaded.checked, host).map_err(text)?;
-    }
-    Ok(())
+/// The host module mounted at `std.host` for `target`.
+fn host_path(target: &dyn Target) -> PathBuf {
+    standard_path().with_file_name(format!("hosts/{}.fn", target.name()))
 }
 
 /// Load, check and lower a Faun application for `target`, stopping at Barb
 /// before any optimization.
 ///
+/// Reaching Barb is what checking a program means: it meets `target`'s host
+/// module and every routine it asks for exists.
+///
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
 pub fn barb(source: &Path, target: &dyn Target) -> Result<faun_core::barb::Program, String> {
-    let loaded = load(source, true)?;
-    let host = loaded
-        .host
-        .ok_or_else(|| "an application is loaded with its host".to_owned())?;
+    let loaded = load(source, target)?;
     lower::application(
         &loaded.resolved,
         &loaded.checked,
         &loaded.blessed,
-        &host,
+        &loaded.host,
         &target.routines(),
     )
     .map_err(text)
@@ -81,29 +73,31 @@ pub fn machine(source: &Path, target: &dyn Target) -> Result<faun_core::ir::Prog
     faun_core::machine(&mut program, &target.routines())
 }
 
-/// A program loaded, resolved and checked, with its host where it is an
-/// application.
+/// An application loaded, resolved and checked against its target's host.
 struct Loaded {
     resolved: resolve::ResolvedProgram,
     checked: check::CheckedProgram,
     blessed: blessed::PreludeIds,
-    host: Option<host::HostIds>,
+    host: host::HostIds,
 }
 
-fn load(source: &Path, application: bool) -> Result<Loaded, String> {
+fn load(source: &Path, target: &dyn Target) -> Result<Loaded, String> {
     let prelude = standard_path();
-    // The host is the same for every target, so any program may import it.
-    let host_module = prelude.with_file_name("host.fn");
+    let host_module = host_path(target);
+    if !host_module.is_file() {
+        return Err(format!(
+            "no Faun host module for target `{}`",
+            target.name()
+        ));
+    }
     let loaded =
         modules::load_with_host(&[source.to_path_buf()], Some(prelude), Some(&host_module))
             .map_err(text)?;
     let blessed = blessed::PreludeIds::resolve(&loaded).map_err(text)?;
-    let host = application
-        .then(|| host::HostIds::resolve(&loaded, &blessed))
-        .transpose()
-        .map_err(text)?;
+    let host = host::HostIds::resolve(&loaded, &blessed).map_err(text)?;
     let resolved = resolve::resolve(loaded).map_err(text)?;
     let checked = check::program(&resolved, &blessed).map_err(text)?;
+    check::application(&resolved, &checked, &host).map_err(text)?;
     Ok(Loaded {
         resolved,
         checked,

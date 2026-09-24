@@ -31,7 +31,7 @@ const NATIVE: Option<&dyn Target> = if cfg!(all(target_arch = "x86_64", target_o
 #[derive(Clone, Debug)]
 enum Command {
     Check {
-        target: Option<&'static dyn Target>,
+        target: &'static dyn Target,
         source: PathBuf,
     },
     Build {
@@ -62,7 +62,8 @@ fn main() -> ExitCode {
     }
 }
 
-fn selected_target() -> impl Parser<&'static dyn Target> {
+/// `--target`, defaulting to [`NATIVE`] and required where there is none.
+fn target_parser() -> impl Parser<&'static dyn Target> {
     long("target")
         .help("Machine to compile for")
         .argument::<String>("TARGET")
@@ -72,10 +73,6 @@ fn selected_target() -> impl Parser<&'static dyn Target> {
                 .find(|target| target.name() == name)
                 .ok_or_else(|| unknown_target(&name))
         })
-}
-
-fn target_parser() -> impl Parser<&'static dyn Target> {
-    selected_target()
         .fallback_with(|| NATIVE.ok_or(NO_NATIVE))
         .debug_fallback()
 }
@@ -109,11 +106,11 @@ fn build_parser() -> impl Parser<Command> {
 }
 
 fn cli() -> OptionParser<Command> {
-    let target = selected_target().optional();
+    let target = target_parser();
     let source = positional::<PathBuf>("PATH").help("The source file to check");
     let check = construct!(Command::Check { target, source })
         .to_options()
-        .descr("Load and check a Faun program")
+        .descr("Check a Faun program against the selected machine's host")
         .command("check");
 
     let target = target_parser();
@@ -143,7 +140,7 @@ fn unknown_target(name: &str) -> String {
 fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
     match command {
         Command::Check { source, target } => {
-            faun::check(&source, target.is_some())?;
+            faun::barb(&source, target)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Build {
@@ -276,6 +273,25 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn check_selects_a_target_like_build() {
+        let command = cli()
+            .run_inner(&["check", "--target", "mos6502-sim65", "example.fn"])
+            .unwrap();
+        assert!(matches!(
+            command,
+            Command::Check { target, .. } if target.name() == "mos6502-sim65"
+        ));
+        let defaulted = cli().run_inner(&["check", "example.fn"]);
+        match NATIVE {
+            Some(native) => assert!(matches!(
+                defaulted,
+                Ok(Command::Check { target, .. }) if target.name() == native.name()
+            )),
+            None => assert!(defaulted.is_err()),
+        }
     }
 
     #[test]
