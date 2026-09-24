@@ -1,8 +1,0 @@
-# Startup values and effects supplied by the x86-64 Linux target.
-
-exports {Host argc! exit!}
-
-Host : [Host]
-
-argc! : Host -> Nat
-exit! : Host Nat -> []

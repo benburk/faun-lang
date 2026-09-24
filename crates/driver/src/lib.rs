@@ -15,20 +15,11 @@ use std::process::{Command as Process, ExitCode};
 use bpaf::{OptionParser, Parser, choice, construct, long, positional, short};
 use faun_core::targets::{Artifact, Target};
 
-/// A source host module paired with the machine target that implements it.
-#[derive(Clone, Copy, Debug)]
-enum HostModule {
-    /// Resolve `hosts/<name>.fn` beside the selected standard package.
-    Standard(&'static str),
-    /// Load a host module shipped by an external target crate.
-    Path(&'static str),
-}
-
-/// One backend offered by a compiler distribution.
+/// One backend offered by a compiler distribution. Every one supplies the
+/// standard package's `host.fn`, mounted at `std.host`.
 #[derive(Clone, Copy)]
 pub struct Backend {
     target: &'static dyn Target,
-    host: HostModule,
     native: bool,
 }
 
@@ -39,37 +30,19 @@ impl fmt::Debug for Backend {
 }
 
 impl Backend {
-    /// Register a target whose host module belongs to the standard package.
+    /// Register a target. `native` says it runs on the machine compiling.
     #[must_use]
-    pub const fn standard(target: &'static dyn Target, host: &'static str, native: bool) -> Self {
-        Self {
-            target,
-            host: HostModule::Standard(host),
-            native,
-        }
+    pub const fn new(target: &'static dyn Target, native: bool) -> Self {
+        Self { target, native }
     }
+}
 
-    /// Register an external target and the host module it ships.
-    #[must_use]
-    pub const fn external(target: &'static dyn Target, host: &'static str, native: bool) -> Self {
-        Self {
-            target,
-            host: HostModule::Path(host),
-            native,
-        }
-    }
-
-    fn host_path(self, prelude: &Path) -> Result<PathBuf, String> {
-        match self.host {
-            HostModule::Standard(name) => {
-                let directory = prelude
-                    .parent()
-                    .ok_or_else(|| "the standard package path has no parent".to_string())?;
-                Ok(directory.join("hosts").join(format!("{name}.fn")))
-            }
-            HostModule::Path(path) => Ok(PathBuf::from(path)),
-        }
-    }
+/// The standard package's host module, beside its prelude.
+fn host_path(prelude: &Path) -> Result<PathBuf, String> {
+    let directory = prelude
+        .parent()
+        .ok_or_else(|| "the standard package path has no parent".to_string())?;
+    Ok(directory.join("host.fn"))
 }
 
 #[derive(Clone, Debug)]
@@ -280,9 +253,7 @@ fn build(
 
 fn check(source: &Path, backend: Option<Backend>) -> Result<(), String> {
     let prelude = faun::standard_path();
-    let host = backend
-        .map(|backend| backend.host_path(prelude))
-        .transpose()?;
+    let host = backend.map(|_| host_path(prelude)).transpose()?;
     let loaded =
         faun::modules::load_with_host(&[source.to_path_buf()], Some(prelude), host.as_deref())
             .map_err(|error| error.to_string())?;
@@ -301,7 +272,7 @@ fn check(source: &Path, backend: Option<Backend>) -> Result<(), String> {
 
 fn lower_application(source: &Path, backend: Backend) -> Result<faun_core::barb::Program, String> {
     let prelude = faun::standard_path();
-    let host = backend.host_path(prelude)?;
+    let host = host_path(prelude)?;
     let loaded = faun::modules::load_with_host(&[source.to_path_buf()], Some(prelude), Some(&host))
         .map_err(|error| error.to_string())?;
     let blessed = faun::blessed::PreludeIds::resolve(&loaded).map_err(|error| error.to_string())?;
@@ -391,7 +362,7 @@ mod tests {
     }
 
     const TEST_TARGET: TestTarget = TestTarget;
-    const BACKENDS: [Backend; 1] = [Backend::standard(&TEST_TARGET, "test-target", true)];
+    const BACKENDS: [Backend; 1] = [Backend::new(&TEST_TARGET, true)];
 
     #[test]
     fn build_emits_intermediate_stages_for_registered_targets() {
@@ -466,9 +437,9 @@ mod tests {
     #[test]
     fn backend_registration_rejects_empty_duplicate_and_multiple_native_sets() {
         assert!(validate_backends(&[]).is_err());
-        let duplicate = Backend::standard(&TEST_TARGET, "test-target", false);
+        let duplicate = Backend::new(&TEST_TARGET, false);
         assert!(validate_backends(&[duplicate, duplicate]).is_err());
-        let second = Backend::external(&TEST_TARGET, "host.fn", true);
+        let second = Backend::new(&TEST_TARGET, true);
         assert!(validate_backends(&[BACKENDS[0], second]).is_err());
     }
 }

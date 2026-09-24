@@ -20,10 +20,12 @@ sign. For every type, division by zero returns zero and `a % 0` returns `a`.
 
 The structural empty variant type `[]` is the uninhabited result used by
 applications; it needs no blessed standard-library name. `Never` remains an
-ordinary available constructor spelling. Files under `hosts/`
-are target-selected modules mounted at `std.host`; each initial module provides
-a `Host` carrying nothing and bodyless `argc! : Host -> Nat` and
-`exit! : Host Nat -> []`. The `Host` constructor remains private.
+ordinary available constructor spelling. `host.fn` is mounted at `std.host` for
+every standard target. It provides a `Host` carrying nothing, a `Unit` for
+effects answering nothing, and bodyless `argc! : Host -> Nat`,
+`exit! : Host Nat -> []`, `write! : Host Str -> Unit` and
+`read_byte! : Host -> Nat`, which answers nought at the end of input and one
+more than the byte otherwise. The `Host` constructor remains private.
 
 `Host` is authority and nothing else. It carries no startup payload, so what a
 host module offers it offers as ordinary bodyless declarations taking one, and

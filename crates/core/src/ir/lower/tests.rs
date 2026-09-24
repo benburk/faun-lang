@@ -824,3 +824,50 @@ fn a_product_field_grown_by_recursion_is_held_whole() {
     let machine = lower(source.analyze(), &Routines::builtin().with_word(64)).unwrap();
     assert_eq!(run(&machine, named(&machine, "run")), [BigUint::from(40u8)]);
 }
+
+/// A nominal string wraps its bytes, as Faun's `Str` wraps `List(U8)`, and
+/// `write!` is handed the bytes inside: the wrapper is read through.
+#[test]
+fn a_wrapped_byte_string_is_handed_over_as_its_bytes() {
+    let mut source = barb::Program::default();
+    let host = source.declare_type("Host");
+    source.define_type(host, &[("Host", &[])]);
+    let unit = source.declare_type("Unit");
+    source.define_type(unit, &[("Unit", &[])]);
+    let nat = source.declare_type("Nat");
+    source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let list = source.declare_type("List");
+    source.define_type(list, &[("Nil", &[]), ("Cons", &[nat, list])]);
+    let text = source.declare_type("Str");
+    source.define_type(text, &[("Str", &[list])]);
+    let bytes = source.intern_byte_spine(list, b"hi\n").unwrap();
+    let barb::ConstantView::Spine(spine) = source.constant(bytes).view() else {
+        panic!("a spine");
+    };
+    let elements: Vec<_> = spine.to_bytes().unwrap();
+    let number = |n: u8| {
+        (0..n).fold(barb::Value(source.ctor_at(nat, 0), vec![]), |held, _| {
+            barb::Value(source.ctor_at(nat, 1), vec![held])
+        })
+    };
+    let listed = elements.iter().rev().fold(
+        barb::Value(source.ctor_at(list, 0), vec![]),
+        |rest, &byte| barb::Value(source.ctor_at(list, 1), vec![number(byte), rest]),
+    );
+    let greeting = source
+        .intern(text, &barb::Value(source.ctor_at(text, 0), vec![listed]))
+        .unwrap();
+    let write = source.declare("write!", &[host, text], unit);
+    let nought = source.intern_number(nat, 0).unwrap();
+    let main = source.declare_named("main!", &[("host", host)], nat);
+    source.define(main, |b, args| {
+        let greeting = b.known(greeting);
+        b.call(write, &[args[0], greeting]);
+        b.known(nought)
+    });
+    source.set_entry(main);
+    barb::validate(&source).unwrap();
+
+    let machine = lower(source.analyze(), &Routines::builtin()).unwrap();
+    assert_eq!(machine.data(), b"hi\n");
+}

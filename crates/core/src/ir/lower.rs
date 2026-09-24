@@ -1677,7 +1677,9 @@ impl Lowering<'_> {
     /// # Panics
     /// If the constant is not the byte string its declaration said it is.
     fn bytes(&self, literal: barb::ConstId) -> Vec<u8> {
-        let barb::ConstantView::Spine(string) = self.barb.constant(literal).view() else {
+        // A nominal string wraps its bytes; the bytes are what is handed over.
+        let value = barb::single_field_constant(self.barb, self.barb.constant(literal));
+        let barb::ConstantView::Spine(string) = value.view() else {
             unreachable!("a byte string is spine encoded");
         };
         string

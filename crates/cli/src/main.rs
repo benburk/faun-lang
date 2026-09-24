@@ -12,13 +12,12 @@ use faun_x86_64_linux::X86_64Linux;
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const BACKENDS: [Backend; 3] = [
-    Backend::standard(
+    Backend::new(
         &X86_64Linux,
-        "x86-64-linux",
         cfg!(all(target_arch = "x86_64", target_os = "linux")),
     ),
-    Backend::standard(&Wasm32Wasi, "wasm32-wasi", false),
-    Backend::standard(&Mos6502Sim65, "mos6502-sim65", false),
+    Backend::new(&Wasm32Wasi, false),
+    Backend::new(&Mos6502Sim65, false),
 ];
 
 fn main() -> ExitCode {
