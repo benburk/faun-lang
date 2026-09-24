@@ -16,7 +16,7 @@ pub mod bytes;
 
 use std::fmt;
 
-use crate::ir::{Class, Endian, Layout, Op, Program, Returns, ValueId};
+use crate::ir::{Budget, Class, Endian, Layout, Op, Program, Returns, ValueId};
 
 #[derive(Debug)]
 pub struct Artifact {
@@ -74,12 +74,24 @@ pub trait Target: fmt::Debug {
     ///
     /// This runs from [`Self::accepts`] after scalar class checks. The IR
     /// itself permits multivalue functions and regions; a target that cannot
-    /// implement those shapes must reject them here, before emission.
+    /// implement those shapes must reject them here, before emission, and
+    /// declare the same numbers in [`Self::budget`] so preparation fits a
+    /// program to them first.
     ///
     /// # Errors
     /// Names an unsupported target-specific program shape.
     fn limits(&self, _program: &Program) -> Result<(), String> {
         Ok(())
+    }
+
+    /// How many values its calling convention and region edges carry.
+    ///
+    /// Preparation packs anything more into a cell, so a program within the
+    /// IR's own rules is never refused for how many values cross a boundary.
+    /// [`Self::limits`] still checks the prepared program against the same
+    /// numbers.
+    fn budget(&self) -> Budget {
+        Budget::UNLIMITED
     }
 
     /// Prepare once, then accept and emit that same scalar program.
@@ -91,7 +103,8 @@ pub trait Target: fmt::Debug {
         Ok(self.emit(&prepared))
     }
 
-    /// Legalize representations using a bounded, reusable private heap.
+    /// Fit boundaries to [`Self::budget`], then legalize representations
+    /// using a bounded, reusable private heap.
     /// Exhaustion terminates with status 2, never a wrapped natural result.
     /// On supported runtime targets, clients needing a different budget can
     /// call `ir::legalize` with an explicit `ir::natural::Config`, then compile
@@ -104,6 +117,7 @@ pub trait Target: fmt::Debug {
     /// Reports invalid IR or a representation this target cannot safely emit.
     fn prepare(&self, program: &Program) -> Result<Program, String> {
         crate::ir::validate(program)?;
+        let program = &crate::ir::fit(program, self.budget());
         // The 6502 backend has image/frame and hardware-stack limits not yet
         // audited for generated runtime helpers. Do not enter its infallible
         // emitter with a larger image and hope that address arithmetic fits.

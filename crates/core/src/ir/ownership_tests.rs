@@ -220,3 +220,36 @@ fn narrower_loop_initial_values_do_not_narrow_rebuilt_carried_parameters() {
         }
     }
 }
+
+#[test]
+fn packed_boundaries_carry_managed_values_without_leaking_a_claim() {
+    // Every function, `if` and loop in the fixture carrying two values or
+    // more now carries a cell, and naturals ride in some of them.
+    let budget = Budget::new(1, 1, 1);
+    // A pack is an object of its own, live beside what it carries, so this
+    // takes more room at once than the fixture does unpacked. It is still a
+    // constant: a claim leaked per iteration would not fit.
+    let heap = 2 * fixture::HEAP_BYTES;
+    assert!(fixture::ITERATIONS * 8 > u64::try_from(heap).unwrap());
+    for bits in [16, 32, 64] {
+        for early in [false, true] {
+            let fitted = fit(&fixture::program(early), budget);
+            validate(&fitted).expect("a fitted program is valid");
+            assert!(fitted.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
+            let config = natural::Config {
+                word_bits: bits,
+                heap_bytes: 8192,
+            };
+            let scalar = legalize(&fitted, config).unwrap();
+            for argc in [1, 3] {
+                let (before, before_host) = run(&fitted, bits, argc);
+                let (after, after_host) = run(&scalar, bits, argc);
+                assert_eq!(before.returned().unwrap(), [BigUint::from(0u8)]);
+                assert_eq!(after.outcome, before.outcome);
+                assert_eq!(before_host.bytes, fixture::expected(argc));
+                assert_eq!(after_host.bytes, before_host.bytes);
+                no_live_objects(&scalar, &after, config);
+            }
+        }
+    }
+}

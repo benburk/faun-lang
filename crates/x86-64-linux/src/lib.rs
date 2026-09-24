@@ -15,12 +15,15 @@ mod selected;
 #[cfg(test)]
 mod tests;
 
-use faun_core::ir::{DataId, Program};
+use faun_core::ir::{Budget, DataId, Program};
 use faun_core::targets::{Artifact, Target};
 
 /// How wide this machine's own word is, which is the widest value it holds
 /// and what any class but a fixed one means here.
 pub(crate) const WORD_BITS: u16 = 64;
+
+/// Parameters a call passes, one per System V integer argument register.
+const ARG_COUNT: usize = 6;
 
 /// This target, for whoever is choosing between them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +42,10 @@ impl Target for X86_64Linux {
         &["write!", "exit!", "grow", "argc!", "read_byte!"]
     }
 
+    fn budget(&self) -> Budget {
+        Budget::new(ARG_COUNT, 1, usize::MAX)
+    }
+
     fn limits(&self, program: &Program) -> Result<(), String> {
         let entry = program.entry();
         for (at, name) in program.parameter_names(entry).enumerate() {
@@ -50,9 +57,9 @@ impl Target for X86_64Linux {
         }
         for function in program.functions() {
             let name = program.name(function.name);
-            if function.params.len() > 6 {
+            if function.params.len() > ARG_COUNT {
                 return Err(format!(
-                    "x86-64-linux function `{name}` has {} parameters; at most 6 are supported",
+                    "x86-64-linux function `{name}` has {} parameters; at most {ARG_COUNT} are supported",
                     function.params.len()
                 ));
             }

@@ -15,17 +15,17 @@ fn tag_planning_visits_each_body_once_and_preserves_every_suffix_join() {
         vec![Never, Never, Never],
         vec![Nothing, Never, Nothing],
         vec![
-            Value(Class::fixed(17)),
+            Value(Carried::One(Class::fixed(17))),
             Never,
-            Value(Class::fixed(9)),
-            Value(Class::fixed(1)),
-            Value(Class::fixed(0)),
+            Value(Carried::One(Class::fixed(9))),
+            Value(Carried::One(Class::fixed(1))),
+            Value(Carried::One(Class::fixed(0))),
         ],
         (0..128)
             .map(|at| match at % 3 {
                 0 => Never,
-                1 => Value(Class::Natural),
-                _ => Value(Class::fixed(8)),
+                1 => Value(Carried::One(Class::Natural)),
+                _ => Value(Carried::One(Class::fixed(8))),
             })
             .collect(),
     ] {
@@ -59,7 +59,7 @@ fn tag_planning_visits_each_body_once_and_preserves_every_suffix_join() {
     clippy::too_many_lines,
     reason = "one fixture covers product construction, sum tags, projection, calls, and evaluation"
 )]
-fn products_and_payload_sums_cross_calls_and_matches_as_cells() {
+fn payload_sums_are_cells_holding_their_products_flat() {
     let mut source = barb::Program::default();
     let nat = source.declare_type("Nat");
     source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
@@ -108,7 +108,17 @@ fn products_and_payload_sums_cross_calls_and_matches_as_cells() {
         &Routines::builtin().with_word(64),
     )
     .unwrap();
-    assert!(machine.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
+    // `Some` is the only object: its pair is laid inline as two fields, and
+    // nothing projects a pair back out as a cell of its own.
+    let built: Vec<_> = machine
+        .ops
+        .iter()
+        .filter_map(|op| match *op {
+            Op::Cell { fields, .. } => Some(fields.len()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(built, [2], "{}", machine.render());
     assert!(
         machine
             .ops
@@ -270,14 +280,16 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
         barb: &source,
         facts: &facts,
         carries: demand.carries,
+        leaves: demand.leaves,
         takes: demand.takes,
         callees: vec![],
         refused: std::cell::RefCell::default(),
     };
     let body = source.function(entry).body().unwrap();
-    let mut carried = vec![Some(Class::Word), None];
+    let word = Some(Carried::One(Class::Word));
+    let mut carried = vec![word, None];
     assert_eq!(lowering.body_answer(body, &mut carried), Answer::Nothing);
-    assert_eq!(carried, [Some(Class::Word), None]);
+    assert_eq!(carried, [word, None]);
     let barb::Expr::Match(_, arms) = source.expr(body.tail) else {
         panic!("a match");
     };
@@ -287,7 +299,7 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
         .zip([Answer::Never, Answer::Nothing])
     {
         assert_eq!(lowering.body_answer(arm.body, &mut carried), expected);
-        assert_eq!(carried, [Some(Class::Word), None]);
+        assert_eq!(carried, [word, None]);
     }
 }
 
@@ -535,4 +547,297 @@ fn unused_parameters_leave_machine_signatures_and_calls_together() {
             .collect::<Vec<_>>(),
         ["kept"]
     );
+}
+
+/// The functions in a lowered program named `name`.
+fn named(machine: &Program, name: &str) -> FunctionId {
+    FunctionId::at(
+        machine
+            .functions()
+            .iter()
+            .position(|function| machine.name(function.name) == name)
+            .unwrap_or_else(|| panic!("`{name}` is lowered")),
+    )
+}
+
+fn run(machine: &Program, function: FunctionId) -> Vec<BigUint> {
+    evaluate::evaluate(
+        machine,
+        function,
+        &[],
+        evaluate::Config::default(),
+        &mut evaluate::RejectHost,
+    )
+    .unwrap()
+    .returned()
+    .unwrap()
+    .to_vec()
+}
+
+/// A product is its fields' values: a call takes and answers one machine
+/// value per leaf, nested products included, and nothing is built.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture covers nested construction, matching, calls, and evaluation"
+)]
+fn products_are_held_flat_across_calls_and_nesting() {
+    let mut source = barb::Program::default();
+    let nat = source.declare_type("Nat");
+    source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let flag = source.declare_type("Flag");
+    source.define_type(flag, &[("Off", &[]), ("On", &[])]);
+    let pair = source.declare_type("Pair");
+    source.define_type(pair, &[("Pair", &[nat, flag])]);
+    let pair_ctor = source.ctor_at(pair, 0);
+    let triple = source.declare_type("Triple");
+    source.define_type(triple, &[("Triple", &[pair, nat])]);
+    let triple_ctor = source.ctor_at(triple, 0);
+    let on = source.ctor_at(flag, 1);
+    let seven = source.intern_number(nat, 7).unwrap();
+    let five = source.intern_number(nat, 5).unwrap();
+
+    // rotate(Triple(Pair(a f) b)) -> Triple(Pair(b f) a)
+    let rotate = source.declare("rotate", &[triple], triple);
+    source.define(rotate, |b, args| {
+        b.match_(args[0], triple, |b, _, fields| {
+            let (inner, last) = (fields[0], fields[1]);
+            b.match_(inner, pair, |b, _, fields| {
+                let pair = b.con(pair_ctor, &[last, fields[1]]);
+                b.con(triple_ctor, &[pair, fields[0]])
+            })
+        })
+    });
+    let first = source.declare("first", &[triple], nat);
+    source.define(first, |b, args| {
+        b.match_(args[0], triple, |b, _, fields| {
+            b.match_(fields[0], pair, |_, _, fields| fields[0])
+        })
+    });
+    let run_it = source.declare("run", &[], nat);
+    source.define(run_it, |b, _| {
+        let (seven, five) = (b.known(seven), b.known(five));
+        let on = b.con(on, &[]);
+        let pair = b.con(pair_ctor, &[seven, on]);
+        let held = b.con(triple_ctor, &[pair, five]);
+        let turned = b.call(rotate, &[held]);
+        b.call(first, &[turned])
+    });
+    let nought = source.intern_number(nat, 0).unwrap();
+    let main = source.declare("main", &[], nat);
+    source.define(main, |b, _| {
+        b.call(run_it, &[]);
+        b.known(nought)
+    });
+    source.set_entry(main);
+
+    let machine = lower(
+        &source,
+        &barb::analyze(&source),
+        &Routines::builtin().with_word(64),
+    )
+    .unwrap();
+    assert!(
+        !machine
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::Cell { .. } | Op::CellField { .. })),
+        "{}",
+        machine.render()
+    );
+    let rotate = named(&machine, "rotate");
+    // Both counts are only ever five or seven, and the flag is only `On`.
+    let count = Class::Held(barb::Bounds {
+        low: 5,
+        high: Some(7),
+    });
+    let leaves = [count, Class::Held(barb::Bounds::at(1)), count];
+    assert_eq!(machine.signature(machine.function(rotate).params), leaves);
+    assert_eq!(
+        machine.signature(machine.function(rotate).returns.classes()),
+        leaves
+    );
+    assert_eq!(run(&machine, named(&machine, "run")), [BigUint::from(5u8)]);
+}
+
+/// A product with more leaves than a flat one may have is a cell, and so is
+/// one that holds itself through products alone.
+#[test]
+fn wide_and_self_holding_products_are_cells() {
+    let mut source = barb::Program::default();
+    let nat = source.declare_type("Nat");
+    source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let wide = source.declare_type("Wide");
+    let fields = vec![nat; FLAT_LEAVES + 1];
+    source.define_type(wide, &[("Wide", &fields)]);
+    let fits = source.declare_type("Fits");
+    source.define_type(fits, &[("Fits", &fields[1..])]);
+    let knot = source.declare_type("Knot");
+    source.define_type(knot, &[("Knot", &[knot, nat])]);
+    let zero = source.ctor_at(nat, 0);
+    let nought = source.intern_number(nat, 0).unwrap();
+    let main = source.declare_named(
+        "main",
+        &[("wide", wide), ("fits", fits), ("knot", knot)],
+        nat,
+    );
+    source.define(main, |b, args| {
+        let a = b.match_(args[0], wide, |_, _, fields| fields[0]);
+        let c = b.match_(args[1], fits, |_, _, fields| fields[0]);
+        let d = b.match_(args[2], knot, |_, _, fields| fields[1]);
+        b.match_(a, nat, |_, ctor, _| if ctor == zero { c } else { d });
+        b.known(nought)
+    });
+    source.set_entry(main);
+    barb::validate(&source).unwrap();
+
+    let machine = lower(&source, &barb::analyze(&source), &Routines::default()).unwrap();
+    let mut expected = vec![Class::Cell];
+    expected.extend(vec![Class::Natural; FLAT_LEAVES]);
+    expected.push(Class::Cell);
+    assert_eq!(
+        machine.signature(machine.function(machine.entry()).params),
+        expected
+    );
+    assert_eq!(
+        machine.parameter_names(machine.entry()).nth(1),
+        Some("fits.0")
+    );
+}
+
+/// A product built into a known value counts as built: its fields are as
+/// wide as the constant's, not only as the ones the program works out.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture declares its types, builds its values, and checks facts and evaluation"
+)]
+fn a_constant_holding_a_product_widens_its_fields() {
+    let mut source = barb::Program::default();
+    let nat = source.declare_type("Nat");
+    source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let (zero, succ) = (source.ctor_at(nat, 0), source.ctor_at(nat, 1));
+    let pair = source.declare_type("Pair");
+    source.define_type(pair, &[("Pair", &[nat, nat])]);
+    let pair_ctor = source.ctor_at(pair, 0);
+    let maybe = source.declare_type("Maybe");
+    source.define_type(maybe, &[("None", &[]), ("Some", &[pair])]);
+    let some = source.ctor_at(maybe, 1);
+    let number = |n: u64| {
+        (0..n).fold(barb::Value(zero, vec![]), |held, _| {
+            barb::Value(succ, vec![held])
+        })
+    };
+    let known = source
+        .intern(
+            maybe,
+            &barb::Value(
+                some,
+                vec![barb::Value(pair_ctor, vec![number(200), number(1)])],
+            ),
+        )
+        .unwrap();
+    let nought = source.intern_number(nat, 0).unwrap();
+
+    let first = source.declare("first", &[maybe], nat);
+    source.define(first, |b, args| {
+        b.match_(args[0], maybe, |b, ctor, fields| {
+            if ctor == some {
+                b.match_(fields[0], pair, |_, _, fields| fields[0])
+            } else {
+                b.known(nought)
+            }
+        })
+    });
+    let run_it = source.declare("run", &[], nat);
+    source.define(run_it, |b, _| {
+        let zero = b.known(nought);
+        let made = b.con(pair_ctor, &[zero, zero]);
+        let made = b.con(some, &[made]);
+        b.call(first, &[made]);
+        let known = b.known(known);
+        b.call(first, &[known])
+    });
+    let main = source.declare("main", &[], nat);
+    source.define(main, |b, _| {
+        b.call(run_it, &[]);
+        b.known(nought)
+    });
+    source.set_entry(main);
+
+    let facts = barb::analyze(&source);
+    assert_eq!(
+        facts.field(&source, pair_ctor, 0),
+        barb::Bounds {
+            low: 0,
+            high: Some(200)
+        }
+    );
+    let machine = lower(&source, &facts, &Routines::builtin().with_word(64)).unwrap();
+    assert_eq!(
+        run(&machine, named(&machine, "run")),
+        [BigUint::from(200u8)]
+    );
+}
+
+/// A field carried round a recursion grows each time round, so what it can
+/// hold is only known once the walk stops going round: reading it back is
+/// never narrower than the last value put there.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture declares its types, builds its values, and checks facts and evaluation"
+)]
+fn a_product_field_grown_by_recursion_is_held_whole() {
+    let mut source = barb::Program::default();
+    let nat = source.declare_type("Nat");
+    source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let (zero, succ) = (source.ctor_at(nat, 0), source.ctor_at(nat, 1));
+    let state = source.declare_type("State");
+    source.define_type(state, &[("S", &[nat, nat])]);
+    let s = source.ctor_at(state, 0);
+    let steps = source.intern_number(nat, 20).unwrap();
+    let nought = source.intern_number(nat, 0).unwrap();
+
+    let bump = source.declare("bump", &[state], state);
+    source.define(bump, |b, args| {
+        b.match_(args[0], state, |b, _, fields| {
+            let once = b.con(succ, &[fields[1]]);
+            let twice = b.con(succ, &[once]);
+            b.con(s, &[fields[0], twice])
+        })
+    });
+    let go = source.declare("go", &[nat, state], nat);
+    source.define(go, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                b.match_(args[1], state, |_, _, fields| fields[1])
+            } else {
+                let bumped = b.call(bump, &[args[1]]);
+                b.call(go, &[fields[0], bumped])
+            }
+        })
+    });
+    let run_it = source.declare("run", &[], nat);
+    source.define(run_it, |b, _| {
+        let (steps, zero) = (b.known(steps), b.known(nought));
+        let start = b.con(s, &[zero, zero]);
+        b.call(go, &[steps, start])
+    });
+    let main = source.declare("main", &[], nat);
+    source.define(main, |b, _| {
+        b.call(run_it, &[]);
+        b.known(nought)
+    });
+    source.set_entry(main);
+    barb::validate(&source).unwrap();
+
+    let facts = barb::analyze(&source);
+    // The walk settles, and the total's field widened to anything on the
+    // way; the count beside it stays nought.
+    assert_eq!(facts.answers(main), barb::Bounds::at(0));
+    assert_eq!(facts.field(&source, s, 1).width(), None);
+    assert_eq!(facts.field(&source, s, 0), barb::Bounds::at(0));
+    let machine = lower(&source, &facts, &Routines::builtin().with_word(64)).unwrap();
+    assert_eq!(run(&machine, named(&machine, "run")), [BigUint::from(40u8)]);
 }

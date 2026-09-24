@@ -13,12 +13,19 @@
 //! arm reached at two widths, a definition gone round again -- holds what
 //! it held at any of them.
 //!
+//! A field is held the same way: every value built into one field of one
+//! constructor, anywhere, is what reading that field back can answer. That
+//! is what lets a number inside a product be held as narrowly as a number
+//! outside one. A value no walk sees built -- handed in at the entry, or
+//! answered by something outside -- could hold anything in any field it
+//! reaches.
+//!
 //! Nothing here is exact. A bound too wide costs a wider number and never a
 //! wrong one, so where the walk cannot say -- a definition that counts up
 //! without a last step, an argument from outside -- it says so and the
 //! tiers below hold what they must.
 
-use super::model::{Body, CtorId, Expr, ExprId, FnId, Range};
+use super::model::{Body, CtorId, Expr, ExprId, FnId, Range, TypeId};
 use super::program::Program;
 use super::{Shape, shape, single_field};
 pub use crate::facts::Facts as Bounds;
@@ -59,31 +66,13 @@ pub(super) struct Ranges {
     pub takes: Vec<Vec<Bounds>>,
     /// And what each answers.
     pub answers: Vec<Bounds>,
+    /// What each constructor field holds, by its place in the field pool.
+    pub fields: Vec<Bounds>,
 }
 
 pub(super) fn analyze(program: &Program, operations: &[Option<super::Operation>]) -> Ranges {
     let count = program.functions().len();
-    let entry = program.entry();
-    // A parameter nothing has handed anything to yet is a parameter nothing
-    // is known of, which is not the same as one anything could be handed.
-    let mut held = Propagation {
-        params: (0..count)
-            .map(|at| {
-                let id = FnId::at(at);
-                if entry == Some(id) {
-                    program
-                        .parameter_bounds(id)
-                        .map(|bounds| Some(bounds.unwrap_or(Bounds::ANY)))
-                        .collect()
-                } else {
-                    vec![None; program.params(id).len()]
-                }
-            })
-            .collect(),
-        results: vec![None; count],
-        terms: vec![Bounds::NOTHING; program.exprs_count()],
-        matched: vec![Bounds::NOTHING; program.exprs_count()],
-    };
+    let mut held = Propagation::start(program);
 
     let mut settled = false;
     for round in 0..ROUNDS {
@@ -103,19 +92,56 @@ pub(super) fn analyze(program: &Program, operations: &[Option<super::Operation>]
     // growing, so reaching here means something grew in a way widening does
     // not reach -- and then nothing here is known.
     if !settled {
-        held.terms.fill(Bounds::ANY);
-        held.matched.fill(Bounds::ANY);
-        held.params.iter_mut().flatten().for_each(|held| {
-            *held = Some(Bounds::ANY);
-        });
-        held.results.fill(Some(Bounds::ANY));
+        held.forget();
     }
 
-    finish(held)
+    finish(program, held)
+}
+
+/// How many field places the program declares, end to end.
+fn field_slots(program: &Program) -> usize {
+    (0..program.types().len())
+        .flat_map(|ty| program.ctors(TypeId::at(ty)))
+        .map(|ctor| ctor.fields.range().end)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The place one field of one constructor has in the field pool.
+pub(super) fn slot(program: &Program, ctor: CtorId, at: usize) -> usize {
+    program.ctor(ctor).fields.range().start + at
+}
+
+/// Say that every field reachable from `roots` could hold anything: values
+/// of those types were built where nothing here walks.
+fn unknown(program: &Program, roots: &[TypeId], fields: &mut [Option<Bounds>]) {
+    let mut seen = vec![false; program.types().len()];
+    let mut waiting = roots.to_vec();
+    while let Some(ty) = waiting.pop() {
+        if std::mem::replace(&mut seen[ty.index()], true) {
+            continue;
+        }
+        for ctor in program.ctors(ty) {
+            for place in &mut fields[ctor.fields.range()] {
+                *place = Some(Bounds::ANY);
+            }
+            waiting.extend_from_slice(program.types_of(ctor.fields));
+        }
+    }
 }
 
 /// What the walk worked out, as the tier below reads it.
-fn finish(held: Propagation) -> Ranges {
+fn finish(program: &Program, held: Propagation) -> Ranges {
+    // Taking a spine apart reads its fields as steps of its count, not as
+    // what was built into them, so nothing is said of a spine's fields.
+    let mut fields: Vec<_> = held.fields.into_iter().map(anything).collect();
+    for ty in 0..program.types().len() {
+        if let Shape::Spine { .. } = shape(program, TypeId::at(ty)) {
+            for ctor in program.ctors(TypeId::at(ty)) {
+                fields[ctor.fields.range()].fill(Bounds::ANY);
+            }
+        }
+    }
     // A term nothing reached is a term nothing knows, and so is a parameter
     // nothing was ever handed.
     Ranges {
@@ -135,6 +161,7 @@ fn finish(held: Propagation) -> Ranges {
             .map(|held| held.into_iter().map(anything).collect())
             .collect(),
         answers: held.results.into_iter().map(anything).collect(),
+        fields,
     }
 }
 
@@ -156,6 +183,89 @@ struct Propagation {
     results: Vec<Option<Bounds>>,
     terms: Vec<Bounds>,
     matched: Vec<Bounds>,
+    /// What each field was built with, by its place in the field pool.
+    fields: Vec<Option<Bounds>>,
+}
+
+impl Propagation {
+    /// Where the walk starts: nothing known of anything reached from inside,
+    /// and anything at all in the fields of what comes in from outside.
+    fn start(program: &Program) -> Self {
+        let count = program.functions().len();
+        let entry = program.entry();
+        // A parameter nothing has handed anything to yet is a parameter nothing
+        // is known of, which is not the same as one anything could be handed.
+        let mut held = Self {
+            params: (0..count)
+                .map(|at| {
+                    let id = FnId::at(at);
+                    if entry == Some(id) {
+                        program
+                            .parameter_bounds(id)
+                            .map(|bounds| Some(bounds.unwrap_or(Bounds::ANY)))
+                            .collect()
+                    } else {
+                        vec![None; program.params(id).len()]
+                    }
+                })
+                .collect(),
+            results: vec![None; count],
+            terms: vec![Bounds::NOTHING; program.exprs_count()],
+            matched: vec![Bounds::NOTHING; program.exprs_count()],
+            fields: vec![None; field_slots(program)],
+        };
+        // What comes in from outside was built where no walk sees it.
+        let mut outside: Vec<TypeId> = Vec::new();
+        for (at, function) in program.functions().iter().enumerate() {
+            if entry == Some(FnId::at(at)) {
+                outside.extend_from_slice(program.params(FnId::at(at)));
+            }
+            if function.body().is_none() {
+                outside.push(function.result);
+            }
+        }
+        unknown(program, &outside, &mut held.fields);
+        held
+    }
+
+    /// Say nothing is known, which is what a walk that did not settle knows.
+    fn forget(&mut self) {
+        self.terms.fill(Bounds::ANY);
+        self.matched.fill(Bounds::ANY);
+        self.params.iter_mut().flatten().for_each(|held| {
+            *held = Some(Bounds::ANY);
+        });
+        self.results.fill(Some(Bounds::ANY));
+        self.fields.fill(Some(Bounds::ANY));
+    }
+
+    /// Take in what one walk found it built and called, answering whether
+    /// any of it was more than was known.
+    fn learn(&mut self, program: &Program, found: Found, round: usize) -> bool {
+        let mut again = false;
+        for (place, bounds) in found.built {
+            again |= settle(&mut self.fields[place], bounds, round);
+        }
+        if !found.outside.is_empty() {
+            let before = self.fields.clone();
+            unknown(program, &found.outside, &mut self.fields);
+            again |= self.fields != before;
+        }
+        for (called, args) in found.calls {
+            for (at, bounds) in args.into_iter().enumerate() {
+                again |= settle(&mut self.params[called.index()][at], bounds, round);
+            }
+        }
+        again
+    }
+}
+
+/// What one walk hands on: the arguments it called with, what it built into
+/// each field, and the types of values it met built out of sight.
+struct Found {
+    calls: Vec<(FnId, Vec<Bounds>)>,
+    built: Vec<(usize, Bounds)>,
+    outside: Vec<TypeId>,
 }
 
 /// One definition, once. Answers whether anything it worked out was more
@@ -196,6 +306,9 @@ fn once(
         program,
         operations,
         results: &held.results,
+        fields: &held.fields,
+        built: Vec::new(),
+        outside: Vec::new(),
         predicates: vec![None; params.len()],
         scope: params,
         terms: std::mem::take(&mut held.terms),
@@ -205,15 +318,13 @@ fn once(
     let answer = walk.body(body);
     held.terms = walk.terms;
     held.matched = walk.matched;
-    let calls = walk.calls;
-
-    let mut again = settle(&mut held.results[at], answer, round);
-    for (called, args) in calls {
-        for (at, bounds) in args.into_iter().enumerate() {
-            again |= settle(&mut held.params[called.index()][at], bounds, round);
-        }
-    }
-    again
+    let found = Found {
+        calls: walk.calls,
+        built: walk.built,
+        outside: walk.outside,
+    };
+    let again = settle(&mut held.results[at], answer, round);
+    held.learn(program, found, round) || again
 }
 
 /// Widen `held` by `found`, answering whether that changed it. Past the
@@ -245,6 +356,11 @@ struct FunctionWalk<'a> {
     program: &'a Program,
     operations: &'a [Option<super::Operation>],
     results: &'a [Option<Bounds>],
+    /// What each field was built with so far, and what this walk builds.
+    fields: &'a [Option<Bounds>],
+    built: Vec<(usize, Bounds)>,
+    /// Types of values this walk found built where it cannot see inside.
+    outside: Vec<TypeId>,
     /// What each level holds here, which arms take back as they end.
     scope: Vec<Bounds>,
     predicates: Vec<Option<(super::Operation, usize, usize)>>,
@@ -300,8 +416,18 @@ impl FunctionWalk<'_> {
     fn worked(&mut self, id: ExprId) -> Bounds {
         match self.program.expr(id) {
             Expr::Atom(atom) => self.scope[atom.0.index()],
-            Expr::Static(value) => constant_bounds(self.program, self.program.constant(value)),
-            Expr::Con(ctor, args) => self.built(ctor, args),
+            Expr::Static(value) => {
+                let value = self.program.constant(value);
+                self.constant_fields(value);
+                constant_bounds(self.program, value)
+            }
+            Expr::Con(ctor, args) => {
+                for (at, atom) in self.program.atoms(args).iter().enumerate() {
+                    let place = slot(self.program, ctor, at);
+                    self.built.push((place, self.scope[atom.0.index()]));
+                }
+                self.built(ctor, args)
+            }
             Expr::Call(called, args) => self.call(called, args),
             Expr::Match(scrutinee, arms) => {
                 self.matched[id.index()] =
@@ -331,6 +457,32 @@ impl FunctionWalk<'_> {
             Bounds::NOTHING
         } else {
             answer
+        }
+    }
+
+    /// Record what a known value holds in each field, all the way down. A
+    /// spine is read as a count, not field by field, so what one holds is
+    /// said to be anything.
+    fn constant_fields(&mut self, value: super::Constant<'_>) {
+        let super::ConstantView::Constructor(ctor) = value.view() else {
+            if matches!(value.view(), super::ConstantView::Spine(_)) {
+                self.outside.push(value.owner());
+            }
+            return;
+        };
+        let mut budget = super::Budget::new(super::FoldLimits {
+            work: u64::MAX,
+            max_bytes: usize::MAX,
+            max_depth: usize::MAX,
+        });
+        let fields = ctor
+            .fields(&mut budget)
+            .expect("validated constants can be revisited");
+        for (at, field) in fields.into_iter().enumerate() {
+            let place = slot(self.program, ctor.constructor(), at);
+            self.built
+                .push((place, constant_bounds(self.program, field)));
+            self.constant_fields(field);
         }
     }
 
@@ -401,29 +553,28 @@ impl FunctionWalk<'_> {
         if !reaches(self.program, held, spine, ctor) {
             return false;
         }
-        let field = if single_field(self.program, owner).is_some() {
-            held
+        let (field, tagged) = if single_field(self.program, owner).is_some() {
+            (held, false)
         } else {
             match spine {
                 Shape::Spine { nil, .. } if ctor == nil => {
                     self.scope[scrutinee] = Bounds::at(0);
-                    Bounds::NOTHING
+                    (Bounds::NOTHING, false)
                 }
                 Shape::Spine { .. } => {
                     self.scope[scrutinee] = Bounds {
                         low: held.low.max(1),
                         high: held.high,
                     };
-                    self.scope[scrutinee].down()
+                    (self.scope[scrutinee].down(), false)
                 }
                 Shape::Tagged => {
                     self.scope[scrutinee] = Bounds::at(u64::from(self.program.tag(ctor)));
-                    Bounds::ANY
+                    (Bounds::ANY, true)
                 }
             }
         };
-        self.scope
-            .resize(self.scope.len() + self.program.fields(ctor).len(), field);
+        self.bind_fields(ctor, field, tagged);
         if let Some((op, left, right)) = self.predicates[scrutinee] {
             let (a, b) = refine(op, ctor, self.scope[left], self.scope[right]);
             self.scope[left] = a;
@@ -435,6 +586,34 @@ impl FunctionWalk<'_> {
         self.predicates.resize(self.scope.len(), None);
         true
     }
+
+    /// Bind a constructor's fields at `field`. A field of a tagged
+    /// constructor holds what was built into it -- nothing yet, where no
+    /// walk has built one -- and one whose type is a run of bare tags is
+    /// one of them besides: the type says that much alone.
+    fn bind_fields(&mut self, ctor: CtorId, field: Bounds, tagged: bool) {
+        for (at, &ty) in self.program.fields(ctor).iter().enumerate() {
+            if !tagged {
+                self.scope.push(field);
+                continue;
+            }
+            let built = self.fields[slot(self.program, ctor, at)].unwrap_or(Bounds::NOTHING);
+            self.scope
+                .push(tag_count(self.program, ty).map_or(built, |count| {
+                    built.and(Bounds {
+                        low: 0,
+                        high: Some(count - 1),
+                    })
+                }));
+        }
+    }
+}
+
+/// How many tags a type has, where its constructors all carry nothing and
+/// there are at least two of them: a value of one is a tag below this.
+fn tag_count(program: &Program, ty: TypeId) -> Option<u64> {
+    (super::type_shape(program, ty) == super::TypeShape::Enumeration)
+        .then(|| u64::try_from(program.ctors(ty).len()).expect("a count of constructors"))
 }
 
 fn constant_bounds(program: &Program, value: super::Constant<'_>) -> Bounds {

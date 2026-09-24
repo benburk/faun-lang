@@ -104,6 +104,17 @@ impl Facts {
     pub(crate) fn affine(&self, id: ExprId) -> Option<&Affine> {
         self.affine.get(id.index())?.as_ref()
     }
+    /// What field `at` of `ctor` can hold: every value built into it, or
+    /// anything where a value was built out of sight or the field is a step
+    /// of a spine.
+    #[must_use]
+    pub fn field(&self, program: &Program, ctor: CtorId, at: usize) -> Bounds {
+        self.ranges
+            .fields
+            .get(super::bounds::slot(program, ctor, at))
+            .copied()
+            .unwrap_or(Bounds::ANY)
+    }
     #[must_use]
     pub fn answers(&self, id: FnId) -> Bounds {
         self.ranges

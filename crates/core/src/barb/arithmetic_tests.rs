@@ -364,3 +364,67 @@ fn reduced(held: &str) -> String {
     let (_, main) = rendered.split_once("main!(v0: Host)").expect("an entry");
     main.to_owned()
 }
+
+/// A field holds what was built into it: reading one back answers no more
+/// than the values some construction put there.
+#[test]
+fn a_field_holds_what_was_built_into_it() {
+    let mut program = Program::default();
+    let order = program.declare_type("Order");
+    program.define_type(order, &[("Lt", &[]), ("Eq", &[]), ("Gt", &[])]);
+    let nat = program.declare_type("Nat");
+    program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let pair = program.declare_type("Pair");
+    program.define_type(pair, &[("Pair", &[order, nat])]);
+    let outcome = program.declare("outcome", &[pair], order);
+    program.define(outcome, |b, args| {
+        b.match_(args[0], pair, |_, _, fields| fields[0])
+    });
+    let count = program.declare("count", &[pair], nat);
+    program.define(count, |b, args| {
+        b.match_(args[0], pair, |_, _, fields| fields[1])
+    });
+    let (gt, zero) = (program.ctor_at(order, 2), program.ctor_at(nat, 0));
+    let pair_ctor = program.ctor_at(pair, 0);
+    let main = program.declare("main", &[], order);
+    program.define(main, |b, _| {
+        let fields = [b.con(gt, &[]), b.con(zero, &[])];
+        let held = b.con(pair_ctor, &fields);
+        b.call(count, &[held]);
+        b.call(outcome, &[held])
+    });
+    program.set_entry(main);
+    let facts = analyze(&program);
+    assert_eq!(facts.answers(outcome), Bounds::at(2));
+    assert_eq!(facts.answers(count), Bounds::at(0));
+    assert_eq!(facts.field(&program, pair_ctor, 0), Bounds::at(2));
+}
+
+/// A value handed in at the entry was built out of sight, so its fields
+/// could hold anything -- except that a field whose type is a run of bare
+/// tags is still one of them: the type says that much alone.
+#[test]
+fn a_field_built_out_of_sight_is_known_only_by_its_type() {
+    let mut program = Program::default();
+    let order = program.declare_type("Order");
+    program.define_type(order, &[("Lt", &[]), ("Eq", &[]), ("Gt", &[])]);
+    let nat = program.declare_type("Nat");
+    program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+    let pair = program.declare_type("Pair");
+    program.define_type(pair, &[("Pair", &[order, nat])]);
+    let pair_ctor = program.ctor_at(pair, 0);
+    let main = program.declare_named("main", &[("handed", pair)], order);
+    program.define(main, |b, args| {
+        b.match_(args[0], pair, |_, _, fields| fields[0])
+    });
+    program.set_entry(main);
+    let facts = analyze(&program);
+    assert_eq!(
+        facts.answers(main),
+        Bounds {
+            low: 0,
+            high: Some(2)
+        }
+    );
+    assert_eq!(facts.field(&program, pair_ctor, 1), Bounds::ANY);
+}

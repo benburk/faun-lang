@@ -14,12 +14,20 @@
 //!   construction and projection add no machine operation. This is asked
 //!   before anything asks whether a value is held as a cell, since a wrapper
 //!   around a product is held as that product.
+//! - a product -- one constructor, several fields -- is held flat: as the
+//!   values its fields are held as, end to end, with no object of its own.
+//!   Constructing one allocates nothing and taking it apart reads nothing.
+//!   Whether it fits a target's registers is the target's question, answered
+//!   by [`super::fit`]. A product on a cycle made only of products has no
+//!   values, and one with more than [`FLAT_LEAVES`] leaves is a cell: a
+//!   value that large is cheaper shared than copied.
 //! - everything else with fields is a managed cell, a sequence included. A
 //!   sequence is a two-constructor sum whose step holds the rest of itself,
 //!   so it is one object per element. That is what it costs; a packed run
 //!   of bytes would cost less and does not exist yet.
 //! - a cell's fields are held at the class the cell says, which is the class
-//!   a projection reads them back at.
+//!   a projection reads them back at. A field held flat is its leaves, laid
+//!   inline among the cell's own fields.
 //!
 //! Nothing here recognises a routine by name. What a call to something
 //! outside hands over is read off that routine's contract, so a byte string
@@ -28,7 +36,10 @@
 //!
 //! Targets without arbitrary-precision support reject that class explicitly.
 
+use std::rc::Rc;
+
 use crate::barb;
+use crate::index::append_range;
 
 use super::model::{Binary, Class, FunctionId, Relation, ValueId};
 use super::program::Program;
@@ -71,6 +82,7 @@ pub fn lower(
         barb: program,
         facts,
         carries: demand.carries,
+        leaves: demand.leaves,
         takes: demand.takes,
         callees,
         refused: std::cell::RefCell::default(),
@@ -238,29 +250,103 @@ fn provided(wanted: &Routine, handed: &[Handed], returns: &[Class]) -> Result<()
     Ok(())
 }
 
+/// The most leaves a product is held flat in. Past this a product is a
+/// cell: copying it at every call would cost more than sharing it.
+const FLAT_LEAVES: usize = 8;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Storage {
     Undemanded,
     Erased,
     Scalar,
     Cell,
+    /// A product held as its leaves: a run in the leaf pool, never empty.
+    Flat(barb::Range),
 }
 
 impl Storage {
     fn carried(self) -> bool {
         match self {
-            Self::Scalar | Self::Cell => true,
+            Self::Scalar | Self::Cell | Self::Flat(_) => true,
             Self::Erased => false,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
         }
     }
 
-    fn class(self, bounds: barb::Bounds) -> Option<Class> {
+    /// What a value is held as, given what the tier above proved about it.
+    /// Only a scalar's class reads the bounds.
+    fn held(self, bounds: barb::Bounds) -> Option<Carried> {
         match self {
-            Self::Scalar => Some(width(bounds)),
-            Self::Cell => Some(Class::Cell),
+            Self::Scalar => Some(Carried::One(width(bounds))),
+            Self::Cell => Some(Carried::One(Class::Cell)),
+            Self::Flat(leaves) => Some(Carried::Flat(leaves)),
             Self::Erased => None,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
+        }
+    }
+}
+
+/// What one source value is held in: one machine value at a class, or a
+/// flat product's leaves, at the classes its run in the leaf pool says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Carried {
+    One(Class),
+    Flat(barb::Range),
+}
+
+/// The classes a value is held at, one per machine value.
+fn classes<'a>(leaves: &'a [Class], carried: &'a Carried) -> &'a [Class] {
+    match carried {
+        Carried::One(class) => std::slice::from_ref(class),
+        Carried::Flat(run) => &leaves[run.range()],
+    }
+}
+
+/// The machine values holding one source value.
+#[derive(Clone, Debug)]
+enum Held {
+    One(ValueId),
+    /// A product's leaves, at the classes of its run in the leaf pool.
+    Flat {
+        leaves: barb::Range,
+        values: Rc<[ValueId]>,
+    },
+}
+
+impl Held {
+    /// What `values` hold, where they are held as `carried` says.
+    fn of(carried: Carried, values: &[ValueId]) -> Self {
+        match carried {
+            Carried::One(_) => Self::One(values[0]),
+            Carried::Flat(leaves) => Self::Flat {
+                leaves,
+                values: values.into(),
+            },
+        }
+    }
+
+    fn values(&self) -> &[ValueId] {
+        match self {
+            Self::One(value) => std::slice::from_ref(value),
+            Self::Flat { values, .. } => values,
+        }
+    }
+
+    /// The one value a scalar or a cell is held in.
+    ///
+    /// # Panics
+    /// If this is a product held flat, which nothing reads as one value.
+    fn one(&self) -> ValueId {
+        match self {
+            Self::One(value) => *value,
+            Self::Flat { .. } => panic!("a scalar or a cell, not a flat product"),
+        }
+    }
+
+    fn carried(&self, b: &super::Builder) -> Carried {
+        match self {
+            Self::One(value) => Carried::One(b.class(*value)),
+            Self::Flat { leaves, .. } => Carried::Flat(*leaves),
         }
     }
 }
@@ -278,6 +364,8 @@ struct Demand<'a> {
     // Every lowered introduction must demand its type first. Undemanded is
     // distinct from erased, so a missed visit cannot silently discard a value.
     carries: Vec<Storage>,
+    /// Every flat product's leaf classes, one run per product type.
+    leaves: Vec<Class>,
 }
 
 impl<'a> Demand<'a> {
@@ -304,6 +392,7 @@ impl<'a> Demand<'a> {
                 })
                 .collect(),
             carries: vec![Storage::Undemanded; program.types().len()],
+            leaves: Vec::new(),
         };
         while let Some(id) = demand.waiting.pop() {
             if std::mem::replace(&mut demand.reached[id.index()], true) {
@@ -369,22 +458,32 @@ impl<'a> Demand<'a> {
         }
     }
 
+    /// A flat product parameter is one machine parameter per leaf, each
+    /// named for the parameter and its place.
     fn named_params(&self, id: barb::FnId) -> Vec<(String, Class)> {
-        self.program
+        let mut named = Vec::new();
+        for (((name, ty), held), _) in self
+            .program
             .parameter_names(id)
             .zip(self.program.params(id))
             .zip(self.facts.takes(id))
             .zip(&self.takes[id.index()])
             .filter(|(((_, ty), _), used)| **used && self.carries[ty.index()].carried())
-            .map(|(((name, ty), held), _)| {
-                (
-                    name.to_owned(),
-                    self.carries[ty.index()]
-                        .class(*held)
-                        .expect("a carried parameter has a class"),
-                )
-            })
-            .collect()
+        {
+            let carried = self.carries[ty.index()]
+                .held(*held)
+                .expect("a carried parameter has a class");
+            match carried {
+                Carried::One(class) => named.push((name.to_owned(), class)),
+                Carried::Flat(run) => named.extend(
+                    self.leaves[run.range()]
+                        .iter()
+                        .enumerate()
+                        .map(|(at, &class)| (format!("{name}.{at}"), class)),
+                ),
+            }
+        }
+        named
     }
 
     /// What each argument a call to something outside hands over, after
@@ -397,15 +496,22 @@ impl<'a> Demand<'a> {
     /// What one carried argument is, for saying so where a routine reads
     /// something else. A managed value is the only thing a byte string can
     /// be, so it is named as one here.
-    fn carried_as(&self, ty: barb::TypeId, bounds: barb::Bounds) -> Handed {
-        match self.carries[ty.index()] {
-            Storage::Cell => Handed::Bytes,
-            storage => Handed::Value(
-                storage
-                    .class(bounds)
-                    .expect("a carried argument has a class"),
-            ),
+    fn carried_sentence(&self, carried: &[(&barb::TypeId, &barb::Bounds)]) -> String {
+        if carried.is_empty() {
+            return "nothing".to_owned();
         }
+        carried
+            .iter()
+            .map(
+                |(ty, bounds)| match self.carries[ty.index()].held(**bounds) {
+                    Some(Carried::One(Class::Cell)) => handed_sentence(&[Handed::Bytes]),
+                    Some(Carried::One(class)) => handed_sentence(&[Handed::Value(class)]),
+                    Some(Carried::Flat(_)) => "a product".to_owned(),
+                    None => unreachable!("an argument handed over is carried"),
+                },
+            )
+            .collect::<Vec<_>>()
+            .join(" and ")
     }
 
     fn handed(&self, id: barb::FnId, wanted: &Routine) -> Result<Vec<Handed>, String> {
@@ -423,14 +529,10 @@ impl<'a> Demand<'a> {
         // where one is read. An argument is counted once here even where a
         // machine reads it as two, which a byte string is.
         if carried.len() != wanted.takes.len() {
-            let handed: Vec<_> = carried
-                .iter()
-                .map(|(ty, bounds)| self.carried_as(**ty, **bounds))
-                .collect();
             return Err(format!(
                 "`{held}` reads {}, and is handed {}",
                 takes_sentence(&wanted.takes),
-                handed_sentence(&handed),
+                self.carried_sentence(&carried),
             ));
         }
         carried
@@ -447,11 +549,14 @@ impl<'a> Demand<'a> {
                         ))
                     }
                 }
-                Takes::Scalar(_) => Ok(Handed::Value(
-                    self.carries[ty.index()]
-                        .class(*bounds)
-                        .expect("a carried argument has a class"),
-                )),
+                Takes::Scalar(_) => match self.carries[ty.index()].held(*bounds) {
+                    Some(Carried::One(class)) => Ok(Handed::Value(class)),
+                    _ => Err(format!(
+                        "`{held}` reads {}, and `{}` is a product",
+                        takes_sentence(std::slice::from_ref(takes)),
+                        self.program.name(self.program.type_(*ty).name)
+                    )),
+                },
             })
             .collect()
     }
@@ -466,26 +571,27 @@ impl<'a> Demand<'a> {
             .collect()
     }
 
-    /// Erased and unused parameters take no machine slot.
+    /// Erased and unused parameters take no machine slot; a flat product
+    /// takes one per leaf.
     fn signature(&self, id: barb::FnId) -> (Vec<Class>, Vec<Class>) {
-        let params = self
+        let mut params = Vec::new();
+        for ((ty, held), _) in self
             .program
             .params(id)
             .iter()
             .zip(self.facts.takes(id))
             .zip(&self.takes[id.index()])
             .filter(|((ty, _), used)| **used && self.carries[ty.index()].carried())
-            .map(|((ty, held), _)| {
-                self.carries[ty.index()]
-                    .class(*held)
-                    .expect("a carried parameter has a class")
-            })
-            .collect();
+        {
+            let carried = self.carries[ty.index()]
+                .held(*held)
+                .expect("a carried parameter has a class");
+            params.extend_from_slice(classes(&self.leaves, &carried));
+        }
         let result = self.program.function(id).result;
         let returns = self.carries[result.index()]
-            .class(self.facts.answers(id))
-            .into_iter()
-            .collect();
+            .held(self.facts.answers(id))
+            .map_or_else(Vec::new, |carried| classes(&self.leaves, &carried).to_vec());
         (params, returns)
     }
 
@@ -494,18 +600,72 @@ impl<'a> Demand<'a> {
             return Ok(());
         }
         let storage = represent(self.program, ty)?;
+        // Held as a cell until it is known to be held flat, which is also
+        // what a cycle back to it through a sum reads meanwhile. A sum's
+        // fields are read when it is lowered, not here, so that reading is
+        // never kept.
         self.carries[ty.index()] = storage;
+        if storage == Storage::Cell
+            && let Some(product) = flattened(self.program, ty)
+            && let Some(flat) = self.flatten(ty, product)?
+        {
+            self.carries[ty.index()] = flat;
+            return Ok(());
+        }
         if storage == Storage::Cell {
-            let fields: Vec<_> = self
-                .program
-                .ctors(ty)
-                .iter()
-                .flat_map(|ctor| self.program.types_of(ctor.fields))
-                .copied()
-                .collect();
-            for field in fields {
-                self.type_(field)?;
+            return self.type_fields(ty);
+        }
+        Ok(())
+    }
+
+    /// How a product is held once its fields are demanded: flat where its
+    /// leaves fit, erased where there are none, and `None` to keep it a
+    /// cell. A wrapper around a product is held as that product, with the
+    /// same run of leaves, so the two are never told apart.
+    fn flatten(
+        &mut self,
+        ty: barb::TypeId,
+        product: barb::TypeId,
+    ) -> Result<Option<Storage>, String> {
+        if product != ty {
+            self.type_(product)?;
+            let inner = self.carries[product.index()];
+            return Ok(matches!(inner, Storage::Flat(_) | Storage::Erased).then_some(inner));
+        }
+        let barb::TypeShape::Product { constructor } = barb::type_shape(self.program, ty) else {
+            unreachable!("a flattened type is a product");
+        };
+        let fields = self.program.fields(constructor).to_vec();
+        for &field in &fields {
+            self.type_(field)?;
+        }
+        let mut leaves = Vec::new();
+        for at in 0..fields.len() {
+            let carried = field_carried(self.program, self.facts, &self.carries, constructor, at);
+            if let Some(carried) = carried {
+                leaves.extend_from_slice(classes(&self.leaves, &carried));
             }
+        }
+        Ok((leaves.len() <= FLAT_LEAVES).then(|| {
+            if leaves.is_empty() {
+                Storage::Erased
+            } else {
+                Storage::Flat(append_range(&mut self.leaves, &leaves))
+            }
+        }))
+    }
+
+    /// Demand every field of every constructor, as a cell's.
+    fn type_fields(&mut self, ty: barb::TypeId) -> Result<(), String> {
+        let fields: Vec<_> = self
+            .program
+            .ctors(ty)
+            .iter()
+            .flat_map(|ctor| self.program.types_of(ctor.fields))
+            .copied()
+            .collect();
+        for field in fields {
+            self.type_(field)?;
         }
         Ok(())
     }
@@ -663,6 +823,56 @@ fn represent(program: &barb::Program, id: barb::TypeId) -> Result<Storage, Strin
     Err(format!("`{name}` has a cyclic transparent representation"))
 }
 
+/// The product a type is held flat as, if it is one: read through wrappers,
+/// and refused where the product reaches itself through products alone,
+/// which no value does in a total program and no finite run could hold.
+fn flattened(program: &barb::Program, id: barb::TypeId) -> Option<barb::TypeId> {
+    let product = peeled(program, id)?;
+    let barb::TypeShape::Product { constructor } = barb::type_shape(program, product) else {
+        return None;
+    };
+    let mut seen = vec![false; program.types().len()];
+    let mut waiting = program.fields(constructor).to_vec();
+    while let Some(field) = waiting.pop() {
+        let field = peeled(program, field)?;
+        if field == product {
+            return None;
+        }
+        if std::mem::replace(&mut seen[field.index()], true) {
+            continue;
+        }
+        if let barb::TypeShape::Product { constructor } = barb::type_shape(program, field) {
+            waiting.extend_from_slice(program.fields(constructor));
+        }
+    }
+    Some(product)
+}
+
+/// What field `at` of `ctor` is held as, where it carries anything.
+///
+/// A number is as wide as every value built into that field, which is all a
+/// reader of it can know. A tag nothing bounds is a word.
+fn field_carried(
+    program: &barb::Program,
+    facts: &barb::Facts,
+    carries: &[Storage],
+    ctor: barb::CtorId,
+    at: usize,
+) -> Option<Carried> {
+    let ty = program.fields(ctor)[at];
+    let held = facts.field(program, ctor, at);
+    match carries[ty.index()] {
+        Storage::Cell => Some(Carried::One(Class::Cell)),
+        Storage::Scalar if held.width().is_none() && tagged(program, ty) => {
+            Some(Carried::One(Class::Word))
+        }
+        Storage::Scalar => Some(Carried::One(width(held))),
+        Storage::Flat(run) => Some(Carried::Flat(run)),
+        Storage::Erased => None,
+        Storage::Undemanded => panic!("a bound field type must have been demanded"),
+    }
+}
+
 /// Whether a type's values are a run of bytes: a sequence whose element is
 /// a number no wider than one. Wrappers are read through, since one adds
 /// nothing to what a value is.
@@ -797,10 +1007,15 @@ fn met(b: &mut super::Builder, arg: ValueId, wanted: Class) -> ValueId {
 }
 
 /// Where two arms meet: what they leave with is one place, so it is as wide
-/// as either of them needs.
-fn widest(held: Answer<Class>, other: Answer<Class>) -> Answer<Class> {
+/// as either of them needs. A flat product's leaves are held at the classes
+/// its type says, so two arms answering one already agree.
+fn widest(held: Answer<Carried>, other: Answer<Carried>) -> Answer<Carried> {
     match (held.held(), other.held()) {
-        (Some(held), Some(other)) => Answer::Value(super::arithmetic::widest(held, other)),
+        (Some(Carried::One(held)), Some(Carried::One(other))) => {
+            Answer::Value(Carried::One(super::arithmetic::widest(held, other)))
+        }
+        (Some(flat @ Carried::Flat(_)), Some(Carried::Flat(_))) => Answer::Value(flat),
+        (Some(_), Some(_)) => unreachable!("the arms of one match answer one type"),
         _ => held.or(other),
     }
 }
@@ -808,7 +1023,7 @@ fn widest(held: Answer<Class>, other: Answer<Class>) -> Answer<Class> {
 /// A tagged arm and the join of this arm with all following arms.
 struct TagArm {
     arm: barb::Arm,
-    suffix: Answer<Class>,
+    suffix: Answer<Carried>,
 }
 
 // Analyze each body once, then accumulate joins backward. Returning arms of a
@@ -816,7 +1031,7 @@ struct TagArm {
 // here. Keep the narrower suffix joins, not just the width of the whole match.
 fn tag_plan(
     arms: impl Iterator<Item = barb::Arm>,
-    mut answer: impl FnMut(barb::Body) -> Answer<Class>,
+    mut answer: impl FnMut(barb::Body) -> Answer<Carried>,
 ) -> Vec<TagArm> {
     let mut planned: Vec<_> = arms
         .map(|arm| TagArm {
@@ -834,50 +1049,66 @@ fn tag_plan(
 
 /// Leave an arm with what its body answered. An arm that does not come back
 /// never reaches the join, so it carries nothing there.
-fn yielded(b: &mut super::Builder, answer: Answer<ValueId>, classes: &[Class]) {
+fn yielded(b: &mut super::Builder, answer: Answer<Held>, classes: &[Class]) {
     match answer {
-        Answer::Value(value) => {
-            let value = met(b, value, classes[0]);
-            b.yield_(&[value]);
+        Answer::Value(held) => {
+            let values: Vec<_> = held
+                .values()
+                .iter()
+                .zip(classes)
+                .map(|(&value, &class)| met(b, value, class))
+                .collect();
+            b.yield_(&values);
         }
         Answer::Nothing => b.yield_(&[]),
         Answer::Never => (),
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ReturnTo {
     Entry,
-    Function(Class),
+    /// The classes a function answers at, one per machine value.
+    Function(Vec<Class>),
 }
 
 /// The entry's implicit status is a host word, not a request for modulo.
 fn returned(
     b: &mut super::Builder,
-    answer: Answer<ValueId>,
-    destination: ReturnTo,
+    answer: Answer<Held>,
+    destination: &ReturnTo,
 ) -> Result<(), String> {
-    let returns = match destination {
-        ReturnTo::Entry => Class::Word,
-        ReturnTo::Function(class) => class,
-    };
-    match answer {
-        Answer::Value(answer) => {
-            if matches!(destination, ReturnTo::Entry) && b.class(answer) == Class::Natural {
+    match (answer, destination) {
+        (Answer::Value(held), ReturnTo::Entry) => {
+            let &[answer] = held.values() else {
+                return Err(
+                    "the entry's result is a product, but its exit status is one word".to_owned(),
+                );
+            };
+            if b.class(answer) == Class::Natural {
                 return Err(
                     "the entry's result is unbounded, but its exit status must fit a word"
                         .to_owned(),
                 );
             }
-            let answer = met(b, answer, returns);
+            let answer = met(b, answer, Class::Word);
             b.ret(&[answer]);
         }
-        Answer::Nothing if matches!(destination, ReturnTo::Entry) => {
+        (Answer::Value(held), ReturnTo::Function(classes)) => {
+            let values: Vec<_> = held
+                .values()
+                .iter()
+                .zip(classes)
+                .map(|(&value, &class)| met(b, value, class))
+                .collect();
+            b.ret(&values);
+        }
+        (Answer::Nothing, ReturnTo::Entry) => {
             let status = b.constant(Class::Word, 0);
             b.ret(&[status]);
         }
-        Answer::Nothing => b.ret(&[]),
-        Answer::Never => (),
+        (Answer::Nothing, ReturnTo::Function(_)) => b.ret(&[]),
+        (Answer::Never, _) => (),
     }
     Ok(())
 }
@@ -887,6 +1118,8 @@ struct Lowering<'a> {
     facts: &'a barb::Facts,
     /// Whether a value of each barb type takes a place, by type.
     carries: Vec<Storage>,
+    /// Every flat product's leaf classes, one run per product type.
+    leaves: Vec<Class>,
     /// Which source parameters survive into each machine signature.
     takes: Vec<Vec<bool>>,
     callees: Vec<Callee<'a>>,
@@ -896,31 +1129,37 @@ struct Lowering<'a> {
     refused: std::cell::RefCell<Option<String>>,
 }
 
+/// Local values, one entry per source local: `None` where it carries nothing.
+type Locals = [Option<Held>];
+
 impl Lowering<'_> {
-    /// The class a term answers at, which is how wide what it answers can
-    /// be. Two scalar values of one type may be held differently, while an
-    /// aggregate keeps the cell class selected for its source type.
-    fn class(&self, ty: barb::TypeId, bounds: barb::Bounds) -> Class {
+    /// What a term answers as. Two scalar values of one type may be held
+    /// at different widths, while an aggregate keeps the representation
+    /// selected for its source type.
+    fn carried(&self, ty: barb::TypeId, bounds: barb::Bounds) -> Carried {
         self.carries[ty.index()]
-            .class(bounds)
+            .held(bounds)
             .expect("a carried type has a class")
     }
 
-    fn field_class(&self, ty: barb::TypeId) -> Option<Class> {
-        match self.carries[ty.index()] {
-            Storage::Cell => Some(Class::Cell),
-            Storage::Scalar
-                if matches!(
-                    barb::type_shape(self.barb, ty),
-                    barb::TypeShape::Enumeration
-                ) =>
-            {
-                Some(Class::Word)
-            }
-            Storage::Scalar => Some(Class::Natural),
-            Storage::Erased => None,
-            Storage::Undemanded => panic!("a bound field type must have been demanded"),
-        }
+    fn classes<'a>(&'a self, carried: &'a Carried) -> &'a [Class] {
+        classes(&self.leaves, carried)
+    }
+
+    /// What a join carries out, one class per machine value.
+    fn join(&self, answer: Answer<Carried>) -> Vec<Class> {
+        answer
+            .held()
+            .map_or_else(Vec::new, |carried| self.classes(&carried).to_vec())
+    }
+
+    fn field_carried(&self, ctor: barb::CtorId, at: usize) -> Option<Carried> {
+        field_carried(self.barb, self.facts, &self.carries, ctor, at)
+    }
+
+    /// What each field of `ctor` is held as, in order.
+    fn fields_carried(&self, ctor: barb::CtorId) -> impl Iterator<Item = Option<Carried>> + '_ {
+        (0..self.barb.fields(ctor).len()).map(move |at| self.field_carried(ctor, at))
     }
 
     fn width(&self, id: barb::ExprId) -> Class {
@@ -945,26 +1184,15 @@ impl Lowering<'_> {
             let result = self.barb.function(id).result;
             ReturnTo::Function(
                 self.carries[result.index()]
-                    .class(self.facts.answers(id))
-                    .unwrap_or(Class::Word),
+                    .held(self.facts.answers(id))
+                    .map_or_else(Vec::new, |carried| self.classes(&carried).to_vec()),
             )
         };
         machine.try_define(into, |b, params| {
-            let mut taken = params.iter().copied();
-            // Erased parameters take no machine slot; match the rest in order.
-            let mut locals: Vec<Option<ValueId>> = self
-                .barb
-                .params(id)
-                .iter()
-                .zip(&self.takes[id.index()])
-                .map(|(ty, used)| {
-                    (*used && self.carries[ty.index()].carried())
-                        .then(|| taken.next().expect("a parameter"))
-                })
-                .collect();
+            let mut locals = self.parameters(id, params);
             let mut statics = vec![None; locals.len()];
             let answer = self.body(b, body, &mut locals, &mut statics);
-            returned(b, answer, destination)
+            returned(b, answer, &destination)
         })?;
         // A body is built before this can be read: emission answers values,
         // and what it could not lay out is said once, here, where lowering
@@ -972,14 +1200,38 @@ impl Lowering<'_> {
         self.refused.borrow_mut().take().map_or(Ok(()), Err)
     }
 
+    /// The source parameters, as the machine ones hold them. Erased and
+    /// unused parameters take no machine slot and a flat product takes one
+    /// per leaf; the rest match in order.
+    fn parameters(&self, id: barb::FnId, params: &[ValueId]) -> Vec<Option<Held>> {
+        let mut taken = params.iter().copied();
+        self.barb
+            .params(id)
+            .iter()
+            .zip(self.facts.takes(id))
+            .zip(&self.takes[id.index()])
+            .map(|((ty, bounds), used)| {
+                (*used && self.carries[ty.index()].carried()).then(|| {
+                    let carried = self.carried(*ty, *bounds);
+                    let values: Vec<_> = self
+                        .classes(&carried)
+                        .iter()
+                        .map(|_| taken.next().expect("a parameter"))
+                        .collect();
+                    Held::of(carried, &values)
+                })
+            })
+            .collect()
+    }
+
     /// Each binding takes the next local, then the tail answers.
     fn body(
         &self,
         b: &mut super::Builder,
         body: barb::Body,
-        locals: &mut Vec<Option<ValueId>>,
+        locals: &mut Vec<Option<Held>>,
         statics: &mut Vec<Option<barb::ConstId>>,
-    ) -> Answer<ValueId> {
+    ) -> Answer<Held> {
         for &binding in self.barb.bindings(body.bindings) {
             let static_value = self.propagate_static(binding, statics);
             match self.expr(b, binding, locals, statics) {
@@ -1016,11 +1268,11 @@ impl Lowering<'_> {
         &self,
         b: &mut super::Builder,
         expr: barb::ExprId,
-        locals: &[Option<ValueId>],
+        locals: &Locals,
         statics: &[Option<barb::ConstId>],
-    ) -> Answer<ValueId> {
+    ) -> Answer<Held> {
         match self.barb.expr(expr) {
-            barb::Expr::Atom(atom) => locals[atom.0.index()].into(),
+            barb::Expr::Atom(atom) => locals[atom.0.index()].clone().into(),
             // A value the tier above worked out, as the word it lowers to:
             // which constructor for a tag, and what it counts to for a
             // number. One that carries nothing is nothing to carry.
@@ -1030,8 +1282,8 @@ impl Lowering<'_> {
                 if !self.carries[id.index()].carried() {
                     return Answer::Nothing;
                 }
-                let class = self.class(id, self.facts.held(expr));
-                Answer::Value(self.static_value(b, class, value))
+                let carried = self.carried(id, self.facts.held(expr));
+                Answer::Value(self.static_held(b, carried, value))
             }
             barb::Expr::Con(ctor, args) => self.construct(b, expr, ctor, args, locals).into(),
             barb::Expr::Call(function, args) => self.call(b, expr, function, args, locals, statics),
@@ -1041,12 +1293,32 @@ impl Lowering<'_> {
             // that is already decided.
             barb::Expr::Match(scrutinee, arms) => self.branch(
                 b,
-                locals[scrutinee.0.index()],
+                locals[scrutinee.0.index()].as_ref(),
                 arms,
                 locals,
                 statics,
                 self.facts.matched(expr),
             ),
+        }
+    }
+
+    /// A known value, held as its type is.
+    fn static_held(
+        &self,
+        b: &mut super::Builder,
+        carried: Carried,
+        value: barb::Constant<'_>,
+    ) -> Held {
+        match carried {
+            Carried::One(class) => Held::One(self.static_value(b, class, value)),
+            Carried::Flat(leaves) => {
+                let mut values = Vec::new();
+                self.static_leaves(b, value, &mut values);
+                Held::Flat {
+                    leaves,
+                    values: values.into(),
+                }
+            }
         }
     }
 
@@ -1085,8 +1357,14 @@ impl Lowering<'_> {
         }
     }
 
-    /// Build one known object, its fields at the classes the cell says.
-    fn static_cell(&self, b: &mut super::Builder, ctor: barb::ConstructorView<'_>) -> ValueId {
+    /// The fields of one known constructor, each as the values it is held
+    /// in, end to end.
+    fn static_fields(
+        &self,
+        b: &mut super::Builder,
+        ctor: barb::ConstructorView<'_>,
+        out: &mut Vec<ValueId>,
+    ) {
         let mut budget = barb::Budget::new(barb::FoldLimits {
             work: u64::MAX,
             max_bytes: usize::MAX,
@@ -1095,16 +1373,33 @@ impl Lowering<'_> {
         let values = ctor
             .fields(&mut budget)
             .expect("validated constants can be revisited");
-        let fields: Vec<_> = self
-            .barb
-            .fields(ctor.constructor())
-            .iter()
-            .zip(values)
-            .filter_map(|(&ty, value)| {
-                self.field_class(ty)
-                    .map(|class| self.static_value(b, class, value))
-            })
-            .collect();
+        for (carried, value) in self.fields_carried(ctor.constructor()).zip(values) {
+            match carried {
+                Some(Carried::One(class)) => out.push(self.static_value(b, class, value)),
+                Some(Carried::Flat(_)) => self.static_leaves(b, value, out),
+                None => {}
+            }
+        }
+    }
+
+    /// A known product's leaves.
+    fn static_leaves(
+        &self,
+        b: &mut super::Builder,
+        value: barb::Constant<'_>,
+        out: &mut Vec<ValueId>,
+    ) {
+        let value = barb::single_field_constant(self.barb, value);
+        let barb::ConstantView::Constructor(ctor) = value.view() else {
+            unreachable!("a product constant is a constructor");
+        };
+        self.static_fields(b, ctor, out);
+    }
+
+    /// Build one known object, its fields at the classes the cell says.
+    fn static_cell(&self, b: &mut super::Builder, ctor: barb::ConstructorView<'_>) -> ValueId {
+        let mut fields = Vec::new();
+        self.static_fields(b, ctor, &mut fields);
         b.cell(self.barb.tag(ctor.constructor()), &fields)
     }
 
@@ -1123,7 +1418,13 @@ impl Lowering<'_> {
         else {
             unreachable!("a spine-encoded constant has a sequence type");
         };
-        let element = self.field_class(element);
+        let at = usize::from(recursive == 0);
+        debug_assert_eq!(self.barb.fields(push)[at], element);
+        let element = match self.field_carried(push, at) {
+            Some(Carried::One(class)) => Some(class),
+            Some(Carried::Flat(_)) => unreachable!("a byte is not a product"),
+            None => None,
+        };
         let mut held = b.cell(self.barb.tag(empty), &[]);
         for &byte in bytes.iter().rev() {
             let mut fields = Vec::with_capacity(2);
@@ -1159,18 +1460,23 @@ impl Lowering<'_> {
         expr: barb::ExprId,
         function: barb::FnId,
         arguments: barb::Range,
-        locals: &[Option<ValueId>],
+        locals: &Locals,
         statics: &[Option<barb::ConstId>],
-    ) -> Answer<ValueId> {
+    ) -> Answer<Held> {
         let (results, answers) = match &self.callees[function.index()] {
             Callee::Instruction(operation) => {
                 let args = self.call_arguments(function, arguments, locals);
                 if matches!(operation, barb::Operation::Add | barb::Operation::Mul)
                     && let Some(affine) = self.facts.affine(expr)
                 {
-                    return Answer::Value(self.affine(b, expr, affine, locals));
+                    return Answer::Value(Held::One(self.affine(b, expr, affine, locals)));
                 }
-                return Answer::Value(self.operation(b, *operation, self.width(expr), &args));
+                return Answer::Value(Held::One(self.operation(
+                    b,
+                    *operation,
+                    self.width(expr),
+                    &args,
+                )));
             }
             Callee::External {
                 id,
@@ -1191,38 +1497,68 @@ impl Lowering<'_> {
             }
             Callee::Unreachable => unreachable!("a lowered call must have been demanded"),
         };
-        // A call answers what its result type does, which is nothing ever
-        // where that type has no values -- and it answers at the width the
-        // name it calls was declared at, which the caller may hold wider.
-        self.answer(self.barb.function(function).result).map(|_| {
-            let class = self.class(self.barb.function(function).result, self.facts.held(expr));
+        self.answered(b, expr, function, &results, answers)
+    }
+
+    /// What a call answers: what its result type does, which is nothing
+    /// ever where that type has no values -- and at the width the name it
+    /// calls was declared at, which the caller may hold wider.
+    fn answered(
+        &self,
+        b: &mut super::Builder,
+        expr: barb::ExprId,
+        function: barb::FnId,
+        results: &[ValueId],
+        answers: Option<Class>,
+    ) -> Answer<Held> {
+        let result = self.barb.function(function).result;
+        self.answer(result).map(|()| {
+            let carried = self.carried(result, self.facts.held(expr));
+            let Carried::One(class) = carried else {
+                return Held::of(carried, results);
+            };
             let held = *results.first().expect("a result where a type carries one");
-            if answers == Some(Class::Word) {
+            Held::One(if answers == Some(Class::Word) {
                 held
             } else if answers.is_some_and(|answers| !answers.fits(class)) {
                 b.convert(class, held)
             } else {
                 held
-            }
+            })
         })
     }
 
+    /// The machine values a call hands over: each carried argument's, end
+    /// to end.
     fn call_arguments(
         &self,
         function: barb::FnId,
         args: barb::Range,
-        locals: &[Option<ValueId>],
+        locals: &Locals,
     ) -> Vec<ValueId> {
-        self.barb
+        let mut values = Vec::new();
+        for ((atom, _), _) in self
+            .barb
             .atoms(args)
             .iter()
             .zip(self.barb.params(function))
             .zip(&self.takes[function.index()])
             .filter(|((_, ty), used)| **used && self.carries[ty.index()].carried())
-            .map(|((atom, _), _)| {
-                locals[atom.0.index()].expect("a demanded call argument to carry a value")
-            })
-            .collect()
+        {
+            let held = locals[atom.0.index()]
+                .as_ref()
+                .expect("a demanded call argument to carry a value");
+            values.extend_from_slice(held.values());
+        }
+        values
+    }
+
+    /// The one value a scalar local is held in.
+    fn scalar(locals: &Locals, atom: barb::Atom) -> ValueId {
+        locals[atom.0.index()]
+            .as_ref()
+            .expect("a scalar local to carry a value")
+            .one()
     }
 
     /// Materialize a target-independent affine summary as machine arithmetic.
@@ -1233,12 +1569,12 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         expr: barb::ExprId,
         affine: &barb::Affine,
-        locals: &[Option<ValueId>],
+        locals: &Locals,
     ) -> ValueId {
         let class = self.width(expr);
         let mut answer = None;
         for &(atom, coefficient) in &affine.terms {
-            let value = locals[atom.0.index()].expect("an affine term to carry a value");
+            let value = Self::scalar(locals, atom);
             let term = match coefficient {
                 1 => value,
                 // Preserve the primitive operation already present in x+x.
@@ -1278,7 +1614,7 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         function: barb::FnId,
         arguments: barb::Range,
-        locals: &[Option<ValueId>],
+        locals: &Locals,
         statics: &[Option<barb::ConstId>],
         handed: &[Handed],
     ) -> Vec<ValueId> {
@@ -1291,9 +1627,7 @@ impl Lowering<'_> {
             .filter(|(_, ty)| self.carries[ty.index()] != Storage::Erased);
         for ((atom, _), handed) in carried.zip(handed) {
             match handed {
-                Handed::Value(_) => args.push(
-                    locals[atom.0.index()].expect("a demanded call argument to carry a value"),
-                ),
+                Handed::Value(_) => args.push(Self::scalar(locals, *atom)),
                 Handed::Bytes => {
                     // Something outside reads bytes where they lie, which
                     // is somewhere only a value known before the program
@@ -1379,72 +1713,92 @@ impl Lowering<'_> {
     /// A tag is which constructor it is. A number's empty constructor is
     /// nought and its other one counts up -- which is not the same as its
     /// tag, since a program may write `Succ` before `Zero`. One that
-    /// carries nothing builds nothing.
+    /// carries nothing builds nothing, and a product held flat is only its
+    /// fields' values, so building one writes nothing either.
     fn construct(
         &self,
         b: &mut super::Builder,
         expr: barb::ExprId,
         ctor: barb::CtorId,
         args: barb::Range,
-        locals: &[Option<ValueId>],
-    ) -> Option<ValueId> {
+        locals: &Locals,
+    ) -> Option<Held> {
         let owner = self.barb.ctor(ctor).owner;
         if !self.carries[owner.index()].carried() {
             return None;
         }
-        let class = self.class(owner, self.facts.held(expr));
         if barb::single_field(self.barb, owner).is_some() {
             let atom = self.barb.atoms(args)[0];
-            return Some(locals[atom.0.index()].expect("a transparent field to carry a value"));
+            return Some(
+                locals[atom.0.index()]
+                    .clone()
+                    .expect("a transparent field to carry a value"),
+            );
         }
+        let class = match self.carried(owner, self.facts.held(expr)) {
+            Carried::Flat(leaves) => {
+                let mut values = Vec::new();
+                self.field_values(b, ctor, args, locals, &mut values);
+                return Some(Held::Flat {
+                    leaves,
+                    values: values.into(),
+                });
+            }
+            Carried::One(class) => class,
+        };
         if class == Class::Cell {
-            return Some(self.build_cell(b, ctor, args, locals));
+            let mut fields = Vec::new();
+            self.field_values(b, ctor, args, locals, &mut fields);
+            return Some(Held::One(b.cell(self.barb.tag(ctor), &fields)));
         }
         if tagged(self.barb, owner) {
-            return Some(b.constant(class, u64::from(self.barb.tag(ctor))));
+            return Some(Held::One(b.constant(class, u64::from(self.barb.tag(ctor)))));
         }
-        let Some(&atom) = self.barb.atoms(args).first() else {
-            return Some(b.constant(class, 0));
-        };
-        let one = b.constant(class, 1);
-        let held = locals[atom.0.index()].expect("a field that carries something");
-        Some(super::arithmetic::lower(
-            b,
-            barb::Operation::Add,
-            class,
-            held,
-            one,
-        ))
+        Some(Held::One(self.count(b, class, args, locals)))
     }
 
-    /// Build one object, its fields at the classes the cell says.
+    /// A number built from constructors: nought, or one more than its field.
+    fn count(
+        &self,
+        b: &mut super::Builder,
+        class: Class,
+        args: barb::Range,
+        locals: &Locals,
+    ) -> ValueId {
+        let Some(&atom) = self.barb.atoms(args).first() else {
+            return b.constant(class, 0);
+        };
+        let one = b.constant(class, 1);
+        let held = Self::scalar(locals, atom);
+        super::arithmetic::lower(b, barb::Operation::Add, class, held, one)
+    }
+
+    /// A constructor's fields, each as the values it is held in, at the
+    /// classes its field type says.
     ///
     /// What a value was worked out as says how wide it needs to be, not
     /// where it is kept: storing a number where a projection expects an
     /// arbitrary-precision one and reading it back would read a count as
     /// though it were an address.
-    fn build_cell(
+    fn field_values(
         &self,
         b: &mut super::Builder,
         ctor: barb::CtorId,
         args: barb::Range,
-        locals: &[Option<ValueId>],
-    ) -> ValueId {
-        let held: Vec<_> = self
-            .barb
-            .atoms(args)
-            .iter()
-            .zip(self.barb.fields(ctor))
-            .filter_map(|(atom, ty)| {
-                let class = self.field_class(*ty)?;
-                Some((locals[atom.0.index()].expect("a carried cell field"), class))
-            })
-            .collect();
-        let fields: Vec<_> = held
-            .into_iter()
-            .map(|(value, class)| met(b, value, class))
-            .collect();
-        b.cell(self.barb.tag(ctor), &fields)
+        locals: &Locals,
+        out: &mut Vec<ValueId>,
+    ) {
+        for (atom, carried) in self.barb.atoms(args).iter().zip(self.fields_carried(ctor)) {
+            let Some(carried) = carried else {
+                continue;
+            };
+            let held = locals[atom.0.index()]
+                .as_ref()
+                .expect("a carried field to carry a value");
+            for (&value, &class) in held.values().iter().zip(self.classes(&carried)) {
+                out.push(met(b, value, class));
+            }
+        }
     }
 
     /// Matching a number asks whether it is nought; the other arm counts the
@@ -1456,12 +1810,12 @@ impl Lowering<'_> {
     fn branch(
         &self,
         b: &mut super::Builder,
-        scrutinee: Option<ValueId>,
+        scrutinee: Option<&Held>,
         arms: barb::Range,
-        locals: &[Option<ValueId>],
+        locals: &Locals,
         statics: &[Option<barb::ConstId>],
         bounds: barb::Bounds,
-    ) -> Answer<ValueId> {
+    ) -> Answer<Held> {
         let mut arms = reachable(self.barb, arms, bounds);
         let Some(first) = arms.next() else {
             return Answer::Never;
@@ -1469,26 +1823,22 @@ impl Lowering<'_> {
         let Some(second) = arms.next() else {
             return self.only_arm(b, scrutinee, &first, locals, statics);
         };
-        // More than one arm means the value says which, so it is held.
-        let scrutinee = scrutinee.expect("a tested value is carried");
+        // More than one arm means the value says which, so it is held, and
+        // held in one value: only a product is held flat, and it has one.
+        let scrutinee = scrutinee.expect("a tested value is carried").one();
         let owner = self.barb.ctor(first.ctor).owner;
         if self.carries[owner.index()] == Storage::Cell {
             let planned = {
                 let mut carried: Vec<_> = locals
                     .iter()
-                    .map(|value| value.map(|value| b.class(value)))
+                    .map(|value| value.as_ref().map(|value| value.carried(b)))
                     .collect();
                 let base = carried.len();
                 let mut planned: Vec<_> = [first, second]
                     .into_iter()
                     .chain(arms)
                     .map(|arm| {
-                        carried.extend(
-                            self.barb
-                                .fields(arm.ctor)
-                                .iter()
-                                .map(|&ty| self.field_class(ty)),
-                        );
+                        carried.extend(self.fields_carried(arm.ctor));
                         let suffix = self.body_answer(arm.body, &mut carried);
                         carried.truncate(base);
                         TagArm { arm, suffix }
@@ -1502,7 +1852,7 @@ impl Lowering<'_> {
                 planned
             };
             let tag = b.cell_tag(scrutinee);
-            return self.cell_tags(b, Some(scrutinee), tag, &planned, locals, statics);
+            return self.cell_tags(b, scrutinee, tag, &planned, locals, statics);
         }
         // A number is the one thing left that is held as a scalar and still
         // has two arms: which constructor it is, is whether it is nought.
@@ -1520,7 +1870,7 @@ impl Lowering<'_> {
         let arms = {
             let mut carried = locals
                 .iter()
-                .map(|value| value.map(|value| b.class(value)))
+                .map(|value| value.as_ref().map(|value| value.carried(b)))
                 .collect();
             tag_plan([first, second].into_iter().chain(arms), |body| {
                 self.body_answer(body, &mut carried)
@@ -1536,9 +1886,9 @@ impl Lowering<'_> {
         scrutinee: ValueId,
         empty: &barb::Arm,
         counted: &barb::Arm,
-        locals: &[Option<ValueId>],
+        locals: &Locals,
         statics: &[Option<barb::ConstId>],
-    ) -> Answer<ValueId> {
+    ) -> Answer<Held> {
         let class = b.class(scrutinee);
         // Both arms answer alike, so whichever of them comes back says what
         // the match holds. An arm that leaves says nothing about it.
@@ -1547,45 +1897,45 @@ impl Lowering<'_> {
         let answer = {
             let mut carried = locals
                 .iter()
-                .map(|value| value.map(|value| b.class(value)))
+                .map(|value| value.as_ref().map(|value| value.carried(b)))
                 .collect();
             let answer = self.body_answer(empty.body, &mut carried);
-            carried.push(Some(class));
+            carried.push(Some(Carried::One(class)));
             widest(answer, self.body_answer(counted.body, &mut carried))
         };
-        let held = answer.held();
+        let join = self.join(answer);
         let nought = b.constant(class, 0);
         let is_nought = b.compare(Relation::Equal, scrutinee, nought);
         let results = b.if_(
             is_nought,
-            held.as_slice(),
+            &join,
             |b| {
                 let mut inner = locals.to_vec();
                 let mut inner_statics = statics.to_vec();
                 let answer = self.body(b, empty.body, &mut inner, &mut inner_statics);
-                yielded(b, answer, held.as_slice());
+                yielded(b, answer, &join);
             },
             |b| {
                 let mut inner = locals.to_vec();
                 let mut inner_statics = statics.to_vec();
                 let one = b.constant(class, 1);
-                inner.push(Some(b.binary(Binary::Sub, scrutinee, one)));
+                inner.push(Some(Held::One(b.binary(Binary::Sub, scrutinee, one))));
                 inner_statics.push(None);
                 let answer = self.body(b, counted.body, &mut inner, &mut inner_statics);
-                yielded(b, answer, held.as_slice());
+                yielded(b, answer, &join);
             },
         );
-        answer.map(|_| *results.first().expect("a result where the arms carry one"))
+        answer.map(|carried| Held::of(carried, &results))
     }
 
     fn only_arm(
         &self,
         b: &mut super::Builder,
-        scrutinee: Option<ValueId>,
+        scrutinee: Option<&Held>,
         arm: &barb::Arm,
-        locals: &[Option<ValueId>],
+        locals: &Locals,
         statics: &[Option<barb::ConstId>],
-    ) -> Answer<ValueId> {
+    ) -> Answer<Held> {
         let mut inner = locals.to_vec();
         let mut inner_statics = statics.to_vec();
         let owner = self.barb.ctor(arm.ctor).owner;
@@ -1597,28 +1947,31 @@ impl Lowering<'_> {
             // class is the product's -- and taking one apart here would
             // take the product apart a step early.
             if barb::single_field(self.barb, owner).is_some() {
-                inner.push(Some(scrutinee));
+                inner.push(Some(scrutinee.clone()));
                 inner_statics.push(None);
+            } else if let Storage::Flat(_) = self.carries[owner.index()] {
+                self.bind_flat_fields(scrutinee.values(), arm.ctor, &mut inner, &mut inner_statics);
             } else if self.carries[owner.index()] == Storage::Cell {
-                self.bind_cell_fields(b, scrutinee, arm.ctor, &mut inner, &mut inner_statics);
+                self.bind_cell_fields(b, scrutinee.one(), arm.ctor, &mut inner, &mut inner_statics);
             } else if let barb::TypeShape::Sequence { push, .. }
             | barb::TypeShape::Natural { push, .. }
             | barb::TypeShape::Spine { push, .. } = barb::type_shape(self.barb, owner)
                 && arm.ctor == push
             {
+                let scrutinee = scrutinee.one();
                 let one = b.constant(b.class(scrutinee), 1);
-                inner.push(Some(b.binary(Binary::Sub, scrutinee, one)));
+                inner.push(Some(Held::One(b.binary(Binary::Sub, scrutinee, one))));
                 inner_statics.push(None);
             }
         } else {
             // The arm still binds what its constructor declares, and a
             // constructor of a type carrying nothing declares nothing that
             // is carried either.
-            for &ty in self.barb.fields(arm.ctor) {
+            for carried in self.fields_carried(arm.ctor) {
                 inner.push(None);
                 inner_statics.push(None);
                 debug_assert!(
-                    self.field_class(ty).is_none(),
+                    carried.is_none(),
                     "a carried field belongs to a carried type"
                 );
             }
@@ -1626,20 +1979,49 @@ impl Lowering<'_> {
         self.body(b, arm.body, &mut inner, &mut inner_statics)
     }
 
+    /// Taking a flat product apart reads nothing: each field is the run of
+    /// its leaves, where construction laid them.
+    fn bind_flat_fields(
+        &self,
+        values: &[ValueId],
+        ctor: barb::CtorId,
+        locals: &mut Vec<Option<Held>>,
+        statics: &mut Vec<Option<barb::ConstId>>,
+    ) {
+        let mut rest = values;
+        for carried in self.fields_carried(ctor) {
+            let field = carried.map(|carried| {
+                let (field, after) = rest.split_at(self.classes(&carried).len());
+                rest = after;
+                Held::of(carried, field)
+            });
+            locals.push(field);
+            statics.push(None);
+        }
+        debug_assert!(rest.is_empty(), "every leaf belongs to a field");
+    }
+
     fn bind_cell_fields(
         &self,
         b: &mut super::Builder,
         scrutinee: ValueId,
         ctor: barb::CtorId,
-        locals: &mut Vec<Option<ValueId>>,
+        locals: &mut Vec<Option<Held>>,
         statics: &mut Vec<Option<barb::ConstId>>,
     ) {
         let mut index = 0;
-        for &ty in self.barb.fields(ctor) {
-            let field = self.field_class(ty).map(|class| {
-                let field = b.cell_field(class, scrutinee, index);
-                index += 1;
-                field
+        for carried in self.fields_carried(ctor) {
+            let field = carried.map(|carried| {
+                let values: Vec<_> = self
+                    .classes(&carried)
+                    .iter()
+                    .map(|&class| {
+                        let field = b.cell_field(class, scrutinee, index);
+                        index += 1;
+                        field
+                    })
+                    .collect();
+                Held::of(carried, &values)
             });
             locals.push(field);
             statics.push(None);
@@ -1659,9 +2041,9 @@ impl Lowering<'_> {
         scrutinee: ValueId,
         class: Class,
         arms: &[TagArm],
-        locals: &[Option<ValueId>],
+        locals: &Locals,
         statics: &[Option<barb::ConstId>],
-    ) -> Answer<ValueId> {
+    ) -> Answer<Held> {
         let (
             TagArm {
                 arm,
@@ -1674,35 +2056,35 @@ impl Lowering<'_> {
             let mut inner_statics = statics.to_vec();
             return self.body(b, arm.body, &mut inner, &mut inner_statics);
         }
-        let held = answer.held();
+        let join = self.join(*answer);
         let tag = b.constant(class, u64::from(self.barb.tag(arm.ctor)));
         let is_this_one = b.compare(Relation::Equal, scrutinee, tag);
         let results = b.if_(
             is_this_one,
-            held.as_slice(),
+            &join,
             |b| {
                 let mut inner = locals.to_vec();
                 let mut inner_statics = statics.to_vec();
                 let answer = self.body(b, arm.body, &mut inner, &mut inner_statics);
-                yielded(b, answer, held.as_slice());
+                yielded(b, answer, &join);
             },
             |b| {
                 let answer = self.tags(b, scrutinee, class, rest, locals, statics);
-                yielded(b, answer, held.as_slice());
+                yielded(b, answer, &join);
             },
         );
-        answer.map(|_| *results.first().expect("a result where the arms carry one"))
+        answer.map(|carried| Held::of(carried, &results))
     }
 
     fn cell_tags(
         &self,
         b: &mut super::Builder,
-        scrutinee: Option<ValueId>,
+        scrutinee: ValueId,
         discriminator: ValueId,
         arms: &[TagArm],
-        locals: &[Option<ValueId>],
+        locals: &Locals,
         statics: &[Option<barb::ConstId>],
-    ) -> Answer<ValueId> {
+    ) -> Answer<Held> {
         let (
             TagArm {
                 arm,
@@ -1710,25 +2092,26 @@ impl Lowering<'_> {
             },
             rest,
         ) = arms.split_first().expect("an arm to match");
+        let held = Held::One(scrutinee);
         if rest.is_empty() {
-            return self.only_arm(b, scrutinee, arm, locals, statics);
+            return self.only_arm(b, Some(&held), arm, locals, statics);
         }
-        let held = answer.held();
+        let join = self.join(*answer);
         let tag = b.constant(Class::Word, u64::from(self.barb.tag(arm.ctor)));
         let is_this_one = b.compare(Relation::Equal, discriminator, tag);
         let results = b.if_(
             is_this_one,
-            held.as_slice(),
+            &join,
             |b| {
-                let answer = self.only_arm(b, scrutinee, arm, locals, statics);
-                yielded(b, answer, held.as_slice());
+                let answer = self.only_arm(b, Some(&held), arm, locals, statics);
+                yielded(b, answer, &join);
             },
             |b| {
                 let answer = self.cell_tags(b, scrutinee, discriminator, rest, locals, statics);
-                yielded(b, answer, held.as_slice());
+                yielded(b, answer, &join);
             },
         );
-        answer.map(|_| *results.first().expect("a result where the arms carry one"))
+        answer.map(|carried| Held::of(carried, &results))
     }
 
     /// What a body answers, read off its shape: an `if` has to be told what
@@ -1736,7 +2119,7 @@ impl Lowering<'_> {
     ///
     /// Local presence is occurrence-specific, not an `ExprId` cache. Reuse the
     /// scratch stack across siblings, restoring it even when a binding exits.
-    fn body_answer(&self, body: barb::Body, carried: &mut Vec<Option<Class>>) -> Answer<Class> {
+    fn body_answer(&self, body: barb::Body, carried: &mut Vec<Option<Carried>>) -> Answer<Carried> {
         let base = carried.len();
         let answer = 'body: {
             for &binding in self.barb.bindings(body.bindings) {
@@ -1752,55 +2135,52 @@ impl Lowering<'_> {
         answer
     }
 
-    fn expr_answer(&self, expr: barb::ExprId, carried: &mut Vec<Option<Class>>) -> Answer<Class> {
+    fn expr_answer(
+        &self,
+        expr: barb::ExprId,
+        carried: &mut Vec<Option<Carried>>,
+    ) -> Answer<Carried> {
         match self.barb.expr(expr) {
             barb::Expr::Static(value) => {
                 let ty = self.barb.constant(value).owner();
                 self.answer(ty)
-                    .map(|_| self.class(ty, self.facts.held(expr)))
+                    .map(|()| self.carried(ty, self.facts.held(expr)))
             }
             barb::Expr::Con(ctor, _) => {
                 let ty = self.barb.ctor(ctor).owner;
                 self.answer(ty)
-                    .map(|_| self.class(ty, self.facts.held(expr)))
+                    .map(|()| self.carried(ty, self.facts.held(expr)))
             }
             barb::Expr::Call(function, _) => {
                 let ty = self.barb.function(function).result;
                 self.answer(ty)
-                    .map(|_| self.class(ty, self.facts.held(expr)))
+                    .map(|()| self.carried(ty, self.facts.held(expr)))
             }
             barb::Expr::Match(_, arms) => {
                 let base = carried.len();
                 let mut answer = Answer::Never;
                 for arm in reachable(self.barb, arms, self.facts.matched(expr)) {
-                    carried.extend(
-                        self.barb
-                            .fields(arm.ctor)
-                            .iter()
-                            .map(|&ty| self.field_class(ty)),
-                    );
+                    carried.extend(self.fields_carried(arm.ctor));
                     answer = widest(answer, self.body_answer(arm.body, carried));
                     carried.truncate(base);
                 }
                 answer
             }
             barb::Expr::Atom(atom) => match carried[atom.0.index()] {
-                Some(Class::Cell) => Answer::Value(Class::Cell),
-                Some(_) => Answer::Value(self.width(expr)),
+                Some(Carried::One(Class::Cell)) => Answer::Value(Carried::One(Class::Cell)),
+                Some(Carried::One(_)) => Answer::Value(Carried::One(self.width(expr))),
+                Some(flat @ Carried::Flat(_)) => Answer::Value(flat),
                 None => Answer::Nothing,
             },
         }
     }
 
-    /// What a type answers with: its class, nothing where it carries
+    /// Whether a type answers with a value, nothing where it carries
     /// nothing, and nothing ever where it has no values at all.
-    fn answer(&self, id: barb::TypeId) -> Answer<Class> {
+    fn answer(&self, id: barb::TypeId) -> Answer<()> {
         if uninhabited(self.barb, id) {
             return Answer::Never;
         }
-        self.carries[id.index()]
-            .carried()
-            .then_some(Class::Word)
-            .into()
+        self.carries[id.index()].carried().then_some(()).into()
     }
 }

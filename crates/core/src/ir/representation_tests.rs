@@ -121,15 +121,34 @@ fn default_pipeline_accepts_runtime_product_programs() {
     }
 }
 
+/// A byte is a product of eight flags, held flat as eight words; a signed
+/// number is a sum carrying a payload, held as a cell. Neither unused
+/// binding is erased by lowering.
 #[test]
 fn runtime_products_and_signed_sums_lower_without_erasing_unused_bindings() {
-    for text in [
-        "main!(h) -> n = argc!(h) byte = u8_from_nat_wrapping(n) converted = u8_to_nat(byte) exit!(h Zero)",
-        "main!(h) -> n = argc!(h) signed = int_from_nat(n) magnitude = int_abs(signed) exit!(h Zero)",
-        "main!(h) -> byte = u8_zero() exit!(h Zero)",
+    for (text, cells) in [
+        (
+            "main!(h) -> n = argc!(h) byte = u8_from_nat_wrapping(n) converted = u8_to_nat(byte) exit!(h Zero)",
+            false,
+        ),
+        (
+            "main!(h) -> n = argc!(h) signed = int_from_nat(n) magnitude = int_abs(signed) exit!(h Zero)",
+            true,
+        ),
+        ("main!(h) -> byte = u8_zero() exit!(h Zero)", false),
     ] {
         let machine = lower_program(&parse(&library(text))).unwrap();
-        assert!(machine.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
+        validate(&machine).unwrap();
+        assert_eq!(
+            machine.ops.iter().any(|op| matches!(op, Op::Cell { .. })),
+            cells,
+            "{}",
+            machine.render()
+        );
+        assert!(
+            bodies(&machine) > 1,
+            "the library calls are lowered, not erased"
+        );
     }
 }
 
@@ -219,9 +238,8 @@ fn detached_arena_expressions_do_not_demand_a_representation() {
 }
 
 /// A wrapper around a product is held as that product, so matching one binds
-/// the product itself rather than taking a step into it. Reading it as a
-/// cell would project a field a step early and hand a count back where an
-/// address was expected.
+/// the product itself rather than taking a step into it. Both are held flat,
+/// so nothing is built and nothing is read back.
 #[test]
 fn a_wrapper_around_a_product_stays_transparent_when_matched() {
     let text = library(
@@ -238,31 +256,38 @@ fn a_wrapper_around_a_product_stays_transparent_when_matched() {
     let machine = lower_program(&parse(&text)).unwrap();
     validate(&machine).unwrap();
     let rendered = machine.render();
-    // One object is built for the product; the wrapper adds none, so
-    // nothing steps into the wrapper. Taking it apart as though it were a
-    // cell would project the product out of itself, which shows up as a
-    // projection answering another cell.
-    assert_eq!(rendered.matches("= cell ").count(), 1, "{rendered}");
-    for (op, results) in machine
+    assert!(
+        !machine
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::Cell { .. } | Op::CellField { .. })),
+        "{rendered}"
+    );
+    // The wrapper and the product it holds are the same two values.
+    let unbox = machine
         .functions()
         .iter()
-        .filter_map(Function::body)
-        .flat_map(|body| machine.walk_within(body))
-    {
-        assert!(
-            !matches!(op, Op::CellField { .. }) || machine.class(results[0]) != Class::Cell,
-            "{rendered}"
-        );
-    }
+        .find(|function| machine.name(function.name) == "unbox")
+        .expect("unbox is lowered");
+    assert_eq!(
+        machine.signature(unbox.params),
+        machine.signature(unbox.returns.classes())
+    );
+    assert_eq!(machine.signature(unbox.params).len(), 2, "{rendered}");
 }
 
 /// A cell's fields are held at the class the cell says, which is the class a
 /// projection reads them back at. Storing a value at whatever width it was
 /// worked out as would let a projection read a count as an address.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture declares its types, builds its values, and checks facts and evaluation"
+)]
 fn cell_fields_are_held_at_the_class_their_projection_reads() {
     let text = library(
-        "type Pair MkPair(Nat Nat)
+        "type Pair NoPair MkPair(Nat Nat)
+         first(NoPair) -> Zero
          first(MkPair(a b)) -> a
          main!(h) ->
            n = argc!(h)
@@ -271,29 +296,41 @@ fn cell_fields_are_held_at_the_class_their_projection_reads() {
     );
     let machine = lower_program(&parse(&text)).unwrap();
     validate(&machine).unwrap();
-    let mut built = 0;
-    let mut read = 0;
+    let rendered = machine.render();
+    let mut built = Vec::new();
+    let mut read = Vec::new();
     for (op, results) in machine
         .functions()
         .iter()
         .filter_map(Function::body)
         .flat_map(|body| machine.walk_within(body))
     {
-        if let Op::Cell { fields, .. } = op {
-            for &field in machine.values(*fields) {
-                built += 1;
-                assert_eq!(machine.class(field), Class::Natural, "{}", machine.render());
-            }
-        }
-        if matches!(op, Op::CellField { .. }) {
-            read += 1;
-            assert_eq!(
-                machine.class(results[0]),
-                Class::Natural,
-                "{}",
-                machine.render()
-            );
+        match *op {
+            Op::Cell { fields, .. } => built.extend(
+                machine
+                    .values(fields)
+                    .iter()
+                    .map(|&field| machine.class(field)),
+            ),
+            Op::CellField { index, .. } => read.push((index, machine.class(results[0]))),
+            _ => {}
         }
     }
-    assert!(built > 0 && read > 0, "{}", machine.render());
+    // The count is held as wide as a count can be, and the second field
+    // only ever holds nought: each field is as wide as what is built there.
+    assert_eq!(
+        built,
+        [
+            Class::Held(barb::Bounds {
+                low: 0,
+                high: Some(u64::MAX)
+            }),
+            Class::fixed(0)
+        ],
+        "{rendered}"
+    );
+    assert!(!read.is_empty(), "{rendered}");
+    for (index, class) in read {
+        assert_eq!(class, built[usize::try_from(index).unwrap()], "{rendered}");
+    }
 }

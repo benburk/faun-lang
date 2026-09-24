@@ -71,6 +71,11 @@ x    ::= a parameter, a binding, or a field an arm bound
   preconditions, not proofs supplied here.
 - `arithmetic.rs`: recognize induction equations, without range analysis.
 - `bounds.rs`: interval arithmetic and interprocedural range propagation.
+  Each constructor field holds the join of every value built into it, by
+  construction or in a constant; reading one back answers no more. Fields of
+  values built out of sight -- entry parameters, bodyless results, spine
+  constants -- hold anything, and a field of an enumeration type is also
+  bounded by its tag count. Spine fields are read as counts and say nothing.
   `Propagation` is the evolving state; `Ranges` is the conservative final result.
 - `affine.rs`: derive small affine summaries from recognized natural addition and
   multiplication by constants, without adding an expression kind or expanding
@@ -160,8 +165,8 @@ there is no fixed-point loop. Matches and calls of unknown meaning are conservat
 retained even when their results are unused. Calls structurally recognized as pure,
 total arithmetic are inert and may go. In particular, dropping a constructor does
 not drop opaque eager calls that computed its fields. Folded, now-unused product
-constants no longer demand runtime representations; live products and
-payload-carrying sums lower to machine cells.
+constants no longer demand runtime representations; live products lower to
+their fields' machine values and payload-carrying sums to machine cells.
 
 Cleanup is also the term-arena compaction point. It borrows the original program,
 builds a fresh `TermArena`, then hands it and all remapped function roots to
@@ -194,8 +199,9 @@ one recursive field; its element may be any type. Names and constructor order do
 not participate. Machine representation selection uses this exhaustive view
 instead of rediscovering products, naturals, and byte spines independently.
 Units are erased, wrappers remain transparent, naturals and enumerations are
-scalar, and everything else carrying fields -- products, general sums, and
-sequences alike -- becomes a managed cell. `Shape` is the constant codec's own
+scalar, products of at most eight leaves are held flat as their fields'
+values, and everything else carrying fields -- wider products, general sums,
+and sequences alike -- becomes a managed cell. `Shape` is the constant codec's own
 view of an encoding and answers a different question; representation selection
 does not read it.
 

@@ -63,6 +63,7 @@ mod arithmetic;
 mod builder;
 mod cell;
 pub mod evaluate;
+mod fit;
 mod layout;
 mod legalize;
 mod lower;
@@ -77,6 +78,7 @@ mod simplify;
 mod validate;
 
 pub use builder::Builder;
+pub use fit::{Budget, fit};
 pub use layout::{Endian, Layout};
 pub use legalize::legalize;
 pub use lower::lower;
@@ -94,6 +96,8 @@ mod arithmetic_tests;
 mod builder_tests;
 #[cfg(test)]
 mod external_tests;
+#[cfg(test)]
+mod fit_tests;
 #[cfg(test)]
 mod flow_tests;
 #[cfg(test)]

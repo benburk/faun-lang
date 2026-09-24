@@ -205,6 +205,104 @@ fn target_runs_managed_products_across_calls_and_matches() {
     assert_eq!(status(&prepared), 42);
 }
 
+/// Products held flat cross calls as arguments and results, meet at a join,
+/// and ride inside a sum's cell as their fields. The 6502 answers one value
+/// and joins two, so there the same program also runs packed.
+const PRODUCTS: &str = "type Nat Zero Succ(Nat)
+                        type Bool False True
+                        type Pair P(Bool Bool)
+                        type Triple T(Pair Bool)
+                        type Maybe Nothing Just(Triple)
+
+                        is_zero(Zero) -> True
+                        is_zero(Succ(k)) -> False
+                        is_one(Zero) -> False
+                        is_one(Succ(k)) -> is_zero(k)
+                        and(True b) -> b
+                        and(False b) -> False
+
+                        swap(P(a b)) -> P(b a)
+                        second(P(a b)) -> b
+                        spin(P(a b) c) -> T(P(b c) a)
+                        rotate(T(p c)) -> spin(p c)
+                        choose(True t) -> rotate(t)
+                        choose(False t) -> t
+                        unwrap(Nothing) -> T(P(True True) True)
+                        unwrap(Just(t)) -> t
+                        four(True) -> Succ(Succ(Succ(Succ(Zero))))
+                        four(False) -> Zero
+                        status(T(p c)) -> four(and(c second(p)))
+
+                        main!(h) ->
+                          n = argc!(h)
+                          flag = is_one(n)
+                          start = T(swap(P(False flag)) True)
+                          kept = unwrap(Just(start))
+                          exit!(h status(choose(flag kept)))";
+
+#[test]
+fn products_cross_calls_joins_and_cells_as_their_fields() {
+    let program = read(PRODUCTS).expect("a program holding products");
+    let prepared = TARGET
+        .prepare(&program)
+        .expect("a program any target holds");
+    // One argument: the flag is set, so the triple is rotated to
+    // T(P(False True) True). Two: it is kept as T(P(True False) True).
+    assert_eq!(
+        execute_counts(&prepared, &[1, 2]),
+        [(4, String::new()), (0, String::new())]
+    );
+}
+
+/// Numbers inside a product are as wide as what is built into them, so a
+/// pair of small counts is two small words: nothing allocated, and an exit
+/// status proven to fit.
+const NUMBER_PAIR: &str = "type Nat Zero Succ(Nat)
+                           type Pair P(Nat Nat)
+
+                           swap(P(a b)) -> P(b a)
+                           sum(Zero b) -> b
+                           sum(Succ(a) b) -> Succ(sum(a b))
+                           both(P(a b)) -> sum(a b)
+                           small(Zero) -> Zero
+                           small(Succ(k)) -> Succ(Zero)
+
+                           main!(h) ->
+                             n = argc!(h)
+                             p = swap(P(small(n) Succ(Succ(Zero))))
+                             exit!(h both(p))";
+
+#[test]
+fn a_pair_of_small_numbers_is_two_small_words() {
+    let program = read(NUMBER_PAIR).expect("a program holding a pair of numbers");
+    let prepared = TARGET
+        .prepare(&program)
+        .expect("a program any target holds");
+    assert!(
+        !prepared.render().contains("allocate"),
+        "{}",
+        prepared.render()
+    );
+    assert_eq!(status(&prepared), 3);
+}
+
+/// A target's calling convention is not a language limit: preparation packs
+/// what a boundary cannot carry into a cell, so these run everywhere.
+#[test]
+fn prepared_programs_carry_more_across_a_boundary_than_a_target_passes() {
+    use programs::abi::{self, Transfer};
+    let mut held = vec![abi::function(7, 3), abi::function(5, 2)];
+    for kind in [Transfer::If, Transfer::LoopState, Transfer::LoopResults] {
+        held.push(abi::region(kind, 3));
+    }
+    for program in held {
+        let prepared = TARGET
+            .prepare(&program)
+            .expect("a program any target holds");
+        assert_eq!(status(&prepared), 0);
+    }
+}
+
 #[test]
 fn target_supplies_named_entry_parameters() {
     let (mut program, main) = Program::new_with_params("main", &[("host", Class::Word)]);

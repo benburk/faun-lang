@@ -18,7 +18,7 @@ mod lower;
 #[cfg(test)]
 mod tests;
 
-use faun_core::ir::{Op, Program, RegionId};
+use faun_core::ir::{Budget, Op, Program, RegionId};
 use faun_core::targets::{Artifact, Target};
 
 /// Where sim65 loads the image, and the zero-page pairs below it.
@@ -80,6 +80,10 @@ impl Target for Mos6502Sim65 {
         &["write!", "exit!", "grow", "argc!", "read_byte!"]
     }
 
+    fn budget(&self) -> Budget {
+        Budget::new(usize::from(ARG_COUNT), 1, TRANSFER_COUNT)
+    }
+
     fn limits(&self, program: &Program) -> Result<(), String> {
         let entry = program.entry();
         for (at, name) in program.parameter_names(entry).enumerate() {
@@ -119,6 +123,9 @@ impl Target for Mos6502Sim65 {
     }
 }
 
+/// Values a region edge carries: one per scratch pair.
+const TRANSFER_COUNT: usize = 2;
+
 /// All nested region edges use at most the two scratch pairs. Function
 /// parameters arrive in separate argument pairs and are checked separately.
 fn region_limits(program: &Program, name: &str, body: RegionId) -> Result<(), String> {
@@ -136,9 +143,9 @@ fn region_limits(program: &Program, name: &str, body: RegionId) -> Result<(), St
                 }
                 Op::Loop { initial, body } => {
                     regions.push(body);
-                    if initial.len() > 2 {
+                    if initial.len() > TRANSFER_COUNT {
                         return Err(format!(
-                            "mos6502-sim65 function `{name}` region {} has {} loop parameters; at most 2 are supported",
+                            "mos6502-sim65 function `{name}` region {} has {} loop parameters; at most {TRANSFER_COUNT} are supported",
                             region.index(),
                             initial.len()
                         ));
@@ -147,9 +154,9 @@ fn region_limits(program: &Program, name: &str, body: RegionId) -> Result<(), St
                 }
                 _ => continue,
             };
-            if count > 2 {
+            if count > TRANSFER_COUNT {
                 return Err(format!(
-                    "mos6502-sim65 function `{name}` region {} has {count} {kind}; at most 2 are supported",
+                    "mos6502-sim65 function `{name}` region {} has {count} {kind}; at most {TRANSFER_COUNT} are supported",
                     region.index()
                 ));
             }

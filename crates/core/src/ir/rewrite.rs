@@ -13,12 +13,19 @@
 //! A pass supplies [`Pass::op`]. Answering `false` copies the instruction;
 //! answering `true` means the pass wrote what it wanted instead and said,
 //! through [`Rebuild::stands_for`], which value each old result now names.
+//! A pass that changes what crosses a boundary also answers [`Pass::enter`]
+//! and [`Pass::exit`], and hands [`rebuild_declared`] the declarations it
+//! rewrote.
 
 use std::cell::Cell;
 
 use crate::index::Pool;
 
-use super::{Builder, Class, Definition, Exit, Op, Program, Range, RegionId, Terminator, ValueId};
+use super::model::Parameter;
+use super::{
+    Builder, Class, Definition, Exit, Function, FunctionId, Op, Program, Range, RegionId,
+    Terminator, ValueId,
+};
 
 /// One decision, made instruction by instruction.
 pub(super) trait Pass {
@@ -27,6 +34,43 @@ pub(super) trait Pass {
     /// A pass that writes nothing and points the old results at values it
     /// already has is how an instruction goes away.
     fn op(&mut self, rebuild: &Rebuild<'_>, b: &mut Builder, op: Op, results: &[ValueId]) -> bool;
+
+    /// Open a function's body: what each of the old body's parameters is,
+    /// given the new body's. A pass that keeps signatures keeps these.
+    fn enter(
+        &mut self,
+        _rebuild: &Rebuild<'_>,
+        _b: &mut Builder,
+        _function: FunctionId,
+        params: &[ValueId],
+    ) -> Vec<ValueId> {
+        params.to_vec()
+    }
+
+    /// Write how a region leaves, or answer `false` to copy it.
+    fn exit(&mut self, _rebuild: &Rebuild<'_>, _b: &mut Builder, _terminator: Terminator) -> bool {
+        false
+    }
+}
+
+/// Every function declaration, and the pools their signatures and parameter
+/// names are runs of. A pass changing signatures writes new ones; the
+/// function IDs, names and definitions they describe stay as they were.
+pub(super) struct Declarations {
+    pub functions: Pool<FunctionId, Function>,
+    pub signature: Vec<Class>,
+    pub parameters: Vec<Parameter>,
+}
+
+impl Declarations {
+    /// The declarations as `source` has them.
+    pub(super) fn of(source: &Program) -> Self {
+        Self {
+            functions: source.functions.clone(),
+            signature: source.signature.clone(),
+            parameters: source.parameters.clone(),
+        }
+    }
 }
 
 /// The old program, and what the new one calls each of its values.
@@ -44,7 +88,19 @@ pub(super) struct Rebuild<'a> {
 /// over untouched; only bodies are walked. An external declaration has no
 /// body and is copied as it stands.
 pub(super) fn rebuild<P: Pass>(source: &Program, pass: &mut P) -> Program {
-    let mut output = skeleton(source);
+    rebuild_declared(source, Declarations::of(source), pass)
+}
+
+/// Read `source` into a program declared as `declared` says.
+///
+/// Each function keeps its ID and definition kind; a body is opened with
+/// parameters minted from its new signature and handed to [`Pass::enter`].
+pub(super) fn rebuild_declared<P: Pass>(
+    source: &Program,
+    declared: Declarations,
+    pass: &mut P,
+) -> Program {
+    let mut output = skeleton(source, declared);
     let rebuild = Rebuild {
         source,
         values: vec![Cell::new(None); source.values_count()],
@@ -54,7 +110,8 @@ pub(super) fn rebuild<P: Pass>(source: &Program, pass: &mut P) -> Program {
             continue;
         };
         output.define(id, |b, params| {
-            rebuild.region(b, body, params, pass);
+            let params = pass.enter(&rebuild, b, id, params);
+            rebuild.region(b, body, &params, pass);
         });
     }
     output
@@ -62,7 +119,7 @@ pub(super) fn rebuild<P: Pass>(source: &Program, pass: &mut P) -> Program {
 
 /// The same program with its bodies emptied: every pool a rebuild keeps,
 /// and none of the arenas it writes again.
-fn skeleton(source: &Program) -> Program {
+fn skeleton(source: &Program, declared: Declarations) -> Program {
     let mut output = Program {
         layout: source.layout,
         runtime_cells: source.runtime_cells,
@@ -70,10 +127,10 @@ fn skeleton(source: &Program) -> Program {
         data: source.data.clone(),
         globals: source.globals.clone(),
         spans: source.spans.clone(),
-        functions: source.functions.clone(),
+        functions: declared.functions,
         classes: Pool::default(),
-        signature: source.signature.clone(),
-        parameters: source.parameters.clone(),
+        signature: declared.signature,
+        parameters: declared.parameters,
         ops: Vec::new(),
         results: Vec::new(),
         operands: Vec::new(),
@@ -155,7 +212,9 @@ impl<'a> Rebuild<'a> {
                 self.copy(b, *op, results, pass);
             }
         }
-        if let Some(terminator) = old.terminator {
+        if let Some(terminator) = old.terminator
+            && !pass.exit(self, b, terminator)
+        {
             self.exit(b, terminator);
         }
     }
