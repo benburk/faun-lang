@@ -38,11 +38,12 @@ makes one.
 
 `Host` is authority carrying the startup values its target produces. A field
 such as `host.argc` is read like any record field; the target produces it into
-the entry's frame before `main!` runs, and nothing asks for it again. Lowering
-generates a Barb entry `start` taking one named parameter per field, which
-builds `Host` and calls `main!`. Machine lowering drops parameters nothing
-reads, so a target produces only the startup values a program uses. A field
-the target cannot produce is refused when lowering.
+the entry's frame before `main!` runs, and nothing asks for it again. In Barb,
+`Host` holds its fields itself, `Host(argc: Nat)`, each bounded as the target's
+startup table says, and `main!` is the entry as written. Machine lowering names
+the entry's parameters for those fields and drops the ones nothing reads, so a
+target produces only the startup values a program uses. A field the target
+cannot produce is refused when lowering.
 
 `Host`'s bodyless methods are the effects the target answers for, called as
 `host.write!(text)`. A program orders its effects by threading `Host` through

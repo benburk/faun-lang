@@ -56,11 +56,12 @@ pub fn program(
 
 /// Lower a checked `main! : Host -> []` application.
 ///
-/// The Barb entry is a generated `start` taking one named parameter per
-/// field of `Host`, each a startup value the target produces, which builds
-/// `Host` and calls `main!`. Machine lowering drops parameters nothing reads,
-/// so a target produces only the values a program uses. `Host`'s bodyless
-/// methods are the target's routines, asked without their receiver.
+/// The Barb entry is `main!` as written. `Host` holds its fields itself, each
+/// a startup value named and bounded as the target's startup table says;
+/// machine lowering names the entry's parameters for them, so the target
+/// produces them by name, and drops those nothing reads, so it produces only
+/// what a program uses. `Host`'s bodyless methods are the target's routines,
+/// asked without their receiver.
 ///
 /// # Errors
 ///
@@ -85,7 +86,7 @@ pub fn application(
 #[derive(Clone, Copy)]
 struct HostContext<'a> {
     routines: &'a faun_core::platform::Routines,
-    /// The source `Host` type: the entry builds it, and a routine is asked
+    /// The source `Host` type: its fields are startup values, and a routine is asked
     /// without it.
     host: Symbol,
 }
@@ -241,11 +242,12 @@ impl<'a> Lowerer<'a> {
         self.declare_functions()?;
         self.define_functions()?;
         self.define_apply_functions()?;
-        let main = self.function_ids[&self.specialized.entry];
-        let entry = match self.host {
-            Some(host) => self.define_start(host, main)?,
-            None => main,
-        };
+        if let Some(host) = self.host
+            && host.routines.get("exit!").is_none()
+        {
+            return Err(error("the selected target does not provide `exit!`"));
+        }
+        let entry = self.function_ids[&self.specialized.entry];
         self.output.set_entry(entry);
         barb::validate(&self.output).map_err(error)?;
         Ok(self.output)
@@ -431,6 +433,9 @@ impl<'a> Lowerer<'a> {
         for ty in types {
             let id = self.type_ids[&ty];
             match &ty {
+                Type::Named(_, _) if self.record_wrappers.contains_key(&ty) => {
+                    self.define_record_wrapper(&ty, id)?;
+                }
                 Type::Named(_, _) => {
                     let constructors = self.constructors_of(&ty)?;
                     let held: Vec<_> = constructors
@@ -458,12 +463,9 @@ impl<'a> Lowerer<'a> {
                 }
                 Type::Empty => self.output.define_type(id, &[]),
                 Type::Record(fields) => {
-                    let field_types: Vec<_> = fields
-                        .iter()
-                        .map(|(_, field)| self.type_ids[field])
-                        .collect();
+                    let fields = self.named_fields(fields);
                     self.output
-                        .define_type(id, &[("Record", field_types.as_slice())]);
+                        .define_fields(id, &[("Record", fields.as_slice())]);
                     self.record_constructor_ids
                         .insert(ty.clone(), self.output.ctor_at(id, 0));
                 }
@@ -501,6 +503,54 @@ impl<'a> Lowerer<'a> {
                 .intern_number(nat, 0)
                 .map_err(|cause| error(cause.to_string()))?;
         }
+        Ok(())
+    }
+
+    /// A record's fields, each named as the program spells it.
+    fn named_fields(&self, fields: &[(Symbol, Type)]) -> Vec<barb::Field<'a>> {
+        fields
+            .iter()
+            .map(|(name, ty)| {
+                barb::Field::of(self.type_ids[ty]).named(self.resolved.symbols.text(*name))
+            })
+            .collect()
+    }
+
+    /// A nominal wrapper around a record holds the record's fields itself,
+    /// so what its declaration says of them is said of its own constructor,
+    /// which only its declarer builds. `Host`'s fields are the startup
+    /// values its target produces, each bounded as the target says.
+    fn define_record_wrapper(&mut self, ty: &Type, id: TypeId) -> Result<(), LowerError> {
+        let Type::Named(name, _) = ty else {
+            unreachable!("a record wrapper is a named type")
+        };
+        let Type::Record(fields) = self.record_wrappers[ty].clone() else {
+            unreachable!("record wrappers map to record types")
+        };
+        let mut held = self.named_fields(&fields);
+        if let Some(host) = self.host.filter(|host| host.host == *name) {
+            let nat = Type::Named(self.prelude.nat, Vec::new());
+            for ((field, field_ty), held) in fields.iter().zip(&mut held) {
+                let field = self.resolved.symbols.text(*field);
+                let value = host.routines.startup(field).ok_or_else(|| {
+                    error(format!("the selected target does not produce `{field}`"))
+                })?;
+                if *field_ty != nat {
+                    return Err(error(format!("the startup value `{field}` must be a Nat")));
+                }
+                *held = held.bounded(value.bounds());
+            }
+        }
+        let wrapper = self.specialized.data[name]
+            .wrapper
+            .as_ref()
+            .expect("a record wrapper")
+            .constructor;
+        let spelled = source_name(wrapper, &self.resolved.symbols).to_owned();
+        self.output
+            .define_fields(id, &[(spelled.as_str(), held.as_slice())]);
+        self.constructor_ids
+            .insert((wrapper, ty.clone()), self.output.ctor_at(id, 0));
         Ok(())
     }
 
@@ -624,60 +674,6 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    /// Define the Barb entry: take each field of `Host` as a startup value
-    /// named for it, build `Host`, and call `main!` with it.
-    fn define_start(&mut self, host: HostContext<'_>, main: FnId) -> Result<FnId, LowerError> {
-        if host.routines.get("exit!").is_none() {
-            return Err(error("the selected target does not provide `exit!`"));
-        }
-        let host_ty = Type::Named(host.host, Vec::new());
-        let record_ty = self
-            .record_wrappers
-            .get(&host_ty)
-            .ok_or_else(|| error("`Host` must wrap a record of startup values"))?
-            .clone();
-        let Type::Record(fields) = &record_ty else {
-            unreachable!("record wrappers map to record types")
-        };
-        let nat = Type::Named(self.prelude.nat, Vec::new());
-        let mut parameters = Vec::with_capacity(fields.len());
-        let mut bounds = Vec::with_capacity(fields.len());
-        for (name, ty) in fields {
-            let name = self.resolved.symbols.text(*name);
-            let value = host
-                .routines
-                .startup(name)
-                .ok_or_else(|| error(format!("the selected target does not produce `{name}`")))?;
-            if *ty != nat {
-                return Err(error(format!("the startup value `{name}` must be a Nat")));
-            }
-            parameters.push((name.to_owned(), self.type_ids[ty]));
-            bounds.push(value.bounds());
-        }
-        let borrowed: Vec<_> = parameters
-            .iter()
-            .map(|(name, ty)| (name.as_str(), *ty))
-            .collect();
-        let never = self.output.function(main).result;
-        let start = self.output.declare_named("start", &borrowed, never);
-        for (at, bounds) in bounds.into_iter().enumerate() {
-            self.output.bound_parameter(start, at, bounds);
-        }
-        let wrapper = self.specialized.data[&host.host]
-            .wrapper
-            .as_ref()
-            .expect("a record wrapper")
-            .constructor;
-        let record = self.record_constructor_ids[&record_ty];
-        let wrap = self.constructor_ids[&(wrapper, host_ty)];
-        self.output.define(start, |builder, values| {
-            let record = builder.con(record, values);
-            let host = builder.con(wrap, &[record]);
-            builder.call(main, &[host])
-        });
-        Ok(start)
-    }
-
     fn define_apply_functions(&mut self) -> Result<(), LowerError> {
         let invoked: Vec<_> = self.invoked.iter().cloned().collect();
         for ty in invoked {
@@ -753,10 +749,7 @@ impl<'a> Lowerer<'a> {
                             let Type::Function(_, result) = function_type else {
                                 unreachable!()
                             };
-                            builder.con(
-                                context.constructor_ids[&(*source, (**result).clone())],
-                                arguments,
-                            )
+                            context.construct(builder, *source, result, arguments)
                         }
                         ClosureKey::Lambda(_, _, _) => {
                             let plan = &lambda_plans[&variant.key];
@@ -1084,6 +1077,37 @@ struct EmitContext<'a> {
 }
 
 impl EmitContext<'_> {
+    /// Build a value of `ty` with `constructor` from `fields`. A record
+    /// wrapper holds its record's fields itself, so its one field, the
+    /// record, is taken apart into them.
+    fn construct(
+        &self,
+        builder: &mut Builder<'_>,
+        constructor: Symbol,
+        ty: &Type,
+        fields: &[Atom],
+    ) -> Atom {
+        let id = self.constructor_ids[&(constructor, ty.clone())];
+        let Some(record) = self.record_wrappers.get(ty) else {
+            return builder.con(id, fields);
+        };
+        let [record_value] = fields else {
+            unreachable!("a record wrapper is built from one record")
+        };
+        builder.match_(*record_value, self.type_ids[record], |builder, _, held| {
+            builder.con(id, held)
+        })
+    }
+
+    /// What an arm of `owner` binds: its fields, except that a record
+    /// wrapper's arm binds the one record its fields make.
+    fn arm_fields(&self, builder: &mut Builder<'_>, owner: &Type, fields: &[Atom]) -> Vec<Atom> {
+        self.record_wrappers.get(owner).map_or_else(
+            || fields.to_vec(),
+            |record| vec![builder.con(self.record_constructor_ids[record], fields)],
+        )
+    }
+
     /// Call a global, asking a routine without its `Host` receiver.
     fn call(&self, builder: &mut Builder<'_>, key: &FunctionKey, arguments: &[Atom]) -> Atom {
         let arguments = if self.receivers.contains(key) {
@@ -1122,9 +1146,10 @@ fn emit_decision(
                         context.constructor_ids[&(arm.constructor, owner.clone())] == constructor
                     })
                     .expect("the plan has one arm per constructor");
+                let fields = context.arm_fields(builder, owner, fields);
                 let mut nested = values.clone();
                 for (value, atom) in arm.fields.iter().zip(fields) {
-                    nested.insert(*value, *atom);
+                    nested.insert(*value, atom);
                 }
                 emit_decision(context, builder, &arm.decision, &nested)
             })
@@ -1227,10 +1252,7 @@ fn emit_expr(
                 .iter()
                 .map(|field| emit_expr(context, builder, field, locals))
                 .collect::<Vec<_>>();
-            builder.con(
-                context.constructor_ids[&(*constructor, expression.ty.clone())],
-                &fields,
-            )
+            context.construct(builder, *constructor, &expression.ty, &fields)
         }
         ExprKind::Record(fields) => {
             let mut fields = fields
@@ -1279,17 +1301,17 @@ fn emit_projection(
             values[index]
         });
     }
-    let record = &context.record_wrappers[receiver_ty];
-    builder.match_(
-        receiver,
-        context.type_ids[receiver_ty],
-        |builder, _, fields| {
-            let [record_value] = fields else {
-                unreachable!("a record wrapper has one field")
-            };
-            emit_projection(context, builder, *record_value, record, field)
-        },
-    )
+    // A record wrapper holds its record's fields itself.
+    let Type::Record(fields) = &context.record_wrappers[receiver_ty] else {
+        unreachable!("record wrappers map to record types")
+    };
+    let index = fields
+        .iter()
+        .position(|(name, _)| *name == field)
+        .expect("checked projection names a record field");
+    builder.match_(receiver, context.type_ids[receiver_ty], |_, _, values| {
+        values[index]
+    })
 }
 
 fn captures_for_key(
@@ -1517,22 +1539,58 @@ mod tests {
             let mut program = application(&resolved, &checked, &prelude, &host, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
-            // `Host` carries the startup values; a generated entry takes each
-            // one by name and builds it, and a routine is asked without it.
-            assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\nHost = Host({argc: Nat})\n\n"));
-            assert!(rendered.contains("start(argc: Nat) -> [] ="), "{rendered}");
+            // `Host` holds the startup values its target produces, each
+            // bounded as the target says; `main!` is the entry as written,
+            // and a routine is asked without its receiver.
+            assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\nHost = Host(argc: Nat)\n\n"));
+            assert!(rendered.contains("main!(v0: Host) -> [] ="), "{rendered}");
             assert!(rendered.contains("Host.exit!(v0: Nat) -> [] = <elsewhere>"));
+            assert!(!rendered.contains("start"));
             assert!(!rendered.contains('$'));
             let machine = faun_core::lower(&mut program.clone(), &routines).unwrap();
-            // The target produces `argc` into the entry's frame.
-            assert_eq!(
-                machine.parameter_names(machine.entry()).collect::<Vec<_>>(),
-                ["argc"]
-            );
+            // The target produces `argc` into the entry's frame, as wide as
+            // its word.
+            let entry = machine.entry();
+            assert_eq!(machine.parameter_names(entry).collect::<Vec<_>>(), ["argc"]);
+            let body = machine.function(entry).body().unwrap();
+            let argc = machine.values(machine.region(body).params)[0];
+            assert_eq!(machine.class(argc), faun_core::ir::Class::fixed(bits));
             let rendered = machine.render();
-            assert!(rendered.contains("fn f0 start(argc: "), "{rendered}");
             assert!(rendered.contains("call exit!(v0)"), "{rendered}");
         }
+    }
+
+    /// A `Host` field is a startup value its target must produce; one the
+    /// target has no answer for is refused rather than left unbounded.
+    #[test]
+    fn a_host_field_the_target_does_not_produce_is_refused() {
+        let dir = std::env::temp_dir().join(format!("faun-host-field-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = dir.join("host.fn");
+        std::fs::write(
+            &host,
+            "exports {Host}\nHost : {argc: Nat cwd: Nat}.(\n  exit! : Host Nat -> []\n)\n",
+        )
+        .unwrap();
+        let entry = dir.join("main.fn");
+        std::fs::write(
+            &entry,
+            "import std.host {Host}\nmain! : Host -> []\nmain!(host) -> host.exit!(host.cwd)\n",
+        )
+        .unwrap();
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
+        let loaded = crate::modules::load_with_host(&[entry], Some(&root), Some(&host)).unwrap();
+        let prelude = PreludeIds::resolve(&loaded).unwrap();
+        let host = crate::host::HostIds::resolve(&loaded, &prelude).unwrap();
+        let resolved = crate::resolve::resolve(loaded).unwrap();
+        let checked = crate::check::program(&resolved, &prelude).unwrap();
+        let routines = faun_core::platform::Routines::builtin().with_word(64);
+        let failure = application(&resolved, &checked, &prelude, &host, &routines).unwrap_err();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            failure.message,
+            "the selected target does not produce `cwd`"
+        );
     }
 
     #[test]
