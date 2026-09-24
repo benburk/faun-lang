@@ -74,7 +74,9 @@ x    ::= a parameter, a binding, or a field an arm bound
   Each constructor field holds the join of every value built into it, by
   construction or in a constant; reading one back answers no more. Fields of
   values built out of sight -- entry parameters, bodyless results, spine
-  constants -- hold anything, and a field of an enumeration type is also
+  constants -- hold anything but what an `Assumed` given to the analysis
+  says of them. Barb itself assumes nothing: the tier lowering a program for a
+  target supplies what it knows. A field of an enumeration type is also
   bounded by its tag count. A spine's rest is read as a step of its count and
   says nothing; a sequence's element holds what was built into it, and a
   known byte string records the range of its bytes.

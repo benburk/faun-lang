@@ -804,7 +804,7 @@ fn it_lays_out_a_chain_as_the_number_it_builds() {
 fn it_runs_a_program_built_rather_than_written() {
     let mut barb = programs::two_and_two_in_barb();
     let machine =
-        faun_core::ir::lower(barb.analyze(), &TARGET.routines()).expect("a representable program");
+        faun_core::ir::lower(&mut barb, &TARGET.routines()).expect("a representable program");
     // Recognized addition becomes an instruction; only the entry survives.
     assert_eq!(
         machine
@@ -1033,7 +1033,7 @@ fn external_declarations_interleave_with_internal_function_ids() {
 #[test]
 fn it_compiles_the_ladder_to_the_sizes_recorded() {
     let routines = TARGET.routines();
-    let ladder = programs::ladder::every(&routines);
+    let ladder = programs::ladder::every();
     assert_eq!(ladder.len(), LADDER_SIZES.len());
     let changed: Vec<_> = ladder
         .into_iter()
@@ -1065,7 +1065,7 @@ fn the_ladder_answers_what_its_programs_say() {
     // a status of 126 or above.
     const COUNTS: &[u16] = &[1, 3, 4, 5, 62];
     let routines = TARGET.routines();
-    for (name, barb) in programs::ladder::every(&routines) {
+    for (name, barb) in programs::ladder::every() {
         let program = lowered(barb, &routines);
         for (&argc, (status, _)) in COUNTS.iter().zip(execute_counts(&program, COUNTS)) {
             let answer = match name {

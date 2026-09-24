@@ -70,15 +70,25 @@ pub(super) struct Ranges {
     pub fields: Vec<Bounds>,
 }
 
-pub(super) fn analyze(program: &Program, operations: &[Option<super::Operation>]) -> Ranges {
+pub(super) fn analyze(
+    program: &Program,
+    operations: &[Option<super::Operation>],
+    assumed: &Assumed,
+) -> Ranges {
     let count = program.functions().len();
-    let mut held = Propagation::start(program);
+    let mut held = Propagation::start(program, assumed);
 
     let mut settled = false;
     for round in 0..ROUNDS {
         let mut again = false;
         for at in 0..count {
-            again |= once(program, operations, &mut held, (FnId::at(at), round));
+            again |= once(
+                program,
+                operations,
+                assumed,
+                &mut held,
+                (FnId::at(at), round),
+            );
         }
         if !again {
             settled = true;
@@ -95,33 +105,62 @@ pub(super) fn analyze(program: &Program, operations: &[Option<super::Operation>]
         held.forget();
     }
 
-    finish(program, held)
+    finish(program, assumed, held)
 }
 
-/// What a declaration with no body answers: what the tier above said of it,
-/// and what the type it answers declares.
-fn answered(program: &Program, id: FnId) -> Bounds {
-    let function = program.function(id);
-    let said = function.bounds().unwrap_or(Bounds::ANY);
-    said.and(declared(program, function.result))
+/// What the tier lowering a program assumes of values that come from
+/// outside it: what its routines answer and what its target hands the entry.
+///
+/// Barb works out what the program itself says and nothing about any
+/// target; these are asked of an analysis by the tier that knows the target,
+/// and what comes out belongs to that tier, never to the program.
+#[derive(Clone, Debug, Default)]
+pub struct Assumed {
+    /// What a declaration with no body answers.
+    pub results: Vec<(FnId, Bounds)>,
+    /// What the entry's parameters are handed, by place.
+    pub parameters: Vec<(usize, Bounds)>,
+    /// What every value of a constructor holds in one field.
+    pub fields: Vec<(CtorId, usize, Bounds)>,
 }
 
-/// What a value of `ty` is wherever it was built: anything, but for what the
-/// wrappers it is held through declare of their one field. A wrapper is its
-/// field, so its declaration bounds the value itself.
-fn declared(program: &Program, ty: TypeId) -> Bounds {
-    let mut held = Bounds::ANY;
-    let mut ty = ty;
-    for _ in 0..program.types().len() {
-        let Some((ctor, field)) = single_field(program, ty) else {
-            break;
-        };
-        if let Some(bounds) = program.field_bounds(ctor, 0) {
-            held = held.and(bounds);
-        }
-        ty = field;
+impl Assumed {
+    fn result(&self, id: FnId) -> Bounds {
+        self.results
+            .iter()
+            .find(|(of, _)| *of == id)
+            .map_or(Bounds::ANY, |(_, bounds)| *bounds)
     }
-    held
+
+    fn parameter(&self, at: usize) -> Bounds {
+        self.parameters
+            .iter()
+            .find(|(of, _)| *of == at)
+            .map_or(Bounds::ANY, |(_, bounds)| *bounds)
+    }
+
+    fn field(&self, ctor: CtorId, at: usize) -> Bounds {
+        self.fields
+            .iter()
+            .find(|(of, place, _)| *of == ctor && *place == at)
+            .map_or(Bounds::ANY, |(_, _, bounds)| *bounds)
+    }
+
+    /// What a value of `ty` built outside is: anything, but for what is
+    /// assumed of the one field of each wrapper it is held through. A wrapper
+    /// is its field, so that bounds the value itself.
+    fn value(&self, program: &Program, ty: TypeId) -> Bounds {
+        let mut held = Bounds::ANY;
+        let mut ty = ty;
+        for _ in 0..program.types().len() {
+            let Some((ctor, field)) = single_field(program, ty) else {
+                break;
+            };
+            held = held.and(self.field(ctor, 0));
+            ty = field;
+        }
+        held
+    }
 }
 
 /// How many field places the program declares, end to end.
@@ -138,20 +177,20 @@ pub(super) fn slot(program: &Program, ctor: CtorId, at: usize) -> usize {
     program.ctor(ctor).fields.range().start + at
 }
 
-/// Say that every field reachable from `roots` could hold anything its
-/// declaration allows: values of those types were built where nothing here
+/// Say that every field reachable from `roots` could hold anything but what
+/// is assumed of it: values of those types were built where nothing here
 /// walks.
-fn unknown(program: &Program, roots: &[TypeId], fields: &mut [Option<Bounds>]) {
+fn unknown(program: &Program, assumed: &Assumed, roots: &[TypeId], fields: &mut [Option<Bounds>]) {
     let mut seen = vec![false; program.types().len()];
     let mut waiting = roots.to_vec();
     while let Some(ty) = waiting.pop() {
         if std::mem::replace(&mut seen[ty.index()], true) {
             continue;
         }
-        for ctor in program.ctors(ty) {
-            let declared = program.declared_bounds(ctor);
-            for (place, declared) in fields[ctor.fields.range()].iter_mut().zip(declared) {
-                *place = Some(declared.unwrap_or(Bounds::ANY));
+        for (tag, ctor) in program.ctors(ty).iter().enumerate() {
+            let id = program.ctor_at(ty, u32::try_from(tag).expect("a sane constructor count"));
+            for (at, place) in fields[ctor.fields.range()].iter_mut().enumerate() {
+                *place = Some(assumed.field(id, at));
             }
             waiting.extend_from_slice(program.types_of(ctor.fields));
         }
@@ -159,7 +198,7 @@ fn unknown(program: &Program, roots: &[TypeId], fields: &mut [Option<Bounds>]) {
 }
 
 /// What the walk worked out, as the tier below reads it.
-fn finish(program: &Program, held: Propagation) -> Ranges {
+fn finish(program: &Program, assumed: &Assumed, held: Propagation) -> Ranges {
     // A spine's rest is read as a step of its count, not as what was built
     // there, so nothing is said of that field.
     let mut fields: Vec<_> = held.fields.into_iter().map(anything).collect();
@@ -170,15 +209,11 @@ fn finish(program: &Program, held: Propagation) -> Ranges {
         {
             fields[slot(program, cons, recursive)] = Bounds::ANY;
         }
-        // What a declaration promises holds wherever the value was built.
-        for ctor in program.ctors(TypeId::at(ty)) {
-            let declared = program.declared_bounds(ctor);
-            for (held, declared) in fields[ctor.fields.range()].iter_mut().zip(declared) {
-                if let Some(declared) = declared {
-                    *held = held.and(declared);
-                }
-            }
-        }
+    }
+    // What is assumed of a field holds wherever the value was built.
+    for &(ctor, at, bounds) in &assumed.fields {
+        let place = slot(program, ctor, at);
+        fields[place] = fields[place].and(bounds);
     }
     // A term nothing reached is a term nothing knows, and so is a parameter
     // nothing was ever handed.
@@ -228,7 +263,7 @@ struct Propagation {
 impl Propagation {
     /// Where the walk starts: nothing known of anything reached from inside,
     /// and anything at all in the fields of what comes in from outside.
-    fn start(program: &Program) -> Self {
+    fn start(program: &Program, assumed: &Assumed) -> Self {
         let count = program.functions().len();
         let entry = program.entry();
         // A parameter nothing has handed anything to yet is a parameter nothing
@@ -239,10 +274,11 @@ impl Propagation {
                     let id = FnId::at(at);
                     if entry == Some(id) {
                         program
-                            .parameter_bounds(id)
-                            .zip(program.params(id))
-                            .map(|(bounds, &ty)| {
-                                Some(bounds.unwrap_or(Bounds::ANY).and(declared(program, ty)))
+                            .params(id)
+                            .iter()
+                            .enumerate()
+                            .map(|(at, &ty)| {
+                                Some(assumed.parameter(at).and(assumed.value(program, ty)))
                             })
                             .collect()
                     } else {
@@ -265,7 +301,7 @@ impl Propagation {
                 outside.push(function.result);
             }
         }
-        unknown(program, &outside, &mut held.fields);
+        unknown(program, assumed, &outside, &mut held.fields);
         held
     }
 
@@ -282,14 +318,14 @@ impl Propagation {
 
     /// Take in what one walk found it built and called, answering whether
     /// any of it was more than was known.
-    fn learn(&mut self, program: &Program, found: Found, round: usize) -> bool {
+    fn learn(&mut self, program: &Program, assumed: &Assumed, found: Found, round: usize) -> bool {
         let mut again = false;
         for (place, bounds) in found.built {
             again |= settle(&mut self.fields[place], bounds, round);
         }
         if !found.outside.is_empty() {
             let before = self.fields.clone();
-            unknown(program, &found.outside, &mut self.fields);
+            unknown(program, assumed, &found.outside, &mut self.fields);
             again |= self.fields != before;
         }
         for (called, args) in found.calls {
@@ -322,6 +358,7 @@ struct Found {
 fn once(
     program: &Program,
     operations: &[Option<super::Operation>],
+    assumed: &Assumed,
     held: &mut Propagation,
     (id, round): (FnId, usize),
 ) -> bool {
@@ -331,7 +368,9 @@ fn once(
     let Some(body) = program.function(id).body() else {
         // Something outside answers, and nothing about a declaration can be
         // read, so what comes back from one is what the tier above said.
-        return settle(&mut held.results[at], answered(program, id), round);
+        let result = program.function(id).result;
+        let answered = assumed.result(id).and(assumed.value(program, result));
+        return settle(&mut held.results[at], answered, round);
     };
 
     // A recognized equation is evaluated as that operation, not walked as
@@ -349,6 +388,7 @@ fn once(
     // per-function snapshot without copying the whole table each round.
     let mut walk = FunctionWalk {
         program,
+        assumed,
         operations,
         results: &held.results,
         fields: &held.fields,
@@ -369,7 +409,7 @@ fn once(
         outside: walk.outside,
     };
     let again = settle(&mut held.results[at], answer, round);
-    held.learn(program, found, round) || again
+    held.learn(program, assumed, found, round) || again
 }
 
 /// Widen `held` by `found`, answering whether that changed it. Past the
@@ -411,6 +451,7 @@ fn settle(held: &mut Option<Bounds>, found: Bounds, round: usize) -> bool {
 /// One walk over one definition, with what it hands to what it calls.
 struct FunctionWalk<'a> {
     program: &'a Program,
+    assumed: &'a Assumed,
     operations: &'a [Option<super::Operation>],
     results: &'a [Option<Bounds>],
     /// What each field was built with so far, and what this walk builds.
@@ -575,7 +616,7 @@ impl FunctionWalk<'_> {
     fn built(&self, ctor: CtorId, args: Range) -> Bounds {
         let owner = self.program.ctor(ctor).owner;
         if single_field(self.program, owner).is_some() {
-            let promised = self.program.field_bounds(ctor, 0).unwrap_or(Bounds::ANY);
+            let promised = self.assumed.field(ctor, 0);
             return self
                 .program
                 .atoms(args)
@@ -640,7 +681,7 @@ impl FunctionWalk<'_> {
             return false;
         }
         let binding = if single_field(self.program, owner).is_some() {
-            let promised = self.program.field_bounds(ctor, 0).unwrap_or(Bounds::ANY);
+            let promised = self.assumed.field(ctor, 0);
             Binding::Whole(held.and(promised))
         } else {
             match spine {

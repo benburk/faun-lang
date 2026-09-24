@@ -15,7 +15,7 @@ fn unknown_or_overflowing_bounds_never_choose_a_machine_word() {
             let sum = b.call(add, &[n, n]);
             b.match_(sum, nat, |b, _, _| b.known(zero))
         });
-        let machine = lower(source.analyze(), &crate::platform::Routines::builtin()).unwrap();
+        let machine = lower(&mut source, &crate::platform::Routines::builtin()).unwrap();
         let body = machine.function(machine.entry()).body().unwrap();
         assert!(machine.walk(body).any(|(op, results)| {
             matches!(
@@ -44,7 +44,7 @@ fn an_unbounded_entry_result_is_not_silently_truncated() {
         .intern_natural(nat, &(BigUint::from(1u8) << 100usize))
         .unwrap();
     source.define(source.entry().unwrap(), |b, _| b.known(value));
-    let error = lower(source.analyze(), &crate::platform::Routines::builtin()).unwrap_err();
+    let error = lower(&mut source, &crate::platform::Routines::builtin()).unwrap_err();
     assert!(error.contains("unbounded"), "{error}");
 }
 
@@ -84,7 +84,7 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
         };
         let (nat, less_than) = (library.nat, library.less_than);
         let two = library.number(2);
-        let world = tests::host(&mut library.program, nat, &routines);
+        let world = tests::host(&mut library.program, nat);
         let bounded = tests::bounded(&mut library, &world);
         let program = &mut library.program;
         let main = program.declare_named("main!", &[("host", world.host)], world.never);

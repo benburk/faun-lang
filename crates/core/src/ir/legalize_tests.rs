@@ -594,13 +594,13 @@ fn source_host_arguments_are_not_implicitly_truncated() {
     let routines = crate::platform::Routines::builtin().with_word(64);
     let mut library = crate::barb::fixture::Library::new();
     let (nat, add) = (library.nat, library.add);
-    let world = tests::host(&mut library.program, nat, &routines);
+    let world = tests::host(&mut library.program, nat);
     let main =
         library
             .program
             .declare_named("main!", &[("host", world.host), ("argc", nat)], world.never);
-    let count = routines.startup("argc").expect("a count").bounds();
-    library.program.bound_parameter(main, 1, count);
+    // The count is a word because the target says so of a parameter named
+    // for it, when lowering.
     library.program.define(main, |b, args| {
         let n = args[1];
         let doubled = b.call(add, &[n, n]);
@@ -617,7 +617,7 @@ fn source_host_arguments_are_not_implicitly_truncated() {
     let routines = crate::platform::Routines::builtin().with_word(16);
     let mut library = crate::barb::fixture::Library::new();
     let one = library.number(1);
-    let world = tests::host(&mut library.program, library.nat, &routines);
+    let world = tests::host(&mut library.program, library.nat);
     let main = library
         .program
         .declare_named("main!", &[("host", world.host)], world.never);

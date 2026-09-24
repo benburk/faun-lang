@@ -61,7 +61,7 @@ const ARITHMETIC_SIZES: [usize; 3] = [204, 215, 216];
 fn ladder_code_size_ratchets() {
     let routines = TARGET.routines();
     let mut code = Vec::new();
-    for (name, mut barb) in faun_core::programs::ladder::every(&routines) {
+    for (name, mut barb) in faun_core::programs::ladder::every() {
         faun_core::barb::optimize(&mut barb);
         let machine = faun_core::lower(&mut barb, &routines).unwrap();
         let prepared = TARGET.prepare(&machine).unwrap();

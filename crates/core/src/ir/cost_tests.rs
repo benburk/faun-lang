@@ -48,7 +48,7 @@ impl Cost {
 /// Lower, legalize and run a Barb program's entry, checking that it frees
 /// everything it built.
 fn cost(source: &barb::Program) -> Cost {
-    let machine = lower(source.clone().analyze(), &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&mut source.clone(), &Routines::builtin().with_word(64)).unwrap();
     let config = natural::Config {
         word_bits: 64,
         heap_bytes: HEAP_BYTES,
@@ -226,7 +226,7 @@ fn a_list_round_trip_costs_what_is_recorded() {
 /// walk only takes apart is borrowed, and so is a count.
 #[test]
 fn only_what_a_function_consumes_is_owned() {
-    let machine = lower(round_trip(3).analyze(), &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&mut round_trip(3), &Routines::builtin().with_word(64)).unwrap();
     let owned = ownership::owned_parameters(&machine);
     let of = |name: &str| {
         let id = machine

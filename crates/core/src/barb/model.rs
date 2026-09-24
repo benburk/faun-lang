@@ -100,50 +100,32 @@ pub struct Ctor {
     pub details: Range,
 }
 
-/// What a constructor's field is called, and what every value it holds is
-/// known to be, as its declaration said.
+/// What a constructor's field is called, as its declaration said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FieldDetail {
     pub name: Option<Symbol>,
-    pub bounds: Option<super::Bounds>,
 }
 
 /// One field of a constructor, as a type definition gives it: its type, and
-/// optionally the name it is read by and what every value held there is.
-///
-/// Declared bounds are trusted, including for values built where nothing in
-/// the program looks, such as a target's startup: a declaration is a promise
-/// every builder of the constructor keeps.
+/// optionally the name it is read by. A name is for reading: a program
+/// printed, and a tier below naming what it holds.
 #[derive(Clone, Copy, Debug)]
 pub struct Field<'a> {
     pub ty: TypeId,
     pub name: Option<&'a str>,
-    pub bounds: Option<super::Bounds>,
 }
 
 impl<'a> Field<'a> {
-    /// A field of type `ty`, unnamed and unbounded.
+    /// A field of type `ty`, unnamed.
     #[must_use]
     pub const fn of(ty: TypeId) -> Self {
-        Self {
-            ty,
-            name: None,
-            bounds: None,
-        }
+        Self { ty, name: None }
     }
 
     #[must_use]
     pub const fn named(self, name: &'a str) -> Self {
         Self {
             name: Some(name),
-            ..self
-        }
-    }
-
-    #[must_use]
-    pub const fn bounded(self, bounds: super::Bounds) -> Self {
-        Self {
-            bounds: Some(bounds),
             ..self
         }
     }
@@ -158,15 +140,12 @@ pub enum Definition {
     External {
         /// Provider name, which may differ from the source name.
         symbol: Symbol,
-        /// An optional range contract for a natural-valued result.
-        bounds: Option<super::Bounds>,
     },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Parameter {
     pub name: Symbol,
-    pub bounds: Option<super::Bounds>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,7 +155,7 @@ pub struct Function {
     pub name: Symbol,
     /// The types of its parameters, which are the first locals.
     pub params: Range,
-    /// Names and optional incoming range contracts, parallel to `params`.
+    /// Parameter names, parallel to `params`.
     pub(super) parameters: Range,
     pub result: TypeId,
     pub definition: Definition,
@@ -191,10 +170,11 @@ impl Function {
         }
     }
 
+    /// The name something outside answers a bodyless declaration by.
     #[must_use]
-    pub const fn bounds(&self) -> Option<super::Bounds> {
+    pub const fn provider(&self) -> Option<Symbol> {
         match self.definition {
-            Definition::External { bounds, .. } => bounds,
+            Definition::External { symbol } => Some(symbol),
             Definition::Body(_) => None,
         }
     }

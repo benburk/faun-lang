@@ -40,9 +40,10 @@
 //! Two other things must come from outside, because nothing here can see them:
 //!
 //! - **What a name with no body does.** Such a name is something outside
-//!   answers for, and nothing about it can be read — so what is known of
-//!   one is what the tier above said, which is today [`Function::bounds`]
-//!   for a finite host result, and will be more.
+//!   answers for, and nothing about it can be read. Barb knows no target, so
+//!   it takes no range for one, nor for what the entry is handed: the tier
+//!   lowering the program says what it assumes of values from outside, as
+//!   an [`Assumed`], and the analysis it asks for is its own.
 //! - **What effects those names perform.** Programs express dependencies by
 //!   threading state through calls. Optimizations also retain eager bindings:
 //!   an unused answer does not prove a call harmless or that it returns.
@@ -102,7 +103,7 @@ mod types;
 mod validate;
 
 pub(crate) use affine::Affine;
-pub use bounds::Bounds;
+pub use bounds::{Assumed, Bounds};
 pub use budget::{Budget, FoldLimits, LimitExceeded};
 pub use builder::Builder;
 pub use constant::{

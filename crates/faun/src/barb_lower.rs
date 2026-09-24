@@ -434,7 +434,7 @@ impl<'a> Lowerer<'a> {
             let id = self.type_ids[&ty];
             match &ty {
                 Type::Named(_, _) if self.record_wrappers.contains_key(&ty) => {
-                    self.define_record_wrapper(&ty, id)?;
+                    self.define_record_wrapper(&ty, id);
                 }
                 Type::Named(_, _) => {
                     let constructors = self.constructors_of(&ty)?;
@@ -517,30 +517,16 @@ impl<'a> Lowerer<'a> {
     }
 
     /// A nominal wrapper around a record holds the record's fields itself,
-    /// so what its declaration says of them is said of its own constructor,
-    /// which only its declarer builds. `Host`'s fields are the startup
-    /// values its target produces, each bounded as the target says.
-    fn define_record_wrapper(&mut self, ty: &Type, id: TypeId) -> Result<(), LowerError> {
+    /// each named as the program spells it. `Host`'s are the startup values
+    /// its target produces, which the target recognizes by those names.
+    fn define_record_wrapper(&mut self, ty: &Type, id: TypeId) {
         let Type::Named(name, _) = ty else {
             unreachable!("a record wrapper is a named type")
         };
         let Type::Record(fields) = self.record_wrappers[ty].clone() else {
             unreachable!("record wrappers map to record types")
         };
-        let mut held = self.named_fields(&fields);
-        if let Some(host) = self.host.filter(|host| host.host == *name) {
-            let nat = Type::Named(self.prelude.nat, Vec::new());
-            for ((field, field_ty), held) in fields.iter().zip(&mut held) {
-                let field = self.resolved.symbols.text(*field);
-                let value = host.routines.startup(field).ok_or_else(|| {
-                    error(format!("the selected target does not produce `{field}`"))
-                })?;
-                if *field_ty != nat {
-                    return Err(error(format!("the startup value `{field}` must be a Nat")));
-                }
-                *held = held.bounded(value.bounds());
-            }
-        }
+        let held = self.named_fields(&fields);
         let wrapper = self.specialized.data[name]
             .wrapper
             .as_ref()
@@ -551,7 +537,6 @@ impl<'a> Lowerer<'a> {
             .define_fields(id, &[(spelled.as_str(), held.as_slice())]);
         self.constructor_ids
             .insert((wrapper, ty.clone()), self.output.ctor_at(id, 0));
-        Ok(())
     }
 
     fn declare_functions(&mut self) -> Result<(), LowerError> {
@@ -586,15 +571,6 @@ impl<'a> Lowerer<'a> {
             if let Some(provider) = function.provider {
                 let provider = self.resolved.symbols.text(provider);
                 self.output.answered_by(id, provider);
-                // What a routine answers with is what the machine holds,
-                // which bounds the numbers a program reads back from one.
-                if let Some(bounds) = self
-                    .host
-                    .and_then(|host| host.routines.get(provider))
-                    .and_then(faun_core::platform::Routine::bounds)
-                {
-                    self.output.bound(id, bounds);
-                }
             }
             self.function_ids.insert(function.key.clone(), id);
         }
@@ -1558,39 +1534,6 @@ mod tests {
             let rendered = machine.render();
             assert!(rendered.contains("call exit!(v0)"), "{rendered}");
         }
-    }
-
-    /// A `Host` field is a startup value its target must produce; one the
-    /// target has no answer for is refused rather than left unbounded.
-    #[test]
-    fn a_host_field_the_target_does_not_produce_is_refused() {
-        let dir = std::env::temp_dir().join(format!("faun-host-field-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let host = dir.join("host.fn");
-        std::fs::write(
-            &host,
-            "exports {Host}\nHost : {argc: Nat cwd: Nat}.(\n  exit! : Host Nat -> []\n)\n",
-        )
-        .unwrap();
-        let entry = dir.join("main.fn");
-        std::fs::write(
-            &entry,
-            "import std.host {Host}\nmain! : Host -> []\nmain!(host) -> host.exit!(host.cwd)\n",
-        )
-        .unwrap();
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-        let loaded = crate::modules::load_with_host(&[entry], Some(&root), Some(&host)).unwrap();
-        let prelude = PreludeIds::resolve(&loaded).unwrap();
-        let host = crate::host::HostIds::resolve(&loaded, &prelude).unwrap();
-        let resolved = crate::resolve::resolve(loaded).unwrap();
-        let checked = crate::check::program(&resolved, &prelude).unwrap();
-        let routines = faun_core::platform::Routines::builtin().with_word(64);
-        let failure = application(&resolved, &checked, &prelude, &host, &routines).unwrap_err();
-        std::fs::remove_dir_all(dir).unwrap();
-        assert_eq!(
-            failure.message,
-            "the selected target does not produce `cwd`"
-        );
     }
 
     #[test]

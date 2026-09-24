@@ -1,5 +1,5 @@
 use super::*;
-use crate::barb::{self, Bounds};
+use crate::barb;
 
 /// What a frontend declares for its host: the authority a program is
 /// handed, a type with no values for what never comes back, and the
@@ -11,25 +11,16 @@ pub(super) struct World {
     pub input: barb::FnId,
 }
 
-/// Declare `exit!` and `read_byte!` over `nat`, bounding what is read as
-/// `routines` says. The byte read is the program's input from outside.
-pub(super) fn host(
-    program: &mut barb::Program,
-    nat: barb::TypeId,
-    routines: &crate::platform::Routines,
-) -> World {
+/// Declare `exit!` and `read_byte!` over `nat`. The byte read is the
+/// program's input from outside; how wide it is, lowering assumes from the
+/// routine it names.
+pub(super) fn host(program: &mut barb::Program, nat: barb::TypeId) -> World {
     let host = program.declare_type("Host");
     program.define_type(host, &[("Host", &[])]);
     let never = program.declare_type("Never");
     program.define_type(never, &[]);
     let exit = program.declare("exit!", &[host, nat], never);
     let input = program.declare("read_byte!", &[host], nat);
-    if let Some(bounds) = routines
-        .get("read_byte!")
-        .and_then(crate::platform::Routine::bounds)
-    {
-        program.bound(input, bounds);
-    }
     World {
         host,
         never,
@@ -223,8 +214,6 @@ fn two_names_may_give_the_same_routine() {
     let holds = |program: &mut barb::Program, name, type_| {
         let id = program.declare(name, &[type_], type_);
         program.answered_by(id, "hold");
-        // Builder clients supply finite host contracts, like the frontend.
-        program.bound(id, Bounds::at(0).or(Bounds::at(u64::MAX)));
         id
     };
     let held_nat = holds(&mut program, "held_nat", nat);
@@ -249,7 +238,7 @@ fn two_names_may_give_the_same_routine() {
         returns: crate::platform::Returns::Value(Class::Word),
     });
 
-    let machine = lower(program.analyze(), &routines).expect("a representable program");
+    let machine = lower(&mut program, &routines).expect("a representable program");
     let held: Vec<&str> = machine
         .functions()
         .iter()
@@ -298,7 +287,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         });
         program.set_entry(main);
 
-        lower(program.analyze(), &routines)
+        lower(&mut program, &routines)
     };
 
     held(9).expect("a value inside four bits");
@@ -317,7 +306,7 @@ fn a_constructor_that_carries_something_is_not_a_tag() {
     let maybe = source.declare_type("Maybe");
     source.define_type(maybe, &[("None", &[]), ("Some", &[nat])]);
     let (zero, some) = (source.ctor_at(nat, 0), source.ctor_at(maybe, 1));
-    let world = host(&mut source, nat, &routines);
+    let world = host(&mut source, nat);
     let unwrap = source.declare("unwrap", &[maybe], nat);
     source.define(unwrap, |b, args| {
         b.match_(args[0], maybe, |b, ctor, fields| {
@@ -337,7 +326,7 @@ fn a_constructor_that_carries_something_is_not_a_tag() {
         b.call(world.exit, &[args[0], status])
     });
     source.set_entry(main);
-    let program = lower(source.analyze(), &routines).unwrap();
+    let program = lower(&mut source, &routines).unwrap();
     assert!(program.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
     assert!(program.classes.as_slice().contains(&Class::Cell));
 }
@@ -353,7 +342,7 @@ fn an_effect_hands_over_what_the_routine_reads() {
     let nat = source.declare_type("Nat");
     source.define_type(nat, &[("Zero", &[])]);
     let zero = source.ctor_at(nat, 0);
-    let world = host(&mut source, nat, &routines);
+    let world = host(&mut source, nat);
     let main = source.declare_named("main!", &[("host", world.host)], world.never);
     source.define(main, |b, args| {
         let status = b.con(zero, &[]);
@@ -377,7 +366,7 @@ fn how_wide_a_number_is_held_is_what_it_can_be() {
     let mut library = barb::fixture::Library::new();
     let two = library.number(2);
     let (nat, add) = (library.nat, library.add);
-    let world = host(&mut library.program, nat, &routines);
+    let world = host(&mut library.program, nat);
     let main = library
         .program
         .declare_named("main!", &[("host", world.host)], world.never);

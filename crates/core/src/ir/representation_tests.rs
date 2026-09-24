@@ -24,7 +24,7 @@ fn routines() -> Routines {
 }
 
 fn lower_program(source: &barb::Program) -> Result<Program, String> {
-    lower(source.clone().analyze(), &routines())
+    lower(&mut source.clone(), &routines())
 }
 
 /// Natural arithmetic, the host, a byte held as eight flags and a signed
@@ -50,7 +50,7 @@ impl Standard {
     )]
     fn new() -> Self {
         let mut library = Library::new();
-        let world = host(&mut library.program, library.nat, &routines());
+        let world = host(&mut library.program, library.nat);
         let (nat, bool_) = (library.nat, library.bool_);
         let (zero, succ, yes, no) = (library.zero, library.succ, library.true_, library.false_);
         let (add, div, modulo, equals) = (library.add, library.div, library.modulo, library.equals);
@@ -402,7 +402,7 @@ fn recognized_definition_bodies_do_not_demand_runtime_representations() {
         source.ctor_at(nat, 1),
         source.ctor_at(int, 0),
     );
-    let world = host(&mut source, nat, &routines);
+    let world = host(&mut source, nat);
     // add(a Zero) -> ignored = Pos(a) a
     // add(a Succ(b)) -> Succ(add(a b))
     let add = source.declare("add", &[nat, nat], nat);
@@ -427,7 +427,7 @@ fn recognized_definition_bodies_do_not_demand_runtime_representations() {
     source.set_entry(main);
     let facts = barb::analyzed(&source);
     assert_eq!(facts.operation(add), Some(barb::Operation::Add));
-    let machine = lower(source.analyze(), &routines).unwrap();
+    let machine = lower(&mut source, &routines).unwrap();
     assert_eq!(bodies(&machine), 1, "add becomes an instruction");
 }
 

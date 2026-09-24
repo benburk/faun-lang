@@ -55,6 +55,11 @@ mod tests;
 /// Lower a whole program, or say what it holds that this tier cannot yet
 /// represent.
 ///
+/// Ranges are worked out here, from what the program says and what the
+/// target says of values from outside it: what its routines answer and what
+/// it hands the entry. Barb knows no target, so how wide anything is held is
+/// decided here, and the program's own facts are left as they were.
+///
 /// # Errors
 ///
 /// Names the first type whose representation is not decided.
@@ -62,11 +67,11 @@ mod tests;
 /// # Panics
 ///
 /// If `program` has no entry.
-pub fn lower(program: &barb::Program, routines: &Routines) -> Result<Program, String> {
+pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program, String> {
     barb::validate(program)?;
-    let facts = program
-        .facts()
-        .ok_or_else(|| "a program is analyzed before it is lowered".to_owned())?;
+    let assumed = assumed(program, routines);
+    let facts = &program.assuming(&assumed);
+    let program = &*program;
     let entry = program.entry().expect("a program to lower has an entry");
     // Only values actually lowered need a representation. Merely declaring
     // a library type (or retaining an old expression in the arena) does not.
@@ -883,6 +888,86 @@ fn field_carried(
         Storage::Erased => None,
         Storage::Undemanded => panic!("a bound field type must have been demanded"),
     }
+}
+
+/// What the target says of values from outside the program: what each
+/// routine it answers for answers, and what it hands the entry.
+fn assumed(program: &barb::Program, routines: &Routines) -> barb::Assumed {
+    let mut assumed = barb::Assumed::default();
+    for (at, function) in program.functions().iter().enumerate() {
+        if let Some(provider) = function.provider()
+            && let Some(bounds) = routines
+                .get(program.name(provider))
+                .and_then(Routine::bounds)
+        {
+            assumed.results.push((barb::FnId::at(at), bounds));
+        }
+    }
+    if let Some(entry) = program.entry() {
+        handed(program, routines, entry, &mut assumed);
+    }
+    assumed
+}
+
+/// A startup value is named, as a parameter of the entry or a field of a
+/// type the entry is handed, through wrappers and products, and holds what
+/// the target's startup table says.
+fn handed(
+    program: &barb::Program,
+    routines: &Routines,
+    entry: barb::FnId,
+    assumed: &mut barb::Assumed,
+) {
+    let startup = |name: &str, ty| startup(program, routines, name, ty);
+    let mut waiting = Vec::new();
+    for (at, (name, &ty)) in program
+        .parameter_names(entry)
+        .zip(program.params(entry))
+        .enumerate()
+    {
+        if let Some(bounds) = startup(name, ty) {
+            assumed.parameters.push((at, bounds));
+        }
+        waiting.push(ty);
+    }
+    let mut seen = vec![false; program.types().len()];
+    while let Some(ty) = waiting.pop() {
+        if std::mem::replace(&mut seen[ty.index()], true) {
+            continue;
+        }
+        let (barb::TypeShape::Wrapper { constructor, .. }
+        | barb::TypeShape::Product { constructor }) = barb::type_shape(program, ty)
+        else {
+            continue;
+        };
+        for (at, &field) in program.fields(constructor).iter().enumerate() {
+            if let Some(bounds) = program
+                .field_name(constructor, at)
+                .and_then(|name| startup(name, field))
+            {
+                assumed.fields.push((constructor, at, bounds));
+            }
+            waiting.push(field);
+        }
+    }
+}
+
+/// What the startup value named `name` holds, where the target produces one
+/// and `ty` is a number.
+fn startup(
+    program: &barb::Program,
+    routines: &Routines,
+    name: &str,
+    ty: barb::TypeId,
+) -> Option<barb::Bounds> {
+    let natural = matches!(
+        barb::type_shape(program, ty),
+        barb::TypeShape::Natural { .. }
+    );
+    routines
+        .startup(name)
+        .filter(|_| natural)
+        .map(crate::platform::Startup::bounds)
 }
 
 /// Each leaf's name, for a value of `ty` held as `carried`: the name of the

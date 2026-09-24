@@ -19,11 +19,11 @@ struct Hosted {
 }
 
 impl Hosted {
-    fn new(routines: &Routines) -> Self {
+    fn new() -> Self {
         let mut library = Library::new();
         let nat = library.nat;
         let p = &mut library.program;
-        let (host, never, input, exit) = host_routines(p, nat, routines);
+        let (host, never, input, exit) = host_routines(p, nat);
         Self {
             library,
             host,
@@ -52,20 +52,12 @@ impl Hosted {
 
 /// Declare `Host`, `Never`, and the routines `read_byte!` and `exit!` over `nat`,
 /// answering `(host, never, input, exit)`.
-fn host_routines(
-    p: &mut barb::Program,
-    nat: TypeId,
-    routines: &Routines,
-) -> (TypeId, TypeId, FnId, FnId) {
+fn host_routines(p: &mut barb::Program, nat: TypeId) -> (TypeId, TypeId, FnId, FnId) {
     let host = p.declare_type("Host");
     p.define_type(host, &[("Host", &[])]);
     let never = p.declare_type("Never");
     p.define_type(never, &[]);
     let input = p.declare("read_byte!", &[host], nat);
-    let held = routines
-        .get("read_byte!")
-        .and_then(crate::platform::Routine::bounds);
-    p.bound(input, held.expect("a bounded byte"));
     let exit = p.declare("exit!", &[host, nat], never);
     (host, never, input, exit)
 }
@@ -95,7 +87,7 @@ fn zero_constants_choose_fixed0_but_the_entry_still_returns_a_word() {
         for (value, bits) in [(0, 0), (1, 1), (2, 2)] {
             for optimized in [true, false] {
                 let routines = Routines::builtin().with_word(word_bits);
-                let mut hosted = Hosted::new(&routines);
+                let mut hosted = Hosted::new();
                 let nat = (hosted.library.zero, hosted.library.succ);
                 let exit = hosted.exit;
                 hosted.main(|b, host| {
@@ -122,7 +114,7 @@ fn zero_constants_choose_fixed0_but_the_entry_still_returns_a_word() {
 /// and joins these tests are about.
 fn program(word_bits: u16, optimized: bool) -> Program {
     let routines = Routines::builtin().with_word(word_bits);
-    let mut hosted = Hosted::new(&routines);
+    let mut hosted = Hosted::new();
     let (host, input, exit) = (hosted.host, hosted.input, hosted.exit);
     let library = &hosted.library;
     let (nat, bool_, equals) = (library.nat, library.bool_, library.equals);
@@ -208,7 +200,7 @@ fn zero_parameters_results_and_joins_are_not_erased() {
 fn range_proven_zero_arithmetic_selects_fixed0() {
     for word_bits in [16, 32, 64] {
         let routines = Routines::builtin().with_word(word_bits);
-        let mut hosted = Hosted::new(&routines);
+        let mut hosted = Hosted::new();
         let (input, exit) = (hosted.input, hosted.exit);
         let library = &hosted.library;
         let (zero, succ, modulo) = (library.zero, library.succ, library.modulo);
@@ -394,7 +386,7 @@ fn comparison_programs(word_bits: u16, order: [&str; 2], probe: Probe) -> (Progr
     let nat = p.declare_type("Nat");
     p.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
     let (zero, succ) = (p.ctor_at(nat, 0), p.ctor_at(nat, 1));
-    let (host, never, input, exit) = host_routines(&mut p, nat, &routines);
+    let (host, never, input, exit) = host_routines(&mut p, nat);
     let ops = comparisons(&mut p, (nat, zero, succ), order);
     let probe = declare_probe(&mut p, (nat, zero, succ), &ops, probe);
     // status!(h False) -> exit!(h Zero)
@@ -417,7 +409,7 @@ fn comparison_programs(word_bits: u16, order: [&str; 2], probe: Probe) -> (Progr
     // Inlining, without the laws or folding that would decide the comparison.
     barb::structural(&mut p);
     barb::normalize_with_limits(&mut p, barb::InlineLimits::default());
-    let lowered = crate::ir::lower(p.analyze(), &routines).unwrap();
+    let lowered = crate::ir::lower(&mut p, &routines).unwrap();
     validate(&lowered).unwrap();
     let optimized = crate::ir::optimize(&lowered);
     validate(&optimized).unwrap();

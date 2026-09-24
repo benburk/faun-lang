@@ -128,8 +128,12 @@ impl Facts {
 /// Ranges and affine forms over `program`, given which of its functions are
 /// recognised equations. [`Program::analyze`] keeps the answer.
 #[must_use]
-pub(super) fn analyze(program: &Program, operations: Vec<Option<Operation>>) -> Facts {
-    let ranges = super::bounds::analyze(program, &operations);
+pub(super) fn analyze(
+    program: &Program,
+    operations: Vec<Option<Operation>>,
+    assumed: &super::Assumed,
+) -> Facts {
+    let ranges = super::bounds::analyze(program, &operations, assumed);
     let affine = super::affine::analyze(program, &operations);
     Facts {
         operations,

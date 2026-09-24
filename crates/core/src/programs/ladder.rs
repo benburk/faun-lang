@@ -10,8 +10,7 @@
 //! thing more. What they are for is the question "is this as small as it can
 //! be", which nobody can answer about a program doing four things at once.
 
-use crate::barb::{Bounds, FnId, Program, TypeId};
-use crate::platform::Routines;
+use crate::barb::{FnId, Program, TypeId};
 
 /// What every program here is read against.
 ///
@@ -24,13 +23,13 @@ struct Ground {
     nat: TypeId,
     never: TypeId,
     exit: FnId,
-    /// What the target promises of the count it hands the entry.
-    count: Bounds,
 }
 
 /// The declarations every program here starts from: authority, an empty
-/// type, numbers, and the host routine it reaches.
-fn ground(routines: &Routines) -> Ground {
+/// type, numbers, and the host routine it reaches. None of it says how
+/// wide anything is: what a routine answers and what the entry is handed
+/// are the target's to say, when the program is lowered for one.
+fn ground() -> Ground {
     let mut program = Program::default();
     let host = program.declare_type("Host");
     program.define_type(host, &[("Host", &[])]);
@@ -39,34 +38,21 @@ fn ground(routines: &Routines) -> Ground {
     let nat = program.declare_type("Nat");
     program.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
 
-    let reached = |program: &mut Program, name: &str, takes: &[TypeId], result| {
-        let id = program.declare(name, takes, result);
-        if let Some(bounds) = routines.get(name).expect("a routine to reach").bounds() {
-            program.bound(id, bounds);
-        }
-        id
-    };
-    let exit = reached(&mut program, "exit!", &[host, nat], never);
-    let count = routines
-        .startup("argc")
-        .expect("a count produced at startup")
-        .bounds();
+    let exit = program.declare("exit!", &[host, nat], never);
     Ground {
         program,
         host,
         nat,
         never,
         exit,
-        count,
     }
 }
 
-/// `main!`, handed authority and the count its target produces at startup.
-fn counted_main(program: &mut Program, ground: (TypeId, TypeId, TypeId), count: Bounds) -> FnId {
+/// `main!`, handed authority and the count its target produces at startup,
+/// which is a parameter named for it.
+fn counted_main(program: &mut Program, ground: (TypeId, TypeId, TypeId)) -> FnId {
     let (host, nat, never) = ground;
-    let main = program.declare_named("main!", &[("host", host), ("argc", nat)], never);
-    program.bound_parameter(main, 1, count);
-    main
+    program.declare_named("main!", &[("host", host), ("argc", nat)], never)
 }
 
 /// Leave, with a number known before the program ran.
@@ -77,7 +63,7 @@ fn counted_main(program: &mut Program, ground: (TypeId, TypeId, TypeId), count: 
 /// # Panics
 /// If `status` does not fit the declared natural shape.
 #[must_use]
-pub fn exits_with_a_constant(routines: &Routines, status: u64) -> Program {
+pub fn exits_with_a_constant(status: u64) -> Program {
     let Ground {
         mut program,
         host,
@@ -85,7 +71,7 @@ pub fn exits_with_a_constant(routines: &Routines, status: u64) -> Program {
         never,
         exit,
         ..
-    } = ground(routines);
+    } = ground();
     let main = program.declare("main!", &[host], never);
     program.define(main, |b, args| {
         let held = b.number(nat, status).expect("the declared natural shape");
@@ -101,16 +87,16 @@ pub fn exits_with_a_constant(routines: &Routines, status: u64) -> Program {
 /// The count is the one thing every machine can be asked, and in a program
 /// this small it is the only number not known before it runs.
 #[must_use]
-pub fn exits_with_the_count(routines: &Routines) -> Program {
+pub fn exits_with_the_count() -> Program {
     let Ground {
         mut program,
         host,
         nat,
         never,
         exit,
-        count,
-    } = ground(routines);
-    let main = counted_main(&mut program, (host, nat, never), count);
+        ..
+    } = ground();
+    let main = counted_main(&mut program, (host, nat, never));
     program.define(main, |b, args| b.call(exit, &[args[0], args[1]]));
     program.set_entry(main);
     program
@@ -130,22 +116,22 @@ pub fn exits_with_the_count(routines: &Routines) -> Program {
 /// # Panics
 /// If `limit` does not fit the declared natural shape.
 #[must_use]
-pub fn exits_with_the_count_and_more(routines: &Routines, limit: u64, more: u64) -> Program {
+pub fn exits_with_the_count_and_more(limit: u64, more: u64) -> Program {
     let Ground {
         mut program,
         host,
         nat,
         never,
         exit,
-        count,
-    } = ground(routines);
+        ..
+    } = ground();
     let truth = program.declare_type("Bool");
     program.define_type(truth, &[("False", &[]), ("True", &[])]);
     let (no, _) = (program.ctor_at(truth, 0), program.ctor_at(truth, 1));
     let succ = program.ctor_at(nat, 1);
     let below = comparing(&mut program, nat, truth);
 
-    let main = counted_main(&mut program, (host, nat, never), count);
+    let main = counted_main(&mut program, (host, nat, never));
     program.define(main, |b, args| {
         let (host, count) = (args[0], args[1]);
         let ceiling = b.number(nat, limit).expect("the declared natural shape");
@@ -182,15 +168,15 @@ pub fn exits_with_the_count_and_more(routines: &Routines, limit: u64, more: u64)
 /// # Panics
 /// If `limit` or three does not fit the declared natural shape.
 #[must_use]
-pub fn exits_with_a_shared_intermediate(routines: &Routines, limit: u64) -> Program {
+pub fn exits_with_a_shared_intermediate(limit: u64) -> Program {
     let Ground {
         mut program,
         host,
         nat,
         never,
         exit,
-        count,
-    } = ground(routines);
+        ..
+    } = ground();
     let truth = program.declare_type("Bool");
     program.define_type(truth, &[("False", &[]), ("True", &[])]);
     let (no, _) = (program.ctor_at(truth, 0), program.ctor_at(truth, 1));
@@ -199,7 +185,7 @@ pub fn exits_with_a_shared_intermediate(routines: &Routines, limit: u64) -> Prog
     let [ceiling, three] =
         [limit, 3].map(|n| program.intern_number(nat, n).expect("the natural shape"));
 
-    let main = counted_main(&mut program, (host, nat, never), count);
+    let main = counted_main(&mut program, (host, nat, never));
     program.define(main, |b, args| {
         let (host, count) = (args[0], args[1]);
         let ceiling = b.known(ceiling);
@@ -235,15 +221,15 @@ pub fn exits_with_a_shared_intermediate(routines: &Routines, limit: u64) -> Prog
 /// # Panics
 /// If `bits` or `more` does not describe something the declared shape holds.
 #[must_use]
-pub fn exits_with_the_count_and_a_constant(routines: &Routines, bits: u32, more: u64) -> Program {
+pub fn exits_with_the_count_and_a_constant(bits: u32, more: u64) -> Program {
     let Ground {
         mut program,
         host,
         nat,
         never,
         exit,
-        count,
-    } = ground(routines);
+        ..
+    } = ground();
     let truth = program.declare_type("Bool");
     program.define_type(truth, &[("False", &[]), ("True", &[])]);
     let adding = adds(&mut program, nat);
@@ -258,7 +244,7 @@ pub fn exits_with_the_count_and_a_constant(routines: &Routines, bits: u32, more:
         .intern_number(nat, more)
         .expect("the declared natural shape");
 
-    let main = counted_main(&mut program, (host, nat, never), count);
+    let main = counted_main(&mut program, (host, nat, never));
     program.define(main, |b, args| {
         let (host, count) = (args[0], args[1]);
         let more = b.known(more);
@@ -282,15 +268,15 @@ pub fn exits_with_the_count_and_a_constant(routines: &Routines, bits: u32, more:
 /// # Panics
 /// If `bits` does not describe a power of two the declared shape holds.
 #[must_use]
-pub fn exits_with_the_low_bits_of_a_sum(routines: &Routines, bits: u32) -> Program {
+pub fn exits_with_the_low_bits_of_a_sum(bits: u32) -> Program {
     let Ground {
         mut program,
         host,
         nat,
         never,
         exit,
-        count,
-    } = ground(routines);
+        ..
+    } = ground();
     let truth = program.declare_type("Bool");
     program.define_type(truth, &[("False", &[]), ("True", &[])]);
     let adding = adds(&mut program, nat);
@@ -299,7 +285,7 @@ pub fn exits_with_the_low_bits_of_a_sum(routines: &Routines, bits: u32) -> Progr
         .intern_number(nat, 1 << bits)
         .expect("the declared natural shape");
 
-    let main = counted_main(&mut program, (host, nat, never), count);
+    let main = counted_main(&mut program, (host, nat, never));
     program.define(main, |b, args| {
         let (host, count) = (args[0], args[1]);
         let sum = b.call(adding, &[count, count]);
@@ -431,29 +417,23 @@ fn comparing(program: &mut Program, nat: TypeId, truth: TypeId) -> FnId {
 /// is a few bits rather than a machine word, which is what a program reading
 /// a count and adding to it looks like when it is written to be compiled.
 #[must_use]
-pub fn every(routines: &Routines) -> Vec<(&'static str, Program)> {
+pub fn every() -> Vec<(&'static str, Program)> {
     vec![
-        ("a constant", exits_with_a_constant(routines, 0)),
-        ("the count", exits_with_the_count(routines)),
+        ("a constant", exits_with_a_constant(0)),
+        ("the count", exits_with_the_count()),
         (
             "the count and a constant",
-            exits_with_the_count_and_a_constant(routines, 8, 4),
+            exits_with_the_count_and_a_constant(8, 4),
         ),
-        (
-            "the low bits of a sum",
-            exits_with_the_low_bits_of_a_sum(routines, 8),
-        ),
+        ("the low bits of a sum", exits_with_the_low_bits_of_a_sum(8)),
         (
             "the count under a guard",
-            exits_with_the_count_and_more(routines, 4, 0),
+            exits_with_the_count_and_more(4, 0),
         ),
-        (
-            "the count and more",
-            exits_with_the_count_and_more(routines, 4, 4),
-        ),
+        ("the count and more", exits_with_the_count_and_more(4, 4)),
         (
             "a shared intermediate",
-            exits_with_a_shared_intermediate(routines, 32),
+            exits_with_a_shared_intermediate(32),
         ),
     ]
 }

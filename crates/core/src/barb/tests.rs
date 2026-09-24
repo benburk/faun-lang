@@ -58,16 +58,13 @@ fn a_definition_replaces_external_metadata_instead_of_retaining_it() {
         program.function(function).definition,
         Definition::External {
             symbol: program.function(function).name,
-            bounds: None,
         }
     );
     program.answered_by(function, "provider");
-    program.bound(function, Bounds::at(7));
-    let Definition::External { symbol, bounds } = program.function(function).definition else {
+    let Definition::External { symbol } = program.function(function).definition else {
         panic!("a declaration has no body");
     };
     assert_eq!(program.name(symbol), "provider");
-    assert_eq!(bounds, Some(Bounds::at(7)));
     program.define(function, |b, _| {
         let value = b.number(nat, 3).unwrap();
         b.known(value)
@@ -76,30 +73,9 @@ fn a_definition_replaces_external_metadata_instead_of_retaining_it() {
         program.function(function).definition,
         Definition::Body(_)
     ));
-    assert_eq!(program.function(function).bounds(), None);
+    assert_eq!(program.function(function).provider(), None);
     program.set_entry(function);
     validate(&program).unwrap();
-}
-
-#[test]
-#[should_panic(expected = "only an external declaration can carry a range contract")]
-fn a_defined_function_cannot_acquire_a_host_range_contract() {
-    let (mut program, nat, _, _) = types();
-    let function = program.declare("defined", &[], nat);
-    program.define(function, |b, _| {
-        let value = b.number(nat, 3).unwrap();
-        b.known(value)
-    });
-    program.bound(function, Bounds::at(7));
-}
-
-#[test]
-#[should_panic(expected = "parameter outside the function signature")]
-fn a_parameter_bound_cannot_escape_into_the_next_declaration() {
-    let (mut program, nat, _, _) = types();
-    let first = program.declare("first", &[nat], nat);
-    program.declare("second", &[nat], nat);
-    program.bound_parameter(first, 1, Bounds::at(7));
 }
 
 #[test]

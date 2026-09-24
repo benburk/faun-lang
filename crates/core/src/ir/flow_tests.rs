@@ -256,7 +256,7 @@ fn source_never_functions_keep_their_contract_without_inlining() {
     let nat = source.declare_type("Nat");
     source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
     let zero = source.ctor_at(nat, 0);
-    let world = tests::host(&mut source, nat, &routines);
+    let world = tests::host(&mut source, nat);
     let finish = source.declare_named("finish!", &[("host", world.host)], world.never);
     source.define(finish, |b, args| {
         let status = b.con(zero, &[]);
@@ -265,7 +265,7 @@ fn source_never_functions_keep_their_contract_without_inlining() {
     let main = source.declare_named("main!", &[("host", world.host)], world.never);
     source.define(main, |b, args| b.call(finish, &[args[0]]));
     source.set_entry(main);
-    let p = lower(source.analyze(), &routines).unwrap();
+    let p = lower(&mut source, &routines).unwrap();
     validate(&p).unwrap();
     assert_eq!(
         p.functions().iter().filter(|f| f.body().is_some()).count(),

@@ -397,7 +397,7 @@ fn source_externals_check_unit_against_nonreturning_provider_contracts() {
             takes: vec![],
             returns,
         });
-        let error = lower(source.analyze(), &routines).unwrap_err();
+        let error = lower(&mut source, &routines).unwrap_err();
         assert!(error.contains("about returning"), "{error}");
     }
 }

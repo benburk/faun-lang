@@ -23,7 +23,6 @@ pub fn lower(
     program: &mut barb::Program,
     routines: &platform::Routines,
 ) -> Result<ir::Program, String> {
-    program.analyze();
     let held = ir::lower(program, routines)?;
     ir::validate(&held)?;
     Ok(ir::optimize(&held))

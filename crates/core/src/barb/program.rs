@@ -21,9 +21,9 @@ pub struct Program {
     pub(super) terms: TermArena,
     /// Field and parameter types.
     pub(super) types_pool: Vec<TypeId>,
-    /// Function parameter names and incoming range contracts.
+    /// Function parameter names.
     pub(super) parameters: Vec<Parameter>,
-    /// Constructor field names and declared bounds.
+    /// Constructor field names.
     pub(super) field_details: Vec<FieldDetail>,
     /// Known values, encoded. See [`super::constant`].
     pub(super) constants: ConstantPool,
@@ -172,8 +172,17 @@ impl Program {
     /// the program is answered back so that reading follows directly.
     pub fn analyze(&mut self) -> &Self {
         let operations = self.operations().to_vec();
-        self.facts.0 = Some(super::facts::analyze(self, operations));
+        let facts = super::facts::analyze(self, operations, &super::Assumed::default());
+        self.facts.0 = Some(facts);
         self
+    }
+
+    /// What analysis finds when values from outside the program are what
+    /// `assumed` says. The tier that knows a target asks this; the answer is
+    /// its own, and the program's facts stay what the program alone says.
+    pub fn assuming(&mut self, assumed: &super::Assumed) -> Facts {
+        let operations = self.operations().to_vec();
+        super::facts::analyze(self, operations, assumed)
     }
 
     /// What [`Self::analyze`] found, where nothing it read has changed since.
@@ -227,15 +236,6 @@ impl Program {
         self.parameters[self.function(id).parameters.range()]
             .iter()
             .map(|parameter| self.name(parameter.name))
-    }
-
-    pub(super) fn parameter_bounds(
-        &self,
-        id: FnId,
-    ) -> impl Iterator<Item = Option<super::Bounds>> + '_ {
-        self.parameters[self.function(id).parameters.range()]
-            .iter()
-            .map(|parameter| parameter.bounds)
     }
 
     #[must_use]
@@ -339,7 +339,7 @@ impl Program {
         self.define_fields(id, &ctors);
     }
 
-    /// Define a type whose constructors' fields may be named and bounded.
+    /// Define a type whose constructors' fields may be named.
     ///
     /// # Panics
     /// If the type is already defined, or a field's type is not declared.
@@ -363,7 +363,6 @@ impl Program {
                 .iter()
                 .map(|field| FieldDetail {
                     name: field.name.map(|name| self.symbol(name)),
-                    bounds: field.bounds,
                 })
                 .collect();
             let fields = append_range(&mut self.types_pool, &types);
@@ -378,16 +377,6 @@ impl Program {
         self.types[id].definition = TypeDefinition::Defined(Range::of(start, ctors.len()));
     }
 
-    /// Each field's declared bounds, in order.
-    pub(super) fn declared_bounds(
-        &self,
-        ctor: &Ctor,
-    ) -> impl Iterator<Item = Option<super::Bounds>> + '_ {
-        self.field_details[ctor.details.range()]
-            .iter()
-            .map(|detail| detail.bounds)
-    }
-
     /// Each field's name, in order, where its definition gave one.
     pub(super) fn field_names(&self, ctor: &Ctor) -> impl Iterator<Item = Option<&str>> + '_ {
         self.field_details[ctor.details.range()]
@@ -400,14 +389,6 @@ impl Program {
     pub fn field_name(&self, ctor: CtorId, at: usize) -> Option<&str> {
         let detail = self.field_details[self.ctor(ctor).details.range()].get(at)?;
         detail.name.map(|name| self.name(name))
-    }
-
-    /// What every value field `at` of `ctor` holds is, if its definition said.
-    #[must_use]
-    pub fn field_bounds(&self, ctor: CtorId, at: usize) -> Option<super::Bounds> {
-        self.field_details[self.ctor(ctor).details.range()]
-            .get(at)?
-            .bounds
     }
 
     /// # Panics
@@ -434,21 +415,15 @@ impl Program {
             .map(|(parameter, _)| self.symbol(parameter))
             .collect();
         let start = self.parameters.len();
-        self.parameters.extend(
-            names
-                .into_iter()
-                .map(|name| Parameter { name, bounds: None }),
-        );
+        self.parameters
+            .extend(names.into_iter().map(|name| Parameter { name }));
         let parameters = Range::of(start, params.len());
         self.functions.push(Function {
             name,
             params: types,
             parameters,
             result,
-            definition: super::Definition::External {
-                symbol: name,
-                bounds: None,
-            },
+            definition: super::Definition::External { symbol: name },
         })
     }
 
@@ -465,32 +440,6 @@ impl Program {
             panic!("only an external declaration can name a provider");
         };
         *symbol = name;
-    }
-
-    /// Supply a range contract for a declaration implemented outside Barb.
-    ///
-    /// # Panics
-    /// If the function already has a body.
-    pub fn bound(&mut self, id: FnId, bounds: super::Bounds) {
-        self.redefined();
-        let super::Definition::External {
-            bounds: contract, ..
-        } = &mut self.functions[id].definition
-        else {
-            panic!("only an external declaration can carry a range contract");
-        };
-        *contract = Some(bounds);
-    }
-
-    /// Supply the range promised for one incoming parameter.
-    ///
-    /// # Panics
-    /// If `at` is outside the function signature.
-    pub fn bound_parameter(&mut self, id: FnId, at: usize, bounds: super::Bounds) {
-        self.redefined();
-        let range = self.functions[id].parameters;
-        assert!(at < range.len(), "parameter outside the function signature");
-        self.parameters[range.range().start + at].bounds = Some(bounds);
     }
 
     /// The function a target enters.

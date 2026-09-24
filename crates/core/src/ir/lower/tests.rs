@@ -102,7 +102,7 @@ fn payload_sums_are_cells_holding_their_products_flat() {
     });
     source.set_entry(main);
 
-    let machine = lower(source.analyze(), &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
     // `Some` is the only object: its pair is laid inline as two fields, and
     // nothing projects a pair back out as a cell of its own.
     let built: Vec<_> = machine
@@ -144,10 +144,6 @@ fn payload_sums_are_cells_holding_their_products_flat() {
     assert_eq!(result.returned().unwrap(), &[BigUint::from(2u8)]);
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one nested-match fixture with erased locals and descending result widths"
-)]
 fn selection() -> Program {
     let mut source = barb::Program::default();
     let nat = source.declare_type("Nat");
@@ -160,13 +156,6 @@ fn selection() -> Program {
     let first = source.ctor_at(choice, 0).index();
     let values = [65536, 256, 1, 0].map(|n| source.intern_number(nat, n).unwrap());
     let read = source.declare("read_byte!", &[], choice);
-    source.bound(
-        read,
-        barb::Bounds {
-            low: 0,
-            high: Some(3),
-        },
-    );
     let select = source.declare("select", &[choice, choice, unit], nat);
     source.define(select, |b, args| {
         b.match_(args[0], choice, |b, ctor, _| {
@@ -190,7 +179,7 @@ fn selection() -> Program {
         b.call(select, &[outer, inner, unit])
     });
     source.set_entry(main);
-    lower(source.analyze(), &Routines::builtin().with_word(64)).unwrap()
+    lower(&mut source, &Routines::builtin().with_word(64)).unwrap()
 }
 
 #[test]
@@ -302,21 +291,13 @@ fn one_field_products_are_transparent_through_machine_lowering() {
     let mut source = barb::Program::default();
     let nat = source.declare_type("Nat");
     source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
-    let record = source.declare_inline_type("{input: Nat}");
-    source.define_type(record, &[("Record", &[nat])]);
+    let record = source.declare_inline_type("{argc: Nat}");
+    source.define_fields(record, &[("Record", &[barb::Field::of(nat).named("argc")])]);
     let record_ctor = source.ctor_at(record, 0);
     let host = source.declare_type("Host");
     source.define_type(host, &[("Host", &[record])]);
     let host_ctor = source.ctor_at(host, 0);
     let main = source.declare_named("main", &[("host", host)], nat);
-    source.bound_parameter(
-        main,
-        0,
-        barb::Bounds {
-            low: 0,
-            high: Some(255),
-        },
-    );
     source.define(main, |b, args| {
         let input = b.match_(args[0], host, |b, _, fields| {
             b.match_(fields[0], record, |_, _, fields| fields[0])
@@ -330,9 +311,10 @@ fn one_field_products_are_transparent_through_machine_lowering() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(source.analyze(), &Routines::default()).unwrap();
+    // A target whose word is a byte hands the entry a byte-wide count.
+    let machine = lower(&mut source, &Routines::builtin().with_word(8)).unwrap();
     let entry = machine.entry();
-    assert_eq!(machine.parameter_name(entry, 0), "host");
+    assert_eq!(machine.parameter_name(entry, 0), "argc");
     assert_eq!(
         machine.signature(machine.function(entry).params),
         [Class::fixed(8)]
@@ -373,7 +355,7 @@ fn known_one_field_products_lower_as_their_field() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(source.analyze(), &Routines::default()).unwrap();
+    let machine = lower(&mut source, &Routines::default()).unwrap();
     let result = evaluate::evaluate(
         &machine,
         machine.entry(),
@@ -398,7 +380,7 @@ fn unused_parameters_do_not_demand_unsupported_representations() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(source.analyze(), &Routines::default()).unwrap();
+    let machine = lower(&mut source, &Routines::default()).unwrap();
     assert!(
         machine
             .signature(machine.function(machine.entry()).params)
@@ -429,7 +411,7 @@ fn parameters_read_only_in_impossible_arms_are_unused() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(source.analyze(), &Routines::default()).unwrap();
+    let machine = lower(&mut source, &Routines::default()).unwrap();
     assert!(
         machine
             .signature(machine.function(machine.entry()).params)
@@ -460,7 +442,7 @@ fn parameters_read_only_after_a_nonreturning_call_are_unused() {
         returns: crate::platform::Returns::Never,
     });
 
-    let machine = lower(source.analyze(), &routines).unwrap();
+    let machine = lower(&mut source, &routines).unwrap();
     assert!(
         machine
             .signature(machine.function(machine.entry()).params)
@@ -492,7 +474,7 @@ fn external_parameter_names_survive_machine_lowering() {
         returns: crate::platform::Returns::Never,
     });
 
-    let machine = lower(source.analyze(), &routines).unwrap();
+    let machine = lower(&mut source, &routines).unwrap();
     let stop = machine
         .functions()
         .iter()
@@ -522,7 +504,7 @@ fn unused_parameters_leave_machine_signatures_and_calls_together() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(source.analyze(), &Routines::default()).unwrap();
+    let machine = lower(&mut source, &Routines::default()).unwrap();
     let keep = machine
         .functions()
         .iter()
@@ -619,7 +601,7 @@ fn products_are_held_flat_across_calls_and_nesting() {
     });
     source.set_entry(main);
 
-    let machine = lower(source.analyze(), &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
     assert!(
         !machine
             .ops
@@ -674,7 +656,7 @@ fn wide_and_self_holding_products_are_cells() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(source.analyze(), &Routines::default()).unwrap();
+    let machine = lower(&mut source, &Routines::default()).unwrap();
     let mut expected = vec![Class::Cell];
     expected.extend(vec![Class::Natural; FLAT_LEAVES]);
     expected.push(Class::Cell);
@@ -756,7 +738,7 @@ fn a_constant_holding_a_product_widens_its_fields() {
             high: Some(200)
         }
     );
-    let machine = lower(source.analyze(), &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
     assert_eq!(
         run(&machine, named(&machine, "run")),
         [BigUint::from(200u8)]
@@ -821,7 +803,7 @@ fn a_product_field_grown_by_recursion_is_held_whole() {
     assert_eq!(facts.answers(main), barb::Bounds::at(0));
     assert_eq!(facts.field(&source, s, 1).width(), None);
     assert_eq!(facts.field(&source, s, 0), barb::Bounds::at(0));
-    let machine = lower(source.analyze(), &Routines::builtin().with_word(64)).unwrap();
+    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
     assert_eq!(run(&machine, named(&machine, "run")), [BigUint::from(40u8)]);
 }
 
@@ -868,15 +850,15 @@ fn a_wrapped_byte_string_is_handed_over_as_its_bytes() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(source.analyze(), &Routines::builtin()).unwrap();
+    let machine = lower(&mut source, &Routines::builtin()).unwrap();
     assert_eq!(machine.data(), b"hi\n");
 }
 
-/// A field declared bounded holds what its declaration says even when its
-/// value was built outside, and an entry parameter held through it is named
-/// for the field, which is how a target supplies a startup value.
+/// An entry parameter held through a field named for a startup value is
+/// named for that field, and is as wide as the target's startup table says,
+/// though nothing in the program bounds it: the target supplies it by name.
 #[test]
-fn a_declared_field_names_and_bounds_what_the_entry_is_handed() {
+fn a_startup_field_names_and_bounds_what_the_entry_is_handed() {
     let mut library = barb::fixture::Library::new();
     let nat = library.nat;
     let p = &mut library.program;
@@ -885,10 +867,7 @@ fn a_declared_field_names_and_bounds_what_the_entry_is_handed() {
         low: 0,
         high: Some(u64::from(u16::MAX)),
     };
-    p.define_fields(
-        host,
-        &[("Host", &[barb::Field::of(nat).named("argc").bounded(word)])],
-    );
+    p.define_fields(host, &[("Host", &[barb::Field::of(nat).named("argc")])]);
     let never = p.declare_type("Never");
     p.define_type(never, &[]);
     let exit = p.declare("exit!", &[nat], never);

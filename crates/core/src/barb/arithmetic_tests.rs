@@ -358,10 +358,6 @@ fn an_early_exit_refines_the_continuation() {
     p.define_type(never, &[]);
     let exit = p.declare("exit!", &[host, nat], never);
     let input = p.declare("read_byte!", &[host], nat);
-    let word = routines
-        .get("read_byte!")
-        .and_then(crate::platform::Routine::bounds);
-    p.bound(input, word.expect("a bounded count"));
     // bounded!(h True n) -> n
     // bounded!(h False n) -> exit!(h Zero)
     let bounded = p.declare("bounded!", &[host, bool_, nat], nat);
@@ -401,7 +397,7 @@ fn an_early_exit_refines_the_continuation() {
             high: Some(2)
         }
     );
-    let machine = crate::ir::lower(program.analyze(), &routines).unwrap();
+    let machine = crate::ir::lower(&mut program, &routines).unwrap();
     assert!(
         (0..machine.values_count())
             .all(|at| machine.class(crate::ir::ValueId::at(at)) != crate::ir::Class::Natural)
