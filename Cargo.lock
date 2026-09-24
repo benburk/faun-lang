@@ -39,11 +39,8 @@ dependencies = [
 name = "faun-cli"
 version = "0.1.0"
 dependencies = [
- "bpaf",
- "faun-core",
  "faun-driver",
  "faun-mos6502-sim65",
- "faun-simple",
  "faun-wasm32-wasi",
  "faun-x86-64-linux",
  "mimalloc",
@@ -72,14 +69,6 @@ version = "0.1.0"
 dependencies = [
  "faun-core",
  "faun-driver",
-]
-
-[[package]]
-name = "faun-simple"
-version = "0.1.0"
-dependencies = [
- "faun-core",
- "num-bigint",
 ]
 
 [[package]]

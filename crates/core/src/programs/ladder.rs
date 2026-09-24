@@ -1,7 +1,7 @@
 //! The simplest programs there are, written where a program is written.
 //!
-//! Barb is the tier a program arrives at, whether somebody wrote it in the
-//! simple frontend or built it here, so a question about what the whole compiler
+//! Barb is the tier a program arrives at, whether a frontend wrote it or
+//! it was built here, so a question about what the whole compiler
 //! does has to be asked from there. The rest of `programs` is written at the
 //! tier a target reads, which answers a different question: what a backend
 //! does with IR it was handed.
@@ -27,7 +27,8 @@ struct Ground {
     argc: FnId,
 }
 
-/// The same declarations the simple frontend makes before it reads anything.
+/// The declarations every program here starts from: authority, an empty
+/// type, numbers, and the host routines it reaches.
 fn ground(routines: &Routines) -> Ground {
     let mut program = Program::default();
     let host = program.declare_type("Host");

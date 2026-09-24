@@ -12,7 +12,6 @@ faun = { path = "crates/faun", version = "0.1.0" }
 faun-core = { path = "crates/core", version = "0.1.0" }
 faun-driver = { path = "crates/driver", version = "0.1.0" }
 faun-mos6502-sim65 = { path = "crates/mos6502-sim65", version = "0.1.0" }
-faun-simple = { path = "crates/simple", version = "0.1.0" }
 faun-wasm32-wasi = { path = "crates/wasm32-wasi", version = "0.1.0" }
 faun-x86-64-linux = { path = "crates/x86-64-linux", version = "0.1.0" }
 

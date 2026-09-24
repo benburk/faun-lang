@@ -11,17 +11,9 @@ path = "src/main.rs"
 # The command and library share a name; only the library has an API to document.
 doc = false
 
-[[bin]]
-name = "faun-simple"
-path = "src/simple.rs"
-doc = false
-
 [dependencies]
-bpaf = "0.9"
-faun-core.workspace = true
 faun-driver.workspace = true
 faun-mos6502-sim65.workspace = true
-faun-simple.workspace = true
 faun-wasm32-wasi.workspace = true
 faun-x86-64-linux.workspace = true
 mimalloc = "0.1.52"
