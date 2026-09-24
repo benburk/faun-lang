@@ -142,23 +142,14 @@ pub(super) fn check(target: &dyn Target, runner: Option<&str>, early_return: boo
         },
     )
     .expect("legalization with a target-matching tiny heap");
-    let artifact = target
-        .compile(&scalar)
-        .expect("scalar compilation")
-        .remove(0);
+    let image = target.compile(&scalar).expect("scalar compilation");
     let dir = std::env::temp_dir().join(format!(
         "faun-lifetimes-{}-{}-{early_return}",
         target.name(),
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("program{}", artifact.extension));
-    std::fs::write(&path, artifact.bytes).unwrap();
-    #[cfg(unix)]
-    if artifact.executable {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let path = target.write(&image, &dir.join("program")).unwrap();
     for argc in [1, 3] {
         execute(&path, runner, argc);
     }

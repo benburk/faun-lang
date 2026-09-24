@@ -45,12 +45,11 @@ fn measure(case: Case, size: usize, ceiling: u64) {
         faun::machine(&case.source(), &Mos6502Sim65).expect("a guarded source expression");
     // Reading (above), preparation and emission happen once per case, not
     // per input. Every invocation below executes this same image.
-    let artifacts = Mos6502Sim65.compile(&program).expect("scalar compilation");
-    let artifact = &artifacts[0];
+    let image = Mos6502Sim65.compile(&program).expect("scalar compilation");
     assert!(
-        artifact.bytes.len() <= size,
+        image.len() <= size,
         "{case:?}: {} bytes, ceiling {size}",
-        artifact.bytes.len()
+        image.len()
     );
     let dir = std::env::temp_dir().join(format!(
         "faun-expression-cost-{}-{case:?}-{}",
@@ -62,7 +61,7 @@ fn measure(case: Case, size: usize, ceiling: u64) {
     ));
     fs::create_dir_all(&dir).expect("a scratch directory");
     let path = dir.join("image");
-    fs::write(&path, &artifact.bytes).expect("the image");
+    fs::write(&path, &image).expect("the image");
 
     for &argc in COUNTS {
         let (status, cycles) = run(&path, argc);

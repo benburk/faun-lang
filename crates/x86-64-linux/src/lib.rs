@@ -15,8 +15,11 @@ mod selected;
 #[cfg(test)]
 mod tests;
 
+use std::io;
+use std::path::{Path, PathBuf};
+
 use faun_core::ir::{Budget, DataId, Program};
-use faun_core::targets::{Artifact, Target};
+use faun_core::targets::{Target, write_image};
 
 /// How wide this machine's own word is, which is the widest value it holds
 /// and what any class but a fixed one means here.
@@ -75,15 +78,16 @@ impl Target for X86_64Linux {
         Ok(())
     }
 
-    fn emit(&self, program: &Program) -> Vec<Artifact> {
+    fn emit(&self, program: &Program) -> Vec<u8> {
         let allocated = selected::select_and_allocate(program)
             .expect("accepted machine IR has a valid x86 selected allocation");
         let code = encode::encode(&allocated);
-        vec![Artifact {
-            extension: "",
-            bytes: elf::image(&code, program),
-            executable: true,
-        }]
+        elf::image(&code, program)
+    }
+
+    /// An executable named `output`.
+    fn write(&self, image: &[u8], output: &Path) -> io::Result<PathBuf> {
+        write_image(output, "", image, true)
     }
 }
 

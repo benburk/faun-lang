@@ -58,9 +58,7 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
 const ARITHMETIC_SIZES: [usize; 3] = [209, 248, 246];
 
 fn code(program: &faun_core::ir::Program) -> Vec<u8> {
-    TARGET.compile(program).expect("scalar compilation")[0]
-        .bytes
-        .clone()
+    TARGET.compile(program).expect("scalar compilation")
 }
 
 #[test]
@@ -124,9 +122,9 @@ fn only_a_program_that_calls_something_sets_the_stack() {
     // ldx #$FF, txs.
     const SETS_IT: &[u8] = &[0xA2, 0xFF, 0x9A];
     let held = |program: &faun_core::ir::Program| {
-        let artifacts = TARGET.compile(program).expect("scalar compilation");
+        let image = TARGET.compile(program).expect("scalar compilation");
         let code = 12 + program.data().len() + program.globals().len();
-        artifacts[0].bytes[code..].starts_with(SETS_IT)
+        image[code..].starts_with(SETS_IT)
     };
     assert!(
         !held(&shared::read(shared::EXIT_ZERO).expect("a program")),

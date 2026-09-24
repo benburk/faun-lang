@@ -2,8 +2,8 @@
 //!
 //! A target owns everything below the IR: the machine, the environment it
 //! calls into, and the files it writes. Each is its own crate and answers
-//! [`Target`], which supplies its layout, host contracts, acceptance limits
-//! and emission. Representation legalization is shared machine-IR code;
+//! [`Target`], which supplies its layout, host contracts, acceptance limits,
+//! emission, and how its image is written and rendered. Representation legalization is shared machine-IR code;
 //! instruction selection and file formats remain backend responsibilities.
 //!
 //! - Targets share [`bytes`] and the checked preparation path.
@@ -15,17 +15,10 @@
 pub mod bytes;
 
 use std::fmt;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use crate::ir::{Budget, Class, Layout, Op, Program, Returns, ValueId};
-
-#[derive(Debug)]
-pub struct Artifact {
-    /// Appended to the output name, such as `.wasm`. Empty when the target
-    /// writes a bare executable.
-    pub extension: &'static str,
-    pub bytes: Vec<u8>,
-    pub executable: bool,
-}
 
 /// A machine, and everything below the IR that reaching it takes.
 ///
@@ -61,9 +54,27 @@ pub trait Target: fmt::Debug {
             .with_word(self.word())
     }
 
-    /// The files an already validated, accepted scalar program becomes.
+    /// The image an already validated, accepted scalar program becomes.
     /// Prefer [`Self::compile`], which establishes these preconditions.
-    fn emit(&self, program: &Program) -> Vec<Artifact>;
+    fn emit(&self, program: &Program) -> Vec<u8>;
+
+    /// Put an image [`Self::emit`] made at `output`, answering the path it
+    /// was written to. The layout on disk is the target's: by default a
+    /// plain file at `output`.
+    ///
+    /// # Errors
+    /// Reports what the filesystem refused.
+    fn write(&self, image: &[u8], output: &Path) -> io::Result<PathBuf> {
+        write_image(output, "", image, false)
+    }
+
+    /// What [`Self::emit`] encodes for an already prepared program, in the
+    /// target's own readable form, as each tier above renders itself: its
+    /// assembly, or the text of a target whose image is text. Empty where a
+    /// target has no rendering yet.
+    fn render(&self, _program: &Program) -> String {
+        String::new()
+    }
 
     /// Target-specific calling-convention, logical-entry, and representation limits.
     ///
@@ -93,7 +104,7 @@ pub trait Target: fmt::Debug {
     ///
     /// # Errors
     /// Reports invalid IR, unsupported representations or target constraints.
-    fn compile(&self, program: &Program) -> Result<Vec<Artifact>, String> {
+    fn compile(&self, program: &Program) -> Result<Vec<u8>, String> {
         let prepared = self.prepare(program)?;
         Ok(self.emit(&prepared))
     }
@@ -283,6 +294,31 @@ fn accepts_class(name: &str, word: u16, class: Class) -> Result<(), String> {
     Ok(())
 }
 
+/// Write `image` to `output` with `suffix` appended to its name, marked
+/// executable where asked, answering the path written.
+///
+/// # Errors
+/// Reports what the filesystem refused.
+pub fn write_image(
+    output: &Path,
+    suffix: &str,
+    image: &[u8],
+    executable: bool,
+) -> io::Result<PathBuf> {
+    let mut path = output.as_os_str().to_owned();
+    path.push(suffix);
+    let path = PathBuf::from(path);
+    std::fs::write(&path, image)?;
+    #[cfg(unix)]
+    if executable {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    }
+    #[cfg(not(unix))]
+    let _ = executable;
+    Ok(path)
+}
+
 /// What a program is read against is what its own target answers for, not
 /// what every target between them does. A program naming something this one
 /// has no answer for never reaches a backend at all.
@@ -334,7 +370,7 @@ mod tests {
             &["exit!"]
         }
 
-        fn emit(&self, _: &Program) -> Vec<Artifact> {
+        fn emit(&self, _: &Program) -> Vec<u8> {
             Vec::new()
         }
     }

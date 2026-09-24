@@ -1,6 +1,6 @@
 use super::evaluate::{self, Error, Host, HostResult, Memory, Outcome};
 use super::*;
-use crate::targets::{Artifact, Target};
+use crate::targets::Target;
 use num_bigint::BigUint;
 
 fn program() -> Program {
@@ -85,7 +85,7 @@ impl Target for Provider {
         });
         routines.with_word(self.0)
     }
-    fn emit(&self, _: &Program) -> Vec<Artifact> {
+    fn emit(&self, _: &Program) -> Vec<u8> {
         Vec::new()
     }
 }

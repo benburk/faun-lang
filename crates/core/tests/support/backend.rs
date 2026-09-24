@@ -101,16 +101,9 @@ fn execute_cases(program: &Program, cases: &[(u16, &[u8])]) -> Vec<(i32, String)
             .as_nanos()
     ));
     fs::create_dir_all(&dir).expect("a scratch directory");
-    let artifacts = TARGET.emit(program);
-    assert_eq!(artifacts.len(), 1);
-    let artifact = &artifacts[0];
-    let path = dir.join(format!("program{}", artifact.extension));
-    fs::write(&path, &artifact.bytes).expect("somewhere to write it");
-    #[cfg(unix)]
-    if artifact.executable {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("a runnable file");
-    }
+    let path = TARGET
+        .write(&TARGET.emit(program), &dir.join("program"))
+        .expect("somewhere to write it");
     let answers = cases
         .iter()
         .map(|&(argc, input)| {
@@ -414,7 +407,7 @@ fn optimized(program: &Program) -> Program {
 }
 
 pub(super) fn bytes(program: &Program) -> Vec<u8> {
-    TARGET.emit(program).remove(0).bytes
+    TARGET.emit(program)
 }
 
 /// Every program here and what it leaves with. What a program answers is a
@@ -1048,9 +1041,7 @@ fn it_compiles_the_ladder_to_the_sizes_recorded() {
         .filter_map(|((name, barb), &(expected, size))| {
             assert_eq!(name, expected, "size baselines must match the ladder");
             let program = lowered(barb, &routines);
-            let actual = TARGET.compile(&program).expect("compilation")[0]
-                .bytes
-                .len();
+            let actual = TARGET.compile(&program).expect("compilation").len();
             (actual != size).then_some((name, actual, size))
         })
         .collect();

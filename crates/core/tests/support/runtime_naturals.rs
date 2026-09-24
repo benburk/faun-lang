@@ -64,20 +64,14 @@ fn execute(
 ) {
     use std::fs;
     use std::process::Command;
-    let artifact = target.compile(p).expect("runtime compilation").remove(0);
+    let image = target.compile(p).expect("runtime compilation");
     let dir = std::env::temp_dir().join(format!(
         "faun-bigint-{label}-{}-{}",
         target.name(),
         std::process::id()
     ));
     fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("program{}", artifact.extension));
-    fs::write(&path, artifact.bytes).unwrap();
-    #[cfg(unix)]
-    if artifact.executable {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let path = target.write(&image, &dir.join("program")).unwrap();
     for extra in [0, 2] {
         let mut command = runner.map_or_else(
             || Command::new(&path),

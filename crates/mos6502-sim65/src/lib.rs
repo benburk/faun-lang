@@ -18,8 +18,11 @@ mod lower;
 #[cfg(test)]
 mod tests;
 
+use std::io;
+use std::path::{Path, PathBuf};
+
 use faun_core::ir::{Budget, Op, Program, RegionId};
-use faun_core::targets::{Artifact, Target};
+use faun_core::targets::{Target, write_image};
 
 /// Where sim65 loads the image, and the zero-page pairs below it.
 const LOAD: u16 = 0x0200;
@@ -116,12 +119,13 @@ impl Target for Mos6502Sim65 {
         lower::check_frames(program)
     }
 
-    fn emit(&self, program: &Program) -> Vec<Artifact> {
-        vec![Artifact {
-            extension: ".bin",
-            bytes: image::image(&lower::lower(program), program),
-            executable: false,
-        }]
+    fn emit(&self, program: &Program) -> Vec<u8> {
+        image::image(&lower::lower(program), program)
+    }
+
+    /// An image named `output.bin`, for `sim65` to run.
+    fn write(&self, image: &[u8], output: &Path) -> io::Result<PathBuf> {
+        write_image(output, ".bin", image, false)
     }
 }
 

@@ -55,8 +55,7 @@ fn run(program: &Program) -> (u64, i32) {
     let dir = std::env::temp_dir().join(format!("faun-cost-{}-{at}", std::process::id()));
     fs::create_dir_all(&dir).expect("a scratch directory");
     let path = dir.join("image");
-    let artifacts = Mos6502Sim65.emit(program);
-    fs::write(&path, &artifacts[0].bytes).expect("the image");
+    fs::write(&path, Mos6502Sim65.emit(program)).expect("the image");
 
     let output = Command::new("sim65")
         .arg("-c")

@@ -1,7 +1,7 @@
 use super::evaluate::{self, Config as EvaluationConfig, Error, RejectHost};
 use super::natural::{self, Config, Needs};
 use super::{Class, Layout, Program, legalize};
-use crate::targets::{Artifact, Target};
+use crate::targets::Target;
 use num_bigint::BigUint;
 
 #[derive(Debug)]
@@ -17,7 +17,7 @@ impl Target for TargetAt {
     fn provides(&self) -> &'static [&'static str] {
         &["exit!"]
     }
-    fn emit(&self, _: &Program) -> Vec<Artifact> {
+    fn emit(&self, _: &Program) -> Vec<u8> {
         Vec::new()
     }
 }

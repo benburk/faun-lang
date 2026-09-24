@@ -163,11 +163,7 @@ mod tests {
     use super::*;
 
     fn hello() -> Vec<u8> {
-        crate::Wasm32Wasi
-            .emit(&faun_core::programs::hello_world())
-            .pop()
-            .unwrap()
-            .bytes
+        crate::Wasm32Wasi.emit(&faun_core::programs::hello_world())
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
 
 use bpaf::{OptionParser, Parser, choice, construct, long, positional, short};
-use faun_core::targets::{Artifact, Target};
+use faun_core::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
@@ -49,6 +49,8 @@ enum Command {
 enum Stage {
     Barb,
     Machine,
+    /// The target's own rendering of what it encodes.
+    Target,
 }
 
 fn main() -> ExitCode {
@@ -98,11 +100,12 @@ fn build_parser() -> impl Parser<Command> {
 fn emit_parser() -> impl Parser<Command> {
     let target = target_parser();
     let stage = positional::<String>("STAGE")
-        .help("The stage to print: barb or machine")
+        .help("The stage to print: barb, machine or target")
         .parse(|stage| match stage.as_str() {
             "barb" => Ok(Stage::Barb),
             "machine" => Ok(Stage::Machine),
-            _ => Err("expected barb or machine"),
+            "target" => Ok(Stage::Target),
+            _ => Err("expected barb, machine or target"),
         });
     let source = positional::<PathBuf>("PATH").help("The source file to compile");
     construct!(Command::Emit {
@@ -163,10 +166,9 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
             output,
             target,
         } => {
-            let artifacts = target.compile(&faun::machine(&source, target)?)?;
-            for artifact in write_artifacts(&output, artifacts)? {
-                println!("wrote {}", artifact.path.display());
-            }
+            let image = target.compile(&faun::machine(&source, target)?)?;
+            let written = target.write(&image, &output)?;
+            println!("wrote {}", written.display());
             Ok(ExitCode::SUCCESS)
         }
         Command::Run { source, target } => run(&source, target),
@@ -182,57 +184,29 @@ fn dispatch(command: Command) -> Result<ExitCode, Box<dyn Error>> {
                     print!("{}", program.render());
                 }
                 Stage::Machine => print!("{}", faun::machine(&source, target)?.render()),
+                Stage::Target => {
+                    let prepared = target.prepare(&faun::machine(&source, target)?)?;
+                    print!("{}", target.render(&prepared));
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
     }
 }
 
-/// Compile for a target with a native executable, run it, and exit as it did.
+/// Compile for the machine this runs on, run it, and exit as it did.
 fn run(source: &Path, target: &dyn Target) -> Result<ExitCode, Box<dyn Error>> {
-    let artifacts = target.compile(&faun::machine(source, target)?)?;
-    if !artifacts.iter().any(|artifact| artifact.executable) {
-        return Err("the selected target did not emit a native executable".into());
+    if NATIVE.is_none_or(|native| native.name() != target.name()) {
+        return Err(format!("{} programs do not run on this machine", target.name()).into());
     }
+    let image = target.compile(&faun::machine(source, target)?)?;
     let directory = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
     fs::create_dir_all(&directory)?;
-    let artifacts = write_artifacts(&directory.join("program"), artifacts)?;
-    let executable = artifacts
-        .iter()
-        .find(|artifact| artifact.executable)
-        .expect("an executable artifact was checked before writing");
-    let status = Process::new(&executable.path).status();
+    let written = target.write(&image, &directory.join("program"));
+    let status = written.and_then(|path| Process::new(path).status());
     fs::remove_dir_all(directory)?;
     let code = status?.code().unwrap_or(1);
     Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
-}
-
-struct WrittenArtifact {
-    path: PathBuf,
-    executable: bool,
-}
-
-fn write_artifacts(
-    output: &Path,
-    artifacts: Vec<Artifact>,
-) -> Result<Vec<WrittenArtifact>, Box<dyn Error>> {
-    let mut written = Vec::with_capacity(artifacts.len());
-    for artifact in artifacts {
-        let mut path = output.to_path_buf().into_os_string();
-        path.push(artifact.extension);
-        let path = PathBuf::from(path);
-        fs::write(&path, artifact.bytes)?;
-        #[cfg(unix)]
-        if artifact.executable {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
-        }
-        written.push(WrittenArtifact {
-            path,
-            executable: artifact.executable,
-        });
-    }
-    Ok(written)
 }
 
 #[cfg(test)]
@@ -285,12 +259,38 @@ mod tests {
     }
 
     #[test]
+    fn emit_prints_the_target_rendering() {
+        let command = cli()
+            .run_inner(&["emit", "--target", "mos6502-sim65", "target", "example.fn"])
+            .unwrap();
+        assert!(matches!(
+            command,
+            Command::Emit {
+                stage: Stage::Target,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn run_refuses_a_target_this_machine_does_not_run() {
+        let command = cli()
+            .run_inner(&["run", "--target", "wasm32-wasi", "example.fn"])
+            .unwrap();
+        let error = dispatch(command).unwrap_err().to_string();
+        assert!(error.contains("do not run on this machine"), "{error}");
+    }
+
+    #[test]
     fn emit_rejects_unknown_stages() {
         let error = cli()
             .run_inner(&["emit", "ir", "example.fn"])
             .unwrap_err()
             .unwrap_stderr();
-        assert!(error.contains("expected barb or machine"), "{error}");
+        assert!(
+            error.contains("expected barb, machine or target"),
+            "{error}"
+        );
     }
 
     #[test]

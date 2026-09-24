@@ -6,8 +6,11 @@ mod module;
 #[cfg(test)]
 mod tests;
 
+use std::io;
+use std::path::{Path, PathBuf};
+
 use faun_core::ir::Program;
-use faun_core::targets::{Artifact, Target};
+use faun_core::targets::{Target, write_image};
 
 const I32: u8 = 0x7F;
 const FUNC_TYPE: u8 = 0x60;
@@ -51,12 +54,13 @@ impl Target for Wasm32Wasi {
         Ok(())
     }
 
-    fn emit(&self, program: &Program) -> Vec<Artifact> {
-        vec![Artifact {
-            extension: ".wasm",
-            bytes: module::module(&lower::lower(program)),
-            executable: false,
-        }]
+    fn emit(&self, program: &Program) -> Vec<u8> {
+        module::module(&lower::lower(program))
+    }
+
+    /// A module named `output.wasm`, for a WASI runtime to run.
+    fn write(&self, image: &[u8], output: &Path) -> io::Result<PathBuf> {
+        write_image(output, ".wasm", image, false)
     }
 }
 

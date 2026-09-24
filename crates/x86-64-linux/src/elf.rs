@@ -192,11 +192,7 @@ mod tests {
     use super::*;
 
     fn hello() -> Vec<u8> {
-        crate::X86_64Linux
-            .emit(&faun_core::programs::hello_world())
-            .pop()
-            .unwrap()
-            .bytes
+        crate::X86_64Linux.emit(&faun_core::programs::hello_world())
     }
 
     #[test]
