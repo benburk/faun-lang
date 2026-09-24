@@ -155,7 +155,8 @@ fn selection() -> Program {
     source.define_type(choice, &[("A", &[]), ("B", &[]), ("C", &[]), ("D", &[])]);
     let first = source.ctor_at(choice, 0).index();
     let values = [65536, 256, 1, 0].map(|n| source.intern_number(nat, n).unwrap());
-    let read = source.declare("read_byte!", &[], choice);
+    // Asked with authority, which carries nothing here.
+    let read = source.declare("read_byte!", &[unit], choice);
     let select = source.declare("select", &[choice, choice, unit], nat);
     source.define(select, |b, args| {
         b.match_(args[0], choice, |b, ctor, _| {
@@ -173,8 +174,9 @@ fn selection() -> Program {
     });
     let main = source.declare("main", &[], nat);
     source.define(main, |b, _| {
-        let outer = b.call(read, &[]);
-        let inner = b.call(read, &[]);
+        let authority = b.con(unit_ctor, &[]);
+        let outer = b.call(read, &[authority]);
+        let inner = b.call(read, &[authority]);
         let unit = b.con(unit_ctor, &[]);
         b.call(select, &[outer, inner, unit])
     });
@@ -254,7 +256,7 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
     source.set_entry(entry);
     barb::validate(&source).unwrap();
     let facts = barb::analyzed(&source);
-    let demand = Demand::discover(&source, &facts, entry).unwrap();
+    let demand = Demand::discover(&source, &facts, &Routines::default(), entry).unwrap();
     let lowering = Lowering {
         barb: &source,
         facts: &facts,
@@ -438,6 +440,7 @@ fn parameters_read_only_after_a_nonreturning_call_are_unused() {
     routines.push(Routine {
         name: "stop".to_owned(),
         offered: true,
+        authority: false,
         takes: vec![],
         returns: crate::platform::Returns::Never,
     });
@@ -470,6 +473,7 @@ fn external_parameter_names_survive_machine_lowering() {
     routines.push(Routine {
         name: "stop".to_owned(),
         offered: true,
+        authority: false,
         takes: vec![Takes::Scalar(Class::fixed(0))],
         returns: crate::platform::Returns::Never,
     });
@@ -870,10 +874,12 @@ fn a_startup_field_names_and_bounds_what_the_entry_is_handed() {
     p.define_fields(host, &[("Host", &[barb::Field::of(nat).named("argc")])]);
     let never = p.declare_type("Never");
     p.define_type(never, &[]);
-    let exit = p.declare("exit!", &[nat], never);
+    let exit = p.declare("exit!", &[host, nat], never);
     let main = p.declare_named("main!", &[("host", host)], never);
     p.define(main, |b, args| {
-        b.match_(args[0], host, |b, _, fields| b.call(exit, &[fields[0]]))
+        b.match_(args[0], host, |b, _, fields| {
+            b.call(exit, &[args[0], fields[0]])
+        })
     });
     p.set_entry(main);
     assert!(

@@ -83,6 +83,12 @@ pub struct Routine {
     /// build what it offers. The tier below still reaches it, since a
     /// program built rather than written is a program too.
     pub offered: bool,
+    /// Whether a program asks it with authority: the first argument a
+    /// declaration of it takes is what a program was handed to be allowed
+    /// to ask, and nothing of it is read. It orders what a program asks and
+    /// says who may; a machine hands nothing for it, and handing it over is
+    /// not reading what it carries.
+    pub authority: bool,
     /// What it reads and what it leaves.
     ///
     /// One entry per argument a program hands it, which is not always one
@@ -240,6 +246,9 @@ impl Routines {
         let held = |name: &str, offered, takes: &[Takes], returns| Routine {
             name: name.to_owned(),
             offered,
+            // What a program asks, it asks with the authority it was handed;
+            // what a target uses to build what it offers, nobody asks.
+            authority: offered,
             takes: takes.to_vec(),
             returns,
         };

@@ -57,11 +57,10 @@ pub fn program(
 /// Lower a checked `main! : Host -> []` application.
 ///
 /// The Barb entry is `main!` as written. `Host` holds its fields itself, each
-/// a startup value named and bounded as the target's startup table says;
-/// machine lowering names the entry's parameters for them, so the target
-/// produces them by name, and drops those nothing reads, so it produces only
-/// what a program uses. `Host`'s bodyless methods are the target's routines,
-/// asked without their receiver.
+/// named as the source spells it; machine lowering recognizes the startup
+/// values among them, names the entry's parameters for them and drops those
+/// nothing reads. `Host`'s bodyless methods are the target's routines, called
+/// with the `Host` they were handed, as the source says.
 ///
 /// # Errors
 ///
@@ -75,20 +74,7 @@ pub fn application(
 ) -> Result<barb::Program, LowerError> {
     crate::check::application(resolved, checked, host).map_err(|cause| error(cause.to_string()))?;
     let specialized = specialize::application(resolved, checked, prelude, host)?;
-    let host = HostContext {
-        routines,
-        host: host.host,
-    };
-    Lowerer::new(resolved, prelude, Some(host), specialized)?.lower()
-}
-
-/// What lowering an application reads of its target and its host.
-#[derive(Clone, Copy)]
-struct HostContext<'a> {
-    routines: &'a faun_core::platform::Routines,
-    /// The source `Host` type: its fields are startup values, and a routine is asked
-    /// without it.
-    host: Symbol,
+    Lowerer::new(resolved, prelude, Some(routines), specialized)?.lower()
 }
 
 /// Select a uniquely named checked value and lower it as the entry.
@@ -189,10 +175,8 @@ struct Lowerer<'a> {
     resolved: &'a ResolvedProgram,
     prelude: &'a PreludeIds,
     /// The target and its host, present when lowering an application.
-    host: Option<HostContext<'a>>,
-    /// Routines whose first parameter is the `Host` receiver, which Barb
-    /// declares and calls without.
-    receivers: HashSet<FunctionKey>,
+    /// The target's routines, present when lowering an application.
+    routines: Option<&'a faun_core::platform::Routines>,
     specialized: specialize::Program,
     closures: BTreeMap<Type, Vec<ClosureVariant>>,
     invoked: BTreeSet<Type>,
@@ -211,14 +195,13 @@ impl<'a> Lowerer<'a> {
     fn new(
         resolved: &'a ResolvedProgram,
         prelude: &'a PreludeIds,
-        host: Option<HostContext<'a>>,
+        routines: Option<&'a faun_core::platform::Routines>,
         specialized: specialize::Program,
     ) -> Result<Self, LowerError> {
         let mut lowerer = Self {
             resolved,
             prelude,
-            host,
-            receivers: HashSet::new(),
+            routines,
             specialized,
             closures: BTreeMap::new(),
             invoked: BTreeSet::new(),
@@ -242,8 +225,8 @@ impl<'a> Lowerer<'a> {
         self.declare_functions()?;
         self.define_functions()?;
         self.define_apply_functions()?;
-        if let Some(host) = self.host
-            && host.routines.get("exit!").is_none()
+        if let Some(routines) = self.routines
+            && routines.get("exit!").is_none()
         {
             return Err(error("the selected target does not provide `exit!`"));
         }
@@ -546,18 +529,8 @@ impl<'a> Lowerer<'a> {
                 .ty
                 .function()
                 .ok_or_else(|| error("specialized global is not a function"))?;
-            // A routine is asked without its receiver: authority says who
-            // may ask, and the target answers the same whoever does.
-            let receives = function.provider.is_some()
-                && self.host.is_some_and(|host| {
-                    parameters.first() == Some(&Type::Named(host.host, Vec::new()))
-                });
-            if receives {
-                self.receivers.insert(function.key.clone());
-            }
             let parameters: Vec<_> = parameters
                 .iter()
-                .skip(usize::from(receives))
                 .enumerate()
                 .map(|(index, parameter)| (format!("v{index}"), self.type_ids[parameter]))
                 .collect();
@@ -631,7 +604,6 @@ impl<'a> Lowerer<'a> {
                 record_wrappers: &self.record_wrappers,
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
-                receivers: &self.receivers,
                 apply_ids: &self.apply_ids,
                 closures: &self.closures,
                 prelude: self.prelude,
@@ -663,7 +635,6 @@ impl<'a> Lowerer<'a> {
                 record_wrappers: &self.record_wrappers,
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
-                receivers: &self.receivers,
                 apply_ids: &self.apply_ids,
                 closures: &self.closures,
                 prelude: self.prelude,
@@ -1046,7 +1017,6 @@ struct EmitContext<'a> {
     record_wrappers: &'a HashMap<Type, Type>,
     closure_constructor_ids: &'a HashMap<ClosureKey, CtorId>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
-    receivers: &'a HashSet<FunctionKey>,
     apply_ids: &'a HashMap<Type, FnId>,
     closures: &'a BTreeMap<Type, Vec<ClosureVariant>>,
     prelude: &'a PreludeIds,
@@ -1084,13 +1054,7 @@ impl EmitContext<'_> {
         )
     }
 
-    /// Call a global, asking a routine without its `Host` receiver.
     fn call(&self, builder: &mut Builder<'_>, key: &FunctionKey, arguments: &[Atom]) -> Atom {
-        let arguments = if self.receivers.contains(key) {
-            &arguments[1..]
-        } else {
-            arguments
-        };
         builder.call(self.function_ids[key], arguments)
     }
 }
@@ -1515,12 +1479,13 @@ mod tests {
             let mut program = application(&resolved, &checked, &prelude, &host, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
-            // `Host` holds the startup values its target produces, each
-            // bounded as the target says; `main!` is the entry as written,
-            // and a routine is asked without its receiver.
+            // `Host` holds the startup values its target produces; `main!` is
+            // the entry as written, and a routine is asked with the `Host`
+            // it was handed, as the source says.
             assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\nHost = Host(argc: Nat)\n\n"));
             assert!(rendered.contains("main!(v0: Host) -> [] ="), "{rendered}");
-            assert!(rendered.contains("Host.exit!(v0: Nat) -> [] = <elsewhere>"));
+            assert!(rendered.contains("Host.exit!(v0: Host, v1: Nat) -> [] = <elsewhere>"));
+            assert!(rendered.contains("Host.exit!(v0, v1)"), "{rendered}");
             assert!(!rendered.contains("start"));
             assert!(!rendered.contains('$'));
             let machine = faun_core::lower(&mut program.clone(), &routines).unwrap();

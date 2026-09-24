@@ -80,6 +80,7 @@ impl Target for Provider {
         routines.push(crate::platform::Routine {
             name: "count!".to_owned(),
             offered: true,
+            authority: false,
             takes: Vec::new(),
             returns: crate::platform::Returns::Value(Class::Word),
         });
@@ -394,6 +395,7 @@ fn source_externals_check_unit_against_nonreturning_provider_contracts() {
         routines.push(platform::Routine {
             name: "foreign".into(),
             offered: false,
+            authority: false,
             takes: vec![],
             returns,
         });

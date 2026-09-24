@@ -48,6 +48,8 @@ read field the target cannot produce is refused by the target.
 
 `Host`'s bodyless methods are the effects the target answers for, called as
 `host.write!(text)`. A program orders its effects by threading `Host` through
-them. Barb declares and calls each routine without its `Host` receiver, since
-the target answers the same whoever asks; Barb keeps the order and number of
-calls to anything bodyless.
+them. Barb calls each routine with the `Host` it was handed, as the source
+says, and keeps the order and number of calls to anything bodyless. A routine
+asked with authority reads nothing of it, so machine lowering hands nothing
+for it, and passing `Host` along is not reading what it carries: a program
+that never reads `host.argc` makes its target produce nothing.

@@ -75,7 +75,7 @@ pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program
     let entry = program.entry().expect("a program to lower has an entry");
     // Only values actually lowered need a representation. Merely declaring
     // a library type (or retaining an old expression in the arena) does not.
-    let demand = Demand::discover(program, facts, entry)?;
+    let demand = Demand::discover(program, facts, routines, entry)?;
     let entry_params = demand.named_params(entry);
     let borrowed: Vec<_> = entry_params
         .iter()
@@ -204,7 +204,7 @@ fn declare<'a>(
                         "`{outside}` disagrees with `{name}` about returning"
                     ));
                 }
-                let taken = demand.handed_names(id);
+                let taken = demand.handed_names(id, wanted);
                 let borrowed: Vec<_> = taken.iter().map(String::as_str).collect();
                 Callee::External {
                     id: wanted.declare_named(machine, &borrowed),
@@ -390,6 +390,7 @@ impl<'a> Demand<'a> {
     fn discover(
         program: &'a barb::Program,
         facts: &'a barb::Facts,
+        routines: &Routines,
         entry: barb::FnId,
     ) -> Result<Self, String> {
         let mut demand = Self {
@@ -397,18 +398,7 @@ impl<'a> Demand<'a> {
             facts,
             reached: vec![false; program.functions().len()],
             waiting: vec![entry],
-            takes: program
-                .functions()
-                .iter()
-                .enumerate()
-                .map(|(at, function)| {
-                    let id = barb::FnId::at(at);
-                    vec![
-                        function.body().is_none() || facts.operation(id).is_some();
-                        program.params(id).len()
-                    ]
-                })
-                .collect(),
+            takes: read_before_walking(program, facts, routines),
             carries: vec![Storage::Undemanded; program.types().len()],
             leaves: SEQUENCE_LEAVES.to_vec(),
         };
@@ -534,15 +524,33 @@ impl<'a> Demand<'a> {
             .join(" and ")
     }
 
-    fn handed(&self, id: barb::FnId, wanted: &Routine) -> Result<Vec<Handed>, String> {
-        let carried: Vec<_> = self
+    /// The parameters of a declaration a routine reads: past the authority
+    /// it is asked with, and carrying something.
+    fn read_by(
+        &self,
+        id: barb::FnId,
+        wanted: &Routine,
+    ) -> Result<Vec<(&barb::TypeId, &barb::Bounds)>, String> {
+        let asked = authority(wanted);
+        if self.program.params(id).len() < asked {
+            return Err(format!(
+                "`{}` is asked with authority, and a declaration of it takes none",
+                wanted.name
+            ));
+        }
+        Ok(self
             .program
             .params(id)
             .iter()
             .zip(self.facts.takes(id))
+            .skip(asked)
             .filter(|(ty, _)| self.carries[ty.index()] != Storage::Erased)
-            .collect();
+            .collect())
+    }
+
+    fn handed(&self, id: barb::FnId, wanted: &Routine) -> Result<Vec<Handed>, String> {
         let held = wanted.name.as_str();
+        let carried = self.read_by(id, wanted)?;
         // What is handed over is converted to what the routine reads, so
         // what has to agree is how many of them: a value of a type carrying
         // nothing is not handed over at all, and then there is no value
@@ -582,10 +590,11 @@ impl<'a> Demand<'a> {
     }
 
     /// One diagnostic name per handed argument, in the same order.
-    fn handed_names(&self, id: barb::FnId) -> Vec<String> {
+    fn handed_names(&self, id: barb::FnId, wanted: &Routine) -> Vec<String> {
         self.program
             .parameter_names(id)
             .zip(self.program.params(id))
+            .skip(authority(wanted))
             .filter(|(_, ty)| self.carries[ty.index()] != Storage::Erased)
             .map(|(name, _)| name.to_owned())
             .collect()
@@ -888,6 +897,54 @@ fn field_carried(
         Storage::Erased => None,
         Storage::Undemanded => panic!("a bound field type must have been demanded"),
     }
+}
+
+/// Which parameters are read before any body is walked: every one of a
+/// declaration something outside answers or an equation recognized as an
+/// operation, but for the authority a routine is asked with, which is handed
+/// over and not read.
+fn read_before_walking(
+    program: &barb::Program,
+    facts: &barb::Facts,
+    routines: &Routines,
+) -> Vec<Vec<bool>> {
+    program
+        .functions()
+        .iter()
+        .enumerate()
+        .map(|(at, function)| {
+            let id = barb::FnId::at(at);
+            let mut takes = vec![
+                function.body().is_none() || facts.operation(id).is_some();
+                program.params(id).len()
+            ];
+            if let Some(first) = takes.first_mut()
+                && asks_with_authority(program, routines, function)
+            {
+                *first = false;
+            }
+            takes
+        })
+        .collect()
+}
+
+/// How many of a declaration's first parameters a routine takes as the
+/// authority it is asked with, rather than reads: one or none.
+const fn authority(routine: &Routine) -> usize {
+    if routine.authority { 1 } else { 0 }
+}
+
+/// Whether a declaration with no body is answered by a routine asked with
+/// authority.
+fn asks_with_authority(
+    program: &barb::Program,
+    routines: &Routines,
+    function: &barb::Function,
+) -> bool {
+    function
+        .provider()
+        .and_then(|provider| routines.get(program.name(provider)))
+        .is_some_and(|routine| routine.authority)
 }
 
 /// What the target says of values from outside the program: what each
@@ -1638,7 +1695,8 @@ impl Lowering<'_> {
                 routine,
                 handed,
             } => {
-                let args = self.outside_arguments(b, function, arguments, locals, statics, handed);
+                let asked = (*routine, handed.as_slice());
+                let args = self.outside_arguments(b, function, arguments, locals, statics, asked);
                 (b.call(*id, &args), routine.answers())
             }
             Callee::Function(callee) => {
@@ -1771,7 +1829,7 @@ impl Lowering<'_> {
         arguments: barb::Range,
         locals: &Locals,
         statics: &[Option<barb::ConstId>],
-        handed: &[Handed],
+        (routine, handed): (&Routine, &[Handed]),
     ) -> Vec<ValueId> {
         let mut args = Vec::with_capacity(handed.len());
         let carried = self
@@ -1779,6 +1837,7 @@ impl Lowering<'_> {
             .atoms(arguments)
             .iter()
             .zip(self.barb.params(function))
+            .skip(authority(routine))
             .filter(|(_, ty)| self.carries[ty.index()] != Storage::Erased);
         for ((atom, _), handed) in carried.zip(handed) {
             match handed {

@@ -514,6 +514,7 @@ fn natural_host_signatures_do_not_become_address_signatures() {
     routines.push(crate::platform::Routine {
         name: "foreign".into(),
         offered: false,
+        authority: false,
         takes: vec![crate::platform::Takes::Scalar(Class::Natural)],
         returns: crate::platform::Returns::Value(Class::Natural),
     });
@@ -547,6 +548,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
         routines.push(crate::platform::Routine {
             name: "mark".into(),
             offered: false,
+            authority: false,
             takes: vec![],
             returns: crate::platform::Returns::Unit,
         });
