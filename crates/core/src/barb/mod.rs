@@ -86,6 +86,8 @@ mod cleanup;
 mod constant;
 mod evaluate;
 mod facts;
+#[cfg(test)]
+pub(crate) mod fixture;
 mod fold;
 mod inline;
 mod laws;
