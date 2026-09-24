@@ -10,7 +10,7 @@
 //! thing more. What they are for is the question "is this as small as it can
 //! be", which nobody can answer about a program doing four things at once.
 
-use crate::barb::{FnId, Program, TypeId};
+use crate::barb::{Bounds, FnId, Program, TypeId};
 use crate::platform::Routines;
 
 /// What every program here is read against.
@@ -24,11 +24,12 @@ struct Ground {
     nat: TypeId,
     never: TypeId,
     exit: FnId,
-    argc: FnId,
+    /// What the target promises of the count it hands the entry.
+    count: Bounds,
 }
 
 /// The declarations every program here starts from: authority, an empty
-/// type, numbers, and the host routines it reaches.
+/// type, numbers, and the host routine it reaches.
 fn ground(routines: &Routines) -> Ground {
     let mut program = Program::default();
     let host = program.declare_type("Host");
@@ -46,15 +47,26 @@ fn ground(routines: &Routines) -> Ground {
         id
     };
     let exit = reached(&mut program, "exit!", &[host, nat], never);
-    let argc = reached(&mut program, "argc!", &[host], nat);
+    let count = routines
+        .startup("argc")
+        .expect("a count produced at startup")
+        .bounds();
     Ground {
         program,
         host,
         nat,
         never,
         exit,
-        argc,
+        count,
     }
+}
+
+/// `main!`, handed authority and the count its target produces at startup.
+fn counted_main(program: &mut Program, ground: (TypeId, TypeId, TypeId), count: Bounds) -> FnId {
+    let (host, nat, never) = ground;
+    let main = program.declare_named("main!", &[("host", host), ("argc", nat)], never);
+    program.bound_parameter(main, 1, count);
+    main
 }
 
 /// Leave, with a number known before the program ran.
@@ -93,16 +105,13 @@ pub fn exits_with_the_count(routines: &Routines) -> Program {
     let Ground {
         mut program,
         host,
+        nat,
         never,
         exit,
-        argc,
-        ..
+        count,
     } = ground(routines);
-    let main = program.declare("main!", &[host], never);
-    program.define(main, |b, args| {
-        let count = b.call(argc, &[args[0]]);
-        b.call(exit, &[args[0], count])
-    });
+    let main = counted_main(&mut program, (host, nat, never), count);
+    program.define(main, |b, args| b.call(exit, &[args[0], args[1]]));
     program.set_entry(main);
     program
 }
@@ -128,7 +137,7 @@ pub fn exits_with_the_count_and_more(routines: &Routines, limit: u64, more: u64)
         nat,
         never,
         exit,
-        argc,
+        count,
     } = ground(routines);
     let truth = program.declare_type("Bool");
     program.define_type(truth, &[("False", &[]), ("True", &[])]);
@@ -136,10 +145,9 @@ pub fn exits_with_the_count_and_more(routines: &Routines, limit: u64, more: u64)
     let succ = program.ctor_at(nat, 1);
     let below = comparing(&mut program, nat, truth);
 
-    let main = program.declare("main!", &[host], never);
+    let main = counted_main(&mut program, (host, nat, never), count);
     program.define(main, |b, args| {
-        let host = args[0];
-        let count = b.call(argc, &[host]);
+        let (host, count) = (args[0], args[1]);
         let ceiling = b.number(nat, limit).expect("the declared natural shape");
         let ceiling = b.known(ceiling);
         let under = b.call(below, &[count, ceiling]);
@@ -181,7 +189,7 @@ pub fn exits_with_a_shared_intermediate(routines: &Routines, limit: u64) -> Prog
         nat,
         never,
         exit,
-        argc,
+        count,
     } = ground(routines);
     let truth = program.declare_type("Bool");
     program.define_type(truth, &[("False", &[]), ("True", &[])]);
@@ -191,10 +199,9 @@ pub fn exits_with_a_shared_intermediate(routines: &Routines, limit: u64) -> Prog
     let [ceiling, three] =
         [limit, 3].map(|n| program.intern_number(nat, n).expect("the natural shape"));
 
-    let main = program.declare("main!", &[host], never);
+    let main = counted_main(&mut program, (host, nat, never), count);
     program.define(main, |b, args| {
-        let host = args[0];
-        let count = b.call(argc, &[host]);
+        let (host, count) = (args[0], args[1]);
         let ceiling = b.known(ceiling);
         let under = b.call(below, &[count, ceiling]);
         let kept = b.match_(under, truth, |b, ctor, _| {
@@ -235,7 +242,7 @@ pub fn exits_with_the_count_and_a_constant(routines: &Routines, bits: u32, more:
         nat,
         never,
         exit,
-        argc,
+        count,
     } = ground(routines);
     let truth = program.declare_type("Bool");
     program.define_type(truth, &[("False", &[]), ("True", &[])]);
@@ -251,10 +258,9 @@ pub fn exits_with_the_count_and_a_constant(routines: &Routines, bits: u32, more:
         .intern_number(nat, more)
         .expect("the declared natural shape");
 
-    let main = program.declare("main!", &[host], never);
+    let main = counted_main(&mut program, (host, nat, never), count);
     program.define(main, |b, args| {
-        let host = args[0];
-        let count = b.call(argc, &[host]);
+        let (host, count) = (args[0], args[1]);
         let more = b.known(more);
         let sum = b.call(adding, &[count, more]);
         let modulus = b.known(modulus);
@@ -283,7 +289,7 @@ pub fn exits_with_the_low_bits_of_a_sum(routines: &Routines, bits: u32) -> Progr
         nat,
         never,
         exit,
-        argc,
+        count,
     } = ground(routines);
     let truth = program.declare_type("Bool");
     program.define_type(truth, &[("False", &[]), ("True", &[])]);
@@ -293,10 +299,9 @@ pub fn exits_with_the_low_bits_of_a_sum(routines: &Routines, bits: u32) -> Progr
         .intern_number(nat, 1 << bits)
         .expect("the declared natural shape");
 
-    let main = program.declare("main!", &[host], never);
+    let main = counted_main(&mut program, (host, nat, never), count);
     program.define(main, |b, args| {
-        let host = args[0];
-        let count = b.call(argc, &[host]);
+        let (host, count) = (args[0], args[1]);
         let sum = b.call(adding, &[count, count]);
         let modulus = b.known(modulus);
         let low = b.call(remainder, &[sum, modulus]);

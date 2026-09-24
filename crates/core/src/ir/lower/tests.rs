@@ -159,7 +159,7 @@ fn selection() -> Program {
     source.define_type(choice, &[("A", &[]), ("B", &[]), ("C", &[]), ("D", &[])]);
     let first = source.ctor_at(choice, 0).index();
     let values = [65536, 256, 1, 0].map(|n| source.intern_number(nat, n).unwrap());
-    let read = source.declare("argc!", &[], choice);
+    let read = source.declare("read_byte!", &[], choice);
     source.bound(
         read,
         barb::Bounds {
@@ -302,7 +302,7 @@ fn one_field_products_are_transparent_through_machine_lowering() {
     let mut source = barb::Program::default();
     let nat = source.declare_type("Nat");
     source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
-    let record = source.declare_inline_type("{argc: Nat}");
+    let record = source.declare_inline_type("{input: Nat}");
     source.define_type(record, &[("Record", &[nat])]);
     let record_ctor = source.ctor_at(record, 0);
     let host = source.declare_type("Host");
@@ -318,10 +318,10 @@ fn one_field_products_are_transparent_through_machine_lowering() {
         },
     );
     source.define(main, |b, args| {
-        let argc = b.match_(args[0], host, |b, _, fields| {
+        let input = b.match_(args[0], host, |b, _, fields| {
             b.match_(fields[0], record, |_, _, fields| fields[0])
         });
-        let startup = b.con(record_ctor, &[argc]);
+        let startup = b.con(record_ctor, &[input]);
         let rebuilt = b.con(host_ctor, &[startup]);
         b.match_(rebuilt, host, |b, _, fields| {
             b.match_(fields[0], record, |_, _, fields| fields[0])
@@ -361,10 +361,10 @@ fn known_one_field_products_lower_as_their_field() {
     source.define_type(record, &[("Record", &[nat])]);
     let host = source.declare_type("Host");
     source.define_type(host, &[("Host", &[record])]);
-    let argc = (0..42).fold(barb::Value(source.ctor_at(nat, 0), vec![]), |held, _| {
+    let input = (0..42).fold(barb::Value(source.ctor_at(nat, 0), vec![]), |held, _| {
         barb::Value(source.ctor_at(nat, 1), vec![held])
     });
-    let startup = barb::Value(source.ctor_at(record, 0), vec![argc]);
+    let startup = barb::Value(source.ctor_at(record, 0), vec![input]);
     let known = source
         .intern(host, &barb::Value(source.ctor_at(host, 0), vec![startup]))
         .unwrap();

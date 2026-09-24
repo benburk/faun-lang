@@ -1522,7 +1522,6 @@ mod tests {
             assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\nHost = Host({argc: Nat})\n\n"));
             assert!(rendered.contains("start(argc: Nat) -> [] ="), "{rendered}");
             assert!(rendered.contains("Host.exit!(v0: Nat) -> [] = <elsewhere>"));
-            assert!(!rendered.contains("argc!"));
             assert!(!rendered.contains('$'));
             let machine = faun_core::machine(&mut program.clone(), &routines).unwrap();
             // The target produces `argc` into the entry's frame.

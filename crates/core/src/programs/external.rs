@@ -3,19 +3,22 @@
 use crate::ir::{Binary, Class, Program, Returns};
 
 /// Interleave external declarations and bodies whose names resemble host functions.
-/// Writes `externals\n`, then exits 42 if two argc declarations agree.
+///
+/// Writes `externals\n`, then exits 42 if two declarations of `read_byte!`
+/// agree, which they do with nothing on standard input: both read the end.
 #[must_use]
 pub fn interleaved() -> Program {
     let (mut p, main) = Program::new("main");
-    let count = p.external("argc!", &[], Returns::Values(&[Class::Word]));
-    let increment = p.declare("argc!", &[Class::Word], &[Class::Word]);
+    let byte = Class::fixed(9);
+    let read = p.external("read_byte!", &[], Returns::Values(&[byte]));
+    let increment = p.declare("read_byte!", &[Class::Word], &[Class::Word]);
     let write = p.external(
         "write!",
         &[Class::Address, Class::Word],
         Returns::Values(&[]),
     );
     let wrapper = p.declare("exit!", &[Class::Word], &[Class::Word]);
-    let again = p.external("argc!", &[], Returns::Values(&[Class::Word]));
+    let again = p.external("read_byte!", &[], Returns::Values(&[byte]));
     let exit = p.external("exit!", &[Class::Word], Returns::Never);
     let data = p.intern(b"externals\n");
     p.define(increment, |b, args| {
@@ -31,9 +34,11 @@ pub fn interleaved() -> Program {
         b.ret(&value);
     });
     p.define(main, |b, _| {
-        let before = b.call_one(count, &[]);
+        let before = b.call_one(read, &[]);
+        let before = b.convert(Class::Word, before);
         let held = b.call_one(wrapper, &[before]);
         let after = b.call_one(again, &[]);
+        let after = b.convert(Class::Word, after);
         let difference = b.binary(Binary::Sub, held, after);
         let expected = b.constant(Class::Word, 41);
         let status = b.binary(Binary::Add, expected, difference);

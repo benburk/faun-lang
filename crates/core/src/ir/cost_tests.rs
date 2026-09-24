@@ -251,10 +251,9 @@ fn only_what_a_function_consumes_is_owned() {
     reason = "one fixture builds the branch, legalizes it, and finds each arm"
 )]
 fn a_claim_read_last_by_a_branch_is_released_in_each_arm() {
-    let (mut p, main) = Program::new("main");
-    let argc = p.external("argc!", &[], Returns::Values(&[Class::Word]));
-    p.define(main, |b, _| {
-        let count = b.call_one(argc, &[]);
+    let (mut p, main) = Program::new_with_params("main", &[("argc", Class::Word)]);
+    p.define(main, |b, params| {
+        let count = params[0];
         let held = b.convert(Class::Natural, count);
         let one = b.constant(Class::Word, 1);
         let test = b.compare(Relation::Equal, count, one);

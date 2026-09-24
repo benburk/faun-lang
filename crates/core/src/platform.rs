@@ -254,8 +254,6 @@ impl Routines {
             // The kernel picks the address, so nothing asking for a page
             // says where.
             hidden("grow", &[word], Returns::Value(Class::Address)),
-            // How many arguments a program was handed.
-            offered("argc!", &[], Returns::Value(Class::Word)),
             // One byte from standard input, offset by one so nought can say
             // EOF without losing the byte whose bits are all nought.
             offered("read_byte!", &[], Returns::Value(Class::fixed(9))),

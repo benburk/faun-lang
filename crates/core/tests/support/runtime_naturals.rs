@@ -7,13 +7,12 @@ use faun_core::targets::Target;
     reason = "shared arithmetic graph and full-byte projection"
 )]
 fn program() -> Program {
-    let (mut p, main) = Program::new("main");
+    let (mut p, main) = Program::new_with_params("main", &[("argc", Class::Word)]);
     let routines = faun_core::platform::Routines::builtin();
-    let argc = routines.declare(&mut p, "argc!");
     let write = routines.declare(&mut p, "write!");
     let bytes = p.global(&[0; 80]);
-    p.define(main, |b, _| {
-        let count = b.call_one(argc, &[]);
+    p.define(main, |b, params| {
+        let count = params[0];
         let count = b.convert(Class::Natural, count);
         let max = b.constant(Class::Natural, u64::MAX);
         let one = b.constant(Class::Natural, 1);

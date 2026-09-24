@@ -355,24 +355,24 @@ pub fn doubles_then_reads_the_same_number() -> Program {
 }
 
 /// Enough live products to occupy the 6502 home that once overlapped ARGC.
-/// Arithmetic must preserve platform state, not only its own answers.
+/// Arithmetic must preserve platform state, not only its own answers: the
+/// count, run as one, is read after every product.
 #[must_use]
 pub fn preserves_host_count() -> Program {
-    let (mut program, main) = Program::new("main");
-    let argc = crate::platform::Routines::builtin().declare(&mut program, "argc!");
-    program.define(main, |b, _| {
-        let before = b.call_one(argc, &[]);
+    let (mut program, main) = Program::new_with_params("main", &[("argc", Class::Word)]);
+    program.define(main, |b, params| {
+        let argc = params[0];
         let two = b.constant(Class::Word, 2);
         let three = b.constant(Class::Word, 3);
         let products: Vec<_> = (0..12).map(|_| b.binary(Binary::Mul, two, three)).collect();
-        let after = b.call_one(argc, &[]);
+        let one = b.constant(Class::Word, 1);
         let mut total = b.constant(Class::Word, 0);
         for product in products {
             total = b.binary(Binary::Add, total, product);
         }
         let expected = b.constant(Class::Word, 72);
         let correct = b.compare(Relation::Equal, total, expected);
-        let preserved = b.compare(Relation::Equal, before, after);
+        let preserved = b.compare(Relation::Equal, argc, one);
         let passed = b.binary(Binary::Add, correct, preserved);
         let failures = b.binary(Binary::Sub, two, passed);
         b.ret(&[failures]);

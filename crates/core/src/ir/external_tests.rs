@@ -71,7 +71,19 @@ impl Target for Provider {
         self.0
     }
     fn provides(&self) -> &'static [&'static str] {
-        &["exit!", "argc!", "write!"]
+        &["exit!", "write!", "count!"]
+    }
+    /// The built-in routines it provides, and one answering a whole word,
+    /// which no built-in routine does.
+    fn routines(&self) -> crate::platform::Routines {
+        let mut routines = crate::platform::Routines::builtin().only(self.provides());
+        routines.push(crate::platform::Routine {
+            name: "count!".to_owned(),
+            offered: true,
+            takes: Vec::new(),
+            returns: crate::platform::Returns::Value(Class::Word),
+        });
+        routines.with_word(self.0)
     }
     fn emit(&self, _: &Program) -> Vec<Artifact> {
         Vec::new()
@@ -269,12 +281,12 @@ fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not(
     for bits in [16, 32, 64] {
         for class in [Class::Word, Class::fixed(bits)] {
             let mut p = program();
-            let external = p.external("argc!", &[], Returns::Values(&[class]));
+            let external = p.external("count!", &[], Returns::Values(&[class]));
             call_external(&mut p, external);
             Provider(bits).compile(&p).unwrap();
         }
         let mut p = program();
-        let external = p.external("argc!", &[], Returns::Values(&[Class::fixed(bits - 1)]));
+        let external = p.external("count!", &[], Returns::Values(&[Class::fixed(bits - 1)]));
         call_external(&mut p, external);
         assert!(
             Provider(bits)
@@ -323,7 +335,7 @@ fn the_reference_host_reads_all_bytes_and_repeats_eof() {
 #[test]
 fn a_body_named_like_an_external_function_is_still_a_body() {
     let mut p = program();
-    let internal = p.declare("argc!", &[], &[Class::Word]);
+    let internal = p.declare("count!", &[], &[Class::Word]);
     p.define(internal, |b, _| {
         let zero = b.constant(Class::Word, 0);
         b.ret(&[zero]);
@@ -332,7 +344,7 @@ fn a_body_named_like_an_external_function_is_still_a_body() {
         let result = b.call(internal, &[]);
         b.ret(&result);
     });
-    assert!(!p.reaches("argc!"));
+    assert!(!p.reaches("count!"));
     Provider(64).compile(&p).unwrap();
     let mut host = reply(|_| HostResult::Return(vec![BigUint::from(7u8)]));
     assert_eq!(
@@ -343,12 +355,12 @@ fn a_body_named_like_an_external_function_is_still_a_body() {
         [BigUint::from(0u8)]
     );
     assert!(host.calls.is_empty());
-    let external = p.external("argc!", &[], Returns::Values(&[Class::Word]));
+    let external = p.external("count!", &[], Returns::Values(&[Class::Word]));
     p.define(p.entry(), |b, _| {
         let result = b.call(external, &[]);
         b.ret(&result);
     });
-    assert!(p.reaches("argc!"));
+    assert!(p.reaches("count!"));
     Provider(64).compile(&p).unwrap();
     assert_eq!(
         run(&p, p.entry(), &[], &mut host)
@@ -357,7 +369,7 @@ fn a_body_named_like_an_external_function_is_still_a_body() {
             .unwrap(),
         [BigUint::from(7u8)]
     );
-    assert_eq!(host.calls, ["argc!"]);
+    assert_eq!(host.calls, ["count!"]);
 }
 
 #[test]

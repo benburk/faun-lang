@@ -1384,7 +1384,6 @@ impl Selector<'_> {
                             "write!" => Opcode::Write,
                             "exit!" => Opcode::Exit,
                             "grow" => Opcode::Grow,
-                            "argc!" => Opcode::ArgumentCount,
                             "read_byte!" => Opcode::ReadByte,
                             other => return Err(format!("x86 has no selected call for `{other}`")),
                         }

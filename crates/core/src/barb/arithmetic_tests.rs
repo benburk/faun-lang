@@ -357,11 +357,11 @@ fn an_early_exit_refines_the_continuation() {
     let never = p.declare_type("Never");
     p.define_type(never, &[]);
     let exit = p.declare("exit!", &[host, nat], never);
-    let argc = p.declare("argc!", &[host], nat);
+    let input = p.declare("read_byte!", &[host], nat);
     let word = routines
-        .get("argc!")
+        .get("read_byte!")
         .and_then(crate::platform::Routine::bounds);
-    p.bound(argc, word.expect("a bounded count"));
+    p.bound(input, word.expect("a bounded count"));
     // bounded!(h True n) -> n
     // bounded!(h False n) -> exit!(h Zero)
     let bounded = p.declare("bounded!", &[host, bool_, nat], nat);
@@ -377,7 +377,7 @@ fn an_early_exit_refines_the_continuation() {
     });
     let main = p.declare_named("main!", &[("host", host)], never);
     p.define(main, |b, args| {
-        let count = b.call(argc, &[args[0]]);
+        let count = b.call(input, &[args[0]]);
         let two = b.known(two);
         let below = b.call(less_than, &[count, two]);
         let n = b.call(bounded, &[args[0], below, count]);
@@ -622,10 +622,10 @@ fn reduced(held: impl FnOnce(&mut Builder<'_>, &Terms) -> Atom) -> String {
     let never = p.declare_type("Never");
     p.define_type(never, &[]);
     let exit = p.declare("exit!", &[host, nat], never);
-    let argc = p.declare("argc!", &[host], nat);
+    let input = p.declare("read_byte!", &[host], nat);
     let main = p.declare("main!", &[host], never);
     p.define(main, |b, args| {
-        let n = b.call(argc, &[args[0]]);
+        let n = b.call(input, &[args[0]]);
         let two = b.known(two);
         let four = b.call(mul, &[two, two]);
         let sixteen = b.call(mul, &[four, four]);

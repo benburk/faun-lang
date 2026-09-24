@@ -14,7 +14,6 @@ use crate::{ir, targets};
 mod fixture;
 
 struct Observer {
-    argc: u64,
     bytes: Vec<u8>,
     calls: Vec<String>,
 }
@@ -28,7 +27,6 @@ impl Host for Observer {
     ) -> Result<HostResult, evaluate::Error> {
         self.calls.push(name.to_owned());
         match name {
-            "argc!" => Ok(HostResult::Return(vec![BigUint::from(self.argc)])),
             "write!" => {
                 let address = u64::try_from(word(&args[0].to_bytes_le())).unwrap();
                 let len = word(&args[1].to_bytes_le());
@@ -41,17 +39,17 @@ impl Host for Observer {
     }
 }
 
-fn run(p: &Program, bits: u16, argc: u64) -> (Evaluation, Observer) {
+/// Run `p` handed the entry arguments `args`.
+fn run(p: &Program, bits: u16, args: &[u64]) -> (Evaluation, Observer) {
     validate(p).expect("valid fixture");
     let mut host = Observer {
-        argc,
         bytes: Vec::new(),
         calls: Vec::new(),
     };
     let result = evaluate::evaluate(
         p,
         p.entry(),
-        &[],
+        &args.iter().copied().map(BigUint::from).collect::<Vec<_>>(),
         evaluate::Config {
             word_bits: bits,
             fuel: 100_000_000,
@@ -81,8 +79,8 @@ fn nested_lifetimes_preserve_full_values_and_free_every_mortal_claim() {
             };
             let scalar = legalize(&original, config).unwrap();
             for argc in [1, 3] {
-                let (before, before_host) = run(&original, bits, argc);
-                let (after, after_host) = run(&scalar, bits, argc);
+                let (before, before_host) = run(&original, bits, &[argc]);
+                let (after, after_host) = run(&scalar, bits, &[argc]);
                 assert_eq!(before.returned().unwrap(), [BigUint::from(0u8)]);
                 assert_eq!(after.outcome, before.outcome);
                 assert_eq!(before_host.bytes, fixture::expected(argc));
@@ -90,7 +88,7 @@ fn nested_lifetimes_preserve_full_values_and_free_every_mortal_claim() {
                     after_host.bytes, before_host.bytes,
                     "{bits}-bit, early={early}, argc={argc}"
                 );
-                assert_eq!(before_host.calls, ["argc!", "write!"]);
+                assert_eq!(before_host.calls, ["write!"]);
                 assert_eq!(after_host.calls, before_host.calls);
                 no_live_objects(&scalar, &after, config);
             }
@@ -146,8 +144,8 @@ fn one_global_mapping_preserves_sibling_and_cross_function_ownership() {
                 heap_bytes: 256,
             };
             let scalar = legalize(&original, config).unwrap();
-            let (before, _) = run(&original, bits, 0);
-            let (after, _) = run(&scalar, bits, 0);
+            let (before, _) = run(&original, bits, &[]);
+            let (after, _) = run(&scalar, bits, &[]);
             let expected = 120 + 16 * if choice == 0 { 3u64 } else { 2 };
             assert_eq!(before.returned().unwrap(), [BigUint::from(expected)]);
             assert_eq!(after.outcome, before.outcome);
@@ -209,8 +207,8 @@ fn narrower_loop_initial_values_do_not_narrow_rebuilt_carried_parameters() {
                 Class::Word,
                 "preserve declared loop width"
             );
-            let (before, _) = run(&original, bits, 0);
-            let (after, _) = run(&scalar, bits, 0);
+            let (before, _) = run(&original, bits, &[]);
+            let (after, _) = run(&scalar, bits, &[]);
             assert_eq!(before.returned().unwrap(), [BigUint::from(260u16)]);
             assert_eq!(
                 after.outcome, before.outcome,
@@ -242,8 +240,8 @@ fn packed_boundaries_carry_managed_values_without_leaking_a_claim() {
             };
             let scalar = legalize(&fitted, config).unwrap();
             for argc in [1, 3] {
-                let (before, before_host) = run(&fitted, bits, argc);
-                let (after, after_host) = run(&scalar, bits, argc);
+                let (before, before_host) = run(&fitted, bits, &[argc]);
+                let (after, after_host) = run(&scalar, bits, &[argc]);
                 assert_eq!(before.returned().unwrap(), [BigUint::from(0u8)]);
                 assert_eq!(after.outcome, before.outcome);
                 assert_eq!(before_host.bytes, fixture::expected(argc));

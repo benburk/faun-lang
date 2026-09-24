@@ -330,18 +330,6 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     }
 }
 
-/// Whether a call is the one asking how many arguments a program was handed.
-///
-/// It is the one routine here whose answer is the same every time it is
-/// asked, and the reset routine asks it once. What a call to it wants is
-/// where that answer was put.
-fn counted(program: &Program, function: FunctionId) -> bool {
-    program
-        .function(function)
-        .external()
-        .is_some_and(|symbol| program.name(symbol) == "argc!")
-}
-
 /// What a round may learn and never unlearn: that the heap has to start
 /// further up. It is not taken back, and an address is two bytes however
 /// high it is, so a heap further out never makes the code that names it
@@ -526,7 +514,7 @@ impl Lowering<'_> {
         // image header named. Nothing has asked for memory yet, so it is
         // told the heap. What is wanted back is the count, which it leaves
         // in `A` and `X`.
-        if self.program.reaches("argc!") || self.entry_argc().is_some() {
+        if self.entry_argc().is_some() {
             let [low, high] = heap.to_le_bytes();
             self.set_pair(CSP, CSTACK_TOP - 2);
             self.asm.lda_imm(low);
@@ -559,17 +547,7 @@ impl Lowering<'_> {
     /// what it answered, which is a byte nobody wants wherever every
     /// program that asks the count narrows it.
     fn counts_wide(&self) -> bool {
-        let program = self.program;
         self.entry_argc().is_some_and(|value| self.wide(value))
-            || program
-                .functions()
-                .iter()
-                .filter_map(faun_core::ir::Function::body)
-                .flat_map(|body| program.walk_within(body))
-                .any(|(op, results)| {
-                    matches!(*op, Op::Call { function, .. } if counted(program, function))
-                        && results.first().is_some_and(|&held| self.wide(held))
-                })
     }
 
     fn entry_argc(&self) -> Option<ValueId> {
@@ -749,13 +727,6 @@ impl Lowering<'_> {
                 }
                 Op::AddressOf(data) => {
                     self.source[results[0].index()] = Source::Addr(data);
-                    true
-                }
-                // The count was read once at reset and left at a pair
-                // nothing writes again, so a value asking for it is already
-                // where it lives and wants no place of its own.
-                Op::Call { function, .. } if counted(program, function) => {
-                    self.source[results[0].index()] = Source::Home(ARGC);
                     true
                 }
                 _ => false,
@@ -1715,8 +1686,6 @@ impl Lowering<'_> {
         match name {
             "write!" => self.write(args),
             "read_byte!" => self.read_byte(results[0]),
-            // Read at reset and kept since, so nothing is asked here.
-            "argc!" => self.commit(results[0], ARGC),
             "exit!" => {
                 let status = self.operand(args[0], T0);
                 self.load(status.byte(0));

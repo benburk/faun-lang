@@ -89,7 +89,7 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
         let program = &mut library.program;
         let main = program.declare_named("main!", &[("host", world.host)], world.never);
         program.define(main, |b, args| {
-            let count = b.call(world.argc, &[args[0]]);
+            let count = b.call(world.input, &[args[0]]);
             let two = b.known(two);
             let small = b.call(less_than, &[count, two]);
             let n = b.call(bounded, &[args[0], small, count]);

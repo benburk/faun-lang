@@ -17,20 +17,19 @@ pub(super) fn expected(argc: u64) -> Vec<u8> {
 }
 
 pub(super) fn program(early_return: bool) -> Program {
-    let (mut p, main) = Program::new("main");
+    let (mut p, main) = Program::new_with_params("main", &[("argc", Class::Word)]);
     let identity = p.declare("borrowed identity", &[Class::Natural], &[Class::Natural]);
     p.define(identity, |b, args| b.ret(&[args[0]]));
     let accumulate = accumulator(&mut p, identity, early_return);
     let serialize = serializer(&mut p);
-    let argc = p.external("argc!", &[], Returns::Values(&[Class::Word]));
     let write = p.external(
         "write!",
         &[Class::Address, Class::Word],
         Returns::Values(&[]),
     );
     let buffer = p.global(&[0; OUTPUT_BYTES]);
-    p.define(main, |b, _| {
-        let argc = b.call_one(argc, &[]);
+    p.define(main, |b, params| {
+        let argc = params[0];
         let iterations = b.constant(Class::Word, ITERATIONS);
         let answer = b.call_one(accumulate, &[argc, iterations]);
         let address = b.address_of(buffer);

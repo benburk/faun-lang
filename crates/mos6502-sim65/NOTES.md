@@ -9,7 +9,7 @@ A dead register holding a known constant could materialize an adjacent constant 
 without adding cycles: `DEX` is one byte and two cycles, while `LDX #imm` is two bytes
 and two cycles.
 
-The `argc!` startup sequence has one such opportunity. After setting the hardware
+The startup sequence reading `argc` has one such opportunity. After setting the hardware
 stack pointer, `X` holds `$FF`; two `DEX`/`STX` pairs could write `$FE` and `$FD` into
 the sim65 argument-stack pointer. This would reduce each affected image by three
 bytes.

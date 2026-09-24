@@ -8,13 +8,13 @@ const ZERO: Class = Class::fixed(0);
 const BIT: Class = Class::fixed(1);
 
 /// The arithmetic library with the authority an entry is handed and the two
-/// routines these programs call: `argc!`, bounded as the host's word, and
+/// routines these programs call: `read_byte!`, bounded as its routine says, and
 /// `exit!`, which does not come back.
 struct Hosted {
     library: Library,
     host: TypeId,
     never: TypeId,
-    argc: FnId,
+    input: FnId,
     exit: FnId,
 }
 
@@ -23,12 +23,12 @@ impl Hosted {
         let mut library = Library::new();
         let nat = library.nat;
         let p = &mut library.program;
-        let (host, never, argc, exit) = host_routines(p, nat, routines);
+        let (host, never, input, exit) = host_routines(p, nat, routines);
         Self {
             library,
             host,
             never,
-            argc,
+            input,
             exit,
         }
     }
@@ -50,8 +50,8 @@ impl Hosted {
     }
 }
 
-/// Declare `Host`, `Never`, and the routines `argc!` and `exit!` over `nat`,
-/// answering `(host, never, argc, exit)`.
+/// Declare `Host`, `Never`, and the routines `read_byte!` and `exit!` over `nat`,
+/// answering `(host, never, input, exit)`.
 fn host_routines(
     p: &mut barb::Program,
     nat: TypeId,
@@ -61,13 +61,13 @@ fn host_routines(
     p.define_type(host, &[("Host", &[])]);
     let never = p.declare_type("Never");
     p.define_type(never, &[]);
-    let argc = p.declare("argc!", &[host], nat);
+    let input = p.declare("read_byte!", &[host], nat);
     let held = routines
-        .get("argc!")
+        .get("read_byte!")
         .and_then(crate::platform::Routine::bounds);
-    p.bound(argc, held.expect("a bounded count"));
+    p.bound(input, held.expect("a bounded byte"));
     let exit = p.declare("exit!", &[host, nat], never);
-    (host, never, argc, exit)
+    (host, never, input, exit)
 }
 
 /// `n` as the chain of constructors a program writes for it.
@@ -117,22 +117,22 @@ fn zero_constants_choose_fixed0_but_the_entry_still_returns_a_word() {
 }
 
 /// A known-zero scalar is still an argument, a result and a branch result.
-/// Computing it calls `argc!` again: knowing the result must not erase that
+/// Computing it calls `read_byte!` again: knowing the result must not erase that
 /// call. Optimized or not, since inlining would otherwise remove the calls
 /// and joins these tests are about.
 fn program(word_bits: u16, optimized: bool) -> Program {
     let routines = Routines::builtin().with_word(word_bits);
     let mut hosted = Hosted::new(&routines);
-    let (host, argc, exit) = (hosted.host, hosted.argc, hosted.exit);
+    let (host, input, exit) = (hosted.host, hosted.input, hosted.exit);
     let library = &hosted.library;
     let (nat, bool_, equals) = (library.nat, library.bool_, library.equals);
     let (zero, succ, yes) = (library.zero, library.succ, library.true_);
     let p = &mut hosted.library.program;
 
-    // keep_zero!(h n) -> observed = argc!(h) n
+    // keep_zero!(h n) -> observed = read_byte!(h) n
     let keep_zero = p.declare_named("keep_zero!", &[("h", host), ("n", nat)], nat);
     p.define(keep_zero, |b, args| {
-        b.call(argc, &[args[0]]);
+        b.call(input, &[args[0]]);
         args[1]
     });
     // select_zero!(h False) -> keep_zero!(h Zero)
@@ -157,7 +157,7 @@ fn program(word_bits: u16, optimized: bool) -> Program {
         })
     });
     hosted.main(|b, host| {
-        let count = b.call(argc, &[host]);
+        let count = b.call(input, &[host]);
         let one = written(b, (zero, succ), 1);
         let first = b.call(equals, &[count, one]);
         let z = b.call(select_zero, &[host, first]);
@@ -209,12 +209,12 @@ fn range_proven_zero_arithmetic_selects_fixed0() {
     for word_bits in [16, 32, 64] {
         let routines = Routines::builtin().with_word(word_bits);
         let mut hosted = Hosted::new(&routines);
-        let (argc, exit) = (hosted.argc, hosted.exit);
+        let (input, exit) = (hosted.input, hosted.exit);
         let library = &hosted.library;
         let (zero, succ, modulo) = (library.zero, library.succ, library.modulo);
-        // main!(h) -> n = argc!(h) exit!(h mod(n Succ(Zero)))
+        // main!(h) -> n = read_byte!(h) exit!(h mod(n Succ(Zero)))
         hosted.main(|b, host| {
-            let n = b.call(argc, &[host]);
+            let n = b.call(input, &[host]);
             let one = written(b, (zero, succ), 1);
             let status = b.call(modulo, &[n, one]);
             b.call(exit, &[host, status])
@@ -233,14 +233,14 @@ fn range_proven_zero_arithmetic_selects_fixed0() {
         assert!(p.walk_within(body).any(|(op, results)| {
             matches!(op, Op::Convert { .. }) && p.class(results[0]) == ZERO
         }));
-        for argc in [0, 1, 255, 65535] {
+        for input in [0, 1, 255, 511] {
             let mut host = Host {
-                argc,
+                input,
                 ..Host::default()
             };
             let result = evaluate_entry(&p, word_bits, &mut host);
             assert_eq!(result.halted().unwrap(), [BigUint::from(0u8)]);
-            assert_eq!(host.calls, ["argc!", "exit!"]);
+            assert_eq!(host.calls, ["read_byte!", "exit!"]);
         }
     }
 }
@@ -394,7 +394,7 @@ fn comparison_programs(word_bits: u16, order: [&str; 2], probe: Probe) -> (Progr
     let nat = p.declare_type("Nat");
     p.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
     let (zero, succ) = (p.ctor_at(nat, 0), p.ctor_at(nat, 1));
-    let (host, never, argc, exit) = host_routines(&mut p, nat, &routines);
+    let (host, never, input, exit) = host_routines(&mut p, nat, &routines);
     let ops = comparisons(&mut p, (nat, zero, succ), order);
     let probe = declare_probe(&mut p, (nat, zero, succ), &ops, probe);
     // status!(h False) -> exit!(h Zero)
@@ -408,7 +408,7 @@ fn comparison_programs(word_bits: u16, order: [&str; 2], probe: Probe) -> (Progr
     });
     let main = p.declare_named("main!", &[("h", host)], never);
     p.define(main, |b, args| {
-        let n = b.call(argc, &[args[0]]);
+        let n = b.call(input, &[args[0]]);
         let asked = b.call(probe, &[n]);
         b.call(status, &[args[0], asked])
     });
@@ -476,19 +476,19 @@ fn comparison_arms_use_minimal_constants_and_a_wide_enough_join() {
                         "a proven zero is narrowed after the join"
                     );
                 }
-                for (argc, answer) in [0, 1, 2, 33].into_iter().zip(answers) {
+                for (input, answer) in [0, 1, 2, 33].into_iter().zip(answers) {
                     for p in [&lowered, &optimized] {
                         let mut host = Host {
-                            argc,
+                            input,
                             ..Host::default()
                         };
                         let result = evaluate_entry(p, word_bits, &mut host);
                         assert_eq!(
                             result.halted().unwrap(),
                             [BigUint::from(answer)],
-                            "{order:?}: {probe:?}, argc={argc}"
+                            "{order:?}: {probe:?}, input={input}"
                         );
-                        assert_eq!(host.calls, ["argc!", "exit!"]);
+                        assert_eq!(host.calls, ["read_byte!", "exit!"]);
                     }
                 }
             }
@@ -512,7 +512,7 @@ fn evaluate_entry(p: &Program, word_bits: u16, host: &mut Host) -> evaluate::Eva
 
 #[derive(Default)]
 struct Host {
-    argc: u16,
+    input: u16,
     calls: Vec<String>,
     halt_on_read: Option<usize>,
 }
@@ -526,10 +526,12 @@ impl evaluate::Host for Host {
     ) -> Result<evaluate::HostResult, evaluate::Error> {
         self.calls.push(name.to_owned());
         match name {
-            "argc!" if self.halt_on_read == Some(self.calls.len()) => {
+            "read_byte!" if self.halt_on_read == Some(self.calls.len()) => {
                 Ok(evaluate::HostResult::Halt(vec![BigUint::from(7u8)]))
             }
-            "argc!" => Ok(evaluate::HostResult::Return(vec![BigUint::from(self.argc)])),
+            "read_byte!" => Ok(evaluate::HostResult::Return(vec![BigUint::from(
+                self.input,
+            )])),
             "exit!" => Ok(evaluate::HostResult::Halt(args.to_vec())),
             _ => Err(evaluate::Error::Host(name.to_owned())),
         }
@@ -541,18 +543,18 @@ fn zero_results_preserve_eager_calls_and_nonreturning_execution() {
     for word_bits in [16, 32, 64] {
         for optimized in [true, false] {
             let p = program(word_bits, optimized);
-            for argc in [1, 2, 33] {
+            for input in [1, 2, 33] {
                 for halt_on_read in [None, Some(2)] {
                     let mut host = Host {
-                        argc,
+                        input,
                         halt_on_read,
                         ..Host::default()
                     };
                     let result = evaluate_entry(&p, word_bits, &mut host);
                     let (answer, calls): (u8, &[&str]) = if halt_on_read.is_some() {
-                        (7, &["argc!", "argc!"])
+                        (7, &["read_byte!", "read_byte!"])
                     } else {
-                        (u8::from(argc == 1), &["argc!", "argc!", "exit!"])
+                        (u8::from(input == 1), &["read_byte!", "read_byte!", "exit!"])
                     };
                     assert_eq!(result.halted().unwrap(), [BigUint::from(answer)]);
                     assert_eq!(host.calls, calls);

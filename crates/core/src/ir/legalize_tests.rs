@@ -595,11 +595,14 @@ fn source_host_arguments_are_not_implicitly_truncated() {
     let mut library = crate::barb::fixture::Library::new();
     let (nat, add) = (library.nat, library.add);
     let world = tests::host(&mut library.program, nat, &routines);
-    let main = library
-        .program
-        .declare_named("main!", &[("host", world.host)], world.never);
+    let main =
+        library
+            .program
+            .declare_named("main!", &[("host", world.host), ("argc", nat)], world.never);
+    let count = routines.startup("argc").expect("a count").bounds();
+    library.program.bound_parameter(main, 1, count);
     library.program.define(main, |b, args| {
-        let n = b.call(world.argc, &[args[0]]);
+        let n = args[1];
         let doubled = b.call(add, &[n, n]);
         b.call(world.exit, &[args[0], doubled])
     });

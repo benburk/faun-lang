@@ -8,11 +8,11 @@ pub(super) struct World {
     pub host: barb::TypeId,
     pub never: barb::TypeId,
     pub exit: barb::FnId,
-    pub argc: barb::FnId,
+    pub input: barb::FnId,
 }
 
-/// Declare `exit!` and `argc!` over `nat`, bounding the count as `routines`
-/// says a machine's word does.
+/// Declare `exit!` and `read_byte!` over `nat`, bounding what is read as
+/// `routines` says. The byte read is the program's input from outside.
 pub(super) fn host(
     program: &mut barb::Program,
     nat: barb::TypeId,
@@ -23,18 +23,18 @@ pub(super) fn host(
     let never = program.declare_type("Never");
     program.define_type(never, &[]);
     let exit = program.declare("exit!", &[host, nat], never);
-    let argc = program.declare("argc!", &[host], nat);
+    let input = program.declare("read_byte!", &[host], nat);
     if let Some(bounds) = routines
-        .get("argc!")
+        .get("read_byte!")
         .and_then(crate::platform::Routine::bounds)
     {
-        program.bound(argc, bounds);
+        program.bound(input, bounds);
     }
     World {
         host,
         never,
         exit,
-        argc,
+        input,
     }
 }
 
@@ -330,7 +330,7 @@ fn a_constructor_that_carries_something_is_not_a_tag() {
     });
     let main = source.declare_named("main!", &[("host", world.host)], world.never);
     source.define(main, |b, args| {
-        let n = b.call(world.argc, &[args[0]]);
+        let n = b.call(world.input, &[args[0]]);
         let held = b.con(some, &[n]);
         b.call(unwrap, &[held]);
         let status = b.con(zero, &[]);

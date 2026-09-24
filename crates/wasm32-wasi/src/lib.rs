@@ -34,7 +34,7 @@ impl Target for Wasm32Wasi {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write!", "exit!", "grow", "argc!", "read_byte!", "argc"]
+        &["write!", "exit!", "grow", "read_byte!", "argc"]
     }
 
     fn limits(&self, program: &Program) -> Result<(), String> {

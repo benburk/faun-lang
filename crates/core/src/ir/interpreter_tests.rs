@@ -363,7 +363,7 @@ impl Host for TestHost {
     ) -> Result<HostResult, Error> {
         self.calls.push(name.to_owned());
         match name {
-            "argc!" => Ok(HostResult::Return(vec![BigUint::from(7u8)])),
+            "read_byte!" => Ok(HostResult::Return(vec![BigUint::from(7u8)])),
             "exit!" => Ok(HostResult::Halt(args.to_vec())),
             _ => Err(Error::Host(name.to_owned())),
         }
@@ -373,12 +373,12 @@ impl Host for TestHost {
 #[test]
 fn deterministic_host_can_return_values_and_halt_callers() {
     let (mut p, main) = Program::new("main");
-    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc!");
+    let read = crate::platform::Routines::builtin().declare(&mut p, "read_byte!");
     let exit = crate::platform::Routines::builtin().declare(&mut p, "exit!");
     let f = p.declare_never("stop", &[]);
     p.define(f, |b, _| {
-        let count = b.call(argc, &[]);
-        b.call(exit, &count);
+        let byte = b.call(read, &[]);
+        b.call(exit, &byte);
     });
     p.define(main, |b, _| {
         b.call(f, &[]);
@@ -397,7 +397,7 @@ fn deterministic_host_can_return_values_and_halt_callers() {
         )
         .unwrap();
         assert_eq!(result.halted().unwrap(), vec![BigUint::from(7u8)]);
-        assert_eq!(host.calls, ["argc!", "exit!"]);
+        assert_eq!(host.calls, ["read_byte!", "exit!"]);
     }
     assert!(matches!(run(&p, main, &[], 64), Err(Error::Host(_))));
 }
@@ -748,18 +748,10 @@ fn shared_native_backend_arithmetic_fixtures_agree_with_interpreter() {
             vec![BigUint::from(4u8)]
         );
         let p = arithmetic::preserves_host_count();
-        let result = evaluate(
-            &p,
-            p.entry(),
-            &[],
-            Config {
-                word_bits: bits,
-                ..Config::default()
-            },
-            &mut TestHost { calls: Vec::new() },
-        )
-        .unwrap();
-        assert_eq!(result.returned().unwrap(), vec![BigUint::default()]);
+        assert_eq!(
+            run(&p, p.entry(), &[1], bits).unwrap().returned().unwrap(),
+            vec![BigUint::default()]
+        );
     }
 }
 
@@ -773,10 +765,10 @@ impl Host for OversizedHost {
 #[test]
 fn host_results_do_not_implicitly_fit_a_word() {
     let (mut p, main) = Program::new("main");
-    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc!");
+    let external = p.external("read_word!", &[], Returns::Values(&[Class::Word]));
     p.define(main, |b, _| {
-        let count = b.call(argc, &[]);
-        b.ret(&count);
+        let word = b.call(external, &[]);
+        b.ret(&word);
     });
     for word_bits in [16, 32, 64] {
         assert_eq!(

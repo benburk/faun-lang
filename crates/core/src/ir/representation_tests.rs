@@ -202,7 +202,7 @@ impl Standard {
 #[test]
 fn unused_library_types_and_functions_do_not_need_runtime_representations() {
     let source = Standard::new().main(|b, host, s| {
-        let n = b.call(s.world.argc, &[host]);
+        let n = b.call(s.world.input, &[host]);
         let two = s.nat(b, 2);
         let rest = b.call(s.library.modulo, &[n, two]);
         s.exit(b, host, rest)
@@ -215,7 +215,7 @@ fn unused_library_types_and_functions_do_not_need_runtime_representations() {
     ] {
         validate(&machine).unwrap();
         assert_eq!(bodies(&machine), 1, "only main is emitted");
-        assert_eq!(externals(&machine), 2, "argc and exit are retained");
+        assert_eq!(externals(&machine), 2, "input and exit are retained");
     }
 }
 
@@ -283,7 +283,7 @@ fn default_pipeline_removes_folded_library_temporaries() {
 /// magnitude taken; each answers nought.
 fn runtime_product(byte: bool) -> barb::Program {
     Standard::new().main(|b, host, s| {
-        let n = b.call(s.world.argc, &[host]);
+        let n = b.call(s.world.input, &[host]);
         if byte {
             let held = b.call(s.u8_from_nat, &[n]);
             b.call(s.u8_to_nat, &[held]);
@@ -419,7 +419,7 @@ fn recognized_definition_bodies_do_not_demand_runtime_representations() {
     });
     let main = source.declare_named("main!", &[("host", world.host)], world.never);
     source.define(main, |b, args| {
-        let n = b.call(world.argc, &[args[0]]);
+        let n = b.call(world.input, &[args[0]]);
         let nought = b.con(zero, &[]);
         let sum = b.call(add, &[n, nought]);
         b.call(world.exit, &[args[0], sum])
@@ -459,7 +459,7 @@ fn unsupported_values_after_nonreturning_bindings_are_not_lowered() {
             })
         });
         let source = standard.main(|b, host, s| {
-            let count = b.call(s.world.argc, &[host]);
+            let count = b.call(s.world.input, &[host]);
             let nought = b.con(s.library.zero, &[]);
             let n = b.call(s.library.add, &[count, nought]);
             if leaves_through_stop {
@@ -529,7 +529,7 @@ fn a_wrapper_around_a_product_stays_transparent_when_matched() {
         b.match_(args[0], pair, |_, _, fields| fields[0])
     });
     let source = standard.main(|b, host, s| {
-        let n = b.call(s.world.argc, &[host]);
+        let n = b.call(s.world.input, &[host]);
         let nought = b.con(s.library.zero, &[]);
         let inner = b.con(mk_pair, &[n, nought]);
         let held = b.con(mk_boxed, &[inner]);
@@ -588,7 +588,7 @@ fn cell_fields_are_held_at_the_class_their_projection_reads() {
         })
     });
     let source = standard.main(|b, host, s| {
-        let n = b.call(s.world.argc, &[host]);
+        let n = b.call(s.world.input, &[host]);
         let nought = b.con(s.library.zero, &[]);
         let held = b.con(mk_pair, &[n, nought]);
         let n = b.call(first, &[held]);
@@ -618,14 +618,15 @@ fn cell_fields_are_held_at_the_class_their_projection_reads() {
             _ => {}
         }
     }
-    // The count is held as wide as a count can be, and the second field
-    // only ever holds nought: each field is as wide as what is built there.
+    // The byte read is held as wide as a read can answer, and the second
+    // field only ever holds nought: each field is as wide as what is built
+    // there.
     assert_eq!(
         built,
         [
             Class::Held(barb::Bounds {
                 low: 0,
-                high: Some(u64::MAX)
+                high: Some(511)
             }),
             Class::fixed(0)
         ],

@@ -77,7 +77,7 @@ impl Target for Mos6502Sim65 {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write!", "exit!", "grow", "argc!", "read_byte!", "argc"]
+        &["write!", "exit!", "grow", "read_byte!", "argc"]
     }
 
     fn budget(&self) -> Budget {

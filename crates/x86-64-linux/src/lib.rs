@@ -39,7 +39,7 @@ impl Target for X86_64Linux {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write!", "exit!", "grow", "argc!", "read_byte!", "argc"]
+        &["write!", "exit!", "grow", "read_byte!", "argc"]
     }
 
     fn budget(&self) -> Budget {

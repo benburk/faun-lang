@@ -146,7 +146,7 @@ fn function_and_branch_parameters_must_match_their_owner() {
 fn all_leaf_operations_check_result_arity_and_class() {
     let (mut p, main) = Program::new("main");
     let datum = p.intern(&[0; 8]);
-    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc!");
+    let read = crate::platform::Routines::builtin().declare(&mut p, "read_byte!");
     let other = p.declare("other", &[], &[Class::Word]);
     p.define(other, |b, _| {
         let value = b.constant(Class::Word, 1);
@@ -162,7 +162,7 @@ fn all_leaf_operations_check_result_arity_and_class() {
         b.store(Width::Byte, address, Offset::Bytes(0), value);
         b.convert(Class::fixed(8), value);
         b.call(other, &[]);
-        b.call(argc, &[]);
+        b.call(read, &[]);
         b.ret(&[value]);
     });
     validate(&p).unwrap();
@@ -431,8 +431,8 @@ fn corrupt_declaration_and_storage_pools_are_rejected() {
     });
     rejects(&p, "invalid pool range");
     let mut p = simple();
-    let argc = crate::platform::Routines::builtin().declare(&mut p, "argc!");
-    p.functions[argc].name = model::Symbol(u32::MAX);
+    let read = crate::platform::Routines::builtin().declare(&mut p, "read_byte!");
+    p.functions[read].name = model::Symbol(u32::MAX);
     rejects(&p, "invalid symbol");
 }
 

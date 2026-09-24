@@ -51,16 +51,16 @@ fn named_calls_keep_ids_to_distinguish_duplicate_names() {
     validate(&program).unwrap();
     let text = program.render();
     for fragment in [
-        "fn f1 argc!() -> (word) = external",
-        "fn f2 argc!(v0: word) -> (word) = r1",
-        "fn f5 argc!() -> (word) = external",
-        "call argc!()  # f1",
-        "call argc!()  # f5",
+        "fn f1 read_byte!() -> (0..511) = external",
+        "fn f2 read_byte!(v0: word) -> (word) = r1",
+        "fn f5 read_byte!() -> (0..511) = external",
+        "call read_byte!()  # f1",
+        "call read_byte!()  # f5",
     ] {
         assert!(text.contains(fragment), "missing {fragment:?} in {text}");
     }
     // Both an internal function and an external provider can have this name.
-    for (name, id) in [("argc!", 2), ("exit!", 4), ("exit!", 6)] {
+    for (name, id) in [("read_byte!", 2), ("exit!", 4), ("exit!", 6)] {
         assert!(
             text.lines().any(|line| {
                 line.contains(&format!("call {name}(")) && line.ends_with(&format!("  # f{id}"))

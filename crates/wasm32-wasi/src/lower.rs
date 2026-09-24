@@ -125,7 +125,7 @@ pub(crate) fn lower(program: &Program) -> Code {
     if state.needs_proc_exit() {
         state.imports.push("proc_exit");
     }
-    if program.reaches("argc!") || entry_argc(program).is_some() {
+    if entry_argc(program).is_some() {
         state.imports.push("args_sizes_get");
     }
 
@@ -805,7 +805,6 @@ impl Lowering<'_> {
                 self.body.byte(DROP); // The errno, which there is nobody to tell.
             }
             "exit!" => self.leave(args[0], position),
-            "argc!" => self.count(results[0]),
             "read_byte!" => self.read_byte(results[0]),
             // Handed straight back: nothing is asked of the outside, and
             // all this says is that nothing worked the value out.
