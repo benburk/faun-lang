@@ -1,9 +1,9 @@
 # An effect that leaves on the program's behalf.
 
-import std.host {Host exit!}
+import std.host {Host}
 
 leave! : Host Nat -> []
-leave!(host n) -> exit!(host n)
+leave!(host n) -> host.exit!(n)
 
 main! : Host -> []
 main!(host) -> leave!(host 2 + 2)

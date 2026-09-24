@@ -12,8 +12,8 @@ use crate::modules::LoadedProgram;
 
 /// Source identities required by the initial host ABI.
 ///
-/// `Host` is authority and carries no startup payload: startup values are
-/// ordinary bodyless routines taking it, so nothing here names one.
+/// `Host` is authority carrying the startup values its target produces, and
+/// its bodyless methods are the effects the target answers for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostIds {
     pub entry_module: crate::ModuleId,
@@ -88,16 +88,13 @@ impl HostIds {
             return Err(error("the `Host` constructor must not be publicly exposed"));
         }
         let exit_name = symbol(program, "exit!")?;
-        let exit = selected_host
-            .public
-            .values
+        let exit = binding
+            .methods
             .get(&exit_name)
             .copied()
-            .ok_or_else(|| error("the selected host module must export `exit!`"))?;
-        if has_clause(program, exit)? {
-            return Err(error(
-                "the selected host module must declare bodyless `exit!`",
-            ));
+            .ok_or_else(|| error("the selected host's `Host` must have an `exit!` method"))?;
+        if has_method_clause(program, host_module, "exit!")? {
+            return Err(error("the selected host must declare `exit!` bodyless"));
         }
 
         Ok(Self {
@@ -110,26 +107,24 @@ impl HostIds {
     }
 }
 
-fn has_clause(program: &LoadedProgram, canonical: Symbol) -> Result<bool, HostError> {
-    for module in &program.modules {
-        let source = program
-            .sources
-            .get(module.source)
-            .ok_or_else(|| error("a loaded host dependency has no source"))?
-            .text();
-        for item in &module.syntax.items {
-            let crate::ast::Item::Clause(clause) = item else {
-                continue;
-            };
-            let Some(local) = program.symbols.find(clause.name.text(source)) else {
-                continue;
-            };
-            if module.scope.values.get(&local) == Some(&canonical) {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
+/// Whether any type the host module declares gives a method `name` a body.
+fn has_method_clause(
+    program: &LoadedProgram,
+    module: crate::ModuleId,
+    name: &str,
+) -> Result<bool, HostError> {
+    let module = program.module(module);
+    let source = program
+        .sources
+        .get(module.source)
+        .ok_or_else(|| error("the selected host module has no loaded source"))?
+        .text();
+    Ok(module.syntax.items.iter().any(|item| {
+        matches!(item, crate::ast::Item::Data(data) if data.methods.iter().any(|method| {
+            matches!(method, crate::ast::MethodItem::Clause(clause)
+                if clause.name.text(source) == name)
+        }))
+    }))
 }
 
 fn symbol(program: &LoadedProgram, name: &str) -> Result<Symbol, HostError> {
@@ -189,8 +184,8 @@ mod tests {
     }
 
     const ENTRY: &str =
-        "import std.host {Host exit!}\nmain! : Host -> []\nmain!(host) -> exit!(host host.argc)\n";
-    const HOST: &str = "exports {Host exit!}\nHost : {argc: Nat}\nexit! : Host Nat -> []\n";
+        "import std.host {Host}\nmain! : Host -> []\nmain!(host) -> host.exit!(host.argc)\n";
+    const HOST: &str = "exports {Host}\nHost : {argc: Nat}.(\n  exit! : Host Nat -> []\n)\n";
 
     #[test]
     fn application_entry_requires_a_clause() {
@@ -206,7 +201,7 @@ mod tests {
         let fixture = Fixture::new();
         let exported = fixture
             .resolve(
-                "exports {Host.* exit!}\nHost : {argc: Nat}\nexit! : Host Nat -> []\n",
+                "exports {Host.*}\nHost : {argc: Nat}.(\n  exit! : Host Nat -> []\n)\n",
                 ENTRY,
             )
             .unwrap_err();
@@ -214,7 +209,7 @@ mod tests {
 
         let bodyful = fixture
             .resolve(
-                "exports {Host exit!}\nHost : {argc: Nat}\nexit! : Host Nat -> []\nexit!(host code) -> exit!(host code)\n",
+                "exports {Host}\nHost : {argc: Nat}.(\n  exit! : Host Nat -> []\n  exit!(host code) -> host.exit!(code)\n)\n",
                 ENTRY,
             )
             .unwrap_err();

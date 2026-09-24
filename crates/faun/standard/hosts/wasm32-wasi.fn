@@ -1,13 +1,12 @@
-# The host wasm32-wasi supplies, mounted at `std.host`: the authority a program
-# is handed, and the routines it may ask of it. `Unit` is what an effect
-# answers when it answers nothing.
+# The host wasm32-wasi supplies, mounted at `std.host`. `Host` is the authority a
+# program is handed. Its fields are startup values the target produces
+# before `main!` runs; a field nothing reads is never produced. Its bodyless
+# methods are the effects the program may ask of the target.
 
-exports {Host Unit argc! exit! write! read_byte!}
+exports {Host}
 
-Host : [Host]
-Unit : [Unit]
-
-argc! : Host -> Nat
-exit! : Host Nat -> []
-write! : Host Str -> Unit
-read_byte! : Host -> Nat
+Host : {argc: Nat}.(
+  exit! : Host Nat -> []
+  write! : Host Str -> {}
+  read_byte! : Host -> Nat
+)

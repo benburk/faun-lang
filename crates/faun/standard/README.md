@@ -22,15 +22,30 @@ The structural empty variant type `[]` is the uninhabited result used by
 applications; it needs no blessed standard-library name. `Never` remains an
 ordinary available constructor spelling. Each target has its own host module,
 `hosts/<target>.fn`, mounted at `std.host`. They start out identical and will
-diverge as targets offer different capabilities. Each provides a `Host` carrying nothing, a `Unit` for
-effects answering nothing, and bodyless `argc! : Host -> Nat`,
-`exit! : Host Nat -> []`, `write! : Host Str -> Unit` and
-`read_byte! : Host -> Nat`, which answers nought at the end of input and one
-more than the byte otherwise. The `Host` constructor remains private.
+diverge as targets offer different capabilities. Each declares
 
-`Host` is authority and nothing else. It carries no startup payload, so what a
-host module offers it offers as ordinary bodyless declarations taking one, and
-a program orders its effects by threading that authority through them. Barb
-retains the parameter and the threading; both are erased below it, because a
-type with one value says nothing by being itself. So the machine entry takes
-nothing and no target binds a startup parameter by name to supply it.
+```
+Host : {argc: Nat}.(
+  exit! : Host Nat -> []
+  write! : Host Str -> {}
+  read_byte! : Host -> Nat
+)
+```
+
+where `read_byte!` answers nought at the end of input and one more than the
+byte otherwise. The `Host` constructor remains private, so only the target
+makes one.
+
+`Host` is authority carrying the startup values its target produces. A field
+such as `host.argc` is read like any record field; the target produces it into
+the entry's frame before `main!` runs, and nothing asks for it again. Lowering
+generates a Barb entry `start` taking one named parameter per field, which
+builds `Host` and calls `main!`. Machine lowering drops parameters nothing
+reads, so a target produces only the startup values a program uses. A field
+the target cannot produce is refused when lowering.
+
+`Host`'s bodyless methods are the effects the target answers for, called as
+`host.write!(text)`. A program orders its effects by threading `Host` through
+them. Barb declares and calls each routine without its `Host` receiver, since
+the target answers the same whoever asks; Barb keeps the order and number of
+calls to anything bodyless.

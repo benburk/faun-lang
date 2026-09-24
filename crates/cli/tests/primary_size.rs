@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CONSTANT: &str =
-    "import std.host {Host exit!}\n\nmain! : Host -> []\nmain!(host) -> exit!(host 0)\n";
-const COUNT: &str = "import std.host {Host argc! exit!}\n\nmain! : Host -> []\nmain!(host) ->\n  count = argc!(host)\n  exit!(host count)\n";
-const ARITHMETIC: &str = "import std.host {Host argc! exit!}\n\nmain! : Host -> []\nmain!(host) ->\n  count = argc!(host)\n  exit!(host (count + 4) % 256)\n";
+    "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) -> host.exit!(0)\n";
+const COUNT: &str = "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.argc\n  host.exit!(count)\n";
+const ARITHMETIC: &str = "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.argc\n  host.exit!((count + 4) % 256)\n";
 
 #[test]
 fn primary_frontend_preserves_initial_size_ratchets() {

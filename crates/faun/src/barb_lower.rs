@@ -56,9 +56,11 @@ pub fn program(
 
 /// Lower a checked `main! : Host -> []` application.
 ///
-/// The source entry keeps its explicit `Host` parameter. Authority carries
-/// nothing, so that parameter is erased below Barb and the startup values a
-/// host module offers are ordinary bodyless routines taking it.
+/// The Barb entry is a generated `start` taking one named parameter per
+/// field of `Host`, each a startup value the target produces, which builds
+/// `Host` and calls `main!`. Machine lowering drops parameters nothing reads,
+/// so a target produces only the values a program uses. `Host`'s bodyless
+/// methods are the target's routines, asked without their receiver.
 ///
 /// # Errors
 ///
@@ -72,7 +74,20 @@ pub fn application(
 ) -> Result<barb::Program, LowerError> {
     crate::check::application(resolved, checked, host).map_err(|cause| error(cause.to_string()))?;
     let specialized = specialize::application(resolved, checked, prelude, host)?;
-    Lowerer::new(resolved, prelude, Some(routines), specialized)?.lower()
+    let host = HostContext {
+        routines,
+        host: host.host,
+    };
+    Lowerer::new(resolved, prelude, Some(host), specialized)?.lower()
+}
+
+/// What lowering an application reads of its target and its host.
+#[derive(Clone, Copy)]
+struct HostContext<'a> {
+    routines: &'a faun_core::platform::Routines,
+    /// The source `Host` type: the entry builds it, and a routine is asked
+    /// without it.
+    host: Symbol,
 }
 
 /// Select a uniquely named checked value and lower it as the entry.
@@ -172,10 +187,11 @@ struct DecisionArm {
 struct Lowerer<'a> {
     resolved: &'a ResolvedProgram,
     prelude: &'a PreludeIds,
-    /// The target's routine catalog, present when lowering an application.
-    /// Host identities are not needed here: authority carries nothing, so
-    /// nothing about it survives into a signature or a call.
-    host: Option<&'a faun_core::platform::Routines>,
+    /// The target and its host, present when lowering an application.
+    host: Option<HostContext<'a>>,
+    /// Routines whose first parameter is the `Host` receiver, which Barb
+    /// declares and calls without.
+    receivers: HashSet<FunctionKey>,
     specialized: specialize::Program,
     closures: BTreeMap<Type, Vec<ClosureVariant>>,
     invoked: BTreeSet<Type>,
@@ -194,13 +210,14 @@ impl<'a> Lowerer<'a> {
     fn new(
         resolved: &'a ResolvedProgram,
         prelude: &'a PreludeIds,
-        host: Option<&'a faun_core::platform::Routines>,
+        host: Option<HostContext<'a>>,
         specialized: specialize::Program,
     ) -> Result<Self, LowerError> {
         let mut lowerer = Self {
             resolved,
             prelude,
             host,
+            receivers: HashSet::new(),
             specialized,
             closures: BTreeMap::new(),
             invoked: BTreeSet::new(),
@@ -222,10 +239,13 @@ impl<'a> Lowerer<'a> {
         self.declare_types();
         self.define_types()?;
         self.declare_functions()?;
-        self.configure_host_entry()?;
         self.define_functions()?;
         self.define_apply_functions()?;
-        let entry = self.function_ids[&self.specialized.entry];
+        let main = self.function_ids[&self.specialized.entry];
+        let entry = match self.host {
+            Some(host) => self.define_start(host, main)?,
+            None => main,
+        };
         self.output.set_entry(entry);
         barb::validate(&self.output).map_err(error)?;
         Ok(self.output)
@@ -491,10 +511,18 @@ impl<'a> Lowerer<'a> {
                 .ty
                 .function()
                 .ok_or_else(|| error("specialized global is not a function"))?;
-            // Authority carries nothing, so nothing is filtered here: the
-            // machine tier erases a parameter whose type has one value.
+            // A routine is asked without its receiver: authority says who
+            // may ask, and the target answers the same whoever does.
+            let receives = function.provider.is_some()
+                && self.host.is_some_and(|host| {
+                    parameters.first() == Some(&Type::Named(host.host, Vec::new()))
+                });
+            if receives {
+                self.receivers.insert(function.key.clone());
+            }
             let parameters: Vec<_> = parameters
                 .iter()
+                .skip(usize::from(receives))
                 .enumerate()
                 .map(|(index, parameter)| (format!("v{index}"), self.type_ids[parameter]))
                 .collect();
@@ -512,7 +540,7 @@ impl<'a> Lowerer<'a> {
                 // which bounds the numbers a program reads back from one.
                 if let Some(bounds) = self
                     .host
-                    .and_then(|routines| routines.get(provider))
+                    .and_then(|host| host.routines.get(provider))
                     .and_then(faun_core::platform::Routine::bounds)
                 {
                     self.output.bound(id, bounds);
@@ -577,6 +605,7 @@ impl<'a> Lowerer<'a> {
                 record_wrappers: &self.record_wrappers,
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
+                receivers: &self.receivers,
                 apply_ids: &self.apply_ids,
                 closures: &self.closures,
                 prelude: self.prelude,
@@ -595,17 +624,58 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    /// Check the one routine an application cannot do without. Everything
-    /// else a host module offers is an ordinary bodyless declaration and is
-    /// checked against the target where every other one is.
-    fn configure_host_entry(&self) -> Result<(), LowerError> {
-        let Some(routines) = self.host else {
-            return Ok(());
-        };
-        if routines.get("exit!").is_none() {
+    /// Define the Barb entry: take each field of `Host` as a startup value
+    /// named for it, build `Host`, and call `main!` with it.
+    fn define_start(&mut self, host: HostContext<'_>, main: FnId) -> Result<FnId, LowerError> {
+        if host.routines.get("exit!").is_none() {
             return Err(error("the selected target does not provide `exit!`"));
         }
-        Ok(())
+        let host_ty = Type::Named(host.host, Vec::new());
+        let record_ty = self
+            .record_wrappers
+            .get(&host_ty)
+            .ok_or_else(|| error("`Host` must wrap a record of startup values"))?
+            .clone();
+        let Type::Record(fields) = &record_ty else {
+            unreachable!("record wrappers map to record types")
+        };
+        let nat = Type::Named(self.prelude.nat, Vec::new());
+        let mut parameters = Vec::with_capacity(fields.len());
+        let mut bounds = Vec::with_capacity(fields.len());
+        for (name, ty) in fields {
+            let name = self.resolved.symbols.text(*name);
+            let value = host
+                .routines
+                .startup(name)
+                .ok_or_else(|| error(format!("the selected target does not produce `{name}`")))?;
+            if *ty != nat {
+                return Err(error(format!("the startup value `{name}` must be a Nat")));
+            }
+            parameters.push((name.to_owned(), self.type_ids[ty]));
+            bounds.push(value.bounds());
+        }
+        let borrowed: Vec<_> = parameters
+            .iter()
+            .map(|(name, ty)| (name.as_str(), *ty))
+            .collect();
+        let never = self.output.function(main).result;
+        let start = self.output.declare_named("start", &borrowed, never);
+        for (at, bounds) in bounds.into_iter().enumerate() {
+            self.output.bound_parameter(start, at, bounds);
+        }
+        let wrapper = self.specialized.data[&host.host]
+            .wrapper
+            .as_ref()
+            .expect("a record wrapper")
+            .constructor;
+        let record = self.record_constructor_ids[&record_ty];
+        let wrap = self.constructor_ids[&(wrapper, host_ty)];
+        self.output.define(start, |builder, values| {
+            let record = builder.con(record, values);
+            let host = builder.con(wrap, &[record]);
+            builder.call(main, &[host])
+        });
+        Ok(start)
     }
 
     fn define_apply_functions(&mut self) -> Result<(), LowerError> {
@@ -621,6 +691,7 @@ impl<'a> Lowerer<'a> {
                 record_wrappers: &self.record_wrappers,
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
+                receivers: &self.receivers,
                 apply_ids: &self.apply_ids,
                 closures: &self.closures,
                 prelude: self.prelude,
@@ -677,9 +748,7 @@ impl<'a> Lowerer<'a> {
                         })
                         .expect("each closure constructor has a variant");
                     match &variant.key {
-                        ClosureKey::Global(key) => {
-                            builder.call(context.function_ids[key], arguments)
-                        }
+                        ClosureKey::Global(key) => context.call(builder, key, arguments),
                         ClosureKey::Constructor(source, function_type) => {
                             let Type::Function(_, result) = function_type else {
                                 unreachable!()
@@ -1008,9 +1077,22 @@ struct EmitContext<'a> {
     record_wrappers: &'a HashMap<Type, Type>,
     closure_constructor_ids: &'a HashMap<ClosureKey, CtorId>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
+    receivers: &'a HashSet<FunctionKey>,
     apply_ids: &'a HashMap<Type, FnId>,
     closures: &'a BTreeMap<Type, Vec<ClosureVariant>>,
     prelude: &'a PreludeIds,
+}
+
+impl EmitContext<'_> {
+    /// Call a global, asking a routine without its `Host` receiver.
+    fn call(&self, builder: &mut Builder<'_>, key: &FunctionKey, arguments: &[Atom]) -> Atom {
+        let arguments = if self.receivers.contains(key) {
+            &arguments[1..]
+        } else {
+            arguments
+        };
+        builder.call(self.function_ids[key], arguments)
+    }
 }
 
 fn emit_decision(
@@ -1168,7 +1250,7 @@ fn emit_expr(
                 .iter()
                 .map(|argument| emit_expr(context, builder, argument, locals))
                 .collect::<Vec<_>>();
-            builder.call(context.function_ids[key], &arguments)
+            context.call(builder, key, &arguments)
         }
         ExprKind::Invoke(head, arguments) => {
             let mut lowered = Vec::with_capacity(arguments.len() + 1);
@@ -1435,23 +1517,22 @@ mod tests {
             let mut program = application(&resolved, &checked, &prelude, &host, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
-            // Authority is a value with one inhabitant: it carries no
-            // startup payload, so a host module offers what it has as
-            // ordinary bodyless declarations taking one.
-            assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\nHost = Host\n\n"));
-            assert!(rendered.contains("main!(v0: Host) -> [] ="));
-            assert!(rendered.contains("v1 = argc!(v0)"));
-            assert!(rendered.contains("argc!(v0: Host) -> Nat = <elsewhere>"));
-            assert!(!rendered.contains("_start"));
-            assert!(!rendered.lines().any(|line| line == "[]"));
+            // `Host` carries the startup values; a generated entry takes each
+            // one by name and builds it, and a routine is asked without it.
+            assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\nHost = Host({argc: Nat})\n\n"));
+            assert!(rendered.contains("start(argc: Nat) -> [] ="), "{rendered}");
+            assert!(rendered.contains("Host.exit!(v0: Nat) -> [] = <elsewhere>"));
+            assert!(!rendered.contains("argc!"));
             assert!(!rendered.contains('$'));
             let machine = faun_core::machine(&mut program.clone(), &routines).unwrap();
-            // Nothing holds authority below Barb, so the entry takes nothing
-            // and no target binds a parameter by name to supply it.
-            assert_eq!(machine.parameter_names(machine.entry()).count(), 0);
+            // The target produces `argc` into the entry's frame.
+            assert_eq!(
+                machine.parameter_names(machine.entry()).collect::<Vec<_>>(),
+                ["argc"]
+            );
             let rendered = machine.render();
-            assert!(rendered.contains("fn f0 main!() -> (word)"), "{rendered}");
-            assert!(rendered.contains("call argc!()"), "{rendered}");
+            assert!(rendered.contains("fn f0 start(argc: "), "{rendered}");
+            assert!(rendered.contains("call exit!(v0)"), "{rendered}");
         }
     }
 

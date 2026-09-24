@@ -39,7 +39,7 @@ impl Target for X86_64Linux {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write!", "exit!", "grow", "argc!", "read_byte!"]
+        &["write!", "exit!", "grow", "argc!", "read_byte!", "argc"]
     }
 
     fn budget(&self) -> Budget {
@@ -48,8 +48,10 @@ impl Target for X86_64Linux {
 
     fn limits(&self, program: &Program) -> Result<(), String> {
         let entry = program.entry();
+        // Each entry parameter is a startup value, and argc is the only one
+        // this target produces.
         for (at, name) in program.parameter_names(entry).enumerate() {
-            if at != 0 || name != "host" {
+            if at != 0 || name != "argc" {
                 return Err(format!(
                     "x86-64-linux cannot supply entry parameter {at} `{name}`"
                 ));

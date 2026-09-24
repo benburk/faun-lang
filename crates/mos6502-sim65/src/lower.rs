@@ -526,7 +526,7 @@ impl Lowering<'_> {
         // image header named. Nothing has asked for memory yet, so it is
         // told the heap. What is wanted back is the count, which it leaves
         // in `A` and `X`.
-        if self.program.reaches("argc!") || self.entry_host().is_some() {
+        if self.program.reaches("argc!") || self.entry_argc().is_some() {
             let [low, high] = heap.to_le_bytes();
             self.set_pair(CSP, CSTACK_TOP - 2);
             self.asm.lda_imm(low);
@@ -560,7 +560,7 @@ impl Lowering<'_> {
     /// program that asks the count narrows it.
     fn counts_wide(&self) -> bool {
         let program = self.program;
-        self.entry_host().is_some_and(|value| self.wide(value))
+        self.entry_argc().is_some_and(|value| self.wide(value))
             || program
                 .functions()
                 .iter()
@@ -572,9 +572,9 @@ impl Lowering<'_> {
                 })
     }
 
-    fn entry_host(&self) -> Option<ValueId> {
+    fn entry_argc(&self) -> Option<ValueId> {
         let entry = self.program.entry();
-        (self.program.parameter_names(entry).next() == Some("host")).then(|| {
+        (self.program.parameter_names(entry).next() == Some("argc")).then(|| {
             let body = self
                 .program
                 .function(entry)
@@ -626,7 +626,7 @@ impl Lowering<'_> {
         let params = self.program.values(self.program.region(body).params);
         for (index, &param) in params.to_vec().iter().enumerate() {
             let pair =
-                if id == self.program.entry() && self.program.parameter_name(id, index) == "host" {
+                if id == self.program.entry() && self.program.parameter_name(id, index) == "argc" {
                     ARGC
                 } else {
                     ARGS + 2 * u8::try_from(index).expect("a few arguments")
@@ -666,6 +666,12 @@ impl Lowering<'_> {
         let mut uses = vec![0u32; self.program.values_count()];
         let mut held = Vec::new();
         self.survey(body, 0, &mut weight, &mut uses, &mut held);
+        // The count was read at reset and left at a pair nothing writes
+        // again, so the entry's `argc` is already where it lives.
+        if let Some(argc) = self.entry_argc() {
+            held.retain(|&value| value != argc);
+            self.source[argc.index()] = Source::Home(ARGC);
+        }
         // Value numbers are unique across the program, so what one function
         // marks cannot be mistaken for another's.
         self.mark(body, &uses);

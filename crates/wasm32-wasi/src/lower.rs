@@ -64,9 +64,9 @@ fn bits(class: Class) -> u16 {
     class.bits(WORD_BITS)
 }
 
-fn entry_host(program: &Program) -> Option<ValueId> {
+fn entry_argc(program: &Program) -> Option<ValueId> {
     let entry = program.entry();
-    (program.parameter_names(entry).next() == Some("host")).then(|| {
+    (program.parameter_names(entry).next() == Some("argc")).then(|| {
         let body = program
             .function(entry)
             .body()
@@ -125,7 +125,7 @@ pub(crate) fn lower(program: &Program) -> Code {
     if state.needs_proc_exit() {
         state.imports.push("proc_exit");
     }
-    if program.reaches("argc!") || entry_host(program).is_some() {
+    if program.reaches("argc!") || entry_argc(program).is_some() {
         state.imports.push("args_sizes_get");
     }
 
@@ -371,9 +371,9 @@ impl Lowering<'_> {
             self.role = FunctionRole::at(id, self.entry);
             self.body = Bytes::default();
             if self.role == FunctionRole::Entry
-                && let Some(host) = entry_host(self.program)
+                && let Some(argc) = entry_argc(self.program)
             {
-                self.count(host);
+                self.count(argc);
             }
             self.region(body);
             // Wasm does not infer that both branches return, or that a

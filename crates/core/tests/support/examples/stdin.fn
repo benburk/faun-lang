@@ -1,9 +1,9 @@
 # One byte from standard input: nought at its end, and one more than the
 # byte otherwise.
 
-import std.host {Host exit! read_byte!}
+import std.host {Host}
 
 main! : Host -> []
 main!(host) ->
-  byte = read_byte!(host)
-  exit!(host byte + 4)
+  byte = host.read_byte!()
+  host.exit!(byte + 4)

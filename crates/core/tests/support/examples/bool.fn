@@ -1,7 +1,7 @@
 # A type whose constructors carry nothing is a tag: `Bool` is held as which
 # one it is, and matching one asks which.
 
-import std.host {Host argc! exit!}
+import std.host {Host}
 
 is_zero : Nat -> Bool
 is_zero(0) -> True
@@ -13,6 +13,6 @@ down(Succ(k)) -> k
 
 main! : Host -> []
 main!(host) ->
-  n = argc!(host)
+  n = host.argc
   held = False.not().and(False.or(is_zero(down(n))))
-  exit!(host held.select(4 0))
+  host.exit!(held.select(4 0))

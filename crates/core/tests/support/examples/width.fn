@@ -10,7 +10,7 @@
 # wraps: a value needing three bits is held in whatever a target has that
 # holds three bits, and what it holds above them is nought.
 
-import std.host {Host argc! exit!}
+import std.host {Host}
 
 double : Nat -> Nat
 double(n) -> n + n
@@ -29,10 +29,10 @@ finish!(host True n) ->
   two = n + n
   four = double(two)
   # Nothing here is above four, so three bits hold every number in it.
-  exit!(host is_zero(0).select(four 0))
-finish!(host False _) -> exit!(host 0)
+  host.exit!(is_zero(0).select(four 0))
+finish!(host False _) -> host.exit!(0)
 
 main! : Host -> []
 main!(host) ->
-  count = argc!(host)
+  count = host.argc
   finish!(host below(count 2) count)

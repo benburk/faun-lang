@@ -77,7 +77,7 @@ impl Target for Mos6502Sim65 {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write!", "exit!", "grow", "argc!", "read_byte!"]
+        &["write!", "exit!", "grow", "argc!", "read_byte!", "argc"]
     }
 
     fn budget(&self) -> Budget {
@@ -86,8 +86,10 @@ impl Target for Mos6502Sim65 {
 
     fn limits(&self, program: &Program) -> Result<(), String> {
         let entry = program.entry();
+        // Each entry parameter is a startup value, and argc is the only one
+        // this target produces.
         for (at, name) in program.parameter_names(entry).enumerate() {
-            if at != 0 || name != "host" {
+            if at != 0 || name != "argc" {
                 return Err(format!(
                     "mos6502-sim65 cannot supply entry parameter {at} `{name}`"
                 ));

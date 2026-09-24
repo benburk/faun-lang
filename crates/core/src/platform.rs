@@ -175,22 +175,46 @@ impl Routine {
     /// nothing, or answers something that is not a number, bounds nothing.
     #[must_use]
     pub fn bounds(&self) -> Option<crate::barb::Bounds> {
-        let high = match self.returns {
-            Returns::Value(Class::Word) => Some(u64::MAX),
-            Returns::Value(held @ Class::Held(_)) => held.width().map(|bits| {
-                if bits < 64 {
-                    (1u64 << bits) - 1
-                } else {
-                    u64::MAX
-                }
-            }),
-            // A natural, an address, or a width no machine here has: a
-            // number with no bound rather than no number.
-            Returns::Value(_) => None,
-            Returns::Unit | Returns::Never => return None,
-        };
-        Some(crate::barb::Bounds { low: 0, high })
+        self.answers().map(held_bounds)
     }
+}
+
+/// A value a target hands the entry when the program starts, by name.
+///
+/// The target produces it where it starts the program, into the entry's
+/// frame, and nothing asks for it again. An entry that never reads one has
+/// no parameter for it once lowering drops unused ones, so the target never
+/// produces it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Startup {
+    pub name: String,
+    pub class: Class,
+}
+
+impl Startup {
+    /// What a program may assume about the number it is handed.
+    #[must_use]
+    pub fn bounds(&self) -> crate::barb::Bounds {
+        held_bounds(self.class)
+    }
+}
+
+/// The numbers a machine value of `class` can hold.
+fn held_bounds(class: Class) -> crate::barb::Bounds {
+    let high = match class {
+        Class::Word => Some(u64::MAX),
+        held @ Class::Held(_) => held.width().map(|bits| {
+            if bits < 64 {
+                (1u64 << bits) - 1
+            } else {
+                u64::MAX
+            }
+        }),
+        // A natural, an address, or a width no machine here has: a number
+        // with no bound rather than no number.
+        _ => None,
+    };
+    crate::barb::Bounds { low: 0, high }
 }
 
 /// The routines a program is read against.
@@ -203,7 +227,10 @@ impl Routine {
 /// program any target can be handed, and one naming something in it that
 /// its own target does not answer for is refused by the target.
 #[derive(Clone, Debug, Default)]
-pub struct Routines(Vec<Routine>);
+pub struct Routines {
+    routines: Vec<Routine>,
+    startup: Vec<Startup>,
+}
 
 impl Routines {
     /// What every compiler knows: the routines a target answers for out of
@@ -219,7 +246,7 @@ impl Routines {
         let offered = |name: &str, takes: &[Takes], returns| held(name, true, takes, returns);
         let hidden = |name: &str, takes: &[Takes], returns| held(name, false, takes, returns);
         let word = Takes::Scalar(Class::Word);
-        Self(vec![
+        let routines = vec![
             // One argument, two machine values: a program hands over a
             // string and a machine reads where it starts and how long it is.
             offered("write!", &[Takes::StaticBytes], Returns::Unit),
@@ -232,16 +259,29 @@ impl Routines {
             // One byte from standard input, offset by one so nought can say
             // EOF without losing the byte whose bits are all nought.
             offered("read_byte!", &[], Returns::Value(Class::fixed(9))),
-        ])
+        ];
+        let startup = vec![
+            // How many arguments a program was handed.
+            Startup {
+                name: "argc".to_owned(),
+                class: Class::Word,
+            },
+        ];
+        Self { routines, startup }
     }
 
     /// Resolve the finite range of a host word for a particular target.
     /// The range is a host contract, not a bound on the language's Nat type.
     #[must_use]
     pub fn with_word(mut self, bits: u16) -> Self {
-        for routine in &mut self.0 {
+        for routine in &mut self.routines {
             if routine.returns == Returns::Value(Class::Word) {
                 routine.returns = Returns::Value(Class::fixed(bits));
+            }
+        }
+        for value in &mut self.startup {
+            if value.class == Class::Word {
+                value.class = Class::fixed(bits);
             }
         }
         self
@@ -249,13 +289,19 @@ impl Routines {
 
     /// Every routine a program may call by name.
     pub fn offered(&self) -> impl Iterator<Item = &Routine> {
-        self.0.iter().filter(|routine| routine.offered)
+        self.routines.iter().filter(|routine| routine.offered)
     }
 
     /// The routine a target answers to by `name`.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&Routine> {
-        self.0.iter().find(|routine| routine.name == name)
+        self.routines.iter().find(|routine| routine.name == name)
+    }
+
+    /// The startup value a target hands the entry by `name`.
+    #[must_use]
+    pub fn startup(&self, name: &str) -> Option<&Startup> {
+        self.startup.iter().find(|value| value.name == name)
     }
 
     /// Declare one of this environment's contracts in a machine program.
@@ -273,18 +319,25 @@ impl Routines {
     /// is being compiled for.
     #[must_use]
     pub fn only(&self, names: &[&str]) -> Self {
-        Self(
-            self.0
+        Self {
+            routines: self
+                .routines
                 .iter()
                 .filter(|routine| names.contains(&routine.name.as_str()))
                 .cloned()
                 .collect(),
-        )
+            startup: self
+                .startup
+                .iter()
+                .filter(|value| names.contains(&value.name.as_str()))
+                .cloned()
+                .collect(),
+        }
     }
 
     /// Take one more in, which is how a routine somebody wrote down arrives.
     pub fn push(&mut self, routine: Routine) {
-        self.0.push(routine);
+        self.routines.push(routine);
     }
 }
 

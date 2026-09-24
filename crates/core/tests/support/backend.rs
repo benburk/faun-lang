@@ -18,10 +18,10 @@ mod expressions;
 #[path = "faun.rs"]
 mod faun;
 
-pub(super) const EXIT_ZERO: &str = "import std.host {Host exit!}
+pub(super) const EXIT_ZERO: &str = "import std.host {Host}
 
                                    main! : Host -> []
-                                   main!(host) -> exit!(host 0)";
+                                   main!(host) -> host.exit!(0)";
 
 fn corpus() -> [(&'static str, Program); 19] {
     [
@@ -217,7 +217,7 @@ fn target_runs_managed_products_across_calls_and_matches() {
 /// Products held flat cross calls as arguments and results, meet at a join,
 /// and ride inside a sum's cell as their fields. The 6502 answers one value
 /// and joins two, so there the same program also runs packed.
-const PRODUCTS: &str = "import std.host {Host argc! exit!}
+const PRODUCTS: &str = "import std.host {Host}
 
                         Pair : [P(Bool Bool)]
                         Triple : [T(Pair Bool)]
@@ -252,11 +252,11 @@ const PRODUCTS: &str = "import std.host {Host argc! exit!}
 
                         main! : Host -> []
                         main!(host) ->
-                          count = argc!(host)
+                          count = host.argc
                           flag = is_one(count)
                           start = T(swap(P(False flag)) True)
                           kept = unwrap(Just(start))
-                          exit!(host status(choose(flag kept)))";
+                          host.exit!(status(choose(flag kept)))";
 
 #[test]
 fn products_cross_calls_joins_and_cells_as_their_fields() {
@@ -275,7 +275,7 @@ fn products_cross_calls_joins_and_cells_as_their_fields() {
 /// Numbers inside a product are as wide as what is built into them, so a
 /// pair of small counts is two small words: nothing allocated, and an exit
 /// status proven to fit.
-const NUMBER_PAIR: &str = "import std.host {Host argc! exit!}
+const NUMBER_PAIR: &str = "import std.host {Host}
 
                            Pair : [P(Nat Nat)]
 
@@ -291,9 +291,9 @@ const NUMBER_PAIR: &str = "import std.host {Host argc! exit!}
 
                            main! : Host -> []
                            main!(host) ->
-                             count = argc!(host)
+                             count = host.argc
                              p = swap(P(small(count) 2))
-                             exit!(host both(p))";
+                             host.exit!(both(p))";
 
 #[test]
 fn a_pair_of_small_numbers_is_two_small_words() {
@@ -312,7 +312,7 @@ fn a_pair_of_small_numbers_is_two_small_words() {
 /// A list built while the program runs is a buffer: counting builds one by
 /// pushing in place, reversing builds another, and the first element is
 /// read back from where the buffer holds it.
-const LIST: &str = "import std.host {Host argc! exit!}
+const LIST: &str = "import std.host {Host}
 
                     small : Nat -> Nat
                     small(0) -> 0
@@ -332,10 +332,10 @@ const LIST: &str = "import std.host {Host argc! exit!}
 
                     main! : Host -> []
                     main!(host) ->
-                      c = argc!(host)
+                      c = host.argc
                       n = small(c)
                       counted = count(4 + n [])
-                      exit!(host head(turn(counted [])))";
+                      host.exit!(head(turn(counted [])))";
 
 #[test]
 fn a_list_built_at_run_time_is_a_buffer() {
@@ -370,7 +370,7 @@ fn prepared_programs_carry_more_across_a_boundary_than_a_target_passes() {
 
 #[test]
 fn target_supplies_named_entry_parameters() {
-    let (mut program, main) = Program::new_with_params("main", &[("host", Class::Word)]);
+    let (mut program, main) = Program::new_with_params("main", &[("argc", Class::Word)]);
     let exit = TARGET.routines().declare(&mut program, "exit!");
     program.define(main, |b, params| {
         b.call(exit, &[params[0]]);
@@ -384,6 +384,24 @@ fn target_supplies_named_entry_parameters() {
             .collect::<Vec<_>>(),
         [1, 4, 9]
     );
+}
+
+/// A startup value nothing reads is not an entry parameter, so the target
+/// never produces it.
+#[test]
+fn an_unread_startup_value_is_never_produced() {
+    let reads = read(
+        "import std.host {Host}
+         main! : Host -> []
+         main!(host) -> host.exit!(host.argc)",
+    )
+    .expect("a program reading argc");
+    assert_eq!(
+        reads.parameter_names(reads.entry()).collect::<Vec<_>>(),
+        ["argc"]
+    );
+    let ignores = read(EXIT_ZERO).expect("a program ignoring argc");
+    assert_eq!(ignores.parameter_names(ignores.entry()).count(), 0);
 }
 
 /// The program a target is handed once the machine passes have read it.
@@ -460,56 +478,56 @@ const WRITTEN: &[(&str, &str, i32)] = &[
     ("exit zero", EXIT_ZERO, 0),
     (
         "a status it was told",
-        "import std.host {Host exit!}
+        "import std.host {Host}
          main! : Host -> []
-         main!(host) -> exit!(host 3)",
+         main!(host) -> host.exit!(3)",
         3,
     ),
     (
         "a name that leaves",
-        "import std.host {Host exit!}
+        "import std.host {Host}
          die! : Host Nat -> []
-         die!(host n) -> exit!(host n)
+         die!(host n) -> host.exit!(n)
          main! : Host -> []
          main!(host) -> die!(host 2)",
         2,
     ),
     (
         "a tag from a count",
-        "import std.host {Host exit!}
+        "import std.host {Host}
          main! : Host -> []
-         main!(host) -> exit!(host True.to_nat())",
+         main!(host) -> host.exit!(True.to_nat())",
         1,
     ),
     (
         "how many arguments",
-        "import std.host {Host argc! exit!}
+        "import std.host {Host}
          below : Nat Nat -> Bool
          below(_ 0) -> False
          below(0 Succ(_)) -> True
          below(Succ(a) Succ(b)) -> below(a b)
          finish! : Host Bool Nat -> []
-         finish!(host True n) -> exit!(host n + n)
-         finish!(host False _) -> exit!(host 0)
+         finish!(host True n) -> host.exit!(n + n)
+         finish!(host False _) -> host.exit!(0)
          main! : Host -> []
          main!(host) ->
-           count = argc!(host)
+           count = host.argc
            finish!(host below(count 2) count)",
         2,
     ),
     (
         "a runtime guard exits early",
-        "import std.host {Host argc! exit!}
+        "import std.host {Host}
          below : Nat Nat -> Bool
          below(_ 0) -> False
          below(0 Succ(_)) -> True
          below(Succ(a) Succ(b)) -> below(a b)
          finish! : Host Bool Nat -> []
-         finish!(host True n) -> exit!(host n)
-         finish!(host False _) -> exit!(host 7)
+         finish!(host True n) -> host.exit!(n)
+         finish!(host False _) -> host.exit!(7)
          main! : Host -> []
          main!(host) ->
-           count = argc!(host)
+           count = host.argc
            finish!(host below(count 1) count)",
         7,
     ),
@@ -537,7 +555,7 @@ const WRITTEN: &[(&str, &str, i32)] = &[
 macro_rules! ordering {
     ($which:literal) => {
         concat!(
-            "import std.host {Host exit!}
+            "import std.host {Host}
              Order : [Lt Eq Gt]
              rank : Order -> Nat
              rank(Lt) -> 0
@@ -547,7 +565,7 @@ macro_rules! ordering {
              pick(0) -> Lt
              pick(Succ(_)) -> Gt
              main! : Host -> []
-             main!(host) -> exit!(host rank(pick(",
+             main!(host) -> host.exit!(rank(pick(",
             $which,
             ")))"
         )
@@ -561,7 +579,7 @@ const ORDER_GT: &str = ordering!("1");
 macro_rules! columns {
     ($answer:literal) => {
         concat!(
-            "import std.host {Host exit!}
+            "import std.host {Host}
              Order : [Lt Eq Gt]
              sub : Nat Nat -> Nat
              sub(0 _) -> 0
@@ -577,7 +595,7 @@ macro_rules! columns {
              rank(Eq) -> 1
              rank(Gt) -> 2
              main! : Host -> []
-             main!(host) -> exit!(host ",
+             main!(host) -> host.exit!(",
             $answer,
             ")"
         )
@@ -594,23 +612,23 @@ const COLUMNS_MORE: &str = columns!("rank(cmp(3 1))");
 macro_rules! arithmetic {
     ($answer:literal) => {
         concat!(
-            "import std.host {Host argc! exit!}
+            "import std.host {Host}
              below : Nat Nat -> Bool
              below(_ 0) -> False
              below(0 Succ(_)) -> True
              below(Succ(a) Succ(b)) -> below(a b)
              finish! : Host Bool Nat -> []
-             finish!(host False _) -> exit!(host 0)
+             finish!(host False _) -> host.exit!(0)
              finish!(host True n) ->
                a = n + 8
                b = n + 1
                z = n - n
-               exit!(host ",
+               host.exit!(",
             $answer,
             ")
              main! : Host -> []
              main!(host) ->
-               count = argc!(host)
+               count = host.argc
                finish!(host below(count 2) count)"
         )
     };
@@ -701,10 +719,11 @@ fn it_compiles_to_the_sizes_recorded() {
 
 #[test]
 fn it_provides_routines_that_exist() {
+    let routines = TARGET.routines();
     for held in TARGET.provides() {
         assert!(
-            TARGET.routines().get(held).is_some(),
-            "it answers for `{held}`, which is not a routine"
+            routines.get(held).is_some() || routines.startup(held).is_some(),
+            "it answers for `{held}`, which is neither a routine nor a startup value"
         );
     }
 }
@@ -730,19 +749,19 @@ pub(super) fn narrow(bits: u16) -> Program {
 #[test]
 fn it_sees_nothing_of_what_was_worked_out() {
     let known = read(
-        "import std.host {Host exit!}
+        "import std.host {Host}
 
          main! : Host -> []
          main!(host) ->
            two = 2
-           exit!(host two * two)",
+           host.exit!(two * two)",
     )
     .expect("a program");
     let four = read(
-        "import std.host {Host exit!}
+        "import std.host {Host}
 
          main! : Host -> []
-         main!(host) -> exit!(host 4)",
+         main!(host) -> host.exit!(4)",
     )
     .expect("a program");
     assert_eq!(status(&known), 4);
@@ -751,13 +770,13 @@ fn it_sees_nothing_of_what_was_worked_out() {
 
 #[test]
 fn it_lays_out_nothing_that_is_not_reached() {
-    let reached = "import std.host {Host exit!}
+    let reached = "import std.host {Host}
 
                    double : Nat -> Nat
                    double(n) -> n + n
 
                    main! : Host -> []
-                   main!(host) -> exit!(host double(2))";
+                   main!(host) -> host.exit!(double(2))";
     let spare = format!(
         "{reached}
 
@@ -777,7 +796,7 @@ fn it_lays_out_nothing_that_is_not_reached() {
 fn it_lays_out_a_chain_as_the_number_it_builds() {
     let chain = |held: usize| {
         let text = format!(
-            "import std.host {{Host exit!}}\n\nmain! : Host -> []\nmain!(host) -> exit!(host {}0{})",
+            "import std.host {{Host}}\n\nmain! : Host -> []\nmain!(host) -> host.exit!({}0{})",
             "Succ(".repeat(held),
             ")".repeat(held)
         );
@@ -876,11 +895,11 @@ fn runnable_expression_example_uses_runtime_arguments() {
 /// A known-zero scalar is still an argument, a result and a branch result.
 /// Computing it calls argc again: knowing the result must not erase that
 /// call.
-const ZERO_WIDTH: &str = "import std.host {Host argc! exit!}
+const ZERO_WIDTH: &str = "import std.host {Host}
 
                           keep_zero! : Host Nat -> Nat
                           keep_zero!(host n) ->
-                            observed = argc!(host)
+                            observed = host.argc
                             n
 
                           select_zero! : Host Bool -> Nat
@@ -893,10 +912,10 @@ const ZERO_WIDTH: &str = "import std.host {Host argc! exit!}
 
                           main! : Host -> []
                           main!(host) ->
-                            count = argc!(host)
+                            count = host.argc
                             first = count.equals(1)
                             z = select_zero!(host first)
-                            exit!(host zero_or_one(first z))";
+                            host.exit!(zero_or_one(first z))";
 
 #[test]
 fn source_zero_width_scalars_cross_calls_and_joins() {

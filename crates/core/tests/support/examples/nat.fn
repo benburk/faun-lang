@@ -1,7 +1,7 @@
 # Arithmetic as recursion over the constructors it is written in, on a
 # count nothing knows before the program runs.
 
-import std.host {Host argc! exit!}
+import std.host {Host}
 
 Order : [Lt Eq Gt]
 
@@ -28,10 +28,10 @@ finish!(host True n) ->
   two = n + n
   four = two * two
   eight = two * four
-  exit!(host min(four eight - two))
-finish!(host False _) -> exit!(host 0)
+  host.exit!(min(four eight - two))
+finish!(host False _) -> host.exit!(0)
 
 main! : Host -> []
 main!(host) ->
-  count = argc!(host)
+  count = host.argc
   finish!(host below(count 2) count)

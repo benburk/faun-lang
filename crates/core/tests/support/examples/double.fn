@@ -1,6 +1,6 @@
 # A helper whose body binds its answer before answering it.
 
-import std.host {Host exit!}
+import std.host {Host}
 
 double : Nat -> Nat
 double(n) ->
@@ -8,4 +8,4 @@ double(n) ->
   m
 
 main! : Host -> []
-main!(host) -> exit!(host double(2))
+main!(host) -> host.exit!(double(2))

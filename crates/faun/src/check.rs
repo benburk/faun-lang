@@ -145,9 +145,8 @@ pub fn application(
             _ => None,
         })
         .unwrap_or_default();
-    // `Host` is authority and nothing else: it carries no startup payload,
-    // so a host module says what it offers with ordinary bodyless routines
-    // taking one rather than with a record this has to agree about.
+    // `Host` wraps the record of startup values its target produces. Which
+    // fields a target can produce is the target's to say, when lowering.
     let carries = resolved
         .program
         .modules
@@ -157,11 +156,11 @@ pub fn application(
             h::Item::Data(data) if data.name == host.host => data.wrapper.as_ref(),
             _ => None,
         });
-    if carries.is_some() {
+    if !carries.is_some_and(|wrapper| matches!(wrapper.field, h::Type::Record(_))) {
         return Err(failure(
             module,
             span,
-            "the application ABI requires `Host` to carry no startup payload",
+            "the application ABI requires `Host` to wrap a record of startup values",
         ));
     }
 
