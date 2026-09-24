@@ -19,7 +19,7 @@ pub mod targets;
 /// # Errors
 ///
 /// Names what the machine tier cannot represent.
-pub fn machine(
+pub fn lower(
     program: &mut barb::Program,
     routines: &platform::Routines,
 ) -> Result<ir::Program, String> {

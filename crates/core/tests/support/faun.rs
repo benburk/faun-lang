@@ -9,25 +9,28 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use faun_core::ir::Program;
 use faun_core::targets::Target;
 
-/// Compile a Faun application to the machine IR `target` compiles.
-pub(crate) fn machine(text: &str, target: &dyn Target) -> Result<Program, String> {
+/// Lower a Faun application to the machine IR `target` compiles: to Barb,
+/// optimized, then to machine IR.
+pub(crate) fn lower(text: &str, target: &dyn Target) -> Result<Program, String> {
     let (dir, path) = source_file(text);
-    let machine = ::faun::machine(&path, target);
+    let barb = ::faun::lower(&path, target);
     fs::remove_dir_all(dir).expect("the scratch source to go");
-    Ok(machine?)
+    let mut barb = barb?;
+    faun_core::barb::optimize(&mut barb);
+    faun_core::lower(&mut barb, &target.routines())
 }
 
-/// The same, lowered without optimizing, for a test of shapes the
-/// optimizer would have removed.
+/// The same, without optimizing Barb, for a test of shapes the optimizer
+/// would have removed.
 #[allow(
     dead_code,
     reason = "not every test binary including this reads unoptimized"
 )]
 pub(crate) fn unoptimized(text: &str, target: &dyn Target) -> Result<Program, String> {
     let (dir, path) = source_file(text);
-    let barb = ::faun::barb(&path, target);
+    let barb = ::faun::lower(&path, target);
     fs::remove_dir_all(dir).expect("the scratch source to go");
-    faun_core::machine(&mut barb?, &target.routines())
+    faun_core::lower(&mut barb?, &target.routines())
 }
 
 /// Write `text` as the entry module of a fresh scratch directory.

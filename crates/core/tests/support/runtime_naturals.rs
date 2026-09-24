@@ -153,7 +153,7 @@ const SQUARES: &str = "import std.host {Host}
                          host.exit!(quotient.equals(1).to_nat())";
 
 fn source_check(target: &dyn Target, runner: Option<&str>) {
-    let p = faun::machine(SQUARES, target).expect("bounded effect after runtime arithmetic");
+    let p = faun::lower(SQUARES, target).expect("bounded effect after runtime arithmetic");
     for wanted in [Binary::Mul, Binary::Div] {
         assert!(
             p.functions().iter().filter_map(faun_core::ir::Function::body).any(|body| p.every(body).any(|op| {

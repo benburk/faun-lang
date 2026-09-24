@@ -45,15 +45,15 @@ fn host_path(target: &dyn Target) -> PathBuf {
     standard_path().with_file_name(format!("hosts/{}.fn", target.name()))
 }
 
-/// Load, check and lower a Faun application for `target`, stopping at Barb
-/// before any optimization.
+/// Lower a Faun application to Barb for `target`: load it, check it, and
+/// lower it, before any optimization.
 ///
 /// Reaching Barb is what checking a program means: it meets `target`'s host
 /// module and every routine it asks for exists.
 ///
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
-pub fn barb(source: &Path, target: &dyn Target) -> Result<faun_core::barb::Program, Diagnostic> {
+pub fn lower(source: &Path, target: &dyn Target) -> Result<faun_core::barb::Program, Diagnostic> {
     let loaded = load(source, target)?;
     lower::application(
         &loaded.resolved,
@@ -63,16 +63,6 @@ pub fn barb(source: &Path, target: &dyn Target) -> Result<faun_core::barb::Progr
         &target.routines(),
     )
     .map_err(|error| Diagnostic::new(error.message))
-}
-
-/// Compile a Faun application to the machine IR `target` compiles.
-///
-/// # Errors
-/// Reports any error [`barb`] does, or what the machine tier cannot represent.
-pub fn machine(source: &Path, target: &dyn Target) -> Result<faun_core::ir::Program, Diagnostic> {
-    let mut program = barb(source, target)?;
-    faun_core::barb::optimize(&mut program);
-    faun_core::machine(&mut program, &target.routines()).map_err(Diagnostic::new)
 }
 
 /// An application loaded, resolved and checked against its target's host.

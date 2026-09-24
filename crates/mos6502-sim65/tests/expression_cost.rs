@@ -41,8 +41,7 @@ fn guarded_argc_expressions_stay_within_size_and_cycle_ceilings() {
 }
 
 fn measure(case: Case, size: usize, ceiling: u64) {
-    let program =
-        faun::machine(&case.source(), &Mos6502Sim65).expect("a guarded source expression");
+    let program = faun::lower(&case.source(), &Mos6502Sim65).expect("a guarded source expression");
     // Reading (above), preparation and emission happen once per case, not
     // per input. Every invocation below executes this same image.
     let image = Mos6502Sim65.compile(&program).expect("scalar compilation");

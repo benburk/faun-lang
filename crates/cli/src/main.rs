@@ -7,6 +7,7 @@ use std::process::{Command as Process, ExitCode};
 
 use bpaf::{OptionParser, Parser, choice, construct, long, positional, short};
 use faun_core::targets::Target;
+use faun_core::{barb, ir};
 use faun_mos6502_sim65::Mos6502Sim65;
 use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
@@ -158,38 +159,33 @@ fn unknown_target(name: &str) -> String {
 
 fn dispatch(command: Command) -> Result<(), String> {
     match command {
-        Command::Check { source, target } => {
-            faun::barb(&source, target)?;
-        }
+        Command::Check { source, target } => check(&source, target),
         Command::Build {
             source,
             output,
             target,
-        } => {
-            let image = target.compile(&faun::machine(&source, target)?)?;
-            let written = target
-                .write(&image, &output)
-                .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
-            println!("wrote {}", written.display());
-        }
-        Command::Run { source, target } => run(&source, target)?,
+        } => build(&source, target, &output),
+        Command::Run { source, target } => run(&source, target),
         Command::Emit {
             target,
             stage,
             source,
-        } => match stage {
-            Stage::Barb => {
-                let mut program = faun::barb(&source, target)?;
-                faun_core::barb::optimize(&mut program);
-                print!("{}", program.render());
-            }
-            Stage::Machine => print!("{}", faun::machine(&source, target)?.render()),
-            Stage::Target => {
-                let prepared = target.prepare(&faun::machine(&source, target)?)?;
-                print!("{}", target.render(&prepared));
-            }
-        },
+        } => emit(stage, &source, target),
     }
+}
+
+/// Check a program by lowering it as far as Barb.
+fn check(source: &Path, target: &dyn Target) -> Result<(), String> {
+    faun::lower(source, target)?;
+    Ok(())
+}
+
+/// Compile a program and write its image to `output`.
+fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), String> {
+    let machine = lower(source, target)?;
+    let image = target.compile(&machine)?;
+    let written = write(target, &image, output)?;
+    println!("wrote {}", written.display());
     Ok(())
 }
 
@@ -201,17 +197,54 @@ fn run(source: &Path, target: &dyn Target) -> Result<(), String> {
             target.name()
         ));
     }
-    let image = target.compile(&faun::machine(source, target)?)?;
+    let machine = lower(source, target)?;
+    let image = target.compile(&machine)?;
     let directory = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
-    let cannot = |doing: &str, error: std::io::Error| {
-        format!("cannot {doing} {}: {error}", directory.display())
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
+    let status = write(target, &image, &directory.join("program")).and_then(|program| {
+        Process::new(&program)
+            .status()
+            .map_err(|error| format!("cannot run {}: {error}", program.display()))
+    });
+    fs::remove_dir_all(&directory)
+        .map_err(|error| format!("cannot remove {}: {error}", directory.display()))?;
+    std::process::exit(status?.code().unwrap_or(1))
+}
+
+/// Print one stage of a program.
+fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), String> {
+    let text = match stage {
+        Stage::Barb => {
+            let mut barb = faun::lower(source, target)?;
+            barb::optimize(&mut barb);
+            barb.render()
+        }
+        Stage::Machine => lower(source, target)?.render(),
+        Stage::Target => {
+            let machine = lower(source, target)?;
+            let prepared = target.prepare(&machine)?;
+            target.render(&prepared)
+        }
     };
-    fs::create_dir_all(&directory).map_err(|error| cannot("create", error))?;
-    let written = target.write(&image, &directory.join("program"));
-    let status = written.and_then(|path| Process::new(path).status());
-    fs::remove_dir_all(&directory).map_err(|error| cannot("remove", error))?;
-    let status = status.map_err(|error| cannot("run the program in", error))?;
-    std::process::exit(status.code().unwrap_or(1))
+    print!("{text}");
+    Ok(())
+}
+
+/// Lower a program to the machine IR `target` compiles: to Barb, optimized,
+/// then to machine IR.
+fn lower(source: &Path, target: &dyn Target) -> Result<ir::Program, String> {
+    let mut barb = faun::lower(source, target)?;
+    barb::optimize(&mut barb);
+    let machine = faun_core::lower(&mut barb, &target.routines())?;
+    Ok(machine)
+}
+
+/// Write an image through its target, answering the path written.
+fn write(target: &dyn Target, image: &[u8], output: &Path) -> Result<PathBuf, String> {
+    target
+        .write(image, output)
+        .map_err(|error| format!("cannot write {}: {error}", output.display()))
 }
 
 #[cfg(test)]
