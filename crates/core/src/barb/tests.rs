@@ -460,53 +460,80 @@ fn large_arithmetic_does_not_expand_constructor_spines() {
 /// A definition may go round only on something it took apart, so each time
 /// round is over something smaller and the taking apart has an end.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a refused definition, the same shape taking its argument apart, and an alias"
+)]
 fn a_definition_that_does_not_stop_is_refused() {
-    let read = |text: &str| crate::read(text, &crate::platform::Routines::builtin());
-
-    let refused = read(
-        "type Nat Zero Succ(Nat)
-
-         add(a Zero) -> a
-         add(a Succ(k)) -> Succ(add(a k))
-
-         spin(n) -> add(Zero spin(n))
-
-         main!(h) -> exit!(h spin(Zero))",
-    )
-    .unwrap_err();
+    // spin(n) -> add(Zero spin(n))
+    let mut lib = fixture::Library::new();
+    let (nat, zero, add) = (lib.nat, lib.zero, lib.add);
+    let p = &mut lib.program;
+    let spin = p.declare("spin", &[nat], nat);
+    p.define(spin, |b, args| {
+        let nought = b.con(zero, &[]);
+        let again = b.call(spin, &[args[0]]);
+        b.call(add, &[nought, again])
+    });
+    enter(p, nat, spin, 0);
+    let refused = validate(p).unwrap_err();
     assert!(
         refused.contains("nothing here shows `spin` stops"),
         "{refused}"
     );
 
     // The same shape, taking its argument apart: this one has an end.
-    read(
-        "type Nat Zero Succ(Nat)
-
-         add(a Zero) -> a
-         add(a Succ(k)) -> Succ(add(a k))
-
-         twice(Zero) -> Zero
-         twice(Succ(k)) -> Succ(Succ(twice(k)))
-
-         main!(h) ->
-           two = Succ(Succ(Zero))
-           exit!(h twice(two))",
-    )
-    .expect("a program that stops");
+    // twice(Zero) -> Zero
+    // twice(Succ(k)) -> Succ(Succ(twice(k)))
+    let mut lib = fixture::Library::new();
+    let (nat, zero, succ) = (lib.nat, lib.zero, lib.succ);
+    let p = &mut lib.program;
+    let twice = p.declare("twice", &[nat], nat);
+    p.define(twice, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                return b.con(zero, &[]);
+            }
+            let rest = b.call(twice, &[fields[0]]);
+            let once = b.con(succ, &[rest]);
+            b.con(succ, &[once])
+        })
+    });
+    enter(p, nat, twice, 2);
+    validate(p).expect("a program that stops");
 
     // A local alias does not hide that the recursive argument was a field.
-    read(
-        "type Nat Zero Succ(Nat)
-
-         down(Zero) -> Zero
-         down(Succ(k)) ->
-           alias = k
-           down(alias)
-
-         main!(h) -> exit!(h down(Zero))",
-    )
-    .expect("an alias retains the field's descent");
+    // down(Zero) -> Zero
+    // down(Succ(k)) -> alias = k down(alias)
+    let mut lib = fixture::Library::new();
+    let (nat, zero, succ) = (lib.nat, lib.zero, lib.succ);
+    let p = &mut lib.program;
+    let down = p.declare("down", &[nat], nat);
+    // The builder never writes an alias, so the body is laid out directly:
+    // the parameter is local 0, the field local 1 and the alias local 2.
+    let at = |level| Atom(Local::at(level));
+    let empty = p.terms.hold_atoms(std::iter::empty());
+    let nought = p.terms.push(Expr::Con(zero, empty));
+    let stopped = p.terms.hold_body(&[], nought);
+    let alias = p.terms.push(Expr::Atom(at(1)));
+    let args = p.terms.hold_atoms(std::iter::once(at(2)));
+    let again = p.terms.push(Expr::Call(down, args));
+    let descended = p.terms.hold_body(&[alias], again);
+    let arms = p.terms.hold_arms(&[
+        Arm {
+            ctor: zero,
+            body: stopped,
+        },
+        Arm {
+            ctor: succ,
+            body: descended,
+        },
+    ]);
+    let tail = p.terms.push(Expr::Match(at(0), arms));
+    let body = p.terms.hold_body(&[], tail);
+    p.replace_bodies(vec![(down, body)]);
+    enter(p, nat, down, 0);
+    validate(p).expect("an alias retains the field's descent");
 }
 
 /// Constructor distances survive partial reconstruction: the recursive value
@@ -540,12 +567,107 @@ fn size_change_accepts_reconstructed_subterms() {
 /// Recognized arithmetic bounds preserve decreases that are not visible as a
 /// bare pattern field at the recursive call.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Fibonacci, factorial, GCD and popcount, each written as its equations"
+)]
 fn size_change_accepts_arithmetic_recursion() {
-    crate::read(
-        include_str!("../../tests/support/termination_arithmetic.fn"),
-        &crate::platform::Routines::builtin(),
-    )
-    .expect("modulo, Fibonacci, factorial, GCD, and popcount all stop");
+    let mut lib = fixture::Library::new();
+    let (nat, zero, succ) = (lib.nat, lib.zero, lib.succ);
+    let (add, mul, div, modulo) = (lib.add, lib.mul, lib.div, lib.modulo);
+    let p = &mut lib.program;
+
+    // fibonacci(Zero) -> Zero
+    // fibonacci(Succ(n)) -> fibonacci_step(n)
+    // fibonacci_step(Zero) -> Succ(Zero)
+    // fibonacci_step(Succ(n)) ->
+    //   previous = Succ(n)
+    //   add(fibonacci(previous) fibonacci(n))
+    let fibonacci = p.declare("fibonacci", &[nat], nat);
+    let step = p.declare("fibonacci_step", &[nat], nat);
+    p.define(fibonacci, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                b.con(zero, &[])
+            } else {
+                b.call(step, &[fields[0]])
+            }
+        })
+    });
+    p.define(step, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                let nought = b.con(zero, &[]);
+                return b.con(succ, &[nought]);
+            }
+            let previous = b.con(succ, &[fields[0]]);
+            let one = b.call(fibonacci, &[previous]);
+            let two = b.call(fibonacci, &[fields[0]]);
+            b.call(add, &[one, two])
+        })
+    });
+
+    // factorial(Zero) -> Succ(Zero)
+    // factorial(Succ(n)) -> mul(Succ(n) factorial(n))
+    let factorial = p.declare("factorial", &[nat], nat);
+    p.define(factorial, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                let nought = b.con(zero, &[]);
+                return b.con(succ, &[nought]);
+            }
+            let whole = b.con(succ, &[fields[0]]);
+            let rest = b.call(factorial, &[fields[0]]);
+            b.call(mul, &[whole, rest])
+        })
+    });
+
+    // gcd(a Zero) -> a
+    // gcd(a Succ(b)) -> divisor = Succ(b) gcd(divisor mod(a divisor))
+    let gcd = p.declare("gcd", &[nat, nat], nat);
+    p.define(gcd, |b, args| {
+        b.match_(args[1], nat, |b, ctor, fields| {
+            if ctor == zero {
+                return args[0];
+            }
+            let divisor = b.con(succ, &[fields[0]]);
+            let remainder = b.call(modulo, &[args[0], divisor]);
+            b.call(gcd, &[divisor, remainder])
+        })
+    });
+
+    // popcount(Zero) -> Zero
+    // popcount(Succ(n)) ->
+    //   value = Succ(n)
+    //   two = Succ(Succ(Zero))
+    //   half = div(value two)
+    //   add(mod(value two) popcount(half))
+    let popcount = p.declare("popcount", &[nat], nat);
+    p.define(popcount, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                return b.con(zero, &[]);
+            }
+            let value = b.con(succ, &[fields[0]]);
+            let nought = b.con(zero, &[]);
+            let one = b.con(succ, &[nought]);
+            let two = b.con(succ, &[one]);
+            let half = b.call(div, &[value, two]);
+            let low = b.call(modulo, &[value, two]);
+            let rest = b.call(popcount, &[half]);
+            b.call(add, &[low, rest])
+        })
+    });
+
+    let main = p.declare("main", &[], nat);
+    p.define(main, |b, _| {
+        let nought = b.con(zero, &[]);
+        let counts = [fibonacci, factorial, popcount].map(|id| b.call(id, &[nought]));
+        let divided = b.call(gcd, &[counts[0], counts[1]]);
+        b.call(add, &[divided, counts[2]])
+    });
+    p.set_entry(main);
+    validate(p).expect("modulo, Fibonacci, factorial, GCD, and popcount all stop");
 }
 
 /// Weak arithmetic bounds are not strict decreases. Dividing by one and
@@ -553,44 +675,34 @@ fn size_change_accepts_arithmetic_recursion() {
 /// recursive argument.
 #[test]
 fn size_change_rejects_non_decreasing_arithmetic() {
-    let refused = crate::read(
-        "type Nat Zero Succ(Nat)
-         type Bool False True
-
-         equals(Zero Zero) -> True
-         equals(Zero Succ(_)) -> False
-         equals(Succ(_) Zero) -> False
-         equals(Succ(a) Succ(b)) -> equals(a b)
-
-         modulo(a Zero) -> a
-         modulo(Zero Succ(_)) -> Zero
-         modulo(Succ(a) Succ(b)) ->
-           rest = modulo(a Succ(b))
-           choose_mod(equals(rest b) rest)
-         choose_mod(True _) -> Zero
-         choose_mod(False rest) -> Succ(rest)
-
-         divide(_ Zero) -> Zero
-         divide(Zero Succ(_)) -> Zero
-         divide(Succ(a) Succ(b)) ->
-           quotient = divide(a Succ(b))
-           choose_div(equals(modulo(a Succ(b)) b) quotient)
-         choose_div(True quotient) -> Succ(quotient)
-         choose_div(False quotient) -> quotient
-
-         stall(Zero) -> Zero
-         stall(Succ(n)) ->
-           value = Succ(n)
-           one = Succ(Zero)
-           stall_mod(divide(value one))
-         stall_mod(n) ->
-           zero = Zero
-           stall(modulo(n zero))
-
-         main!(h) -> exit!(h Zero)",
-        &crate::platform::Routines::builtin(),
-    )
-    .unwrap_err();
+    let mut lib = fixture::Library::new();
+    let (nat, zero, succ) = (lib.nat, lib.zero, lib.succ);
+    let (div, modulo) = (lib.div, lib.modulo);
+    let p = &mut lib.program;
+    // stall(Zero) -> Zero
+    // stall(Succ(n)) -> value = Succ(n) one = Succ(Zero) stall_mod(div(value one))
+    // stall_mod(n) -> zero = Zero stall(mod(n zero))
+    let stall = p.declare("stall", &[nat], nat);
+    let stall_mod = p.declare("stall_mod", &[nat], nat);
+    p.define(stall, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                return b.con(zero, &[]);
+            }
+            let value = b.con(succ, &[fields[0]]);
+            let nought = b.con(zero, &[]);
+            let one = b.con(succ, &[nought]);
+            let divided = b.call(div, &[value, one]);
+            b.call(stall_mod, &[divided])
+        })
+    });
+    p.define(stall_mod, |b, args| {
+        let nought = b.con(zero, &[]);
+        let remainder = b.call(modulo, &[args[0], nought]);
+        b.call(stall, &[remainder])
+    });
+    enter(p, nat, stall, 0);
+    let refused = validate(p).unwrap_err();
     assert!(
         refused.contains("nothing here shows `stall`, `stall_mod` stops"),
         "{refused}"
@@ -603,40 +715,57 @@ fn size_change_rejects_non_decreasing_arithmetic() {
 /// make it rather than by asking each pair in turn.
 #[test]
 fn a_round_is_every_name_that_goes_round_together() {
-    let read = |text: &str| crate::read(text, &crate::platform::Routines::builtin());
-
     // Three deep, taking a part each time round, which stops.
-    read(
-        "type Nat Zero Succ(Nat)
-
-         one(Zero) -> Zero
-         one(Succ(k)) -> two(k)
-         two(Zero) -> Zero
-         two(Succ(k)) -> three(k)
-         three(Zero) -> Zero
-         three(Succ(k)) -> one(k)
-
-         main!(h) ->
-           n = argc!(h)
-           exit!(h one(n))",
-    )
-    .expect("a round that takes something apart");
+    // one(Zero) -> Zero    one(Succ(k)) -> two(k)
+    // two(Zero) -> Zero    two(Succ(k)) -> three(k)
+    // three(Zero) -> Zero  three(Succ(k)) -> one(k)
+    let mut lib = fixture::Library::new();
+    let (nat, zero) = (lib.nat, lib.zero);
+    let p = &mut lib.program;
+    let round = ["one", "two", "three"].map(|name| p.declare(name, &[nat], nat));
+    for (at, &id) in round.iter().enumerate() {
+        let next = round[(at + 1) % round.len()];
+        p.define(id, |b, args| {
+            b.match_(args[0], nat, |b, ctor, fields| {
+                if ctor == zero {
+                    b.con(zero, &[])
+                } else {
+                    b.call(next, &[fields[0]])
+                }
+            })
+        });
+    }
+    enter(p, nat, round[0], 3);
+    validate(p).expect("a round that takes something apart");
 
     // The same three, going round on what they were handed.
-    let refused = read(
-        "type Nat Zero Succ(Nat)
-
-         add(a Zero) -> a
-         add(a Succ(k)) -> Succ(add(a k))
-
-         one(n) -> add(Zero two(n))
-         two(n) -> add(Zero three(n))
-         three(n) -> add(Zero one(n))
-
-         main!(h) -> exit!(h one(Zero))",
-    )
-    .unwrap_err();
+    // one(n) -> add(Zero two(n)), and so on round.
+    let mut lib = fixture::Library::new();
+    let (nat, zero, add) = (lib.nat, lib.zero, lib.add);
+    let p = &mut lib.program;
+    let round = ["one", "two", "three"].map(|name| p.declare(name, &[nat], nat));
+    for (at, &id) in round.iter().enumerate() {
+        let next = round[(at + 1) % round.len()];
+        p.define(id, |b, args| {
+            let nought = b.con(zero, &[]);
+            let again = b.call(next, &[args[0]]);
+            b.call(add, &[nought, again])
+        });
+    }
+    enter(p, nat, round[0], 0);
+    let refused = validate(p).unwrap_err();
     assert!(refused.contains("`one`, `two`, `three` stops"), "{refused}");
+}
+
+/// Give `program` an entry answering `called(n)`.
+fn enter(program: &mut Program, nat: TypeId, called: FnId, n: u64) {
+    let n = program.intern_number(nat, n).unwrap();
+    let main = program.declare("main", &[], nat);
+    program.define(main, |b, _| {
+        let n = b.known(n);
+        b.call(called, &[n])
+    });
+    program.set_entry(main);
 }
 
 /// Size-change termination follows each repeatable path rather than demanding

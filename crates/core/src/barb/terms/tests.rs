@@ -6,15 +6,14 @@ use crate::barb::{
     validate,
 };
 
+/// The fixture's arithmetic, with an entry answering nought.
 fn library() -> Program {
-    crate::simple::parse(
-        &format!(
-            "{}\nmain!(h) -> exit!(h Zero)",
-            include_str!("../../../../../crates/simple/standard/nat.fn")
-        ),
-        &crate::platform::Routines::builtin(),
-    )
-    .unwrap()
+    let mut library = barb::fixture::Library::new();
+    let nought = library.number(0);
+    let main = library.program.declare("main", &[], library.nat);
+    library.program.define(main, |b, _| b.known(nought));
+    library.program.set_entry(main);
+    library.program
 }
 
 fn counts(p: &Program) -> [usize; 4] {
@@ -257,7 +256,11 @@ fn fragmented() -> (Program, FnId, barb::ConstId) {
         .intern_natural(nat, &(num_bigint::BigUint::from(1u8) << 4096usize))
         .unwrap();
     p.define(unused, |b, args| {
-        b.match_(args[0], nat, |b, _, _| b.known(huge))
+        b.known(huge);
+        b.match_(args[0], nat, |b, _, _| {
+            b.known(huge);
+            b.known(huge)
+        })
     });
     // Redefinition leaves obsolete match/argument/binding entries in the pools.
     p.define(unused, |b, _| b.known(huge));

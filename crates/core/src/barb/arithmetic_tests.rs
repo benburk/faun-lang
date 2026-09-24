@@ -12,14 +12,188 @@ fn budget(work: u64) -> Budget {
 use super::*;
 use num_bigint::BigUint;
 
-const LIBRARY: &str = include_str!("../../../../crates/simple/standard/nat.fn");
+/// The fixture's arithmetic, with an entry answering nought so the
+/// program validates.
+fn library() -> Program {
+    let mut library = fixture::Library::new();
+    let nought = library.number(0);
+    let main = library.program.declare("main", &[], library.nat);
+    library.program.define(main, |b, _| b.known(nought));
+    library.program.set_entry(main);
+    library.program
+}
 
-fn source(library: &str) -> Program {
-    crate::simple::parse(
-        &format!("{library}\nmain!(h) -> exit!(h Zero)"),
-        &crate::platform::Routines::builtin(),
-    )
-    .unwrap()
+/// Which clause of the arithmetic [`variant`] writes wrongly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Miss {
+    Nothing,
+    Div,
+    Mod,
+    Sub,
+    Mul,
+    Equals,
+}
+
+/// The fixture's arithmetic written again: renamed, with the number type
+/// called `Count`, its successor and `Bool`'s `True` declared first and
+/// addition called `plus`, and with the clause `miss` names written wrongly.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one definition per operation, as the fixture writes them"
+)]
+fn variant(renamed: bool, miss: Miss) -> Program {
+    let mut p = Program::default();
+    let nat = p.declare_type(if renamed { "Count" } else { "Nat" });
+    let bool_ = p.declare_type("Bool");
+    if renamed {
+        p.define_type(nat, &[("Succ", &[nat]), ("Zero", &[])]);
+        p.define_type(bool_, &[("True", &[]), ("False", &[])]);
+    } else {
+        p.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+        p.define_type(bool_, &[("False", &[]), ("True", &[])]);
+    }
+    let (zero, succ) = (named_ctor(&p, nat, "Zero"), named_ctor(&p, nat, "Succ"));
+    let (false_, true_) = (
+        named_ctor(&p, bool_, "False"),
+        named_ctor(&p, bool_, "True"),
+    );
+    let two = [nat, nat];
+
+    let add = p.declare(if renamed { "plus" } else { "add" }, &two, nat);
+    p.define(add, |b, args| {
+        b.match_(args[1], nat, |b, ctor, fields| {
+            if ctor == zero {
+                args[0]
+            } else {
+                let rest = b.call(add, &[args[0], fields[0]]);
+                b.con(succ, &[rest])
+            }
+        })
+    });
+    let sub = p.declare("sub", &two, nat);
+    p.define(sub, |b, args| {
+        b.match_(args[0], nat, |b, ctor, left| {
+            if ctor == zero {
+                return if miss == Miss::Sub {
+                    args[1]
+                } else {
+                    b.con(zero, &[])
+                };
+            }
+            b.match_(args[1], nat, |b, ctor, right| {
+                if ctor == zero {
+                    b.con(succ, &[left[0]])
+                } else {
+                    b.call(sub, &[left[0], right[0]])
+                }
+            })
+        })
+    });
+    let mul = p.declare("mul", &two, nat);
+    p.define(mul, |b, args| {
+        b.match_(args[1], nat, |b, ctor, fields| {
+            if ctor != zero {
+                let rest = b.call(mul, &[args[0], fields[0]]);
+                b.call(add, &[args[0], rest])
+            } else if miss == Miss::Mul {
+                args[0]
+            } else {
+                b.con(zero, &[])
+            }
+        })
+    });
+    let equals = p.declare("equals", &two, bool_);
+    p.define(equals, |b, args| {
+        b.match_(args[0], nat, |b, ctor, left| {
+            let left_zero = ctor == zero;
+            b.match_(args[1], nat, |b, ctor, right| {
+                match (left_zero, ctor == zero) {
+                    (true, true) => b.con(true_, &[]),
+                    (true, false) if miss == Miss::Equals => b.con(true_, &[]),
+                    (true, false) | (false, true) => b.con(false_, &[]),
+                    (false, false) => b.call(equals, &[left[0], right[0]]),
+                }
+            })
+        })
+    });
+    let mod_step = p.declare("mod_step", &[bool_, nat], nat);
+    p.define(mod_step, |b, args| {
+        b.match_(args[0], bool_, |b, ctor, _| {
+            if ctor == true_ {
+                b.con(zero, &[])
+            } else {
+                b.con(succ, &[args[1]])
+            }
+        })
+    });
+    let modulo = p.declare("mod", &two, nat);
+    p.define(modulo, |b, args| {
+        b.match_(args[1], nat, |b, ctor, divisor| {
+            if ctor == zero {
+                return if miss == Miss::Mod {
+                    b.con(zero, &[])
+                } else {
+                    args[0]
+                };
+            }
+            b.match_(args[0], nat, |b, ctor, dividend| {
+                if ctor == zero {
+                    return b.con(zero, &[]);
+                }
+                let whole = b.con(succ, &[divisor[0]]);
+                let r = b.call(modulo, &[dividend[0], whole]);
+                let last = b.call(equals, &[r, divisor[0]]);
+                b.call(mod_step, &[last, r])
+            })
+        })
+    });
+    let div_step = p.declare("div_step", &[bool_, nat], nat);
+    p.define(div_step, |b, args| {
+        b.match_(args[0], bool_, |b, ctor, _| {
+            if ctor == true_ {
+                b.con(succ, &[args[1]])
+            } else {
+                args[1]
+            }
+        })
+    });
+    let div = p.declare("div", &two, nat);
+    p.define(div, |b, args| {
+        b.match_(args[1], nat, |b, ctor, divisor| {
+            if ctor == zero {
+                return if miss == Miss::Div {
+                    args[0]
+                } else {
+                    b.con(zero, &[])
+                };
+            }
+            b.match_(args[0], nat, |b, ctor, dividend| {
+                if ctor == zero {
+                    return b.con(zero, &[]);
+                }
+                let whole = b.con(succ, &[divisor[0]]);
+                let q = b.call(div, &[dividend[0], whole]);
+                let whole = b.con(succ, &[divisor[0]]);
+                let r = b.call(modulo, &[dividend[0], whole]);
+                let last = b.call(equals, &[r, divisor[0]]);
+                b.call(div_step, &[last, q])
+            })
+        })
+    });
+    let main = p.declare("main", &[], nat);
+    p.define(main, |b, _| b.con(zero, &[]));
+    p.set_entry(main);
+    p
+}
+
+/// The constructor of `owner` called `name`, wherever it was declared.
+fn named_ctor(program: &Program, owner: TypeId, name: &str) -> CtorId {
+    let tag = program
+        .ctors(owner)
+        .iter()
+        .position(|ctor| program.name(ctor.name) == name)
+        .unwrap();
+    program.ctor_at(owner, u32::try_from(tag).unwrap())
 }
 fn named(program: &Program, name: &str) -> FnId {
     FnId::at(
@@ -36,7 +210,7 @@ fn number(program: &Program, owner: TypeId, n: u64) -> Held {
 
 #[test]
 fn library_equations_are_recognized_before_and_after_folding() {
-    let mut program = source(LIBRARY);
+    let mut program = library();
     validate(&program).unwrap();
     for _ in 0..2 {
         let facts = analyzed(&program);
@@ -68,12 +242,7 @@ fn library_equations_are_recognized_before_and_after_folding() {
 
 #[test]
 fn recognition_is_structural_and_zero_divisor_near_misses_are_not_operations() {
-    let library = LIBRARY
-        .replace("Nat", "Count")
-        .replace("Zero Succ(Count)", "Succ(Count) Zero")
-        .replace("False True", "True False")
-        .replace("add", "plus");
-    let program = source(&library);
+    let program = variant(true, Miss::Nothing);
     assert_eq!(
         analyzed(&program).operation(named(&program, "plus")),
         Some(Operation::Add)
@@ -82,18 +251,20 @@ fn recognition_is_structural_and_zero_divisor_near_misses_are_not_operations() {
         analyzed(&program).operation(named(&program, "mod")),
         Some(Operation::Mod)
     );
-    for (old, new, name) in [
-        ("div(a Zero) -> Zero", "div(a Zero) -> a", "div"),
-        ("mod(a Zero) -> a", "mod(a Zero) -> Zero", "mod"),
-        ("sub(Zero b) -> Zero", "sub(Zero b) -> b", "sub"),
-        ("mul(a Zero) -> Zero", "mul(a Zero) -> a", "mul"),
-        (
-            "equals(Zero Succ(b)) -> False",
-            "equals(Zero Succ(b)) -> True",
-            "equals",
-        ),
+    let program = variant(false, Miss::Nothing);
+    assert_eq!(
+        analyzed(&program).operation(named(&program, "div")),
+        Some(Operation::Div)
+    );
+    for (miss, name) in [
+        (Miss::Div, "div"),
+        (Miss::Mod, "mod"),
+        (Miss::Sub, "sub"),
+        (Miss::Mul, "mul"),
+        (Miss::Equals, "equals"),
     ] {
-        let program = source(&LIBRARY.replace(old, new));
+        let program = variant(false, miss);
+        validate(&program).unwrap();
         assert_eq!(
             analyzed(&program).operation(named(&program, name)),
             None,
@@ -104,7 +275,7 @@ fn recognition_is_structural_and_zero_divisor_near_misses_are_not_operations() {
 
 #[test]
 fn structural_evaluation_matches_arithmetic_for_small_inputs() {
-    let program = source(LIBRARY);
+    let program = library();
     let operations = arithmetic::recognise(&program);
     let unknown = vec![None; program.functions().len()];
     for name in ["add", "sub", "mul", "div", "mod", "equals", "less_than"] {
@@ -146,7 +317,7 @@ fn structural_evaluation_matches_arithmetic_for_small_inputs() {
 
 #[test]
 fn folded_values_are_not_limited_to_u64() {
-    let mut program = source(LIBRARY);
+    let mut program = library();
     let mul = named(&program, "mul");
     let ty = program.params(mul)[0];
     let n = BigUint::from(1u8) << 100usize;
@@ -169,12 +340,53 @@ fn folded_values_are_not_limited_to_u64() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the guard, its entry and the lowering check are one program"
+)]
 fn an_early_exit_refines_the_continuation() {
     let routines = crate::platform::Routines::builtin();
-    let text = format!(
-        "{LIBRARY}\nbounded!(h True n) -> n\nbounded!(h False n) -> exit!(h Zero)\nmain!(h) -> count = argc!(h) n = bounded!(h less_than(count Succ(Succ(Zero))) count) exit!(h add(n n))"
-    );
-    let mut program = crate::simple::parse(&text, &routines).unwrap();
+    let mut library = fixture::Library::new();
+    let two = library.number(2);
+    let nought = library.number(0);
+    let (nat, bool_, true_) = (library.nat, library.bool_, library.true_);
+    let (add, less_than) = (library.add, library.less_than);
+    let p = &mut library.program;
+    let host = p.declare_type("Host");
+    p.define_type(host, &[("Host", &[])]);
+    let never = p.declare_type("Never");
+    p.define_type(never, &[]);
+    let exit = p.declare("exit!", &[host, nat], never);
+    let argc = p.declare("argc!", &[host], nat);
+    let word = routines
+        .get("argc!")
+        .and_then(crate::platform::Routine::bounds);
+    p.bound(argc, word.expect("a bounded count"));
+    // bounded!(h True n) -> n
+    // bounded!(h False n) -> exit!(h Zero)
+    let bounded = p.declare("bounded!", &[host, bool_, nat], nat);
+    p.define(bounded, |b, args| {
+        b.match_(args[1], bool_, |b, ctor, _| {
+            if ctor == true_ {
+                args[2]
+            } else {
+                let nought = b.known(nought);
+                b.call(exit, &[args[0], nought])
+            }
+        })
+    });
+    let main = p.declare_named("main!", &[("host", host)], never);
+    p.define(main, |b, args| {
+        let count = b.call(argc, &[args[0]]);
+        let two = b.known(two);
+        let below = b.call(less_than, &[count, two]);
+        let n = b.call(bounded, &[args[0], below, count]);
+        let sum = b.call(add, &[n, n]);
+        b.call(exit, &[args[0], sum])
+    });
+    p.set_entry(main);
+    let mut program = library.program;
+    validate(&program).unwrap();
     normalize_with_limits(&mut program, InlineLimits::default());
     fold(&mut program);
     let facts = analyzed(&program);
@@ -198,10 +410,21 @@ fn an_early_exit_refines_the_continuation() {
 
 #[test]
 fn unrecognized_recursion_still_has_an_evaluation_budget() {
-    let program = source(&format!(
-        "{LIBRARY}\ncount(Zero) -> Zero\ncount(Succ(n)) -> count(n)"
-    ));
-    let id = named(&program, "count");
+    let mut program = library();
+    let nat = program.params(named(&program, "add"))[0];
+    let zero = program.ctor_at(nat, 0);
+    // count(Zero) -> Zero
+    // count(Succ(n)) -> count(n)
+    let id = program.declare("count", &[nat], nat);
+    program.define(id, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                b.con(zero, &[])
+            } else {
+                b.call(id, &[fields[0]])
+            }
+        })
+    });
     let ty = program.params(id)[0];
     let operations = arithmetic::recognise(&program);
     assert_eq!(operations[id.index()], None);
@@ -290,7 +513,10 @@ fn arithmetic_interval_bounds_contain_every_small_answer() {
 fn a_sum_modulo_a_power_of_two_is_a_sum_of_remainders() {
     // One side reduced, added to itself, and that reduced: both sides being
     // the same side, one remainder of it does for both.
-    let held = reduced("mod(add(n n) two_fifty_six)");
+    let held = reduced(|b, t| {
+        let sum = b.call(t.add, &[t.n, t.n]);
+        b.call(t.modulo, &[sum, t.two_fifty_six])
+    });
     assert_eq!(held.matches("mod(").count(), 2, "{held}");
     assert!(held.contains("add(v"), "{held}");
 
@@ -299,20 +525,29 @@ fn a_sum_modulo_a_power_of_two_is_a_sum_of_remainders() {
     // remainder of its own; the constant is added as it stands, and wrapping
     // it in one would have the tier below reading a number widened to the
     // modulus and narrowed straight back.
-    let held = reduced("mod(add(n four) two_fifty_six)");
+    let held = reduced(|b, t| {
+        let sum = b.call(t.add, &[t.n, t.four]);
+        b.call(t.modulo, &[sum, t.two_fifty_six])
+    });
     assert_eq!(held.matches("mod(").count(), 2, "{held}");
     assert!(held.contains("add(v"), "{held}");
 
     // Under it is what buys that, not being known: one as big as the modulus
     // loses something to it, so it takes a remainder like anything else.
-    let held = reduced("mod(add(n sixteen) sixteen)");
+    let held = reduced(|b, t| {
+        let sum = b.call(t.add, &[t.n, t.sixteen]);
+        b.call(t.modulo, &[sum, t.sixteen])
+    });
     assert_eq!(held.matches("mod(").count(), 3, "{held}");
 }
 
 /// A product too, for the same reason.
 #[test]
 fn a_product_modulo_a_power_of_two_is_a_product_of_remainders() {
-    let held = reduced("mod(mul(n n) two_fifty_six)");
+    let held = reduced(|b, t| {
+        let product = b.call(t.mul, &[t.n, t.n]);
+        b.call(t.modulo, &[product, t.two_fifty_six])
+    });
     assert_eq!(held.matches("mod(").count(), 2, "{held}");
 }
 
@@ -320,7 +555,10 @@ fn a_product_modulo_a_power_of_two_is_a_product_of_remainders() {
 /// where there was one, and divides nothing away.
 #[test]
 fn a_sum_modulo_anything_else_is_left_as_it_stands() {
-    let held = reduced("mod(add(n n) ten)");
+    let held = reduced(|b, t| {
+        let sum = b.call(t.add, &[t.n, t.n]);
+        b.call(t.modulo, &[sum, t.ten])
+    });
     assert_eq!(held.matches("mod(").count(), 1, "{held}");
 }
 
@@ -329,9 +567,17 @@ fn a_sum_modulo_anything_else_is_left_as_it_stands() {
 #[test]
 fn only_what_carries_through_a_remainder_is_pushed_inside_one() {
     // Two different values, so that nothing collapses for being the same.
-    for held in ["sub(n four)", "div(n four)", "mod(n four)"] {
-        let rendered = reduced(&format!("mod({held} two_fifty_six)"));
-        let wanted = usize::from(held.starts_with("mod")) + 1;
+    let inner: [(&str, Pick); 3] = [
+        ("sub", |t| t.sub),
+        ("div", |t| t.div),
+        ("mod", |t| t.modulo),
+    ];
+    for (held, operation) in inner {
+        let rendered = reduced(|b, t| {
+            let inside = b.call(operation(t), &[t.n, t.four]);
+            b.call(t.modulo, &[inside, t.two_fifty_six])
+        });
+        let wanted = usize::from(held == "mod") + 1;
         assert_eq!(
             rendered.matches("mod(").count(),
             wanted,
@@ -340,22 +586,71 @@ fn only_what_carries_through_a_remainder_is_pushed_inside_one() {
     }
 }
 
-/// `main!` as the optimizer leaves it, for a program working `held` out of
-/// the count it was handed.
-fn reduced(held: &str) -> String {
-    let source = format!(
-        "{LIBRARY}
-         main!(h) ->
-           n = argc!(h)
-           two = Succ(Succ(Zero))
-           four = mul(two two)
-           sixteen = mul(four four)
-           two_fifty_six = mul(sixteen sixteen)
-           ten = add(four add(four two))
-           exit!(h {held})"
-    );
-    let program =
-        crate::read_barb(&source, &crate::platform::Routines::builtin()).expect("a program");
+/// What `main!` works out of the count it was handed, and the arithmetic
+/// it may use: the count `n`, the constants it names, and the operations.
+struct Terms {
+    n: Atom,
+    four: Atom,
+    sixteen: Atom,
+    two_fifty_six: Atom,
+    ten: Atom,
+    add: FnId,
+    sub: FnId,
+    mul: FnId,
+    div: FnId,
+    modulo: FnId,
+}
+
+/// Which of the operations in [`Terms`] to use.
+type Pick = fn(&Terms) -> FnId;
+
+/// `main!` as the optimizer leaves it, for a program exiting with what
+/// `held` works out of the count it was handed.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the host, the constants and the operations `held` may use"
+)]
+fn reduced(held: impl FnOnce(&mut Builder<'_>, &Terms) -> Atom) -> String {
+    let mut library = fixture::Library::new();
+    let two = library.number(2);
+    let nat = library.nat;
+    let (add, sub, mul) = (library.add, library.sub, library.mul);
+    let (div, modulo) = (library.div, library.modulo);
+    let p = &mut library.program;
+    let host = p.declare_type("Host");
+    p.define_type(host, &[("Host", &[])]);
+    let never = p.declare_type("Never");
+    p.define_type(never, &[]);
+    let exit = p.declare("exit!", &[host, nat], never);
+    let argc = p.declare("argc!", &[host], nat);
+    let main = p.declare("main!", &[host], never);
+    p.define(main, |b, args| {
+        let n = b.call(argc, &[args[0]]);
+        let two = b.known(two);
+        let four = b.call(mul, &[two, two]);
+        let sixteen = b.call(mul, &[four, four]);
+        let two_fifty_six = b.call(mul, &[sixteen, sixteen]);
+        let six = b.call(add, &[four, two]);
+        let ten = b.call(add, &[four, six]);
+        let terms = Terms {
+            n,
+            four,
+            sixteen,
+            two_fifty_six,
+            ten,
+            add,
+            sub,
+            mul,
+            div,
+            modulo,
+        };
+        let status = held(b, &terms);
+        b.call(exit, &[args[0], status])
+    });
+    p.set_entry(main);
+    let mut program = library.program;
+    validate(&program).unwrap();
+    optimize(&mut program);
     let rendered = program.render();
     let (_, main) = rendered.split_once("main!(v0: Host)").expect("an entry");
     main.to_owned()

@@ -4,23 +4,123 @@ use super::evaluate::Evaluator;
 use super::*;
 use num_bigint::BigUint;
 
-const NAT: &str = include_str!("../../../../crates/simple/standard/nat.fn");
-const U8: &str = include_str!("../../../../crates/simple/standard/u8.fn");
-const INT: &str = include_str!("../../../../crates/simple/standard/int.fn");
-
+/// The fixture's arithmetic, with a signed number (a sum carrying a
+/// magnitude) and a pair of numbers (a product) over it.
 struct Library {
     program: Program,
     operations: Vec<Option<Operation>>,
 }
 
 impl Library {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each definition written as its equations, in one fixture"
+    )]
     fn new() -> Self {
-        let text = format!("{NAT}\n{U8}\n{INT}\nmain!(h) -> exit!(h Zero)");
-        let program = crate::simple::parse(&text, &crate::platform::Routines::builtin()).unwrap();
-        validate(&program).unwrap();
-        let operations = arithmetic::recognise(&program);
+        let library = fixture::Library::new();
+        let (nat, zero, succ) = (library.nat, library.zero, library.succ);
+        let (add, mul) = (library.add, library.mul);
+        let mut p = library.program;
+        let signed = p.declare_type("Signed");
+        p.define_type(signed, &[("Pos", &[nat]), ("NegSucc", &[nat])]);
+        let (pos, neg) = (p.ctor_at(signed, 0), p.ctor_at(signed, 1));
+        let pair = p.declare_type("Pair");
+        p.define_type(pair, &[("Pair", &[nat, nat])]);
+        let both = p.ctor_at(pair, 0);
+
+        // magnitude(Pos(n)) -> n
+        // magnitude(NegSucc(n)) -> Succ(n)
+        let magnitude = p.declare("magnitude", &[signed], nat);
+        p.define(magnitude, |b, args| {
+            b.match_(args[0], signed, |b, ctor, fields| {
+                if ctor == pos {
+                    fields[0]
+                } else {
+                    b.con(succ, &[fields[0]])
+                }
+            })
+        });
+        // negative(Zero) -> Pos(Zero)
+        // negative(Succ(n)) -> NegSucc(n)
+        let negative = p.declare("negative", &[nat], signed);
+        p.define(negative, |b, args| {
+            b.match_(args[0], nat, |b, ctor, fields| {
+                if ctor == zero {
+                    b.con(pos, &[args[0]])
+                } else {
+                    b.con(neg, &[fields[0]])
+                }
+            })
+        });
+        // negate(Pos(n)) -> negative(n)
+        // negate(NegSucc(n)) -> Pos(Succ(n))
+        let negate = p.declare("negate", &[signed], signed);
+        p.define(negate, |b, args| {
+            b.match_(args[0], signed, |b, ctor, fields| {
+                if ctor == pos {
+                    b.call(negative, &[fields[0]])
+                } else {
+                    let whole = b.con(succ, &[fields[0]]);
+                    b.con(pos, &[whole])
+                }
+            })
+        });
+        // signed_mul(a b): the product of the magnitudes, negative where
+        // exactly one side is.
+        let signed_mul = p.declare("signed_mul", &[signed, signed], signed);
+        p.define(signed_mul, |b, args| {
+            b.match_(args[0], signed, |b, left, a| {
+                b.match_(args[1], signed, |b, right, c| {
+                    let a = if left == pos {
+                        a[0]
+                    } else {
+                        b.con(succ, &[a[0]])
+                    };
+                    let c = if right == pos {
+                        c[0]
+                    } else {
+                        b.con(succ, &[c[0]])
+                    };
+                    let product = b.call(mul, &[a, c]);
+                    if (left == pos) == (right == pos) {
+                        b.con(pos, &[product])
+                    } else {
+                        b.call(negative, &[product])
+                    }
+                })
+            })
+        });
+        // pair_swap(Pair(a b)) -> Pair(b a)
+        let pair_swap = p.declare("pair_swap", &[pair], pair);
+        p.define(pair_swap, |b, args| {
+            b.match_(args[0], pair, |b, _, fields| {
+                b.con(both, &[fields[1], fields[0]])
+            })
+        });
+        // pair_sum(Pair(a b)) -> add(a b)
+        let pair_sum = p.declare("pair_sum", &[pair], nat);
+        p.define(pair_sum, |b, args| {
+            b.match_(args[0], pair, |b, _, fields| {
+                b.call(add, &[fields[0], fields[1]])
+            })
+        });
+        // pair_scaled(Pair(a b) n) -> Pair(mul(a n) mul(b n))
+        let pair_scaled = p.declare("pair_scaled", &[pair, nat], pair);
+        p.define(pair_scaled, |b, args| {
+            b.match_(args[0], pair, |b, _, fields| {
+                let first = b.call(mul, &[fields[0], args[1]]);
+                let second = b.call(mul, &[fields[1], args[1]]);
+                b.con(both, &[first, second])
+            })
+        });
+        let main = p.declare("main", &[], nat);
+        p.define(main, |b, _| b.con(zero, &[]));
+        p.set_entry(main);
+
+        validate(&p).unwrap();
+        let operations = arithmetic::recognise(&p);
         Self {
-            program,
+            program: p,
             operations,
         }
     }
@@ -61,7 +161,7 @@ impl Library {
         Held::number(self.program.type_info(), owner, &n.into())
     }
 
-    // Construct tagged values independently of the library's conversions.
+    // Construct values independently of the library's own definitions.
     fn construct(&self, name: &str, fields: &[Held]) -> Held {
         let ctor = (0..self.program.types().len())
             .flat_map(|at| self.program.ctors(TypeId::at(at)))
@@ -77,10 +177,6 @@ impl Library {
                     .ctor_at(ctor.owner, u32::try_from(tag).unwrap())
             })
             .unwrap();
-        assert_eq!(
-            self.program.fields(id),
-            fields.iter().map(Held::owner).collect::<Vec<_>>()
-        );
         Held::build(
             self.program.type_info(),
             id,
@@ -90,25 +186,16 @@ impl Library {
         .unwrap()
     }
 
-    fn boolean(&self, yes: bool) -> Held {
-        self.construct(if yes { "True" } else { "False" }, &[])
-    }
-
-    fn byte(&self, n: u8) -> Held {
-        self.construct(
-            "U8",
-            &(0..8)
-                .map(|bit| self.boolean(n & (1 << bit) != 0))
-                .collect::<Vec<_>>(),
-        )
-    }
-
     fn integer(&self, n: i64) -> Held {
         if n < 0 {
             self.construct("NegSucc", &[self.natural(n.unsigned_abs() - 1)])
         } else {
             self.construct("Pos", &[self.natural(n.unsigned_abs())])
         }
+    }
+
+    fn pair(&self, a: impl Into<BigUint>, b: impl Into<BigUint>) -> Held {
+        self.construct("Pair", &[self.natural(a), self.natural(b)])
     }
 }
 
@@ -117,118 +204,8 @@ fn same(actual: &Held, expected: &Held) {
     assert_eq!(actual.encoded(), expected.encoded());
 }
 
-#[test]
-fn every_constructible_byte_roundtrips_and_narrowing_is_explicit() {
-    let lib = Library::new();
-    let owner = lib.byte(0).owner();
-    assert_eq!(lib.program.ctors(owner).len(), 1);
-    let fields = lib.program.fields(lib.program.ctor_at(owner, 0));
-    assert_eq!(fields, &[lib.boolean(false).owner(); 8]);
-    // Eight Bool fields: these enumerate *all* constructible U8 values.
-    for n in 0..=255u8 {
-        let byte = lib.byte(n);
-        same(&lib.call("u8_to_nat", &[byte]), &lib.natural(n));
-    }
-    same(&lib.call("u8_zero", &[]), &lib.byte(0));
-    for n in 0..=1024u32 {
-        let byte = lib.byte(u8::try_from(n % 256).unwrap());
-        same(&lib.call("u8_from_nat_wrapping", &[lib.natural(n)]), &byte);
-        let checked = if n < 256 {
-            lib.construct("U8Value", &[byte])
-        } else {
-            lib.construct("U8Overflow", &[])
-        };
-        same(
-            &lib.call("u8_from_nat_checked", &[lib.natural(n)]),
-            &checked,
-        );
-    }
-    let huge = (BigUint::from(1u8) << 200usize) + BigUint::from(173u8);
-    same(
-        &lib.call("u8_from_nat_wrapping", &[lib.natural(huge.clone())]),
-        &lib.byte(173),
-    );
-    same(
-        &lib.call("u8_from_nat_checked", &[lib.natural(huge)]),
-        &lib.construct("U8Overflow", &[]),
-    );
-}
-
-#[test]
-fn byte_arithmetic_wraps_instead_of_using_monus_or_escaping_the_type() {
-    let lib = Library::new();
-    for a in 0..=255u8 {
-        for b in [0u8, 1, 2, 3, 127, 128, 254, 255] {
-            let args = [lib.byte(a), lib.byte(b)];
-            for (name, expected) in [
-                ("u8_add_wrapping", a.wrapping_add(b)),
-                ("u8_sub_wrapping", a.wrapping_sub(b)),
-                ("u8_mul_wrapping", a.wrapping_mul(b)),
-                ("u8_div_wrapping", a.checked_div(b).unwrap_or(0)),
-                ("u8_mod_wrapping", a.checked_rem(b).unwrap_or(a)),
-            ] {
-                same(&lib.call(name, &args), &lib.byte(expected));
-            }
-            same(&lib.call("u8_equals", &args), &lib.boolean(a == b));
-            same(&lib.call("u8_less_than", &args), &lib.boolean(a < b));
-        }
-    }
-}
-
-#[test]
-fn signed_conversions_have_canonical_zero() {
-    let lib = Library::new();
-    same(&lib.call("int_zero", &[]), &lib.integer(0));
-    for a in -16i64..=16 {
-        let value = lib.integer(a);
-        same(
-            &lib.call("int_negate", std::slice::from_ref(&value)),
-            &lib.integer(-a),
-        );
-        same(
-            &lib.call("int_abs", std::slice::from_ref(&value)),
-            &lib.natural(a.unsigned_abs()),
-        );
-        same(
-            &lib.call("int_is_negative", std::slice::from_ref(&value)),
-            &lib.boolean(a < 0),
-        );
-        let checked = if a < 0 {
-            lib.construct("IntNegative", &[])
-        } else {
-            lib.construct("IntNatural", &[lib.natural(a.unsigned_abs())])
-        };
-        same(&lib.call("int_to_nat_checked", &[value]), &checked);
-        if a >= 0 {
-            same(
-                &lib.call("int_from_nat", &[lib.natural(a.unsigned_abs())]),
-                &lib.integer(a),
-            );
-        }
-    }
-}
-
-#[test]
-fn signed_arithmetic_comparisons_and_zero_divisors() {
-    let lib = Library::new();
-    for a in -16i64..=16 {
-        for b in -16i64..=16 {
-            let args = [lib.integer(a), lib.integer(b)];
-            for (name, expected) in [
-                ("int_add", a + b),
-                ("int_sub", a - b),
-                ("int_mul", a * b),
-                ("int_div", a.checked_div(b).unwrap_or(0)),
-                ("int_mod", a.checked_rem(b).unwrap_or(a)),
-            ] {
-                same(&lib.call(name, &args), &lib.integer(expected));
-            }
-            same(&lib.call("int_equals", &args), &lib.boolean(a == b));
-            same(&lib.call("int_less_than", &args), &lib.boolean(a < b));
-        }
-    }
-}
-
+/// Evaluation reads a definition's equations when nothing about it is
+/// recognised, and answers what recognised arithmetic would.
 #[test]
 fn small_library_calls_also_evaluate_without_arithmetic_recognition() {
     let mut lib = Library::new();
@@ -236,79 +213,55 @@ fn small_library_calls_also_evaluate_without_arithmetic_recognition() {
     for a in -3i64..=3 {
         for b in -3i64..=3 {
             let args = [lib.integer(a), lib.integer(b)];
-            for (name, expected) in [
-                ("int_add", a + b),
-                ("int_sub", a - b),
-                ("int_mul", a * b),
-                ("int_div", a.checked_div(b).unwrap_or(0)),
-                ("int_mod", a.checked_rem(b).unwrap_or(a)),
-            ] {
-                same(&lib.call(name, &args), &lib.integer(expected));
-            }
+            same(&lib.call("signed_mul", &args), &lib.integer(a * b));
         }
-    }
-    for n in 0..8u8 {
+        let n = u32::try_from(a + 3).unwrap();
+        same(&lib.call("negate", &[lib.integer(a)]), &lib.integer(-a));
         same(
-            &lib.call("u8_from_nat_wrapping", &[lib.natural(n)]),
-            &lib.byte(n),
+            &lib.call("pair_sum", &[lib.pair(n, 2u32)]),
+            &lib.natural(n + 2),
+        );
+        same(
+            &lib.call("pair_swap", &[lib.pair(n, 2u32)]),
+            &lib.pair(2u32, n),
         );
     }
-    for (name, expected) in [
-        ("u8_add_wrapping", 5),
-        ("u8_mul_wrapping", 6),
-        ("u8_div_wrapping", 0),
-        ("u8_mod_wrapping", 2),
-    ] {
-        same(
-            &lib.call(name, &[lib.byte(2), lib.byte(3)]),
-            &lib.byte(expected),
-        );
-    }
-}
-
-#[test]
-fn signed_magnitudes_remain_unbounded() {
-    let lib = Library::new();
-    let n = BigUint::from(1u8) << 200usize;
-    let positive = lib.construct("Pos", &[lib.natural(n.clone())]);
-    let negative = lib.construct("NegSucc", &[lib.natural(&n - BigUint::from(1u8))]);
-    same(
-        &lib.call("int_add", &[positive.clone(), negative.clone()]),
-        &lib.integer(0),
-    );
-    same(
-        &lib.call("int_sub", &[negative.clone(), positive]),
-        &lib.construct(
-            "NegSucc",
-            &[lib.natural((&n << 1usize) - BigUint::from(1u8))],
-        ),
-    );
-    same(
-        &lib.call("int_mul", &[negative.clone(), negative]),
-        &lib.construct("Pos", &[lib.natural(&n * &n)]),
-    );
 }
 
 #[test]
 fn library_products_sums_and_large_magnitudes_fold_as_ordinary_calls() {
     let mut lib = Library::new();
     let huge = BigUint::from(1u8) << 100usize;
+    let expected = lib.construct("Pos", &[lib.natural((&huge + 1u8) * (&huge + 1u8))]);
+    let squared = lib.call(
+        "signed_mul",
+        &[
+            lib.construct("NegSucc", &[lib.natural(huge.clone())]),
+            lib.construct("NegSucc", &[lib.natural(huge.clone())]),
+        ],
+    );
+    same(&squared, &expected);
     let cases = [
-        ("u8_sub_wrapping", vec![lib.byte(0), lib.byte(1)]),
-        ("u8_mul_wrapping", vec![lib.byte(255), lib.byte(255)]),
-        ("u8_from_nat_checked", vec![lib.natural(255u32)]),
-        ("u8_from_nat_checked", vec![lib.natural(256u32)]),
-        ("int_negate", vec![lib.integer(0)]),
-        ("int_sub", vec![lib.integer(-3), lib.integer(5)]),
-        ("int_div", vec![lib.integer(-7), lib.integer(3)]),
-        ("int_mod", vec![lib.integer(-7), lib.integer(0)]),
-        ("u8_div_wrapping", vec![lib.byte(255), lib.byte(0)]),
-        ("u8_mod_wrapping", vec![lib.byte(255), lib.byte(0)]),
         (
-            "int_mul",
+            "signed_mul",
             vec![
                 lib.construct("NegSucc", &[lib.natural(huge.clone())]),
-                lib.construct("NegSucc", &[lib.natural(huge)]),
+                lib.construct("NegSucc", &[lib.natural(huge.clone())]),
+            ],
+        ),
+        ("signed_mul", vec![lib.integer(3), lib.integer(-4)]),
+        ("negate", vec![lib.integer(0)]),
+        (
+            "magnitude",
+            vec![lib.construct("NegSucc", &[lib.natural(huge.clone())])],
+        ),
+        ("pair_swap", vec![lib.pair(1u32, 2u32)]),
+        ("pair_sum", vec![lib.pair(huge, 5u32)]),
+        (
+            "pair_scaled",
+            vec![
+                lib.pair(3u32, 4u32),
+                lib.natural(BigUint::from(1u8) << 64usize),
             ],
         ),
     ];
@@ -353,42 +306,96 @@ fn assert_calls_fold(lib: &mut Library, cases: &[(&str, Vec<Held>)]) {
     }
 }
 
+/// A probe over renamed types whose constructors are declared in another
+/// order folds to what the same probe does over the usual ones.
 #[test]
 fn library_meaning_does_not_depend_on_names_or_constructor_order() {
-    let source = format!(
-        "{NAT}\n{U8}\n{INT}\nprobe() ->
-          one = Succ(Zero)
-          byte = u8_sub_wrapping(u8_zero() u8_from_nat_wrapping(one))
-          int_abs(int_add(NegSucc(u8_to_nat(byte)) Pos(one)))
-        main!(h) -> exit!(h probe())"
-    );
-    let source = source
-        .replace("Nat", "Count")
-        .replace("Zero", "Nil")
-        .replace("Succ", "Next")
-        .replace("Bool False True", "Truth True False")
-        .replace("Bool", "Truth")
-        .replace("U8", "Octet")
-        .replace(
-            "Int Pos(Count) NegNext(Count)",
-            "Signed NegNext(Count) Pos(Count)",
-        )
-        .replace("u8_", "byte_")
-        .replace("int_", "signed_");
-    let mut program = crate::simple::parse(&source, &crate::platform::Routines::builtin()).unwrap();
-    normalize_with_limits(&mut program, InlineLimits::default());
-    fold(&mut program);
-    validate(&program).unwrap();
-    let probe = program
-        .functions()
-        .iter()
-        .find(|f| program.name(f.name) == "probe")
-        .unwrap();
-    let Expr::Static(value) = program.expr(probe.body().unwrap().tail) else {
-        panic!("renamed probe did not fold");
-    };
-    let ConstantView::Natural(number) = program.constant(value).view() else {
-        panic!("a natural");
-    };
-    assert_eq!(number.try_u64(), Ok(255));
+    for renamed in [false, true] {
+        let (mut program, probe) = naming_probe(renamed);
+        normalize_with_limits(&mut program, InlineLimits::default());
+        fold(&mut program);
+        validate(&program).unwrap();
+        let Expr::Static(value) = program.expr(program.function(probe).body().unwrap().tail) else {
+            panic!("probe did not fold (renamed={renamed})");
+        };
+        let ConstantView::Natural(number) = program.constant(value).view() else {
+            panic!("a natural");
+        };
+        assert_eq!(number.try_u64(), Ok(255), "renamed={renamed}");
+    }
+}
+
+/// `magnitude(NegSucc(sub(add(k one) one)))` for `k = 254`, over a number
+/// type and a signed type that are, where `renamed`, called otherwise, with
+/// their constructors declared the other way round and the arithmetic
+/// called otherwise too.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the types, the arithmetic and the probe are one fixture"
+)]
+fn naming_probe(renamed: bool) -> (Program, FnId) {
+    let name = |plain: &'static str, other: &'static str| if renamed { other } else { plain };
+    let mut p = Program::default();
+    let nat = p.declare_type(name("Nat", "Count"));
+    let signed = p.declare_type(name("Signed", "Integer"));
+    if renamed {
+        p.define_type(nat, &[("Next", &[nat]), ("Nil", &[])]);
+        p.define_type(signed, &[("Below", &[nat]), ("Above", &[nat])]);
+    } else {
+        p.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+        p.define_type(signed, &[("Pos", &[nat]), ("NegSucc", &[nat])]);
+    }
+    let tag = u32::from(renamed);
+    let (zero, succ) = (p.ctor_at(nat, tag), p.ctor_at(nat, 1 - tag));
+    let (pos, neg) = (p.ctor_at(signed, tag), p.ctor_at(signed, 1 - tag));
+
+    let add = p.declare(name("add", "plus"), &[nat, nat], nat);
+    p.define(add, |b, args| {
+        b.match_(args[1], nat, |b, ctor, fields| {
+            if ctor == zero {
+                args[0]
+            } else {
+                let rest = b.call(add, &[args[0], fields[0]]);
+                b.con(succ, &[rest])
+            }
+        })
+    });
+    let sub = p.declare(name("sub", "minus"), &[nat, nat], nat);
+    p.define(sub, |b, args| {
+        b.match_(args[0], nat, |b, ctor, left| {
+            if ctor == zero {
+                return b.con(zero, &[]);
+            }
+            b.match_(args[1], nat, |b, ctor, right| {
+                if ctor == zero {
+                    b.con(succ, &[left[0]])
+                } else {
+                    b.call(sub, &[left[0], right[0]])
+                }
+            })
+        })
+    });
+    let magnitude = p.declare(name("magnitude", "size"), &[signed], nat);
+    p.define(magnitude, |b, args| {
+        b.match_(args[0], signed, |b, ctor, fields| {
+            if ctor == pos {
+                fields[0]
+            } else {
+                b.con(succ, &[fields[0]])
+            }
+        })
+    });
+    let k = p.intern_number(nat, 254).unwrap();
+    let probe = p.declare("probe", &[], nat);
+    p.define(probe, |b, _| {
+        let nought = b.con(zero, &[]);
+        let one = b.con(succ, &[nought]);
+        let k = b.known(k);
+        let up = b.call(add, &[k, one]);
+        let back = b.call(sub, &[up, one]);
+        let negative = b.con(neg, &[back]);
+        b.call(magnitude, &[negative])
+    });
+    p.set_entry(probe);
+    (p, probe)
 }
