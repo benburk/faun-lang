@@ -1273,8 +1273,19 @@ impl<'a> Checker<'a> {
                     next.push(index);
                     continue;
                 }
-                let candidates = self.method_candidates(&pending);
+                let owned = self.owned_methods(&pending);
+                let candidates: Vec<_> = owned
+                    .iter()
+                    .filter(|implementation| self.fits(&pending, implementation))
+                    .cloned()
+                    .collect();
                 match candidates.as_slice() {
+                    // The one method the receiver has, with arguments it does
+                    // not take: applying it says which argument is wrong.
+                    [] if owned.len() == 1 => {
+                        self.apply_method(&pending, &owned[0])?;
+                        unreachable!("a method that does not fit fails to apply");
+                    }
                     [] => {
                         return Err(failure(
                             pending.module,
@@ -1342,13 +1353,14 @@ impl<'a> Checker<'a> {
             })
             .filter(|field| {
                 let mut trial = self.infer.clone();
-                apply_signature(&mut trial, pending, &field.scheme).is_ok()
+                apply_signature(&mut trial, pending, &field.scheme, self.symbols).is_ok()
             })
             .map(|field| field.scheme.clone())
             .collect()
     }
 
-    fn method_candidates(&self, pending: &PendingMethod) -> Vec<MethodImpl> {
+    /// The visible methods named at `pending` that its receiver could have.
+    fn owned_methods(&self, pending: &PendingMethod) -> Vec<MethodImpl> {
         let Some(implementations) = self.methods.get(&pending.name) else {
             return Vec::new();
         };
@@ -1362,16 +1374,18 @@ impl<'a> Checker<'a> {
                 Ty::Var(_) => true,
                 _ => false,
             })
-            .filter(|implementation| {
-                let mut trial = self.infer.clone();
-                apply_signature(&mut trial, pending, &implementation.scheme).is_ok()
-            })
             .cloned()
             .collect()
     }
 
+    /// Whether `implementation` takes the arguments given at `pending`.
+    fn fits(&self, pending: &PendingMethod, implementation: &MethodImpl) -> bool {
+        let mut trial = self.infer.clone();
+        apply_signature(&mut trial, pending, &implementation.scheme, self.symbols).is_ok()
+    }
+
     fn apply_field(&mut self, pending: &PendingMethod, scheme: &Scheme) -> Result<(), CheckError> {
-        apply_signature(&mut self.infer, pending, scheme)
+        apply_signature(&mut self.infer, pending, scheme, self.symbols)
             .map_err(|message| failure(pending.module, pending.span, message))?;
         self.checked.projections.push(ProjectionSite {
             module: pending.module,
@@ -1386,8 +1400,13 @@ impl<'a> Checker<'a> {
         pending: &PendingMethod,
         implementation: &MethodImpl,
     ) -> Result<(), CheckError> {
-        apply_signature(&mut self.infer, pending, &implementation.scheme)
-            .map_err(|message| failure(pending.module, pending.span, message))?;
+        apply_signature(
+            &mut self.infer,
+            pending,
+            &implementation.scheme,
+            self.symbols,
+        )
+        .map_err(|message| failure(pending.module, pending.span, message))?;
         self.checked.methods.push(MethodSite {
             module: pending.module,
             span: pending.span,
@@ -1471,21 +1490,41 @@ impl<'a> Checker<'a> {
     }
 }
 
+/// Unify a field or method call with `scheme`. A mismatch says which
+/// argument does not fit, as what was wanted and what was given.
 fn apply_signature(
     infer: &mut Infer,
     pending: &PendingMethod,
     scheme: &Scheme,
+    symbols: &Symbols,
 ) -> Result<(), String> {
     let instantiated = infer.instantiate(scheme);
     let Ty::Function(parameters, result) = instantiated else {
         return Err("a method declaration is not a function".to_string());
     };
     if parameters.len() != pending.arguments.len() + 1 {
-        return Err("method call has the wrong number of arguments".to_string());
+        return Err(format!(
+            "`{}` takes {} arguments, but {} were given",
+            symbols.text(pending.name),
+            parameters.len() - 1,
+            pending.arguments.len()
+        ));
     }
-    infer.unify(&pending.receiver, &parameters[0])?;
-    for (argument, parameter) in pending.arguments.iter().zip(&parameters[1..]) {
-        infer.unify(argument, parameter)?;
+    let given = std::iter::once(&pending.receiver).chain(&pending.arguments);
+    for (at, (argument, parameter)) in given.zip(&parameters).enumerate() {
+        infer.unify(argument, parameter).map_err(|_| {
+            let which = if at == 0 {
+                "the receiver".to_owned()
+            } else {
+                format!("argument {at}")
+            };
+            format!(
+                "{which} of `{}` should be {}, but is {}",
+                symbols.text(pending.name),
+                show(&infer.resolve(parameter), symbols),
+                show(&infer.resolve(argument), symbols)
+            )
+        })?;
     }
     infer.unify(&pending.result, &result)
 }
@@ -1920,14 +1959,23 @@ fn component_name_set(monotypes: &HashMap<Symbol, Ty>) -> HashSet<Symbol> {
     monotypes.keys().copied().collect()
 }
 
+/// A name as the program wrote it: resolution prefixes a global with the
+/// module it belongs to, separated by `$$`.
+fn spelled(name: Symbol, symbols: &Symbols) -> &str {
+    let canonical = symbols.text(name);
+    canonical
+        .rsplit_once("$$")
+        .map_or(canonical, |(_, spelling)| spelling)
+}
+
 fn show(ty: &Ty, symbols: &Symbols) -> String {
     match ty {
         Ty::Var(variable) => format!("?{variable}"),
         Ty::Rigid(variable) => format!("'a{variable}"),
-        Ty::Named(name, arguments) if arguments.is_empty() => symbols.text(*name).to_string(),
+        Ty::Named(name, arguments) if arguments.is_empty() => spelled(*name, symbols).to_owned(),
         Ty::Named(name, arguments) => format!(
             "{}({})",
-            symbols.text(*name),
+            spelled(*name, symbols),
             arguments
                 .iter()
                 .map(|ty| show(ty, symbols))
@@ -1943,7 +1991,19 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
                 .join(" "),
             show(result, symbols)
         ),
-        Ty::Variants(_) => "a structural variant".to_string(),
+        Ty::Variants(variants) => format!(
+            "[{}]",
+            variants
+                .iter()
+                .map(|(name, fields)| if fields.is_empty() {
+                    spelled(*name, symbols).to_owned()
+                } else {
+                    let fields: Vec<_> = fields.iter().map(|ty| show(ty, symbols)).collect();
+                    format!("{}({})", spelled(*name, symbols), fields.join(" "))
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
         Ty::Record(fields) => format!(
             "{{{}}}",
             fields
@@ -2209,6 +2269,19 @@ mod tests {
         );
         let failure = program(&resolved, &prelude).unwrap_err();
         assert!(failure.message.contains("must stand on its own"));
+    }
+
+    /// A method that exists, called with an argument it does not take, says
+    /// which argument and both types, rather than that there is no method.
+    #[test]
+    fn a_method_given_the_wrong_argument_names_it() {
+        let fixture = Fixture::new();
+        let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> Zero.add(True)\n");
+        let failure = program(&resolved, &prelude).unwrap_err();
+        assert_eq!(
+            failure.message,
+            "argument 1 of `add` should be Nat, but is Bool"
+        );
     }
 
     #[test]

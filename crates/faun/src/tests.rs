@@ -115,6 +115,15 @@ fn errors_report_the_source_position() {
 }
 
 #[test]
+fn an_unfinished_type_lists_what_could_come_next() {
+    let error = parse("main! : Host -> \n").unwrap_err();
+    assert_eq!(
+        error.message,
+        "expected one of `(`, `[`, `{`, a name, a type name before the end of the file"
+    );
+}
+
+#[test]
 fn parses_module_interfaces_methods_guards_and_constraints() {
     let source = r"
         lib {}
