@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use num_bigint::BigUint;
@@ -42,7 +42,8 @@ pub(crate) struct FunctionKey {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Program {
-    pub(crate) entry: FunctionKey,
+    /// Where the program starts, when it is an application.
+    pub(crate) entry: Option<FunctionKey>,
     pub(crate) functions: Vec<Function>,
     pub(crate) data: HashMap<Symbol, h::DataDecl>,
 }
@@ -126,19 +127,100 @@ impl fmt::Display for SpecializeError {
 
 impl std::error::Error for SpecializeError {}
 
+/// Specialize what one parameterless `entry` reaches, and nothing else.
 pub(crate) fn monomorphize_from_entry(
     checked: &CheckedProgram,
     entry: Symbol,
 ) -> Result<Program, SpecializeError> {
-    Specializer::new(checked)?.run(entry, None)
+    let specializer = Specializer::new(checked)?;
+    let entry = specializer.entry_key(entry, None)?;
+    specializer.run(Some(entry), Vec::new())
 }
 
-pub(crate) fn monomorphize_application(
+/// Specialize a package: what its `main!` reaches, when it has one, then
+/// every definition of the package that can stand on its own, so that all
+/// the code it writes is checked whether or not anything calls it.
+///
+/// A definition stands on its own when its parameters hold no function,
+/// which only a caller could supply. A generic one is also specialized at
+/// the empty type `[]` for each of its variables: without constraints, what
+/// it does cannot depend on the type, so that one instance is checked for
+/// all of them. Constraints would end that, as a bound's implementation can
+/// decide whether a definition stops.
+pub(crate) fn monomorphize_package(
     checked: &CheckedProgram,
     host: &crate::host::HostIds,
-    main: &crate::host::Main,
+    main: Option<&crate::host::Main>,
 ) -> Result<Program, SpecializeError> {
-    Specializer::new(checked)?.run(main.symbol, Some(host.host))
+    let specializer = Specializer::new(checked)?;
+    let entry = main
+        .map(|main| specializer.entry_key(main.symbol, Some(host.host)))
+        .transpose()?;
+    specializer.run(entry, package_roots(checked)?)
+}
+
+/// The package's definitions that stand on their own, in the order written,
+/// each generic one at the empty type.
+fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, SpecializeError> {
+    let resolved = &checked.resolved;
+    let mut roots = Vec::new();
+    let mut seen = HashSet::new();
+    let written = resolved
+        .program
+        .modules
+        .iter()
+        .filter(|module| resolved.package.contains(&module.source))
+        .flat_map(|module| &module.items)
+        .flat_map(|item| match item {
+            h::Item::Clause(clause) => vec![clause],
+            h::Item::Data(data) => data
+                .methods
+                .iter()
+                .filter_map(|method| match method {
+                    h::MethodItem::Clause(clause) => Some(clause),
+                    h::MethodItem::Signature(_) => None,
+                })
+                .collect(),
+            h::Item::Signature(_) => Vec::new(),
+        });
+    for clause in written {
+        if !seen.insert(clause.name) {
+            continue;
+        }
+        let Some(scheme) = checked.types.values.get(&clause.name) else {
+            continue;
+        };
+        // A generic definition can do nothing with a value of a type variable
+        // but hand it on, having no constraint that would say more, so how it
+        // behaves is the same at every type: judge it once, at the empty type.
+        let placeholder = scheme
+            .variables
+            .iter()
+            .map(|variable| (*variable, Type::Empty))
+            .collect();
+        let ty = substitute_type(&scheme.ty, &placeholder)?;
+        let Some((parameters, _)) = ty.function() else {
+            continue;
+        };
+        if parameters.iter().any(holds_function) {
+            continue;
+        }
+        roots.push(FunctionKey {
+            name: clause.name,
+            ty,
+        });
+    }
+    Ok(roots)
+}
+
+/// Whether a value of `ty` may hold a function, as far as its type says.
+fn holds_function(ty: &Type) -> bool {
+    match ty {
+        Type::Function(_, _) => true,
+        Type::Named(_, arguments) => arguments.iter().any(holds_function),
+        Type::Record(fields) => fields.iter().any(|(_, field)| holds_function(field)),
+        Type::Empty => false,
+    }
 }
 
 struct Specializer<'a> {
@@ -257,11 +339,13 @@ impl<'a> Specializer<'a> {
         })
     }
 
-    fn run(
-        mut self,
+    /// The key `entry` is specialized at, checking it takes what an entry
+    /// may: nothing, or for an application exactly one `Host`.
+    fn entry_key(
+        &self,
         entry: Symbol,
         application_host: Option<Symbol>,
-    ) -> Result<Program, SpecializeError> {
+    ) -> Result<FunctionKey, SpecializeError> {
         let scheme = self
             .checked
             .values
@@ -282,15 +366,26 @@ impl<'a> Specializer<'a> {
                 None => "Barb entry functions cannot take parameters",
             }));
         }
-        let entry = FunctionKey {
+        Ok(FunctionKey {
             name: entry,
             ty: entry_ty,
-        };
-        self.request(entry.clone());
-        while let Some(key) = self.queue.pop_front() {
-            let index = self.requested[&key];
-            let function = self.specialize_function(&key)?;
-            self.functions[index] = Some(function);
+        })
+    }
+
+    /// Specialize everything `entry` reaches, then everything each root
+    /// reaches that it did not, so what the entry reaches keeps its order.
+    fn run(
+        mut self,
+        entry: Option<FunctionKey>,
+        roots: Vec<FunctionKey>,
+    ) -> Result<Program, SpecializeError> {
+        for key in entry.iter().cloned().chain(roots) {
+            self.request(key);
+            while let Some(key) = self.queue.pop_front() {
+                let index = self.requested[&key];
+                let function = self.specialize_function(&key)?;
+                self.functions[index] = Some(function);
+            }
         }
         Ok(Program {
             entry,

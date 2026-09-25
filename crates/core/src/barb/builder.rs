@@ -5,8 +5,9 @@
 //!
 //! Every operation returns an [`Atom`], and the `Let` that binds it is
 //! written for you: A-normal form is the shape of the IR, not a burden on
-//! whoever constructs it. A caller never names a local and never sees an
-//! [`ExprId`].
+//! whoever constructs it. A caller never names a local, and sees an
+//! [`ExprId`] only through [`Builder::call_site`], to map a refusal naming
+//! that call back to the source it came from.
 
 use num_bigint::BigUint;
 
@@ -50,8 +51,16 @@ impl Builder<'_> {
 
     /// A saturated call to a top-level name.
     pub fn call(&mut self, function: FnId, args: &[Atom]) -> Atom {
+        self.call_site(function, args).0
+    }
+
+    /// [`Self::call`], also answering the id a [`super::Refusal`] names the
+    /// call by. It holds until the program is next rewritten, so a frontend
+    /// maps it before optimizing.
+    pub fn call_site(&mut self, function: FnId, args: &[Atom]) -> (Atom, ExprId) {
         let args = self.program.terms.hold_atoms(args.iter().copied());
-        self.emit(Expr::Call(function, args))
+        let site = self.program.terms.push(Expr::Call(function, args));
+        (self.bind(site), site)
     }
 
     /// Hold a number in the program's pool, for [`Self::known`].
@@ -123,6 +132,11 @@ impl Builder<'_> {
     /// Bind an expression to the next local and answer it.
     fn emit(&mut self, expr: Expr) -> Atom {
         let id = self.program.terms.push(expr);
+        self.bind(id)
+    }
+
+    /// Bind an expression already pushed, as the next local.
+    fn bind(&mut self, id: ExprId) -> Atom {
         self.pending.push(id);
         let bound = Atom(Local(self.level));
         self.level += 1;

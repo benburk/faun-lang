@@ -24,6 +24,9 @@ value semantics. a bodyless call is a value the target computes
   - sizeof, alignment, layout dependent serialization, casts between representations
   - weak refs, finalizers
 - whole source available. ish. backend will be able to dynamically link libs eventually
+- an entry is optional. Every defined function is validated and must be total
+  whether or not the entry reaches it; machine lowering takes only what the
+  entry reaches, so a program with no entry is checked and lowers to nothing
 - must be fully defunctionalized and monomorphized
 
 ## The IR
@@ -58,6 +61,10 @@ x    ::= a parameter, a binding, or a field an arm bound
   reads from writes. Keep fields and construction machinery private or narrowly
   visible within the tier, and re-export the public API from `mod.rs`.
 - `validate.rs`, `stops.rs`: structural checks and size-change termination.
+  A `Refusal` names what it refuses by Barb's own ids -- the function, and for
+  a definition that may not stop, the call beginning a way round with no
+  descent -- never by source; a frontend maps them back through what
+  `Builder::call_site` told it, before anything rewrites the program.
   The termination pass keeps signed constructor-depth bounds for locals, so taking
   two fields and rebuilding one constructor still records a decrease. Structurally
   recognized natural arithmetic contributes its semantic result bounds: monus and

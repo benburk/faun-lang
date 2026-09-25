@@ -89,6 +89,9 @@ pub struct LoadedProgram {
     pub symbols: Symbols,
     pub modules: Vec<LoadedModule>,
     pub entry: ModuleId,
+    /// The entry's package: the entry and every module it imports by path,
+    /// as opposed to the standard library and host, which it depends on.
+    pub package: Vec<ModuleId>,
     pub prelude: ModuleId,
     /// The target-selected module mounted at `std.host`.
     pub host: ModuleId,
@@ -125,8 +128,9 @@ pub fn load_program(
     loader.prelude = Some(loader.pending[prelude_id.index()].public.clone());
     let host_id = loader.load_module(host, &Root::at(prelude), false)?;
     loader.host = Some(host_id);
+    let first_in_package = loader.pending.len();
     let entry_id = loader.load_module(entry, &Root::at(entry), false)?;
-    Ok(loader.into_loaded_program(entry_id, prelude_id, host_id))
+    Ok(loader.into_loaded_program(entry_id, first_in_package, prelude_id, host_id))
 }
 
 #[derive(Clone, Debug)]
@@ -175,9 +179,14 @@ impl Loader {
     fn into_loaded_program(
         self,
         entry: ModuleId,
+        first_in_package: usize,
         prelude: ModuleId,
         host: ModuleId,
     ) -> LoadedProgram {
+        let package = self.pending[first_in_package..]
+            .iter()
+            .map(|module| module.id)
+            .collect();
         let modules = self
             .pending
             .into_iter()
@@ -196,6 +205,7 @@ impl Loader {
             symbols: self.symbols,
             modules,
             entry,
+            package,
             prelude,
             host,
         }

@@ -205,5 +205,8 @@ fn a_match_on_a_type_with_no_constructors_is_not_a_program() {
     });
     program.set_entry(held);
     let refused = validate(&program).unwrap_err();
-    assert!(refused.contains("matches on nothing at all"), "{refused}");
+    assert!(
+        refused.message.contains("matches on nothing at all"),
+        "{refused}"
+    );
 }

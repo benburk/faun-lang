@@ -124,13 +124,16 @@ impl std::error::Error for CheckError {}
 /// # Errors
 ///
 /// Reports type, arity, ambiguous-method, unsupported-constraint, and literal
-/// protocol failures.
+/// protocol failures, and clauses that leave a case unmatched.
 pub fn type_check(
     resolved: ResolvedProgram,
     prelude: PreludeIds,
 ) -> Result<CheckedProgram, Diagnostic> {
     let types = validate_effects(&resolved.program, &resolved.symbols).and_then(|()| {
-        Checker::new(&resolved.program, &resolved.symbols, &prelude)?.check(&resolved.program)
+        let types = Checker::new(&resolved.program, &resolved.symbols, &prelude)?
+            .check(&resolved.program)?;
+        crate::exhaustive::exhaustive(&resolved.program, &resolved.symbols, &prelude)?;
+        Ok(types)
     });
     match types {
         Ok(types) => Ok(CheckedProgram {

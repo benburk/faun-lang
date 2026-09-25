@@ -3,23 +3,28 @@
 
 #![allow(clippy::too_many_lines)]
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
 use num_traits::ToPrimitive;
 
-use crate::Symbol;
 use crate::blessed::PreludeIds;
 use crate::check::CheckedProgram;
 use crate::defunctionalize::{self as d, ClosureKey, Expr, ExprKind};
+use crate::diagnostic::Diagnostic;
+use crate::hir as h;
 use crate::hir::LocalId;
 use crate::resolve::ResolvedProgram;
 use crate::specialize::{self, FunctionKey, Pattern, Type};
+use crate::{ModuleId, Symbol};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerError {
     pub message: String,
+    /// Where in the source it is about, when that is known.
+    pub at: Option<(ModuleId, crate::ast::Span)>,
 }
 
 impl fmt::Display for LowerError {
@@ -34,6 +39,7 @@ impl From<specialize::SpecializeError> for LowerError {
     fn from(error: specialize::SpecializeError) -> Self {
         Self {
             message: error.message,
+            at: None,
         }
     }
 }
@@ -53,7 +59,8 @@ pub fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program,
     Lowerer::new(checked, None, first_order)?.lower()
 }
 
-/// Emit a defunctionalized `main! : Host -> []` application as Barb.
+/// Emit a defunctionalized package as Barb, starting at its `main! : Host -> []`
+/// when it is an application.
 ///
 /// The Barb entry is `main!` as written. `Host` holds its fields itself, each
 /// named as the source spells it; machine lowering recognizes the startup
@@ -64,12 +71,17 @@ pub fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program,
 /// # Errors
 ///
 /// Reports Barb construction failures and a target without `exit!`.
-pub(crate) fn lower_application_to_barb(
+pub(crate) fn lower_package_to_barb(
     checked: &CheckedProgram,
     first_order: d::Program,
     routines: &faun_core::platform::Routines,
-) -> Result<barb::Program, LowerError> {
-    Lowerer::new(checked, Some(routines), first_order)?.lower()
+) -> Result<barb::Program, Diagnostic> {
+    Lowerer::new(checked, Some(routines), first_order)
+        .and_then(Lowerer::lower)
+        .map_err(|error| match error.at {
+            Some((module, span)) => checked.resolved.diagnostic(module, span, error.message),
+            None => Diagnostic::new(error.message),
+        })
 }
 
 /// Select a uniquely named checked value and lower it as the entry.
@@ -163,6 +175,10 @@ struct Lowerer<'a> {
     closure_constructor_ids: HashMap<ClosureKey, CtorId>,
     function_ids: HashMap<FunctionKey, FnId>,
     apply_ids: HashMap<Type, FnId>,
+    /// Where each call emitted was written, so a refusal naming the call
+    /// can point at it. Barb's ids hold until the program is rewritten,
+    /// which is after it is validated.
+    call_sites: RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
     output: barb::Program,
 }
 
@@ -185,6 +201,7 @@ impl<'a> Lowerer<'a> {
             closure_constructor_ids: HashMap::new(),
             function_ids: HashMap::new(),
             apply_ids: HashMap::new(),
+            call_sites: RefCell::default(),
             output: barb::Program::default(),
         };
         lowerer.discover()?;
@@ -202,10 +219,45 @@ impl<'a> Lowerer<'a> {
         {
             return Err(error("the selected target does not provide `exit!`"));
         }
-        let entry = self.function_ids[&self.program.entry];
-        self.output.set_entry(entry);
-        barb::validate(&self.output).map_err(error)?;
+        if let Some(entry) = &self.program.entry {
+            self.output.set_entry(self.function_ids[entry]);
+        }
+        barb::validate(&self.output).map_err(|refusal| self.refused(refusal))?;
         Ok(self.output)
+    }
+
+    /// A refusal, placed at the call it names, or else at the definition.
+    fn refused(&self, refusal: barb::Refusal) -> LowerError {
+        let call = refusal
+            .call
+            .and_then(|call| self.call_sites.borrow().get(&call).copied());
+        let definition = || {
+            let function = refusal.function?;
+            let (key, _) = self.function_ids.iter().find(|(_, id)| **id == function)?;
+            self.definition_site(key.name)
+        };
+        LowerError {
+            at: call.or_else(definition),
+            message: refusal.message,
+        }
+    }
+
+    /// Where the first clause defining `name` is written.
+    fn definition_site(&self, name: Symbol) -> Option<(ModuleId, crate::ast::Span)> {
+        self.resolved.program.modules.iter().find_map(|module| {
+            module.items.iter().find_map(|item| match item {
+                h::Item::Clause(clause) if clause.name == name => {
+                    Some((module.source, clause.span))
+                }
+                h::Item::Data(data) => data.methods.iter().find_map(|method| match method {
+                    h::MethodItem::Clause(clause) if clause.name == name => {
+                        Some((module.source, clause.span))
+                    }
+                    _ => None,
+                }),
+                _ => None,
+            })
+        })
     }
 
     /// Find every type the program holds, each of which Barb declares.
@@ -547,6 +599,7 @@ impl<'a> Lowerer<'a> {
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
                 apply_ids: &self.apply_ids,
+                call_sites: &self.call_sites,
                 prelude: self.prelude,
             };
             self.output.define(function_id, |builder, parameters| {
@@ -577,6 +630,7 @@ impl<'a> Lowerer<'a> {
                 closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
                 apply_ids: &self.apply_ids,
+                call_sites: &self.call_sites,
                 prelude: self.prelude,
             };
             let mut lambda_plans = HashMap::new();
@@ -958,6 +1012,7 @@ struct EmitContext<'a> {
     closure_constructor_ids: &'a HashMap<ClosureKey, CtorId>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
     apply_ids: &'a HashMap<Type, FnId>,
+    call_sites: &'a RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
     prelude: &'a PreludeIds,
 }
 
@@ -995,6 +1050,21 @@ impl EmitContext<'_> {
 
     fn call(&self, builder: &mut Builder<'_>, key: &FunctionKey, arguments: &[Atom]) -> Atom {
         builder.call(self.function_ids[key], arguments)
+    }
+
+    /// Emit a call to `function` written as `expression`, noting where.
+    fn call_written(
+        &self,
+        builder: &mut Builder<'_>,
+        function: FnId,
+        arguments: &[Atom],
+        expression: &Expr,
+    ) -> Atom {
+        let (atom, site) = builder.call_site(function, arguments);
+        self.call_sites
+            .borrow_mut()
+            .insert(site, (expression.module, expression.span));
+        atom
     }
 }
 
@@ -1141,7 +1211,7 @@ fn emit_expr(
                 .iter()
                 .map(|argument| emit_expr(context, builder, argument, locals))
                 .collect::<Vec<_>>();
-            context.call(builder, key, &arguments)
+            context.call_written(builder, context.function_ids[key], &arguments, expression)
         }
         ExprKind::Apply(head, arguments) => {
             let mut lowered = Vec::with_capacity(arguments.len() + 1);
@@ -1149,7 +1219,7 @@ fn emit_expr(
             for argument in arguments {
                 lowered.push(emit_expr(context, builder, argument, locals));
             }
-            builder.call(context.apply_ids[&head.ty], &lowered)
+            context.call_written(builder, context.apply_ids[&head.ty], &lowered, expression)
         }
     }
 }
@@ -1257,6 +1327,7 @@ fn closure_name(key: &ClosureKey, symbols: &crate::Symbols) -> String {
 fn error(message: impl Into<String>) -> LowerError {
     LowerError {
         message: message.into(),
+        at: None,
     }
 }
 
@@ -1309,9 +1380,10 @@ mod tests {
         crate::check::check_application_abi(&checked, &host, &main).unwrap();
         for bits in [16, 32, 64] {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
-            let specialized = specialize::monomorphize_application(&checked, &host, &main).unwrap();
+            let specialized =
+                specialize::monomorphize_package(&checked, &host, Some(&main)).unwrap();
             let first_order = crate::defunctionalize::defunctionalize(specialized);
-            let mut program = lower_application_to_barb(&checked, first_order, &routines).unwrap();
+            let mut program = lower_package_to_barb(&checked, first_order, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
             // `Host` holds the startup values its target produces; `main!` is

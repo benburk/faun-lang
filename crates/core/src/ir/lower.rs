@@ -62,17 +62,16 @@ mod tests;
 ///
 /// # Errors
 ///
-/// Names the first type whose representation is not decided.
-///
-/// # Panics
-///
-/// If `program` has no entry.
+/// Names a program with no entry, which has nothing to run, and the first
+/// type whose representation is not decided.
 pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program, String> {
     barb::validate(program)?;
     let assumed = assumed(program, routines);
     let facts = &program.assuming(&assumed);
     let program = &*program;
-    let entry = program.entry().expect("a program to lower has an entry");
+    let entry = program
+        .entry()
+        .ok_or("a program with no entry has nothing to run")?;
     // Only values actually lowered need a representation. Merely declaring
     // a library type (or retaining an old expression in the arena) does not.
     let demand = Demand::discover(program, facts, routines, entry)?;

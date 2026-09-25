@@ -136,7 +136,7 @@ pub(crate) use program::shape;
 pub use program::{Program, type_shape};
 pub(crate) use program::{single_field, single_field_constant};
 pub use types::TypeShape;
-pub use validate::validate;
+pub use validate::{Refusal, validate};
 
 #[cfg(test)]
 use constant::decode;

@@ -16,6 +16,45 @@
 use super::model::{Atom, Body, Expr, ExprId, FnId, Range};
 use super::program::Program;
 
+/// Why a program was refused, and where in it.
+///
+/// Barb knows no source, so a place is one of its own ids: a frontend that
+/// kept which source each came from maps them back to what was written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    pub message: String,
+    /// The definition refused, when it is one definition's fault.
+    pub function: Option<FnId>,
+    /// For a definition that may not stop, the call in `function` that
+    /// begins a way round on which nothing gets smaller.
+    pub call: Option<ExprId>,
+}
+
+impl Refusal {
+    const fn of_program(message: String) -> Self {
+        Self {
+            message,
+            function: None,
+            call: None,
+        }
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// A refusal told to someone is its message.
+impl From<Refusal> for String {
+    fn from(refusal: Refusal) -> Self {
+        refusal.message
+    }
+}
+
 /// Refuse a program the tiers below could not read rightly.
 ///
 /// # Errors
@@ -25,16 +64,13 @@ use super::program::Program;
 /// # Panics
 ///
 /// If the program outgrew the four billion names or arguments it may have.
-pub fn validate(program: &Program) -> Result<(), String> {
-    if program.entry().is_none() {
-        return Err("nothing says where the program starts".to_owned());
-    }
+pub fn validate(program: &Program) -> Result<(), Refusal> {
     for ty in program.types() {
         if matches!(ty.definition, super::model::TypeDefinition::Declared) {
-            return Err(format!(
+            return Err(Refusal::of_program(format!(
                 "type `{}` was declared but never defined",
                 program.name(ty.name)
-            ));
+            )));
         }
     }
     for at in 0..program.functions().len() {
@@ -44,7 +80,11 @@ pub fn validate(program: &Program) -> Result<(), String> {
         };
         let name = program.name(program.function(id).name);
         let level = u32::try_from(program.params(id).len()).expect("a sane arity");
-        shaped(program, name, body, level)?;
+        shaped(program, name, body, level).map_err(|message| Refusal {
+            message,
+            function: Some(id),
+            call: None,
+        })?;
     }
     super::stops::stops(program)
 }

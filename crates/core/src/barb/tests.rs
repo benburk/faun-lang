@@ -220,7 +220,9 @@ fn size_change_rejects_non_decreasing_arithmetic() {
     enter(p, nat, stall, 0);
     let refused = validate(p).unwrap_err();
     assert!(
-        refused.contains("nothing here shows `stall`, `stall_mod` stops"),
+        refused
+            .message
+            .contains("nothing here shows `stall`, `stall_mod` stops"),
         "{refused}"
     );
 }
@@ -270,7 +272,10 @@ fn a_round_is_every_name_that_goes_round_together() {
     }
     enter(p, nat, round[0], 0);
     let refused = validate(p).unwrap_err();
-    assert!(refused.contains("`one`, `two`, `three` stops"), "{refused}");
+    assert!(
+        refused.message.contains("`one`, `two`, `three` stops"),
+        "{refused}"
+    );
 }
 
 /// Give `program` an entry answering `called(n)`.
@@ -328,7 +333,7 @@ fn size_change_rejects_an_unchanged_permutation() {
 
     let refused = validate(&program).unwrap_err();
     assert!(
-        refused.contains("nothing here shows `swap` stops"),
+        refused.message.contains("nothing here shows `swap` stops"),
         "{refused}"
     );
 }

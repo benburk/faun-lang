@@ -19,6 +19,9 @@ pub struct ResolvedProgram {
     pub sources: Sources,
     pub symbols: Symbols,
     pub program: h::Program,
+    /// The entry's package, whose every definition is compiled, rather than
+    /// only what reaches into it.
+    pub package: Vec<ModuleId>,
     /// Each module's source, by module.
     module_sources: Vec<SourceId>,
 }
@@ -87,6 +90,7 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
     }
     Ok(ResolvedProgram {
         module_sources: loaded.modules.iter().map(|module| module.source).collect(),
+        package: loaded.package,
         sources: loaded.sources,
         symbols: loaded.symbols,
         program: h::Program { modules },

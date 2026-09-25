@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
 
 use bpaf::{OptionParser, Parser, choice, construct, long, positional, short};
-use faun::Checked;
 use faun_core::barb;
 use faun_core::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
@@ -178,26 +177,23 @@ fn dispatch(command: Command) -> Result<(), String> {
     }
 }
 
-/// Check a program against the target's host: a library's types, and an
-/// application as far as Barb.
+/// Check a package against the target's host by lowering it as far as Barb.
 fn check(source: &Path, target: &dyn Target) -> Result<(), String> {
-    faun::check_source(source, target)?;
+    faun::lower_to_barb(source, target)?;
     Ok(())
 }
 
 /// Compile an application and write its image to `output`. A library has
 /// nothing to build, so building one checks it.
 fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), String> {
-    let barb = match faun::check_source(source, target)? {
-        Checked::Application(barb) => barb,
-        Checked::Library => {
-            println!(
-                "checked {}, a library with no `main!` to build",
-                source.display()
-            );
-            return Ok(());
-        }
-    };
+    let barb = faun::lower_to_barb(source, target)?;
+    if barb.entry().is_none() {
+        println!(
+            "checked {}, a library with no `main!` to build",
+            source.display()
+        );
+        return Ok(());
+    }
     let image = faun::compile_barb_to_image(barb, target)?;
     let written = write(target, &image, output)?;
     println!("wrote {}", written.display());

@@ -440,7 +440,7 @@ fn unknown_nonreturning_bindings_are_not_folded_away() {
     let test = program.declare("test", &[], ty);
     program.define(test, |b, _| b.call(helper, &[]));
     program.set_entry(test);
-    assert!(validate(&program).unwrap_err().contains("stops"));
+    assert!(validate(&program).unwrap_err().message.contains("stops"));
     fold(&mut program);
     assert!(matches!(
         program.expr(program.function(test).body().unwrap().tail),
@@ -895,7 +895,7 @@ fn optimizing_never_bypasses_totality_checking() {
     });
     program.set_entry(main);
     for error in [
-        validate(program).unwrap_err(),
+        validate(program).unwrap_err().message,
         crate::lower_to_machine_ir(program, &crate::platform::Routines::builtin()).unwrap_err(),
     ] {
         assert!(

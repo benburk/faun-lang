@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::model::{Atom, Body, Expr, ExprId, FnId};
 use super::program::Program;
-use super::{ConstantView, Operation};
+use super::{ConstantView, Operation, Refusal};
 
 /// What a value is, against a parameter it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -113,8 +113,9 @@ pub(super) fn recursive(program: &Program) -> Vec<bool> {
     found
 }
 
-/// Refuse a definition nothing shows stops.
-pub(super) fn stops(program: &Program) -> Result<(), String> {
+/// Refuse a definition nothing shows stops, naming the call that begins a
+/// way round on which nothing gets smaller.
+pub(super) fn stops(program: &Program) -> Result<(), Refusal> {
     let calls = graph(program);
     let operations = super::arithmetic::recognise(program);
     for round in rounds(&calls) {
@@ -230,23 +231,27 @@ fn descends(
     program: &Program,
     round: &[FnId],
     operations: &[Option<Operation>],
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let within: HashSet<FnId> = round.iter().copied().collect();
     let direct = round
         .iter()
         .flat_map(|id| matrices(program, *id, &within, operations));
-    if Closure::new().proves(direct) {
+    let Err((function, call)) = Closure::new().proves(direct) else {
         return Ok(());
-    }
+    };
 
     let named: Vec<&str> = round
         .iter()
         .map(|id| program.name(program.function(*id).name))
         .collect();
-    Err(format!(
-        "nothing here shows `{}` stops: it goes round on what it was handed rather than on a part of it",
-        named.join("`, `")
-    ))
+    Err(Refusal {
+        message: format!(
+            "nothing here shows `{}` stops: it goes round on what it was handed rather than on a part of it",
+            named.join("`, `")
+        ),
+        function: Some(function),
+        call: Some(call),
+    })
 }
 
 /// The finite closure of one component's size-change graphs.
@@ -257,6 +262,8 @@ fn descends(
 /// recomputing every ordered pair as the closure grows.
 struct Closure {
     graphs: Vec<Graph>,
+    /// The direct call each graph's path begins with, by graph.
+    first_calls: Vec<ExprId>,
     seen: HashSet<Graph>,
     by_caller: HashMap<FnId, Vec<usize>>,
     by_callee: HashMap<FnId, Vec<usize>>,
@@ -266,49 +273,53 @@ impl Closure {
     fn new() -> Self {
         Self {
             graphs: Vec::new(),
+            first_calls: Vec::new(),
             seen: HashSet::new(),
             by_caller: HashMap::new(),
             by_callee: HashMap::new(),
         }
     }
 
-    fn proves(mut self, direct: impl IntoIterator<Item = Graph>) -> bool {
-        for graph in direct {
-            if self.insert(graph).is_err() {
-                return false;
-            }
+    /// Close the direct graphs, each beside the call it was read from, or
+    /// answer where a path with no descent begins: its definition and call.
+    fn proves(
+        mut self,
+        direct: impl IntoIterator<Item = (Graph, ExprId)>,
+    ) -> Result<(), (FnId, ExprId)> {
+        for (graph, call) in direct {
+            self.insert(graph, call)?;
         }
 
         let mut at = 0;
         while at < self.graphs.len() {
-            for product in self.products(at) {
-                if self.insert(product).is_err() {
-                    return false;
-                }
+            for (product, call) in self.products(at) {
+                self.insert(product, call)?;
             }
             at += 1;
         }
-        true
+        Ok(())
     }
 
-    /// Add one unique graph, or report an idempotent path with no descent.
-    fn insert(&mut self, graph: Graph) -> Result<(), ()> {
+    /// Add one unique graph whose path begins with `call`, or report an
+    /// idempotent path with no descent by where it begins.
+    fn insert(&mut self, graph: Graph, call: ExprId) -> Result<(), (FnId, ExprId)> {
         if !self.seen.insert(graph.clone()) {
             return Ok(());
         }
         if !graph.strict_diagonal() && graph.idempotent() {
-            return Err(());
+            return Err((graph.caller, call));
         }
 
         let at = self.graphs.len();
         self.by_caller.entry(graph.caller).or_default().push(at);
         self.by_callee.entry(graph.callee).or_default().push(at);
         self.graphs.push(graph);
+        self.first_calls.push(call);
         Ok(())
     }
 
     /// Compose `at` in both orders with compatible graphs already processed.
-    fn products(&self, at: usize) -> Vec<Graph> {
+    fn products(&self, at: usize) -> Vec<(Graph, ExprId)> {
         let graph = &self.graphs[at];
         let mut products = Vec::new();
 
@@ -316,13 +327,16 @@ impl Closure {
             if before > at {
                 break;
             }
-            products.push(compose(&self.graphs[before], graph));
+            products.push((
+                compose(&self.graphs[before], graph),
+                self.first_calls[before],
+            ));
         }
         for &after in self.by_caller.get(&graph.callee).into_iter().flatten() {
             if after >= at {
                 break;
             }
-            products.push(compose(graph, &self.graphs[after]));
+            products.push((compose(graph, &self.graphs[after]), self.first_calls[at]));
         }
         products
     }
@@ -352,13 +366,14 @@ fn compose(first: &Graph, second: &Graph) -> Graph {
     }
 }
 
-/// A graph per call this definition makes to one it goes round with.
+/// A graph per call this definition makes to one it goes round with,
+/// beside that call.
 fn matrices(
     program: &Program,
     id: FnId,
     within: &HashSet<FnId>,
     operations: &[Option<Operation>],
-) -> Vec<Graph> {
+) -> Vec<(Graph, ExprId)> {
     let params = program.params(id).len();
     let mut held = Vec::new();
     let Some(body) = program.function(id).body() else {
@@ -393,7 +408,7 @@ fn read(
     from: FnId,
     within: &HashSet<FnId>,
     operations: &[Option<Operation>],
-    (locals, held, params): (&mut Vec<LocalFacts>, &mut Vec<Graph>, usize),
+    (locals, held, params): (&mut Vec<LocalFacts>, &mut Vec<(Graph, ExprId)>, usize),
 ) {
     for &binding in program.bindings(body.bindings) {
         let facts = term(
@@ -422,7 +437,7 @@ fn term(
     from: FnId,
     within: &HashSet<FnId>,
     operations: &[Option<Operation>],
-    (locals, held, params): (&mut Vec<LocalFacts>, &mut Vec<Graph>, usize),
+    (locals, held, params): (&mut Vec<LocalFacts>, &mut Vec<(Graph, ExprId)>, usize),
 ) -> LocalFacts {
     let unknown = || LocalFacts {
         bounds: vec![Bound::Unknown; params],
@@ -438,7 +453,7 @@ fn term(
         Expr::Call(to, args) => {
             let args = program.atoms(args);
             if within.contains(&to) {
-                held.push(matrix(from, to, locals, args, params));
+                held.push((matrix(from, to, locals, args, params), id));
             }
             operations[to.index()].map_or_else(unknown, |operation| {
                 arithmetic_result(operation, args, locals, unknown())
@@ -466,7 +481,7 @@ fn read_arms(
     from: FnId,
     within: &HashSet<FnId>,
     operations: &[Option<Operation>],
-    (locals, held, params): (&mut Vec<LocalFacts>, &mut Vec<Graph>, usize),
+    (locals, held, params): (&mut Vec<LocalFacts>, &mut Vec<(Graph, ExprId)>, usize),
 ) {
     for arm in program.arms(arms) {
         let at = scrutinee.0.index();

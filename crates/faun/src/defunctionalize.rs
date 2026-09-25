@@ -19,7 +19,8 @@ use crate::{ModuleId, Symbol};
 /// A specialized program with no function values but closures.
 #[derive(Clone, Debug)]
 pub(crate) struct Program {
-    pub(crate) entry: FunctionKey,
+    /// Where the program starts, when it is an application.
+    pub(crate) entry: Option<FunctionKey>,
     pub(crate) functions: Vec<Function>,
     /// For each function type, the closures a value of it may be, in the
     /// order they were found.
@@ -57,6 +58,9 @@ pub(crate) struct Binding {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Expr {
+    /// Where it was written, which a diagnostic about it points at.
+    pub(crate) module: ModuleId,
+    pub(crate) span: crate::ast::Span,
     pub(crate) ty: Type,
     pub(crate) kind: ExprKind,
 }
@@ -163,7 +167,7 @@ impl Defunctionalizer {
 
     fn expr(&mut self, expression: specialize::Expr) -> Expr {
         use specialize::ExprKind as S;
-        let ty = expression.ty;
+        let (module, span, ty) = (expression.module, expression.span, expression.ty);
         let kind = match expression.kind {
             S::Local(local) => ExprKind::Local(local),
             S::Natural(magnitude) => ExprKind::Natural(magnitude),
@@ -185,7 +189,7 @@ impl Defunctionalizer {
                 Vec::new(),
             ),
             S::Lambda(patterns, body) => {
-                let key = ClosureKey::Lambda(expression.module, expression.span, ty.clone());
+                let key = ClosureKey::Lambda(module, span, ty.clone());
                 self.lambda(&ty, &key, patterns, *body)
             }
             S::Invoke(head, arguments) => {
@@ -194,7 +198,12 @@ impl Defunctionalizer {
                 ExprKind::Apply(Box::new(head), self.exprs(arguments))
             }
         };
-        Expr { ty, kind }
+        Expr {
+            module,
+            span,
+            ty,
+            kind,
+        }
     }
 
     /// Record a lambda as a closure of `ty`, with its body made first order.
