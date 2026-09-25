@@ -133,6 +133,8 @@ pub(crate) enum ExprKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SpecializeError {
     pub message: String,
+    /// Where in the source it is about, when that is known.
+    pub at: Option<(ModuleId, crate::ast::Span)>,
 }
 
 impl fmt::Display for SpecializeError {
@@ -413,7 +415,7 @@ impl<'a> Specializer<'a> {
                 self.functions[index] = Some(function);
             }
         }
-        Ok(Program {
+        let program = Program {
             entry,
             functions: self
                 .functions
@@ -421,7 +423,9 @@ impl<'a> Specializer<'a> {
                 .map(|function| function.expect("every requested function was specialized"))
                 .collect(),
             data: self.data,
-        })
+        };
+        crate::second_class::check(&program)?;
+        Ok(program)
     }
 
     fn request(&mut self, key: FunctionKey) {
@@ -507,7 +511,7 @@ impl<'a> Specializer<'a> {
         let Some(target) = self.widening_sites.get(&(module, expression.span)) else {
             return Ok(written);
         };
-        let target = substitute_type(target, substitution)?;
+        let target = self.site_type(target, substitution)?;
         if target == written.ty {
             return Ok(written);
         }
@@ -529,7 +533,7 @@ impl<'a> Specializer<'a> {
             .expression_types
             .get(&(module, expression.span))
             .ok_or_else(|| error("checked expression type is missing"))?;
-        let ty = substitute_type(template, substitution)?;
+        let ty = self.site_type(template, substitution)?;
         let kind = match &expression.kind {
             h::ExprKind::Local(local) => ExprKind::Local(*local),
             h::ExprKind::Global(name) => {
@@ -709,7 +713,29 @@ impl<'a> Specializer<'a> {
             .expression_types
             .get(&(module, span))
             .ok_or_else(|| error("checked expression type is missing"))?;
-        substitute_type(ty, substitution)
+        self.site_type(ty, substitution)
+    }
+
+    /// A site's type at this specialization. A type variable nothing pinned
+    /// -- the element of `[]` in `[].len()` -- is `Nat`, as in Ori: no value
+    /// of it is ever built, so which type it is cannot be seen. A row's
+    /// rest nothing pinned holds no tags instead.
+    fn site_type(
+        &self,
+        template: &InferredType,
+        substitution: &HashMap<TypeVariable, Type>,
+    ) -> Result<Type, SpecializeError> {
+        let mut free = Vec::new();
+        ordinary_variables(template, &mut free);
+        free.retain(|variable| !substitution.contains_key(variable));
+        if free.is_empty() {
+            return substitute_type(template, substitution);
+        }
+        let mut defaulted = substitution.clone();
+        for variable in free {
+            defaulted.insert(variable, Type::Named(self.prelude.nat, Vec::new()));
+        }
+        substitute_type(template, &defaulted)
     }
 
     fn method_site(
@@ -888,6 +914,39 @@ fn read(dual: &h::Dual, readings: &HashMap<h::SiteId, Reading>) -> Symbol {
     match readings.get(&dual.site) {
         Some(Reading::Constructor(symbol) | Reading::Tag(symbol)) => *symbol,
         None => unreachable!("checking reads every claimed word"),
+    }
+}
+
+/// The type variables of `ty` that stand for types, not for a row's rest.
+fn ordinary_variables(ty: &InferredType, output: &mut Vec<TypeVariable>) {
+    match ty {
+        InferredType::Variable(variable) => output.push(*variable),
+        InferredType::Named(_, arguments) => {
+            for argument in arguments {
+                ordinary_variables(argument, output);
+            }
+        }
+        InferredType::Function(parameters, result) => {
+            for parameter in parameters {
+                ordinary_variables(parameter, output);
+            }
+            ordinary_variables(result, output);
+        }
+        InferredType::Variants(tags, tail) => {
+            for field in tags.iter().flat_map(|(_, fields)| fields) {
+                ordinary_variables(field, output);
+            }
+            if let Some(tail) = tail.as_deref()
+                && !matches!(tail, InferredType::Variable(_))
+            {
+                ordinary_variables(tail, output);
+            }
+        }
+        InferredType::Record(fields) => {
+            for (_, field) in fields {
+                ordinary_variables(field, output);
+            }
+        }
     }
 }
 
@@ -1080,5 +1139,6 @@ pub(crate) fn surface_type(
 fn error(message: impl Into<String>) -> SpecializeError {
     SpecializeError {
         message: message.into(),
+        at: None,
     }
 }

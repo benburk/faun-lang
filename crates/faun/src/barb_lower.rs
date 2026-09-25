@@ -39,7 +39,7 @@ impl From<specialize::SpecializeError> for LowerError {
     fn from(error: specialize::SpecializeError) -> Self {
         Self {
             message: error.message,
-            at: None,
+            at: error.at,
         }
     }
 }

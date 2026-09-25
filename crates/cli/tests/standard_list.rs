@@ -3,14 +3,9 @@
 //! checks is the library and the tiers above a target, whatever any one
 //! backend can yet hold: lists of lists, and counts with no bound.
 
-use std::fs;
-use std::path::PathBuf;
+mod support;
 
-use faun_core::ir::FunctionId;
-use faun_core::ir::evaluate::{self, Error, Host, HostResult, Memory};
-use faun_core::targets::Target;
-use faun_x86_64_linux::X86_64Linux;
-use num_bigint::BigUint;
+use support::Package;
 
 /// Each case: what it exercises, the status it exits with, and what it
 /// leaves with from `xs`, `[0 1 2 3 4]`, and `n`, its length.
@@ -118,73 +113,21 @@ const CASES: &[(&str, &str, u32)] = &[
 
 #[test]
 fn every_list_function_answers_what_ori_says() {
-    let root = std::env::temp_dir().join(format!("faun-standard-list-{}", std::process::id()));
-    fs::create_dir_all(&root).unwrap();
     for (name, answer, expected) in CASES {
-        let status = run(&root, name, answer);
-        assert_eq!(status, *expected, "`{name}`: {answer}");
-    }
-    fs::remove_dir_all(root).unwrap();
-}
+        let package = Package::new(
+            name,
+            &format!(
+                "small : Nat -> Nat
+                 small(0) -> 0
+                 small(Succ(_)) -> 1
 
-/// What a program exits with, where `xs` is built from what it is handed
-/// so that nothing is folded away before it runs. An exit status is a
-/// byte, so the answer is taken as one.
-fn run(root: &std::path::Path, name: &str, answer: &str) -> u32 {
-    let source: PathBuf = root.join(format!("{name}.fn"));
-    fs::write(
-        &source,
-        format!(
-            "import std.host {{Host}}\n\n\
-             small : Nat -> Nat\nsmall(0) -> 0\nsmall(Succ(_)) -> 1\n\n\
-             main! : Host -> []\nmain!(host) ->\n  \
-             n = 4 + small(host.argc)\n  xs = [0 1 2 3 n - 1]\n  host.exit!(({answer}) % 256)\n"
-        ),
-    )
-    .unwrap();
-    let mut barb = faun::lower_to_barb(&source, &X86_64Linux)
-        .unwrap_or_else(|error| panic!("`{name}`: {}", error.message));
-    faun_core::barb::optimize(&mut barb);
-    let machine = faun_core::lower_to_machine_ir(&mut barb, &X86_64Linux.routines())
-        .unwrap_or_else(|error| panic!("`{name}`: {error}"));
-    let prepared = X86_64Linux
-        .prepare(&machine)
-        .unwrap_or_else(|error| panic!("`{name}`: {error}"));
-    let main = prepared
-        .functions()
-        .iter()
-        .position(|function| prepared.name(function.name) == "main!")
-        .map(FunctionId::at)
-        .expect("an entry");
-    let evaluation = evaluate::evaluate(
-        &prepared,
-        main,
-        &[BigUint::from(1u8)],
-        evaluate::Config {
-            fuel: 100_000_000,
-            ..evaluate::Config::default()
-        },
-        &mut Exit,
-    )
-    .unwrap_or_else(|error| panic!("`{name}`: {error:?}"));
-    let halted = evaluation.halted().expect("a program that exits");
-    u32::try_from(&halted[0]).expect("a status")
-}
-
-/// A host that only knows how to leave.
-struct Exit;
-
-impl Host for Exit {
-    fn call(
-        &mut self,
-        name: &str,
-        args: &[BigUint],
-        _: &mut Memory<'_>,
-    ) -> Result<HostResult, Error> {
-        if name == "exit!" {
-            Ok(HostResult::Halt(args.to_vec()))
-        } else {
-            Err(Error::Host(name.to_owned()))
-        }
+                 main! : Host -> []
+                 main!(host) ->
+                   n = 4 + small(host.argc)
+                   xs = [0 1 2 3 n - 1]
+                   host.exit!(({answer}) % 256)"
+            ),
+        );
+        assert_eq!(package.run(), *expected, "`{name}`: {answer}");
     }
 }

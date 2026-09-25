@@ -666,6 +666,28 @@ impl Infer {
     }
 }
 
+/// Whether a written type holds no function anywhere: the type of data.
+fn first_order(ty: &h::Type) -> bool {
+    match ty {
+        h::Type::Function(..) => false,
+        h::Type::Variable(_) => true,
+        h::Type::Named(_, arguments) => arguments.iter().all(first_order),
+        h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).all(first_order),
+        h::Type::Record(fields) => fields.iter().all(|(_, field)| first_order(field)),
+    }
+}
+
+/// Whether a written type is one a parameter may have: data, or a function
+/// of at least one parameter answering data, itself passed its own.
+fn passable(ty: &h::Type) -> bool {
+    match ty {
+        h::Type::Function(parameters, result) => {
+            !parameters.is_empty() && parameters.iter().all(passable) && first_order(result)
+        }
+        other => first_order(other),
+    }
+}
+
 fn contains(ty: &Ty, variable: u32) -> bool {
     match ty {
         Ty::Var(id) => *id == variable,
@@ -794,6 +816,27 @@ impl<'a> Checker<'a> {
     }
 
     fn add_data(&mut self, module: ModuleId, data: &h::DataDecl) -> Result<(), CheckError> {
+        let written = data
+            .constructors
+            .iter()
+            .map(|constructor| (constructor.name, constructor.fields.as_slice()))
+            .chain(
+                data.wrapper
+                    .iter()
+                    .map(|wrapper| (wrapper.constructor, std::slice::from_ref(&wrapper.field))),
+            );
+        for (constructor, fields) in written {
+            if !fields.iter().all(first_order) {
+                return Err(failure(
+                    module,
+                    data.span,
+                    format!(
+                        "constructor `{}` holds a function; data may not store functions",
+                        spelled(constructor, self.symbols)
+                    ),
+                ));
+            }
+        }
         let mut variables = HashMap::new();
         for parameter in &data.parameters {
             let fresh = self.infer.fresh();
@@ -861,6 +904,18 @@ impl<'a> Checker<'a> {
         signature: &h::SignatureDecl,
         owner: Option<Symbol>,
     ) -> Result<(), CheckError> {
+        // A function is passed into a call, so it is a parameter's type,
+        // never an answer's or data's.
+        if !first_order(&signature.result) || !signature.parameters.iter().all(passable) {
+            return Err(failure(
+                module,
+                signature.span,
+                format!(
+                    "`{}` holds a function other than as a parameter; a function is passed into a call, never answered or stored",
+                    self.symbols.text(signature.spelling)
+                ),
+            ));
+        }
         if !signature.constraints.is_empty() {
             return Err(failure(
                 module,
@@ -1098,6 +1153,21 @@ impl<'a> Checker<'a> {
                         .map_err(|message| failure(module, clause.span, message))?;
                 }
             }
+            for name in &component {
+                if let Ty::Function(_, result) = self.infer.resolve(&monotypes[name])
+                    && matches!(*result, Ty::Function(..))
+                {
+                    let (module, clause) = definitions[name][0];
+                    return Err(failure(
+                        module,
+                        clause.span,
+                        format!(
+                            "`{}` answers a function; a function is passed into a call, never answered",
+                            spelled(*name, self.symbols)
+                        ),
+                    ));
+                }
+            }
             for name in component {
                 let ty = self.infer.resolve(&monotypes[&name]);
                 let scheme = self.generalize(&ty, Some(&component_name_set(&monotypes)));
@@ -1214,10 +1284,17 @@ impl<'a> Checker<'a> {
             self.pending_closings.push(PendingClosing {
                 module,
                 span: binding.value.span,
-                ty: value,
+                ty: value.clone(),
                 rows: vec![(binding.pattern.clone(), false)],
             });
             self.finish_pending(marks)?;
+            if matches!(self.infer.resolve(&value), Ty::Function(..)) {
+                return Err(failure(
+                    module,
+                    binding.value.span,
+                    "a function may only be passed straight into a call; it cannot be bound, answered, or stored",
+                ));
+            }
             for local in bound {
                 let ty = locals[local.index()]
                     .as_ref()
@@ -3097,13 +3174,19 @@ mod tests {
         type_check(resolved, prelude).unwrap();
     }
 
+    /// A function is passed into a call; bound to a name, it would be a
+    /// value a program holds.
     #[test]
-    fn local_function_bindings_are_generalized() {
+    fn a_function_is_not_bound() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load(
-            "id : a -> a\nid(x) -> x\nlocal : Int\nlocal() ->\n  f = id\n  natural = f(1)\n  f(-1)\n",
+        let (prelude, resolved) =
+            fixture.load("id : a -> a\nid(x) -> x\nlocal : Int\nlocal() ->\n  f = id\n  f(-1)\n");
+        let failure = type_check(resolved, prelude).unwrap_err();
+        assert!(
+            failure.message.contains("cannot be bound"),
+            "{}",
+            failure.message
         );
-        type_check(resolved, prelude).unwrap();
     }
 
     #[test]

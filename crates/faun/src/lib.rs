@@ -36,6 +36,7 @@ pub mod lower;
 pub mod modules;
 mod parse;
 pub mod resolve;
+mod second_class;
 pub mod source;
 mod specialize;
 pub mod symbol;
@@ -72,8 +73,13 @@ pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program
     if let Some(main) = &main {
         check::check_application_abi(&checked, &host, main)?;
     }
-    let specialized = specialize::monomorphize_package(&checked, &host, main.as_ref())
-        .map_err(|e| Diagnostic::new(e.message))?;
+    let specialized =
+        specialize::monomorphize_package(&checked, &host, main.as_ref()).map_err(|e| {
+            match e.at {
+                Some((module, span)) => checked.resolved.diagnostic(module, span, e.message),
+                None => Diagnostic::new(e.message),
+            }
+        })?;
     let first_order = defunctionalize::defunctionalize(specialized);
     barb_lower::lower_package_to_barb(&checked, first_order, &target.routines())
 }

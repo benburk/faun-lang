@@ -5,16 +5,9 @@
 //! Each case is a Faun package, lowered for x86-64 and run on the reference
 //! interpreter, or refused with the message it names.
 
-use std::fs;
-use std::path::PathBuf;
+mod support;
 
-use faun_core::ir::FunctionId;
-use faun_core::ir::evaluate::{self, Error, Host, HostResult, Memory};
-use faun_core::targets::Target;
-use faun_x86_64_linux::X86_64Linux;
-use num_bigint::BigUint;
-
-const HOST: &str = "import std.host {Host}\n\n";
+use support::Package;
 
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
@@ -157,16 +150,6 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
 ];
 
-/// A module the cases import, whose constructors it keeps.
-const SEALED: &str = "exports {Failure accept}
-
-Failure : [NotFound SomethingElse]
-
-accept : Failure -> Nat
-accept(NotFound) -> 1
-accept(SomethingElse) -> 2
-";
-
 /// Programs refused, and what the message says.
 const REFUSED: &[(&str, &str, &str)] = &[
     (
@@ -246,93 +229,7 @@ fn tag_programs_answer_what_they_say() {
 fn tag_programs_are_refused_with_what_is_wrong() {
     for (name, source, expected) in REFUSED {
         let package = Package::new(name, source);
-        let refused = faun::lower_to_barb(&package.entry(), &X86_64Linux)
-            .expect_err(name)
-            .message;
+        let refused = package.refusal();
         assert!(refused.contains(expected), "{name}: {refused}");
-    }
-}
-
-/// A case's program beside the module it may import, in its own directory.
-struct Package(PathBuf);
-
-impl Package {
-    fn new(name: &str, source: &str) -> Self {
-        let directory = std::env::temp_dir().join(format!(
-            "faun-tags-{}-{}",
-            name.replace(' ', "-"),
-            std::process::id()
-        ));
-        fs::create_dir_all(&directory).unwrap();
-        let body = source
-            .lines()
-            .map(|line| line.strip_prefix("         ").unwrap_or(line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        fs::write(directory.join("main.fn"), format!("{HOST}{body}\n")).unwrap();
-        fs::write(directory.join("sealed.fn"), SEALED).unwrap();
-        Self(directory)
-    }
-
-    fn entry(&self) -> PathBuf {
-        self.0.join("main.fn")
-    }
-
-    /// The status the program exits with, run with one argument's count.
-    fn run(&self) -> u32 {
-        let mut barb = faun::lower_to_barb(&self.entry(), &X86_64Linux)
-            .unwrap_or_else(|error| panic!("{}", error.message));
-        faun_core::barb::optimize(&mut barb);
-        let machine = faun_core::lower_to_machine_ir(&mut barb, &X86_64Linux.routines()).unwrap();
-        let prepared = X86_64Linux.prepare(&machine).unwrap();
-        let main = main_of(&prepared);
-        // `argc` is handed only where the program reads it.
-        let handed = vec![BigUint::from(1u8); prepared.parameter_names(main).count()];
-        let evaluation = evaluate::evaluate(
-            &prepared,
-            main,
-            &handed,
-            evaluate::Config {
-                fuel: 100_000_000,
-                ..evaluate::Config::default()
-            },
-            &mut Exit,
-        )
-        .unwrap();
-        let halted = evaluation.halted().expect("a program that exits");
-        u32::try_from(&halted[0]).expect("a status")
-    }
-}
-
-impl Drop for Package {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn main_of(program: &faun_core::ir::Program) -> FunctionId {
-    program
-        .functions()
-        .iter()
-        .position(|function| program.name(function.name) == "main!")
-        .map(FunctionId::at)
-        .expect("an entry")
-}
-
-/// A host that only knows how to leave.
-struct Exit;
-
-impl Host for Exit {
-    fn call(
-        &mut self,
-        name: &str,
-        args: &[BigUint],
-        _: &mut Memory<'_>,
-    ) -> Result<HostResult, Error> {
-        if name == "exit!" {
-            Ok(HostResult::Halt(args.to_vec()))
-        } else {
-            Err(Error::Host(name.to_owned()))
-        }
     }
 }
