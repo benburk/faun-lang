@@ -106,3 +106,28 @@ fn runners_print_what_a_program_answers_and_report_what_it_fails_with() {
         (1, String::new())
     );
 }
+
+/// An effect on a line of its own is asked for what it does, and its answer
+/// is not kept; the line after it goes on, and the next clause is its own.
+#[test]
+fn an_effect_on_its_own_line_goes_on_to_the_next() {
+    let package = support::Package::new(
+        "statements",
+        "main! : Host -> []
+         main!(host) ->
+           host.println!(\"Hello, world!\")
+           name = \"Faun\"
+           host.print!(\"Hi, \")
+           greet!(host name)
+           host.exit!(3)
+
+         greet! : Host Str -> {}
+         greet!(host name) ->
+           host.println!(name)
+           {}",
+    );
+    assert_eq!(
+        support::run_file(&package.entry(), b""),
+        (3, "Hello, world!\nHi, Faun\n".to_owned())
+    );
+}

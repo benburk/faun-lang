@@ -28,11 +28,17 @@ Host : {argc: Nat}.(
   complete! : Host Nat -> []
   complete!(host status) -> host.exit!(status)
 
-  # Print `text` and finish: nought, or one where it could not be written.
-  print! : Host Str -> []
+  # `text` on standard output, all of it.
+  print! : Host Str -> Result({} IoError)
   print!(host text) ->
-    status = finish!(host.stdout text)
-    complete!(host status)
+    wrote = host.stdout.write_all!(text.to_utf8())
+    went = wrote?
+    Ok({})
+
+  # `text` and a line's end on standard output.
+  println! : Host Str -> Result({} IoError)
+  println!(host text) -> host.print!("${text}
+")
 
   # Run a program of no input, printing what it answers.
   run! : Host ({} -> a) -> [] where a.to_str : a -> Str

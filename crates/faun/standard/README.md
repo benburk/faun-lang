@@ -140,8 +140,18 @@ each bounded by fuel so it is seen to stop. The `Host`, `Stdin`, `Stdout` and
 of a value's own type is reached whether or not the type was imported, so
 `host.stdout.write_all!(bytes)` needs only `Host`.
 
-`Host` also has Ori's runners, which finish the program for it: `print!`
-writes a text; `run!` and `run_text!` run a pure function of nothing or of
+`host.print!(text)` and `host.println!(text)` write a text to standard output,
+the second with a line's end, and answer `Result({} IoError)`. An effect whose
+answer nothing needs is written on a line of its own, which binds it to `_`:
+
+```
+main!(host) ->
+  host.println!("Hello, world!")
+  host.exit!(0)
+```
+
+`Host` also has Ori's runners, which finish the program for it: `run!` and
+`run_text!` run a pure function of nothing or of
 `{stdin: Str}` and print what it answers; `run_result!` and
 `run_result_text!` do the same for one answering a `Result`, reporting an
 error on standard error as `error: ...`. Each finishes with status nought, or

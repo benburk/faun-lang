@@ -89,6 +89,85 @@ fn binding_ahead(tokens: &[Token], at: usize) -> bool {
         .is_some_and(|token| token.kind == Kind::Eq)
 }
 
+/// Whether a line at `at` is a statement: a line of a body that is not its
+/// last. That is so where neither it nor the line after it begins an item,
+/// and the line after is not where a block or the file ends.
+fn statement_ahead(tokens: &[Token], at: usize) -> bool {
+    if binding_ahead(tokens, at) {
+        return false;
+    }
+    let end = line_end(tokens, at);
+    if end == at || begins_item(tokens, at, end) {
+        return false;
+    }
+    let after = line_end(tokens, end);
+    after > end && !begins_item(tokens, end, after)
+}
+
+/// Where the line beginning at `at` ends: at the next token that begins a
+/// line outside every bracket, a `.` continuing a chain aside, or where a
+/// bracket around it closes.
+fn line_end(tokens: &[Token], at: usize) -> usize {
+    let mut depth = 0usize;
+    for (offset, token) in tokens.iter().enumerate().skip(at) {
+        if offset > at && depth == 0 && token.newline_before && token.kind != Kind::Dot {
+            return offset;
+        }
+        match token.kind {
+            Kind::LParen
+            | Kind::LBracket
+            | Kind::LBrace
+            | Kind::DotParen
+            | Kind::StrStart
+            | Kind::SpliceStart => depth += 1,
+            Kind::RParen | Kind::RBracket | Kind::RBrace | Kind::StrEnd | Kind::SpliceEnd => {
+                if depth == 0 {
+                    return offset;
+                }
+                depth -= 1;
+            }
+            Kind::Eof => return offset,
+            _ => {}
+        }
+    }
+    tokens.len()
+}
+
+/// Whether the line from `at` to `end` begins an item rather than going on
+/// with a body: a clause's head, with its arrow; a signature or declaration,
+/// with its colon; a directive; an alias.
+fn begins_item(tokens: &[Token], at: usize, end: usize) -> bool {
+    let line = &tokens[at..end];
+    if matches!(
+        line.first().map(|token| token.kind),
+        Some(Kind::KwImport | Kind::KwExports | Kind::KwPackage)
+    ) {
+        return true;
+    }
+    let mut depth = 0usize;
+    for (offset, token) in line.iter().enumerate() {
+        match token.kind {
+            Kind::LParen
+            | Kind::LBracket
+            | Kind::LBrace
+            | Kind::DotParen
+            | Kind::StrStart
+            | Kind::SpliceStart => depth += 1,
+            Kind::RParen | Kind::RBracket | Kind::RBrace | Kind::StrEnd | Kind::SpliceEnd => {
+                depth = depth.saturating_sub(1);
+            }
+            Kind::Arrow | Kind::Colon | Kind::KwWhere if depth == 0 => return true,
+            // `Name = ...` names a type, where a binding's pattern would be
+            // a constructor that holds nothing, which binds nothing.
+            Kind::Eq if depth == 0 && offset == 1 => {
+                return line[0].kind == Kind::TypeIdent;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Where the bracket opening at `at` is closed, just past it.
 fn closed_by(tokens: &[Token], at: usize, open: Kind, close: Kind) -> Option<usize> {
     let mut depth = 0usize;
@@ -396,8 +475,24 @@ peg::parser! {
             = field:ident() colon() value:ty() { (name(field), value) }
 
         rule body() -> Body
-            = bindings:(binding_ahead() binding:binding() { binding })*
+            = bindings:(
+                binding_ahead() binding:binding() { binding }
+                / statement_ahead() value:expr() {
+                    Binding { pattern: Pattern::Wild(value.span), value }
+                }
+              )*
               result:expr() { Body { bindings, result } }
+
+        // A line of its own whose answer nothing keeps: an effect asked for
+        // what it does. It is a binding to `_`.
+        rule statement_ahead()
+            = #{|input, at| {
+                if statement_ahead(input, at) {
+                    peg::RuleResult::Matched(at, ())
+                } else {
+                    peg::RuleResult::Failed
+                }
+            }}
 
         rule binding_ahead()
             = #{|input, at| {
