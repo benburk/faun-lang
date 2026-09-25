@@ -125,7 +125,7 @@ impl std::error::Error for CheckError {}
 ///
 /// Reports type, arity, ambiguous-method, unsupported-constraint, and literal
 /// protocol failures.
-pub fn program(
+pub fn type_check(
     resolved: ResolvedProgram,
     prelude: PreludeIds,
 ) -> Result<CheckedProgram, Diagnostic> {
@@ -148,21 +148,22 @@ pub fn program(
 ///
 /// Rejects host declarations or an entry whose checked type differs from the
 /// canonical `Host` and `Nat` identities or the structural empty variant type.
-pub fn application(
+pub fn check_application_abi(
     checked: &CheckedProgram,
     host: &crate::host::HostIds,
+    main: &crate::host::Main,
 ) -> Result<(), Diagnostic> {
     let resolved = &checked.resolved;
     let failure = |module, span, message: &str| resolved.diagnostic(module, span, message.into());
-    let module = host.entry_module;
+    let module = main.module;
     let span = resolved
         .program
         .modules
         .iter()
         .flat_map(|module| &module.items)
         .find_map(|item| match item {
-            h::Item::Signature(signature) if signature.name == host.main => Some(signature.span),
-            h::Item::Clause(clause) if clause.name == host.main => Some(clause.span),
+            h::Item::Signature(signature) if signature.name == main.symbol => Some(signature.span),
+            h::Item::Clause(clause) if clause.name == main.symbol => Some(clause.span),
             _ => None,
         })
         .unwrap_or_default();
@@ -187,7 +188,7 @@ pub fn application(
 
     for (name, expected, written) in [
         (
-            host.main,
+            main.symbol,
             InferredType::Function(
                 vec![InferredType::Named(host.host, Vec::new())],
                 Box::new(InferredType::Variants(Vec::new())),
@@ -2086,12 +2087,13 @@ mod tests {
             self.write("str.fn", "exports {Str}\nStr : List(U8)\n");
             let standard = self.write(
                 "standard.fn",
-                "lib {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
+                "package {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
             );
             let entry = self.write("main.fn", entry_source);
-            let loaded = modules::load(&entry, Some(&standard)).unwrap();
-            let prelude = PreludeIds::resolve(&loaded).unwrap();
-            let resolved = resolve::resolve(loaded).unwrap();
+            let host = self.write("host.fn", "exports {Host}\nHost : {argc: Nat}\n");
+            let loaded = modules::load_program(&entry, &standard, &host).unwrap();
+            let prelude = PreludeIds::find_in(&loaded).unwrap();
+            let resolved = resolve::resolve_names(loaded).unwrap();
             (prelude, resolved)
         }
     }
@@ -2108,7 +2110,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "natural : Nat\nnatural() -> 42\ninteger : Int\ninteger() -> -42\ntext : Str\ntext() -> \"é\"\n",
         );
-        let checked = program(resolved, prelude.clone()).unwrap();
+        let checked = type_check(resolved, prelude.clone()).unwrap();
         let entry = checked.resolved.program.modules.last().unwrap().source;
         let entry_sites: Vec<_> = checked
             .types
@@ -2127,7 +2129,7 @@ mod tests {
         let fixture = Fixture::new();
         let (prelude, resolved) =
             fixture.load("Outcome : [Never]\nvalue : Outcome\nvalue() -> Never\n");
-        program(resolved, prelude).unwrap();
+        type_check(resolved, prelude).unwrap();
     }
 
     #[test]
@@ -2151,7 +2153,7 @@ mod tests {
                 }
             })
             .unwrap();
-        let checked = program(resolved, prelude).unwrap();
+        let checked = type_check(resolved, prelude).unwrap();
         let scheme = &checked.types.values[&id];
         assert_eq!(scheme.variables.len(), 1);
         let InferredType::Function(parameters, result) = &scheme.ty else {
@@ -2164,7 +2166,7 @@ mod tests {
     fn a_polymorphic_signature_cannot_be_implemented_by_one_concrete_type() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("constant : a -> a\nconstant(_) -> 1\n");
-        let failure = program(resolved, prelude).unwrap_err();
+        let failure = type_check(resolved, prelude).unwrap_err();
         assert!(failure.message.contains("numeral") || failure.message.contains("mismatch"));
     }
 
@@ -2174,7 +2176,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "id(x) -> x\nnatural : Nat\nnatural() -> id(1)\ninteger : Int\ninteger() -> id(-1)\n",
         );
-        program(resolved, prelude).unwrap();
+        type_check(resolved, prelude).unwrap();
     }
 
     #[test]
@@ -2183,7 +2185,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "id : a -> a\nid(x) -> x\nlocal : Int\nlocal() ->\n  f = id\n  natural = f(1)\n  f(-1)\n",
         );
-        program(resolved, prelude).unwrap();
+        type_check(resolved, prelude).unwrap();
     }
 
     #[test]
@@ -2192,7 +2194,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "increment : Nat -> Nat\nincrement(n) -> n.add(1)\ntruth : Bool -> Bool\ntruth(b) -> b.not()\n",
         );
-        let checked = program(resolved, prelude.clone()).unwrap();
+        let checked = type_check(resolved, prelude.clone()).unwrap();
         let targets: Vec<_> = checked
             .types
             .methods
@@ -2215,7 +2217,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "Flip : [Off On].(not : Flip -> Flip not(Off) -> On not(On) -> Off)\nbad(x) -> x.not()\n",
         );
-        let failure = program(resolved, prelude).unwrap_err();
+        let failure = type_check(resolved, prelude).unwrap_err();
         assert!(failure.message.contains("ambiguous") || failure.message.contains("compatible"));
     }
 
@@ -2227,7 +2229,7 @@ mod tests {
             "exports {helper}\nSecret : [Hidden].(not : Secret -> Secret not(Hidden) -> Hidden)\nhelper : Nat\nhelper() -> 0\n",
         );
         let (prelude, resolved) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
-        let checked = program(resolved, prelude.clone()).unwrap();
+        let checked = type_check(resolved, prelude.clone()).unwrap();
         assert!(
             checked
                 .types
@@ -2241,10 +2243,10 @@ mod tests {
     fn repository_bootstrap_checks_polymorphic_utilities() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/utilities.fn");
-        let loaded = modules::load(&entry, Some(&root)).unwrap();
-        let prelude = PreludeIds::resolve(&loaded).unwrap();
-        let resolved = resolve::resolve(loaded).unwrap();
-        let checked = program(resolved, prelude).unwrap();
+        let loaded = modules::load_program(&entry, &root, &crate::test_host()).unwrap();
+        let prelude = PreludeIds::find_in(&loaded).unwrap();
+        let resolved = resolve::resolve_names(loaded).unwrap();
+        let checked = type_check(resolved, prelude).unwrap();
         assert!(!checked.types.methods.is_empty());
     }
 
@@ -2261,10 +2263,10 @@ mod tests {
              u8_ops(a b) -> ((((a + b) - b) * b) / b) % b\n",
         );
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-        let loaded = modules::load(&entry, Some(&root)).unwrap();
-        let prelude = PreludeIds::resolve(&loaded).unwrap();
-        let resolved = resolve::resolve(loaded).unwrap();
-        let checked = program(resolved, prelude).unwrap();
+        let loaded = modules::load_program(&entry, &root, &crate::test_host()).unwrap();
+        let prelude = PreludeIds::find_in(&loaded).unwrap();
+        let resolved = resolve::resolve_names(loaded).unwrap();
+        let checked = type_check(resolved, prelude).unwrap();
         let methods: HashSet<_> = checked
             .types
             .methods
@@ -2288,7 +2290,7 @@ mod tests {
         let fixture = Fixture::new();
         let (prelude, resolved) =
             fixture.load("stop! : Nat -> Nat\nbad : Nat\nbad() -> stop!(0)\n");
-        let failure = program(resolved, prelude).unwrap_err();
+        let failure = type_check(resolved, prelude).unwrap_err();
         assert!(
             failure
                 .message
@@ -2298,7 +2300,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "stop! : Nat -> Nat\nid : Nat -> Nat\nid(n) -> n\nbad! : Nat\nbad!() -> id(stop!(0))\n",
         );
-        let failure = program(resolved, prelude).unwrap_err();
+        let failure = type_check(resolved, prelude).unwrap_err();
         assert!(failure.message.contains("must stand on its own"));
     }
 
@@ -2308,7 +2310,7 @@ mod tests {
     fn a_method_given_the_wrong_argument_names_it() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> Zero.add(True)\n");
-        let failure = program(resolved, prelude).unwrap_err();
+        let failure = type_check(resolved, prelude).unwrap_err();
         assert_eq!(
             failure.message,
             "argument 1 of `add` should be Nat, but is Bool"
@@ -2319,7 +2321,7 @@ mod tests {
     fn a_negative_nat_is_rejected() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> -1\n");
-        let failure = program(resolved, prelude).unwrap_err();
+        let failure = type_check(resolved, prelude).unwrap_err();
         assert!(failure.message.contains("negative numeral"));
     }
 }

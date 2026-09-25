@@ -133,7 +133,7 @@ fn target_contracts_check_parameters_results_and_returning_behavior() {
         validate(&p).unwrap();
         assert!(
             Provider(64)
-                .compile(&p)
+                .compile_machine_ir(&p)
                 .unwrap_err()
                 .contains("provider contract")
         );
@@ -147,14 +147,14 @@ fn word_results_and_exact_target_widths_share_an_abi_but_narrower_claims_do_not(
             let mut p = program();
             let external = p.external("count!", &[], Returns::Values(&[class]));
             call_external(&mut p, external);
-            Provider(bits).compile(&p).unwrap();
+            Provider(bits).compile_machine_ir(&p).unwrap();
         }
         let mut p = program();
         let external = p.external("count!", &[], Returns::Values(&[Class::fixed(bits - 1)]));
         call_external(&mut p, external);
         assert!(
             Provider(bits)
-                .compile(&p)
+                .compile_machine_ir(&p)
                 .unwrap_err()
                 .contains("provider contract")
         );

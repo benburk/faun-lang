@@ -44,7 +44,9 @@ fn measure(case: Case, size: usize, ceiling: u64) {
     let program = faun::lower(&case.source(), &Mos6502Sim65).expect("a guarded source expression");
     // Reading (above), preparation and emission happen once per case, not
     // per input. Every invocation below executes this same image.
-    let image = Mos6502Sim65.compile(&program).expect("scalar compilation");
+    let image = Mos6502Sim65
+        .compile_machine_ir(&program)
+        .expect("scalar compilation");
     assert!(
         image.len() <= size,
         "{case:?}: {} bytes, ceiling {size}",

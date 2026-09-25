@@ -102,7 +102,7 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
         barb::structural(program);
         barb::normalize_with_limits(program, barb::InlineLimits::default());
         barb::fold(program);
-        let machine = crate::to_machine(program, &routines).unwrap();
+        let machine = crate::lower_to_machine_ir(program, &routines).unwrap();
         validate(&machine).unwrap();
         let body = machine.function(machine.entry()).body().unwrap();
         assert!(

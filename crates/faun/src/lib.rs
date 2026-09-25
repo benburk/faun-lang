@@ -1,15 +1,18 @@
 //! The Faun compiler as a library.
 //!
-//! [`lower()`] takes an application's source to Barb, which is what checking
-//! it means, and [`compile()`] takes it on to a target's image. Any
-//! [`Target`] will do; which targets exist is the command line's to say.
+//! [`check_source`] checks a program against a target's host. An entry that
+//! defines `main!` is an application, which checking also lowers to Barb; one
+//! that does not is a library, which has nothing to build.
+//! [`compile_barb_to_image`] takes an application's Barb on to a target's
+//! image. Any [`Target`] will do; which targets exist is the command line's
+//! to say.
 //!
-//! [`lower()`] runs the frontend passes in order. Parsing retains compact
+//! [`check_source`] runs the frontend passes in order. Parsing retains compact
 //! source spans. Module loading and qualification then produce symbol-based
 //! HIR without merging raw ASTs. Checking performs Hindley–Milner inference,
 //! nominal receiver-directed method resolution, and contextual literal
 //! elaboration. The entry's reachable functions are then specialized,
-//! defunctionalized, and lowered to Barb. [`compile()`] hands that Barb to
+//! defunctionalized, and lowered to Barb. [`compile_barb_to_image`] hands that Barb to
 //! `faun_core` for the machine tier and to the target for its image.
 
 use std::path::{Path, PathBuf};
@@ -48,38 +51,87 @@ pub fn standard_path() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/standard/standard.fn"))
 }
 
-/// Compile the Faun application at `source` to `target`'s image: lower it to
-/// Barb, optimize that, lower it to machine IR, and let the target compile it.
+/// What checking a Faun program finds it to be.
+#[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one is returned per check, so boxing would save nothing"
+)]
+pub enum Checked {
+    /// Its entry defines `main!`: its Barb, before any optimization.
+    Application(barb::Program),
+    /// Its entry defines no `main!`, so there is nothing to build.
+    Library,
+}
+
+/// Check the Faun program at `source` against `target`'s host, and lower it
+/// to Barb if it is an application.
 ///
 /// # Errors
-/// Reports the first stage that refuses the program.
-pub fn compile(source: &Path, target: &dyn Target) -> Result<Vec<u8>, Diagnostic> {
-    let mut barb = lower(source, target)?;
-    barb::optimize(&mut barb);
-    let machine = faun_core::to_machine(&mut barb, &target.routines()).map_err(Diagnostic::new)?;
-    target.compile(&machine).map_err(Diagnostic::new)
+/// Reports loading, resolution, checking or lowering errors.
+pub fn check_source(source: &Path, target: &dyn Target) -> Result<Checked, Diagnostic> {
+    let loaded = modules::load_program(source, standard_path(), &host_path(target)?)?;
+    let prelude = blessed::PreludeIds::find_in(&loaded).map_err(|e| Diagnostic::new(e.message))?;
+    let host = host::HostIds::find_in(&loaded)?;
+    let main = host::Main::find_in(&loaded)?;
+    let resolved = resolve::resolve_names(loaded)?;
+    let checked = check::type_check(resolved, prelude)?;
+    let Some(main) = main else {
+        return Ok(Checked::Library);
+    };
+    check::check_application_abi(&checked, &host, &main)?;
+    let specialized = specialize::monomorphize_application(&checked, &host, &main)
+        .map_err(|e| Diagnostic::new(e.message))?;
+    let first_order = defunctionalize::defunctionalize(specialized);
+    let barb = barb_lower::lower_application_to_barb(&checked, first_order, &target.routines())
+        .map_err(|e| Diagnostic::new(e.message))?;
+    Ok(Checked::Application(barb))
 }
 
 /// Lower the Faun application at `source` to Barb for `target`, before any
 /// optimization.
 ///
-/// Reaching Barb is what checking a program means: it meets `target`'s host
-/// module and every routine it asks for exists.
+/// # Errors
+/// Reports what [`check_source`] does, and a library, which has no `main!`
+/// to lower.
+pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program, Diagnostic> {
+    match check_source(source, target)? {
+        Checked::Application(barb) => Ok(barb),
+        Checked::Library => Err(Diagnostic::new(format!(
+            "{} is a library: it defines no `main!`",
+            source.display()
+        ))
+        .help("write `main! : Host -> []` and a clause `main!(host) -> ...`")),
+    }
+}
+
+/// Compile the Faun application at `source` to `target`'s image.
 ///
 /// # Errors
-/// Reports loading, resolution, checking or lowering errors.
-pub fn lower(source: &Path, target: &dyn Target) -> Result<barb::Program, Diagnostic> {
-    let loaded = modules::load_with_host(source, standard_path(), &host_path(target)?)?;
-    let prelude = blessed::PreludeIds::resolve(&loaded).map_err(|e| Diagnostic::new(e.message))?;
-    let host = host::HostIds::resolve(&loaded)?;
-    let resolved = resolve::resolve(loaded)?;
-    let checked = check::program(resolved, prelude)?;
-    check::application(&checked, &host)?;
-    let specialized =
-        specialize::application(&checked, &host).map_err(|e| Diagnostic::new(e.message))?;
-    let first_order = defunctionalize::defunctionalize(specialized);
-    barb_lower::application(&checked, first_order, &target.routines())
-        .map_err(|e| Diagnostic::new(e.message))
+/// Reports the first stage that refuses the program.
+pub fn compile_to_image(source: &Path, target: &dyn Target) -> Result<Vec<u8>, Diagnostic> {
+    compile_barb_to_image(lower_to_barb(source, target)?, target)
+}
+
+/// Compile an application's Barb to `target`'s image: optimize it, lower it
+/// to machine IR, and let the target compile that.
+///
+/// # Errors
+/// Reports what the machine tier or the target cannot represent.
+pub fn compile_barb_to_image(
+    mut barb: barb::Program,
+    target: &dyn Target,
+) -> Result<Vec<u8>, Diagnostic> {
+    barb::optimize(&mut barb);
+    let machine =
+        faun_core::lower_to_machine_ir(&mut barb, &target.routines()).map_err(Diagnostic::new)?;
+    target.compile_machine_ir(&machine).map_err(Diagnostic::new)
+}
+
+/// The x86-64 Linux host, which frontend tests load their programs with.
+#[cfg(test)]
+fn test_host() -> PathBuf {
+    standard_path().with_file_name("hosts/x86_64-linux.fn")
 }
 
 /// The host module mounted at `std.host` for `target`.

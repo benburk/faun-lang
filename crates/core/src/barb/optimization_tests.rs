@@ -896,7 +896,7 @@ fn optimizing_never_bypasses_totality_checking() {
     program.set_entry(main);
     for error in [
         validate(program).unwrap_err(),
-        crate::to_machine(program, &crate::platform::Routines::builtin()).unwrap_err(),
+        crate::lower_to_machine_ir(program, &crate::platform::Routines::builtin()).unwrap_err(),
     ] {
         assert!(
             error.contains("forever") && error.contains("stops"),

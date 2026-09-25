@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
 
 use bpaf::{OptionParser, Parser, choice, construct, long, positional, short};
+use faun::Checked;
 use faun_core::barb;
 use faun_core::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
@@ -177,15 +178,27 @@ fn dispatch(command: Command) -> Result<(), String> {
     }
 }
 
-/// Check a program by lowering it as far as Barb.
+/// Check a program against the target's host: a library's types, and an
+/// application as far as Barb.
 fn check(source: &Path, target: &dyn Target) -> Result<(), String> {
-    faun::lower(source, target)?;
+    faun::check_source(source, target)?;
     Ok(())
 }
 
-/// Compile a program and write its image to `output`.
+/// Compile an application and write its image to `output`. A library has
+/// nothing to build, so building one checks it.
 fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), String> {
-    let image = faun::compile(source, target)?;
+    let barb = match faun::check_source(source, target)? {
+        Checked::Application(barb) => barb,
+        Checked::Library => {
+            println!(
+                "checked {}, a library with no `main!` to build",
+                source.display()
+            );
+            return Ok(());
+        }
+    };
+    let image = faun::compile_barb_to_image(barb, target)?;
     let written = write(target, &image, output)?;
     println!("wrote {}", written.display());
     Ok(())
@@ -199,7 +212,7 @@ fn run(source: &Path, target: &dyn Target) -> Result<(), String> {
             target.name()
         ));
     }
-    let image = faun::compile(source, target)?;
+    let image = faun::compile_to_image(source, target)?;
     let directory = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
     fs::create_dir_all(&directory)
         .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
@@ -215,13 +228,13 @@ fn run(source: &Path, target: &dyn Target) -> Result<(), String> {
 
 /// Print one stage of a program.
 fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), String> {
-    let mut barb = faun::lower(source, target)?;
+    let mut barb = faun::lower_to_barb(source, target)?;
     barb::optimize(&mut barb);
     let text = match stage {
         Stage::Barb => barb.render(),
-        Stage::Machine => faun_core::to_machine(&mut barb, &target.routines())?.render(),
+        Stage::Machine => faun_core::lower_to_machine_ir(&mut barb, &target.routines())?.render(),
         Stage::Target => {
-            let machine = faun_core::to_machine(&mut barb, &target.routines())?;
+            let machine = faun_core::lower_to_machine_ir(&mut barb, &target.routines())?;
             target.render(&target.prepare(&machine)?)
         }
     };

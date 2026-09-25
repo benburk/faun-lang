@@ -18,7 +18,7 @@ fn compilation_wrappers_fit_programs_to_native_abi_and_transfer_limits() {
     ] {
         let prepared = Mos6502Sim65.prepare(&p).unwrap();
         Mos6502Sim65.accepts(&prepared).unwrap();
-        Mos6502Sim65.compile(&p).unwrap();
+        Mos6502Sim65.compile_machine_ir(&p).unwrap();
     }
 }
 
@@ -31,6 +31,6 @@ fn runtime_images_are_rejected_until_frame_and_image_budgets_are_checked() {
         let result = b.convert(Class::Word, natural);
         b.ret(&[result]);
     });
-    let error = Mos6502Sim65.compile(&p).unwrap_err();
+    let error = Mos6502Sim65.compile_machine_ir(&p).unwrap_err();
     assert!(error.contains("checked image/frame limits"), "{error}");
 }

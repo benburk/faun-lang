@@ -44,7 +44,7 @@ impl Hosted {
     /// Lower after running `stages`.
     fn lower(mut self, routines: &Routines, stages: impl FnOnce(&mut barb::Program)) -> Program {
         stages(&mut self.library.program);
-        let program = crate::to_machine(&mut self.library.program, routines).unwrap();
+        let program = crate::lower_to_machine_ir(&mut self.library.program, routines).unwrap();
         validate(&program).unwrap();
         program
     }

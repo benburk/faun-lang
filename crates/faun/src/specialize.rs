@@ -126,15 +126,19 @@ impl fmt::Display for SpecializeError {
 
 impl std::error::Error for SpecializeError {}
 
-pub(crate) fn program(checked: &CheckedProgram, entry: Symbol) -> Result<Program, SpecializeError> {
+pub(crate) fn monomorphize_from_entry(
+    checked: &CheckedProgram,
+    entry: Symbol,
+) -> Result<Program, SpecializeError> {
     Specializer::new(checked)?.run(entry, None)
 }
 
-pub(crate) fn application(
+pub(crate) fn monomorphize_application(
     checked: &CheckedProgram,
     host: &crate::host::HostIds,
+    main: &crate::host::Main,
 ) -> Result<Program, SpecializeError> {
-    Specializer::new(checked)?.run(host.main, Some(host.host))
+    Specializer::new(checked)?.run(main.symbol, Some(host.host))
 }
 
 struct Specializer<'a> {

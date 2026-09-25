@@ -64,7 +64,7 @@ fn execute(
 ) {
     use std::fs;
     use std::process::Command;
-    let image = target.compile(p).expect("runtime compilation");
+    let image = target.compile_machine_ir(p).expect("runtime compilation");
     let dir = std::env::temp_dir().join(format!(
         "faun-bigint-{label}-{}-{}",
         target.name(),

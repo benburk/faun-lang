@@ -142,7 +142,9 @@ pub(super) fn check(target: &dyn Target, runner: Option<&str>, early_return: boo
         },
     )
     .expect("legalization with a target-matching tiny heap");
-    let image = target.compile(&scalar).expect("scalar compilation");
+    let image = target
+        .compile_machine_ir(&scalar)
+        .expect("scalar compilation");
     let dir = std::env::temp_dir().join(format!(
         "faun-lifetimes-{}-{}-{early_return}",
         target.name(),

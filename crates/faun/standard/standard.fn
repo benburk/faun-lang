@@ -2,7 +2,7 @@
 # useful arithmetic and polymorphic utilities that do not need records,
 # tuples, method constraints, hashing, or bodyless derivation.
 
-lib {}
+package {}
 
 import bool {Bool.*}
 import nat {Nat.*}

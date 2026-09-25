@@ -1,12 +1,12 @@
-//! Canonical identities for an application's entry and selected host interface.
+//! Canonical identities for the selected host interface and an entry's `main!`.
 //!
 //! Host modules are ordinary source modules mounted at `std.host`. This module
 //! discovers their identities once so entry validation and lowering do not
 //! infer authority or providers from coincidental spellings elsewhere.
 
-use crate::Symbol;
 use crate::diagnostic::Diagnostic;
 use crate::modules::LoadedProgram;
+use crate::{ModuleId, Symbol};
 
 /// Source identities required by the initial host ABI.
 ///
@@ -14,51 +14,20 @@ use crate::modules::LoadedProgram;
 /// its bodyless methods are the effects the target answers for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostIds {
-    pub entry_module: crate::ModuleId,
-    pub main: Symbol,
     pub host: Symbol,
     pub exit: Symbol,
 }
 
 impl HostIds {
-    /// Resolve the entry and selected host module's required interface.
+    /// Find the selected host module's required interface.
     ///
     /// # Errors
     ///
-    /// Rejects library loads, malformed host interfaces, and entries without
-    /// a bodyful `main!`.
-    #[allow(clippy::too_many_lines)]
-    pub fn resolve(program: &LoadedProgram) -> Result<Self, Diagnostic> {
-        let entry = program.entry;
-        let host_module = program
-            .host
-            .ok_or_else(|| error("an application requires a selected `std.host` module"))?;
-        let entry_module = program.module(entry);
-        let entry_source = program
-            .sources
-            .get(entry_module.source)
-            .ok_or_else(|| error("the entry module has no loaded source"))?
-            .text();
-        let defines_main = entry_module.syntax.items.iter().any(|item| {
-            matches!(item, crate::ast::Item::Clause(clause) if clause.name.text(entry_source) == "main!")
-        });
-        if !defines_main {
-            return Err(error("the entry module must define `main!`")
-                .help("write `main! : Host -> []` and a clause `main!(host) -> ...`"));
-        }
-        let main_name = symbol(program, "main!")?;
-        let main = entry_module
-            .scope
-            .values
-            .get(&main_name)
-            .copied()
-            .ok_or_else(|| {
-                error("the entry module must define `main!`")
-                    .help("write `main! : Host -> []` and a clause `main!(host) -> ...`")
-            })?;
-
+    /// Rejects a host that does not export `Host`, exposes its constructor,
+    /// or lacks a bodyless `exit!`.
+    pub fn find_in(program: &LoadedProgram) -> Result<Self, Diagnostic> {
         let host_name = symbol(program, "Host")?;
-        let selected_host = program.module(host_module);
+        let selected_host = program.module(program.host);
         let binding = selected_host
             .public
             .types
@@ -78,23 +47,62 @@ impl HostIds {
             .get(&exit_name)
             .copied()
             .ok_or_else(|| error("the selected host's `Host` must have an `exit!` method"))?;
-        if has_method_clause(program, host_module, "exit!")? {
+        if has_method_clause(program, program.host, "exit!")? {
             return Err(error("the selected host must declare `exit!` bodyless"));
         }
-
         Ok(Self {
-            entry_module: entry,
-            main,
             host: binding.canonical,
             exit,
         })
     }
 }
 
+/// An application's entry point: the `main!` its entry module defines.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Main {
+    pub module: ModuleId,
+    pub symbol: Symbol,
+}
+
+impl Main {
+    /// The entry module's `main!`, or `None` when it names none and so is a
+    /// library, with nothing to build.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a `main!` declared without a clause to run.
+    pub fn find_in(program: &LoadedProgram) -> Result<Option<Self>, Diagnostic> {
+        let module = program.module(program.entry);
+        let Some(symbol) = program
+            .symbols
+            .find("main!")
+            .and_then(|name| module.scope.values.get(&name).copied())
+        else {
+            return Ok(None);
+        };
+        let source = program
+            .sources
+            .get(module.source)
+            .ok_or_else(|| error("the entry module has no loaded source"))?
+            .text();
+        let defines_main = module.syntax.items.iter().any(|item| {
+            matches!(item, crate::ast::Item::Clause(clause) if clause.name.text(source) == "main!")
+        });
+        if !defines_main {
+            return Err(error("the entry module must define `main!`")
+                .help("write `main! : Host -> []` and a clause `main!(host) -> ...`"));
+        }
+        Ok(Some(Self {
+            module: program.entry,
+            symbol,
+        }))
+    }
+}
+
 /// Whether any type the host module declares gives a method `name` a body.
 fn has_method_clause(
     program: &LoadedProgram,
-    module: crate::ModuleId,
+    module: ModuleId,
     name: &str,
 ) -> Result<bool, Diagnostic> {
     let module = program.module(module);
@@ -149,12 +157,11 @@ mod tests {
             path
         }
 
-        fn resolve(&self, host: &str, entry: &str) -> Result<HostIds, Diagnostic> {
+        fn load(&self, host: &str, entry: &str) -> LoadedProgram {
             let host = self.write("host.fn", host);
             let entry = self.write("main.fn", entry);
             let standard = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-            let loaded = modules::load_with_host(&entry, &standard, &host).unwrap();
-            HostIds::resolve(&loaded)
+            modules::load_program(&entry, &standard, &host).unwrap()
         }
     }
 
@@ -171,28 +178,33 @@ mod tests {
     #[test]
     fn application_entry_requires_a_clause() {
         let fixture = Fixture::new();
-        let failure = fixture
-            .resolve(HOST, "import std.host {Host}\nmain! : Host -> []\n")
-            .unwrap_err();
+        let loaded = fixture.load(HOST, "import std.host {Host}\nmain! : Host -> []\n");
+        let failure = Main::find_in(&loaded).unwrap_err();
         assert!(failure.message.contains("define `main!`"));
+    }
+
+    #[test]
+    fn an_entry_without_main_is_a_library() {
+        let fixture = Fixture::new();
+        let loaded = fixture.load(HOST, "double : Nat -> Nat\ndouble(n) -> n + n\n");
+        assert_eq!(Main::find_in(&loaded).unwrap(), None);
+        HostIds::find_in(&loaded).unwrap();
     }
 
     #[test]
     fn host_authority_cannot_be_constructed_or_implemented_by_source() {
         let fixture = Fixture::new();
-        let exported = fixture
-            .resolve(
-                "exports {Host.*}\nHost : {argc: Nat}.(\n  exit! : Host Nat -> []\n)\n",
-                ENTRY,
-            )
-            .unwrap_err();
+        let exported = HostIds::find_in(&fixture.load(
+            "exports {Host.*}\nHost : {argc: Nat}.(\n  exit! : Host Nat -> []\n)\n",
+            ENTRY,
+        ))
+        .unwrap_err();
         assert!(exported.message.contains("must not be publicly exposed"));
 
-        let bodyful = fixture
-            .resolve(
+        let bodyful = HostIds::find_in(&fixture.load(
                 "exports {Host}\nHost : {argc: Nat}.(\n  exit! : Host Nat -> []\n  exit!(host code) -> host.exit!(code)\n)\n",
                 ENTRY,
-            )
+            ))
             .unwrap_err();
         assert!(bodyful.message.contains("bodyless"));
     }

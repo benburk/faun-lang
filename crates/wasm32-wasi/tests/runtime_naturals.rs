@@ -18,7 +18,9 @@ fn compilation_wrappers_preserve_supported_multivalue_abis() {
         abi::region(abi::Transfer::LoopState, 3),
     ] {
         target.prepare(&p).expect("wasm ABI supports this shape");
-        target.compile(&p).expect("compile has no native-only gate");
+        target
+            .compile_machine_ir(&p)
+            .expect("compile has no native-only gate");
     }
 }
 

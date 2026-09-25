@@ -89,9 +89,9 @@ pub struct LoadedProgram {
     pub symbols: Symbols,
     pub modules: Vec<LoadedModule>,
     pub entry: ModuleId,
-    pub prelude: Option<ModuleId>,
-    /// The target-selected module mounted at `std.host`, when loading an application.
-    pub host: Option<ModuleId>,
+    pub prelude: ModuleId,
+    /// The target-selected module mounted at `std.host`.
+    pub host: ModuleId,
 }
 
 impl LoadedProgram {
@@ -101,59 +101,32 @@ impl LoadedProgram {
     }
 }
 
-/// Load a library: an entry file and an optional standard-library root,
-/// with no `std.host` to import.
+/// Load an entry file with the standard library at `prelude`, whose exports
+/// every module sees, and the target-selected module at `host` mounted as
+/// `std.host`.
 ///
 /// Imports are rooted at the importing package directory. Each path component
 /// maps to a directory and the final module is either `path.fn` or
-/// `path/name.fn`; finding both is an error.
+/// `path/name.fn`; finding both is an error. The host is loaded as an
+/// ordinary module, but its public interface is reached through the stable
+/// virtual path `std.host` rather than its disk location.
 ///
 /// # Errors
 ///
-/// Reports I/O, parse, cycle, duplicate declaration, visibility, and ambiguous
-/// module-path failures.
-pub fn load(entry: &Path, prelude: Option<&Path>) -> Result<LoadedProgram, Diagnostic> {
-    load_modules(entry, prelude, None)
-}
-
-/// Load an application: an entry file, the standard library, and the
-/// target-selected `std.host` module.
-///
-/// The host is loaded as an ordinary module, but its public interface is reached
-/// through the stable virtual path `std.host` rather than its disk location.
-///
-/// # Errors
-///
-/// Reports the same failures as [`load`], plus conflicting or missing host imports.
-pub fn load_with_host(
+/// Reports I/O, parse, cycle, duplicate declaration, visibility, ambiguous
+/// module-path, and conflicting or missing host import failures.
+pub fn load_program(
     entry: &Path,
     prelude: &Path,
     host: &Path,
 ) -> Result<LoadedProgram, Diagnostic> {
-    load_modules(entry, Some(prelude), Some(host))
-}
-
-fn load_modules(
-    entry: &Path,
-    prelude: Option<&Path>,
-    host: Option<&Path>,
-) -> Result<LoadedProgram, Diagnostic> {
     let mut loader = Loader::default();
-    let prelude_id = match prelude {
-        Some(path) => Some(loader.load_module(path, &Root::at(path), true)?),
-        None => None,
-    };
-    loader.prelude = prelude_id.map(|id| loader.pending[id.index()].public.clone());
-    let host_id = match host {
-        Some(path) => {
-            let root = prelude.map_or_else(|| Root::at(path), Root::at);
-            Some(loader.load_module(path, &root, false)?)
-        }
-        None => None,
-    };
-    loader.host = host_id;
+    let prelude_id = loader.load_module(prelude, &Root::at(prelude), true)?;
+    loader.prelude = Some(loader.pending[prelude_id.index()].public.clone());
+    let host_id = loader.load_module(host, &Root::at(prelude), false)?;
+    loader.host = Some(host_id);
     let entry_id = loader.load_module(entry, &Root::at(entry), false)?;
-    Ok(loader.finish(entry_id, prelude_id, host_id))
+    Ok(loader.into_loaded_program(entry_id, prelude_id, host_id))
 }
 
 #[derive(Clone, Debug)]
@@ -191,17 +164,19 @@ struct Loader {
     pending: Vec<PendingModule>,
     loaded: HashMap<PathBuf, ModuleId>,
     visiting: Vec<PathBuf>,
+    /// The prelude's exports, once it has loaded; its own modules see none.
     prelude: Option<Interface>,
+    /// The host module, once it has loaded; it cannot import itself.
     host: Option<ModuleId>,
     standard_root: Option<PathBuf>,
 }
 
 impl Loader {
-    fn finish(
+    fn into_loaded_program(
         self,
         entry: ModuleId,
-        prelude: Option<ModuleId>,
-        host: Option<ModuleId>,
+        prelude: ModuleId,
+        host: ModuleId,
     ) -> LoadedProgram {
         let modules = self
             .pending
@@ -296,7 +271,7 @@ impl Loader {
         for (index, path_parts) in imports {
             let dependency = if path_parts == ["std", "host"] {
                 self.host.ok_or_else(|| {
-                    Diagnostic::new("import `std.host` requires a selected host module")
+                    Diagnostic::new("the host module cannot import `std.host`, which is itself")
                 })?
             } else {
                 let dependency_path = module_path(&root.directory, &path_parts)?;
@@ -714,6 +689,17 @@ mod tests {
             Self { root }
         }
 
+        /// A standard library that exports nothing, beside the fixture's own
+        /// package so it does not claim the fixture's namespaces.
+        fn empty_prelude(&self) -> PathBuf {
+            self.write("prelude/standard.fn", "package {}\nexports {}\n")
+        }
+
+        /// A host exporting `Host`, beside the fixture's own package.
+        fn host(&self) -> PathBuf {
+            self.write("host/host.fn", "exports {Host}\nHost : {argc: Nat}\n")
+        }
+
         fn write(&self, name: &str, source: &str) -> PathBuf {
             let path = self.root.join(name);
             if let Some(parent) = path.parent() {
@@ -738,7 +724,7 @@ mod tests {
             "exports {Nat.*}\nNat : [Zero Succ(Nat)]\nsecret() -> Zero\n",
         );
         let entry = fixture.write("main.fn", "import numbers {Nat.*}\nid(x) -> Succ(x)\n");
-        let loaded = load(&entry, None).unwrap();
+        let loaded = load_program(&entry, &fixture.empty_prelude(), &fixture.host()).unwrap();
         let entry = loaded.module(loaded.entry);
         let succ = loaded.symbols.find("Succ").unwrap();
         let secret = loaded.symbols.find("secret").unwrap();
@@ -751,7 +737,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write("hidden.fn", "secret() -> 0\n");
         let entry = fixture.write("main.fn", "import hidden {secret}\nmain() -> secret()\n");
-        let error = load(&entry, None).unwrap_err();
+        let error = load_program(&entry, &fixture.empty_prelude(), &fixture.host()).unwrap_err();
         assert!(error.message.contains("not exported"));
     }
 
@@ -760,7 +746,7 @@ mod tests {
         let fixture = Fixture::new();
         let first = fixture.write("first.fn", "import second {}\n");
         fixture.write("second.fn", "import first {}\n");
-        let error = load(&first, None).unwrap_err();
+        let error = load_program(&first, &fixture.empty_prelude(), &fixture.host()).unwrap_err();
         assert!(error.message.contains("import cycle"));
     }
 
@@ -772,15 +758,16 @@ mod tests {
             "main.fn",
             "import std.host {Host}\nid : Host -> Host\nid(h) -> h\n",
         );
-        let missing = load(&entry, None).unwrap_err();
-        assert!(missing.message.contains("requires a selected host"));
-
-        let loaded = load_with_host(&entry, crate::standard_path(), &host).unwrap();
+        let loaded = load_program(&entry, crate::standard_path(), &host).unwrap();
         let canonical = host.canonicalize().unwrap();
-        assert_eq!(
-            loaded.host.map(|id| loaded.module(id).path.as_path()),
-            Some(canonical.as_path())
+        assert_eq!(loaded.module(loaded.host).path, canonical);
+
+        let circular = fixture.write(
+            "target/circular.fn",
+            "import std.host {Host}\nexports {Host}\n",
         );
+        let error = load_program(&entry, crate::standard_path(), &circular).unwrap_err();
+        assert!(error.message.contains("cannot import `std.host`"));
     }
 
     #[test]
@@ -789,10 +776,10 @@ mod tests {
         fixture.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)]\n");
         let root = fixture.write(
             "standard.fn",
-            "lib {}\nimport nat {Nat.*}\nexports {Nat.*}\n",
+            "package {}\nimport nat {Nat.*}\nexports {Nat.*}\n",
         );
         let entry = fixture.write("main.fn", "id(x) -> x\n");
-        let loaded = load(&entry, Some(&root)).unwrap();
+        let loaded = load_program(&entry, &root, &fixture.host()).unwrap();
         let nat = loaded
             .modules
             .iter()

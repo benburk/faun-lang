@@ -32,7 +32,7 @@ fn compilation_wrappers_fit_programs_to_native_abi_limits() {
     ] {
         let prepared = target.prepare(&p).unwrap();
         target.accepts(&prepared).unwrap();
-        target.compile(&p).unwrap();
+        target.compile_machine_ir(&p).unwrap();
     }
 }
 

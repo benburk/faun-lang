@@ -65,11 +65,8 @@ impl std::error::Error for ResolveError {}
 ///
 /// Panics only if a [`LoadedProgram`] was manually built with a module whose
 /// source identity is absent from its source collection.
-pub fn resolve(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagnostic> {
-    let prelude = loaded
-        .prelude
-        .map(|id| loaded.module(id).public.clone())
-        .unwrap_or_default();
+pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagnostic> {
+    let prelude = loaded.module(loaded.prelude).public.clone();
     let mut modules = Vec::with_capacity(loaded.modules.len());
     for module in &loaded.modules {
         let source = loaded
@@ -739,14 +736,15 @@ mod tests {
         fixture.write("str.fn", "exports {Str}\nStr : List(U8)\n");
         let standard = fixture.write(
             "standard.fn",
-            "lib {}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8.*}\nimport list {List.*}\nimport str {Str}\nexports {Nat.* Int.* U8.* List.* Str}\n",
+            "package {}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8.*}\nimport list {List.*}\nimport str {Str}\nexports {Nat.* Int.* U8.* List.* Str}\n",
         );
         let entry = fixture.write(
             "main.fn",
             "number : Int\nnumber() -> Int.of_nat(42)\ntext : Str\ntext() -> \"é\"\n",
         );
-        let loaded = modules::load(&entry, Some(&standard)).unwrap();
-        let resolved = resolve(loaded).unwrap();
+        let host = fixture.write("host.fn", "exports {Host}\nHost : {argc: Nat}\n");
+        let loaded = modules::load_program(&entry, &standard, &host).unwrap();
+        let resolved = resolve_names(loaded).unwrap();
         let entry = &resolved.program.modules.last().unwrap().items;
         let h::Item::Clause(number) = &entry[1] else {
             panic!("number clause")
@@ -768,9 +766,11 @@ mod tests {
     #[test]
     fn rejects_an_unresolved_name_at_its_span() {
         let fixture = Fixture::new();
+        let prelude = fixture.write("standard.fn", "package {}\nexports {}\n");
         let entry = fixture.write("main.fn", "f() -> missing\n");
-        let loaded = modules::load(&entry, None).unwrap();
-        let failure = resolve(loaded).unwrap_err();
+        let host = fixture.write("host.fn", "exports {Host}\nHost : {}\n");
+        let loaded = modules::load_program(&entry, &prelude, &host).unwrap();
+        let failure = resolve_names(loaded).unwrap_err();
         let at = failure.location.expect("a place in the source");
         assert_eq!((at.line, at.column, at.width), (1, 8, 7));
     }

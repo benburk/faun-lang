@@ -889,7 +889,7 @@ fn a_startup_field_names_and_bounds_what_the_entry_is_handed() {
     );
 
     let routines = Routines::builtin().with_word(16);
-    let machine = crate::to_machine(&mut library.program, &routines).unwrap();
+    let machine = crate::lower_to_machine_ir(&mut library.program, &routines).unwrap();
     let entry = machine.entry();
     assert_eq!(machine.parameter_names(entry).collect::<Vec<_>>(), ["argc"]);
     let body = machine.function(entry).body().unwrap();

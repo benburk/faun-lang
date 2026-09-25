@@ -55,7 +55,7 @@ pub trait Target: fmt::Debug {
     }
 
     /// The image an already validated, accepted scalar program becomes.
-    /// Prefer [`Self::compile`], which establishes these preconditions.
+    /// Prefer [`Self::compile_machine_ir`], which establishes these preconditions.
     fn emit(&self, program: &Program) -> Vec<u8>;
 
     /// Put an image [`Self::emit`] made at `output`, answering the path it
@@ -104,7 +104,7 @@ pub trait Target: fmt::Debug {
     ///
     /// # Errors
     /// Reports invalid IR, unsupported representations or target constraints.
-    fn compile(&self, program: &Program) -> Result<Vec<u8>, String> {
+    fn compile_machine_ir(&self, program: &Program) -> Result<Vec<u8>, String> {
         let prepared = self.prepare(program)?;
         Ok(self.emit(&prepared))
     }

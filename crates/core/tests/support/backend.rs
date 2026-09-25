@@ -421,7 +421,8 @@ fn running() -> Vec<(&'static str, Program, i32)> {
     ] {
         let mut barb = programs::an_arm_that_leaves(leave);
         faun_core::barb::optimize(&mut barb);
-        let machine = faun_core::to_machine(&mut barb, &TARGET.routines()).expect("a program");
+        let machine =
+            faun_core::lower_to_machine_ir(&mut barb, &TARGET.routines()).expect("a program");
         held.push((name, machine, answer));
     }
     for (name, text, answer) in WRITTEN {
@@ -1041,7 +1042,10 @@ fn it_compiles_the_ladder_to_the_sizes_recorded() {
         .filter_map(|((name, barb), &(expected, size))| {
             assert_eq!(name, expected, "size baselines must match the ladder");
             let program = lowered(barb, &routines);
-            let actual = TARGET.compile(&program).expect("compilation").len();
+            let actual = TARGET
+                .compile_machine_ir(&program)
+                .expect("compilation")
+                .len();
             (actual != size).then_some((name, actual, size))
         })
         .collect();
@@ -1101,7 +1105,7 @@ fn lowered(
 ) -> Program {
     faun_core::barb::validate(&barb).expect("a sound program");
     faun_core::barb::optimize(&mut barb);
-    faun_core::to_machine(&mut barb, routines).expect("a representable program")
+    faun_core::lower_to_machine_ir(&mut barb, routines).expect("a representable program")
 }
 
 #[test]

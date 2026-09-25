@@ -76,11 +76,14 @@ pub enum Item {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeaderKind {
-    Lib,
+    Package,
 }
 
-/// A package root. Dependency entries will be added when package dependency
-/// syntax is needed; an empty `lib {}` already establishes the root boundary.
+/// A package root, `package {}`.
+///
+/// Dependency entries will be added when package dependency syntax is needed;
+/// an empty header already establishes the root boundary. Whether a package
+/// builds a binary is whether its entry defines `main!`, not its header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeaderDecl {
     pub span: Span,

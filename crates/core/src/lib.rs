@@ -20,7 +20,7 @@ pub mod targets;
 /// # Errors
 ///
 /// Names what the machine tier cannot represent.
-pub fn to_machine(
+pub fn lower_to_machine_ir(
     program: &mut barb::Program,
     routines: &platform::Routines,
 ) -> Result<ir::Program, String> {

@@ -177,8 +177,8 @@ peg::parser! {
             / declaration:term_declaration() { term_item(declaration) }
 
         rule header() -> HeaderDecl
-            = start:tok(Kind::KwLib) lbrace() close:rbrace() {
-                HeaderDecl { span: start.span().through(close.span()), kind: HeaderKind::Lib }
+            = start:tok(Kind::KwPackage) lbrace() close:rbrace() {
+                HeaderDecl { span: start.span().through(close.span()), kind: HeaderKind::Package }
             }
 
         rule import_decl() -> ImportDecl

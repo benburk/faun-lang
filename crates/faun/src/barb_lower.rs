@@ -48,7 +48,7 @@ impl From<specialize::SpecializeError> for LowerError {
 /// Reports ambiguous specialization, unsupported structural types or ranges,
 /// missing declarations, non-exhaustive clauses, and invalid literal shapes.
 pub fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, LowerError> {
-    let specialized = specialize::program(checked, entry)?;
+    let specialized = specialize::monomorphize_from_entry(checked, entry)?;
     let first_order = crate::defunctionalize::defunctionalize(specialized);
     Lowerer::new(checked, None, first_order)?.lower()
 }
@@ -64,7 +64,7 @@ pub fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program,
 /// # Errors
 ///
 /// Reports Barb construction failures and a target without `exit!`.
-pub(crate) fn application(
+pub(crate) fn lower_application_to_barb(
     checked: &CheckedProgram,
     first_order: d::Program,
     routines: &faun_core::platform::Routines,
@@ -1270,10 +1270,10 @@ mod tests {
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("examples")
             .join(name);
-        let loaded = crate::modules::load(&entry, Some(&root)).unwrap();
-        let prelude = PreludeIds::resolve(&loaded).unwrap();
-        let resolved = crate::resolve::resolve(loaded).unwrap();
-        crate::check::program(resolved, prelude).unwrap()
+        let loaded = crate::modules::load_program(&entry, &root, &crate::test_host()).unwrap();
+        let prelude = PreludeIds::find_in(&loaded).unwrap();
+        let resolved = crate::resolve::resolve_names(loaded).unwrap();
+        crate::check::type_check(resolved, prelude).unwrap()
     }
 
     fn named(checked: &CheckedProgram, suffix: &str) -> Symbol {
@@ -1299,19 +1299,19 @@ mod tests {
     #[test]
     fn lowers_the_host_entry_through_the_machine_boundary() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-        let host = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/hosts/x86_64-linux.fn");
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/main.fn");
-        let loaded = crate::modules::load_with_host(&entry, &root, &host).unwrap();
-        let prelude = PreludeIds::resolve(&loaded).unwrap();
-        let host = crate::host::HostIds::resolve(&loaded).unwrap();
-        let resolved = crate::resolve::resolve(loaded).unwrap();
-        let checked = crate::check::program(resolved, prelude).unwrap();
-        crate::check::application(&checked, &host).unwrap();
+        let loaded = crate::modules::load_program(&entry, &root, &crate::test_host()).unwrap();
+        let prelude = PreludeIds::find_in(&loaded).unwrap();
+        let host = crate::host::HostIds::find_in(&loaded).unwrap();
+        let main = crate::host::Main::find_in(&loaded).unwrap().unwrap();
+        let resolved = crate::resolve::resolve_names(loaded).unwrap();
+        let checked = crate::check::type_check(resolved, prelude).unwrap();
+        crate::check::check_application_abi(&checked, &host, &main).unwrap();
         for bits in [16, 32, 64] {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
-            let specialized = specialize::application(&checked, &host).unwrap();
+            let specialized = specialize::monomorphize_application(&checked, &host, &main).unwrap();
             let first_order = crate::defunctionalize::defunctionalize(specialized);
-            let mut program = application(&checked, first_order, &routines).unwrap();
+            let mut program = lower_application_to_barb(&checked, first_order, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
             // `Host` holds the startup values its target produces; `main!` is
@@ -1323,7 +1323,7 @@ mod tests {
             assert!(rendered.contains("Host.exit!(v0, v1)"), "{rendered}");
             assert!(!rendered.contains("start"));
             assert!(!rendered.contains('$'));
-            let machine = faun_core::to_machine(&mut program.clone(), &routines).unwrap();
+            let machine = faun_core::lower_to_machine_ir(&mut program.clone(), &routines).unwrap();
             // The target produces `argc` into the entry's frame, as wide as
             // its word.
             let entry = machine.entry();

@@ -54,7 +54,7 @@ impl PreludeIds {
     /// # Errors
     ///
     /// Reports the first missing standard type, constructor, or method.
-    pub fn resolve(program: &LoadedProgram) -> Result<Self, PreludeError> {
+    pub fn find_in(program: &LoadedProgram) -> Result<Self, PreludeError> {
         let bool_ = binding(program, "Bool")?;
         let nat = binding(program, "Nat")?;
         let int = binding(program, "Int")?;
@@ -151,11 +151,8 @@ pub fn string(bytes: &[u8], prelude: &PreludeIds) -> LiteralExpr {
 
 fn binding(program: &LoadedProgram, name: &str) -> Result<TypeBinding, PreludeError> {
     let local = symbol(&program.symbols, name)?;
-    let prelude = program.prelude.ok_or_else(|| PreludeError {
-        message: "literal syntax needs a loaded prelude".to_string(),
-    })?;
     program
-        .module(prelude)
+        .module(program.prelude)
         .public
         .types
         .get(&local)
@@ -272,18 +269,19 @@ mod tests {
         fixture.write("str.fn", "exports {Str}\nStr : List(U8)\n");
         let root = fixture.write(
             "standard.fn",
-            "lib {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
+            "package {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
         );
         let entry = fixture.write("main.fn", "id(x) -> x\n");
         // The loader owns all source text, so removing the fixture afterwards
         // does not invalidate the program.
-        modules::load(&entry, Some(&root)).unwrap()
+        let host = fixture.write("host.fn", "exports {Host}\nHost : {argc: Nat}\n");
+        modules::load_program(&entry, &root, &host).unwrap()
     }
 
     #[test]
     fn int_numerals_use_library_conversions() {
         let loaded = loaded();
-        let ids = PreludeIds::resolve(&loaded).unwrap();
+        let ids = PreludeIds::find_in(&loaded).unwrap();
         assert_eq!(
             numeral(BigUint::from(42u8), true, NumeralType::Int, &ids).unwrap(),
             LiteralExpr::Call(
@@ -307,7 +305,7 @@ mod tests {
     #[test]
     fn strings_use_private_utf8_cells() {
         let loaded = loaded();
-        let ids = PreludeIds::resolve(&loaded).unwrap();
+        let ids = PreludeIds::find_in(&loaded).unwrap();
         let value = string("é".as_bytes(), &ids);
         let LiteralExpr::Construct(str_constructor, outer) = value else {
             panic!("Str wrapper")

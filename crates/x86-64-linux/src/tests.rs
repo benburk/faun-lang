@@ -63,7 +63,7 @@ fn ladder_code_size_ratchets() {
     let mut code = Vec::new();
     for (name, mut barb) in faun_core::programs::ladder::every() {
         faun_core::barb::optimize(&mut barb);
-        let machine = faun_core::to_machine(&mut barb, &routines).unwrap();
+        let machine = faun_core::lower_to_machine_ir(&mut barb, &routines).unwrap();
         let prepared = TARGET.prepare(&machine).unwrap();
         let allocated = crate::selected::select_and_allocate(&prepared).unwrap();
         code.push((name, crate::encode::encode(&allocated).bytes));

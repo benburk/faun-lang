@@ -21,7 +21,7 @@ fn checked_native_compilation_rejects_foreign_runtime_layouts() {
     for error in [
         X86_64Linux.accepts(&foreign).unwrap_err(),
         X86_64Linux.prepare(&foreign).unwrap_err(),
-        X86_64Linux.compile(&foreign).unwrap_err(),
+        X86_64Linux.compile_machine_ir(&foreign).unwrap_err(),
     ] {
         assert!(error.contains("layout"));
     }
@@ -33,5 +33,5 @@ fn checked_native_compilation_rejects_foreign_runtime_layouts() {
         },
     )
     .unwrap();
-    assert!(!X86_64Linux.compile(&native).unwrap().is_empty());
+    assert!(!X86_64Linux.compile_machine_ir(&native).unwrap().is_empty());
 }
