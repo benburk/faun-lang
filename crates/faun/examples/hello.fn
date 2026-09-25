@@ -1,0 +1,4 @@
+main! : Host -> []
+main!(host) ->
+  host.println!("Hello, world!")
+  host.exit!(0)
