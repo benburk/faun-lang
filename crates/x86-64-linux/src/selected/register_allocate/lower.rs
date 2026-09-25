@@ -9,7 +9,9 @@ use crate::machine::{
     ShiftDirection,
 };
 use crate::parallel_copy::{self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place};
-use crate::selected::{BlockId, Immediate, Opcode, Requirements, Selected, Terminator, VReg};
+use crate::selected::{
+    BlockId, Immediate, InstId, Opcode, Requirements, Selected, Terminator, VReg,
+};
 use faun_core::ir::{DataId, FunctionId, Offset, Width};
 
 const SYS_READ: u64 = 0;
@@ -50,6 +52,48 @@ struct Lowering<'a> {
     pending_condition: Option<(VReg, Condition)>,
     exit_epilogue: Option<Label>,
     final_block: Option<BlockId>,
+    uses: Uses,
+}
+
+/// Where each value is defined and how often it is read, gathered once so
+/// that asking of one value costs nothing like the whole program.
+struct Uses {
+    /// The instruction defining each value.
+    definitions: Vec<Option<InstId>>,
+    /// The block listing each instruction.
+    blocks: Vec<Option<BlockId>>,
+    /// How many operands read each value.
+    operands: Vec<u32>,
+    /// How many branches test each value.
+    branches: Vec<u32>,
+}
+
+impl Uses {
+    fn new(selected: &Selected) -> Self {
+        let mut uses = Self {
+            definitions: vec![None; selected.widths.len()],
+            blocks: vec![None; selected.instructions.len()],
+            operands: vec![0; selected.widths.len()],
+            branches: vec![0; selected.widths.len()],
+        };
+        for (at, instruction) in selected.instructions.iter().enumerate() {
+            if let Some(result) = instruction.result {
+                uses.definitions[result.index()].get_or_insert_with(|| InstId::at(at));
+            }
+        }
+        for (id, block) in selected.blocks.iter_enumerated() {
+            for &instruction in &selected.order[block.instructions.range()] {
+                uses.blocks[instruction.index()].get_or_insert(id);
+            }
+            if let Terminator::Branch { condition, .. } = block.terminator {
+                uses.branches[condition.index()] += 1;
+            }
+        }
+        for &operand in &selected.operands {
+            uses.operands[operand.index()] += 1;
+        }
+        uses
+    }
 }
 
 impl<'a> Lowering<'a> {
@@ -78,6 +122,7 @@ impl<'a> Lowering<'a> {
             pending_condition: None,
             exit_epilogue: None,
             final_block: None,
+            uses: Uses::new(selected),
         }
     }
 
@@ -161,9 +206,8 @@ impl<'a> Lowering<'a> {
         )?;
         let mut copies: Vec<_> = self
             .allocation
-            .transitions
+            .transitions_at(points.early)
             .iter()
-            .filter(|transition| transition.at == points.early)
             .map(|transition| ParallelCopy::between(place(transition.from), place(transition.to)))
             .collect();
         for (&value, &destination) in self.selected.operands[inst.operands.range()]
@@ -188,11 +232,10 @@ impl<'a> Lowering<'a> {
             .requirements();
         let copies: Vec<_> = self
             .allocation
-            .transitions
+            .transitions_at(points.late)
             .iter()
             .filter(|transition| {
-                transition.at == points.late
-                    && transition_before_instruction(**transition, requirements) == before
+                transition_before_instruction(**transition, requirements) == before
             })
             .map(|transition| ParallelCopy::between(place(transition.from), place(transition.to)))
             .collect();
@@ -205,9 +248,8 @@ impl<'a> Lowering<'a> {
     fn emit_transitions(&mut self, point: Point) -> Result<(), String> {
         let copies: Vec<_> = self
             .allocation
-            .transitions
+            .transitions_at(point)
             .iter()
-            .filter(|transition| transition.at == point)
             .map(|transition| ParallelCopy::between(place(transition.from), place(transition.to)))
             .collect();
         let owner = self.owner_at(point);
@@ -216,15 +258,14 @@ impl<'a> Lowering<'a> {
         Ok(())
     }
 
+    /// The block holding `point`: blocks take consecutive runs of points in
+    /// order, so it is the last block beginning at or before it.
     fn block_at(&self, point: Point) -> BlockId {
-        self.liveness
+        let after = self
+            .liveness
             .blocks
-            .iter()
-            .find(|layout| {
-                layout.entry.index() <= point.index() && point.index() <= layout.terminator.index()
-            })
-            .expect("every allocation point belongs to a block")
-            .block
+            .partition_point(|layout| layout.entry.index() <= point.index());
+        self.liveness.blocks[after - 1].block
     }
 
     fn owner_at(&self, point: Point) -> FunctionId {
@@ -232,25 +273,17 @@ impl<'a> Lowering<'a> {
     }
 
     fn is_unique_constant(&self, value: VReg) -> bool {
-        let Some((definition_id, definition)) = self
-            .selected
-            .instructions
-            .iter()
-            .enumerate()
-            .find(|(_, instruction)| instruction.result == Some(value))
-        else {
+        let Some(definition_id) = self.uses.definitions[value.index()] else {
             return false;
         };
+        let definition = self.selected.instructions[definition_id];
         let Immediate::Integer(integer) = definition.immediate else {
             return false;
         };
-        let Some(block) = self.selected.blocks.iter().find(|block| {
-            self.selected.order[block.instructions.range()]
-                .iter()
-                .any(|instruction| instruction.index() == definition_id)
-        }) else {
+        let Some(block) = self.uses.blocks[definition_id.index()] else {
             return false;
         };
+        let block = self.selected.blocks[block];
         self.selected.order[block.instructions.range()]
             .iter()
             .filter(|&&instruction| {
@@ -260,13 +293,7 @@ impl<'a> Lowering<'a> {
             })
             .count()
             == 1
-            && self
-                .selected
-                .operands
-                .iter()
-                .filter(|&&operand| operand == value)
-                .count()
-                == 1
+            && self.uses.operands[value.index()] == 1
     }
 
     fn is_branch_only_result(&self, points: &InstPoints, result: VReg) -> bool {
@@ -276,20 +303,7 @@ impl<'a> Lowering<'a> {
             .is_some_and(|&instruction| instruction == points.instruction);
         let is_condition =
             matches!(block.terminator, Terminator::Branch { condition, .. } if condition == result);
-        let uses = self
-            .selected
-            .operands
-            .iter()
-            .filter(|&&operand| operand == result)
-            .count()
-            + self
-                .selected
-                .blocks
-                .iter()
-                .filter(|block| {
-                    matches!(block.terminator, Terminator::Branch { condition, .. } if condition == result)
-                })
-                .count();
+        let uses = self.uses.operands[result.index()] + self.uses.branches[result.index()];
         is_last && is_condition && uses == 1
     }
 
@@ -747,10 +761,11 @@ impl<'a> Lowering<'a> {
     }
 
     fn edge_moves(&self, from: BlockId, target: BlockId) -> Result<&[CopyMove], String> {
-        self.allocation
-            .edge_moves
+        let edges = &self.allocation.edge_moves;
+        edges[edges.partition_point(|edge| edge.from < from)..]
             .iter()
-            .find(|edge| edge.from == from && edge.target == target)
+            .take_while(|edge| edge.from == from)
+            .find(|edge| edge.target == target)
             .map(|edge| edge.moves.as_slice())
             .ok_or_else(|| {
                 format!(
@@ -769,14 +784,7 @@ impl<'a> Lowering<'a> {
 
     fn location(&self, point: Point, value: VReg) -> Result<Location, String> {
         self.allocation
-            .segments
-            .iter()
-            .find(|segment| {
-                segment.value == value
-                    && segment.start.index() <= point.index()
-                    && point.index() < segment.end.index()
-            })
-            .map(|segment| segment.location)
+            .location(point, value)
             .ok_or_else(|| format!("x86 v{} has no allocated segment", value.index()))
     }
 }

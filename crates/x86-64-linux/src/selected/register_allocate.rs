@@ -14,7 +14,7 @@ use crate::machine::FrameSlot;
 use crate::parallel_copy::{
     self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place, TransitionCost,
 };
-use faun_core::index::{BitSet, Range};
+use faun_core::index::{BitSet, Range, index};
 use faun_core::ir::FunctionId;
 
 const REGISTERS: [Reg; 8] = [
@@ -102,11 +102,37 @@ struct BlockPoints {
     terminator: Point,
 }
 
+/// The values live at each point, and where each block's points are.
+///
+/// Liveness never crosses a function, so each function is solved over its
+/// own values alone, and a point keeps only what is live there: the cost is
+/// what the program holds live, not every value at every point.
 #[derive(Debug)]
 pub(super) struct Liveness {
-    at: Vec<BitSet<VReg>>,
+    at: Vec<LiveSet>,
     blocks: Vec<BlockPoints>,
 }
+
+/// The values live at one point, in ascending order.
+#[derive(Debug, Default)]
+struct LiveSet(Box<[VReg]>);
+
+impl LiveSet {
+    fn iter(&self) -> impl Iterator<Item = VReg> + '_ {
+        self.0.iter().copied()
+    }
+
+    fn contains(&self, value: VReg) -> bool {
+        self.0.binary_search(&value).is_ok()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+// A value's number within the function that holds it.
+index!(Local);
 
 #[derive(Debug)]
 struct PointState {
@@ -125,131 +151,211 @@ pub(super) fn allocate(
 }
 
 impl Liveness {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "point numbering, CFG dataflow, and per-point liveness form one analysis"
-    )]
     fn build(selected: &Selected) -> Result<Self, String> {
-        let values = selected.widths.len();
-        let mut cursor = 0;
-        let mut blocks = Vec::with_capacity(selected.blocks.len());
+        let (blocks, points) = number_points(selected)?;
+        let mut liveness = Self {
+            at: (0..points).map(|_| LiveSet::default()).collect(),
+            blocks,
+        };
+        let mut by_function = vec![Vec::new(); function_count(selected)];
         for (id, block) in selected.blocks.iter_enumerated() {
-            let entry = Point::at(cursor)?;
-            cursor += 1;
-            let mut instructions = Vec::with_capacity(block.instructions.len());
-            for &instruction in &selected.order[block.instructions.range()] {
-                let early = Point::at(cursor)?;
-                let late = Point::at(cursor + 1)?;
-                cursor += 2;
-                instructions.push(InstPoints {
-                    instruction,
-                    early,
-                    late,
-                });
-            }
-            let terminator = Point::at(cursor)?;
-            cursor += 1;
-            blocks.push(BlockPoints {
-                block: id,
-                entry,
-                instructions,
-                terminator,
+            by_function[block.owner.index()].push(id);
+        }
+        let mut numbering = Numbering {
+            local: vec![None; selected.widths.len()],
+            position: vec![0; selected.blocks.len()],
+        };
+        for function in &by_function {
+            liveness.solve_function(selected, function, &mut numbering);
+        }
+        Ok(liveness)
+    }
+
+    /// Fill the points of one function's `blocks`: solve what is live out
+    /// of each, then walk each block back from its end.
+    fn solve_function(
+        &mut self,
+        selected: &Selected,
+        blocks: &[BlockId],
+        numbering: &mut Numbering,
+    ) {
+        let values = numbering.number(selected, blocks);
+        let number = |value: VReg| numbering.local[value.index()].expect("a value of its function");
+        let mut live_out = live_out(selected, blocks, values.len(), numbering);
+        let members = |live: &BitSet<Local>| {
+            LiveSet(live.iter().map(|local| values[local.index()]).collect())
+        };
+        for (at, &id) in blocks.iter().enumerate() {
+            let layout = &self.blocks[id.index()];
+            let block = selected.blocks[id];
+            let live = &mut live_out[at];
+            visit_terminator_values(selected, block.terminator, |value| {
+                live.insert(number(value));
             });
-        }
-
-        let (uses, defs) = block_uses_and_defs(selected, values);
-        let mut live_in = vec![BitSet::new(values); selected.blocks.len()];
-        let mut live_out = live_in.clone();
-        loop {
-            let previous_in = live_in.clone();
-            let previous_out = live_out.clone();
-            for (at, block) in selected.blocks.iter().enumerate().rev() {
-                let mut outgoing = BitSet::new(values);
-                for successor in successors(block.terminator).into_iter().flatten() {
-                    outgoing.union_with(&previous_in[successor.index()]);
-                }
-                let mut incoming = outgoing.clone();
-                incoming.subtract(&defs[at]);
-                incoming.union_with(&uses[at]);
-                live_out[at] = outgoing;
-                live_in[at] = incoming;
-            }
-            if live_in == previous_in && live_out == previous_out {
-                break;
-            }
-        }
-
-        let mut at = vec![BitSet::new(values); cursor];
-        for layout in &blocks {
-            let block = selected.blocks[layout.block];
-            let mut live = live_out[layout.block.index()].clone();
-            add_terminator_uses(selected, block.terminator, &mut live);
-            at[layout.terminator.index()].clone_from(&live);
+            self.at[layout.terminator.index()] = members(live);
             for points in layout.instructions.iter().rev() {
                 let inst = selected.instructions[points.instruction];
-                let mut late = live.clone();
                 if let Some(result) = inst.result {
-                    late.insert(result);
-                    live.remove(result);
+                    live.insert(number(result));
+                    self.at[points.late.index()] = members(live);
+                    live.remove(number(result));
+                } else {
+                    self.at[points.late.index()] = members(live);
                 }
-                at[points.late.index()] = late;
                 for &operand in &selected.operands[inst.operands.range()] {
-                    live.insert(operand);
+                    live.insert(number(operand));
                 }
-                at[points.early.index()].clone_from(&live);
+                self.at[points.early.index()] = members(live);
             }
-            let mut entry = live;
             for &param in &selected.block_params[block.params.range()] {
-                entry.remove(param);
-                entry.insert(param);
+                live.insert(number(param));
             }
-            at[layout.entry.index()] = entry;
+            self.at[layout.entry.index()] = members(live);
         }
-        Ok(Self { at, blocks })
+        numbering.forget(&values);
     }
 }
 
+/// Each block's points, numbered consecutively in block order: an entry,
+/// an early and a late point for each instruction, and a terminator; and
+/// how many points there are.
+fn number_points(selected: &Selected) -> Result<(Vec<BlockPoints>, usize), String> {
+    let mut cursor = 0;
+    let mut blocks = Vec::with_capacity(selected.blocks.len());
+    for (id, block) in selected.blocks.iter_enumerated() {
+        let entry = Point::at(cursor)?;
+        cursor += 1;
+        let mut instructions = Vec::with_capacity(block.instructions.len());
+        for &instruction in &selected.order[block.instructions.range()] {
+            let early = Point::at(cursor)?;
+            let late = Point::at(cursor + 1)?;
+            cursor += 2;
+            instructions.push(InstPoints {
+                instruction,
+                early,
+                late,
+            });
+        }
+        let terminator = Point::at(cursor)?;
+        cursor += 1;
+        blocks.push(BlockPoints {
+            block: id,
+            entry,
+            instructions,
+            terminator,
+        });
+    }
+    Ok((blocks, cursor))
+}
+
+/// What is live out of each of one function's `blocks`, over its `bound`
+/// local numbers, solved to a fixed point over its CFG.
+fn live_out(
+    selected: &Selected,
+    blocks: &[BlockId],
+    bound: usize,
+    numbering: &Numbering,
+) -> Vec<BitSet<Local>> {
+    let number = |value: VReg| numbering.local[value.index()].expect("a value of its function");
+    let (uses, defs) = block_uses_and_defs(selected, blocks, bound, number);
+    let mut live_in = vec![BitSet::new(bound); blocks.len()];
+    let mut live_out = live_in.clone();
+    let mut incoming = BitSet::new(bound);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (at, &id) in blocks.iter().enumerate().rev() {
+            for successor in successors(selected.blocks[id].terminator)
+                .into_iter()
+                .flatten()
+            {
+                live_out[at].union_with(&live_in[numbering.position[successor.index()]]);
+            }
+            incoming.clone_from(&live_out[at]);
+            incoming.subtract(&defs[at]);
+            incoming.union_with(&uses[at]);
+            if incoming != live_in[at] {
+                live_in[at].clone_from(&incoming);
+                changed = true;
+            }
+        }
+    }
+    live_out
+}
+
+/// Numbers within one function at a time, reused across functions: each
+/// value's local number, and each block's position among its function's.
+struct Numbering {
+    local: Vec<Option<Local>>,
+    position: Vec<usize>,
+}
+
+impl Numbering {
+    /// Number every value `blocks` name, in ascending order of the values
+    /// themselves, so a local set lists its members as the program numbers
+    /// them; answer the values by local number.
+    fn number(&mut self, selected: &Selected, blocks: &[BlockId]) -> Vec<VReg> {
+        let mut values = Vec::new();
+        for (at, &id) in blocks.iter().enumerate() {
+            self.position[id.index()] = at;
+            let block = selected.blocks[id];
+            values.extend_from_slice(&selected.block_params[block.params.range()]);
+            for &instruction in &selected.order[block.instructions.range()] {
+                let inst = selected.instructions[instruction];
+                values.extend(inst.result);
+                values.extend_from_slice(&selected.operands[inst.operands.range()]);
+            }
+            visit_terminator_values(selected, block.terminator, |value| values.push(value));
+        }
+        values.sort_unstable();
+        values.dedup();
+        for (at, &value) in values.iter().enumerate() {
+            self.local[value.index()] = Some(Local::at(at));
+        }
+        values
+    }
+
+    fn forget(&mut self, values: &[VReg]) {
+        for &value in values {
+            self.local[value.index()] = None;
+        }
+    }
+}
+
+/// What each of `blocks` reads before defining, and what it defines, over
+/// its function's local numbers.
 fn block_uses_and_defs(
     selected: &Selected,
-    values: usize,
-) -> (Vec<BitSet<VReg>>, Vec<BitSet<VReg>>) {
-    let mut uses = vec![BitSet::new(values); selected.blocks.len()];
+    blocks: &[BlockId],
+    bound: usize,
+    number: impl Fn(VReg) -> Local,
+) -> (Vec<BitSet<Local>>, Vec<BitSet<Local>>) {
+    let mut uses = vec![BitSet::new(bound); blocks.len()];
     let mut defs = uses.clone();
-    for (at, block) in selected.blocks.iter().enumerate() {
+    for (at, &id) in blocks.iter().enumerate() {
+        let block = selected.blocks[id];
         for &param in &selected.block_params[block.params.range()] {
-            defs[at].insert(param);
+            defs[at].insert(number(param));
         }
         for &instruction in &selected.order[block.instructions.range()] {
             let inst = selected.instructions[instruction];
             for &operand in &selected.operands[inst.operands.range()] {
-                if !defs[at].contains(operand) {
-                    uses[at].insert(operand);
+                if !defs[at].contains(number(operand)) {
+                    uses[at].insert(number(operand));
                 }
             }
             if let Some(result) = inst.result {
-                defs[at].insert(result);
+                defs[at].insert(number(result));
             }
         }
-        add_terminator_uses_if_undefined(selected, block.terminator, &defs[at], &mut uses[at]);
+        let (block_uses, block_defs) = (&mut uses[at], &defs[at]);
+        visit_terminator_values(selected, block.terminator, |value| {
+            if !block_defs.contains(number(value)) {
+                block_uses.insert(number(value));
+            }
+        });
     }
     (uses, defs)
-}
-
-fn add_terminator_uses_if_undefined(
-    selected: &Selected,
-    terminator: Terminator,
-    defs: &BitSet<VReg>,
-    uses: &mut BitSet<VReg>,
-) {
-    visit_terminator_values(selected, terminator, |value| {
-        if !defs.contains(value) {
-            uses.insert(value);
-        }
-    });
-}
-
-fn add_terminator_uses(selected: &Selected, terminator: Terminator, live: &mut BitSet<VReg>) {
-    visit_terminator_values(selected, terminator, |value| live.insert(value));
 }
 
 fn visit_terminator_values(
@@ -408,7 +514,7 @@ impl<'a> Allocator<'a> {
         }
         self.plan_edges()?;
         self.verify_states()?;
-        let (segments, transitions) = build_segments(&self.states)?;
+        let (segments, transitions) = build_segments(&self.states, self.selected.widths.len())?;
         let operand_locations =
             collect_instruction_data(self.operand_locations, "operand allocation")?;
         let operand_moves = collect_instruction_data(self.operand_moves, "operand move plan")?;
@@ -835,7 +941,7 @@ impl<'a> Allocator<'a> {
                 .as_ref()
                 .ok_or_else(|| format!("x86 allocation has no state at p{at}"))?;
             let live = &self.liveness.at[at];
-            if state.values.len() != live.iter().count()
+            if state.values.len() != live.len()
                 || state.values.iter().any(|(value, _)| !live.contains(*value))
             {
                 return Err(format!(
@@ -1200,57 +1306,76 @@ const fn place(location: Location) -> Place {
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "segment compression also records each location transition"
-)]
+/// Each value's runs of consecutive points in one block and one location,
+/// ordered by value and then by start, and the transitions between a
+/// value's runs, ordered by the point each is made at.
 fn build_segments(
     states: &[Option<PointState>],
+    values: usize,
 ) -> Result<(Vec<Segment>, Vec<Transition>), String> {
     let mut segments: Vec<Segment> = Vec::new();
     let mut transitions = Vec::new();
+    // Each value's latest segment, the only one that can run on into the
+    // next point.
+    let mut latest: Vec<Option<usize>> = vec![None; values];
     for (point_at, state) in states.iter().enumerate() {
         let Some(state) = state else { continue };
         let point = Point::at(point_at)?;
+        let same_block = point_at > 0
+            && states[point_at - 1]
+                .as_ref()
+                .is_some_and(|before| before.block == state.block);
         for &(value, location) in &state.values {
-            let previous = segments.iter_mut().rev().find(|segment| {
-                segment.value == value
-                    && segment.end.index() == point_at
-                    && states[point_at - 1]
-                        .as_ref()
-                        .is_some_and(|before| before.block == state.block)
-            });
+            let previous = latest[value.index()]
+                .filter(|&at| same_block && segments[at].end.index() == point_at);
+            if let Some(previous) = previous
+                && segments[previous].location == location
+            {
+                segments[previous].end = Point::at(point_at + 1)?;
+                continue;
+            }
             if let Some(previous) = previous {
-                if previous.location == location {
-                    previous.end = Point::at(point_at + 1)?;
-                } else {
-                    transitions.push(Transition {
-                        value,
-                        at: point,
-                        from: previous.location,
-                        to: location,
-                    });
-                    segments.push(Segment {
-                        value,
-                        start: point,
-                        end: Point::at(point_at + 1)?,
-                        location,
-                    });
-                }
-            } else {
-                segments.push(Segment {
+                transitions.push(Transition {
                     value,
-                    start: point,
-                    end: Point::at(point_at + 1)?,
-                    location,
+                    at: point,
+                    from: segments[previous].location,
+                    to: location,
                 });
             }
+            latest[value.index()] = Some(segments.len());
+            segments.push(Segment {
+                value,
+                start: point,
+                end: Point::at(point_at + 1)?,
+                location,
+            });
         }
     }
+    segments.sort_unstable_by_key(|segment| (segment.value, segment.start.0));
     Ok((segments, transitions))
 }
 
 impl Allocation {
+    /// The transitions made at `point`.
+    fn transitions_at(&self, point: Point) -> &[Transition] {
+        let start = self
+            .transitions
+            .partition_point(|transition| transition.at.0 < point.0);
+        let end = self
+            .transitions
+            .partition_point(|transition| transition.at.0 <= point.0);
+        &self.transitions[start..end]
+    }
+
+    /// Where `value` is at `point`, if it is live there.
+    fn location(&self, point: Point, value: VReg) -> Option<Location> {
+        let after = self
+            .segments
+            .partition_point(|segment| (segment.value, segment.start.0) <= (value, point.0));
+        let segment = self.segments[..after].last()?;
+        (segment.value == value && point.0 < segment.end.0).then_some(segment.location)
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "the allocation boundary verifies ranges, transitions, moves, and costs"
@@ -1274,14 +1399,7 @@ impl Allocation {
                 return Err("x86 allocation contains an invalid live segment".to_owned());
             }
             if let Location::Spill(SpillSlot(slot)) = segment.location {
-                let owner = liveness
-                    .blocks
-                    .iter()
-                    .find(|layout| {
-                        layout.entry.index() <= segment.start.index()
-                            && segment.start.index() <= layout.terminator.index()
-                    })
-                    .map(|layout| selected.blocks[layout.block].owner)
+                let owner = owner_at(selected, liveness, segment.start)
                     .ok_or_else(|| "x86 spill segment has no owning function".to_owned())?;
                 if self
                     .spill_slots
@@ -1291,6 +1409,12 @@ impl Allocation {
                     return Err("x86 allocation refers past its spill frame".to_owned());
                 }
             }
+        }
+        if !self
+            .transitions
+            .is_sorted_by_key(|transition| transition.at.0)
+        {
+            return Err("x86 allocation transitions are out of point order".to_owned());
         }
         for transition in &self.transitions {
             if transition.from == transition.to
