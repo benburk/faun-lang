@@ -397,6 +397,38 @@ const RUNNING: &[(&str, &str, u32)] = &[
 /// Programs refused, and what the message says.
 const REFUSED: &[(&str, &str, &str)] = &[
     (
+        "a range runs up",
+        "digit : U8 -> Bool
+         digit('9'..'0') -> True
+         digit(_) -> False",
+        "a range runs up, and `'9'..'0'` is reversed",
+    ),
+    (
+        "a clause holding a range covers nothing",
+        "small : Nat -> Nat
+         small(0..9) -> 1
+
+         main! : Host -> []
+         main!(host) -> host.exit!(small(3))",
+        "no clause matches `small(_)`",
+    ),
+    (
+        "a range is a test, which only a clause makes",
+        "main! : Host -> []
+         main!(host) -> host.exit!([1 2].map(|0..9| 1).len())",
+        "a range pattern is a test, which only a clause's guard makes",
+    ),
+    (
+        "a range's ends are numerals its type takes",
+        "byte : U8 -> Bool
+         byte(0..300) -> True
+         byte(_) -> False
+
+         main! : Host -> []
+         main!(host) -> host.exit!(0)",
+        "`300` is not a `U8`",
+    ),
+    (
         "a callback wrapped anew each time round would need a definition for each round",
         "nest : Nat (Nat -> Nat) -> Nat
          nest(0 f) -> f(0)

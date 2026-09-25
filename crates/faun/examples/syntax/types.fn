@@ -1,0 +1,66 @@
+# Signatures, type declarations, aliases, method blocks and constraints.
+
+# An alias names a type.
+Pair = (Nat Nat)
+Errors = [Missing Invalid]
+Numbers = List(Nat)
+
+first : Pair -> Nat
+first((a _)) -> a
+
+expect first((4 5)) == 4
+
+check : Nat -> Result(Nat Errors)
+check(0) -> Err(Missing)
+check(n) -> Ok(n)
+
+expect check(0) == Err(Missing) & check(3) == Ok(3)
+
+total : Numbers -> Nat
+total(values) -> values.sum()
+
+expect total([1 2 3]) == 6
+
+# A declaration makes a type of its own, with methods in `.( )`.
+Stack(a) : [Empty Push(a Stack(a))].(
+  size : Stack(a) -> Nat
+  size(Empty) -> 0
+  size(Push(_ rest)) -> 1 + rest.size()
+
+  top_or : Stack(a) a -> a
+  top_or(Empty fallback) -> fallback
+  top_or(Push(value _) _) -> value
+)
+
+expect Push(1 Push(2 Empty)).size() == 2
+expect Push(7 Empty).top_or(0) == 7 & Empty.top_or(0) == 0
+
+# A record type, and a function type as a parameter.
+Counter : {count: Nat step: Nat}
+
+advance : Counter -> Counter
+advance(Counter({count step})) -> Counter({count: count + step step})
+
+read : Counter -> Nat
+read(Counter({count *})) -> count
+
+expect read(advance(advance(Counter({count: 0 step: 3})))) == 6
+
+apply_twice : (a -> a) a -> a
+apply_twice(f x) -> f(f(x))
+
+expect apply_twice(|n| n + 5 1) == 11
+
+# Constraints: what a type variable's type must answer, on one line or on
+# lines of their own.
+largest : List(a) a -> a where a.cmp : a a -> Order
+largest(values fallback) -> values.max().ok_or(fallback)
+
+expect largest([3 9 4] 0) == 9
+
+sum_of : List(a) -> a where
+  a.zero : a
+  a.add : a a -> a
+sum_of(values) -> values.sum()
+
+expect sum_of([1 2 3]) == 6

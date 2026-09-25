@@ -994,9 +994,9 @@ impl<'a> Lowerer<'a> {
                 magnitude,
                 negative,
             } => self.number_pattern(magnitude, negative, expected),
-            Pattern::Range(start, end) => Err(error(format!(
-                "range pattern {start}..{end} is not supported by Barb lowering"
-            ))),
+            Pattern::Range => Err(error(
+                "a range pattern is a test, which only a clause's guard makes",
+            )),
             Pattern::String => Err(error(
                 "a string pattern is a test, which only a clause's guard makes",
             )),
@@ -1681,7 +1681,7 @@ fn holds_numeral(pattern: &Pattern) -> bool {
             inner.iter().any(holds_numeral) || rest.as_deref().is_some_and(holds_numeral)
         }
         Pattern::Record(fields) => fields.iter().any(|(_, inner)| holds_numeral(inner)),
-        Pattern::Wild | Pattern::Bind(_) | Pattern::Range(..) | Pattern::String => false,
+        Pattern::Wild | Pattern::Bind(_) | Pattern::Range | Pattern::String => false,
     }
 }
 

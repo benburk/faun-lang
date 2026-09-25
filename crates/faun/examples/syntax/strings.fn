@@ -1,0 +1,24 @@
+# Strings, characters and numerals as they are written.
+
+expect "plain".len() == 5
+expect "".is_empty()
+expect "a\tb\nc".len() == 5
+expect "quote \" and backslash \\".len() == 23
+expect "Faun 🦌".len() == 9
+
+# A splice is its value's `to_str`, and may hold any expression.
+name : Str
+name() -> "Faun"
+
+expect "hi ${name()}!" == "hi Faun!"
+expect "${1 + 2} and ${[1 2]}" == "3 and [1 2]"
+expect "${"inner ${name()}"}" == "inner Faun"
+expect "${True}${False}" == "TrueFalse"
+
+# A character is its byte.
+expect 'a' == 97 & '\n' == 10 & '\\' == 92 & '\'' == 39
+
+# Numerals: decimal, hexadecimal, and ones longer than a word.
+expect 0x10 == 16 & 0xff == 255
+expect 1000000 * 1000000 == 1000000000000
+expect 36893488147419103232 / 2 == 18446744073709551616

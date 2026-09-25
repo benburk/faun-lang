@@ -702,7 +702,7 @@ fn pattern_highest(pattern: &Pattern) -> u32 {
             .map(|(_, field)| pattern_highest(field))
             .max()
             .unwrap_or(0),
-        Pattern::Wild | Pattern::Number { .. } | Pattern::Range(..) | Pattern::String => 0,
+        Pattern::Wild | Pattern::Number { .. } | Pattern::Range | Pattern::String => 0,
     }
 }
 
@@ -798,6 +798,6 @@ fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
                 pattern_locals(pattern, output);
             }
         }
-        Pattern::Wild | Pattern::Number { .. } | Pattern::Range(_, _) | Pattern::String => {}
+        Pattern::Wild | Pattern::Number { .. } | Pattern::Range | Pattern::String => {}
     }
 }

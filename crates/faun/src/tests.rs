@@ -1,4 +1,4 @@
-use super::ast::{Body, ExprKind, Item, Pattern, UnaryOp};
+use super::ast::{BinaryOp, Body, Clause, ExprKind, Item, Pattern, UnaryOp};
 use super::parse;
 
 #[test]
@@ -149,6 +149,7 @@ fn what_is_not_a_pattern_or_only_a_pattern_says_so() {
         ("f(x) -> _\n", "`_` stands only in a pattern"),
         ("f(x) -> [x *]\n", "a list's rest names what follows"),
         ("f(x) -> 1..2\n", "a range stands only in a pattern"),
+        ("f(9..0) -> 1\n", "`9..0` is reversed"),
         (
             "f(x) -> x\ny\nf : Nat -> Nat\nz\n",
             "belongs to no definition",
@@ -178,4 +179,52 @@ fn every_line_that_cannot_be_read_is_told_at_once() {
     assert!(told[1].1.contains("`(-b)`"), "{told:?}");
     assert_eq!(told[2].0, 4);
     assert!(told[2].1.contains("found `)`"), "{told:?}");
+}
+
+/// The clauses of `source`, in order.
+fn clauses(source: &str) -> Vec<Clause> {
+    parse(source)
+        .unwrap()
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Clause(clause) => Some(clause),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_guard_stands_between_a_clause_s_patterns_and_its_arrow() {
+    let read = clauses(
+        "f(Some(x) y) if x > 1 & y.ok() | !x ->\n  z = x\n  z\nf(_ _) -> 0\ng(x) if\n  x -> x\n",
+    );
+    let [guarded, fallback, continued] = &read[..] else {
+        panic!("three clauses, found {read:?}");
+    };
+    assert!(matches!(
+        guarded.guard.as_ref().map(|guard| &guard.kind),
+        Some(ExprKind::Binary(BinaryOp::Or, ..))
+    ));
+    assert_eq!(guarded.body.bindings.len(), 1);
+    assert!(fallback.guard.is_none());
+    assert!(matches!(
+        continued.guard.as_ref().map(|guard| &guard.kind),
+        Some(ExprKind::Name(_))
+    ));
+}
+
+#[test]
+fn a_guard_is_one_expression_and_only_a_clause_has_one() {
+    for (source, said) in [
+        ("f(x) if -> x\n", "expected an expression, found `->`"),
+        ("f(x) if x\n", "expected `->`"),
+        ("f(x) if x if y -> x\n", "expected `->`, found `if`"),
+        ("f(x) if x = 1 -> x\n", "expected `->`, found `=`"),
+        ("f(x) -> x if x\n", "found `if`"),
+        ("f : Nat if x -> Nat\n", "found `if`"),
+    ] {
+        let error = parse(source).unwrap_err();
+        assert!(error.message.contains(said), "{source}: {}", error.message);
+    }
 }

@@ -1,0 +1,62 @@
+# Lines. An item or a body's line ends at a new line; a line goes on after
+# an arrow, after an infix operator, and into a chain that begins with `.`.
+# Indentation carries no meaning.
+
+# A body is its bindings, one to a line, and ends with its answer.
+area : Nat Nat -> Nat
+area(width height) ->
+  inner_width = width - 2
+  inner_height = height - 2
+  inner_width * inner_height
+
+expect area(5 4) == 6
+
+# The answer may begin on the line after the arrow.
+answer : Nat
+answer() ->
+  42
+
+expect answer() == 42
+
+# An operator at a line's end carries it on.
+total : Nat Nat Nat -> Nat
+total(a b c) ->
+  a +
+    b *
+    c
+
+expect total(1 2 3) == 7
+
+# A chain goes on at a line that begins with `.`.
+evens_doubled : List(Nat) -> List(Nat)
+evens_doubled(values) ->
+  values
+    .filter(|n| n % 2 == 0)
+    .map(|n| n * 2)
+
+expect evens_doubled([1 2 3 4]) == [4 8]
+
+# Parentheses group, however deep.
+expect ((((1)))) + (((2))) == 3
+
+# Comments run to a line's end, beside code or on their own.
+commented : Nat -> Nat   # a signature
+# between a signature and its clauses
+commented(n) -> n        # a clause
+
+expect commented(1) == 1
+
+# An expectation may be a body of its own.
+expect
+  doubled = [1 2 3].map(|n| n * 2)
+  doubled.len() == 3
+    & doubled.last().ok_or(0) == 6
+
+# Blank lines, and none, between items.
+a : Nat
+a() -> 1
+b : Nat
+b() -> a() + 1
+
+
+expect b() == 2

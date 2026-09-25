@@ -1,0 +1,26 @@
+# A lambda: `|parameters| body`, as an argument to a call.
+
+expect [1 2 3].map(|n| n + 1) == [2 3 4]
+
+# Many parameters, and one that captures a name around it.
+expect [1 2 3].fold(0 |sum n| sum + n) == 6
+
+offset_all : List(Nat) Nat -> List(Nat)
+offset_all(values offset) -> values.map(|n| n + offset)
+
+expect offset_all([1 2] 10) == [11 12]
+
+# A parameter is a pattern.
+expect [Ok(1) Err("x") Ok(3)].map(|r| r.ok_or(0)) == [1 0 3]
+expect [(1 2) (3 4)].fold(0 |sum (a b)| sum + a * b) == 14
+
+# A lambda among other arguments, and one within another.
+expect [1 2].map2([10 20] |a b| a + b) == [11 22]
+expect [[1 2] [3]].map(|row| row.map(|n| n * 10)) == [[10 20] [30]]
+
+# A function, a method and a constructor stand where a lambda would.
+double : Nat -> Nat
+double(n) -> n * 2
+
+expect [1 2].map(double) == [2 4]
+expect [1 2].map(Ok).map(|r| r.ok_or(0)) == [1 2]

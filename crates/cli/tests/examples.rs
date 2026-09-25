@@ -170,3 +170,12 @@ fn argument_runners_hand_the_program_its_arguments() {
     assert_eq!(run(&second, &["hello"]), (Some(0), "hello".to_owned()));
     assert_eq!(run(&second, &[]), (Some(1), String::new()));
 }
+
+/// The grammar, construct by construct: every expectation of the syntax
+/// examples holds.
+#[test]
+fn the_syntax_examples_hold() {
+    let (failed, count) = support::test_file(&example("syntax/main.fn"));
+    assert_eq!(failed, Vec::<String>::new());
+    assert_eq!(count, 89);
+}

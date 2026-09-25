@@ -598,7 +598,23 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
             }
             _ => Err(not_a_pattern()),
         },
-        ExprKind::Range(start, end) => Ok(Pattern::Range { span, start, end }),
+        ExprKind::Range(start, end) => {
+            // A malformed end is told when literals are validated.
+            let reversed = crate::literal::magnitude(start, source)
+                .ok()
+                .zip(crate::literal::magnitude(end, source).ok())
+                .is_some_and(|(start, end)| start > end);
+            if reversed {
+                return Err(error(
+                    span,
+                    format!(
+                        "a range runs up, and `{}` is reversed: it matches nothing",
+                        span.text(source)
+                    ),
+                ));
+            }
+            Ok(Pattern::Range { span, start, end })
+        }
         ExprKind::String(parts) => Ok(Pattern::String {
             span,
             parts: parts

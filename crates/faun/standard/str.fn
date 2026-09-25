@@ -99,15 +99,15 @@ Str : List(U8).(
 # past U+10FFFF. One definition calling itself, so a long text is a loop.
 utf8 : List(U8) Nat Nat Nat -> Bool
 utf8([] 0 _ _) -> True
-utf8([byte *rest] 0 _ _) if byte.to_nat() < 128 -> utf8(rest 0 128 191)
-utf8([byte *rest] 0 _ _) if between(byte 194 223) -> utf8(rest 1 128 191)
-utf8([byte *rest] 0 _ _) if between(byte 224 224) -> utf8(rest 2 160 191)
-utf8([byte *rest] 0 _ _) if between(byte 225 236) -> utf8(rest 2 128 191)
-utf8([byte *rest] 0 _ _) if between(byte 237 237) -> utf8(rest 2 128 159)
-utf8([byte *rest] 0 _ _) if between(byte 238 239) -> utf8(rest 2 128 191)
-utf8([byte *rest] 0 _ _) if between(byte 240 240) -> utf8(rest 3 144 191)
-utf8([byte *rest] 0 _ _) if between(byte 241 243) -> utf8(rest 3 128 191)
-utf8([byte *rest] 0 _ _) if between(byte 244 244) -> utf8(rest 3 128 143)
+utf8([0x00..0x7f *rest] 0 _ _) -> utf8(rest 0 128 191)
+utf8([0xc2..0xdf *rest] 0 _ _) -> utf8(rest 1 128 191)
+utf8([0xe0 *rest] 0 _ _) -> utf8(rest 2 160 191)
+utf8([0xe1..0xec *rest] 0 _ _) -> utf8(rest 2 128 191)
+utf8([0xed *rest] 0 _ _) -> utf8(rest 2 128 159)
+utf8([0xee..0xef *rest] 0 _ _) -> utf8(rest 2 128 191)
+utf8([0xf0 *rest] 0 _ _) -> utf8(rest 3 144 191)
+utf8([0xf1..0xf3 *rest] 0 _ _) -> utf8(rest 3 128 191)
+utf8([0xf4 *rest] 0 _ _) -> utf8(rest 3 128 143)
 utf8([byte *rest] Succ(owed) low high) if between(byte low high) -> utf8(rest owed 128 191)
 utf8(_ _ _ _) -> False
 

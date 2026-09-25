@@ -545,6 +545,8 @@ fn the_grammar_reads_and_refuses_what_the_parser_does() {
         "expect 'a'..'z' == \"s${x}t\"\n",
         "f(x) -> [(x) (x y) _ 1.5 -2 *xs]\nx = 1\nx\n",
         "f(x) -> x\n  .map(g)\n  .filter(h) +\n  1\n",
+        "f([x *r] {a *}) if x.p(|y| y) ^ !a ->\n  r\nf(_ _) if\n  (a b) == c -> 0\n",
+        "T : [A B].(\n  f(A) if g() -> 1\n  f(_) -> 0\n)\n",
         "",
     ];
     for source in read {
@@ -561,6 +563,11 @@ fn the_grammar_reads_and_refuses_what_the_parser_does() {
         "f(x) -> [a -b]\n",
         "f(x) -> (x -> x)\n",
         "f(x) -> x ->\n",
+        "f(x) if -> x\n",
+        "f(x) if x if y -> x\n",
+        "f(x) if x = 1 -> x\n",
+        "f(x) -> x if x\n",
+        "f : Nat if x -> Nat\n",
     ];
     for source in refused {
         assert!(!agree(&grammar, source, source), "{source} is refused");

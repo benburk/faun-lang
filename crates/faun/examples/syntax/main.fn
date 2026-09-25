@@ -1,0 +1,12 @@
+# Faun's grammar, construct by construct: each module reads one part of it,
+# and its expectations say what the parser made of what is written.
+# `faun test examples/syntax/main.fn` asks them all.
+
+import guards {}
+import patterns {}
+import operators {}
+import layout {}
+import lambdas {}
+import strings {}
+import types {}
+import modules {}

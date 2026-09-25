@@ -48,13 +48,16 @@ U8 : Nat.(
 
   # Whether the byte is an ASCII digit, `'0'` to `'9'`.
   is_digit : U8 -> Bool
-  is_digit(U8(value)) -> '0' <= value & value <= '9'
+  is_digit(U8('0'..'9')) -> True
+  is_digit(_) -> False
 
   is_ascii_lower : U8 -> Bool
-  is_ascii_lower(U8(value)) -> 'a' <= value & value <= 'z'
+  is_ascii_lower(U8('a'..'z')) -> True
+  is_ascii_lower(_) -> False
 
   is_ascii_upper : U8 -> Bool
-  is_ascii_upper(U8(value)) -> 'A' <= value & value <= 'Z'
+  is_ascii_upper(U8('A'..'Z')) -> True
+  is_ascii_upper(_) -> False
 
   is_ascii_letter : U8 -> Bool
   is_ascii_letter(byte) -> byte.is_ascii_lower() | byte.is_ascii_upper()

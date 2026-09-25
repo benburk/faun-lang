@@ -111,7 +111,9 @@ pub(crate) enum Pattern {
         magnitude: BigUint,
         negative: bool,
     },
-    Range(BigUint, BigUint),
+    /// A range, which only a clause's guard can test for; see
+    /// [`Specializer::tested`].
+    Range,
     List(Vec<Self>, Option<Box<Self>>),
     Record(Vec<(Symbol, Self)>),
     Product(Vec<Self>),
@@ -900,6 +902,23 @@ impl<'a> Specializer<'a> {
         ty: &Type,
         (next, tests): (&mut u32, &mut Vec<Expr>),
     ) -> Result<Pattern, SpecializeError> {
+        // A range binds nothing it shows: a fresh name, and its bounds
+        // asked of that name, each through the type's `cmp`.
+        if let h::Pattern::Range(start, end) = pattern {
+            let local = h::LocalId(*next);
+            *next = next.checked_add(1).expect("fewer than 2^32 locals");
+            let held = Expr {
+                module,
+                span,
+                ty: ty.clone(),
+                kind: ExprKind::Local(local),
+            };
+            let low = self.natural_numeral(module, span, start.clone(), false, ty)?;
+            let high = self.natural_numeral(module, span, end.clone(), false, ty)?;
+            tests.push(self.at_most((module, span), low, held.clone(), ty)?);
+            tests.push(self.at_most((module, span), held, high, ty)?);
+            return Ok(Pattern::Bind(local));
+        }
         let readings = &self.checked.readings;
         let literal = match pattern {
             h::Pattern::String(bytes) => Some((
@@ -1563,44 +1582,85 @@ impl<'a> Specializer<'a> {
                 crate::blessed::decimal(numeral.magnitude.clone(), scale, numeral.negative, float);
             return self.literal(module, span, &literal, ty);
         }
-        let kind = match ty {
-            Type::Named(name, arguments) if arguments.is_empty() && *name == self.prelude.nat => {
-                NumeralType::Nat
-            }
-            Type::Named(name, arguments) if arguments.is_empty() && *name == self.prelude.int => {
-                NumeralType::Int
-            }
-            Type::Named(name, arguments) if arguments.is_empty() => {
-                let word = self
-                    .prelude
-                    .words
-                    .iter()
-                    .find(|word| word.ty == *name)
-                    .ok_or_else(|| {
-                        located(
-                            module,
-                            span,
-                            "a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`",
-                        )
-                    })?;
-                NumeralType::Word(word)
-            }
-            _ => {
-                return Err(located(
-                    module,
-                    span,
-                    "a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`",
-                ));
-            }
-        };
-        let literal = crate::blessed::numeral(
+        self.natural_numeral(
+            module,
+            span,
             numeral.magnitude.clone(),
             numeral.negative,
-            kind,
-            self.prelude,
+            ty,
         )
-        .map_err(|failure| located(module, span, &failure.to_string()))?;
+    }
+
+    /// A numeral with no point, `magnitude` negated or not, at `ty`, which
+    /// must be one a numeral can be.
+    fn natural_numeral(
+        &mut self,
+        module: ModuleId,
+        span: crate::ast::Span,
+        magnitude: BigUint,
+        negative: bool,
+        ty: &Type,
+    ) -> Result<Expr, SpecializeError> {
+        let kind = match ty {
+            Type::Named(name, arguments) if arguments.is_empty() && *name == self.prelude.nat => {
+                Some(NumeralType::Nat)
+            }
+            Type::Named(name, arguments) if arguments.is_empty() && *name == self.prelude.int => {
+                Some(NumeralType::Int)
+            }
+            Type::Named(name, arguments) if arguments.is_empty() => self
+                .prelude
+                .words
+                .iter()
+                .find(|word| word.ty == *name)
+                .map(NumeralType::Word),
+            _ => None,
+        }
+        .ok_or_else(|| {
+            located(
+                module,
+                span,
+                "a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`",
+            )
+        })?;
+        let literal = crate::blessed::numeral(magnitude, negative, kind, self.prelude)
+            .map_err(|failure| located(module, span, &failure.to_string()))?;
         self.literal(module, span, &literal, ty)
+    }
+
+    /// `low <= high` at `ty`: the `le` view of what `ty`'s `cmp` answers.
+    fn at_most(
+        &mut self,
+        (module, span): (ModuleId, crate::ast::Span),
+        low: Expr,
+        high: Expr,
+        ty: &Type,
+    ) -> Result<Expr, SpecializeError> {
+        let cmp = self
+            .prelude
+            .cmp
+            .ok_or_else(|| error("a range is tested with `cmp`, which nothing declares"))?;
+        let order = Type::Named(self.prelude.order, Vec::new());
+        let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
+        let target = self
+            .implementation(ty, cmp)
+            .map_err(|_| located(module, span, "a range is tested with its type's `cmp`"))?;
+        let compare = self.method_key(target, ty, std::slice::from_ref(ty), &order)?;
+        self.request_at(compare.clone(), (module, span));
+        let view = self.method_key(self.prelude.order_le, &order, &[], &bool_ty)?;
+        self.request(view.clone());
+        let compared = Expr {
+            module,
+            span,
+            ty: order,
+            kind: ExprKind::DirectCall(compare, vec![low, high]),
+        };
+        Ok(Expr {
+            module,
+            span,
+            ty: bool_ty,
+            kind: ExprKind::DirectCall(view, vec![compared]),
+        })
     }
 
     fn method_site(
@@ -1773,7 +1833,7 @@ fn convert_pattern(pattern: &h::Pattern, readings: &HashMap<h::SiteId, Reading>)
             magnitude: magnitude.clone(),
             negative: *negative,
         },
-        h::Pattern::Range(start, end) => Pattern::Range(start.clone(), end.clone()),
+        h::Pattern::Range(..) => Pattern::Range,
         h::Pattern::List(elements, rest) => Pattern::List(
             elements.iter().map(convert).collect(),
             rest.as_deref().map(convert).map(Box::new),

@@ -213,13 +213,31 @@ begins a line of its own.
 alternative binds the same names at the same types. A clause holding one is
 a row for each choice of alternatives, checked and covered as those rows
 would be. A binding's or a lambda's pattern must match whatever it is
-handed, and holds none. A range pattern still has no lowering.
+handed, and holds none.
 
 ```
 bucket : Nat -> Nat
 bucket(0) -> 0
 bucket(1 | 2) -> 1
 bucket(_) -> 2
+```
+
+## Ranges
+
+A range pattern, `lo..hi` of numerals or characters, is inclusive at both
+ends and follows Ori (`notes/forms/pattern-matching.md` there): it binds
+nothing, and is a test of the value's `cmp` at both ends, asked with the
+clause's other literal tests before its guard. A clause holding one is
+guarded, so it covers nothing, and a group of them ends in a clause without.
+A reversed range, which could match nothing, is refused. Unlike Ori's, a
+range may stand in an or-pattern's alternative, since each alternative is a
+row of its own, as a word's numeral already may. Ori's open ends, `_..hi`
+and `lo.._`, and negative ends are not read yet.
+
+```
+utf8([0xe0 0xa0..0xbf 0x80..0xbf *rest]) -> utf8(rest)
+is_digit(U8('0'..'9')) -> True
+is_digit(_) -> False
 ```
 
 ## Callbacks

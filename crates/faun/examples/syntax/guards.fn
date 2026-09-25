@@ -1,0 +1,59 @@
+# A guard: `if` and a Boolean after a clause's patterns, before its arrow.
+# When it fails, the next clause is tried; a guarded clause covers nothing,
+# so a chain of them ends in one without.
+
+allowed : Nat -> Bool
+allowed(distance) -> distance % 2 == 0
+
+step : [Move(Nat) Stop] -> Nat
+step(Move(distance)) if distance > 100 & allowed(distance) -> 3
+step(Move(distance)) if distance > 50 | distance == 7 -> 2
+step(Move(_)) -> 1
+step(Stop) -> 0
+
+expect step(Move(102)) == 3
+expect step(Move(101)) == 2 & step(Move(7)) == 2
+expect step(Move(8)) == 1 & step(Stop) == 0
+
+# A guard reads the head's names, and may call and compare.
+lower : U8 -> U8
+lower(byte) if 'A' <= byte & byte <= 'Z' -> byte + 32
+lower(byte) -> byte
+
+expect lower('Q') == 'q' & lower('q') == 'q' & lower('@') == '@'
+
+# A literal in the head is tested before the guard, and a guard may reach a
+# binding the literal left alone.
+label : Nat Nat -> Nat
+label(0 n) if n > 9 -> 10
+label(0 _) -> 0
+label(m n) if m == n -> 1
+label(_ _) -> 2
+
+expect label(0 10) == 10 & label(0 3) == 0
+expect label(4 4) == 1 & label(4 5) == 2
+
+# A guard over a list's head, with the rest passed on.
+count_small : List(Nat) -> Nat
+count_small([]) -> 0
+count_small([x *rest]) if x < 10 -> 1 + count_small(rest)
+count_small([_ *rest]) -> count_small(rest)
+
+expect count_small([1 20 3 40 5]) == 3
+
+# A guard's body may run over lines.
+clamp : Nat -> Nat
+clamp(n) if n > 100 ->
+  over = n - 100
+  n - over
+clamp(n) -> n
+
+expect clamp(150) == 100 & clamp(42) == 42
+
+# `!` and `^` in a guard.
+odd_one : Bool Bool -> Nat
+odd_one(a b) if a ^ b -> 1
+odd_one(a _) if !a -> 2
+odd_one(_ _) -> 3
+
+expect odd_one(True False) == 1 & odd_one(False False) == 2 & odd_one(True True) == 3

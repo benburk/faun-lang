@@ -1,0 +1,26 @@
+# Infix operators, loosest first:  |  ^  &  == != < <= > >=  + -  / % *
+# each level left-associative. Prefix `-` and `!` bind tightest.
+
+expect 1 + 2 * 3 == 7
+expect (1 + 2) * 3 == 9
+expect 10 - 3 - 2 == 5
+expect 100 / 10 / 5 == 2
+expect 17 % 5 * 2 == 4
+expect 2 * 3 % 4 == 2
+expect 7 - 2 + 1 == 6
+
+expect True | False & False
+expect !(False & True)
+expect True ^ True == False
+expect (True ^ True) == False
+expect 1 < 2 & 2 <= 2 & 3 > 2 & 3 >= 3 & 1 != 2
+
+expect -3 + 5 == 2
+expect -(3 + 5) == -8
+expect 2 - -3 == 5
+expect !True == False
+
+# A method binds tighter than any operator, and a chain reads left to right.
+expect 3.max(4) * 2 == 8
+expect [3 1 2].sort().reverse() == [3 2 1]
+expect (-2).min(1) == -2
