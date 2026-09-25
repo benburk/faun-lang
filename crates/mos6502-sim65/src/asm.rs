@@ -63,6 +63,7 @@ pub(crate) enum Mnemonic {
     Ldy,
     Iny,
     Dex,
+    Inx,
     Asl,
     Rol,
     Lsr,
@@ -383,6 +384,7 @@ const fn opcode(mnemonic: Mnemonic, operand: Operand) -> u8 {
         (M::Ldy, O::Imm(_)) => 0xA0,
         (M::Iny, O::Implied) => 0xC8,
         (M::Dex, O::Implied) => 0xCA,
+        (M::Inx, O::Implied) => 0xE8,
         (M::Asl, O::Implied) => 0x0A,
         (M::Asl, O::Zero(_)) => 0x06,
         (M::Rol, O::Implied) => 0x2A,
@@ -601,7 +603,7 @@ impl Assembler {
         match (mnemonic, operand) {
             (M::Lda | M::Adc | M::Sbc | M::And | M::Ora, _)
             | (M::Asl | M::Rol | M::Lsr | M::Ror, Operand::Implied) => Some(Reg::A),
-            (M::Ldx | M::Dex, _) => Some(Reg::X),
+            (M::Ldx | M::Dex | M::Inx, _) => Some(Reg::X),
             (M::Sta | M::Stx | M::Clc | M::Sec | M::Txs | M::Jmp | M::Rts, _) => {
                 self.state.flags.from
             }
@@ -639,8 +641,14 @@ impl Assembler {
                 flags: before.flags.with_nz(None),
                 ..before
             },
-            M::Dex => {
-                let number = before.x.number.map(|value| value.wrapping_sub(1));
+            M::Dex | M::Inx => {
+                let number = before.x.number.map(|value| {
+                    if mnemonic == M::Dex {
+                        value.wrapping_sub(1)
+                    } else {
+                        value.wrapping_add(1)
+                    }
+                });
                 MachineState {
                     x: Register {
                         number,
@@ -1124,8 +1132,17 @@ impl Assembler {
         self.op(Mnemonic::Sta, Operand::Indirect(pair));
     }
 
+    /// `X` is overwritten either way, and a step from a known neighbour
+    /// sets N and Z as the load would, in one byte rather than two and the
+    /// same two cycles.
     pub(crate) fn ldx_imm(&mut self, value: u8) {
-        self.op(Mnemonic::Ldx, Operand::Imm(value));
+        match self.state.x.number {
+            Some(held) if held.wrapping_sub(1) == value => self.dex(),
+            Some(held) if held.wrapping_add(1) == value => {
+                self.op(Mnemonic::Inx, Operand::Implied);
+            }
+            _ => self.op(Mnemonic::Ldx, Operand::Imm(value)),
+        }
     }
 
     pub(crate) fn ldx_zp(&mut self, at: u8) {
@@ -1436,6 +1453,18 @@ mod tests {
         asm.bind(target);
         assert_eq!(asm.state.flags.carry, Some(true));
         assert_eq!(asm.finish(), [0x38, 0xB0, 0x00]);
+    }
+
+    #[test]
+    fn a_known_neighbour_in_x_is_stepped_to_rather_than_loaded() {
+        let mut asm = Assembler::new(0x200);
+        asm.ldx_imm(0xFF);
+        asm.ldx_imm(0xFE);
+        asm.ldx_imm(0xFF);
+        asm.ldx_imm(0x10);
+        assert_eq!(asm.state.x.number, Some(0x10));
+        assert!(asm.zero_reflects(Held::Imm(0x10)));
+        assert_eq!(asm.finish(), [0xA2, 0xFF, 0xCA, 0xE8, 0xA2, 0x10]);
     }
 
     #[test]

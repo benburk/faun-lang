@@ -24,11 +24,11 @@ use expressions::{CASES, COUNTS, Case};
 // that proves it small. Narrowing a refined local in its arm would win this
 // back.
 const BASELINES: &[(Case, usize, u64)] = &[
-    (Case::Chain, 50, 36),
-    (Case::Shared, 55, 44),
-    (Case::ConstantLeft, 50, 36),
-    (Case::Carry, 96, 93),
-    (Case::Monus, 61, 43),
+    (Case::Chain, 48, 36),
+    (Case::Shared, 53, 44),
+    (Case::ConstantLeft, 48, 36),
+    (Case::Carry, 94, 93),
+    (Case::Monus, 59, 43),
 ];
 
 #[test]

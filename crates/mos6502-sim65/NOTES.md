@@ -2,19 +2,12 @@
 
 ## Potential optimizations
 
-### Register-aware constant materialization
+### Sharing a tail through a skipped load
 
-A dead register holding a known constant could materialize an adjacent constant with
-`INX` or `DEX` instead of another immediate load. On the 6502, one step saves a byte
-without adding cycles: `DEX` is one byte and two cycles, while `LDX #imm` is two bytes
-and two cycles.
-
-The startup sequence reading `argc` has one such opportunity. After setting the hardware
-stack pointer, `X` holds `$FF`; two `DEX`/`STX` pairs could write `$FE` and `$FD` into
-the sim65 argument-stack pointer. This would reduce each affected image by three
-bytes.
-
-Keep this as an instruction-selection rule rather than a startup special case. It
-requires a dead source value, tracked N/Z flags, and a size/cycle comparison. Limit
-the initial rule to a delta of one; longer increment or decrement sequences trade
-cycles for size.
+Two paths that load different constants into `A` and then jump to the same place
+can share one jump: the first load is followed by `$2C`, the opcode of `bit abs`,
+which reads the second load's two bytes as an address and so skips it. The Monus
+probe would lose one byte to this, but the skipping path pays four cycles for the
+`bit`, raising its worst case from 39 to 42 cycles. It also needs the skipped
+instruction to be exactly two bytes and `bit`'s flag changes to be dead. Not
+worth it unless size is to be traded for cycles.

@@ -549,7 +549,14 @@ impl Lowering<'_> {
         // in `A` and `X`.
         if self.entry_argc().is_some() {
             let [low, high] = heap.to_le_bytes();
-            self.set_pair(CSP, CSTACK_TOP - 2);
+            // `X` is free until the hook's argument goes in it, and holds
+            // what the stack pointer was set from, so the pair is written
+            // through it: a neighbour of a number `X` holds is a step away.
+            let [stack_low, stack_high] = (CSTACK_TOP - 2).to_le_bytes();
+            self.asm.ldx_imm(stack_low);
+            self.asm.stx_zp(CSP);
+            self.asm.ldx_imm(stack_high);
+            self.asm.stx_zp(CSP + 1);
             self.asm.lda_imm(low);
             self.asm.ldx_imm(high);
             self.jsr_hook(HOOK_ARGS);
