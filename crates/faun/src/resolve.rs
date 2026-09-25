@@ -71,6 +71,7 @@ impl std::error::Error for ResolveError {}
 pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagnostic> {
     let prelude = loaded.module(loaded.prelude).public.clone();
     let mut modules = Vec::with_capacity(loaded.modules.len());
+    let mut sites = 0;
     for module in &loaded.modules {
         let source = loaded
             .sources
@@ -79,7 +80,7 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
             .text();
         let mut scope = prelude.clone();
         scope.merge(&module.scope, &loaded.symbols, "module scope")?;
-        let resolved = resolve_module(module, source, &scope, &mut loaded.symbols);
+        let resolved = resolve_module(module, source, &scope, &mut loaded.symbols, &mut sites);
         modules.push(resolved.map_err(|error| {
             let source = loaded
                 .sources
@@ -102,12 +103,13 @@ fn resolve_module(
     source: &str,
     scope: &Interface,
     symbols: &mut Symbols,
+    sites: &mut u32,
 ) -> Result<h::Module, ResolveError> {
     let mut items = Vec::new();
     for item in &module.syntax.items {
         match item {
             s::Item::Data(data) => items.push(h::Item::Data(resolve_data(
-                module.id, data, source, scope, symbols,
+                module.id, data, source, scope, symbols, sites,
             )?)),
             s::Item::Signature(signature) => {
                 let name = global_value(module.id, signature.name, source, scope, symbols)?;
@@ -118,7 +120,13 @@ fn resolve_module(
             s::Item::Clause(clause) => {
                 let name = global_value(module.id, clause.name, source, scope, symbols)?;
                 items.push(h::Item::Clause(resolve_clause(
-                    module.id, clause, name, source, scope, None, symbols,
+                    module.id,
+                    clause,
+                    name,
+                    source,
+                    scope,
+                    None,
+                    (symbols, sites),
                 )?));
             }
             s::Item::Header(_) | s::Item::Import(_) | s::Item::Exports(_) => {}
@@ -144,6 +152,7 @@ fn resolve_data(
     source: &str,
     scope: &Interface,
     symbols: &mut Symbols,
+    sites: &mut u32,
 ) -> Result<h::DataDecl, ResolveError> {
     let local = symbols
         .find(data.name.text(source))
@@ -203,7 +212,7 @@ fn resolve_data(
                     source,
                     scope,
                     Some(binding),
-                    symbols,
+                    (symbols, sites),
                 )?));
             }
         }
@@ -348,7 +357,7 @@ fn resolve_clause(
     source: &str,
     scope: &Interface,
     methods: Option<&TypeBinding>,
-    symbols: &mut Symbols,
+    (symbols, sites): (&mut Symbols, &mut u32),
 ) -> Result<h::Clause, ResolveError> {
     let mut resolver = ClauseResolver {
         module,
@@ -356,6 +365,7 @@ fn resolve_clause(
         scope,
         methods,
         symbols,
+        sites,
         locals: HashMap::new(),
         next_local: 0,
     };
@@ -392,6 +402,8 @@ struct ClauseResolver<'a> {
     scope: &'a Interface,
     methods: Option<&'a TypeBinding>,
     symbols: &'a mut Symbols,
+    /// How many dual sites the program has numbered so far.
+    sites: &'a mut u32,
     locals: HashMap<Symbol, h::LocalId>,
     next_local: u32,
 }
@@ -417,27 +429,36 @@ impl ClauseResolver<'_> {
                 self.locals.insert(spelling, local);
                 Ok(h::Pattern::Bind(local))
             }
-            s::Pattern::Constructor { span, name, fields } => {
+            s::Pattern::Constructor {
+                span,
+                qualifier,
+                name,
+                fields,
+            } => {
                 let spelling = self.symbols.intern(name.text(self.source));
-                let constructor =
-                    self.scope
-                        .constructors
-                        .get(&spelling)
-                        .copied()
-                        .ok_or_else(|| {
-                            error(
-                                self.module,
-                                *span,
-                                format!("unknown constructor `{}`", name.text(self.source)),
-                            )
-                        })?;
-                Ok(h::Pattern::Constructor(
-                    constructor,
-                    fields
-                        .iter()
-                        .map(|field| self.pattern(field))
-                        .collect::<Result<_, _>>()?,
-                ))
+                let fields = fields
+                    .iter()
+                    .map(|field| self.pattern(field))
+                    .collect::<Result<_, _>>()?;
+                if let Some(qualifier) = qualifier {
+                    let constructor = self.qualified(*qualifier, *name)?;
+                    return Ok(h::Pattern::Constructor(constructor, fields));
+                }
+                // A word no visible declaration claims is a structural tag;
+                // one some declaration claims is its position's to decide.
+                Ok(match self.scope.constructors.get(&spelling) {
+                    Some(candidates) => h::Pattern::Dual(self.dual(spelling, candidates), fields),
+                    None if capitalised(name.text(self.source)) => {
+                        h::Pattern::Tag(spelling, fields)
+                    }
+                    None => {
+                        return Err(error(
+                            self.module,
+                            *span,
+                            format!("unknown constructor `{}`", name.text(self.source)),
+                        ));
+                    }
+                })
             }
             s::Pattern::Number {
                 numeral, negative, ..
@@ -546,8 +567,8 @@ impl ClauseResolver<'_> {
                     .collect::<Result<_, _>>()?,
             ),
             s::ExprKind::Member(head, member) => {
-                if let Some(method) = self.static_method(head, *member) {
-                    h::ExprKind::Global(method?)
+                if let Some(found) = self.static_member(head, *member) {
+                    found?
                 } else {
                     h::ExprKind::Member(
                         Box::new(self.expr(head)?),
@@ -560,11 +581,11 @@ impl ClauseResolver<'_> {
                     .iter()
                     .map(|argument| self.expr(argument))
                     .collect::<Result<Vec<_>, _>>()?;
-                if let Some(method) = self.static_method(head, *member) {
+                if let Some(found) = self.static_member(head, *member) {
                     h::ExprKind::Call(
                         Box::new(h::Expr {
                             span: head.span.through(member.0),
-                            kind: h::ExprKind::Global(method?),
+                            kind: found?,
                         }),
                         arguments,
                     )
@@ -604,8 +625,13 @@ impl ClauseResolver<'_> {
         {
             return Ok(h::ExprKind::Global(method));
         }
-        if let Some(&constructor) = self.scope.constructors.get(&spelling) {
-            return Ok(h::ExprKind::Constructor(constructor));
+        if let Some(candidates) = self.scope.constructors.get(&spelling) {
+            return Ok(h::ExprKind::Dual(self.dual(spelling, candidates)));
+        }
+        // A capitalised word nothing visible declares is a structural tag: it
+        // exists by being written, and belongs to no module.
+        if capitalised(name.text(self.source)) {
+            return Ok(h::ExprKind::Tag(spelling));
         }
         Err(error(
             self.module,
@@ -614,22 +640,46 @@ impl ClauseResolver<'_> {
         ))
     }
 
-    fn static_method(
+    /// A word some declaration claims, numbered so checking can say which
+    /// reading its position chose.
+    fn dual(&mut self, spelling: Symbol, candidates: &[Symbol]) -> h::Dual {
+        let site = h::SiteId(*self.sites);
+        *self.sites = self
+            .sites
+            .checked_add(1)
+            .expect("fewer than 2^32 dual sites");
+        h::Dual {
+            site,
+            spelling,
+            candidates: candidates.to_vec(),
+            home: self
+                .methods
+                .and_then(|binding| binding.constructors.get(&spelling).copied()),
+        }
+    }
+
+    /// What `Type.member` names, where the head is a visible type: one of
+    /// its methods, or one of the constructors it exports.
+    fn static_member(
         &mut self,
         head: &s::Expr,
         member: s::Name,
-    ) -> Option<Result<Symbol, ResolveError>> {
+    ) -> Option<Result<h::ExprKind, ResolveError>> {
         let s::ExprKind::Name(owner) = &head.kind else {
             return None;
         };
         let owner_spelling = self.symbols.intern(owner.text(self.source));
         let binding = self.scope.types.get(&owner_spelling)?;
+        if capitalised(member.text(self.source)) {
+            return Some(self.qualified(*owner, member).map(h::ExprKind::Constructor));
+        }
         let member_spelling = self.symbols.intern(member.text(self.source));
         Some(
             binding
                 .methods
                 .get(&member_spelling)
                 .copied()
+                .map(h::ExprKind::Global)
                 .ok_or_else(|| {
                     error(
                         self.module,
@@ -643,6 +693,43 @@ impl ClauseResolver<'_> {
                 }),
         )
     }
+
+    /// The constructor `Type.Ctor` names: that type's, outright, never a
+    /// structural tag. A constructor the type does not export here is
+    /// private, and naming it qualified is no way round that.
+    fn qualified(&mut self, owner: s::Name, member: s::Name) -> Result<Symbol, ResolveError> {
+        let owner_spelling = self.symbols.intern(owner.text(self.source));
+        let member_spelling = self.symbols.intern(member.text(self.source));
+        self.scope
+            .types
+            .get(&owner_spelling)
+            .ok_or_else(|| {
+                error(
+                    self.module,
+                    owner.0,
+                    format!("unknown type `{}`", owner.text(self.source)),
+                )
+            })?
+            .constructors
+            .get(&member_spelling)
+            .copied()
+            .ok_or_else(|| {
+                error(
+                    self.module,
+                    member.0,
+                    format!(
+                        "type `{}` has no constructor `{}` visible here",
+                        owner.text(self.source),
+                        member.text(self.source)
+                    ),
+                )
+            })
+    }
+}
+
+/// Whether a word is spelled as a type, constructor or tag is: capitalised.
+fn capitalised(word: &str) -> bool {
+    word.starts_with(|character: char| character.is_ascii_uppercase())
 }
 
 fn global_value(

@@ -37,7 +37,11 @@ pub struct TypeBinding {
 pub struct Interface {
     pub values: HashMap<Symbol, Symbol>,
     pub types: HashMap<Symbol, TypeBinding>,
-    pub constructors: HashMap<Symbol, Symbol>,
+    /// Each visible constructor word and every declared constructor it may
+    /// name. Types are each their own constructor namespace, so a word may
+    /// have several claimants; which one a use means is its position's to
+    /// decide, when it is checked.
+    pub constructors: HashMap<Symbol, Vec<Symbol>>,
 }
 
 impl Interface {
@@ -48,13 +52,11 @@ impl Interface {
         context: &str,
     ) -> Result<(), Diagnostic> {
         merge_map(&mut self.values, &other.values, symbols, context, "value")?;
-        merge_map(
-            &mut self.constructors,
-            &other.constructors,
-            symbols,
-            context,
-            "constructor",
-        )?;
+        for (&word, claimants) in &other.constructors {
+            for &canonical in claimants {
+                claim(&mut self.constructors, word, canonical);
+            }
+        }
         for (&local, binding) in &other.types {
             if let Some(previous) = self.types.get(&local)
                 && previous.canonical != binding.canonical
@@ -413,14 +415,14 @@ fn declare_data(
                     data.name.text(source),
                     constructor.name.text(source)
                 ));
-                insert_unique(
-                    &mut own.constructors,
-                    spelling,
-                    canonical,
-                    symbols,
-                    "constructor",
-                )?;
-                binding.constructors.insert(spelling, canonical);
+                if binding.constructors.insert(spelling, canonical).is_some() {
+                    return Err(Diagnostic::new(format!(
+                        "type `{}` declares constructor `{}` more than once",
+                        data.name.text(source),
+                        constructor.name.text(source)
+                    )));
+                }
+                claim(&mut own.constructors, spelling, canonical);
             }
         }
         DataRepresentation::Wrapper(representation) => {
@@ -431,13 +433,7 @@ fn declare_data(
                 data.name.text(source)
             ));
             binding.constructors.insert(local, canonical);
-            insert_unique(
-                &mut own.constructors,
-                local,
-                canonical,
-                symbols,
-                "constructor",
-            )?;
+            claim(&mut own.constructors, local, canonical);
         }
     }
     for method in &data.methods {
@@ -555,13 +551,7 @@ fn exports(
             public.types.insert(local, visible.clone());
             if export.constructors {
                 for (&name, &canonical) in &visible.constructors {
-                    insert_unique(
-                        &mut public.constructors,
-                        name,
-                        canonical,
-                        symbols,
-                        "exported constructor",
-                    )?;
+                    claim(&mut public.constructors, name, canonical);
                 }
             }
         }
@@ -611,13 +601,7 @@ fn expose_import(
             }
             if exposure.constructors {
                 for (&name, &canonical) in &imported.constructors {
-                    insert_unique(
-                        &mut scope.constructors,
-                        name,
-                        canonical,
-                        symbols,
-                        "imported constructor",
-                    )?;
+                    claim(&mut scope.constructors, name, canonical);
                 }
             }
             scope.types.insert(local, imported);
@@ -658,6 +642,14 @@ fn merge_map(
         into.insert(local, canonical);
     }
     Ok(())
+}
+
+/// Add `canonical` to the declarations `word` may name.
+fn claim(map: &mut HashMap<Symbol, Vec<Symbol>>, word: Symbol, canonical: Symbol) {
+    let claimants = map.entry(word).or_default();
+    if !claimants.contains(&canonical) {
+        claimants.push(canonical);
+    }
 }
 
 fn insert_unique(

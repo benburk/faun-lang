@@ -9,11 +9,36 @@ records, method constraints, or `?`: `len`, `is_empty`, `append`, `extend`,
 `any`, `all`, `fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
 `get`, `get_or`, `set`, `find`, `find_index`, `take`, `drop`, `take_while`,
 `drop_while`, and the constructors `List.range(n)` and `List.repeat(x n)`. A
-lookup that can miss answers `Err(OutOfBounds)`, `Err(Empty)` or
-`Err(NotFound)`. Ori's are loose tags; until Faun has those, each is a
-nominal one-constructor type the list module exports, spelled the same at
-every use. Nothing is recognized by name: `len` is answered from the length a
-list holds because Barb recognizes what it computes.
+lookup that can miss answers a structural tag: `Err(OutOfBounds)`,
+`Err(Empty)` or `Err(NotFound)`. Nothing is recognized by name: `len` is
+answered from the length a list holds because Barb recognizes what it
+computes.
+
+## Tags
+
+Tags follow Ori (`notes/values/tags.md` there). A capitalised word no visible
+declaration claims is a structural tag: it belongs to no module and needs no
+import, and rows of tags join by unification where values meet, so
+`[NotFound SomethingElse]` and `[Blah NotFound]` flow into one
+`[Blah NotFound SomethingElse]`. A row written in a signature is closed for
+the body, which may answer only those tags, and open to callers, which may
+join it with their own. A row in a parameter is what a definition handles
+and stays closed. Clauses that take a row apart with no catch-all close it,
+so a caller cannot hand them a tag no clause matches.
+
+A word some visible declaration also claims is read as its position's type
+decides: a tag row takes the tag, a nominal type its constructor, and a
+position nothing decides the one declared reading, or an ambiguity error
+where several types declare the word. `Type.Ctor` names a constructor
+outright, in expressions and patterns. Inside a type's block, a bare word the
+type declares means its own constructor. `exports {T}` keeps `T`'s
+constructors private, and a same-spelled structural tag never becomes one.
+
+Faun specializes from the types checking recorded rather than inferring each
+specialization again, so where a closed row is answered as a signature's
+wider one, a caller's, the value is rebuilt in the wider row. Tag rows have
+no written tail, as in Ori; a tag used as a function value, a row's
+automatic `to_str`, and `?` propagation are not here yet.
 
 ```sh
 cargo run -- check crates/faun/examples/utilities.fn

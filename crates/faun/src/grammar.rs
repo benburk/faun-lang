@@ -399,13 +399,16 @@ peg::parser! {
                 }
             }
             / head:type_ident()
+              member:(adj(Kind::Dot) member:adj(Kind::TypeIdent) { member })?
               fields:(adj(Kind::LParen) fields:(pattern() ++ sep()) close:rparen() {
                   (fields, close.span())
               })? {
-                let (fields, end) = fields.unwrap_or_else(|| (Vec::new(), head.span()));
+                let last = member.unwrap_or(head);
+                let (fields, end) = fields.unwrap_or_else(|| (Vec::new(), last.span()));
                 Pattern::Constructor {
                     span: head.span().through(end),
-                    name: name(head),
+                    qualifier: member.map(|_| name(head)),
+                    name: name(last),
                     fields,
                 }
             }
@@ -483,7 +486,7 @@ peg::parser! {
             }
 
         rule dot_access() -> (Token, Option<Vec<Expr>>, Span)
-            = chain_dot() member:(adj(Kind::Ident) / adj(Kind::EffectIdent))
+            = chain_dot() member:(adj(Kind::Ident) / adj(Kind::EffectIdent) / adj(Kind::TypeIdent))
               args:call_args()? {
                 let end = args.as_ref().map_or_else(|| member.span(), |args| args.1);
                 (member, args.map(|args| args.0), end)

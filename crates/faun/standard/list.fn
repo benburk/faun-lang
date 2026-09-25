@@ -2,16 +2,11 @@
 # nor postfix propagation. They follow Ori's standard list: the receiver
 # comes first, so `xs.get(i)` means `get(xs i)`.
 #
-# A lookup that can miss answers a `Result` whose error names the miss.
-# Faun has no loose tags yet, so each is a nominal type of one constructor,
-# spelled as the tag it stands for: a caller writes `Err(OutOfBounds)`
-# either way.
+# A lookup that can miss answers a `Result` whose error is a structural
+# tag naming the miss. A tag belongs to no module, so a caller's own
+# failures join it in one row.
 
-exports {List.* OutOfBounds.* Empty.* NotFound.*}
-
-OutOfBounds : [OutOfBounds]
-Empty : [Empty]
-NotFound : [NotFound]
+exports {List.*}
 
 List(a) : [Nil Cons(a List(a))].(
   len : List(a) -> Nat
@@ -92,17 +87,17 @@ List(a) : [Nil Cons(a List(a))].(
   reverse : List(a) -> List(a)
   reverse(values) -> reverse_into(values [])
 
-  first : List(a) -> Result(a Empty)
+  first : List(a) -> Result(a [Empty])
   first([]) -> Err(Empty)
   first([head *_]) -> Ok(head)
 
-  last : List(a) -> Result(a Empty)
+  last : List(a) -> Result(a [Empty])
   last([]) -> Err(Empty)
   last([only]) -> Ok(only)
   last([_ *tail]) -> last(tail)
 
   # The element at `index`, counting from nought.
-  get : List(a) Nat -> Result(a OutOfBounds)
+  get : List(a) Nat -> Result(a [OutOfBounds])
   get([] _) -> Err(OutOfBounds)
   get([head *_] 0) -> Ok(head)
   get([_ *tail] Succ(index)) -> get(tail index)
@@ -111,17 +106,17 @@ List(a) : [Nil Cons(a List(a))].(
   get_or(values index fallback) -> get(values index).ok_or(fallback)
 
   # The list with the element at `index` replaced by `value`.
-  set : List(a) Nat a -> Result(List(a) OutOfBounds)
+  set : List(a) Nat a -> Result(List(a) [OutOfBounds])
   set([] _ _) -> Err(OutOfBounds)
   set([_ *tail] 0 value) -> Ok([value *tail])
   set([head *tail] Succ(index) value) -> set(tail index value).map_ok(|rest| [head *rest])
 
-  find : List(a) (a -> Bool) -> Result(a NotFound)
+  find : List(a) (a -> Bool) -> Result(a [NotFound])
   find([] _) -> Err(NotFound)
   find([head *_] test) if test(head) -> Ok(head)
   find([_ *tail] test) -> find(tail test)
 
-  find_index : List(a) (a -> Bool) -> Result(Nat NotFound)
+  find_index : List(a) (a -> Bool) -> Result(Nat [NotFound])
   find_index([] _) -> Err(NotFound)
   find_index([head *_] test) if test(head) -> Ok(0)
   find_index([_ *tail] test) -> find_index(tail test).map_ok(|index| index + 1)

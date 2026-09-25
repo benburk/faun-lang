@@ -79,6 +79,7 @@ pub enum Type {
     Named(Symbol, Vec<Self>),
     Variable(Symbol),
     Function(Vec<Self>, Box<Self>),
+    /// A closed tag row, each tag named by its spelling.
     Variants(Vec<ConstructorDecl>),
     Record(Vec<(Symbol, Self)>),
 }
@@ -103,12 +104,39 @@ impl LocalId {
     }
 }
 
+/// Where a constructor word was written whose meaning its position decides,
+/// numbered across the program so checking can say which it chose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SiteId(pub u32);
+
+/// A capitalised word some visible declaration claims. It may name any of
+/// `candidates`, or the structural tag it spells; which is its position's
+/// type to decide.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dual {
+    pub site: SiteId,
+    pub spelling: Symbol,
+    pub candidates: Vec<Symbol>,
+    /// Inside a type's block, the constructor that type declares with this
+    /// word, which is the only declared one the word may read as there.
+    pub home: Option<Symbol>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
     Wild,
     Bind(LocalId),
     Constructor(Symbol, Vec<Self>),
-    Number { magnitude: BigUint, negative: bool },
+    /// A structural tag, named by its spelling: it belongs to no declaration,
+    /// and the scrutinee is a tag row that holds it.
+    Tag(Symbol, Vec<Self>),
+    /// A word a declaration claims, whose reading the scrutinee's type
+    /// decides.
+    Dual(Dual, Vec<Self>),
+    Number {
+        magnitude: BigUint,
+        negative: bool,
+    },
     Range(BigUint, BigUint),
     List(Vec<Self>, Option<Box<Self>>),
     Record(Vec<(Symbol, Self)>),
@@ -137,6 +165,11 @@ pub enum ExprKind {
     Local(LocalId),
     Global(Symbol),
     Constructor(Symbol),
+    /// A structural tag, named by its spelling. Applied, it carries fields;
+    /// alone, it is a tag with none.
+    Tag(Symbol),
+    /// A word a declaration claims, whose reading its position decides.
+    Dual(Dual),
     Number(BigUint),
     String(Vec<StringPart>),
     List(Vec<Expr>, Option<Box<Expr>>),

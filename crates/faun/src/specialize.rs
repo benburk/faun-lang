@@ -13,7 +13,7 @@ use std::fmt;
 use num_bigint::BigUint;
 
 use crate::blessed::{LiteralExpr, PreludeIds};
-use crate::check::{CheckedProgram, InferredScheme, InferredType, TypeVariable, Types};
+use crate::check::{CheckedProgram, InferredScheme, InferredType, Reading, TypeVariable, Types};
 use crate::hir as h;
 use crate::{ModuleId, Symbol};
 
@@ -21,11 +21,24 @@ use crate::{ModuleId, Symbol};
 pub(crate) enum Type {
     Named(Symbol, Vec<Self>),
     Function(Vec<Self>, Box<Self>),
-    Empty,
+    /// A closed tag row, its tags in one order so that two spellings of one
+    /// row are one type. The empty row is the type with no values.
+    Variants(Vec<(Symbol, Vec<Self>)>),
     Record(Vec<(Symbol, Self)>),
 }
 
 impl Type {
+    /// The empty row, which nothing inhabits.
+    pub(crate) const fn empty() -> Self {
+        Self::Variants(Vec::new())
+    }
+
+    /// The row holding `tags`, in the order every row keeps them.
+    fn row(mut tags: Vec<(Symbol, Vec<Self>)>) -> Self {
+        tags.sort_by_key(|(label, _)| *label);
+        Self::Variants(tags)
+    }
+
     pub(crate) fn function(&self) -> Option<(&[Self], &Self)> {
         let Self::Function(parameters, result) = self else {
             return None;
@@ -112,6 +125,9 @@ pub(crate) enum ExprKind {
     DirectCall(FunctionKey, Vec<Expr>),
     Invoke(Box<Expr>, Vec<Expr>),
     Lambda(Vec<Pattern>, Box<Expr>),
+    /// The value as this expression's wider type: the same value, its tag
+    /// rows holding the tags a caller added.
+    Widen(Box<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,7 +212,7 @@ fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, Specializ
         let placeholder = scheme
             .variables
             .iter()
-            .map(|variable| (*variable, Type::Empty))
+            .map(|variable| (*variable, Type::empty()))
             .collect();
         let ty = substitute_type(&scheme.ty, &placeholder)?;
         let Some((parameters, _)) = ty.function() else {
@@ -219,7 +235,10 @@ fn holds_function(ty: &Type) -> bool {
         Type::Function(_, _) => true,
         Type::Named(_, arguments) => arguments.iter().any(holds_function),
         Type::Record(fields) => fields.iter().any(|(_, field)| holds_function(field)),
-        Type::Empty => false,
+        Type::Variants(tags) => tags
+            .iter()
+            .flat_map(|(_, fields)| fields)
+            .any(holds_function),
     }
 }
 
@@ -231,6 +250,7 @@ struct Specializer<'a> {
     literal_sites: HashMap<(ModuleId, crate::ast::Span), &'a LiteralExpr>,
     method_sites: HashMap<(ModuleId, crate::ast::Span), Symbol>,
     projection_sites: HashMap<(ModuleId, crate::ast::Span), Symbol>,
+    widening_sites: HashMap<(ModuleId, crate::ast::Span), &'a InferredType>,
     definitions: HashMap<Symbol, Vec<(ModuleId, &'a h::Clause)>>,
     signatures: HashMap<Symbol, Symbol>,
     data: HashMap<Symbol, h::DataDecl>,
@@ -321,6 +341,11 @@ impl<'a> Specializer<'a> {
             .iter()
             .map(|site| ((site.module, site.span), site.field))
             .collect();
+        let widening_sites = checked
+            .widenings
+            .iter()
+            .map(|site| ((site.module, site.span), &site.ty))
+            .collect();
         Ok(Self {
             checked,
             prelude,
@@ -329,6 +354,7 @@ impl<'a> Specializer<'a> {
             literal_sites,
             method_sites,
             projection_sites,
+            widening_sites,
             definitions,
             signatures,
             data,
@@ -442,7 +468,11 @@ impl<'a> Specializer<'a> {
         substitution: &HashMap<TypeVariable, Type>,
     ) -> Result<Clause, SpecializeError> {
         Ok(Clause {
-            patterns: clause.patterns.iter().map(convert_pattern).collect(),
+            patterns: clause
+                .patterns
+                .iter()
+                .map(|pattern| convert_pattern(pattern, &self.checked.readings))
+                .collect(),
             guard: clause
                 .guard
                 .as_ref()
@@ -455,7 +485,7 @@ impl<'a> Specializer<'a> {
                     .iter()
                     .map(|binding| {
                         Ok(Binding {
-                            pattern: convert_pattern(&binding.pattern),
+                            pattern: convert_pattern(&binding.pattern, &self.checked.readings),
                             value: self.expr(module, &binding.value, substitution)?,
                         })
                     })
@@ -465,7 +495,31 @@ impl<'a> Specializer<'a> {
         })
     }
 
+    /// An expression at this specialization, widened where checking said a
+    /// signature answers it as a wider type and the two differ here.
     fn expr(
+        &mut self,
+        module: ModuleId,
+        expression: &h::Expr,
+        substitution: &HashMap<TypeVariable, Type>,
+    ) -> Result<Expr, SpecializeError> {
+        let written = self.written_expr(module, expression, substitution)?;
+        let Some(target) = self.widening_sites.get(&(module, expression.span)) else {
+            return Ok(written);
+        };
+        let target = substitute_type(target, substitution)?;
+        if target == written.ty {
+            return Ok(written);
+        }
+        Ok(Expr {
+            module,
+            span: expression.span,
+            ty: target,
+            kind: ExprKind::Widen(Box::new(written)),
+        })
+    }
+
+    fn written_expr(
         &mut self,
         module: ModuleId,
         expression: &h::Expr,
@@ -485,6 +539,16 @@ impl<'a> Specializer<'a> {
                 };
                 self.request(key.clone());
                 ExprKind::Function(key)
+            }
+            // A tag is built as the constructor of its row it names.
+            h::ExprKind::Tag(label) => ExprKind::Construct(*label, Vec::new()),
+            h::ExprKind::Dual(dual) => {
+                let read = read(dual, &self.checked.readings);
+                if matches!(ty, Type::Function(_, _)) {
+                    ExprKind::ConstructorFunction(read)
+                } else {
+                    ExprKind::Construct(read, Vec::new())
+                }
             }
             h::ExprKind::Constructor(constructor) => {
                 if matches!(ty, Type::Function(_, _)) {
@@ -532,7 +596,10 @@ impl<'a> Specializer<'a> {
                     .collect::<Result<_, SpecializeError>>()?,
             ),
             h::ExprKind::Lambda(patterns, body) => ExprKind::Lambda(
-                patterns.iter().map(convert_pattern).collect(),
+                patterns
+                    .iter()
+                    .map(|pattern| convert_pattern(pattern, &self.checked.readings))
+                    .collect(),
                 Box::new(self.expr(module, body, substitution)?),
             ),
             h::ExprKind::Call(head, arguments) => {
@@ -550,8 +617,11 @@ impl<'a> Specializer<'a> {
                         self.request(key.clone());
                         ExprKind::DirectCall(key, arguments)
                     }
-                    h::ExprKind::Constructor(constructor) => {
+                    h::ExprKind::Constructor(constructor) | h::ExprKind::Tag(constructor) => {
                         ExprKind::Construct(*constructor, arguments)
+                    }
+                    h::ExprKind::Dual(dual) => {
+                        ExprKind::Construct(read(dual, &self.checked.readings), arguments)
                     }
                     _ => ExprKind::Invoke(
                         Box::new(self.expr(module, head, substitution)?),
@@ -778,12 +848,18 @@ impl<'a> Specializer<'a> {
     }
 }
 
-fn convert_pattern(pattern: &h::Pattern) -> Pattern {
+/// A checked pattern as specialization reads it, each claimed word as the
+/// reading checking gave it.
+fn convert_pattern(pattern: &h::Pattern, readings: &HashMap<h::SiteId, Reading>) -> Pattern {
+    let convert = |pattern| convert_pattern(pattern, readings);
     match pattern {
+        h::Pattern::Dual(dual, fields) => {
+            Pattern::Constructor(read(dual, readings), fields.iter().map(convert).collect())
+        }
         h::Pattern::Wild => Pattern::Wild,
         h::Pattern::Bind(local) => Pattern::Bind(*local),
-        h::Pattern::Constructor(constructor, fields) => {
-            Pattern::Constructor(*constructor, fields.iter().map(convert_pattern).collect())
+        h::Pattern::Constructor(constructor, fields) | h::Pattern::Tag(constructor, fields) => {
+            Pattern::Constructor(*constructor, fields.iter().map(convert).collect())
         }
         h::Pattern::Number {
             magnitude,
@@ -794,15 +870,24 @@ fn convert_pattern(pattern: &h::Pattern) -> Pattern {
         },
         h::Pattern::Range(start, end) => Pattern::Range(start.clone(), end.clone()),
         h::Pattern::List(elements, rest) => Pattern::List(
-            elements.iter().map(convert_pattern).collect(),
-            rest.as_deref().map(convert_pattern).map(Box::new),
+            elements.iter().map(convert).collect(),
+            rest.as_deref().map(convert).map(Box::new),
         ),
         h::Pattern::Record(fields) => Pattern::Record(
             fields
                 .iter()
-                .map(|(name, pattern)| (*name, convert_pattern(pattern)))
+                .map(|(name, pattern)| (*name, convert(pattern)))
                 .collect(),
         ),
+    }
+}
+
+/// What a claimed word was read as: the constructor or the tag checking
+/// chose for it. Checking reads every word before it answers.
+fn read(dual: &h::Dual, readings: &HashMap<h::SiteId, Reading>) -> Symbol {
+    match readings.get(&dual.site) {
+        Some(Reading::Constructor(symbol) | Reading::Tag(symbol)) => *symbol,
+        None => unreachable!("checking reads every claimed word"),
     }
 }
 
@@ -836,10 +921,33 @@ fn substitute_type(
                 .collect::<Result<_, _>>()?,
             Box::new(substitute_type(result, substitution)?),
         )),
-        InferredType::Variants(constructors) if constructors.is_empty() => Ok(Type::Empty),
-        InferredType::Variants(_) => Err(error(
-            "nonempty structural variant types are not supported by Barb lowering yet",
-        )),
+        // A rest nothing pinned holds no tags: no value the program builds
+        // carries one it did not write.
+        InferredType::Variants(tags, tail) => {
+            let mut row = tags
+                .iter()
+                .map(|(label, fields)| {
+                    let fields = fields
+                        .iter()
+                        .map(|field| substitute_type(field, substitution))
+                        .collect::<Result<_, _>>()?;
+                    Ok((*label, fields))
+                })
+                .collect::<Result<Vec<_>, SpecializeError>>()?;
+            let rest = match tail.as_deref() {
+                None => Type::empty(),
+                Some(InferredType::Variable(variable)) => substitution
+                    .get(variable)
+                    .cloned()
+                    .unwrap_or_else(Type::empty),
+                Some(other) => substitute_type(other, substitution)?,
+            };
+            let Type::Variants(more) = rest else {
+                return Err(error("the rest of a tag row is not a row"));
+            };
+            row.extend(more);
+            Ok(Type::row(row))
+        }
         InferredType::Record(fields) => Ok(Type::Record(
             fields
                 .iter()
@@ -879,7 +987,29 @@ fn match_type(
             }
             match_type(ar, br, substitution)
         }
-        (InferredType::Variants(constructors), Type::Empty) if constructors.is_empty() => Ok(()),
+        (InferredType::Variants(tags, tail), Type::Variants(concrete)) => {
+            for (label, fields) in tags {
+                let Some((_, held)) = concrete.iter().find(|(found, _)| found == label) else {
+                    return Err(error("a concrete tag row lacks a tag its use holds"));
+                };
+                if fields.len() != held.len() {
+                    return Err(error("a tag's fields differ between a use and its row"));
+                }
+                for (field, held) in fields.iter().zip(held) {
+                    match_type(field, held, substitution)?;
+                }
+            }
+            let rest: Vec<_> = concrete
+                .iter()
+                .filter(|(label, _)| !tags.iter().any(|(found, _)| found == label))
+                .cloned()
+                .collect();
+            match tail.as_deref() {
+                Some(tail) => match_type(tail, &Type::Variants(rest), substitution),
+                None if rest.is_empty() => Ok(()),
+                None => Err(error("a closed tag row received more tags")),
+            }
+        }
         (InferredType::Record(a), Type::Record(b)) if a.len() == b.len() => {
             for ((an, at), (bn, bt)) in a.iter().zip(b) {
                 if an != bn {
@@ -925,9 +1055,18 @@ pub(crate) fn surface_type(
                 .collect::<Result<_, _>>()?,
             Box::new(surface_type(result, variables)?),
         )),
-        h::Type::Variants(constructors) if constructors.is_empty() => Ok(Type::Empty),
-        h::Type::Variants(_) => Err(error(
-            "nonempty structural variant fields are not supported by Barb lowering yet",
+        h::Type::Variants(constructors) => Ok(Type::row(
+            constructors
+                .iter()
+                .map(|constructor| {
+                    let fields = constructor
+                        .fields
+                        .iter()
+                        .map(|field| surface_type(field, variables))
+                        .collect::<Result<_, _>>()?;
+                    Ok((constructor.name, fields))
+                })
+                .collect::<Result<_, SpecializeError>>()?,
         )),
         h::Type::Record(fields) => Ok(Type::Record(
             fields

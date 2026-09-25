@@ -265,6 +265,8 @@ pub enum Pattern {
     Bind(Name),
     Constructor {
         span: Span,
+        /// The type a qualified `Type.Ctor` names its constructor through.
+        qualifier: Option<Name>,
         name: Name,
         fields: Vec<Self>,
     },

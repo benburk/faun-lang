@@ -6,6 +6,15 @@
 //! until ordinary unification (and numeral defaulting) identifies a receiver.
 //! Constraints and bodyless-method derivation are deliberately outside this
 //! pass; the bootstrap library supplies concrete implementations instead.
+//!
+//! Tag rows unify as Rémy's rows: shared tags unify their fields and an open
+//! side's tail takes what only the other holds. A signature's result rows get
+//! a tail its scheme quantifies; skolemized for the body, that tail is rigid,
+//! so the body answers only the written tags and callers may widen them. A
+//! closed row answered where such a row is wanted is subsumed, and the
+//! expression is recorded as widened. Clauses taking a row apart without a
+//! catch-all close it. A word a declaration claims waits, as a method does,
+//! for its position's type to choose between the tag and the constructor.
 
 #![allow(clippy::too_many_lines)]
 
@@ -51,7 +60,9 @@ pub enum InferredType {
     Variable(TypeVariable),
     Named(Symbol, Vec<Self>),
     Function(Vec<Self>, Box<Self>),
-    Variants(Vec<(Symbol, Vec<Self>)>),
+    /// A tag row: the tags it holds, and a variable standing for the tags a
+    /// caller may add, where it is open.
+    Variants(Vec<(Symbol, Vec<Self>)>, Option<Box<Self>>),
     Record(Vec<(Symbol, Self)>),
 }
 
@@ -84,6 +95,16 @@ pub struct CheckedProgram {
     pub types: Types,
 }
 
+/// Which reading a word some declaration claims took, by its site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reading {
+    /// The declared constructor its position demanded, or its one declared
+    /// reading, where nothing decided.
+    Constructor(Symbol),
+    /// The structural tag it spells, where its position is a tag row.
+    Tag(Symbol),
+}
+
 /// The types checking inferred for a program's HIR, by site.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Types {
@@ -96,6 +117,12 @@ pub struct Types {
     pub literals: Vec<LiteralSite>,
     pub methods: Vec<MethodSite>,
     pub projections: Vec<ProjectionSite>,
+    /// Expressions whose value a signed definition answers with, and the
+    /// wider type it is answered as: a closed tag row standing where the
+    /// signature's row is one a caller may widen.
+    pub widenings: Vec<ExpressionSite>,
+    /// Which reading each word a declaration claims took.
+    pub readings: HashMap<h::SiteId, Reading>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,7 +159,7 @@ pub fn type_check(
     let types = validate_effects(&resolved.program, &resolved.symbols).and_then(|()| {
         let types = Checker::new(&resolved.program, &resolved.symbols, &prelude)?
             .check(&resolved.program)?;
-        crate::exhaustive::exhaustive(&resolved.program, &resolved.symbols, &prelude)?;
+        crate::exhaustive::exhaustive(&resolved.program, &resolved.symbols, &prelude, &types)?;
         Ok(types)
     });
     match types {
@@ -194,7 +221,7 @@ pub fn check_application_abi(
             main.symbol,
             InferredType::Function(
                 vec![InferredType::Named(host.host, Vec::new())],
-                Box::new(InferredType::Variants(Vec::new())),
+                Box::new(InferredType::Variants(Vec::new(), None)),
             ),
             "main! : Host -> []",
         ),
@@ -205,7 +232,7 @@ pub fn check_application_abi(
                     InferredType::Named(host.host, Vec::new()),
                     InferredType::Named(checked.prelude.nat, Vec::new()),
                 ],
-                Box::new(InferredType::Variants(Vec::new())),
+                Box::new(InferredType::Variants(Vec::new(), None)),
             ),
             "exit! : Host Nat -> []",
         ),
@@ -234,8 +261,55 @@ enum Ty {
     Rigid(u32),
     Named(Symbol, Vec<Self>),
     Function(Vec<Self>, Box<Self>),
-    Variants(Vec<(Symbol, Vec<Self>)>),
+    /// A tag row: the tags it holds, and where it is open, a tail standing
+    /// for the rest. A tail is a variable, which unification may widen, or
+    /// rigid: a signed definition's own result row, which its body may not
+    /// widen and each caller may.
+    Variants(Vec<(Symbol, Vec<Self>)>, Option<Box<Self>>),
     Record(Vec<(Symbol, Self)>),
+}
+
+/// The tags of a row, each with its fields.
+type Tags = Vec<(Symbol, Vec<Ty>)>;
+
+/// Why two types do not unify.
+#[derive(Clone, Debug)]
+enum Mismatch {
+    Reason(&'static str),
+    /// One tag written with two numbers of fields.
+    Fields(usize, usize),
+    /// Tags a row holds that `row` -- closed, or a caller's to widen --
+    /// cannot take.
+    NotAmong {
+        tags: Vec<Symbol>,
+        row: Ty,
+    },
+}
+
+impl Mismatch {
+    fn describe(&self, symbols: &Symbols) -> String {
+        match self {
+            Self::Reason(reason) => (*reason).to_owned(),
+            Self::Fields(one, other) => {
+                format!("one tag is written with {one} and with {other} fields")
+            }
+            Self::NotAmong { tags, row } => {
+                let tags: Vec<_> = tags
+                    .iter()
+                    .map(|tag| format!("`{}`", spelled(*tag, symbols)))
+                    .collect();
+                let (subject, verb) = if tags.len() == 1 {
+                    (tags[0].clone(), "is")
+                } else {
+                    (tags.join(" and "), "are")
+                };
+                format!(
+                    "{subject} {verb} not among the tags of `{}`, which admits no others",
+                    show(row, symbols)
+                )
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -267,6 +341,41 @@ struct PendingMethod {
     result: Ty,
     member: bool,
     resolved: bool,
+}
+
+/// A claimed word awaiting its position's decision. `fields` are what it is
+/// applied to, where it is; `result` is its position's type.
+#[derive(Clone, Debug)]
+struct PendingTag {
+    module: ModuleId,
+    span: super::ast::Span,
+    dual: h::Dual,
+    fields: Option<Vec<Ty>>,
+    /// Where each field was written, for a word applied in an expression:
+    /// a field is a value flowing into the constructor, which may be widened
+    /// there. A pattern's fields flow out, and have none.
+    field_spans: Vec<super::ast::Span>,
+    result: Ty,
+    resolved: bool,
+}
+
+/// Patterns whose rows close once every word in them has its reading.
+#[derive(Clone, Debug)]
+struct PendingClosing {
+    module: ModuleId,
+    span: super::ast::Span,
+    ty: Ty,
+    rows: Vec<(h::Pattern, bool)>,
+}
+
+/// Where each pending list stood when a stretch of checking began, which
+/// is the part of each that stretch settles.
+#[derive(Clone, Copy, Debug)]
+struct Marks {
+    methods: usize,
+    numerals: usize,
+    tags: usize,
+    closings: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -305,14 +414,24 @@ impl Infer {
                 parameters.iter().map(|ty| self.resolve(ty)).collect(),
                 Box::new(self.resolve(result)),
             ),
-            Ty::Variants(constructors) => Ty::Variants(
-                constructors
+            // A row is resolved flat: a tail bound to a row gives up its
+            // tags, so what comes back ends in an unbound tail or none.
+            Ty::Variants(tags, tail) => {
+                let mut tags: Tags = tags
                     .iter()
                     .map(|(name, fields)| {
                         (*name, fields.iter().map(|ty| self.resolve(ty)).collect())
                     })
-                    .collect(),
-            ),
+                    .collect();
+                let tail = match tail.as_deref().map(|tail| self.resolve(tail)) {
+                    Some(Ty::Variants(more, rest)) => {
+                        tags.extend(more);
+                        rest
+                    }
+                    other => other.map(Box::new),
+                };
+                Ty::Variants(tags, tail)
+            }
             Ty::Record(fields) => Ty::Record(
                 fields
                     .iter()
@@ -322,7 +441,7 @@ impl Infer {
         }
     }
 
-    fn unify(&mut self, left: &Ty, right: &Ty) -> Result<(), String> {
+    fn unify(&mut self, left: &Ty, right: &Ty) -> Result<(), Mismatch> {
         let left = self.resolve(left);
         let right = self.resolve(right);
         match (&left, &right) {
@@ -330,7 +449,7 @@ impl Infer {
             (Ty::Rigid(a), Ty::Rigid(b)) if a == b => Ok(()),
             (Ty::Var(id), other) | (other, Ty::Var(id)) => {
                 if contains(other, *id) {
-                    Err("a type would contain itself".to_string())
+                    Err(Mismatch::Reason("a type would contain itself"))
                 } else {
                     self.links[usize::try_from(*id).expect("u32 fits usize")] = Some(other.clone());
                     Ok(())
@@ -348,27 +467,176 @@ impl Infer {
                 }
                 self.unify(ar, br)
             }
-            (Ty::Variants(a), Ty::Variants(b)) if a.len() == b.len() => {
-                for ((an, af), (bn, bf)) in a.iter().zip(b) {
-                    if an != bn || af.len() != bf.len() {
-                        return Err("different structural variant types".to_string());
-                    }
-                    for (a, b) in af.iter().zip(bf) {
-                        self.unify(a, b)?;
-                    }
-                }
-                Ok(())
+            (Ty::Variants(a, at), Ty::Variants(b, bt)) => {
+                self.unify_rows((a, at.as_deref()), (b, bt.as_deref()))
             }
             (Ty::Record(a), Ty::Record(b)) if a.len() == b.len() => {
                 for ((an, at), (bn, bt)) in a.iter().zip(b) {
                     if an != bn {
-                        return Err("different record fields".to_string());
+                        return Err(Mismatch::Reason("the records have different fields"));
                     }
                     self.unify(at, bt)?;
                 }
                 Ok(())
             }
-            _ => Err("incompatible types".to_string()),
+            _ => Err(Mismatch::Reason("incompatible types")),
+        }
+    }
+
+    /// Unify what a body answers with what its signature says it answers,
+    /// except that a closed tag row may stand where the signature's row is
+    /// one a caller may widen, if it holds none of the caller's tags. That
+    /// takes a widening where the value is answered, which this says.
+    ///
+    /// Unification alone would refuse `f : [A] -> [A]` written `f(x) -> x`:
+    /// the parameter is closed, and the result's rest is the caller's.
+    fn subsume(&mut self, actual: &Ty, expected: &Ty) -> Result<bool, Mismatch> {
+        let actual = self.resolve(actual);
+        let expected = self.resolve(expected);
+        match (&actual, &expected) {
+            (Ty::Named(a, aa), Ty::Named(b, ba)) if a == b && aa.len() == ba.len() => {
+                let mut widened = false;
+                for (a, b) in aa.iter().zip(ba) {
+                    widened |= self.subsume(a, b)?;
+                }
+                Ok(widened)
+            }
+            (Ty::Record(a), Ty::Record(b))
+                if a.len() == b.len() && a.iter().zip(b).all(|((x, _), (y, _))| x == y) =>
+            {
+                let mut widened = false;
+                for ((_, a), (_, b)) in a.iter().zip(b) {
+                    widened |= self.subsume(a, b)?;
+                }
+                Ok(widened)
+            }
+            (Ty::Variants(a, a_tail), Ty::Variants(b, b_tail)) => {
+                let mut widened = false;
+                for (name, fields) in a {
+                    if let Some((_, other)) = b.iter().find(|(found, _)| found == name) {
+                        if fields.len() != other.len() {
+                            return Err(Mismatch::Fields(fields.len(), other.len()));
+                        }
+                        for (field, other) in fields.iter().zip(other) {
+                            widened |= self.subsume(field, other)?;
+                        }
+                    }
+                }
+                // The shared tags' fields are settled; what remains is which
+                // tags each row holds.
+                let settled = |tags: &[(Symbol, Vec<Ty>)], other: &[(Symbol, Vec<Ty>)]| -> Tags {
+                    tags.iter()
+                        .map(|(name, fields)| {
+                            let shared = other.iter().any(|(found, _)| found == name);
+                            (*name, if shared { Vec::new() } else { fields.clone() })
+                        })
+                        .collect()
+                };
+                let (left, right) = (settled(a, b), settled(b, a));
+                match self.unify_rows((&left, a_tail.as_deref()), (&right, b_tail.as_deref())) {
+                    Ok(()) => Ok(widened),
+                    Err(_)
+                        if a_tail.is_none()
+                            && matches!(b_tail.as_deref(), Some(Ty::Rigid(_)))
+                            && a.iter()
+                                .all(|(name, _)| b.iter().any(|(found, _)| found == name)) =>
+                    {
+                        Ok(true)
+                    }
+                    Err(mismatch) => Err(mismatch),
+                }
+            }
+            _ => self.unify(&actual, &expected).map(|()| false),
+        }
+    }
+
+    /// Row unification: tags both rows hold unify their fields, and each
+    /// open side's tail takes the tags only the other holds. A closed row
+    /// takes nothing, and neither does a rigid tail, which stands for tags
+    /// only a caller knows.
+    fn unify_rows(
+        &mut self,
+        (left, left_tail): (&[(Symbol, Vec<Ty>)], Option<&Ty>),
+        (right, right_tail): (&[(Symbol, Vec<Ty>)], Option<&Ty>),
+    ) -> Result<(), Mismatch> {
+        for (name, fields) in left {
+            if let Some((_, other)) = right.iter().find(|(found, _)| found == name) {
+                if fields.len() != other.len() {
+                    return Err(Mismatch::Fields(fields.len(), other.len()));
+                }
+                for (a, b) in fields.iter().zip(other) {
+                    self.unify(a, b)?;
+                }
+            }
+        }
+        let only = |from: &[(Symbol, Vec<Ty>)], other: &[(Symbol, Vec<Ty>)]| -> Tags {
+            from.iter()
+                .filter(|(name, _)| !other.iter().any(|(found, _)| found == name))
+                .cloned()
+                .collect()
+        };
+        let (only_left, only_right) = (only(left, right), only(right, left));
+        let not_among =
+            |extra: &Tags, tags: &[(Symbol, Vec<Ty>)], tail: Option<&Ty>| Mismatch::NotAmong {
+                tags: extra.iter().map(|(name, _)| *name).collect(),
+                row: Ty::Variants(tags.to_vec(), tail.cloned().map(Box::new)),
+            };
+        match (left_tail, right_tail) {
+            (None, None) if only_left.is_empty() && only_right.is_empty() => Ok(()),
+            (None, None) if only_left.is_empty() => Err(not_among(&only_right, left, None)),
+            (None, None) => Err(not_among(&only_left, right, None)),
+            (Some(Ty::Var(v)), None) => {
+                if !only_left.is_empty() {
+                    return Err(not_among(&only_left, right, None));
+                }
+                self.unify(&Ty::Var(*v), &Ty::Variants(only_right, None))
+            }
+            (None, Some(Ty::Var(v))) => {
+                if !only_right.is_empty() {
+                    return Err(not_among(&only_right, left, None));
+                }
+                self.unify(&Ty::Var(*v), &Ty::Variants(only_left, None))
+            }
+            (Some(Ty::Var(v)), Some(Ty::Var(w))) => {
+                if v == w {
+                    return if only_left.is_empty() && only_right.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(Mismatch::Reason(
+                            "two tag rows share their rest, so neither may hold a tag the other lacks",
+                        ))
+                    };
+                }
+                let rest = Box::new(self.fresh());
+                self.unify(&Ty::Var(*v), &Ty::Variants(only_right, Some(rest.clone())))?;
+                self.unify(&Ty::Var(*w), &Ty::Variants(only_left, Some(rest)))
+            }
+            (Some(Ty::Var(v)), Some(rigid @ Ty::Rigid(_))) => {
+                if !only_left.is_empty() {
+                    return Err(not_among(&only_left, right, right_tail));
+                }
+                self.unify(
+                    &Ty::Var(*v),
+                    &Ty::Variants(only_right, Some(Box::new(rigid.clone()))),
+                )
+            }
+            (Some(rigid @ Ty::Rigid(_)), Some(Ty::Var(v))) => {
+                if !only_right.is_empty() {
+                    return Err(not_among(&only_right, left, left_tail));
+                }
+                self.unify(
+                    &Ty::Var(*v),
+                    &Ty::Variants(only_left, Some(Box::new(rigid.clone()))),
+                )
+            }
+            (Some(Ty::Rigid(a)), Some(Ty::Rigid(b)))
+                if a == b && only_left.is_empty() && only_right.is_empty() =>
+            {
+                Ok(())
+            }
+            _ => Err(Mismatch::Reason(
+                "a tag row whose rest a caller chooses is neither closed nor another caller's",
+            )),
         }
     }
 
@@ -406,10 +674,12 @@ fn contains(ty: &Ty, variable: u32) -> bool {
         Ty::Function(parameters, result) => {
             parameters.iter().any(|ty| contains(ty, variable)) || contains(result, variable)
         }
-        Ty::Variants(constructors) => constructors
-            .iter()
-            .flat_map(|(_, fields)| fields)
-            .any(|ty| contains(ty, variable)),
+        Ty::Variants(tags, tail) => {
+            tags.iter()
+                .flat_map(|(_, fields)| fields)
+                .any(|ty| contains(ty, variable))
+                || tail.as_deref().is_some_and(|tail| contains(tail, variable))
+        }
         Ty::Record(fields) => fields.iter().any(|(_, ty)| contains(ty, variable)),
     }
 }
@@ -432,9 +702,8 @@ fn substitute(ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
                 .collect(),
             Box::new(substitute(result, replacements)),
         ),
-        Ty::Variants(constructors) => Ty::Variants(
-            constructors
-                .iter()
+        Ty::Variants(tags, tail) => Ty::Variants(
+            tags.iter()
                 .map(|(name, fields)| {
                     (
                         *name,
@@ -445,6 +714,8 @@ fn substitute(ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
                     )
                 })
                 .collect(),
+            tail.as_deref()
+                .map(|tail| Box::new(substitute(tail, replacements))),
         ),
         Ty::Record(fields) => Ty::Record(
             fields
@@ -466,8 +737,11 @@ struct Checker<'a> {
     visible_methods: HashMap<ModuleId, HashSet<Symbol>>,
     pending_methods: Vec<PendingMethod>,
     pending_numerals: Vec<PendingNumeral>,
+    pending_tags: Vec<PendingTag>,
+    pending_closings: Vec<PendingClosing>,
     expression_types: Vec<(ModuleId, super::ast::Span, Ty)>,
     clause_types: Vec<(ModuleId, super::ast::Span, Ty)>,
+    widenings: Vec<(ModuleId, super::ast::Span, Ty)>,
     checked: Types,
 }
 
@@ -497,8 +771,11 @@ impl<'a> Checker<'a> {
                 .collect(),
             pending_methods: Vec::new(),
             pending_numerals: Vec::new(),
+            pending_tags: Vec::new(),
+            pending_closings: Vec::new(),
             expression_types: Vec::new(),
             clause_types: Vec::new(),
+            widenings: Vec::new(),
             checked: Types::default(),
         };
         for module in &program.modules {
@@ -598,7 +875,7 @@ impl<'a> Checker<'a> {
             .map(|ty| self.surface_type(ty, &mut variables))
             .collect();
         let result = self.surface_type(&signature.result, &mut variables);
-        let ty = Ty::Function(parameters, Box::new(result));
+        let ty = self.open_result_rows(&Ty::Function(parameters, Box::new(result)), true);
         let scheme = Scheme {
             variables: free_variables(&ty),
             ty,
@@ -615,6 +892,60 @@ impl<'a> Checker<'a> {
                 });
         }
         Ok(())
+    }
+
+    /// Give every nonempty tag row in result position a tail, which the
+    /// scheme then quantifies.
+    ///
+    /// A signature's `Result(a [Empty])` says what this definition fails
+    /// with, and its body is checked against exactly that: skolemized, the
+    /// tail is rigid, so a body answering another tag is refused. It says
+    /// nothing about callers, whose business it is whether `Empty` travels
+    /// in one row with their own failures: instantiated, the tail is a
+    /// variable they may widen. A row in a parameter is what a definition
+    /// handles, and stays closed. The empty row is the type with no values
+    /// rather than a failure row, and stays closed too.
+    fn open_result_rows(&mut self, ty: &Ty, positive: bool) -> Ty {
+        match ty {
+            Ty::Var(_) | Ty::Rigid(_) => ty.clone(),
+            Ty::Named(name, arguments) => Ty::Named(
+                *name,
+                arguments
+                    .iter()
+                    .map(|ty| self.open_result_rows(ty, positive))
+                    .collect(),
+            ),
+            Ty::Function(parameters, result) => Ty::Function(
+                parameters
+                    .iter()
+                    .map(|ty| self.open_result_rows(ty, !positive))
+                    .collect(),
+                Box::new(self.open_result_rows(result, positive)),
+            ),
+            Ty::Variants(tags, tail) => {
+                let tags: Tags = tags
+                    .iter()
+                    .map(|(name, fields)| {
+                        let fields = fields
+                            .iter()
+                            .map(|ty| self.open_result_rows(ty, positive))
+                            .collect();
+                        (*name, fields)
+                    })
+                    .collect();
+                let tail = match tail {
+                    None if positive && !tags.is_empty() => Some(Box::new(self.infer.fresh())),
+                    other => other.clone(),
+                };
+                Ty::Variants(tags, tail)
+            }
+            Ty::Record(fields) => Ty::Record(
+                fields
+                    .iter()
+                    .map(|(name, ty)| (*name, self.open_result_rows(ty, positive)))
+                    .collect(),
+            ),
+        }
     }
 
     fn surface_type(&mut self, ty: &h::Type, variables: &mut HashMap<Symbol, Ty>) -> Ty {
@@ -637,6 +968,7 @@ impl<'a> Checker<'a> {
                     .collect(),
                 Box::new(self.surface_type(result, variables)),
             ),
+            // A written row is closed: it is exactly these tags.
             h::Type::Variants(constructors) => Ty::Variants(
                 constructors
                     .iter()
@@ -651,6 +983,7 @@ impl<'a> Checker<'a> {
                         )
                     })
                     .collect(),
+                None,
             ),
             h::Type::Record(fields) => Ty::Record(
                 fields
@@ -713,8 +1046,7 @@ impl<'a> Checker<'a> {
             .collect();
 
         for component in components(&definitions, &unsigned) {
-            let method_start = self.pending_methods.len();
-            let numeral_start = self.pending_numerals.len();
+            let marks = self.marks();
             let mut monotypes = HashMap::new();
             for name in &component {
                 let clauses = &definitions[name];
@@ -748,7 +1080,24 @@ impl<'a> Checker<'a> {
                     self.check_clause(module, clause, &monotypes[name])?;
                 }
             }
-            self.finish_pending(method_start, numeral_start)?;
+            self.finish_pending(marks)?;
+            for name in &component {
+                let Ty::Function(parameters, _) = self.infer.resolve(&monotypes[name]) else {
+                    continue;
+                };
+                let clauses = &definitions[name];
+                for (column, parameter) in parameters.iter().enumerate() {
+                    let rows = clauses
+                        .iter()
+                        .map(|(_, clause)| {
+                            (clause.patterns[column].clone(), clause.guard.is_some())
+                        })
+                        .collect();
+                    let (module, clause) = clauses[0];
+                    self.close_rows(parameter, rows)
+                        .map_err(|message| failure(module, clause.span, message))?;
+                }
+            }
             for name in component {
                 let ty = self.infer.resolve(&monotypes[&name]);
                 let scheme = self.generalize(&ty, Some(&component_name_set(&monotypes)));
@@ -764,11 +1113,10 @@ impl<'a> Checker<'a> {
                 continue;
             }
             for &(module, clause) in clauses {
-                let method_start = self.pending_methods.len();
-                let numeral_start = self.pending_numerals.len();
+                let marks = self.marks();
                 let ty = self.infer.skolemize(&scheme);
                 self.check_clause(module, clause, &ty)?;
-                self.finish_pending(method_start, numeral_start)?;
+                self.finish_pending(marks)?;
             }
         }
         self.checked.values = self
@@ -778,6 +1126,15 @@ impl<'a> Checker<'a> {
             .collect();
         self.checked.expressions = self
             .expression_types
+            .iter()
+            .map(|(module, span, ty)| ExpressionSite {
+                module: *module,
+                span: *span,
+                ty: public_type(&self.infer.resolve(ty)),
+            })
+            .collect();
+        self.checked.widenings = self
+            .widenings
             .iter()
             .map(|(module, span, ty)| ExpressionSite {
                 module: *module,
@@ -843,8 +1200,7 @@ impl<'a> Checker<'a> {
             self.unify_at(module, guard.span, &actual, &self.bool_type())?;
         }
         for binding in &clause.body.bindings {
-            let method_start = self.pending_methods.len();
-            let numeral_start = self.pending_numerals.len();
+            let marks = self.marks();
             let value = self.expr(module, &binding.value, &mut locals)?;
             let mut bound = Vec::new();
             collect_pattern_locals(&binding.pattern, &mut bound);
@@ -855,7 +1211,13 @@ impl<'a> Checker<'a> {
                 &mut locals,
                 binding.value.span,
             )?;
-            self.finish_pending(method_start, numeral_start)?;
+            self.pending_closings.push(PendingClosing {
+                module,
+                span: binding.value.span,
+                ty: value,
+                rows: vec![(binding.pattern.clone(), false)],
+            });
+            self.finish_pending(marks)?;
             for local in bound {
                 let ty = locals[local.index()]
                     .as_ref()
@@ -866,7 +1228,26 @@ impl<'a> Checker<'a> {
             }
         }
         let actual = self.expr(module, &clause.body.result, &mut locals)?;
-        self.unify_at(module, clause.body.result.span, &actual, &result)
+        let span = clause.body.result.span;
+        let widened = self.infer.subsume(&actual, &result).map_err(|reason| {
+            failure(
+                module,
+                span,
+                match reason {
+                    Mismatch::NotAmong { .. } => reason.describe(self.symbols),
+                    _ => format!(
+                        "type mismatch: {} and {} ({})",
+                        show(&self.infer.resolve(&actual), self.symbols),
+                        show(&self.infer.resolve(&result), self.symbols),
+                        reason.describe(self.symbols)
+                    ),
+                },
+            )
+        })?;
+        if widened {
+            self.widenings.push((module, span, (*result).clone()));
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -906,6 +1287,36 @@ impl<'a> Checker<'a> {
                 self.unify_at(module, span, expected, &result)?;
                 for (field, parameter) in fields.iter().zip(parameters) {
                     self.pattern(module, field, &parameter, locals, span)?;
+                }
+                Ok(())
+            }
+            // A claimed word's reading is the scrutinee's type to decide.
+            h::Pattern::Dual(dual, fields) => {
+                let field_types: Vec<_> = fields.iter().map(|_| self.infer.fresh()).collect();
+                self.pending_tags.push(PendingTag {
+                    module,
+                    span,
+                    dual: dual.clone(),
+                    fields: Some(field_types.clone()),
+                    field_spans: Vec::new(),
+                    result: expected.clone(),
+                    resolved: false,
+                });
+                for (field, ty) in fields.iter().zip(&field_types) {
+                    self.pattern(module, field, ty, locals, span)?;
+                }
+                Ok(())
+            }
+            // A tag pattern says the scrutinee is a row holding this tag.
+            h::Pattern::Tag(label, fields) => {
+                let field_types: Vec<_> = fields.iter().map(|_| self.infer.fresh()).collect();
+                let row = Ty::Variants(
+                    vec![(*label, field_types.clone())],
+                    Some(Box::new(self.infer.fresh())),
+                );
+                self.unify_at(module, span, expected, &row)?;
+                for (field, ty) in fields.iter().zip(&field_types) {
+                    self.pattern(module, field, ty, locals, span)?;
                 }
                 Ok(())
             }
@@ -1010,6 +1421,13 @@ impl<'a> Checker<'a> {
                 };
                 Ok(self.infer.instantiate(&scheme))
             }
+            // A tag alone is a value of any row holding it, with no fields.
+            h::ExprKind::Tag(label) => Ok(self.tag(*label, Vec::new())),
+            // A claimed word alone: a constructor as a function or a value,
+            // or a tag with no fields, as its position decides.
+            h::ExprKind::Dual(dual) => {
+                Ok(self.defer_tag(module, expression.span, dual, None, Vec::new()))
+            }
             h::ExprKind::Number(magnitude) => {
                 let ty = self.infer.fresh();
                 self.pending_numerals.push(PendingNumeral {
@@ -1078,10 +1496,39 @@ impl<'a> Checker<'a> {
                     self.pattern(module, pattern, parameter, locals, expression.span)?;
                 }
                 let result = self.expr(module, body, locals)?;
+                for (pattern, parameter) in patterns.iter().zip(&parameters) {
+                    self.pending_closings.push(PendingClosing {
+                        module,
+                        span: expression.span,
+                        ty: parameter.clone(),
+                        rows: vec![(pattern.clone(), false)],
+                    });
+                }
                 for local in bound {
                     locals[local.index()] = None;
                 }
                 Ok(Ty::Function(parameters, Box::new(result)))
+            }
+            h::ExprKind::Call(head, arguments) if matches!(head.kind, h::ExprKind::Dual(_)) => {
+                let h::ExprKind::Dual(dual) = &head.kind else {
+                    unreachable!("guarded")
+                };
+                let mut fields = Vec::with_capacity(arguments.len());
+                for argument in arguments {
+                    fields.push(self.expr(module, argument, locals)?);
+                }
+                let spans = arguments.iter().map(|argument| argument.span).collect();
+                Ok(self.defer_tag(module, expression.span, dual, Some(fields), spans))
+            }
+            h::ExprKind::Call(head, arguments) if matches!(head.kind, h::ExprKind::Tag(_)) => {
+                let h::ExprKind::Tag(label) = head.kind else {
+                    unreachable!("guarded")
+                };
+                let mut fields = Vec::with_capacity(arguments.len());
+                for argument in arguments {
+                    fields.push(self.expr(module, argument, locals)?);
+                }
+                Ok(self.tag(label, fields))
             }
             h::ExprKind::Call(head, arguments) => {
                 let head_type = self.expr(module, head, locals)?;
@@ -1178,6 +1625,217 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Close every open tag row the patterns take apart without a catch-all.
+    ///
+    /// A tag pattern only says the scrutinee holds that tag, so an unsigned
+    /// `f(A) -> 1` and `f(B) -> 2` infer a row holding at least `A` and
+    /// `B`. Left open, a caller could hand `f` a `C` no clause matches. Where
+    /// every row matching here names a tag, and none takes whatever else
+    /// comes, the row is exactly the tags there are clauses for. A guarded
+    /// catch-all takes nothing, since its guard may fail. A rigid tail is a
+    /// caller's to fill, so it cannot be closed: that match needs a
+    /// catch-all.
+    fn close_rows(&mut self, ty: &Ty, rows: Vec<(h::Pattern, bool)>) -> Result<(), String> {
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(|(pattern, guarded)| (self.desugared(pattern), guarded))
+            .collect();
+        if rows.is_empty()
+            || rows.iter().any(|(pattern, guarded)| {
+                !guarded && matches!(pattern, h::Pattern::Wild | h::Pattern::Bind(_))
+            })
+        {
+            return Ok(());
+        }
+        match self.infer.resolve(ty) {
+            Ty::Variants(tags, tail) => {
+                let tagged = rows
+                    .iter()
+                    .any(|(pattern, _)| matches!(pattern, h::Pattern::Tag(..)));
+                match tail.as_deref() {
+                    Some(Ty::Rigid(_)) if tagged => {
+                        return Err(format!(
+                            "`{}` may hold tags a caller adds, which no pattern here matches: write a catch-all",
+                            show(&Ty::Variants(tags, tail.clone()), self.symbols)
+                        ));
+                    }
+                    Some(_) if tagged => {
+                        let resolved = Ty::Variants(tags.clone(), tail.clone());
+                        self.infer
+                            .unify(&resolved, &Ty::Variants(tags.clone(), None))
+                            .map_err(|reason| reason.describe(self.symbols))?;
+                    }
+                    _ => {}
+                }
+                for (label, fields) in tags {
+                    let taken: Vec<_> = rows
+                        .iter()
+                        .filter_map(|(pattern, guarded)| match pattern {
+                            h::Pattern::Tag(found, subs) if *found == label => {
+                                Some((subs.clone(), *guarded))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    self.close_fields(&fields, &taken)?;
+                }
+            }
+            Ty::Named(..) => {
+                let mut constructors: Vec<Symbol> = Vec::new();
+                for (pattern, _) in &rows {
+                    if let h::Pattern::Constructor(constructor, _) = pattern
+                        && !constructors.contains(constructor)
+                    {
+                        constructors.push(*constructor);
+                    }
+                }
+                for constructor in constructors {
+                    let Some(scheme) = self.constructors.get(&constructor).cloned() else {
+                        continue;
+                    };
+                    let (fields, result) = match self.infer.instantiate(&scheme) {
+                        Ty::Function(fields, result) => (fields, *result),
+                        result => (Vec::new(), result),
+                    };
+                    self.infer
+                        .unify(ty, &result)
+                        .map_err(|reason| reason.describe(self.symbols))?;
+                    let taken: Vec<_> = rows
+                        .iter()
+                        .filter_map(|(pattern, guarded)| match pattern {
+                            h::Pattern::Constructor(found, subs) if *found == constructor => {
+                                Some((subs.clone(), *guarded))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    self.close_fields(&fields, &taken)?;
+                }
+            }
+            Ty::Record(fields) => {
+                for (name, field) in fields {
+                    let column = rows
+                        .iter()
+                        .filter_map(|(pattern, guarded)| match pattern {
+                            h::Pattern::Record(held) => held
+                                .iter()
+                                .find(|(found, _)| *found == name)
+                                .map(|(_, pattern)| (pattern.clone(), *guarded)),
+                            _ => None,
+                        })
+                        .collect();
+                    self.close_rows(&field, column)?;
+                }
+            }
+            Ty::Var(_) | Ty::Rigid(_) | Ty::Function(..) => {}
+        }
+        Ok(())
+    }
+
+    /// [`Self::close_rows`] for each field of the rows one constructor or
+    /// tag took apart.
+    fn close_fields(
+        &mut self,
+        fields: &[Ty],
+        taken: &[(Vec<h::Pattern>, bool)],
+    ) -> Result<(), String> {
+        for (at, field) in fields.iter().enumerate() {
+            let column = taken
+                .iter()
+                .filter_map(|(subs, guarded)| subs.get(at).map(|sub| (sub.clone(), *guarded)))
+                .collect();
+            self.close_rows(field, column)?;
+        }
+        Ok(())
+    }
+
+    /// A pattern as what it matches: a list as the constructors it stands
+    /// for, and a claimed word as the reading it took.
+    fn desugared(&self, pattern: h::Pattern) -> h::Pattern {
+        if let h::Pattern::Dual(dual, fields) = pattern {
+            return match self.checked.readings.get(&dual.site) {
+                Some(Reading::Constructor(constructor)) => {
+                    h::Pattern::Constructor(*constructor, fields)
+                }
+                Some(Reading::Tag(label)) => h::Pattern::Tag(*label, fields),
+                None => h::Pattern::Dual(dual, fields),
+            };
+        }
+        let h::Pattern::List(elements, rest) = pattern else {
+            return pattern;
+        };
+        let mut tail = rest.map_or_else(
+            || h::Pattern::Constructor(self.prelude.list_nil, Vec::new()),
+            |rest| *rest,
+        );
+        for element in elements.into_iter().rev() {
+            tail = h::Pattern::Constructor(self.prelude.list_cons, vec![element, tail]);
+        }
+        tail
+    }
+
+    /// A claimed word at a position whose type will decide its reading.
+    fn defer_tag(
+        &mut self,
+        module: ModuleId,
+        span: super::ast::Span,
+        dual: &h::Dual,
+        fields: Option<Vec<Ty>>,
+        field_spans: Vec<super::ast::Span>,
+    ) -> Ty {
+        let result = self.infer.fresh();
+        self.pending_tags.push(PendingTag {
+            module,
+            span,
+            dual: dual.clone(),
+            fields,
+            field_spans,
+            result: result.clone(),
+            resolved: false,
+        });
+        result
+    }
+
+    /// A pending word's field flowing into the type its reading gives it:
+    /// widened where it is written in an expression and the reading's type
+    /// is a row a caller may widen, unified otherwise.
+    fn field_flows(
+        &mut self,
+        pending: &PendingTag,
+        at: usize,
+        field: &Ty,
+        wanted: &Ty,
+    ) -> Result<(), CheckError> {
+        let Some(&span) = pending.field_spans.get(at) else {
+            return self.unify_at(pending.module, pending.span, field, wanted);
+        };
+        let widened = self.infer.subsume(field, wanted).map_err(|reason| {
+            failure(
+                pending.module,
+                span,
+                match reason {
+                    Mismatch::NotAmong { .. } => reason.describe(self.symbols),
+                    _ => format!(
+                        "type mismatch: {} and {} ({})",
+                        show(&self.infer.resolve(field), self.symbols),
+                        show(&self.infer.resolve(wanted), self.symbols),
+                        reason.describe(self.symbols)
+                    ),
+                },
+            )
+        })?;
+        if widened {
+            self.widenings.push((pending.module, span, wanted.clone()));
+        }
+        Ok(())
+    }
+
+    /// A value of any row holding `label` with these fields: open, so it
+    /// flows to whatever handles more.
+    fn tag(&mut self, label: Symbol, fields: Vec<Ty>) -> Ty {
+        Ty::Variants(vec![(label, fields)], Some(Box::new(self.infer.fresh())))
+    }
+
     fn method(
         &mut self,
         module: ModuleId,
@@ -1218,12 +1876,37 @@ impl<'a> Checker<'a> {
         result
     }
 
-    fn finish_pending(
-        &mut self,
-        method_start: usize,
-        numeral_start: usize,
-    ) -> Result<(), CheckError> {
-        self.settle_methods(method_start, false)?;
+    const fn marks(&self) -> Marks {
+        Marks {
+            methods: self.pending_methods.len(),
+            numerals: self.pending_numerals.len(),
+            tags: self.pending_tags.len(),
+            closings: self.pending_closings.len(),
+        }
+    }
+
+    fn finish_pending(&mut self, marks: Marks) -> Result<(), CheckError> {
+        let (method_start, numeral_start) = (marks.methods, marks.numerals);
+        self.settle(marks)?;
+        // A word nothing decided takes its one declared reading, before a
+        // numeral does its default: `W(3)` builds a `W`, whatever `3` is.
+        // One at a time, since reading one may prove another's position a
+        // tag row.
+        while let Some(index) = (marks.tags..self.pending_tags.len()).find(|&index| {
+            let pending = &self.pending_tags[index];
+            !pending.resolved && pending.dual.candidates.len() == 1
+        }) {
+            let pending = self.pending_tags[index].clone();
+            self.settle_nominal(&pending)?;
+            self.pending_tags[index].resolved = true;
+            self.settle(marks)?;
+        }
+        if let Some(pending) = self.pending_tags[marks.tags..]
+            .iter()
+            .find(|pending| !pending.resolved)
+        {
+            return Err(self.ambiguous(pending));
+        }
         for index in numeral_start..self.pending_numerals.len() {
             let numeral = self.pending_numerals[index].clone();
             if numeral.resolved {
@@ -1275,7 +1958,207 @@ impl<'a> Checker<'a> {
             });
             self.pending_numerals[index].resolved = true;
         }
+        let closings = self.pending_closings.split_off(marks.closings);
+        for closing in closings {
+            self.close_rows(&closing.ty, closing.rows)
+                .map_err(|message| failure(closing.module, closing.span, message))?;
+        }
         Ok(())
+    }
+
+    /// Settle methods and claimed words together until neither moves: a
+    /// method's answer can decide a word's position, and a word's reading
+    /// a method's receiver.
+    fn settle(&mut self, marks: Marks) -> Result<(), CheckError> {
+        loop {
+            self.settle_methods(marks.methods, false)?;
+            if !self.settle_tags(marks.tags)? {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Give every pending word whose position has a type its reading there:
+    /// a tag row takes the tag, anything else a declared constructor.
+    /// Answers whether any did.
+    fn settle_tags(&mut self, start: usize) -> Result<bool, CheckError> {
+        let mut progress = false;
+        for index in start..self.pending_tags.len() {
+            if self.pending_tags[index].resolved {
+                continue;
+            }
+            let pending = self.pending_tags[index].clone();
+            match self.infer.resolve(&pending.result) {
+                Ty::Var(_) => continue,
+                Ty::Variants(tags, _) => {
+                    let fields = pending.fields.clone().unwrap_or_default();
+                    // Where the row already holds the tag, each field flows
+                    // into what the row says it holds.
+                    let fields = match tags
+                        .iter()
+                        .find(|(label, _)| *label == pending.dual.spelling)
+                    {
+                        Some((_, wanted)) if wanted.len() == fields.len() => {
+                            for (at, (field, wanted)) in fields.iter().zip(wanted).enumerate() {
+                                self.field_flows(&pending, at, field, wanted)?;
+                            }
+                            wanted.clone()
+                        }
+                        _ => fields,
+                    };
+                    let row = self.tag(pending.dual.spelling, fields);
+                    self.unify_at(pending.module, pending.span, &pending.result, &row)?;
+                    self.checked
+                        .readings
+                        .insert(pending.dual.site, Reading::Tag(pending.dual.spelling));
+                }
+                _ => self.settle_nominal(&pending)?,
+            }
+            self.pending_tags[index].resolved = true;
+            progress = true;
+        }
+        Ok(progress)
+    }
+
+    /// Read a pending word as the declared constructor its position
+    /// demands: its only claimant, or the one whose type the position has.
+    fn settle_nominal(&mut self, pending: &PendingTag) -> Result<(), CheckError> {
+        let chosen = match pending.dual.candidates.as_slice() {
+            [only] => *only,
+            candidates => {
+                let head = match self.infer.resolve(&pending.result) {
+                    Ty::Named(head, _) => Some(head),
+                    Ty::Function(_, result) => match *result {
+                        Ty::Named(head, _) => Some(head),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(head) = head else {
+                    return Err(self.ambiguous(pending));
+                };
+                *candidates
+                    .iter()
+                    .find(|candidate| self.constructor_owner(**candidate) == Some(head))
+                    .ok_or_else(|| {
+                        failure(
+                            pending.module,
+                            pending.span,
+                            format!(
+                                "type `{}` has no constructor `{}`",
+                                spelled(head, self.symbols),
+                                self.symbols.text(pending.dual.spelling)
+                            ),
+                        )
+                    })?
+            }
+        };
+        if let Some(home) = pending.dual.home
+            && home != chosen
+        {
+            let owner = self
+                .constructor_owner(home)
+                .map_or("", |owner| spelled(owner, self.symbols));
+            let other = self
+                .constructor_owner(chosen)
+                .map_or("", |owner| spelled(owner, self.symbols));
+            let word = self.symbols.text(pending.dual.spelling);
+            return Err(failure(
+                pending.module,
+                pending.span,
+                format!(
+                    "inside `{owner}`'s block, the bare `{word}` reads as `{owner}`'s own constructor; this one is `{other}.{word}`, which is written qualified"
+                ),
+            ));
+        }
+        let scheme = self.constructors.get(&chosen).cloned().ok_or_else(|| {
+            failure(
+                pending.module,
+                pending.span,
+                "constructor has no declared type",
+            )
+        })?;
+        let ty = self.infer.instantiate(&scheme);
+        // Where the position already has a type, that the constructor
+        // builds another is the whole of what is wrong.
+        let builds = |checker: &mut Self, built: &Ty| {
+            let wanted = checker.infer.resolve(&pending.result);
+            checker.infer.unify(&pending.result, built).map_err(|_| {
+                failure(
+                    pending.module,
+                    pending.span,
+                    format!(
+                        "`{}` builds {}, where {} is wanted",
+                        checker.symbols.text(pending.dual.spelling),
+                        show(&checker.infer.resolve(built), checker.symbols),
+                        show(&wanted, checker.symbols)
+                    ),
+                )
+            })
+        };
+        match &pending.fields {
+            None => builds(self, &ty)?,
+            Some(fields) => {
+                let (parameters, result) = match ty {
+                    Ty::Function(parameters, result) => (parameters, *result),
+                    result => (Vec::new(), result),
+                };
+                if parameters.len() != fields.len() {
+                    return Err(failure(
+                        pending.module,
+                        pending.span,
+                        format!(
+                            "constructor `{}` takes {} fields, but is given {}",
+                            self.symbols.text(pending.dual.spelling),
+                            parameters.len(),
+                            fields.len()
+                        ),
+                    ));
+                }
+                builds(self, &result)?;
+                for (at, (field, parameter)) in fields.iter().zip(&parameters).enumerate() {
+                    self.field_flows(pending, at, field, parameter)?;
+                }
+            }
+        }
+        self.checked
+            .readings
+            .insert(pending.dual.site, Reading::Constructor(chosen));
+        Ok(())
+    }
+
+    /// The type a declared constructor builds.
+    fn constructor_owner(&self, constructor: Symbol) -> Option<Symbol> {
+        let scheme = self.constructors.get(&constructor)?;
+        let result = match &scheme.ty {
+            Ty::Function(_, result) => result.as_ref(),
+            result => result,
+        };
+        match result {
+            Ty::Named(owner, _) => Some(*owner),
+            _ => None,
+        }
+    }
+
+    /// The one honest ambiguity: several types claim the word, and nothing
+    /// says which type its position has.
+    fn ambiguous(&self, pending: &PendingTag) -> CheckError {
+        let word = self.symbols.text(pending.dual.spelling);
+        let readings: Vec<_> = pending
+            .dual
+            .candidates
+            .iter()
+            .filter_map(|candidate| self.constructor_owner(*candidate))
+            .map(|owner| format!("`{}.{word}`", spelled(owner, self.symbols)))
+            .collect();
+        failure(
+            pending.module,
+            pending.span,
+            format!(
+                "constructor `{word}` is ambiguous here: nothing decides between {}; qualify it, or let a signature decide",
+                readings.join(" and ")
+            ),
+        )
     }
 
     fn settle_methods(&mut self, start: usize, final_pass: bool) -> Result<(), CheckError> {
@@ -1459,15 +2342,17 @@ impl<'a> Checker<'a> {
         expected: &Ty,
     ) -> Result<(), CheckError> {
         self.infer.unify(actual, expected).map_err(|reason| {
-            failure(
-                module,
-                span,
-                format!(
-                    "type mismatch: {} and {} ({reason})",
+            let message = match reason {
+                // Which tag does not fit is the whole of it.
+                Mismatch::NotAmong { .. } => reason.describe(self.symbols),
+                _ => format!(
+                    "type mismatch: {} and {} ({})",
                     show(&self.infer.resolve(actual), self.symbols),
-                    show(&self.infer.resolve(expected), self.symbols)
+                    show(&self.infer.resolve(expected), self.symbols),
+                    reason.describe(self.symbols)
                 ),
-            )
+            };
+            failure(module, span, message)
         })
     }
 
@@ -1551,7 +2436,18 @@ fn apply_signature(
             )
         })?;
     }
-    infer.unify(&pending.result, &result)
+    let wanted = infer.resolve(&pending.result);
+    infer
+        .unify(&pending.result, &result)
+        .map_err(|reason| match reason {
+            Mismatch::NotAmong { .. } => reason.describe(symbols),
+            _ => format!(
+                "`{}` answers {}, where {} is wanted",
+                symbols.text(pending.name),
+                show(&infer.resolve(&result), symbols),
+                show(&wanted, symbols)
+            ),
+        })
 }
 
 fn public_type(ty: &Ty) -> InferredType {
@@ -1571,11 +2467,11 @@ fn public_type(ty: &Ty) -> InferredType {
             parameters.iter().map(public_type).collect(),
             Box::new(public_type(result)),
         ),
-        Ty::Variants(constructors) => InferredType::Variants(
-            constructors
-                .iter()
+        Ty::Variants(tags, tail) => InferredType::Variants(
+            tags.iter()
                 .map(|(name, fields)| (*name, fields.iter().map(public_type).collect()))
                 .collect(),
+            tail.as_deref().map(|tail| Box::new(public_type(tail))),
         ),
         Ty::Record(fields) => InferredType::Record(
             fields
@@ -1606,11 +2502,14 @@ fn free_variables(ty: &Ty) -> Vec<u32> {
                 }
                 collect(result, output);
             }
-            Ty::Variants(constructors) => {
-                for (_, fields) in constructors {
+            Ty::Variants(tags, tail) => {
+                for (_, fields) in tags {
                     for ty in fields {
                         collect(ty, output);
                     }
+                }
+                if let Some(tail) = tail {
+                    collect(tail, output);
                 }
             }
             Ty::Record(fields) => {
@@ -1763,6 +2662,8 @@ fn validate_effect_expr(
         h::ExprKind::Local(_)
         | h::ExprKind::Global(_)
         | h::ExprKind::Constructor(_)
+        | h::ExprKind::Tag(_)
+        | h::ExprKind::Dual(_)
         | h::ExprKind::Number(_) => Ok(()),
     }
 }
@@ -1951,14 +2852,21 @@ fn expr_globals(expression: &h::Expr, output: &mut HashSet<Symbol>) {
             expr_globals(left, output);
             expr_globals(right, output);
         }
-        h::ExprKind::Local(_) | h::ExprKind::Constructor(_) | h::ExprKind::Number(_) => {}
+        h::ExprKind::Local(_)
+        | h::ExprKind::Constructor(_)
+        | h::ExprKind::Tag(_)
+        | h::ExprKind::Dual(_)
+        | h::ExprKind::Number(_) => {}
     }
 }
 
 fn collect_pattern_locals(pattern: &h::Pattern, output: &mut Vec<h::LocalId>) {
     match pattern {
         h::Pattern::Bind(local) => output.push(*local),
-        h::Pattern::Constructor(_, fields) | h::Pattern::List(fields, None) => {
+        h::Pattern::Constructor(_, fields)
+        | h::Pattern::Tag(_, fields)
+        | h::Pattern::Dual(_, fields)
+        | h::Pattern::List(fields, None) => {
             for field in fields {
                 collect_pattern_locals(field, output);
             }
@@ -2016,19 +2924,26 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
                 .join(" "),
             show(result, symbols)
         ),
-        Ty::Variants(variants) => format!(
-            "[{}]",
-            variants
+        // An open row shows its rest as `*`: the tags a caller may add.
+        Ty::Variants(tags, tail) => {
+            let mut shown: Vec<_> = tags
                 .iter()
-                .map(|(name, fields)| if fields.is_empty() {
-                    spelled(*name, symbols).to_owned()
-                } else {
-                    let fields: Vec<_> = fields.iter().map(|ty| show(ty, symbols)).collect();
-                    format!("{}({})", spelled(*name, symbols), fields.join(" "))
+                .map(|(name, fields)| {
+                    if fields.is_empty() {
+                        spelled(*name, symbols).to_owned()
+                    } else {
+                        let fields: Vec<_> = fields.iter().map(|ty| show(ty, symbols)).collect();
+                        format!("{}({})", spelled(*name, symbols), fields.join(" "))
+                    }
                 })
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
+                .collect();
+            // A rigid rest is a caller's: where it shows, in the body it
+            // belongs to, the row is exactly its tags.
+            if matches!(tail.as_deref(), Some(Ty::Var(_))) {
+                shown.push("*".to_owned());
+            }
+            format!("[{}]", shown.join(" "))
+        }
         Ty::Record(fields) => format!(
             "{{{}}}",
             fields
@@ -2307,17 +3222,14 @@ mod tests {
         assert!(failure.message.contains("must stand on its own"));
     }
 
-    /// A method that exists, called with an argument it does not take, says
-    /// which argument and both types, rather than that there is no method.
+    /// A constructor handed where its position wants another type says what
+    /// it builds and what is wanted, rather than that there is no method.
     #[test]
-    fn a_method_given_the_wrong_argument_names_it() {
+    fn a_constructor_where_another_type_is_wanted_says_both() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> Zero.add(True)\n");
         let failure = type_check(resolved, prelude).unwrap_err();
-        assert_eq!(
-            failure.message,
-            "argument 1 of `add` should be Nat, but is Bool"
-        );
+        assert_eq!(failure.message, "`True` builds Bool, where Nat is wanted");
     }
 
     #[test]

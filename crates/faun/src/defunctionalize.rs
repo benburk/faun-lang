@@ -79,6 +79,9 @@ pub(crate) enum ExprKind {
     Close(ClosureKey, Vec<LocalId>),
     /// Apply the closure the head makes through `apply` for its type.
     Apply(Box<Expr>, Vec<Expr>),
+    /// The value as this expression's wider type; see
+    /// [`specialize::ExprKind::Widen`].
+    Widen(Box<Expr>),
 }
 
 /// Which closure of a function type: what it does when applied.
@@ -197,6 +200,7 @@ impl Defunctionalizer {
                 let head = self.expr(*head);
                 ExprKind::Apply(Box::new(head), self.exprs(arguments))
             }
+            S::Widen(value) => ExprKind::Widen(Box::new(self.expr(*value))),
         };
         Expr {
             module,
@@ -276,7 +280,7 @@ fn free_locals(
                 free_locals(field, bound, found);
             }
         }
-        S::Project(receiver, _) => free_locals(receiver, bound, found),
+        S::Project(receiver, _) | S::Widen(receiver) => free_locals(receiver, bound, found),
         S::Invoke(head, arguments) => {
             free_locals(head, bound, found);
             for argument in arguments {
