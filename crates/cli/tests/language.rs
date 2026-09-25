@@ -495,6 +495,22 @@ const REFUSED: &[(&str, &str, &str)] = &[
         "a record with `*` has no `equals`",
     ),
     (
+        "only an effect stands on a line of its own",
+        "main! : Host -> []
+         main!(host) ->
+           [1 2].len()
+           host.exit!(0)",
+        "only an effect stands on a line of its own; bind anything else to a name",
+    ),
+    (
+        "a line of its own is not a way to throw a value away",
+        "main! : Host -> []
+         main!(host) ->
+           host.argc + 1
+           host.exit!(0)",
+        "only an effect stands on a line of its own",
+    ),
+    (
         "a constraint alias may not apply itself",
         "Forever(a) = where
            Forever(a)",

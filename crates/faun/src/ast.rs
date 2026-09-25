@@ -263,6 +263,9 @@ pub struct Body {
 pub struct Binding {
     pub pattern: Pattern,
     pub value: Expr,
+    /// Written as a line of its own, whose answer nothing keeps: an effect
+    /// asked for what it does.
+    pub discarded: bool,
 }
 
 /// A written integer. Its type and magnitude are deliberately not decided by

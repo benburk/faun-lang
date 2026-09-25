@@ -56,6 +56,14 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
         .any(|token| matches!(token.kind, Kind::Char | Kind::StrText));
     let mut module =
         grammar::source::program(&tokens).map_err(|error| syntax_error(source, &tokens, &error))?;
+    if let Some(line) = discarded_values(&module, source) {
+        let offset = usize::try_from(line.start).expect("u32 fits usize");
+        return Err(error_at(
+            source,
+            offset,
+            "only an effect stands on a line of its own; bind anything else to a name".to_owned(),
+        ));
+    }
     if validate_literals {
         literal::validate(&module, source).map_err(|error| {
             let offset = usize::try_from(error.span.start).expect("u32 fits usize");
@@ -64,6 +72,36 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
     }
     module.source = source_id;
     Ok(module)
+}
+
+/// The first line of a body that keeps nothing of what it works out and is
+/// no effect: a call of a name ending `!`, directly or as a method, is the
+/// only thing worth asking for what it does.
+fn discarded_values(module: &Module, source: &str) -> Option<crate::ast::Span> {
+    use crate::ast::{ExprKind, Item, MethodItem};
+    let effect = |expression: &crate::ast::Expr| match &expression.kind {
+        ExprKind::Call(head, _) => {
+            matches!(&head.kind, ExprKind::Name(name) if name.text(source).ends_with('!'))
+        }
+        ExprKind::Method(_, name, _) => name.text(source).ends_with('!'),
+        _ => false,
+    };
+    let clauses = module.items.iter().flat_map(|item| match item {
+        Item::Clause(clause) => vec![clause],
+        Item::Data(data) => data
+            .methods
+            .iter()
+            .filter_map(|method| match method {
+                MethodItem::Clause(clause) => Some(clause),
+                MethodItem::Signature(_) => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    });
+    clauses
+        .flat_map(|clause| &clause.body.bindings)
+        .find(|binding| binding.discarded && !effect(&binding.value))
+        .map(|binding| binding.value.span)
 }
 
 fn syntax_error(

@@ -478,7 +478,7 @@ peg::parser! {
             = bindings:(
                 binding_ahead() binding:binding() { binding }
                 / statement_ahead() value:expr() {
-                    Binding { pattern: Pattern::Wild(value.span), value }
+                    Binding { pattern: Pattern::Wild(value.span), value, discarded: true }
                 }
               )*
               result:expr() { Body { bindings, result } }
@@ -504,7 +504,9 @@ peg::parser! {
             }}
 
         rule binding() -> Binding
-            = pattern:pattern() equals() value:expr() { Binding { pattern, value } }
+            = pattern:pattern() equals() value:expr() {
+                Binding { pattern, value, discarded: false }
+            }
 
         rule pattern() -> Pattern
             = start:(tok(Kind::Number) / tok(Kind::Char)) adj(Kind::DotDot)

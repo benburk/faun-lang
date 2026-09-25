@@ -142,7 +142,9 @@ of a value's own type is reached whether or not the type was imported, so
 
 `host.print!(text)` and `host.println!(text)` write a text to standard output,
 the second with a line's end, and answer `Result({} IoError)`. An effect whose
-answer nothing needs is written on a line of its own, which binds it to `_`:
+answer nothing needs is written on a line of its own, which binds it to `_`.
+Only an effect, a call of a name ending `!`, may stand so; anything else is
+bound to a name:
 
 ```
 main!(host) ->
