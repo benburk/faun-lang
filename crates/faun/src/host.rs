@@ -5,6 +5,7 @@
 //! infer authority or providers from coincidental spellings elsewhere.
 
 use crate::diagnostic::Diagnostic;
+use crate::hir as h;
 use crate::modules::LoadedProgram;
 use crate::{ModuleId, Symbol};
 
@@ -55,6 +56,50 @@ impl HostIds {
             exit,
         })
     }
+}
+
+/// Give a `main!` written without a signature the ABI's, `Host -> []`.
+///
+/// Its `host` is then a `Host` from the start, and what it asks of it is
+/// found on `Host`, whatever the entry imports.
+pub fn sign_main(resolved: &mut crate::resolve::ResolvedProgram, host: &HostIds, main: &Main) {
+    let items = || {
+        resolved
+            .program
+            .modules
+            .iter()
+            .flat_map(|module| &module.items)
+    };
+    if items()
+        .any(|item| matches!(item, h::Item::Signature(signature) if signature.name == main.symbol))
+    {
+        return;
+    }
+    let Some(span) = items().find_map(|item| match item {
+        h::Item::Clause(clause) if clause.name == main.symbol => Some(clause.span),
+        _ => None,
+    }) else {
+        return;
+    };
+    let Some(spelling) = resolved.symbols.find("main!") else {
+        return;
+    };
+    let Some(module) = resolved
+        .program
+        .modules
+        .iter_mut()
+        .find(|module| module.source == main.module)
+    else {
+        return;
+    };
+    module.items.push(h::Item::Signature(h::SignatureDecl {
+        span,
+        name: main.symbol,
+        spelling,
+        parameters: vec![h::Type::Named(host.host, Vec::new())],
+        result: h::Type::Variants(Vec::new()),
+        constraints: Vec::new(),
+    }));
 }
 
 /// An application's entry point: the `main!` its entry module defines.

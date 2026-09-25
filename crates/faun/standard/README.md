@@ -166,6 +166,10 @@ stream routine on its primitive through a scratch region of one run, and keeps
 the last error for the host module to ask after. What a routine answers as a
 byte string is known to be bytes wherever a program reads them.
 
+An entry's `main!` is `Host -> []`, whether or not it says so: one written
+without a signature is given that one, so its `host` is a `Host` from the
+start and what it asks of it is found on `Host` without importing it.
+
 `Host` is authority carrying what its target hands the program: `host.args`,
 the arguments it was run with, its own name first, read like any record
 field. `host.args.len()` is how many there are, and

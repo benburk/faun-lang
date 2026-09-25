@@ -1,8 +1,6 @@
 # Advent of Code 2015, day 1: Not Quite Lisp.
 # Input is inspected as UTF-8 bytes; `(` raises the floor and `)` lowers it.
 
-import std.host {Host}
-
 step : U8 -> Int
 step('(') -> 1
 step(')') -> -1

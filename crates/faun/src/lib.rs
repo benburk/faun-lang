@@ -68,7 +68,10 @@ pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program
     let prelude = blessed::PreludeIds::find_in(&loaded).map_err(|e| Diagnostic::new(e.message))?;
     let host = host::HostIds::find_in(&loaded)?;
     let main = host::Main::find_in(&loaded)?;
-    let resolved = resolve::resolve_names(loaded)?;
+    let mut resolved = resolve::resolve_names(loaded)?;
+    if let Some(main) = &main {
+        host::sign_main(&mut resolved, &host, main);
+    }
     let checked = check::type_check(resolved, prelude)?;
     if let Some(main) = &main {
         check::check_application_abi(&checked, &host, main)?;
