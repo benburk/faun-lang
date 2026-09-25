@@ -33,7 +33,7 @@ const RUNGS: [(&str, &str); 5] = [
     ),
     (
         "a greeting",
-        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  host.stdout.write!(\"Hello, world!\".to_utf8())\n  host.exit!(0)\n",
+        include_str!("../../faun/examples/minimal-hello.fn"),
     ),
 ];
 

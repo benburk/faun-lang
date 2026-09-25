@@ -26,6 +26,16 @@ fn advent_of_code_2015_day_one_answers_the_puzzle_examples() {
     }
 }
 
+/// Hello, world, written once from where it lies; how small that is, is
+/// held by the ladder's greeting.
+#[test]
+fn minimal_hello_says_hello() {
+    assert_eq!(
+        support::run_file(&example("minimal-hello.fn"), b""),
+        (0, "Hello, world!".to_owned())
+    );
+}
+
 /// Standard input to its end, then to standard output: what went, or the
 /// error each step met, as its own status.
 #[test]

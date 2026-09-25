@@ -1,0 +1,13 @@
+# Hello, world, as small as a program saying it can be: one write of bytes
+# known before the program runs, from where they lie, and the way out. What
+# the write answers is not asked, so nothing is made of it.
+#
+# `print!` would go on writing until every byte went, which is a loop; this
+# writes once.
+
+import std.host {Host}
+
+main! : Host -> []
+main!(host) ->
+  host.stdout.write!("Hello, world!".to_utf8())
+  host.exit!(0)
