@@ -3420,12 +3420,15 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `equals` on a closed record or a tuple, and `cmp` on a tuple, which
-    /// such values have with no declaration: each asks the same of every
-    /// component, position by position for a tuple. A record has no `cmp`,
-    /// having no order of its fields, and an open record has neither, its
-    /// other fields being a caller's. Answers whether `pending` was one, or
-    /// nothing while a record may yet be closed.
+    /// `equals` on a closed record, a tuple or a tag row, `cmp` on a tuple,
+    /// and `to_str` on a tag row, which such values have with no
+    /// declaration: each asks the same of every component, position by
+    /// position for a tuple and field by field of each tag for a row. A
+    /// record and a row have no `cmp`, having no order of their fields or
+    /// tags, and an open record has neither, its other fields being a
+    /// caller's, as a row a caller may add tags to has neither `equals` nor
+    /// `to_str`. Answers whether `pending` was one, or nothing while a record
+    /// or row may yet be closed.
     fn structural(
         &mut self,
         pending: &PendingMethod,
@@ -3435,12 +3438,14 @@ impl<'a> Checker<'a> {
         let components = match &receiver {
             Ty::Tuple(members) => members.clone(),
             Ty::Record(fields, _) => fields.iter().map(|(_, ty)| ty.clone()).collect(),
+            Ty::Variants(tags, _) => tags.iter().flat_map(|(_, fields)| fields.clone()).collect(),
             _ => return Ok(Some(false)),
         };
         let spelled = self.symbols.text(pending.name);
         let answer = match (spelled, &receiver) {
             ("equals", _) => Ty::Named(self.prelude.bool_, Vec::new()),
             ("cmp", Ty::Tuple(_)) => Ty::Named(self.prelude.order, Vec::new()),
+            ("to_str", Ty::Variants(..)) => Ty::Named(self.prelude.str_, Vec::new()),
             _ => return Ok(Some(false)),
         };
         if let Ty::Record(_, Some(tail)) = &receiver {
@@ -3453,10 +3458,31 @@ impl<'a> Checker<'a> {
                 "a record with `*` has no `equals`: its other fields are a caller's",
             ));
         }
-        let [other] = pending.arguments.as_slice() else {
-            return Ok(Some(false));
-        };
-        self.unify_at(pending.module, pending.span, other, &receiver)?;
+        // A row's rest nothing else fills closes to nothing, but may be
+        // filled yet until checking is done.
+        if let Ty::Variants(_, Some(tail)) = &receiver {
+            match &**tail {
+                Ty::Var(_) if !final_pass => return Ok(None),
+                Ty::Var(_) => {}
+                _ => {
+                    return Err(failure(
+                        pending.module,
+                        pending.span,
+                        format!(
+                            "`{}` may hold tags a caller adds, which it cannot say `{spelled}` of",
+                            show(&receiver, self.symbols)
+                        ),
+                    ));
+                }
+            }
+        }
+        // `to_str` takes the value alone; the others take a second like it.
+        let unary = spelled == "to_str";
+        match pending.arguments.as_slice() {
+            [] if unary => {}
+            [other] if !unary => self.unify_at(pending.module, pending.span, other, &receiver)?,
+            _ => return Ok(Some(false)),
+        }
         self.unify_at(pending.module, pending.span, &pending.result, &answer)?;
         for component in components {
             self.pending_methods.push(PendingMethod {
@@ -3464,7 +3490,7 @@ impl<'a> Checker<'a> {
                 span: pending.span,
                 name: pending.name,
                 receiver: component.clone(),
-                arguments: vec![component],
+                arguments: if unary { Vec::new() } else { vec![component] },
                 result: answer.clone(),
                 reach: Reach::Called,
                 resolved: false,

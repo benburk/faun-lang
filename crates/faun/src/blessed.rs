@@ -46,10 +46,11 @@ pub struct PreludeIds {
     /// How a tuple's `cmp` goes on past an equal position.
     pub order_then: Symbol,
     pub order_eq: Symbol,
-    /// The spellings of the members a closed record or a tuple has without
-    /// declaring them, where anything spells them.
+    /// The spellings of the members a closed record, a tuple or a tag row
+    /// has without declaring them, where anything spells them.
     pub equals: Option<Symbol>,
     pub cmp: Option<Symbol>,
+    pub to_str: Option<Symbol>,
     /// What `?` takes apart and answers with.
     pub result: Symbol,
     pub result_ok: Symbol,
@@ -138,6 +139,7 @@ impl PreludeIds {
             order_eq: constructor(program, &order, "Order", "Eq")?,
             equals: program.symbols.find("equals"),
             cmp: program.symbols.find("cmp"),
+            to_str: program.symbols.find("to_str"),
             result: result.canonical,
             result_ok: constructor(program, &result, "Result", "Ok")?,
             result_err: constructor(program, &result, "Result", "Err")?,

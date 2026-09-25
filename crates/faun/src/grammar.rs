@@ -583,8 +583,12 @@ peg::parser! {
                     negative: false,
                 }
             }
+            // `[a *]` takes a rest it does not name.
             / open:lbracket() elements:(pattern() ** sep())
-              rest:(sep()? tok(Kind::Star) tight() rest:pattern() { rest })?
+              rest:(sep()? star:tok(Kind::Star)
+                  rest:(tight() rest:pattern() { rest })? {
+                      rest.unwrap_or_else(|| Pattern::Wild(star.span()))
+                  })?
               close:rbracket() {
                 Pattern::List {
                     span: open.span().through(close.span()),

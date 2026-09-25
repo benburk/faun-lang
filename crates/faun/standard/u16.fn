@@ -9,6 +9,9 @@ numerals_below : Nat
 numerals_below() -> 65536
 
 U16 : Nat.(
+  zero : U16
+  zero() -> U16(0)
+
   of_nat : Nat -> U16
   of_nat(n) -> U16(n % 65536)
 

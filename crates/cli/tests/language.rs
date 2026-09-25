@@ -346,6 +346,30 @@ const RUNNING: &[(&str, &str, u32)] = &[
            host.exit!(sizes + buckets + opened)",
         7 + 210 + 3,
     ),
+    (
+        "tags compare and print structurally, and results compare by their sides",
+        "kind : Nat -> [Small Big(Nat)]
+         kind(n) if n < 10 -> Small
+         kind(n) -> Big(n)
+
+         parse : Str -> Result(Nat [Malformed])
+         parse(text) -> Nat.from_str(text)
+
+         opens : List(Nat) -> Nat
+         opens([a b *]) -> a + b
+         opens(_) -> 0
+
+         bit : Bool -> Nat
+         bit(b) -> b.to_nat()
+
+         main! : Host -> []
+         main!(host) ->
+           tags = bit(kind(3) == Small) + bit(kind(30) == Big(30)) * 2 + bit(kind(30) != Big(31)) * 4
+           printed = bit(\"${kind(30)} ${kind(1)}\" == \"Big(30) Small\") * 8
+           results = bit(parse(\"48\") == Ok(48)) * 16 + bit(parse(\"x\") == Err(Malformed)) * 32
+           host.exit!(tags + printed + results + opens([1 2 9]) * 64)",
+        63 + 3 * 64,
+    ),
 ];
 
 /// Programs refused, and what the message says.

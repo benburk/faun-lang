@@ -516,13 +516,19 @@ impl<'a> Specializer<'a> {
     }
 
     /// Whether `name` on these parameters is a closed record's or a
-    /// tuple's own `equals` or `cmp`.
+    /// tuple's own `equals` or `cmp`, or a tag row's own `equals` or
+    /// `to_str`.
     fn is_structural(&self, name: Symbol, parameters: Option<&[Type]>) -> bool {
-        (Some(name) == self.prelude.equals || Some(name) == self.prelude.cmp)
+        let receiver = parameters.and_then(<[Type]>::first);
+        let name = Some(name);
+        (name == self.prelude.equals
             && matches!(
-                parameters.and_then(<[Type]>::first),
-                Some(Type::Record(_) | Type::Tuple(_))
-            )
+                receiver,
+                Some(Type::Record(_) | Type::Tuple(_) | Type::Variants(_))
+            ))
+            || (name == self.prelude.cmp
+                && matches!(receiver, Some(Type::Record(_) | Type::Tuple(_))))
+            || (name == self.prelude.to_str && matches!(receiver, Some(Type::Variants(_))))
     }
 
     fn specialize_function(&mut self, key: &FunctionKey) -> Result<Function, SpecializeError> {
@@ -562,34 +568,180 @@ impl<'a> Specializer<'a> {
         })
     }
 
-    /// A record's or a tuple's `equals`, every component equal, or a
-    /// tuple's `cmp`, the first position not `Eq`, each component compared
-    /// by its own type's member.
+    /// A record's, a tuple's or a tag row's `equals`, every component equal,
+    /// or a tuple's `cmp`, the first position not `Eq`, each component
+    /// compared by its own type's member. Values of a row are equal where
+    /// they are one tag with equal fields.
     fn structural_function(
         &mut self,
         key: &FunctionKey,
-        (module, span): (ModuleId, crate::ast::Span),
+        at: (ModuleId, crate::ast::Span),
     ) -> Result<Function, SpecializeError> {
         let (parameters, answer) = key
             .ty
             .function()
             .ok_or_else(|| error("a structural member is not a function"))?;
         let (receiver, answer) = (parameters[0].clone(), answer.clone());
-        let components: Vec<Type> = match &receiver {
-            Type::Tuple(members) => members.clone(),
-            Type::Record(fields) => fields.iter().map(|(_, ty)| ty.clone()).collect(),
-            _ => unreachable!("only records and tuples have structural members"),
+        if let Type::Variants(tags) = &receiver
+            && Some(key.name) == self.prelude.to_str
+        {
+            return self.row_to_str(key, at, tags);
+        }
+        let clauses = match &receiver {
+            Type::Tuple(members) => {
+                vec![self.componentwise(key, at, &answer, members, Pattern::Product)?]
+            }
+            Type::Record(fields) => {
+                let components: Vec<Type> = fields.iter().map(|(_, ty)| ty.clone()).collect();
+                let shape = |binds: Vec<Pattern>| {
+                    Pattern::Record(fields.iter().map(|(name, _)| *name).zip(binds).collect())
+                };
+                vec![self.componentwise(key, at, &answer, &components, shape)?]
+            }
+            Type::Variants(tags) => {
+                let mut clauses = Vec::with_capacity(tags.len() + 1);
+                for (label, fields) in tags {
+                    let shape = |binds| Pattern::Constructor(*label, binds);
+                    clauses.push(self.componentwise(key, at, &answer, fields, shape)?);
+                }
+                // Two different tags, where there are two to differ.
+                if tags.len() != 1 {
+                    clauses.push(Clause {
+                        patterns: vec![Pattern::Wild, Pattern::Wild],
+                        guard: None,
+                        body: Body {
+                            bindings: Vec::new(),
+                            result: Expr {
+                                module: at.0,
+                                span: at.1,
+                                ty: answer.clone(),
+                                kind: ExprKind::Construct(self.prelude.bool_false, Vec::new()),
+                            },
+                        },
+                    });
+                }
+                clauses
+            }
+            _ => unreachable!("only records, tuples and rows have structural members"),
         };
+        Ok(Function {
+            key: key.clone(),
+            clauses,
+            provider: None,
+        })
+    }
+
+    /// A tag row's `to_str`, as Ori writes a tag: its name, and the `to_str`
+    /// of each of its fields after it in parentheses, `Invalid(3)`.
+    fn row_to_str(
+        &mut self,
+        key: &FunctionKey,
+        (module, span): (ModuleId, crate::ast::Span),
+        tags: &[(Symbol, Vec<Type>)],
+    ) -> Result<Function, SpecializeError> {
+        let str_ = Type::Named(self.prelude.str_, Vec::new());
+        let concat = self.method_key(
+            self.prelude.str_concat,
+            &str_,
+            std::slice::from_ref(&str_),
+            &str_,
+        )?;
+        let mut clauses = Vec::with_capacity(tags.len());
+        for (label, fields) in tags {
+            let count =
+                u32::try_from(fields.len()).map_err(|_| error("a tag has too many fields"))?;
+            let name = self.symbols.text(*label).to_owned();
+            // The name, then each field and what follows it.
+            let opening = if fields.is_empty() {
+                name
+            } else {
+                format!("{name}(")
+            };
+            let mut pieces = vec![self.text(module, span, &opening)?];
+            for (index, field) in (0..count).zip(fields) {
+                let target = self.implementation(field, key.name)?;
+                let call = self.method_key(target, field, &[], &str_)?;
+                self.request_at(call.clone(), (module, span));
+                pieces.push(Expr {
+                    module,
+                    span,
+                    ty: str_.clone(),
+                    kind: ExprKind::DirectCall(
+                        call,
+                        vec![Expr {
+                            module,
+                            span,
+                            ty: field.clone(),
+                            kind: ExprKind::Local(h::LocalId(index)),
+                        }],
+                    ),
+                });
+                let after = if index + 1 == count { ")" } else { " " };
+                pieces.push(self.text(module, span, after)?);
+            }
+            let mut pieces = pieces.into_iter();
+            let mut result = pieces.next().ok_or_else(|| error("a tag has a name"))?;
+            for next in pieces {
+                self.request(concat.clone());
+                result = Expr {
+                    module,
+                    span,
+                    ty: str_.clone(),
+                    kind: ExprKind::DirectCall(concat.clone(), vec![result, next]),
+                };
+            }
+            clauses.push(Clause {
+                patterns: vec![Pattern::Constructor(
+                    *label,
+                    (0..count)
+                        .map(|index| Pattern::Bind(h::LocalId(index)))
+                        .collect(),
+                )],
+                guard: None,
+                body: Body {
+                    bindings: Vec::new(),
+                    result,
+                },
+            });
+        }
+        Ok(Function {
+            key: key.clone(),
+            clauses,
+            provider: None,
+        })
+    }
+
+    /// A string literal of `text`.
+    fn text(
+        &mut self,
+        module: ModuleId,
+        span: crate::ast::Span,
+        text: &str,
+    ) -> Result<Expr, SpecializeError> {
+        let literal = crate::blessed::string(text.as_bytes(), self.prelude);
+        let str_ = Type::Named(self.prelude.str_, Vec::new());
+        self.literal(module, span, &literal, &str_)
+    }
+
+    /// The clause taking two values of one shape apart, `shape` holding the
+    /// binds of their `components`, that answers each pair of components
+    /// compared by the component type's own member, the answers joined.
+    fn componentwise(
+        &mut self,
+        key: &FunctionKey,
+        (module, span): (ModuleId, crate::ast::Span),
+        answer: &Type,
+        components: &[Type],
+        shape: impl Fn(Vec<Pattern>) -> Pattern,
+    ) -> Result<Clause, SpecializeError> {
         let count = u32::try_from(components.len())
             .map_err(|_| error("a product has too many components"))?;
-        let side = |offset: u32| -> Pattern {
-            let binds = (0..count).map(|index| Pattern::Bind(h::LocalId(offset + index)));
-            match &receiver {
-                Type::Record(fields) => {
-                    Pattern::Record(fields.iter().map(|(name, _)| *name).zip(binds).collect())
-                }
-                _ => Pattern::Product(binds.collect()),
-            }
+        let side = |offset: u32| {
+            shape(
+                (0..count)
+                    .map(|index| Pattern::Bind(h::LocalId(offset + index)))
+                    .collect(),
+            )
         };
         let patterns = vec![side(0), side(count)];
         let local = |index: u32, ty: &Type| Expr {
@@ -599,10 +751,10 @@ impl<'a> Specializer<'a> {
             kind: ExprKind::Local(h::LocalId(index)),
         };
         let mut compared = Vec::with_capacity(components.len());
-        for (index, component) in (0..count).zip(&components) {
+        for (index, component) in (0..count).zip(components) {
             let target = self.implementation(component, key.name)?;
             let call =
-                self.method_key(target, component, std::slice::from_ref(component), &answer)?;
+                self.method_key(target, component, std::slice::from_ref(component), answer)?;
             self.request_at(call.clone(), (module, span));
             compared.push(Expr {
                 module,
@@ -619,7 +771,7 @@ impl<'a> Specializer<'a> {
         } else {
             (self.prelude.bool_and, self.prelude.bool_true)
         };
-        let join = self.method_key(join, &answer, std::slice::from_ref(&answer), &answer)?;
+        let join = self.method_key(join, answer, std::slice::from_ref(answer), answer)?;
         let mut result = Expr {
             module,
             span,
@@ -639,17 +791,13 @@ impl<'a> Specializer<'a> {
                 kind: ExprKind::DirectCall(join.clone(), vec![earlier, result]),
             };
         }
-        Ok(Function {
-            key: key.clone(),
-            clauses: vec![Clause {
-                patterns,
-                guard: None,
-                body: Body {
-                    bindings: Vec::new(),
-                    result,
-                },
-            }],
-            provider: None,
+        Ok(Clause {
+            patterns,
+            guard: None,
+            body: Body {
+                bindings: Vec::new(),
+                result,
+            },
         })
     }
 
@@ -1199,7 +1347,7 @@ impl<'a> Specializer<'a> {
                     let site = crate::check::splice_site(splice.span);
                     let target = self.target(module, site, substitution)?;
                     let key = self.method_key(target, &value.ty, &[], str_)?;
-                    self.request(key.clone());
+                    self.request_at(key.clone(), (module, splice.span));
                     Expr {
                         module,
                         span: splice.span,

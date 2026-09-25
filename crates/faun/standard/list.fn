@@ -178,6 +178,12 @@ List(a) : [Nil Cons(a List(a))].(
   unzip : List((a b)) -> (List(a) List(b))
   unzip(pairs) -> unzip_into(pairs [] [])
 
+  # Every element of the list beside every element of `other`, the list's
+  # first with each of `other` before its second: `[a b].cross([x y])` is
+  # `[(a x) (a y) (b x) (b y)]`.
+  cross : List(a) List(b) -> List((a b))
+  cross(values other) -> cross_into(values other [])
+
   # Each element beside its place, counting from nought.
   enumerate : List(a) -> List((Nat a))
   enumerate(values) -> enumerate_into(values 0 [])
@@ -187,6 +193,11 @@ List(a) : [Nil Cons(a List(a))].(
   # empty window at each place, the end included, where `size` is nought.
   windows : List(a) Nat -> List(List(a))
   windows(values size) -> windows_into(values size [])
+
+  # The elements as Ori writes a list, each by its own `to_str`:
+  # `[1 2 3].to_str()` is `"[1 2 3]"`.
+  to_str : List(a) -> Str where a.to_str : a -> Str
+  to_str(values) -> "[".concat(Str.join(values.map(|value| value.to_str()) " ")).concat("]")
 
   # The least element, the first of those that tie.
   min : List(a) -> Result(a [Empty]) where a.cmp : a a -> Order
@@ -300,6 +311,11 @@ unzip_into([] firsts seconds) -> (reverse_into(firsts []) reverse_into(seconds [
 unzip_into([(first second) *tail] firsts seconds) ->
   unzip_into(tail [first *firsts] [second *seconds])
 
+cross_into : List(a) List(b) List((a b)) -> List((a b))
+cross_into([] _ built) -> reverse_into(built [])
+cross_into([head *tail] other built) ->
+  cross_into(tail other reverse_into(other.map(|paired| (head paired)) built))
+
 enumerate_into : List(a) Nat List((Nat a)) -> List((Nat a))
 enumerate_into([] _ built) -> reverse_into(built [])
 enumerate_into([head *tail] at built) -> enumerate_into(tail at + 1 [(at head) *built])
@@ -349,3 +365,5 @@ expect [1 2 3 4].windows(2) == [[1 2] [2 3] [3 4]] & [1 2].windows(3).is_empty()
 expect [1 2].windows(0).len() == 3
 expect [1 2 3 4 5].partition(|n| n % 2 == 0) == ([2 4] [1 3 5])
 expect [1 2 3].split_at(1) == ([1] [2 3]) & [1].split_at(5) == ([1] [])
+expect [1 2].cross([7 8 9]) == [(1 7) (1 8) (1 9) (2 7) (2 8) (2 9)] & [1].cross([0].drop(1)).is_empty()
+expect [1 20 3].to_str() == "[1 20 3]" & [0].drop(1).to_str() == "[]" & "${[[1] []]}" == "[[1] []]"

@@ -34,10 +34,11 @@ of equality, asked before the clause's guard.
 `any`, `all`, `fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
 `get`, `get_or`, `set`, `exchange`, `try_map`, `find`, `find_index`, `equals`,
 `contains`, `sum`, `take`, `drop`, `take_while`, `drop_while`, `split_at`,
-`partition`, `zip`, `unzip`, `enumerate`, `windows`, `min`, `max`, `sort`
-and `sort_on`, and the constructors `List.range(n)` and `List.repeat(x n)`.
-`sort` is a stable merge sort by the element's `cmp`, and `sort_on` by a
-key's. A
+`partition`, `zip`, `unzip`, `cross`, `enumerate`, `windows`, `min`, `max`,
+`sort`, `sort_on` and `to_str`, and the constructors `List.range(n)` and
+`List.repeat(x n)`. `sort` is a stable merge sort by the element's `cmp`, and
+`sort_on` by a key's. `to_str` writes a list as Ori does, `[1 2 3]`. A list
+pattern's rest may go unnamed, as `[a b *]`. A
 lookup that can miss answers a structural tag: `Err(OutOfBounds)`,
 `Err(Empty)` or `Err(NotFound)`. Nothing is recognized by name: `len` is
 answered from the length a list holds because Barb recognizes what it
@@ -66,8 +67,14 @@ constructors private, and a same-spelled structural tag never becomes one.
 Faun specializes from the types checking recorded rather than inferring each
 specialization again, so where a closed row is answered as a signature's
 wider one, a caller's, the value is rebuilt in the wider row. Tag rows have
-no written tail, as in Ori; a tag used as a function value and a row's
-automatic `to_str` are not here yet.
+no written tail, as in Ori; a tag used as a function value is not here yet.
+
+A closed row has `equals` and `to_str` without declaring them, as in Ori:
+two values are equal where they are one tag with equal fields, and a tag is
+written as its name, and its fields after it by their own `to_str`,
+`Invalid(3)`. A row a caller may still add tags to has neither. `Result`
+writes its own `equals`, both sides by their types' own, so
+`Nat.from_str(text) == Ok(48)` asks it of a `Nat` and a row.
 
 `value?` is an `Ok`'s value, or its `Err` answered at once by the clause or
 lambda it is written in, which answers a `Result`. Each `?` adds its
@@ -110,15 +117,16 @@ is given; `{x *}` in a pattern names some fields and takes the rest;
 `(a b)` is a positional product of two or more, built by its literal and
 taken apart by a pattern, and never unifies with a record. A binding may
 take a record or tuple apart, since that always matches. A closed record and a
-tuple have `equals` without declaring it, each component equal by its own
-type's `equals`, and a tuple has `cmp`, its positions in order with `Order.then`;
+tuple have `equals` without declaring it, as a tag row does, each component
+equal by its own type's `equals`, and a tuple has `cmp`, its positions in
+order with `Order.then`;
 a record has no order of its fields, and an open record no `equals`, its other
 fields being a caller's. A declared type writes its own.
 
 `&`, `|` and `^` are `and`, `or` and `xor`, as in Ori: logical on `Bool` and
 bitwise on `Nat` and the words, and looser than a comparison, so
 `x == 3 & y == 5` needs no parentheses and `(a & b) == 8` does. The words
-also have `bit_not`, `shift_left`, `shift_right`, `rotate_left` and
+also have `zero`, and `bit_not`, `shift_left`, `shift_right`, `rotate_left` and
 `rotate_right`, each by a `Nat` count of bits; a shift by the width or more
 is nought. `Int` has no bitwise operations.
 

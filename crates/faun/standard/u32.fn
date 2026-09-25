@@ -9,6 +9,9 @@ numerals_below : Nat
 numerals_below() -> 4294967296
 
 U32 : Nat.(
+  zero : U32
+  zero() -> U32(0)
+
   of_nat : Nat -> U32
   of_nat(n) -> U32(n % 4294967296)
 

@@ -9,6 +9,9 @@ numerals_below : Nat
 numerals_below() -> 18446744073709551616
 
 U64 : Nat.(
+  zero : U64
+  zero() -> U64(0)
+
   of_nat : Nat -> U64
   of_nat(n) -> U64(n % 18446744073709551616)
 
