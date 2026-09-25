@@ -319,6 +319,8 @@ pub enum ExprKind {
     Method(Box<Expr>, Name, Vec<Expr>),
     Unary(UnaryOp, Box<Expr>),
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
+    /// `value?`: an `Ok`'s value, or the `Err` answered at once.
+    Try(Box<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

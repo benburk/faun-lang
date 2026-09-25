@@ -203,6 +203,7 @@ fn validate_expr(expression: &Expr, source: &str) -> Result<(), LiteralError> {
         ExprKind::Record(fields) => fields
             .iter()
             .try_for_each(|(_, value)| validate_expr(value, source)),
+        ExprKind::Try(value) => validate_expr(value, source),
         ExprKind::Lambda(patterns, body) => {
             patterns
                 .iter()

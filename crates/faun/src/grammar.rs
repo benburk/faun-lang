@@ -459,6 +459,9 @@ peg::parser! {
                 let span = head.span.through(args.1);
                 Expr { span, kind: ExprKind::Call(Box::new(head), args.0) }
             }
+            value:@ question:adj(Kind::Question) {
+                Expr { span: value.span.through(question.span()), kind: ExprKind::Try(Box::new(value)) }
+            }
             head:@ member:dot_access() {
                 let span = head.span.through(member.2);
                 match member.1 {

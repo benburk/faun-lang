@@ -180,6 +180,9 @@ pub enum ExprKind {
     Method(Box<Expr>, Symbol, Vec<Expr>),
     Unary(UnaryOp, Box<Expr>),
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
+    /// `value?`: an `Ok`'s value, or the `Err` answered at once by the
+    /// clause or lambda it is written in.
+    Try(Box<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -298,14 +298,17 @@ impl<'a> Lowerer<'a> {
             self.collect_type(result)?;
             for clause in &function.clauses {
                 if let Some(guard) = &clause.guard {
-                    self.collect_expr(guard)?;
+                    self.collect_expr(guard, result)?;
                 }
-                self.collect_body(&clause.body)?;
+                self.collect_body(&clause.body, result)?;
             }
         }
-        for closure in closures.values().flatten() {
-            if let Some((_, body)) = &closure.lambda {
-                self.collect_expr(body)?;
+        for (ty, closure) in closures
+            .iter()
+            .flat_map(|(ty, closures)| closures.iter().map(move |closure| (ty, closure)))
+        {
+            if let (Some((_, body)), Some((_, answer))) = (&closure.lambda, ty.function()) {
+                self.collect_expr(body, answer)?;
             }
         }
         loop {
@@ -338,41 +341,53 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn collect_body(&mut self, body: &d::Body) -> Result<(), LowerError> {
+    /// Find what `body` holds, where its function or lambda answers
+    /// `answer`, which a `?` in it answers early with.
+    fn collect_body(&mut self, body: &d::Body, answer: &Type) -> Result<(), LowerError> {
         for binding in &body.bindings {
-            self.collect_expr(&binding.value)?;
+            self.collect_expr(&binding.value, answer)?;
             if !matches!(binding.pattern, Pattern::Wild | Pattern::Bind(_)) {
                 return Err(error(
                     "refutable local bindings are not supported by Barb lowering yet",
                 ));
             }
         }
-        self.collect_expr(&body.result)
+        self.collect_expr(&body.result, answer)
     }
 
-    fn collect_expr(&mut self, expression: &Expr) -> Result<(), LowerError> {
+    fn collect_expr(&mut self, expression: &Expr, answer: &Type) -> Result<(), LowerError> {
         self.collect_type(&expression.ty)?;
         match &expression.kind {
             ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Close(_, _) => {}
             ExprKind::Construct(_, fields) | ExprKind::DirectCall(_, fields) => {
                 for field in fields {
-                    self.collect_expr(field)?;
+                    self.collect_expr(field, answer)?;
                 }
             }
             ExprKind::Record(fields) => {
                 for (_, field) in fields {
-                    self.collect_expr(field)?;
+                    self.collect_expr(field, answer)?;
                 }
             }
-            ExprKind::Project(receiver, _) => self.collect_expr(receiver)?,
+            ExprKind::Project(receiver, _) => self.collect_expr(receiver, answer)?,
+            // An `Err` answered early is widened into what is answered.
+            ExprKind::Try(value) => {
+                self.collect_expr(value, answer)?;
+                if let (Type::Named(_, taken), Type::Named(_, answered)) = (&value.ty, answer)
+                    && let ([_, from], [_, to]) = (taken.as_slice(), answered.as_slice())
+                {
+                    self.collect_type(answer)?;
+                    self.collect_widening(from, to)?;
+                }
+            }
             ExprKind::Widen(value) => {
-                self.collect_expr(value)?;
+                self.collect_expr(value, answer)?;
                 self.collect_widening(&value.ty, &expression.ty)?;
             }
             ExprKind::Apply(head, arguments) => {
-                self.collect_expr(head)?;
+                self.collect_expr(head, answer)?;
                 for argument in arguments {
-                    self.collect_expr(argument)?;
+                    self.collect_expr(argument, answer)?;
                 }
             }
         }
@@ -654,6 +669,7 @@ impl<'a> Lowerer<'a> {
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
                 prelude: self.prelude,
+                answer: &to,
             };
             self.output.define(id, |builder, parameters| {
                 builder.match_(
@@ -724,6 +740,11 @@ impl<'a> Lowerer<'a> {
             let mut next = u32::try_from(subjects.len()).expect("a sane arity");
             let decision = self.plan(&rows, &subjects, &mut next)?;
             let function_id = self.function_ids[&function.key];
+            let (_, answer) = function
+                .key
+                .ty
+                .function()
+                .expect("specialized global is a function");
             let context = EmitContext {
                 type_ids: &self.type_ids,
                 constructor_ids: &self.constructor_ids,
@@ -735,6 +756,7 @@ impl<'a> Lowerer<'a> {
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
                 prelude: self.prelude,
+                answer,
             };
             self.output.define(function_id, |builder, parameters| {
                 let values = parameters
@@ -756,6 +778,7 @@ impl<'a> Lowerer<'a> {
             let variants = self.program.closures[&ty].clone();
             let apply = self.apply_ids[&ty];
             let closure_type = self.type_ids[&ty];
+            let (_, answer) = ty.function().expect("an applied type is a function");
             let context = EmitContext {
                 type_ids: &self.type_ids,
                 constructor_ids: &self.constructor_ids,
@@ -767,6 +790,7 @@ impl<'a> Lowerer<'a> {
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
                 prelude: self.prelude,
+                answer,
             };
             let mut lambda_plans = HashMap::new();
             for variant in &variants {
@@ -1155,6 +1179,9 @@ struct EmitContext<'a> {
     widen_ids: &'a HashMap<(Type, Type), FnId>,
     call_sites: &'a RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
     prelude: &'a PreludeIds,
+    /// What the function or lambda being emitted answers, which a `?` in
+    /// it answers an `Err` early as.
+    answer: &'a Type,
 }
 
 impl EmitContext<'_> {
@@ -1301,19 +1328,131 @@ fn emit_body(
     context: &EmitContext<'_>,
     builder: &mut Builder<'_>,
     body: &d::Body,
+    locals: HashMap<LocalId, Atom>,
+) -> Atom {
+    let body = hoisted(body);
+    emit_bindings(context, builder, &body.bindings, &body.result, locals)
+}
+
+/// Emit bindings in order, then the answer. A binding of `value?` takes the
+/// value apart: its `Ok` goes on to the rest of the body, and its `Err` is
+/// what this answers, at once.
+fn emit_bindings(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    bindings: &[d::Binding],
+    result: &Expr,
     mut locals: HashMap<LocalId, Atom>,
 ) -> Atom {
-    for binding in &body.bindings {
-        let value = emit_expr(context, builder, &binding.value, &locals);
-        match binding.pattern {
-            Pattern::Wild => {}
-            Pattern::Bind(local) => {
-                locals.insert(local, value);
-            }
-            _ => unreachable!("refutable bindings were rejected before emission"),
+    let Some((binding, rest)) = bindings.split_first() else {
+        return emit_expr(context, builder, result, &locals);
+    };
+    let bind = |locals: &mut HashMap<LocalId, Atom>, value| match binding.pattern {
+        Pattern::Wild => {}
+        Pattern::Bind(local) => {
+            locals.insert(local, value);
         }
+        _ => unreachable!("refutable bindings were rejected before emission"),
+    };
+    let ExprKind::Try(taken) = &binding.value.kind else {
+        let value = emit_expr(context, builder, &binding.value, &locals);
+        bind(&mut locals, value);
+        return emit_bindings(context, builder, rest, result, locals);
+    };
+    let value = emit_expr(context, builder, taken, &locals);
+    let (Type::Named(_, taken_types), Type::Named(_, answered_types)) = (&taken.ty, context.answer)
+    else {
+        unreachable!("`?` takes and answers results")
+    };
+    let ok = context.constructor_ids[&(context.prelude.result_ok, taken.ty.clone())];
+    builder.match_(
+        value,
+        context.type_ids[&taken.ty],
+        |builder, built, fields| {
+            if built == ok {
+                let mut locals = locals.clone();
+                bind(&mut locals, fields[0]);
+                emit_bindings(context, builder, rest, result, locals)
+            } else {
+                let error = context.widen(builder, fields[0], &taken_types[1], &answered_types[1]);
+                context.construct(
+                    builder,
+                    context.prelude.result_err,
+                    context.answer,
+                    &[error],
+                )
+            }
+        },
+    )
+}
+
+/// `body` with every `value?` in it bound on its own, in the order it is
+/// evaluated, and read back where it was written: what follows a `?` runs
+/// only on its `Ok`. Evaluation is pure but for effects, which stand on
+/// their own, so taking a `?` out ahead of the rest of its expression
+/// changes nothing a program can see.
+fn hoisted(body: &d::Body) -> d::Body {
+    let mut fresh = 0;
+    let mut bindings = Vec::with_capacity(body.bindings.len());
+    for binding in &body.bindings {
+        let value = lifted(&binding.value, &mut bindings, &mut fresh);
+        bindings.push(d::Binding {
+            pattern: binding.pattern.clone(),
+            value,
+        });
     }
-    emit_expr(context, builder, &body.result, &locals)
+    let result = lifted(&body.result, &mut bindings, &mut fresh);
+    d::Body { bindings, result }
+}
+
+/// `expression` with each `?` in it replaced by a local bound before it.
+fn lifted(expression: &Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> Expr {
+    let mut lift = |inner: &Expr| lifted(inner, bindings, fresh);
+    let kind = match &expression.kind {
+        ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Close(_, _) => {
+            return expression.clone();
+        }
+        ExprKind::Construct(constructor, fields) => {
+            ExprKind::Construct(*constructor, fields.iter().map(&mut lift).collect())
+        }
+        ExprKind::Record(fields) => ExprKind::Record(
+            fields
+                .iter()
+                .map(|(name, field)| (*name, lift(field)))
+                .collect(),
+        ),
+        ExprKind::Project(receiver, field) => ExprKind::Project(Box::new(lift(receiver)), *field),
+        ExprKind::DirectCall(key, arguments) => {
+            ExprKind::DirectCall(key.clone(), arguments.iter().map(&mut lift).collect())
+        }
+        ExprKind::Apply(head, arguments) => {
+            let head = lift(head);
+            ExprKind::Apply(Box::new(head), arguments.iter().map(&mut lift).collect())
+        }
+        ExprKind::Widen(value) => ExprKind::Widen(Box::new(lift(value))),
+        ExprKind::Try(value) => {
+            let value = lift(value);
+            // Past any local a clause can have: they are numbered from nought.
+            let local = LocalId(u32::MAX - *fresh);
+            *fresh += 1;
+            bindings.push(d::Binding {
+                pattern: Pattern::Bind(local),
+                value: Expr {
+                    module: expression.module,
+                    span: expression.span,
+                    ty: expression.ty.clone(),
+                    kind: ExprKind::Try(Box::new(value)),
+                },
+            });
+            ExprKind::Local(local)
+        }
+    };
+    Expr {
+        module: expression.module,
+        span: expression.span,
+        ty: expression.ty.clone(),
+        kind,
+    }
 }
 
 fn emit_expr(
@@ -1366,6 +1505,7 @@ fn emit_expr(
             let atom = emit_expr(context, builder, value, locals);
             context.widen(builder, atom, &value.ty, &expression.ty)
         }
+        ExprKind::Try(_) => unreachable!("every `?` is bound on its own before emission"),
         ExprKind::Apply(head, arguments) => {
             let mut lowered = Vec::with_capacity(arguments.len() + 1);
             lowered.push(emit_expr(context, builder, head, locals));

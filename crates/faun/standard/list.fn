@@ -1,5 +1,5 @@
-# Polymorphic list utilities that need neither tuples, records, constraints,
-# nor postfix propagation. They follow Ori's standard list: the receiver
+# Polymorphic list utilities that need neither tuples, records nor
+# constraints. They follow Ori's standard list: the receiver
 # comes first, so `xs.get(i)` means `get(xs i)`.
 #
 # A lookup that can miss answers a `Result` whose error is a structural
@@ -111,6 +111,21 @@ List(a) : [Nil Cons(a List(a))].(
   set([_ *tail] 0 value) -> Ok([value *tail])
   set([head *tail] Succ(index) value) -> set(tail index value).map_ok(|rest| [head *rest])
 
+  # The elements exchanged at `i` and `j`, each read before either is
+  # written, so a list threaded through here is swapped where it lies.
+  exchange : List(a) Nat Nat -> Result(List(a) [OutOfBounds])
+  exchange(values i j) ->
+    a = get(values i)?
+    b = get(values j)?
+    Ok(put(put(values i b) j a))
+
+  # `Ok` of every element mapped, where each maps; the first `Err` else.
+  try_map : List(a) (a -> Result(b e)) -> Result(List(b) e)
+  try_map([] _) -> Ok([])
+  try_map([head *tail] f) ->
+    converted = f(head)?
+    Ok([converted *try_map(tail f)?])
+
   find : List(a) (a -> Bool) -> Result(a [NotFound])
   find([] _) -> Err(NotFound)
   find([head *_] test) if test(head) -> Ok(head)
@@ -151,6 +166,11 @@ List(a) : [Nil Cons(a List(a))].(
 reverse_into : List(a) List(a) -> List(a)
 reverse_into([] output) -> output
 reverse_into([head *tail] output) -> reverse_into(tail [head *output])
+
+# `values` with the element at `index` replaced, unchanged where there is
+# none: the store `exchange` makes once its reads have succeeded.
+put : List(a) Nat a -> List(a)
+put(values index value) -> List.set(values index value).ok_or(values)
 
 range_from : Nat Nat -> List(Nat)
 range_from(_ 0) -> []

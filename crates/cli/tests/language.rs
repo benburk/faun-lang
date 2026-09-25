@@ -72,6 +72,48 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> host.exit!((Small < Large).to_nat() + (Large <= Small).to_nat() * 2)",
         1,
     ),
+    (
+        "? answers an Err early and joins its producers' rows",
+        "cat : Nat -> Result(Nat [NotFound SomethingElse])
+         cat(0) -> Err(NotFound)
+         cat(1) -> Err(SomethingElse)
+         cat(n) -> Ok(n)
+
+         dog : Nat -> Result(Nat [Blah NotFound])
+         dog(0) -> Err(NotFound)
+         dog(1) -> Err(Blah)
+         dog(n) -> Ok(n)
+
+         foo : Nat -> Result(Nat [Blah NotFound SomethingElse])
+         foo(n) ->
+           x = cat(n)?
+           y = dog(n + 1)?
+           Ok(x + y)
+
+         inline(n) -> Ok(cat(n)? + dog(n)? * 2)
+
+         code : Result(Nat [Blah NotFound SomethingElse]) -> Nat
+         code(Ok(n)) -> n
+         code(Err(NotFound)) -> 100
+         code(Err(SomethingElse)) -> 101
+         code(Err(Blah)) -> 102
+
+         main! : Host -> []
+         main!(host) -> host.exit!(code(foo(5)) + code(foo(1)) + code(foo(0)) + code(inline(3)) - 190)",
+        31,
+    ),
+    (
+        "? in a lambda answers from the lambda",
+        "half : Nat -> Result(Nat [Odd])
+         half(n) if n % 2 == 0 -> Ok(n / 2)
+         half(_) -> Err(Odd)
+
+         main! : Host -> []
+         main!(host) ->
+           halves = [2 4].map(|n| Ok(half(n)? + 1))
+           host.exit!(halves.map(|r| r.ok_or(0)).fold(0 |s x| s + x))",
+        5,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -156,6 +198,25 @@ const REFUSED: &[(&str, &str, &str)] = &[
          main! : Host -> []
          main!(host) -> host.exit!((Small < Large).to_nat())",
         "method `cmp`",
+    ),
+    (
+        "? admits no tag a signature does not hold",
+        "dog : Nat -> Result(Nat [Blah NotFound])
+         dog(0) -> Err(Blah)
+         dog(n) -> Ok(n)
+
+         bar : Nat -> Result(Nat [NotFound])
+         bar(n) -> Ok(dog(n)?)",
+        "`Blah` is not among the tags of `[NotFound]`",
+    ),
+    (
+        "? answers an Err, so its definition answers a Result",
+        "dog : Nat -> Result(Nat [Blah])
+         dog(n) -> Ok(n)
+
+         bar : Nat -> Nat
+         bar(n) -> dog(n)?",
+        "`?` answers an `Err` early, but this answers Nat",
     ),
 ];
 

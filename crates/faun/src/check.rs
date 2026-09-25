@@ -761,6 +761,10 @@ struct Checker<'a> {
     pending_numerals: Vec<PendingNumeral>,
     pending_tags: Vec<PendingTag>,
     pending_closings: Vec<PendingClosing>,
+    /// What the clause or lambda being checked answers, innermost last,
+    /// which is what a `?` in it answers early with. A guard answers
+    /// nothing.
+    answers: Vec<Option<Ty>>,
     expression_types: Vec<(ModuleId, super::ast::Span, Ty)>,
     clause_types: Vec<(ModuleId, super::ast::Span, Ty)>,
     widenings: Vec<(ModuleId, super::ast::Span, Ty)>,
@@ -795,6 +799,7 @@ impl<'a> Checker<'a> {
             pending_numerals: Vec::new(),
             pending_tags: Vec::new(),
             pending_closings: Vec::new(),
+            answers: Vec::new(),
             expression_types: Vec::new(),
             clause_types: Vec::new(),
             widenings: Vec::new(),
@@ -1266,21 +1271,33 @@ impl<'a> Checker<'a> {
             self.pattern(module, pattern, &parameter, &mut locals, clause.span)?;
         }
         if let Some(guard) = &clause.guard {
-            let actual = self.expr(module, guard, &mut locals)?;
+            self.answers.push(None);
+            let actual = self.expr(module, guard, &mut locals);
+            self.answers.pop();
+            let actual = actual?;
             self.unify_at(module, guard.span, &actual, &self.bool_type())?;
         }
+        self.answers.push(Some((*result).clone()));
+        let checked = self.clause_body(module, clause, &mut locals, &result);
+        self.answers.pop();
+        checked
+    }
+
+    /// A clause's bindings and answer, with what it answers on top of
+    /// [`Self::answers`].
+    fn clause_body(
+        &mut self,
+        module: ModuleId,
+        clause: &h::Clause,
+        locals: &mut Vec<Option<Scheme>>,
+        result: &Ty,
+    ) -> Result<(), CheckError> {
         for binding in &clause.body.bindings {
             let marks = self.marks();
-            let value = self.expr(module, &binding.value, &mut locals)?;
+            let value = self.expr(module, &binding.value, locals)?;
             let mut bound = Vec::new();
             collect_pattern_locals(&binding.pattern, &mut bound);
-            self.pattern(
-                module,
-                &binding.pattern,
-                &value,
-                &mut locals,
-                binding.value.span,
-            )?;
+            self.pattern(module, &binding.pattern, &value, locals, binding.value.span)?;
             self.pending_closings.push(PendingClosing {
                 module,
                 span: binding.value.span,
@@ -1301,12 +1318,12 @@ impl<'a> Checker<'a> {
                     .expect("pattern binding installs its local")
                     .ty
                     .clone();
-                locals[local.index()] = Some(self.generalize_local(&ty, &locals, local));
+                locals[local.index()] = Some(self.generalize_local(&ty, locals, local));
             }
         }
-        let actual = self.expr(module, &clause.body.result, &mut locals)?;
+        let actual = self.expr(module, &clause.body.result, locals)?;
         let span = clause.body.result.span;
-        let widened = self.infer.subsume(&actual, &result).map_err(|reason| {
+        let widened = self.infer.subsume(&actual, result).map_err(|reason| {
             failure(
                 module,
                 span,
@@ -1315,7 +1332,7 @@ impl<'a> Checker<'a> {
                     _ => format!(
                         "type mismatch: {} and {} ({})",
                         show(&self.infer.resolve(&actual), self.symbols),
-                        show(&self.infer.resolve(&result), self.symbols),
+                        show(&self.infer.resolve(result), self.symbols),
                         reason.describe(self.symbols)
                     ),
                 },
@@ -1498,6 +1515,7 @@ impl<'a> Checker<'a> {
                 };
                 Ok(self.infer.instantiate(&scheme))
             }
+            h::ExprKind::Try(value) => self.try_(module, expression.span, value, locals),
             // A tag alone is a value of any row holding it, with no fields.
             h::ExprKind::Tag(label) => Ok(self.tag(*label, Vec::new())),
             // A claimed word alone: a constructor as a function or a value,
@@ -1572,7 +1590,12 @@ impl<'a> Checker<'a> {
                     collect_pattern_locals(pattern, &mut bound);
                     self.pattern(module, pattern, parameter, locals, expression.span)?;
                 }
-                let result = self.expr(module, body, locals)?;
+                let answer = self.infer.fresh();
+                self.answers.push(Some(answer.clone()));
+                let result = self.expr(module, body, locals);
+                self.answers.pop();
+                let result = result?;
+                self.unify_at(module, body.span, &result, &answer)?;
                 for (pattern, parameter) in patterns.iter().zip(&parameters) {
                     self.pending_closings.push(PendingClosing {
                         module,
@@ -1852,6 +1875,49 @@ impl<'a> Checker<'a> {
             tail = h::Pattern::Constructor(self.prelude.list_cons, vec![element, tail]);
         }
         tail
+    }
+
+    /// `value?`: what an `Ok` holds, where the clause or lambda it is written
+    /// in answers a `Result` whose error takes an `Err`'s, answered early.
+    /// That is where failure rows join: each `?` adds its producer's tags to
+    /// the answer's row, and a signature's row admits only its own.
+    fn try_(
+        &mut self,
+        module: ModuleId,
+        span: super::ast::Span,
+        value: &h::Expr,
+        locals: &mut Vec<Option<Scheme>>,
+    ) -> Result<Ty, CheckError> {
+        let taken = self.expr(module, value, locals)?;
+        let (ok, error) = (self.infer.fresh(), self.infer.fresh());
+        let result = Ty::Named(self.prelude.result, vec![ok.clone(), error.clone()]);
+        self.unify_at(module, value.span, &taken, &result)?;
+        let Some(Some(answer)) = self.answers.last().cloned() else {
+            return Err(failure(
+                module,
+                span,
+                "`?` answers early from its clause or lambda, and a guard answers nothing",
+            ));
+        };
+        let answered_error = self.infer.fresh();
+        let answered = Ty::Named(
+            self.prelude.result,
+            vec![self.infer.fresh(), answered_error.clone()],
+        );
+        self.infer.unify(&answer, &answered).map_err(|_| {
+            failure(
+                module,
+                span,
+                format!(
+                    "`?` answers an `Err` early, but this answers {}",
+                    show(&self.infer.resolve(&answer), self.symbols)
+                ),
+            )
+        })?;
+        self.infer
+            .subsume(&error, &answered_error)
+            .map_err(|reason| failure(module, span, reason.describe(self.symbols)))?;
+        Ok(ok)
     }
 
     /// A claimed word at a position whose type will decide its reading.
@@ -2672,6 +2738,10 @@ fn validate_effect_expr(
                 source_name(symbols, *name)
             ),
         )),
+        // What `?` propagates stands where the `?` does.
+        h::ExprKind::Try(value) => {
+            validate_effect_expr(module, value, owner_effectful, stands_alone, symbols)
+        }
         h::ExprKind::Call(head, arguments) => {
             let effect = match &head.kind {
                 h::ExprKind::Global(name) if symbols.text(*name).ends_with('!') => Some(*name),
@@ -2931,7 +3001,9 @@ fn expr_globals(expression: &h::Expr, output: &mut HashSet<Symbol>) {
                 expr_globals(value, output);
             }
         }
-        h::ExprKind::Lambda(_, body) | h::ExprKind::Unary(_, body) => expr_globals(body, output),
+        h::ExprKind::Lambda(_, body) | h::ExprKind::Unary(_, body) | h::ExprKind::Try(body) => {
+            expr_globals(body, output);
+        }
         h::ExprKind::Call(head, arguments) | h::ExprKind::Method(head, _, arguments) => {
             expr_globals(head, output);
             for argument in arguments {
@@ -3095,12 +3167,16 @@ mod tests {
             );
             self.write("str.fn", "exports {Str}\nStr : List(U8)\n");
             self.write(
+                "result.fn",
+                "exports {Result.*}\nResult(a e) : [Ok(a) Err(e)]\n",
+            );
+            self.write(
             "order.fn",
             "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool lt(Lt) -> True lt(_) -> False le : Order -> Bool le(Gt) -> False le(_) -> True gt : Order -> Bool gt(Gt) -> True gt(_) -> False ge : Order -> Bool ge(Lt) -> False ge(_) -> True)\n",
         );
             let standard = self.write(
                 "standard.fn",
-                "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Order.* Nat.* Int.* U8 List.* Str}\n",
+                "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport result {Result.*}\nimport str {Str}\nexports {Bool.* Order.* Nat.* Int.* U8 List.* Result.* Str}\n",
             );
             let entry = self.write("main.fn", entry_source);
             let host = self.write("host.fn", "exports {Host}\nHost : {argc: Nat}\n");

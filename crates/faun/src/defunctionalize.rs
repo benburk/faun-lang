@@ -82,6 +82,8 @@ pub(crate) enum ExprKind {
     /// The value as this expression's wider type; see
     /// [`specialize::ExprKind::Widen`].
     Widen(Box<Expr>),
+    /// `value?`; see [`specialize::ExprKind::Try`].
+    Try(Box<Expr>),
 }
 
 /// Which closure of a function type: what it does when applied.
@@ -201,6 +203,7 @@ impl Defunctionalizer {
                 ExprKind::Apply(Box::new(head), self.exprs(arguments))
             }
             S::Widen(value) => ExprKind::Widen(Box::new(self.expr(*value))),
+            S::Try(value) => ExprKind::Try(Box::new(self.expr(*value))),
         };
         Expr {
             module,
@@ -280,7 +283,9 @@ fn free_locals(
                 free_locals(field, bound, found);
             }
         }
-        S::Project(receiver, _) | S::Widen(receiver) => free_locals(receiver, bound, found),
+        S::Project(receiver, _) | S::Widen(receiver) | S::Try(receiver) => {
+            free_locals(receiver, bound, found);
+        }
         S::Invoke(head, arguments) => {
             free_locals(head, bound, found);
             for argument in arguments {

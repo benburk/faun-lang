@@ -4,10 +4,10 @@
 `Int`, `U8`, `List`, `Result`, and `Str` from sibling modules.
 
 `List` follows Ori's standard list wherever a function needs no tuples,
-records, method constraints, or `?`: `len`, `is_empty`, `append`, `extend`,
+records, or method constraints: `len`, `is_empty`, `append`, `extend`,
 `prepend`, `map`, `map2`, `flat_map`, `flatten`, `join`, `filter`, `count`,
 `any`, `all`, `fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
-`get`, `get_or`, `set`, `find`, `find_index`, `take`, `drop`, `take_while`,
+`get`, `get_or`, `set`, `exchange`, `try_map`, `find`, `find_index`, `take`, `drop`, `take_while`,
 `drop_while`, and the constructors `List.range(n)` and `List.repeat(x n)`. A
 lookup that can miss answers a structural tag: `Err(OutOfBounds)`,
 `Err(Empty)` or `Err(NotFound)`. Nothing is recognized by name: `len` is
@@ -37,8 +37,14 @@ constructors private, and a same-spelled structural tag never becomes one.
 Faun specializes from the types checking recorded rather than inferring each
 specialization again, so where a closed row is answered as a signature's
 wider one, a caller's, the value is rebuilt in the wider row. Tag rows have
-no written tail, as in Ori; a tag used as a function value, a row's
-automatic `to_str`, and `?` propagation are not here yet.
+no written tail, as in Ori; a tag used as a function value and a row's
+automatic `to_str` are not here yet.
+
+`value?` is an `Ok`'s value, or its `Err` answered at once by the clause or
+lambda it is written in, which answers a `Result`. Each `?` adds its
+producer's failure tags to that answer's row, so failures from several
+producers join without an umbrella type, and a signature's row admits only
+its own.
 
 ```sh
 cargo run -- check crates/faun/examples/utilities.fn

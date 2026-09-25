@@ -785,6 +785,7 @@ impl ClauseResolver<'_> {
             s::ExprKind::Unary(operator, value) => {
                 h::ExprKind::Unary(*operator, Box::new(self.expr(value)?))
             }
+            s::ExprKind::Try(value) => h::ExprKind::Try(Box::new(self.expr(value)?)),
             s::ExprKind::Binary(operator, left, right) => h::ExprKind::Binary(
                 *operator,
                 Box::new(self.expr(left)?),

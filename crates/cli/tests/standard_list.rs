@@ -95,6 +95,16 @@ const CASES: &[(&str, &str, u32)] = &[
         "xs.find_index(|x| x == 3).ok_or(9) + xs.find_index(|x| x == 7).ok_or(9) * 10",
         93,
     ),
+    (
+        "try_map",
+        "xs.try_map(|x| Ok(x + 1)).ok_or([]).fold(0 |s x| s + x)",
+        15,
+    ),
+    (
+        "exchange",
+        "xs.exchange(0 4).ok_or([]).get_or(0 9) + xs.exchange(0 n).ok_or([]).len() * 10",
+        4,
+    ),
     ("take", "xs.take(2).len() + xs.take(9).len() * 10", 52),
     ("drop", "xs.drop(1).get_or(0 9) + xs.drop(9).len() * 10", 1),
     ("take_while", "xs.take_while(|x| x % 4 == x).len()", 4),

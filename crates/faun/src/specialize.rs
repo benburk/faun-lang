@@ -128,6 +128,9 @@ pub(crate) enum ExprKind {
     /// The value as this expression's wider type: the same value, its tag
     /// rows holding the tags a caller added.
     Widen(Box<Expr>),
+    /// `value?`: an `Ok`'s value, or its `Err` answered at once by the
+    /// function or lambda this is in.
+    Try(Box<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -659,6 +662,9 @@ impl<'a> Specializer<'a> {
                 let key = self.method_key(target, &lowered[0].ty, &argument_types, &ty)?;
                 self.request(key.clone());
                 ExprKind::DirectCall(key, lowered)
+            }
+            h::ExprKind::Try(value) => {
+                ExprKind::Try(Box::new(self.expr(module, value, substitution)?))
             }
             h::ExprKind::Unary(_, value) if matches!(value.kind, h::ExprKind::Number(_)) => {
                 let literal = self.literal_site(module, expression.span)?;
