@@ -148,6 +148,20 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> host.exit!(code(NotFound))",
         3,
     ),
+    (
+        "a tag where a function is wanted builds the tag from its fields",
+        "cat : Nat -> Result(Nat [NotFound])
+         cat(0) -> Err(NotFound)
+         cat(n) -> Ok(n)
+
+         code : Result(Nat [CatFailure([NotFound])]) -> Nat
+         code(Ok(n)) -> n
+         code(Err(CatFailure(NotFound))) -> 7
+
+         main! : Host -> []
+         main!(host) -> host.exit!(code(cat(0).map_err(CatFailure)) + code(cat(3).map_err(CatFailure)) + [1 2].map(Boxed).len())",
+        12,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -205,7 +219,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
 
          main! : Host -> []
          main!(host) -> host.exit!(accept(NotFound))",
-        "Failure -> Nat and [NotFound *]",
+        "Failure and [NotFound *]",
     ),
     (
         "a sealed constructor is not reached by qualifying it",

@@ -514,6 +514,17 @@ struct PendingTag {
     resolved: bool,
 }
 
+/// A tag written alone, awaiting whether its position wants a value or a
+/// function building one.
+#[derive(Clone, Debug)]
+struct PendingBare {
+    module: ModuleId,
+    span: super::ast::Span,
+    label: Symbol,
+    ty: Ty,
+    resolved: bool,
+}
+
 /// Patterns whose rows close once every word in them has its reading.
 #[derive(Clone, Debug)]
 struct PendingClosing {
@@ -978,6 +989,7 @@ struct Checker<'a> {
     pending_methods: Vec<PendingMethod>,
     pending_numerals: Vec<PendingNumeral>,
     pending_tags: Vec<PendingTag>,
+    pending_bare: Vec<PendingBare>,
     pending_closings: Vec<PendingClosing>,
     /// Each definition's bounds, over its scheme's variables.
     bounds: HashMap<Symbol, Vec<Bound>>,
@@ -1026,6 +1038,7 @@ impl<'a> Checker<'a> {
             pending_methods: Vec::new(),
             pending_numerals: Vec::new(),
             pending_tags: Vec::new(),
+            pending_bare: Vec::new(),
             pending_closings: Vec::new(),
             answers: Vec::new(),
             bounds: HashMap::new(),
@@ -1969,8 +1982,20 @@ impl<'a> Checker<'a> {
                 Ok(self.infer.instantiate(&scheme))
             }
             h::ExprKind::Try(value) => self.try_(module, expression.span, value, locals),
-            // A tag alone is a value of any row holding it, with no fields.
-            h::ExprKind::Tag(label) => Ok(self.tag(*label, Vec::new())),
+            // A tag alone is a value of a row holding it with no fields, or
+            // where a function is wanted, the function building it from its
+            // fields: `map_err(Wrap)`.
+            h::ExprKind::Tag(label) => {
+                let ty = self.infer.fresh();
+                self.pending_bare.push(PendingBare {
+                    module,
+                    span: expression.span,
+                    label: *label,
+                    ty: ty.clone(),
+                    resolved: false,
+                });
+                Ok(ty)
+            }
             // A claimed word alone: a constructor as a function or a value,
             // or a tag with no fields, as its position decides.
             h::ExprKind::Dual(dual) => {
@@ -2657,6 +2682,9 @@ impl<'a> Checker<'a> {
         {
             return Err(self.ambiguous(pending));
         }
+        if !matches!(finish, Finish::Binding) && self.settle_bare(true)? {
+            self.settle(marks)?;
+        }
         if matches!(finish, Finish::Binding) {
             return self.finish_binding(marks);
         }
@@ -2980,7 +3008,7 @@ impl<'a> Checker<'a> {
     /// a tag row takes the tag, anything else a declared constructor.
     /// Answers whether any did.
     fn settle_tags(&mut self, start: usize) -> Result<bool, CheckError> {
-        let mut progress = false;
+        let mut progress = self.settle_bare(false)?;
         for index in start..self.pending_tags.len() {
             if self.pending_tags[index].resolved {
                 continue;
@@ -3013,6 +3041,32 @@ impl<'a> Checker<'a> {
                 _ => self.settle_nominal(&pending)?,
             }
             self.pending_tags[index].resolved = true;
+            progress = true;
+        }
+        Ok(progress)
+    }
+
+    /// Give each bare tag whose position has a type its reading there: a
+    /// function's answer is the tag with the function's parameters as its
+    /// fields, anything else the tag with none. Where nothing decided, and
+    /// `default` says so, it is the tag with none.
+    fn settle_bare(&mut self, default: bool) -> Result<bool, CheckError> {
+        let mut progress = false;
+        for index in 0..self.pending_bare.len() {
+            let pending = self.pending_bare[index].clone();
+            if pending.resolved {
+                continue;
+            }
+            let wanted = match self.infer.resolve(&pending.ty) {
+                Ty::Var(_) if !default => continue,
+                Ty::Function(parameters, _) => {
+                    let row = self.tag(pending.label, parameters.clone());
+                    Ty::Function(parameters, Box::new(row))
+                }
+                _ => self.tag(pending.label, Vec::new()),
+            };
+            self.unify_at(pending.module, pending.span, &pending.ty, &wanted)?;
+            self.pending_bare[index].resolved = true;
             progress = true;
         }
         Ok(progress)
@@ -3500,6 +3554,12 @@ impl<'a> Checker<'a> {
                     .iter()
                     .filter(|pending| !pending.resolved)
                     .map(|pending| &pending.result),
+            )
+            .chain(
+                self.pending_bare
+                    .iter()
+                    .filter(|pending| !pending.resolved)
+                    .map(|pending| &pending.ty),
             )
             .flat_map(|ty| free_variables(&self.infer.resolve(ty)));
         for variable in waiting {

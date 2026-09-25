@@ -602,6 +602,9 @@ impl<'a> Specializer<'a> {
                 ExprKind::Function(key)
             }
             // A tag is built as the constructor of its row it names.
+            h::ExprKind::Tag(label) if matches!(ty, Type::Function(_, _)) => {
+                ExprKind::ConstructorFunction(*label)
+            }
             h::ExprKind::Tag(label) => ExprKind::Construct(*label, Vec::new()),
             h::ExprKind::Associated(..) => {
                 return Err(error("a member a bound gives is only ever called"));
