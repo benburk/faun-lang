@@ -178,6 +178,23 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> host.exit!(bit(\"apple\" < \"banana\") + bit(\"ab\" < \"a\") * 2 + bit(\"x\" == \"x\") * 4)",
         5,
     ),
+    (
+        "bounds, written and inferred, are met by each type's own members",
+        "double(x) -> x.mul(2)
+
+         total : List(a) -> a where
+           a.zero : a
+           a.add : a a -> a
+         total(values) -> values.fold(a.zero() |sum value| sum.add(value))
+
+         main! : Host -> []
+         main!(host) ->
+           a = double(3) + double(U8.of_nat(200)).to_nat()
+           b = [1 2 3].sum() + (-10 + [-1 -2].sum()).abs() + total([4 5])
+           c = [[1 2] [3]].contains([3]).to_nat() + ([1 2] == [1 2]).to_nat() * 2
+           host.exit!(a + b + c)",
+        181,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -341,6 +358,31 @@ const REFUSED: &[(&str, &str, &str)] = &[
          main! : Host -> []
          main!(host) -> host.exit!(flag(1))",
         "a numeral cannot be a `Bool`",
+    ),
+    (
+        "a bound is met at the use",
+        "double(x) -> x.mul(2)
+
+         main! : Host -> []
+         main!(host) -> host.exit!(double(True).to_nat())",
+        "no type-compatible field or method `mul`",
+    ),
+    (
+        "a signed body has only the members its bounds give",
+        "flip : a -> a
+         flip(x) -> x.not()",
+        "no type-compatible field or method `not`",
+    ),
+    (
+        "a bound names a variable its signature has",
+        "pick : a -> a where b.zero : b
+         pick(x) -> x",
+        "`where` bounds `b`, which the signature does not have",
+    ),
+    (
+        "a type variable is named only where a signature bounds it",
+        "nought(_) -> a.zero()",
+        "names a type only in a signature's `where` bounds",
     ),
 ];
 

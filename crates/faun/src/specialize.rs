@@ -12,8 +12,12 @@ use std::fmt;
 
 use num_bigint::BigUint;
 
+use crate::blessed::NumeralType;
 use crate::blessed::{LiteralExpr, PreludeIds};
-use crate::check::{CheckedProgram, InferredScheme, InferredType, Reading, TypeVariable, Types};
+use crate::check::{
+    CheckedProgram, ClauseSite, DeferredNumeral, InferredBound, InferredScheme, InferredType,
+    Reading, TypeVariable, Types,
+};
 use crate::hir as h;
 use crate::{ModuleId, Symbol};
 
@@ -217,6 +221,10 @@ fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, Specializ
         let Some(scheme) = checked.types.values.get(&clause.name) else {
             continue;
         };
+        // A bounded definition is judged where something meets its bounds.
+        if !scheme.bounds.is_empty() && !scheme.variables.is_empty() {
+            continue;
+        }
         // A generic definition can do nothing with a value of a type variable
         // but hand it on, having no constraint that would say more, so how it
         // behaves is the same at every type: judge it once, at the empty type.
@@ -262,7 +270,14 @@ struct Specializer<'a> {
     checked: &'a Types,
     prelude: &'a PreludeIds,
     expression_types: HashMap<(ModuleId, crate::ast::Span), &'a InferredType>,
-    clause_types: HashMap<(ModuleId, crate::ast::Span), &'a InferredType>,
+    clause_types: HashMap<(ModuleId, crate::ast::Span), &'a ClauseSite>,
+    /// Calls through `where` bounds: the owner whose member each is.
+    bound_sites: HashMap<(ModuleId, crate::ast::Span), (&'a InferredType, Symbol)>,
+    /// Numerals of a generic type, elaborated at each specialization.
+    deferred_numerals: HashMap<(ModuleId, crate::ast::Span), &'a DeferredNumeral>,
+    /// Each declared type's methods, by owner and spelling: what a bound's
+    /// member is at a concrete type.
+    members: HashMap<(Symbol, Symbol), Symbol>,
     literal_sites: HashMap<(ModuleId, crate::ast::Span), &'a LiteralExpr>,
     method_sites: HashMap<(ModuleId, crate::ast::Span), Symbol>,
     projection_sites: HashMap<(ModuleId, crate::ast::Span), Symbol>,
@@ -340,7 +355,31 @@ impl<'a> Specializer<'a> {
         let clause_types = checked
             .clauses
             .iter()
-            .map(|site| ((site.module, site.span), &site.ty))
+            .map(|site| ((site.module, site.span), site))
+            .collect();
+        let bound_sites = checked
+            .bound_sites
+            .iter()
+            .map(|site| ((site.module, site.span), (&site.owner, site.member)))
+            .collect();
+        let deferred_numerals = checked
+            .deferred_numerals
+            .iter()
+            .map(|numeral| ((numeral.module, numeral.span), numeral))
+            .collect();
+        let members = data
+            .values()
+            .flat_map(|declaration: &h::DataDecl| {
+                declaration
+                    .methods
+                    .iter()
+                    .filter_map(move |method| match method {
+                        h::MethodItem::Signature(signature) => {
+                            Some(((declaration.name, signature.spelling), signature.name))
+                        }
+                        h::MethodItem::Clause(_) => None,
+                    })
+            })
             .collect();
         let literal_sites = checked
             .literals
@@ -367,6 +406,9 @@ impl<'a> Specializer<'a> {
             prelude,
             expression_types,
             clause_types,
+            bound_sites,
+            deferred_numerals,
+            members,
             literal_sites,
             method_sites,
             projection_sites,
@@ -464,12 +506,13 @@ impl<'a> Specializer<'a> {
             };
         let mut specialized = Vec::with_capacity(clauses.len());
         for (module, clause) in clauses {
-            let template = self
+            let site = *self
                 .clause_types
                 .get(&(module, clause.span))
                 .ok_or_else(|| error("checked clause type is missing"))?;
             let mut substitution = HashMap::new();
-            match_type(template, &key.ty, &mut substitution)?;
+            match_type(&site.ty, &key.ty, &mut substitution)?;
+            self.discharge(&site.bounds, &mut substitution)?;
             specialized.push(self.clause(module, clause, &substitution)?);
         }
         Ok(Function {
@@ -560,6 +603,9 @@ impl<'a> Specializer<'a> {
             }
             // A tag is built as the constructor of its row it names.
             h::ExprKind::Tag(label) => ExprKind::Construct(*label, Vec::new()),
+            h::ExprKind::Associated(..) => {
+                return Err(error("a member a bound gives is only ever called"));
+            }
             h::ExprKind::Dual(dual) => {
                 let read = read(dual, &self.checked.readings);
                 if matches!(ty, Type::Function(_, _)) {
@@ -582,7 +628,8 @@ impl<'a> Specializer<'a> {
             {
                 return self.interpolated(module, expression.span, parts, &ty, substitution);
             }
-            h::ExprKind::Number(_) | h::ExprKind::String(_) => {
+            h::ExprKind::Number(_) => return self.numeral(module, expression.span, &ty),
+            h::ExprKind::String(_) => {
                 let literal = self.literal_site(module, expression.span)?;
                 return self.literal(module, expression.span, &literal, &ty);
             }
@@ -661,6 +708,17 @@ impl<'a> Specializer<'a> {
                     h::ExprKind::Dual(dual) => {
                         ExprKind::Construct(read(dual, &self.checked.readings), arguments)
                     }
+                    // `a.zero()`: the member of whatever `a` is here.
+                    h::ExprKind::Associated(..) => {
+                        let target = self.target(module, expression.span, substitution)?;
+                        let parameters = arguments.iter().map(|argument| argument.ty.clone());
+                        let key = FunctionKey {
+                            name: target,
+                            ty: Type::Function(parameters.collect(), Box::new(ty.clone())),
+                        };
+                        self.request(key.clone());
+                        ExprKind::DirectCall(key, arguments)
+                    }
                     _ => ExprKind::Invoke(
                         Box::new(self.expr(module, head, substitution)?),
                         arguments,
@@ -672,14 +730,14 @@ impl<'a> Specializer<'a> {
                 if let Some(field) = self.projection_sites.get(&(module, expression.span)) {
                     ExprKind::Project(Box::new(receiver), *field)
                 } else {
-                    let target = self.method_site(module, expression.span)?;
+                    let target = self.target(module, expression.span, substitution)?;
                     let key = self.method_key(target, &receiver.ty, &[], &ty)?;
                     self.request(key.clone());
                     ExprKind::DirectCall(key, vec![receiver])
                 }
             }
             h::ExprKind::Method(receiver, _, arguments) => {
-                let target = self.method_site(module, expression.span)?;
+                let target = self.target(module, expression.span, substitution)?;
                 let receiver = self.expr(module, receiver, substitution)?;
                 let mut lowered = Vec::with_capacity(arguments.len() + 1);
                 lowered.push(receiver);
@@ -698,18 +756,17 @@ impl<'a> Specializer<'a> {
                 ExprKind::Try(Box::new(self.expr(module, value, substitution)?))
             }
             h::ExprKind::Unary(_, value) if matches!(value.kind, h::ExprKind::Number(_)) => {
-                let literal = self.literal_site(module, expression.span)?;
-                return self.literal(module, expression.span, &literal, &ty);
+                return self.numeral(module, expression.span, &ty);
             }
             h::ExprKind::Unary(_, value) => {
-                let target = self.method_site(module, expression.span)?;
+                let target = self.target(module, expression.span, substitution)?;
                 let value = self.expr(module, value, substitution)?;
                 let key = self.method_key(target, &value.ty, &[], &ty)?;
                 self.request(key.clone());
                 ExprKind::DirectCall(key, vec![value])
             }
             h::ExprKind::Binary(operator, left, right) => {
-                let target = self.method_site(module, expression.span)?;
+                let target = self.target(module, expression.span, substitution)?;
                 let left = self.expr(module, left, substitution)?;
                 let right = self.expr(module, right, substitution)?;
                 let ordering = matches!(
@@ -793,7 +850,7 @@ impl<'a> Specializer<'a> {
                 h::StringPart::Splice(splice) => {
                     let value = self.expr(module, splice, substitution)?;
                     let site = crate::check::splice_site(splice.span);
-                    let target = self.method_site(module, site)?;
+                    let target = self.target(module, site, substitution)?;
                     let key = self.method_key(target, &value.ty, &[], str_)?;
                     self.request(key.clone());
                     Expr {
@@ -855,6 +912,142 @@ impl<'a> Specializer<'a> {
             defaulted.insert(variable, Type::Named(self.prelude.nat, Vec::new()));
         }
         substitute_type(template, &defaulted)
+    }
+
+    /// The method a call names: where it goes through a `where` bound, the
+    /// member of the concrete type the bound's owner is here.
+    fn target(
+        &self,
+        module: ModuleId,
+        span: crate::ast::Span,
+        substitution: &HashMap<TypeVariable, Type>,
+    ) -> Result<Symbol, SpecializeError> {
+        let Some((owner, member)) = self.bound_sites.get(&(module, span)).copied() else {
+            return self.method_site(module, span);
+        };
+        let owner = self.site_type(owner, substitution)?;
+        self.implementation(&owner, member)
+    }
+
+    /// Which method of `owner` is its `member`.
+    fn implementation(&self, owner: &Type, member: Symbol) -> Result<Symbol, SpecializeError> {
+        let Type::Named(name, _) = owner else {
+            return Err(error(
+                "a `where` bound is met only by a declared type's methods",
+            ));
+        };
+        self.members
+            .get(&(*name, member))
+            .copied()
+            .ok_or_else(|| error("a type does not have a member a `where` bound asks of it"))
+    }
+
+    /// Fix what a definition's bounds determine: once an owner is known, its
+    /// member's implementation says the types of the member's other
+    /// positions, which may be all that says what a variable is. Runs until
+    /// nothing more is determined.
+    fn discharge(
+        &self,
+        bounds: &[InferredBound],
+        substitution: &mut HashMap<TypeVariable, Type>,
+    ) -> Result<(), SpecializeError> {
+        let mut open: Vec<&InferredBound> = bounds.iter().collect();
+        loop {
+            let before = open.len();
+            let mut waiting = Vec::new();
+            for bound in open {
+                let Ok(owner) = substitute_type(&bound.owner, substitution) else {
+                    waiting.push(bound);
+                    continue;
+                };
+                let target = self.implementation(&owner, bound.member)?;
+                let scheme = self
+                    .checked
+                    .values
+                    .get(&target)
+                    .ok_or_else(|| error("a bound's implementation has no scheme"))?;
+                let InferredType::Function(parameters, result) = &scheme.ty else {
+                    continue;
+                };
+                // The implementation at this owner: matched by its receiver,
+                // or for a member of the type, by what it answers.
+                let mut fixed = HashMap::new();
+                let matched = if bound.associated {
+                    match_type(result, &owner, &mut fixed)
+                } else {
+                    parameters
+                        .first()
+                        .map_or(Ok(()), |receiver| match_type(receiver, &owner, &mut fixed))
+                };
+                if matched.is_err() {
+                    continue;
+                }
+                if let Ok(concrete) = substitute_type(&scheme.ty, &fixed) {
+                    let _ = match_type(&bound.ty, &concrete, substitution);
+                }
+            }
+            if waiting.is_empty() || waiting.len() == before {
+                return Ok(());
+            }
+            open = waiting;
+        }
+    }
+
+    /// A numeral at its type here: elaborated by checking where that type
+    /// was known there, and here where it was generic.
+    fn numeral(
+        &mut self,
+        module: ModuleId,
+        span: crate::ast::Span,
+        ty: &Type,
+    ) -> Result<Expr, SpecializeError> {
+        if let Some(literal) = self.literal_sites.get(&(module, span)) {
+            let literal = (*literal).clone();
+            return self.literal(module, span, &literal, ty);
+        }
+        let numeral = self
+            .deferred_numerals
+            .get(&(module, span))
+            .copied()
+            .ok_or_else(|| error("elaborated literal is missing"))?;
+        let kind = match ty {
+            Type::Named(name, arguments) if arguments.is_empty() && *name == self.prelude.nat => {
+                NumeralType::Nat
+            }
+            Type::Named(name, arguments) if arguments.is_empty() && *name == self.prelude.int => {
+                NumeralType::Int
+            }
+            Type::Named(name, arguments) if arguments.is_empty() => {
+                let word = self
+                    .prelude
+                    .words
+                    .iter()
+                    .find(|word| word.ty == *name)
+                    .ok_or_else(|| {
+                        located(
+                            module,
+                            span,
+                            "a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`",
+                        )
+                    })?;
+                NumeralType::Word(word)
+            }
+            _ => {
+                return Err(located(
+                    module,
+                    span,
+                    "a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`",
+                ));
+            }
+        };
+        let literal = crate::blessed::numeral(
+            numeral.magnitude.clone(),
+            numeral.negative,
+            kind,
+            self.prelude,
+        )
+        .map_err(|failure| located(module, span, &failure.to_string()))?;
+        self.literal(module, span, &literal, ty)
     }
 
     fn method_site(
@@ -1306,6 +1499,13 @@ pub(crate) fn surface_type(
                 .map(|member| surface_type(member, variables))
                 .collect::<Result<_, _>>()?,
         )),
+    }
+}
+
+fn located(module: ModuleId, span: crate::ast::Span, message: &str) -> SpecializeError {
+    SpecializeError {
+        message: message.to_owned(),
+        at: Some((module, span)),
     }
 }
 

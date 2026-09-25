@@ -7,6 +7,11 @@ Nat : [Zero Succ(Nat)].(
   zero : Nat
   zero() -> 0
 
+  # A numeral of a generic type is built through its type's `of_nat`, and a
+  # natural is already one.
+  of_nat : Nat -> Nat
+  of_nat(n) -> n
+
   add : Nat Nat -> Nat
   add(0 y) -> y
   add(Succ(n) y) -> Succ(n + y)

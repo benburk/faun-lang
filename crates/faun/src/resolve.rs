@@ -253,7 +253,10 @@ fn expand_signature(
             signature
                 .constraints
                 .iter_mut()
-                .flat_map(|constraint| &mut constraint.arguments),
+                .flat_map(|constraint| match constraint {
+                    h::Constraint::Member { ty, .. } => std::slice::from_mut(ty),
+                    h::Constraint::Alias { arguments, .. } => arguments.as_mut_slice(),
+                }),
         );
     for ty in written {
         *ty = expand(ty, aliases, symbols, &mut Vec::new())?;
@@ -442,13 +445,33 @@ fn resolve_signature(
             .constraints
             .iter()
             .map(|constraint| {
-                Ok(h::Constraint {
-                    name: symbols.intern(constraint.name.text(source)),
-                    arguments: constraint
-                        .arguments
-                        .iter()
-                        .map(|ty| resolve_type(module, ty, source, scope, symbols))
-                        .collect::<Result<_, _>>()?,
+                Ok(match constraint {
+                    s::Constraint::Member {
+                        variable,
+                        member,
+                        parameters,
+                        result,
+                        ..
+                    } => h::Constraint::Member {
+                        variable: symbols.intern(variable.text(source)),
+                        member: symbols.intern(member.text(source)),
+                        ty: h::Type::Function(
+                            parameters
+                                .iter()
+                                .map(|ty| resolve_type(module, ty, source, scope, symbols))
+                                .collect::<Result<_, _>>()?,
+                            Box::new(resolve_type(module, result, source, scope, symbols)?),
+                        ),
+                    },
+                    s::Constraint::Alias {
+                        name, arguments, ..
+                    } => h::Constraint::Alias {
+                        name: symbols.intern(name.text(source)),
+                        arguments: arguments
+                            .iter()
+                            .map(|ty| resolve_type(module, ty, source, scope, symbols))
+                            .collect::<Result<_, _>>()?,
+                    },
                 })
             })
             .collect::<Result<_, ResolveError>>()?,
@@ -785,6 +808,18 @@ impl ClauseResolver<'_> {
                         }),
                         arguments,
                     )
+                } else if let Some(variable) = self.type_variable(head) {
+                    // `a.zero()`: a member a `where` bound on `a` names.
+                    h::ExprKind::Call(
+                        Box::new(h::Expr {
+                            span: head.span.through(member.0),
+                            kind: h::ExprKind::Associated(
+                                variable,
+                                self.symbols.intern(member.text(self.source)),
+                            ),
+                        }),
+                        arguments,
+                    )
                 } else {
                     h::ExprKind::Method(
                         Box::new(self.expr(head)?),
@@ -841,6 +876,25 @@ impl ClauseResolver<'_> {
             name.0,
             format!("unknown name `{}`", name.text(self.source)),
         ))
+    }
+
+    /// The type variable a head spells, where it is a lowercase word naming
+    /// no local and no value: only a `where` bound can mean it.
+    fn type_variable(&mut self, head: &s::Expr) -> Option<Symbol> {
+        let s::ExprKind::Name(name) = &head.kind else {
+            return None;
+        };
+        let text = name.text(self.source);
+        if !text.starts_with(|character: char| character.is_ascii_lowercase()) {
+            return None;
+        }
+        let spelling = self.symbols.intern(text);
+        let named = self.locals.contains_key(&spelling)
+            || self.scope.values.contains_key(&spelling)
+            || self
+                .methods
+                .is_some_and(|binding| binding.methods.contains_key(&spelling));
+        (!named).then_some(spelling)
     }
 
     /// A record expression's fields, each named once.

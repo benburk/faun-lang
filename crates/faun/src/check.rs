@@ -4,8 +4,7 @@
 //! Algorithm W over call-graph components, keeping recursive groups
 //! monomorphic until the whole group has been checked. Method calls are held
 //! until ordinary unification (and numeral defaulting) identifies a receiver.
-//! Constraints and bodyless-method derivation are deliberately outside this
-//! pass; the bootstrap library supplies concrete implementations instead.
+//! Bodyless-method derivation is deliberately outside this pass.
 //!
 //! Tag rows unify as Rémy's rows: shared tags unify their fields and an open
 //! side's tail takes what only the other holds. A signature's result rows get
@@ -15,6 +14,13 @@
 //! expression is recorded as widened. Clauses taking a row apart without a
 //! catch-all close it. A word a declaration claims waits, as a method does,
 //! for its position's type to choose between the tag and the constructor.
+//!
+//! `where` bounds are structural. A signed body meets its written bounds at
+//! its rigid variables; a use of a bounded definition owes its bounds, met
+//! where the use's types are known or owed in turn. An unsigned component's
+//! methods still open on a variable it generalizes become its bounds, as do
+//! its numerals of a generic type, through `of_nat`. Specialization calls
+//! each concrete type's own member.
 
 #![allow(clippy::too_many_lines)]
 
@@ -73,6 +79,40 @@ pub enum InferredType {
 pub struct InferredScheme {
     pub variables: Vec<TypeVariable>,
     pub ty: InferredType,
+    /// What every type the variables stand for must have.
+    pub bounds: Vec<InferredBound>,
+}
+
+/// A `where` bound, written or inferred: every type `owner` stands for has
+/// `member`, at `ty`. A method's type takes the owner first; a value's, as
+/// `a.zero : a` is, is a function of nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InferredBound {
+    pub owner: InferredType,
+    pub member: Symbol,
+    pub ty: InferredType,
+    /// Reached through the type rather than as a method of a value.
+    pub associated: bool,
+}
+
+/// A call through a bound: the concrete type `owner` stands for at a
+/// specialization says whose `member` it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundSite {
+    pub module: ModuleId,
+    pub span: super::ast::Span,
+    pub owner: InferredType,
+    pub member: Symbol,
+}
+
+/// A numeral whose type a definition leaves generic, built through its
+/// type's `of_nat` at each specialization.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeferredNumeral {
+    pub module: ModuleId,
+    pub span: super::ast::Span,
+    pub magnitude: num_bigint::BigUint,
+    pub negative: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +127,8 @@ pub struct ClauseSite {
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub ty: InferredType,
+    /// The bounds of the definition, over this clause's type variables.
+    pub bounds: Vec<InferredBound>,
 }
 
 /// A resolved program with what checking learned about it.
@@ -126,6 +168,10 @@ pub struct Types {
     pub widenings: Vec<ExpressionSite>,
     /// Which reading each word a declaration claims took.
     pub readings: HashMap<h::SiteId, Reading>,
+    /// Calls through `where` bounds.
+    pub bound_sites: Vec<BoundSite>,
+    /// Numerals of a generic type.
+    pub deferred_numerals: Vec<DeferredNumeral>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -377,6 +423,45 @@ struct MethodImpl {
     owner: Symbol,
     target: Symbol,
     scheme: Scheme,
+    /// Whether this is a bound of the definition being checked, which
+    /// names no implementation until it is specialized.
+    bound: bool,
+}
+
+/// A `where` bound over a definition's type variables; see
+/// [`InferredBound`].
+#[derive(Clone, Debug)]
+struct Bound {
+    owner: Ty,
+    member: Symbol,
+    ty: Ty,
+    /// Whether the member is reached through the type, `a.zero()` or
+    /// `a.of_nat(n)`, rather than as a method of a value of it, which is
+    /// its type's first parameter.
+    associated: bool,
+}
+
+impl Bound {
+    fn substituted(&self, replacements: &HashMap<u32, Ty>) -> Self {
+        Self {
+            owner: substitute(&self.owner, replacements),
+            member: self.member,
+            ty: substitute(&self.ty, replacements),
+            associated: self.associated,
+        }
+    }
+}
+
+/// How much a stretch of checking decides when it finishes.
+#[derive(Clone, Copy)]
+enum Finish<'t> {
+    /// A binding: what the rest of its definition may decide waits for it.
+    Binding,
+    /// A signed clause, whose variables are rigid: everything is decided.
+    Signed,
+    /// An unsigned component about to be generalized, its definitions'
+    /// types and names: what stays open on their variables becomes bounds.
+    Unsigned(&'t [Ty], &'t HashSet<Symbol>),
 }
 
 #[derive(Clone, Debug)]
@@ -393,8 +478,24 @@ struct PendingMethod {
     receiver: Ty,
     arguments: Vec<Ty>,
     result: Ty,
-    member: bool,
+    reach: Reach,
     resolved: bool,
+    /// A bound a use of a definition owes rather than a call written: it
+    /// must be met, and names nothing where it stands.
+    obligation: bool,
+}
+
+/// How a member is reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reach {
+    /// Called on a value, `x.add(y)`.
+    Called,
+    /// Named on a value with no call, `x.name`: a field, or a method of no
+    /// other arguments.
+    Bare,
+    /// Through the type, `a.zero()`: a value of the type rather than a
+    /// method of one.
+    Type,
 }
 
 /// A claimed word awaiting its position's decision. `fields` are what it is
@@ -740,15 +841,20 @@ impl Infer {
     }
 
     fn instantiate(&mut self, scheme: &Scheme) -> Ty {
+        self.instantiated(scheme).0
+    }
+
+    /// A scheme instantiated, with the variable each of its own became.
+    fn instantiated(&mut self, scheme: &Scheme) -> (Ty, HashMap<u32, Ty>) {
         let replacements: HashMap<_, _> = scheme
             .variables
             .iter()
             .map(|variable| (*variable, self.fresh()))
             .collect();
-        substitute(&scheme.ty, &replacements)
+        (substitute(&scheme.ty, &replacements), replacements)
     }
 
-    fn skolemize(&mut self, scheme: &Scheme) -> Ty {
+    fn skolemize(&mut self, scheme: &Scheme) -> (Ty, HashMap<u32, Ty>) {
         let replacements: HashMap<_, _> = scheme
             .variables
             .iter()
@@ -761,7 +867,7 @@ impl Infer {
                 (*variable, Ty::Rigid(rigid))
             })
             .collect();
-        substitute(&scheme.ty, &replacements)
+        (substitute(&scheme.ty, &replacements), replacements)
     }
 }
 
@@ -873,12 +979,22 @@ struct Checker<'a> {
     pending_numerals: Vec<PendingNumeral>,
     pending_tags: Vec<PendingTag>,
     pending_closings: Vec<PendingClosing>,
+    /// Each definition's bounds, over its scheme's variables.
+    bounds: HashMap<Symbol, Vec<Bound>>,
+    /// Each signed definition's type variables, by the names it writes them.
+    variable_names: HashMap<Symbol, HashMap<Symbol, u32>>,
+    /// The bounds of the signed body being checked, and its variables by
+    /// name, rigid as its body sees them.
+    current: Vec<Bound>,
+    current_names: HashMap<Symbol, Ty>,
+    bound_sites: Vec<(ModuleId, super::ast::Span, Ty, Symbol)>,
+    deferred_numerals: Vec<DeferredNumeral>,
     /// What the clause or lambda being checked answers, innermost last,
     /// which is what a `?` in it answers early with. A guard answers
     /// nothing.
     answers: Vec<Option<Ty>>,
     expression_types: Vec<(ModuleId, super::ast::Span, Ty)>,
-    clause_types: Vec<(ModuleId, super::ast::Span, Ty)>,
+    clause_types: Vec<(ModuleId, super::ast::Span, Ty, Vec<Bound>)>,
     widenings: Vec<(ModuleId, super::ast::Span, Ty)>,
     checked: Types,
 }
@@ -912,6 +1028,12 @@ impl<'a> Checker<'a> {
             pending_tags: Vec::new(),
             pending_closings: Vec::new(),
             answers: Vec::new(),
+            bounds: HashMap::new(),
+            variable_names: HashMap::new(),
+            current: Vec::new(),
+            current_names: HashMap::new(),
+            bound_sites: Vec::new(),
+            deferred_numerals: Vec::new(),
             expression_types: Vec::new(),
             clause_types: Vec::new(),
             widenings: Vec::new(),
@@ -1040,13 +1162,6 @@ impl<'a> Checker<'a> {
                 ),
             ));
         }
-        if !signature.constraints.is_empty() {
-            return Err(failure(
-                module,
-                signature.span,
-                "`where` constraints are not supported by type inference yet",
-            ));
-        }
         let mut variables = HashMap::new();
         let parameters = signature
             .parameters
@@ -1055,11 +1170,31 @@ impl<'a> Checker<'a> {
             .collect();
         let result = self.surface_type(&signature.result, &mut variables);
         let ty = self.open_result_rows(&Ty::Function(parameters, Box::new(result)), true);
+        let bounds = self.written_bounds(module, signature, &mut variables)?;
+        let mut quantified = free_variables(&ty);
+        for bound in &bounds {
+            for variable in free_variables(&bound.ty) {
+                if !quantified.contains(&variable) {
+                    quantified.push(variable);
+                }
+            }
+        }
         let scheme = Scheme {
-            variables: free_variables(&ty),
+            variables: quantified,
             ty,
         };
         self.values.insert(signature.name, scheme.clone());
+        self.bounds.insert(signature.name, bounds);
+        self.variable_names.insert(
+            signature.name,
+            variables
+                .iter()
+                .filter_map(|(name, ty)| match ty {
+                    Ty::Var(variable) => Some((*name, *variable)),
+                    _ => None,
+                })
+                .collect(),
+        );
         if let Some(owner) = owner {
             self.methods
                 .entry(signature.spelling)
@@ -1068,9 +1203,60 @@ impl<'a> Checker<'a> {
                     owner,
                     target: signature.name,
                     scheme,
+                    bound: false,
                 });
         }
         Ok(())
+    }
+
+    /// A signature's `where` bounds, over its own type variables. A
+    /// variable a bound alone mentions is quantified too: which type it is,
+    /// the bound's implementation says at each specialization.
+    fn written_bounds(
+        &mut self,
+        module: ModuleId,
+        signature: &h::SignatureDecl,
+        variables: &mut HashMap<Symbol, Ty>,
+    ) -> Result<Vec<Bound>, CheckError> {
+        let mut bounds = Vec::with_capacity(signature.constraints.len());
+        for constraint in &signature.constraints {
+            let (variable, member, ty) = match constraint {
+                h::Constraint::Member {
+                    variable,
+                    member,
+                    ty,
+                } => (*variable, *member, ty),
+                h::Constraint::Alias { .. } => {
+                    return Err(failure(
+                        module,
+                        signature.span,
+                        "constraint aliases are not here yet; write the members",
+                    ));
+                }
+            };
+            let Some(owner) = variables.get(&variable).cloned() else {
+                return Err(failure(
+                    module,
+                    signature.span,
+                    format!(
+                        "`where` bounds `{}`, which the signature does not have",
+                        self.symbols.text(variable)
+                    ),
+                ));
+            };
+            let ty = self.surface_type(ty, variables);
+            // A member taking the type first is a method of its values;
+            // anything else is reached through the type.
+            let associated = !matches!(&ty, Ty::Function(parameters, _)
+                if parameters.first().is_some_and(|first| *first == owner));
+            bounds.push(Bound {
+                owner,
+                member,
+                ty,
+                associated,
+            });
+        }
+        Ok(bounds)
     }
 
     /// Give every nonempty tag row in result position a tail, which the
@@ -1275,7 +1461,9 @@ impl<'a> Checker<'a> {
                     self.check_clause(module, clause, &monotypes[name])?;
                 }
             }
-            self.finish_pending(marks)?;
+            let types: Vec<Ty> = monotypes.values().cloned().collect();
+            let names = component_name_set(&monotypes);
+            self.finish_pending(marks, Finish::Unsigned(&types, &names))?;
             for name in &component {
                 let Ty::Function(parameters, _) = self.infer.resolve(&monotypes[name]) else {
                     continue;
@@ -1308,9 +1496,47 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
+            // Resolved, so that instantiating a scheme renames every
+            // variable a bound mentions, not only the ones not yet linked.
+            let bounds: Vec<Bound> = self
+                .inferred_bounds(marks)?
+                .into_iter()
+                .map(|bound| Bound {
+                    owner: self.infer.resolve(&bound.owner),
+                    ty: self.infer.resolve(&bound.ty),
+                    ..bound
+                })
+                .collect();
+            for name in &component {
+                for (module, clause) in &definitions[name] {
+                    if let Some(site) = self
+                        .clause_types
+                        .iter_mut()
+                        .find(|(at, span, _, _)| at == module && *span == clause.span)
+                    {
+                        site.3.clone_from(&bounds);
+                    }
+                }
+            }
             for name in component {
                 let ty = self.infer.resolve(&monotypes[&name]);
-                let scheme = self.generalize(&ty, Some(&component_name_set(&monotypes)));
+                let mut scheme = self.generalize(&ty, Some(&names));
+                // A variable only a bound mentions is quantified too.
+                let mentioned = bounds
+                    .iter()
+                    .flat_map(|bound| free_variables(&self.infer.resolve(&bound.ty)));
+                let fixed: HashSet<u32> = self
+                    .values
+                    .iter()
+                    .filter(|(held, _)| !names.contains(held))
+                    .flat_map(|(_, scheme)| free_scheme(scheme))
+                    .collect();
+                for variable in mentioned {
+                    if !fixed.contains(&variable) && !scheme.variables.contains(&variable) {
+                        scheme.variables.push(variable);
+                    }
+                }
+                self.bounds.insert(name, bounds.clone());
                 self.values.insert(name, scheme);
             }
         }
@@ -1324,15 +1550,41 @@ impl<'a> Checker<'a> {
             }
             for &(module, clause) in clauses {
                 let marks = self.marks();
-                let ty = self.infer.skolemize(&scheme);
+                let (ty, rigid) = self.infer.skolemize(&scheme);
+                // The body meets its bounds as written, at its own rigid
+                // variables, and names them by the signature's names.
+                self.current = self
+                    .bounds
+                    .get(name)
+                    .map(|bounds| {
+                        bounds
+                            .iter()
+                            .map(|bound| bound.substituted(&rigid))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.current_names = self
+                    .variable_names
+                    .get(name)
+                    .map(|names| {
+                        names
+                            .iter()
+                            .filter_map(|(spelled, variable)| {
+                                rigid.get(variable).map(|ty| (*spelled, ty.clone()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 self.check_clause(module, clause, &ty)?;
-                self.finish_pending(marks)?;
+                self.finish_pending(marks, Finish::Signed)?;
+                self.current.clear();
+                self.current_names.clear();
             }
         }
         self.checked.values = self
             .values
             .iter()
-            .map(|(&name, scheme)| (name, self.public_scheme(scheme)))
+            .map(|(&name, scheme)| (name, self.public_scheme(name, scheme)))
             .collect();
         self.checked.expressions = self
             .expression_types
@@ -1355,17 +1607,51 @@ impl<'a> Checker<'a> {
         self.checked.clauses = self
             .clause_types
             .iter()
-            .map(|(module, span, ty)| ClauseSite {
+            .map(|(module, span, ty, bounds)| ClauseSite {
                 module: *module,
                 span: *span,
                 ty: public_type(&self.infer.resolve(ty)),
+                bounds: bounds
+                    .iter()
+                    .map(|bound| self.public_bound(bound))
+                    .collect(),
             })
             .collect();
+        self.checked.bound_sites = self
+            .bound_sites
+            .iter()
+            .map(|(module, span, owner, member)| BoundSite {
+                module: *module,
+                span: *span,
+                owner: public_type(&self.infer.resolve(owner)),
+                member: *member,
+            })
+            .collect();
+        self.checked.deferred_numerals = std::mem::take(&mut self.deferred_numerals);
         Ok(self.checked)
     }
 
-    fn public_scheme(&self, scheme: &Scheme) -> InferredScheme {
+    fn public_bound(&self, bound: &Bound) -> InferredBound {
+        InferredBound {
+            owner: public_type(&self.infer.resolve(&bound.owner)),
+            member: bound.member,
+            ty: public_type(&self.infer.resolve(&bound.ty)),
+            associated: bound.associated,
+        }
+    }
+
+    fn public_scheme(&self, name: Symbol, scheme: &Scheme) -> InferredScheme {
         InferredScheme {
+            bounds: self
+                .bounds
+                .get(&name)
+                .map(|bounds| {
+                    bounds
+                        .iter()
+                        .map(|bound| self.public_bound(bound))
+                        .collect()
+                })
+                .unwrap_or_default(),
             variables: scheme
                 .variables
                 .iter()
@@ -1386,7 +1672,7 @@ impl<'a> Checker<'a> {
         function: &Ty,
     ) -> Result<(), CheckError> {
         self.clause_types
-            .push((module, clause.span, function.clone()));
+            .push((module, clause.span, function.clone(), self.current.clone()));
         let Ty::Function(parameters, result) = self.infer.resolve(function) else {
             return Err(failure(module, clause.span, "definition is not a function"));
         };
@@ -1439,7 +1725,7 @@ impl<'a> Checker<'a> {
                 ty: value.clone(),
                 rows: vec![(binding.pattern.clone(), false)],
             });
-            self.finish_pending(marks)?;
+            self.finish_pending(marks, Finish::Binding)?;
             if matches!(self.infer.resolve(&value), Ty::Function(..)) {
                 return Err(failure(
                     module,
@@ -1653,7 +1939,24 @@ impl<'a> Checker<'a> {
                         "global has no declared type",
                     ));
                 };
-                Ok(self.infer.instantiate(&scheme))
+                // A use owes the bounds the definition has.
+                let (ty, replacements) = self.infer.instantiated(&scheme);
+                self.oblige(module, expression.span, *global, &replacements);
+                Ok(ty)
+            }
+            h::ExprKind::Associated(variable, member) => Err(failure(
+                module,
+                expression.span,
+                format!(
+                    "a member a bound gives is called: write `{}.{}()`",
+                    self.symbols.text(*variable),
+                    self.symbols.text(*member)
+                ),
+            )),
+            h::ExprKind::Call(head, arguments)
+                if matches!(head.kind, h::ExprKind::Associated(..)) =>
+            {
+                self.associated_call(module, expression.span, head, arguments, locals)
             }
             h::ExprKind::Constructor(constructor) => {
                 let Some(scheme) = self.constructors.get(constructor).cloned() else {
@@ -2076,6 +2379,71 @@ impl<'a> Checker<'a> {
         tail
     }
 
+    /// `a.zero()`: the member a `where` bound of the signed body being
+    /// checked gives type `a`, named by the signature's name for it.
+    fn associated_call(
+        &mut self,
+        module: ModuleId,
+        span: super::ast::Span,
+        head: &h::Expr,
+        arguments: &[h::Expr],
+        locals: &mut Vec<Option<Scheme>>,
+    ) -> Result<Ty, CheckError> {
+        let h::ExprKind::Associated(variable, member) = head.kind else {
+            unreachable!("guarded")
+        };
+        let spelled = |checker: &Self| {
+            format!(
+                "{}.{}",
+                checker.symbols.text(variable),
+                checker.symbols.text(member)
+            )
+        };
+        let Some(owner) = self.current_names.get(&variable).cloned() else {
+            return Err(failure(
+                module,
+                span,
+                format!(
+                    "`{}` names a type only in a signature's `where` bounds",
+                    self.symbols.text(variable)
+                ),
+            ));
+        };
+        let Some(bound) = self
+            .current
+            .iter()
+            .find(|bound| bound.associated && bound.member == member && bound.owner == owner)
+            .cloned()
+        else {
+            return Err(failure(
+                module,
+                span,
+                format!("no `where` bound gives `{}`", spelled(self)),
+            ));
+        };
+        let Ty::Function(parameters, result) = bound.ty else {
+            unreachable!("a bound's member is a function")
+        };
+        if parameters.len() != arguments.len() {
+            return Err(failure(
+                module,
+                span,
+                format!(
+                    "`{}` takes {} arguments, but {} were given",
+                    spelled(self),
+                    parameters.len(),
+                    arguments.len()
+                ),
+            ));
+        }
+        for (argument, parameter) in arguments.iter().zip(&parameters) {
+            let given = self.expr(module, argument, locals)?;
+            self.unify_at(module, argument.span, &given, parameter)?;
+        }
+        self.bound_sites.push((module, span, owner, member));
+        Ok(*result)
+    }
+
     /// `value?`: what an `Ok` holds, where the clause or lambda it is written
     /// in answers a `Result` whose error takes an `Err`'s, answered early.
     /// That is where failure rows join: each `?` adds its producer's tags to
@@ -2215,10 +2583,47 @@ impl<'a> Checker<'a> {
             receiver,
             arguments,
             result: result.clone(),
-            member,
+            reach: if member { Reach::Bare } else { Reach::Called },
             resolved: false,
+            obligation: false,
         });
         result
+    }
+
+    /// Owe, where `definition` is used, the bounds its scheme has, at the
+    /// variables this use instantiated it with.
+    fn oblige(
+        &mut self,
+        module: ModuleId,
+        span: super::ast::Span,
+        definition: Symbol,
+        replacements: &HashMap<u32, Ty>,
+    ) {
+        let Some(bounds) = self.bounds.get(&definition).cloned() else {
+            return;
+        };
+        for bound in bounds {
+            let bound = bound.substituted(replacements);
+            let Ty::Function(parameters, result) = bound.ty else {
+                continue;
+            };
+            let skipped = usize::from(!bound.associated);
+            self.pending_methods.push(PendingMethod {
+                module,
+                span,
+                name: bound.member,
+                receiver: bound.owner,
+                arguments: parameters.into_iter().skip(skipped).collect(),
+                result: *result,
+                reach: if bound.associated {
+                    Reach::Type
+                } else {
+                    Reach::Called
+                },
+                resolved: false,
+                obligation: true,
+            });
+        }
     }
 
     const fn marks(&self) -> Marks {
@@ -2230,7 +2635,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn finish_pending(&mut self, marks: Marks) -> Result<(), CheckError> {
+    fn finish_pending(&mut self, marks: Marks, finish: Finish<'_>) -> Result<(), CheckError> {
         let (method_start, numeral_start) = (marks.methods, marks.numerals);
         self.settle(marks)?;
         // A word nothing decided takes its one declared reading, before a
@@ -2252,6 +2657,19 @@ impl<'a> Checker<'a> {
         {
             return Err(self.ambiguous(pending));
         }
+        if matches!(finish, Finish::Binding) {
+            return self.finish_binding(marks);
+        }
+        let generic = match finish {
+            Finish::Unsigned(types, names) => {
+                let generic = self.generic_variables(types, names);
+                self.link_shapes(method_start, &generic);
+                self.settle(marks)?;
+                generic
+            }
+            _ => HashSet::new(),
+        };
+        let is_generic = |checker: &Self, ty: &Ty| matches!(checker.infer.resolve(ty), Ty::Var(variable) if generic.contains(&variable));
         // A numeral nothing typed takes its default one at a time, a
         // negative one first since only `Int` holds it, and what that
         // settles may type the rest: in `-2 < 1` the `1` is compared with an
@@ -2263,6 +2681,7 @@ impl<'a> Checker<'a> {
                     !numeral.resolved
                         && numeral.negative == negative
                         && matches!(self.infer.resolve(&numeral.ty), Ty::Var(_))
+                        && !is_generic(self, &numeral.ty)
                 })
             };
             let Some(index) = undecided(true).or_else(|| undecided(false)) else {
@@ -2277,58 +2696,20 @@ impl<'a> Checker<'a> {
             self.unify_at(numeral.module, numeral.span, &numeral.ty, &default)?;
             self.settle(marks)?;
         }
-        self.settle_methods(method_start, true)?;
+        for index in numeral_start..self.pending_numerals.len() {
+            let numeral = self.pending_numerals[index].clone();
+            if !numeral.resolved && is_generic(self, &numeral.ty) {
+                self.defer_numeral(&numeral)?;
+                self.pending_numerals[index].resolved = true;
+            }
+        }
+        self.settle_methods(method_start, true, &generic)?;
         for index in numeral_start..self.pending_numerals.len() {
             let numeral = self.pending_numerals[index].clone();
             if numeral.resolved {
                 continue;
             }
-            let ty = self.infer.resolve(&numeral.ty);
-            let (kind, symbol) = match ty {
-                Ty::Named(name, ref arguments)
-                    if name == self.prelude.nat && arguments.is_empty() =>
-                {
-                    (NumeralType::Nat, self.prelude.nat)
-                }
-                Ty::Named(name, ref arguments)
-                    if name == self.prelude.int && arguments.is_empty() =>
-                {
-                    (NumeralType::Int, self.prelude.int)
-                }
-                Ty::Named(name, ref arguments)
-                    if arguments.is_empty()
-                        && self.prelude.words.iter().any(|word| word.ty == name) =>
-                {
-                    let word = self
-                        .prelude
-                        .words
-                        .iter()
-                        .find(|word| word.ty == name)
-                        .expect("guarded");
-                    (NumeralType::Word(word), name)
-                }
-                // Only the prelude's integers are numerals, and no conversion
-                // is inserted to make one fit anything else.
-                other => {
-                    return Err(failure(
-                        numeral.module,
-                        numeral.span,
-                        format!(
-                            "a numeral cannot be a `{}`: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`; convert a value with `of_nat`",
-                            show(&other, self.symbols)
-                        ),
-                    ));
-                }
-            };
-            let value =
-                blessed::numeral(numeral.magnitude, numeral.negative, kind, self.prelude)
-                    .map_err(|error| failure(numeral.module, numeral.span, error.to_string()))?;
-            self.checked.literals.push(LiteralSite {
-                module: numeral.module,
-                span: numeral.span,
-                ty: symbol,
-                value,
-            });
+            self.elaborate(&numeral)?;
             self.pending_numerals[index].resolved = true;
         }
         let closings = self.pending_closings.split_off(marks.closings);
@@ -2339,12 +2720,256 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// A numeral at the type its position gave it: a natural, or a call of
+    /// the type's `of_nat`.
+    fn elaborate(&mut self, numeral: &PendingNumeral) -> Result<(), CheckError> {
+        let ty = self.infer.resolve(&numeral.ty);
+        let (kind, symbol) = match ty {
+            Ty::Named(name, ref arguments) if name == self.prelude.nat && arguments.is_empty() => {
+                (NumeralType::Nat, self.prelude.nat)
+            }
+            Ty::Named(name, ref arguments) if name == self.prelude.int && arguments.is_empty() => {
+                (NumeralType::Int, self.prelude.int)
+            }
+            Ty::Named(name, ref arguments)
+                if arguments.is_empty()
+                    && self.prelude.words.iter().any(|word| word.ty == name) =>
+            {
+                let word = self
+                    .prelude
+                    .words
+                    .iter()
+                    .find(|word| word.ty == name)
+                    .expect("guarded");
+                (NumeralType::Word(word), name)
+            }
+            // Only the prelude's integers are numerals, and no conversion
+            // is inserted to make one fit anything else.
+            other => {
+                return Err(failure(
+                    numeral.module,
+                    numeral.span,
+                    format!(
+                        "a numeral cannot be a `{}`: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`; convert a value with `of_nat`",
+                        show(&other, self.symbols)
+                    ),
+                ));
+            }
+        };
+        let value = blessed::numeral(
+            numeral.magnitude.clone(),
+            numeral.negative,
+            kind,
+            self.prelude,
+        )
+        .map_err(|error| failure(numeral.module, numeral.span, error.to_string()))?;
+        self.checked.literals.push(LiteralSite {
+            module: numeral.module,
+            span: numeral.span,
+            ty: symbol,
+            value,
+        });
+        Ok(())
+    }
+
+    /// A binding settles what it can and leaves the rest to its definition,
+    /// which may yet decide a numeral's type or a method's receiver.
+    fn finish_binding(&mut self, marks: Marks) -> Result<(), CheckError> {
+        for index in marks.numerals..self.pending_numerals.len() {
+            let numeral = self.pending_numerals[index].clone();
+            if numeral.resolved || matches!(self.infer.resolve(&numeral.ty), Ty::Var(_)) {
+                continue;
+            }
+            self.elaborate(&numeral)?;
+            self.pending_numerals[index].resolved = true;
+        }
+        let closings = self.pending_closings.split_off(marks.closings);
+        for closing in closings {
+            self.close_rows(&closing.ty, closing.rows)
+                .map_err(|message| failure(closing.module, closing.span, message))?;
+        }
+        Ok(())
+    }
+
+    /// The variables of a component's types that generalizing it will
+    /// quantify: those nothing outside it holds.
+    fn generic_variables(&self, types: &[Ty], names: &HashSet<Symbol>) -> HashSet<u32> {
+        let mut generic: HashSet<u32> = types
+            .iter()
+            .flat_map(|ty| free_variables(&self.infer.resolve(ty)))
+            .collect();
+        for (name, scheme) in &self.values {
+            if !names.contains(name) {
+                for variable in free_scheme(scheme) {
+                    generic.remove(&variable);
+                }
+            }
+        }
+        generic
+    }
+
+    /// Where every method a generic receiver could have shares a shape --
+    /// every `mul` is `T T -> T`, every `equals` answers a `Bool` -- that
+    /// shape is context for the call before any default: in
+    /// `double(x) -> x.mul(2)` the `2` is whatever `x` is.
+    fn link_shapes(&mut self, start: usize, generic: &HashSet<u32>) {
+        for index in start..self.pending_methods.len() {
+            let pending = self.pending_methods[index].clone();
+            if pending.resolved || pending.reach != Reach::Called {
+                continue;
+            }
+            let Ty::Var(receiver) = self.infer.resolve(&pending.receiver) else {
+                continue;
+            };
+            if !generic.contains(&receiver) {
+                continue;
+            }
+            let Some(implementations) = self.methods.get(&pending.name) else {
+                continue;
+            };
+            let visible = &self.visible_methods[&pending.module];
+            let shapes: Vec<_> = implementations
+                .iter()
+                .filter(|implementation| visible.contains(&implementation.target))
+                .filter_map(|implementation| {
+                    let mut trial = self.infer.clone();
+                    match trial.instantiate(&implementation.scheme) {
+                        Ty::Function(parameters, result)
+                            if parameters.len() == pending.arguments.len() + 1 =>
+                        {
+                            let receiver = trial.resolve(&parameters[0]);
+                            let shape = |ty: &Ty| {
+                                let ty = trial.resolve(ty);
+                                if ty == receiver {
+                                    Some(None)
+                                } else if free_variables(&ty).is_empty() {
+                                    Some(Some(ty))
+                                } else {
+                                    None
+                                }
+                            };
+                            Some((
+                                parameters[1..].iter().map(shape).collect::<Vec<_>>(),
+                                shape(&result),
+                            ))
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            let Some((first_arguments, first_result)) = shapes.first().cloned() else {
+                continue;
+            };
+            let shared = |position: &Option<Option<Ty>>, all: Vec<&Option<Option<Ty>>>| {
+                position.is_some() && all.iter().all(|other| *other == position)
+            };
+            for (at, position) in first_arguments.iter().enumerate() {
+                if shared(
+                    position,
+                    shapes.iter().map(|(arguments, _)| &arguments[at]).collect(),
+                ) {
+                    let linked = position.clone().flatten().unwrap_or(Ty::Var(receiver));
+                    let _ = self.infer.unify(&pending.arguments[at], &linked);
+                }
+            }
+            if shared(
+                &first_result,
+                shapes.iter().map(|(_, result)| result).collect(),
+            ) {
+                let linked = first_result.flatten().unwrap_or(Ty::Var(receiver));
+                let _ = self.infer.unify(&pending.result, &linked);
+            }
+        }
+    }
+
+    /// A numeral of a generic type is built through that type's `of_nat`,
+    /// and `neg` where it is negated, at each specialization: the component
+    /// owes both as bounds, and the numeral waits for its type.
+    fn defer_numeral(&mut self, numeral: &PendingNumeral) -> Result<(), CheckError> {
+        let of_nat = self.method_symbol(numeral.module, numeral.span, "of_nat")?;
+        let nat = Ty::Named(self.prelude.nat, Vec::new());
+        self.pending_methods.push(PendingMethod {
+            module: numeral.module,
+            span: numeral.span,
+            name: of_nat,
+            receiver: numeral.ty.clone(),
+            arguments: vec![nat],
+            result: numeral.ty.clone(),
+            reach: Reach::Type,
+            resolved: false,
+            obligation: true,
+        });
+        if numeral.negative {
+            let neg = self.method_symbol(numeral.module, numeral.span, "neg")?;
+            self.pending_methods.push(PendingMethod {
+                module: numeral.module,
+                span: numeral.span,
+                name: neg,
+                receiver: numeral.ty.clone(),
+                arguments: Vec::new(),
+                result: numeral.ty.clone(),
+                reach: Reach::Called,
+                resolved: false,
+                obligation: true,
+            });
+        }
+        self.deferred_numerals.push(DeferredNumeral {
+            module: numeral.module,
+            span: numeral.span,
+            magnitude: numeral.magnitude.clone(),
+            negative: numeral.negative,
+        });
+        Ok(())
+    }
+
+    /// What stays open on a component's generic variables after it is
+    /// checked: each becomes a bound its definitions carry, and a call
+    /// written through one is recorded as a call through a bound. The same
+    /// member on the same variable twice is one bound, at one type.
+    fn inferred_bounds(&mut self, marks: Marks) -> Result<Vec<Bound>, CheckError> {
+        let mut bounds: Vec<Bound> = Vec::new();
+        for index in marks.methods..self.pending_methods.len() {
+            let pending = self.pending_methods[index].clone();
+            if pending.resolved {
+                continue;
+            }
+            let owner = self.infer.resolve(&pending.receiver);
+            let mut parameters = pending.arguments.clone();
+            if pending.reach != Reach::Type {
+                parameters.insert(0, owner.clone());
+            }
+            let ty = Ty::Function(parameters, Box::new(pending.result.clone()));
+            match bounds.iter().find(|bound| {
+                bound.member == pending.name
+                    && bound.associated == (pending.reach == Reach::Type)
+                    && self.infer.resolve(&bound.owner) == owner
+            }) {
+                Some(existing) => {
+                    let existing = existing.ty.clone();
+                    self.unify_at(pending.module, pending.span, &ty, &existing)?;
+                }
+                None => bounds.push(Bound {
+                    owner: owner.clone(),
+                    member: pending.name,
+                    ty,
+                    associated: pending.reach == Reach::Type,
+                }),
+            }
+            if !pending.obligation {
+                self.bound_sites
+                    .push((pending.module, pending.span, owner, pending.name));
+            }
+            self.pending_methods[index].resolved = true;
+        }
+        Ok(bounds)
+    }
+
     /// Settle methods and claimed words together until neither moves: a
     /// method's answer can decide a word's position, and a word's reading
     /// a method's receiver.
     fn settle(&mut self, marks: Marks) -> Result<(), CheckError> {
         loop {
-            self.settle_methods(marks.methods, false)?;
+            self.settle_methods(marks.methods, false, &HashSet::new())?;
             if !self.settle_tags(marks.tags)? {
                 return Ok(());
             }
@@ -2534,7 +3159,14 @@ impl<'a> Checker<'a> {
         )
     }
 
-    fn settle_methods(&mut self, start: usize, final_pass: bool) -> Result<(), CheckError> {
+    /// Resolve pending methods. On the final pass one still ambiguous is an
+    /// error, except on a receiver in `generic`, which becomes a bound.
+    fn settle_methods(
+        &mut self,
+        start: usize,
+        final_pass: bool,
+        generic: &HashSet<u32>,
+    ) -> Result<(), CheckError> {
         let mut unresolved: Vec<_> = (start..self.pending_methods.len())
             .filter(|index| !self.pending_methods[*index].resolved)
             .collect();
@@ -2569,7 +3201,7 @@ impl<'a> Checker<'a> {
                     }
                     // A field of a receiver nothing else says anything of is
                     // a field of whatever record it turns out to be.
-                    [] if pending.member
+                    [] if pending.reach == Reach::Bare
                         && pending.arguments.is_empty()
                         && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_)) =>
                     {
@@ -2581,6 +3213,15 @@ impl<'a> Checker<'a> {
                         } else {
                             next.push(index);
                         }
+                    }
+                    // A receiver not yet known may be one that has it, or a
+                    // generic one owing it as a bound.
+                    [] if match self.infer.resolve(&pending.receiver) {
+                        Ty::Var(variable) => !final_pass || generic.contains(&variable),
+                        _ => false,
+                    } =>
+                    {
+                        next.push(index);
                     }
                     [] => {
                         return Err(failure(
@@ -2604,8 +3245,12 @@ impl<'a> Checker<'a> {
                 return Ok(());
             }
             if !progress {
-                if final_pass {
-                    let pending = &self.pending_methods[next[0]];
+                let waiting = next.iter().find(|index| {
+                    !matches!(self.infer.resolve(&self.pending_methods[**index].receiver),
+                        Ty::Var(variable) if generic.contains(&variable))
+                });
+                if final_pass && let Some(&index) = waiting {
+                    let pending = &self.pending_methods[index];
                     return Err(failure(
                         pending.module,
                         pending.span,
@@ -2622,7 +3267,7 @@ impl<'a> Checker<'a> {
     }
 
     fn field_candidates(&self, pending: &PendingMethod) -> Vec<Scheme> {
-        if !pending.member || !pending.arguments.is_empty() {
+        if pending.reach != Reach::Bare || !pending.arguments.is_empty() {
             return Vec::new();
         }
         let receiver = self.infer.resolve(&pending.receiver);
@@ -2667,10 +3312,30 @@ impl<'a> Checker<'a> {
 
     /// The visible methods named at `pending` that its receiver could have.
     fn owned_methods(&self, pending: &PendingMethod) -> Vec<MethodImpl> {
-        let Some(implementations) = self.methods.get(&pending.name) else {
-            return Vec::new();
-        };
+        let implementations = self.methods.get(&pending.name).cloned().unwrap_or_default();
         let receiver = self.infer.resolve(&pending.receiver);
+        // A rigid receiver is a signed body's own variable: what it has is
+        // what its bounds say.
+        if let Ty::Rigid(_) = receiver {
+            return self
+                .current
+                .iter()
+                .filter(|bound| {
+                    bound.member == pending.name
+                        && bound.associated == (pending.reach == Reach::Type)
+                        && self.infer.resolve(&bound.owner) == receiver
+                })
+                .map(|bound| MethodImpl {
+                    owner: pending.name,
+                    target: pending.name,
+                    scheme: Scheme {
+                        variables: Vec::new(),
+                        ty: bound.ty.clone(),
+                    },
+                    bound: true,
+                })
+                .collect();
+        }
         let visible = &self.visible_methods[&pending.module];
         implementations
             .iter()
@@ -2706,18 +3371,40 @@ impl<'a> Checker<'a> {
         pending: &PendingMethod,
         implementation: &MethodImpl,
     ) -> Result<(), CheckError> {
-        apply_signature(
+        let replacements = apply_signature(
             &mut self.infer,
             pending,
             &implementation.scheme,
             self.symbols,
         )
         .map_err(|message| failure(pending.module, pending.span, message))?;
-        self.checked.methods.push(MethodSite {
-            module: pending.module,
-            span: pending.span,
-            target: implementation.target,
-        });
+        // An obligation names nothing where it stands; a call through a
+        // bound names its implementation only once it is specialized; a call
+        // of an implementation owes that implementation's own bounds.
+        if implementation.bound {
+            if !pending.obligation {
+                self.bound_sites.push((
+                    pending.module,
+                    pending.span,
+                    pending.receiver.clone(),
+                    pending.name,
+                ));
+            }
+        } else {
+            if !pending.obligation {
+                self.checked.methods.push(MethodSite {
+                    module: pending.module,
+                    span: pending.span,
+                    target: implementation.target,
+                });
+            }
+            self.oblige(
+                pending.module,
+                pending.span,
+                implementation.target,
+                &replacements,
+            );
+        }
         Ok(())
     }
 
@@ -2791,6 +3478,33 @@ impl<'a> Checker<'a> {
         for scheme in self.values.values() {
             variables.retain(|variable| !free_scheme(scheme).contains(variable));
         }
+        // What a method, numeral or word still waiting will decide is not the
+        // binding's to quantify.
+        let waiting = self
+            .pending_methods
+            .iter()
+            .filter(|pending| !pending.resolved)
+            .flat_map(|pending| {
+                std::iter::once(&pending.receiver)
+                    .chain(&pending.arguments)
+                    .chain(std::iter::once(&pending.result))
+            })
+            .chain(
+                self.pending_numerals
+                    .iter()
+                    .filter(|numeral| !numeral.resolved)
+                    .map(|numeral| &numeral.ty),
+            )
+            .chain(
+                self.pending_tags
+                    .iter()
+                    .filter(|pending| !pending.resolved)
+                    .map(|pending| &pending.result),
+            )
+            .flat_map(|ty| free_variables(&self.infer.resolve(ty)));
+        for variable in waiting {
+            variables.remove(&variable);
+        }
         Scheme {
             variables: variables.into_iter().collect(),
             ty,
@@ -2805,21 +3519,32 @@ fn apply_signature(
     pending: &PendingMethod,
     scheme: &Scheme,
     symbols: &Symbols,
-) -> Result<(), String> {
-    let instantiated = infer.instantiate(scheme);
+) -> Result<HashMap<u32, Ty>, String> {
+    let (instantiated, replacements) = infer.instantiated(scheme);
     let Ty::Function(parameters, result) = instantiated else {
         return Err("a method declaration is not a function".to_string());
     };
-    if parameters.len() != pending.arguments.len() + 1 {
+    // A member reached through its type takes no receiver; its answer is a
+    // value of that type.
+    let through_type = pending.reach == Reach::Type;
+    let receiver = usize::from(!through_type);
+    if parameters.len() != pending.arguments.len() + receiver {
         return Err(format!(
             "`{}` takes {} arguments, but {} were given",
             symbols.text(pending.name),
-            parameters.len() - 1,
+            parameters.len() - receiver,
             pending.arguments.len()
         ));
     }
-    let given = std::iter::once(&pending.receiver).chain(&pending.arguments);
-    for (at, (argument, parameter)) in given.zip(&parameters).enumerate() {
+    let given: Vec<&Ty> = if through_type {
+        pending.arguments.iter().collect()
+    } else {
+        std::iter::once(&pending.receiver)
+            .chain(&pending.arguments)
+            .collect()
+    };
+    for (at, (argument, parameter)) in given.into_iter().zip(&parameters).enumerate() {
+        let at = at + usize::from(through_type);
         infer.unify(argument, parameter).map_err(|_| {
             let which = if at == 0 {
                 "the receiver".to_owned()
@@ -2845,7 +3570,8 @@ fn apply_signature(
                 show(&infer.resolve(&result), symbols),
                 show(&wanted, symbols)
             ),
-        })
+        })?;
+    Ok(replacements)
 }
 
 fn public_type(ty: &Ty) -> InferredType {
@@ -3085,6 +3811,7 @@ fn validate_effect_expr(
         | h::ExprKind::Constructor(_)
         | h::ExprKind::Tag(_)
         | h::ExprKind::Dual(_)
+        | h::ExprKind::Associated(..)
         | h::ExprKind::Number(_) => Ok(()),
     }
 }
@@ -3290,6 +4017,7 @@ fn expr_globals(expression: &h::Expr, output: &mut HashSet<Symbol>) {
         | h::ExprKind::Constructor(_)
         | h::ExprKind::Tag(_)
         | h::ExprKind::Dual(_)
+        | h::ExprKind::Associated(..)
         | h::ExprKind::Number(_) => {}
     }
 }
@@ -3605,14 +4333,26 @@ mod tests {
         );
     }
 
+    /// A method several types have, called on a value nothing else says the
+    /// type of, is a bound the definition carries: `flip` is generic over
+    /// every type with a `not`.
     #[test]
-    fn an_ambiguous_unconstrained_method_is_rejected() {
+    fn a_method_several_types_have_is_a_bound() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load(
-            "Flip : [Off On].(not : Flip -> Flip not(Off) -> On not(On) -> Off)\nbad(x) -> x.not()\n",
+            "Flip : [Off On].(not : Flip -> Flip not(Off) -> On not(On) -> Off)\nflip(x) -> x.not()\n",
         );
-        let failure = type_check(resolved, prelude).unwrap_err();
-        assert!(failure.message.contains("ambiguous") || failure.message.contains("compatible"));
+        let checked = type_check(resolved, prelude).unwrap();
+        let resolved = &checked.resolved;
+        let scheme = checked
+            .types
+            .values
+            .iter()
+            .find(|(name, _)| resolved.symbols.text(**name).ends_with("$$flip"))
+            .map(|(_, scheme)| scheme)
+            .unwrap();
+        assert_eq!(scheme.bounds.len(), 1);
+        assert_eq!(resolved.symbols.text(scheme.bounds[0].member), "not");
     }
 
     #[test]

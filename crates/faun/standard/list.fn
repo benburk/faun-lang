@@ -84,6 +84,24 @@ List(a) : [Nil Cons(a List(a))].(
     next = f(state head)
     [next *trail(tail next f)]
 
+  # The same length, and equal elements in order, by the element's own
+  # `equals`.
+  equals : List(a) List(a) -> Bool where a.equals : a a -> Bool
+  equals([] []) -> True
+  equals([] [_ *_]) -> False
+  equals([_ *_] []) -> False
+  equals([x *left] [y *right]) -> x.equals(y) & equals(left right)
+
+  # Whether an element equals `wanted`.
+  contains : List(a) a -> Bool where a.equals : a a -> Bool
+  contains(values wanted) -> values.any(|value| value == wanted)
+
+  # The elements added up from their type's nought.
+  sum : List(a) -> a where
+    a.zero : a
+    a.add : a a -> a
+  sum(values) -> values.fold(a.zero() |total value| total + value)
+
   reverse : List(a) -> List(a)
   reverse(values) -> reverse_into(values [])
 

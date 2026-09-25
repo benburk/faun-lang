@@ -68,10 +68,20 @@ pub struct SignatureDecl {
     pub constraints: Vec<Constraint>,
 }
 
+/// One requirement in a `where` clause.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Constraint {
-    pub name: Symbol,
-    pub arguments: Vec<Type>,
+pub enum Constraint {
+    /// A member every type `variable` stands for must have: a method whose
+    /// first parameter is the receiver, or a value, a function of none.
+    Member {
+        variable: Symbol,
+        member: Symbol,
+        ty: Type,
+    },
+    Alias {
+        name: Symbol,
+        arguments: Vec<Type>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +184,9 @@ pub enum ExprKind {
     /// A structural tag, named by its spelling. Applied, it carries fields;
     /// alone, it is a tag with none.
     Tag(Symbol),
+    /// `a.zero`: the member a `where` bound on type variable `a` names,
+    /// where `a` is spelled as the signature spells it.
+    Associated(Symbol, Symbol),
     /// A word a declaration claims, whose reading its position decides.
     Dual(Dual),
     Number(BigUint),

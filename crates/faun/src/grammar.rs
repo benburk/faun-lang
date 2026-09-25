@@ -310,19 +310,34 @@ peg::parser! {
 
         rule constraints() -> (Vec<Constraint>, Span)
             = tok(Kind::KwWhere) constraints:(constraint() ++ sep()) {
-                let end = constraints.last().map_or_else(Span::default, |constraint| constraint.span);
+                let end = constraints.last().map_or_else(Span::default, Constraint::span);
                 (constraints, end)
             }
 
         rule constraint() -> Constraint
-            = head:type_ident() adj(Kind::LParen)
+            = variable:ident() adj(Kind::Dot) member:(adj(Kind::Ident) / adj(Kind::EffectIdent))
+              colon() shape:member_type() {
+                let (parameters, result) = shape;
+                Constraint::Member {
+                    span: variable.span().through(type_span(&result)),
+                    variable: name(variable),
+                    member: name(member),
+                    parameters,
+                    result,
+                }
+            }
+            / head:type_ident() adj(Kind::LParen)
               arguments:(ty() ++ sep()) close:rparen() {
-                Constraint {
+                Constraint::Alias {
                     span: head.span().through(close.span()),
                     name: name(head),
                     arguments,
                 }
             }
+
+        rule member_type() -> (Vec<Type>, Type)
+            = parameters:(ty() ++ sep()) arrow() result:ty() { (parameters, result) }
+            / result:ty() { (Vec::new(), result) }
 
         rule ty() -> Type
             = head:type_ident()

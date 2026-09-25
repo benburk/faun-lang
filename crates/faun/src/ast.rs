@@ -176,11 +176,33 @@ pub struct SignatureDecl {
     pub constraints: Vec<Constraint>,
 }
 
+/// One requirement in a `where` clause.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Constraint {
-    pub span: Span,
-    pub name: Name,
-    pub arguments: Vec<Type>,
+pub enum Constraint {
+    /// `a.add : a a -> a`, a method every type `a` stands for must have; or
+    /// `a.zero : a`, a value it must supply, read as `a.zero()`.
+    Member {
+        span: Span,
+        variable: Name,
+        member: Name,
+        parameters: Vec<Type>,
+        result: Type,
+    },
+    /// `Summable(a)`: a named conjunction of requirements, applied.
+    Alias {
+        span: Span,
+        name: Name,
+        arguments: Vec<Type>,
+    },
+}
+
+impl Constraint {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Member { span, .. } | Self::Alias { span, .. } => *span,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

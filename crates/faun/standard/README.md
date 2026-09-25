@@ -17,11 +17,11 @@ byte order and `equals` from it, and `from_ascii`. `Bool`, the integers and
 value's `to_str`, the pieces joined with `concat`. Numeral patterns on words
 and string patterns are not here yet.
 
-`List` follows Ori's standard list wherever a function needs no tuples,
-records, or method constraints: `len`, `is_empty`, `append`, `extend`,
+`List` follows Ori's standard list: `len`, `is_empty`, `append`, `extend`,
 `prepend`, `map`, `map2`, `flat_map`, `flatten`, `join`, `filter`, `count`,
 `any`, `all`, `fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
-`get`, `get_or`, `set`, `exchange`, `try_map`, `find`, `find_index`, `take`, `drop`, `take_while`,
+`get`, `get_or`, `set`, `exchange`, `try_map`, `find`, `find_index`, `equals`,
+`contains`, `sum`, `take`, `drop`, `take_while`,
 `drop_while`, and the constructors `List.range(n)` and `List.repeat(x n)`. A
 lookup that can miss answers a structural tag: `Err(OutOfBounds)`,
 `Err(Empty)` or `Err(NotFound)`. Nothing is recognized by name: `len` is
@@ -65,8 +65,18 @@ cargo run -- check crates/faun/examples/utilities.fn
 cargo run -- emit --target x86_64-linux barb crates/faun/examples/main.fn
 ```
 
-The package deliberately omits hashing, method constraints, and bodyless
-derivation.
+The package deliberately omits hashing and bodyless derivation.
+
+Generic code that uses a method has a `where` bound, as in Ori: structural,
+met by any type having the member, with no trait and no runtime dictionary.
+A signature writes them, `sum : List(a) -> a where a.zero : a a.add : a a -> a`,
+a value member called on the type as `a.zero()`; an unsigned definition
+infers them, so `double(x) -> x.mul(2)` serves every type with a `mul`. Where
+every method a generic receiver could have shares a shape, that shape is
+context before any default, so the `2` is whatever `x` is, built through its
+type's `of_nat`. Each specialization calls the concrete type's own member.
+Constraint aliases and derived members for records and tuples are not here
+yet.
 
 Records are structural and unordered. `{name: Str *}` is a record with at
 least a `name`, and reading `.name` asks exactly that of whatever record it
@@ -74,8 +84,7 @@ is given; `{x *}` in a pattern names some fields and takes the rest;
 `{x: e *r}` is `r` with `x` replaced, and adds or retypes nothing. A tuple
 `(a b)` is a positional product of two or more, built by its literal and
 taken apart by a pattern, and never unifies with a record. A binding may
-take a record or tuple apart, since that always matches. Concrete core equality methods are written manually;
-generic equality for `List` and `Result` waits for method constraints.
+take a record or tuple apart, since that always matches.
 
 `Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by
 defining one `cmp : T T -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of
