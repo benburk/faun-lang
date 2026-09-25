@@ -43,6 +43,13 @@ pub struct PreludeIds {
     pub order_le: Symbol,
     pub order_gt: Symbol,
     pub order_ge: Symbol,
+    /// How a tuple's `cmp` goes on past an equal position.
+    pub order_then: Symbol,
+    pub order_eq: Symbol,
+    /// The spellings of the members a closed record or a tuple has without
+    /// declaring them, where anything spells them.
+    pub equals: Option<Symbol>,
+    pub cmp: Option<Symbol>,
     /// What `?` takes apart and answers with.
     pub result: Symbol,
     pub result_ok: Symbol,
@@ -127,6 +134,10 @@ impl PreludeIds {
             order_le: method(program, &order, "Order", "le")?,
             order_gt: method(program, &order, "Order", "gt")?,
             order_ge: method(program, &order, "Order", "ge")?,
+            order_then: method(program, &order, "Order", "then")?,
+            order_eq: constructor(program, &order, "Order", "Eq")?,
+            equals: program.symbols.find("equals"),
+            cmp: program.symbols.find("cmp"),
             result: result.canonical,
             result_ok: constructor(program, &result, "Result", "Ok")?,
             result_err: constructor(program, &result, "Result", "Err")?,
@@ -410,7 +421,7 @@ mod tests {
         );
         fixture.write(
             "order.fn",
-            "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool lt(Lt) -> True lt(_) -> False le : Order -> Bool le(Gt) -> False le(_) -> True gt : Order -> Bool gt(Gt) -> True gt(_) -> False ge : Order -> Bool ge(Lt) -> False ge(_) -> True)\n",
+            "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool lt(Lt) -> True lt(_) -> False le : Order -> Bool le(Gt) -> False le(_) -> True gt : Order -> Bool gt(Gt) -> True gt(_) -> False ge : Order -> Bool ge(Lt) -> False ge(_) -> True then : Order Order -> Order then(Eq next) -> next then(decided _) -> decided)\n",
         );
         let root = fixture.write(
             "standard.fn",

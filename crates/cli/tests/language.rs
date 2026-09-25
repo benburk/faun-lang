@@ -217,6 +217,20 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> host.exit!(verb(\"put\") + verb(\"post\") * 10 + bytes(U8.of_nat(255)) + bytes(U8.of_nat(150)) + bytes(U8.of_nat(3)) + nested(Ok(U8.of_nat(7))) + nested(Err(\"x\")) * 10)",
         113,
     ),
+    (
+        "a record or a tuple is equal by its parts, and a tuple ordered by them",
+        "weigh : Bool Nat -> Nat
+         weigh(True n) -> n
+         weigh(False _) -> 0
+
+         main! : Host -> []
+         main!(host) ->
+           same = weigh((1 \"a\") == (1 \"a\") 1) + weigh({x: 1 y: [2 3]} == {y: [2 3] x: 1} 2)
+           differ = weigh((1 2) != (1 3) 4) + weigh({x: 1 y: [2]} == {x: 1 y: [3]} 64)
+           ordered = weigh((1 (2 \"b\")) < (1 (2 \"c\")) 8) + weigh((2 1) > (1 9) 32) + weigh((1 1) < (1 1) 128)
+           host.exit!(same + differ + ordered + weigh([(1 2) (3 4)].contains((3 4)) 16))",
+        63,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -418,6 +432,18 @@ const REFUSED: &[(&str, &str, &str)] = &[
          byte(300) -> 1
          byte(_) -> 0",
         "`300` is not a `U8`",
+    ),
+    (
+        "a record has no order of its fields",
+        "less : {x: Nat} {x: Nat} -> Bool
+         less(a b) -> a < b",
+        "no type-compatible field or method `cmp`",
+    ),
+    (
+        "an open record's other fields are a caller's",
+        "same : {x: Nat *} {x: Nat *} -> Bool
+         same(a b) -> a == b",
+        "a record with `*` has no `equals`",
     ),
 ];
 

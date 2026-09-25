@@ -75,8 +75,7 @@ infers them, so `double(x) -> x.mul(2)` serves every type with a `mul`. Where
 every method a generic receiver could have shares a shape, that shape is
 context before any default, so the `2` is whatever `x` is, built through its
 type's `of_nat`. Each specialization calls the concrete type's own member.
-Constraint aliases and derived members for records and tuples are not here
-yet.
+Constraint aliases are not here yet.
 
 Records are structural and unordered. `{name: Str *}` is a record with at
 least a `name`, and reading `.name` asks exactly that of whatever record it
@@ -84,7 +83,11 @@ is given; `{x *}` in a pattern names some fields and takes the rest;
 `{x: e *r}` is `r` with `x` replaced, and adds or retypes nothing. A tuple
 `(a b)` is a positional product of two or more, built by its literal and
 taken apart by a pattern, and never unifies with a record. A binding may
-take a record or tuple apart, since that always matches.
+take a record or tuple apart, since that always matches. A closed record and a
+tuple have `equals` without declaring it, each component equal by its own
+type's `equals`, and a tuple has `cmp`, its positions in order with `Order.then`;
+a record has no order of its fields, and an open record no `equals`, its other
+fields being a caller's. A declared type writes its own.
 
 `Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by
 defining one `cmp : T T -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of

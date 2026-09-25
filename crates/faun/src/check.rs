@@ -3244,6 +3244,18 @@ impl<'a> Checker<'a> {
                     next.push(index);
                     continue;
                 }
+                match self.structural(&pending, final_pass)? {
+                    Some(true) => {
+                        self.pending_methods[index].resolved = true;
+                        progress = true;
+                        continue;
+                    }
+                    None => {
+                        next.push(index);
+                        continue;
+                    }
+                    Some(false) => {}
+                }
                 let owned = self.owned_methods(&pending);
                 let candidates: Vec<_> = owned
                     .iter()
@@ -3366,6 +3378,67 @@ impl<'a> Checker<'a> {
                 Box::new(Ty::Var(field)),
             ),
         }
+    }
+
+    /// `equals` on a closed record or a tuple, and `cmp` on a tuple, which
+    /// such values have with no declaration: each asks the same of every
+    /// component, position by position for a tuple. A record has no `cmp`,
+    /// having no order of its fields, and an open record has neither, its
+    /// other fields being a caller's. Answers whether `pending` was one, or
+    /// nothing while a record may yet be closed.
+    fn structural(
+        &mut self,
+        pending: &PendingMethod,
+        final_pass: bool,
+    ) -> Result<Option<bool>, CheckError> {
+        let receiver = self.infer.resolve(&pending.receiver);
+        let components = match &receiver {
+            Ty::Tuple(members) => members.clone(),
+            Ty::Record(fields, _) => fields.iter().map(|(_, ty)| ty.clone()).collect(),
+            _ => return Ok(Some(false)),
+        };
+        let spelled = self.symbols.text(pending.name);
+        let answer = match (spelled, &receiver) {
+            ("equals", _) => Ty::Named(self.prelude.bool_, Vec::new()),
+            ("cmp", Ty::Tuple(_)) => Ty::Named(self.prelude.order, Vec::new()),
+            _ => return Ok(Some(false)),
+        };
+        if let Ty::Record(_, Some(tail)) = &receiver {
+            if !final_pass && matches!(**tail, Ty::Var(_)) {
+                return Ok(None);
+            }
+            return Err(failure(
+                pending.module,
+                pending.span,
+                "a record with `*` has no `equals`: its other fields are a caller's",
+            ));
+        }
+        let [other] = pending.arguments.as_slice() else {
+            return Ok(Some(false));
+        };
+        self.unify_at(pending.module, pending.span, other, &receiver)?;
+        self.unify_at(pending.module, pending.span, &pending.result, &answer)?;
+        for component in components {
+            self.pending_methods.push(PendingMethod {
+                module: pending.module,
+                span: pending.span,
+                name: pending.name,
+                receiver: component.clone(),
+                arguments: vec![component],
+                result: answer.clone(),
+                reach: Reach::Called,
+                resolved: false,
+                obligation: true,
+            });
+        }
+        if !pending.obligation {
+            self.checked.methods.push(MethodSite {
+                module: pending.module,
+                span: pending.span,
+                target: pending.name,
+            });
+        }
+        Ok(Some(true))
     }
 
     /// The visible methods named at `pending` that its receiver could have.
@@ -4266,7 +4339,7 @@ mod tests {
             );
             self.write(
             "order.fn",
-            "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool lt(Lt) -> True lt(_) -> False le : Order -> Bool le(Gt) -> False le(_) -> True gt : Order -> Bool gt(Gt) -> True gt(_) -> False ge : Order -> Bool ge(Lt) -> False ge(_) -> True)\n",
+            "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool lt(Lt) -> True lt(_) -> False le : Order -> Bool le(Gt) -> False le(_) -> True gt : Order -> Bool gt(Gt) -> True gt(_) -> False ge : Order -> Bool ge(Lt) -> False ge(_) -> True then : Order Order -> Order then(Eq next) -> next then(decided _) -> decided)\n",
         );
             let standard = self.write(
                 "standard.fn",

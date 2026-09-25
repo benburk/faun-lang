@@ -25,4 +25,10 @@ Order : [Lt Eq Gt].(
   eq : Order -> Bool
   eq(Eq) -> True
   eq(_) -> False
+
+  # This order, or where it is `Eq`, the next: how a tuple is ordered
+  # position by position.
+  then : Order Order -> Order
+  then(Eq next) -> next
+  then(decided _) -> decided
 )

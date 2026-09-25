@@ -293,6 +293,9 @@ struct Specializer<'a> {
     data: HashMap<Symbol, h::DataDecl>,
     constructors: HashMap<Symbol, Constructor>,
     requested: HashMap<FunctionKey, usize>,
+    /// The `equals` and `cmp` of closed records and tuples, which nothing
+    /// declares, each with the first place that asked for it.
+    structural: HashMap<FunctionKey, (ModuleId, crate::ast::Span)>,
     queue: VecDeque<FunctionKey>,
     functions: Vec<Option<Function>>,
 }
@@ -424,6 +427,7 @@ impl<'a> Specializer<'a> {
             data,
             constructors,
             requested: HashMap::new(),
+            structural: HashMap::new(),
             queue: VecDeque::new(),
             functions: Vec::new(),
         })
@@ -500,7 +504,28 @@ impl<'a> Specializer<'a> {
         self.queue.push_back(key);
     }
 
+    /// Ask for `key`, which the expression at `at` calls.
+    fn request_at(&mut self, key: FunctionKey, at: (ModuleId, crate::ast::Span)) {
+        if self.is_structural(key.name, key.ty.function().map(|(p, _)| p)) {
+            self.structural.entry(key.clone()).or_insert(at);
+        }
+        self.request(key);
+    }
+
+    /// Whether `name` on these parameters is a closed record's or a
+    /// tuple's own `equals` or `cmp`.
+    fn is_structural(&self, name: Symbol, parameters: Option<&[Type]>) -> bool {
+        (Some(name) == self.prelude.equals || Some(name) == self.prelude.cmp)
+            && matches!(
+                parameters.and_then(<[Type]>::first),
+                Some(Type::Record(_) | Type::Tuple(_))
+            )
+    }
+
     fn specialize_function(&mut self, key: &FunctionKey) -> Result<Function, SpecializeError> {
+        if let Some(&at) = self.structural.get(key) {
+            return self.structural_function(key, at);
+        }
         let clauses = self.definitions.get(&key.name).cloned().unwrap_or_default();
         let provider =
             if clauses.is_empty() {
@@ -530,6 +555,97 @@ impl<'a> Specializer<'a> {
             key: key.clone(),
             clauses: specialized,
             provider,
+        })
+    }
+
+    /// A record's or a tuple's `equals`, every component equal, or a
+    /// tuple's `cmp`, the first position not `Eq`, each component compared
+    /// by its own type's member.
+    fn structural_function(
+        &mut self,
+        key: &FunctionKey,
+        (module, span): (ModuleId, crate::ast::Span),
+    ) -> Result<Function, SpecializeError> {
+        let (parameters, answer) = key
+            .ty
+            .function()
+            .ok_or_else(|| error("a structural member is not a function"))?;
+        let (receiver, answer) = (parameters[0].clone(), answer.clone());
+        let components: Vec<Type> = match &receiver {
+            Type::Tuple(members) => members.clone(),
+            Type::Record(fields) => fields.iter().map(|(_, ty)| ty.clone()).collect(),
+            _ => unreachable!("only records and tuples have structural members"),
+        };
+        let count = u32::try_from(components.len())
+            .map_err(|_| error("a product has too many components"))?;
+        let side = |offset: u32| -> Pattern {
+            let binds = (0..count).map(|index| Pattern::Bind(h::LocalId(offset + index)));
+            match &receiver {
+                Type::Record(fields) => {
+                    Pattern::Record(fields.iter().map(|(name, _)| *name).zip(binds).collect())
+                }
+                _ => Pattern::Product(binds.collect()),
+            }
+        };
+        let patterns = vec![side(0), side(count)];
+        let local = |index: u32, ty: &Type| Expr {
+            module,
+            span,
+            ty: ty.clone(),
+            kind: ExprKind::Local(h::LocalId(index)),
+        };
+        let mut compared = Vec::with_capacity(components.len());
+        for (index, component) in (0..count).zip(&components) {
+            let target = self.implementation(component, key.name)?;
+            let call =
+                self.method_key(target, component, std::slice::from_ref(component), &answer)?;
+            self.request_at(call.clone(), (module, span));
+            compared.push(Expr {
+                module,
+                span,
+                ty: answer.clone(),
+                kind: ExprKind::DirectCall(
+                    call,
+                    vec![local(index, component), local(count + index, component)],
+                ),
+            });
+        }
+        let (join, unit) = if Some(key.name) == self.prelude.cmp {
+            (self.prelude.order_then, self.prelude.order_eq)
+        } else {
+            (self.prelude.bool_and, self.prelude.bool_true)
+        };
+        let join = self.method_key(join, &answer, std::slice::from_ref(&answer), &answer)?;
+        let mut result = Expr {
+            module,
+            span,
+            ty: answer.clone(),
+            kind: ExprKind::Construct(unit, Vec::new()),
+        };
+        if let Some(last) = compared.pop() {
+            result = last;
+            self.request(join.clone());
+        }
+        // From the last position back, so the first decides first.
+        while let Some(earlier) = compared.pop() {
+            result = Expr {
+                module,
+                span,
+                ty: answer.clone(),
+                kind: ExprKind::DirectCall(join.clone(), vec![earlier, result]),
+            };
+        }
+        Ok(Function {
+            key: key.clone(),
+            clauses: vec![Clause {
+                patterns,
+                guard: None,
+                body: Body {
+                    bindings: Vec::new(),
+                    result,
+                },
+            }],
+            provider: None,
         })
     }
 
@@ -949,7 +1065,7 @@ impl<'a> Specializer<'a> {
                     .map(|argument| argument.ty.clone())
                     .collect();
                 let key = self.method_key(target, &lowered[0].ty, &argument_types, &ty)?;
-                self.request(key.clone());
+                self.request_at(key.clone(), (module, expression.span));
                 ExprKind::DirectCall(key, lowered)
             }
             h::ExprKind::Try(value) => {
@@ -983,7 +1099,7 @@ impl<'a> Specializer<'a> {
                 };
                 let key =
                     self.method_key(target, &left.ty, std::slice::from_ref(&right.ty), &answered)?;
-                self.request(key.clone());
+                self.request_at(key.clone(), (module, expression.span));
                 let call = ExprKind::DirectCall(key, vec![left, right]);
                 let view = match operator {
                     crate::ast::BinaryOp::Less => Some(self.prelude.order_lt),
@@ -1131,6 +1247,9 @@ impl<'a> Specializer<'a> {
 
     /// Which method of `owner` is its `member`.
     fn implementation(&self, owner: &Type, member: Symbol) -> Result<Symbol, SpecializeError> {
+        if self.is_structural(member, Some(std::slice::from_ref(owner))) {
+            return Ok(member);
+        }
         let Type::Named(name, _) = owner else {
             return Err(error(
                 "a `where` bound is met only by a declared type's methods",
@@ -1161,6 +1280,11 @@ impl<'a> Specializer<'a> {
                     continue;
                 };
                 let target = self.implementation(&owner, bound.member)?;
+                // A record's or a tuple's own member takes two of it: the
+                // owner says all there is.
+                if self.is_structural(target, Some(std::slice::from_ref(&owner))) {
+                    continue;
+                }
                 let scheme = self
                     .checked
                     .values
@@ -1272,6 +1396,9 @@ impl<'a> Specializer<'a> {
         parameters.push(receiver.clone());
         parameters.extend_from_slice(arguments);
         let ty = Type::Function(parameters, Box::new(result.clone()));
+        if self.is_structural(name, ty.function().map(|(p, _)| p)) {
+            return Ok(FunctionKey { name, ty });
+        }
         let scheme = self
             .checked
             .values
