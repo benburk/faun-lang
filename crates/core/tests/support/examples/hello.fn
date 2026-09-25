@@ -4,5 +4,5 @@ import std.host {Host}
 
 main! : Host -> []
 main!(host) ->
-  said = host.write!("Hello, world!\n")
+  said = host.stdout!("Hello, world!\n")
   host.exit!(0)

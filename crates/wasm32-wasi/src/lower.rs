@@ -18,6 +18,7 @@ use faun_core::targets::bytes::{Bytes, len32};
 
 const STDIN: i32 = 0;
 const STDOUT: i32 = 1;
+const STDERR: i32 = 2;
 
 /// Linear memory: the cell `fd_write`/`fd_read` reports its byte count into,
 /// then argument scratch, four-byte aligned WASI vectors, then program data.
@@ -209,10 +210,9 @@ impl Plan {
             }
             match *op {
                 Op::Call { function, .. }
-                    if program
-                        .function(function)
-                        .external()
-                        .is_some_and(|symbol| program.name(symbol) == "write!") =>
+                    if program.function(function).external().is_some_and(|symbol| {
+                        matches!(program.name(symbol), "write!" | "write_error!")
+                    }) =>
                 {
                     self.writes += 1;
                 }
@@ -801,7 +801,7 @@ impl Lowering<'_> {
         position: Position,
     ) {
         match name {
-            "write!" => {
+            "write!" | "write_error!" => {
                 let index = self.written;
                 self.written += 1;
                 let iovec = IOVECS + IOVEC_LEN * len32(index);
@@ -816,7 +816,7 @@ impl Lowering<'_> {
                     self.store(iovec + 4, args[1]);
                 }
 
-                self.constant_i32(STDOUT);
+                self.constant_i32(if name == "write!" { STDOUT } else { STDERR });
                 self.constant_i32(iovec.cast_signed());
                 self.constant_i32(1);
                 self.constant_i32(NWRITTEN);

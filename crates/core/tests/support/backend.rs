@@ -735,16 +735,22 @@ fn it_writes_what_a_program_writes() {
 }
 
 #[test]
-fn it_reads_standard_input_one_byte_at_a_time() {
+fn it_reads_standard_input() {
+    // The primitive a program's reading is built on, one byte at a time.
     let program = programs::external::reads_bytes();
     assert_eq!(
         execute_with_input(&program, &[0, 127, 255]),
         (0, String::new())
     );
 
+    // All of it, as a program asks: what goes to standard error is not
+    // what goes to standard output.
     let text = fs::read_to_string(written().join("stdin.fn")).expect("the stdin example");
-    let source = read(&text).expect("a source program that reads a byte");
-    assert_eq!(execute_with_input(&source, b"A"), (70, String::new()));
+    let source = read(&text).expect("a source program that reads its input");
+    let source = TARGET
+        .prepare(&source)
+        .expect("a program this machine holds");
+    assert_eq!(execute_with_input(&source, b"AB"), (6, "AB".to_owned()));
     assert_eq!(execute_with_input(&source, b""), (4, String::new()));
 }
 
@@ -754,6 +760,9 @@ fn it_runs_every_example() {
         let path = entry.expect("an example").path();
         let text = fs::read_to_string(&path).expect("an example to read");
         let program = read(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let program = TARGET
+            .prepare(&program)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         if path.file_stem().and_then(|name| name.to_str()) == Some("hello") {
             assert_eq!(execute(&program), (0, "Hello, world!\n".to_owned()));
         } else {

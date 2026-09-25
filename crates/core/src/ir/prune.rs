@@ -8,10 +8,12 @@
 //! width change, a comparison, an arithmetic step. A call may do something
 //! while answering and a store does nothing else, so neither is ever
 //! dropped, and an `if` holding one of them stays for what it holds rather
-//! than for what it answers. A loop stays either way: this does not decide
-//! whether one comes back.
+//! than for what it answers. So does an `if` an arm of which leaves some
+//! other way than by answering: a loop's `break` or `continue`, or a
+//! return. A loop stays either way: this does not decide whether one comes
+//! back.
 
-use super::{Op, Program, RegionId, ValueId, rewrite};
+use super::{Exit, Op, Program, RegionId, ValueId, rewrite};
 
 /// Rebuild `source` without the instructions nothing reads.
 #[must_use]
@@ -116,7 +118,13 @@ impl Read {
                 then_region,
                 else_region,
                 ..
-            } => answered() || acts(source, then_region) || acts(source, else_region),
+            } => {
+                answered()
+                    || acts(source, then_region)
+                    || acts(source, else_region)
+                    || leaves(source, then_region)
+                    || leaves(source, else_region)
+            }
             _ => answered(),
         }
     }
@@ -134,6 +142,48 @@ fn acts(source: &Program, region: RegionId) -> bool {
     source
         .every(region)
         .any(|op| matches!(*op, Op::Store { .. } | Op::Call { .. }))
+}
+
+/// Whether control can leave a region other than by its answer: by a
+/// `break` or `continue` of a loop around it, or by returning.
+fn leaves(source: &Program, region: RegionId) -> bool {
+    let held = source.region(region);
+    if held
+        .terminator
+        .is_some_and(|terminator| terminator.exit != Exit::Yield)
+    {
+        return true;
+    }
+    source.walk(region).any(|(op, _)| match *op {
+        Op::If {
+            then_region,
+            else_region,
+            ..
+        } => leaves(source, then_region) || leaves(source, else_region),
+        // A loop's own `break` and `continue` stay within it.
+        Op::Loop { body, .. } => returns(source, body),
+        _ => false,
+    })
+}
+
+/// Whether a region, or one within it, returns from its function.
+fn returns(source: &Program, region: RegionId) -> bool {
+    let held = source.region(region);
+    if held
+        .terminator
+        .is_some_and(|terminator| terminator.exit == Exit::Return)
+    {
+        return true;
+    }
+    source.walk(region).any(|(op, _)| match *op {
+        Op::If {
+            then_region,
+            else_region,
+            ..
+        } => returns(source, then_region) || returns(source, else_region),
+        Op::Loop { body, .. } => returns(source, body),
+        _ => false,
+    })
 }
 
 /// What an instruction reads, for the ones that read a fixed few values.

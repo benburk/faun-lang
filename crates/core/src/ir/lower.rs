@@ -48,7 +48,7 @@ use crate::index::append_range;
 use super::model::{Binary, Class, FunctionId, Relation, ValueId};
 use super::program::Program;
 use super::validate::validate;
-use crate::platform::{Routine, Routines, Takes, reads, takes as takes_sentence};
+use crate::platform::{Returns, Routine, Routines, Takes, reads, takes as takes_sentence};
 
 #[cfg(test)]
 mod tests;
@@ -118,7 +118,20 @@ enum Callee<'a> {
         /// What each argument it is handed becomes, after erasure.
         handed: Vec<Handed>,
     },
+    /// A routine built on a primitive, whose loop is written here: a byte
+    /// string gathered from the primitive, or handed to it in runs.
+    Built {
+        primitive: FunctionId,
+        gathers: bool,
+        /// Where a string worked out while the program runs is copied, a
+        /// run at a time, for the primitive to read where it lies.
+        scratch: super::DataId,
+    },
 }
+
+/// How many bytes of a string worked out while the program runs are handed
+/// over at once. Its room is in every image that writes one, so it is small.
+const SCRATCH: usize = 256;
 
 /// What one argument of a call to something outside becomes.
 ///
@@ -158,6 +171,7 @@ fn declare<'a>(
 ) -> Result<Vec<Callee<'a>>, String> {
     let (program, facts) = (demand.program, demand.facts);
     let mut callees = Vec::with_capacity(program.functions().len());
+    let mut scratch = None;
     for (at, reached) in demand.reached.iter().enumerate() {
         let id = barb::FnId::at(at);
         if id == entry {
@@ -210,6 +224,19 @@ fn declare<'a>(
                         "`{outside}` disagrees with `{name}` about returning"
                     ));
                 }
+                if let Some(through) = &wanted.through {
+                    let Some(primitive) = routines.get(through) else {
+                        return Err(format!(
+                            "nothing answers for `{through}`, which `{outside}` is built on"
+                        ));
+                    };
+                    callees.push(Callee::Built {
+                        primitive: primitive.declare(machine),
+                        gathers: wanted.returns == Returns::Bytes,
+                        scratch: *scratch.get_or_insert_with(|| machine.global(&[0; SCRATCH])),
+                    });
+                    continue;
+                }
                 let taken = demand.handed_names(id, wanted);
                 let borrowed: Vec<_> = taken.iter().map(String::as_str).collect();
                 Callee::External {
@@ -237,7 +264,7 @@ fn provided(wanted: &Routine, handed: &[Handed], returns: &[Class]) -> Result<()
     // must never turn an implicit effect argument into modulo-word Convert.
     for (actual, &expected) in handed.iter().zip(&wanted.takes) {
         match (actual, expected) {
-            (Handed::Bytes, Takes::StaticBytes) => {}
+            (Handed::Bytes, Takes::StaticBytes | Takes::Bytes) => {}
             (Handed::Value(actual), Takes::Scalar(expected)) if actual.fits(expected) => {}
             (Handed::Value(actual), Takes::Scalar(expected)) => {
                 return Err(format!(
@@ -253,10 +280,14 @@ fn provided(wanted: &Routine, handed: &[Handed], returns: &[Class]) -> Result<()
             }
         }
     }
-    if returns.len() != wanted.answers().iter().len() {
+    let answers: Vec<Class> = match wanted.returns {
+        Returns::Bytes => SEQUENCE_LEAVES.to_vec(),
+        _ => wanted.answers().into_iter().collect(),
+    };
+    if returns.len() != answers.len() {
         return Err(format!(
             "`{held}` answers {}, and what is taken back is {}",
-            reads(wanted.answers().as_slice()),
+            reads(&answers),
             reads(returns),
         ));
     }
@@ -573,7 +604,7 @@ impl<'a> Demand<'a> {
             .into_iter()
             .zip(&wanted.takes)
             .map(|((ty, bounds), takes)| match takes {
-                Takes::StaticBytes => {
+                Takes::StaticBytes | Takes::Bytes => {
                     if byte_shaped(self.program, *ty) {
                         Ok(Handed::Bytes)
                     } else {
@@ -963,6 +994,22 @@ fn assumed(program: &barb::Program, routines: &Routines) -> barb::Assumed {
         {
             assumed.results.push((barb::FnId::at(at), bounds));
         }
+        if let Some(provider) = function.provider()
+            && routines
+                .get(program.name(provider))
+                .is_some_and(|routine| routine.returns == Returns::Bytes)
+            && let Some(places) = byte_places(program, function.result)
+        {
+            // Every byte a routine answers is one, and a byte type's values
+            // are bytes wherever they were built.
+            let byte = barb::Bounds {
+                low: 0,
+                high: Some(255),
+            };
+            for (constructor, at) in places {
+                assumed.fields.push((constructor, at, byte));
+            }
+        }
     }
     if let Some(entry) = program.entry() {
         handed(program, routines, entry, &mut assumed);
@@ -1100,6 +1147,30 @@ fn byte_shaped(program: &barb::Program, id: barb::TypeId) -> bool {
             barb::TypeShape::Natural { .. }
         )
     })
+}
+
+/// Where a byte string's bytes are held, where its element is a type of its
+/// own around a number: that type's field, and the sequence's element field.
+/// A value of a byte type is a byte wherever it was built, so saying so of
+/// every one is saying nothing false.
+fn byte_places(program: &barb::Program, id: barb::TypeId) -> Option<[(barb::CtorId, usize); 2]> {
+    let barb::TypeShape::Sequence {
+        element,
+        push,
+        recursive,
+        ..
+    } = barb::type_shape(program, peeled(program, id)?)
+    else {
+        return None;
+    };
+    let barb::TypeShape::Wrapper { constructor, field } = barb::type_shape(program, element) else {
+        return None;
+    };
+    matches!(
+        barb::type_shape(program, peeled(program, field)?),
+        barb::TypeShape::Natural { .. }
+    )
+    .then_some([(constructor, 0), (push, usize::from(recursive == 0))])
 }
 
 /// Read through one-field products. Bounded by the declared types, so a
@@ -1671,6 +1742,10 @@ impl Lowering<'_> {
     /// An instruction where the tier below has one, a platform routine where
     /// something outside answers, and a call otherwise. An argument that
     /// carries nothing is not passed.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one dispatch over every kind of callee"
+    )]
     fn call(
         &self,
         b: &mut super::Builder,
@@ -1706,6 +1781,15 @@ impl Lowering<'_> {
                 let asked = (*routine, handed.as_slice());
                 let args = self.outside_arguments(b, function, arguments, locals, statics, asked);
                 (b.call(*id, &args), routine.answers())
+            }
+            Callee::Built {
+                primitive,
+                gathers,
+                scratch,
+            } => {
+                let built = (*primitive, *gathers, *scratch);
+                let results = self.built(b, (function, arguments), locals, statics, built);
+                (results, None)
             }
             Callee::Function(callee) => {
                 let callee = *callee;
@@ -1899,6 +1983,147 @@ impl Lowering<'_> {
             }
         }
         args
+    }
+
+    /// A routine built on a primitive: what it gathers, or nothing once it
+    /// has handed its string out.
+    fn built(
+        &self,
+        b: &mut super::Builder,
+        asked: (barb::FnId, barb::Range),
+        locals: &Locals,
+        statics: &[Option<barb::ConstId>],
+        (primitive, gathers, scratch): (FunctionId, bool, super::DataId),
+    ) -> Vec<ValueId> {
+        if gathers {
+            return Self::gather(b, primitive);
+        }
+        self.hand_out(b, asked, locals, statics, (primitive, scratch));
+        Vec::new()
+    }
+
+    /// Every byte the primitive has, to its end, as a sequence in the order
+    /// they came. A sequence grows at its front, so they are gathered last
+    /// first and then turned round.
+    fn gather(b: &mut super::Builder, read: FunctionId) -> Vec<ValueId> {
+        let byte = Class::fixed(8);
+        let got = Class::fixed(9);
+        let empty = b.buffer_empty();
+        let none = b.constant(Class::Word, 0);
+        let backwards = b.loop_(&[empty, none], &SEQUENCE_LEAVES, |b, state| {
+            let (held, len) = (state[0], state[1]);
+            let answer = b.call_one(read, &[]);
+            let end = b.constant(got, 0);
+            let ended = b.compare(Relation::Equal, answer, end);
+            b.if_(ended, &[], |b| b.break_(&[held, len]), |b| b.yield_(&[]));
+            let one = b.constant(got, 1);
+            let offset = b.binary(Binary::Sub, answer, one);
+            let value = b.convert(byte, offset);
+            let longer = b.buffer_push(held, len, &[value]);
+            let one = b.constant(Class::Word, 1);
+            let more = b.binary(Binary::Add, len, one);
+            b.continue_(&[longer, more]);
+        });
+        let empty = b.buffer_empty();
+        let none = b.constant(Class::Word, 0);
+        let initial = [backwards[0], backwards[1], empty, none];
+        b.loop_(&initial, &SEQUENCE_LEAVES, |b, state| {
+            let (from, left, onto, len) = (state[0], state[1], state[2], state[3]);
+            let none = b.constant(Class::Word, 0);
+            let done = b.compare(Relation::Equal, left, none);
+            b.if_(done, &[], |b| b.break_(&[onto, len]), |b| b.yield_(&[]));
+            let value = b.buffer_field(byte, from, left, 0);
+            let one = b.constant(Class::Word, 1);
+            let fewer = b.binary(Binary::Sub, left, one);
+            let longer = b.buffer_push(onto, len, &[value]);
+            let more = b.binary(Binary::Add, len, one);
+            b.continue_(&[from, fewer, longer, more]);
+        })
+    }
+
+    /// Hand the one byte string a routine is called with to the primitive
+    /// it is built on: where it lies, if it is known before the program
+    /// runs, and otherwise copied to `scratch` a run at a time.
+    fn hand_out(
+        &self,
+        b: &mut super::Builder,
+        (function, arguments): (barb::FnId, barb::Range),
+        locals: &Locals,
+        statics: &[Option<barb::ConstId>],
+        (write, scratch): (FunctionId, super::DataId),
+    ) {
+        // Past the authority it is asked with, the one argument carried.
+        let (atom, _) = self
+            .barb
+            .atoms(arguments)
+            .iter()
+            .zip(self.barb.params(function))
+            .skip(1)
+            .find(|(_, ty)| self.carries[ty.index()] != Storage::Erased)
+            .expect("a string handed out is carried");
+        let atom = *atom;
+        if let Some(literal) = statics[atom.0.index()] {
+            let data = b.data(&self.bytes(literal));
+            let at = b.address_of(data);
+            let len = b.data_len(data);
+            b.call(write, &[at, len]);
+            return;
+        }
+        let held = locals[atom.0.index()]
+            .as_ref()
+            .expect("a string handed out is carried");
+        let [buffer, len] = held.values() else {
+            unreachable!("a byte string is held as a sequence");
+        };
+        Self::copy_out(b, (*buffer, *len), (write, scratch));
+    }
+
+    /// Copy a sequence of bytes to `scratch`, handing it to `write` each
+    /// time it fills and once more at the end.
+    fn copy_out(
+        b: &mut super::Builder,
+        (buffer, len): (ValueId, ValueId),
+        (write, scratch): (FunctionId, super::DataId),
+    ) {
+        let room = b.data_len(scratch);
+        let none = b.constant(Class::Word, 0);
+        b.loop_(&[none, none], &[], |b, state| {
+            let (at, filled) = (state[0], state[1]);
+            let done = b.compare(Relation::Equal, at, len);
+            b.if_(
+                done,
+                &[],
+                |b| {
+                    let start = b.address_of(scratch);
+                    b.call(write, &[start, filled]);
+                    b.break_(&[]);
+                },
+                |b| b.yield_(&[]),
+            );
+            let left = b.binary(Binary::Sub, len, at);
+            let value = b.buffer_field(Class::fixed(8), buffer, left, 0);
+            let start = b.address_of(scratch);
+            let base = b.convert(Class::Word, start);
+            let place = b.binary(Binary::Add, base, filled);
+            let place = b.convert(Class::Address, place);
+            b.store(super::Width::Byte, place, super::Offset::Bytes(0), value);
+            let one = b.constant(Class::Word, 1);
+            let next = b.binary(Binary::Add, at, one);
+            let more = b.binary(Binary::Add, filled, one);
+            let full = b.compare(Relation::Equal, more, room);
+            let kept = b.if_(
+                full,
+                &[Class::Word],
+                |b| {
+                    let start = b.address_of(scratch);
+                    b.call(write, &[start, more]);
+                    let none = b.constant(Class::Word, 0);
+                    b.yield_(&[none]);
+                },
+                |b| b.yield_(&[more]),
+            )[0];
+            b.continue_(&[next, kept]);
+        });
     }
 
     /// The bytes a compile-time byte string holds, read off its encoding.

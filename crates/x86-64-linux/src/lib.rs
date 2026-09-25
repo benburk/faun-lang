@@ -42,7 +42,17 @@ impl Target for X86_64Linux {
     }
 
     fn provides(&self) -> &'static [&'static str] {
-        &["write!", "exit!", "grow", "read_byte!", "argc"]
+        &[
+            "stdin!",
+            "stdout!",
+            "stderr!",
+            "exit!",
+            "write!",
+            "write_error!",
+            "read_byte!",
+            "grow",
+            "argc",
+        ]
     }
 
     fn budget(&self) -> Budget {

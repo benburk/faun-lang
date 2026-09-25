@@ -1,9 +1,11 @@
-# One byte from standard input: nought at its end, and one more than the
-# byte otherwise.
+# All of standard input, written back to standard output and to standard
+# error, exiting with four more than how many bytes it was.
 
 import std.host {Host}
 
 main! : Host -> []
 main!(host) ->
-  byte = host.read_byte!()
-  host.exit!(byte + 4)
+  input = host.stdin!()
+  echoed = host.stdout!(input)
+  told = host.stderr!(input)
+  host.exit!((input.len() + 4) % 256)

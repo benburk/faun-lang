@@ -34,6 +34,10 @@ pub enum Takes {
     /// A run of bytes known before the program runs, handed over as the
     /// address it starts at and the number of bytes it is.
     StaticBytes,
+    /// A byte string of any kind: one known before the program runs goes
+    /// over where it lies, and one worked out while it runs is copied out
+    /// in runs through the primitive the routine is built on.
+    Bytes,
 }
 
 impl Takes {
@@ -43,7 +47,7 @@ impl Takes {
     pub fn classes(self) -> Vec<Class> {
         match self {
             Self::Scalar(class) => vec![class],
-            Self::StaticBytes => vec![Class::Address, Class::Word],
+            Self::StaticBytes | Self::Bytes => vec![Class::Address, Class::Word],
         }
     }
 
@@ -52,7 +56,7 @@ impl Takes {
     pub const fn width(self) -> usize {
         match self {
             Self::Scalar(_) => 1,
-            Self::StaticBytes => 2,
+            Self::StaticBytes | Self::Bytes => 2,
         }
     }
 }
@@ -63,6 +67,9 @@ pub enum Returns {
     Never,
     Unit,
     Value(Class),
+    /// A byte string the program then holds, gathered through the
+    /// primitive the routine is built on.
+    Bytes,
 }
 
 /// A routine, as every tier that reads one reads it.
@@ -97,6 +104,11 @@ pub struct Routine {
     /// this counts is what a machine reads rather than what a source wrote.
     pub takes: Vec<Takes>,
     pub returns: Returns,
+    /// The primitive this is built on, where it is not one itself: a byte
+    /// string in either direction is more than a machine hands over in one
+    /// call, so lowering writes the loop and a target answers only for the
+    /// primitive, which never sees the program's string.
+    pub through: Option<String>,
 }
 
 impl Routine {
@@ -141,7 +153,7 @@ impl Routine {
         for (&name, takes) in names.iter().zip(&self.takes) {
             match takes {
                 Takes::Scalar(class) => owned.push((name.to_owned(), *class)),
-                Takes::StaticBytes => {
+                Takes::StaticBytes | Takes::Bytes => {
                     owned.push((format!("{name}.at"), Class::Address));
                     owned.push((format!("{name}.len"), Class::Word));
                 }
@@ -164,7 +176,7 @@ impl Routine {
     pub const fn answers(&self) -> Option<Class> {
         match self.returns {
             Returns::Value(class) => Some(class),
-            Returns::Unit | Returns::Never => None,
+            Returns::Unit | Returns::Never | Returns::Bytes => None,
         }
     }
 
@@ -245,29 +257,46 @@ impl Routines {
     /// its own machine, rather than by reaching a name somebody wrote down.
     #[must_use]
     pub fn builtin() -> Self {
-        let held = |name: &str, offered, takes: &[Takes], returns| Routine {
+        let held = |name: &str, (offered, authority), takes: &[Takes], returns, through| Routine {
             name: name.to_owned(),
             offered,
-            // What a program asks, it asks with the authority it was handed;
-            // what a target uses to build what it offers, nobody asks.
-            authority: offered,
+            authority,
             takes: takes.to_vec(),
             returns,
+            through,
         };
-        let offered = |name: &str, takes: &[Takes], returns| held(name, true, takes, returns);
-        let hidden = |name: &str, takes: &[Takes], returns| held(name, false, takes, returns);
+        // What a program asks, it asks with the authority it was handed.
+        let offered =
+            |name: &str, takes: &[Takes], returns| held(name, (true, true), takes, returns, None);
+        let built = |name: &str, takes: &[Takes], returns, through: &str| {
+            held(name, (true, true), takes, returns, Some(through.to_owned()))
+        };
+        // A primitive a program's routines are built on is asked with the
+        // same authority, though no program names it.
+        let primitive =
+            |name: &str, takes: &[Takes], returns| held(name, (false, true), takes, returns, None);
+        // What a target uses to build what it offers, nobody asks.
+        let hidden =
+            |name: &str, takes: &[Takes], returns| held(name, (false, false), takes, returns, None);
         let word = Takes::Scalar(Class::Word);
         let contracts = vec![
-            // One argument, two machine values: a program hands over a
-            // string and a machine reads where it starts and how long it is.
-            offered("write!", &[Takes::StaticBytes], Returns::Unit),
+            // All of standard input, and a string to standard output or
+            // standard error.
+            built("stdin!", &[], Returns::Bytes, "read_byte!"),
+            built("stdout!", &[Takes::Bytes], Returns::Unit, "write!"),
+            built("stderr!", &[Takes::Bytes], Returns::Unit, "write_error!"),
             offered("exit!", &[word], Returns::Never),
+            // One argument, two machine values: a machine reads where a run
+            // of bytes starts and how long it is, to standard output...
+            primitive("write!", &[Takes::StaticBytes], Returns::Unit),
+            // ...or to standard error.
+            primitive("write_error!", &[Takes::StaticBytes], Returns::Unit),
+            // One byte from standard input, offset by one so nought can say
+            // EOF without losing the byte whose bits are all nought.
+            primitive("read_byte!", &[], Returns::Value(Class::fixed(9))),
             // The kernel picks the address, so nothing asking for a page
             // says where.
             hidden("grow", &[word], Returns::Value(Class::Address)),
-            // One byte from standard input, offset by one so nought can say
-            // EOF without losing the byte whose bits are all nought.
-            offered("read_byte!", &[], Returns::Value(Class::fixed(9))),
         ];
         let startup = vec![
             // How many arguments a program was handed.
@@ -372,7 +401,7 @@ pub fn takes(takes: &[Takes]) -> String {
     takes
         .iter()
         .map(|takes| match takes {
-            Takes::StaticBytes => "a byte string".to_owned(),
+            Takes::StaticBytes | Takes::Bytes => "a byte string".to_owned(),
             Takes::Scalar(class) => reads(std::slice::from_ref(class)),
         })
         .collect::<Vec<_>>()

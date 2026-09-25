@@ -1362,17 +1362,18 @@ impl Lowering<'_> {
 
     /// `write(1, buffer, count)`: the first two through `CSP`, the count in
     /// A and X.
-    fn write(&mut self, args: &[ValueId]) {
+    /// Write through sim65's `write(fd, buffer, count)` hook, to `fd`.
+    fn write(&mut self, args: &[ValueId], fd: u8) {
         let buffer = self.operand(args[0], T1);
         let count = self.operand(args[1], T0);
         if let Some(at) = self.constant(args[0]) {
-            let block = self.intern([at, 1]);
+            let block = self.intern([at, u16::from(fd)]);
             self.asm.lda_imm_half(block, Half::Low);
             self.asm.sta_zp(CSP);
             self.asm.lda_imm_half(block, Half::High);
             self.asm.sta_zp(CSP + 1);
         } else {
-            self.build_arguments(buffer);
+            self.build_arguments(buffer, fd);
         }
         match count.byte(1) {
             Held::Imm(high) => self.asm.ldx_imm(high),
@@ -1415,7 +1416,7 @@ impl Lowering<'_> {
     }
 
     /// A computed buffer, written into the block below the C stack top.
-    fn build_arguments(&mut self, buffer: Operand) {
+    fn build_arguments(&mut self, buffer: Operand, fd: u8) {
         self.set_pair(CSP, CSTACK_TOP - 4);
         self.asm.ldy_imm(0);
         self.load(buffer.byte(0));
@@ -1424,7 +1425,7 @@ impl Lowering<'_> {
         self.load(buffer.byte(1));
         self.asm.sta_ind_y(CSP);
         self.asm.iny();
-        self.asm.lda_imm(1);
+        self.asm.lda_imm(fd);
         self.asm.sta_ind_y(CSP);
         self.asm.iny();
         self.asm.lda_imm(0);
@@ -1689,7 +1690,8 @@ impl Lowering<'_> {
 
     fn platform_call(&mut self, name: &str, args: &[ValueId], results: &[ValueId]) {
         match name {
-            "write!" => self.write(args),
+            "write!" => self.write(args, 1),
+            "write_error!" => self.write(args, 2),
             "read_byte!" => self.read_byte(results[0]),
             "exit!" => {
                 let status = self.operand(args[0], T0);

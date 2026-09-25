@@ -131,7 +131,7 @@ line. Types reserved with `declare_inline_type` carry their complete structural
 spelling at each use and omit a redundant top-level declaration. The text is a
 diagnostic view, not surface syntax or a serialization.
 Frontend-created declarations retain their source names, including `!` on
-platform calls such as `exit!` and `write!`, and those are the names machine
+platform calls such as `exit!` and `stdout!`, and those are the names machine
 lowering carries through for linkage. A declaration may still name a different
 provider symbol -- `answered_by` is how two declarations reach one routine at
 two types -- so nothing infers a provider or an effect from the display name.

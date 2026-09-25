@@ -117,14 +117,23 @@ diverge as targets offer different capabilities. Each declares
 ```
 Host : {argc: Nat}.(
   exit! : Host Nat -> []
-  write! : Host Str -> {}
-  read_byte! : Host -> Nat
+  stdin! : Host -> Str
+  stdout! : Host Str -> {}
+  stderr! : Host Str -> {}
 )
 ```
 
-where `read_byte!` answers nought at the end of input and one more than the
-byte otherwise. The `Host` constructor remains private, so only the target
-makes one.
+where `stdin!` answers all of standard input, read to its end, and `stdout!`
+and `stderr!` write any string, whether known before the program runs or
+worked out while it does. The `Host` constructor remains private, so only the
+target makes one.
+
+A target answers for smaller primitives than these: a byte read, and a write
+of bytes that lie in memory. Machine lowering builds each stream routine on
+its primitive, so no program names one: `stdin!` gathers bytes to the end of
+input, and a string worked out at run time is copied out through a small
+scratch region a run at a time. What a routine answers is a byte string, so
+its bytes are known to be bytes wherever a program reads them.
 
 `Host` is authority carrying the startup values its target produces. A field
 such as `host.argc` is read like any record field; the target produces it into
@@ -137,7 +146,7 @@ nothing reads, so a target produces only the startup values a program uses. A
 read field the target cannot produce is refused by the target.
 
 `Host`'s bodyless methods are the effects the target answers for, called as
-`host.write!(text)`. A program orders its effects by threading `Host` through
+`host.stdout!(text)`. A program orders its effects by threading `Host` through
 them. Barb calls each routine with the `Host` it was handed, as the source
 says, and keeps the order and number of calls to anything bodyless. A routine
 asked with authority reads nothing of it, so machine lowering hands nothing

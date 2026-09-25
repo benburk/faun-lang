@@ -237,6 +237,7 @@ fn two_names_may_give_the_same_routine() {
         authority: false,
         takes: vec![crate::platform::Takes::Scalar(Class::Word)],
         returns: crate::platform::Returns::Value(Class::Word),
+        through: None,
     });
 
     let machine = lower(&mut program, &routines).expect("a representable program");
@@ -268,6 +269,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         authority: false,
         takes: vec![crate::platform::Takes::Scalar(Class::fixed(4))],
         returns: crate::platform::Returns::Unit,
+        through: None,
     });
 
     let held = |value: u64| {

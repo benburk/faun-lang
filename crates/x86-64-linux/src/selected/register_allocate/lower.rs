@@ -18,6 +18,7 @@ const SYS_MMAP: u64 = 9;
 const SYS_EXIT: u64 = 60;
 const STDIN: u64 = 0;
 const STDOUT: u64 = 1;
+const STDERR: u64 = 2;
 const PROT_READ_WRITE: u64 = 0x3;
 const MAP_PRIVATE_ANONYMOUS: u64 = 0x22;
 const COPY_SCRATCH: Reg = Reg::R11;
@@ -459,6 +460,12 @@ impl<'a> Lowering<'a> {
                 self.materialize(Reg::Rax, SYS_WRITE);
                 debug_assert_eq!(SYS_WRITE, STDOUT);
                 self.mov_reg(Reg::Rdi, Reg::Rax, RegisterWidth::Low32);
+                self.asm.syscall();
+                self.forget_call_clobbers();
+            }
+            (Opcode::WriteError, Immediate::None) => {
+                self.materialize(Reg::Rax, SYS_WRITE);
+                self.materialize(Reg::Rdi, STDERR);
                 self.asm.syscall();
                 self.forget_call_clobbers();
             }

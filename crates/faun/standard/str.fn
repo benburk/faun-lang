@@ -16,6 +16,10 @@ Str : List(U8).(
   to_str : Str -> Str
   to_str(text) -> text
 
+  # The bytes the string is, first to last.
+  to_utf8 : Str -> List(U8)
+  to_utf8(Str(bytes)) -> bytes
+
   # Byte order: the first differing byte decides, and a string comes before
   # every string extending it. UTF-8 keeps that codepoint order. It is not
   # a collation.

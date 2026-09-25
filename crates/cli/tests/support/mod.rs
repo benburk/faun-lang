@@ -83,7 +83,16 @@ impl Package {
 
     /// The status the program exits with, handed an `argc` of one.
     pub(crate) fn run(&self) -> u32 {
-        let mut barb = faun::lower_to_barb(&self.entry(), &X86_64Linux)
+        run_file(&self.entry(), &[]).0
+    }
+}
+
+/// Run the program at `entry` on the reference interpreter, handed an
+/// `argc` of one and `input` on standard input: the status it exits with,
+/// and what it wrote to standard output.
+pub(crate) fn run_file(entry: &std::path::Path, input: &[u8]) -> (u32, String) {
+    {
+        let mut barb = faun::lower_to_barb(entry, &X86_64Linux)
             .unwrap_or_else(|error| panic!("{}", error.message));
         faun_core::barb::optimize(&mut barb);
         let machine = faun_core::lower_to_machine_ir(&mut barb, &X86_64Linux.routines())
@@ -99,6 +108,10 @@ impl Package {
             .expect("an entry");
         // `argc` is handed only where the program reads it.
         let handed = vec![BigUint::from(1u8); prepared.parameter_names(main).count()];
+        let mut streams = Streams {
+            input: input.iter().copied().collect(),
+            output: Vec::new(),
+        };
         let evaluation = evaluate::evaluate(
             &prepared,
             main,
@@ -107,11 +120,15 @@ impl Package {
                 fuel: 100_000_000,
                 ..evaluate::Config::default()
             },
-            &mut Exit,
+            &mut streams,
         )
         .unwrap_or_else(|error| panic!("{error:?}"));
         let halted = evaluation.halted().expect("a program that exits");
-        u32::try_from(&halted[0]).expect("a status")
+        let status = u32::try_from(&halted[0]).expect("a status");
+        (
+            status,
+            String::from_utf8(streams.output).expect("text written"),
+        )
     }
 }
 
@@ -121,20 +138,35 @@ impl Drop for Package {
     }
 }
 
-/// A host that only knows how to leave.
-struct Exit;
+/// A host with standard input to hand out, standard output to keep, and
+/// standard error to drop.
+struct Streams {
+    input: std::collections::VecDeque<u8>,
+    output: Vec<u8>,
+}
 
-impl Host for Exit {
+impl Host for Streams {
     fn call(
         &mut self,
         name: &str,
         args: &[BigUint],
-        _: &mut Memory<'_>,
+        memory: &mut Memory<'_>,
     ) -> Result<HostResult, Error> {
-        if name == "exit!" {
-            Ok(HostResult::Halt(args.to_vec()))
-        } else {
-            Err(Error::Host(name.to_owned()))
+        let word = |value: &BigUint| u64::try_from(value).expect("a word");
+        match name {
+            "exit!" => Ok(HostResult::Halt(args.to_vec())),
+            // Nought at the end, and one more than the byte otherwise.
+            "read_byte!" => Ok(HostResult::Return(vec![BigUint::from(
+                self.input.pop_front().map_or(0, |byte| u16::from(byte) + 1),
+            )])),
+            "write!" => {
+                let len = usize::try_from(word(&args[1])).expect("a length");
+                self.output
+                    .extend_from_slice(memory.read(word(&args[0]), len)?);
+                Ok(HostResult::Return(Vec::new()))
+            }
+            "write_error!" => Ok(HostResult::Return(Vec::new())),
+            _ => Err(Error::Host(name.to_owned())),
         }
     }
 }

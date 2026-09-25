@@ -442,7 +442,8 @@ fn parameters_read_only_after_a_nonreturning_call_are_unused() {
         offered: true,
         authority: false,
         takes: vec![],
-        returns: crate::platform::Returns::Never,
+        returns: Returns::Never,
+        through: None,
     });
 
     let machine = lower(&mut source, &routines).unwrap();
@@ -475,7 +476,8 @@ fn external_parameter_names_survive_machine_lowering() {
         offered: true,
         authority: false,
         takes: vec![Takes::Scalar(Class::fixed(0))],
-        returns: crate::platform::Returns::Never,
+        returns: Returns::Never,
+        through: None,
     });
 
     let machine = lower(&mut source, &routines).unwrap();

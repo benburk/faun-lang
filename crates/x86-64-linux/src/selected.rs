@@ -136,6 +136,8 @@ pub(crate) enum Opcode {
     Shift,
     Call,
     Write,
+    /// A write to standard error rather than standard output.
+    WriteError,
     Exit,
     Grow,
     ArgumentCount,
@@ -143,6 +145,11 @@ pub(crate) enum Opcode {
 }
 
 impl Opcode {
+    /// A write of bytes where they lie, to standard output or error.
+    const fn writes(self) -> bool {
+        matches!(self, Self::Write | Self::WriteError)
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "one centralized expansion, scratch, and effect declaration per selected opcode"
@@ -197,9 +204,9 @@ impl Opcode {
                 ..Effects::PURE
             },
             Self::Call => call,
-            Self::Write | Self::Exit | Self::Grow | Self::ReadByte => {
+            Self::Write | Self::WriteError | Self::Exit | Self::Grow | Self::ReadByte => {
                 let scratch = match self {
-                    Self::Write => RegSet::of(&[Reg::Rax, Reg::Rdi]),
+                    Self::Write | Self::WriteError => RegSet::of(&[Reg::Rax, Reg::Rdi]),
                     Self::Exit => RegSet::of(&[Reg::Rax]),
                     Self::Grow => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10, Reg::R8, Reg::R9]),
                     Self::ReadByte => RegSet::of(&[Reg::Rax, Reg::Rcx, Reg::Rdi, Reg::Rsi]),
@@ -223,6 +230,7 @@ impl Opcode {
             | Self::Equal
             | Self::Below
             | Self::Write
+            | Self::WriteError
             | Self::Exit
             | Self::Grow
             | Self::ReadByte => Expansion::Sequence,
@@ -230,7 +238,7 @@ impl Opcode {
         };
         let scratch = match self {
             Self::Multiply | Self::Divide | Self::Modulo => RegSet::of(&[Reg::Rdx]),
-            Self::Write => RegSet::of(&[Reg::Rax, Reg::Rdi]),
+            Self::Write | Self::WriteError => RegSet::of(&[Reg::Rax, Reg::Rdi]),
             Self::Exit => RegSet::of(&[Reg::Rax]),
             Self::Grow => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10, Reg::R8, Reg::R9]),
             Self::ReadByte => RegSet::of(&[Reg::Rax, Reg::Rcx, Reg::Rdi, Reg::Rsi]),
@@ -295,8 +303,8 @@ impl Inst {
                 Constraint::Fixed(Reg::Rcx)
             }
             Opcode::Call => abi_register(use_at).map(Constraint::Fixed)?,
-            Opcode::Write | Opcode::Grow if use_at == 0 => Constraint::Fixed(Reg::Rsi),
-            Opcode::Write if use_at == 1 => Constraint::Fixed(Reg::Rdx),
+            Opcode::Grow if use_at == 0 => Constraint::Fixed(Reg::Rsi),
+            op if op.writes() && use_at < 2 => Constraint::Fixed([Reg::Rsi, Reg::Rdx][use_at]),
             Opcode::Exit if use_at == 0 => Constraint::Fixed(Reg::Rdi),
             _ => Constraint::Any,
         };
@@ -571,7 +579,8 @@ impl Selected {
             | Opcode::Equal
             | Opcode::Below
             | Opcode::Store
-            | Opcode::Write => 2,
+            | Opcode::Write
+            | Opcode::WriteError => 2,
             Opcode::Call => uses,
         };
         if uses != expected {
@@ -581,7 +590,9 @@ impl Selected {
             ));
         }
         let result_is_valid = match inst.opcode {
-            Opcode::Store | Opcode::Write | Opcode::Exit => inst.result.is_none(),
+            Opcode::Store | Opcode::Write | Opcode::WriteError | Opcode::Exit => {
+                inst.result.is_none()
+            }
             Opcode::Call => true,
             _ => inst.result.is_some(),
         };
@@ -945,6 +956,10 @@ fn define(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exhaustive arm per opcode, so a new one cannot go unchecked"
+)]
 fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
     let requirements = opcode.requirements();
     let effects = requirements.effects;
@@ -956,7 +971,12 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             }
             Opcode::Load => effects.memory == Access::Read,
             Opcode::Store => effects.memory == Access::Write,
-            Opcode::Call | Opcode::Write | Opcode::Exit | Opcode::Grow | Opcode::ReadByte => {
+            Opcode::Call
+            | Opcode::Write
+            | Opcode::WriteError
+            | Opcode::Exit
+            | Opcode::Grow
+            | Opcode::ReadByte => {
                 effects.control
                     && effects.memory == Access::Unknown
                     && effects.clobbers.contains(Reg::Rax)
@@ -1007,6 +1027,7 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
             | (Opcode::Call, Immediate::Function(_))
             | (
                 Opcode::Write
+                    | Opcode::WriteError
                     | Opcode::Exit
                     | Opcode::Grow
                     | Opcode::ArgumentCount
@@ -1352,6 +1373,7 @@ impl Selector<'_> {
                     let opcode = if let Some(symbol) = callee.external() {
                         match source.name(symbol) {
                             "write!" => Opcode::Write,
+                            "write_error!" => Opcode::WriteError,
                             "exit!" => Opcode::Exit,
                             "grow" => Opcode::Grow,
                             "read_byte!" => Opcode::ReadByte,
