@@ -491,6 +491,11 @@ fn intern_record_fields(ty: &super::ast::Type, source: &str, symbols: &mut Symbo
                 intern_record_fields(argument, source, symbols);
             }
         }
+        super::ast::Type::Tuple { members, .. } => {
+            for member in members {
+                intern_record_fields(member, source, symbols);
+            }
+        }
         super::ast::Type::Function {
             parameters, result, ..
         } => {

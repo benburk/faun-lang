@@ -51,8 +51,16 @@ cargo run -- check crates/faun/examples/utilities.fn
 cargo run -- emit --target x86_64-linux barb crates/faun/examples/main.fn
 ```
 
-The package deliberately omits hashing, tuples, record rows and updates, method
-constraints, and bodyless derivation. Concrete core equality methods are written manually;
+The package deliberately omits hashing, method constraints, and bodyless
+derivation.
+
+Records are structural and unordered. `{name: Str *}` is a record with at
+least a `name`, and reading `.name` asks exactly that of whatever record it
+is given; `{x *}` in a pattern names some fields and takes the rest;
+`{x: e *r}` is `r` with `x` replaced, and adds or retypes nothing. A tuple
+`(a b)` is a positional product of two or more, built by its literal and
+taken apart by a pattern, and never unifies with a record. A binding may
+take a record or tuple apart, since that always matches. Concrete core equality methods are written manually;
 generic equality for `List` and `Result` waits for method constraints.
 
 `Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by

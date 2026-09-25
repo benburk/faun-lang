@@ -63,7 +63,10 @@ pub enum InferredType {
     /// A tag row: the tags it holds, and a variable standing for the tags a
     /// caller may add, where it is open.
     Variants(Vec<(Symbol, Vec<Self>)>, Option<Box<Self>>),
-    Record(Vec<(Symbol, Self)>),
+    /// A record's fields, and where it is open the rest of a caller's.
+    Record(Vec<(Symbol, Self)>, Option<Box<Self>>),
+    /// A positional product of two or more.
+    Tuple(Vec<Self>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,7 +211,7 @@ pub fn check_application_abi(
             h::Item::Data(data) if data.name == host.host => data.wrapper.as_ref(),
             _ => None,
         });
-    if !carries.is_some_and(|wrapper| matches!(wrapper.field, h::Type::Record(_))) {
+    if !carries.is_some_and(|wrapper| matches!(wrapper.field, h::Type::Record(..))) {
         return Err(failure(
             module,
             span,
@@ -266,11 +269,48 @@ enum Ty {
     /// rigid: a signed definition's own result row, which its body may not
     /// widen and each caller may.
     Variants(Vec<(Symbol, Vec<Self>)>, Option<Box<Self>>),
-    Record(Vec<(Symbol, Self)>),
+    /// A record's fields, in one order, and where it is open, a tail
+    /// standing for the fields a caller's record has besides.
+    Record(Vec<(Symbol, Self)>, Option<Box<Self>>),
+    /// A positional product of two or more, which never unifies with a
+    /// record.
+    Tuple(Vec<Self>),
 }
 
 /// The tags of a row, each with its fields.
 type Tags = Vec<(Symbol, Vec<Ty>)>;
+
+/// Which kind of row a row unification builds: a tag row, whose entries
+/// are tags and their fields, or a record, whose entries are fields each
+/// held as a one-type entry.
+#[derive(Clone, Copy, Debug)]
+enum Former {
+    Tags,
+    Fields,
+}
+
+impl Former {
+    fn build(self, entries: Tags, tail: Option<Box<Ty>>) -> Ty {
+        match self {
+            Self::Tags => Ty::Variants(entries, tail),
+            Self::Fields => Ty::Record(
+                entries
+                    .into_iter()
+                    .map(|(name, mut held)| (name, held.remove(0)))
+                    .collect(),
+                tail,
+            ),
+        }
+    }
+}
+
+/// A record's fields as row entries.
+fn entries(fields: &[(Symbol, Ty)]) -> Tags {
+    fields
+        .iter()
+        .map(|(name, ty)| (*name, vec![ty.clone()]))
+        .collect()
+}
 
 /// Why two types do not unify.
 #[derive(Clone, Debug)]
@@ -292,6 +332,20 @@ impl Mismatch {
             Self::Reason(reason) => (*reason).to_owned(),
             Self::Fields(one, other) => {
                 format!("one tag is written with {one} and with {other} fields")
+            }
+            Self::NotAmong {
+                tags: fields,
+                row: row @ Ty::Record(..),
+            } => {
+                let fields: Vec<_> = fields
+                    .iter()
+                    .map(|field| format!("`{}`", symbols.text(*field)))
+                    .collect();
+                format!(
+                    "the record `{}` has no field {}",
+                    show(row, symbols),
+                    fields.join(" or ")
+                )
             }
             Self::NotAmong { tags, row } => {
                 let tags: Vec<_> = tags
@@ -432,12 +486,22 @@ impl Infer {
                 };
                 Ty::Variants(tags, tail)
             }
-            Ty::Record(fields) => Ty::Record(
-                fields
+            Ty::Record(fields, tail) => {
+                let mut fields: Vec<_> = fields
                     .iter()
                     .map(|(name, ty)| (*name, self.resolve(ty)))
-                    .collect(),
-            ),
+                    .collect();
+                let tail = match tail.as_deref().map(|tail| self.resolve(tail)) {
+                    Some(Ty::Record(more, rest)) => {
+                        fields.extend(more);
+                        rest
+                    }
+                    other => other.map(Box::new),
+                };
+                fields.sort_by_key(|(name, _)| *name);
+                Ty::Record(fields, tail)
+            }
+            Ty::Tuple(members) => Ty::Tuple(members.iter().map(|ty| self.resolve(ty)).collect()),
         }
     }
 
@@ -468,14 +532,16 @@ impl Infer {
                 self.unify(ar, br)
             }
             (Ty::Variants(a, at), Ty::Variants(b, bt)) => {
-                self.unify_rows((a, at.as_deref()), (b, bt.as_deref()))
+                self.unify_rows(Former::Tags, (a, at.as_deref()), (b, bt.as_deref()))
             }
-            (Ty::Record(a), Ty::Record(b)) if a.len() == b.len() => {
-                for ((an, at), (bn, bt)) in a.iter().zip(b) {
-                    if an != bn {
-                        return Err(Mismatch::Reason("the records have different fields"));
-                    }
-                    self.unify(at, bt)?;
+            (Ty::Record(a, at), Ty::Record(b, bt)) => self.unify_rows(
+                Former::Fields,
+                (&entries(a), at.as_deref()),
+                (&entries(b), bt.as_deref()),
+            ),
+            (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
+                for (a, b) in a.iter().zip(b) {
+                    self.unify(a, b)?;
                 }
                 Ok(())
             }
@@ -501,13 +567,40 @@ impl Infer {
                 }
                 Ok(widened)
             }
-            (Ty::Record(a), Ty::Record(b))
-                if a.len() == b.len() && a.iter().zip(b).all(|((x, _), (y, _))| x == y) =>
-            {
+            (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
                 let mut widened = false;
-                for ((_, a), (_, b)) in a.iter().zip(b) {
+                for (a, b) in a.iter().zip(b) {
                     widened |= self.subsume(a, b)?;
                 }
+                Ok(widened)
+            }
+            (Ty::Record(a, a_tail), Ty::Record(b, b_tail)) => {
+                let mut widened = false;
+                for (name, field) in a {
+                    if let Some((_, other)) = b.iter().find(|(found, _)| found == name) {
+                        widened |= self.subsume(field, other)?;
+                    }
+                }
+                // The shared fields are settled, so the left takes the
+                // right's types for them; what remains is which fields each
+                // record has.
+                let settled = |fields: &[(Symbol, Ty)], other: &[(Symbol, Ty)]| -> Tags {
+                    fields
+                        .iter()
+                        .map(|(name, ty)| {
+                            let shared = other.iter().find(|(found, _)| found == name);
+                            (
+                                *name,
+                                vec![shared.map_or_else(|| ty.clone(), |(_, ty)| ty.clone())],
+                            )
+                        })
+                        .collect()
+                };
+                self.unify_rows(
+                    Former::Fields,
+                    (&settled(a, b), a_tail.as_deref()),
+                    (&entries(b), b_tail.as_deref()),
+                )?;
                 Ok(widened)
             }
             (Ty::Variants(a, a_tail), Ty::Variants(b, b_tail)) => {
@@ -533,7 +626,11 @@ impl Infer {
                         .collect()
                 };
                 let (left, right) = (settled(a, b), settled(b, a));
-                match self.unify_rows((&left, a_tail.as_deref()), (&right, b_tail.as_deref())) {
+                match self.unify_rows(
+                    Former::Tags,
+                    (&left, a_tail.as_deref()),
+                    (&right, b_tail.as_deref()),
+                ) {
                     Ok(()) => Ok(widened),
                     Err(_)
                         if a_tail.is_none()
@@ -550,12 +647,14 @@ impl Infer {
         }
     }
 
-    /// Row unification: tags both rows hold unify their fields, and each
+    /// Row unification, for tag rows and record rows alike: entries both
+    /// rows hold unify, and each
     /// open side's tail takes the tags only the other holds. A closed row
     /// takes nothing, and neither does a rigid tail, which stands for tags
     /// only a caller knows.
     fn unify_rows(
         &mut self,
+        former: Former,
         (left, left_tail): (&[(Symbol, Vec<Ty>)], Option<&Ty>),
         (right, right_tail): (&[(Symbol, Vec<Ty>)], Option<&Ty>),
     ) -> Result<(), Mismatch> {
@@ -579,7 +678,7 @@ impl Infer {
         let not_among =
             |extra: &Tags, tags: &[(Symbol, Vec<Ty>)], tail: Option<&Ty>| Mismatch::NotAmong {
                 tags: extra.iter().map(|(name, _)| *name).collect(),
-                row: Ty::Variants(tags.to_vec(), tail.cloned().map(Box::new)),
+                row: former.build(tags.to_vec(), tail.cloned().map(Box::new)),
             };
         match (left_tail, right_tail) {
             (None, None) if only_left.is_empty() && only_right.is_empty() => Ok(()),
@@ -589,13 +688,13 @@ impl Infer {
                 if !only_left.is_empty() {
                     return Err(not_among(&only_left, right, None));
                 }
-                self.unify(&Ty::Var(*v), &Ty::Variants(only_right, None))
+                self.unify(&Ty::Var(*v), &former.build(only_right, None))
             }
             (None, Some(Ty::Var(v))) => {
                 if !only_right.is_empty() {
                     return Err(not_among(&only_right, left, None));
                 }
-                self.unify(&Ty::Var(*v), &Ty::Variants(only_left, None))
+                self.unify(&Ty::Var(*v), &former.build(only_left, None))
             }
             (Some(Ty::Var(v)), Some(Ty::Var(w))) => {
                 if v == w {
@@ -603,13 +702,13 @@ impl Infer {
                         Ok(())
                     } else {
                         Err(Mismatch::Reason(
-                            "two tag rows share their rest, so neither may hold a tag the other lacks",
+                            "two rows share their rest, so neither may hold what the other lacks",
                         ))
                     };
                 }
                 let rest = Box::new(self.fresh());
-                self.unify(&Ty::Var(*v), &Ty::Variants(only_right, Some(rest.clone())))?;
-                self.unify(&Ty::Var(*w), &Ty::Variants(only_left, Some(rest)))
+                self.unify(&Ty::Var(*v), &former.build(only_right, Some(rest.clone())))?;
+                self.unify(&Ty::Var(*w), &former.build(only_left, Some(rest)))
             }
             (Some(Ty::Var(v)), Some(rigid @ Ty::Rigid(_))) => {
                 if !only_left.is_empty() {
@@ -617,7 +716,7 @@ impl Infer {
                 }
                 self.unify(
                     &Ty::Var(*v),
-                    &Ty::Variants(only_right, Some(Box::new(rigid.clone()))),
+                    &former.build(only_right, Some(Box::new(rigid.clone()))),
                 )
             }
             (Some(rigid @ Ty::Rigid(_)), Some(Ty::Var(v))) => {
@@ -626,7 +725,7 @@ impl Infer {
                 }
                 self.unify(
                     &Ty::Var(*v),
-                    &Ty::Variants(only_left, Some(Box::new(rigid.clone()))),
+                    &former.build(only_left, Some(Box::new(rigid.clone()))),
                 )
             }
             (Some(Ty::Rigid(a)), Some(Ty::Rigid(b)))
@@ -635,7 +734,7 @@ impl Infer {
                 Ok(())
             }
             _ => Err(Mismatch::Reason(
-                "a tag row whose rest a caller chooses is neither closed nor another caller's",
+                "a row whose rest a caller chooses is neither closed nor another caller's",
             )),
         }
     }
@@ -673,7 +772,8 @@ fn first_order(ty: &h::Type) -> bool {
         h::Type::Variable(_) => true,
         h::Type::Named(_, arguments) => arguments.iter().all(first_order),
         h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).all(first_order),
-        h::Type::Record(fields) => fields.iter().all(|(_, field)| first_order(field)),
+        h::Type::Record(fields, _) => fields.iter().all(|(_, field)| first_order(field)),
+        h::Type::Tuple(members) => members.iter().all(first_order),
     }
 }
 
@@ -702,7 +802,11 @@ fn contains(ty: &Ty, variable: u32) -> bool {
                 .any(|ty| contains(ty, variable))
                 || tail.as_deref().is_some_and(|tail| contains(tail, variable))
         }
-        Ty::Record(fields) => fields.iter().any(|(_, ty)| contains(ty, variable)),
+        Ty::Record(fields, tail) => {
+            fields.iter().any(|(_, ty)| contains(ty, variable))
+                || tail.as_deref().is_some_and(|tail| contains(tail, variable))
+        }
+        Ty::Tuple(members) => members.iter().any(|ty| contains(ty, variable)),
     }
 }
 
@@ -739,10 +843,18 @@ fn substitute(ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
             tail.as_deref()
                 .map(|tail| Box::new(substitute(tail, replacements))),
         ),
-        Ty::Record(fields) => Ty::Record(
+        Ty::Record(fields, tail) => Ty::Record(
             fields
                 .iter()
                 .map(|(name, ty)| (*name, substitute(ty, replacements)))
+                .collect(),
+            tail.as_deref()
+                .map(|tail| Box::new(substitute(tail, replacements))),
+        ),
+        Ty::Tuple(members) => Ty::Tuple(
+            members
+                .iter()
+                .map(|ty| substitute(ty, replacements))
                 .collect(),
         ),
     }
@@ -874,7 +986,14 @@ impl<'a> Checker<'a> {
         }
         if let Some(wrapper) = &data.wrapper {
             let field = self.surface_type(&wrapper.field, &mut variables);
-            if let Ty::Record(fields) = &field {
+            if matches!(&field, Ty::Record(_, Some(_))) {
+                return Err(failure(
+                    module,
+                    data.span,
+                    "a declared type's record is closed; a record with `*` is written where it is taken",
+                ));
+            }
+            if let Ty::Record(fields, _) = &field {
                 for (name, field_ty) in fields {
                     let ty = Ty::Function(vec![result.clone()], Box::new(field_ty.clone()));
                     self.fields.entry(*name).or_default().push(FieldImpl {
@@ -999,10 +1118,17 @@ impl<'a> Checker<'a> {
                 };
                 Ty::Variants(tags, tail)
             }
-            Ty::Record(fields) => Ty::Record(
+            Ty::Record(fields, tail) => Ty::Record(
                 fields
                     .iter()
                     .map(|(name, ty)| (*name, self.open_result_rows(ty, positive)))
+                    .collect(),
+                tail.clone(),
+            ),
+            Ty::Tuple(members) => Ty::Tuple(
+                members
+                    .iter()
+                    .map(|ty| self.open_result_rows(ty, positive))
                     .collect(),
             ),
         }
@@ -1045,10 +1171,19 @@ impl<'a> Checker<'a> {
                     .collect(),
                 None,
             ),
-            h::Type::Record(fields) => Ty::Record(
+            // `*` stands for whatever other fields a caller's record has:
+            // a tail of its own, which the scheme quantifies.
+            h::Type::Record(fields, open) => Ty::Record(
                 fields
                     .iter()
                     .map(|(name, ty)| (*name, self.surface_type(ty, variables)))
+                    .collect(),
+                open.then(|| Box::new(self.infer.fresh())),
+            ),
+            h::Type::Tuple(members) => Ty::Tuple(
+                members
+                    .iter()
+                    .map(|ty| self.surface_type(ty, variables))
                     .collect(),
             ),
         }
@@ -1452,14 +1587,29 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
-            h::Pattern::Record(fields) => {
+            // `{x *}` names some fields and takes a record with any others.
+            h::Pattern::Record(fields, open) => {
                 let field_types: Vec<_> = fields
                     .iter()
                     .map(|(name, _)| (*name, self.infer.fresh()))
                     .collect();
-                self.unify_at(module, span, expected, &Ty::Record(field_types.clone()))?;
+                let rest = open.then(|| Box::new(self.infer.fresh()));
+                self.unify_at(
+                    module,
+                    span,
+                    expected,
+                    &Ty::Record(field_types.clone(), rest),
+                )?;
                 for ((_, pattern), (_, ty)) in fields.iter().zip(field_types) {
                     self.pattern(module, pattern, &ty, locals, span)?;
+                }
+                Ok(())
+            }
+            h::Pattern::Tuple(members) => {
+                let member_types: Vec<_> = members.iter().map(|_| self.infer.fresh()).collect();
+                self.unify_at(module, span, expected, &Ty::Tuple(member_types.clone()))?;
+                for (member, ty) in members.iter().zip(&member_types) {
+                    self.pattern(module, member, ty, locals, span)?;
                 }
                 Ok(())
             }
@@ -1581,7 +1731,27 @@ impl<'a> Checker<'a> {
                     inferred.push((*name, self.expr(module, value, locals)?));
                 }
                 inferred.sort_by_key(|(name, _)| *name);
-                Ok(Ty::Record(inferred))
+                Ok(Ty::Record(inferred, None))
+            }
+            h::ExprKind::Tuple(members) => {
+                let mut inferred = Vec::with_capacity(members.len());
+                for member in members {
+                    inferred.push(self.expr(module, member, locals)?);
+                }
+                Ok(Ty::Tuple(inferred))
+            }
+            // An update replaces values; it adds no field and retypes none, so
+            // the record must have each field named, at the value's type.
+            h::ExprKind::Update(base, fields) => {
+                let updated = self.expr(module, base, locals)?;
+                let mut named = Vec::with_capacity(fields.len());
+                for (name, value) in fields {
+                    named.push((*name, self.expr(module, value, locals)?));
+                }
+                named.sort_by_key(|(name, _)| *name);
+                let shape = Ty::Record(named, Some(Box::new(self.infer.fresh())));
+                self.unify_at(module, expression.span, &updated, &shape)?;
+                Ok(updated)
             }
             h::ExprKind::Lambda(patterns, body) => {
                 let parameters: Vec<_> = patterns.iter().map(|_| self.infer.fresh()).collect();
@@ -1815,19 +1985,36 @@ impl<'a> Checker<'a> {
                     self.close_fields(&fields, &taken)?;
                 }
             }
-            Ty::Record(fields) => {
+            Ty::Record(fields, _) => {
                 for (name, field) in fields {
+                    // A record pattern not naming the field takes any.
                     let column = rows
                         .iter()
                         .filter_map(|(pattern, guarded)| match pattern {
-                            h::Pattern::Record(held) => held
-                                .iter()
-                                .find(|(found, _)| *found == name)
-                                .map(|(_, pattern)| (pattern.clone(), *guarded)),
+                            h::Pattern::Record(held, _) => Some((
+                                held.iter()
+                                    .find(|(found, _)| *found == name)
+                                    .map_or(h::Pattern::Wild, |(_, pattern)| pattern.clone()),
+                                *guarded,
+                            )),
                             _ => None,
                         })
                         .collect();
                     self.close_rows(&field, column)?;
+                }
+            }
+            Ty::Tuple(members) => {
+                for (at, member) in members.iter().enumerate() {
+                    let column = rows
+                        .iter()
+                        .filter_map(|(pattern, guarded)| match pattern {
+                            h::Pattern::Tuple(held) => {
+                                held.get(at).map(|pattern| (pattern.clone(), *guarded))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    self.close_rows(member, column)?;
                 }
             }
             Ty::Var(_) | Ty::Rigid(_) | Ty::Function(..) => {}
@@ -2351,6 +2538,21 @@ impl<'a> Checker<'a> {
                         self.apply_method(&pending, &owned[0])?;
                         unreachable!("a method that does not fit fails to apply");
                     }
+                    // A field of a receiver nothing else says anything of is
+                    // a field of whatever record it turns out to be.
+                    [] if pending.member
+                        && pending.arguments.is_empty()
+                        && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_)) =>
+                    {
+                        if final_pass {
+                            let projection = Self::projection(pending.name);
+                            self.apply_field(&pending, &projection)?;
+                            self.pending_methods[index].resolved = true;
+                            progress = true;
+                        } else {
+                            next.push(index);
+                        }
+                    }
                     [] => {
                         return Err(failure(
                             pending.module,
@@ -2395,16 +2597,8 @@ impl<'a> Checker<'a> {
             return Vec::new();
         }
         let receiver = self.infer.resolve(&pending.receiver);
-        if let Ty::Record(fields) = &receiver {
-            return fields
-                .iter()
-                .find(|(name, _)| *name == pending.name)
-                .map(|(_, field)| Scheme {
-                    variables: Vec::new(),
-                    ty: Ty::Function(vec![receiver.clone()], Box::new(field.clone())),
-                })
-                .into_iter()
-                .collect();
+        if let Ty::Record(..) = &receiver {
+            return vec![Self::projection(pending.name)];
         }
         let Some(fields) = self.fields.get(&pending.name) else {
             return Vec::new();
@@ -2422,6 +2616,24 @@ impl<'a> Checker<'a> {
             })
             .map(|field| field.scheme.clone())
             .collect()
+    }
+
+    /// Reading field `name` of a record: `{name: t *} -> t`, which reads it
+    /// from a record that has it and asks it of one that is open. Its two
+    /// variables are the scheme's own, never linked, since a scheme is
+    /// instantiated before it is used.
+    fn projection(name: Symbol) -> Scheme {
+        let (field, rest) = (u32::MAX, u32::MAX - 1);
+        Scheme {
+            variables: vec![field, rest],
+            ty: Ty::Function(
+                vec![Ty::Record(
+                    vec![(name, Ty::Var(field))],
+                    Some(Box::new(Ty::Var(rest))),
+                )],
+                Box::new(Ty::Var(field)),
+            ),
+        }
     }
 
     /// The visible methods named at `pending` that its receiver could have.
@@ -2630,12 +2842,14 @@ fn public_type(ty: &Ty) -> InferredType {
                 .collect(),
             tail.as_deref().map(|tail| Box::new(public_type(tail))),
         ),
-        Ty::Record(fields) => InferredType::Record(
+        Ty::Record(fields, tail) => InferredType::Record(
             fields
                 .iter()
                 .map(|(name, ty)| (*name, public_type(ty)))
                 .collect(),
+            tail.as_deref().map(|tail| Box::new(public_type(tail))),
         ),
+        Ty::Tuple(members) => InferredType::Tuple(members.iter().map(public_type).collect()),
     }
 }
 
@@ -2669,8 +2883,16 @@ fn free_variables(ty: &Ty) -> Vec<u32> {
                     collect(tail, output);
                 }
             }
-            Ty::Record(fields) => {
+            Ty::Record(fields, tail) => {
                 for (_, ty) in fields {
+                    collect(ty, output);
+                }
+                if let Some(tail) = tail {
+                    collect(tail, output);
+                }
+            }
+            Ty::Tuple(members) => {
+                for ty in members {
                     collect(ty, output);
                 }
             }
@@ -2811,6 +3033,15 @@ fn validate_effect_expr(
         }
         h::ExprKind::Record(fields) => fields.iter().try_for_each(|(_, value)| {
             validate_effect_expr(module, value, owner_effectful, false, symbols)
+        }),
+        h::ExprKind::Update(base, fields) => {
+            validate_effect_expr(module, base, owner_effectful, false, symbols)?;
+            fields.iter().try_for_each(|(_, value)| {
+                validate_effect_expr(module, value, owner_effectful, false, symbols)
+            })
+        }
+        h::ExprKind::Tuple(members) => members.iter().try_for_each(|member| {
+            validate_effect_expr(module, member, owner_effectful, false, symbols)
         }),
         h::ExprKind::Lambda(_, body) => validate_effect_expr(module, body, false, false, symbols),
         h::ExprKind::Unary(_, value) => {
@@ -3001,6 +3232,17 @@ fn expr_globals(expression: &h::Expr, output: &mut HashSet<Symbol>) {
                 expr_globals(value, output);
             }
         }
+        h::ExprKind::Update(base, fields) => {
+            expr_globals(base, output);
+            for (_, value) in fields {
+                expr_globals(value, output);
+            }
+        }
+        h::ExprKind::Tuple(members) => {
+            for member in members {
+                expr_globals(member, output);
+            }
+        }
         h::ExprKind::Lambda(_, body) | h::ExprKind::Unary(_, body) | h::ExprKind::Try(body) => {
             expr_globals(body, output);
         }
@@ -3042,9 +3284,14 @@ fn collect_pattern_locals(pattern: &h::Pattern, output: &mut Vec<h::LocalId>) {
                 collect_pattern_locals(rest, output);
             }
         }
-        h::Pattern::Record(fields) => {
+        h::Pattern::Record(fields, _) => {
             for (_, pattern) in fields {
                 collect_pattern_locals(pattern, output);
+            }
+        }
+        h::Pattern::Tuple(members) => {
+            for member in members {
+                collect_pattern_locals(member, output);
             }
         }
         h::Pattern::Wild | h::Pattern::Number { .. } | h::Pattern::Range(..) => {}
@@ -3107,11 +3354,21 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
             }
             format!("[{}]", shown.join(" "))
         }
-        Ty::Record(fields) => format!(
-            "{{{}}}",
-            fields
+        Ty::Record(fields, tail) => {
+            let mut shown: Vec<_> = fields
                 .iter()
                 .map(|(name, ty)| format!("{}: {}", symbols.text(*name), show(ty, symbols)))
+                .collect();
+            if matches!(tail.as_deref(), Some(Ty::Var(_))) {
+                shown.push("*".to_owned());
+            }
+            format!("{{{}}}", shown.join(" "))
+        }
+        Ty::Tuple(members) => format!(
+            "({})",
+            members
+                .iter()
+                .map(|ty| show(ty, symbols))
                 .collect::<Vec<_>>()
                 .join(" ")
         ),

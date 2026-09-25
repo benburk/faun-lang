@@ -346,9 +346,9 @@ impl<'a> Lowerer<'a> {
     fn collect_body(&mut self, body: &d::Body, answer: &Type) -> Result<(), LowerError> {
         for binding in &body.bindings {
             self.collect_expr(&binding.value, answer)?;
-            if !matches!(binding.pattern, Pattern::Wild | Pattern::Bind(_)) {
+            if !takes_apart(&binding.pattern) {
                 return Err(error(
-                    "refutable local bindings are not supported by Barb lowering yet",
+                    "a binding takes a value apart only as records and tuples, which always match",
                 ));
             }
         }
@@ -365,6 +365,17 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ExprKind::Record(fields) => {
+                for (_, field) in fields {
+                    self.collect_expr(field, answer)?;
+                }
+            }
+            ExprKind::Tuple(members) => {
+                for member in members {
+                    self.collect_expr(member, answer)?;
+                }
+            }
+            ExprKind::Update(base, fields) => {
+                self.collect_expr(base, answer)?;
                 for (_, field) in fields {
                     self.collect_expr(field, answer)?;
                 }
@@ -416,13 +427,8 @@ impl<'a> Lowerer<'a> {
     /// which holds every one of them. A record is one constructor, named
     /// by nothing.
     fn widening_fields(&self, from: &Type, to: &Type) -> Result<Widening, LowerError> {
-        if let (Type::Record(source), Type::Record(target)) = (from, to) {
-            let pairs = source
-                .iter()
-                .zip(target)
-                .map(|((_, source), (_, target))| (source.clone(), target.clone()))
-                .collect();
-            return Ok(vec![(None, pairs)]);
+        if let (Some(source), Some(target)) = (members(from), members(to)) {
+            return Ok(vec![(None, source.into_iter().zip(target).collect())]);
         }
         if matches!(from, Type::Function(..)) {
             return Err(error(
@@ -476,6 +482,11 @@ impl<'a> Lowerer<'a> {
                     self.collect_type(field)?;
                 }
             }
+            Type::Tuple(members) => {
+                for member in members {
+                    self.collect_type(member)?;
+                }
+            }
         }
         Ok(())
     }
@@ -483,7 +494,7 @@ impl<'a> Lowerer<'a> {
     fn declare_types(&mut self) {
         for ty in &self.types {
             let name = type_name(ty, &self.resolved.symbols);
-            let id = if matches!(ty, Type::Variants(_) | Type::Record(_)) {
+            let id = if matches!(ty, Type::Variants(_) | Type::Record(_) | Type::Tuple(_)) {
                 self.output.declare_inline_type(&name)
             } else {
                 self.output.declare_type(&name)
@@ -529,6 +540,14 @@ impl<'a> Lowerer<'a> {
                     let fields = self.named_fields(fields);
                     self.output
                         .define_fields(id, &[("Record", fields.as_slice())]);
+                    self.record_constructor_ids
+                        .insert(ty.clone(), self.output.ctor_at(id, 0));
+                }
+                Type::Tuple(members) => {
+                    let members: Vec<_> =
+                        members.iter().map(|member| self.type_ids[member]).collect();
+                    self.output
+                        .define_type(id, &[("Tuple", members.as_slice())]);
                     self.record_constructor_ids
                         .insert(ty.clone(), self.output.ctor_at(id, 0));
                 }
@@ -929,8 +948,8 @@ impl<'a> Lowerer<'a> {
             .map(|(column, _)| column)
             .expect("a refutable pattern exists");
         let subject = &subjects[column];
-        if let Type::Record(record_fields) = &subject.ty {
-            let fields: Vec<_> = record_fields
+        if let Some(member_types) = members(&subject.ty) {
+            let fields: Vec<_> = member_types
                 .iter()
                 .map(|_| {
                     let value = Value(*next);
@@ -949,10 +968,10 @@ impl<'a> Lowerer<'a> {
                         vec![Pattern::Wild; fields.len()]
                     }
                     Pattern::Product(patterns) => patterns,
-                    _ => unreachable!("record patterns normalize to a product"),
+                    _ => unreachable!("record and tuple patterns normalize to a product"),
                 };
                 if replacement.len() != fields.len() {
-                    return Err(error("record pattern has the wrong field count"));
+                    return Err(error("a product pattern has the wrong field count"));
                 }
                 row.patterns.splice(column..=column, replacement);
                 specialized.push(row);
@@ -963,7 +982,7 @@ impl<'a> Lowerer<'a> {
                 fields
                     .iter()
                     .copied()
-                    .zip(record_fields.iter().map(|(_, ty)| ty.clone()))
+                    .zip(member_types)
                     .map(|(value, ty)| Subject { value, ty }),
             );
             return Ok(Decision::Record {
@@ -1045,20 +1064,27 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(tail)
             }
-            Pattern::Record(fields) => {
+            // A field the pattern does not name is taken whatever it is.
+            Pattern::Record(mut fields) => {
                 let Type::Record(expected) = expected else {
                     return Err(error("record pattern does not have a record type"));
                 };
-                if fields.len() != expected.len()
-                    || fields
-                        .iter()
-                        .zip(expected)
-                        .any(|((found, _), (wanted, _))| found != wanted)
+                if fields
+                    .iter()
+                    .any(|(found, _)| !expected.iter().any(|(wanted, _)| wanted == found))
                 {
-                    return Err(error("record pattern fields do not match its type"));
+                    return Err(error("record pattern names a field its type lacks"));
                 }
                 Ok(Pattern::Product(
-                    fields.into_iter().map(|(_, pattern)| pattern).collect(),
+                    expected
+                        .iter()
+                        .map(|(wanted, _)| {
+                            fields
+                                .iter()
+                                .position(|(found, _)| found == wanted)
+                                .map_or(Pattern::Wild, |at| fields.swap_remove(at).1)
+                        })
+                        .collect(),
                 ))
             }
             product @ Pattern::Product(_) => Ok(product),
@@ -1352,10 +1378,20 @@ fn emit_bindings(
         Pattern::Bind(local) => {
             locals.insert(local, value);
         }
-        _ => unreachable!("refutable bindings were rejected before emission"),
+        _ => unreachable!("a pattern taking a value apart is bound by `destructure`"),
     };
     let ExprKind::Try(taken) = &binding.value.kind else {
         let value = emit_expr(context, builder, &binding.value, &locals);
+        if !matches!(binding.pattern, Pattern::Wild | Pattern::Bind(_)) {
+            return destructure(
+                context,
+                builder,
+                (value, &binding.value.ty),
+                &binding.pattern,
+                locals,
+                &|builder, locals| emit_bindings(context, builder, rest, result, locals),
+            );
+        }
         bind(&mut locals, value);
         return emit_bindings(context, builder, rest, result, locals);
     };
@@ -1384,6 +1420,76 @@ fn emit_bindings(
             }
         },
     )
+}
+
+/// Take `value` apart as `pattern`, a record or tuple of names, then go on.
+fn destructure(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    (value, ty): (Atom, &Type),
+    pattern: &Pattern,
+    mut locals: HashMap<LocalId, Atom>,
+    then: &dyn Fn(&mut Builder<'_>, HashMap<LocalId, Atom>) -> Atom,
+) -> Atom {
+    let parts: Vec<(Pattern, Type)> = match (pattern, ty) {
+        (Pattern::Wild, _) => return then(builder, locals),
+        (Pattern::Bind(local), _) => {
+            locals.insert(*local, value);
+            return then(builder, locals);
+        }
+        (Pattern::Record(named), Type::Record(fields)) => fields
+            .iter()
+            .map(|(name, ty)| {
+                let part = named
+                    .iter()
+                    .find(|(found, _)| found == name)
+                    .map_or(Pattern::Wild, |(_, pattern)| pattern.clone());
+                (part, ty.clone())
+            })
+            .collect(),
+        (Pattern::Product(members), Type::Tuple(types)) => {
+            members.iter().cloned().zip(types.iter().cloned()).collect()
+        }
+        _ => unreachable!("a binding takes apart only records and tuples"),
+    };
+    builder.match_(value, context.type_ids[ty], |builder, _, held| {
+        let held = held.to_vec();
+        destructure_each(context, builder, &held, &parts, locals.clone(), then)
+    })
+}
+
+fn destructure_each(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    held: &[Atom],
+    parts: &[(Pattern, Type)],
+    locals: HashMap<LocalId, Atom>,
+    then: &dyn Fn(&mut Builder<'_>, HashMap<LocalId, Atom>) -> Atom,
+) -> Atom {
+    let (Some((&value, held)), Some(((pattern, ty), parts))) =
+        (held.split_first(), parts.split_first())
+    else {
+        return then(builder, locals);
+    };
+    destructure(
+        context,
+        builder,
+        (value, ty),
+        pattern,
+        locals,
+        &|builder, locals| destructure_each(context, builder, held, parts, locals, then),
+    )
+}
+
+/// Whether a binding's pattern is one lowering takes a value apart with:
+/// names, and records and tuples of them, which always match.
+fn takes_apart(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Wild | Pattern::Bind(_) => true,
+        Pattern::Record(fields) => fields.iter().all(|(_, pattern)| takes_apart(pattern)),
+        Pattern::Product(members) => members.iter().all(takes_apart),
+        _ => false,
+    }
 }
 
 /// `body` with every `value?` in it bound on its own, in the order it is
@@ -1421,6 +1527,17 @@ fn lifted(expression: &Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) ->
                 .map(|(name, field)| (*name, lift(field)))
                 .collect(),
         ),
+        ExprKind::Tuple(members) => ExprKind::Tuple(members.iter().map(&mut lift).collect()),
+        ExprKind::Update(base, fields) => {
+            let base = lift(base);
+            ExprKind::Update(
+                Box::new(base),
+                fields
+                    .iter()
+                    .map(|(name, field)| (*name, lift(field)))
+                    .collect(),
+            )
+        }
         ExprKind::Project(receiver, field) => ExprKind::Project(Box::new(lift(receiver)), *field),
         ExprKind::DirectCall(key, arguments) => {
             ExprKind::DirectCall(key.clone(), arguments.iter().map(&mut lift).collect())
@@ -1490,6 +1607,43 @@ fn emit_expr(
             let fields: Vec<_> = fields.into_iter().map(|(_, field)| field).collect();
             builder.con(context.record_constructor_ids[&expression.ty], &fields)
         }
+        ExprKind::Tuple(members) => {
+            let members: Vec<_> = members
+                .iter()
+                .map(|member| emit_expr(context, builder, member, locals))
+                .collect();
+            builder.con(context.record_constructor_ids[&expression.ty], &members)
+        }
+        // The replacements are worked out first, in the order written, then
+        // the record is taken apart and built again with them in their places.
+        ExprKind::Update(base, fields) => {
+            let record = emit_expr(context, builder, base, locals);
+            let replaced: Vec<_> = fields
+                .iter()
+                .map(|(name, field)| (*name, emit_expr(context, builder, field, locals)))
+                .collect();
+            let Type::Record(layout) = &expression.ty else {
+                unreachable!("an update builds a record")
+            };
+            let constructor = context.record_constructor_ids[&expression.ty];
+            builder.match_(
+                record,
+                context.type_ids[&expression.ty],
+                |builder, _, held| {
+                    let rebuilt: Vec<_> = layout
+                        .iter()
+                        .zip(held)
+                        .map(|((name, _), kept)| {
+                            replaced
+                                .iter()
+                                .find(|(found, _)| found == name)
+                                .map_or(*kept, |(_, value)| *value)
+                        })
+                        .collect();
+                    builder.con(constructor, &rebuilt)
+                },
+            )
+        }
         ExprKind::Project(receiver, field) => {
             let atom = emit_expr(context, builder, receiver, locals);
             emit_projection(context, builder, atom, &receiver.ty, *field)
@@ -1544,6 +1698,16 @@ fn emit_projection(
     builder.match_(receiver, context.type_ids[receiver_ty], |_, _, values| {
         values[index]
     })
+}
+
+/// The types of a record's fields, in their order, or a tuple's members:
+/// the columns a product is taken apart into.
+fn members(ty: &Type) -> Option<Vec<Type>> {
+    match ty {
+        Type::Record(fields) => Some(fields.iter().map(|(_, ty)| ty.clone()).collect()),
+        Type::Tuple(members) => Some(members.clone()),
+        _ => None,
+    }
 }
 
 const fn irrefutable(pattern: &Pattern) -> bool {
@@ -1601,6 +1765,14 @@ fn type_name(ty: &Type, symbols: &crate::Symbols) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join(" ")
+        ),
+        Type::Tuple(members) => format!(
+            "({})",
+            members
+                .iter()
+                .map(|member| type_name(member, symbols))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         Type::Record(fields) => format!(
             "{{{}}}",

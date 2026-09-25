@@ -183,7 +183,8 @@ fn has_variable(ty: &h::Type) -> bool {
             parameters.iter().any(has_variable) || has_variable(result)
         }
         h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).any(has_variable),
-        h::Type::Record(fields) => fields.iter().any(|(_, field)| has_variable(field)),
+        h::Type::Record(fields, _) => fields.iter().any(|(_, field)| has_variable(field)),
+        h::Type::Tuple(members) => members.iter().any(has_variable),
     }
 }
 
@@ -322,10 +323,17 @@ fn expand(
                 })
                 .collect::<Result<_, String>>()?,
         ),
-        h::Type::Record(fields) => h::Type::Record(
+        h::Type::Record(fields, open) => h::Type::Record(
             fields
                 .iter()
                 .map(|(name, field)| Ok((*name, expand(field, aliases, symbols, expanding)?)))
+                .collect::<Result<_, String>>()?,
+            *open,
+        ),
+        h::Type::Tuple(members) => h::Type::Tuple(
+            members
+                .iter()
+                .map(|member| expand(member, aliases, symbols, expanding))
                 .collect::<Result<_, String>>()?,
         ),
     })
@@ -516,7 +524,13 @@ fn resolve_type(
                 })
                 .collect::<Result<_, ResolveError>>()?,
         )),
-        s::Type::Record { span, fields } => {
+        s::Type::Tuple { members, .. } => Ok(h::Type::Tuple(
+            members
+                .iter()
+                .map(|member| resolve_type(module, member, source, scope, symbols))
+                .collect::<Result<_, _>>()?,
+        )),
+        s::Type::Record { span, fields, open } => {
             let mut resolved = fields
                 .iter()
                 .map(|(name, ty)| {
@@ -530,7 +544,7 @@ fn resolve_type(
             if resolved.windows(2).any(|pair| pair[0].0 == pair[1].0) {
                 return Err(error(module, *span, "record type repeats a field"));
             }
-            Ok(h::Type::Record(resolved))
+            Ok(h::Type::Record(resolved, *open))
         }
     }
 }
@@ -667,7 +681,13 @@ impl ClauseResolver<'_> {
                     .map(|rest| self.pattern(rest).map(Box::new))
                     .transpose()?,
             )),
-            s::Pattern::Record { span, fields } => {
+            s::Pattern::Tuple { members, .. } => Ok(h::Pattern::Tuple(
+                members
+                    .iter()
+                    .map(|member| self.pattern(member))
+                    .collect::<Result<_, _>>()?,
+            )),
+            s::Pattern::Record { span, fields, open } => {
                 let mut resolved = fields
                     .iter()
                     .map(|(name, pattern)| {
@@ -681,7 +701,7 @@ impl ClauseResolver<'_> {
                 if resolved.windows(2).any(|pair| pair[0].0 == pair[1].0) {
                     return Err(error(self.module, *span, "record pattern repeats a field"));
                 }
-                Ok(h::Pattern::Record(resolved))
+                Ok(h::Pattern::Record(resolved, *open))
             }
         }
     }
@@ -719,20 +739,11 @@ impl ClauseResolver<'_> {
                     .transpose()?,
             ),
             s::ExprKind::Record(fields) => {
-                let mut seen = std::collections::HashSet::new();
-                let mut resolved = Vec::with_capacity(fields.len());
-                for (name, value) in fields {
-                    let name = self.symbols.intern(name.text(self.source));
-                    if !seen.insert(name) {
-                        return Err(error(
-                            self.module,
-                            expression.span,
-                            "record expression repeats a field",
-                        ));
-                    }
-                    resolved.push((name, self.expr(value)?));
-                }
-                h::ExprKind::Record(resolved)
+                h::ExprKind::Record(self.record_fields(fields, expression.span)?)
+            }
+            s::ExprKind::Update(fields, base) => {
+                let base = Box::new(self.expr(base)?);
+                h::ExprKind::Update(base, self.record_fields(fields, expression.span)?)
             }
             s::ExprKind::Lambda(patterns, body) => {
                 let saved = self.locals.clone();
@@ -786,6 +797,12 @@ impl ClauseResolver<'_> {
                 h::ExprKind::Unary(*operator, Box::new(self.expr(value)?))
             }
             s::ExprKind::Try(value) => h::ExprKind::Try(Box::new(self.expr(value)?)),
+            s::ExprKind::Tuple(members) => h::ExprKind::Tuple(
+                members
+                    .iter()
+                    .map(|member| self.expr(member))
+                    .collect::<Result<_, _>>()?,
+            ),
             s::ExprKind::Binary(operator, left, right) => h::ExprKind::Binary(
                 *operator,
                 Box::new(self.expr(left)?),
@@ -824,6 +841,28 @@ impl ClauseResolver<'_> {
             name.0,
             format!("unknown name `{}`", name.text(self.source)),
         ))
+    }
+
+    /// A record expression's fields, each named once.
+    fn record_fields(
+        &mut self,
+        fields: &[(s::Name, s::Expr)],
+        span: s::Span,
+    ) -> Result<Vec<(Symbol, h::Expr)>, ResolveError> {
+        let mut seen = std::collections::HashSet::new();
+        let mut resolved = Vec::with_capacity(fields.len());
+        for (name, value) in fields {
+            let name = self.symbols.intern(name.text(self.source));
+            if !seen.insert(name) {
+                return Err(error(
+                    self.module,
+                    span,
+                    "record expression repeats a field",
+                ));
+            }
+            resolved.push((name, self.expr(value)?));
+        }
+        Ok(resolved)
     }
 
     /// A word some declaration claims, numbered so checking can say which

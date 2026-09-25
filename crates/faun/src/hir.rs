@@ -81,7 +81,11 @@ pub enum Type {
     Function(Vec<Self>, Box<Self>),
     /// A closed tag row, each tag named by its spelling.
     Variants(Vec<ConstructorDecl>),
-    Record(Vec<(Symbol, Self)>),
+    /// A record's fields, and whether it is open: `{x: T *}` has at least
+    /// `x`, and whatever else a caller's record does.
+    Record(Vec<(Symbol, Self)>, bool),
+    /// A positional product of two or more, which never passes for a record.
+    Tuple(Vec<Self>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,7 +143,9 @@ pub enum Pattern {
     },
     Range(BigUint, BigUint),
     List(Vec<Self>, Option<Box<Self>>),
-    Record(Vec<(Symbol, Self)>),
+    /// Named fields, and whether the pattern ignores the others.
+    Record(Vec<(Symbol, Self)>, bool),
+    Tuple(Vec<Self>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +180,9 @@ pub enum ExprKind {
     String(Vec<StringPart>),
     List(Vec<Expr>, Option<Box<Expr>>),
     Record(Vec<(Symbol, Expr)>),
+    /// A record's fields replaced: the record, and the new values.
+    Update(Box<Expr>, Vec<(Symbol, Expr)>),
+    Tuple(Vec<Expr>),
     Lambda(Vec<Pattern>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     Member(Box<Expr>, Symbol),

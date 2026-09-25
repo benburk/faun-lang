@@ -118,8 +118,11 @@ enum Pattern {
     Number(BigUint, bool),
     /// A range, which covers no constructor wholly.
     Range,
-    /// A record, its fields ordered by name.
+    /// A record, its fields ordered by name; a field it does not name, it
+    /// takes whatever of.
     Record(Vec<(Symbol, Self)>),
+    /// A tuple, member by member.
+    Tuple(Vec<Self>),
 }
 
 struct Coverage<'a> {
@@ -237,13 +240,16 @@ impl<'a> Coverage<'a> {
                 }
                 tail
             }
-            h::Pattern::Record(fields) => {
+            h::Pattern::Record(fields, _) => {
                 let mut fields: Vec<_> = fields
                     .iter()
                     .map(|(name, field)| (*name, self.pattern(field)))
                     .collect();
                 fields.sort_by_key(|(name, _)| *name);
                 Pattern::Record(fields)
+            }
+            h::Pattern::Tuple(members) => {
+                Pattern::Tuple(members.iter().map(|member| self.pattern(member)).collect())
             }
         }
     }
@@ -255,11 +261,14 @@ impl<'a> Coverage<'a> {
             return rows.is_empty().then(Vec::new);
         }
         let heads = || rows.iter().map(|row| &row[0]);
-        if let Some(names) = heads().find_map(|head| match head {
-            Pattern::Record(fields) => Some(fields.iter().map(|(name, _)| *name).collect()),
+        if heads().any(|head| matches!(head, Pattern::Record(_))) {
+            return self.missing_record(rows, columns);
+        }
+        if let Some(arity) = heads().find_map(|head| match head {
+            Pattern::Tuple(members) => Some(members.len()),
             _ => None,
         }) {
-            return self.missing_record(rows, columns, names);
+            return self.missing_tuple(rows, columns, arity);
         }
         if heads().any(|head| matches!(head, Pattern::Tag(..))) {
             return self.missing_tag(&rows, columns);
@@ -324,33 +333,50 @@ impl<'a> Coverage<'a> {
         None
     }
 
-    fn missing_record(
-        &self,
-        rows: Vec<Vec<Pattern>>,
-        columns: &[Column],
-        names: Vec<Symbol>,
-    ) -> Option<Vec<Pattern>> {
+    /// A record is one shape, whose fields are its columns: every field its
+    /// type has, or where that is not known, every field a pattern names.
+    fn missing_record(&self, rows: Vec<Vec<Pattern>>, columns: &[Column]) -> Option<Vec<Pattern>> {
+        let (names, field_types): (Vec<Symbol>, Vec<Column>) =
+            if let Some(InferredType::Record(fields, _)) = &columns[0] {
+                fields
+                    .iter()
+                    .map(|(name, ty)| (*name, Some(ty.clone())))
+                    .unzip()
+            } else {
+                let mut names: Vec<Symbol> = rows
+                    .iter()
+                    .filter_map(|row| match &row[0] {
+                        Pattern::Record(fields) => Some(fields.iter().map(|(name, _)| *name)),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                names.sort_unstable();
+                names.dedup();
+                let unknown = vec![None; names.len()];
+                (names, unknown)
+            };
         let arity = names.len();
         let rows = rows
             .into_iter()
             .map(|mut row| {
                 let rest = row.split_off(1);
                 let mut fields = match row.pop() {
-                    Some(Pattern::Record(fields)) => {
-                        fields.into_iter().map(|(_, field)| field).collect()
-                    }
+                    Some(Pattern::Record(fields)) => names
+                        .iter()
+                        .map(|name| {
+                            fields
+                                .iter()
+                                .find(|(found, _)| found == name)
+                                .map_or(Pattern::Wild, |(_, field)| field.clone())
+                        })
+                        .collect(),
                     _ => vec![Pattern::Wild; arity],
                 };
                 fields.extend(rest);
                 fields
             })
             .collect();
-        let field_types: Vec<Column> = match &columns[0] {
-            Some(InferredType::Record(fields)) if fields.len() == arity => {
-                fields.iter().map(|(_, ty)| Some(ty.clone())).collect()
-            }
-            _ => vec![None; arity],
-        };
         let mut nested = field_types;
         nested.extend(columns[1..].iter().cloned());
         let mut missing = self.missing(rows, &nested)?;
@@ -358,6 +384,39 @@ impl<'a> Coverage<'a> {
         let mut record = vec![Pattern::Record(names.into_iter().zip(missing).collect())];
         record.extend(rest);
         Some(record)
+    }
+
+    /// A tuple is one shape, whose members are its columns.
+    fn missing_tuple(
+        &self,
+        rows: Vec<Vec<Pattern>>,
+        columns: &[Column],
+        arity: usize,
+    ) -> Option<Vec<Pattern>> {
+        let rows = rows
+            .into_iter()
+            .map(|mut row| {
+                let rest = row.split_off(1);
+                let mut members = match row.pop() {
+                    Some(Pattern::Tuple(members)) => members,
+                    _ => vec![Pattern::Wild; arity],
+                };
+                members.extend(rest);
+                members
+            })
+            .collect();
+        let mut nested: Vec<Column> = match &columns[0] {
+            Some(InferredType::Tuple(members)) if members.len() == arity => {
+                members.iter().cloned().map(Some).collect()
+            }
+            _ => vec![None; arity],
+        };
+        nested.extend(columns[1..].iter().cloned());
+        let mut missing = self.missing(rows, &nested)?;
+        let rest = missing.split_off(arity);
+        let mut tuple = vec![Pattern::Tuple(missing)];
+        tuple.extend(rest);
+        Some(tuple)
     }
 
     fn missing_constructor(
@@ -462,6 +521,7 @@ impl<'a> Coverage<'a> {
                 spelling(symbols, *name),
                 self.render_all(fields, symbols)
             ),
+            Pattern::Tuple(members) => format!("({})", self.render_all(members, symbols)),
             Pattern::Record(fields) => format!(
                 "{{{}}}",
                 fields
@@ -509,10 +569,17 @@ fn written(ty: &h::Type, bound: &HashMap<Symbol, &InferredType>) -> Column {
                 .collect::<Option<_>>()?,
             None,
         ),
-        h::Type::Record(fields) => InferredType::Record(
+        h::Type::Record(fields, _) => InferredType::Record(
             fields
                 .iter()
                 .map(|(name, field)| Some((*name, written(field, bound)?)))
+                .collect::<Option<_>>()?,
+            None,
+        ),
+        h::Type::Tuple(members) => InferredType::Tuple(
+            members
+                .iter()
+                .map(|member| written(member, bound))
                 .collect::<Option<_>>()?,
         ),
     })

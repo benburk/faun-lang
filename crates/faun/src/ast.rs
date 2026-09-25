@@ -199,10 +199,15 @@ pub enum Type {
         span: Span,
         constructors: Vec<ConstructorDecl>,
     },
+    /// `{x: T}`, or with `*`, `{x: T *}`: a record with at least these
+    /// fields, whatever else a caller's has.
     Record {
         span: Span,
         fields: Vec<(Name, Self)>,
+        open: bool,
     },
+    /// `(A B)`: a positional product of two or more.
+    Tuple { span: Span, members: Vec<Self> },
 }
 
 /// One `name(patterns) if guard -> body` row. Consecutive rows are grouped later.
@@ -294,9 +299,15 @@ pub enum Pattern {
         elements: Vec<Self>,
         rest: Option<Box<Self>>,
     },
+    /// `{x}`, or with `*`, `{x *}`: naming some fields and ignoring the rest.
     Record {
         span: Span,
         fields: Vec<(Name, Self)>,
+        open: bool,
+    },
+    Tuple {
+        span: Span,
+        members: Vec<Self>,
     },
 }
 
@@ -313,6 +324,10 @@ pub enum ExprKind {
     String(Vec<StringPart>),
     List(Vec<Expr>, Option<Box<Expr>>),
     Record(Vec<(Name, Expr)>),
+    /// `{x: e *base}`: `base` with the fields named replaced.
+    Update(Vec<(Name, Expr)>, Box<Expr>),
+    /// `(a b)`: a positional product of two or more.
+    Tuple(Vec<Expr>),
     Lambda(Vec<Pattern>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     Member(Box<Expr>, Name),

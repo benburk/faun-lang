@@ -52,6 +52,11 @@ fn value(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
         | ExprKind::Natural(_) => Ok(()),
         ExprKind::Construct(_, fields) => fields.iter().try_for_each(|field| value(field, false)),
         ExprKind::Record(fields) => fields.iter().try_for_each(|(_, field)| value(field, false)),
+        ExprKind::Update(base, fields) => {
+            value(base, false)?;
+            fields.iter().try_for_each(|(_, field)| value(field, false))
+        }
+        ExprKind::Tuple(members) => members.iter().try_for_each(|member| value(member, false)),
         ExprKind::Project(receiver, _) => value(receiver, false),
         ExprKind::DirectCall(_, arguments) => arguments
             .iter()

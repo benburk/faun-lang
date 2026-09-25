@@ -114,6 +114,35 @@ const RUNNING: &[(&str, &str, u32)] = &[
            host.exit!(halves.map(|r| r.ok_or(0)).fold(0 |s x| s + x))",
         5,
     ),
+    (
+        "tuples, record rows, updates and destructuring",
+        "swap : (Nat Bool) -> (Bool Nat)
+         swap((n b)) -> (b n)
+
+         first((k _)) -> k
+
+         get_name : {name: Nat *} -> Nat
+         get_name(r) -> r.name
+
+         age_of(r) -> r.age
+
+         older(r) -> {age: r.age + 1 *r}
+
+         sub(x y) -> subtract((x y))
+         subtract((0 _)) -> 0
+         subtract((Succ(m) 0)) -> Succ(m)
+         subtract((Succ(m) Succ(n))) -> subtract((m n))
+
+         main! : Host -> []
+         main!(host) ->
+           (flag n) = swap((3 True))
+           user = {name: 7 age: 30 city: 2}
+           bumped = older(user)
+           {age *} = bumped
+           pairs = [(1 2) (3 4)].map(|(a b)| a * b).fold(0 |s x| s + x)
+           host.exit!(n + flag.to_nat() + get_name(user) + age + age_of(user) + first((5 6)) + sub(9 4) + pairs)",
+        96,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -217,6 +246,39 @@ const REFUSED: &[(&str, &str, &str)] = &[
          bar : Nat -> Nat
          bar(n) -> dog(n)?",
         "`?` answers an `Err` early, but this answers Nat",
+    ),
+    (
+        "a tuple is not a record",
+        "pair() -> (1 2)
+
+         bad : {x: Nat} -> Nat
+         bad(_) -> 0
+
+         main! : Host -> []
+         main!(host) -> host.exit!(bad(pair()))",
+        "incompatible types",
+    ),
+    (
+        "a record without the field is refused where it is read",
+        "get_name : {name: Nat *} -> Nat
+         get_name(r) -> r.name
+
+         main! : Host -> []
+         main!(host) -> host.exit!(get_name({age: 3}))",
+        "has no field `name`",
+    ),
+    (
+        "an update adds no field",
+        "main! : Host -> []
+         main!(host) -> host.exit!({extra: 1 *{age: 3}}.age)",
+        "has no field `extra`",
+    ),
+    (
+        "a tuple's cases must be covered",
+        "both : (Bool Bool) -> Nat
+         both((True True)) -> 1
+         both((False _)) -> 0",
+        "no clause matches `both((True False))`",
     ),
 ];
 

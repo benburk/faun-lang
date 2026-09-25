@@ -81,19 +81,21 @@ fn binding_ahead(tokens: &[Token], at: usize) -> bool {
             Some(at + 2)
         }
         Kind::TypeIdent => constructor_pattern_end(tokens, at),
-        Kind::LBrace => record_pattern_end(tokens, at),
+        Kind::LBrace => closed_by(tokens, at, Kind::LBrace, Kind::RBrace),
+        Kind::LParen => closed_by(tokens, at, Kind::LParen, Kind::RParen),
         _ => None,
     };
     end.and_then(|end| tokens.get(end))
         .is_some_and(|token| token.kind == Kind::Eq)
 }
 
-fn record_pattern_end(tokens: &[Token], at: usize) -> Option<usize> {
+/// Where the bracket opening at `at` is closed, just past it.
+fn closed_by(tokens: &[Token], at: usize, open: Kind, close: Kind) -> Option<usize> {
     let mut depth = 0usize;
     for (offset, token) in tokens.get(at..)?.iter().enumerate() {
         match token.kind {
-            Kind::LBrace => depth += 1,
-            Kind::RBrace => {
+            kind if kind == open => depth += 1,
+            kind if kind == close => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(at + offset + 1);
@@ -338,16 +340,25 @@ peg::parser! {
                     result: Box::new(result),
                 }
             }
+            / open:lparen() members:(ty() **<2,> sep()) close:rparen() {
+                Type::Tuple {
+                    span: open.span().through(close.span()),
+                    members,
+                }
+            }
+            / lparen() grouped:ty() rparen() { grouped }
             / open:lbracket() constructors:(constructor() ** sep()) close:rbracket() {
                 Type::Variants {
                     span: open.span().through(close.span()),
                     constructors,
                 }
             }
-            / open:lbrace() fields:(record_type_field() ** sep()) close:rbrace() {
+            / open:lbrace() fields:(record_type_field() ** sep())
+              rest:(sep()? tok(Kind::Star))? close:rbrace() {
                 Type::Record {
                     span: open.span().through(close.span()),
                     fields,
+                    open: rest.is_some(),
                 }
             }
 
@@ -402,10 +413,19 @@ peg::parser! {
                     rest: rest.map(Box::new),
                 }
             }
-            / open:lbrace() fields:(record_pattern_field() ** sep()) close:rbrace() {
+            / open:lparen() members:(pattern() **<2,> sep()) close:rparen() {
+                Pattern::Tuple {
+                    span: open.span().through(close.span()),
+                    members,
+                }
+            }
+            / lparen() grouped:pattern() rparen() { grouped }
+            / open:lbrace() fields:(record_pattern_field() ** sep())
+              rest:(sep()? tok(Kind::Star))? close:rbrace() {
                 Pattern::Record {
                     span: open.span().through(close.span()),
                     fields,
+                    open: rest.is_some(),
                 }
             }
             / head:type_ident()
@@ -512,6 +532,9 @@ peg::parser! {
             / string:string() { string }
             / list:list() { list }
             / record:record() { record }
+            / open:lparen() members:(expr() **<2,> sep()) close:rparen() {
+                Expr { span: open.span().through(close.span()), kind: ExprKind::Tuple(members) }
+            }
             / open:lparen() value:expr() close:rparen() {
                 Expr { span: open.span().through(close.span()), ..value }
             }
@@ -536,10 +559,12 @@ peg::parser! {
             }
 
         rule record() -> Expr
-            = open:lbrace() fields:(record_expr_field() ** sep()) close:rbrace() {
-                Expr {
-                    span: open.span().through(close.span()),
-                    kind: ExprKind::Record(fields),
+            = open:lbrace() fields:(record_expr_field() ** sep())
+              base:(sep()? tok(Kind::Star) tight() base:expr() { base })? close:rbrace() {
+                let span = open.span().through(close.span());
+                match base {
+                    Some(base) => Expr { span, kind: ExprKind::Update(fields, Box::new(base)) },
+                    None => Expr { span, kind: ExprKind::Record(fields) },
                 }
             }
 
@@ -596,6 +621,7 @@ const fn type_span(ty: &Type) -> Span {
         Type::Named { span, .. }
         | Type::Function { span, .. }
         | Type::Variants { span, .. }
-        | Type::Record { span, .. } => *span,
+        | Type::Record { span, .. }
+        | Type::Tuple { span, .. } => *span,
     }
 }

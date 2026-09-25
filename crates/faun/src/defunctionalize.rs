@@ -8,6 +8,10 @@
 //! expression makes a function value only by naming a closure, and calls one
 //! only through `apply`.
 
+// The passes over expressions are cohesive exhaustive matches, kept whole
+// so a new kind of expression shows where it is missed.
+#![allow(clippy::too_many_lines)]
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use num_bigint::BigUint;
@@ -71,6 +75,9 @@ pub(crate) enum ExprKind {
     Natural(BigUint),
     Construct(Symbol, Vec<Expr>),
     Record(Vec<(Symbol, Expr)>),
+    /// A record with the fields named replaced.
+    Update(Box<Expr>, Vec<(Symbol, Expr)>),
+    Tuple(Vec<Expr>),
     Project(Box<Expr>, Symbol),
     DirectCall(FunctionKey, Vec<Expr>),
     /// The closure named by the key, holding these locals' values in the
@@ -186,6 +193,14 @@ impl Defunctionalizer {
                     .collect(),
             ),
             S::Project(receiver, field) => ExprKind::Project(Box::new(self.expr(*receiver)), field),
+            S::Update(base, fields) => ExprKind::Update(
+                Box::new(self.expr(*base)),
+                fields
+                    .into_iter()
+                    .map(|(name, field)| (name, self.expr(field)))
+                    .collect(),
+            ),
+            S::Tuple(members) => ExprKind::Tuple(self.exprs(members)),
             S::DirectCall(key, arguments) => ExprKind::DirectCall(key, self.exprs(arguments)),
             S::Function(key) => self.close(&ty, ClosureKey::Global(key), Vec::new()),
             S::ConstructorFunction(constructor) => self.close(
@@ -273,8 +288,14 @@ fn free_locals(
             }
         }
         S::Function(_) | S::ConstructorFunction(_) | S::Natural(_) => {}
-        S::Construct(_, fields) | S::DirectCall(_, fields) => {
+        S::Construct(_, fields) | S::DirectCall(_, fields) | S::Tuple(fields) => {
             for field in fields {
+                free_locals(field, bound, found);
+            }
+        }
+        S::Update(base, fields) => {
+            free_locals(base, bound, found);
+            for (_, field) in fields {
                 free_locals(field, bound, found);
             }
         }

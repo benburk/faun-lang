@@ -174,6 +174,9 @@ fn validate_pattern(pattern: &Pattern, source: &str) -> Result<(), LiteralError>
         Pattern::Record { fields, .. } => fields
             .iter()
             .try_for_each(|(_, pattern)| validate_pattern(pattern, source)),
+        Pattern::Tuple { members, .. } => members
+            .iter()
+            .try_for_each(|member| validate_pattern(member, source)),
     }
 }
 
@@ -204,6 +207,15 @@ fn validate_expr(expression: &Expr, source: &str) -> Result<(), LiteralError> {
             .iter()
             .try_for_each(|(_, value)| validate_expr(value, source)),
         ExprKind::Try(value) => validate_expr(value, source),
+        ExprKind::Tuple(members) => members
+            .iter()
+            .try_for_each(|member| validate_expr(member, source)),
+        ExprKind::Update(fields, base) => {
+            validate_expr(base, source)?;
+            fields
+                .iter()
+                .try_for_each(|(_, value)| validate_expr(value, source))
+        }
         ExprKind::Lambda(patterns, body) => {
             patterns
                 .iter()

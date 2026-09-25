@@ -24,7 +24,10 @@ pub(crate) enum Type {
     /// A closed tag row, its tags in one order so that two spellings of one
     /// row are one type. The empty row is the type with no values.
     Variants(Vec<(Symbol, Vec<Self>)>),
+    /// A closed record, its fields in one order.
     Record(Vec<(Symbol, Self)>),
+    /// A positional product of two or more.
+    Tuple(Vec<Self>),
 }
 
 impl Type {
@@ -121,6 +124,9 @@ pub(crate) enum ExprKind {
     Construct(Symbol, Vec<Expr>),
     Natural(BigUint),
     Record(Vec<(Symbol, Expr)>),
+    /// A record with the fields named replaced.
+    Update(Box<Expr>, Vec<(Symbol, Expr)>),
+    Tuple(Vec<Expr>),
     Project(Box<Expr>, Symbol),
     DirectCall(FunctionKey, Vec<Expr>),
     Invoke(Box<Expr>, Vec<Expr>),
@@ -214,9 +220,13 @@ fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, Specializ
         // A generic definition can do nothing with a value of a type variable
         // but hand it on, having no constraint that would say more, so how it
         // behaves is the same at every type: judge it once, at the empty type.
+        // A row's rest is left out: it closes to its own empty row.
+        let mut ordinary = Vec::new();
+        ordinary_variables(&scheme.ty, &mut ordinary);
         let placeholder = scheme
             .variables
             .iter()
+            .filter(|variable| ordinary.contains(variable))
             .map(|variable| (*variable, Type::empty()))
             .collect();
         let ty = substitute_type(&scheme.ty, &placeholder)?;
@@ -240,6 +250,7 @@ fn holds_function(ty: &Type) -> bool {
         Type::Function(_, _) => true,
         Type::Named(_, arguments) => arguments.iter().any(holds_function),
         Type::Record(fields) => fields.iter().any(|(_, field)| holds_function(field)),
+        Type::Tuple(members) => members.iter().any(holds_function),
         Type::Variants(tags) => tags
             .iter()
             .flat_map(|(_, fields)| fields)
@@ -602,6 +613,19 @@ impl<'a> Specializer<'a> {
                     .map(|(name, value)| Ok((*name, self.expr(module, value, substitution)?)))
                     .collect::<Result<_, SpecializeError>>()?,
             ),
+            h::ExprKind::Update(base, fields) => ExprKind::Update(
+                Box::new(self.expr(module, base, substitution)?),
+                fields
+                    .iter()
+                    .map(|(name, value)| Ok((*name, self.expr(module, value, substitution)?)))
+                    .collect::<Result<_, SpecializeError>>()?,
+            ),
+            h::ExprKind::Tuple(members) => ExprKind::Tuple(
+                members
+                    .iter()
+                    .map(|member| self.expr(module, member, substitution))
+                    .collect::<Result<_, _>>()?,
+            ),
             h::ExprKind::Lambda(patterns, body) => ExprKind::Lambda(
                 patterns
                     .iter()
@@ -937,12 +961,14 @@ fn convert_pattern(pattern: &h::Pattern, readings: &HashMap<h::SiteId, Reading>)
             elements.iter().map(convert).collect(),
             rest.as_deref().map(convert).map(Box::new),
         ),
-        h::Pattern::Record(fields) => Pattern::Record(
+        // A field an open pattern leaves out is taken whatever it is.
+        h::Pattern::Record(fields, _) => Pattern::Record(
             fields
                 .iter()
                 .map(|(name, pattern)| (*name, convert(pattern)))
                 .collect(),
         ),
+        h::Pattern::Tuple(members) => Pattern::Product(members.iter().map(convert).collect()),
     }
 }
 
@@ -980,9 +1006,19 @@ fn ordinary_variables(ty: &InferredType, output: &mut Vec<TypeVariable>) {
                 ordinary_variables(tail, output);
             }
         }
-        InferredType::Record(fields) => {
+        InferredType::Record(fields, tail) => {
             for (_, field) in fields {
                 ordinary_variables(field, output);
+            }
+            if let Some(tail) = tail.as_deref()
+                && !matches!(tail, InferredType::Variable(_))
+            {
+                ordinary_variables(tail, output);
+            }
+        }
+        InferredType::Tuple(members) => {
+            for member in members {
+                ordinary_variables(member, output);
             }
         }
     }
@@ -1045,11 +1081,32 @@ fn substitute_type(
             row.extend(more);
             Ok(Type::row(row))
         }
-        InferredType::Record(fields) => Ok(Type::Record(
-            fields
+        // A record's rest nothing pinned holds no fields.
+        InferredType::Record(fields, tail) => {
+            let mut record = fields
                 .iter()
                 .map(|(name, ty)| Ok((*name, substitute_type(ty, substitution)?)))
-                .collect::<Result<_, SpecializeError>>()?,
+                .collect::<Result<Vec<_>, SpecializeError>>()?;
+            let rest = match tail.as_deref() {
+                None => Type::Record(Vec::new()),
+                Some(InferredType::Variable(variable)) => substitution
+                    .get(variable)
+                    .cloned()
+                    .unwrap_or(Type::Record(Vec::new())),
+                Some(other) => substitute_type(other, substitution)?,
+            };
+            let Type::Record(more) = rest else {
+                return Err(error("the rest of a record is not a record"));
+            };
+            record.extend(more);
+            record.sort_by_key(|(name, _)| *name);
+            Ok(Type::Record(record))
+        }
+        InferredType::Tuple(members) => Ok(Type::Tuple(
+            members
+                .iter()
+                .map(|member| substitute_type(member, substitution))
+                .collect::<Result<_, _>>()?,
         )),
     }
 }
@@ -1107,12 +1164,27 @@ fn match_type(
                 None => Err(error("a closed tag row received more tags")),
             }
         }
-        (InferredType::Record(a), Type::Record(b)) if a.len() == b.len() => {
-            for ((an, at), (bn, bt)) in a.iter().zip(b) {
-                if an != bn {
-                    return Err(error("record specialization has different fields"));
-                }
-                match_type(at, bt, substitution)?;
+        (InferredType::Record(fields, tail), Type::Record(concrete)) => {
+            for (name, field) in fields {
+                let Some((_, held)) = concrete.iter().find(|(found, _)| found == name) else {
+                    return Err(error("a concrete record lacks a field its use has"));
+                };
+                match_type(field, held, substitution)?;
+            }
+            let rest: Vec<_> = concrete
+                .iter()
+                .filter(|(name, _)| !fields.iter().any(|(found, _)| found == name))
+                .cloned()
+                .collect();
+            match tail.as_deref() {
+                Some(tail) => match_type(tail, &Type::Record(rest), substitution),
+                None if rest.is_empty() => Ok(()),
+                None => Err(error("a closed record received more fields")),
+            }
+        }
+        (InferredType::Tuple(a), Type::Tuple(b)) if a.len() == b.len() => {
+            for (a, b) in a.iter().zip(b) {
+                match_type(a, b, substitution)?;
             }
             Ok(())
         }
@@ -1165,11 +1237,17 @@ pub(crate) fn surface_type(
                 })
                 .collect::<Result<_, SpecializeError>>()?,
         )),
-        h::Type::Record(fields) => Ok(Type::Record(
+        h::Type::Record(fields, _) => Ok(Type::Record(
             fields
                 .iter()
                 .map(|(name, ty)| Ok((*name, surface_type(ty, variables)?)))
                 .collect::<Result<_, SpecializeError>>()?,
+        )),
+        h::Type::Tuple(members) => Ok(Type::Tuple(
+            members
+                .iter()
+                .map(|member| surface_type(member, variables))
+                .collect::<Result<_, _>>()?,
         )),
     }
 }
