@@ -9,6 +9,7 @@
 mod abi_tests;
 mod elf;
 mod encode;
+mod jumps;
 mod machine;
 mod parallel_copy;
 mod selected;

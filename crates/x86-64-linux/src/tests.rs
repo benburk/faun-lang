@@ -40,9 +40,9 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("less", 140),
     ("two worked out", 169),
     ("a flag", 219),
-    ("a countdown", 190),
-    ("a carried total", 160),
-    ("a step first", 197),
+    ("a countdown", 186),
+    ("a carried total", 156),
+    ("a step first", 193),
     ("a long arm", 266),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
@@ -51,13 +51,13 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("double", 128),
     ("leave", 128),
     ("bool", 161),
-    ("nat", 429),
-    ("width", 147),
-    ("argc", 147),
-    ("expressions", 153),
-    ("hello", 277),
+    ("nat", 423),
+    ("width", 145),
+    ("argc", 145),
+    ("expressions", 151),
+    ("hello", 255),
 ];
-const ARITHMETIC_SIZES: [usize; 3] = [204, 215, 216];
+const ARITHMETIC_SIZES: [usize; 3] = [204, 215, 214];
 
 #[test]
 fn ladder_code_size_ratchets() {

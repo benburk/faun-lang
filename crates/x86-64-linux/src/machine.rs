@@ -323,7 +323,9 @@ impl AllocatedBuilder {
         if let Some((label, _)) = self.code.labels().find(|(_, position)| position.is_none()) {
             return Err(format!("x86 label l{} is not bound", label.index()));
         }
-        let program = Allocated { code: self.code };
+        let mut code = self.code;
+        crate::jumps::thread(&mut code);
+        let program = Allocated { code };
         program.verify()?;
         Ok(program)
     }
