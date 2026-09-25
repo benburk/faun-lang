@@ -58,6 +58,10 @@ Int : [Pos(Nat) NegSucc(Nat)].(
   cmp(Pos(_) NegSucc(_)) -> Gt
   cmp(NegSucc(_) Pos(_)) -> Lt
 
+  to_str : Int -> Str
+  to_str(Pos(n)) -> n.to_str()
+  to_str(NegSucc(n)) -> "-".concat((n + 1).to_str())
+
   equals : Int Int -> Bool
   equals(Pos(a) Pos(b)) -> a.equals(b)
   equals(NegSucc(a) NegSucc(b)) -> a.equals(b)

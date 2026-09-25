@@ -1,7 +1,21 @@
 # Primary frontend standard library
 
 `standard.fn` is the bootstrap package root. It exports `Bool`, `Order`, `Nat`,
-`Int`, `U8`, `List`, `Result`, and `Str` from sibling modules.
+`Int`, `U8`, `U16`, `U32`, `U64`, `List`, `Result`, and `Str` from sibling modules.
+
+A numeral takes its type from its position, as in Ori, and may be only a
+`Nat`, `Int`, `U8`, `U16`, `U32` or `U64`; nothing else is made numeric by the
+methods it defines. A word is built through its own `of_nat`, and its module's
+private `numerals_below` bounds what may be written: `300` is not a `U8`,
+though `U8.of_nat(300)` is 44. A numeral nothing types is a `Nat`, or an `Int`
+when it is negated. The words are rings: they wrap by definition, and `sub`
+is the ring's, not monus.
+
+`Str` is UTF-8 bytes behind a private wrapper, with `len`, `concat`, `cmp` in
+byte order and `equals` from it, and `from_ascii`. `Bool`, the integers and
+`Str` say themselves with `to_str`, and a splice `${value}` in a string is its
+value's `to_str`, the pieces joined with `concat`. Numeral patterns on words
+and string patterns are not here yet.
 
 `List` follows Ori's standard list wherever a function needs no tuples,
 records, or method constraints: `len`, `is_empty`, `append`, `extend`,

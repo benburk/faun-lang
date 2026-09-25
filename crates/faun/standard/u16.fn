@@ -1,0 +1,41 @@
+# 16-bit words: the ring of naturals modulo 65536, wrapping by definition
+# rather than overflowing. The wrapper is private, so every `U16` is below
+# its modulus; a numeral builds one through `of_nat`, and one written at or
+# above `numerals_below` is refused rather than wrapped.
+
+exports {U16}
+
+numerals_below : Nat
+numerals_below() -> 65536
+
+U16 : Nat.(
+  of_nat : Nat -> U16
+  of_nat(n) -> U16(n % 65536)
+
+  to_nat : U16 -> Nat
+  to_nat(U16(value)) -> value
+
+  add : U16 U16 -> U16
+  add(U16(a) U16(b)) -> U16((a + b) % 65536)
+
+  sub : U16 U16 -> U16
+  sub(U16(a) U16(b)) -> U16((a + 65536 - b) % 65536)
+
+  mul : U16 U16 -> U16
+  mul(U16(a) U16(b)) -> U16((a * b) % 65536)
+
+  div : U16 U16 -> U16
+  div(U16(a) U16(b)) -> U16(a / b)
+
+  mod : U16 U16 -> U16
+  mod(U16(a) U16(b)) -> U16(a % b)
+
+  cmp : U16 U16 -> Order
+  cmp(U16(a) U16(b)) -> a.cmp(b)
+
+  to_str : U16 -> Str
+  to_str(U16(value)) -> value.to_str()
+
+  equals : U16 U16 -> Bool
+  equals(U16(a) U16(b)) -> a.equals(b)
+)

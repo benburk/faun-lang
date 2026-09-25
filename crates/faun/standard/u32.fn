@@ -1,0 +1,41 @@
+# 32-bit words: the ring of naturals modulo 4294967296, wrapping by definition
+# rather than overflowing. The wrapper is private, so every `U32` is below
+# its modulus; a numeral builds one through `of_nat`, and one written at or
+# above `numerals_below` is refused rather than wrapped.
+
+exports {U32}
+
+numerals_below : Nat
+numerals_below() -> 4294967296
+
+U32 : Nat.(
+  of_nat : Nat -> U32
+  of_nat(n) -> U32(n % 4294967296)
+
+  to_nat : U32 -> Nat
+  to_nat(U32(value)) -> value
+
+  add : U32 U32 -> U32
+  add(U32(a) U32(b)) -> U32((a + b) % 4294967296)
+
+  sub : U32 U32 -> U32
+  sub(U32(a) U32(b)) -> U32((a + 4294967296 - b) % 4294967296)
+
+  mul : U32 U32 -> U32
+  mul(U32(a) U32(b)) -> U32((a * b) % 4294967296)
+
+  div : U32 U32 -> U32
+  div(U32(a) U32(b)) -> U32(a / b)
+
+  mod : U32 U32 -> U32
+  mod(U32(a) U32(b)) -> U32(a % b)
+
+  cmp : U32 U32 -> Order
+  cmp(U32(a) U32(b)) -> a.cmp(b)
+
+  to_str : U32 -> Str
+  to_str(U32(value)) -> value.to_str()
+
+  equals : U32 U32 -> Bool
+  equals(U32(a) U32(b)) -> a.equals(b)
+)

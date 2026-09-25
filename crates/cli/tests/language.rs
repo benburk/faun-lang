@@ -143,6 +143,41 @@ const RUNNING: &[(&str, &str, u32)] = &[
            host.exit!(n + flag.to_nat() + get_name(user) + age + age_of(user) + first((5 6)) + sub(9 4) + pairs)",
         96,
     ),
+    (
+        "a numeral takes the word its position asks for",
+        "byte : U8 -> U8
+         byte(b) -> b + 250
+
+         wide : U16 -> U16
+         wide(w) -> w * 300
+
+         main! : Host -> []
+         main!(host) -> host.exit!(byte(10).to_nat() + wide(300).to_nat() % 256 + (0 - U64.of_nat(1)).to_nat() % 7)",
+        149,
+    ),
+    (
+        "values say themselves as text",
+        "main! : Host -> []
+         main!(host) -> host.exit!((1234.to_str().len() + (-56).to_str().len() * 10 + True.to_str().concat(\"x\").len() * 100) % 256)",
+        22,
+    ),
+    (
+        "a splice is its value's text",
+        "main! : Host -> []
+         main!(host) ->
+           n = host.argc + 41
+           host.exit!((\"n is ${n}, big ${n > 3}, neg ${-7}!\".len() + \"${n}${n}\".len() * 10) % 256)",
+        66,
+    ),
+    (
+        "strings are ordered by their bytes",
+        "bit : Bool -> Nat
+         bit(b) -> b.to_nat()
+
+         main! : Host -> []
+         main!(host) -> host.exit!(bit(\"apple\" < \"banana\") + bit(\"ab\" < \"a\") * 2 + bit(\"x\" == \"x\") * 4)",
+        5,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -279,6 +314,33 @@ const REFUSED: &[(&str, &str, &str)] = &[
          both((True True)) -> 1
          both((False _)) -> 0",
         "no clause matches `both((True False))`",
+    ),
+    (
+        "a word is not written past its width",
+        "byte : U8 -> U8
+         byte(b) -> b
+
+         main! : Host -> []
+         main!(host) -> host.exit!(byte(300).to_nat())",
+        "`300` is not a `U8`: it takes numerals below 256",
+    ),
+    (
+        "a word has no negative numerals",
+        "byte : U8 -> U8
+         byte(b) -> b
+
+         main! : Host -> []
+         main!(host) -> host.exit!(byte(-1).to_nat())",
+        "a `U8` has no negative numerals",
+    ),
+    (
+        "a numeral is only a prelude integer",
+        "flag : Bool -> Nat
+         flag(_) -> 0
+
+         main! : Host -> []
+         main!(host) -> host.exit!(flag(1))",
+        "a numeral cannot be a `Bool`",
     ),
 ];
 

@@ -1,0 +1,41 @@
+# 64-bit words: the ring of naturals modulo 18446744073709551616, wrapping by definition
+# rather than overflowing. The wrapper is private, so every `U64` is below
+# its modulus; a numeral builds one through `of_nat`, and one written at or
+# above `numerals_below` is refused rather than wrapped.
+
+exports {U64}
+
+numerals_below : Nat
+numerals_below() -> 18446744073709551616
+
+U64 : Nat.(
+  of_nat : Nat -> U64
+  of_nat(n) -> U64(n % 18446744073709551616)
+
+  to_nat : U64 -> Nat
+  to_nat(U64(value)) -> value
+
+  add : U64 U64 -> U64
+  add(U64(a) U64(b)) -> U64((a + b) % 18446744073709551616)
+
+  sub : U64 U64 -> U64
+  sub(U64(a) U64(b)) -> U64((a + 18446744073709551616 - b) % 18446744073709551616)
+
+  mul : U64 U64 -> U64
+  mul(U64(a) U64(b)) -> U64((a * b) % 18446744073709551616)
+
+  div : U64 U64 -> U64
+  div(U64(a) U64(b)) -> U64(a / b)
+
+  mod : U64 U64 -> U64
+  mod(U64(a) U64(b)) -> U64(a % b)
+
+  cmp : U64 U64 -> Order
+  cmp(U64(a) U64(b)) -> a.cmp(b)
+
+  to_str : U64 -> Str
+  to_str(U64(value)) -> value.to_str()
+
+  equals : U64 U64 -> Bool
+  equals(U64(a) U64(b)) -> a.equals(b)
+)

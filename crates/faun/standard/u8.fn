@@ -1,8 +1,18 @@
-# The private wrapper is available to string syntax, not to importers.
+# 8-bit words: the ring of naturals modulo 256, wrapping by definition
+# rather than overflowing. The wrapper is private, so every `U8` is below
+# its modulus; a numeral builds one through `of_nat`, and one written at or
+# above `numerals_below` is refused rather than wrapped. String syntax, and
+# nothing else outside, may build the wrapper directly.
 
 exports {U8}
 
+numerals_below : Nat
+numerals_below() -> 256
+
 U8 : Nat.(
+  of_nat : Nat -> U8
+  of_nat(n) -> U8(n % 256)
+
   to_nat : U8 -> Nat
   to_nat(U8(value)) -> value
 
@@ -16,13 +26,16 @@ U8 : Nat.(
   mul(U8(a) U8(b)) -> U8((a * b) % 256)
 
   div : U8 U8 -> U8
-  div(U8(a) U8(b)) -> U8((a / b) % 256)
+  div(U8(a) U8(b)) -> U8(a / b)
 
   mod : U8 U8 -> U8
-  mod(U8(a) U8(b)) -> U8((a % b) % 256)
+  mod(U8(a) U8(b)) -> U8(a % b)
 
   cmp : U8 U8 -> Order
   cmp(U8(a) U8(b)) -> a.cmp(b)
+
+  to_str : U8 -> Str
+  to_str(U8(value)) -> value.to_str()
 
   equals : U8 U8 -> Bool
   equals(U8(a) U8(b)) -> a.equals(b)

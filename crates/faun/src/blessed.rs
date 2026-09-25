@@ -27,6 +27,8 @@ pub struct PreludeIds {
     pub bool_false: Symbol,
     pub bool_true: Symbol,
     pub str_constructor: Symbol,
+    /// How an interpolated string's pieces are joined.
+    pub str_concat: Symbol,
     pub u8_constructor: Symbol,
     pub list_nil: Symbol,
     pub list_cons: Symbol,
@@ -41,6 +43,19 @@ pub struct PreludeIds {
     pub result: Symbol,
     pub result_ok: Symbol,
     pub result_err: Symbol,
+    /// The fixed-width words a numeral may be, each built with its `of_nat`.
+    pub words: Vec<Word>,
+}
+
+/// A prelude word a numeral may be: the type, how a natural becomes one,
+/// and the numerals it takes, which its module declares as
+/// `numerals_below`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Word {
+    pub ty: Symbol,
+    pub name: String,
+    pub of_nat: Symbol,
+    pub below: BigUint,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +89,10 @@ impl PreludeIds {
         let list = binding(program, "List")?;
         let order = binding(program, "Order")?;
         let result = binding(program, "Result")?;
+        let words = ["U8", "U16", "U32", "U64"]
+            .into_iter()
+            .filter_map(|name| word(program, name))
+            .collect();
         Ok(Self {
             bool_: bool_.canonical,
             nat: nat.canonical,
@@ -87,6 +106,7 @@ impl PreludeIds {
             bool_false: constructor(program, &bool_, "Bool", "False")?,
             bool_true: constructor(program, &bool_, "Bool", "True")?,
             str_constructor: constructor(program, &str_, "Str", "Str")?,
+            str_concat: method(program, &str_, "Str", "concat")?,
             u8_constructor: constructor(program, &u8_, "U8", "U8")?,
             list_nil: constructor(program, &list, "List", "Nil")?,
             list_cons: constructor(program, &list, "List", "Cons")?,
@@ -98,14 +118,16 @@ impl PreludeIds {
             result: result.canonical,
             result_ok: constructor(program, &result, "Result", "Ok")?,
             result_err: constructor(program, &result, "Result", "Err")?,
+            words,
         })
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NumeralType {
+pub enum NumeralType<'a> {
     Nat,
     Int,
+    Word(&'a Word),
 }
 
 /// Literal-focused core syntax. It is independent of the surface tree so type
@@ -126,9 +148,27 @@ pub enum LiteralExpr {
 pub fn numeral(
     magnitude: BigUint,
     negative: bool,
-    ty: NumeralType,
+    ty: NumeralType<'_>,
     prelude: &PreludeIds,
 ) -> Result<LiteralExpr, LiteralElaborationError> {
+    if let NumeralType::Word(word) = ty {
+        // What may be written, not what may be computed: `of_nat` wraps,
+        // and a numeral that would wrap is refused.
+        if negative {
+            return Err(LiteralElaborationError::Negative(word.name.clone()));
+        }
+        if magnitude >= word.below {
+            return Err(LiteralElaborationError::TooLarge {
+                written: magnitude,
+                name: word.name.clone(),
+                below: word.below.clone(),
+            });
+        }
+        return Ok(LiteralExpr::Call(
+            word.of_nat,
+            vec![LiteralExpr::Natural(magnitude)],
+        ));
+    }
     let natural = LiteralExpr::Natural(magnitude);
     match (ty, negative) {
         (NumeralType::Nat, false) => Ok(natural),
@@ -138,18 +178,36 @@ pub fn numeral(
             prelude.int_neg,
             vec![LiteralExpr::Call(prelude.int_of_nat, vec![natural])],
         )),
+        (NumeralType::Word(_), _) => unreachable!("a word is elaborated above"),
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiteralElaborationError {
     NegativeNat,
+    /// A word has no negative numerals.
+    Negative(String),
+    /// A numeral a word's `of_nat` would wrap.
+    TooLarge {
+        written: BigUint,
+        name: String,
+        below: BigUint,
+    },
 }
 
 impl fmt::Display for LiteralElaborationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NegativeNat => f.write_str("a negative numeral cannot be a Nat"),
+            Self::Negative(name) => write!(f, "a `{name}` has no negative numerals"),
+            Self::TooLarge {
+                written,
+                name,
+                below,
+            } => write!(
+                f,
+                "`{written}` is not a `{name}`: it takes numerals below {below}"
+            ),
         }
     }
 }
@@ -168,6 +226,47 @@ pub fn string(bytes: &[u8], prelude: &PreludeIds) -> LiteralExpr {
         list = LiteralExpr::Construct(prelude.list_cons, vec![byte, list]);
     }
     LiteralExpr::Construct(prelude.str_constructor, vec![list])
+}
+
+/// The word the prelude exports as `name`, where it has an `of_nat` and its
+/// module declares `numerals_below` as a numeral.
+fn word(program: &LoadedProgram, name: &str) -> Option<Word> {
+    let binding = binding(program, name).ok()?;
+    let of_nat = method(program, &binding, name, "of_nat").ok()?;
+    let local = symbol(&program.symbols, name).ok()?;
+    let module = program.modules.iter().find(|module| {
+        module
+            .scope
+            .types
+            .get(&local)
+            .is_some_and(|found| found.canonical == binding.canonical)
+            && module.syntax.items.iter().any(|item| {
+                matches!(item, crate::ast::Item::Data(data)
+                if program.sources.get(module.source).is_some_and(|source| {
+                    data.name.text(source.text()) == name
+                }))
+            })
+    })?;
+    let source = program.sources.get(module.source)?.text();
+    let below = module.syntax.items.iter().find_map(|item| match item {
+        crate::ast::Item::Clause(clause)
+            if clause.name.text(source) == "numerals_below" && clause.body.bindings.is_empty() =>
+        {
+            match clause.body.result.kind {
+                crate::ast::ExprKind::Number(numeral) => {
+                    crate::literal::magnitude(numeral, source).ok()
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    })?;
+    Some(Word {
+        ty: binding.canonical,
+        name: name.to_owned(),
+        of_nat,
+        below,
+    })
 }
 
 fn binding(program: &LoadedProgram, name: &str) -> Result<TypeBinding, PreludeError> {
@@ -287,7 +386,10 @@ mod tests {
             "list.fn",
             "exports {List.*}\nList(a) : [Nil Cons(a List(a))]\n",
         );
-        fixture.write("str.fn", "exports {Str}\nStr : List(U8)\n");
+        fixture.write(
+            "str.fn",
+            "exports {Str}\nStr : List(U8).(concat : Str Str -> Str concat(left _) -> left)\n",
+        );
         fixture.write(
             "result.fn",
             "exports {Result.*}\nResult(a e) : [Ok(a) Err(e)]\n",

@@ -35,6 +35,10 @@ Bool : [False True].(
   cmp(True False) -> Gt
   cmp(_ _) -> Eq
 
+  to_str : Bool -> Str
+  to_str(False) -> "False"
+  to_str(True) -> "True"
+
   equals : Bool Bool -> Bool
   equals(False False) -> True
   equals(True True) -> True

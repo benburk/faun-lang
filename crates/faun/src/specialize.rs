@@ -575,6 +575,13 @@ impl<'a> Specializer<'a> {
                     ExprKind::Construct(*constructor, Vec::new())
                 }
             }
+            h::ExprKind::String(parts)
+                if parts
+                    .iter()
+                    .any(|part| matches!(part, h::StringPart::Splice(_))) =>
+            {
+                return self.interpolated(module, expression.span, parts, &ty, substitution);
+            }
             h::ExprKind::Number(_) | h::ExprKind::String(_) => {
                 let literal = self.literal_site(module, expression.span)?;
                 return self.literal(module, expression.span, &literal, &ty);
@@ -763,6 +770,56 @@ impl<'a> Specializer<'a> {
             ty,
             kind,
         })
+    }
+
+    /// `"a${x}b"` as `"a".concat(x.to_str()).concat("b")`, in the order
+    /// written, leaving out empty text.
+    fn interpolated(
+        &mut self,
+        module: ModuleId,
+        span: crate::ast::Span,
+        parts: &[h::StringPart],
+        str_: &Type,
+        substitution: &HashMap<TypeVariable, Type>,
+    ) -> Result<Expr, SpecializeError> {
+        let mut pieces = Vec::with_capacity(parts.len());
+        for part in parts {
+            pieces.push(match part {
+                h::StringPart::Text(bytes) if bytes.is_empty() => continue,
+                h::StringPart::Text(bytes) => {
+                    let literal = crate::blessed::string(bytes, self.prelude);
+                    self.literal(module, span, &literal, str_)?
+                }
+                h::StringPart::Splice(splice) => {
+                    let value = self.expr(module, splice, substitution)?;
+                    let site = crate::check::splice_site(splice.span);
+                    let target = self.method_site(module, site)?;
+                    let key = self.method_key(target, &value.ty, &[], str_)?;
+                    self.request(key.clone());
+                    Expr {
+                        module,
+                        span: splice.span,
+                        ty: str_.clone(),
+                        kind: ExprKind::DirectCall(key, vec![value]),
+                    }
+                }
+            });
+        }
+        let concat = self.method_key(
+            self.prelude.str_concat,
+            str_,
+            std::slice::from_ref(str_),
+            str_,
+        )?;
+        self.request(concat.clone());
+        let mut pieces = pieces.into_iter();
+        let first = pieces.next().expect("a string with a splice has a piece");
+        Ok(pieces.fold(first, |joined, piece| Expr {
+            module,
+            span,
+            ty: str_.clone(),
+            kind: ExprKind::DirectCall(concat.clone(), vec![joined, piece]),
+        }))
     }
 
     fn expression_type(

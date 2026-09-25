@@ -47,12 +47,24 @@ Nat : [Zero Succ(Nat)].(
   cmp : Nat Nat -> Order
   cmp(a b) -> nat_order(nat_below(a b) a.equals(b))
 
+  # The decimal text.
+  to_str : Nat -> Str
+  to_str(n) -> Str.from_ascii(nat_decimal(n n)).ok_or("")
+
   equals : Nat Nat -> Bool
   equals(0 0) -> True
   equals(0 Succ(_)) -> False
   equals(Succ(_) 0) -> False
   equals(Succ(a) Succ(b)) -> equals(a b)
 )
+
+# The decimal digits of `n`, most significant first. The second argument
+# only counts down, which says the walk stops: `n` has fewer digits than
+# it is large.
+nat_decimal : Nat Nat -> List(U8)
+nat_decimal(n _) if n < 10 -> [U8.of_nat(n + '0')]
+nat_decimal(_ 0) -> []
+nat_decimal(n Succ(rest)) -> nat_decimal(n / 10 rest).append(U8.of_nat(n % 10 + '0'))
 
 nat_below : Nat Nat -> Bool
 nat_below(_ 0) -> False

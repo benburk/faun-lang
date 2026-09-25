@@ -1,6 +1,43 @@
 # Strings are UTF-8 bytes in a nominal wrapper. String syntax alone may build
-# the private Str and U8 wrappers directly.
+# the private Str and U8 wrappers directly; everything else reaches a string
+# through these methods, and cannot take one apart by shape.
 
 exports {Str}
 
-Str : List(U8)
+Str : List(U8).(
+  # The number of bytes, which for text beyond ASCII is more than the
+  # number of characters.
+  len : Str -> Nat
+  len(Str(bytes)) -> bytes.len()
+
+  concat : Str Str -> Str
+  concat(Str(left) Str(right)) -> Str(left.extend(right))
+
+  to_str : Str -> Str
+  to_str(text) -> text
+
+  # Byte order: the first differing byte decides, and a string comes before
+  # every string extending it. UTF-8 keeps that codepoint order. It is not
+  # a collation.
+  cmp : Str Str -> Order
+  cmp(Str(left) Str(right)) -> bytes_cmp(left right)
+
+  equals : Str Str -> Bool
+  equals(left right) -> cmp(left right).eq()
+
+  # `Ok` of the bytes as a string where every one is ASCII, which is always
+  # valid UTF-8.
+  from_ascii : List(U8) -> Result(Str [NotAscii])
+  from_ascii(bytes) if bytes.all(|byte| byte.to_nat() < 128) -> Ok(Str(bytes))
+  from_ascii(_) -> Err(NotAscii)
+)
+
+bytes_cmp : List(U8) List(U8) -> Order
+bytes_cmp([] []) -> Eq
+bytes_cmp([] [_ *_]) -> Lt
+bytes_cmp([_ *_] []) -> Gt
+bytes_cmp([a *left] [b *right]) -> then_cmp(a.cmp(b) left right)
+
+then_cmp : Order List(U8) List(U8) -> Order
+then_cmp(Eq left right) -> bytes_cmp(left right)
+then_cmp(decided _ _) -> decided

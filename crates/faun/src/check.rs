@@ -1685,10 +1685,22 @@ impl<'a> Checker<'a> {
                 });
                 Ok(ty)
             }
+            // Each splice is its value's `to_str`, and the pieces are joined.
             h::ExprKind::String(parts) => {
                 for part in parts {
                     if let h::StringPart::Splice(splice) = part {
-                        self.expr(module, splice, locals)?;
+                        let value = self.expr(module, splice, locals)?;
+                        let to_str = self.method_symbol(module, splice.span, "to_str")?;
+                        let text = self.defer_method(
+                            module,
+                            splice_site(splice.span),
+                            value,
+                            to_str,
+                            Vec::new(),
+                            false,
+                        );
+                        let str_ = Ty::Named(self.prelude.str_, Vec::new());
+                        self.unify_at(module, splice.span, &text, &str_)?;
                     }
                 }
                 if parts
@@ -2283,11 +2295,28 @@ impl<'a> Checker<'a> {
                 {
                     (NumeralType::Int, self.prelude.int)
                 }
-                _ => {
+                Ty::Named(name, ref arguments)
+                    if arguments.is_empty()
+                        && self.prelude.words.iter().any(|word| word.ty == name) =>
+                {
+                    let word = self
+                        .prelude
+                        .words
+                        .iter()
+                        .find(|word| word.ty == name)
+                        .expect("guarded");
+                    (NumeralType::Word(word), name)
+                }
+                // Only the prelude's integers are numerals, and no conversion
+                // is inserted to make one fit anything else.
+                other => {
                     return Err(failure(
                         numeral.module,
                         numeral.span,
-                        "a numeral must infer as Nat or Int",
+                        format!(
+                            "a numeral cannot be a `{}`: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`; convert a value with `of_nat`",
+                            show(&other, self.symbols)
+                        ),
                     ));
                 }
             };
@@ -3375,6 +3404,16 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
     }
 }
 
+/// Where the `to_str` a splice is read through is recorded: before the
+/// splice, empty, which no expression's place is, so it cannot be taken
+/// for a method call written as the splice itself.
+pub(crate) const fn splice_site(splice: super::ast::Span) -> super::ast::Span {
+    super::ast::Span {
+        start: splice.start,
+        end: splice.start,
+    }
+}
+
 fn failure(module: ModuleId, span: super::ast::Span, message: impl Into<String>) -> CheckError {
     CheckError {
         module,
@@ -3422,7 +3461,10 @@ mod tests {
                 "list.fn",
                 "exports {List.*}\nList(a) : [Nil Cons(a List(a))]\n",
             );
-            self.write("str.fn", "exports {Str}\nStr : List(U8)\n");
+            self.write(
+                "str.fn",
+                "exports {Str}\nStr : List(U8).(concat : Str Str -> Str concat(left _) -> left)\n",
+            );
             self.write(
                 "result.fn",
                 "exports {Result.*}\nResult(a e) : [Ok(a) Err(e)]\n",

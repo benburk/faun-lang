@@ -1,6 +1,6 @@
 # Bootstrap standard package for the Ori-compatible frontend. It keeps the
-# useful arithmetic and polymorphic utilities that do not need records,
-# tuples, method constraints, hashing, or bodyless derivation.
+# useful arithmetic and polymorphic utilities that do not need method
+# constraints, hashing, or bodyless derivation.
 
 package {}
 
@@ -9,8 +9,11 @@ import order {Order.*}
 import nat {Nat.*}
 import int {Int.*}
 import u8 {U8}
+import u16 {U16}
+import u32 {U32}
+import u64 {U64}
 import list {List.*}
 import result {Result.*}
 import str {Str}
 
-exports {Bool.* Order.* Nat.* Int.* U8 List.* Result.* Str}
+exports {Bool.* Order.* Nat.* Int.* U8 U16 U32 U64 List.* Result.* Str}
