@@ -112,28 +112,39 @@ The structural empty variant type `[]` is the uninhabited result used by
 applications; it needs no blessed standard-library name. `Never` remains an
 ordinary available constructor spelling. Each target has its own host module,
 `hosts/<target>.fn`, mounted at `std.host`. They start out identical and will
-diverge as targets offer different capabilities. Each declares
+diverge as targets offer different capabilities. Each declares Ori's host
+streams:
 
 ```
 Host : {argc: Nat}.(
   exit! : Host Nat -> []
-  stdin! : Host -> Str
-  stdout! : Host Str -> {}
-  stderr! : Host Str -> {}
+  stdin : Host -> Stdin
+  stdout : Host -> Stdout
+  stderr : Host -> Stderr
 )
+
+Stdin    read! : Stdin Nat -> Result(List(U8) IoError)
+         read_to_end! : Stdin -> Result(List(U8) [Io(IoError) LimitExceeded])
+         read_to_str! : Stdin -> Result(Str [Io(IoError) LimitExceeded InvalidUtf8])
+Stdout   write!, write_all! : Stdout List(U8) -> Result(Nat IoError)
+Stderr   write!, write_all! : Stderr List(U8) -> Result(Nat IoError)
 ```
 
-where `stdin!` answers all of standard input, read to its end, and `stdout!`
-and `stderr!` write any string, whether known before the program runs or
-worked out while it does. The `Host` constructor remains private, so only the
-target makes one.
+with `IoError` the tags `NotFound Denied AlreadyExists NotADirectory
+IsADirectory NotEmpty Escapes BrokenPipe NoSpace Unsupported Other(Nat)`, each
+host reading its own error numbers into them. A `read!` or `write!` moves some
+bytes, a run of at most 256, and answers how many; `read_to_end!` and
+`write_all!` are Faun in the host module, going on until the stream is done,
+each bounded by fuel so it is seen to stop. The `Host`, `Stdin`, `Stdout` and
+`Stderr` constructors remain private, so only the target makes one. A method
+of a value's own type is reached whether or not the type was imported, so
+`host.stdout.write_all!(bytes)` needs only `Host`.
 
-A target answers for smaller primitives than these: a byte read, and a write
-of bytes that lie in memory. Machine lowering builds each stream routine on
-its primitive, so no program names one: `stdin!` gathers bytes to the end of
-input, and a string worked out at run time is copied out through a small
-scratch region a run at a time. What a routine answers is a byte string, so
-its bytes are known to be bytes wherever a program reads them.
+A target answers for smaller primitives than these: moving a run of bytes that
+lie in memory, answering how many or `-errno`. Machine lowering builds each
+stream routine on its primitive through a scratch region of one run, and keeps
+the last error for the host module to ask after. What a routine answers as a
+byte string is known to be bytes wherever a program reads them.
 
 `Host` is authority carrying the startup values its target produces. A field
 such as `host.argc` is read like any record field; the target produces it into
@@ -146,7 +157,7 @@ nothing reads, so a target produces only the startup values a program uses. A
 read field the target cannot produce is refused by the target.
 
 `Host`'s bodyless methods are the effects the target answers for, called as
-`host.stdout!(text)`. A program orders its effects by threading `Host` through
+`host.stdout.write_all!(bytes)`. A program orders its effects by threading `Host` through
 them. Barb calls each routine with the `Host` it was handed, as the source
 says, and keeps the order and number of calls to anything bodyless. A routine
 asked with authority reads nothing of it, so machine lowering hands nothing

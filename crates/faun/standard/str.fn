@@ -34,7 +34,33 @@ Str : List(U8).(
   from_ascii : List(U8) -> Result(Str [NotAscii])
   from_ascii(bytes) if bytes.all(|byte| byte.to_nat() < 128) -> Ok(Str(bytes))
   from_ascii(_) -> Err(NotAscii)
+
+  # `Ok` of the bytes as a string where they are well-formed UTF-8.
+  from_utf8 : List(U8) -> Result(Str [InvalidUtf8])
+  from_utf8(bytes) if utf8(bytes 0 128 191) -> Ok(Str(bytes))
+  from_utf8(_) -> Err(InvalidUtf8)
 )
+
+# Whether `bytes` finish well-formed UTF-8, owing `owed` continuation bytes,
+# the first of them from `low` to `high`: a lead byte says how many follow,
+# and the first of them keeps out overlong forms, surrogates, and anything
+# past U+10FFFF. One definition calling itself, so a long text is a loop.
+utf8 : List(U8) Nat Nat Nat -> Bool
+utf8([] 0 _ _) -> True
+utf8([byte *rest] 0 _ _) if byte.to_nat() < 128 -> utf8(rest 0 128 191)
+utf8([byte *rest] 0 _ _) if between(byte 194 223) -> utf8(rest 1 128 191)
+utf8([byte *rest] 0 _ _) if between(byte 224 224) -> utf8(rest 2 160 191)
+utf8([byte *rest] 0 _ _) if between(byte 225 236) -> utf8(rest 2 128 191)
+utf8([byte *rest] 0 _ _) if between(byte 237 237) -> utf8(rest 2 128 159)
+utf8([byte *rest] 0 _ _) if between(byte 238 239) -> utf8(rest 2 128 191)
+utf8([byte *rest] 0 _ _) if between(byte 240 240) -> utf8(rest 3 144 191)
+utf8([byte *rest] 0 _ _) if between(byte 241 243) -> utf8(rest 3 128 191)
+utf8([byte *rest] 0 _ _) if between(byte 244 244) -> utf8(rest 3 128 143)
+utf8([byte *rest] Succ(owed) low high) if between(byte low high) -> utf8(rest owed 128 191)
+utf8(_ _ _ _) -> False
+
+between : U8 Nat Nat -> Bool
+between(byte low high) -> byte.to_nat() >= low & byte.to_nat() <= high
 
 bytes_cmp : List(U8) List(U8) -> Order
 bytes_cmp([] []) -> Eq

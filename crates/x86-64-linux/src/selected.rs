@@ -136,8 +136,12 @@ pub(crate) enum Opcode {
     Shift,
     Call,
     Write,
-    /// A write to standard error rather than standard output.
-    WriteError,
+    /// Bytes where they lie to standard output, or to standard error, or
+    /// from standard input to where they are to lie: how many moved, or
+    /// `-errno`.
+    PutOut,
+    PutErr,
+    TakeIn,
     Exit,
     Grow,
     ArgumentCount,
@@ -145,9 +149,30 @@ pub(crate) enum Opcode {
 }
 
 impl Opcode {
-    /// A write of bytes where they lie, to standard output or error.
-    const fn writes(self) -> bool {
-        matches!(self, Self::Write | Self::WriteError)
+    /// A move of bytes where they lie, to or from a stream.
+    const fn moves_bytes(self) -> bool {
+        matches!(
+            self,
+            Self::Write | Self::PutOut | Self::PutErr | Self::TakeIn
+        )
+    }
+
+    /// Where what it answers is left.
+    const fn answered_in(self) -> Constraint {
+        match self {
+            Self::Multiply
+            | Self::Divide
+            | Self::Modulo
+            | Self::Convert
+            | Self::Shift
+            | Self::Call
+            | Self::PutOut
+            | Self::PutErr
+            | Self::TakeIn
+            | Self::Grow => Constraint::Fixed(Reg::Rax),
+            Self::ReadByte => Constraint::Fixed(Reg::Rdx),
+            _ => Constraint::Any,
+        }
     }
 
     #[expect(
@@ -204,9 +229,16 @@ impl Opcode {
                 ..Effects::PURE
             },
             Self::Call => call,
-            Self::Write | Self::WriteError | Self::Exit | Self::Grow | Self::ReadByte => {
+            Self::Write
+            | Self::PutOut
+            | Self::PutErr
+            | Self::TakeIn
+            | Self::Exit
+            | Self::Grow
+            | Self::ReadByte => {
                 let scratch = match self {
-                    Self::Write | Self::WriteError => RegSet::of(&[Reg::Rax, Reg::Rdi]),
+                    Self::Write => RegSet::of(&[Reg::Rax, Reg::Rdi]),
+                    Self::PutOut | Self::PutErr | Self::TakeIn => RegSet::of(&[Reg::Rdi]),
                     Self::Exit => RegSet::of(&[Reg::Rax]),
                     Self::Grow => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10, Reg::R8, Reg::R9]),
                     Self::ReadByte => RegSet::of(&[Reg::Rax, Reg::Rcx, Reg::Rdi, Reg::Rsi]),
@@ -230,7 +262,9 @@ impl Opcode {
             | Self::Equal
             | Self::Below
             | Self::Write
-            | Self::WriteError
+            | Self::PutOut
+            | Self::PutErr
+            | Self::TakeIn
             | Self::Exit
             | Self::Grow
             | Self::ReadByte => Expansion::Sequence,
@@ -238,7 +272,8 @@ impl Opcode {
         };
         let scratch = match self {
             Self::Multiply | Self::Divide | Self::Modulo => RegSet::of(&[Reg::Rdx]),
-            Self::Write | Self::WriteError => RegSet::of(&[Reg::Rax, Reg::Rdi]),
+            Self::Write => RegSet::of(&[Reg::Rax, Reg::Rdi]),
+            Self::PutOut | Self::PutErr | Self::TakeIn => RegSet::of(&[Reg::Rdi]),
             Self::Exit => RegSet::of(&[Reg::Rax]),
             Self::Grow => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10, Reg::R8, Reg::R9]),
             Self::ReadByte => RegSet::of(&[Reg::Rax, Reg::Rcx, Reg::Rdi, Reg::Rsi]),
@@ -275,21 +310,10 @@ impl Inst {
     fn operand_spec(self, at: usize) -> Option<OperandSpec> {
         let def = usize::from(self.result.is_some());
         if at < def {
-            let constraint = match self.opcode {
-                Opcode::Multiply
-                | Opcode::Divide
-                | Opcode::Modulo
-                | Opcode::Convert
-                | Opcode::Shift
-                | Opcode::Call
-                | Opcode::Grow => Constraint::Fixed(Reg::Rax),
-                Opcode::ReadByte => Constraint::Fixed(Reg::Rdx),
-                _ => Constraint::Any,
-            };
             return Some(OperandSpec {
                 role: Role::Def,
                 timing: Timing::Late,
-                constraint,
+                constraint: self.opcode.answered_in(),
             });
         }
         let use_at = at.checked_sub(def)?;
@@ -304,7 +328,7 @@ impl Inst {
             }
             Opcode::Call => abi_register(use_at).map(Constraint::Fixed)?,
             Opcode::Grow if use_at == 0 => Constraint::Fixed(Reg::Rsi),
-            op if op.writes() && use_at < 2 => Constraint::Fixed([Reg::Rsi, Reg::Rdx][use_at]),
+            op if op.moves_bytes() && use_at < 2 => Constraint::Fixed([Reg::Rsi, Reg::Rdx][use_at]),
             Opcode::Exit if use_at == 0 => Constraint::Fixed(Reg::Rdi),
             _ => Constraint::Any,
         };
@@ -580,7 +604,9 @@ impl Selected {
             | Opcode::Below
             | Opcode::Store
             | Opcode::Write
-            | Opcode::WriteError => 2,
+            | Opcode::PutOut
+            | Opcode::PutErr
+            | Opcode::TakeIn => 2,
             Opcode::Call => uses,
         };
         if uses != expected {
@@ -590,9 +616,7 @@ impl Selected {
             ));
         }
         let result_is_valid = match inst.opcode {
-            Opcode::Store | Opcode::Write | Opcode::WriteError | Opcode::Exit => {
-                inst.result.is_none()
-            }
+            Opcode::Store | Opcode::Write | Opcode::Exit => inst.result.is_none(),
             Opcode::Call => true,
             _ => inst.result.is_some(),
         };
@@ -973,7 +997,9 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             Opcode::Store => effects.memory == Access::Write,
             Opcode::Call
             | Opcode::Write
-            | Opcode::WriteError
+            | Opcode::PutOut
+            | Opcode::PutErr
+            | Opcode::TakeIn
             | Opcode::Exit
             | Opcode::Grow
             | Opcode::ReadByte => {
@@ -1027,7 +1053,9 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
             | (Opcode::Call, Immediate::Function(_))
             | (
                 Opcode::Write
-                    | Opcode::WriteError
+                    | Opcode::PutOut
+                    | Opcode::PutErr
+                    | Opcode::TakeIn
                     | Opcode::Exit
                     | Opcode::Grow
                     | Opcode::ArgumentCount
@@ -1373,7 +1401,9 @@ impl Selector<'_> {
                     let opcode = if let Some(symbol) = callee.external() {
                         match source.name(symbol) {
                             "write!" => Opcode::Write,
-                            "write_error!" => Opcode::WriteError,
+                            "put_out!" => Opcode::PutOut,
+                            "put_err!" => Opcode::PutErr,
+                            "take_in!" => Opcode::TakeIn,
                             "exit!" => Opcode::Exit,
                             "grow" => Opcode::Grow,
                             "read_byte!" => Opcode::ReadByte,

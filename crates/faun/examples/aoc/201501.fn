@@ -28,6 +28,7 @@ entered(False rest floor position) -> basement(rest floor position + 1)
 
 main! : Host -> []
 main!(host) ->
-  input = host.stdin!()
-  said = host.stdout!("part1: ${part1(input)} part2: ${part2(input)}\n")
+  read = host.stdin.read_to_str!()
+  input = read.ok_or("")
+  said = host.stdout.write_all!("part1: ${part1(input)} part2: ${part2(input)}\n".to_utf8())
   host.exit!(0)

@@ -38,12 +38,18 @@ impl Target for Wasm32Wasi {
 
     fn provides(&self) -> &'static [&'static str] {
         &[
-            "stdin!",
-            "stdout!",
-            "stderr!",
+            "stdin_take!",
+            "stdin_bytes!",
+            "stdin_failure!",
+            "stdout_put!",
+            "stdout_failure!",
+            "stderr_put!",
+            "stderr_failure!",
             "exit!",
+            "put_out!",
+            "put_err!",
+            "take_in!",
             "write!",
-            "write_error!",
             "read_byte!",
             "grow",
             "argc",

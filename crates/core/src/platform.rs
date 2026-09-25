@@ -104,11 +104,30 @@ pub struct Routine {
     /// this counts is what a machine reads rather than what a source wrote.
     pub takes: Vec<Takes>,
     pub returns: Returns,
-    /// The primitive this is built on, where it is not one itself: a byte
-    /// string in either direction is more than a machine hands over in one
-    /// call, so lowering writes the loop and a target answers only for the
-    /// primitive, which never sees the program's string.
-    pub through: Option<String>,
+    /// What lowering builds this from, where it is not a routine a target
+    /// answers for itself. A target answers only for primitives, which never
+    /// see a program's string.
+    pub built: Option<Built>,
+}
+
+/// A routine lowering builds on a primitive, or on memory alone.
+///
+/// Each counts in bytes a stream moved, and a primitive answering
+/// more than it was asked to move is saying it failed: the error is that far
+/// short of the top of a word, which is how a kernel answers `-errno`. The
+/// routine answers nought then, and keeps the error for [`Built::Failure`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Built {
+    /// Hand the primitive a byte string's first run, all of it where it is
+    /// known before the program runs: how many bytes went.
+    Put(String),
+    /// Ask the primitive for up to a count of bytes, into a scratch region
+    /// of a run: how many came, nought at the end of the stream.
+    Take(String),
+    /// The first bytes of that region, as many as are asked, as a string.
+    Taken,
+    /// The error the last put or take met, nought for none, and then none.
+    Failure,
 }
 
 impl Routine {
@@ -256,20 +275,24 @@ impl Routines {
     /// What every compiler knows: the routines a target answers for out of
     /// its own machine, rather than by reaching a name somebody wrote down.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one contract per line, in the order a reader looks for them"
+    )]
     pub fn builtin() -> Self {
-        let held = |name: &str, (offered, authority), takes: &[Takes], returns, through| Routine {
+        let held = |name: &str, (offered, authority), takes: &[Takes], returns, built| Routine {
             name: name.to_owned(),
             offered,
             authority,
             takes: takes.to_vec(),
             returns,
-            through,
+            built,
         };
         // What a program asks, it asks with the authority it was handed.
         let offered =
             |name: &str, takes: &[Takes], returns| held(name, (true, true), takes, returns, None);
-        let built = |name: &str, takes: &[Takes], returns, through: &str| {
-            held(name, (true, true), takes, returns, Some(through.to_owned()))
+        let built = |name: &str, takes: &[Takes], returns, built: Built| {
+            held(name, (true, true), takes, returns, Some(built))
         };
         // A primitive a program's routines are built on is asked with the
         // same authority, though no program names it.
@@ -279,18 +302,40 @@ impl Routines {
         let hidden =
             |name: &str, takes: &[Takes], returns| held(name, (false, false), takes, returns, None);
         let word = Takes::Scalar(Class::Word);
+        let count = Returns::Value(Class::Word);
         let contracts = vec![
-            // All of standard input, and a string to standard output or
-            // standard error.
-            built("stdin!", &[], Returns::Bytes, "read_byte!"),
-            built("stdout!", &[Takes::Bytes], Returns::Unit, "write!"),
-            built("stderr!", &[Takes::Bytes], Returns::Unit, "write_error!"),
+            // The streams a program reads and writes, a run at a time.
+            built(
+                "stdin_take!",
+                &[word],
+                count,
+                Built::Take("take_in!".into()),
+            ),
+            built("stdin_bytes!", &[word], Returns::Bytes, Built::Taken),
+            built("stdin_failure!", &[], count, Built::Failure),
+            built(
+                "stdout_put!",
+                &[Takes::Bytes],
+                count,
+                Built::Put("put_out!".into()),
+            ),
+            built("stdout_failure!", &[], count, Built::Failure),
+            built(
+                "stderr_put!",
+                &[Takes::Bytes],
+                count,
+                Built::Put("put_err!".into()),
+            ),
+            built("stderr_failure!", &[], count, Built::Failure),
             offered("exit!", &[word], Returns::Never),
+            // Bytes where they lie to standard output or error, and bytes from
+            // standard input to where they are to lie: how many, or an error.
+            primitive("put_out!", &[Takes::StaticBytes], count),
+            primitive("put_err!", &[Takes::StaticBytes], count),
+            primitive("take_in!", &[Takes::Scalar(Class::Address), word], count),
             // One argument, two machine values: a machine reads where a run
-            // of bytes starts and how long it is, to standard output...
+            // of bytes starts and how long it is.
             primitive("write!", &[Takes::StaticBytes], Returns::Unit),
-            // ...or to standard error.
-            primitive("write_error!", &[Takes::StaticBytes], Returns::Unit),
             // One byte from standard input, offset by one so nought can say
             // EOF without losing the byte whose bits are all nought.
             primitive("read_byte!", &[], Returns::Value(Class::fixed(9))),
@@ -328,6 +373,12 @@ impl Routines {
         }
         self.word = Some(bits);
         self
+    }
+
+    /// How many bits a host word is, once a target has said.
+    #[must_use]
+    pub const fn word(&self) -> Option<u16> {
+        self.word
     }
 
     /// What a sequence's length can be. A sequence is held in memory, and

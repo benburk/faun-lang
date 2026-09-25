@@ -91,6 +91,16 @@ impl Package {
 /// `argc` of one and `input` on standard input: the status it exits with,
 /// and what it wrote to standard output.
 pub(crate) fn run_file(entry: &std::path::Path, input: &[u8]) -> (u32, String) {
+    run_failing(entry, input, None)
+}
+
+/// The same, where every write to standard output fails with `errno`, as
+/// a kernel says so: that far short of the top of a word.
+pub(crate) fn run_failing(
+    entry: &std::path::Path,
+    input: &[u8],
+    errno: Option<u64>,
+) -> (u32, String) {
     {
         let mut barb = faun::lower_to_barb(entry, &X86_64Linux)
             .unwrap_or_else(|error| panic!("{}", error.message));
@@ -111,6 +121,7 @@ pub(crate) fn run_file(entry: &std::path::Path, input: &[u8]) -> (u32, String) {
         let mut streams = Streams {
             input: input.iter().copied().collect(),
             output: Vec::new(),
+            errno,
         };
         let evaluation = evaluate::evaluate(
             &prepared,
@@ -143,6 +154,8 @@ impl Drop for Package {
 struct Streams {
     input: std::collections::VecDeque<u8>,
     output: Vec<u8>,
+    /// What every write to standard output fails with, if it fails.
+    errno: Option<u64>,
 }
 
 impl Host for Streams {
@@ -155,17 +168,28 @@ impl Host for Streams {
         let word = |value: &BigUint| u64::try_from(value).expect("a word");
         match name {
             "exit!" => Ok(HostResult::Halt(args.to_vec())),
-            // Nought at the end, and one more than the byte otherwise.
-            "read_byte!" => Ok(HostResult::Return(vec![BigUint::from(
-                self.input.pop_front().map_or(0, |byte| u16::from(byte) + 1),
-            )])),
-            "write!" => {
-                let len = usize::try_from(word(&args[1])).expect("a length");
-                self.output
-                    .extend_from_slice(memory.read(word(&args[0]), len)?);
-                Ok(HostResult::Return(Vec::new()))
+            // Up to as many as asked, where they are to lie: how many.
+            "take_in!" => {
+                let asked = usize::try_from(word(&args[1])).expect("a count");
+                let taken: Vec<u8> = (0..asked).map_while(|_| self.input.pop_front()).collect();
+                memory.write(word(&args[0]), &taken)?;
+                Ok(HostResult::Return(vec![BigUint::from(taken.len())]))
             }
-            "write_error!" => Ok(HostResult::Return(Vec::new())),
+            // All of it, every time: how many.
+            "put_out!" if self.errno.is_some() => {
+                let errno = self.errno.expect("a failing write");
+                Ok(HostResult::Return(vec![BigUint::from(
+                    0u64.wrapping_sub(errno),
+                )]))
+            }
+            "put_out!" | "put_err!" => {
+                let len = usize::try_from(word(&args[1])).expect("a length");
+                if name == "put_out!" {
+                    self.output
+                        .extend_from_slice(memory.read(word(&args[0]), len)?);
+                }
+                Ok(HostResult::Return(vec![BigUint::from(len)]))
+            }
             _ => Err(Error::Host(name.to_owned())),
         }
     }

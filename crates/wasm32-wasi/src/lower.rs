@@ -101,6 +101,7 @@ pub(crate) fn lower(program: &Program) -> Code {
     let data_start = after_writes + read.map_or(0, |_| IOVEC_LEN + 4);
 
     let writes = plan.writes > 0;
+    let takes = plan.takes;
     let mut state = Lowering {
         program,
         entry: program.entry(),
@@ -122,7 +123,7 @@ pub(crate) fn lower(program: &Program) -> Code {
     if writes {
         state.imports.push("fd_write");
     }
-    if state.read.is_some() {
+    if state.read.is_some() || takes {
         state.imports.push("fd_read");
     }
     if state.needs_proc_exit() {
@@ -157,6 +158,8 @@ struct Plan {
     locals: u32,
     writes: usize,
     reads: bool,
+    /// Whether anything takes a run of standard input.
+    takes: bool,
     functions: Vec<Option<Frame>>,
 }
 
@@ -169,6 +172,7 @@ impl Plan {
             locals: 0,
             writes: 0,
             reads: false,
+            takes: false,
             functions: Vec::new(),
         };
         let mut index = 0;
@@ -211,10 +215,21 @@ impl Plan {
             match *op {
                 Op::Call { function, .. }
                     if program.function(function).external().is_some_and(|symbol| {
-                        matches!(program.name(symbol), "write!" | "write_error!")
+                        matches!(program.name(symbol), "write!" | "put_out!" | "put_err!")
                     }) =>
                 {
                     self.writes += 1;
+                }
+                // A take reads through a vector of its own, so it counts as
+                // one, and it needs the read import.
+                Op::Call { function, .. }
+                    if program
+                        .function(function)
+                        .external()
+                        .is_some_and(|symbol| program.name(symbol) == "take_in!") =>
+                {
+                    self.writes += 1;
+                    self.takes = true;
                 }
                 Op::Call { function, .. }
                     if program
@@ -801,7 +816,8 @@ impl Lowering<'_> {
         position: Position,
     ) {
         match name {
-            "write!" | "write_error!" => {
+            "put_out!" | "put_err!" | "take_in!" => self.stream(name, args, results[0]),
+            "write!" => {
                 let index = self.written;
                 self.written += 1;
                 let iovec = IOVECS + IOVEC_LEN * len32(index);
@@ -816,7 +832,7 @@ impl Lowering<'_> {
                     self.store(iovec + 4, args[1]);
                 }
 
-                self.constant_i32(if name == "write!" { STDOUT } else { STDERR });
+                self.constant_i32(STDOUT);
                 self.constant_i32(iovec.cast_signed());
                 self.constant_i32(1);
                 self.constant_i32(NWRITTEN);
@@ -842,6 +858,48 @@ impl Lowering<'_> {
             }
             other => panic!("`{other}` is not one this answers for, which `accepts` says first"),
         }
+    }
+
+    /// Move a run of bytes to standard output or error, or from standard
+    /// input, through a vector of this call's own: how many moved, or
+    /// `-errno`, as a kernel would answer.
+    fn stream(&mut self, name: &str, args: &[ValueId], result: ValueId) {
+        let index = self.written;
+        self.written += 1;
+        let iovec = IOVECS + IOVEC_LEN * len32(index);
+        if let (Some(base), Some(length)) = (self.constant(args[0]), self.constant(args[1])) {
+            self.iovecs[index] = Some((base, length));
+        } else {
+            self.store(iovec, args[0]);
+            self.store(iovec + 4, args[1]);
+        }
+        let (fd, import) = match name {
+            "put_out!" => (STDOUT, "fd_write"),
+            "put_err!" => (STDERR, "fd_write"),
+            _ => (STDIN, "fd_read"),
+        };
+        self.constant_i32(fd);
+        self.constant_i32(iovec.cast_signed());
+        self.constant_i32(1);
+        self.constant_i32(NWRITTEN);
+        let call = self.import(import).expect("a transfer imports its call");
+        self.call(call);
+        // The errno, held while it decides which answer this is.
+        self.set(result);
+        self.push(result);
+        self.constant_i32(0);
+        self.body.byte(I32_EQ);
+        self.body.byte(IF);
+        self.body.byte(I32);
+        self.open();
+        self.constant_i32(NWRITTEN);
+        self.access(Width::Word, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.body.byte(ELSE);
+        self.constant_i32(0);
+        self.push(result);
+        self.body.byte(I32_SUB);
+        self.close();
+        self.set(result);
     }
 
     /// Return zero at EOF or on a host error, and otherwise the byte plus

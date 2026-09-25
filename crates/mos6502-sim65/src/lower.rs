@@ -1360,10 +1360,10 @@ impl Lowering<'_> {
         }
     }
 
-    /// `write(1, buffer, count)`: the first two through `CSP`, the count in
-    /// A and X.
-    /// Write through sim65's `write(fd, buffer, count)` hook, to `fd`.
-    fn write(&mut self, args: &[ValueId], fd: u8) {
+    /// Move bytes through sim65's `write(fd, buffer, count)` or
+    /// `read(fd, buffer, count)` hook: the first two through `CSP`, the count
+    /// in A and X, and what it answers left in A and X.
+    fn move_bytes(&mut self, args: &[ValueId], fd: u8, hook: u16) {
         let buffer = self.operand(args[0], T1);
         let count = self.operand(args[1], T0);
         if let Some(at) = self.constant(args[0]) {
@@ -1380,7 +1380,16 @@ impl Lowering<'_> {
             Held::Zero(at) => self.asm.ldx_zp(at),
         }
         self.load(count.byte(0));
-        self.jsr_hook(HOOK_WRITE);
+        self.jsr_hook(hook);
+    }
+
+    /// Move bytes and answer how many moved, or the hook's `-1`, which is
+    /// a word that far short of the top: an error, the only one it says.
+    fn stream(&mut self, args: &[ValueId], fd: u8, hook: u16, result: ValueId) {
+        self.move_bytes(args, fd, hook);
+        self.asm.sta_zp(T0);
+        self.asm.stx_zp(T0 + 1);
+        self.commit(result, T0);
     }
 
     /// Read one byte through sim65's `read(0, buffer, 1)` hook. Its result
@@ -1690,8 +1699,10 @@ impl Lowering<'_> {
 
     fn platform_call(&mut self, name: &str, args: &[ValueId], results: &[ValueId]) {
         match name {
-            "write!" => self.write(args, 1),
-            "write_error!" => self.write(args, 2),
+            "write!" => self.move_bytes(args, 1, HOOK_WRITE),
+            "put_out!" => self.stream(args, 1, HOOK_WRITE, results[0]),
+            "put_err!" => self.stream(args, 2, HOOK_WRITE, results[0]),
+            "take_in!" => self.stream(args, 0, HOOK_READ, results[0]),
             "read_byte!" => self.read_byte(results[0]),
             "exit!" => {
                 let status = self.operand(args[0], T0);

@@ -2,13 +2,164 @@
 # program is handed. Its fields are startup values the target produces
 # before `main!` runs; a field nothing reads is never produced. Its bodyless
 # methods are the effects the program may ask of the target.
+#
+# Standard input, output and error are Ori's streams: a read or write moves
+# some bytes and answers how many, or the error it met; `read_to_end!` and
+# `write_all!` go on until the stream is done. Each loop is bounded by fuel,
+# so it is seen to stop, and a stream that never ends runs out of it: as many
+# reads as a word counts.
 
-exports {Host}
+exports {Host Stdin Stdout Stderr IoError.*}
 
 Host : {argc: Nat}.(
   exit! : Host Nat -> []
-  # All of standard input, read to its end.
-  stdin! : Host -> Str
-  stdout! : Host Str -> {}
-  stderr! : Host Str -> {}
+
+  stdin : Host -> Stdin
+  stdin(_) -> Stdin
+
+  stdout : Host -> Stdout
+  stdout(_) -> Stdout
+
+  stderr : Host -> Stderr
+  stderr(_) -> Stderr
 )
+
+# What reading or writing a stream can meet.
+IoError : [NotFound Denied AlreadyExists NotADirectory IsADirectory NotEmpty
+           Escapes BrokenPipe NoSpace Unsupported Other(Nat)].(
+  to_str : IoError -> Str
+  to_str(NotFound) -> "NotFound"
+  to_str(Denied) -> "Denied"
+  to_str(AlreadyExists) -> "AlreadyExists"
+  to_str(NotADirectory) -> "NotADirectory"
+  to_str(IsADirectory) -> "IsADirectory"
+  to_str(NotEmpty) -> "NotEmpty"
+  to_str(Escapes) -> "Escapes"
+  to_str(BrokenPipe) -> "BrokenPipe"
+  to_str(NoSpace) -> "NoSpace"
+  to_str(Unsupported) -> "Unsupported"
+  to_str(Other(code)) -> "Other(${code})"
+)
+
+Stdin : [Stdin].(
+  # Up to `count` bytes, fewer where fewer are ready, and none at the end.
+  read! : Stdin Nat -> Result(List(U8) IoError)
+  read!(input count) ->
+    got = stdin_take!(input 256 - (256 - count))
+    failure = stdin_failure!(input)
+    taken!(input got failure)
+
+  # Every byte to the end.
+  read_to_end! : Stdin -> Result(List(U8) [Io(IoError) LimitExceeded])
+  read_to_end!(input) -> read_chunks!(input 4294967295 [])
+
+  # Every byte to the end, as text.
+  read_to_str! : Stdin -> Result(Str [Io(IoError) LimitExceeded InvalidUtf8])
+  read_to_str!(input) ->
+    read = input.read_to_end!()
+    bytes = read?
+    text = Str.from_utf8(bytes)?
+    Ok(text)
+)
+
+Stdout : [Stdout].(
+  # Some of `bytes`, from the first: how many went.
+  write! : Stdout List(U8) -> Result(Nat IoError)
+  write!(output bytes) ->
+    went = stdout_put!(output bytes)
+    failure = stdout_failure!(output)
+    written(went failure)
+
+  # All of `bytes`: how many that is.
+  write_all! : Stdout List(U8) -> Result(Nat IoError)
+  write_all!(output bytes) ->
+    wrote = write_rest!(output bytes bytes.len())
+    done = wrote?
+    Ok(bytes.len())
+)
+
+Stderr : [Stderr].(
+  # Some of `bytes`, from the first: how many went.
+  write! : Stderr List(U8) -> Result(Nat IoError)
+  write!(output bytes) ->
+    went = stderr_put!(output bytes)
+    failure = stderr_failure!(output)
+    written(went failure)
+
+  # All of `bytes`: how many that is.
+  write_all! : Stderr List(U8) -> Result(Nat IoError)
+  write_all!(output bytes) ->
+    wrote = write_rest!(output bytes bytes.len())
+    done = wrote?
+    Ok(bytes.len())
+)
+
+# What the target answers for, a run of bytes at a time: how many moved,
+# and the error the last move met, nought for none.
+stdin_take! : Stdin Nat -> Nat
+stdin_bytes! : Stdin Nat -> List(U8)
+stdin_failure! : Stdin -> Nat
+stdout_put! : Stdout List(U8) -> Nat
+stdout_failure! : Stdout -> Nat
+stderr_put! : Stderr List(U8) -> Nat
+stderr_failure! : Stderr -> Nat
+
+taken! : Stdin Nat Nat -> Result(List(U8) IoError)
+taken!(input got 0) ->
+  bytes = stdin_bytes!(input got)
+  Ok(bytes)
+taken!(_ _ code) -> Err(io_error(code))
+
+written : Nat Nat -> Result(Nat IoError)
+written(went 0) -> Ok(went)
+written(_ code) -> Err(io_error(code))
+
+# Chunks to the end, the latest first; each read takes one fuel.
+read_chunks! : Stdin Nat List(List(U8)) -> Result(List(U8) [Io(IoError) LimitExceeded])
+read_chunks!(_ 0 _) -> Err(LimitExceeded)
+read_chunks!(input Succ(fuel) chunks) ->
+  read = input.read!(65536)
+  chunk = read.map_err(Io)?
+  read_on!(input fuel chunks chunk)
+
+read_on! : Stdin Nat List(List(U8)) List(U8) -> Result(List(U8) [Io(IoError) LimitExceeded])
+read_on!(_ _ chunks []) -> Ok(joined(chunks []))
+read_on!(input fuel chunks chunk) -> read_chunks!(input fuel [chunk *chunks])
+
+# The chunks, latest first, in the order they came, before `built`: each is
+# put in front a byte at a time from its end, so every step is a loop.
+joined : List(List(U8)) List(U8) -> List(U8)
+joined([] built) -> built
+joined([chunk *chunks] built) -> joined(chunks prepended(chunk.reverse() built))
+
+prepended : List(U8) List(U8) -> List(U8)
+prepended([] built) -> built
+prepended([byte *rest] built) -> prepended(rest [byte *built])
+
+# Write what is left until nothing is, one fuel a byte: a stream that keeps
+# taking none runs out of it. Nothing is counted, since a total would be a
+# number the host's answers add up to, wider than any word a target picks:
+# once it ends well, every byte went.
+write_rest! : w List(U8) Nat -> Result({} IoError) where
+  w.write! : w List(U8) -> Result(Nat IoError)
+write_rest!(_ [] _) -> Ok({})
+write_rest!(_ [_ *_] 0) -> Err(Other(5))
+write_rest!(output remaining Succ(fuel)) ->
+  wrote = output.write!(remaining)
+  went = wrote?
+  write_rest!(output remaining.drop(went) fuel)
+
+# What an error number of WASI's is.
+io_error : Nat -> IoError
+io_error(2) -> Denied
+io_error(20) -> AlreadyExists
+io_error(31) -> IsADirectory
+io_error(44) -> NotFound
+io_error(51) -> NoSpace
+io_error(54) -> NotADirectory
+io_error(55) -> NotEmpty
+io_error(58) -> Unsupported
+io_error(63) -> Denied
+io_error(64) -> BrokenPipe
+io_error(76) -> Escapes
+io_error(code) -> Other(code)

@@ -519,7 +519,7 @@ fn natural_host_signatures_do_not_become_address_signatures() {
         authority: false,
         takes: vec![crate::platform::Takes::Scalar(Class::Natural)],
         returns: crate::platform::Returns::Value(Class::Natural),
-        through: None,
+        built: None,
     });
     let (mut p, main) = Program::new("main");
     let foreign = routines.declare(&mut p, "foreign");
@@ -555,7 +555,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
             authority: false,
             takes: vec![],
             returns: crate::platform::Returns::Unit,
-            through: None,
+            built: None,
         });
         let (mut p, main) = Program::new("main");
         let mark = routines.declare(&mut p, "mark");

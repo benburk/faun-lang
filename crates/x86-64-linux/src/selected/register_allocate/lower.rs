@@ -463,11 +463,20 @@ impl<'a> Lowering<'a> {
                 self.asm.syscall();
                 self.forget_call_clobbers();
             }
-            (Opcode::WriteError, Immediate::None) => {
-                self.materialize(Reg::Rax, SYS_WRITE);
-                self.materialize(Reg::Rdi, STDERR);
+            (Opcode::PutOut | Opcode::PutErr | Opcode::TakeIn, Immediate::None) => {
+                let (call, fd) = match inst.opcode {
+                    Opcode::PutOut => (SYS_WRITE, STDOUT),
+                    Opcode::PutErr => (SYS_WRITE, STDERR),
+                    _ => (SYS_READ, STDIN),
+                };
+                self.materialize(Reg::Rax, call);
+                self.materialize(Reg::Rdi, fd);
                 self.asm.syscall();
                 self.forget_call_clobbers();
+                // The count, or `-errno`, is where the kernel left it.
+                let dst = result()?;
+                debug_assert_eq!(dst, Reg::Rax);
+                self.forget(dst);
             }
             (Opcode::Exit, Immediate::None) => {
                 self.asm.omit_redundant_exit_narrow();

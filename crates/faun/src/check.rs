@@ -1769,7 +1769,13 @@ impl<'a> Checker<'a> {
                     .expect("pattern binding installs its local")
                     .ty
                     .clone();
-                locals[local.index()] = Some(self.generalize_local(&ty, locals, local));
+                // A local holds one value, built once at one type, so it
+                // is not generalized: a use at another type, a wider row
+                // most of all, would read that value as something it is not.
+                locals[local.index()] = Some(Scheme {
+                    variables: Vec::new(),
+                    ty,
+                });
             }
         }
         let actual = self.expr(module, &clause.body.result, locals)?;
@@ -3489,13 +3495,15 @@ impl<'a> Checker<'a> {
         if let Ty::Rigid(_) = receiver {
             return bounded.collect();
         }
+        // A value's own type's methods are its, wherever the value went and
+        // whether or not its type was imported; one not yet known may have
+        // only those in scope, which are what inference chooses among.
         let visible = &self.visible_methods[&pending.module];
         implementations
             .iter()
-            .filter(|implementation| visible.contains(&implementation.target))
             .filter(|implementation| match &receiver {
                 Ty::Named(owner, _) => implementation.owner == *owner,
-                Ty::Var(_) => true,
+                Ty::Var(_) => visible.contains(&implementation.target),
                 _ => false,
             })
             .cloned()
@@ -3611,59 +3619,6 @@ impl<'a> Checker<'a> {
                 continue;
             }
             variables.retain(|variable| !free_scheme(scheme).contains(variable));
-        }
-        Scheme {
-            variables: variables.into_iter().collect(),
-            ty,
-        }
-    }
-
-    fn generalize_local(&self, ty: &Ty, locals: &[Option<Scheme>], current: h::LocalId) -> Scheme {
-        let ty = self.infer.resolve(ty);
-        let mut variables: HashSet<_> = free_variables(&ty).into_iter().collect();
-        for (index, scheme) in locals.iter().enumerate() {
-            if index == current.index() {
-                continue;
-            }
-            if let Some(scheme) = scheme {
-                variables.retain(|variable| !free_scheme(scheme).contains(variable));
-            }
-        }
-        for scheme in self.values.values() {
-            variables.retain(|variable| !free_scheme(scheme).contains(variable));
-        }
-        // What a method, numeral or word still waiting will decide is not the
-        // binding's to quantify.
-        let waiting = self
-            .pending_methods
-            .iter()
-            .filter(|pending| !pending.resolved)
-            .flat_map(|pending| {
-                std::iter::once(&pending.receiver)
-                    .chain(&pending.arguments)
-                    .chain(std::iter::once(&pending.result))
-            })
-            .chain(
-                self.pending_numerals
-                    .iter()
-                    .filter(|numeral| !numeral.resolved)
-                    .map(|numeral| &numeral.ty),
-            )
-            .chain(
-                self.pending_tags
-                    .iter()
-                    .filter(|pending| !pending.resolved)
-                    .map(|pending| &pending.result),
-            )
-            .chain(
-                self.pending_bare
-                    .iter()
-                    .filter(|pending| !pending.resolved)
-                    .map(|pending| &pending.ty),
-            )
-            .flat_map(|ty| free_variables(&self.infer.resolve(ty)));
-        for variable in waiting {
-            variables.remove(&variable);
         }
         Scheme {
             variables: variables.into_iter().collect(),

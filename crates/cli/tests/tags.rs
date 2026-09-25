@@ -162,6 +162,27 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> host.exit!(code(cat(0).map_err(CatFailure)) + code(cat(3).map_err(CatFailure)) + [1 2].map(Boxed).len())",
         12,
     ),
+    (
+        "a result bound before `?` answers its error at the wider row",
+        "narrow : Nat -> Result(Nat [A])
+         narrow(0) -> Err(A)
+         narrow(n) -> Ok(n)
+
+         wide : Nat -> Result(Nat [B A])
+         wide(n) ->
+           taken = narrow(n)
+           kept = taken?
+           Ok(kept)
+
+         code : Result(Nat [B A]) -> Nat
+         code(Ok(n)) -> n % 10
+         code(Err(A)) -> 50
+         code(Err(B)) -> 60
+
+         main! : Host -> []
+         main!(host) -> host.exit!(code(wide(host.argc - 1)) + code(wide(7)))",
+        57,
+    ),
 ];
 
 /// Programs refused, and what the message says.

@@ -83,7 +83,7 @@ impl Target for Provider {
             authority: false,
             takes: Vec::new(),
             returns: crate::platform::Returns::Value(Class::Word),
-            through: None,
+            built: None,
         });
         routines.with_word(self.0)
     }
@@ -187,7 +187,7 @@ fn source_externals_check_unit_against_nonreturning_provider_contracts() {
             authority: false,
             takes: vec![],
             returns,
-            through: None,
+            built: None,
         });
         let error = lower(&mut source, &routines).unwrap_err();
         assert!(error.contains("about returning"), "{error}");

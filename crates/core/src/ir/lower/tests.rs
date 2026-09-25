@@ -444,7 +444,7 @@ fn parameters_read_only_after_a_nonreturning_call_are_unused() {
         authority: false,
         takes: vec![],
         returns: Returns::Never,
-        through: None,
+        built: None,
     });
 
     let machine = lower(&mut source, &routines).unwrap();
@@ -478,7 +478,7 @@ fn external_parameter_names_survive_machine_lowering() {
         authority: false,
         takes: vec![Takes::Scalar(Class::fixed(0))],
         returns: Returns::Never,
-        through: None,
+        built: None,
     });
 
     let machine = lower(&mut source, &routines).unwrap();
