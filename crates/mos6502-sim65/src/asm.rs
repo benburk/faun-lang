@@ -261,6 +261,20 @@ impl MachineState {
         }
     }
 
+    /// Whether a branch on `cc` is taken, where the flag it reads is known.
+    const fn decides(self, cc: Cc) -> Option<bool> {
+        let (flag, when) = match cc {
+            Cc::Equal => (self.flags.zero, true),
+            Cc::NotEqual => (self.flags.zero, false),
+            Cc::Carry => (self.flags.carry, true),
+            Cc::NoCarry => (self.flags.carry, false),
+        };
+        match flag {
+            Some(set) => Some(set == when),
+            None => None,
+        }
+    }
+
     const fn on_branch(mut self, cc: Cc, taken: bool) -> Self {
         match cc {
             Cc::Equal => self.flags.zero = Some(taken),
@@ -699,10 +713,12 @@ impl Assembler {
             (Some(left), Some(right)) => self.state.flags.with_nz(Some(left.wrapping_sub(right))),
             _ => self.state.flags.with_nz(None),
         };
-        let carry = register
-            .number
-            .zip(self.number(operand))
-            .map(|(left, right)| left >= right);
+        // Nothing is under nought, so a compare against it always sets carry.
+        let carry = match (register.number, self.number(operand)) {
+            (Some(left), Some(right)) => Some(left >= right),
+            (_, Some(0)) => Some(true),
+            _ => None,
+        };
         MachineState {
             flags: Flags { carry, ..flags },
             ..self.state
@@ -1267,11 +1283,23 @@ impl Assembler {
     }
 
     /// A branch: its target learns the condition held, and what runs on
-    /// from here learns it did not.
+    /// from here learns it did not. One the flags already decide is not
+    /// written where it is never taken, and ends what runs on where it
+    /// always is.
     pub(crate) fn branch(&mut self, cc: Cc, label: Label) {
-        self.arrive(label, self.state.on_branch(cc, true));
-        self.state = self.state.on_branch(cc, false);
-        self.insts.push(Inst::Branch { cc, to: label });
+        match self.state.decides(cc) {
+            Some(false) => {}
+            Some(true) => {
+                self.arrive(label, self.state);
+                self.unreached = true;
+                self.insts.push(Inst::Branch { cc, to: label });
+            }
+            None => {
+                self.arrive(label, self.state.on_branch(cc, true));
+                self.state = self.state.on_branch(cc, false);
+                self.insts.push(Inst::Branch { cc, to: label });
+            }
+        }
     }
 
     fn op(&mut self, mnemonic: Mnemonic, operand: Operand) {
@@ -1394,6 +1422,20 @@ mod tests {
         asm.bind(joined);
         assert_eq!(asm.state.flags.carry, None);
         assert_eq!(asm.finish(), [0x90, 0x02, 0xB0, 0x00]);
+    }
+
+    #[test]
+    fn a_branch_the_flags_decide_is_left_out_or_ends_the_run() {
+        let mut asm = Assembler::new(0x200);
+        let target = asm.label();
+        asm.sec();
+        asm.branch(Cc::NoCarry, target);
+        asm.branch(Cc::Carry, target);
+        // Always taken: what follows is reached only through a label.
+        assert!(asm.unreached);
+        asm.bind(target);
+        assert_eq!(asm.state.flags.carry, Some(true));
+        assert_eq!(asm.finish(), [0x38, 0xB0, 0x00]);
     }
 
     #[test]
