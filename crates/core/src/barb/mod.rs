@@ -101,6 +101,7 @@ mod optimize;
 mod pretty;
 mod program;
 mod stops;
+mod sweep;
 mod terms;
 mod types;
 mod validate;

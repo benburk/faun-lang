@@ -266,6 +266,8 @@ mod tests {
         });
         library.program.set_entry(main);
         crate::barb::optimize(&mut library.program);
+        // What the entry does not reach is gone, and the entry renumbered.
+        let main = library.program.entry().expect("an entry");
         let body = library.program.function(main).body().unwrap();
         let crate::barb::Expr::Static(value) = library.program.expr(body.tail) else {
             panic!("folded\n{}", library.program.render());

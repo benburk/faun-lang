@@ -8,15 +8,10 @@ use super::{
 };
 
 /// `Nat`, `Bool` and their arithmetic, as a source library writes them,
-/// with an entry that answers nought and calls none of it.
+/// with no entry: every definition is one a test reads, so every one is
+/// kept, and each keeps its ID through optimization.
 fn library() -> Program {
-    let library = super::fixture::Library::new();
-    let (nat, zero) = (library.nat, library.zero);
-    let mut program = library.program;
-    let main = program.declare("main", &[], nat);
-    program.define(main, |b, _| b.con(zero, &[]));
-    program.set_entry(main);
-    program
+    super::fixture::Library::new().program
 }
 
 fn named(program: &Program, name: &str) -> FnId {

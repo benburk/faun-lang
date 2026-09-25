@@ -8,6 +8,29 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "a large numeral is a test, however large",
+        "code : Nat -> Nat
+         code(13) -> 1
+         code(95) -> 2
+         code(2000) -> 3
+         code(_) -> 0
+
+         main! : Host -> []
+         main!(host) -> host.exit!(code(95) * 27 + code(2000) * 9 + code(13) * 3 + code(7))",
+        84,
+    ),
+    (
+        "a large signed numeral is a sign and a test",
+        "sign : Int -> Nat
+         sign(-40) -> 5
+         sign(40) -> 6
+         sign(_) -> 7
+
+         main! : Host -> []
+         main!(host) -> host.exit!(sign(-40) * 25 + sign(40) * 5 + sign(-39))",
+        162,
+    ),
+    (
         "a type nothing pins is Nat",
         "main! : Host -> []
          main!(host) -> host.exit!([].len() + [[] []].len())",

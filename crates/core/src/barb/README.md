@@ -25,8 +25,10 @@ value semantics. a bodyless call is a value the target computes
   - weak refs, finalizers
 - whole source available. ish. backend will be able to dynamically link libs eventually
 - an entry is optional. Every defined function is validated and must be total
-  whether or not the entry reaches it; machine lowering takes only what the
-  entry reaches, so a program with no entry is checked and lowers to nothing
+  whether or not the entry reaches it. Optimization then keeps only what the
+  entry reaches, so what is checked is everything written and what is kept is
+  what runs; a program with no entry is checked, keeps every definition, and
+  lowers to nothing
 - must be fully defunctionalized and monomorphized
 
 ## The IR
@@ -131,6 +133,9 @@ x    ::= a parameter, a binding, or a field an arm bound
   so a chain fuses a link at a time. Only definitions reaching no bodyless
   call take part: fusing interleaves their work and cuts the producer short
   where the consumer stops. Nothing is recognized by name.
+- `sweep.rs`: dropping the definitions an entry does not reach, once
+  validation has checked them and inlining and fusion have copied what they
+  needed out of them.
 - `copy.rs`: copying terms into a body under construction through a map of
   locals, with an optional redirect of one function's calls; what fusion and
   descent build new bodies with.
@@ -176,7 +181,9 @@ two types -- so nothing infers a provider or an effect from the display name.
 7. Bounded algebraic normalization: combine constants across recognized associative
    operations and directional monus/division chains, then push power-of-two moduli
    through sums and products.
-8. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+8. Sweep: where there is an entry, drop every definition it does not reach,
+   renumbering function IDs in order. Types, constructors and constants stay.
+9. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
    pure arithmetic or lengths; retain calls of unknown meaning and matches.
 
 Every normalizing stage (1, 3 and 7) also decides what is already decided: a
@@ -230,8 +237,7 @@ their fields' machine values and payload-carrying sums to machine cells.
 
 Cleanup is also the term-arena compaction point. It borrows the original program,
 builds a fresh `TermArena`, then hands it and all remapped function roots to
-`Program::replace_terms`. Every defined function is retained, not only entry-reachable
-ones. Recognized arithmetic equations are copied without semantic rewriting, with
+`Program::replace_terms`. Every definition the sweep kept is retained. Recognized arithmetic equations are copied without semantic rewriting, with
 expression sharing preserved; liveness rewriting remains occurrence-specific.
 Names, declarations, type lists and constant storage are neither cloned nor moved.
 Constant-pool garbage collection is not part of this pass.

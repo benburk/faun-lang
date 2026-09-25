@@ -199,7 +199,7 @@ impl Program {
 
     /// Forget everything worked out about this program: a declaration or a
     /// body now says something it did not.
-    fn redefined(&mut self) {
+    pub(super) fn redefined(&mut self) {
         self.recognised.0 = Recognised::default();
         self.facts.0 = None;
     }

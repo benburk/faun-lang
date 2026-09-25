@@ -22,5 +22,6 @@ pub fn optimize(program: &mut Program) {
     super::laws::laws(program);
     super::fold(program);
     super::normalize::algebra(program, FoldLimits::default());
+    super::sweep::sweep(program);
     super::cleanup::cleanup(program);
 }

@@ -156,6 +156,28 @@ enum Decision {
         otherwise: Box<Self>,
         answer: Box<Self>,
     },
+    /// Whether a natural is a numeral: one test, where taking the numeral's
+    /// successors off one at a time would be as many matches as it counts.
+    Numeral {
+        subject: Value,
+        number: num_bigint::BigUint,
+        equal: Box<Self>,
+        otherwise: Box<Self>,
+    },
+}
+
+impl Decision {
+    fn tests_numerals(&self) -> bool {
+        match self {
+            Self::Body { .. } => false,
+            Self::Numeral { .. } => true,
+            Self::Match { arms, .. } => arms.iter().any(|arm| arm.decision.tests_numerals()),
+            Self::Record { decision, .. } => decision.tests_numerals(),
+            Self::Guard {
+                otherwise, answer, ..
+            } => otherwise.tests_numerals() || answer.tests_numerals(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +186,10 @@ struct DecisionArm {
     fields: Vec<Value>,
     decision: Box<Decision>,
 }
+
+/// The largest numeral a column of naturals is taken apart for rather than
+/// tested against. See [`Lowerer::numeral_column`].
+const PEELED_NUMERALS: u8 = 8;
 
 struct Lowerer<'a> {
     resolved: &'a ResolvedProgram,
@@ -187,6 +213,9 @@ struct Lowerer<'a> {
     /// can point at it. Barb's ids hold until the program is rewritten,
     /// which is after it is validated.
     call_sites: RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
+    /// Whether two naturals are equal, written once where a numeral is
+    /// matched, in the shape Barb recognizes as that comparison.
+    numeral_equals: Option<FnId>,
     output: barb::Program,
 }
 
@@ -212,6 +241,7 @@ impl<'a> Lowerer<'a> {
             widenings: BTreeSet::new(),
             widen_ids: HashMap::new(),
             call_sites: RefCell::default(),
+            numeral_equals: None,
             output: barb::Program::default(),
         };
         lowerer.discover()?;
@@ -297,6 +327,10 @@ impl<'a> Lowerer<'a> {
             }
             self.collect_type(result)?;
             for clause in &function.clauses {
+                // A numeral is tested for, and a test answers a `Bool`.
+                if clause.patterns.iter().any(holds_numeral) {
+                    self.collect_type(&Type::Named(self.prelude.bool_, Vec::new()))?;
+                }
                 if let Some(guard) = &clause.guard {
                     self.collect_expr(guard, result)?;
                 }
@@ -688,6 +722,7 @@ impl<'a> Lowerer<'a> {
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
                 prelude: self.prelude,
+                numeral_equals: self.numeral_equals,
                 answer: &to,
             };
             self.output.define(id, |builder, parameters| {
@@ -758,6 +793,9 @@ impl<'a> Lowerer<'a> {
                 .collect();
             let mut next = u32::try_from(subjects.len()).expect("a sane arity");
             let decision = self.plan(&rows, &subjects, &mut next)?;
+            if decision.tests_numerals() && self.numeral_equals.is_none() {
+                self.numeral_equals = Some(self.define_numeral_equals());
+            }
             let function_id = self.function_ids[&function.key];
             let (_, answer) = function
                 .key
@@ -775,6 +813,7 @@ impl<'a> Lowerer<'a> {
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
                 prelude: self.prelude,
+                numeral_equals: self.numeral_equals,
                 answer,
             };
             self.output.define(function_id, |builder, parameters| {
@@ -809,6 +848,7 @@ impl<'a> Lowerer<'a> {
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
                 prelude: self.prelude,
+                numeral_equals: self.numeral_equals,
                 answer,
             };
             let mut lambda_plans = HashMap::new();
@@ -992,6 +1032,30 @@ impl<'a> Lowerer<'a> {
                 decision: Box::new(self.plan(&specialized, &nested_subjects, next)?),
             });
         }
+        if let Some(number) = self.numeral_column(rows, column, &subject.ty) {
+            let mut equal = Vec::new();
+            let mut otherwise = Vec::new();
+            for row in rows {
+                match &row.patterns[column] {
+                    Pattern::Number { magnitude, .. } if *magnitude == number => {
+                        let mut row = row.clone();
+                        row.patterns[column] = Pattern::Wild;
+                        equal.push(row);
+                    }
+                    Pattern::Number { .. } => otherwise.push(row.clone()),
+                    _ => {
+                        equal.push(row.clone());
+                        otherwise.push(row.clone());
+                    }
+                }
+            }
+            return Ok(Decision::Numeral {
+                subject: subject.value,
+                number,
+                equal: Box::new(self.plan(&equal, subjects, next)?),
+                otherwise: Box::new(self.plan(&otherwise, subjects, next)?),
+            });
+        }
         let constructors = self.constructors_of(&subject.ty)?;
         let mut arms = Vec::with_capacity(constructors.len());
         for (constructor, field_types) in constructors {
@@ -1043,6 +1107,70 @@ impl<'a> Lowerer<'a> {
             owner: subject.ty.clone(),
             arms,
         })
+    }
+
+    /// The numeral a column of naturals is first tested for, where every
+    /// pattern in it is a numeral or takes anything, and some numeral is
+    /// past [`PEELED_NUMERALS`]: then each is one test.
+    ///
+    /// A small numeral is taken apart instead, a successor at a time. That
+    /// is as few matches as tests, and what it says is more: past `0` a
+    /// number is a successor, which is how a definition counting down is
+    /// seen to stop. A column also taking successors apart is taken apart,
+    /// numerals and all, since a test says nothing about what a successor
+    /// holds.
+    fn numeral_column(
+        &self,
+        rows: &[Row],
+        column: usize,
+        ty: &Type,
+    ) -> Option<num_bigint::BigUint> {
+        if *ty != Type::Named(self.prelude.nat, Vec::new())
+            || !self
+                .type_ids
+                .contains_key(&Type::Named(self.prelude.bool_, Vec::new()))
+        {
+            return None;
+        }
+        let mut first = None;
+        let mut largest = num_bigint::BigUint::ZERO;
+        for row in rows {
+            match &row.patterns[column] {
+                Pattern::Number {
+                    magnitude,
+                    negative: false,
+                } => {
+                    first.get_or_insert_with(|| magnitude.clone());
+                    largest = largest.max(magnitude.clone());
+                }
+                Pattern::Wild | Pattern::Bind(_) => {}
+                _ => return None,
+            }
+        }
+        first.filter(|_| largest > num_bigint::BigUint::from(PEELED_NUMERALS))
+    }
+
+    /// Declare and write whether two naturals are equal: nought is nought,
+    /// a successor is one if what they succeed is.
+    fn define_numeral_equals(&mut self) -> FnId {
+        let nat_ty = Type::Named(self.prelude.nat, Vec::new());
+        let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
+        let (nat, bool_) = (self.type_ids[&nat_ty], self.type_ids[&bool_ty]);
+        let yes = self.constructor_ids[&(self.prelude.bool_true, bool_ty.clone())];
+        let no = self.constructor_ids[&(self.prelude.bool_false, bool_ty)];
+        let id = self.output.declare("numeral.equals", &[nat, nat], bool_);
+        self.output.define(id, |b, args| {
+            let other = args[1];
+            b.match_(args[0], nat, |b, _, fields| {
+                let first = fields.first().copied();
+                b.match_(other, nat, |b, _, rest| match (first, rest.first()) {
+                    (None, None) => b.con(yes, &[]),
+                    (Some(a), Some(&c)) => b.call(id, &[a, c]),
+                    _ => b.con(no, &[]),
+                })
+            })
+        });
+        id
     }
 
     fn normalize_pattern(&self, pattern: Pattern, expected: &Type) -> Result<Pattern, LowerError> {
@@ -1118,16 +1246,24 @@ impl<'a> Lowerer<'a> {
             if constructors.len() != 2 {
                 return Err(error("Int must have positive and negative constructors"));
             }
+            // The natural inside is a numeral too, tested where it is taken
+            // apart rather than counted down here.
             if negative && magnitude != num_bigint::BigUint::ZERO {
                 let predecessor = magnitude - 1u8;
                 return Ok(Pattern::Constructor(
                     constructors[1].name,
-                    vec![self.natural_pattern(&predecessor)?],
+                    vec![Pattern::Number {
+                        magnitude: predecessor,
+                        negative: false,
+                    }],
                 ));
             }
             return Ok(Pattern::Constructor(
                 constructors[0].name,
-                vec![self.natural_pattern(&magnitude)?],
+                vec![Pattern::Number {
+                    magnitude,
+                    negative: false,
+                }],
             ));
         }
         Err(error("a numeric pattern must infer as Nat or Int"))
@@ -1208,6 +1344,7 @@ struct EmitContext<'a> {
     widen_ids: &'a HashMap<(Type, Type), FnId>,
     call_sites: &'a RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
     prelude: &'a PreludeIds,
+    numeral_equals: Option<FnId>,
     /// What the function or lambda being emitted answers, which a `?` in
     /// it answers an `Err` early as.
     answer: &'a Type,
@@ -1349,6 +1486,35 @@ fn emit_decision(
                     emit_decision(context, builder, answer, values)
                 }
             })
+        }
+        Decision::Numeral {
+            subject,
+            number,
+            equal,
+            otherwise,
+        } => {
+            let nat_ty = Type::Named(context.prelude.nat, Vec::new());
+            let known = builder
+                .natural(context.type_ids[&nat_ty], number)
+                .expect("Nat has a natural's shape");
+            let known = builder.known(known);
+            let equals = context
+                .numeral_equals
+                .expect("a numeral's test is written before it is read");
+            let test = builder.call(equals, &[values[subject], known]);
+            let bool_ty = Type::Named(context.prelude.bool_, Vec::new());
+            let true_id = context.constructor_ids[&(context.prelude.bool_true, bool_ty.clone())];
+            builder.match_(
+                test,
+                context.type_ids[&bool_ty],
+                |builder, constructor, _| {
+                    if constructor == true_id {
+                        emit_decision(context, builder, equal, values)
+                    } else {
+                        emit_decision(context, builder, otherwise, values)
+                    }
+                },
+            )
         }
     }
 }
@@ -1710,6 +1876,19 @@ fn members(ty: &Type) -> Option<Vec<Type>> {
         Type::Record(fields) => Some(fields.iter().map(|(_, ty)| ty.clone()).collect()),
         Type::Tuple(members) => Some(members.clone()),
         _ => None,
+    }
+}
+
+/// Whether a pattern matches a numeral anywhere in it.
+fn holds_numeral(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Number { .. } => true,
+        Pattern::Constructor(_, inner) | Pattern::Product(inner) => inner.iter().any(holds_numeral),
+        Pattern::List(inner, rest) => {
+            inner.iter().any(holds_numeral) || rest.as_deref().is_some_and(holds_numeral)
+        }
+        Pattern::Record(fields) => fields.iter().any(|(_, inner)| holds_numeral(inner)),
+        Pattern::Wild | Pattern::Bind(_) | Pattern::Range(..) | Pattern::String => false,
     }
 }
 
