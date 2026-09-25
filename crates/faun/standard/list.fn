@@ -5,6 +5,10 @@
 # A lookup that can miss answers a `Result` whose error is a structural
 # tag naming the miss. A tag belongs to no module, so a caller's own
 # failures join it in one row.
+#
+# Every walk down a list is a loop: each calls itself last, building what it
+# answers backwards and turning it round once at the end, so a list is as
+# long as memory allows rather than as deep as a stack goes.
 
 exports {List.*}
 
@@ -18,55 +22,46 @@ List(a) : [Nil Cons(a List(a))].(
   is_empty([_ *_]) -> False
 
   append : List(a) a -> List(a)
-  append([] value) -> [value]
-  append([head *tail] value) -> [head *append(tail value)]
+  append(values value) -> extend(values [value])
 
   extend : List(a) List(a) -> List(a)
-  extend([] right) -> right
-  extend([head *tail] right) -> [head *extend(tail right)]
+  extend(left right) -> reverse_into(reverse_into(left []) right)
 
   prepend : List(a) a -> List(a)
   prepend(values value) -> [value *values]
 
   map : List(a) (a -> b) -> List(b)
-  map([] _) -> []
-  map([head *tail] f) -> [f(head) *map(tail f)]
+  map(values f) -> map_into(values f [])
 
   map2 : List(a) List(b) (a b -> c) -> List(c)
-  map2([head *tail] [other *rest] f) -> [f(head other) *map2(tail rest f)]
-  map2(_ _ _) -> []
+  map2(left right f) -> map2_into(left right f [])
 
   flat_map : List(a) (a -> List(b)) -> List(b)
-  flat_map([] _) -> []
-  flat_map([head *tail] f) -> extend(f(head) flat_map(tail f))
+  flat_map(values f) -> flat_map_into(values f [])
 
   flatten : List(List(a)) -> List(a)
-  flatten([]) -> []
-  flatten([head *tail]) -> extend(head flatten(tail))
+  flatten(lists) -> flatten_into(lists [])
 
   # The lists with `separator` between neighbours and at neither edge.
   join : List(List(a)) List(a) -> List(a)
   join([] _) -> []
-  join([only] _) -> only
-  join([head *tail] separator) -> extend(extend(head separator) join(tail separator))
+  join([first *rest] separator) -> join_into(rest separator reverse_into(first []))
 
   filter : List(a) (a -> Bool) -> List(a)
-  filter([] _) -> []
-  filter([head *tail] keep) if keep(head) -> [head *filter(tail keep)]
-  filter([_ *tail] keep) -> filter(tail keep)
+  filter(values keep) -> filter_into(values keep [])
 
   count : List(a) (a -> Bool) -> Nat
-  count([] _) -> 0
-  count([head *tail] keep) if keep(head) -> count(tail keep) + 1
-  count([_ *tail] keep) -> count(tail keep)
+  count(values keep) -> count_from(values keep 0)
 
   any : List(a) (a -> Bool) -> Bool
   any([] _) -> False
-  any([head *tail] test) -> test(head) | any(tail test)
+  any([head *_] test) if test(head) -> True
+  any([_ *tail] test) -> any(tail test)
 
   all : List(a) (a -> Bool) -> Bool
   all([] _) -> True
-  all([head *tail] test) -> test(head) & all(tail test)
+  all([head *tail] test) if test(head) -> all(tail test)
+  all(_ _) -> False
 
   fold : List(a) b (b a -> b) -> b
   fold([] state _) -> state
@@ -74,23 +69,18 @@ List(a) : [Nil Cons(a List(a))].(
 
   # The fold from the right: `f` takes the element before the state.
   fold_right : List(a) b (a b -> b) -> b
-  fold_right([] state _) -> state
-  fold_right([head *tail] state f) -> f(head fold_right(tail state f))
+  fold_right(values state f) -> fold_back(reverse_into(values []) state f)
 
   # Every state a left fold passes through, without the seed.
   trail : List(a) b (b a -> b) -> List(b)
-  trail([] _ _) -> []
-  trail([head *tail] state f) ->
-    next = f(state head)
-    [next *trail(tail next f)]
+  trail(values state f) -> trail_into(values state f [])
 
   # The same length, and equal elements in order, by the element's own
   # `equals`.
   equals : List(a) List(a) -> Bool where a.equals : a a -> Bool
   equals([] []) -> True
-  equals([] [_ *_]) -> False
-  equals([_ *_] []) -> False
-  equals([x *left] [y *right]) -> x.equals(y) & equals(left right)
+  equals([x *left] [y *right]) if x.equals(y) -> equals(left right)
+  equals(_ _) -> False
 
   # Whether an element equals `wanted`.
   contains : List(a) a -> Bool where a.equals : a a -> Bool
@@ -125,9 +115,7 @@ List(a) : [Nil Cons(a List(a))].(
 
   # The list with the element at `index` replaced by `value`.
   set : List(a) Nat a -> Result(List(a) [OutOfBounds])
-  set([] _ _) -> Err(OutOfBounds)
-  set([_ *tail] 0 value) -> Ok([value *tail])
-  set([head *tail] Succ(index) value) -> set(tail index value).map_ok(|rest| [head *rest])
+  set(values index value) -> set_into(values index value [])
 
   # The elements exchanged at `i` and `j`, each read before either is
   # written, so a list threaded through here is swapped where it lies.
@@ -139,10 +127,7 @@ List(a) : [Nil Cons(a List(a))].(
 
   # `Ok` of every element mapped, where each maps; the first `Err` else.
   try_map : List(a) (a -> Result(b e)) -> Result(List(b) e)
-  try_map([] _) -> Ok([])
-  try_map([head *tail] f) ->
-    converted = f(head)?
-    Ok([converted *try_map(tail f)?])
+  try_map(values f) -> try_map_into(values f [])
 
   find : List(a) (a -> Bool) -> Result(a [NotFound])
   find([] _) -> Err(NotFound)
@@ -150,13 +135,10 @@ List(a) : [Nil Cons(a List(a))].(
   find([_ *tail] test) -> find(tail test)
 
   find_index : List(a) (a -> Bool) -> Result(Nat [NotFound])
-  find_index([] _) -> Err(NotFound)
-  find_index([head *_] test) if test(head) -> Ok(0)
-  find_index([_ *tail] test) -> find_index(tail test).map_ok(|index| index + 1)
+  find_index(values test) -> find_index_from(values test 0)
 
   take : List(a) Nat -> List(a)
-  take([head *tail] Succ(count)) -> [head *take(tail count)]
-  take(_ _) -> []
+  take(values count) -> take_into(values count [])
 
   drop : List(a) Nat -> List(a)
   drop(values 0) -> values
@@ -164,8 +146,7 @@ List(a) : [Nil Cons(a List(a))].(
   drop([_ *tail] Succ(count)) -> drop(tail count)
 
   take_while : List(a) (a -> Bool) -> List(a)
-  take_while([head *tail] keep) if keep(head) -> [head *take_while(tail keep)]
-  take_while(_ _) -> []
+  take_while(values keep) -> take_while_into(values keep [])
 
   drop_while : List(a) (a -> Bool) -> List(a)
   drop_while([head *tail] skip) if skip(head) -> drop_while(tail skip)
@@ -179,8 +160,7 @@ List(a) : [Nil Cons(a List(a))].(
 
   # `count` copies of `value`, written `List.repeat(value count)`.
   repeat : a Nat -> List(a)
-  repeat(_ 0) -> []
-  repeat(value Succ(count)) -> [value *repeat(value count)]
+  repeat(value count) -> repeat_onto(value count [])
 )
 
 reverse_into : List(a) List(a) -> List(a)
@@ -195,3 +175,75 @@ put(values index value) -> List.set(values index value).ok_or(values)
 range_into : Nat List(Nat) -> List(Nat)
 range_into(0 built) -> built
 range_into(Succ(left) built) -> range_into(left [left *built])
+
+# The loops the walks above are, each building its answer backwards onto
+# `built` and turning it round at the end.
+
+map_into : List(a) (a -> b) List(b) -> List(b)
+map_into([] _ built) -> reverse_into(built [])
+map_into([head *tail] f built) -> map_into(tail f [f(head) *built])
+
+map2_into : List(a) List(b) (a b -> c) List(c) -> List(c)
+map2_into([head *tail] [other *rest] f built) -> map2_into(tail rest f [f(head other) *built])
+map2_into(_ _ _ built) -> reverse_into(built [])
+
+flat_map_into : List(a) (a -> List(b)) List(b) -> List(b)
+flat_map_into([] _ built) -> reverse_into(built [])
+flat_map_into([head *tail] f built) -> flat_map_into(tail f reverse_into(f(head) built))
+
+flatten_into : List(List(a)) List(a) -> List(a)
+flatten_into([] built) -> reverse_into(built [])
+flatten_into([head *tail] built) -> flatten_into(tail reverse_into(head built))
+
+join_into : List(List(a)) List(a) List(a) -> List(a)
+join_into([] _ built) -> reverse_into(built [])
+join_into([head *tail] separator built) ->
+  join_into(tail separator reverse_into(head reverse_into(separator built)))
+
+filter_into : List(a) (a -> Bool) List(a) -> List(a)
+filter_into([] _ built) -> reverse_into(built [])
+filter_into([head *tail] keep built) if keep(head) -> filter_into(tail keep [head *built])
+filter_into([_ *tail] keep built) -> filter_into(tail keep built)
+
+count_from : List(a) (a -> Bool) Nat -> Nat
+count_from([] _ counted) -> counted
+count_from([head *tail] keep counted) if keep(head) -> count_from(tail keep counted + 1)
+count_from([_ *tail] keep counted) -> count_from(tail keep counted)
+
+fold_back : List(a) b (a b -> b) -> b
+fold_back([] state _) -> state
+fold_back([head *tail] state f) -> fold_back(tail f(head state) f)
+
+trail_into : List(a) b (b a -> b) List(b) -> List(b)
+trail_into([] _ _ built) -> reverse_into(built [])
+trail_into([head *tail] state f built) ->
+  next = f(state head)
+  trail_into(tail next f [next *built])
+
+set_into : List(a) Nat a List(a) -> Result(List(a) [OutOfBounds])
+set_into([] _ _ _) -> Err(OutOfBounds)
+set_into([_ *tail] 0 value built) -> Ok(reverse_into(built [value *tail]))
+set_into([head *tail] Succ(index) value built) -> set_into(tail index value [head *built])
+
+try_map_into : List(a) (a -> Result(b e)) List(b) -> Result(List(b) e)
+try_map_into([] _ built) -> Ok(reverse_into(built []))
+try_map_into([head *tail] f built) ->
+  converted = f(head)?
+  try_map_into(tail f [converted *built])
+
+find_index_from : List(a) (a -> Bool) Nat -> Result(Nat [NotFound])
+find_index_from([] _ _) -> Err(NotFound)
+find_index_from([head *_] test at) if test(head) -> Ok(at)
+find_index_from([_ *tail] test at) -> find_index_from(tail test at + 1)
+
+take_into : List(a) Nat List(a) -> List(a)
+take_into([head *tail] Succ(count) built) -> take_into(tail count [head *built])
+take_into(_ _ built) -> reverse_into(built [])
+
+take_while_into : List(a) (a -> Bool) List(a) -> List(a)
+take_while_into([head *tail] keep built) if keep(head) -> take_while_into(tail keep [head *built])
+take_while_into(_ _ built) -> reverse_into(built [])
+
+repeat_onto : a Nat List(a) -> List(a)
+repeat_onto(_ 0 built) -> built
+repeat_onto(value Succ(count) built) -> repeat_onto(value count [value *built])

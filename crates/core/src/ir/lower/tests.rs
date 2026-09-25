@@ -95,15 +95,19 @@ fn payload_sums_are_cells_holding_their_products_flat() {
         let some = b.con(some, &[pair]);
         b.call(value, &[some])
     });
+    let none = source.ctor_at(maybe, 0);
     let main = source.declare("main", &[], nat);
     source.define(main, |b, _| {
         b.call(run, &[]);
+        // `value` is handed both, so which one it is is asked.
+        let none = b.con(none, &[]);
+        b.call(value, &[none]);
         b.known(zero)
     });
     source.set_entry(main);
 
     let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
-    // `Some` is the only object: its pair is laid inline as two fields, and
+    // `Some`'s pair is laid inline as two fields, and
     // nothing projects a pair back out as a cell of its own.
     let built: Vec<_> = machine
         .ops
@@ -113,7 +117,8 @@ fn payload_sums_are_cells_holding_their_products_flat() {
             _ => None,
         })
         .collect();
-    assert_eq!(built, [2], "{}", machine.render());
+    // `None` is built too, holding nothing.
+    assert_eq!(built, [2, 0], "{}", machine.render());
     assert!(
         machine
             .ops

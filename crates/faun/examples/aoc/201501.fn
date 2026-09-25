@@ -1,33 +1,27 @@
 # Advent of Code 2015, day 1: Not Quite Lisp.
-# Input is read as bytes; `(` raises the floor and `)` lowers it.
+# Input is inspected as UTF-8 bytes; `(` raises the floor and `)` lowers it.
 
 import std.host {Host}
 
 step : U8 -> Int
-step(40) -> 1
-step(41) -> -1
+step('(') -> 1
+step(')') -> -1
 step(_) -> 0
 
+parse : Str -> List(Int)
+parse(input) -> input.to_utf8().map(step)
+
 part1 : Str -> Int
-part1(input) -> input.to_utf8().fold(0 |floor byte| floor + step(byte))
+part1(input) -> parse(input).sum()
 
-# The position of the first step into the basement, counting from one;
-# nought where Santa never goes there.
 part2 : Str -> Nat
-part2(input) -> basement(input.to_utf8() 0 1)
+part2(input) -> parse(input)
+  .trail(0 Int.add)
+  .find_index(|floor| floor == -1)
+  .map_ok(|index| index + 1)
+  .ok_or(0)
 
-basement : List(U8) Int Nat -> Nat
-basement([] _ _) -> 0
-basement([byte *rest] floor position) ->
-  next = floor + step(byte)
-  entered(next == -1 rest next position)
+app : {stdin: Str} -> Result(Str Str)
+app(input) -> Ok("part1: ${part1(input.stdin)} part2: ${part2(input.stdin)}\n")
 
-entered : Bool List(U8) Int Nat -> Nat
-entered(True _ _ position) -> position
-entered(False rest floor position) -> basement(rest floor position + 1)
-
-app : {stdin: Str} -> Str
-app({stdin}) -> "part1: ${part1(stdin)} part2: ${part2(stdin)}\n"
-
-main! : Host -> []
-main!(host) -> host.run_text!(app)
+main!(host) -> host.run_result_text!(app)

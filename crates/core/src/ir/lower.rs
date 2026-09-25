@@ -962,7 +962,11 @@ fn reachable(
         match barb::type_shape(program, program.ctor(arm.ctor).owner) {
             barb::TypeShape::Natural { empty, .. } if arm.ctor == empty => bounds.low == 0,
             barb::TypeShape::Natural { .. } => bounds.high != Some(0),
-            barb::TypeShape::Enumeration => {
+            // What the tier above found a value's constructor can be, the
+            // same for a sum whose constructors carry something as for one
+            // whose do not: an arm for one it cannot be is never taken, and
+            // what that arm would work out, nothing there knows.
+            barb::TypeShape::Enumeration | barb::TypeShape::Sum => {
                 let tag = u64::from(program.tag(arm.ctor));
                 tag >= bounds.low && bounds.high.is_none_or(|high| tag <= high)
             }
@@ -971,8 +975,7 @@ fn reachable(
             | barb::TypeShape::Wrapper { .. }
             | barb::TypeShape::Product { .. }
             | barb::TypeShape::Sequence { .. }
-            | barb::TypeShape::Spine { .. }
-            | barb::TypeShape::Sum => true,
+            | barb::TypeShape::Spine { .. } => true,
         }
     })
 }
@@ -1753,6 +1756,15 @@ impl Lowering<'_> {
         defined
     }
 
+    /// Whether `expr` is a call of the function being lowered as a loop, to
+    /// itself in tail position, which goes round again.
+    fn goes_round(&self, expr: barb::ExprId) -> bool {
+        self.looping
+            .borrow()
+            .as_ref()
+            .is_some_and(|(_, tails)| tails.contains(&expr))
+    }
+
     /// The calls of `id` to itself in tail position: a body's tail, and
     /// the tails of each arm of a match there.
     fn tail_calls(&self, id: barb::FnId, body: barb::Body) -> Vec<barb::ExprId> {
@@ -2110,12 +2122,7 @@ impl Lowering<'_> {
                     let wanted = b.takes(callee)[at];
                     *arg = met(b, *arg, wanted);
                 }
-                let again = self
-                    .looping
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|(looping, tails)| *looping == function && tails.contains(&expr));
-                if again {
+                if self.goes_round(expr) {
                     b.continue_(&args);
                     return Answer::Never;
                 }
@@ -3147,6 +3154,9 @@ impl Lowering<'_> {
                 self.answer(ty)
                     .map(|()| self.carried(ty, self.facts.held(expr)))
             }
+            // A call of itself in tail position goes round again rather
+            // than answering here.
+            barb::Expr::Call(..) if self.goes_round(expr) => Answer::Never,
             barb::Expr::Call(function, _) => {
                 let ty = self.barb.function(function).result;
                 self.answer(ty)
