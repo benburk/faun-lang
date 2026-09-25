@@ -27,10 +27,10 @@ mod barb_lower;
 pub mod blessed;
 mod callbacks;
 pub mod check;
-mod defunctionalize;
 pub mod diagnostic;
 mod exhaustive;
 mod expectations;
+mod first_order;
 mod grammar;
 pub mod hir;
 pub mod host;
@@ -136,7 +136,7 @@ fn lower_resolved(
             Some((module, span)) => checked.resolved.diagnostic(module, span, e.message),
             None => Diagnostic::new(e.message),
         })?;
-    let first_order = defunctionalize::defunctionalize(specialized);
+    let first_order = first_order::first_order(specialized);
     barb_lower::lower_package_to_barb(&checked, first_order, &target.routines())
 }
 

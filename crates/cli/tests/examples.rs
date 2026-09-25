@@ -154,3 +154,42 @@ fn the_readme_programs_run() {
         );
     }
 }
+
+/// A runner handed the arguments: what the program answers of them
+/// printed, or what it fails with reported. The reference interpreter holds
+/// no arguments to read, so this runs the program on the machine.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn argument_runners_hand_the_program_its_arguments() {
+    let run = |package: &support::Package, args: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+            .arg("run")
+            .arg(package.entry())
+            .arg("--")
+            .args(args)
+            .output()
+            .unwrap();
+        (
+            output.status.code(),
+            String::from_utf8(output.stdout).unwrap(),
+        )
+    };
+    let counting = support::Package::new(
+        "run-args",
+        "count : {args: List(Str)} -> Nat
+         count({args}) -> args.len()
+
+         main!(host) -> host.run_args!(count)",
+    );
+    assert_eq!(run(&counting, &["a", "b"]), (Some(0), "3".to_owned()));
+
+    let second = support::Package::new(
+        "run-result-args",
+        "second : {args: List(Str)} -> Result(Str [OutOfBounds])
+         second({args}) -> args.get(1)
+
+         main!(host) -> host.run_result_args!(second)",
+    );
+    assert_eq!(run(&second, &["hello"]), (Some(0), "hello".to_owned()));
+    assert_eq!(run(&second, &[]), (Some(1), String::new()));
+}

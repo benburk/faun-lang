@@ -1,7 +1,8 @@
 # Primary frontend standard library
 
 `standard.fn` is the bootstrap package root. It exports `Bool`, `Order`, `Nat`,
-`Int`, `U8`, `U16`, `U32`, `U64`, `List`, `Result`, and `Str` from sibling modules.
+`Int`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`, `List`, `Result`, and `Str` from
+sibling modules.
 
 A numeral takes its type from its position, as in Ori, and may be only a
 `Nat`, `Int`, `U8`, `U16`, `U32` or `U64`; nothing else is made numeric by the
@@ -10,6 +11,25 @@ private `numerals_below` bounds what may be written: `300` is not a `U8`,
 though `U8.of_nat(300)` is 44. A numeral nothing types is a `Nat`, or an `Int`
 when it is negated. The words are rings: they wrap by definition, and `sub`
 is the ring's, not monus.
+
+A numeral with a point, `1.5` or `1.0e-12`, is a float's, and only a float's:
+`F32` or `F64` as its position decides, and `F64` where nothing does, built
+through the float's `of_decimal(digits scale)`, `digits / 10^scale`, and
+negated through its `neg`. A numeral without one is never a float, so `3` is
+not an `F64`; `3.0` is.
+
+`F32` and `F64` are Ori's IEEE 754 binary32 and binary64 under `float/`,
+ported whole: one core in `format.fn` that takes its format as a record, over
+`U32` and `U64` patterns, computing each result exactly on naturals and
+rounding it once, to nearest with ties to even. Every operation is total: an
+invalid one answers the one NaN, and overflow an infinity. There are the
+basic operations and `fma`, `sqrt`, the roundings to integers, conversions,
+`to_str` and `from_str` that round-trip, `to_fixed`, `to_exponent` and
+`to_precision`. `cmp` is the standard's total order, and `equals` follows it:
+a NaN equals itself and `-0.0` is not `0.0`; `partial_cmp` and
+`numeric_equals` are the hardware's. Ori's contract for them, rule by rule,
+is `examples/floats/`. They are software, and slow to build: a program of
+many `F64` operations takes the release compiler seconds.
 
 `Nat.from_str` and `Int.from_str` read decimal text, `Err(Malformed)` where it
 is not one: digits only, and for an `Int` a leading `-`. `Nat`, `Int` and `U8`
@@ -215,6 +235,26 @@ does. A recursive call that wraps the callback it was handed in a new lambda
 each time round is refused, since it would need a definition for every
 round; recurse on data that says what to call instead.
 
+## Packages
+
+A package is its root module's directory and every module it imports from
+there. Its root may name the packages it depends on in its header, each a
+module base relative to the header's file, as Ori's `app {}` and `lib {}` do:
+
+```
+package {
+  md5: "../libraries/md5/src/md5"
+}
+
+import md5 {md5_hash}
+```
+
+Any module of the package may then import `md5`, which is that package's
+root module; its inner modules are its own, and importing one is refused. A
+dependency's modules resolve their imports from its root, with its own
+header's dependencies. Only a package's root module has a header. Whether a
+package is an application is whether its entry defines `main!`.
+
 ## Expectations
 
 `expect` followed by a body is a claim a module makes of its definitions:
@@ -235,18 +275,19 @@ An expectation is checked as any definition is, typed, exhaustive and seen to
 stop, whenever its package is. No program can name one. `faun test PATH`
 builds the package at `PATH` with an entry of its own in place of any `main!`,
 which is checked all the same: the entry asks every expectation of every module in the package, those of the
-standard library aside, and prints the number of each that does not hold.
+standard library and of packages it depends on aside, and prints the number
+of each that does not hold.
 The standard library is a package too, and holds expectations of its own:
 `faun test crates/faun/standard/standard.fn` asks them.
 `faun test` runs that for the machine it is on and says where each failing
 expectation was written; what the compiler settled while compiling, it
 settled before the program ran.
 
-`Host` also has Ori's runners, which finish the program for it: `run!` and
-`run_text!` run a pure function of nothing or of
-`{stdin: Str}` and print what it answers; `run_result!` and
-`run_result_text!` do the same for one answering a `Result`, reporting an
-error on standard error as `error: ...`. Each finishes with status nought, or
+`Host` also has Ori's runners, which finish the program for it: `run!`,
+`run_args!` and `run_text!` run a pure function of nothing, of
+`{args: List(Str)}` or of `{stdin: Str}` and print what it answers;
+`run_result!`, `run_result_args!` and `run_result_text!` do the same for one
+answering a `Result`, reporting an error on standard error as `error: ...`. Each finishes with status nought, or
 one where something went wrong, so `main!(host) -> host.run_text!(app)` is a
 whole program.
 

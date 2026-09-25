@@ -1,0 +1,304 @@
+# IEEE 754 binary64: a nominal `U64` holding the pattern, over the core in
+# `format.fn`, which takes this format as a record. The contract, the one
+# NaN, and the rounding are the core's; this file is the word, its seams to
+# the core. The contract is demonstrated at this width in
+# `examples/floats/f64.fn`.
+
+import float.format {
+  add_unpacked binary32 binary64 bits div_unpacked even exponent fixed
+  fma_unpacked from_decimal integer is_eq mul_unpacked observe parse_sign
+  precision rank round_pack rounded Rounding.* sqrt_unpacked text unpack
+  Unpacked.*
+}
+
+exports {F64}
+
+F64 : U64.(
+  # The value whose bit pattern is `word`; a NaN pattern of any sign or
+  # payload is the NaN.
+  of_bits : U64 -> F64
+  of_bits(word) -> F64(word)
+
+  # The bit pattern of `x`, with the NaN read as `0x7ff8000000000000` whatever
+  # pattern it arrived as: a codec that writes floats as bits gets every
+  # number back exactly and every NaN back canonical.
+  to_bits : F64 -> U64
+  to_bits(F64(word)) -> U64.of_nat(observe(binary64() U64.to_nat(word)))
+
+  # `-x`: the sign bit flipped. The standard's sign operations act on the
+  # bit alone, whatever the pattern: a zero changes sign, and so does a NaN,
+  # which is the one way a NaN other than the canonical one arises from an
+  # operation.
+  neg : F64 -> F64
+  neg(F64(word)) -> F64(word.xor(0x8000000000000000))
+
+  # `|x|`: the sign bit cleared, on any pattern.
+  abs : F64 -> F64
+  abs(F64(word)) -> F64(word.and(0x7fffffffffffffff))
+
+  # `x` with the sign bit of `y`, on any patterns.
+  copy_sign : F64 F64 -> F64
+  copy_sign(F64(x) F64(y)) -> F64(x.and(0x7fffffffffffffff).or(y.and(0x8000000000000000)))
+
+  # The NaN. Every invalid operation answers it, and every NaN pattern reads
+  # as it.
+  nan : F64
+  nan() -> F64(0x7ff8000000000000)
+
+  # Positive infinity; `infinity().neg()` is the negative one.
+  infinity : F64
+  infinity() -> F64(0x7ff0000000000000)
+
+  # Positive zero. As a nullary method it satisfies a `where a.zero : a`
+  # bound, so a list of floats sums.
+  zero : F64
+  zero() -> F64(0)
+
+  # The largest finite value, `1.7976931348623157e308`.
+  largest : F64
+  largest() -> F64(0x7fefffffffffffff)
+
+  # The smallest positive normal value, `2^-1022`.
+  smallest_normal : F64
+  smallest_normal() -> F64(0x0010000000000000)
+
+  # The smallest positive value, the subnormal `2^-1074`.
+  smallest_subnormal : F64
+  smallest_subnormal() -> F64(0x0000000000000001)
+
+  # The gap between one and the next value up, `2^-52`.
+  epsilon : F64
+  epsilon() -> F64(0x3cb0000000000000)
+
+  # The nearest value to π, `3.141592653589793`.
+  pi : F64
+  pi() -> F64(0x400921fb54442d18)
+
+  # The nearest value to `n`, correctly rounded; past the largest, infinity.
+  # A conversion only: a plain numeral is never a float, so `3` in a float
+  # position is refused and `3.0` is how a float is written (numbers.md).
+  of_nat : Nat -> F64
+  of_nat(n) -> wrap64(round_pack(binary64() False n 3225))
+
+  # A word's value, exactly when it fits the precision and otherwise
+  # correctly rounded.
+  of_u8 : U8 -> F64
+  of_u8(w) -> of_nat(U8.to_nat(w))
+
+  of_u16 : U16 -> F64
+  of_u16(w) -> of_nat(U16.to_nat(w))
+
+  of_u32 : U32 -> F64
+  of_u32(w) -> of_nat(U32.to_nat(w))
+
+  of_u64 : U64 -> F64
+  of_u64(w) -> of_nat(U64.to_nat(w))
+
+  # The nearest value to `i`, correctly rounded.
+  of_int : Int -> F64
+  of_int(Pos(n)) -> of_nat(n)
+  of_int(NegSucc(n)) -> neg(of_nat(n + 1))
+
+  # `n` when it converts exactly, and otherwise `Inexact`: the reading that
+  # refuses to round, as the words' `from_nat` refuses to wrap.
+  from_nat : Nat -> Result(F64 [Inexact])
+  from_nat(n) -> exact_int64(of_nat(n) Int.of_nat(n))
+
+  from_int : Int -> Result(F64 [Inexact])
+  from_int(i) -> exact_int64(of_int(i) i)
+
+
+  # The integer part of `x`, toward zero, if it has one: `Ok(i)` for a finite
+  # `x`, exactly, and `Err(NotFinite)` for a NaN or an infinity. A noun rather
+  # than `to_int`, because `to_` promises a total projection and none exists
+  # here; and not `Int.from_f64`, because only this module can read the
+  # fields it is computed from.
+  integer_part : F64 -> Result(Int [NotFinite])
+  integer_part(x) -> integer(binary64() unpack64(x))
+
+  # `x` rounded to an integer value, toward zero.
+  trunc : F64 -> F64
+  trunc(x) -> integral64(x Toward)
+
+  # `x` rounded to an integer value, toward negative infinity.
+  floor : F64 -> F64
+  floor(x) -> integral64(x Down)
+
+  # `x` rounded to an integer value, toward positive infinity.
+  ceil : F64 -> F64
+  ceil(x) -> integral64(x Up)
+
+  # `x` rounded to the nearest integer value, ties away from zero.
+  round : F64 -> F64
+  round(x) -> integral64(x Away)
+
+  # `x` rounded to the nearest integer value, ties to even: the standard's
+  # roundToIntegralTiesToEven, and the rounding everything else here uses.
+  round_even : F64 -> F64
+  round_even(x) -> integral64(x Even)
+
+  # `digits / 10^scale`, correctly rounded: the decimal numeral protocol's
+  # builder, so `1.5` in an `F64` position is `of_decimal(15 1)`. The
+  # numeral form of `from_str`: every float numeral carries a point, so `3`
+  # never arrives here and `3.0` does.
+  of_decimal : Nat Nat -> F64
+  of_decimal(digits scale) -> wrap64(from_decimal(binary64() False digits scale False 0))
+
+  # The shortest decimal that reads back as `x`: the fewest digits whose
+  # nearest binary64 is `x`, and among those the closest to it. The text is
+  # always a float literal: `1.0`, `0.1`, `-0.0`, `NaN`, `Infinity`, and the
+  # exponent form `1.5e21` or `1.0e-7` below `0.0001` and from `1.0e16`.
+  to_str : F64 -> Str
+  to_str(x) -> Str.from_ascii(text(binary64() unpack64(x))).ok_or("")
+
+  # `x` with `places` digits after the point: the exact value rounded once,
+  # to nearest with ties to even, as `%.*f` prints it. `to_fixed(2)` writes
+  # `1234.5678` as `1234.57`, `-0.001` as `-0.00`, and a large value in
+  # full. No point follows the integer part when `places` is zero.
+  to_fixed : F64 Nat -> Str
+  to_fixed(x places) -> Str.from_ascii(fixed(binary64() unpack64(x) places)).ok_or("")
+
+  # `x` in scientific notation with `places` digits after the point:
+  # `to_exponent(2)` writes `1234.5678` as `1.23e3`. The exponent is spelled
+  # as `to_str` spells it.
+  to_exponent : F64 Nat -> Str
+  to_exponent(x places) -> Str.from_ascii(exponent(binary64() unpack64(x) places)).ok_or("")
+
+  # `x` at `count` significant digits, at least one, keeping trailing
+  # zeros: `to_precision(3)` writes `0.5` as `0.500`, `1234.5678` as
+  # `1.23e3`, and `0.00012345` as `0.00012`. Plain from `0.0001` up to
+  # `10^count`, and in scientific notation outside that.
+  to_precision : F64 Nat -> Str
+  to_precision(x count) -> Str.from_ascii(precision(binary64() unpack64(x) count)).ok_or("")
+
+  # The nearest binary64 to a decimal in the notation `to_str` writes, also
+  # with `E`, a `+` in the exponent, and digits on one side of the point
+  # only. Correctly rounded, so every text `to_str` writes reads back as the
+  # value it came from.
+  from_str : Str -> Result(F64 [Malformed])
+  from_str("NaN") -> Ok(nan())
+  from_str("Infinity") -> Ok(infinity())
+  from_str("-Infinity") -> Ok(neg(infinity()))
+  from_str(s) -> wrap64_result(parse_sign(binary64() s.to_utf8()))
+
+  # `x + y`, correctly rounded.
+  add : F64 F64 -> F64
+  add(x y) -> wrap64(add_unpacked(binary64() unpack64(x) unpack64(y)))
+
+  # `x - y`, which the standard defines as `x + (-y)`, zeros and NaN included.
+  sub : F64 F64 -> F64
+  sub(x y) -> add(x neg(y))
+
+  # `x * y`, correctly rounded.
+  mul : F64 F64 -> F64
+  mul(x y) -> wrap64(mul_unpacked(binary64() unpack64(x) unpack64(y)))
+
+  # `x * y + z` with one rounding of the exact result.
+  fma : F64 F64 F64 -> F64
+  fma(x y z) -> wrap64(fma_unpacked(binary64() unpack64(x) unpack64(y) unpack64(z)))
+
+  # `x / y`, correctly rounded.
+  div : F64 F64 -> F64
+  div(x y) -> wrap64(div_unpacked(binary64() unpack64(x) unpack64(y)))
+
+  # The square root of `x`, correctly rounded.
+  sqrt : F64 -> F64
+  sqrt(x) -> wrap64(sqrt_unpacked(binary64() unpack64(x)))
+
+  # The total order of IEEE 754 clause 5.10 over values with one NaN: `-Inf`,
+  # the negatives by magnitude, `-0`, `+0`, the positives, `+Inf`, NaN. Every
+  # value has one place, so floats sort and key sets and maps, and the
+  # ordering operators derive from it. It parts from the hardware comparison
+  # only where that one is partial: `-0 < +0` here, and the NaN sits at the
+  # end rather than beside nothing. `partial_cmp` is the hardware's.
+  cmp : F64 F64 -> Order
+  cmp(F64(a) F64(b)) ->
+    Nat.cmp(rank(binary64() U64.to_nat(a)) rank(binary64() U64.to_nat(b)))
+
+  # Equality is `cmp`'s, and so is identity of values. `-0` and `+0`
+  # differ; the NaN equals itself; `numeric_equals` is the hardware's
+  # equality.
+  equals : F64 F64 -> Bool
+  equals(a b) -> cmp(a b).eq()
+
+  # The IEEE comparison: `Err(Unordered)` when either is NaN, `Ok(Eq)` for
+  # the two zeros, and otherwise the total order, with which it agrees on
+  # every remaining pair.
+  partial_cmp : F64 F64 -> Result(Order [Unordered])
+  partial_cmp(x y) if is_nan(x) | is_nan(y) -> Err(Unordered)
+  partial_cmp(x y) if is_zero(x) & is_zero(y) -> Ok(Eq)
+  partial_cmp(x y) -> Ok(cmp(x y))
+
+  # The IEEE equality: the zeros are equal and a NaN equals nothing.
+  numeric_equals : F64 F64 -> Bool
+  numeric_equals(x y) -> is_eq(partial_cmp(x y))
+
+  # The smaller of `a` and `b` in the total order.
+  min : F64 F64 -> F64
+  min(a b) -> (a <= b).select(a b)
+
+  # The larger of `a` and `b` in the total order.
+  max : F64 F64 -> F64
+  max(a b) -> (a <= b).select(b a)
+
+  # Whether the sign bit is set: true of `-0`, never of the NaN.
+  sign_bit : F64 -> Bool
+  sign_bit(F64(word)) -> observe(binary64() U64.to_nat(word)) >= 0x8000000000000000
+
+  is_nan : F64 -> Bool
+  is_nan(x) -> magnitude64(x) > 0x7ff0000000000000
+
+  is_infinite : F64 -> Bool
+  is_infinite(x) -> magnitude64(x) == 0x7ff0000000000000
+
+  is_finite : F64 -> Bool
+  is_finite(x) -> magnitude64(x) < 0x7ff0000000000000
+
+  is_zero : F64 -> Bool
+  is_zero(x) -> magnitude64(x) == 0
+
+  # Whether `x` is finite, nonzero, and below the smallest normal.
+  is_subnormal : F64 -> Bool
+  is_subnormal(x) -> magnitude64(x) > 0 & magnitude64(x) < 0x10000000000000
+
+)
+
+# The binary64 wrapper's seams: a pattern from the core becomes a word, and
+# a word's pattern goes to the core.
+wrap64 : Nat -> F64
+wrap64(pattern) -> F64(U64.of_nat(pattern))
+
+wrap64_result : Result(Nat [Malformed]) -> Result(F64 [Malformed])
+wrap64_result(Ok(pattern)) -> Ok(wrap64(pattern))
+wrap64_result(Err(Malformed)) -> Err(Malformed)
+
+unpack64 : F64 -> Unpacked
+unpack64(F64(word)) -> unpack(binary64() U64.to_nat(word))
+
+integral64 : F64 Rounding -> F64
+integral64(x rule) -> rounded64(unpack64(x) rule x)
+
+rounded64 : Unpacked Rounding F64 -> F64
+rounded64(Finite(sign mantissa field) rule _) if field < 1075 ->
+  wrap64(rounded(binary64() sign mantissa field rule))
+rounded64(_ _ x) -> x
+
+# `x` when it is exactly `i`; otherwise `Err(Inexact)`.
+exact_int64 : F64 Int -> Result(F64 [Inexact])
+exact_int64(x i) if F64.integer_part(x) == Ok(i) -> Ok(x)
+exact_int64(_ _) -> Err(Inexact)
+
+# The pattern with the sign bit cleared, as a natural: the classification
+# of a value is a comparison of this against the exponent field's limits,
+# which no NaN's sign or payload can move.
+magnitude64 : F64 -> Nat
+magnitude64(F64(w)) -> U64.to_nat(w) % 0x8000000000000000
+
+f64 : U64 -> F64
+f64(bits) -> F64(bits)
+
+is_unordered : Result(Order [Unordered]) -> Bool
+is_unordered(Err(Unordered)) -> True
+is_unordered(_) -> False
+
+

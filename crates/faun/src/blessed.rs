@@ -57,6 +57,19 @@ pub struct PreludeIds {
     pub result_err: Symbol,
     /// The fixed-width words a numeral may be, each built with its `of_nat`.
     pub words: Vec<Word>,
+    /// The floats a decimal numeral may be, each built with its
+    /// `of_decimal`, the first the one nothing else decides.
+    pub floats: Vec<Float>,
+}
+
+/// A prelude float a decimal numeral may be: the type, how `digits /
+/// 10^scale` becomes one, and how it is negated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Float {
+    pub ty: Symbol,
+    pub name: String,
+    pub of_decimal: Symbol,
+    pub neg: Symbol,
 }
 
 /// A prelude word a numeral may be: the type, how a natural becomes one,
@@ -111,6 +124,18 @@ impl PreludeIds {
             .into_iter()
             .filter_map(|name| word(program, name))
             .collect();
+        let floats = ["F64", "F32"]
+            .into_iter()
+            .filter_map(|name| {
+                let binding = binding(program, name).ok()?;
+                Some(Float {
+                    ty: binding.canonical,
+                    name: name.to_owned(),
+                    of_decimal: method(program, &binding, name, "of_decimal").ok()?,
+                    neg: method(program, &binding, name, "neg").ok()?,
+                })
+            })
+            .collect();
         Ok(Self {
             bool_: bool_.canonical,
             nat: nat.canonical,
@@ -144,6 +169,7 @@ impl PreludeIds {
             result_ok: constructor(program, &result, "Result", "Ok")?,
             result_err: constructor(program, &result, "Result", "Err")?,
             words,
+            floats,
         })
     }
 }
@@ -163,6 +189,25 @@ pub enum LiteralExpr {
     Natural(BigUint),
     Construct(Symbol, Vec<Self>),
     Call(Symbol, Vec<Self>),
+}
+
+/// A decimal numeral, `digits / 10^scale`, as the float context selected:
+/// its `of_decimal`, negated through its `neg` where it is written with a
+/// `-`.
+#[must_use]
+pub fn decimal(digits: BigUint, scale: u32, negative: bool, float: &Float) -> LiteralExpr {
+    let value = LiteralExpr::Call(
+        float.of_decimal,
+        vec![
+            LiteralExpr::Natural(digits),
+            LiteralExpr::Natural(BigUint::from(scale)),
+        ],
+    );
+    if negative {
+        LiteralExpr::Call(float.neg, vec![value])
+    } else {
+        value
+    }
 }
 
 /// Elaborate a numeral after context has selected `Nat` or `Int`.

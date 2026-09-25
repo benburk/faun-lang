@@ -2,8 +2,8 @@
 //!
 //! Barb has no type variables. This pass follows direct calls from one concrete
 //! entry signature and clones each reachable global at every concrete function
-//! type used by the program. Function values remain explicit for the separate
-//! defunctionalizing lowering pass.
+//! type used by the program. Function values remain explicit until
+//! [`crate::callbacks`] makes each into the definition it is handed to.
 
 #![allow(clippy::too_many_lines)]
 
@@ -1140,7 +1140,9 @@ impl<'a> Specializer<'a> {
             {
                 return self.interpolated(module, expression.span, parts, &ty, substitution);
             }
-            h::ExprKind::Number(_) => return self.numeral(module, expression.span, &ty),
+            h::ExprKind::Number(_) | h::ExprKind::Decimal(..) => {
+                return self.numeral(module, expression.span, &ty);
+            }
             h::ExprKind::String(_) => {
                 let literal = self.literal_site(module, expression.span)?;
                 return self.literal(module, expression.span, &literal, &ty);
@@ -1269,7 +1271,12 @@ impl<'a> Specializer<'a> {
             h::ExprKind::Try(value) => {
                 ExprKind::Try(Box::new(self.expr(module, value, substitution)?))
             }
-            h::ExprKind::Unary(_, value) if matches!(value.kind, h::ExprKind::Number(_)) => {
+            h::ExprKind::Unary(_, value)
+                if matches!(
+                    value.kind,
+                    h::ExprKind::Number(_) | h::ExprKind::Decimal(..)
+                ) =>
+            {
                 return self.numeral(module, expression.span, &ty);
             }
             h::ExprKind::Unary(_, value) => {
@@ -1544,6 +1551,18 @@ impl<'a> Specializer<'a> {
             .get(&(module, span))
             .copied()
             .ok_or_else(|| error("elaborated literal is missing"))?;
+        if let Some(scale) = numeral.scale {
+            let float = match ty {
+                Type::Named(name, arguments) if arguments.is_empty() => {
+                    self.prelude.floats.iter().find(|float| float.ty == *name)
+                }
+                _ => None,
+            }
+            .ok_or_else(|| located(module, span, "a decimal numeral is an `F32` or an `F64`"))?;
+            let literal =
+                crate::blessed::decimal(numeral.magnitude.clone(), scale, numeral.negative, float);
+            return self.literal(module, span, &literal, ty);
+        }
         let kind = match ty {
             Type::Named(name, arguments) if arguments.is_empty() && *name == self.prelude.nat => {
                 NumeralType::Nat

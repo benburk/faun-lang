@@ -12,8 +12,8 @@ use num_traits::ToPrimitive;
 
 use crate::blessed::PreludeIds;
 use crate::check::CheckedProgram;
-use crate::defunctionalize::{self as d, ClosureKey, Expr, ExprKind};
 use crate::diagnostic::Diagnostic;
+use crate::first_order::{self as d, Expr, ExprKind};
 use crate::hir as h;
 use crate::hir::LocalId;
 use crate::resolve::ResolvedProgram;
@@ -44,7 +44,7 @@ impl From<specialize::SpecializeError> for LowerError {
     }
 }
 
-/// Specialize the reachable program, defunctionalize it, and emit Barb.
+/// Specialize the reachable program for its callbacks and emit Barb.
 ///
 /// `entry` must name a monomorphic, parameterless function. The returned
 /// program contains only concrete types and saturated first-order calls.
@@ -55,11 +55,11 @@ impl From<specialize::SpecializeError> for LowerError {
 /// missing declarations, non-exhaustive clauses, and invalid literal shapes.
 pub fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, LowerError> {
     let specialized = specialize::monomorphize_from_entry(checked, entry)?;
-    let first_order = crate::defunctionalize::defunctionalize(specialized);
+    let first_order = crate::first_order::first_order(specialized);
     Lowerer::new(checked, None, first_order)?.lower()
 }
 
-/// Emit a defunctionalized package as Barb, starting at its `main! : Host -> []`
+/// Emit a first-order package as Barb, starting at its `main! : Host -> []`
 /// when it is an application.
 ///
 /// The Barb entry is `main!` as written. `Host` holds its fields itself, each
@@ -202,9 +202,7 @@ struct Lowerer<'a> {
     constructor_ids: HashMap<(Symbol, Type), CtorId>,
     record_constructor_ids: HashMap<Type, CtorId>,
     record_wrappers: HashMap<Type, Type>,
-    closure_constructor_ids: HashMap<ClosureKey, CtorId>,
     function_ids: HashMap<FunctionKey, FnId>,
-    apply_ids: HashMap<Type, FnId>,
     /// Each pair of types a value is widened between, which one function
     /// rebuilding it answers for.
     widenings: BTreeSet<(Type, Type)>,
@@ -235,9 +233,7 @@ impl<'a> Lowerer<'a> {
             constructor_ids: HashMap::new(),
             record_constructor_ids: HashMap::new(),
             record_wrappers: HashMap::new(),
-            closure_constructor_ids: HashMap::new(),
             function_ids: HashMap::new(),
-            apply_ids: HashMap::new(),
             widenings: BTreeSet::new(),
             widen_ids: HashMap::new(),
             call_sites: RefCell::default(),
@@ -253,7 +249,6 @@ impl<'a> Lowerer<'a> {
         self.define_types()?;
         self.declare_functions()?;
         self.define_functions()?;
-        self.define_apply_functions()?;
         self.define_widenings()?;
         if let Some(routines) = self.routines
             && routines.get("exit!").is_none()
@@ -304,18 +299,12 @@ impl<'a> Lowerer<'a> {
     /// Find every type the program holds, each of which Barb declares.
     fn discover(&mut self) -> Result<(), LowerError> {
         let functions = std::mem::take(&mut self.program.functions);
-        let closures = std::mem::take(&mut self.program.closures);
-        let found = self.discover_in(&functions, &closures);
+        let found = self.discover_in(&functions);
         self.program.functions = functions;
-        self.program.closures = closures;
         found
     }
 
-    fn discover_in(
-        &mut self,
-        functions: &[d::Function],
-        closures: &std::collections::BTreeMap<Type, Vec<d::Closure>>,
-    ) -> Result<(), LowerError> {
+    fn discover_in(&mut self, functions: &[d::Function]) -> Result<(), LowerError> {
         for function in functions {
             let (parameters, result) = function
                 .key
@@ -337,14 +326,6 @@ impl<'a> Lowerer<'a> {
                 self.collect_body(&clause.body, result)?;
             }
         }
-        for (ty, closure) in closures
-            .iter()
-            .flat_map(|(ty, closures)| closures.iter().map(move |closure| (ty, closure)))
-        {
-            if let (Some((_, body)), Some((_, answer))) = (&closure.lambda, ty.function()) {
-                self.collect_expr(body, answer)?;
-            }
-        }
         loop {
             let before = self.types.len();
             let types: Vec<_> = self.types.iter().cloned().collect();
@@ -362,11 +343,6 @@ impl<'a> Lowerer<'a> {
                     {
                         self.record_wrappers.insert(ty, field.clone());
                     }
-                }
-            }
-            for closure in closures.values().flatten() {
-                for (_, ty) in &closure.captures {
-                    self.collect_type(ty)?;
                 }
             }
             if self.types.len() == before {
@@ -392,7 +368,7 @@ impl<'a> Lowerer<'a> {
     fn collect_expr(&mut self, expression: &Expr, answer: &Type) -> Result<(), LowerError> {
         self.collect_type(&expression.ty)?;
         match &expression.kind {
-            ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Close(_, _) => {}
+            ExprKind::Local(_) | ExprKind::Natural(_) => {}
             ExprKind::Construct(_, fields) | ExprKind::DirectCall(_, fields) => {
                 for field in fields {
                     self.collect_expr(field, answer)?;
@@ -429,12 +405,6 @@ impl<'a> Lowerer<'a> {
                 self.collect_expr(value, answer)?;
                 self.collect_widening(&value.ty, &expression.ty)?;
             }
-            ExprKind::Apply(head, arguments) => {
-                self.collect_expr(head, answer)?;
-                for argument in arguments {
-                    self.collect_expr(argument, answer)?;
-                }
-            }
         }
         Ok(())
     }
@@ -463,11 +433,6 @@ impl<'a> Lowerer<'a> {
     fn widening_fields(&self, from: &Type, to: &Type) -> Result<Widening, LowerError> {
         if let (Some(source), Some(target)) = (members(from), members(to)) {
             return Ok(vec![(None, source.into_iter().zip(target).collect())]);
-        }
-        if matches!(from, Type::Function(..)) {
-            return Err(error(
-                "a function answering a tag row its caller widens cannot be passed on yet",
-            ));
         }
         let target = self.constructors_of(to)?;
         self.constructors_of(from)?
@@ -500,11 +465,10 @@ impl<'a> Lowerer<'a> {
                     )));
                 }
             }
-            Type::Function(parameters, result) => {
-                for parameter in parameters {
-                    self.collect_type(parameter)?;
-                }
-                self.collect_type(result)?;
+            Type::Function(..) => {
+                return Err(error(
+                    "a function is never a value once its callbacks are specialized",
+                ));
             }
             Type::Variants(tags) => {
                 for field in tags.iter().flat_map(|(_, fields)| fields) {
@@ -585,32 +549,7 @@ impl<'a> Lowerer<'a> {
                     self.record_constructor_ids
                         .insert(ty.clone(), self.output.ctor_at(id, 0));
                 }
-                Type::Function(_, _) => {
-                    let variants = self.program.closures.get(&ty).cloned().unwrap_or_default();
-                    let held: Vec<_> = variants
-                        .iter()
-                        .map(|variant| {
-                            (
-                                closure_name(&variant.key, &self.resolved.symbols),
-                                variant
-                                    .captures
-                                    .iter()
-                                    .map(|(_, ty)| self.type_ids[ty])
-                                    .collect::<Vec<_>>(),
-                            )
-                        })
-                        .collect();
-                    let borrowed: Vec<_> = held
-                        .iter()
-                        .map(|(name, fields)| (name.as_str(), fields.as_slice()))
-                        .collect();
-                    self.output.define_type(id, &borrowed);
-                    for (tag, variant) in variants.iter().enumerate() {
-                        let tag = u32::try_from(tag).expect("a sane closure count");
-                        self.closure_constructor_ids
-                            .insert(variant.key.clone(), self.output.ctor_at(id, tag));
-                    }
-                }
+                Type::Function(..) => unreachable!("collection refuses a function type"),
             }
         }
         let nat = Type::Named(self.prelude.nat, Vec::new());
@@ -680,21 +619,6 @@ impl<'a> Lowerer<'a> {
             }
             self.function_ids.insert(function.key.clone(), id);
         }
-        for ty in &self.program.applied {
-            let (parameters, result) = ty
-                .function()
-                .ok_or_else(|| error("invoked value is not a function"))?;
-            if self.program.closures.get(ty).is_none_or(Vec::is_empty) {
-                return Err(error("an invoked function type has no reachable closures"));
-            }
-            let mut signature = Vec::with_capacity(parameters.len() + 1);
-            signature.push(self.type_ids[ty]);
-            signature.extend(parameters.iter().map(|parameter| self.type_ids[parameter]));
-            let id = self
-                .output
-                .declare("apply", &signature, self.type_ids[result]);
-            self.apply_ids.insert(ty.clone(), id);
-        }
         for (from, to) in &self.widenings {
             let id = self
                 .output
@@ -716,9 +640,7 @@ impl<'a> Lowerer<'a> {
                 constructor_ids: &self.constructor_ids,
                 record_constructor_ids: &self.record_constructor_ids,
                 record_wrappers: &self.record_wrappers,
-                closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
-                apply_ids: &self.apply_ids,
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
                 prelude: self.prelude,
@@ -807,9 +729,7 @@ impl<'a> Lowerer<'a> {
                 constructor_ids: &self.constructor_ids,
                 record_constructor_ids: &self.record_constructor_ids,
                 record_wrappers: &self.record_wrappers,
-                closure_constructor_ids: &self.closure_constructor_ids,
                 function_ids: &self.function_ids,
-                apply_ids: &self.apply_ids,
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
                 prelude: self.prelude,
@@ -825,111 +745,6 @@ impl<'a> Lowerer<'a> {
                     })
                     .collect();
                 emit_decision(&context, builder, &decision, &values)
-            });
-        }
-        Ok(())
-    }
-
-    fn define_apply_functions(&mut self) -> Result<(), LowerError> {
-        let applied: Vec<_> = self.program.applied.iter().cloned().collect();
-        for ty in applied {
-            let variants = self.program.closures[&ty].clone();
-            let apply = self.apply_ids[&ty];
-            let closure_type = self.type_ids[&ty];
-            let (_, answer) = ty.function().expect("an applied type is a function");
-            let context = EmitContext {
-                type_ids: &self.type_ids,
-                constructor_ids: &self.constructor_ids,
-                record_constructor_ids: &self.record_constructor_ids,
-                record_wrappers: &self.record_wrappers,
-                closure_constructor_ids: &self.closure_constructor_ids,
-                function_ids: &self.function_ids,
-                apply_ids: &self.apply_ids,
-                widen_ids: &self.widen_ids,
-                call_sites: &self.call_sites,
-                prelude: self.prelude,
-                numeral_equals: self.numeral_equals,
-                answer,
-            };
-            let mut lambda_plans = HashMap::new();
-            for variant in &variants {
-                let Some((patterns, body)) = &variant.lambda else {
-                    continue;
-                };
-                let Type::Function(parameters, _) = &ty else {
-                    unreachable!()
-                };
-                let captured = u32::try_from(variant.captures.len()).expect("sane captures");
-                let subjects: Vec<_> = parameters
-                    .iter()
-                    .enumerate()
-                    .map(|(index, ty)| Subject {
-                        value: Value(captured + u32::try_from(index).expect("a sane arity")),
-                        ty: ty.clone(),
-                    })
-                    .collect();
-                let locals = variant
-                    .captures
-                    .iter()
-                    .enumerate()
-                    .map(|(index, (local, _))| {
-                        (*local, Value(u32::try_from(index).expect("sane captures")))
-                    })
-                    .collect();
-                let row = Row {
-                    patterns: patterns.clone(),
-                    guard: None,
-                    body: d::Body {
-                        bindings: Vec::new(),
-                        result: body.clone(),
-                    },
-                    locals,
-                };
-                let mut next =
-                    captured + u32::try_from(parameters.len()).expect("a sane closure arity");
-                lambda_plans.insert(
-                    variant.key.clone(),
-                    self.plan(&[row], &subjects, &mut next)?,
-                );
-            }
-            self.output.define(apply, |builder, parameters| {
-                let closure = parameters[0];
-                let arguments = &parameters[1..];
-                builder.match_(closure, closure_type, |builder, constructor, fields| {
-                    let variant = variants
-                        .iter()
-                        .find(|variant| {
-                            context.closure_constructor_ids[&variant.key] == constructor
-                        })
-                        .expect("each closure constructor has a variant");
-                    match &variant.key {
-                        ClosureKey::Global(key) => context.call(builder, key, arguments),
-                        ClosureKey::Constructor(source, function_type) => {
-                            let Type::Function(_, result) = function_type else {
-                                unreachable!()
-                            };
-                            context.construct(builder, *source, result, arguments)
-                        }
-                        ClosureKey::Lambda(_, _, _) => {
-                            let plan = &lambda_plans[&variant.key];
-                            let mut values: HashMap<_, _> = fields
-                                .iter()
-                                .enumerate()
-                                .map(|(index, atom)| {
-                                    (Value(u32::try_from(index).expect("sane captures")), *atom)
-                                })
-                                .collect();
-                            let offset = u32::try_from(fields.len()).expect("sane captures");
-                            for (index, atom) in arguments.iter().enumerate() {
-                                values.insert(
-                                    Value(offset + u32::try_from(index).expect("a sane arity")),
-                                    *atom,
-                                );
-                            }
-                            emit_decision(&context, builder, plan, &values)
-                        }
-                    }
-                })
             });
         }
         Ok(())
@@ -1338,9 +1153,7 @@ struct EmitContext<'a> {
     constructor_ids: &'a HashMap<(Symbol, Type), CtorId>,
     record_constructor_ids: &'a HashMap<Type, CtorId>,
     record_wrappers: &'a HashMap<Type, Type>,
-    closure_constructor_ids: &'a HashMap<ClosureKey, CtorId>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
-    apply_ids: &'a HashMap<Type, FnId>,
     widen_ids: &'a HashMap<(Type, Type), FnId>,
     call_sites: &'a RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
     prelude: &'a PreludeIds,
@@ -1388,10 +1201,6 @@ impl EmitContext<'_> {
             || fields.to_vec(),
             |record| vec![builder.con(self.record_constructor_ids[record], fields)],
         )
-    }
-
-    fn call(&self, builder: &mut Builder<'_>, key: &FunctionKey, arguments: &[Atom]) -> Atom {
-        builder.call(self.function_ids[key], arguments)
     }
 
     /// Emit a call to `function` written as `expression`, noting where.
@@ -1684,7 +1493,7 @@ fn hoisted(body: &d::Body) -> d::Body {
 fn lifted(expression: &Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> Expr {
     let mut lift = |inner: &Expr| lifted(inner, bindings, fresh);
     let kind = match &expression.kind {
-        ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Close(_, _) => {
+        ExprKind::Local(_) | ExprKind::Natural(_) => {
             return expression.clone();
         }
         ExprKind::Construct(constructor, fields) => {
@@ -1710,10 +1519,6 @@ fn lifted(expression: &Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) ->
         ExprKind::Project(receiver, field) => ExprKind::Project(Box::new(lift(receiver)), *field),
         ExprKind::DirectCall(key, arguments) => {
             ExprKind::DirectCall(key.clone(), arguments.iter().map(&mut lift).collect())
-        }
-        ExprKind::Apply(head, arguments) => {
-            let head = lift(head);
-            ExprKind::Apply(Box::new(head), arguments.iter().map(&mut lift).collect())
         }
         ExprKind::Widen(value) => ExprKind::Widen(Box::new(lift(value))),
         ExprKind::Try(value) => {
@@ -1755,10 +1560,6 @@ fn emit_expr(
                 .natural(nat, magnitude)
                 .expect("the Nat shape was validated before emission");
             builder.known(constant)
-        }
-        ExprKind::Close(key, captured) => {
-            let captured: Vec<_> = captured.iter().map(|local| locals[local]).collect();
-            builder.con(context.closure_constructor_ids[key], &captured)
         }
         ExprKind::Construct(constructor, fields) => {
             let fields = fields
@@ -1829,14 +1630,6 @@ fn emit_expr(
             context.widen(builder, atom, &value.ty, &expression.ty)
         }
         ExprKind::Try(_) => unreachable!("every `?` is bound on its own before emission"),
-        ExprKind::Apply(head, arguments) => {
-            let mut lowered = Vec::with_capacity(arguments.len() + 1);
-            lowered.push(emit_expr(context, builder, head, locals));
-            for argument in arguments {
-                lowered.push(emit_expr(context, builder, argument, locals));
-            }
-            context.call_written(builder, context.apply_ids[&head.ty], &lowered, expression)
-        }
     }
 }
 
@@ -1979,20 +1772,6 @@ fn function_name(key: &FunctionKey, symbols: &crate::Symbols) -> String {
     }
 }
 
-fn closure_name(key: &ClosureKey, symbols: &crate::Symbols) -> String {
-    match key {
-        ClosureKey::Global(function) => {
-            format!("Global({})", source_name(function.name, symbols))
-        }
-        ClosureKey::Constructor(constructor, _) => {
-            format!("Constructor({})", source_name(*constructor, symbols))
-        }
-        ClosureKey::Lambda(module, span, _) => {
-            format!("Lambda(m{}:{})", module.index(), span.start)
-        }
-    }
-}
-
 fn error(message: impl Into<String>) -> LowerError {
     LowerError {
         message: message.into(),
@@ -2016,13 +1795,18 @@ mod tests {
         crate::check::type_check(resolved, prelude).unwrap()
     }
 
+    /// The example's own definition spelled `suffix`, not the standard
+    /// library's.
     fn named(checked: &CheckedProgram, suffix: &str) -> Symbol {
         checked
             .types
             .values
             .keys()
             .copied()
-            .find(|symbol| checked.resolved.symbols.text(*symbol).ends_with(suffix))
+            .find(|symbol| {
+                let text = checked.resolved.symbols.text(*symbol);
+                text.ends_with(suffix) && !text.starts_with("Mstd_")
+            })
             .unwrap()
     }
 
@@ -2051,7 +1835,7 @@ mod tests {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
             let specialized =
                 specialize::monomorphize_package(&checked, &host, Some(&main)).unwrap();
-            let first_order = crate::defunctionalize::defunctionalize(specialized);
+            let first_order = crate::first_order::first_order(specialized);
             let mut program = lower_package_to_barb(&checked, first_order, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
@@ -2100,7 +1884,7 @@ mod tests {
     }
 
     #[test]
-    fn specializes_polymorphic_data_and_defunctionalizes_lambdas() {
+    fn specializes_polymorphic_data_and_lambdas_for_their_callbacks() {
         let checked = checked_example("utilities.fn");
         for suffix in ["$$mapped", "$$combined", "$$signed_sum"] {
             let entry = named(&checked, suffix);

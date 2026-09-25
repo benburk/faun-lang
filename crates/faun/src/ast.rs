@@ -103,15 +103,26 @@ pub enum HeaderKind {
     Package,
 }
 
-/// A package root, `package {}`.
+/// A package root, `package {}`, and the packages it depends on,
+/// `package {md5: "../md5/src/md5"}`.
 ///
-/// Dependency entries will be added when package dependency syntax is needed;
-/// an empty header already establishes the root boundary. Whether a package
-/// builds a binary is whether its entry defines `main!`, not its header.
+/// Whether a package builds a binary is whether its entry defines `main!`,
+/// not its header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeaderDecl {
     pub span: Span,
     pub kind: HeaderKind,
+    pub dependencies: Vec<Dependency>,
+}
+
+/// `name: "path"`: the package whose root module is at `path`, a module
+/// base relative to the header's file, imported as `name`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dependency {
+    pub span: Span,
+    pub name: Name,
+    /// The path's text, as written, escapes and all.
+    pub path: Vec<Span>,
 }
 
 /// `import foo.bar {Name Other.* source: local}`.
@@ -284,6 +295,8 @@ pub struct Numeral {
 pub enum NumeralKind {
     Number,
     Character,
+    /// `1.5` or `1.0e-12`: digits either side of a point, a float's.
+    Decimal,
 }
 
 impl Numeral {

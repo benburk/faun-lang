@@ -153,3 +153,89 @@ fn a_generic_definition_nothing_calls_is_judged_at_the_empty_type() {
     let refused = faun::lower_to_barb(&looping.entry(), &X86_64Linux).unwrap_err();
     assert!(refused.message.contains("`loop` stops"), "{refused}");
 }
+
+/// A package with a library it depends on beside it, under `vendor/`.
+fn with_dependency(name: &str, entry: &str) -> Package {
+    let package = Package::new(name, entry);
+    let vendor = package.0.join("vendor/shapes");
+    fs::create_dir_all(&vendor).unwrap();
+    fs::write(
+        vendor.join("shapes.fn"),
+        "package {}\n\nimport area {square}\n\nexports {double_square}\n\ndouble_square : Nat -> Nat\ndouble_square(n) -> square(n) * 2\n\nexpect double_square(3) == 18\n",
+    )
+    .unwrap();
+    fs::write(
+        vendor.join("area.fn"),
+        "exports {square}\n\nsquare : Nat -> Nat\nsquare(n) -> n * n\n",
+    )
+    .unwrap();
+    package
+}
+
+/// A dependency's root is imported by the name the header gives it, and
+/// its own modules resolve from its own root. Its expectations are its
+/// package's, not the one depending on it.
+#[test]
+fn a_package_imports_the_root_of_one_it_depends_on() {
+    let package = with_dependency(
+        "dependency",
+        "package {\n  shapes: \"vendor/shapes/shapes\"\n}\n\nimport shapes {double_square}\n\neight : Nat\neight() -> double_square(2)\n\nexpect eight() == 8\n",
+    );
+    faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    let tests = faun::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    assert_eq!(tests.expectations.len(), 1);
+}
+
+#[test]
+fn a_dependency_is_reached_only_at_its_root() {
+    let refused = |name: &str, entry: &str| {
+        let package = with_dependency(name, entry);
+        faun::lower_to_barb(&package.entry(), &X86_64Linux)
+            .unwrap_err()
+            .message
+    };
+    let inner = refused(
+        "dependency-inner",
+        "package {shapes: \"vendor/shapes/shapes\"}\n\nimport shapes.area {square}\n",
+    );
+    assert!(inner.contains("whose modules are its own"), "{inner}");
+    let missing = refused(
+        "dependency-missing",
+        "package {shapes: \"vendor/shapes/nowhere\"}\n",
+    );
+    assert!(
+        missing.contains("dependency `shapes` finds neither"),
+        "{missing}"
+    );
+    let twice = refused(
+        "dependency-twice",
+        "package {\n  shapes: \"vendor/shapes/shapes\"\n  shapes: \"vendor/shapes/shapes\"\n}\n",
+    );
+    assert!(
+        twice.contains("depends on `shapes` more than once"),
+        "{twice}"
+    );
+}
+
+/// A module inside a package inherits its root, and names no dependencies
+/// of its own.
+#[test]
+fn only_a_package_root_has_a_header() {
+    let package = Package::new(
+        "inner-header",
+        "import helper {one}\n\ntwo : Nat\ntwo() -> one() + one()\n",
+    );
+    fs::write(
+        package.0.join("helper.fn"),
+        "package {}\n\nexports {one}\n\none : Nat\none() -> 1\n",
+    )
+    .unwrap();
+    let refused = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap_err();
+    assert!(
+        refused
+            .message
+            .contains("only a package's root module has a `package` header"),
+        "{}",
+        refused.message
+    );
+}

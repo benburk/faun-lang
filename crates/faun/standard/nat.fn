@@ -39,9 +39,10 @@ Nat : [Zero Succ(Nat)].(
     remainder = mod(a Succ(b))
     mod_step(equals(remainder b) remainder)
 
+  # `base` to the `exponent`, squaring the base as the exponent halves: as
+  # many steps as the exponent has bits, each going round again.
   pow : Nat Nat -> Nat
-  pow(_ 0) -> 1
-  pow(base Succ(exponent)) -> base * pow(base exponent)
+  pow(base exponent) -> pow_into(base exponent 1)
 
   times : Nat a (a -> a) -> a
   times(0 value _) -> value
@@ -121,6 +122,14 @@ xor_bits(0 b place built) -> built + b * place
 xor_bits(a 0 place built) -> built + a * place
 xor_bits(a b place built) -> xor_bits(a / 2 b / 2 place * 2 built + (a + b) % 2 * place)
 
+# `built` times `base` to the `exponent`.
+pow_into : Nat Nat Nat -> Nat
+pow_into(_ 0 built) -> built
+pow_into(base 1 built) -> built * base
+pow_into(base exponent built) ->
+  kept = (exponent % 2 == 1).select(built * base built)
+  pow_into(base * base exponent / 2 kept)
+
 nat_below : Nat Nat -> Bool
 nat_below(_ 0) -> False
 nat_below(0 Succ(_)) -> True
@@ -146,3 +155,4 @@ expect 3.min(5) == 3 & 3.max(5) == 5
 expect (12 & 10) == 8 & (12 | 10) == 14 & (12 ^ 10) == 6
 expect (0 & 7) == 0 & (0 | 7) == 7 & (7 ^ 7) == 0 & (5 | 0) == 5
 expect (1267650600228229401496703205376 | 1) == 1267650600228229401496703205377
+expect 2.pow(0) == 1 & 2.pow(10) == 1024 & 3.pow(5) == 243 & 0.pow(0) == 1 & 0.pow(3) == 0

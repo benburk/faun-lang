@@ -1,6 +1,6 @@
 //! Lower checked frontend programs and elaborated literals to Barb.
 //!
-//! [`program`] specializes and defunctionalizes a reachable program. The
+//! [`program`] specializes a reachable program for its callbacks. The
 //! literal-only declaration map remains useful as the narrow contract proving
 //! that blessed expansion uses ordinary Barb constants, constructors, and calls
 //! rather than backend intrinsics.

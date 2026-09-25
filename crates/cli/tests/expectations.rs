@@ -88,3 +88,70 @@ fn wide_words_work_bit_by_bit() {
     );
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 5));
 }
+
+/// A package asks its own expectations, which may call into a package it
+/// depends on, and not that package's, which its own test run asks.
+#[test]
+fn a_dependency_is_called_and_its_expectations_are_its_own() {
+    let package = Package::new(
+        "with-dependency",
+        "package {shapes: \"vendor/shapes\"}
+
+         import shapes {double_square}
+
+         expect double_square(3) == 18
+         expect double_square(1) == 3",
+    );
+    let vendor = package.entry().with_file_name("vendor");
+    fs::create_dir_all(&vendor).unwrap();
+    fs::write(
+        vendor.join("shapes.fn"),
+        "package {}\n\nexports {double_square}\n\ndouble_square : Nat -> Nat\ndouble_square(n) -> n * n * 2\n\nexpect double_square(0) == 1\n",
+    )
+    .unwrap();
+    let (failed, count) = support::test_file(&package.entry());
+    assert_eq!((failed, count), (vec!["main.fn:8".to_owned()], 2));
+}
+
+/// Decimal numerals are floats, `F64` where nothing else decides, and the
+/// basic operations round as the standard says, on the reference
+/// interpreter.
+#[test]
+fn floats_read_add_divide_and_say_themselves() {
+    let package = Package::new(
+        "floats",
+        "third : F32
+         third() -> F32.div(1.0 3.0)
+
+         expect 0.1.add(0.2).to_str() == \"0.30000000000000004\"
+         expect F32.add(0.1 0.2) == 0.3
+         expect third().to_str() == \"0.33333334\"
+         expect (-2.5).to_str() == \"-2.5\" & 2.5E2 == 250.0 & 1.0e-12.to_str() == \"1.0e-12\"
+         expect F64.from_str(\"0.1\") == Ok(0.1) & F32.from_str(\"1e\") == Err(Malformed)
+         expect F32.sqrt(2.0).to_bits() == 0x3fb504f3 & F32.nan() == F32.nan()",
+    );
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 6));
+}
+
+/// `F32` and `F64` keep the IEEE 754 contract Ori's floats state, rule by
+/// rule, each expectation the host FPU's answer, built and run on this
+/// machine as `faun test` does. Compiling them takes the release build
+/// seconds and a debug build minutes, so they are asked with
+/// `cargo test --release -p faun-cli --test expectations -- --ignored`.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+#[ignore = "minutes in a debug build; run with --release -- --ignored"]
+fn floats_keep_the_ieee_contract() {
+    let floats =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/floats");
+    for (entry, count) in [("f32.fn", 101), ("f64.fn", 71)] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+            .arg("test")
+            .arg(floats.join(entry))
+            .output()
+            .unwrap();
+        let said = String::from_utf8(output.stdout).unwrap();
+        assert!(output.status.success(), "{entry}: {said}");
+        assert_eq!(said, format!("{count} expectations hold\n"), "{entry}");
+    }
+}

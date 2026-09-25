@@ -1,0 +1,93 @@
+# The IEEE 754 contract of the standard floats, as Ori states it in its
+# notes/values/floats.md, demonstrated for binary64: each block is one
+# of its rules, and the patterns are the host FPU's answers, taken from
+# Ori's oracle harness. `faun test` asks them, and so does
+# `cargo test --release -p faun-cli --test expectations -- --ignored`.
+
+import helpers {f f64 is_unordered is_eq}
+
+# --- binary64 ---
+
+# The same contract over the wider word, and the default for a decimal
+# nothing else types. The values that differ from binary32 are the ones
+# that show what the width buys.
+expect 1.0.add(1.0) == 2.0
+expect F64.equals(0.1.add(0.2) 0.3).not()
+expect 0.1.add(0.2).to_str() == "0.30000000000000004"
+expect 1.0.div(3.0).to_str() == "0.3333333333333333"
+expect 2.0.sqrt().to_bits() == 0x3ff6a09e667f3bcd
+expect 9007199254740992.0.add(1.0) == 9007199254740992.0   # a tie past 2^53, to even
+expect 9007199254740992.0.add(3.0) == 9007199254740996.0
+expect F64.to_bits(0.1) == 0x3fb999999999999a
+expect F64.fma(f64(0x3ff0000000000001) f64(0x3ff0000000000001) f64(0xbff0000000000002)).to_bits() == 0x3970000000000000
+expect F64.infinity().sub(F64.infinity()).to_bits() == 0x7ff8000000000000
+expect F64.nan() == F64.nan()
+expect F64.infinity() < F64.nan()
+expect f64(0xfff0000000000001).to_bits() == 0x7ff8000000000000   # a NaN pattern reads canonical
+expect F64.largest().to_str() == "1.7976931348623157e308"
+expect F64.smallest_normal().to_str() == "2.2250738585072014e-308"
+expect F64.smallest_subnormal().to_str() == "5.0e-324"
+expect F64.epsilon().to_bits() == 0x3cb0000000000000
+expect 1.0e308.mul(10.0) == F64.infinity()
+expect 5.0e-324.div(2.0) == 0.0
+expect F64.from_str("0.1") == Ok(0.1)
+expect F64.from_str(0.1.add(0.2).to_str()) == Ok(0.1.add(0.2))
+expect F64.of_nat(2.pow(100)).to_str() == "1.2676506002282294e30"
+expect F64.integer_part(1.0e18) == Ok(Int.of_nat(10.pow(18)))
+expect (-0.5).ceil().to_str() == "-0.0"
+expect 2.5.round_even() == 2.0
+expect [1.5 2.5].sum() == 4.0
+expect F64.to_str(F64.from_str("3.4028235e38").ok_or(0.0)) == "3.4028235e38"   # every binary32 is a binary64
+
+# A conversion rounds; a reading refuses to.
+expect F64.from_nat(2.pow(53)) == Ok(9007199254740992.0)
+expect F64.from_nat(2.pow(53) + 1) == Err(Inexact)
+expect F64.from_int(-3) == Ok(-3.0)
+expect F32.from_nat(16777217) == Err(Inexact)
+expect F32.from_nat(10.pow(40)) == Err(Inexact)
+
+# Words convert exactly while they fit the precision, and round past it.
+expect F64.of_u8(255) == 255.0
+expect F64.of_u16(65535) == 65535.0
+expect F64.of_u32(0xffffffff) == 4294967295.0
+expect F64.of_u64(0xffffffffffffffff).to_str() == "1.8446744073709552e19"
+expect F32.of_u32(0xffffffff) == 4294967296.0
+expect F32.of_u8(200) == 200.0
+
+# π is correctly rounded in each width and reads back as its digits.
+expect F64.pi().to_bits() == 0x400921fb54442d18
+expect F64.pi().to_str() == "3.141592653589793"
+expect F32.pi().to_bits() == 0x40490fdb
+expect F32.pi().to_str() == "3.1415927"
+expect F64.pi() == 3.141592653589793
+
+# Text at a chosen precision rounds the exact value once, ties to even, so
+# `0.125` at two places is `0.12` and `2.5` at none is `2`.
+expect 1234.5678.to_fixed(2) == "1234.57"
+expect 0.1.add(0.2).to_fixed(9) == "0.300000000"
+expect 0.125.to_fixed(2) == "0.12"
+expect 2.5.to_fixed(0) == "2"
+expect 3.5.to_fixed(0) == "4"
+expect (-0.001).to_fixed(2) == "-0.00"
+expect (-0.0).to_fixed(1) == "-0.0"
+expect 5.0e-324.to_fixed(3) == "0.000"
+expect F64.of_nat(2.pow(70)).to_fixed(0) == "1180591620717411303424"
+expect F64.nan().to_fixed(2) == "NaN"
+expect F64.infinity().neg().to_fixed(2) == "-Infinity"
+expect 1234.5678.to_exponent(2) == "1.23e3"
+expect 0.000123.to_exponent(1) == "1.2e-4"
+expect 9.999.to_exponent(2) == "1.00e1"
+expect 5.0.to_exponent(0) == "5e0"
+expect 0.0.to_exponent(3) == "0.000e0"
+expect (-1.0e300).to_exponent(4) == "-1.0000e300"
+expect 1234.5678.to_precision(3) == "1.23e3"
+expect 1234.5678.to_precision(6) == "1234.57"
+expect 0.5.to_precision(3) == "0.500"
+expect 0.00012345.to_precision(2) == "0.00012"
+expect 0.000012345.to_precision(2) == "1.2e-5"
+expect 99.99.to_precision(3) == "100"
+expect 7.0.to_precision(0) == "7"
+expect 0.0.to_precision(3) == "0.00"
+expect F32.to_fixed(0.1 10) == "0.1000000015"
+expect F32.to_exponent(0.1 3) == "1.000e-1"
+expect F32.to_precision(F32.largest() 4) == "3.403e38"

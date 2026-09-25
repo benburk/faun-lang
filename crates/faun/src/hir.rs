@@ -302,6 +302,8 @@ pub enum ExprKind {
     /// A word a declaration claims, whose reading its position decides.
     Dual(Dual),
     Number(BigUint),
+    /// A decimal numeral, `digits / 10^scale`, which only a float is.
+    Decimal(BigUint, u32),
     String(Vec<StringPart>),
     List(Vec<Expr>, Option<Box<Expr>>),
     Record(Vec<(Symbol, Expr)>),

@@ -121,6 +121,14 @@ impl LoadedProgram {
 /// ordinary module, but its public interface is reached through the stable
 /// virtual path `std.host` rather than its disk location.
 ///
+/// A package's root module may name the packages it depends on in its header,
+/// `package {md5: "../md5/src/md5"}`, each a module base relative to the
+/// header's file. Every module of the package may then `import md5`, which is
+/// that package's root, and not its inner modules, which are its own. A
+/// dependency's modules resolve their imports from its root, with its own
+/// header's dependencies. Only a root module has a header. The entry's
+/// package is the modules loaded from the entry's root, not its dependencies'.
+///
 /// # Errors
 ///
 /// Reports I/O, parse, cycle, duplicate declaration, visibility, ambiguous
@@ -131,41 +139,40 @@ pub fn load_program(
     host: &Path,
 ) -> Result<LoadedProgram, Diagnostic> {
     let mut loader = Loader::default();
-    let prelude_id = loader.load_module(prelude, &Root::at(prelude), true)?;
+    let root = loader.package_at(prelude);
+    let prelude_id = loader.load_module(prelude, Loading::Package(root), true)?;
     loader.prelude = Some(loader.pending[prelude_id.index()].public.clone());
-    let host_id = loader.load_module(host, &Root::at(prelude), false)?;
+    let root = loader.package_at(prelude);
+    let host_id = loader.load_module(host, Loading::Package(root), false)?;
     loader.host = Some(host_id);
-    let first_in_package = loader.pending.len();
-    let entry_id = loader.load_module(entry, &Root::at(entry), false)?;
-    // The standard library as the entry is its own package: the modules it
-    // loaded before the host.
-    let package = if entry_id == prelude_id {
-        prelude_id.index()..host_id.index()
-    } else {
-        first_in_package..loader.pending.len()
-    };
-    Ok(loader.into_loaded_program(entry_id, package, prelude_id, host_id))
+    // The standard library as the entry is its own package.
+    let root = loader.package_at(entry);
+    let entry_id = loader.load_module(entry, Loading::Package(root), false)?;
+    Ok(loader.into_loaded_program(entry_id, prelude_id, host_id))
 }
 
+/// Where a package's modules resolve their imports from: its root module's
+/// directory, the packages its header depends on, by the name each is
+/// imported as, and which package it is.
 #[derive(Clone, Debug)]
 struct Root {
     directory: PathBuf,
+    dependencies: HashMap<String, PathBuf>,
+    package: usize,
 }
 
-impl Root {
-    fn at(path: &Path) -> Self {
-        Self {
-            directory: path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .to_path_buf(),
-        }
-    }
+/// A module being loaded: a package's root, whose header may name its
+/// dependencies, or one of the modules within `Root`'s package.
+enum Loading<'a> {
+    Package(Root),
+    Within(&'a Root),
 }
 
 #[derive(Debug)]
 struct PendingModule {
     id: ModuleId,
+    /// Which package it belongs to; see [`Root`].
+    package: usize,
     path: PathBuf,
     source: SourceId,
     syntax: Module,
@@ -187,18 +194,35 @@ struct Loader {
     /// The host module, once it has loaded; it cannot import itself.
     host: Option<ModuleId>,
     standard_root: Option<PathBuf>,
+    /// How many packages have been given a root.
+    packages: usize,
 }
 
 impl Loader {
+    /// A new package rooted where the module at `path` is.
+    fn package_at(&mut self, path: &Path) -> Root {
+        self.packages += 1;
+        Root {
+            directory: path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf(),
+            dependencies: HashMap::new(),
+            package: self.packages,
+        }
+    }
+
     fn into_loaded_program(
         self,
         entry: ModuleId,
-        package: std::ops::Range<usize>,
         prelude: ModuleId,
         host: ModuleId,
     ) -> LoadedProgram {
-        let package = self.pending[package]
+        let own = self.pending[entry.index()].package;
+        let package = self
+            .pending
             .iter()
+            .filter(|module| module.package == own)
             .map(|module| module.id)
             .collect();
         let modules = self
@@ -228,7 +252,7 @@ impl Loader {
     fn load_module(
         &mut self,
         written: &Path,
-        root: &Root,
+        loading: Loading<'_>,
         standard_root: bool,
     ) -> Result<ModuleId, Diagnostic> {
         let path = written.canonicalize().map_err(|error| {
@@ -254,6 +278,7 @@ impl Loader {
             let text = self.sources.get(source).expect("the source just added");
             Diagnostic::new(error.message).at(text, at)
         })?;
+        let root = self.root(loading, &syntax, &path, source)?;
         let id =
             ModuleId(u32::try_from(self.pending.len()).expect("fewer than 2^32 loaded modules"));
         let namespace_text = self.namespace(&path, id);
@@ -264,6 +289,7 @@ impl Loader {
         // cycle can name the module being visited.
         self.pending.push(PendingModule {
             id,
+            package: root.package,
             path: path.clone(),
             source,
             syntax,
@@ -297,9 +323,19 @@ impl Loader {
                 self.host.ok_or_else(|| {
                     Diagnostic::new("the host module cannot import `std.host`, which is itself")
                 })?
+            } else if let Some(dependency) = root.dependencies.get(&path_parts[0]) {
+                if path_parts.len() > 1 {
+                    return Err(Diagnostic::new(format!(
+                        "`{}` is a package this one depends on, whose modules are its own: import `{}` itself",
+                        path_parts[0], path_parts[0]
+                    )));
+                }
+                let dependency = dependency.clone();
+                let package = self.package_at(&dependency);
+                self.load_module(&dependency, Loading::Package(package), false)?
             } else {
-                let dependency_path = module_path(&root.directory, &path_parts)?;
-                self.load_module(&dependency_path, root, false)?
+                let module = module_path(&root.directory, &path_parts)?;
+                self.load_module(&module, Loading::Within(&root), false)?
             };
             linked_imports.push((index, dependency));
         }
@@ -329,6 +365,56 @@ impl Loader {
         Ok(id)
     }
 
+    /// The root a module resolves its imports from: its package's, with the
+    /// dependencies its header names where it is the package's root.
+    fn root(
+        &self,
+        loading: Loading<'_>,
+        syntax: &Module,
+        path: &Path,
+        source: SourceId,
+    ) -> Result<Root, Diagnostic> {
+        let header = syntax.items.iter().find_map(|item| match item {
+            Item::Header(header) => Some(header),
+            _ => None,
+        });
+        let text = self.sources.get(source).expect("the source just added");
+        match (loading, header) {
+            (Loading::Within(root), None) => Ok(root.clone()),
+            (Loading::Package(root), None) => Ok(root),
+            (Loading::Within(_), Some(header)) => Err(Diagnostic::new(
+                "only a package's root module has a `package` header; this module is inside its package",
+            )
+            .at(text, header.span)),
+            (Loading::Package(mut root), Some(header)) => {
+                let directory = path.parent().unwrap_or_else(|| Path::new("."));
+                for dependency in &header.dependencies {
+                    let name = dependency.name.text(text.text()).to_owned();
+                    let written: String = dependency
+                        .path
+                        .iter()
+                        .map(|part| {
+                            crate::literal::decode_text(part.text(text.text()))
+                                .map(std::borrow::Cow::into_owned)
+                        })
+                        .collect::<Result<_, _>>()
+                        .map_err(|message| Diagnostic::new(message).at(text, dependency.span))?;
+                    let module = module_base(&directory.join(&written)).map_err(|error| {
+                        Diagnostic::new(format!("dependency `{name}` {}", error.message))
+                            .at(text, dependency.span)
+                    })?;
+                    if root.dependencies.insert(name.clone(), module).is_some() {
+                        return Err(Diagnostic::new(format!(
+                            "the package depends on `{name}` more than once"
+                        ))
+                        .at(text, dependency.span));
+                    }
+                }
+                Ok(root)
+            }
+        }
+    }
+
     fn namespace(&self, path: &Path, id: ModuleId) -> String {
         if let Some(root) = &self.standard_root
             && let Ok(relative) = path.strip_prefix(root)
@@ -353,22 +439,27 @@ fn module_path(root: &Path, parts: &[String]) -> Result<PathBuf, Diagnostic> {
     let joined = parts
         .iter()
         .fold(root.to_path_buf(), |path, part| path.join(part));
+    module_base(&joined)
+        .map_err(|error| Diagnostic::new(format!("import `{}` {}", parts.join("."), error.message)))
+}
+
+/// The module at the base `joined`: `joined.fn`, or `name.fn` in the
+/// directory `joined`, where `name` is its last part, and not both.
+fn module_base(joined: &Path) -> Result<PathBuf, Diagnostic> {
     let flat = joined.with_extension("fn");
     let nested = joined
-        .join(parts.last().expect("nonempty path"))
+        .join(joined.file_name().unwrap_or_default())
         .with_extension("fn");
     match (flat.is_file(), nested.is_file()) {
         (true, false) => Ok(flat),
         (false, true) => Ok(nested),
         (true, true) => Err(Diagnostic::new(format!(
-            "import `{}` is ambiguous between {} and {}",
-            parts.join("."),
+            "is ambiguous between {} and {}",
             flat.display(),
             nested.display()
         ))),
         (false, false) => Err(Diagnostic::new(format!(
-            "import `{}` finds neither {} nor {}",
-            parts.join("."),
+            "finds neither {} nor {}",
             flat.display(),
             nested.display()
         ))),

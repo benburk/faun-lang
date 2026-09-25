@@ -6,9 +6,9 @@
 
 use super::ast::{
     AliasDecl, BinaryOp, Binding, Body, Clause, Constraint, ConstraintAliasDecl, ConstructorDecl,
-    DataDecl, DataRepresentation, Export, ExportsDecl, Exposure, Expr, ExprKind, HeaderDecl,
-    HeaderKind, ImportDecl, Item, MethodItem, Module, Name, Numeral, NumeralKind, Pattern,
-    SignatureDecl, Span, StringPart, Type, UnaryOp,
+    DataDecl, DataRepresentation, Dependency, Export, ExportsDecl, Exposure, Expr, ExprKind,
+    HeaderDecl, HeaderKind, ImportDecl, Item, MethodItem, Module, Name, Numeral, NumeralKind,
+    Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
 };
 use super::lex::{Kind, Token};
 use super::source::SourceId;
@@ -28,10 +28,10 @@ fn named_type(token: Token, arguments: Vec<Type>, end: Span) -> Type {
 fn numeral(token: Token) -> Numeral {
     Numeral {
         span: token.span(),
-        kind: if token.kind == Kind::Char {
-            NumeralKind::Character
-        } else {
-            NumeralKind::Number
+        kind: match token.kind {
+            Kind::Char => NumeralKind::Character,
+            Kind::Decimal => NumeralKind::Decimal,
+            _ => NumeralKind::Number,
         },
     }
 }
@@ -297,8 +297,23 @@ peg::parser! {
             }
 
         rule header() -> HeaderDecl
-            = start:tok(Kind::KwPackage) lbrace() close:rbrace() {
-                HeaderDecl { span: start.span().through(close.span()), kind: HeaderKind::Package }
+            = start:tok(Kind::KwPackage) lbrace() dependencies:(dependency() ** sep())
+              close:rbrace() {
+                HeaderDecl {
+                    span: start.span().through(close.span()),
+                    kind: HeaderKind::Package,
+                    dependencies,
+                }
+            }
+
+        rule dependency() -> Dependency
+            = named:ident() colon() tok(Kind::StrStart)
+              path:(text:tok(Kind::StrText) { text.span() })* close:tok(Kind::StrEnd) {
+                Dependency {
+                    span: named.span().through(close.span()),
+                    name: name(named),
+                    path,
+                }
             }
 
         rule import_decl() -> ImportDecl
@@ -716,7 +731,7 @@ peg::parser! {
             }
 
         rule primary() -> Expr
-            = value:(tok(Kind::Number) / tok(Kind::Char)) {
+            = value:(tok(Kind::Number) / tok(Kind::Char) / tok(Kind::Decimal)) {
                 atom(value, ExprKind::Number(numeral(value)))
             }
             / string:string() { string }

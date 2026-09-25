@@ -106,13 +106,16 @@ pub struct BoundSite {
 }
 
 /// A numeral whose type a definition leaves generic, built through its
-/// type's `of_nat` at each specialization.
+/// type's `of_nat`, or for a decimal its `of_decimal`, at each
+/// specialization.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeferredNumeral {
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub magnitude: num_bigint::BigUint,
     pub negative: bool,
+    /// For a decimal, the power of ten `magnitude` is over.
+    pub scale: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -550,6 +553,9 @@ struct PendingNumeral {
     span: super::ast::Span,
     magnitude: num_bigint::BigUint,
     negative: bool,
+    /// For a decimal, the power of ten `magnitude` is over: a float's
+    /// numeral, where the others are integers'.
+    scale: Option<u32>,
     ty: Ty,
     resolved: bool,
 }
@@ -1895,6 +1901,7 @@ impl<'a> Checker<'a> {
                     span,
                     magnitude: magnitude.clone(),
                     negative: *negative,
+                    scale: None,
                     ty: expected.clone(),
                     resolved: false,
                 });
@@ -1907,6 +1914,7 @@ impl<'a> Checker<'a> {
                         span,
                         magnitude: magnitude.clone(),
                         negative: false,
+                        scale: None,
                         ty: expected.clone(),
                         resolved: false,
                     });
@@ -2046,6 +2054,20 @@ impl<'a> Checker<'a> {
                     span: expression.span,
                     magnitude: magnitude.clone(),
                     negative: false,
+                    scale: None,
+                    ty: ty.clone(),
+                    resolved: false,
+                });
+                Ok(ty)
+            }
+            h::ExprKind::Decimal(digits, scale) => {
+                let ty = self.infer.fresh();
+                self.pending_numerals.push(PendingNumeral {
+                    module,
+                    span: expression.span,
+                    magnitude: digits.clone(),
+                    negative: false,
+                    scale: Some(*scale),
                     ty: ty.clone(),
                     resolved: false,
                 });
@@ -2202,17 +2224,23 @@ impl<'a> Checker<'a> {
                 locals,
             ),
             h::ExprKind::Unary(super::ast::UnaryOp::Negate, value)
-                if matches!(value.kind, h::ExprKind::Number(_)) =>
+                if matches!(
+                    value.kind,
+                    h::ExprKind::Number(_) | h::ExprKind::Decimal(..)
+                ) =>
             {
-                let h::ExprKind::Number(magnitude) = &value.kind else {
-                    unreachable!()
+                let (magnitude, scale) = match &value.kind {
+                    h::ExprKind::Number(magnitude) => (magnitude.clone(), None),
+                    h::ExprKind::Decimal(digits, scale) => (digits.clone(), Some(*scale)),
+                    _ => unreachable!("guarded"),
                 };
                 let ty = self.infer.fresh();
                 self.pending_numerals.push(PendingNumeral {
                     module,
                     span: expression.span,
-                    magnitude: magnitude.clone(),
+                    magnitude,
                     negative: true,
+                    scale,
                     ty: ty.clone(),
                     resolved: false,
                 });
@@ -2760,10 +2788,17 @@ impl<'a> Checker<'a> {
                 break;
             };
             let numeral = self.pending_numerals[index].clone();
-            let default = if numeral.negative {
-                Ty::Named(self.prelude.int, Vec::new())
-            } else {
-                Ty::Named(self.prelude.nat, Vec::new())
+            let default = match (numeral.scale, self.prelude.floats.first()) {
+                (Some(_), Some(float)) => Ty::Named(float.ty, Vec::new()),
+                (Some(_), None) => {
+                    return Err(failure(
+                        numeral.module,
+                        numeral.span,
+                        "a decimal numeral is a float, and no float is in the prelude",
+                    ));
+                }
+                (None, _) if numeral.negative => Ty::Named(self.prelude.int, Vec::new()),
+                (None, _) => Ty::Named(self.prelude.nat, Vec::new()),
             };
             self.unify_at(numeral.module, numeral.span, &numeral.ty, &default)?;
             self.settle(marks)?;
@@ -2793,9 +2828,52 @@ impl<'a> Checker<'a> {
     }
 
     /// A numeral at the type its position gave it: a natural, or a call of
-    /// the type's `of_nat`.
+    /// the type's `of_nat`, or for a decimal its float's `of_decimal`.
     fn elaborate(&mut self, numeral: &PendingNumeral) -> Result<(), CheckError> {
         let ty = self.infer.resolve(&numeral.ty);
+        let float = match &ty {
+            Ty::Named(name, arguments) if arguments.is_empty() => {
+                self.prelude.floats.iter().find(|float| float.ty == *name)
+            }
+            _ => None,
+        };
+        match (numeral.scale, float) {
+            (Some(scale), Some(float)) => {
+                self.checked.literals.push(LiteralSite {
+                    module: numeral.module,
+                    span: numeral.span,
+                    ty: float.ty,
+                    value: blessed::decimal(
+                        numeral.magnitude.clone(),
+                        scale,
+                        numeral.negative,
+                        float,
+                    ),
+                });
+                return Ok(());
+            }
+            (Some(_), None) => {
+                return Err(failure(
+                    numeral.module,
+                    numeral.span,
+                    format!(
+                        "a decimal numeral cannot be a `{}`: it is a float, an `F32` or an `F64`",
+                        show(&ty, self.symbols)
+                    ),
+                ));
+            }
+            (None, Some(float)) => {
+                return Err(failure(
+                    numeral.module,
+                    numeral.span,
+                    format!(
+                        "a numeral with no point is not a float: write the `{}` with one, as `3.0`",
+                        float.name
+                    ),
+                ));
+            }
+            (None, None) => {}
+        }
         let (kind, symbol) = match ty {
             Ty::Named(name, ref arguments) if name == self.prelude.nat && arguments.is_empty() => {
                 (NumeralType::Nat, self.prelude.nat)
@@ -2958,14 +3036,24 @@ impl<'a> Checker<'a> {
     /// and `neg` where it is negated, at each specialization: the component
     /// owes both as bounds, and the numeral waits for its type.
     fn defer_numeral(&mut self, numeral: &PendingNumeral) -> Result<(), CheckError> {
-        let of_nat = self.method_symbol(numeral.module, numeral.span, "of_nat")?;
+        let builder = if numeral.scale.is_some() {
+            "of_decimal"
+        } else {
+            "of_nat"
+        };
+        let builder = self.method_symbol(numeral.module, numeral.span, builder)?;
         let nat = Ty::Named(self.prelude.nat, Vec::new());
+        let arguments = if numeral.scale.is_some() {
+            vec![nat.clone(), nat]
+        } else {
+            vec![nat]
+        };
         self.pending_methods.push(PendingMethod {
             module: numeral.module,
             span: numeral.span,
-            name: of_nat,
+            name: builder,
             receiver: numeral.ty.clone(),
-            arguments: vec![nat],
+            arguments,
             result: numeral.ty.clone(),
             reach: Reach::Type,
             resolved: false,
@@ -2990,6 +3078,7 @@ impl<'a> Checker<'a> {
             span: numeral.span,
             magnitude: numeral.magnitude.clone(),
             negative: numeral.negative,
+            scale: numeral.scale,
         });
         Ok(())
     }
@@ -3970,7 +4059,8 @@ fn validate_effect_expr(
         | h::ExprKind::Tag(_)
         | h::ExprKind::Dual(_)
         | h::ExprKind::Associated(..)
-        | h::ExprKind::Number(_) => Ok(()),
+        | h::ExprKind::Number(_)
+        | h::ExprKind::Decimal(..) => Ok(()),
     }
 }
 
@@ -4176,7 +4266,8 @@ fn expr_globals(expression: &h::Expr, output: &mut HashSet<Symbol>) {
         | h::ExprKind::Tag(_)
         | h::ExprKind::Dual(_)
         | h::ExprKind::Associated(..)
-        | h::ExprKind::Number(_) => {}
+        | h::ExprKind::Number(_)
+        | h::ExprKind::Decimal(..) => {}
     }
 }
 

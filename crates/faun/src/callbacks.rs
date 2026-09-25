@@ -23,7 +23,7 @@
 // so a new kind of expression shows where it is missed.
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::ast::Span;
 use crate::hir::LocalId;
@@ -310,7 +310,7 @@ impl<'a> Callbacks<'a> {
     ) -> Result<Function, SpecializeError> {
         let lambda = &self.lambdas[&(owner.clone(), site)];
         let (patterns, body, ty) = (lambda.patterns, lambda.body, lambda.ty);
-        let captures = crate::defunctionalize::captures(patterns, body);
+        let captures = captures(patterns, body);
         let mut highest = expr_highest(body);
         for pattern in patterns {
             highest = highest.max(pattern_highest(pattern));
@@ -541,7 +541,7 @@ fn callback(frame: &Frame, expression: &Expr) -> Result<(Callback, Vec<Expr>), S
             let site = (expression.module, expression.span);
             let mut callbacks = Vec::new();
             let mut carried = Vec::new();
-            for (captured, ty) in crate::defunctionalize::captures(patterns, body) {
+            for (captured, ty) in captures(patterns, body) {
                 match frame.functions.get(&captured) {
                     Some((callback, held)) => {
                         callbacks.push(callback.clone());
@@ -583,7 +583,7 @@ fn carried(callback: &Callback, lambdas: &Lambdas) -> Vec<Type> {
     let site = &lambdas[&(lambda.owner.clone(), lambda.site)];
     let mut callbacks = lambda.callbacks.iter();
     let mut types = Vec::new();
-    for (_, ty) in crate::defunctionalize::captures(site.patterns, site.body) {
+    for (_, ty) in captures(site.patterns, site.body) {
         if matches!(ty, Type::Function(..)) {
             if let Some(callback) = callbacks.next() {
                 types.extend(carried(callback, lambdas));
@@ -717,5 +717,87 @@ fn internal(what: &str) -> SpecializeError {
     SpecializeError {
         message: format!("callback specialization expected {what}"),
         at: None,
+    }
+}
+
+/// The locals a lambda's body reads that its parameters do not bind.
+fn captures(patterns: &[Pattern], body: &Expr) -> Vec<(LocalId, Type)> {
+    let mut bound = HashSet::new();
+    for pattern in patterns {
+        pattern_locals(pattern, &mut bound);
+    }
+    let mut found = BTreeMap::new();
+    free_locals(body, &bound, &mut found);
+    found.into_iter().collect()
+}
+
+fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap<LocalId, Type>) {
+    use ExprKind as S;
+    match &expression.kind {
+        S::Local(local) => {
+            if !bound.contains(local) {
+                found.entry(*local).or_insert_with(|| expression.ty.clone());
+            }
+        }
+        S::Function(_) | S::ConstructorFunction(_) | S::Natural(_) => {}
+        S::Construct(_, fields) | S::DirectCall(_, fields) | S::Tuple(fields) => {
+            for field in fields {
+                free_locals(field, bound, found);
+            }
+        }
+        S::Update(base, fields) => {
+            free_locals(base, bound, found);
+            for (_, field) in fields {
+                free_locals(field, bound, found);
+            }
+        }
+        S::Record(fields) => {
+            for (_, field) in fields {
+                free_locals(field, bound, found);
+            }
+        }
+        S::Project(receiver, _) | S::Widen(receiver) | S::Try(receiver) => {
+            free_locals(receiver, bound, found);
+        }
+        S::Invoke(head, arguments) => {
+            free_locals(head, bound, found);
+            for argument in arguments {
+                free_locals(argument, bound, found);
+            }
+        }
+        S::Lambda(patterns, body) => {
+            let mut nested = bound.clone();
+            for pattern in patterns {
+                pattern_locals(pattern, &mut nested);
+            }
+            free_locals(body, &nested, found);
+        }
+    }
+}
+
+fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
+    match pattern {
+        Pattern::Bind(local) => {
+            output.insert(*local);
+        }
+        Pattern::Constructor(_, fields)
+        | Pattern::List(fields, None)
+        | Pattern::Product(fields) => {
+            for field in fields {
+                pattern_locals(field, output);
+            }
+        }
+        Pattern::List(fields, Some(rest)) => {
+            for field in fields {
+                pattern_locals(field, output);
+            }
+            pattern_locals(rest, output);
+        }
+        Pattern::Record(fields) => {
+            for (_, pattern) in fields {
+                pattern_locals(pattern, output);
+            }
+        }
+        Pattern::Wild | Pattern::Number { .. } | Pattern::Range(_, _) | Pattern::String => {}
     }
 }

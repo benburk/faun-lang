@@ -46,6 +46,13 @@ Host : {args: List(Str)}.(
     status = finish!(host.stdout app({}))
     complete!(host status)
 
+  # Run a program of the arguments the program was run with, its own name
+  # first, printing what it answers.
+  run_args! : Host ({args: List(Str)} -> a) -> [] where a.to_str : a -> Str
+  run_args!(host app) ->
+    status = finish!(host.stdout app({args: host.args}))
+    complete!(host status)
+
   # Run a program of standard input as text, printing what it answers; one
   # the input cannot be read for is not run.
   run_text! : Host ({stdin: Str} -> a) -> [] where a.to_str : a -> Str
@@ -61,6 +68,13 @@ Host : {args: List(Str)}.(
     e.to_str : e -> Str
   run_result!(host app) ->
     status = finish_result!(host.stdout host.stderr app({}))
+    complete!(host status)
+
+  run_result_args! : Host ({args: List(Str)} -> Result(a e)) -> [] where
+    a.to_str : a -> Str
+    e.to_str : e -> Str
+  run_result_args!(host app) ->
+    status = finish_result!(host.stdout host.stderr app({args: host.args}))
     complete!(host status)
 
   run_result_text! : Host ({stdin: Str} -> Result(a e)) -> [] where

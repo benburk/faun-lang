@@ -74,6 +74,10 @@ pub fn decode_text(text: &str) -> Result<Cow<'_, str>, String> {
 pub fn magnitude(numeral: Numeral, source: &str) -> Result<BigUint, LiteralError> {
     let text = numeral.text(source);
     match numeral.kind {
+        NumeralKind::Decimal => Err(LiteralError {
+            span: numeral.span,
+            message: format!("`{text}` is a decimal, which only a float is"),
+        }),
         NumeralKind::Number => {
             BigUint::parse_bytes(numeral.digits(source).as_bytes(), numeral.radix(source))
                 .ok_or_else(|| LiteralError {
@@ -81,36 +85,32 @@ pub fn magnitude(numeral: Numeral, source: &str) -> Result<BigUint, LiteralError
                     message: format!("invalid base-{} numeral `{text}`", numeral.radix(source)),
                 })
         }
-        NumeralKind::Character => {
-            let Some(inner) = text
-                .strip_prefix('\'')
-                .and_then(|text| text.strip_suffix('\''))
-            else {
-                return Err(LiteralError {
-                    span: numeral.span,
-                    message: "invalid character literal".to_string(),
-                });
-            };
-            let decoded = decode_text(inner).map_err(|message| LiteralError {
-                span: numeral.span,
-                message,
-            })?;
-            let mut characters = decoded.chars();
-            let Some(character) = characters.next() else {
-                return Err(LiteralError {
-                    span: numeral.span,
-                    message: "an empty character literal has no value".to_string(),
-                });
-            };
-            if characters.next().is_some() {
-                return Err(LiteralError {
-                    span: numeral.span,
-                    message: "a character literal contains more than one scalar".to_string(),
-                });
-            }
-            Ok(BigUint::from(u32::from(character)))
-        }
+        NumeralKind::Character => character(numeral, text),
     }
+}
+
+/// The scalar value a character literal, `text`, holds.
+fn character(numeral: Numeral, text: &str) -> Result<BigUint, LiteralError> {
+    let refused = |message: &str| LiteralError {
+        span: numeral.span,
+        message: message.to_owned(),
+    };
+    let inner = text
+        .strip_prefix('\'')
+        .and_then(|text| text.strip_suffix('\''))
+        .ok_or_else(|| refused("invalid character literal"))?;
+    let decoded = decode_text(inner).map_err(|message| LiteralError {
+        span: numeral.span,
+        message,
+    })?;
+    let mut characters = decoded.chars();
+    let character = characters
+        .next()
+        .ok_or_else(|| refused("an empty character literal has no value"))?;
+    if characters.next().is_some() {
+        return Err(refused("a character literal contains more than one scalar"));
+    }
+    Ok(BigUint::from(u32::from(character)))
 }
 
 pub(crate) fn validate(module: &Module, source: &str) -> Result<(), LiteralError> {
@@ -250,11 +250,60 @@ fn validate_expr(expression: &Expr, source: &str) -> Result<(), LiteralError> {
 }
 
 fn validate_numeral(numeral: Numeral, source: &str) -> Result<(), LiteralError> {
-    if numeral.kind == NumeralKind::Character {
-        magnitude(numeral, source).map(|_| ())
-    } else {
-        Ok(())
+    match numeral.kind {
+        NumeralKind::Character => magnitude(numeral, source).map(|_| ()),
+        NumeralKind::Decimal => decimal(numeral, source).map(|_| ()),
+        NumeralKind::Number => Ok(()),
     }
+}
+
+/// The furthest a decimal's exponent may reach, either way: well past
+/// where every float is zero or infinite, and short of numbers too long to
+/// hold.
+const EXPONENT_LIMIT: u32 = 10_000;
+
+/// A decimal numeral as `digits / 10^scale`: `1.25` is `125` over `10^2`,
+/// and `2.5e3` is `2500` over `10^0`.
+///
+/// # Errors
+///
+/// Refuses an exponent beyond ten thousand either way.
+pub fn decimal(numeral: Numeral, source: &str) -> Result<(BigUint, u32), LiteralError> {
+    let text = numeral.text(source);
+    let refused = |message: String| LiteralError {
+        span: numeral.span,
+        message,
+    };
+    let (significand, exponent) = text
+        .split_once(['e', 'E'])
+        .map_or((text, "0"), |(significand, exponent)| {
+            (significand, exponent)
+        });
+    let (whole, fraction) = significand.split_once('.').unwrap_or((significand, ""));
+    let digits: String = whole.chars().chain(fraction.chars()).collect();
+    let digits = BigUint::parse_bytes(digits.as_bytes(), 10)
+        .ok_or_else(|| refused(format!("invalid decimal numeral `{text}`")))?;
+    let (negative, magnitude) = exponent.strip_prefix('-').map_or_else(
+        || (false, exponent.trim_start_matches('+')),
+        |rest| (true, rest),
+    );
+    let magnitude: u32 = magnitude
+        .parse()
+        .ok()
+        .filter(|magnitude| *magnitude <= EXPONENT_LIMIT)
+        .ok_or_else(|| {
+            refused(format!(
+                "the exponent of `{text}` reaches past {EXPONENT_LIMIT}, where every float is nought or infinite"
+            ))
+        })?;
+    let places = u32::try_from(fraction.len()).map_err(|_| refused("too many digits".into()))?;
+    if negative {
+        return Ok((digits, places + magnitude));
+    }
+    if magnitude >= places {
+        return Ok((digits * BigUint::from(10u8).pow(magnitude - places), 0));
+    }
+    Ok((digits, places - magnitude))
 }
 
 #[cfg(test)]

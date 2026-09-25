@@ -1,0 +1,144 @@
+# The IEEE 754 contract of the standard floats, as Ori states it in its
+# notes/values/floats.md, demonstrated for binary32: each block is one
+# of its rules, and the patterns are the host FPU's answers, taken from
+# Ori's oracle harness. `faun test` asks them, and so does
+# `cargo test --release -p faun-cli --test expectations -- --ignored`.
+
+import helpers {f f64 is_unordered is_eq}
+
+# Spec-defined results: correctly rounded, the standard's special cases.
+expect F32.add(1.0 1.0) == 2.0
+expect F32.add(0.1 0.2) == 0.3                       # the binary32 nearest to 0.3
+expect F32.mul(0.1 10.0) == 1.0                      # rounds back to one
+expect F32.div(1.0 3.0).to_bits() == 0x3eaaaaab      # a third, correctly rounded
+expect F32.sqrt(2.0).to_bits() == 0x3fb504f3        # the root of two
+
+# Declared precision and explicit fma: a product rounds once before a sum,
+# and only `fma` sees the exact product. (1 + 2^-23)^2 rounds to 1 + 2^-22;
+# subtracting that leaves zero, where the fused form keeps the 2^-46.
+expect f(0x3f800001).mul(f(0x3f800001)).to_bits() == 0x3f800002
+expect f(0x3f800001).mul(f(0x3f800001)).add(f(0xbf800002)) == 0.0
+expect F32.fma(f(0x3f800001) f(0x3f800001) f(0xbf800002)).to_bits() == 0x28800000
+
+# Fixed rounding: nearest, ties to even. Past 2^24 the unit is 2, so adding
+# 1 is a tie and stays, adding 3 is a tie and rounds to the even neighbour.
+expect F32.add(16777216.0 1.0) == 16777216.0
+expect F32.add(16777216.0 2.0) == 16777218.0
+expect F32.add(16777216.0 3.0) == 16777220.0
+
+# One NaN, from every invalid operation and from any NaN operand.
+expect F32.infinity().sub(F32.infinity()).to_bits() == 0x7fc00000   # Inf - Inf
+expect F32.mul(0.0 F32.infinity()).to_bits() == 0x7fc00000              # 0 * Inf
+expect F32.div(0.0 0.0).to_bits() == 0x7fc00000                         # 0 / 0
+expect F32.sqrt(-1.0).to_bits() == 0x7fc00000                       # the root of -1
+expect f(0x7f800001).add(1.0).to_bits() == 0x7fc00000               # a NaN with a payload, consumed
+
+# A NaN's sign and payload are not part of its value: every pattern reads
+# back canonical, compares equal, has no sign, and behaves alike everywhere.
+expect f(0xffc00000).to_bits() == 0x7fc00000
+expect f(0x7f800001).to_bits() == 0x7fc00000
+expect F32.nan().neg().to_bits() == 0x7fc00000
+expect f(0xffc00001).abs().to_bits() == 0x7fc00000
+expect f(0xffc00000) == f(0x7f800001)
+expect f(0xffc00000).sign_bit().not()
+expect is_unordered(F32.partial_cmp(f(0xffffffff) f(0xffffffff)))
+expect f(0xffffffff).add(1.0).to_bits() == 0x7fc00000
+
+# Structural equality: the NaN equals itself and the zeros differ; the
+# hardware's equality is `numeric_equals`.
+expect F32.nan() == F32.nan()
+expect F32.equals(-0.0 0.0).not()
+expect F32.numeric_equals(-0.0 0.0)
+expect F32.numeric_equals(F32.nan() F32.nan()).not()
+
+# Total ordering: the standard's clause 5.10 over values, end to end.
+expect F32.infinity().neg() < -1.0
+expect f(0xbf800000) < f(0x80000000)
+expect f(0x80000000) < f(0x00000000)
+expect f(0x00000000) < f(0x3f800000)
+expect 1.0 < F32.infinity()
+expect F32.infinity() < F32.nan()
+expect F32.infinity() < f(0xffc00000)   # whatever pattern the NaN has
+expect is_eq(F32.partial_cmp(-0.0 0.0))
+expect is_unordered(F32.partial_cmp(F32.nan() 1.0))
+
+# Gradual underflow: subnormals are values, and rounding reaches them.
+expect f(0x00000001).add(f(0x00000001)).to_bits() == 0x00000002
+expect f(0x00800000).mul(0.5).to_bits() == 0x00400000   # the smallest normal, halved
+expect f(0x00000003).mul(0.5).to_bits() == 0x00000002   # 1.5 units rounds to even
+expect f(0x00000001).mul(0.5) == 0.0                     # half a unit rounds to even
+
+# Total operations: the standard's default results, and never a trap.
+expect F32.div(1.0 0.0) == F32.infinity()
+expect F32.div(-1.0 0.0) == F32.infinity().neg()
+expect F32.mul(3.4028235e38 2.0) == F32.infinity()   # overflow
+
+# Signed zero, as the standard assigns it.
+expect F32.add(-0.0 (-0.0)).to_str() == "-0.0"
+expect F32.add(-0.0 0.0).to_str() == "0.0"
+expect F32.add(1.0 (-1.0)).to_str() == "0.0"    # exact cancellation
+expect F32.mul(-0.0 1.0).to_str() == "-0.0"
+expect F32.copy_sign(1.0 (-0.0)) == -1.0
+
+# Text round-trips: the shortest decimal that reads back, always a literal,
+# and parsing correctly rounded, ties to even.
+expect F32.to_str(1.0) == "1.0"
+expect F32.to_str(0.1) == "0.1"                     # not 0.100000001
+expect F32.div(1.0 3.0).to_str() == "0.33333334"     # nine digits when it takes them
+expect F32.to_str(3.4028235e38) == "3.4028235e38"
+expect F32.to_str(1.0e-45) == "1.0e-45"
+expect F32.to_str(-0.0) == "-0.0"
+expect F32.nan().to_str() == "NaN"
+expect F32.infinity().neg().to_str() == "-Infinity"
+expect F32.from_str("0.1") == Ok(0.1)
+expect F32.from_str("16777217") == Ok(16777216.0)   # a tie, to even
+expect F32.from_str("3.4028236e38") == Ok(F32.infinity())
+expect F32.from_str("1e-46") == Ok(0.0)
+expect F32.from_str("1e") == Err(Malformed)
+expect F32.from_str("") == Err(Malformed)
+expect F32.from_str(0.3.to_str()) == Ok(0.3)
+
+# Decimal numerals: a point always, the type from context, correctly rounded,
+# and negated through `neg` like any numeral.
+expect F32.to_bits(1.5) == 0x3fc00000
+expect F32.to_bits(0.1) == 0x3dcccccd
+expect F32.to_bits(-2.5) == 0xc0200000
+expect F32.to_bits(1.0e-45) == 0x00000001
+expect F32.to_bits(3.4028235e38) == 0x7f7fffff
+expect F32.to_bits(2.5E2) == 0x437a0000
+expect F32.to_str(0.30000001192092896) == "0.3"
+expect F32.to_str([1.5 2.5].sum()) == "4.0"
+
+# Conversions with the integers: correctly rounded in, exact out, and the
+# five roundings to an integer value, each keeping the sign of a zero.
+expect F32.of_nat(16777217) == 16777216.0                  # a tie, to even
+expect F32.of_nat(2.pow(100)) == 1.2676506e30
+expect F32.of_nat(10.pow(40)) == F32.infinity()
+expect F32.of_int(3.neg()) == -3.0
+expect F32.integer_part(2.75) == Ok(Int.of_nat(2))
+expect F32.integer_part(-2.75) == Ok(Int.of_nat(2).neg())
+expect F32.integer_part(3.4028235e38) == Ok(Int.of_nat(2.pow(128) - 2.pow(104)))
+expect F32.integer_part(F32.nan()) == Err(NotFinite)
+expect F32.integer_part(F32.infinity()) == Err(NotFinite)
+expect F32.trunc(2.5) == 2.0
+expect F32.trunc(-2.5) == -2.0
+expect F32.floor(-2.5) == -3.0
+expect F32.ceil(-2.5) == -2.0
+expect F32.round(2.5) == 3.0
+expect F32.round(-2.5) == -3.0
+expect F32.round_even(2.5) == 2.0
+expect F32.round_even(3.5) == 4.0
+expect F32.ceil(-0.5).to_str() == "-0.0"
+expect F32.floor(0.5).to_str() == "0.0"
+expect F32.largest().to_str() == "3.4028235e38"
+expect F32.smallest_normal().to_str() == "1.1754944e-38"
+expect F32.smallest_subnormal().to_str() == "1.0e-45"
+expect F32.add(1.0 F32.epsilon()) > 1.0
+
+# The named values, and the bound `zero` satisfies: a list of floats sums.
+expect F32.nan().is_nan()
+expect F32.nan().to_bits() == 0x7fc00000
+expect F32.infinity().to_bits() == 0x7f800000
+expect F32.infinity().neg().to_bits() == 0xff800000
+expect F32.zero() == 0.0
+expect F32.to_str([1.0 2.0].sum()) == "3.0"

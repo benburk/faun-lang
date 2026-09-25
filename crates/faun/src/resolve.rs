@@ -1219,6 +1219,11 @@ impl ClauseResolver<'_> {
     fn expr(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
         let kind = match &expression.kind {
             s::ExprKind::Name(name) => self.name(*name)?,
+            s::ExprKind::Number(numeral) if numeral.kind == s::NumeralKind::Decimal => {
+                let (digits, scale) = literal::decimal(*numeral, self.source)
+                    .expect("literals were validated while parsing");
+                h::ExprKind::Decimal(digits, scale)
+            }
             s::ExprKind::Number(numeral) => h::ExprKind::Number(
                 literal::magnitude(*numeral, self.source)
                     .expect("literals were validated while parsing"),
