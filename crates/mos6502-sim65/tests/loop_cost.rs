@@ -79,7 +79,7 @@ fn run(program: &Program) -> (u64, i32) {
 
 #[test]
 fn a_loop_iteration_stays_within_its_cycle_ceiling() {
-    const CEILING: u64 = 38;
+    const CEILING: u64 = 36;
     let (low, high) = (300u64, 1300u64);
 
     let (cheap, small) = run(&summing_loop(low));

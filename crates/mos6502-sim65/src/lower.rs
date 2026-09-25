@@ -67,7 +67,7 @@ impl Spans {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Source {
     Const(u64),
     Addr(DataId),
@@ -230,6 +230,7 @@ fn path_to_continue(
 fn reads(program: &Program) -> Vec<u16> {
     let mut needs = vec![0u16; program.values_count()];
     let mut regions = Vec::new();
+    let mut joins = Vec::new();
     for function in program.functions() {
         let Some(body) = function.body() else {
             continue;
@@ -243,6 +244,7 @@ fn reads(program: &Program) -> Vec<u16> {
             } = *op
             {
                 regions.extend([then_region, else_region]);
+                joins.push(([then_region, else_region], results));
             }
             if let Op::Loop { body, .. } = *op {
                 regions.push(body);
@@ -266,16 +268,47 @@ fn reads(program: &Program) -> Vec<u16> {
         }
     }
     mark_region_outputs(program, &regions, &mut needs);
+    mark_yields(program, &joins, &mut needs);
     needs
 }
 
-/// What a region carries out of it is read whole wherever it lands.
+/// What an arm yields is read as far as its `if`'s result is.
+///
+/// The walk meets an outer `if` before any inside it, so an inner result's
+/// needs are settled before they pass on to what its own arms yield.
+fn mark_yields(program: &Program, joins: &[([RegionId; 2], &[ValueId])], needs: &mut [u16]) {
+    for &(arms, results) in joins {
+        for arm in arms {
+            if !yields(program, arm) {
+                continue;
+            }
+            for (value, result) in program.outgoing(arm).iter().zip(results) {
+                needs[value.index()] = needs[value.index()].max(needs[result.index()]);
+            }
+        }
+    }
+}
+
+/// What a loop body carries out of it is read whole wherever it lands:
+/// the parameters it continues with are read before it is known how much
+/// of them will be.
 fn mark_region_outputs(program: &Program, regions: &[RegionId], needs: &mut [u16]) {
     for &region in regions {
+        if yields(program, region) {
+            continue;
+        }
         for &value in program.outgoing(region) {
             needs[value.index()] = bits(program.class(value));
         }
     }
+}
+
+/// Whether a region ends by yielding to its enclosing `if`.
+fn yields(program: &Program, region: RegionId) -> bool {
+    program
+        .region(region)
+        .terminator
+        .is_some_and(|term| term.exit == Exit::Yield)
 }
 
 fn exit_status(program: &Program, op: &Op) -> Option<ValueId> {
@@ -463,6 +496,9 @@ struct Lowering<'a> {
     )>,
     /// An absent label means the arm falls into its continuation.
     ifs: Vec<(Vec<ValueId>, Option<super::asm::Label>)>,
+    /// What the machine held when a then arm jumped to its continuation,
+    /// for the continuation to join with the else arm falling into it.
+    jumped: Option<MachineState>,
     /// Path-local upper bounds established by enclosing comparisons.
     bounds: Vec<(ValueId, u64)>,
 }
@@ -485,6 +521,7 @@ impl<'a> Lowering<'a> {
             starts: Vec::new(),
             loops: Vec::new(),
             ifs: Vec::new(),
+            jumped: None,
             bounds: Vec::new(),
         }
     }
@@ -1321,22 +1358,28 @@ impl Lowering<'_> {
     /// eight bits or fewer keeps one byte, and whatever the pair had above
     /// it was nought and is not worth writing down.
     fn commit(&mut self, value: ValueId, pair: u8) {
+        self.put(value, Operand::pair(pair));
+    }
+
+    /// Write `from` wherever `value` lives, a byte at a time, so that a
+    /// literal or a one-byte place needs no pair to pass through.
+    fn put(&mut self, value: ValueId, from: Operand) {
         let wide = self.wide(value);
         match self.source[value.index()] {
-            Source::Home(home) if home == pair => {}
+            Source::Home(home) if matches!(from, Operand::Zp { at, .. } if at == home) => {}
             Source::Home(home) => {
-                self.asm.carry(Held::Zero(pair), home);
+                self.asm.carry(from.byte(0), home);
                 if wide {
-                    self.asm.carry(Held::Zero(pair + 1), home + 1);
+                    self.asm.carry(from.byte(1), home + 1);
                 }
             }
             Source::Slot(offset) => {
                 self.asm.ldy_imm(offset);
-                self.asm.lda_zp(pair);
+                self.load(from.byte(0));
                 self.asm.sta_ind_y(FP);
                 if wide {
                     self.asm.iny();
-                    self.asm.lda_zp(pair + 1);
+                    self.load(from.byte(1));
                     self.asm.sta_ind_y(FP);
                 }
             }
@@ -1485,14 +1528,8 @@ impl Lowering<'_> {
             if !moving[index] {
                 continue;
             }
-            match self.operand(source, T0) {
-                Operand::Zp { at, .. } => self.commit(destinations[index], at),
-                Operand::Imm(value) => {
-                    let scratch = if index == 0 { T0 } else { T1 };
-                    self.set_pair(scratch, value);
-                    self.commit(destinations[index], scratch);
-                }
-            }
+            let from = self.operand(source, T0);
+            self.put(destinations[index], from);
         }
     }
 
@@ -1580,10 +1617,7 @@ impl Lowering<'_> {
 
     /// Whether this arm reaches its enclosing `if`'s continuation.
     fn yields(&self, region: RegionId) -> bool {
-        self.program
-            .region(region)
-            .terminator
-            .is_some_and(|term| term.exit == Exit::Yield)
+        yields(self.program, region)
     }
 
     fn conditional(
@@ -1597,6 +1631,12 @@ impl Lowering<'_> {
             .pending
             .take_if(|(value, ..)| *value == condition)
             .map(|(_, relation, left, right)| (relation, left, right));
+        if let Some((Relation::Less, left, right)) = comparison
+            && let Some(difference) = self.monus_arm(left, right, then_region, else_region, results)
+        {
+            self.monus(left, right, difference, then_region, results);
+            return;
+        }
         let bound = self.comparison_bound(comparison);
         let (then_yields, else_yields) = (self.yields(then_region), self.yields(else_region));
 
@@ -1625,15 +1665,142 @@ impl Lowering<'_> {
             return;
         }
 
+        self.both_arms(condition, comparison, then_region, else_region, results);
+    }
+
+    /// The difference an `if left < right then c else left - right` works
+    /// out, where `c` is a literal: its else arm is that one subtraction
+    /// and nothing more, and its then arm only names literals. Only where
+    /// the subtraction's borrow is no dearer than the comparison.
+    fn monus_arm(
+        &self,
+        left: ValueId,
+        right: ValueId,
+        then_region: RegionId,
+        else_region: RegionId,
+        results: &[ValueId],
+    ) -> Option<ValueId> {
+        let program = self.program;
+        let literal = |value: ValueId| {
+            matches!(
+                self.source[value.index()],
+                Source::Const(_) | Source::Addr(_)
+            )
+        };
+        let naming = |op: &Op| matches!(op, Op::Constant { .. } | Op::AddressOf(_));
+        if results.len() != 1 || !self.yields(then_region) || !self.yields(else_region) {
+            return None;
+        }
+        if !program.ops(then_region).iter().all(naming)
+            || !program
+                .outgoing(then_region)
+                .iter()
+                .all(|&value| literal(value))
+        {
+            return None;
+        }
+        let mut working = program.walk(else_region).filter(|(op, _)| !naming(op));
+        let (op, &[difference]) = working.next()? else {
+            return None;
+        };
+        let same = |a: ValueId, b: ValueId| {
+            a == b || (literal(a) && self.source[a.index()] == self.source[b.index()])
+        };
+        let subtracts = matches!(
+            *op,
+            Op::Binary { op: Binary::Sub, left: l, right: r } if same(l, left) && same(r, right)
+        );
+        // A difference of one byte out of a comparison of two needs a high
+        // byte worked out for its borrow alone, which pushes the low byte
+        // out of A; the comparison decides sooner on its own.
+        let narrow = !self.wide(left) && !self.wide(right);
+        (subtracts
+            && working.next().is_none()
+            && program.outgoing(else_region) == [difference]
+            && (narrow || self.wide(difference)))
+        .then_some(difference)
+    }
+
+    /// `left < right ? c : left - right` as the subtraction alone, whose
+    /// carry is the comparison: set exactly when `left` is at least `right`.
+    /// The difference goes where the `if`'s result lives before the branch,
+    /// since loads and stores leave the carry alone, and `c` replaces it
+    /// only on a borrow.
+    fn monus(
+        &mut self,
+        left: ValueId,
+        right: ValueId,
+        difference: ValueId,
+        then_region: RegionId,
+        results: &[ValueId],
+    ) {
+        let left = self.operand(left, T0);
+        let right = self.operand(right, T1);
+        let dest = self.dest(difference);
+        let low = self.begin_chain(Binary::Sub, right.byte(0));
+        self.load(left.byte(0));
+        self.accumulate(Binary::Sub, low);
+        self.asm.sta_zp(dest);
+        // High bytes that are the same literal or place leave the borrow as
+        // the low byte did, and a narrow difference has no high byte to keep.
+        let wide = self.wide(difference);
+        if wide || left.byte(1) != right.byte(1) {
+            self.load(left.byte(1));
+            self.accumulate(Binary::Sub, right.byte(1));
+            if wide {
+                self.asm.sta_zp(dest + 1);
+            }
+        }
+        self.commit(difference, dest);
+        self.transfer(&[difference], results);
+        let done = self.asm.label();
+        let kept = self.asm.branch_state(Cc::Carry, done);
+        self.ifs.push((results.to_vec(), None));
+        self.region(then_region);
+        self.ifs.pop();
+        let replaced = self.asm.state();
+        self.asm.bind_with(done, kept.join(replaced));
+    }
+
+    /// An `if` whose arms both yield, or neither does: the then arm jumps
+    /// over the else arm, which falls into whatever follows.
+    fn both_arms(
+        &mut self,
+        condition: ValueId,
+        comparison: Option<(Relation, ValueId, ValueId)>,
+        then_region: RegionId,
+        else_region: RegionId,
+        results: &[ValueId],
+    ) {
+        let bound = self.comparison_bound(comparison);
+        let then_yields = self.yields(then_region);
         let otherwise = self.asm.label();
         let end = self.asm.label();
         let state = self.branch_if_false(condition, comparison, otherwise);
         self.ifs.push((results.to_vec(), Some(end)));
         self.region_below(then_region, bound);
+        self.ifs.pop();
+        // Arms that both end elsewhere leave nothing to join.
+        let jumped = then_yields.then(|| {
+            self.jumped
+                .take()
+                .expect("a yielding then arm jumps to its end")
+        });
         self.asm.bind_with(otherwise, state);
+        // The else arm is written last, so it runs straight into the
+        // continuation; only the then arm jumps over it. What both arms
+        // leave in a register, such as a result both stored from A, the
+        // continuation need not load again.
+        self.ifs.push((results.to_vec(), None));
         self.region(else_region);
         self.ifs.pop();
-        self.asm.bind(end);
+        match jumped {
+            Some(jumped) => {
+                let fallen = self.asm.state();
+                self.asm.bind_with(end, jumped.join(fallen));
+            }
+            None => self.asm.bind(end),
+        }
     }
 
     fn repeat(&mut self, initial: &[ValueId], body: RegionId, results: &[ValueId]) {
@@ -1844,12 +2011,8 @@ impl Lowering<'_> {
         // high bytes before the high one, so the destination may be one of
         // the operands.
         self.load(left.byte(0));
-        match op {
-            Binary::Add => self.asm.clc(),
-            Binary::Sub => self.asm.sec(),
-            _ => unreachable!("multiply/divide use bitwise legalization"),
-        }
-        self.accumulate(op, right.byte(0));
+        let low = self.begin_chain(op, right.byte(0));
+        self.accumulate(op, low);
         self.asm.sta_zp(dest);
         // An answer of eight bits or fewer has nothing above them to write,
         // and the place it goes to keeps nothing above them either.
@@ -1869,6 +2032,33 @@ impl Lowering<'_> {
 
     /// A step of one over a pair, which reaches the high byte only where the
     /// low one wrapped.
+    /// Ready the carry for the low byte of a sum or difference, and say
+    /// what that byte is then combined with.
+    ///
+    /// A literal can take up a carry already the other way: with carry set,
+    /// `adc #v-1` answers what `adc #v` does with it clear, carry out
+    /// included, and with carry clear `sbc #v-1` answers `sbc #v`. Nought
+    /// has nothing below it to become.
+    fn begin_chain(&mut self, op: Binary, right: Held) -> Held {
+        match (op, right, self.asm.known_carry()) {
+            (Binary::Add, Held::Imm(value), Some(true))
+            | (Binary::Sub, Held::Imm(value), Some(false))
+                if value > 0 =>
+            {
+                Held::Imm(value - 1)
+            }
+            (Binary::Add, ..) => {
+                self.asm.clc();
+                right
+            }
+            (Binary::Sub, ..) => {
+                self.asm.sec();
+                right
+            }
+            _ => unreachable!("multiply/divide use bitwise legalization"),
+        }
+    }
+
     fn step(&mut self, op: Binary, dest: u8) {
         let done = self.asm.label();
         match op {
@@ -2132,6 +2322,16 @@ impl Lowering<'_> {
         }
     }
 
+    /// Set Z for a branch on whether two bytes are equal, and nothing a
+    /// branch on carry could read. Against nought, a byte Z already
+    /// reflects needs no compare at all.
+    fn test_equal(&mut self, left: Held, right: Held) {
+        if nought(right) && self.asm.zero_reflects(left) {
+            return;
+        }
+        self.compare_byte(left, right);
+    }
+
     /// Branch to `yes` when the relation holds, and fall through when it
     /// does. Return the state all edges to `yes` agree on.
     fn holds(
@@ -2144,18 +2344,29 @@ impl Lowering<'_> {
         let no = self.asm.label();
         let at_yes = match relation {
             Relation::Equal => {
-                self.compare_byte(left.byte(0), right.byte(0));
+                self.test_equal(left.byte(0), right.byte(0));
                 // Narrow values both name immediate zero above their low
                 // byte; the same place or literal is necessarily equal too.
                 if left.byte(1) != right.byte(1) {
                     self.asm.branch(Cc::NotEqual, no);
-                    self.compare_byte(left.byte(1), right.byte(1));
+                    self.test_equal(left.byte(1), right.byte(1));
                 }
                 self.asm.branch_state(Cc::Equal, yes)
             }
+            // High bytes that are the same literal or place tie, and the
+            // low byte decides alone.
+            Relation::Less if left.byte(1) == right.byte(1) => {
+                self.compare_byte(left.byte(0), right.byte(0));
+                self.asm.branch_state(Cc::NoCarry, yes)
+            }
             // Unsigned, high byte first; the low byte only decides a tie.
             Relation::Less => {
-                self.compare_byte(left.byte(1), right.byte(1));
+                // Nothing is under nought, so against it only Z is read.
+                if nought(right.byte(1)) {
+                    self.test_equal(left.byte(1), right.byte(1));
+                } else {
+                    self.compare_byte(left.byte(1), right.byte(1));
+                }
                 let high =
                     (!nought(right.byte(1))).then(|| self.asm.branch_state(Cc::NoCarry, yes));
                 self.asm.branch(Cc::NotEqual, no);
@@ -2179,22 +2390,27 @@ impl Lowering<'_> {
     ) -> MachineState {
         match relation {
             Relation::Equal => {
-                self.compare_byte(left.byte(0), right.byte(0));
+                self.test_equal(left.byte(0), right.byte(0));
                 let low = self.asm.branch_state(Cc::NotEqual, no);
                 if left.byte(1) == right.byte(1) {
                     low
                 } else {
-                    self.compare_byte(left.byte(1), right.byte(1));
+                    self.test_equal(left.byte(1), right.byte(1));
                     low.join(self.asm.branch_state(Cc::NotEqual, no))
                 }
             }
+            Relation::Less if left.byte(1) == right.byte(1) => {
+                self.compare_byte(left.byte(0), right.byte(0));
+                self.asm.branch_state(Cc::Carry, no)
+            }
             Relation::Less => {
-                self.compare_byte(left.byte(1), right.byte(1));
                 if nought(right.byte(1)) {
+                    self.test_equal(left.byte(1), right.byte(1));
                     let high = self.asm.branch_state(Cc::NotEqual, no);
                     self.compare_byte(left.byte(0), right.byte(0));
                     high.join(self.asm.branch_state(Cc::Carry, no))
                 } else {
+                    self.compare_byte(left.byte(1), right.byte(1));
                     let yes = self.asm.label();
                     let at_yes = self.asm.branch_state(Cc::NoCarry, yes);
                     let high = self.asm.branch_state(Cc::NotEqual, no);
@@ -2374,6 +2590,7 @@ impl Lowering<'_> {
                 let (results, end) = self.ifs.last().expect("a yield inside an if").clone();
                 self.transfer(values, &results);
                 if let Some(end) = end {
+                    self.jumped = Some(self.asm.state());
                     self.asm.jmp(end);
                 }
             }

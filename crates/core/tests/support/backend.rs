@@ -1052,6 +1052,43 @@ fn runtime_arithmetic_boundaries_and_odd_widths() {
 }
 
 #[test]
+fn runtime_monus_across_byte_boundaries() {
+    for bits in [8, 9, 16, 32, 64] {
+        if bits > TARGET.word() {
+            continue;
+        }
+        let max = u64::MAX >> (64 - bits);
+        let mut pairs = vec![
+            (0, 0),
+            (0, 1),
+            (1, 0),
+            (5, 5),
+            (4, 5),
+            (6, 5),
+            (255, 256),
+            (256, 255),
+            (256, 256),
+            (511, 256),
+            (256, 1),
+            (1, 256),
+            (max, max),
+            (max - 1, max),
+            (max, max - 1),
+            (max, 0),
+            (0, max),
+        ];
+        pairs.retain(|&(left, right)| left <= max && right <= max);
+        for chunk in pairs.chunks(8) {
+            assert_eq!(
+                status(&programs::arithmetic::monus(bits, chunk)),
+                0,
+                "{bits} {chunk:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn runtime_arithmetic_varied_inputs() {
     // Deterministic 16-bit inputs, checked by the host's unsigned model.
     let mut seed = 0xD371u16;

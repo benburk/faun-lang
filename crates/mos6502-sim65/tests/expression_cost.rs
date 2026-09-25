@@ -27,8 +27,8 @@ const BASELINES: &[(Case, usize, u64)] = &[
     (Case::Chain, 50, 36),
     (Case::Shared, 55, 44),
     (Case::ConstantLeft, 50, 36),
-    (Case::Carry, 121, 115),
-    (Case::Monus, 83, 64),
+    (Case::Carry, 98, 96),
+    (Case::Monus, 64, 47),
 ];
 
 #[test]

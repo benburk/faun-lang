@@ -160,6 +160,17 @@ struct Flags {
     zero: Option<bool>,
     negative: Option<bool>,
     overflow: Option<bool>,
+    /// The register whose present value N and Z were last set from, which
+    /// makes a compare of that register against nought say nothing new to
+    /// a branch on Z.
+    from: Option<Reg>,
+}
+
+/// One of the eight-bit registers this assembler tracks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Reg {
+    A,
+    X,
 }
 
 impl Flags {
@@ -181,6 +192,7 @@ impl Flags {
             zero: same(self.zero, other.zero),
             negative: same(self.negative, other.negative),
             overflow: same(self.overflow, other.overflow),
+            from: same(self.from, other.from),
         }
     }
 }
@@ -237,6 +249,7 @@ impl MachineState {
             zero: None,
             negative: None,
             overflow: None,
+            from: None,
         },
     };
 
@@ -485,13 +498,22 @@ impl Assembler {
         self.state.x.holds(held)
     }
 
+    /// Whether Z already says if this byte is nought: a register holds it,
+    /// and N and Z were set from that register's present value.
+    pub(crate) const fn zero_reflects(&self, held: Held) -> bool {
+        match self.state.flags.from {
+            Some(Reg::A) => self.state.acc.holds(held),
+            Some(Reg::X) => self.state.x.holds(held),
+            None => false,
+        }
+    }
+
     /// Read a byte into the accumulator, unless it already holds it.
     ///
-    /// The load left out is one that would have set the negative and zero
-    /// flags from the value they already reflect. Nothing between here and
-    /// whatever reads those reads them: every branch this target writes is
-    /// reached through a compare, a bit test or a decrement, each of which
-    /// writes the flags itself.
+    /// The load left out would have set N and Z from the byte, and they may
+    /// reflect something else. A branch that reads them without a compare,
+    /// a bit test or a decrement first asks [`Self::zero_reflects`], which
+    /// only answers yes where they reflect the register holding it.
     pub(crate) fn load(&mut self, held: Held) {
         if !self.needs_load(held) {
             return;
@@ -524,11 +546,35 @@ impl Assembler {
     }
 
     /// What is known once an instruction has run.
+    fn after(&self, mnemonic: Mnemonic, operand: Operand) -> MachineState {
+        let mut state = self.effect(mnemonic, operand);
+        state.flags.from = self.nz_from(mnemonic, operand);
+        state
+    }
+
+    /// Which register N and Z reflect once an instruction has run. Every
+    /// instruction that writes A or X sets them from it; those that write
+    /// neither the registers nor N and Z leave the answer as it was.
+    const fn nz_from(&self, mnemonic: Mnemonic, operand: Operand) -> Option<Reg> {
+        use Mnemonic as M;
+        match (mnemonic, operand) {
+            (M::Lda | M::Adc | M::Sbc | M::And | M::Ora, _)
+            | (M::Asl | M::Rol | M::Lsr | M::Ror, Operand::Implied) => Some(Reg::A),
+            (M::Ldx | M::Dex, _) => Some(Reg::X),
+            (M::Sta | M::Stx | M::Clc | M::Sec | M::Txs | M::Jmp | M::Rts, _) => {
+                self.state.flags.from
+            }
+            _ => None,
+        }
+    }
+
+    /// What an instruction does to the registers and to what is known of
+    /// the flags' values.
     #[expect(
         clippy::too_many_lines,
         reason = "one exhaustive arm per machine instruction family"
     )]
-    fn after(&self, mnemonic: Mnemonic, operand: Operand) -> MachineState {
+    fn effect(&self, mnemonic: Mnemonic, operand: Operand) -> MachineState {
         use Mnemonic as M;
         let before = self.state;
         match mnemonic {
@@ -746,6 +792,7 @@ impl Assembler {
     pub(crate) fn finish(mut self) -> Vec<u8> {
         self.check_nothing_jumps_where_nothing_should();
         self.drop_unread_stores();
+        self.thread_jumps();
         self.drop_repeated_jumps();
         let (far, at) = self.settled();
         let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
@@ -825,6 +872,32 @@ impl Assembler {
             return;
         }
         self.keeping(&kept);
+    }
+
+    /// Send a `jmp` that lands on another `jmp` straight to where that one
+    /// goes. The bytes are the same and the second jump's cycles are saved;
+    /// a label left with nothing naming it costs nothing.
+    fn thread_jumps(&mut self) {
+        for at in 0..self.insts.len() {
+            // Each step moves to a different jump, so a ring of them is the
+            // only way to go on longer than there are instructions.
+            for _ in 0..self.insts.len() {
+                let Inst::Absolute {
+                    mnemonic: Mnemonic::Jmp,
+                    to,
+                } = self.insts[at]
+                else {
+                    break;
+                };
+                let landing = self.labels[to.0].and_then(|id| self.insts.get(id)).copied();
+                match landing {
+                    Some(next) if next.is_jump() && next != self.insts[at] => {
+                        self.insts[at] = next;
+                    }
+                    _ => break,
+                }
+            }
+        }
     }
 
     /// Merge adjacent copies of the same unconditional jump.
@@ -992,7 +1065,10 @@ impl Assembler {
     pub(crate) fn lda_imm_half(&mut self, label: Label, half: Half) {
         self.state = MachineState {
             acc: Register::NOTHING,
-            flags: self.state.flags.with_nz(None),
+            flags: Flags {
+                from: Some(Reg::A),
+                ..self.state.flags.with_nz(None)
+            },
             ..self.state
         };
         self.insts.push(Inst::Half { to: label, half });
@@ -1094,6 +1170,11 @@ impl Assembler {
     }
 
     // Arithmetic and comparison, all through the accumulator.
+
+    /// The carry, where it is known.
+    pub(crate) const fn known_carry(&self) -> Option<bool> {
+        self.state.flags.carry
+    }
 
     pub(crate) fn clc(&mut self) {
         if self.state.flags.carry != Some(false) {
@@ -1242,6 +1323,40 @@ mod tests {
 
         // Neither remembered place is read from memory, so both stores leave.
         assert_eq!(asm.finish(), [0xA9, 0x07, 0xA2, 0x00, 0xE0, 0x00]);
+    }
+
+    #[test]
+    fn zero_flag_follows_the_register_last_written_until_a_compare() {
+        let mut asm = Assembler::new(0x200);
+        asm.lda_zp(0x20);
+        asm.clc();
+        asm.adc_imm(1);
+        asm.sta_zp(0x21);
+        // A store changes neither A nor the flags set from it.
+        assert!(asm.zero_reflects(Held::Zero(0x21)));
+        asm.ldx_zp(0x22);
+        assert!(!asm.zero_reflects(Held::Zero(0x21)));
+        assert!(asm.zero_reflects(Held::Zero(0x22)));
+        asm.cmp_imm(3);
+        assert!(!asm.zero_reflects(Held::Zero(0x21)));
+        assert!(!asm.zero_reflects(Held::Zero(0x22)));
+    }
+
+    #[test]
+    fn a_jump_to_a_jump_goes_to_the_second_target() {
+        let mut asm = Assembler::new(0x200);
+        let over = asm.label();
+        let tail = asm.label();
+        asm.jmp(tail);
+        asm.bind(over);
+        asm.lda_imm(0);
+        asm.bind(tail);
+        asm.jmp_abs(0xFFF9);
+
+        assert_eq!(
+            asm.finish(),
+            [0x4C, 0xF9, 0xFF, 0xA9, 0x00, 0x4C, 0xF9, 0xFF]
+        );
     }
 
     #[test]
