@@ -16,7 +16,7 @@ impl Default for InlineLimits {
         Self {
             max_callee: 256,
             per_function: 4096,
-            total: 65_536,
+            total: 1_048_576,
             max_depth: 32,
         }
     }
