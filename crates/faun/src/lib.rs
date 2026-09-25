@@ -28,6 +28,8 @@ pub mod blessed;
 mod callbacks;
 pub mod check;
 pub mod diagnostic;
+#[cfg(test)]
+mod ebnf;
 mod exhaustive;
 mod expectations;
 mod first_order;
@@ -35,6 +37,7 @@ mod grammar;
 pub mod hir;
 pub mod host;
 pub mod lex;
+mod lines;
 pub mod literal;
 pub mod lower;
 pub mod modules;

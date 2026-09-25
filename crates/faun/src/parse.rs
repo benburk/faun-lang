@@ -3,6 +3,7 @@ use std::fmt;
 use super::ast::Module;
 use super::grammar;
 use super::lex::{self, Kind, Token};
+use super::lines;
 use super::literal;
 use super::source::SourceId;
 
@@ -57,8 +58,18 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
     let validate_literals = tokens
         .iter()
         .any(|token| matches!(token.kind, Kind::Char | Kind::StrText));
-    let mut module =
-        grammar::source::program(&tokens).map_err(|error| syntax_error(source, &tokens, &error))?;
+    let lines = grammar::source::program(&tokens, source)
+        .map_err(|error| syntax_error(source, &tokens, &error))?;
+    let items = lines::items(lines, source).map_err(|error| {
+        let offset = usize::try_from(error.span.start).expect("u32 fits usize");
+        let mut located = error_at(source, offset, error.message);
+        located.end = usize::try_from(error.span.end).expect("u32 fits usize");
+        located
+    })?;
+    let mut module = Module {
+        source: SourceId::DETACHED,
+        items,
+    };
     if let Some(line) = discarded_values(&module, source) {
         let offset = usize::try_from(line.start).expect("u32 fits usize");
         let mut error = error_at(
@@ -128,6 +139,21 @@ fn syntax_error(
             let operator = token.text(source);
             format!(
                 "`{operator}` has space on one side only: write `a {operator} b`, or `a{operator}b`"
+            )
+        }
+        Kind::Detached => match token.text(source) {
+            joiner @ ("." | "..") => format!("`{joiner}` goes against what it joins: no space around it"),
+            joiner => format!("`{joiner}` goes against what it follows: no space before it"),
+        },
+        Kind::Adjacent => {
+            let before = error
+                .location
+                .checked_sub(1)
+                .and_then(|at| tokens.get(at))
+                .map_or("", |before| before.text(source));
+            format!(
+                "`{before}` and `{}` are two elements: part them with a space",
+                token.text(source)
             )
         }
         Kind::NegatedElement => "this `-` begins an element of its own: write `a - b` to subtract, or `(-b)` for a negated element".to_owned(),

@@ -24,6 +24,12 @@
 //! operator spaced on one side only is [`Kind::Lopsided`], and a `-` beginning
 //! an element after another, `[a -b]`, is [`Kind::NegatedElement`] unless it
 //! negates a numeral, `[-4 -5]`: both are errors the parser reports.
+//!
+//! What joins by adjacency is read here too, so the grammar reads kinds
+//! alone: a `(` against an operand is a call's, [`Kind::CallParen`]; `.`, `..`,
+//! `.*` and `?` go against what they join, or they are [`Kind::Detached`]; and
+//! an operand straight against another is [`Kind::Adjacent`], since elements
+//! side by side are parted by space.
 
 // Token recognition is clearer as one exhaustive byte match than as forwarding
 // helpers cut to satisfy a line-count heuristic.
@@ -58,6 +64,8 @@ pub enum Kind {
     /// The closing quote of a string.
     StrEnd,
     LParen,
+    /// `(` straight after an operand: a call's arguments, or a type's.
+    CallParen,
     RParen,
     LBracket,
     RBracket,
@@ -113,6 +121,11 @@ pub enum Kind {
     /// A `-` beginning an element straight after another, `[a -b]`, where it
     /// negates no numeral: an error, being so near `a - b`.
     NegatedElement,
+    /// `.`, `..`, `.*` or `?` with space where it joins: an error.
+    Detached,
+    /// An operand straight after another, `a"b"`: an error, as elements
+    /// side by side are parted by space.
+    Adjacent,
     /// The end of a line of items or of a body; see the module notes.
     Newline,
     /// The end of the text: every token stream ends with one.
@@ -139,6 +152,28 @@ impl Kind {
                 | Self::DotStar
                 | Self::Question
                 | Self::Error
+        )
+    }
+
+    /// Whether an operand can begin with this token.
+    const fn begins_operand(self) -> bool {
+        matches!(
+            self,
+            Self::Ident
+                | Self::EffectIdent
+                | Self::TypeIdent
+                | Self::Wild
+                | Self::Number
+                | Self::Decimal
+                | Self::Char
+                | Self::StrStart
+                | Self::LParen
+                | Self::LBracket
+                | Self::LBrace
+                | Self::Negate
+                | Self::Bang
+                | Self::LambdaBar
+                | Self::Rest
         )
     }
 
@@ -352,7 +387,9 @@ impl Lexer<'_> {
         let kind = self.classify(kind);
         match kind {
             Kind::DotParen => self.brackets.push(Bracket::Lines),
-            Kind::LParen | Kind::LBracket | Kind::LBrace => self.brackets.push(Bracket::Joined),
+            Kind::LParen | Kind::CallParen | Kind::LBracket | Kind::LBrace => {
+                self.brackets.push(Bracket::Joined);
+            }
             Kind::RParen | Kind::RBracket | Kind::RBrace => {
                 self.brackets.pop();
             }
@@ -375,7 +412,7 @@ impl Lexer<'_> {
         let operand = self.out.last().is_some_and(|last| last.kind.ends_line());
         let (before, after) = (self.space_before, self.space_after());
         let prefix = !operand || before && !after;
-        match kind {
+        let kind = match kind {
             Kind::Minus if !operand => Kind::Negate,
             Kind::Minus if prefix && self.bytes.get(self.at).is_some_and(u8::is_ascii_digit) => {
                 Kind::Negate
@@ -384,7 +421,16 @@ impl Lexer<'_> {
             Kind::Star if prefix || before && self.closes_next() => Kind::Rest,
             Kind::Bar if prefix => Kind::LambdaBar,
             kind if kind.infix() && before != after => Kind::Lopsided,
+            Kind::LParen if operand && !before => Kind::CallParen,
+            Kind::Dot if before && !self.newline_before || after => Kind::Detached,
+            Kind::DotDot if before || after => Kind::Detached,
+            Kind::DotStar | Kind::Question if before => Kind::Detached,
             kind => kind,
+        };
+        if operand && !before && kind.begins_operand() {
+            Kind::Adjacent
+        } else {
+            kind
         }
     }
 

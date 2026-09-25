@@ -418,6 +418,12 @@ pub enum ExprKind {
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
     /// `value?`: an `Ok`'s value, or the `Err` answered at once.
     Try(Box<Expr>),
+    /// `_`, or a rest with nothing after its `*`: read as an expression
+    /// before its line says it is a pattern, and refused by the parser
+    /// wherever it is not one, so it never leaves the parser.
+    Wild,
+    /// `1..9`: as `Wild`, a pattern's alone, which never leaves the parser.
+    Range(Numeral, Numeral),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

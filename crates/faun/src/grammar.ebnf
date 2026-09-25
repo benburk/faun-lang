@@ -1,0 +1,90 @@
+(* Faun's grammar, over the lexer's tokens.
+
+   Each choice is made by the next token alone: the grammar is LL(1), and the
+   `ebnf` tests check that it is, and that it reads what the parser reads.
+
+   Terminals are token kinds: quoted, as spelled, or named in capitals. The
+   lexer decides what spacing means, so the grammar never sees a space:
+     NEWLINE     the end of a line of items or of a body
+     CALL_PAREN  `(` straight after an operand: a call's, or a type's
+     NEGATE      `-` beginning an operand
+     REST        `*` beginning a rest, or alone before `]` or `}`
+     LAMBDA_BAR  `|` opening a lambda's parameters
+   and `.`, `..`, `.*` and `?` are written against what they join.
+
+   A pattern is written as the expression that builds what it matches, so a
+   binding's or a clause's head is an expression here; the parser makes it a
+   pattern once its line says it is one, and groups lines into items. *)
+
+file              = [ line ] { NEWLINE [ line ] } EOF ;
+
+(* A keyword's line, or an expression and what follows it. After a type's
+   name alone, `=` names a type. *)
+line              = directive
+                  | "expect" statement
+                  | TYPE after-type
+                  | untyped-operand expr-tail [ trailer ] ;
+after-type        = "=" ( constraints | type )
+                  | ":" typed
+                  | clause
+                  | postfix { postfix } expr-tail [ trailer ]
+                  | infix operand expr-tail [ trailer ]
+                  | (* the name alone *) ;
+trailer           = "=" ( constraints | expr )
+                  | ":" typed
+                  | clause ;
+clause            = [ "if" expr ] "->" statement ;
+statement         = expr [ "=" expr ] ;
+
+directive         = "package" "{" { NAME ":" STR_START { STR_TEXT } STR_END } "}"
+                  | "import" NAME { "." NAME } "{" { exposure } "}"
+                  | "exports" "{" { any-name [ ".*" ] } "}" ;
+exposure          = any-name [ ".*" ] [ ":" any-name ] ;
+any-name          = NAME | EFFECT | TYPE ;
+
+(* A signature, a data declaration, or a `where` list's constraint. *)
+typed             = signature [ constraints ] [ methods ] ;
+signature         = type { type } [ "->" type ] ;
+methods           = ".(" [ line ] { NEWLINE [ line ] } ")" ;
+
+(* A member's constraint ends its line; more follow on lines of their own. *)
+constraints       = "where" ( alias-constraint { alias-constraint } [ member-constraint ]
+                            | member-constraint ) ;
+alias-constraint  = TYPE CALL_PAREN type { type } ")" ;
+member-constraint = NAME "." ( NAME | EFFECT ) ":" signature ;
+
+type              = TYPE [ CALL_PAREN type { type } ")" ]
+                  | NAME
+                  | "(" type { type } [ "->" type ] ")"
+                  | "[" { TYPE [ CALL_PAREN type { type } ")" ] } "]"
+                  | "{" { NAME ":" type } [ REST ] "}" ;
+
+(* Infix operators, loosest first:
+     |   ^   &   == != < <= > >=   + -   / % *
+   each level left-associative. *)
+expr              = operand expr-tail ;
+expr-tail         = { infix operand } ;
+infix             = "|" | "^" | "&" | "==" | "!=" | "<" | "<=" | ">" | ">="
+                  | "+" | "-" | "/" | "%" | "*" ;
+operand           = prefix operand
+                  | primary { postfix } ;
+untyped-operand   = prefix operand
+                  | untyped-primary { postfix } ;
+prefix            = NEGATE | "!" ;
+postfix           = CALL_PAREN { argument } ")"
+                  | "?"
+                  | "." ( NAME | EFFECT | TYPE ) ;
+argument          = LAMBDA_BAR operand { operand } "|" expr
+                  | expr ;
+
+primary           = TYPE | untyped-primary ;
+untyped-primary   = ( NUMBER | CHAR ) [ ".." ( NUMBER | CHAR ) ]
+                  | DECIMAL
+                  | "_"
+                  | NAME
+                  | EFFECT
+                  | STR_START { STR_TEXT | SPLICE_START expr SPLICE_END } STR_END
+                  | "(" expr { expr } ")"
+                  | "[" { expr } [ rest ] "]"
+                  | "{" { NAME [ ":" expr ] } [ rest ] "}" ;
+rest              = REST [ expr ] ;

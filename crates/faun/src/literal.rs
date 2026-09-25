@@ -197,6 +197,9 @@ fn validate_pattern(pattern: &Pattern, source: &str) -> Result<(), LiteralError>
 fn validate_expr(expression: &Expr, source: &str) -> Result<(), LiteralError> {
     match &expression.kind {
         ExprKind::Name(_) => Ok(()),
+        ExprKind::Wild | ExprKind::Range(..) => {
+            unreachable!("the parser refuses a pattern's form outside a pattern")
+        }
         ExprKind::Number(numeral) => validate_numeral(*numeral, source),
         ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
             StringPart::Text(span) => {

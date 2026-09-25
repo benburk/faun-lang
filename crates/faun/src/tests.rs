@@ -1,4 +1,4 @@
-use super::ast::{Body, ExprKind, Item, UnaryOp};
+use super::ast::{Body, ExprKind, Item, Pattern, UnaryOp};
 use super::parse;
 
 #[test]
@@ -33,7 +33,7 @@ fn items_and_statements_end_with_their_lines() {
     assert!(
         error
             .message
-            .contains("a line answering the body after its last binding"),
+            .contains("a body ends with its answer, a line after its last binding"),
         "{}",
         error.message
     );
@@ -90,4 +90,75 @@ fn parentheses_nest_without_trying_each_reading_again() {
         &types.items[0],
         Item::Signature(signature) if signature.parameters.len() == 3
     ));
+}
+
+/// The patterns of `source`'s one clause.
+fn patterns(source: &str) -> Vec<Pattern> {
+    match parse(source).unwrap().items.pop() {
+        Some(Item::Clause(clause)) => clause.patterns,
+        other => panic!("expected a clause, found {other:?}"),
+    }
+}
+
+#[test]
+fn a_pattern_is_the_expression_that_builds_what_it_matches() {
+    let written = patterns(
+        "f(x _ Some(y) Opt.None [a *] [b *rest] {c *} {d e: 1} (g h) 1..9 -2 'z' \"s\" A | B) -> x\n",
+    );
+    assert!(matches!(
+        written[..],
+        [
+            Pattern::Bind(_),
+            Pattern::Wild(_),
+            Pattern::Constructor {
+                qualifier: None,
+                ..
+            },
+            Pattern::Constructor {
+                qualifier: Some(_),
+                ..
+            },
+            Pattern::List { rest: Some(_), .. },
+            Pattern::List { rest: Some(_), .. },
+            Pattern::Record { open: true, .. },
+            Pattern::Record { open: false, .. },
+            Pattern::Tuple { .. },
+            Pattern::Range { .. },
+            Pattern::Number { negative: true, .. },
+            Pattern::Number {
+                negative: false,
+                ..
+            },
+            Pattern::String { .. },
+            Pattern::Or { .. },
+        ]
+    ));
+    let lines = body("f(xs) ->\n  Some(y) = xs.first()\n  xs.map(|Some(z) _| z)\n");
+    assert!(matches!(
+        lines.bindings[0].pattern,
+        Pattern::Constructor { .. }
+    ));
+    assert!(matches!(lines.result.kind, ExprKind::Method(..)));
+}
+
+#[test]
+fn what_is_not_a_pattern_or_only_a_pattern_says_so() {
+    for (source, said) in [
+        ("f(x + 1) -> x\n", "`x + 1` is not a pattern"),
+        ("f(g(x)) -> x\n", "`g(x)` is not a pattern"),
+        ("f(x) -> _\n", "`_` stands only in a pattern"),
+        ("f(x) -> [x *]\n", "a list's rest names what follows"),
+        ("f(x) -> 1..2\n", "a range stands only in a pattern"),
+        (
+            "f(x) -> x\ny\nf : Nat -> Nat\nz\n",
+            "belongs to no definition",
+        ),
+        (
+            "F(x) -> x\n",
+            "a clause begins with its name and its patterns",
+        ),
+    ] {
+        let error = parse(source).unwrap_err();
+        assert!(error.message.contains(said), "{source}: {}", error.message);
+    }
 }

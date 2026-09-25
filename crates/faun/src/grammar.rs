@@ -1,17 +1,21 @@
 //! The Ori grammar over compact lexer tokens.
 //!
-//! Alternatives are dispatched by their leading token wherever possible. In
-//! particular, module directives, types, signatures, clauses, and literal
-//! kinds do not retry one another after constructing syntax trees.
+//! A file is lines. Each begins with a keyword or an expression, and the token
+//! after that expression says what the line is; [`lines`](super::lines) makes
+//! the heads that are patterns into patterns, and groups the lines into items.
+//! Every choice is made by the next token, but for `Name =`, whose right side
+//! is a type because its head, already read, is a type's name.
+//!
+//! The grammar this reads is written out in `grammar.ebnf`, which the `ebnf`
+//! tests check is LL(1) and reads what this does.
 
 use super::ast::{
-    AliasDecl, BinaryOp, Binding, Body, Clause, Constraint, ConstraintAliasDecl, ConstructorDecl,
-    DataDecl, DataRepresentation, Dependency, Export, ExportsDecl, Exposure, Expr, ExprKind,
-    HeaderDecl, HeaderKind, ImportDecl, Item, MethodItem, Module, Name, Numeral, NumeralKind,
-    Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
+    BinaryOp, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl, Exposure, Expr,
+    ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span, StringPart,
+    Type, UnaryOp,
 };
 use super::lex::{Kind, Token};
-use super::source::SourceId;
+use super::lines::{self, Equals, Line, Statement, Trailer, Typed};
 
 fn name(token: Token) -> Name {
     Name(token.span())
@@ -57,166 +61,38 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     }
 }
 
-/// What follows a type name and its parameters at the head of an item.
-enum Declared {
-    Alias(Type),
-    Constraints((Vec<Constraint>, Span)),
-    Data(Type, Option<(Vec<MethodItem>, Span)>),
+/// A lambda of `parameters`, each written as the pattern-shaped expression
+/// that is its pattern.
+fn lambda(
+    open: Token,
+    parameters: Vec<Expr>,
+    body: Expr,
+    source: &str,
+) -> Result<Expr, &'static str> {
+    let patterns = parameters
+        .into_iter()
+        .map(|parameter| lines::pattern(parameter, source))
+        .collect::<Result<_, _>>()
+        .map_err(|_| "a pattern for each of the lambda's parameters")?;
+    Ok(Expr {
+        span: open.span().through(body.span),
+        kind: ExprKind::Lambda(patterns, Box::new(body)),
+    })
 }
 
-enum TermDeclaration {
-    Signature(Vec<Type>, Type, Vec<Constraint>, Span),
-    Clause(Vec<Pattern>, Option<Expr>, Body),
-}
-
-/// Return whether the next pattern-shaped token run is followed by `=`.
-///
-/// A constructor expression and a constructor pattern have the same spelling.
-/// Letting `binding()*` discover the difference through PEG backtracking builds
-/// and drops the entire pattern tree before parsing a body's final expression.
-fn binding_ahead(tokens: &[Token], at: usize) -> bool {
-    let Some(first) = tokens.get(at) else {
-        return false;
-    };
-    let end = match first.kind {
-        Kind::Ident | Kind::Wild | Kind::Number => Some(at + 1),
-        Kind::Negate
-            if tokens
-                .get(at + 1)
-                .is_some_and(|token| token.kind == Kind::Number && !token.space_before) =>
-        {
-            Some(at + 2)
-        }
-        Kind::TypeIdent => constructor_pattern_end(tokens, at),
-        Kind::LBrace => closed_by(tokens, at, Kind::LBrace, Kind::RBrace),
-        Kind::LParen => closed_by(tokens, at, Kind::LParen, Kind::RParen),
-        _ => None,
-    };
-    end.and_then(|end| tokens.get(end))
-        .is_some_and(|token| token.kind == Kind::Eq)
-}
-
-/// Whether the line at `at` begins an item rather than going on with a
-/// body.
-fn item_ahead(tokens: &[Token], at: usize) -> bool {
-    begins_item(tokens, at, line_end(tokens, at))
-}
-
-/// Where the line beginning at `at` ends: at its newline, where a bracket
-/// around it closes, or at the end of the file.
-fn line_end(tokens: &[Token], at: usize) -> usize {
-    let mut depth = 0usize;
-    for (offset, token) in tokens.iter().enumerate().skip(at) {
-        match token.kind {
-            Kind::Newline | Kind::Eof if depth == 0 => return offset,
-            Kind::LParen
-            | Kind::LBracket
-            | Kind::LBrace
-            | Kind::DotParen
-            | Kind::StrStart
-            | Kind::SpliceStart => depth += 1,
-            Kind::RParen | Kind::RBracket | Kind::RBrace | Kind::StrEnd | Kind::SpliceEnd => {
-                if depth == 0 {
-                    return offset;
-                }
-                depth -= 1;
-            }
-            _ => {}
-        }
-    }
-    tokens.len()
-}
-
-/// Whether the line from `at` to `end` begins an item rather than going on
-/// with a body: a clause's head, with its arrow; a signature or declaration,
-/// with its colon; a directive; an `expect`; an alias.
-fn begins_item(tokens: &[Token], at: usize, end: usize) -> bool {
-    let line = &tokens[at..end];
-    if matches!(
-        line.first().map(|token| token.kind),
-        Some(Kind::KwImport | Kind::KwExports | Kind::KwPackage | Kind::KwExpect)
-    ) {
-        return true;
-    }
-    let mut depth = 0usize;
-    for (offset, token) in line.iter().enumerate() {
-        match token.kind {
-            Kind::LParen
-            | Kind::LBracket
-            | Kind::LBrace
-            | Kind::DotParen
-            | Kind::StrStart
-            | Kind::SpliceStart => depth += 1,
-            Kind::RParen | Kind::RBracket | Kind::RBrace | Kind::StrEnd | Kind::SpliceEnd => {
-                depth = depth.saturating_sub(1);
-            }
-            Kind::Arrow | Kind::Colon | Kind::KwWhere if depth == 0 => return true,
-            // `Name = ...` names a type, where a binding's pattern would be
-            // a constructor that holds nothing, which binds nothing.
-            Kind::Eq if depth == 0 && offset == 1 => {
-                return line[0].kind == Kind::TypeIdent;
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-/// Where the bracket opening at `at` is closed, just past it.
-fn closed_by(tokens: &[Token], at: usize, open: Kind, close: Kind) -> Option<usize> {
-    let mut depth = 0usize;
-    for (offset, token) in tokens.get(at..)?.iter().enumerate() {
-        match token.kind {
-            kind if kind == open => depth += 1,
-            kind if kind == close => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(at + offset + 1);
-                }
-            }
-            Kind::Eof => return None,
-            _ => {}
-        }
-    }
-    None
-}
-
-fn constructor_pattern_end(tokens: &[Token], at: usize) -> Option<usize> {
-    if !tokens
-        .get(at + 1)
-        .is_some_and(|token| token.kind == Kind::LParen && !token.space_before)
-    {
-        return Some(at + 1);
-    }
-    let mut depth = 1usize;
-    let mut cursor = at + 2;
-    loop {
-        let token = tokens.get(cursor)?;
-        match token.kind {
-            Kind::LParen => depth += 1,
-            Kind::RParen => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(cursor + 1);
-                }
-            }
-            Kind::Eof => return None,
-            _ => {}
-        }
-        cursor += 1;
+/// Match nothing at `at` where `condition` holds, and fail where not.
+const fn holds(condition: bool, at: usize) -> peg::RuleResult<()> {
+    if condition {
+        peg::RuleResult::Matched(at, ())
+    } else {
+        peg::RuleResult::Failed
     }
 }
 
 peg::parser! {
-    pub grammar source() for [Token] {
+    pub grammar source(src: &str) for [Token] {
         rule tok(kind: Kind) -> Token
             = quiet!{[token if token.kind == kind]}
-        rule adj(kind: Kind) -> Token
-            = quiet!{[token if token.kind == kind && !token.space_before]}
-        rule sep()
-            = quiet!{&[token if token.space_before]}
-        rule chain_dot() -> Token
-            = quiet!{[token if token.kind == Kind::Dot && (!token.space_before || token.newline_before)]}
         rule eof()
             = quiet!{[Token { kind: Kind::Eof, .. }]}
               / expected!("the end of the file")
@@ -231,43 +107,57 @@ peg::parser! {
         rule rbrace() -> Token = tok(Kind::RBrace) / expected!("`}`")
         rule colon() = tok(Kind::Colon) / expected!("`:`")
         rule arrow() = tok(Kind::Arrow) / expected!("`->`")
-        rule equals() = tok(Kind::Eq) / expected!("`=`")
         rule ident() -> Token = tok(Kind::Ident) / expected!("a name")
         rule type_ident() -> Token = tok(Kind::TypeIdent) / expected!("a type name")
-        rule term_name() -> Token
-            = quiet!{[token if matches!(token.kind, Kind::Ident | Kind::EffectIdent)]}
-              / expected!("a term name")
         rule source_name() -> Token
             = quiet!{[token if matches!(token.kind,
                 Kind::TypeIdent | Kind::Ident | Kind::EffectIdent)]}
               / expected!("a name")
 
-        pub rule program() -> Module
-            = items:(item() ** newline()) newline()? eof() {
-                Module { source: SourceId::DETACHED, items }
+        pub rule program() -> Vec<Line>
+            = lines:(line() ** newline()) newline()? eof() { lines }
+
+        // A keyword's line, or an expression and what follows it.
+        rule line() -> Line
+            = header:header() { Line::Header(header) }
+            / import:import_decl() { Line::Import(import) }
+            / exports:exports_decl() { Line::Exports(exports) }
+            / keyword:tok(Kind::KwExpect) first:statement() {
+                Line::Expect(keyword.span(), first)
+            }
+            / head:expr() trailer:trailer(lines::names_a_type(&head, src))? {
+                Line::new(head, trailer)
             }
 
-        rule item() -> Item
-            = header:header() { Item::Header(header) }
-            / import:import_decl() { Item::Import(import) }
-            / exports:exports_decl() { Item::Exports(exports) }
-            / declaration:type_declaration() { declaration }
-            / expect:expect_decl() { Item::Expect(expect) }
-            / declaration:term_declaration() { term_item(declaration) }
+        // `= value`, or after a type's name `= type`; `= where ...`;
+        // `: type`; or `if guard -> value` and `-> value`.
+        rule trailer(names_a_type: bool) -> Trailer
+            = tok(Kind::Eq) equals:(
+                constraints:constraints() { Equals::Constraints(constraints) }
+                / when(names_a_type) ty:ty() { Equals::Type(ty) }
+                / when(!names_a_type) value:expr() { Equals::Value(value) }
+            ) { Trailer::Equals(equals) }
+            / colon() shape:member_type() constraints:constraints()? methods:method_block()? {
+                let (parameters, result) = shape;
+                Trailer::Typed(Typed { parameters, result, constraints, methods })
+            }
+            / guard:(tok(Kind::KwIf) guard:expr() { guard })? arrow() first:statement() {
+                Trailer::Clause { guard, first }
+            }
 
-        rule expect_decl() -> Clause
-            = head:tok(Kind::KwExpect) body:body() {
-                Clause {
-                    span: head.span().through(body.result.span),
-                    name: name(head),
-                    patterns: Vec::new(),
-                    guard: None,
-                    body,
+        rule when(condition: bool) = #{|_, at| holds(condition, at)}
+
+        // A body's line: a value, or `pattern = value`.
+        rule statement() -> Statement
+            = value:expr() bound:(tok(Kind::Eq) bound:expr() { bound })? {
+                match bound {
+                    Some(bound) => Statement::Binding(value, bound),
+                    None => Statement::Value(value),
                 }
             }
 
         rule header() -> HeaderDecl
-            = start:tok(Kind::KwPackage) lbrace() dependencies:(dependency() ** sep())
+            = start:tok(Kind::KwPackage) lbrace() dependencies:(dependency()*)
               close:rbrace() {
                 HeaderDecl {
                     span: start.span().through(close.span()),
@@ -288,7 +178,7 @@ peg::parser! {
 
         rule import_decl() -> ImportDecl
             = start:tok(Kind::KwImport) path:module_path()
-              lbrace() exposures:(exposure() ** sep()) close:rbrace() {
+              lbrace() exposures:(exposure()*) close:rbrace() {
                 ImportDecl {
                     span: start.span().through(close.span()),
                     path,
@@ -297,12 +187,12 @@ peg::parser! {
             }
 
         rule module_path() -> Vec<Name>
-            = first:ident() rest:(adj(Kind::Dot) next:adj(Kind::Ident) { next })* {
+            = first:ident() rest:(tok(Kind::Dot) next:tok(Kind::Ident) { next })* {
                 std::iter::once(first).chain(rest).map(name).collect()
             }
 
         rule exposure() -> Exposure
-            = exported:source_name() constructors:adj(Kind::DotStar)?
+            = exported:source_name() constructors:tok(Kind::DotStar)?
               local:(colon() local:source_name() { local })? {
                 Exposure {
                     exported: name(exported),
@@ -313,7 +203,7 @@ peg::parser! {
 
         rule exports_decl() -> ExportsDecl
             = start:tok(Kind::KwExports) lbrace()
-              exports:(export() ** sep()) close:rbrace() {
+              exports:(export()*) close:rbrace() {
                 ExportsDecl {
                     span: start.span().through(close.span()),
                     exports,
@@ -321,82 +211,35 @@ peg::parser! {
             }
 
         rule export() -> Export
-            = exported:source_name() constructors:adj(Kind::DotStar)? {
+            = exported:source_name() constructors:tok(Kind::DotStar)? {
                 Export { name: name(exported), constructors: constructors.is_some() }
-            }
-
-        // `Name = ty`, `Name(a) = where ...` or `Name(a) : ty`, told apart
-        // after the name and its parameters by the token that follows.
-        rule type_declaration() -> Item
-            = head:type_ident() params:type_params()? declared:(
-                tok(Kind::Eq) declared:(
-                    constraints:constraints() { Declared::Constraints(constraints) }
-                    / ty:ty() { Declared::Alias(ty) }
-                ) { declared }
-                / colon() representation:ty() methods:method_block()? {
-                    Declared::Data(representation, methods)
-                }
-            ) {? type_declaration(head, params, declared) }
-
-        rule type_params() -> Vec<Name>
-            = adj(Kind::LParen) params:(ident() ++ sep()) rparen() {
-                params.into_iter().map(name).collect()
             }
 
         rule constructor() -> ConstructorDecl
             = head:type_ident()
-              fields:(adj(Kind::LParen) fields:(ty() ++ sep()) rparen() { fields })? {
+              fields:(tok(Kind::CallParen) fields:(ty()+) rparen() { fields })? {
                 ConstructorDecl {
                     name: name(head),
                     fields: fields.unwrap_or_default(),
                 }
             }
 
-        rule method_block() -> (Vec<MethodItem>, Span)
-            = tok(Kind::DotParen) methods:(method_declaration() ** newline()) newline()?
-              close:rparen() {
-                (methods, close.span())
-            }
-
-        rule method_declaration() -> MethodItem
-            = declaration:term_declaration() { method_item(declaration) }
-
-        rule term_declaration() -> (Token, TermDeclaration)
-            = head:term_name() declaration:term_tail() { (head, declaration) }
-
-        rule term_tail() -> TermDeclaration
-            = colon() signature:signature_type() {
-                TermDeclaration::Signature(signature.0, signature.1, signature.2, signature.3)
-            }
-            / adj(Kind::LParen) patterns:(pattern() ** sep()) rparen()
-              guard:(tok(Kind::KwIf) guard:expr() { guard })?
-              arrow() body:body() {
-                TermDeclaration::Clause(patterns, guard, body)
-            }
-
-        rule signature_type() -> (Vec<Type>, Type, Vec<Constraint>, Span)
-            = shape:member_type() constraints:constraints()? {
-                let (parameters, result) = shape;
-                let end = constraints.as_ref().map_or_else(
-                    || type_span(&result),
-                    |constraints| constraints.1,
-                );
-                (parameters, result, constraints.map_or_else(Vec::new, |value| value.0), end)
+        rule method_block() -> (Vec<Line>, Span)
+            = tok(Kind::DotParen) lines:(line() ** newline()) newline()? close:rparen() {
+                (lines, close.span())
             }
 
         rule constraints() -> (Vec<Constraint>, Span)
-            = tok(Kind::KwWhere) constraints:(constraint() ++ constraint_sep()) {
-                let end = constraints.last().map_or_else(Span::default, Constraint::span);
-                (constraints, end)
+            = tok(Kind::KwWhere) aliases:alias_constraint()* member:member_constraint()? {?
+                let constraints: Vec<_> = aliases.into_iter().chain(member).collect();
+                let end = constraints.last().map(Constraint::span).ok_or("a constraint")?;
+                Ok((constraints, end))
             }
 
-        // A `where` list goes on to the next line with a member's constraint,
-        // `a.add : a a -> a`, which no item begins as.
-        rule constraint_sep()
-            = sep() / newline() &(tok(Kind::Ident) adj(Kind::Dot))
-
-        rule constraint() -> Constraint
-            = variable:ident() adj(Kind::Dot) member:(adj(Kind::Ident) / adj(Kind::EffectIdent))
+        // `a.add : a a -> a`. It ends its `where` line, as a value's
+        // constraint, `a.zero : a`, reads no end of its own.
+        rule member_constraint() -> Constraint
+            = variable:ident() tok(Kind::Dot) member:(tok(Kind::Ident) / tok(Kind::EffectIdent))
               colon() shape:member_type() {
                 let (parameters, result) = shape;
                 Constraint::Member {
@@ -407,8 +250,10 @@ peg::parser! {
                     result,
                 }
             }
-            / head:type_ident() adj(Kind::LParen)
-              arguments:(ty() ++ sep()) close:rparen() {
+
+        rule alias_constraint() -> Constraint
+            = head:type_ident() tok(Kind::CallParen)
+              arguments:(ty()+) close:rparen() {
                 Constraint::Alias {
                     span: head.span().through(close.span()),
                     name: name(head),
@@ -418,7 +263,7 @@ peg::parser! {
 
         // Parameters and an arrow to the result, or the result alone.
         rule member_type() -> (Vec<Type>, Type)
-            = types:(ty() ++ sep()) result:(arrow() result:ty() { result })? {?
+            = types:(ty()+) result:(arrow() result:ty() { result })? {?
                 match result {
                     Some(result) => Ok((types, result)),
                     None if types.len() == 1 => {
@@ -430,7 +275,7 @@ peg::parser! {
 
         rule ty() -> Type
             = head:type_ident()
-              args:(adj(Kind::LParen) args:(ty() ++ sep()) close:rparen() { (args, close.span()) })? {
+              args:(tok(Kind::CallParen) args:(ty()+) close:rparen() { (args, close.span()) })? {
                 match args {
                     Some((args, end)) => named_type(head, args, end),
                     None => named_type(head, Vec::new(), head.span()),
@@ -438,7 +283,7 @@ peg::parser! {
             }
             / variable:ident() { named_type(variable, Vec::new(), variable.span()) }
             // A function type, a tuple, or one type grouped.
-            / open:lparen() members:(ty() ++ sep()) result:(arrow() result:ty() { result })?
+            / open:lparen() members:(ty()+) result:(arrow() result:ty() { result })?
               close:rparen() {
                 let span = open.span().through(close.span());
                 match result {
@@ -451,13 +296,13 @@ peg::parser! {
                     None => Type::Tuple { span, members },
                 }
             }
-            / open:lbracket() constructors:(constructor() ** sep()) close:rbracket() {
+            / open:lbracket() constructors:(constructor()*) close:rbracket() {
                 Type::Variants {
                     span: open.span().through(close.span()),
                     constructors,
                 }
             }
-            / open:lbrace() fields:(record_type_field() ** sep())
+            / open:lbrace() fields:(record_type_field()*)
               rest:tok(Kind::Rest)? close:rbrace() {
                 Type::Record {
                     span: open.span().through(close.span()),
@@ -469,141 +314,7 @@ peg::parser! {
         rule record_type_field() -> (Name, Type)
             = field:ident() colon() value:ty() { (name(field), value) }
 
-        // Lines, each but the last a binding or an effect asked for what it
-        // does, which binds `_`; the last is the answer. A line beginning
-        // an item ends the body before it.
-        rule body() -> Body
-            = lines:(body_line() ++ (newline() !item_ahead())) {? body(lines) }
-
-        rule body_line() -> Binding
-            = binding_ahead() binding:binding() { binding }
-            / value:expr() {
-                Binding { pattern: Pattern::Wild(value.span), value, discarded: true }
-            }
-
-        rule item_ahead()
-            = #{|input, at| {
-                if item_ahead(input, at) {
-                    peg::RuleResult::Matched(at, ())
-                } else {
-                    peg::RuleResult::Failed
-                }
-            }}
-
-        rule binding_ahead()
-            = #{|input, at| {
-                if binding_ahead(input, at) {
-                    peg::RuleResult::Matched(at, ())
-                } else {
-                    peg::RuleResult::Failed
-                }
-            }}
-
-        rule binding() -> Binding
-            = pattern:pattern() equals() value:expr() {
-                Binding { pattern, value, discarded: false }
-            }
-
-        // `A | B`: either of two or more alternatives.
-        rule pattern() -> Pattern
-            = first:single_pattern() rest:(tok(Kind::Bar) next:single_pattern() { next })* {
-                if rest.is_empty() {
-                    return first;
-                }
-                let alternatives: Vec<Pattern> = std::iter::once(first).chain(rest).collect();
-                Pattern::Or {
-                    span: alternatives[0]
-                        .span()
-                        .through(alternatives.last().expect("two or more").span()),
-                    alternatives,
-                }
-            }
-
-        rule single_pattern() -> Pattern
-            = start:(tok(Kind::Number) / tok(Kind::Char))
-              end:(adj(Kind::DotDot) end:(adj(Kind::Number) / adj(Kind::Char)) { end })? {
-                end.map_or_else(
-                    || Pattern::Number {
-                        span: start.span(),
-                        numeral: numeral(start),
-                        negative: false,
-                    },
-                    |end| Pattern::Range {
-                        span: start.span().through(end.span()),
-                        start: numeral(start),
-                        end: numeral(end),
-                    },
-                )
-            }
-            / minus:tok(Kind::Negate) value:(tok(Kind::Number) / tok(Kind::Char)) {
-                Pattern::Number {
-                    span: minus.span().through(value.span()),
-                    numeral: numeral(value),
-                    negative: true,
-                }
-            }
-            // `[a *]` takes a rest it does not name.
-            / open:lbracket() elements:(pattern() ** sep())
-              rest:(star:tok(Kind::Rest) rest:pattern()? {
-                  rest.unwrap_or_else(|| Pattern::Wild(star.span()))
-              })?
-              close:rbracket() {
-                Pattern::List {
-                    span: open.span().through(close.span()),
-                    elements,
-                    rest: rest.map(Box::new),
-                }
-            }
-            / open:tok(Kind::StrStart) parts:(text:tok(Kind::StrText) { text.span() })*
-              close:tok(Kind::StrEnd) {
-                Pattern::String {
-                    span: open.span().through(close.span()),
-                    parts,
-                }
-            }
-            // A tuple, or one pattern grouped.
-            / open:lparen() members:(pattern() ++ sep()) close:rparen() {
-                if members.len() == 1 {
-                    members.into_iter().next().expect("one")
-                } else {
-                    Pattern::Tuple {
-                        span: open.span().through(close.span()),
-                        members,
-                    }
-                }
-            }
-            / open:lbrace() fields:(record_pattern_field() ** sep())
-              rest:tok(Kind::Rest)? close:rbrace() {
-                Pattern::Record {
-                    span: open.span().through(close.span()),
-                    fields,
-                    open: rest.is_some(),
-                }
-            }
-            / head:type_ident()
-              member:(adj(Kind::Dot) member:adj(Kind::TypeIdent) { member })?
-              fields:(adj(Kind::LParen) fields:(pattern() ++ sep()) close:rparen() {
-                  (fields, close.span())
-              })? {
-                let last = member.unwrap_or(head);
-                let (fields, end) = fields.unwrap_or_else(|| (Vec::new(), last.span()));
-                Pattern::Constructor {
-                    span: head.span().through(end),
-                    qualifier: member.map(|_| name(head)),
-                    name: name(last),
-                    fields,
-                }
-            }
-            / wild:tok(Kind::Wild) { Pattern::Wild(wild.span()) }
-            / bind:ident() { Pattern::Bind(name(bind)) }
-
-        rule record_pattern_field() -> (Name, Pattern)
-            = field:ident() value:(colon() value:pattern() { value })? {
-                let field = name(field);
-                (field, value.unwrap_or(Pattern::Bind(field)))
-            }
-
-        pub rule expr() -> Expr = precedence! {
+        rule expr() -> Expr = precedence! {
             left:(@) tok(Kind::Bar) right:@ { binary(BinaryOp::Or, left, right) }
             --
             left:(@) tok(Kind::Caret) right:@ { binary(BinaryOp::Xor, left, right) }
@@ -624,6 +335,11 @@ peg::parser! {
             left:(@) tok(Kind::Percent) right:@ { binary(BinaryOp::Remainder, left, right) }
             left:(@) tok(Kind::Star) right:@ { binary(BinaryOp::Multiply, left, right) }
             --
+            operand:operand() { operand }
+        }
+
+        // What an operator applies to: a prefix, a postfix, or a primary.
+        rule operand() -> Expr = precedence! {
             token:tok(Kind::Negate) value:@ { unary(UnaryOp::Negate, token, value) }
             token:tok(Kind::Bang) value:@ { unary(UnaryOp::Not, token, value) }
             --
@@ -631,7 +347,7 @@ peg::parser! {
                 let span = head.span.through(args.1);
                 Expr { span, kind: ExprKind::Call(Box::new(head), args.0) }
             }
-            value:@ question:adj(Kind::Question) {
+            value:@ question:tok(Kind::Question) {
                 Expr { span: value.span.through(question.span()), kind: ExprKind::Try(Box::new(value)) }
             }
             head:@ member:dot_access() {
@@ -653,37 +369,43 @@ peg::parser! {
 
 
         rule call_args() -> (Vec<Expr>, Span)
-            = adj(Kind::LParen) args:(argument() ** sep()) close:rparen() {
+            = tok(Kind::CallParen) args:(argument()*) close:rparen() {
                 (args, close.span())
             }
 
         rule argument() -> Expr = lambda() / expr()
 
+        // `|x Some(y)| body`: its parameters are operands, being no `or`,
+        // each the pattern it spells.
         rule lambda() -> Expr
-            = open:tok(Kind::LambdaBar) patterns:(single_pattern() ++ sep()) tok(Kind::Bar)
-              body:expr() {
-                Expr {
-                    span: open.span().through(body.span),
-                    kind: ExprKind::Lambda(patterns, Box::new(body)),
-                }
-            }
+            = open:tok(Kind::LambdaBar) parameters:(operand()+) tok(Kind::Bar)
+              body:expr() {? lambda(open, parameters, body, src) }
 
         rule dot_access() -> (Token, Option<Vec<Expr>>, Span)
-            = chain_dot() member:(adj(Kind::Ident) / adj(Kind::EffectIdent) / adj(Kind::TypeIdent))
+            = tok(Kind::Dot) member:(tok(Kind::Ident) / tok(Kind::EffectIdent) / tok(Kind::TypeIdent))
               args:call_args()? {
                 let end = args.as_ref().map_or_else(|| member.span(), |args| args.1);
                 (member, args.map(|args| args.0), end)
             }
 
         rule primary() -> Expr
-            = value:(tok(Kind::Number) / tok(Kind::Char) / tok(Kind::Decimal)) {
-                atom(value, ExprKind::Number(numeral(value)))
+            = start:(tok(Kind::Number) / tok(Kind::Char))
+              end:(tok(Kind::DotDot) end:(tok(Kind::Number) / tok(Kind::Char)) { end })? {
+                end.map_or_else(
+                    || atom(start, ExprKind::Number(numeral(start))),
+                    |end| Expr {
+                        span: start.span().through(end.span()),
+                        kind: ExprKind::Range(numeral(start), numeral(end)),
+                    },
+                )
             }
+            / value:tok(Kind::Decimal) { atom(value, ExprKind::Number(numeral(value))) }
+            / wild:tok(Kind::Wild) { atom(wild, ExprKind::Wild) }
             / string:string() { string }
             / list:list() { list }
             / record:record() { record }
             // A tuple, or one value grouped.
-            / open:lparen() members:(expr() ++ sep()) close:rparen() {
+            / open:lparen() members:(expr()+) close:rparen() {
                 let span = open.span().through(close.span());
                 if members.len() == 1 {
                     Expr { span, ..members.into_iter().next().expect("one") }
@@ -712,8 +434,8 @@ peg::parser! {
             }
 
         rule record() -> Expr
-            = open:lbrace() fields:(record_expr_field() ** sep())
-              base:(tok(Kind::Rest) base:expr() { base })? close:rbrace() {
+            = open:lbrace() fields:(record_expr_field()*)
+              base:rest()? close:rbrace() {
                 let span = open.span().through(close.span());
                 match base {
                     Some(base) => Expr { span, kind: ExprKind::Update(fields, Box::new(base)) },
@@ -728,101 +450,20 @@ peg::parser! {
                 (field_name, value)
             }
 
+        // `*rest`, or `*` alone, a pattern's rest it does not name.
+        rule rest() -> Expr
+            = star:tok(Kind::Rest) rest:expr()? {
+                rest.unwrap_or_else(|| atom(star, ExprKind::Wild))
+            }
+
         rule list() -> Expr
-            = open:lbracket() elements:(expr() ** sep())
-              rest:(tok(Kind::Rest) rest:expr() { rest })?
-              close:rbracket() {
+            = open:lbracket() elements:(expr()*)
+              rest:rest()? close:rbracket() {
                 Expr {
                     span: open.span().through(close.span()),
                     kind: ExprKind::List(elements, rest.map(Box::new)),
                 }
             }
-    }
-}
-
-/// The item a type name heads: an alias of no parameters, a constraint alias
-/// of some, or a data declaration, whose representation in brackets is its
-/// constructors.
-fn type_declaration(
-    head: Token,
-    params: Option<Vec<Name>>,
-    declared: Declared,
-) -> Result<Item, &'static str> {
-    match (declared, params) {
-        (Declared::Alias(ty), None) => Ok(Item::Alias(AliasDecl {
-            span: head.span().through(type_span(&ty)),
-            name: name(head),
-            ty,
-        })),
-        (Declared::Alias(_), Some(_)) => {
-            Err("`where` and the constraints a parameterized alias stands for")
-        }
-        (Declared::Constraints((constraints, end)), Some(parameters)) => {
-            Ok(Item::Constraints(ConstraintAliasDecl {
-                span: head.span().through(end),
-                name: name(head),
-                parameters,
-                constraints,
-            }))
-        }
-        (Declared::Constraints(_), None) => Err("`(` and the parameters a constraint alias takes"),
-        (Declared::Data(represented, methods), params) => {
-            let end = methods
-                .as_ref()
-                .map_or_else(|| type_span(&represented), |methods| methods.1);
-            let representation = match represented {
-                Type::Variants { constructors, .. } => DataRepresentation::Sum(constructors),
-                wrapped => DataRepresentation::Wrapper(wrapped),
-            };
-            Ok(Item::Data(DataDecl {
-                span: head.span().through(end),
-                name: name(head),
-                params: params.unwrap_or_default(),
-                representation,
-                methods: methods.map_or_else(Vec::new, |methods| methods.0),
-            }))
-        }
-    }
-}
-
-/// A body of its lines: the last, which must be a value, is its answer.
-fn body(mut lines: Vec<Binding>) -> Result<Body, &'static str> {
-    let last = lines.pop().expect("a body has a line");
-    if !last.discarded {
-        return Err("a line answering the body after its last binding");
-    }
-    Ok(Body {
-        bindings: lines,
-        result: last.value,
-    })
-}
-
-fn term_item((head, declaration): (Token, TermDeclaration)) -> Item {
-    match declaration {
-        TermDeclaration::Signature(parameters, result, constraints, end) => {
-            Item::Signature(SignatureDecl {
-                span: head.span().through(end),
-                name: name(head),
-                parameters,
-                result,
-                constraints,
-            })
-        }
-        TermDeclaration::Clause(patterns, guard, body) => Item::Clause(Clause {
-            span: head.span().through(body.result.span),
-            name: name(head),
-            patterns,
-            guard,
-            body,
-        }),
-    }
-}
-
-fn method_item((head, declaration): (Token, TermDeclaration)) -> MethodItem {
-    match term_item((head, declaration)) {
-        Item::Signature(signature) => MethodItem::Signature(signature),
-        Item::Clause(clause) => MethodItem::Clause(clause),
-        _ => unreachable!("term items are signatures or clauses"),
     }
 }
 
