@@ -327,6 +327,9 @@ impl Rewrite<'_> {
             }
             Expr::Call(called, args) => {
                 let args = self.args(args, locals);
+                if let Some(held) = self.counted(called, &args, scope) {
+                    return held;
+                }
                 if let Some(body) = self.callee(called) {
                     self.inline_depth += 1;
                     let answer = self.into(body, args, scope);
@@ -387,6 +390,29 @@ impl Rewrite<'_> {
         let mut inner = locals.to_vec();
         inner.extend(fields);
         Some(self.into(arm.body, inner, scope))
+    }
+
+    /// The length of a sequence written as a known value, which is a number
+    /// known too.
+    fn counted(&mut self, called: FnId, args: &[Atom], scope: &mut Scope) -> Option<Atom> {
+        if self.recognised.sequences[called.index()] != Some(super::SequenceOperation::Length) {
+            return None;
+        }
+        let &[sequence] = args else {
+            return None;
+        };
+        let wrote = (*self.written.get(sequence.0.index())?)?;
+        let Expr::Static(value) = self.program.expr(wrote) else {
+            return None;
+        };
+        let value = super::single_field_constant(self.program, self.program.constant(value));
+        let super::ConstantView::Spine(spine) = value.view() else {
+            return None;
+        };
+        let length = u64::try_from(spine.length()).ok()?;
+        let result = self.program.function(called).result;
+        let length = self.program.intern_number(result, length).ok()?;
+        Some(self.push(Expr::Static(length), scope))
     }
 
     /// A known value's constructor, and each of its fields as a known value

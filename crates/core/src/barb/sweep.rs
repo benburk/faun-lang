@@ -44,7 +44,7 @@ pub(crate) fn sweep(program: &mut Program) {
 
 /// Which definitions `entry` reaches, by function, and every call in them,
 /// each once however many bodies share it.
-fn reached(program: &Program, entry: FnId) -> (Vec<bool>, Vec<ExprId>) {
+pub(super) fn reached(program: &Program, entry: FnId) -> (Vec<bool>, Vec<ExprId>) {
     let mut reached = vec![false; program.functions.len()];
     let mut seen = vec![false; program.terms.exprs_count()];
     let mut calls = Vec::new();

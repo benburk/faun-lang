@@ -81,9 +81,18 @@ impl Handed {
                 vec![param; program.params(id).len()]
             })
             .collect();
+        // Only a caller the entry reaches is ever a caller: one it does not
+        // is swept away, whatever it hands.
+        let reached = entry.map_or_else(
+            || vec![true; program.functions().len()],
+            |entry| super::sweep::reached(program, entry).0,
+        );
         let mut handed = Self { params };
-        for at in 0..program.functions().len() {
+        for (at, &reached) in reached.iter().enumerate() {
             let id = FnId::at(at);
+            if !reached {
+                continue;
+            }
             if let Some(body) = program.function(id).body() {
                 let mut known = vec![None; program.params(id).len()];
                 handed.body(program, id, body, &mut known);

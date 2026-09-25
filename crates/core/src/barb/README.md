@@ -214,20 +214,21 @@ two types -- so nothing infers a provider or an effect from the display name.
    meets its callees' answers as constants; each definition draws at most a
    per-definition allowance from the pass's budget, so a costly answer
    declined in one leaves the rest something to fold with.
-7. Bounded algebraic normalization: combine constants across recognized associative
+7. Invariant arguments: a parameter every caller the entry reaches hands one
+   known value is bound to that value in its definition. After folding, so
+   what they hand is known, and before algebraic normalization, which reads a
+   known sequence's length as a number.
+8. Bounded algebraic normalization: combine constants across recognized associative
    operations and directional monus/division chains, then push power-of-two moduli
    through sums and products.
-8. Sweep: where there is an entry, drop every definition it does not reach,
+9. Sweep: where there is an entry, drop every definition it does not reach,
    renumbering function IDs in order. Types, constructors and constants stay.
-9. Invariant arguments: a parameter every remaining caller hands one known
-   value is bound to that value in its definition. After the sweep, so only
-   callers the entry reaches count, and after folding, so what they hand is
-   known.
 10. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
     pure arithmetic or lengths; retain calls of unknown meaning and matches.
 
-Every normalizing stage (1, 3 and 7) also decides what is already decided: a
-match on a known constructor is its arm, and a match whose arms agree is that
+Every normalizing stage (1, 3 and 8) also decides what is already decided: a
+match on a known constructor is its arm, the length of a known sequence is a
+number, and a match whose arms agree is that
 arm. A match that is the last binding of a body answering a match on it, and
 read nothing else there, becomes one match: where each of its arms ends by
 building a constructor, that arm goes on into the second's arm for it. Only

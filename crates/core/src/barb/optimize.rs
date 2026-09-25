@@ -6,8 +6,8 @@ use super::{FoldLimits, InlineLimits, Program};
 /// and evaluation must not hide a malformed or nonterminating definition.
 ///
 /// Each stage runs once, in this order: structural normalization, descent,
-/// helper inlining, fusion, arithmetic laws, constant folding, algebraic
-/// normalization, the sweep, invariant arguments and cleanup. Recognized induction equations are left intact. Cleanup removes
+/// helper inlining, fusion, arithmetic laws, constant folding, invariant
+/// arguments, algebraic normalization, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
 /// aliases and unused inert bindings, never calls or matches whose
 /// evaluation may have effects. Inlining and folding stop at their fixed
 /// budgets, which bound work rather than choose what is done.
@@ -21,8 +21,8 @@ pub fn optimize(program: &mut Program) {
     super::fuse::fuse(program);
     super::laws::laws(program);
     super::fold(program);
+    super::invariant::invariant(program);
     super::normalize::algebra(program, FoldLimits::default());
     super::sweep::sweep(program);
-    super::invariant::invariant(program);
     super::cleanup::cleanup(program);
 }

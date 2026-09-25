@@ -176,6 +176,17 @@ impl<'a> Rebuild<'a> {
         self.values[old.index()].set(Some(new));
     }
 
+    /// What the new program has instead of `old` so far, if anything, and
+    /// saying so again, for a pass that names an old value differently
+    /// within one region and then as it was.
+    pub(super) fn standing(&self, old: ValueId) -> Option<ValueId> {
+        self.values[old.index()].get()
+    }
+
+    pub(super) fn restand(&self, old: ValueId, new: Option<ValueId>) {
+        self.values[old.index()].set(new);
+    }
+
     /// A run of operands, each as the new program names it.
     #[must_use]
     pub(super) fn args(&self, operands: Range) -> Vec<ValueId> {

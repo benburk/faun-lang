@@ -18,6 +18,12 @@
 //! can build machine IR directly. Here four steps of one become a step of
 //! four regardless of where they came from.
 //!
+//! And the same for a condition asked twice. Lowering a match on what a
+//! branch answered asks the branch's own condition again, and in each arm of
+//! the second asking, what the first answered is what its arm on the same
+//! side did: a number, or something worked out before either. Read that way,
+//! the first branch answers nothing anybody reads.
+//!
 //! And the same for arithmetic on numbers known before the program runs,
 //! which legalization writes a great deal of: an offset is a count of words
 //! times a word's bytes, plus a header, plus which leaf. Two known numbers
@@ -365,7 +371,8 @@ impl Simplify {
     }
 
     /// A branch asking which constructor a comparison answered is the
-    /// comparison, with its arms in whichever order the tags say.
+    /// comparison, with its arms in whichever order the tags say; and one
+    /// on a condition an earlier branch took reads what that one answered.
     fn branching(
         &mut self,
         rebuild: &rewrite::Rebuild<'_>,
@@ -375,11 +382,62 @@ impl Simplify {
         results: &[ValueId],
     ) -> bool {
         let Some((test, swapped)) = self.wrote.asks(rebuild.source(), condition) else {
-            return false;
+            return self.threading(rebuild, b, condition, arms, results);
         };
         let [then_region, else_region] = if swapped { [arms[1], arms[0]] } else { arms };
+        if self.threading(rebuild, b, test, [then_region, else_region], results) {
+            return true;
+        }
         let test = rebuild.value(test);
         let fresh = rebuild.if_(b, test, results, then_region, else_region, self);
+        for (&was, now) in results.iter().zip(fresh) {
+            rebuild.stands_for(was, now);
+        }
+        true
+    }
+
+    /// A branch on a condition an earlier branch took: in each arm, what the
+    /// earlier one answered is what its arm on the same side answered,
+    /// where that is a number or something worked out before it, so the
+    /// earlier one need not be asked.
+    fn threading(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        condition: ValueId,
+        arms: [RegionId; 2],
+        results: &[ValueId],
+    ) -> bool {
+        let sides = self.wrote.sides(rebuild, condition);
+        if sides.iter().all(Vec::is_empty) {
+            return false;
+        }
+        let pass = std::cell::RefCell::new(&mut *self);
+        let arm = |b: &mut Builder, side: usize| {
+            let held: Vec<_> = sides[side]
+                .iter()
+                .map(|&(was, answered)| {
+                    let before = rebuild.standing(was);
+                    let now = match answered {
+                        Answered::Number(number, class) => b.constant(class, number),
+                        Answered::Before(value) => rebuild.value(value),
+                    };
+                    rebuild.stands_for(was, now);
+                    (was, before)
+                })
+                .collect();
+            let mut pass = pass.borrow_mut();
+            rebuild.region(b, arms[side], &[], &mut **pass);
+            for (was, before) in held {
+                rebuild.restand(was, before);
+            }
+        };
+        let fresh = b.if_(
+            rebuild.value(condition),
+            &rebuild.classes(results),
+            |b| arm(b, 0),
+            |b| arm(b, 1),
+        );
         for (&was, now) in results.iter().zip(fresh) {
             rebuild.stands_for(was, now);
         }
@@ -414,38 +472,101 @@ impl Simplify {
     }
 }
 
-/// What wrote each value, which is what lets one instruction be read
-/// together with the ones it reads.
-struct Wrote(Vec<Option<(Op, Class)>>);
+/// What an earlier branch's arm answered, as a later one on the same
+/// condition can name it: a number, or a value worked out before it.
+#[derive(Clone, Copy)]
+enum Answered {
+    Number(u64, Class),
+    Before(ValueId),
+}
+
+/// A branch's arms, then and else, and its results.
+type Branch<'a> = ([RegionId; 2], &'a [ValueId]);
+
+/// What wrote each value, and which of its results the value is, which is
+/// what lets one instruction be read together with the ones it reads.
+struct Wrote(
+    Vec<Option<(Op, Class, usize)>>,
+    Vec<Vec<([RegionId; 2], Vec<ValueId>)>>,
+);
 
 impl Wrote {
     fn of(source: &Program) -> Self {
         let mut held = vec![None; source.values_count()];
+        let mut branches = vec![Vec::new(); source.values_count()];
         for function in source.functions() {
             let Some(body) = function.body() else {
                 continue;
             };
             for (op, results) in every(source, body) {
-                for value in results {
-                    held[value.index()] = Some((op, source.class(value)));
+                if let Op::If {
+                    condition,
+                    then_region,
+                    else_region,
+                } = op
+                    && !results.is_empty()
+                {
+                    branches[condition.index()].push(([then_region, else_region], results.clone()));
+                }
+                for (at, value) in results.into_iter().enumerate() {
+                    held[value.index()] = Some((op, source.class(value), at));
                 }
             }
         }
-        Self(held)
+        Self(held, branches)
+    }
+
+    /// Every branch answering something on `condition`.
+    fn asked(&self, condition: ValueId) -> Vec<Branch<'_>> {
+        self.1[condition.index()]
+            .iter()
+            .map(|(regions, results)| (*regions, results.as_slice()))
+            .collect()
+    }
+
+    /// For each arm of a branch on `condition`, which results of an earlier
+    /// branch on it stand for what there.
+    fn sides(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        condition: ValueId,
+    ) -> [Vec<(ValueId, Answered)>; 2] {
+        let source = rebuild.source();
+        let mut sides: [Vec<(ValueId, Answered)>; 2] = [Vec::new(), Vec::new()];
+        for (regions, results) in self.asked(condition) {
+            // One not yet written is not before this one.
+            if results.iter().all(|&was| rebuild.standing(was).is_none()) {
+                continue;
+            }
+            let inside = within(source, regions);
+            for (side, held) in sides.iter_mut().enumerate() {
+                let yielded = source.outgoing(regions[side]);
+                for (&was, &value) in results.iter().zip(yielded) {
+                    let answered = match self.number(value) {
+                        Some(number) => Answered::Number(number, source.class(value)),
+                        None if !inside.contains(&value) => Answered::Before(value),
+                        None => continue,
+                    };
+                    held.push((was, answered));
+                }
+            }
+        }
+        sides
     }
 
     /// The number a value is, where a constant wrote it. A natural is held
     /// in the data pool rather than as a number here, and says nothing.
     fn number(&self, value: ValueId) -> Option<u64> {
-        let (op, class) = self.0[value.index()]?;
+        let (op, class, _) = self.0[value.index()]?;
         match op {
             Op::Constant { value } if matches!(class, Class::Word | Class::Held(_)) => Some(value),
             _ => None,
         }
     }
 
-    /// Whether a condition only asks which of two constants an earlier
-    /// branch chose, and if so, that branch's own condition and whether the
+    /// Whether a condition only asks which arm an earlier branch took, by
+    /// asking whether one of its results is a number one arm answers and
+    /// the other cannot: if so, that branch's own condition and whether the
     /// answer runs the arms the other way round.
     fn asks(&self, source: &Program, condition: ValueId) -> Option<(ValueId, bool)> {
         let Op::Compare {
@@ -457,50 +578,57 @@ impl Wrote {
             return None;
         };
         let wanted = self.number(right)?;
-        let (test, taken, otherwise) = self.chose(source, left)?;
-        // Nothing is decided by asking which of two of the same it was.
-        if taken == otherwise {
-            return None;
-        }
-        if wanted == taken {
-            Some((test, false))
-        } else if wanted == otherwise {
-            Some((test, true))
-        } else {
-            None
-        }
-    }
-
-    /// A branch whose arms do nothing but answer with a constant each: its
-    /// condition, what it answers when the condition holds, and what it
-    /// answers when it does not.
-    fn chose(&self, source: &Program, value: ValueId) -> Option<(ValueId, u64, u64)> {
-        let Op::If {
-            condition,
-            then_region,
-            else_region,
-        } = self.0[value.index()]?.0
+        let (
+            Op::If {
+                condition: test,
+                then_region,
+                else_region,
+            },
+            _,
+            at,
+        ) = self.0[left.index()]?
         else {
             return None;
         };
-        Some((
-            condition,
-            self.answered(source, then_region)?,
-            self.answered(source, else_region)?,
-        ))
+        let taken = self.answers(source, then_region, at, wanted)?;
+        let otherwise = self.answers(source, else_region, at, wanted)?;
+        // Nothing is decided where both arms answer alike.
+        match (taken, otherwise) {
+            (true, false) => Some((test, false)),
+            (false, true) => Some((test, true)),
+            _ => None,
+        }
     }
 
-    /// The one constant an arm leaves with, where that is all the arm does.
-    fn answered(&self, source: &Program, region: RegionId) -> Option<u64> {
+    /// Whether an arm's result `at` is `wanted`, where that is known: a
+    /// constant says, and so does a value that cannot be it.
+    fn answers(&self, source: &Program, region: RegionId, at: usize, wanted: u64) -> Option<bool> {
         let terminator = source.region(region).terminator?;
-        if terminator.exit != Exit::Yield || source.ops(region).len() != 1 {
+        if terminator.exit != Exit::Yield {
             return None;
         }
-        let &[value] = source.values(terminator.values) else {
-            return None;
-        };
-        self.number(value)
+        let &value = source.values(terminator.values).get(at)?;
+        if let Some(number) = self.number(value) {
+            return Some(number == wanted);
+        }
+        let facts = source.class(value).facts()?;
+        let outside = wanted < facts.low || facts.high.is_some_and(|high| wanted > high);
+        outside.then_some(false)
     }
+}
+
+/// Every value written within a branch's arms.
+fn within(source: &Program, regions: [RegionId; 2]) -> Vec<ValueId> {
+    regions
+        .iter()
+        .flat_map(|&region| {
+            let params = source.values(source.region(region).params).to_vec();
+            every(source, region)
+                .into_iter()
+                .flat_map(|(_, results)| results)
+                .chain(params)
+        })
+        .collect()
 }
 
 /// Every instruction under a region, each with what it writes.

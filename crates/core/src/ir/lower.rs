@@ -136,6 +136,7 @@ fn lower_with(
         takes: demand.takes,
         callees,
         refused: std::cell::RefCell::default(),
+        errors: Errors::default(),
         looping: std::cell::RefCell::default(),
         arguments: arguments.map(|at| {
             let made =
@@ -1708,6 +1709,8 @@ struct Lowering<'a> {
     /// body is built. Region callbacks answer values rather than results,
     /// so a refusal is kept here instead of returned from each of them.
     refused: std::cell::RefCell<Option<String>>,
+    /// The errors reads and writes met, as far as a binding follows one.
+    errors: Errors,
     /// The function being lowered as a loop, and the calls of itself in
     /// tail position, each of which goes round again rather than calling.
     looping: std::cell::RefCell<Option<(barb::FnId, Vec<barb::ExprId>)>>,
@@ -1715,6 +1718,39 @@ struct Lowering<'a> {
     /// are, and the routine making the list of strings from them, where the
     /// program reads the list.
     arguments: Option<(usize, Option<FunctionId>)>,
+}
+
+/// The error the last binding's read or write met, and the one the binding
+/// being lowered follows. A failure asked for straight after is that error,
+/// with nothing between to change it, so it need not be read back from
+/// where it was kept.
+#[derive(Default)]
+struct Errors {
+    met: std::cell::Cell<Option<ValueId>>,
+    followed: std::cell::Cell<Option<ValueId>>,
+}
+
+impl Errors {
+    /// A read or write met `error`, or nought.
+    fn meet(&self, error: ValueId) {
+        self.met.set(Some(error));
+    }
+
+    /// The next binding follows the last.
+    fn step(&self) {
+        self.followed.set(self.met.take());
+    }
+
+    /// More than one way may lead on: nothing follows one read or write.
+    fn forget(&self) {
+        self.met.set(None);
+        self.followed.set(None);
+    }
+
+    /// The error the binding being lowered follows straight on from.
+    fn followed(&self) -> Option<ValueId> {
+        self.followed.take()
+    }
 }
 
 /// Local values, one entry per source local: `None` where it carries nothing.
@@ -1953,8 +1989,23 @@ impl Lowering<'_> {
         locals: &mut Vec<Option<Held>>,
         statics: &mut Vec<Option<Known>>,
     ) -> Answer<Held> {
+        let answer = self.bound(b, body, locals, statics);
+        // Where this body ends, more than one way may lead on: nothing
+        // after it follows one read or write in particular.
+        self.errors.forget();
+        answer
+    }
+
+    fn bound(
+        &self,
+        b: &mut super::Builder,
+        body: barb::Body,
+        locals: &mut Vec<Option<Held>>,
+        statics: &mut Vec<Option<Known>>,
+    ) -> Answer<Held> {
         for &binding in self.barb.bindings(body.bindings) {
             let static_value = self.propagate_static(binding, statics);
+            self.errors.step();
             match self.expr(b, binding, locals, statics) {
                 Answer::Value(value) => locals.push(Some(value)),
                 Answer::Nothing => locals.push(None),
@@ -1964,6 +2015,7 @@ impl Lowering<'_> {
             }
             statics.push(static_value);
         }
+        self.errors.step();
         self.expr(b, body.tail, locals, statics)
     }
 
@@ -2387,7 +2439,7 @@ impl Lowering<'_> {
             .expect("a dropped sequence is carried")
             .values();
         let (buffer, len) = (values[0], values[1]);
-        let skipped = Self::skipped(b, Self::scalar(locals, count), len);
+        let skipped = Self::skipped(b, Self::scalar(locals, count), (len, None));
         let rest = b.binary(Binary::Sub, len, skipped);
         Held::Flat {
             leaves: sequence_run(),
@@ -2396,8 +2448,19 @@ impl Lowering<'_> {
     }
 
     /// As many of `len` as `count` says, or all of them where it says more:
-    /// a word, since it is no more than `len` is.
-    fn skipped(b: &mut super::Builder, count: ValueId, len: ValueId) -> ValueId {
+    /// a word, since it is no more than `len` is. Where `len` is `known`
+    /// and `count` can be no more, it is `count`, and nothing is asked.
+    fn skipped(
+        b: &mut super::Builder,
+        count: ValueId,
+        (len, known): (ValueId, Option<u64>),
+    ) -> ValueId {
+        let most = b.class(count).facts().and_then(|facts| facts.high);
+        if let (Some(most), Some(known)) = (most, known)
+            && most <= known
+        {
+            return met(b, count, Class::Word);
+        }
         let class = super::arithmetic::widest(b.class(count), Class::Word);
         let (wide_count, wide_len) = (met(b, count, class), met(b, len, class));
         let more = b.compare(Relation::Less, wide_len, wide_count);
@@ -2426,10 +2489,10 @@ impl Lowering<'_> {
             unreachable!("a length is of one sequence");
         };
         let len = if let Some(Known { value, skip }) = statics[sequence.0.index()] {
-            let total = u64::try_from(self.bytes(value).len()).expect("a length fits 64 bits");
-            let total = b.constant(Class::Word, total);
+            let known = u64::try_from(self.bytes(value).len()).expect("a length fits 64 bits");
+            let total = b.constant(Class::Word, known);
             skip.map_or(total, |count| {
-                let skipped = Self::skipped(b, Self::scalar(locals, count), total);
+                let skipped = Self::skipped(b, Self::scalar(locals, count), (total, Some(known)));
                 b.binary(Binary::Sub, total, skipped)
             })
         } else {
@@ -2615,10 +2678,16 @@ impl Lowering<'_> {
     ) -> Vec<ValueId> {
         let primitive = || primitive.expect("a routine built on a primitive has one");
         match built {
-            Built::Put(_) => vec![self.put(b, asked, locals, statics, (primitive(), io))],
+            Built::Put(_) => {
+                let [went, error] = self.put(b, asked, locals, statics, (primitive(), io));
+                self.errors.meet(error);
+                vec![went]
+            }
             Built::Take(_) => {
                 let count = self.handed_scalar(asked, locals);
-                vec![Self::take(b, count, (primitive(), io))]
+                let [came, error] = Self::take(b, count, (primitive(), io));
+                self.errors.meet(error);
+                vec![came]
             }
             Built::Taken => {
                 let count = self.handed_scalar(asked, locals);
@@ -2626,7 +2695,10 @@ impl Lowering<'_> {
             }
             Built::Failure => {
                 let at = b.address_of(io.failure);
-                let failure = b.load(super::Width::Word, at, super::Offset::Words(0));
+                let failure = self
+                    .errors
+                    .followed()
+                    .unwrap_or_else(|| b.load(super::Width::Word, at, super::Offset::Words(0)));
                 let none = b.constant(Class::Word, 0);
                 b.store(super::Width::Word, at, super::Offset::Words(0), none);
                 vec![failure]
@@ -2654,30 +2726,44 @@ impl Lowering<'_> {
 
     /// What a primitive answered, as a count: where it is more than it was
     /// asked to move, it failed, and the error is kept and nought answered.
-    fn counted(b: &mut super::Builder, answer: ValueId, asked: ValueId, io: Io) -> ValueId {
+    ///
+    /// Beside it, the error kept, or nought.
+    fn counted(b: &mut super::Builder, answer: ValueId, asked: ValueId, io: Io) -> [ValueId; 2] {
         let failed = b.compare(Relation::Less, asked, answer);
-        b.if_(
+        let held = b.if_(
             failed,
-            &[Class::Word],
+            &[Class::Word, Class::Word],
             |b| {
                 // `-error`, read as a word: the error is that far below the
                 // top, and one more.
                 let top = b.constant(Class::Word, io.top);
-                let below = b.binary(Binary::Sub, top, answer);
                 let one = b.constant(Class::Word, 1);
-                let error = b.binary(Binary::Add, below, one);
+                // More than was asked is at least one, so one less is short
+                // of the top: what is left is at least one, and never more
+                // than the top.
+                let less = b.binary_at(Class::Word, Binary::Sub, answer, one);
+                let error = Class::Held(crate::facts::Facts {
+                    low: 1,
+                    high: Some(io.top),
+                });
+                let error = b.binary_at(error, Binary::Monus, top, less);
                 let at = b.address_of(io.failure);
                 b.store(super::Width::Word, at, super::Offset::Words(0), error);
                 let none = b.constant(Class::Word, 0);
-                b.yield_(&[none]);
+                b.yield_(&[none, error]);
             },
-            |b| b.yield_(&[answer]),
-        )[0]
+            |b| {
+                let none = b.constant(Class::Word, 0);
+                b.yield_(&[answer, none]);
+            },
+        );
+        [held[0], held[1]]
     }
 
     /// Hand a byte string to the primitive: where it lies, all of it, if it
     /// is known before the program runs, and otherwise its first run,
-    /// copied to the scratch region. How many bytes went.
+    /// copied to the scratch region. How many bytes went, and the error
+    /// met, or nought.
     fn put(
         &self,
         b: &mut super::Builder,
@@ -2685,7 +2771,7 @@ impl Lowering<'_> {
         locals: &Locals,
         statics: &[Option<Known>],
         (write, io): (FunctionId, Io),
-    ) -> ValueId {
+    ) -> [ValueId; 2] {
         // Past the authority it is asked with, the one argument carried.
         let (atom, _) = self
             .barb
@@ -2697,11 +2783,13 @@ impl Lowering<'_> {
             .expect("a string handed out is carried");
         let atom = *atom;
         if let Some(Known { value, skip }) = statics[atom.0.index()] {
-            let data = b.data(&self.bytes(value));
+            let bytes = self.bytes(value);
+            let known = u64::try_from(bytes.len()).expect("a length fits 64 bits");
+            let data = b.data(&bytes);
             let at = b.address_of(data);
             let len = b.data_len(data);
             let (at, len) = skip.map_or((at, len), |count| {
-                let skipped = Self::skipped(b, Self::scalar(locals, count), len);
+                let skipped = Self::skipped(b, Self::scalar(locals, count), (len, Some(known)));
                 let start = b.convert(Class::Word, at);
                 let start = b.binary(Binary::Add, start, skipped);
                 let rest = b.binary(Binary::Sub, len, skipped);
@@ -2752,8 +2840,8 @@ impl Lowering<'_> {
     }
 
     /// Ask the primitive for up to `count` bytes, no more than a run, into
-    /// the scratch region: how many came.
-    fn take(b: &mut super::Builder, count: ValueId, (read, io): (FunctionId, Io)) -> ValueId {
+    /// the scratch region: how many came, and the error met, or nought.
+    fn take(b: &mut super::Builder, count: ValueId, (read, io): (FunctionId, Io)) -> [ValueId; 2] {
         let count = met(b, count, Class::Word);
         let room = b.data_len(io.scratch);
         let fits = b.compare(Relation::Less, count, room);

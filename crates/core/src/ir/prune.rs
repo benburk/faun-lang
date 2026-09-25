@@ -101,16 +101,20 @@ fn pack(program: &mut Program) {
 }
 
 /// The declarations with every result nothing reads taken out.
+///
+/// The signature pool is written afresh, as `fit` writes it: a class only
+/// an old signature held would otherwise still be found there by anything
+/// asking what the program holds.
 fn declarations(source: &Program, answered: &[Vec<bool>]) -> Declarations {
     let mut declared = Declarations::of(source);
+    declared.signature.clear();
     for (id, kept) in answered.iter().enumerate() {
         let function = &mut declared.functions[FunctionId::at(id)];
+        let params = source.signature(function.params);
+        function.params = append_range(&mut declared.signature, params);
         let Returns::Values(returns) = function.returns else {
             continue;
         };
-        if kept.iter().all(|&kept| kept) {
-            continue;
-        }
         let classes: Vec<_> = source
             .signature(returns)
             .iter()

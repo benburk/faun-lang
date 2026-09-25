@@ -294,6 +294,7 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
         takes: demand.takes,
         callees: vec![],
         refused: std::cell::RefCell::default(),
+        errors: Errors::default(),
         looping: std::cell::RefCell::default(),
         arguments: None,
     };
