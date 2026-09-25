@@ -243,7 +243,7 @@ impl Loader {
             .map_err(|error| Diagnostic::new(format!("cannot read {}: {error}", path.display())))?;
         let source = self.sources.add(path.clone(), text.clone());
         let syntax = parse_in(&text, source).map_err(|error| {
-            let at = Span::new(error.offset, error.offset);
+            let at = Span::new(error.offset, error.end);
             let text = self.sources.get(source).expect("the source just added");
             Diagnostic::new(error.message).at(text, at)
         })?;

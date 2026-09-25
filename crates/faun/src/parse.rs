@@ -10,6 +10,9 @@ use super::source::SourceId;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParseError {
     pub offset: usize,
+    /// Where what it is about ends, which is `offset` where it is about a
+    /// place rather than a stretch of text.
+    pub end: usize,
     pub line: usize,
     pub column: usize,
     pub message: String,
@@ -58,11 +61,13 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
         grammar::source::program(&tokens).map_err(|error| syntax_error(source, &tokens, &error))?;
     if let Some(line) = discarded_values(&module, source) {
         let offset = usize::try_from(line.start).expect("u32 fits usize");
-        return Err(error_at(
+        let mut error = error_at(
             source,
             offset,
-            "only an effect stands on a line of its own; bind anything else to a name".to_owned(),
-        ));
+            "this value is worked out and then thrown away; remove the line, or bind the value to a name if you need it".to_owned(),
+        );
+        error.end = usize::try_from(line.end).expect("u32 fits usize");
+        return Err(error);
     }
     if validate_literals {
         literal::validate(&module, source).map_err(|error| {
@@ -135,6 +140,7 @@ fn error_at(source: &str, offset: usize, message: String) -> ParseError {
     let column = before[line_start..].chars().count() + 1;
     ParseError {
         offset,
+        end: offset,
         line,
         column,
         message,

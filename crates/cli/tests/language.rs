@@ -500,7 +500,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
          main!(host) ->
            [1 2].len()
            host.exit!(0)",
-        "only an effect stands on a line of its own; bind anything else to a name",
+        "this value is worked out and then thrown away; remove the line, or bind the value to a name if you need it",
     ),
     (
         "a line of its own is not a way to throw a value away",
@@ -508,7 +508,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
          main!(host) ->
            host.argc + 1
            host.exit!(0)",
-        "only an effect stands on a line of its own",
+        "this value is worked out and then thrown away",
     ),
     (
         "a constraint alias may not apply itself",
