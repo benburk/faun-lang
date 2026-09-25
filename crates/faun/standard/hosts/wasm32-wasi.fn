@@ -38,8 +38,7 @@ Host : {args: List(Str)}.(
 
   # `text` and a line's end on standard output.
   println! : Host Str -> Result({} IoError)
-  println!(host text) -> host.print!("${text}
-")
+  println!(host text) -> host.print!("${text}\n")
 
   # Run a program of no input, printing what it answers.
   run! : Host ({} -> a) -> [] where a.to_str : a -> Str
@@ -180,8 +179,7 @@ finish_result!(_ errors Err(error)) -> report!(errors error.to_str())
 # that could not be written.
 report! : Stderr Str -> Nat
 report!(errors text) ->
-  wrote = errors.write_all!("error: ${text}
-".to_utf8())
+  wrote = errors.write_all!("error: ${text}\n".to_utf8())
   reported_status(wrote)
 
 reported_status : Result(Nat IoError) -> Nat
