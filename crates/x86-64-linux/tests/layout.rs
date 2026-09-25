@@ -15,6 +15,7 @@ fn checked_native_compilation_rejects_foreign_runtime_layouts() {
         Config {
             word_bits: 32,
             heap_bytes: 128,
+            grows: false,
         },
     )
     .unwrap();
@@ -30,6 +31,7 @@ fn checked_native_compilation_rejects_foreign_runtime_layouts() {
         Config {
             word_bits: 64,
             heap_bytes: 128,
+            grows: false,
         },
     )
     .unwrap();

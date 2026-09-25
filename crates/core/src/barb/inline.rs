@@ -24,7 +24,9 @@ impl Default for InlineLimits {
 
 /// Only expanding rewrites need call-graph analysis, copy costs and budgets.
 pub(super) struct Inlining {
-    recursive: Vec<bool>,
+    /// The definitions a call of is never expanded, which keeps every
+    /// expansion finite.
+    breakers: Vec<bool>,
     costs: Vec<usize>,
     limits: InlineLimits,
     function_left: usize,
@@ -41,7 +43,7 @@ impl Inlining {
             return None;
         }
         Some(Self {
-            recursive: super::stops::recursive(program),
+            breakers: super::stops::breakers(program),
             costs: program
                 .functions()
                 .iter()
@@ -65,7 +67,7 @@ impl Inlining {
             || cost > self.limits.max_callee
             || cost > self.function_left
             || cost > self.total_left
-            || self.recursive[called.index()]
+            || self.breakers[called.index()]
         {
             return None;
         }

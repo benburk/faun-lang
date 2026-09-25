@@ -75,6 +75,7 @@ fn config(bits: u16) -> Config {
     Config {
         word_bits: bits,
         heap_bytes: 4096,
+        grows: false,
     }
 }
 
@@ -208,18 +209,22 @@ fn invalid_configurations_are_rejected() {
         Config {
             word_bits: 8,
             heap_bytes: 64,
+            grows: false,
         },
         Config {
             word_bits: 16,
             heap_bytes: 7,
+            grows: false,
         },
         Config {
             word_bits: 16,
             heap_bytes: 65536,
+            grows: false,
         },
         Config {
             word_bits: 32,
             heap_bytes: 17,
+            grows: false,
         },
     ] {
         let (mut p, _) = Program::new("bad");
@@ -425,6 +430,7 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 12 * word,
+            grows: false,
         };
         let (mut p, lib, _) = program(
             conf,
@@ -472,6 +478,7 @@ fn freed_adjacent_blocks_coalesce_for_a_larger_allocation() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 12 * word,
+            grows: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Add]));
         let observer = observer(&mut p);
@@ -505,6 +512,7 @@ fn exhaustion_halts_without_corrupting_the_heap() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 4 * word,
+            grows: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Mul]));
         let observer = observer(&mut p);
@@ -540,6 +548,7 @@ fn oversized_results_halt_before_allocation() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 4 * word,
+            grows: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul]));
         let huge = natural::constant(&mut p, conf, &(BigUint::from(1u8) << (word * 16))).unwrap();
@@ -614,6 +623,7 @@ fn multiplication_clears_dirty_recycled_accumulators() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 64,
+            grows: false,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::Mul]));
         let observer = observer(&mut p);
@@ -647,6 +657,7 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 8 * word,
+            grows: false,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::FromWord, Helper::Mod]));
         let observer = observer(&mut p);
@@ -703,6 +714,7 @@ fn coalescing_stops_at_live_blocks_and_later_reuses_the_joined_run() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 16 * word,
+            grows: false,
         };
         let magnitude = BigUint::from(1u8) << usize::from(bits);
         for remove_middle in [false, true] {
@@ -767,6 +779,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 128,
+            grows: false,
         };
         let (mut p, entry) = test_program();
         let sentinel = p.intern(&[0xa5]);
@@ -801,6 +814,7 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 128,
+            grows: false,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::Add, Helper::Sub]));
         let observer = observer(&mut p);
@@ -852,6 +866,7 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
         let conf = Config {
             word_bits: bits,
             heap_bytes: 128,
+            grows: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul, Helper::Div, Helper::Mod]));
         let dense = (BigUint::from(1u8) << 128usize) - BigUint::from(1u8);
@@ -889,6 +904,7 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
     let conf = Config {
         word_bits: bits,
         heap_bytes: 128,
+        grows: false,
     };
     let (mut p, lib, entry) = program(conf, isolated_needs(op));
     let optional = Helper::ALL.map(|helper| lib.get(helper));

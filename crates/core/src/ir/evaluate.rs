@@ -188,6 +188,20 @@ impl Memory<'_> {
         })
     }
 
+    /// Room for `bytes` more after the globals, eight-aligned and zeroed:
+    /// the address it starts at.
+    ///
+    /// # Errors
+    /// If the globals would outgrow what an address holds.
+    fn grow(&mut self, bytes: usize) -> Result<u64, Error> {
+        let start = self.globals.len().next_multiple_of(8);
+        let end = start.checked_add(bytes).ok_or(Error::InvalidMemory)?;
+        self.globals.resize(end, 0);
+        self.globals_base
+            .checked_add(u64::try_from(start).map_err(|_| Error::InvalidMemory)?)
+            .ok_or(Error::InvalidMemory)
+    }
+
     /// # Errors
     /// Rejects out-of-bounds accesses and writes to read-only Data.
     pub fn write(&mut self, address: u64, bytes: &[u8]) -> Result<(), Error> {
@@ -919,7 +933,17 @@ impl<H: Host> Machine<'_, H> {
             .get(symbol.range())
             .and_then(|n| std::str::from_utf8(n).ok())
             .ok_or_else(|| invalid("platform name"))?;
-        let result = self.host.call(name, args, &mut self.memory)?;
+        // Fresh memory is the interpreter's own to hand out: after the
+        // globals, where nothing else is, and aligned for any word.
+        let result = if name == "grow" {
+            let [bytes] = args else {
+                return Err(invalid("grow takes one size"));
+            };
+            let bytes = usize::try_from(bytes).map_err(|_| Error::InvalidMemory)?;
+            HostResult::Return(vec![BigUint::from(self.memory.grow(bytes)?)])
+        } else {
+            self.host.call(name, args, &mut self.memory)?
+        };
         if let HostResult::Return(values) = &result {
             let Returns::Values(classes) = returns else {
                 return Err(invalid("non-returning host returned"));

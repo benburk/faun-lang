@@ -147,6 +147,9 @@ pub trait Target: fmt::Debug {
                 } else {
                     64 * 1024
                 },
+                // A 16-bit target's `grow` is the memory above its image,
+                // which nothing checks against its stack.
+                grows: self.word() != 16,
             },
         )?;
         self.accepts(&prepared)?;

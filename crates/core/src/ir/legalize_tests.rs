@@ -28,6 +28,7 @@ fn nested_cells_are_legalized_to_managed_objects_and_released() {
     let config = Config {
         word_bits: 64,
         heap_bytes: 512,
+        grows: false,
     };
     let legalized = legalize(&source, config).unwrap();
     assert!(legalized.ops.iter().all(|op| !matches!(
@@ -56,6 +57,7 @@ fn a_cell_holding_a_natural_retains_and_releases_that_field() {
     let config = Config {
         word_bits: 64,
         heap_bytes: 512,
+        grows: false,
     };
     let legalized = legalize(&source, config).unwrap();
     let evaluation = run(&legalized, main, &[], 64);
@@ -169,6 +171,7 @@ fn exact_runtime_arithmetic_and_returned_ownership_at_each_word_size() {
             let config = Config {
                 word_bits: bits,
                 heap_bytes: 2048,
+                grows: false,
             };
             let scalar = legalize(&p, config).expect("legalized");
             assert!(
@@ -211,6 +214,7 @@ fn zero_division_and_monus_alias_paths_keep_returned_values_live() {
                     Config {
                         word_bits: bits,
                         heap_bytes: 256,
+                        grows: false,
                     },
                 )
                 .unwrap();
@@ -308,6 +312,7 @@ fn loops_rotate_aliases_reuse_tiny_heaps_and_clean_nested_early_returns() {
             let config = Config {
                 word_bits: bits,
                 heap_bytes: 512,
+                grows: false,
             };
             let scalar = legalize(&p, config).unwrap();
             for seed in [0u64, 3, 200] {
@@ -357,6 +362,7 @@ fn recursive_calls_borrow_parameters_and_transfer_owned_results() {
         let config = Config {
             word_bits: bits,
             heap_bytes: 1024,
+            grows: false,
         };
         let scalar = legalize(&p, config).unwrap();
         let expected = run(&p, main, &[], bits);
@@ -407,6 +413,7 @@ fn conversion_aliases_comparisons_and_odd_width_truncation() {
             let config = Config {
                 word_bits: bits,
                 heap_bytes: 256,
+                grows: false,
             };
             let scalar = legalize(&p, config).unwrap();
             for seed in [0u64, 255, 256, 65535, u64::MAX >> (64 - bits)] {
@@ -438,6 +445,7 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
         Config {
             word_bits: 64,
             heap_bytes: 256,
+            grows: false,
         },
     )
     .unwrap();
@@ -461,6 +469,15 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
     assert_eq!(host.calls, ["exit!"]);
 }
 
+/// A heap of `heap_bytes` that exits when it is full.
+const fn fixed_heap(word_bits: u16, heap_bytes: usize) -> Config {
+    Config {
+        word_bits,
+        heap_bytes,
+        grows: false,
+    }
+}
+
 #[test]
 fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
     for (source, target) in [
@@ -474,16 +491,7 @@ fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
             let zero = b.constant(Class::Word, 0);
             b.ret(&[zero]);
         });
-        assert!(
-            legalize(
-                &p,
-                Config {
-                    word_bits: 64,
-                    heap_bytes: 256
-                }
-            )
-            .is_err()
-        );
+        assert!(legalize(&p, fixed_heap(64, 256)).is_err());
     }
     let (mut p, main) = Program::new("main");
     // Wider than the machine, which is a program this cannot represent
@@ -496,15 +504,9 @@ fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
         b.ret(&[zero]);
     });
     assert!(
-        legalize(
-            &p,
-            Config {
-                word_bits: 16,
-                heap_bytes: 256
-            }
-        )
-        .unwrap_err()
-        .contains("Fixed")
+        legalize(&p, fixed_heap(16, 256))
+            .unwrap_err()
+            .contains("Fixed")
     );
 }
 
@@ -532,6 +534,7 @@ fn natural_host_signatures_do_not_become_address_signatures() {
         Config {
             word_bits: 64,
             heap_bytes: 256,
+            grows: false,
         },
     )
     .unwrap_err();
@@ -572,6 +575,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
             Config {
                 word_bits: bits,
                 heap_bytes: usize::from(bits / 8) * 4,
+                grows: false,
             },
         )
         .unwrap();
@@ -645,6 +649,7 @@ fn scalar_fast_path_has_no_runtime_code_data_or_globals() {
         Config {
             word_bits: 64,
             heap_bytes: 0,
+            grows: false,
         },
     )
     .unwrap();

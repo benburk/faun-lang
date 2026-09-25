@@ -139,6 +139,7 @@ pub(super) fn check(target: &dyn Target, runner: Option<&str>, early_return: boo
         super::ir::natural::Config {
             word_bits: target.word(),
             heap_bytes: HEAP_BYTES,
+            grows: false,
         },
     )
     .expect("legalization with a target-matching tiny heap");

@@ -52,6 +52,7 @@ fn cost(source: &barb::Program) -> Cost {
     let config = natural::Config {
         word_bits: 64,
         heap_bytes: HEAP_BYTES,
+        grows: false,
     };
     let scalar = legalize(&machine, config).unwrap();
     let result = evaluate::evaluate(
@@ -241,9 +242,11 @@ fn only_what_a_function_consumes_is_owned() {
     };
     // A list is two parameters, its buffer and its length; only a buffer
     // carries a claim. `reverse` takes its first list apart and grows its
-    // second.
+    // second. It calls itself in tail position, so it is a loop, and a
+    // loop's state holds a claim: it takes one to the list it takes apart
+    // too, once, on the way in, which the costs above show is nothing more.
     assert_eq!(of("build"), [false, true, false]);
-    assert_eq!(of("reverse"), [false, false, true, false]);
+    assert_eq!(of("reverse"), [true, false, true, false]);
     // A count of a list reads the length it holds, and is not lowered.
     assert_eq!(lowered("length"), None);
 }
@@ -280,6 +283,7 @@ fn a_claim_read_last_by_a_branch_is_released_in_each_arm() {
     let config = natural::Config {
         word_bits: 64,
         heap_bytes: 256,
+        grows: false,
     };
     let scalar = legalize(&p, config).unwrap();
     let release = scalar
@@ -373,6 +377,7 @@ fn run_machine(machine: &Program) -> (Vec<BigUint>, Cost) {
     let config = natural::Config {
         word_bits: 64,
         heap_bytes: HEAP_BYTES,
+        grows: false,
     };
     let scalar = legalize(machine, config).unwrap();
     let result = evaluate::evaluate(

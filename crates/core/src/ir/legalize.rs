@@ -903,6 +903,7 @@ mod tests {
             Config {
                 word_bits: 64,
                 heap_bytes: 256,
+                grows: false,
             }
             .layout(),
         )

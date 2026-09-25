@@ -141,7 +141,11 @@ two types -- so nothing infers a provider or an effect from the display name.
 `optimize(program)` runs a small fixed schedule after validation:
 
 1. Structural normalization: substitute local aliases, without expanding calls.
-2. Helper inlining: nonrecursive, non-arithmetic helpers only.
+2. Helper inlining: non-arithmetic helpers other than loop breakers. In each
+   recursive component, a definition calling itself is a breaker, and so are
+   enough of the rest that no cycle is left among the others; each other one may
+   be copied into its caller, so definitions calling each other become one
+   calling itself, which machine lowering makes a loop where the call is a tail.
 3. Arithmetic identities justified by structurally recognized `Operation` facts.
 4. Constant folding with one shared evaluation budget for the entire pass.
 5. Bounded algebraic normalization: combine constants across recognized associative

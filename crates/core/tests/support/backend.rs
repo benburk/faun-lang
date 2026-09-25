@@ -752,6 +752,36 @@ fn it_reads_standard_input() {
         .expect("a program this machine holds");
     assert_eq!(execute_with_input(&source, b"AB"), (6, "AB".to_owned()));
     assert_eq!(execute_with_input(&source, b""), (4, String::new()));
+
+    // Far more than the heap a program starts with holds: where a target
+    // has more to give, the heap grows into it.
+    if TARGET.word() > 16 {
+        // A status a WASI runner passes on, which is below 126.
+        let long = vec![b'x'; 100_100];
+        let (status, echoed) = execute_with_input(&source, &long);
+        assert_eq!(status, (100_100 + 4) % 256);
+        assert_eq!(echoed.len(), long.len());
+    }
+}
+
+/// Advent of Code 2015, day one, on an input far longer than a stack of
+/// frames goes: each step calls the next in tail position, which is a loop.
+#[test]
+fn a_long_walk_goes_round_rather_than_down() {
+    if TARGET.word() == 16 {
+        return;
+    }
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/aoc/201501.fn");
+    let text = fs::read_to_string(&path).expect("the day one example");
+    let program = read(&text).expect("the day one example compiles");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let input = "(()".repeat(20_000);
+    assert_eq!(
+        execute_with_input(&program, input.as_bytes()),
+        (0, "part1: 20000 part2: 0\n".to_owned())
+    );
 }
 
 #[test]

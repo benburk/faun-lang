@@ -93,6 +93,7 @@ pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program
         takes: demand.takes,
         callees,
         refused: std::cell::RefCell::default(),
+        looping: std::cell::RefCell::default(),
     };
     for (at, callee) in lowering.callees.iter().enumerate() {
         let id = barb::FnId::at(at);
@@ -1409,6 +1410,9 @@ struct Lowering<'a> {
     /// body is built. Region callbacks answer values rather than results,
     /// so a refusal is kept here instead of returned from each of them.
     refused: std::cell::RefCell<Option<String>>,
+    /// The function being lowered as a loop, and the calls of itself in
+    /// tail position, each of which goes round again rather than calling.
+    looping: std::cell::RefCell<Option<(barb::FnId, Vec<barb::ExprId>)>>,
 }
 
 /// Local values, one entry per source local: `None` where it carries nothing.
@@ -1470,16 +1474,67 @@ impl Lowering<'_> {
                     .map_or_else(Vec::new, |carried| self.classes(&carried).to_vec()),
             )
         };
-        machine.try_define(into, |b, params| {
-            let mut locals = self.parameters(id, params);
-            let mut statics = vec![None; locals.len()];
-            let answer = self.body(b, body, &mut locals, &mut statics);
-            returned(b, answer, &destination)
-        })?;
+        let tails = if entry {
+            Vec::new()
+        } else {
+            self.tail_calls(id, body)
+        };
+        if tails.is_empty() {
+            machine.try_define(into, |b, params| {
+                let mut locals = self.parameters(id, params);
+                let mut statics = vec![None; locals.len()];
+                let answer = self.body(b, body, &mut locals, &mut statics);
+                returned(b, answer, &destination)
+            })?;
+        } else {
+            self.looped(machine, (id, into), (body, tails), &destination)?;
+        }
         // A body is built before this can be read: emission answers values,
         // and what it could not lay out is said once, here, where lowering
         // can still refuse the program.
         self.refused.borrow_mut().take().map_or(Ok(()), Err)
+    }
+
+    /// A function calling itself in tail position, which goes round again
+    /// instead: the body is a loop over the parameters, and it leaves by
+    /// returning. However deep the recursion, the stack is one frame deep.
+    fn looped(
+        &self,
+        machine: &mut Program,
+        (id, into): (barb::FnId, FunctionId),
+        (body, tails): (barb::Body, Vec<barb::ExprId>),
+        destination: &ReturnTo,
+    ) -> Result<(), String> {
+        *self.looping.borrow_mut() = Some((id, tails));
+        let defined = machine.try_define(into, |b, params| {
+            let mut lowered = Ok(());
+            b.loop_(params, &[], |b, state| {
+                let mut locals = self.parameters(id, state);
+                let mut statics = vec![None; locals.len()];
+                let answer = self.body(b, body, &mut locals, &mut statics);
+                lowered = returned(b, answer, destination);
+            });
+            lowered
+        });
+        self.looping.borrow_mut().take();
+        defined
+    }
+
+    /// The calls of `id` to itself in tail position: a body's tail, and
+    /// the tails of each arm of a match there.
+    fn tail_calls(&self, id: barb::FnId, body: barb::Body) -> Vec<barb::ExprId> {
+        let mut found = Vec::new();
+        let mut waiting = vec![body];
+        while let Some(body) = waiting.pop() {
+            match self.barb.expr(body.tail) {
+                barb::Expr::Call(callee, _) if callee == id => found.push(body.tail),
+                barb::Expr::Match(_, arms) => {
+                    waiting.extend(self.barb.arms(arms).iter().map(|arm| arm.body));
+                }
+                _ => {}
+            }
+        }
+        found
     }
 
     /// The source parameters, as the machine ones hold them. Erased and
@@ -1797,6 +1852,15 @@ impl Lowering<'_> {
                 for (at, arg) in args.iter_mut().enumerate() {
                     let wanted = b.takes(callee)[at];
                     *arg = met(b, *arg, wanted);
+                }
+                let again = self
+                    .looping
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|(looping, tails)| *looping == function && tails.contains(&expr));
+                if again {
+                    b.continue_(&args);
+                    return Answer::Never;
                 }
                 (b.call(callee, &args), None)
             }

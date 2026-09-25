@@ -100,17 +100,55 @@ impl Graph {
     }
 }
 
-pub(super) fn recursive(program: &Program) -> Vec<bool> {
+/// The definitions expanding a call of must not, so that expanding every
+/// other one ends: in each round of calls, one that calls itself, and
+/// enough of the rest that no way round is left among the others. Each of
+/// the others can then be copied into its caller, which is how two
+/// definitions calling each other become one that calls itself, and a call
+/// of itself in tail position becomes a loop below.
+pub(super) fn breakers(program: &Program) -> Vec<bool> {
     let calls = graph(program);
-    let mut found = vec![false; calls.len()];
+    let mut breaker = vec![false; calls.len()];
     for round in rounds(&calls) {
-        if round.len() > 1 || calls[round[0].index()].contains(&round[0]) {
-            for id in round {
-                found[id.index()] = true;
+        for &id in &round {
+            if calls[id.index()].contains(&id) {
+                breaker[id.index()] = true;
+            }
+        }
+        if round.len() == 1 {
+            continue;
+        }
+        // Among the rest, break each way round still left, one definition
+        // at a time, until none is.
+        loop {
+            let left: Vec<Vec<FnId>> = calls
+                .iter()
+                .enumerate()
+                .map(|(at, callees)| {
+                    if breaker[at] || !round.contains(&FnId::at(at)) {
+                        return Vec::new();
+                    }
+                    callees
+                        .iter()
+                        .copied()
+                        .filter(|callee| round.contains(callee) && !breaker[callee.index()])
+                        .collect()
+                })
+                .collect();
+            let cycles: Vec<_> = rounds(&left)
+                .into_iter()
+                .filter(|within| within.len() > 1)
+                .collect();
+            if cycles.is_empty() {
+                break;
+            }
+            for within in cycles {
+                let first = within.iter().min().expect("a round has a member");
+                breaker[first.index()] = true;
             }
         }
     }
-    found
+    breaker
 }
 
 /// Refuse a definition nothing shows stops, naming the call that begins a

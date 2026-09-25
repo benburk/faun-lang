@@ -4,7 +4,10 @@
 //! release it. Objects have three target-word headers: total block bytes,
 //! reference count, and normalized digit count. Digits are little endian.
 //! Static objects have an all-ones count. Mortal objects live in a private,
-//! reusable, coalescing globals heap; exhaustion exits with status two.
+//! reusable, coalescing heap that starts in the globals. Where the target's
+//! `grow` has more to give, a full heap asks it for an arena at least as large
+//! as the heap so far; otherwise, and where it has no more, exhaustion exits
+//! with status two.
 //!
 //! Retain requires a live borrowed object; release requires an owned claim.
 //! Both reject a zero reference count with exit(2), helping expose invalid
@@ -23,7 +26,11 @@ use super::{
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
     pub word_bits: u16,
+    /// The heap every program starts with, in its globals.
     pub heap_bytes: usize,
+    /// Whether the heap asks the target for more when it is full, rather
+    /// than exiting. A target whose `grow` has nothing to bound it says no.
+    pub grows: bool,
 }
 
 /// One inventory for helper requests, generated handles and omission tests.
@@ -289,7 +296,7 @@ pub(super) fn append(
             && !matches!(helper, Helper::Allocate | Helper::Compare | Helper::ToWord)
     }) || needs.contains(Helper::Allocate)
     {
-        let alloc = allocator(program, config, word, zero, fail)?;
+        let alloc = allocation(program, config, (word, max), (zero, fail))?;
         if needs.contains(Helper::Allocate) {
             library.insert(Helper::Allocate, alloc);
         }
@@ -560,6 +567,252 @@ fn allocator(
             );
         })[0];
         b.ret(&[result]);
+    });
+    Ok(allocate)
+}
+
+/// The allocator the heap's configuration asks for.
+fn allocation(
+    program: &mut Program,
+    config: Config,
+    (word, max): (usize, u64),
+    (zero, fail): (DataId, FunctionId),
+) -> Result<FunctionId, String> {
+    if config.grows {
+        growing(program, config, (word, max), zero, fail)
+    } else {
+        allocator(program, config, word, zero, fail)
+    }
+}
+
+/// Words at the start of every arena: the next arena, and where its blocks
+/// end. A next of nought is the first arena, the one in the globals.
+const ARENA_WORDS: usize = 2;
+
+/// The allocator of a heap that grows: a ring of arenas, the first in the
+/// globals and each other from the target's `grow`, searched first-fit from
+/// where the last allocation ended. Where no arena has room, a new one at
+/// least as large as the heap so far is asked for, so the heap doubles and
+/// a program asks the target a number of times logarithmic in what it
+/// holds.
+///
+/// Where the search starts is kept in the globals with the number of
+/// arenas and the heap's size. Every allocation moves it, so a search that
+/// coalesced blocks around it never starts inside one.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the search and the growth share the state they keep"
+)]
+fn growing(
+    p: &mut Program,
+    config: Config,
+    (word, max): (usize, u64),
+    zero: DataId,
+    fail: FunctionId,
+) -> Result<FunctionId, String> {
+    let padding = (word - p.globals().len() % word) % word;
+    if p.globals()
+        .len()
+        .checked_add(padding)
+        .and_then(|n| n.checked_add(config.heap_bytes + 4 * word))
+        .is_none_or(|n| u32::try_from(n).is_err())
+    {
+        return Err("natural heap exceeds the globals pool".to_owned());
+    }
+    if padding != 0 {
+        p.global(&vec![0; padding]);
+    }
+    let start = ARENA_WORDS * word;
+    let mut bytes = vec![0; config.heap_bytes];
+    header(&mut bytes, 1, size64(config.heap_bytes), word);
+    header(
+        &mut bytes,
+        ARENA_WORDS,
+        size64(config.heap_bytes - start),
+        word,
+    );
+    let heap = p.global(&bytes);
+    // Where the search starts, as an arena (nought for the first) and an
+    // offset in it; how many arenas there are; how large the heap is.
+    let mut state = vec![0; 4 * word];
+    header(&mut state, 1, size64(start), word);
+    header(&mut state, 2, 1, word);
+    header(&mut state, 3, size64(config.heap_bytes), word);
+    let kept_at = p.global(&state);
+    let grow = p.external("grow", &[W], super::Returns::Values(&[A]));
+    let coalesce = coalescing(p);
+    let claim = claiming(p, word);
+    let allocate = declare(p, "nat.allocate", &[W], &[A]);
+    p.define(allocate, |b, args| {
+        let cap = args[0];
+        let nil = number(b, 0);
+        let empty = eq(b, cap, nil);
+        b.if_(
+            empty,
+            &[],
+            |b| {
+                let z = b.address_of(zero);
+                b.ret(&[z]);
+            },
+            |b| b.yield_(&[]),
+        );
+        // Far below what could wrap: no request that large is met.
+        let limit = number(b, max / 4);
+        let huge = lt(b, limit, cap);
+        b.if_(
+            huge,
+            &[],
+            |b| {
+                b.call(fail, &[]);
+            },
+            |b| b.yield_(&[]),
+        );
+        let overhead = number(b, size64(4 * word - 1));
+        let size = add(b, cap, overhead);
+        let unit = number(b, size64(word));
+        let units = b.binary(Binary::Div, size, unit);
+        let wanted = b.binary(Binary::Mul, units, unit);
+        let first = b.address_of(heap);
+        let kept = b.address_of(kept_at);
+        // An arena named by a word, where nought is the first.
+        let arena_at = |b: &mut Builder<'_>, named: ValueId| {
+            let nil = number(b, 0);
+            let is_first = eq(b, named, nil);
+            b.if_(
+                is_first,
+                &[A],
+                |b| {
+                    let first = b.address_of(heap);
+                    b.yield_(&[first]);
+                },
+                |b| {
+                    let at = b.convert(A, named);
+                    b.yield_(&[at]);
+                },
+            )[0]
+        };
+        let rover = b.load(Width::Word, kept, Offset::Words(0));
+        let arena = arena_at(b, rover);
+        let offset = b.load(Width::Word, kept, Offset::Words(1));
+        let arenas = b.load(Width::Word, kept, Offset::Words(2));
+        let found = b.loop_(&[arena, offset, nil], &[A, W], |b, state| {
+            let (arena, offset, starts) = (state[0], state[1], state[2]);
+            let end = b.load(Width::Word, arena, Offset::Words(1));
+            let at_end = eq(b, offset, end);
+            b.if_(
+                at_end,
+                &[],
+                |b| {
+                    // On to the next arena, having begun as many as there
+                    // are after the one the search began part way through.
+                    let one = number(b, 1);
+                    let more = add(b, starts, one);
+                    let done = lt(b, arenas, more);
+                    b.if_(
+                        done,
+                        &[],
+                        |b| {
+                            let nil = number(b, 0);
+                            let first = b.address_of(heap);
+                            b.break_(&[first, nil]);
+                        },
+                        |b| b.yield_(&[]),
+                    );
+                    let next = b.load(Width::Word, arena, Offset::Words(0));
+                    let next = arena_at(b, next);
+                    let start = number(b, size64(start));
+                    b.continue_(&[next, start, more]);
+                },
+                |b| b.yield_(&[]),
+            );
+            let at = address(b, arena, offset);
+            let size = b.load(Width::Word, at, Offset::Words(0));
+            let refs = b.load(Width::Word, at, Offset::Words(1));
+            let nil = number(b, 0);
+            let free = eq(b, refs, nil);
+            b.if_(
+                free,
+                &[],
+                |b| {
+                    let merged = b.call_one(coalesce, &[arena, offset, end]);
+                    b.store(Width::Word, at, Offset::Words(0), merged);
+                    let small = lt(b, merged, wanted);
+                    b.if_(
+                        small,
+                        &[],
+                        |b| {
+                            let next = add(b, offset, merged);
+                            b.continue_(&[arena, next, starts]);
+                        },
+                        |b| {
+                            b.call(claim, &[at, wanted, cap]);
+                            let taken = b.load(Width::Word, at, Offset::Words(0));
+                            let after = add(b, offset, taken);
+                            let named = b.convert(W, arena);
+                            let kept = b.address_of(kept_at);
+                            b.store(Width::Word, kept, Offset::Words(0), named);
+                            b.store(Width::Word, kept, Offset::Words(1), after);
+                            let one = number(b, 1);
+                            b.break_(&[at, one]);
+                        },
+                    );
+                },
+                |b| {
+                    let next = add(b, offset, size);
+                    b.continue_(&[arena, next, starts]);
+                },
+            );
+        });
+        let (block, met) = (found[0], found[1]);
+        let one = number(b, 1);
+        let met = eq(b, met, one);
+        b.if_(met, &[], |b| b.ret(&[block]), |b| b.yield_(&[]));
+        // Nothing had room: a new arena, at least as large as the heap.
+        let total = b.load(Width::Word, kept, Offset::Words(3));
+        let header_bytes = number(b, size64(start));
+        let least = add(b, wanted, header_bytes);
+        let smaller = lt(b, least, total);
+        let chunk = b.if_(
+            smaller,
+            &[W],
+            |b| b.yield_(&[total]),
+            |b| b.yield_(&[least]),
+        )[0];
+        let page = b.call_one(grow, &[chunk]);
+        // A target that has no more answers an address the chunk would run
+        // past the end of the address space from.
+        let top = number(b, max);
+        let room = sub(b, top, chunk);
+        let from = b.convert(W, page);
+        let refused = lt(b, room, from);
+        b.if_(
+            refused,
+            &[],
+            |b| {
+                b.call(fail, &[]);
+            },
+            |b| b.yield_(&[]),
+        );
+        let after_first = b.load(Width::Word, first, Offset::Words(0));
+        b.store(Width::Word, page, Offset::Words(0), after_first);
+        b.store(Width::Word, first, Offset::Words(0), from);
+        b.store(Width::Word, page, Offset::Words(1), chunk);
+        let at = address(b, page, header_bytes);
+        let blocks = sub(b, chunk, header_bytes);
+        let nil = number(b, 0);
+        b.store(Width::Word, at, Offset::Words(0), blocks);
+        b.store(Width::Word, at, Offset::Words(1), nil);
+        let one = number(b, 1);
+        let arenas = add(b, arenas, one);
+        b.store(Width::Word, kept, Offset::Words(2), arenas);
+        let grown = add(b, total, chunk);
+        b.store(Width::Word, kept, Offset::Words(3), grown);
+        b.call(claim, &[at, wanted, cap]);
+        let taken = b.load(Width::Word, at, Offset::Words(0));
+        let after = add(b, header_bytes, taken);
+        b.store(Width::Word, kept, Offset::Words(0), from);
+        b.store(Width::Word, kept, Offset::Words(1), after);
+        b.ret(&[at]);
     });
     Ok(allocate)
 }
