@@ -89,31 +89,19 @@ fn binding_ahead(tokens: &[Token], at: usize) -> bool {
         .is_some_and(|token| token.kind == Kind::Eq)
 }
 
-/// Whether a line at `at` is a statement: a line of a body that is not its
-/// last. That is so where neither it nor the line after it begins an item,
-/// and the line after is not where a block or the file ends.
-fn statement_ahead(tokens: &[Token], at: usize) -> bool {
-    if binding_ahead(tokens, at) {
-        return false;
-    }
-    let end = line_end(tokens, at);
-    if end == at || begins_item(tokens, at, end) {
-        return false;
-    }
-    let after = line_end(tokens, end);
-    after > end && !begins_item(tokens, end, after)
+/// Whether the line at `at` begins an item rather than going on with a
+/// body.
+fn item_ahead(tokens: &[Token], at: usize) -> bool {
+    begins_item(tokens, at, line_end(tokens, at))
 }
 
-/// Where the line beginning at `at` ends: at the next token that begins a
-/// line outside every bracket, a token continuing the line before aside, or
-/// where a bracket around it closes.
+/// Where the line beginning at `at` ends: at its newline, where a bracket
+/// around it closes, or at the end of the file.
 fn line_end(tokens: &[Token], at: usize) -> usize {
     let mut depth = 0usize;
     for (offset, token) in tokens.iter().enumerate().skip(at) {
-        if offset > at && depth == 0 && token.newline_before && !continues(tokens, offset) {
-            return offset;
-        }
         match token.kind {
+            Kind::Newline | Kind::Eof if depth == 0 => return offset,
             Kind::LParen
             | Kind::LBracket
             | Kind::LBrace
@@ -126,36 +114,10 @@ fn line_end(tokens: &[Token], at: usize) -> usize {
                 }
                 depth -= 1;
             }
-            Kind::Eof => return offset,
             _ => {}
         }
     }
     tokens.len()
-}
-
-/// Whether the token at `at`, beginning a line, goes on with the line before
-/// rather than beginning one: a `.` continuing a chain, or an infix operator,
-/// which no expression begins with. A `-` held to what follows it is a
-/// negation, and begins one.
-fn continues(tokens: &[Token], at: usize) -> bool {
-    match tokens[at].kind {
-        Kind::Dot
-        | Kind::Bar
-        | Kind::Caret
-        | Kind::Amp
-        | Kind::EqEq
-        | Kind::Ne
-        | Kind::Lt
-        | Kind::Le
-        | Kind::Gt
-        | Kind::Ge
-        | Kind::Plus
-        | Kind::Star
-        | Kind::Slash
-        | Kind::Percent => true,
-        Kind::Minus => tokens.get(at + 1).is_some_and(|next| next.space_before),
-        _ => false,
-    }
 }
 
 /// Whether the line from `at` to `end` begins an item rather than going on
@@ -253,6 +215,9 @@ peg::parser! {
         rule eof()
             = quiet!{[Token { kind: Kind::Eof, .. }]}
               / expected!("the end of the file")
+        rule newline()
+            = quiet!{[Token { kind: Kind::Newline, .. }]}
+              / expected!("a new line")
         rule lparen() -> Token = tok(Kind::LParen) / expected!("`(`")
         rule rparen() -> Token = tok(Kind::RParen) / expected!("`)`")
         rule lbracket() -> Token = tok(Kind::LBracket) / expected!("`[`")
@@ -273,7 +238,9 @@ peg::parser! {
               / expected!("a name")
 
         pub rule program() -> Module
-            = items:item()* eof() { Module { source: SourceId::DETACHED, items } }
+            = items:(item() ** newline()) newline()? eof() {
+                Module { source: SourceId::DETACHED, items }
+            }
 
         rule item() -> Item
             = header:header() { Item::Header(header) }
@@ -414,7 +381,8 @@ peg::parser! {
             }
 
         rule method_block() -> (Vec<MethodItem>, Span)
-            = tok(Kind::DotParen) methods:method_declaration()* close:rparen() {
+            = tok(Kind::DotParen) methods:(method_declaration() ** newline()) newline()?
+              close:rparen() {
                 (methods, close.span())
             }
 
@@ -452,10 +420,15 @@ peg::parser! {
             }
 
         rule constraints() -> (Vec<Constraint>, Span)
-            = tok(Kind::KwWhere) constraints:(constraint() ++ sep()) {
+            = tok(Kind::KwWhere) constraints:(constraint() ++ constraint_sep()) {
                 let end = constraints.last().map_or_else(Span::default, Constraint::span);
                 (constraints, end)
             }
+
+        // A `where` list goes on to the next line with a member's constraint,
+        // `a.add : a a -> a`, which no item begins as.
+        rule constraint_sep()
+            = sep() / newline() &(tok(Kind::Ident) adj(Kind::Dot))
 
         rule constraint() -> Constraint
             = variable:ident() adj(Kind::Dot) member:(adj(Kind::Ident) / adj(Kind::EffectIdent))
@@ -469,11 +442,8 @@ peg::parser! {
                     result,
                 }
             }
-            // Not the head of the declaration after a `where` clause, which
-            // an application looks like up to its `=` or `:`.
             / head:type_ident() adj(Kind::LParen)
-              arguments:(ty() ++ sep()) close:rparen()
-              !(tok(Kind::Eq) / tok(Kind::Colon)) {
+              arguments:(ty() ++ sep()) close:rparen() {
                 Constraint::Alias {
                     span: head.span().through(close.span()),
                     name: name(head),
@@ -526,20 +496,21 @@ peg::parser! {
         rule record_type_field() -> (Name, Type)
             = field:ident() colon() value:ty() { (name(field), value) }
 
+        // Lines, each but the last a binding or an effect asked for what it
+        // does, which binds `_`; the last is the answer. A line beginning
+        // an item ends the body before it.
         rule body() -> Body
-            = bindings:(
-                binding_ahead() binding:binding() { binding }
-                / statement_ahead() value:expr() {
-                    Binding { pattern: Pattern::Wild(value.span), value, discarded: true }
-                }
-              )*
-              result:expr() { Body { bindings, result } }
+            = lines:(body_line() ++ (newline() !item_ahead())) {? body(lines) }
 
-        // A line of its own whose answer nothing keeps: an effect asked for
-        // what it does. It is a binding to `_`.
-        rule statement_ahead()
+        rule body_line() -> Binding
+            = binding_ahead() binding:binding() { binding }
+            / value:expr() {
+                Binding { pattern: Pattern::Wild(value.span), value, discarded: true }
+            }
+
+        rule item_ahead()
             = #{|input, at| {
-                if statement_ahead(input, at) {
+                if item_ahead(input, at) {
                     peg::RuleResult::Matched(at, ())
                 } else {
                     peg::RuleResult::Failed
@@ -790,6 +761,18 @@ peg::parser! {
                 }
             }
     }
+}
+
+/// A body of its lines: the last, which must be a value, is its answer.
+fn body(mut lines: Vec<Binding>) -> Result<Body, &'static str> {
+    let last = lines.pop().expect("a body has a line");
+    if !last.discarded {
+        return Err("a line answering the body after its last binding");
+    }
+    Ok(Body {
+        bindings: lines,
+        result: last.value,
+    })
 }
 
 fn term_item((head, declaration): (Token, TermDeclaration)) -> Item {

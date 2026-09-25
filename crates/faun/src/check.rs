@@ -4459,11 +4459,11 @@ mod tests {
         }
 
         fn load(&self, entry_source: &str) -> (PreludeIds, ResolvedProgram) {
-            self.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False and : Bool Bool -> Bool and(True True) -> True and(_ _) -> False)\n");
-            self.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)].(add : Nat Nat -> Nat add(0 y) -> y add(Succ(n) y) -> Succ(n.add(y)))\n");
+            self.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : Bool Bool -> Bool\nand(True True) -> True\nand(_ _) -> False)\n");
+            self.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)].(add : Nat Nat -> Nat\nadd(0 y) -> y\nadd(Succ(n) y) -> Succ(n.add(y)))\n");
             self.write(
                 "int.fn",
-                "exports {Int.*}\nInt : [Pos(Nat) NegSucc(Nat)].(of_nat : Nat -> Int of_nat(n) -> Pos(n) neg : Int -> Int neg(i) -> i)\n",
+                "exports {Int.*}\nInt : [Pos(Nat) NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
             );
             self.write("u8.fn", "exports {U8}\nU8 : Nat\n");
             self.write(
@@ -4472,7 +4472,7 @@ mod tests {
             );
             self.write(
                 "str.fn",
-                "exports {Str}\nStr : List(U8).(concat : Str Str -> Str concat(left _) -> left equals : Str Str -> Bool equals(_ _) -> False)\n",
+                "exports {Str}\nStr : List(U8).(concat : Str Str -> Str\nconcat(left _) -> left\nequals : Str Str -> Bool\nequals(_ _) -> False)\n",
             );
             self.write(
                 "result.fn",
@@ -4480,7 +4480,7 @@ mod tests {
             );
             self.write(
             "order.fn",
-            "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool lt(Lt) -> True lt(_) -> False le : Order -> Bool le(Gt) -> False le(_) -> True gt : Order -> Bool gt(Gt) -> True gt(_) -> False ge : Order -> Bool ge(Lt) -> False ge(_) -> True then : Order Order -> Order then(Eq next) -> next then(decided _) -> decided)\n",
+            "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\nthen : Order Order -> Order\nthen(Eq next) -> next\nthen(decided _) -> decided)\n",
         );
             let standard = self.write(
                 "standard.fn",
@@ -4621,7 +4621,7 @@ mod tests {
     fn a_method_several_types_have_is_a_bound() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load(
-            "Flip : [Off On].(not : Flip -> Flip not(Off) -> On not(On) -> Off)\nflip(x) -> x.not()\n",
+            "Flip : [Off On].(not : Flip -> Flip\nnot(Off) -> On\nnot(On) -> Off)\nflip(x) -> x.not()\n",
         );
         let checked = type_check(resolved, prelude).unwrap();
         let resolved = &checked.resolved;
@@ -4641,7 +4641,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "hidden.fn",
-            "exports {helper}\nSecret : [Hidden].(not : Secret -> Secret not(Hidden) -> Hidden)\nhelper : Nat\nhelper() -> 0\n",
+            "exports {helper}\nSecret : [Hidden].(not : Secret -> Secret\nnot(Hidden) -> Hidden)\nhelper : Nat\nhelper() -> 0\n",
         );
         let (prelude, resolved) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
         let checked = type_check(resolved, prelude.clone()).unwrap();

@@ -1584,11 +1584,11 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "nat.fn",
-            "exports {Nat.*}\nNat : [Zero Succ(Nat)].(of_nat : Nat -> Nat of_nat(n) -> n)\n",
+            "exports {Nat.*}\nNat : [Zero Succ(Nat)].(of_nat : Nat -> Nat\nof_nat(n) -> n)\n",
         );
         fixture.write(
             "int.fn",
-            "exports {Int.*}\nInt : [Pos(Nat) NegSucc(Nat)].(of_nat : Nat -> Int of_nat(n) -> Pos(n) neg : Int -> Int neg(i) -> i)\n",
+            "exports {Int.*}\nInt : [Pos(Nat) NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
         );
         fixture.write("u8.fn", "exports {U8.*}\nU8 : Nat\n");
         fixture.write(

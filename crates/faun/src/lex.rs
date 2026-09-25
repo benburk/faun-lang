@@ -7,6 +7,12 @@
 //! never sees a space. Comments run from `#` to the end of the line and are
 //! space. A string is a run of pieces: text, and `${…}` splices whose contents
 //! are ordinary tokens, so the lexer keeps a stack of where it is.
+//!
+//! A line of items or of a body ends with a [`Kind::Newline`]: where a line
+//! break comes after a token a line can end with, and before one a line can
+//! begin with, outside every bracket but a method block's. So a line runs on
+//! after `->`, `=` or an operator, and into a next line beginning `.`, an
+//! infix operator, `where` or `if`, and a list or a call spans lines freely.
 
 // Token recognition is clearer as one exhaustive byte match than as forwarding
 // helpers cut to satisfy a line-count heuristic.
@@ -81,8 +87,66 @@ pub enum Kind {
     /// A character no token starts with, or a literal left unfinished. The
     /// parser reports it where it meets it.
     Error,
+    /// The end of a line of items or of a body; see the module notes.
+    Newline,
     /// The end of the text: every token stream ends with one.
     Eof,
+}
+
+impl Kind {
+    /// Whether a line can end with this token: it ends a name, a literal, a
+    /// bracket, or a `?`.
+    const fn ends_line(self) -> bool {
+        matches!(
+            self,
+            Self::Ident
+                | Self::EffectIdent
+                | Self::TypeIdent
+                | Self::Wild
+                | Self::Number
+                | Self::Decimal
+                | Self::Char
+                | Self::StrEnd
+                | Self::RParen
+                | Self::RBracket
+                | Self::RBrace
+                | Self::DotStar
+                | Self::Question
+                | Self::Error
+        )
+    }
+
+    /// Whether a line beginning with this token goes on with the line
+    /// before, as nothing a line holds begins with it. A `-` goes on only
+    /// where space follows it; held to what follows, it negates.
+    const fn continues_line(self) -> bool {
+        matches!(
+            self,
+            Self::Dot
+                | Self::DotParen
+                | Self::DotStar
+                | Self::DotDot
+                | Self::Question
+                | Self::Colon
+                | Self::Arrow
+                | Self::Eq
+                | Self::EqEq
+                | Self::Ne
+                | Self::Lt
+                | Self::Le
+                | Self::Gt
+                | Self::Ge
+                | Self::Plus
+                | Self::Star
+                | Self::Slash
+                | Self::Percent
+                | Self::Amp
+                | Self::Bar
+                | Self::Caret
+                | Self::KwWhere
+                | Self::KwIf
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +186,14 @@ enum Mode {
     Splice { depth: u32 },
 }
 
+/// A bracket the lexer is inside: lines end within a method block, which
+/// holds items, and not within any other.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Bracket {
+    Lines,
+    Joined,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceTooLarge;
 
@@ -149,6 +221,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SourceTooLarge> {
         at: 0,
         out: Vec::with_capacity(src.len() / 4),
         modes: Vec::new(),
+        brackets: Vec::new(),
         space_before: false,
         newline_before: false,
     }
@@ -161,6 +234,7 @@ struct Lexer<'a> {
     at: usize,
     out: Vec<Token>,
     modes: Vec<Mode>,
+    brackets: Vec<Bracket>,
     space_before: bool,
     newline_before: bool,
 }
@@ -219,6 +293,24 @@ impl Lexer<'_> {
     }
 
     fn push(&mut self, kind: Kind, start: usize) {
+        if self.newline_before && self.ends_line_before(kind) {
+            let at = self.out.last().expect("a token before a line break").end;
+            self.out.push(Token {
+                kind: Kind::Newline,
+                start: at,
+                end: at,
+                space_before: false,
+                newline_before: false,
+            });
+        }
+        match kind {
+            Kind::DotParen => self.brackets.push(Bracket::Lines),
+            Kind::LParen | Kind::LBracket | Kind::LBrace => self.brackets.push(Bracket::Joined),
+            Kind::RParen | Kind::RBracket | Kind::RBrace => {
+                self.brackets.pop();
+            }
+            _ => {}
+        }
         self.out.push(Token {
             kind,
             start: u32::try_from(start).expect("source length checked before lexing"),
@@ -228,6 +320,24 @@ impl Lexer<'_> {
         });
         self.space_before = false;
         self.newline_before = false;
+    }
+
+    /// Whether the line break before `kind`, just lexed, ends a line.
+    fn ends_line_before(&self, kind: Kind) -> bool {
+        let lines = self.modes.is_empty()
+            && self
+                .brackets
+                .last()
+                .is_none_or(|bracket| *bracket == Bracket::Lines);
+        let held_minus = kind == Kind::Minus
+            && self
+                .bytes
+                .get(self.at)
+                .is_some_and(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'#'));
+        lines
+            && kind != Kind::Eof
+            && self.out.last().is_some_and(|last| last.kind.ends_line())
+            && (!kind.continues_line() && (kind != Kind::Minus || held_minus))
     }
 
     fn skip_space(&mut self) {
@@ -538,6 +648,36 @@ mod tests {
         assert_eq!(kinds("1.5e3")[0], Kind::Decimal);
         assert_eq!(kinds("0xffTrue")[0], Kind::Error);
         assert_eq!(kinds("0x")[0], Kind::Error);
+    }
+
+    #[test]
+    fn lines_end_between_what_ends_one_and_what_begins_one() {
+        use Kind::{Arrow, Dot, DotParen, Ident, LParen, Minus, Newline, RParen, TypeIdent};
+        assert_eq!(kinds("a\nb"), [Ident, Newline, Ident, Kind::Eof]);
+        assert_eq!(kinds("a # note\n\n\nb")[..3], [Ident, Newline, Ident]);
+        // After what cannot end a line, and before what cannot begin one,
+        // the line goes on.
+        assert_eq!(kinds("a ->\nb"), [Ident, Arrow, Ident, Kind::Eof]);
+        assert_eq!(kinds("a\n  .b"), [Ident, Dot, Ident, Kind::Eof]);
+        assert_eq!(kinds("a\n- b"), [Ident, Minus, Ident, Kind::Eof]);
+        assert_eq!(kinds("a\n-b"), [Ident, Newline, Minus, Ident, Kind::Eof]);
+        // Brackets join their lines, but a method block holds lines of items.
+        assert_eq!(kinds("(a\nb)"), [LParen, Ident, Ident, RParen, Kind::Eof]);
+        assert_eq!(
+            kinds("T.(a\nb\n)"),
+            [
+                TypeIdent,
+                DotParen,
+                Ident,
+                Newline,
+                Ident,
+                Newline,
+                RParen,
+                Kind::Eof
+            ]
+        );
+        assert_eq!(kinds("\"${a\nb}\"")[2..4], [Ident, Ident]);
+        assert_eq!(kinds("a\n"), [Ident, Kind::Eof]);
     }
 
     #[test]

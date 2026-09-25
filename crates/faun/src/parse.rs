@@ -123,6 +123,7 @@ fn syntax_error(
         Kind::Error if token.start == token.end => "unterminated string literal".to_owned(),
         Kind::Error => format!("invalid token `{}`", token.text(source)),
         Kind::Eof => format!("expected {} before the end of the file", error.expected),
+        Kind::Newline => format!("expected {} before the end of the line", error.expected),
         _ => format!(
             "expected {}, found `{}`",
             error.expected,
