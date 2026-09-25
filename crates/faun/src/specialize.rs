@@ -553,7 +553,7 @@ impl<'a> Specializer<'a> {
                 .function()
                 .ok_or_else(|| error("a specialized definition is not a function"))?;
             let parameters = parameters.to_vec();
-            specialized.push(self.clause(module, clause, &substitution, &parameters)?);
+            specialized.extend(self.clause(module, clause, &substitution, &parameters)?);
         }
         Ok(Function {
             key: key.clone(),
@@ -653,46 +653,73 @@ impl<'a> Specializer<'a> {
         })
     }
 
+    /// A written clause at this specialization: one clause for each row its
+    /// `|` patterns stand for, each with the one guard and body.
     fn clause(
         &mut self,
         module: ModuleId,
         clause: &h::Clause,
         substitution: &HashMap<TypeVariable, Type>,
         parameters: &[Type],
+    ) -> Result<Vec<Clause>, SpecializeError> {
+        let guard = clause
+            .guard
+            .as_ref()
+            .map(|expression| self.expr(module, expression, substitution))
+            .transpose()?;
+        let body = Body {
+            bindings: clause
+                .body
+                .bindings
+                .iter()
+                .map(|binding| {
+                    Ok(Binding {
+                        pattern: convert_pattern(&binding.pattern, &self.checked.readings),
+                        value: self.expr(module, &binding.value, substitution)?,
+                    })
+                })
+                .collect::<Result<_, SpecializeError>>()?,
+            result: self.expr(module, &clause.body.result, substitution)?,
+        };
+        let mut rows = h::Pattern::rows(&clause.patterns);
+        let last = rows.pop().expect("a clause is at least one row");
+        let mut clauses = Vec::with_capacity(rows.len() + 1);
+        for row in rows {
+            clauses.push(self.row(
+                module,
+                clause,
+                &row,
+                parameters,
+                (guard.clone(), body.clone()),
+            )?);
+        }
+        clauses.push(self.row(module, clause, &last, parameters, (guard, body))?);
+        Ok(clauses)
+    }
+
+    /// One row of a clause's patterns, its literals tested before `guard`.
+    fn row(
+        &mut self,
+        module: ModuleId,
+        clause: &h::Clause,
+        row: &[h::Pattern],
+        parameters: &[Type],
+        (guard, body): (Option<Expr>, Body),
     ) -> Result<Clause, SpecializeError> {
         let mut next = clause.locals;
         let mut tests = Vec::new();
-        let patterns = clause
-            .patterns
+        let patterns = row
             .iter()
             .zip(parameters)
             .map(|(pattern, ty)| {
                 self.tested((module, clause.span), pattern, ty, (&mut next, &mut tests))
             })
             .collect::<Result<_, _>>()?;
-        let guard = clause
-            .guard
-            .as_ref()
-            .map(|expression| self.expr(module, expression, substitution))
-            .transpose()?;
         let guard = self.joined(module, clause.span, tests, guard)?;
         Ok(Clause {
             patterns,
             guard,
-            body: Body {
-                bindings: clause
-                    .body
-                    .bindings
-                    .iter()
-                    .map(|binding| {
-                        Ok(Binding {
-                            pattern: convert_pattern(&binding.pattern, &self.checked.readings),
-                            value: self.expr(module, &binding.value, substitution)?,
-                        })
-                    })
-                    .collect::<Result<_, SpecializeError>>()?,
-                result: self.expr(module, &clause.body.result, substitution)?,
-            },
+            body,
         })
     }
 
@@ -1538,6 +1565,7 @@ fn convert_pattern(pattern: &h::Pattern, readings: &HashMap<h::SiteId, Reading>)
             Pattern::Constructor(read(dual, readings), fields.iter().map(convert).collect())
         }
         h::Pattern::Wild => Pattern::Wild,
+        h::Pattern::Or(_) => unreachable!("a clause is specialized a row at a time"),
         h::Pattern::String(_) => Pattern::String,
         h::Pattern::Bind(local) => Pattern::Bind(*local),
         h::Pattern::Constructor(constructor, fields) | h::Pattern::Tag(constructor, fields) => {

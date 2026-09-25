@@ -74,6 +74,10 @@ pub enum Item {
     Constraints(ConstraintAliasDecl),
     Signature(SignatureDecl),
     Clause(Clause),
+    /// `expect body`: a claim the module makes of its definitions, which
+    /// `faun test` runs. It is a clause of no parameters answering a `Bool`,
+    /// named by its `expect` keyword.
+    Expect(Clause),
 }
 
 /// `Name = Type`: a second spelling of a type, which mints nothing.
@@ -350,6 +354,30 @@ pub enum Pattern {
         span: Span,
         parts: Vec<Span>,
     },
+    /// `A | B`: either alternative, each binding the same names. Only a
+    /// clause's parameters take one.
+    Or {
+        span: Span,
+        alternatives: Vec<Self>,
+    },
+}
+
+impl Pattern {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Wild(span)
+            | Self::Bind(Name(span))
+            | Self::Constructor { span, .. }
+            | Self::Number { span, .. }
+            | Self::Range { span, .. }
+            | Self::List { span, .. }
+            | Self::Record { span, .. }
+            | Self::Tuple { span, .. }
+            | Self::String { span, .. }
+            | Self::Or { span, .. } => *span,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

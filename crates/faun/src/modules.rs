@@ -137,7 +137,14 @@ pub fn load_program(
     loader.host = Some(host_id);
     let first_in_package = loader.pending.len();
     let entry_id = loader.load_module(entry, &Root::at(entry), false)?;
-    Ok(loader.into_loaded_program(entry_id, first_in_package, prelude_id, host_id))
+    // The standard library as the entry is its own package: the modules it
+    // loaded before the host.
+    let package = if entry_id == prelude_id {
+        prelude_id.index()..host_id.index()
+    } else {
+        first_in_package..loader.pending.len()
+    };
+    Ok(loader.into_loaded_program(entry_id, package, prelude_id, host_id))
 }
 
 #[derive(Clone, Debug)]
@@ -186,11 +193,11 @@ impl Loader {
     fn into_loaded_program(
         self,
         entry: ModuleId,
-        first_in_package: usize,
+        package: std::ops::Range<usize>,
         prelude: ModuleId,
         host: ModuleId,
     ) -> LoadedProgram {
-        let package = self.pending[first_in_package..]
+        let package = self.pending[package]
             .iter()
             .map(|module| module.id)
             .collect();
@@ -407,7 +414,8 @@ fn declarations(
             Item::Clause(clause) => {
                 declare_value(&mut own, clause.name, source, &namespace, symbols)?;
             }
-            Item::Header(_) | Item::Import(_) | Item::Exports(_) => {}
+            // An expectation is named by nothing a program can write.
+            Item::Header(_) | Item::Import(_) | Item::Exports(_) | Item::Expect(_) => {}
         }
     }
     Ok(own)

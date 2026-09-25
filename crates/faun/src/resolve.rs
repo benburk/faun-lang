@@ -8,11 +8,11 @@ use std::collections::HashMap;
 use std::fmt;
 
 use super::ast as s;
-use super::diagnostic::Diagnostic;
+use super::diagnostic::{Diagnostic, Location};
 use super::hir as h;
 use super::literal;
 use super::modules::{Interface, LoadedModule, LoadedProgram, ModuleId, TypeBinding};
-use super::{SourceId, Sources, Symbol, Symbols};
+use super::{Source, SourceId, Sources, Symbol, Symbols};
 
 #[derive(Clone, Debug)]
 pub struct ResolvedProgram {
@@ -33,12 +33,22 @@ impl ResolvedProgram {
     /// If `module` is not one of this program's.
     #[must_use]
     pub fn diagnostic(&self, module: ModuleId, span: s::Span, message: String) -> Diagnostic {
-        let source = self.module_sources[module.index()];
-        let source = self
-            .sources
-            .get(source)
-            .expect("a resolved module has a source");
-        Diagnostic::new(message).at(source, span)
+        Diagnostic::new(message).at(self.source(module), span)
+    }
+
+    /// Where `span` is in `module`.
+    ///
+    /// # Panics
+    /// If `module` is not one of this program's.
+    #[must_use]
+    pub fn location(&self, module: ModuleId, span: s::Span) -> Location {
+        Location::of(self.source(module), span)
+    }
+
+    pub(crate) fn source(&self, module: ModuleId) -> &Source {
+        self.sources
+            .get(self.module_sources[module.index()])
+            .expect("a resolved module has a source")
     }
 }
 
@@ -138,6 +148,7 @@ fn resolve_module(
     (aliases, constraint_aliases): (&mut Aliases, &mut ConstraintAliases),
 ) -> Result<h::Module, ResolveError> {
     let mut items = Vec::new();
+    let mut expectations = Vec::new();
     for item in &module.syntax.items {
         match item {
             s::Item::Data(data) => items.push(h::Item::Data(resolve_data(
@@ -160,6 +171,40 @@ fn resolve_module(
                     None,
                     (symbols, sites),
                 )?));
+            }
+            s::Item::Expect(clause) => {
+                let name = symbols.intern(&format!(
+                    "{}$$expect {}",
+                    symbols.text(module.namespace),
+                    expectations.len() + 1
+                ));
+                let spelling = symbols.intern("expect");
+                let boolean = symbols.intern("Bool");
+                let Some(boolean) = scope.types.get(&boolean) else {
+                    return Err(error(
+                        module.id,
+                        clause.span,
+                        "an `expect` answers a `Bool`, and none is in scope",
+                    ));
+                };
+                items.push(h::Item::Signature(h::SignatureDecl {
+                    span: clause.span,
+                    name,
+                    spelling,
+                    parameters: Vec::new(),
+                    result: h::Type::Named(boolean.canonical, Vec::new()),
+                    constraints: Vec::new(),
+                }));
+                items.push(h::Item::Clause(resolve_clause(
+                    module.id,
+                    clause,
+                    name,
+                    source,
+                    scope,
+                    None,
+                    (symbols, sites),
+                )?));
+                expectations.push(name);
             }
             s::Item::Alias(alias) => {
                 let local = symbols.intern(alias.name.text(source));
@@ -224,6 +269,7 @@ fn resolve_module(
         source: module.id,
         visible_methods,
         items,
+        expectations,
     })
 }
 
@@ -950,6 +996,7 @@ fn resolve_clause(
         sites,
         locals: HashMap::new(),
         next_local: 0,
+        alternative: None,
     };
     let patterns = clause
         .patterns
@@ -964,7 +1011,7 @@ fn resolve_clause(
     let mut bindings = Vec::with_capacity(clause.body.bindings.len());
     for binding in &clause.body.bindings {
         let value = resolver.expr(&binding.value)?;
-        let pattern = resolver.pattern(&binding.pattern)?;
+        let pattern = resolver.total_pattern(&binding.pattern)?;
         bindings.push(h::Binding { pattern, value });
     }
     let result = resolver.expr(&clause.body.result)?;
@@ -988,9 +1035,70 @@ struct ClauseResolver<'a> {
     sites: &'a mut u32,
     locals: HashMap<Symbol, h::LocalId>,
     next_local: u32,
+    /// Inside an alternative of an `|` after its first, the locals the first
+    /// bound, which a name bound again here is, rather than a new one.
+    alternative: Option<HashMap<Symbol, h::LocalId>>,
 }
 
 impl ClauseResolver<'_> {
+    /// Either alternative, each binding the same names, which are the same
+    /// locals in every one of them.
+    fn alternatives(
+        &mut self,
+        span: s::Span,
+        alternatives: &[s::Pattern],
+    ) -> Result<h::Pattern, ResolveError> {
+        let before = self.locals.clone();
+        let newly = |locals: &HashMap<Symbol, h::LocalId>| -> HashMap<Symbol, h::LocalId> {
+            locals
+                .iter()
+                .filter(|(name, _)| !before.contains_key(*name))
+                .map(|(&name, &local)| (name, local))
+                .collect()
+        };
+        let first = self.pattern(&alternatives[0])?;
+        let bound = newly(&self.locals);
+        let outer = self.alternative.replace(bound.clone());
+        let mut resolved = vec![first];
+        for alternative in &alternatives[1..] {
+            let after_first = std::mem::replace(&mut self.locals, before.clone());
+            let pattern = self.pattern(alternative)?;
+            let these = newly(&self.locals);
+            if let Some(name) = bound
+                .keys()
+                .chain(these.keys())
+                .find(|name| bound.get(name) != these.get(name))
+            {
+                return Err(error(
+                    self.module,
+                    span,
+                    format!(
+                        "`{}` is bound by some alternatives of this `|` and not others",
+                        self.symbols.text(*name)
+                    ),
+                ));
+            }
+            self.locals = after_first;
+            resolved.push(pattern);
+        }
+        self.alternative = outer;
+        Ok(h::Pattern::Or(resolved))
+    }
+
+    /// A pattern that must match whatever it is handed, a binding's or a
+    /// lambda's, which no `|` may choose within.
+    fn total_pattern(&mut self, pattern: &s::Pattern) -> Result<h::Pattern, ResolveError> {
+        let resolved = self.pattern(pattern)?;
+        if resolved.has_alternatives() {
+            return Err(error(
+                self.module,
+                pattern.span(),
+                "an `|` pattern may stand only among a clause's parameters",
+            ));
+        }
+        Ok(resolved)
+    }
+
     fn pattern(&mut self, pattern: &s::Pattern) -> Result<h::Pattern, ResolveError> {
         match pattern {
             s::Pattern::Wild(_) => Ok(h::Pattern::Wild),
@@ -1003,11 +1111,18 @@ impl ClauseResolver<'_> {
                         format!("local `{}` is bound more than once", name.text(self.source)),
                     ));
                 }
-                let local = h::LocalId(self.next_local);
-                self.next_local = self
-                    .next_local
-                    .checked_add(1)
-                    .expect("fewer than 2^32 locals");
+                let again = self
+                    .alternative
+                    .as_ref()
+                    .and_then(|first| first.get(&spelling).copied());
+                let local = again.unwrap_or_else(|| {
+                    let local = h::LocalId(self.next_local);
+                    self.next_local = self
+                        .next_local
+                        .checked_add(1)
+                        .expect("fewer than 2^32 locals");
+                    local
+                });
                 self.locals.insert(spelling, local);
                 Ok(h::Pattern::Bind(local))
             }
@@ -1097,6 +1212,7 @@ impl ClauseResolver<'_> {
                 }
                 Ok(h::Pattern::Record(resolved, *open))
             }
+            s::Pattern::Or { span, alternatives } => self.alternatives(*span, alternatives),
         }
     }
 
@@ -1143,7 +1259,7 @@ impl ClauseResolver<'_> {
                 let saved = self.locals.clone();
                 let patterns = patterns
                     .iter()
-                    .map(|pattern| self.pattern(pattern))
+                    .map(|pattern| self.total_pattern(pattern))
                     .collect::<Result<_, _>>()?;
                 let body = self.expr(body)?;
                 self.locals = saved;

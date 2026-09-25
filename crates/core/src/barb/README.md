@@ -68,9 +68,10 @@ x    ::= a parameter, a binding, or a field an arm bound
   The termination pass keeps signed constructor-depth bounds for locals, so taking
   two fields and rebuilding one constructor still records a decrease. Structurally
   recognized natural arithmetic contributes its semantic result bounds: monus and
-  division do not exceed the dividend, division by at least two strictly reduces a
-  positive dividend, and a remainder is below a positive divisor. This proves such
-  definitions as Fibonacci, GCD, and popcount without trusting their source names.
+  division do not exceed the dividend, monus of a positive by a positive and
+  division by at least two strictly reduce a positive dividend, and a remainder
+  is below a positive divisor. This proves such definitions as factorial,
+  Fibonacci, GCD, and popcount without trusting their source names.
   The pass then closes call matrices within each recursive component and requires
   every idempotent self-path to have a strict diagonal. Matrices are flat and
   endpoint-indexed, so closure considers only composable paths and stops at the

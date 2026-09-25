@@ -124,7 +124,7 @@ pub(crate) fn validate(module: &Module, source: &str) -> Result<(), LiteralError
                     }
                 }
             }
-            Item::Clause(clause) => validate_clause(clause, source)?,
+            Item::Clause(clause) | Item::Expect(clause) => validate_clause(clause, source)?,
             Item::Header(_)
             | Item::Import(_)
             | Item::Exports(_)
@@ -175,7 +175,11 @@ fn validate_pattern(pattern: &Pattern, source: &str) -> Result<(), LiteralError>
         Pattern::Record { fields, .. } => fields
             .iter()
             .try_for_each(|(_, pattern)| validate_pattern(pattern, source)),
-        Pattern::Tuple { members, .. } => members
+        Pattern::Tuple { members, .. }
+        | Pattern::Or {
+            alternatives: members,
+            ..
+        } => members
             .iter()
             .try_for_each(|member| validate_pattern(member, source)),
         Pattern::String { parts, .. } => parts.iter().try_for_each(|span| {

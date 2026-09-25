@@ -59,7 +59,8 @@ pub(crate) fn exhaustive(
             let rows = clauses
                 .iter()
                 .filter(|clause| clause.guard.is_none())
-                .map(|clause| clause.patterns.iter().map(|p| checker.pattern(p)).collect())
+                .flat_map(|clause| h::Pattern::rows(&clause.patterns))
+                .map(|row| row.iter().map(|p| checker.pattern(p)).collect())
                 .collect();
             if let Some(missing) = checker.missing(rows, &columns) {
                 let example = checker.render_all(&missing, symbols);
@@ -204,6 +205,7 @@ impl<'a> Coverage<'a> {
     fn pattern(&self, pattern: &h::Pattern) -> Pattern {
         match pattern {
             h::Pattern::Wild | h::Pattern::Bind(_) => Pattern::Wild,
+            h::Pattern::Or(_) => unreachable!("clauses are read as rows, one per alternative"),
             h::Pattern::Constructor(name, fields) => Pattern::Constructor(
                 *name,
                 fields.iter().map(|field| self.pattern(field)).collect(),

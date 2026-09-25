@@ -619,7 +619,10 @@ fn arithmetic_result(
 ) -> LocalFacts {
     let argument = |at: usize| &locals[args[at].0.index()];
     let candidates: &[(&LocalFacts, bool)] = match operation {
-        Operation::Monus => &[(argument(0), false)],
+        Operation::Monus => &[(
+            argument(0),
+            argument(0).minimum > 0 && argument(1).minimum > 0,
+        )],
         Operation::Div => &[(
             argument(0),
             argument(0).minimum > 0 && argument(1).minimum >= 2,

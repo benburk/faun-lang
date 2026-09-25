@@ -58,9 +58,20 @@ Int : [Pos(Nat) NegSucc(Nat)].(
   cmp(Pos(_) NegSucc(_)) -> Gt
   cmp(NegSucc(_) Pos(_)) -> Lt
 
+  min : Int Int -> Int
+  min(a b) -> (a <= b).select(a b)
+
+  max : Int Int -> Int
+  max(a b) -> (a <= b).select(b a)
+
   to_str : Int -> Str
   to_str(Pos(n)) -> n.to_str()
   to_str(NegSucc(n)) -> "-".concat((n + 1).to_str())
+
+  # `Ok` of the number `text` writes in decimal, a `-` before it for a
+  # negative one, as `Nat.from_str` reads the digits.
+  from_str : Str -> Result(Int [Malformed])
+  from_str(text) -> signed(text.drop_prefix("-") text)
 
   equals : Int Int -> Bool
   equals(Pos(a) Pos(b)) -> a.equals(b)
@@ -68,8 +79,17 @@ Int : [Pos(Nat) NegSucc(Nat)].(
   equals(_ _) -> False
 )
 
+# The number `text` writes, where `bare` is it without a leading `-`.
+signed : Str Str -> Result(Int [Malformed])
+signed(bare text) if bare.len() == text.len() -> Nat.from_str(text).map_ok(Int.of_nat)
+signed(bare _) -> Nat.from_str(bare).map_ok(|n| Int.of_nat(n).neg())
+
 difference : Nat Nat -> Int
 difference(0 0) -> Pos(0)
 difference(Succ(a) 0) -> Pos(Succ(a))
 difference(0 Succ(b)) -> NegSucc(b)
 difference(Succ(a) Succ(b)) -> difference(a b)
+
+expect Int.from_str("-42").ok_or(0) == -42 & Int.from_str("17").ok_or(0) == 17
+expect Int.from_str("-").is_err() & Int.from_str("--1").is_err()
+expect (-2).min(1) == -2 & (-2).max(1) == 1

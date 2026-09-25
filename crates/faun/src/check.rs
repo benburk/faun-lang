@@ -1816,11 +1816,22 @@ impl<'a> Checker<'a> {
                 let str_ = Ty::Named(self.prelude.str_, Vec::new());
                 self.unify_at(module, span, expected, &str_)
             }
+            // Every alternative of an `|` binds the same local, at one type.
             h::Pattern::Bind(local) => {
+                if let Some(bound) = &locals[local.index()] {
+                    let bound = bound.ty.clone();
+                    return self.unify_at(module, span, &bound, expected);
+                }
                 locals[local.index()] = Some(Scheme {
                     variables: Vec::new(),
                     ty: expected.clone(),
                 });
+                Ok(())
+            }
+            h::Pattern::Or(alternatives) => {
+                for alternative in alternatives {
+                    self.pattern(module, alternative, expected, locals, span)?;
+                }
                 Ok(())
             }
             h::Pattern::Constructor(constructor, fields) => {
@@ -2278,6 +2289,12 @@ impl<'a> Checker<'a> {
     fn close_rows(&mut self, ty: &Ty, rows: Vec<(h::Pattern, bool)>) -> Result<(), String> {
         let rows: Vec<_> = rows
             .into_iter()
+            .flat_map(|(pattern, guarded)| {
+                pattern
+                    .choices()
+                    .into_iter()
+                    .map(move |choice| (choice, guarded))
+            })
             .map(|(pattern, guarded)| (self.desugared(pattern), guarded))
             .collect();
         if rows.is_empty()
@@ -4166,6 +4183,8 @@ fn collect_pattern_locals(pattern: &h::Pattern, output: &mut Vec<h::LocalId>) {
                 collect_pattern_locals(member, output);
             }
         }
+        // Every alternative binds the same locals.
+        h::Pattern::Or(alternatives) => collect_pattern_locals(&alternatives[0], output),
         h::Pattern::Wild
         | h::Pattern::Number { .. }
         | h::Pattern::Range(..)

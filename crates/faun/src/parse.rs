@@ -92,7 +92,7 @@ fn discarded_values(module: &Module, source: &str) -> Option<crate::ast::Span> {
         _ => false,
     };
     let clauses = module.items.iter().flat_map(|item| match item {
-        Item::Clause(clause) => vec![clause],
+        Item::Clause(clause) | Item::Expect(clause) => vec![clause],
         Item::Data(data) => data
             .methods
             .iter()

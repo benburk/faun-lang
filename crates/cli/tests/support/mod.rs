@@ -8,7 +8,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-use faun_core::ir::FunctionId;
 use faun_core::ir::evaluate::{self, Error, Host, HostResult, Memory};
 use faun_core::targets::Target;
 use faun_x86_64_linux::X86_64Linux;
@@ -101,46 +100,65 @@ pub(crate) fn run_failing(
     input: &[u8],
     errno: Option<u64>,
 ) -> (u32, String) {
-    {
-        let mut barb = faun::lower_to_barb(entry, &X86_64Linux)
-            .unwrap_or_else(|error| panic!("{}", error.message));
-        faun_core::barb::optimize(&mut barb);
-        let machine = faun_core::lower_to_machine_ir(&mut barb, &X86_64Linux.routines())
-            .unwrap_or_else(|error| panic!("{error}"));
-        let prepared = X86_64Linux
-            .prepare(&machine)
-            .unwrap_or_else(|error| panic!("{error}"));
-        let main = prepared
-            .functions()
-            .iter()
-            .position(|function| prepared.name(function.name) == "main!")
-            .map(FunctionId::at)
-            .expect("an entry");
-        // `argc` is handed only where the program reads it.
-        let handed = vec![BigUint::from(1u8); prepared.parameter_names(main).count()];
-        let mut streams = Streams {
-            input: input.iter().copied().collect(),
-            output: Vec::new(),
-            errno,
-        };
-        let evaluation = evaluate::evaluate(
-            &prepared,
-            main,
-            &handed,
-            evaluate::Config {
-                fuel: 100_000_000,
-                ..evaluate::Config::default()
-            },
-            &mut streams,
-        )
-        .unwrap_or_else(|error| panic!("{error:?}"));
-        let halted = evaluation.halted().expect("a program that exits");
-        let status = u32::try_from(&halted[0]).expect("a status");
-        (
-            status,
-            String::from_utf8(streams.output).expect("text written"),
-        )
-    }
+    let barb = faun::lower_to_barb(entry, &X86_64Linux)
+        .unwrap_or_else(|error| panic!("{}", error.message));
+    run_barb(barb, input, errno)
+}
+
+/// Build the package at `entry` as `faun test` does and run it: the lines,
+/// `path:line`, of the expectations that do not hold, and how many there are.
+pub(crate) fn test_file(entry: &std::path::Path) -> (Vec<String>, usize) {
+    let tests = faun::lower_tests_to_barb(entry, &X86_64Linux)
+        .unwrap_or_else(|error| panic!("{}", error.message));
+    let count = tests.expectations.len();
+    let (status, written) = run_barb(tests.barb, &[], None);
+    assert_eq!(status, 0, "{written}");
+    let failed = written
+        .split_whitespace()
+        .map(|number| {
+            let location = &tests.expectations[number.parse::<usize>().unwrap() - 1];
+            format!(
+                "{}:{}",
+                location.path.file_name().unwrap().to_string_lossy(),
+                location.line
+            )
+        })
+        .collect();
+    (failed, count)
+}
+
+fn run_barb(mut barb: faun_core::barb::Program, input: &[u8], errno: Option<u64>) -> (u32, String) {
+    faun_core::barb::optimize(&mut barb);
+    let machine = faun_core::lower_to_machine_ir(&mut barb, &X86_64Linux.routines())
+        .unwrap_or_else(|error| panic!("{error}"));
+    let prepared = X86_64Linux
+        .prepare(&machine)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let main = prepared.entry();
+    // `argc` is handed only where the program reads it.
+    let handed = vec![BigUint::from(1u8); prepared.parameter_names(main).count()];
+    let mut streams = Streams {
+        input: input.iter().copied().collect(),
+        output: Vec::new(),
+        errno,
+    };
+    let evaluation = evaluate::evaluate(
+        &prepared,
+        main,
+        &handed,
+        evaluate::Config {
+            fuel: 100_000_000,
+            ..evaluate::Config::default()
+        },
+        &mut streams,
+    )
+    .unwrap_or_else(|error| panic!("{error:?}"));
+    let halted = evaluation.halted().expect("a program that exits");
+    let status = u32::try_from(&halted[0]).expect("a status");
+    (
+        status,
+        String::from_utf8(streams.output).expect("text written"),
+    )
 }
 
 impl Drop for Package {

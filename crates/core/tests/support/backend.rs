@@ -811,6 +811,43 @@ fn a_long_walk_goes_round_rather_than_down() {
     );
 }
 
+/// A package's expectations, built as `faun test` builds them, say which
+/// do not hold, whatever the target: here the third.
+#[test]
+fn it_runs_a_packages_expectations() {
+    let text = "bucket : Nat -> Nat
+                bucket(0) -> 0
+                bucket(1 | 2) -> 1
+                bucket(_) -> 2
+
+                total : Str -> Nat
+                total(text) -> text.split(\",\").map(|piece| Nat.from_str(piece.trim()).ok_or(0)).sum()
+
+                expect bucket(2) == 1 & bucket(7) == 2
+                expect total(\"3, 4,5\") == 12
+                expect [3 1 2].sort() == [3 2 1]
+                expect \"b\\na\".lines().sort() == [\"a\" \"b\"]
+
+                main!(host) -> host.exit!(9)";
+    let program = faun::expectations(text, &TARGET).expect("the expectations compile");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(execute(&program), (0, "3 ".to_owned()));
+}
+
+/// The standard library holds every expectation it has of itself, whatever
+/// the target.
+#[test]
+fn the_standard_library_holds_its_expectations() {
+    let program = faun::expectations_at(::faun::standard_path(), &TARGET)
+        .expect("the standard expectations compile");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(execute(&program), (0, String::new()));
+}
+
 #[test]
 fn it_runs_every_example() {
     for entry in fs::read_dir(written()).expect("the examples") {

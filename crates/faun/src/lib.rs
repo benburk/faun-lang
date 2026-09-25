@@ -4,8 +4,9 @@
 //! it to Barb, which is what checking it means. An entry that defines `main!`
 //! makes it an application, whose Barb starts there; one that does not is a
 //! library, whose Barb has no entry. [`compile_barb_to_image`] takes an
-//! application's Barb on to a target's image. Any [`Target`] will do; which
-//! targets exist is the command line's to say.
+//! application's Barb on to a target's image. [`lower_tests_to_barb`] lowers
+//! a package whose entry asks its `expect`s instead. Any [`Target`] will do;
+//! which targets exist is the command line's to say.
 //!
 //! [`lower_to_barb`] runs the frontend passes in order. Parsing retains compact
 //! source spans. Module loading and qualification then produce symbol-based
@@ -27,6 +28,7 @@ pub mod check;
 mod defunctionalize;
 pub mod diagnostic;
 mod exhaustive;
+mod expectations;
 mod grammar;
 pub mod hir;
 pub mod host;
@@ -57,31 +59,80 @@ pub fn standard_path() -> &'static Path {
 /// to Barb, before any optimization.
 ///
 /// Every definition the package writes that can stand on its own is lowered
-/// and checked, whether or not anything calls it. The entry defining `main!`
-/// makes it an application, whose Barb starts there; without one it is a
-/// library, whose Barb has no entry and so nothing to build.
+/// and checked, whether or not anything calls it, and so is every `expect`.
+/// The entry defining `main!` makes it an application, whose Barb starts
+/// there; without one it is a library, whose Barb has no entry and so
+/// nothing to build.
 ///
 /// # Errors
 /// Reports loading, resolution, checking or lowering errors.
 pub fn lower_to_barb(source: &Path, target: &dyn Target) -> Result<barb::Program, Diagnostic> {
     let loaded = modules::load_program(source, standard_path(), &host_path(target)?)?;
-    let prelude = blessed::PreludeIds::find_in(&loaded).map_err(|e| Diagnostic::new(e.message))?;
-    let host = host::HostIds::find_in(&loaded)?;
+    let (prelude, host) = identities(&loaded)?;
     let main = host::Main::find_in(&loaded)?;
     let mut resolved = resolve::resolve_names(loaded)?;
     if let Some(main) = &main {
         host::sign_main(&mut resolved, &host, main);
     }
+    lower_resolved(resolved, prelude, &host, main.as_ref(), target)
+}
+
+/// A package's expectations, built to be run.
+#[derive(Debug)]
+pub struct Tests {
+    /// An application whose `main!` prints the number of each expectation
+    /// that does not hold, each followed by a space, and exits with status
+    /// nought.
+    pub barb: barb::Program,
+    /// Where each expectation was written, the first numbered one.
+    pub expectations: Vec<diagnostic::Location>,
+}
+
+/// Check the Faun package at `source` as [`lower_to_barb`] does, and lower it
+/// to Barb whose entry asks every `expect` in the package.
+///
+/// The entry takes the place of the package's `main!`, if it has one, which
+/// is checked all the same.
+///
+/// # Errors
+/// Reports loading, resolution, checking or lowering errors.
+pub fn lower_tests_to_barb(source: &Path, target: &dyn Target) -> Result<Tests, Diagnostic> {
+    let mut loaded = modules::load_program(source, standard_path(), &host_path(target)?)?;
+    let (prelude, host) = identities(&loaded)?;
+    let application = host::Main::find_in(&loaded)?;
+    let main = expectations::main(&mut loaded);
+    let mut resolved = resolve::resolve_names(loaded)?;
+    if let Some(application) = &application {
+        host::sign_main(&mut resolved, &host, application);
+    }
+    let expectations = expectations::enter(&mut resolved, &host, &main);
+    let barb = lower_resolved(resolved, prelude, &host, Some(&main), target)?;
+    Ok(Tests { barb, expectations })
+}
+
+fn identities(
+    loaded: &modules::LoadedProgram,
+) -> Result<(blessed::PreludeIds, host::HostIds), Diagnostic> {
+    let prelude = blessed::PreludeIds::find_in(loaded).map_err(|e| Diagnostic::new(e.message))?;
+    Ok((prelude, host::HostIds::find_in(loaded)?))
+}
+
+/// Check a resolved package and lower it to Barb, entering by `main`.
+fn lower_resolved(
+    resolved: resolve::ResolvedProgram,
+    prelude: blessed::PreludeIds,
+    host: &host::HostIds,
+    main: Option<&host::Main>,
+    target: &dyn Target,
+) -> Result<barb::Program, Diagnostic> {
     let checked = check::type_check(resolved, prelude)?;
-    if let Some(main) = &main {
-        check::check_application_abi(&checked, &host, main)?;
+    if let Some(main) = main {
+        check::check_application_abi(&checked, host, main)?;
     }
     let specialized =
-        specialize::monomorphize_package(&checked, &host, main.as_ref()).map_err(|e| {
-            match e.at {
-                Some((module, span)) => checked.resolved.diagnostic(module, span, e.message),
-                None => Diagnostic::new(e.message),
-            }
+        specialize::monomorphize_package(&checked, host, main).map_err(|e| match e.at {
+            Some((module, span)) => checked.resolved.diagnostic(module, span, e.message),
+            None => Diagnostic::new(e.message),
         })?;
     let first_order = defunctionalize::defunctionalize(specialized);
     barb_lower::lower_package_to_barb(&checked, first_order, &target.routines())

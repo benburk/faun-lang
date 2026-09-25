@@ -34,9 +34,82 @@ U8 : Nat.(
   cmp : U8 U8 -> Order
   cmp(U8(a) U8(b)) -> a.cmp(b)
 
+  min : U8 U8 -> U8
+  min(a b) -> (a <= b).select(a b)
+
+  max : U8 U8 -> U8
+  max(a b) -> (a <= b).select(b a)
+
   to_str : U8 -> Str
   to_str(U8(value)) -> value.to_str()
+
+  # Whether the byte is an ASCII digit, `'0'` to `'9'`.
+  is_digit : U8 -> Bool
+  is_digit(U8(value)) -> '0' <= value & value <= '9'
+
+  is_ascii_lower : U8 -> Bool
+  is_ascii_lower(U8(value)) -> 'a' <= value & value <= 'z'
+
+  is_ascii_upper : U8 -> Bool
+  is_ascii_upper(U8(value)) -> 'A' <= value & value <= 'Z'
+
+  is_ascii_letter : U8 -> Bool
+  is_ascii_letter(byte) -> byte.is_ascii_lower() | byte.is_ascii_upper()
+
+  # An ASCII capital as its small letter, and any other byte as it is.
+  to_ascii_lower : U8 -> U8
+  to_ascii_lower(byte) if byte.is_ascii_upper() -> byte + 32
+  to_ascii_lower(byte) -> byte
+
+  # An ASCII small letter as its capital, and any other byte as it is.
+  to_ascii_upper : U8 -> U8
+  to_ascii_upper(byte) if byte.is_ascii_lower() -> byte - 32
+  to_ascii_upper(byte) -> byte
+
+  # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`.
+  and : U8 U8 -> U8
+  and(U8(a) U8(b)) -> U8(a & b)
+
+  or : U8 U8 -> U8
+  or(U8(a) U8(b)) -> U8(a | b)
+
+  xor : U8 U8 -> U8
+  xor(U8(a) U8(b)) -> U8(a ^ b)
+
+  # Every bit flipped.
+  bit_not : U8 -> U8
+  bit_not(U8(a)) -> U8(255 - a)
+
+  # The bits moved up by `amount`, those past the top lost: nought where
+  # `amount` is the width or more.
+  shift_left : U8 Nat -> U8
+  shift_left(U8(a) amount) if amount < 8 -> of_nat(a * 2.pow(amount))
+  shift_left(_ _) -> U8(0)
+
+  # The bits moved down by `amount`, those below the bottom lost.
+  shift_right : U8 Nat -> U8
+  shift_right(U8(a) amount) if amount < 8 -> U8(a / 2.pow(amount))
+  shift_right(_ _) -> U8(0)
+
+  # The bits moved up by `amount`, those past the top coming round to the
+  # bottom. The width round is no change.
+  rotate_left : U8 Nat -> U8
+  rotate_left(U8(a) amount) ->
+    shift = amount % 8
+    of_nat(a * 2.pow(shift) + a / 2.pow(8 - shift))
+
+  rotate_right : U8 Nat -> U8
+  rotate_right(word amount) -> rotate_left(word 8 - amount % 8)
 
   equals : U8 U8 -> Bool
   equals(U8(a) U8(b)) -> a.equals(b)
 )
+
+expect '7'.is_digit() & !'x'.is_digit() & !'/'.is_digit() & !':'.is_digit()
+expect 'Q'.to_ascii_lower() == 'q' & 'q'.to_ascii_upper() == 'Q' & '1'.to_ascii_upper() == '1'
+expect 'a'.is_ascii_letter() & 'Z'.is_ascii_letter() & !'@'.is_ascii_letter() & !'['.is_ascii_letter()
+expect (U8.of_nat(12) ^ 10) == 6 & (U8.of_nat(0xf0) | 0x0f) == 255
+expect U8.of_nat(0b10100101).bit_not() == 0b01011010
+expect U8.of_nat(0x81).shift_left(1) == 2 & U8.of_nat(0x81).shift_right(7) == 1
+expect U8.of_nat(0x81).rotate_left(1) == 3 & U8.of_nat(0x81).rotate_right(1) == 0xc0
+expect U8.of_nat(1).shift_left(8) == 0 & U8.of_nat(0x81).rotate_left(8) == 0x81

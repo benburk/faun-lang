@@ -1,5 +1,5 @@
-//! The `faun` command: check, build, run, or print a stage of a Faun program
-//! for one of the targets this binary holds.
+//! The `faun` command: check, build, run, test, or print a stage of a Faun
+//! program for one of the targets this binary holds.
 //!
 //! This crate only parses arguments, knows which targets exist, and writes
 //! what the compiler makes. The compiler itself is the `faun` library.
@@ -41,6 +41,10 @@ enum Command {
         source: PathBuf,
         /// What the program is run with, after its own name.
         args: Vec<String>,
+    },
+    Test {
+        target: &'static dyn Target,
+        source: PathBuf,
     },
     Emit {
         target: &'static dyn Target,
@@ -147,10 +151,18 @@ fn cli() -> OptionParser<Command> {
     .descr("Compile a Faun program for the selected machine and run it")
     .command("run");
 
+    let target = target_parser();
+    let source = positional::<PathBuf>("PATH").help("The source file whose package to test");
+    let test = construct!(Command::Test { target, source })
+        .to_options()
+        .descr("Run every `expect` in a Faun package on the selected machine")
+        .command("test");
+
     choice([
         check.boxed(),
         build_parser().boxed(),
         run.boxed(),
+        test.boxed(),
         emit_parser().boxed(),
     ])
     .to_options()
@@ -182,6 +194,7 @@ fn dispatch(command: Command) -> Result<(), String> {
             target,
             args,
         } => run(&source, target, &args),
+        Command::Test { source, target } => test(&source, target),
         Command::Emit {
             target,
             stage,
@@ -215,25 +228,100 @@ fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), String
 
 /// Compile for the machine this runs on, run it, and exit as it did.
 fn run(source: &Path, target: &dyn Target, args: &[String]) -> Result<(), String> {
+    runs_here(target)?;
+    let image = faun::compile_to_image(source, target)?;
+    let status = execute(target, &image, |program| {
+        Process::new(program)
+            .args(args)
+            .status()
+            .map_err(|error| format!("cannot run {}: {error}", program.display()))
+    })?;
+    std::process::exit(status.code().unwrap_or(1))
+}
+
+/// Build a package's expectations for the machine this runs on, run them,
+/// and say where each one that does not hold was written.
+fn test(source: &Path, target: &dyn Target) -> Result<(), String> {
+    runs_here(target)?;
+    let tests = faun::lower_tests_to_barb(source, target)?;
+    let count = tests.expectations.len();
+    if count == 0 {
+        println!("no expectations");
+        return Ok(());
+    }
+    let image = faun::compile_barb_to_image(tests.barb, target)?;
+    let output = execute(target, &image, |program| {
+        Process::new(program)
+            .output()
+            .map_err(|error| format!("cannot run {}: {error}", program.display()))
+    })?;
+    if !output.status.success() {
+        return Err(format!("the expectations stopped with {}", output.status));
+    }
+    let failed = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .map(|number| {
+            number
+                .parse::<usize>()
+                .ok()
+                .and_then(|number| tests.expectations.get(number.checked_sub(1)?))
+                .ok_or_else(|| format!("the expectations answered `{number}`"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    report(&failed, count)
+}
+
+/// Say where each expectation that failed was written, and how many of
+/// `count` held: an error where any failed.
+fn report(failed: &[&faun::diagnostic::Location], count: usize) -> Result<(), String> {
+    for location in failed {
+        println!(
+            "{}:{}: does not hold: {}",
+            location.path.display(),
+            location.line,
+            location.text.trim()
+        );
+    }
+    let counted = if count == 1 {
+        "1 expectation".to_owned()
+    } else {
+        format!("{count} expectations")
+    };
+    match failed.len() {
+        0 if count == 1 => println!("{counted} holds"),
+        0 => println!("{counted} hold"),
+        1 => return Err(format!("1 of {counted} does not hold")),
+        n => return Err(format!("{n} of {counted} do not hold")),
+    }
+    Ok(())
+}
+
+/// Refuse a target whose programs this machine cannot run.
+fn runs_here(target: &dyn Target) -> Result<(), String> {
     if NATIVE.is_none_or(|native| native.name() != target.name()) {
         return Err(format!(
             "{} programs do not run on this machine",
             target.name()
         ));
     }
-    let image = faun::compile_to_image(source, target)?;
+    Ok(())
+}
+
+/// Write `image` to a directory of its own, `start` it there, and remove the
+/// directory whatever it did.
+fn execute<T>(
+    target: &dyn Target,
+    image: &[u8],
+    start: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
     let directory = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
     fs::create_dir_all(&directory)
         .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
-    let status = write(target, &image, &directory.join("program")).and_then(|program| {
-        Process::new(&program)
-            .args(args)
-            .status()
-            .map_err(|error| format!("cannot run {}: {error}", program.display()))
-    });
+    let outcome =
+        write(target, image, &directory.join("program")).and_then(|program| start(&program));
     fs::remove_dir_all(&directory)
         .map_err(|error| format!("cannot remove {}: {error}", directory.display()))?;
-    std::process::exit(status?.code().unwrap_or(1))
+    outcome
 }
 
 /// Print one stage of a program.

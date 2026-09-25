@@ -52,9 +52,31 @@ Nat : [Zero Succ(Nat)].(
   cmp : Nat Nat -> Order
   cmp(a b) -> nat_order(nat_below(a b) a.equals(b))
 
+  min : Nat Nat -> Nat
+  min(a b) -> (a <= b).select(a b)
+
+  max : Nat Nat -> Nat
+  max(a b) -> (a <= b).select(b a)
+
+  # Bitwise, a bit of the answer for each place either has one: `a & b`,
+  # `a | b` and `a ^ b`. Each walk goes on only while both have bits left.
+  and : Nat Nat -> Nat
+  and(a b) -> and_bits(a b 1 0)
+
+  or : Nat Nat -> Nat
+  or(a b) -> or_bits(a b 1 0)
+
+  xor : Nat Nat -> Nat
+  xor(a b) -> xor_bits(a b 1 0)
+
   # The decimal text.
   to_str : Nat -> Str
   to_str(n) -> Str.from_ascii(nat_decimal(n n)).ok_or("")
+
+  # `Ok` of the number `text` writes in decimal: one digit or more, and
+  # nothing else, no sign and no space.
+  from_str : Str -> Result(Nat [Malformed])
+  from_str(text) -> nat_digits(text.to_utf8() 0 False)
 
   equals : Nat Nat -> Bool
   equals(0 0) -> True
@@ -71,6 +93,34 @@ nat_decimal(n _) if n < 10 -> [U8.of_nat(n + '0')]
 nat_decimal(_ 0) -> []
 nat_decimal(n Succ(rest)) -> nat_decimal(n / 10 rest).append(U8.of_nat(n % 10 + '0'))
 
+# The number `bytes` go on to write, having written `value` so far, and
+# whether a digit was seen yet.
+nat_digits : List(U8) Nat Bool -> Result(Nat [Malformed])
+nat_digits([] value seen) -> seen.select(Ok(value) Err(Malformed))
+nat_digits([byte *rest] value _) if byte.is_digit() ->
+  nat_digits(rest value * 10 + (byte.to_nat() - '0') True)
+nat_digits(_ _ _) -> Err(Malformed)
+
+# The bits of `a` and `b` combined from `place` up, added to `built`, the
+# bits below. Each step halves both, and stops where either has none left;
+# what is left of the other is then what it keeps.
+and_bits : Nat Nat Nat Nat -> Nat
+and_bits(0 _ _ built) -> built
+and_bits(_ 0 _ built) -> built
+and_bits(a b place built) -> and_bits(a / 2 b / 2 place * 2 built + a % 2 * (b % 2) * place)
+
+or_bits : Nat Nat Nat Nat -> Nat
+or_bits(0 b place built) -> built + b * place
+or_bits(a 0 place built) -> built + a * place
+or_bits(a b place built) ->
+  low = (a % 2 == 1 | b % 2 == 1).to_nat()
+  or_bits(a / 2 b / 2 place * 2 built + low * place)
+
+xor_bits : Nat Nat Nat Nat -> Nat
+xor_bits(0 b place built) -> built + b * place
+xor_bits(a 0 place built) -> built + a * place
+xor_bits(a b place built) -> xor_bits(a / 2 b / 2 place * 2 built + (a + b) % 2 * place)
+
 nat_below : Nat Nat -> Bool
 nat_below(_ 0) -> False
 nat_below(0 Succ(_)) -> True
@@ -86,3 +136,13 @@ div_step(False quotient) -> quotient
 
 mod_step(True _) -> 0
 mod_step(False remainder) -> Succ(remainder)
+
+expect Nat.from_str("0").ok_or(9) == 0 & Nat.from_str("007").ok_or(0) == 7
+expect Nat.from_str("1234").ok_or(0) == 1234
+expect Nat.from_str("").is_err() & Nat.from_str("12a").is_err() & Nat.from_str("-1").is_err()
+expect 3.min(5) == 3 & 3.max(5) == 5
+# `&`, `|` and `^` bind looser than comparisons, so a bitwise answer is
+# compared in parentheses.
+expect (12 & 10) == 8 & (12 | 10) == 14 & (12 ^ 10) == 6
+expect (0 & 7) == 0 & (0 | 7) == 7 & (7 ^ 7) == 0 & (5 | 0) == 5
+expect (1267650600228229401496703205376 | 1) == 1267650600228229401496703205377

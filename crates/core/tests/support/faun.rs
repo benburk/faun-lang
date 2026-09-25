@@ -20,6 +20,33 @@ pub(crate) fn lower(text: &str, target: &dyn Target) -> Result<Program, String> 
     faun_core::lower_to_machine_ir(&mut barb, &target.routines())
 }
 
+/// Lower a Faun package's expectations as `faun test` builds them: an
+/// application printing the number of each that does not hold.
+#[allow(
+    dead_code,
+    reason = "not every test binary including this runs expectations"
+)]
+pub(crate) fn expectations(text: &str, target: &dyn Target) -> Result<Program, String> {
+    let (dir, path) = source_file(text);
+    let program = expectations_at(&path, target);
+    fs::remove_dir_all(dir).expect("the scratch source to go");
+    program
+}
+
+/// The same, for the package whose entry is at `path`.
+#[allow(
+    dead_code,
+    reason = "not every test binary including this runs expectations"
+)]
+pub(crate) fn expectations_at(
+    path: &std::path::Path,
+    target: &dyn Target,
+) -> Result<Program, String> {
+    let mut barb = ::faun::lower_tests_to_barb(path, target)?.barb;
+    faun_core::barb::optimize(&mut barb);
+    faun_core::lower_to_machine_ir(&mut barb, &target.routines())
+}
+
 /// The same, without optimizing Barb, for a test of shapes the optimizer
 /// would have removed.
 #[allow(

@@ -20,6 +20,10 @@ pub struct Module {
     /// Canonical method definitions reachable through this module's scope.
     pub visible_methods: Vec<Symbol>,
     pub items: Vec<Item>,
+    /// The definitions this module's `expect`s became, in the order written:
+    /// each is among `items`, answering a `Bool`, with a name no source can
+    /// write.
+    pub expectations: Vec<Symbol>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,6 +162,112 @@ pub enum Pattern {
     Tuple(Vec<Self>),
     /// A string's bytes, matched by `Str.equals`: a test, never a shape.
     String(Vec<u8>),
+    /// Either of two or more alternatives, each binding the same locals.
+    /// Only a clause's parameters hold one.
+    Or(Vec<Self>),
+}
+
+impl Pattern {
+    /// The rows `patterns` stand for: one for each way of choosing an
+    /// alternative of every `|` in them, in the order written. Without one,
+    /// that is `patterns` alone.
+    #[must_use]
+    pub fn rows(patterns: &[Self]) -> Vec<Vec<Self>> {
+        product(patterns.iter().map(Self::choices).collect())
+    }
+
+    /// Whether an `|` is anywhere in this pattern.
+    #[must_use]
+    pub fn has_alternatives(&self) -> bool {
+        match self {
+            Self::Or(_) => true,
+            Self::Constructor(_, fields)
+            | Self::Tag(_, fields)
+            | Self::Dual(_, fields)
+            | Self::Tuple(fields) => fields.iter().any(Self::has_alternatives),
+            Self::List(elements, rest) => {
+                elements.iter().any(Self::has_alternatives)
+                    || rest.as_deref().is_some_and(Self::has_alternatives)
+            }
+            Self::Record(fields, _) => fields.iter().any(|(_, field)| field.has_alternatives()),
+            Self::Wild
+            | Self::Bind(_)
+            | Self::Number { .. }
+            | Self::Range(..)
+            | Self::String(_) => false,
+        }
+    }
+
+    /// This pattern once for each way of choosing an alternative of every
+    /// `|` in it, and so once alone where there is none.
+    #[must_use]
+    pub fn choices(&self) -> Vec<Self> {
+        match self {
+            Self::Or(alternatives) => alternatives.iter().flat_map(Self::choices).collect(),
+            Self::Constructor(constructor, fields) => Self::rows(fields)
+                .into_iter()
+                .map(|fields| Self::Constructor(*constructor, fields))
+                .collect(),
+            Self::Tag(label, fields) => Self::rows(fields)
+                .into_iter()
+                .map(|fields| Self::Tag(*label, fields))
+                .collect(),
+            Self::Dual(dual, fields) => Self::rows(fields)
+                .into_iter()
+                .map(|fields| Self::Dual(dual.clone(), fields))
+                .collect(),
+            Self::Tuple(members) => Self::rows(members).into_iter().map(Self::Tuple).collect(),
+            Self::List(elements, rest) => list_choices(elements, rest.as_deref()),
+            Self::Record(fields, open) => {
+                let patterns: Vec<Self> = fields.iter().map(|(_, field)| field.clone()).collect();
+                Self::rows(&patterns)
+                    .into_iter()
+                    .map(|row| {
+                        let named = fields.iter().map(|(name, _)| *name).zip(row).collect();
+                        Self::Record(named, *open)
+                    })
+                    .collect()
+            }
+            Self::Wild
+            | Self::Bind(_)
+            | Self::Number { .. }
+            | Self::Range(..)
+            | Self::String(_) => vec![self.clone()],
+        }
+    }
+}
+
+/// [`Pattern::choices`] of a list pattern: its elements' rows, each with each
+/// choice of its rest.
+fn list_choices(elements: &[Pattern], rest: Option<&Pattern>) -> Vec<Pattern> {
+    let rests: Vec<Option<Pattern>> = rest.map_or_else(
+        || vec![None],
+        |rest| rest.choices().into_iter().map(Some).collect(),
+    );
+    Pattern::rows(elements)
+        .into_iter()
+        .flat_map(|row| {
+            rests
+                .iter()
+                .map(move |rest| Pattern::List(row.clone(), rest.clone().map(Box::new)))
+        })
+        .collect()
+}
+
+/// Every row taking one choice from each column, the first column varying
+/// slowest.
+fn product(columns: Vec<Vec<Pattern>>) -> Vec<Vec<Pattern>> {
+    columns.into_iter().fold(vec![Vec::new()], |rows, column| {
+        rows.iter()
+            .flat_map(|row| {
+                column.iter().map(move |choice| {
+                    let mut row = row.clone();
+                    row.push(choice.clone());
+                    row
+                })
+            })
+            .collect()
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

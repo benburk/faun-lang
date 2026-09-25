@@ -227,6 +227,40 @@ fn size_change_rejects_non_decreasing_arithmetic() {
     );
 }
 
+/// Monus of two positives is below its dividend, so `m - 1` descends where
+/// `m` was matched as a successor; monus by nought does not.
+#[test]
+fn size_change_reads_monus_of_positives_as_a_decrease() {
+    let refusal = |subtrahend: u64| {
+        let mut lib = fixture::Library::new();
+        let (nat, zero, succ, sub) = (lib.nat, lib.zero, lib.succ, lib.sub);
+        let p = &mut lib.program;
+        // count(Zero) -> Zero
+        // count(Succ(n)) -> count(sub(Succ(n) subtrahend))
+        let by = p.intern_number(nat, subtrahend).unwrap();
+        let count = p.declare("count", &[nat], nat);
+        p.define(count, |b, args| {
+            b.match_(args[0], nat, |b, ctor, fields| {
+                if ctor == zero {
+                    return b.con(zero, &[]);
+                }
+                let value = b.con(succ, &[fields[0]]);
+                let by = b.known(by);
+                let less = b.call(sub, &[value, by]);
+                b.call(count, &[less])
+            })
+        });
+        enter(p, nat, count, 3);
+        validate(p).err()
+    };
+    assert!(refusal(1).is_none(), "{:?}", refusal(1));
+    let refused = refusal(0).expect("monus by nought is no decrease");
+    assert!(
+        refused.message.contains("nothing here shows `count` stops"),
+        "{refused}"
+    );
+}
+
 /// Names that go round together are one round, however many of them there
 /// are and whichever of them is reached first. What every definition in one
 /// reaches is every other, so a round is found the way a program's calls

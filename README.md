@@ -10,7 +10,9 @@ factorial(0) -> 1
 factorial(m) -> m * factorial(m - 1)
 
 # Effectful functions come from the host, and end with an exclamation mark
-main!(host) -> host.println!("factorial(5) = ${factorial(5)}")
+main!(host) ->
+  host.println!("factorial(5) = ${factorial(5)}")
+  host.exit!(0)
 ```
 
 - **Strict functional semantics**: immutable values, value semantics, algebraic data types, pattern matching, and eager evaluation.
@@ -49,9 +51,12 @@ Programs
 - exit(0)
 - hello world
 - simple arithmetic expressions
+- `expect` tests, run by `faun test`
 
 ```ruby
-main!(host) -> host.println!("Hello, world!")
+main!(host) ->
+  host.println!("Hello, world!")
+  host.exit!(0)
 
 gcd : Nat Nat -> Nat
 gcd(a 0) -> a

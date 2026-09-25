@@ -280,10 +280,73 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> host.exit!(row([Person(\"ab\") Person(\"cde\")]))",
         5,
     ),
+    (
+        "a line beginning with an infix operator goes on with the one before",
+        "negated : Int -> Int
+         negated(m) ->
+           k = m
+           -k
+
+         main! : Host -> []
+         main!(host) ->
+           n = 2
+             + 3
+             * 4
+           big = n > 10
+             & n < 20
+             & negated(-7) == 7
+           host.exit!(big.select(n 0))",
+        14,
+    ),
+    (
+        "an or-pattern matches either alternative, binding the same names",
+        "Shape : [Circle(Nat) Square(Nat) Dot]
+
+         size : Shape -> Nat
+         size(Circle(n) | Square(n)) -> n
+         size(Dot) -> 0
+
+         bucket : Nat -> Nat
+         bucket(0) -> 0
+         bucket(1 | 2) -> 1
+         bucket(_) -> 2
+
+         opens : List(Nat) -> Nat
+         opens([1 | 2 *_] | [_ 3 *_]) -> 1
+         opens(_) -> 0
+
+         main! : Host -> []
+         main!(host) ->
+           sizes = size(Circle(3)) + size(Square(4)) + size(Dot)
+           buckets = bucket(0) + bucket(2) * 10 + bucket(7) * 100
+           opened = opens([2 9]) + opens([7 3]) * 2 + opens([7 4]) * 4
+           host.exit!(sizes + buckets + opened)",
+        7 + 210 + 3,
+    ),
 ];
 
 /// Programs refused, and what the message says.
 const REFUSED: &[(&str, &str, &str)] = &[
+    (
+        "every alternative of an or-pattern binds the same names",
+        "Shape : [Circle(Nat) Dot]
+
+         size : Shape -> Nat
+         size(Circle(n) | Dot) -> n",
+        "`n` is bound by some alternatives of this `|` and not others",
+    ),
+    (
+        "every alternative of an or-pattern binds a name at one type",
+        "size : [Count(Nat) Name(Str)] -> Nat
+         size(Count(n) | Name(n)) -> 0",
+        "type mismatch",
+    ),
+    (
+        "a lambda's pattern holds no or-pattern",
+        "total : List(Nat) -> Nat
+         total(values) -> values.fold(0 |sum (1 | 2)| sum)",
+        "an `|` pattern may stand only among a clause's parameters",
+    ),
     (
         "a function is not bound",
         "twice : Nat -> Nat

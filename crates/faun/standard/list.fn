@@ -161,6 +161,51 @@ List(a) : [Nil Cons(a List(a))].(
   # `count` copies of `value`, written `List.repeat(value count)`.
   repeat : a Nat -> List(a)
   repeat(value count) -> repeat_onto(value count [])
+
+  # The first `count` elements and the rest.
+  split_at : List(a) Nat -> (List(a) List(a))
+  split_at(values count) -> (take(values count) drop(values count))
+
+  # The elements `keep` holds of, and those it does not, each in order.
+  partition : List(a) (a -> Bool) -> (List(a) List(a))
+  partition(values keep) -> partition_into(values keep [] [])
+
+  # Each element beside the one at its place in `other`, as long as the
+  # shorter list.
+  zip : List(a) List(b) -> List((a b))
+  zip(values other) -> map2(values other |value paired| (value paired))
+
+  unzip : List((a b)) -> (List(a) List(b))
+  unzip(pairs) -> unzip_into(pairs [] [])
+
+  # Each element beside its place, counting from nought.
+  enumerate : List(a) -> List((Nat a))
+  enumerate(values) -> enumerate_into(values 0 [])
+
+  # Every run of `size` neighbours, first to last: `[1 2 3].windows(2)` is
+  # `[[1 2] [2 3]]`, none where the list is shorter than `size`, and one
+  # empty window at each place, the end included, where `size` is nought.
+  windows : List(a) Nat -> List(List(a))
+  windows(values size) -> windows_into(values size [])
+
+  # The least element, the first of those that tie.
+  min : List(a) -> Result(a [Empty]) where a.cmp : a a -> Order
+  min([]) -> Err(Empty)
+  min([head *tail]) -> Ok(tail.fold(head |least value| (value < least).select(value least)))
+
+  # The greatest element, the first of those that tie.
+  max : List(a) -> Result(a [Empty]) where a.cmp : a a -> Order
+  max([]) -> Err(Empty)
+  max([head *tail]) -> Ok(tail.fold(head |most value| (value > most).select(value most)))
+
+  # The elements in order by their type's `cmp`. Stable: those that compare
+  # `Eq` stay in the order they were in.
+  sort : List(a) -> List(a) where a.cmp : a a -> Order
+  sort(values) -> sort_on(values |value| value)
+
+  # The elements in order of `key`, stable as `sort` is.
+  sort_on : List(a) (a -> k) -> List(a) where k.cmp : k k -> Order
+  sort_on(values key) -> merge_sort(values key len(values))
 )
 
 reverse_into : List(a) List(a) -> List(a)
@@ -244,6 +289,63 @@ take_while_into : List(a) (a -> Bool) List(a) -> List(a)
 take_while_into([head *tail] keep built) if keep(head) -> take_while_into(tail keep [head *built])
 take_while_into(_ _ built) -> reverse_into(built [])
 
+partition_into : List(a) (a -> Bool) List(a) List(a) -> (List(a) List(a))
+partition_into([] _ kept left) -> (reverse_into(kept []) reverse_into(left []))
+partition_into([head *tail] keep kept left) if keep(head) ->
+  partition_into(tail keep [head *kept] left)
+partition_into([head *tail] keep kept left) -> partition_into(tail keep kept [head *left])
+
+unzip_into : List((a b)) List(a) List(b) -> (List(a) List(b))
+unzip_into([] firsts seconds) -> (reverse_into(firsts []) reverse_into(seconds []))
+unzip_into([(first second) *tail] firsts seconds) ->
+  unzip_into(tail [first *firsts] [second *seconds])
+
+enumerate_into : List(a) Nat List((Nat a)) -> List((Nat a))
+enumerate_into([] _ built) -> reverse_into(built [])
+enumerate_into([head *tail] at built) -> enumerate_into(tail at + 1 [(at head) *built])
+
+# Once a window is short, every later one is too, so the walk ends there.
+windows_into : List(a) Nat List(List(a)) -> List(List(a))
+windows_into([head *tail] size built) ->
+  window = List.take([head *tail] size)
+  windowed(window.len() == size window tail (size built))
+windows_into([] 0 built) -> reverse_into(built [[]])
+windows_into([] _ built) -> reverse_into(built [])
+
+windowed : Bool List(a) List(a) (Nat List(List(a))) -> List(List(a))
+windowed(True window tail (size built)) -> windows_into(tail size [window *built])
+windowed(False _ _ (_ built)) -> reverse_into(built [])
+
+# Sort each half and merge them. A list halves at every level, so its length
+# is always fuel enough; the fuel is what shows the sort stops.
+merge_sort : List(a) (a -> k) Nat -> List(a) where k.cmp : k k -> Order
+merge_sort([] _ _) -> []
+merge_sort([only] _ _) -> [only]
+merge_sort(values key Succ(fuel)) ->
+  (front back) = List.split_at(values List.len(values) / 2)
+  merge_into(merge_sort(front key fuel) merge_sort(back key fuel) key [])
+merge_sort(values _ 0) -> values
+
+# Two sorted lists as one, the smaller key first and the left one on a tie,
+# which is what keeps the sort stable.
+merge_into : List(a) List(a) (a -> k) List(a) -> List(a) where k.cmp : k k -> Order
+merge_into([] right _ built) -> reverse_into(built right)
+merge_into(left [] _ built) -> reverse_into(built left)
+merge_into([x *left] [y *right] key built) if key(x) <= key(y) ->
+  merge_into(left [y *right] key [x *built])
+merge_into(left [y *right] key built) -> merge_into(left right key [y *built])
+
 repeat_onto : a Nat List(a) -> List(a)
 repeat_onto(_ 0 built) -> built
 repeat_onto(value Succ(count) built) -> repeat_onto(value count [value *built])
+
+expect [3 1 2].sort() == [1 2 3] & [0].drop(1).sort().is_empty()
+expect [5 3 9 1 5 6 2 8 7 4 0].sort() == [0 1 2 3 4 5 5 6 7 8 9]
+expect [(2 1) (1 1) (2 0) (1 0)].sort_on(|(key _)| key) == [(1 1) (1 0) (2 1) (2 0)]
+expect [4 9 2].min().ok_or(0) == 2 & [4 9 2].max().ok_or(0) == 9 & [0].drop(1).min().is_err()
+expect [1 2 3].zip([7 8]) == [(1 7) (2 8)] & [(1 7) (2 8)].unzip() == ([1 2] [7 8])
+expect [7 8].enumerate() == [(0 7) (1 8)]
+expect [1 2 3 4].windows(2) == [[1 2] [2 3] [3 4]] & [1 2].windows(3).is_empty()
+expect [1 2].windows(0).len() == 3
+expect [1 2 3 4 5].partition(|n| n % 2 == 0) == ([2 4] [1 3 5])
+expect [1 2 3].split_at(1) == ([1] [2 3]) & [1].split_at(5) == ([1] [])

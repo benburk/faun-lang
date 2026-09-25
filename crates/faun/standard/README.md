@@ -11,18 +11,33 @@ though `U8.of_nat(300)` is 44. A numeral nothing types is a `Nat`, or an `Int`
 when it is negated. The words are rings: they wrap by definition, and `sub`
 is the ring's, not monus.
 
+`Nat.from_str` and `Int.from_str` read decimal text, `Err(Malformed)` where it
+is not one: digits only, and for an `Int` a leading `-`. `Nat`, `Int` and `U8`
+have `min` and `max`, and `U8` the ASCII tests `is_digit`, `is_ascii_lower`,
+`is_ascii_upper` and `is_ascii_letter`, and `to_ascii_lower` and
+`to_ascii_upper`.
+
 `Str` is UTF-8 bytes behind a private wrapper, with `len`, `concat`, `cmp` in
-byte order and `equals` from it, and `from_ascii`. `Bool`, the integers and
-`Str` say themselves with `to_str`, and a splice `${value}` in a string is its
-value's `to_str`, the pieces joined with `concat`. Numeral patterns on words
-and string patterns are not here yet.
+byte order and `equals` from it, `from_ascii`, `from_utf8` and `to_utf8`.
+`Bool`, the integers and `Str` say themselves with `to_str`, and a splice
+`${value}` in a string is its value's `to_str`, the pieces joined with
+`concat`. For reading text there are `is_empty`, `split` at a separator,
+`lines` at `\n` or `\r\n`, `trim` of ASCII white space, `starts_with`,
+`ends_with`, `drop_prefix` and `drop_suffix`; for writing it,
+`Str.join(pieces separator)` and `repeat`. Matching and cutting go byte by
+byte, which no character boundary can fall inside. There is no slicing by
+position. A numeral pattern of a word and a string pattern are each a test
+of equality, asked before the clause's guard.
 
 `List` follows Ori's standard list: `len`, `is_empty`, `append`, `extend`,
 `prepend`, `map`, `map2`, `flat_map`, `flatten`, `join`, `filter`, `count`,
 `any`, `all`, `fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
 `get`, `get_or`, `set`, `exchange`, `try_map`, `find`, `find_index`, `equals`,
-`contains`, `sum`, `take`, `drop`, `take_while`,
-`drop_while`, and the constructors `List.range(n)` and `List.repeat(x n)`. A
+`contains`, `sum`, `take`, `drop`, `take_while`, `drop_while`, `split_at`,
+`partition`, `zip`, `unzip`, `enumerate`, `windows`, `min`, `max`, `sort`
+and `sort_on`, and the constructors `List.range(n)` and `List.repeat(x n)`.
+`sort` is a stable merge sort by the element's `cmp`, and `sort_on` by a
+key's. A
 lookup that can miss answers a structural tag: `Err(OutOfBounds)`,
 `Err(Empty)` or `Err(NotFound)`. Nothing is recognized by name: `len` is
 answered from the length a list holds because Barb recognizes what it
@@ -100,6 +115,13 @@ type's `equals`, and a tuple has `cmp`, its positions in order with `Order.then`
 a record has no order of its fields, and an open record no `equals`, its other
 fields being a caller's. A declared type writes its own.
 
+`&`, `|` and `^` are `and`, `or` and `xor`, as in Ori: logical on `Bool` and
+bitwise on `Nat` and the words, and looser than a comparison, so
+`x == 3 & y == 5` needs no parentheses and `(a & b) == 8` does. The words
+also have `bit_not`, `shift_left`, `shift_right`, `rotate_left` and
+`rotate_right`, each by a `Nat` count of bits; a shift by the width or more
+is nought. `Int` has no bitwise operations.
+
 `Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by
 defining one `cmp : T T -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of
 its `Order`, so they cannot disagree; `Bool`, `Nat`, `Int` and `U8` define it. Natural subtraction is
@@ -151,6 +173,53 @@ main!(host) ->
   host.println!("Hello, world!")
   host.exit!(0)
 ```
+
+A line beginning with an infix operator, or with a `.`, goes on with the
+line before rather than standing on its own, so a long condition may be
+broken before its `&`. A `-` held to what follows it is a negation and
+begins a line of its own.
+
+## Or-patterns
+
+`A | B` among a clause's parameters matches either alternative, and every
+alternative binds the same names at the same types. A clause holding one is
+a row for each choice of alternatives, checked and covered as those rows
+would be. A binding's or a lambda's pattern must match whatever it is
+handed, and holds none. A range pattern still has no lowering.
+
+```
+bucket : Nat -> Nat
+bucket(0) -> 0
+bucket(1 | 2) -> 1
+bucket(_) -> 2
+```
+
+## Expectations
+
+`expect` followed by a body is a claim a module makes of its definitions:
+a clause of no parameters answering a `Bool`, bindings allowed, as in Ori.
+
+```
+double : Nat -> Nat
+double(n) -> n * 2
+
+expect double(2) == 4
+expect
+  doubled = [1 2 3].map(double)
+  doubled.len() == 3
+    & doubled.last().ok_or(0) == 6
+```
+
+An expectation is checked as any definition is, typed, exhaustive and seen to
+stop, whenever its package is. No program can name one. `faun test PATH`
+builds the package at `PATH` with an entry of its own in place of any `main!`,
+which is checked all the same: the entry asks every expectation of every module in the package, those of the
+standard library aside, and prints the number of each that does not hold.
+The standard library is a package too, and holds expectations of its own:
+`faun test crates/faun/standard/standard.fn` asks them.
+`faun test` runs that for the machine it is on and says where each failing
+expectation was written; what the compiler settled while compiling, it
+settled before the program ran.
 
 `Host` also has Ori's runners, which finish the program for it: `run!` and
 `run_text!` run a pure function of nothing or of

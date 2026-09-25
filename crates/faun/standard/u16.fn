@@ -36,6 +36,41 @@ U16 : Nat.(
   to_str : U16 -> Str
   to_str(U16(value)) -> value.to_str()
 
+  # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`.
+  and : U16 U16 -> U16
+  and(U16(a) U16(b)) -> U16(a & b)
+
+  or : U16 U16 -> U16
+  or(U16(a) U16(b)) -> U16(a | b)
+
+  xor : U16 U16 -> U16
+  xor(U16(a) U16(b)) -> U16(a ^ b)
+
+  # Every bit flipped.
+  bit_not : U16 -> U16
+  bit_not(U16(a)) -> U16(65535 - a)
+
+  # The bits moved up by `amount`, those past the top lost: nought where
+  # `amount` is the width or more.
+  shift_left : U16 Nat -> U16
+  shift_left(U16(a) amount) if amount < 16 -> of_nat(a * 2.pow(amount))
+  shift_left(_ _) -> U16(0)
+
+  # The bits moved down by `amount`, those below the bottom lost.
+  shift_right : U16 Nat -> U16
+  shift_right(U16(a) amount) if amount < 16 -> U16(a / 2.pow(amount))
+  shift_right(_ _) -> U16(0)
+
+  # The bits moved up by `amount`, those past the top coming round to the
+  # bottom. The width round is no change.
+  rotate_left : U16 Nat -> U16
+  rotate_left(U16(a) amount) ->
+    shift = amount % 16
+    of_nat(a * 2.pow(shift) + a / 2.pow(16 - shift))
+
+  rotate_right : U16 Nat -> U16
+  rotate_right(word amount) -> rotate_left(word 16 - amount % 16)
+
   equals : U16 U16 -> Bool
   equals(U16(a) U16(b)) -> a.equals(b)
 )

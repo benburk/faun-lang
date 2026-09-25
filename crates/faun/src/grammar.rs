@@ -105,12 +105,12 @@ fn statement_ahead(tokens: &[Token], at: usize) -> bool {
 }
 
 /// Where the line beginning at `at` ends: at the next token that begins a
-/// line outside every bracket, a `.` continuing a chain aside, or where a
-/// bracket around it closes.
+/// line outside every bracket, a token continuing the line before aside, or
+/// where a bracket around it closes.
 fn line_end(tokens: &[Token], at: usize) -> usize {
     let mut depth = 0usize;
     for (offset, token) in tokens.iter().enumerate().skip(at) {
-        if offset > at && depth == 0 && token.newline_before && token.kind != Kind::Dot {
+        if offset > at && depth == 0 && token.newline_before && !continues(tokens, offset) {
             return offset;
         }
         match token.kind {
@@ -133,14 +133,39 @@ fn line_end(tokens: &[Token], at: usize) -> usize {
     tokens.len()
 }
 
+/// Whether the token at `at`, beginning a line, goes on with the line before
+/// rather than beginning one: a `.` continuing a chain, or an infix operator,
+/// which no expression begins with. A `-` held to what follows it is a
+/// negation, and begins one.
+fn continues(tokens: &[Token], at: usize) -> bool {
+    match tokens[at].kind {
+        Kind::Dot
+        | Kind::Bar
+        | Kind::Caret
+        | Kind::Amp
+        | Kind::EqEq
+        | Kind::Ne
+        | Kind::Lt
+        | Kind::Le
+        | Kind::Gt
+        | Kind::Ge
+        | Kind::Plus
+        | Kind::Star
+        | Kind::Slash
+        | Kind::Percent => true,
+        Kind::Minus => tokens.get(at + 1).is_some_and(|next| next.space_before),
+        _ => false,
+    }
+}
+
 /// Whether the line from `at` to `end` begins an item rather than going on
 /// with a body: a clause's head, with its arrow; a signature or declaration,
-/// with its colon; a directive; an alias.
+/// with its colon; a directive; an `expect`; an alias.
 fn begins_item(tokens: &[Token], at: usize, end: usize) -> bool {
     let line = &tokens[at..end];
     if matches!(
         line.first().map(|token| token.kind),
-        Some(Kind::KwImport | Kind::KwExports | Kind::KwPackage)
+        Some(Kind::KwImport | Kind::KwExports | Kind::KwPackage | Kind::KwExpect)
     ) {
         return true;
     }
@@ -257,7 +282,19 @@ peg::parser! {
             / alias:alias_decl() { Item::Alias(alias) }
             / constraints:constraint_alias_decl() { Item::Constraints(constraints) }
             / data:data_decl() { Item::Data(data) }
+            / expect:expect_decl() { Item::Expect(expect) }
             / declaration:term_declaration() { term_item(declaration) }
+
+        rule expect_decl() -> Clause
+            = head:tok(Kind::KwExpect) body:body() {
+                Clause {
+                    span: head.span().through(body.result.span),
+                    name: name(head),
+                    patterns: Vec::new(),
+                    guard: None,
+                    body,
+                }
+            }
 
         rule header() -> HeaderDecl
             = start:tok(Kind::KwPackage) lbrace() close:rbrace() {
@@ -508,7 +545,22 @@ peg::parser! {
                 Binding { pattern, value, discarded: false }
             }
 
+        // `A | B`: either of two or more alternatives.
         rule pattern() -> Pattern
+            = first:single_pattern() rest:(tok(Kind::Bar) next:single_pattern() { next })* {
+                if rest.is_empty() {
+                    return first;
+                }
+                let alternatives: Vec<Pattern> = std::iter::once(first).chain(rest).collect();
+                Pattern::Or {
+                    span: alternatives[0]
+                        .span()
+                        .through(alternatives.last().expect("two or more").span()),
+                    alternatives,
+                }
+            }
+
+        rule single_pattern() -> Pattern
             = start:(tok(Kind::Number) / tok(Kind::Char)) adj(Kind::DotDot)
               end:(adj(Kind::Number) / adj(Kind::Char)) {
                 Pattern::Range {
@@ -645,7 +697,7 @@ peg::parser! {
         rule argument() -> Expr = lambda() / expr()
 
         rule lambda() -> Expr
-            = open:tok(Kind::Bar) patterns:(pattern() ++ sep()) tok(Kind::Bar) body:expr() {
+            = open:tok(Kind::Bar) patterns:(single_pattern() ++ sep()) tok(Kind::Bar) body:expr() {
                 Expr {
                     span: open.span().through(body.span),
                     kind: ExprKind::Lambda(patterns, Box::new(body)),
