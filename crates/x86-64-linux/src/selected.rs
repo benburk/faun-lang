@@ -9,48 +9,17 @@ mod register_allocate;
 
 use super::machine::Reg;
 use crate::WORD_BITS;
-use faun_core::index::Range;
+use faun_core::index::{Pool, Range, index};
 use faun_core::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op as SourceOp, Program, RegionId, Relation,
     Terminator as SourceTerminator, ValueId, Width,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct VReg(u32);
+index!(pub(crate) VReg, BlockId, InstId);
 
 impl VReg {
     fn from_value(value: ValueId) -> Self {
-        Self(u32::try_from(value.index()).expect("an x86 function within 4G values"))
-    }
-
-    fn index(self) -> usize {
-        usize::try_from(self.0).expect("a virtual-register index that fits")
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct BlockId(u32);
-
-impl BlockId {
-    fn at(index: usize) -> Self {
-        Self(u32::try_from(index).expect("an x86 function within 4G blocks"))
-    }
-
-    fn index(self) -> usize {
-        usize::try_from(self.0).expect("a block index that fits")
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct InstId(u32);
-
-impl InstId {
-    fn at(index: usize) -> Self {
-        Self(u32::try_from(index).expect("an x86 function within 4G instructions"))
-    }
-
-    fn index(self) -> usize {
-        usize::try_from(self.0).expect("an instruction index that fits")
+        Self::at(value.index())
     }
 }
 
@@ -432,11 +401,11 @@ impl Dominators {
 pub(crate) struct Selected {
     widths: Vec<u16>,
     operands: Vec<VReg>,
-    instructions: Vec<Inst>,
+    instructions: Pool<InstId, Inst>,
     order: Vec<InstId>,
     block_params: Vec<VReg>,
     block_param_specs: Vec<OperandSpec>,
-    blocks: Vec<Block>,
+    blocks: Pool<BlockId, Block>,
     functions: Vec<Function>,
 }
 
@@ -454,7 +423,7 @@ impl Selected {
         for function in &self.functions {
             let entry = self
                 .blocks
-                .get(function.entry.index())
+                .get(function.entry)
                 .ok_or_else(|| format!("x86 function {:?} has no entry block", function.source))?;
             if entry.owner != function.source {
                 return Err(format!(
@@ -524,7 +493,7 @@ impl Selected {
                 *owners = owners
                     .checked_add(1)
                     .ok_or_else(|| "x86 instruction has too many owners".to_owned())?;
-                let inst = self.instructions[instruction.index()];
+                let inst = self.instructions[instruction];
                 self.verify_inst(
                     inst,
                     &mut definitions,
@@ -546,14 +515,8 @@ impl Selected {
             self.verify_inst_shape(*inst, InstId::at(at))?;
         }
         let dominators = self.dominators()?;
-        for (at, block) in self.blocks.iter().enumerate() {
-            self.verify_uses(
-                block.owner,
-                block.terminator,
-                &definitions,
-                BlockId::at(at),
-                &dominators,
-            )?;
+        for (id, block) in self.blocks.iter_enumerated() {
+            self.verify_uses(block.owner, block.terminator, &definitions, id, &dominators)?;
         }
         Ok(())
     }
@@ -727,7 +690,7 @@ impl Selected {
         Self::verify_range(args, self.operands.len(), "edge argument")?;
         let target = self
             .blocks
-            .get(target.index())
+            .get(target)
             .ok_or_else(|| "x86 edge refers to an unknown block".to_owned())?;
         if target.owner != owner {
             return Err("x86 edge crosses a function boundary".to_owned());
@@ -793,9 +756,9 @@ impl Selected {
 
     fn predecessors(&self) -> Vec<Vec<BlockId>> {
         let mut predecessors = vec![Vec::new(); self.blocks.len()];
-        for (at, block) in self.blocks.iter().enumerate() {
+        for (id, block) in self.blocks.iter_enumerated() {
             for target in successors(block.terminator).into_iter().flatten() {
-                predecessors[target.index()].push(BlockId::at(at));
+                predecessors[target.index()].push(id);
             }
         }
         predecessors
@@ -807,10 +770,9 @@ impl Selected {
         let mut rpo = Vec::new();
         let candidates = std::iter::once(function.entry).chain(
             self.blocks
-                .iter()
-                .enumerate()
+                .iter_enumerated()
                 .filter(|(_, block)| block.owner == function.source)
-                .map(|(at, _)| BlockId::at(at)),
+                .map(|(id, _)| id),
         );
         for root in candidates {
             if seen[root.index()] {
@@ -829,7 +791,7 @@ impl Selected {
                 }
                 seen[block.index()] = true;
                 stack.push((block, true));
-                for successor in successors(self.blocks[block.index()].terminator)
+                for successor in successors(self.blocks[block].terminator)
                     .into_iter()
                     .flatten()
                 {
@@ -896,13 +858,13 @@ impl Selected {
             }
             Ok(())
         };
-        for (position, inst) in self.blocks[block.index()].instructions.range().enumerate() {
+        for (position, inst) in self.blocks[block].instructions.range().enumerate() {
             let id = self.order[inst];
-            for &value in &self.operands[self.instructions[id.index()].operands.range()] {
+            for &value in &self.operands[self.instructions[id].operands.range()] {
                 check(value, position)?;
             }
         }
-        let after_instructions = self.blocks[block.index()].instructions.len();
+        let after_instructions = self.blocks[block].instructions.len();
         match terminator {
             Terminator::Jump { args, .. } => {
                 for &value in &self.operands[args.range()] {
@@ -1082,8 +1044,8 @@ struct Selector<'a> {
     source: &'a Program,
     widths: Vec<u16>,
     operands: Vec<VReg>,
-    instructions: Vec<Inst>,
-    blocks: Vec<BlockDraft>,
+    instructions: Pool<InstId, Inst>,
+    blocks: Pool<BlockId, BlockDraft>,
     functions: Vec<Function>,
 }
 
@@ -1109,8 +1071,8 @@ pub(crate) fn select(source: &Program) -> Result<Selected, String> {
         source,
         widths,
         operands: Vec::new(),
-        instructions: Vec::new(),
-        blocks: Vec::new(),
+        instructions: Pool::default(),
+        blocks: Pool::default(),
         functions: Vec::new(),
     };
     let entry = source.entry();
@@ -1163,11 +1125,7 @@ impl Selector<'_> {
             return Ok(block);
         }
         let block = self.block(owner, params);
-        for (at, spec) in self.blocks[block.index()]
-            .param_specs
-            .iter_mut()
-            .enumerate()
-        {
+        for (at, spec) in self.blocks[block].param_specs.iter_mut().enumerate() {
             spec.constraint =
                 Constraint::Fixed(abi_register(at).ok_or_else(|| {
                     "x86 function has more than six selected parameters".to_owned()
@@ -1180,7 +1138,7 @@ impl Selector<'_> {
         let mut order = Vec::new();
         let mut block_params = Vec::new();
         let mut block_param_specs = Vec::new();
-        let mut blocks = Vec::with_capacity(self.blocks.len());
+        let mut blocks = Pool::default();
         for (at, block) in self.blocks.into_iter().enumerate() {
             let params = append(&mut block_params, &block.params);
             let specs = append(&mut block_param_specs, &block.param_specs);
@@ -1214,7 +1172,6 @@ impl Selector<'_> {
     }
 
     fn block(&mut self, owner: FunctionId, params: &[ValueId]) -> BlockId {
-        let id = BlockId::at(self.blocks.len());
         self.blocks.push(BlockDraft {
             owner,
             params: params.iter().copied().map(VReg::from_value).collect(),
@@ -1228,8 +1185,7 @@ impl Selector<'_> {
             ],
             instructions: Vec::new(),
             terminator: None,
-        });
-        id
+        })
     }
 
     fn result_block(&mut self, owner: FunctionId, results: &[ValueId]) -> BlockId {
@@ -1244,20 +1200,19 @@ impl Selector<'_> {
         operands: &[ValueId],
         immediate: Immediate,
     ) {
-        let id = InstId::at(self.instructions.len());
         let operands: Vec<_> = operands.iter().copied().map(VReg::from_value).collect();
         let operands = append(&mut self.operands, &operands);
-        self.instructions.push(Inst {
+        let id = self.instructions.push(Inst {
             opcode,
             result: result.map(VReg::from_value),
             operands,
             immediate,
         });
-        self.blocks[block.index()].instructions.push(id);
+        self.blocks[block].instructions.push(id);
     }
 
     fn terminate(&mut self, block: BlockId, terminator: Terminator) {
-        let held = &mut self.blocks[block.index()].terminator;
+        let held = &mut self.blocks[block].terminator;
         assert!(held.is_none(), "an x86 block is terminated once");
         *held = Some(terminator);
     }
@@ -1597,9 +1552,9 @@ mod tests {
         let function = selected
             .functions
             .iter()
-            .find(|function| selected.blocks[function.entry.index()].params.len() == 2)
+            .find(|function| selected.blocks[function.entry].params.len() == 2)
             .unwrap();
-        let entry = selected.blocks[function.entry.index()];
+        let entry = selected.blocks[function.entry];
         let specs = &selected.block_param_specs[entry.params.range()];
         assert_eq!(specs[0].constraint, Constraint::Fixed(Reg::Rdi));
         assert_eq!(specs[1].constraint, Constraint::Fixed(Reg::Rsi));
@@ -1629,7 +1584,7 @@ mod tests {
     fn call_constraints_name_the_system_v_argument_registers() {
         let inst = Inst {
             opcode: Opcode::Call,
-            result: Some(VReg(2)),
+            result: Some(VReg::at(2)),
             operands: Range::of(0, 2),
             immediate: Immediate::Function(FunctionId::at(0)),
         };

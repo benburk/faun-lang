@@ -9,7 +9,7 @@ use crate::index::index;
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. Most passes compare and copy symbols as integers; renderers read
 // function names, and targets read logical-entry parameter names.
-index!(ValueId, DataId, FunctionId, RegionId, Symbol);
+index!(pub ValueId, DataId, FunctionId, RegionId, Symbol);
 
 /// Which of a program's two regions a datum sits in.
 ///

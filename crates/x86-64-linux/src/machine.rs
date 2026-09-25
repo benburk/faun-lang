@@ -4,6 +4,7 @@
 //! physical registers, while labels, frame slots, and data references remain
 //! symbolic until encoding.
 
+use faun_core::index::index;
 use faun_core::ir::DataId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,18 +97,7 @@ pub(crate) enum ShiftDirection {
     Right,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Label(u32);
-
-impl Label {
-    fn at(index: usize) -> Self {
-        Self(u32::try_from(index).expect("an x86 function within 4G labels"))
-    }
-
-    pub(super) fn index(self) -> usize {
-        usize::try_from(self.0).expect("a label index that fits")
-    }
-}
+index!(pub(crate) Label);
 
 /// A function-local eight-byte frame slot. Its byte offset is assigned only
 /// when the instruction is encoded.

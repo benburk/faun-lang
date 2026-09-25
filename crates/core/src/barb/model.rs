@@ -10,7 +10,7 @@ use crate::index::index;
 // to render it. The table belongs to the program, like every other pool
 // here, so a program is a self-contained value and two of them cannot
 // disagree about what a symbol means.
-index!(ExprId, FnId, TypeId, CtorId, ConstId, Local, Symbol);
+index!(pub ExprId, FnId, TypeId, CtorId, ConstId, Local, Symbol);
 
 /// An argument: a local, and nothing else. That is what A-normal form buys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

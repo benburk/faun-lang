@@ -7,17 +7,24 @@
 //! copying an index copies four bytes.
 //!
 //! Individually addressed entities use a typed, append-only `Pool`: insertion
-//! returns the entity's ID and indexing requires that kind of ID. Variable-length
-//! runs still use ordinary vectors and `Range`; temporary vectors and coupled
-//! instruction/result arrays retain their own construction rules.
+//! returns the entity's ID and indexing requires that kind of ID. A `BitSet`
+//! holds a set of one kind of ID. Variable-length runs still use ordinary
+//! vectors and `Range`; temporary vectors and coupled instruction/result
+//! arrays retain their own construction rules.
+//!
+//! Targets declare their own IDs with [`index!`], so every tier below the IR
+//! indexes the same way.
 
-macro_rules! index {
-
-    ($($name:ident),* $(,)?) => {$(
+/// Declare dense index types: `index!(pub(crate) BlockId, InstId)`. Each
+/// type, its `u32` field, and its `at` and `index` take the given visibility.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __index {
+    ($vis:vis $($name:ident),+ $(,)?) => {$(
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct $name(pub u32);
+        $vis struct $name($vis u32);
 
-        impl crate::index::Id for $name {
+        impl $crate::index::Id for $name {
             fn at(index: usize) -> Self { Self::at(index) }
             fn index(self) -> usize { self.index() }
         }
@@ -27,33 +34,34 @@ macro_rules! index {
             ///
             /// If the program outgrew the four billion of these it may have.
             #[must_use]
-            pub fn at(index: usize) -> Self {
+            $vis fn at(index: usize) -> Self {
                 Self(u32::try_from(index).expect("a program within 4G of these"))
             }
 
             #[must_use]
-            pub fn index(self) -> usize {
+            $vis fn index(self) -> usize {
                 usize::try_from(self.0).expect("an index that fits a pointer")
             }
         }
-    )*};
+    )+};
 }
 
-pub(crate) use index;
+pub use crate::__index as index;
 
 /// Dense indices used by the compiler's entity pools. Conversion must round
 /// trip and reject unrepresentable positions rather than truncate them.
-pub(crate) trait Id: Copy {
+pub trait Id: Copy {
     fn at(index: usize) -> Self;
     fn index(self) -> usize;
 }
 
-/// Append-only slots addressed by one kind of ID. Replacing an entry preserves
-/// its slot; middle insertion, removal and reordering are deliberately absent.
+/// Append-only slots addressed by one kind of ID.
+///
+/// Replacing an entry preserves its slot; middle insertion, removal and reordering are deliberately absent.
 /// IDs distinguish entity kinds, not programs or generations: rebuilding a
 /// pool still requires remapping references into it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Pool<I, T> {
+pub struct Pool<I, T> {
     entries: Vec<T>,
     id: std::marker::PhantomData<fn() -> I>,
 }
@@ -70,36 +78,47 @@ impl<I, T> Default for Pool<I, T> {
 impl<I: Id, T> Pool<I, T> {
     /// Check representability before changing storage, then return the slot
     /// actually inserted. This does not make surrounding construction atomic.
-    pub(crate) fn push(&mut self, value: T) -> I {
+    pub fn push(&mut self, value: T) -> I {
         let id = I::at(self.entries.len());
         self.entries.push(value);
         id
     }
 
-    pub(crate) const fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.entries.len()
     }
 
-    pub(crate) fn get(&self, id: I) -> Option<&T> {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[must_use]
+    pub fn get(&self, id: I) -> Option<&T> {
         self.entries.get(id.index())
     }
 
-    pub(crate) fn as_slice(&self) -> &[T] {
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
         &self.entries
     }
 
-    pub(crate) fn iter(&self) -> std::slice::Iter<'_, T> {
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.entries.iter()
     }
 
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
+        self.entries.iter_mut()
+    }
+
     /// The ID of the first entry matching a predicate.
-    pub(crate) fn position(&self, predicate: impl FnMut(&T) -> bool) -> Option<I> {
+    pub fn position(&self, predicate: impl FnMut(&T) -> bool) -> Option<I> {
         self.entries.iter().position(predicate).map(I::at)
     }
 
-    pub(crate) fn iter_enumerated(
-        &self,
-    ) -> impl DoubleEndedIterator<Item = (I, &T)> + ExactSizeIterator {
+    #[must_use]
+    pub fn iter_enumerated(&self) -> impl DoubleEndedIterator<Item = (I, &T)> + ExactSizeIterator {
         self.entries
             .iter()
             .enumerate()
@@ -108,7 +127,7 @@ impl<I: Id, T> Pool<I, T> {
 
     /// A snapshot of existing IDs. Owns only a length, so the caller can
     /// replace entries while walking it; later appends are not visited.
-    pub(crate) fn ids(&self) -> impl DoubleEndedIterator<Item = I> + ExactSizeIterator + use<I, T> {
+    pub fn ids(&self) -> impl DoubleEndedIterator<Item = I> + ExactSizeIterator + use<I, T> {
         (0..self.entries.len()).map(I::at)
     }
 }
@@ -126,6 +145,14 @@ impl<I: Id, T> std::ops::IndexMut<I> for Pool<I, T> {
     }
 }
 
+impl<I, T> IntoIterator for Pool<I, T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.into_iter()
+    }
+}
+
 impl<'a, I, T> IntoIterator for &'a Pool<I, T> {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
@@ -139,6 +166,130 @@ impl<'a, I, T> IntoIterator for &'a mut Pool<I, T> {
     type IntoIter = std::slice::IterMut<'a, T>;
     fn into_iter(self) -> Self::IntoIter {
         self.entries.iter_mut()
+    }
+}
+
+/// A dense set of one kind of ID, one bit each.
+///
+/// The set holds IDs below a bound fixed at construction, and never grows.
+pub struct BitSet<I> {
+    words: Vec<u64>,
+    id: std::marker::PhantomData<fn() -> I>,
+}
+
+impl<I> Clone for BitSet<I> {
+    fn clone(&self) -> Self {
+        Self {
+            words: self.words.clone(),
+            id: std::marker::PhantomData,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.words.clone_from(&source.words);
+    }
+}
+
+impl<I> PartialEq for BitSet<I> {
+    fn eq(&self, other: &Self) -> bool {
+        self.words == other.words
+    }
+}
+
+impl<I> Eq for BitSet<I> {}
+
+impl<I: Id + std::fmt::Debug> std::fmt::Debug for BitSet<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl<I: Id> BitSet<I> {
+    /// The empty set of IDs below `bound`.
+    #[must_use]
+    pub fn new(bound: usize) -> Self {
+        Self {
+            words: vec![0; bound.div_ceil(64)],
+            id: std::marker::PhantomData,
+        }
+    }
+
+    /// Add `id`.
+    ///
+    /// # Panics
+    ///
+    /// If `id` is at or past the bound the set was built for.
+    pub fn insert(&mut self, id: I) {
+        let (word, bit) = Self::locate(id);
+        self.words[word] |= bit;
+    }
+
+    /// Remove `id`.
+    ///
+    /// # Panics
+    ///
+    /// If `id` is at or past the bound the set was built for.
+    pub fn remove(&mut self, id: I) {
+        let (word, bit) = Self::locate(id);
+        self.words[word] &= !bit;
+    }
+
+    /// Whether `id` is a member.
+    ///
+    /// # Panics
+    ///
+    /// If `id` is at or past the bound the set was built for.
+    #[must_use]
+    pub fn contains(&self, id: I) -> bool {
+        let (word, bit) = Self::locate(id);
+        self.words[word] & bit != 0
+    }
+
+    /// Add every member of a set over the same bound.
+    ///
+    /// # Panics
+    ///
+    /// If `other` was built for a different bound.
+    pub fn union_with(&mut self, other: &Self) {
+        assert_eq!(self.words.len(), other.words.len(), "sets over one bound");
+        for (held, &added) in self.words.iter_mut().zip(&other.words) {
+            *held |= added;
+        }
+    }
+
+    /// Remove every member of a set over the same bound.
+    ///
+    /// # Panics
+    ///
+    /// If `other` was built for a different bound.
+    pub fn subtract(&mut self, other: &Self) {
+        assert_eq!(self.words.len(), other.words.len(), "sets over one bound");
+        for (held, &removed) in self.words.iter_mut().zip(&other.words) {
+            *held &= !removed;
+        }
+    }
+
+    /// Members in ascending order.
+    ///
+    /// # Panics
+    ///
+    /// Never for a set whose bound its IDs can represent.
+    pub fn iter(&self) -> impl Iterator<Item = I> + '_ {
+        self.words.iter().enumerate().flat_map(|(at, &word)| {
+            let mut rest = word;
+            std::iter::from_fn(move || {
+                (rest != 0).then(|| {
+                    let bit = rest.trailing_zeros();
+                    rest &= rest - 1;
+                    I::at(at * 64 + usize::try_from(bit).expect("a bit within a word"))
+                })
+            })
+        })
+    }
+
+    fn locate(id: I) -> (usize, u64) {
+        let index = id.index();
+        (index / 64, 1 << (index % 64))
     }
 }
 
@@ -202,5 +353,32 @@ impl Range {
     pub fn range(self) -> std::ops::Range<usize> {
         let start = usize::try_from(self.start).expect("an index that fits a pointer");
         start..start + self.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BitSet, index};
+
+    index!(Probe);
+
+    #[test]
+    fn a_bit_set_lists_members_in_order_across_word_boundaries() {
+        let mut set = BitSet::new(130);
+        for at in [129, 0, 64, 63, 1] {
+            set.insert(Probe::at(at));
+        }
+        set.remove(Probe::at(1));
+        assert!(set.contains(Probe::at(63)) && !set.contains(Probe::at(1)));
+        let members: Vec<_> = set.iter().map(Probe::index).collect();
+        assert_eq!(members, [0, 63, 64, 129]);
+
+        let mut other = BitSet::new(130);
+        other.insert(Probe::at(64));
+        other.insert(Probe::at(100));
+        set.subtract(&other);
+        set.union_with(&BitSet::new(130));
+        let members: Vec<_> = set.iter().map(Probe::index).collect();
+        assert_eq!(members, [0, 63, 129]);
     }
 }

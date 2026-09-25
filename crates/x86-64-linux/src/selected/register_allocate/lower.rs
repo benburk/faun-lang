@@ -83,7 +83,7 @@ impl<'a> Lowering<'a> {
     fn run(mut self, entry: FunctionId) -> Result<Allocated, String> {
         self.configure_program(entry);
         for (at, layout) in self.liveness.blocks.iter().enumerate() {
-            let block = self.selected.blocks[layout.block.index()];
+            let block = self.selected.blocks[layout.block];
             let next = self.liveness.blocks.get(at + 1).map(|layout| layout.block);
             self.asm.bind(self.block_labels[layout.block.index()]);
             self.known.fill(None);
@@ -126,10 +126,9 @@ impl<'a> Lowering<'a> {
 
     fn configure_program(&mut self, entry: FunctionId) {
         self.argument_count_in_rbx = self.liveness.blocks.iter().any(|layout| {
-            self.selected.blocks[layout.block.index()].owner != entry
+            self.selected.blocks[layout.block].owner != entry
                 && layout.instructions.iter().any(|points| {
-                    self.selected.instructions[points.instruction.index()].opcode
-                        == Opcode::ArgumentCount
+                    self.selected.instructions[points.instruction].opcode == Opcode::ArgumentCount
                 })
         });
         let exits = self
@@ -151,7 +150,7 @@ impl<'a> Lowering<'a> {
     }
 
     fn emit_instruction_setup(&mut self, points: &InstPoints) -> Result<(), String> {
-        let inst = self.selected.instructions[points.instruction.index()];
+        let inst = self.selected.instructions[points.instruction];
         let before = Point::at(
             points
                 .early
@@ -183,7 +182,7 @@ impl<'a> Lowering<'a> {
     }
 
     fn emit_late_transitions(&mut self, points: &InstPoints, before: bool) -> Result<(), String> {
-        let requirements = self.selected.instructions[points.instruction.index()]
+        let requirements = self.selected.instructions[points.instruction]
             .opcode
             .requirements();
         let copies: Vec<_> = self
@@ -228,7 +227,7 @@ impl<'a> Lowering<'a> {
     }
 
     fn owner_at(&self, point: Point) -> FunctionId {
-        self.selected.blocks[self.block_at(point).index()].owner
+        self.selected.blocks[self.block_at(point)].owner
     }
 
     fn is_unique_constant(&self, value: VReg) -> bool {
@@ -253,8 +252,8 @@ impl<'a> Lowering<'a> {
         };
         self.selected.order[block.instructions.range()]
             .iter()
-            .filter(|instruction| {
-                let instruction = self.selected.instructions[instruction.index()];
+            .filter(|&&instruction| {
+                let instruction = self.selected.instructions[instruction];
                 instruction.opcode == Opcode::Constant
                     && instruction.immediate == Immediate::Integer(integer)
             })
@@ -270,7 +269,7 @@ impl<'a> Lowering<'a> {
     }
 
     fn is_branch_only_result(&self, points: &InstPoints, result: VReg) -> bool {
-        let block = self.selected.blocks[self.block_at(points.late).index()];
+        let block = self.selected.blocks[self.block_at(points.late)];
         let is_last = self.selected.order[block.instructions.range()]
             .last()
             .is_some_and(|&instruction| instruction == points.instruction);
@@ -328,7 +327,7 @@ impl<'a> Lowering<'a> {
         reason = "one verified expansion per selected x86 opcode"
     )]
     fn emit_instruction(&mut self, points: &InstPoints) -> Result<(), String> {
-        let inst = self.selected.instructions[points.instruction.index()];
+        let inst = self.selected.instructions[points.instruction];
         let uses = &self.allocation.operand_locations[points.instruction.index()];
         let reg = |at: usize| match uses[at] {
             Location::Register(reg) => Ok(reg),
@@ -688,7 +687,7 @@ impl<'a> Lowering<'a> {
                 }
             }
             Terminator::Return { values } => {
-                let owner = self.selected.blocks[layout.block.index()].owner;
+                let owner = self.selected.blocks[layout.block].owner;
                 if owner == entry {
                     if values.is_empty() {
                         self.materialize(Reg::Rdi, 0);

@@ -12,7 +12,7 @@ use crate::machine::FrameSlot;
 use crate::parallel_copy::{
     self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place, TransitionCost,
 };
-use faun_core::index::Range;
+use faun_core::index::{BitSet, Range};
 use faun_core::ir::FunctionId;
 
 const REGISTERS: [Reg; 8] = [
@@ -85,56 +85,6 @@ pub(super) struct Allocation {
     spill_slots: Vec<u32>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct BitSet {
-    words: Vec<u64>,
-}
-
-impl BitSet {
-    fn new(bits: usize) -> Self {
-        Self {
-            words: vec![0; bits.div_ceil(64)],
-        }
-    }
-
-    fn insert(&mut self, value: VReg) {
-        let index = value.index();
-        self.words[index / 64] |= 1_u64 << (index % 64);
-    }
-
-    fn remove(&mut self, value: VReg) {
-        let index = value.index();
-        self.words[index / 64] &= !(1_u64 << (index % 64));
-    }
-
-    fn contains(&self, value: VReg) -> bool {
-        let index = value.index();
-        self.words[index / 64] & (1_u64 << (index % 64)) != 0
-    }
-
-    fn union_with(&mut self, other: &Self) {
-        for (held, &added) in self.words.iter_mut().zip(&other.words) {
-            *held |= added;
-        }
-    }
-
-    fn subtract(&mut self, other: &Self) {
-        for (held, &removed) in self.words.iter_mut().zip(&other.words) {
-            *held &= !removed;
-        }
-    }
-
-    fn iter(&self) -> impl Iterator<Item = VReg> + '_ {
-        self.words.iter().enumerate().flat_map(|(word_at, &word)| {
-            (0..64)
-                .filter(move |&bit| word & (1_u64 << bit) != 0)
-                .map(move |bit| {
-                    VReg(u32::try_from(word_at * 64 + bit).expect("a liveness bit that fits"))
-                })
-        })
-    }
-}
-
 #[derive(Debug)]
 struct InstPoints {
     instruction: InstId,
@@ -152,7 +102,7 @@ struct BlockPoints {
 
 #[derive(Debug)]
 pub(super) struct Liveness {
-    at: Vec<BitSet>,
+    at: Vec<BitSet<VReg>>,
     blocks: Vec<BlockPoints>,
 }
 
@@ -181,7 +131,7 @@ impl Liveness {
         let values = selected.widths.len();
         let mut cursor = 0;
         let mut blocks = Vec::with_capacity(selected.blocks.len());
-        for (at, block) in selected.blocks.iter().enumerate() {
+        for (id, block) in selected.blocks.iter_enumerated() {
             let entry = Point::at(cursor)?;
             cursor += 1;
             let mut instructions = Vec::with_capacity(block.instructions.len());
@@ -198,7 +148,7 @@ impl Liveness {
             let terminator = Point::at(cursor)?;
             cursor += 1;
             blocks.push(BlockPoints {
-                block: BlockId::at(at),
+                block: id,
                 entry,
                 instructions,
                 terminator,
@@ -211,12 +161,9 @@ impl Liveness {
         loop {
             let previous_in = live_in.clone();
             let previous_out = live_out.clone();
-            for at in (0..selected.blocks.len()).rev() {
+            for (at, block) in selected.blocks.iter().enumerate().rev() {
                 let mut outgoing = BitSet::new(values);
-                for successor in successors(selected.blocks[at].terminator)
-                    .into_iter()
-                    .flatten()
-                {
+                for successor in successors(block.terminator).into_iter().flatten() {
                     outgoing.union_with(&previous_in[successor.index()]);
                 }
                 let mut incoming = outgoing.clone();
@@ -232,12 +179,12 @@ impl Liveness {
 
         let mut at = vec![BitSet::new(values); cursor];
         for layout in &blocks {
-            let block = selected.blocks[layout.block.index()];
+            let block = selected.blocks[layout.block];
             let mut live = live_out[layout.block.index()].clone();
             add_terminator_uses(selected, block.terminator, &mut live);
-            at[layout.terminator.index()] = live.clone();
+            at[layout.terminator.index()].clone_from(&live);
             for points in layout.instructions.iter().rev() {
-                let inst = selected.instructions[points.instruction.index()];
+                let inst = selected.instructions[points.instruction];
                 let mut late = live.clone();
                 if let Some(result) = inst.result {
                     late.insert(result);
@@ -247,7 +194,7 @@ impl Liveness {
                 for &operand in &selected.operands[inst.operands.range()] {
                     live.insert(operand);
                 }
-                at[points.early.index()] = live.clone();
+                at[points.early.index()].clone_from(&live);
             }
             let mut entry = live;
             for &param in &selected.block_params[block.params.range()] {
@@ -260,7 +207,10 @@ impl Liveness {
     }
 }
 
-fn block_uses_and_defs(selected: &Selected, values: usize) -> (Vec<BitSet>, Vec<BitSet>) {
+fn block_uses_and_defs(
+    selected: &Selected,
+    values: usize,
+) -> (Vec<BitSet<VReg>>, Vec<BitSet<VReg>>) {
     let mut uses = vec![BitSet::new(values); selected.blocks.len()];
     let mut defs = uses.clone();
     for (at, block) in selected.blocks.iter().enumerate() {
@@ -268,7 +218,7 @@ fn block_uses_and_defs(selected: &Selected, values: usize) -> (Vec<BitSet>, Vec<
             defs[at].insert(param);
         }
         for &instruction in &selected.order[block.instructions.range()] {
-            let inst = selected.instructions[instruction.index()];
+            let inst = selected.instructions[instruction];
             for &operand in &selected.operands[inst.operands.range()] {
                 if !defs[at].contains(operand) {
                     uses[at].insert(operand);
@@ -286,8 +236,8 @@ fn block_uses_and_defs(selected: &Selected, values: usize) -> (Vec<BitSet>, Vec<
 fn add_terminator_uses_if_undefined(
     selected: &Selected,
     terminator: Terminator,
-    defs: &BitSet,
-    uses: &mut BitSet,
+    defs: &BitSet<VReg>,
+    uses: &mut BitSet<VReg>,
 ) {
     visit_terminator_values(selected, terminator, |value| {
         if !defs.contains(value) {
@@ -296,7 +246,7 @@ fn add_terminator_uses_if_undefined(
     });
 }
 
-fn add_terminator_uses(selected: &Selected, terminator: Terminator, live: &mut BitSet) {
+fn add_terminator_uses(selected: &Selected, terminator: Terminator, live: &mut BitSet<VReg>) {
     visit_terminator_values(selected, terminator, |value| live.insert(value));
 }
 
@@ -413,7 +363,7 @@ impl<'a> Allocator<'a> {
     }
 
     fn allocate_entry(&mut self, layout: &BlockPoints) -> Result<(), String> {
-        let block = self.selected.blocks[layout.block.index()];
+        let block = self.selected.blocks[layout.block];
         self.expire_to(layout.entry);
         let params = &self.selected.block_params[block.params.range()];
         let specs = &self.selected.block_param_specs[block.params.range()];
@@ -440,7 +390,7 @@ impl<'a> Allocator<'a> {
         reason = "early uses, clobbers, and late definitions are allocated as one instruction"
     )]
     fn allocate_instruction(&mut self, points: &InstPoints) -> Result<(), String> {
-        let inst = self.selected.instructions[points.instruction.index()];
+        let inst = self.selected.instructions[points.instruction];
         self.expire_to(points.early);
         self.fill_live(points.early, &[], inst.opcode.requirements().scratch)?;
         let before = self.locations.clone();
@@ -582,7 +532,7 @@ impl<'a> Allocator<'a> {
     }
 
     fn allocate_terminator(&mut self, layout: &BlockPoints) -> Result<(), String> {
-        let block = self.selected.blocks[layout.block.index()];
+        let block = self.selected.blocks[layout.block];
         self.expire_to(layout.terminator);
         self.fill_live(layout.terminator, &[], RegSet(0))?;
         let mut protected = Vec::new();
@@ -624,11 +574,7 @@ impl<'a> Allocator<'a> {
 
     fn expire_to(&mut self, point: Point) {
         for (at, location) in self.locations.iter_mut().enumerate() {
-            if location.is_some()
-                && !self.liveness.at[point.index()].contains(VReg(
-                    u32::try_from(at).expect("selected value count was checked"),
-                ))
-            {
+            if location.is_some() && !self.liveness.at[point.index()].contains(VReg::at(at)) {
                 *location = None;
             }
         }
@@ -733,9 +679,7 @@ impl<'a> Allocator<'a> {
             .iter()
             .enumerate()
             .find_map(|(at, &location)| {
-                (location == Some(Location::Register(reg))).then_some(VReg(
-                    u32::try_from(at).expect("selected value count was checked"),
-                ))
+                (location == Some(Location::Register(reg))).then_some(VReg::at(at))
             })
     }
 
@@ -799,10 +743,10 @@ impl<'a> Allocator<'a> {
     fn plan_edges(&mut self) -> Result<(), String> {
         let temporary = Place::Frame(FrameSlot::at(0));
         for layout in &self.liveness.blocks {
-            let terminator = self.selected.blocks[layout.block.index()].terminator;
+            let terminator = self.selected.blocks[layout.block].terminator;
             for (target, args) in edges(terminator) {
                 let target_layout = &self.liveness.blocks[target.index()];
-                let params = self.selected.blocks[target.index()].params;
+                let params = self.selected.blocks[target].params;
                 let parameters = &self.selected.block_params[params.range()];
                 let mut copies: Vec<_> = self.selected.operands[args.range()]
                     .iter()
@@ -888,7 +832,7 @@ impl<'a> Allocator<'a> {
             }
         }
         for layout in &self.liveness.blocks {
-            let block = self.selected.blocks[layout.block.index()];
+            let block = self.selected.blocks[layout.block];
             for (&param, &spec) in self.selected.block_params[block.params.range()]
                 .iter()
                 .zip(&self.selected.block_param_specs[block.params.range()])
@@ -906,7 +850,7 @@ impl<'a> Allocator<'a> {
                 }
             }
             for points in &layout.instructions {
-                let inst = self.selected.instructions[points.instruction.index()];
+                let inst = self.selected.instructions[points.instruction];
                 let operands = &self.selected.operands[inst.operands.range()];
                 let def_offset = usize::from(inst.result.is_some());
                 let allocated = self.operand_locations[points.instruction.index()]
@@ -1044,7 +988,7 @@ fn function_spill_slots(
     let uses_frame = |owner: FunctionId| {
         let owns_point = |point: Point| {
             liveness.blocks.iter().any(|layout| {
-                selected.blocks[layout.block.index()].owner == owner
+                selected.blocks[layout.block].owner == owner
                     && layout.entry.index() <= point.index()
                     && point.index() <= layout.terminator.index()
             })
@@ -1070,7 +1014,7 @@ fn function_spill_slots(
         });
         transition_moves_use_frame
             || liveness.blocks.iter().any(|layout| {
-                selected.blocks[layout.block.index()].owner == owner
+                selected.blocks[layout.block].owner == owner
                     && layout.instructions.iter().any(|points| {
                         operand_moves[points.instruction.index()]
                             .iter()
@@ -1078,8 +1022,7 @@ fn function_spill_slots(
                     })
             })
             || edge_moves.iter().any(|edge| {
-                selected.blocks[edge.from.index()].owner == owner
-                    && edge.moves.iter().any(move_uses_frame)
+                selected.blocks[edge.from].owner == owner && edge.moves.iter().any(move_uses_frame)
             })
     };
     for function in &selected.functions {
@@ -1275,7 +1218,7 @@ impl Allocation {
                         layout.entry.index() <= segment.start.index()
                             && segment.start.index() <= layout.terminator.index()
                     })
-                    .map(|layout| selected.blocks[layout.block.index()].owner)
+                    .map(|layout| selected.blocks[layout.block].owner)
                     .ok_or_else(|| "x86 spill segment has no owning function".to_owned())?;
                 if self
                     .spill_slots
