@@ -6,13 +6,15 @@
 //! emission, and how its image is written and rendered. Representation legalization is shared machine-IR code;
 //! instruction selection and file formats remain backend responsibilities.
 //!
-//! - Targets share [`bytes`] and the checked preparation path.
+//! - Targets share [`bytes`], [`code`] for selected instructions and their
+//!   labels, and the checked preparation path.
 //! - Duplication beats an abstraction fitting neither. Their parallel moves
 //!   have no common shape: wasm pushes every source before setting any
 //!   destination and lets its operand stack swap, where x86-64 routes
 //!   through scratch.
 
 pub mod bytes;
+pub mod code;
 
 use std::fmt;
 use std::io;

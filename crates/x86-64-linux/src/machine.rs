@@ -4,8 +4,8 @@
 //! physical registers, while labels, frame slots, and data references remain
 //! symbolic until encoding.
 
-use faun_core::index::index;
 use faun_core::ir::DataId;
+use faun_core::targets::code::Code;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -97,7 +97,7 @@ pub(crate) enum ShiftDirection {
     Right,
 }
 
-index!(pub(crate) Label);
+pub(crate) use faun_core::targets::code::Label;
 
 /// A function-local eight-byte frame slot. Its byte offset is assigned only
 /// when the instruction is encoded.
@@ -228,17 +228,19 @@ pub(crate) enum Inst {
 
 #[derive(Debug)]
 pub(crate) struct Allocated {
-    instructions: Vec<Inst>,
-    labels: Vec<usize>,
+    /// Every label bound, which finishing the builder checked.
+    code: Code<Inst>,
 }
 
 impl Allocated {
     pub(super) fn instructions(&self) -> &[Inst] {
-        &self.instructions
+        self.code.insts()
     }
 
     pub(super) fn label_position(&self, label: Label) -> usize {
-        self.labels[label.index()]
+        self.code
+            .position(label)
+            .expect("finishing checked every label is bound")
     }
 
     #[expect(
@@ -246,10 +248,10 @@ impl Allocated {
         reason = "one local validity check per allocated instruction family"
     )]
     fn verify(&self) -> Result<(), String> {
-        for (at, inst) in self.instructions.iter().enumerate() {
+        for (at, inst) in self.instructions().iter().enumerate() {
             match *inst {
                 Inst::Call { target } | Inst::Jump { target, .. }
-                    if target.index() >= self.labels.len() =>
+                    if target.index() >= self.code.labels().len() =>
                 {
                     return Err(format!("x86 instruction {at} refers to an unknown label"));
                 }
@@ -294,52 +296,32 @@ impl Allocated {
 
 #[derive(Debug, Default)]
 pub(crate) struct AllocatedBuilder {
-    instructions: Vec<Inst>,
-    labels: Vec<Option<usize>>,
+    code: Code<Inst>,
 }
 
 impl AllocatedBuilder {
     pub(crate) fn label(&mut self) -> Label {
-        let label = Label::at(self.labels.len());
-        self.labels.push(None);
-        label
+        self.code.label()
     }
 
+    /// # Panics
+    ///
+    /// If the label is already bound, or was made by another builder.
     pub(crate) fn bind(&mut self, label: Label) {
-        let position = self
-            .labels
-            .get_mut(label.index())
-            .expect("a label made by this x86 builder");
-        assert!(position.is_none(), "an x86 label may only be bound once");
-        *position = Some(self.instructions.len());
+        self.code.bind(label);
     }
 
     pub(crate) fn finish(self) -> Result<Allocated, String> {
-        let instruction_count = self.instructions.len();
-        let labels = self
-            .labels
-            .into_iter()
-            .enumerate()
-            .map(|(at, position)| {
-                let position = position.ok_or_else(|| format!("x86 label l{at} is not bound"))?;
-                if position > instruction_count {
-                    return Err(format!(
-                        "x86 label l{at} is outside the instruction sequence"
-                    ));
-                }
-                Ok(position)
-            })
-            .collect::<Result<_, _>>()?;
-        let program = Allocated {
-            instructions: self.instructions,
-            labels,
-        };
+        if let Some((label, _)) = self.code.labels().find(|(_, position)| position.is_none()) {
+            return Err(format!("x86 label l{} is not bound", label.index()));
+        }
+        let program = Allocated { code: self.code };
         program.verify()?;
         Ok(program)
     }
 
     fn push(&mut self, inst: Inst) {
-        self.instructions.push(inst);
+        self.code.push(inst);
     }
 
     pub(crate) fn xor_self(&mut self, dst: Reg) {
@@ -389,14 +371,16 @@ impl AllocatedBuilder {
     }
 
     pub(crate) fn narrow(&mut self, dst: Reg, bits: u16) {
+        let len = self.code.insts().len();
         if matches!(bits, 8 | 16)
+            && !self.code.labelled_from(len)
             && let Some(Inst::LoadStack {
                 dst: loaded,
                 displacement,
-            }) = self.instructions.last().copied()
+            }) = self.code.insts().last().copied()
             && loaded == dst
         {
-            *self.instructions.last_mut().expect("the matched load") = Inst::LoadStackNarrow {
+            *self.code.insts_mut().last_mut().expect("the matched load") = Inst::LoadStackNarrow {
                 dst,
                 displacement,
                 bits,
@@ -428,8 +412,8 @@ impl AllocatedBuilder {
     }
 
     pub(crate) fn omit_redundant_exit_narrow(&mut self) {
-        let len = self.instructions.len();
-        match self.instructions.get(len.saturating_sub(2)..) {
+        let len = self.code.insts().len();
+        match self.code.insts().get(len.saturating_sub(2)..) {
             Some(
                 [
                     Inst::Narrow {
@@ -443,21 +427,21 @@ impl AllocatedBuilder {
                     },
                 ],
             ) if narrowed == src && *bits <= 8 => {
-                self.instructions.remove(len - 2);
-                let Some(Inst::Move { width, .. }) = self.instructions.last_mut() else {
+                self.code.remove(len - 2);
+                let Some(Inst::Move { width, .. }) = self.code.insts_mut().last_mut() else {
                     unreachable!("the matched exit transfer remains last");
                 };
                 *width = RegisterWidth::Low32;
             }
             _ if matches!(
-                self.instructions.last(),
+                self.code.insts().last(),
                 Some(Inst::Narrow {
                     dst: Reg::Rdi,
                     bits: 0..=8
                 })
             ) =>
             {
-                self.instructions.pop();
+                self.code.remove(len - 1);
             }
             _ => {}
         }
@@ -488,8 +472,11 @@ impl AllocatedBuilder {
     }
 
     pub(crate) fn fold_alu_immediate(&mut self, op: Alu, dst: Reg, src: Reg, bits: u16) -> bool {
-        let len = self.instructions.len();
-        let immediate = match self.instructions.get(len.wrapping_sub(2)..) {
+        let len = self.code.insts().len();
+        if self.code.labelled_from(len.saturating_sub(1)) {
+            return false;
+        }
+        let immediate = match self.code.insts().get(len.wrapping_sub(2)..) {
             Some(
                 [
                     Inst::PushImmediate(immediate),
@@ -498,7 +485,8 @@ impl AllocatedBuilder {
             ) if *materialized == src => i32::from(*immediate),
             _ => return false,
         };
-        self.instructions.truncate(len - 2);
+        self.code.remove(len - 1);
+        self.code.remove(len - 2);
         self.push(Inst::AluImmediate {
             op,
             dst,

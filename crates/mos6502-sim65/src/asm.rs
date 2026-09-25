@@ -13,8 +13,8 @@
 //! are, and the addresses cannot be known until it is. So the widths settle
 //! first, by measuring the steps rather than by writing any of them.
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct Label(usize);
+use faun_core::targets::code::Code;
+pub(crate) use faun_core::targets::code::Label;
 
 /// A condition, as the branch that takes it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -347,8 +347,8 @@ impl Inst {
     }
 
     /// What it costs, given whether a branch was found not to reach.
-    const fn len(&self, far: bool) -> usize {
-        match *self {
+    const fn len(self, far: bool) -> usize {
+        match self {
             Self::Op { operand, .. } => 1 + operand.len(),
             Self::Branch { .. } if far => 5,
             Self::Absolute { .. } => 3,
@@ -417,10 +417,9 @@ const fn opcode(mnemonic: Mnemonic, operand: Operand) -> u8 {
 
 #[derive(Default)]
 pub(crate) struct Assembler {
-    /// The instructions, in the order they were asked for.
-    insts: Vec<Inst>,
-    /// Which instruction each label stands before, once it has been bound.
-    labels: Vec<Option<usize>>,
+    /// The instructions, in the order they were asked for, and which one
+    /// each label stands before once it has been bound.
+    code: Code<Inst>,
     origin: u16,
     /// What is known about the accumulator and status flags.
     ///
@@ -451,7 +450,7 @@ impl Assembler {
     /// Read off what was written rather than remembered while writing it,
     /// so that nothing has to say it twice.
     pub(crate) fn pushes(&self) -> bool {
-        self.insts.iter().any(|inst| match *inst {
+        self.code.insts().iter().any(|inst| match *inst {
             Inst::Op { mnemonic, .. } | Inst::Absolute { mnemonic, .. } => mnemonic.pushes(),
             Inst::Branch { .. } | Inst::Half { .. } | Inst::Word(_) => false,
         })
@@ -471,10 +470,9 @@ impl Assembler {
     }
 
     pub(crate) fn label(&mut self) -> Label {
-        self.labels.push(None);
         self.arriving.push(None);
         self.assumed.push(None);
-        Label(self.labels.len() - 1)
+        self.code.label()
     }
 
     /// Say that a label stands here, which is before whatever comes next.
@@ -485,7 +483,7 @@ impl Assembler {
     /// for ones that agree with what it assumed; a loop's head, which its
     /// own body jumps back to, is bound with [`Self::bind_reentered`].
     pub(crate) fn bind(&mut self, label: Label) {
-        let arriving = self.arriving[label.0].take();
+        let arriving = self.arriving[label.index()].take();
         self.state = match (arriving, self.unreached) {
             (Some(arriving), false) => arriving.join(self.state),
             (Some(arriving), true) => arriving,
@@ -499,15 +497,15 @@ impl Assembler {
     /// head, or from where nothing here sees, such as a function's start.
     /// Nothing is assumed there.
     pub(crate) fn bind_reentered(&mut self, label: Label) {
-        self.arriving[label.0] = None;
+        self.arriving[label.index()] = None;
         self.state = MachineState::UNKNOWN;
         self.place(label);
     }
 
     fn place(&mut self, label: Label) {
-        self.assumed[label.0] = Some(self.state);
+        self.assumed[label.index()] = Some(self.state);
         self.unreached = false;
-        self.labels[label.0] = Some(self.insts.len());
+        self.code.bind(label);
     }
 
     /// Record an edge into `label` carrying `state`.
@@ -516,14 +514,14 @@ impl Assembler {
     /// If the label is already bound and assumed something this edge does
     /// not bring: the code after it was chosen on a fact that is not so.
     fn arrive(&mut self, label: Label, state: MachineState) {
-        if let Some(assumed) = self.assumed[label.0] {
+        if let Some(assumed) = self.assumed[label.index()] {
             assert!(
                 assumed.join(state) == assumed,
                 "an edge into a bound label contradicts what it assumed"
             );
             return;
         }
-        let arriving = &mut self.arriving[label.0];
+        let arriving = &mut self.arriving[label.index()];
         *arriving = Some(arriving.map_or(state, |known| known.join(state)));
     }
 
@@ -846,7 +844,7 @@ impl Assembler {
         self.drop_repeated_jumps();
         let (far, at) = self.settled();
         let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
-        for (id, inst) in self.insts.iter().enumerate() {
+        for (id, inst) in self.code.insts().iter().enumerate() {
             self.write(*inst, id, &far, &at, &mut bytes);
         }
         bytes
@@ -908,7 +906,8 @@ impl Assembler {
     fn drop_unread_stores(&mut self) {
         let read = self.bytes_read();
         let kept: Vec<bool> = self
-            .insts
+            .code
+            .insts()
             .iter()
             .map(|inst| match *inst {
                 Inst::Op {
@@ -918,31 +917,32 @@ impl Assembler {
                 _ => true,
             })
             .collect();
-        if kept.iter().all(|held| *held) {
-            return;
-        }
-        self.keeping(&kept);
+        self.code.keep(&kept);
     }
 
     /// Send a `jmp` that lands on another `jmp` straight to where that one
     /// goes. The bytes are the same and the second jump's cycles are saved;
     /// a label left with nothing naming it costs nothing.
     fn thread_jumps(&mut self) {
-        for at in 0..self.insts.len() {
+        for at in 0..self.code.insts().len() {
             // Each step moves to a different jump, so a ring of them is the
             // only way to go on longer than there are instructions.
-            for _ in 0..self.insts.len() {
+            for _ in 0..self.code.insts().len() {
                 let Inst::Absolute {
                     mnemonic: Mnemonic::Jmp,
                     to,
-                } = self.insts[at]
+                } = self.code.insts()[at]
                 else {
                     break;
                 };
-                let landing = self.labels[to.0].and_then(|id| self.insts.get(id)).copied();
+                let landing = self
+                    .code
+                    .position(to)
+                    .and_then(|id| self.code.insts().get(id))
+                    .copied();
                 match landing {
-                    Some(next) if next.is_jump() && next != self.insts[at] => {
-                        self.insts[at] = next;
+                    Some(next) if next.is_jump() && next != self.code.insts()[at] => {
+                        self.code.insts_mut()[at] = next;
                     }
                     _ => break,
                 }
@@ -955,18 +955,13 @@ impl Assembler {
     /// A terminal branch arm and the continuation beside it can end at the
     /// same hook or label. Keeping the later jump gives both entries the same
     /// tail: execution that reached the first now falls into the second, and
-    /// labels before either instruction move with [`Self::keeping`].
+    /// labels before either instruction move with [`Code::keep`].
     fn drop_repeated_jumps(&mut self) {
-        let kept: Vec<_> = (0..self.insts.len())
-            .map(|at| {
-                at + 1 == self.insts.len()
-                    || !(self.insts[at].is_jump() && self.insts[at] == self.insts[at + 1])
-            })
+        let insts = self.code.insts();
+        let kept: Vec<_> = (0..insts.len())
+            .map(|at| at + 1 == insts.len() || !(insts[at].is_jump() && insts[at] == insts[at + 1]))
             .collect();
-        if kept.iter().all(|held| *held) {
-            return;
-        }
-        self.keeping(&kept);
+        self.code.keep(&kept);
     }
 
     /// Which zero-page bytes anything reads.
@@ -975,7 +970,7 @@ impl Assembler {
         for &at in &self.outside {
             read[usize::from(at)] = true;
         }
-        for inst in &self.insts {
+        for inst in self.code.insts() {
             let Inst::Op { mnemonic, operand } = *inst else {
                 continue;
             };
@@ -997,30 +992,6 @@ impl Assembler {
         read
     }
 
-    /// Keep the instructions said to be kept, and move every label that
-    /// stood before one that is not.
-    ///
-    /// A label stands before whatever comes next, so one standing before an
-    /// instruction that goes stands before whatever that instruction stood
-    /// before.
-    fn keeping(&mut self, kept: &[bool]) {
-        let mut moved = Vec::with_capacity(kept.len() + 1);
-        let mut at = 0;
-        for held in kept {
-            moved.push(at);
-            at += usize::from(*held);
-        }
-        moved.push(at);
-        for label in self.labels.iter_mut().flatten() {
-            *label = moved[*label];
-        }
-        let mut insts = std::mem::take(&mut self.insts).into_iter();
-        self.insts = kept
-            .iter()
-            .filter_map(|held| insts.next().filter(|_| *held))
-            .collect();
-    }
-
     /// Which branches do not reach, and where every step lands once they
     /// have the width they need.
     ///
@@ -1028,11 +999,11 @@ impl Assembler {
     /// found not to reach is widened and the measuring done again; a branch
     /// only ever widens, so this settles.
     fn settled(&self) -> (Vec<bool>, Vec<usize>) {
-        let mut far = vec![false; self.insts.len()];
+        let mut far = vec![false; self.code.insts().len()];
         loop {
             let at = self.positions(&far);
             let mut again = false;
-            for (id, inst) in self.insts.iter().enumerate() {
+            for (id, inst) in self.code.insts().iter().enumerate() {
                 let Inst::Branch { to, .. } = *inst else {
                     continue;
                 };
@@ -1052,9 +1023,9 @@ impl Assembler {
 
     /// Where each step would land in the image, at the widths it was given.
     fn positions(&self, far: &[bool]) -> Vec<usize> {
-        let mut at = Vec::with_capacity(self.insts.len() + 1);
+        let mut at = Vec::with_capacity(self.code.insts().len() + 1);
         let mut held = 0;
-        for (id, inst) in self.insts.iter().enumerate() {
+        for (id, inst) in self.code.insts().iter().enumerate() {
             at.push(held);
             held += inst.len(far[id]);
         }
@@ -1068,7 +1039,7 @@ impl Assembler {
     ///
     /// If it was never bound, or the image outgrew the machine.
     fn address(&self, at: &[usize], label: Label) -> u16 {
-        let held = self.labels[label.0].expect("every label is bound");
+        let held = self.code.position(label).expect("every label is bound");
         self.origin + u16::try_from(at[held]).expect("an image within 64 KiB")
     }
 
@@ -1078,7 +1049,7 @@ impl Assembler {
     ///
     /// If the label it aims at was never bound.
     fn step_to(&self, at: &[usize], from: usize, to: Label, width: usize) -> i32 {
-        let held = self.labels[to.0].expect("every label is bound");
+        let held = self.code.position(to).expect("every label is bound");
         let after = i32::try_from(at[from] + width).expect("an image within 64 KiB");
         i32::try_from(at[held]).expect("an image within 64 KiB") - after
     }
@@ -1101,13 +1072,13 @@ impl Assembler {
             },
             ..self.state
         };
-        self.insts.push(Inst::Half { to: label, half });
+        self.code.push(Inst::Half { to: label, half });
     }
 
     /// A literal word, for data the target lays down itself.
     pub(crate) fn word(&mut self, value: u16) {
         self.state = MachineState::UNKNOWN;
-        self.insts.push(Inst::Word(value));
+        self.code.push(Inst::Word(value));
     }
 
     pub(crate) fn lda_zp(&mut self, at: u8) {
@@ -1309,12 +1280,12 @@ impl Assembler {
             Some(true) => {
                 self.arrive(label, self.state);
                 self.unreached = true;
-                self.insts.push(Inst::Branch { cc, to: label });
+                self.code.push(Inst::Branch { cc, to: label });
             }
             None => {
                 self.arrive(label, self.state.on_branch(cc, true));
                 self.state = self.state.on_branch(cc, false);
-                self.insts.push(Inst::Branch { cc, to: label });
+                self.code.push(Inst::Branch { cc, to: label });
             }
         }
     }
@@ -1322,7 +1293,7 @@ impl Assembler {
     fn op(&mut self, mnemonic: Mnemonic, operand: Operand) {
         self.state = self.after(mnemonic, operand);
         self.unreached |= matches!(mnemonic, Mnemonic::Jmp | Mnemonic::Rts);
-        self.insts.push(Inst::Op { mnemonic, operand });
+        self.code.push(Inst::Op { mnemonic, operand });
     }
 
     /// A `jmp` or `jsr` to a label, which arrives there with what the
@@ -1331,7 +1302,7 @@ impl Assembler {
         self.arrive(to, self.state);
         self.state = MachineState::UNKNOWN;
         self.unreached |= mnemonic == Mnemonic::Jmp;
-        self.insts.push(Inst::Absolute { mnemonic, to });
+        self.code.push(Inst::Absolute { mnemonic, to });
     }
 }
 
