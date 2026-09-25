@@ -17,7 +17,7 @@ use super::ast::{
     Name, Span,
 };
 use super::diagnostic::Diagnostic;
-use super::{SourceId, Sources, Symbol, Symbols, parse_in};
+use super::{ParseError, SourceId, Sources, Symbol, Symbols, parse_in};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleId(u32);
@@ -274,9 +274,13 @@ impl Loader {
             .map_err(|error| Diagnostic::new(format!("cannot read {}: {error}", path.display())))?;
         let source = self.sources.add(path.clone(), text.clone());
         let syntax = parse_in(&text, source).map_err(|error| {
-            let at = Span::new(error.offset, error.end);
             let text = self.sources.get(source).expect("the source just added");
-            Diagnostic::new(error.message).at(text, at)
+            let told = |error: &ParseError| {
+                Diagnostic::new(error.message.clone()).at(text, Span::new(error.offset, error.end))
+            };
+            let mut diagnostic = told(&error);
+            diagnostic.also = error.also.iter().map(told).collect();
+            diagnostic
         })?;
         let root = self.root(loading, &syntax, &path, source)?;
         let id =

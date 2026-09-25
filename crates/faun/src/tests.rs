@@ -162,3 +162,20 @@ fn what_is_not_a_pattern_or_only_a_pattern_says_so() {
         assert!(error.message.contains(said), "{source}: {}", error.message);
     }
 }
+
+#[test]
+fn every_line_that_cannot_be_read_is_told_at_once() {
+    let error =
+        parse("f(x) -> x .y\ng(y) -> y\nh(z) -> [z -w]\nk(w) -> w)\nm(v) -> v\n").unwrap_err();
+    let told: Vec<_> = std::iter::once(&error)
+        .chain(&error.also)
+        .map(|error| (error.line, error.message.as_str()))
+        .collect();
+    assert_eq!(told.len(), 3, "{told:?}");
+    assert_eq!(told[0].0, 1);
+    assert!(told[0].1.contains("no space around it"), "{told:?}");
+    assert_eq!(told[1].0, 3);
+    assert!(told[1].1.contains("`(-b)`"), "{told:?}");
+    assert_eq!(told[2].0, 4);
+    assert!(told[2].1.contains("found `)`"), "{told:?}");
+}

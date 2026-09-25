@@ -58,6 +58,9 @@ pub struct Diagnostic {
     pub notes: Vec<String>,
     /// What would fix it.
     pub help: Vec<String>,
+    /// The diagnostics found with this one, told after it: the other lines
+    /// of a file that could not be read.
+    pub also: Vec<Self>,
 }
 
 impl Diagnostic {
@@ -68,6 +71,7 @@ impl Diagnostic {
             location: None,
             notes: Vec::new(),
             help: Vec::new(),
+            also: Vec::new(),
         }
     }
 
@@ -113,6 +117,9 @@ impl fmt::Display for Diagnostic {
         }
         for help in &self.help {
             write!(f, "\n  = help: {help}")?;
+        }
+        for also in &self.also {
+            write!(f, "\n\n{also}")?;
         }
         Ok(())
     }

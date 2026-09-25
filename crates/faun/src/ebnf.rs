@@ -501,7 +501,7 @@ fn sources() -> Vec<(String, String)> {
 fn agree(grammar: &Grammar, label: &str, source: &str) -> bool {
     let tokens = lex::lex(source).expect("a small source");
     let grammar_reads = grammar.reads(&tokens);
-    let parser_reads = super::grammar::source::program(&tokens, source).is_ok();
+    let parser_reads = super::grammar::file(&tokens, source).1.is_empty();
     assert_eq!(
         grammar_reads.is_ok(),
         parser_reads,

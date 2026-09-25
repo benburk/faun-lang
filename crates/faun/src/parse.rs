@@ -1,8 +1,9 @@
 use std::fmt;
 
 use super::ast::Module;
+use super::ast::Span;
 use super::grammar;
-use super::lex::{self, Kind, Token};
+use super::lex::{self, Kind};
 use super::lines;
 use super::literal;
 use super::source::SourceId;
@@ -17,6 +18,9 @@ pub struct ParseError {
     pub line: usize,
     pub column: usize,
     pub message: String,
+    /// The errors after this one in the same source, for a parse that went
+    /// on past it: each line that could not be read is one.
+    pub also: Vec<Self>,
 }
 
 impl fmt::Display for ParseError {
@@ -58,27 +62,26 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
     let validate_literals = tokens
         .iter()
         .any(|token| matches!(token.kind, Kind::Char | Kind::StrText));
-    let lines = grammar::source::program(&tokens, source)
-        .map_err(|error| syntax_error(source, &tokens, &error))?;
-    let items = lines::items(lines, source).map_err(|error| {
-        let offset = usize::try_from(error.span.start).expect("u32 fits usize");
-        let mut located = error_at(source, offset, error.message);
-        located.end = usize::try_from(error.span.end).expect("u32 fits usize");
-        located
-    })?;
+    let (lines, errors) = grammar::file(&tokens, source);
+    let mut errors = errors
+        .into_iter()
+        .map(|error| spanned(source, error.span, error.message));
+    if let Some(mut first) = errors.next() {
+        first.also = errors.collect();
+        return Err(first);
+    }
+    let items =
+        lines::items(lines, source).map_err(|error| spanned(source, error.span, error.message))?;
     let mut module = Module {
         source: SourceId::DETACHED,
         items,
     };
     if let Some(line) = discarded_values(&module, source) {
-        let offset = usize::try_from(line.start).expect("u32 fits usize");
-        let mut error = error_at(
+        return Err(spanned(
             source,
-            offset,
+            line,
             "this value is worked out and then thrown away; remove the line, or bind the value to a name if you need it".to_owned(),
-        );
-        error.end = usize::try_from(line.end).expect("u32 fits usize");
-        return Err(error);
+        ));
     }
     if validate_literals {
         literal::validate(&module, source).map_err(|error| {
@@ -93,7 +96,7 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
 /// The first line of a body that keeps nothing of what it works out and is
 /// no effect: a call of a name ending `!`, directly or as a method, is the
 /// only thing worth asking for what it does.
-fn discarded_values(module: &Module, source: &str) -> Option<crate::ast::Span> {
+fn discarded_values(module: &Module, source: &str) -> Option<Span> {
     use crate::ast::{ExprKind, Item, MethodItem};
     let effect = |expression: &crate::ast::Expr| match &expression.kind {
         ExprKind::Call(head, _) => {
@@ -120,51 +123,15 @@ fn discarded_values(module: &Module, source: &str) -> Option<crate::ast::Span> {
         .map(|binding| binding.value.span)
 }
 
-fn syntax_error(
-    source: &str,
-    tokens: &[Token],
-    error: &peg::error::ParseError<usize>,
-) -> ParseError {
-    let token = tokens
-        .get(error.location)
-        .or_else(|| tokens.last())
-        .copied()
-        .expect("the lexer always writes an end token");
-    let message = match token.kind {
-        Kind::Error if token.start == token.end => "unterminated string literal".to_owned(),
-        Kind::Error => format!("invalid token `{}`", token.text(source)),
-        Kind::Eof => format!("expected {} before the end of the file", error.expected),
-        Kind::Newline => format!("expected {} before the end of the line", error.expected),
-        Kind::Lopsided => {
-            let operator = token.text(source);
-            format!(
-                "`{operator}` has space on one side only: write `a {operator} b`, or `a{operator}b`"
-            )
-        }
-        Kind::Detached => match token.text(source) {
-            joiner @ ("." | "..") => format!("`{joiner}` goes against what it joins: no space around it"),
-            joiner => format!("`{joiner}` goes against what it follows: no space before it"),
-        },
-        Kind::Adjacent => {
-            let before = error
-                .location
-                .checked_sub(1)
-                .and_then(|at| tokens.get(at))
-                .map_or("", |before| before.text(source));
-            format!(
-                "`{before}` and `{}` are two elements: part them with a space",
-                token.text(source)
-            )
-        }
-        Kind::NegatedElement => "this `-` begins an element of its own: write `a - b` to subtract, or `(-b)` for a negated element".to_owned(),
-        _ => format!(
-            "expected {}, found `{}`",
-            error.expected,
-            token.text(source)
-        ),
-    };
-    let offset = usize::try_from(token.start).expect("u32 fits usize");
-    error_at(source, offset, message)
+/// An error about the text `span` covers.
+fn spanned(source: &str, span: Span, message: String) -> ParseError {
+    let mut error = error_at(
+        source,
+        usize::try_from(span.start).expect("u32 fits usize"),
+        message,
+    );
+    error.end = usize::try_from(span.end).expect("u32 fits usize");
+    error
 }
 
 fn error_at(source: &str, offset: usize, message: String) -> ParseError {
@@ -178,5 +145,6 @@ fn error_at(source: &str, offset: usize, message: String) -> ParseError {
         line,
         column,
         message,
+        also: Vec::new(),
     }
 }
