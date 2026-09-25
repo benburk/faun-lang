@@ -195,6 +195,28 @@ const RUNNING: &[(&str, &str, u32)] = &[
            host.exit!(a + b + c)",
         181,
     ),
+    (
+        "a literal on a word or a string is an equality test",
+        "verb : Str -> Nat
+         verb(\"get\") -> 1
+         verb(\"put\") -> 2
+         verb(_) -> 0
+
+         bytes : U8 -> Nat
+         bytes(0) -> 10
+         bytes(255) -> 20
+         bytes(b) if b.to_nat() > 100 -> 30
+         bytes(_) -> 40
+
+         nested : Result(U8 Str) -> Nat
+         nested(Ok(7)) -> 1
+         nested(Err(\"x\")) -> 2
+         nested(_) -> 3
+
+         main! : Host -> []
+         main!(host) -> host.exit!(verb(\"put\") + verb(\"post\") * 10 + bytes(U8.of_nat(255)) + bytes(U8.of_nat(150)) + bytes(U8.of_nat(3)) + nested(Ok(U8.of_nat(7))) + nested(Err(\"x\")) * 10)",
+        113,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -383,6 +405,19 @@ const REFUSED: &[(&str, &str, &str)] = &[
         "a type variable is named only where a signature bounds it",
         "nought(_) -> a.zero()",
         "names a type only in a signature's `where` bounds",
+    ),
+    (
+        "a literal pattern never covers its type",
+        "verb : Str -> Nat
+         verb(\"get\") -> 1",
+        "does not cover every case",
+    ),
+    (
+        "a word's pattern is written below its width",
+        "byte : U8 -> Nat
+         byte(300) -> 1
+         byte(_) -> 0",
+        "`300` is not a `U8`",
     ),
 ];
 

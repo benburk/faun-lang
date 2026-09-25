@@ -93,11 +93,17 @@ pub(crate) enum Pattern {
     Wild,
     Bind(h::LocalId),
     Constructor(Symbol, Vec<Self>),
-    Number { magnitude: BigUint, negative: bool },
+    Number {
+        magnitude: BigUint,
+        negative: bool,
+    },
     Range(BigUint, BigUint),
     List(Vec<Self>, Option<Box<Self>>),
     Record(Vec<(Symbol, Self)>),
     Product(Vec<Self>),
+    /// A string, which only a clause's guard can test for; see
+    /// [`Specializer::tested`].
+    String,
 }
 
 #[derive(Clone, Debug)]
@@ -513,7 +519,12 @@ impl<'a> Specializer<'a> {
             let mut substitution = HashMap::new();
             match_type(&site.ty, &key.ty, &mut substitution)?;
             self.discharge(&site.bounds, &mut substitution)?;
-            specialized.push(self.clause(module, clause, &substitution)?);
+            let (parameters, _) = key
+                .ty
+                .function()
+                .ok_or_else(|| error("a specialized definition is not a function"))?;
+            let parameters = parameters.to_vec();
+            specialized.push(self.clause(module, clause, &substitution, &parameters)?);
         }
         Ok(Function {
             key: key.clone(),
@@ -527,18 +538,27 @@ impl<'a> Specializer<'a> {
         module: ModuleId,
         clause: &h::Clause,
         substitution: &HashMap<TypeVariable, Type>,
+        parameters: &[Type],
     ) -> Result<Clause, SpecializeError> {
+        let mut next = clause.locals;
+        let mut tests = Vec::new();
+        let patterns = clause
+            .patterns
+            .iter()
+            .zip(parameters)
+            .map(|(pattern, ty)| {
+                self.tested((module, clause.span), pattern, ty, (&mut next, &mut tests))
+            })
+            .collect::<Result<_, _>>()?;
+        let guard = clause
+            .guard
+            .as_ref()
+            .map(|expression| self.expr(module, expression, substitution))
+            .transpose()?;
+        let guard = self.joined(module, clause.span, tests, guard)?;
         Ok(Clause {
-            patterns: clause
-                .patterns
-                .iter()
-                .map(|pattern| convert_pattern(pattern, &self.checked.readings))
-                .collect(),
-            guard: clause
-                .guard
-                .as_ref()
-                .map(|expression| self.expr(module, expression, substitution))
-                .transpose()?,
+            patterns,
+            guard,
             body: Body {
                 bindings: clause
                     .body
@@ -558,6 +578,183 @@ impl<'a> Specializer<'a> {
 
     /// An expression at this specialization, widened where checking said a
     /// signature answers it as a wider type and the two differ here.
+    /// A clause pattern at its type, each literal a test rather than a
+    /// shape taken out as a fresh name and tested with its type's `equals`:
+    /// a numeral of a word, and a string. The tests are what the clause's
+    /// guard asks first.
+    fn tested(
+        &mut self,
+        (module, span): (ModuleId, crate::ast::Span),
+        pattern: &h::Pattern,
+        ty: &Type,
+        (next, tests): (&mut u32, &mut Vec<Expr>),
+    ) -> Result<Pattern, SpecializeError> {
+        let readings = &self.checked.readings;
+        let literal = match pattern {
+            h::Pattern::String(bytes) => Some((
+                crate::blessed::string(bytes, self.prelude),
+                self.prelude.str_equals,
+            )),
+            h::Pattern::Number {
+                magnitude,
+                negative,
+            } => match ty {
+                Type::Named(name, _) => self
+                    .prelude
+                    .words
+                    .iter()
+                    .find(|word| word.ty == *name)
+                    .map(|word| {
+                        crate::blessed::numeral(
+                            magnitude.clone(),
+                            *negative,
+                            NumeralType::Word(word),
+                            self.prelude,
+                        )
+                        .map(|literal| (literal, word.equals))
+                        .map_err(|failure| located(module, span, &failure.to_string()))
+                    })
+                    .transpose()?,
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((literal, equals)) = literal {
+            let local = h::LocalId(*next);
+            *next = next.checked_add(1).expect("fewer than 2^32 locals");
+            let value = self.literal(module, span, &literal, ty)?;
+            let held = Expr {
+                module,
+                span,
+                ty: ty.clone(),
+                kind: ExprKind::Local(local),
+            };
+            let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
+            let key = self.method_key(equals, ty, std::slice::from_ref(ty), &bool_ty)?;
+            self.request(key.clone());
+            tests.push(Expr {
+                module,
+                span,
+                ty: bool_ty,
+                kind: ExprKind::DirectCall(key, vec![held, value]),
+            });
+            return Ok(Pattern::Bind(local));
+        }
+        let fields: Option<(Symbol, Vec<(&h::Pattern, Type)>)> = match (pattern, ty) {
+            (h::Pattern::Constructor(constructor, fields), Type::Named(..)) => {
+                let types = self.constructor_fields(*constructor, ty)?;
+                Some((*constructor, fields.iter().zip(types).collect()))
+            }
+            (h::Pattern::Dual(dual, fields), Type::Named(..)) => {
+                let constructor = read(dual, readings);
+                let types = self.constructor_fields(constructor, ty)?;
+                Some((constructor, fields.iter().zip(types).collect()))
+            }
+            (
+                h::Pattern::Tag(label, fields)
+                | h::Pattern::Constructor(label, fields)
+                | h::Pattern::Dual(
+                    h::Dual {
+                        spelling: label, ..
+                    },
+                    fields,
+                ),
+                Type::Variants(tags),
+            ) => {
+                let types = tags
+                    .iter()
+                    .find(|(found, _)| found == label)
+                    .map(|(_, types)| types.clone())
+                    .unwrap_or_default();
+                Some((*label, fields.iter().zip(types).collect()))
+            }
+            _ => None,
+        };
+        if let Some((constructor, fields)) = fields {
+            let fields = fields
+                .into_iter()
+                .map(|(field, ty)| self.tested((module, span), field, &ty, (next, tests)))
+                .collect::<Result<_, _>>()?;
+            return Ok(Pattern::Constructor(constructor, fields));
+        }
+        Ok(match (pattern, ty) {
+            (h::Pattern::List(elements, rest), Type::Named(_, arguments))
+                if arguments.len() == 1 =>
+            {
+                let element = arguments[0].clone();
+                Pattern::List(
+                    elements
+                        .iter()
+                        .map(|item| self.tested((module, span), item, &element, (next, tests)))
+                        .collect::<Result<_, _>>()?,
+                    rest.as_deref()
+                        .map(|rest| self.tested((module, span), rest, ty, (next, tests)))
+                        .transpose()?
+                        .map(Box::new),
+                )
+            }
+            (h::Pattern::Record(fields, _), Type::Record(types)) => Pattern::Record(
+                fields
+                    .iter()
+                    .map(|(name, field)| {
+                        let field_ty = types
+                            .iter()
+                            .find(|(found, _)| found == name)
+                            .map(|(_, ty)| ty.clone())
+                            .ok_or_else(|| {
+                                error("a record pattern names a field its type lacks")
+                            })?;
+                        Ok((
+                            *name,
+                            self.tested((module, span), field, &field_ty, (next, tests))?,
+                        ))
+                    })
+                    .collect::<Result<_, SpecializeError>>()?,
+            ),
+            (h::Pattern::Tuple(members), Type::Tuple(types)) => Pattern::Product(
+                members
+                    .iter()
+                    .zip(types)
+                    .map(|(member, ty)| self.tested((module, span), member, ty, (next, tests)))
+                    .collect::<Result<_, _>>()?,
+            ),
+            _ => convert_pattern(pattern, readings),
+        })
+    }
+
+    /// A clause's literal tests and its written guard as one guard, the
+    /// tests first.
+    fn joined(
+        &mut self,
+        module: ModuleId,
+        span: crate::ast::Span,
+        tests: Vec<Expr>,
+        guard: Option<Expr>,
+    ) -> Result<Option<Expr>, SpecializeError> {
+        let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
+        let and = self.method_key(
+            self.prelude.bool_and,
+            &bool_ty,
+            std::slice::from_ref(&bool_ty),
+            &bool_ty,
+        )?;
+        let mut conditions = tests.into_iter().chain(guard);
+        let Some(first) = conditions.next() else {
+            return Ok(None);
+        };
+        let mut joined = first;
+        for condition in conditions {
+            self.request(and.clone());
+            joined = Expr {
+                module,
+                span,
+                ty: bool_ty.clone(),
+                kind: ExprKind::DirectCall(and.clone(), vec![joined, condition]),
+            };
+        }
+        Ok(Some(joined))
+    }
+
     fn expr(
         &mut self,
         module: ModuleId,
@@ -1198,6 +1395,7 @@ fn convert_pattern(pattern: &h::Pattern, readings: &HashMap<h::SiteId, Reading>)
             Pattern::Constructor(read(dual, readings), fields.iter().map(convert).collect())
         }
         h::Pattern::Wild => Pattern::Wild,
+        h::Pattern::String(_) => Pattern::String,
         h::Pattern::Bind(local) => Pattern::Bind(*local),
         h::Pattern::Constructor(constructor, fields) | h::Pattern::Tag(constructor, fields) => {
             Pattern::Constructor(*constructor, fields.iter().map(convert).collect())

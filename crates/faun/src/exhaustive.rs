@@ -226,7 +226,8 @@ impl<'a> Coverage<'a> {
                 magnitude,
                 negative,
             } => Pattern::Number(magnitude.clone(), *negative),
-            h::Pattern::Range(_, _) => Pattern::Range,
+            // A range, or a string, which is a test, covers nothing.
+            h::Pattern::Range(_, _) | h::Pattern::String(_) => Pattern::Range,
             h::Pattern::List(elements, rest) => {
                 let mut tail = rest.as_ref().map_or_else(
                     || Pattern::Constructor(self.prelude.list_nil, Vec::new()),

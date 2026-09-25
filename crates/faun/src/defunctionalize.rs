@@ -346,6 +346,6 @@ fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
                 pattern_locals(pattern, output);
             }
         }
-        Pattern::Wild | Pattern::Number { .. } | Pattern::Range(_, _) => {}
+        Pattern::Wild | Pattern::Number { .. } | Pattern::Range(_, _) | Pattern::String => {}
     }
 }

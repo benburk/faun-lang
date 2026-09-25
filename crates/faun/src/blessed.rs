@@ -29,6 +29,10 @@ pub struct PreludeIds {
     pub str_constructor: Symbol,
     /// How an interpolated string's pieces are joined.
     pub str_concat: Symbol,
+    /// What a string pattern is tested with.
+    pub str_equals: Symbol,
+    /// How a clause's tests are joined with its guard.
+    pub bool_and: Symbol,
     pub u8_constructor: Symbol,
     pub list_nil: Symbol,
     pub list_cons: Symbol,
@@ -55,6 +59,8 @@ pub struct Word {
     pub ty: Symbol,
     pub name: String,
     pub of_nat: Symbol,
+    /// What a numeral pattern of the word is tested with.
+    pub equals: Symbol,
     pub below: BigUint,
 }
 
@@ -80,6 +86,10 @@ impl PreludeIds {
     /// # Errors
     ///
     /// Reports the first missing standard type, constructor, or method.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one standard identity per line, in the order the struct declares them"
+    )]
     pub fn find_in(program: &LoadedProgram) -> Result<Self, PreludeError> {
         let bool_ = binding(program, "Bool")?;
         let nat = binding(program, "Nat")?;
@@ -107,6 +117,8 @@ impl PreludeIds {
             bool_true: constructor(program, &bool_, "Bool", "True")?,
             str_constructor: constructor(program, &str_, "Str", "Str")?,
             str_concat: method(program, &str_, "Str", "concat")?,
+            str_equals: method(program, &str_, "Str", "equals")?,
+            bool_and: method(program, &bool_, "Bool", "and")?,
             u8_constructor: constructor(program, &u8_, "U8", "U8")?,
             list_nil: constructor(program, &list, "List", "Nil")?,
             list_cons: constructor(program, &list, "List", "Cons")?,
@@ -233,6 +245,7 @@ pub fn string(bytes: &[u8], prelude: &PreludeIds) -> LiteralExpr {
 fn word(program: &LoadedProgram, name: &str) -> Option<Word> {
     let binding = binding(program, name).ok()?;
     let of_nat = method(program, &binding, name, "of_nat").ok()?;
+    let equals = method(program, &binding, name, "equals").ok()?;
     let local = symbol(&program.symbols, name).ok()?;
     let module = program.modules.iter().find(|module| {
         module
@@ -265,6 +278,7 @@ fn word(program: &LoadedProgram, name: &str) -> Option<Word> {
         ty: binding.canonical,
         name: name.to_owned(),
         of_nat,
+        equals,
         below,
     })
 }
@@ -375,7 +389,7 @@ mod tests {
 
     fn loaded() -> LoadedProgram {
         let fixture = Fixture::new();
-        fixture.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
+        fixture.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False and : Bool Bool -> Bool and(True True) -> True and(_ _) -> False)\n");
         fixture.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)]\n");
         fixture.write(
             "int.fn",
@@ -388,7 +402,7 @@ mod tests {
         );
         fixture.write(
             "str.fn",
-            "exports {Str}\nStr : List(U8).(concat : Str Str -> Str concat(left _) -> left)\n",
+            "exports {Str}\nStr : List(U8).(concat : Str Str -> Str concat(left _) -> left equals : Str Str -> Bool equals(_ _) -> False)\n",
         );
         fixture.write(
             "result.fn",

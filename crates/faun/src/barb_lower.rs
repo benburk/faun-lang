@@ -1054,6 +1054,9 @@ impl<'a> Lowerer<'a> {
             Pattern::Range(start, end) => Err(error(format!(
                 "range pattern {start}..{end} is not supported by Barb lowering"
             ))),
+            Pattern::String => Err(error(
+                "a string pattern is a test, which only a clause's guard makes",
+            )),
             Pattern::List(elements, rest) => {
                 let mut tail = rest.map_or(
                     Pattern::Constructor(self.prelude.list_nil, Vec::new()),

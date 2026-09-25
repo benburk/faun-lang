@@ -177,6 +177,14 @@ fn validate_pattern(pattern: &Pattern, source: &str) -> Result<(), LiteralError>
         Pattern::Tuple { members, .. } => members
             .iter()
             .try_for_each(|member| validate_pattern(member, source)),
+        Pattern::String { parts, .. } => parts.iter().try_for_each(|span| {
+            decode_text(span.text(source))
+                .map(|_| ())
+                .map_err(|message| LiteralError {
+                    span: *span,
+                    message,
+                })
+        }),
     }
 }
 

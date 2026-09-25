@@ -331,6 +331,11 @@ pub enum Pattern {
         span: Span,
         members: Vec<Self>,
     },
+    /// `"get"`: a string with no splice, matched by equality.
+    String {
+        span: Span,
+        parts: Vec<Span>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

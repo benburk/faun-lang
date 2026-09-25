@@ -1789,6 +1789,10 @@ impl<'a> Checker<'a> {
     ) -> Result<(), CheckError> {
         match pattern {
             h::Pattern::Wild => Ok(()),
+            h::Pattern::String(_) => {
+                let str_ = Ty::Named(self.prelude.str_, Vec::new());
+                self.unify_at(module, span, expected, &str_)
+            }
             h::Pattern::Bind(local) => {
                 locals[local.index()] = Some(Scheme {
                     variables: Vec::new(),
@@ -4111,7 +4115,10 @@ fn collect_pattern_locals(pattern: &h::Pattern, output: &mut Vec<h::LocalId>) {
                 collect_pattern_locals(member, output);
             }
         }
-        h::Pattern::Wild | h::Pattern::Number { .. } | h::Pattern::Range(..) => {}
+        h::Pattern::Wild
+        | h::Pattern::Number { .. }
+        | h::Pattern::Range(..)
+        | h::Pattern::String(_) => {}
     }
 }
 
@@ -4238,7 +4245,7 @@ mod tests {
         }
 
         fn load(&self, entry_source: &str) -> (PreludeIds, ResolvedProgram) {
-            self.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False)\n");
+            self.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool not(False) -> True not(True) -> False and : Bool Bool -> Bool and(True True) -> True and(_ _) -> False)\n");
             self.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)].(add : Nat Nat -> Nat add(0 y) -> y add(Succ(n) y) -> Succ(n.add(y)))\n");
             self.write(
                 "int.fn",
@@ -4251,7 +4258,7 @@ mod tests {
             );
             self.write(
                 "str.fn",
-                "exports {Str}\nStr : List(U8).(concat : Str Str -> Str concat(left _) -> left)\n",
+                "exports {Str}\nStr : List(U8).(concat : Str Str -> Str concat(left _) -> left equals : Str Str -> Bool equals(_ _) -> False)\n",
             );
             self.write(
                 "result.fn",

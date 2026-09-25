@@ -428,6 +428,13 @@ peg::parser! {
                     rest: rest.map(Box::new),
                 }
             }
+            / open:tok(Kind::StrStart) parts:(text:tok(Kind::StrText) { text.span() })*
+              close:tok(Kind::StrEnd) {
+                Pattern::String {
+                    span: open.span().through(close.span()),
+                    parts,
+                }
+            }
             / open:lparen() members:(pattern() **<2,> sep()) close:rparen() {
                 Pattern::Tuple {
                     span: open.span().through(close.span()),

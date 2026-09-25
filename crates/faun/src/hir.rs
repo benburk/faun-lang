@@ -156,6 +156,8 @@ pub enum Pattern {
     /// Named fields, and whether the pattern ignores the others.
     Record(Vec<(Symbol, Self)>, bool),
     Tuple(Vec<Self>),
+    /// A string's bytes, matched by `Str.equals`: a test, never a shape.
+    String(Vec<u8>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

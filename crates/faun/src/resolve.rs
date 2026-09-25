@@ -704,6 +704,17 @@ impl ClauseResolver<'_> {
                     .map(|rest| self.pattern(rest).map(Box::new))
                     .transpose()?,
             )),
+            s::Pattern::String { parts, .. } => Ok(h::Pattern::String(
+                parts
+                    .iter()
+                    .flat_map(|span| {
+                        literal::decode_text(span.text(self.source))
+                            .expect("literals were validated while parsing")
+                            .into_owned()
+                            .into_bytes()
+                    })
+                    .collect(),
+            )),
             s::Pattern::Tuple { members, .. } => Ok(h::Pattern::Tuple(
                 members
                     .iter()
