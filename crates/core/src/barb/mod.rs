@@ -95,6 +95,7 @@ pub(crate) mod fixture;
 mod fold;
 mod fuse;
 mod inline;
+mod invariant;
 mod laws;
 mod model;
 mod normalize;

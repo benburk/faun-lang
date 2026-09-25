@@ -11,6 +11,24 @@
 //! answer changes nothing, so it is that arm. Neither drops or reorders a
 //! binding: the arm taken is the one that would have run, and the arms that
 //! are not were never going to.
+//!
+//! A match whose answer is taken apart by the match after it, and by nothing
+//! else, is one match: where every arm of the first ends by building a
+//! constructor, the second's arm for that constructor is where it goes on.
+//!
+//! ```text
+//! x = match s                     match s
+//!   A => .. C(a)                    A => .. (arm C of the second, with a)
+//!   B => .. D(b)          =>        B => .. (arm D of the second, with b)
+//! match x
+//!   C(p) => ..
+//!   D(q) => ..
+//! ```
+//!
+//! Nothing is built only to be asked what it is, and a field one
+//! constructor carries and another does not is never held in one place for
+//! both. Only where no arm of the second is taken by two arms of the first,
+//! so nothing is copied twice.
 
 use super::budget::{Budget, FoldLimits};
 use super::evaluate::Evaluator;
@@ -66,6 +84,27 @@ fn rebuilt(program: &Program, arms: &[Arm], level: usize) -> bool {
                     }
                     _ => false,
                 }
+        })
+}
+
+/// Whether anything in `body` reads the local at `level`.
+fn reads(program: &Program, body: Body, level: usize) -> bool {
+    let is = |atom: &Atom| atom.0.index() == level;
+    program
+        .bindings(body.bindings)
+        .iter()
+        .chain([&body.tail])
+        .any(|&expr| match program.expr(expr) {
+            Expr::Atom(atom) => is(&atom),
+            Expr::Static(_) => false,
+            Expr::Con(_, atoms) | Expr::Call(_, atoms) => program.atoms(atoms).iter().any(is),
+            Expr::Match(on, arms) => {
+                is(&on)
+                    || program
+                        .arms(arms)
+                        .iter()
+                        .any(|arm| reads(program, arm.body, level))
+            }
         })
 }
 
@@ -145,6 +184,16 @@ impl Scope {
 }
 impl Rewrite<'_> {
     fn body(&mut self, body: Body, locals: Vec<Atom>, level: usize) -> Body {
+        self.body_with(level, |rewrite, scope| rewrite.into(body, locals, scope))
+    }
+
+    /// A body of its own, whose first binding takes `level`, written by
+    /// `write`.
+    fn body_with(
+        &mut self,
+        level: usize,
+        write: impl FnOnce(&mut Self, &mut Scope) -> Atom,
+    ) -> Body {
         self.written.truncate(level);
         self.written.resize(level, None);
         let mut scope = Scope {
@@ -152,7 +201,7 @@ impl Rewrite<'_> {
             level,
             base: level,
         };
-        let answer = self.into(body, locals, &mut scope);
+        let answer = write(self, &mut scope);
         let tail = if answer.0.index() + 1 == scope.level && !scope.bindings.is_empty() {
             scope.bindings.pop().expect("the last binding")
         } else {
@@ -161,12 +210,108 @@ impl Rewrite<'_> {
         self.program.terms.hold_body(&scope.bindings, tail)
     }
     fn into(&mut self, body: Body, mut locals: Vec<Atom>, scope: &mut Scope) -> Atom {
+        let cased = self.cased(body, locals.len());
+        let last = body.bindings.range().end;
         for at in body.bindings.range() {
+            if let Some((scrutinee, first, second)) = cased
+                && at + 1 == last
+            {
+                return self.merged(scrutinee, first, second, &locals, scope);
+            }
             let binding = self.program.terms.binding(at);
             let value = self.expr(binding, &locals, scope);
             locals.push(value);
         }
         self.expr(body.tail, &locals, scope)
+    }
+
+    /// Where a body ends by taking apart, and only taking apart, a match
+    /// that is its last binding, each of whose arms ends by building a
+    /// constructor, no two of them one taken by the same arm: the first
+    /// match's scrutinee and arms, and the second's arms. `level` is the
+    /// level of the body's first binding.
+    fn cased(&self, body: Body, level: usize) -> Option<(Atom, Range, Range)> {
+        let bindings = self.program.bindings(body.bindings);
+        let &last = bindings.last()?;
+        let answer = level + bindings.len() - 1;
+        let Expr::Match(Atom(on), second) = self.program.expr(body.tail) else {
+            return None;
+        };
+        let Expr::Match(scrutinee, first) = self.program.expr(last) else {
+            return None;
+        };
+        if on.index() != answer {
+            return None;
+        }
+        let mut taken = vec![false; self.program.arms(second).len()];
+        for arm in self.program.arms(first) {
+            let Expr::Con(ctor, _) = self.program.expr(arm.body.tail) else {
+                return None;
+            };
+            let at = self
+                .program
+                .arms(second)
+                .iter()
+                .position(|arm| arm.ctor == ctor)?;
+            if std::mem::replace(&mut taken[at], true) {
+                return None;
+            }
+        }
+        let read = self
+            .program
+            .arms(second)
+            .iter()
+            .any(|arm| reads(self.program, arm.body, answer));
+        (!read).then_some((scrutinee, first, second))
+    }
+
+    /// The first match, each arm going on into the second's arm for the
+    /// constructor it built.
+    fn merged(
+        &mut self,
+        scrutinee: Atom,
+        first: Range,
+        second: Range,
+        locals: &[Atom],
+        scope: &mut Scope,
+    ) -> Atom {
+        let second: Vec<_> = self.program.arms(second).to_vec();
+        let mut found = vec![];
+        for at in first.range() {
+            let arm = self.program.terms.arm(at);
+            let fields = self.program.fields(arm.ctor).len();
+            let mut inner = locals.to_vec();
+            inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
+            self.written.truncate(scope.level);
+            let body = self.body_with(scope.level + fields, |rewrite, arm_scope| {
+                for at in arm.body.bindings.range() {
+                    let binding = rewrite.program.terms.binding(at);
+                    let value = rewrite.expr(binding, &inner, arm_scope);
+                    inner.push(value);
+                }
+                let Expr::Con(ctor, built) = rewrite.program.expr(arm.body.tail) else {
+                    unreachable!("every arm was seen to build a constructor");
+                };
+                let built = rewrite.args(built, &inner);
+                let next = second
+                    .iter()
+                    .find(|arm| arm.ctor == ctor)
+                    .expect("every constructor built has an arm");
+                // Nothing reads the first match's answer, so its level may
+                // stand for anything.
+                let mut going = locals.to_vec();
+                going.push(locals[scrutinee.0.index()]);
+                going.extend(built);
+                rewrite.into(next.body, going, arm_scope)
+            });
+            found.push(Arm {
+                ctor: arm.ctor,
+                body,
+            });
+        }
+        self.written.truncate(scope.level);
+        let arms = self.program.terms.hold_arms(&found);
+        self.push(Expr::Match(locals[scrutinee.0.index()], arms), scope)
     }
     #[expect(
         clippy::too_many_lines,

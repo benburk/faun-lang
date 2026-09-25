@@ -135,7 +135,7 @@ Stdout : [Stdout].(
   # All of `bytes`: how many that is.
   write_all! : Stdout List(U8) -> Result(Nat IoError)
   write_all!(output bytes) ->
-    wrote = write_rest!(output bytes bytes.len())
+    wrote = write_rest!(output bytes bytes.len() bytes.len())
     done = wrote?
     Ok(bytes.len())
 )
@@ -151,7 +151,7 @@ Stderr : [Stderr].(
   # All of `bytes`: how many that is.
   write_all! : Stderr List(U8) -> Result(Nat IoError)
   write_all!(output bytes) ->
-    wrote = write_rest!(output bytes bytes.len())
+    wrote = write_rest!(output bytes bytes.len() bytes.len())
     done = wrote?
     Ok(bytes.len())
 )
@@ -241,18 +241,20 @@ prepended : List(U8) List(U8) -> List(U8)
 prepended([] built) -> built
 prepended([byte *rest] built) -> prepended(rest [byte *built])
 
-# Write what is left until nothing is, one fuel a byte: a stream that keeps
-# taking none runs out of it. Nothing is counted, since a total would be a
-# number the host's answers add up to, wider than any word a target picks:
-# once it ends well, every byte went.
-write_rest! : w List(U8) Nat -> Result({} IoError) where
+# Write the last `left` of `bytes` until none are left, one fuel a byte: a
+# stream that keeps taking none runs out of it. Nothing is counted, since a
+# total would be a number the host's answers add up to, wider than any word
+# a target picks: once it ends well, every byte went. The bytes go round
+# unchanged, so bytes known before the program runs are still known on every
+# round, and what is left only falls, so it is never more than there were.
+write_rest! : w List(U8) Nat Nat -> Result({} IoError) where
   w.write! : w List(U8) -> Result(Nat IoError)
-write_rest!(_ [] _) -> Ok({})
-write_rest!(_ [_ *_] 0) -> Err(Other(5))
-write_rest!(output remaining Succ(fuel)) ->
-  wrote = output.write!(remaining)
+write_rest!(_ _ 0 _) -> Ok({})
+write_rest!(_ _ _ 0) -> Err(Other(5))
+write_rest!(output bytes left Succ(fuel)) ->
+  wrote = output.write!(bytes.drop(bytes.len() - left))
   went = wrote?
-  write_rest!(output remaining.drop(went) fuel)
+  write_rest!(output bytes left - went fuel)
 
 # What an error number of Linux's is.
 io_error : Nat -> IoError

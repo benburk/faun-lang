@@ -210,6 +210,14 @@ fn making_arguments(machine: &mut Program, routines: &Routines) -> FunctionId {
     made
 }
 
+/// A run of bytes known before the program runs, as a local holding one is:
+/// all of it, or all but as many of its first as a local counts.
+#[derive(Clone, Copy)]
+struct Known {
+    value: barb::ConstId,
+    skip: Option<barb::Atom>,
+}
+
 /// One entry per source function; no fabricated IDs for non-functions.
 #[derive(Clone)]
 enum Callee<'a> {
@@ -1943,7 +1951,7 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         body: barb::Body,
         locals: &mut Vec<Option<Held>>,
-        statics: &mut Vec<Option<barb::ConstId>>,
+        statics: &mut Vec<Option<Known>>,
     ) -> Answer<Held> {
         for &binding in self.barb.bindings(body.bindings) {
             let static_value = self.propagate_static(binding, statics);
@@ -1959,20 +1967,35 @@ impl Lowering<'_> {
         self.expr(b, body.tail, locals, statics)
     }
 
-    fn propagate_static(
-        &self,
-        expr: barb::ExprId,
-        statics: &[Option<barb::ConstId>],
-    ) -> Option<barb::ConstId> {
+    fn propagate_static(&self, expr: barb::ExprId, statics: &[Option<Known>]) -> Option<Known> {
         match self.barb.expr(expr) {
             // Only a run of bytes is worth following: it is the one thing
             // something outside reads where it lies rather than as a value.
             barb::Expr::Static(value)
                 if byte_shaped(self.barb, self.barb.constant(value).owner()) =>
             {
-                Some(value)
+                Some(Known { value, skip: None })
             }
             barb::Expr::Atom(atom) => statics[atom.0.index()],
+            // Known bytes less some of their first are still where they lie,
+            // that much further on.
+            barb::Expr::Call(function, args)
+                if matches!(
+                    self.callees[function.index()],
+                    Callee::Sequence(barb::SequenceOperation::Drop)
+                ) =>
+            {
+                let &[bytes, count] = self.barb.atoms(args) else {
+                    unreachable!("a drop is of a sequence and a count");
+                };
+                match statics[bytes.0.index()] {
+                    Some(Known { value, skip: None }) => Some(Known {
+                        value,
+                        skip: Some(count),
+                    }),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -1982,7 +2005,7 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         expr: barb::ExprId,
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
     ) -> Answer<Held> {
         match self.barb.expr(expr) {
             barb::Expr::Atom(atom) => locals[atom.0.index()].clone().into(),
@@ -2255,7 +2278,7 @@ impl Lowering<'_> {
         function: barb::FnId,
         arguments: barb::Range,
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
     ) -> Answer<Held> {
         let (results, answers) = match &self.callees[function.index()] {
             Callee::Instruction(operation) => {
@@ -2277,7 +2300,10 @@ impl Lowering<'_> {
                 return Answer::Value(Held::One(b.float(*float, &args)));
             }
             Callee::Sequence(barb::SequenceOperation::Length) => {
-                return Answer::Value(Held::One(self.length(b, expr, arguments, locals)));
+                return Answer::Value(Held::One(self.length(b, expr, arguments, locals, statics)));
+            }
+            Callee::Sequence(barb::SequenceOperation::Drop) => {
+                return Answer::Value(self.dropped(b, arguments, locals));
             }
             Callee::Sequence(
                 operation @ (barb::SequenceOperation::ReverseOnto
@@ -2350,21 +2376,68 @@ impl Lowering<'_> {
         }
     }
 
+    /// A sequence without as many of its first elements as a count says:
+    /// the same buffer, holding fewer of its last.
+    fn dropped(&self, b: &mut super::Builder, arguments: barb::Range, locals: &Locals) -> Held {
+        let &[sequence, count] = self.barb.atoms(arguments) else {
+            unreachable!("a drop is of a sequence and a count");
+        };
+        let values = locals[sequence.0.index()]
+            .as_ref()
+            .expect("a dropped sequence is carried")
+            .values();
+        let (buffer, len) = (values[0], values[1]);
+        let skipped = Self::skipped(b, Self::scalar(locals, count), len);
+        let rest = b.binary(Binary::Sub, len, skipped);
+        Held::Flat {
+            leaves: sequence_run(),
+            values: [buffer, rest].as_slice().into(),
+        }
+    }
+
+    /// As many of `len` as `count` says, or all of them where it says more:
+    /// a word, since it is no more than `len` is.
+    fn skipped(b: &mut super::Builder, count: ValueId, len: ValueId) -> ValueId {
+        let class = super::arithmetic::widest(b.class(count), Class::Word);
+        let (wide_count, wide_len) = (met(b, count, class), met(b, len, class));
+        let more = b.compare(Relation::Less, wide_len, wide_count);
+        let skipped = b.if_(
+            more,
+            &[class],
+            |b| b.yield_(&[wide_len]),
+            |b| b.yield_(&[wide_count]),
+        )[0];
+        met(b, skipped, Class::Word)
+    }
+
     /// How many elements a sequence holds, which is its length leaf.
+    ///
+    /// Known bytes are as many as they are, less as many as were dropped from
+    /// the front of them, without asking the buffer they were built into.
     fn length(
         &self,
         b: &mut super::Builder,
         expr: barb::ExprId,
         arguments: barb::Range,
         locals: &Locals,
+        statics: &[Option<Known>],
     ) -> ValueId {
         let [sequence] = self.barb.atoms(arguments) else {
             unreachable!("a length is of one sequence");
         };
-        let len = locals[sequence.0.index()]
-            .as_ref()
-            .expect("a counted sequence is carried")
-            .values()[1];
+        let len = if let Some(Known { value, skip }) = statics[sequence.0.index()] {
+            let total = u64::try_from(self.bytes(value).len()).expect("a length fits 64 bits");
+            let total = b.constant(Class::Word, total);
+            skip.map_or(total, |count| {
+                let skipped = Self::skipped(b, Self::scalar(locals, count), total);
+                b.binary(Binary::Sub, total, skipped)
+            })
+        } else {
+            locals[sequence.0.index()]
+                .as_ref()
+                .expect("a counted sequence is carried")
+                .values()[1]
+        };
         // A length is held in a word, which is what the tier above was told
         // a length can be; only a class with no greatest number needs it
         // converted.
@@ -2491,7 +2564,7 @@ impl Lowering<'_> {
         function: barb::FnId,
         arguments: barb::Range,
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
         (routine, handed): (&Routine, &[Handed]),
     ) -> Vec<ValueId> {
         let mut args = Vec::with_capacity(handed.len());
@@ -2511,7 +2584,8 @@ impl Lowering<'_> {
                     // runs is. One worked out while it runs would have to
                     // be copied somewhere contiguous first, and nothing
                     // below here does that yet.
-                    let bytes = statics[atom.0.index()].map_or_else(
+                    let whole = statics[atom.0.index()].filter(|known| known.skip.is_none());
+                    let bytes = whole.map(|known| known.value).map_or_else(
                         || {
                             self.refuse(format!(
                                 "`{}` reads a byte string where it lies, and this one is worked out while the program runs",
@@ -2536,7 +2610,7 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         asked: (barb::FnId, barb::Range),
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
         (built, primitive, io): (&Built, Option<FunctionId>, Io),
     ) -> Vec<ValueId> {
         let primitive = || primitive.expect("a routine built on a primitive has one");
@@ -2609,7 +2683,7 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         (function, arguments): (barb::FnId, barb::Range),
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
         (write, io): (FunctionId, Io),
     ) -> ValueId {
         // Past the authority it is asked with, the one argument carried.
@@ -2622,10 +2696,17 @@ impl Lowering<'_> {
             .find(|(_, ty)| self.carries[ty.index()] != Storage::Erased)
             .expect("a string handed out is carried");
         let atom = *atom;
-        if let Some(literal) = statics[atom.0.index()] {
-            let data = b.data(&self.bytes(literal));
+        if let Some(Known { value, skip }) = statics[atom.0.index()] {
+            let data = b.data(&self.bytes(value));
             let at = b.address_of(data);
             let len = b.data_len(data);
+            let (at, len) = skip.map_or((at, len), |count| {
+                let skipped = Self::skipped(b, Self::scalar(locals, count), len);
+                let start = b.convert(Class::Word, at);
+                let start = b.binary(Binary::Add, start, skipped);
+                let rest = b.binary(Binary::Sub, len, skipped);
+                (b.convert(Class::Address, start), rest)
+            });
             let answer = b.call_one(write, &[at, len]);
             return Self::counted(b, answer, len, io);
         }
@@ -2998,7 +3079,7 @@ impl Lowering<'_> {
         scrutinee: Option<&Held>,
         arms: barb::Range,
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
         bounds: barb::Bounds,
     ) -> Answer<Held> {
         let mut arms = reachable(self.barb, arms, bounds);
@@ -3086,7 +3167,7 @@ impl Lowering<'_> {
         scrutinee: &Held,
         arms: [barb::Arm; 2],
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
     ) -> Answer<Held> {
         let answer = {
             let mut carried: Vec<_> = locals
@@ -3137,7 +3218,7 @@ impl Lowering<'_> {
         empty: &barb::Arm,
         counted: &barb::Arm,
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
     ) -> Answer<Held> {
         let class = b.class(scrutinee);
         // Both arms answer alike, so whichever of them comes back says what
@@ -3184,7 +3265,7 @@ impl Lowering<'_> {
         scrutinee: Option<&Held>,
         arm: &barb::Arm,
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
     ) -> Answer<Held> {
         let mut inner = locals.to_vec();
         let mut inner_statics = statics.to_vec();
@@ -3242,7 +3323,7 @@ impl Lowering<'_> {
         scrutinee: &Held,
         ctor: barb::CtorId,
         locals: &mut Vec<Option<Held>>,
-        statics: &mut Vec<Option<barb::ConstId>>,
+        statics: &mut Vec<Option<Known>>,
     ) {
         let owner = self.barb.ctor(ctor).owner;
         let barb::TypeShape::Sequence { recursive, .. } = barb::type_shape(self.barb, owner) else {
@@ -3274,7 +3355,7 @@ impl Lowering<'_> {
         values: &[ValueId],
         ctor: barb::CtorId,
         locals: &mut Vec<Option<Held>>,
-        statics: &mut Vec<Option<barb::ConstId>>,
+        statics: &mut Vec<Option<Known>>,
     ) {
         let mut rest = values;
         for carried in self.fields_carried(ctor) {
@@ -3298,7 +3379,7 @@ impl Lowering<'_> {
         values: &[ValueId],
         (ctor, run): (barb::CtorId, barb::Range),
         locals: &mut Vec<Option<Held>>,
-        statics: &mut Vec<Option<barb::ConstId>>,
+        statics: &mut Vec<Option<Known>>,
     ) {
         let slots = self.slots(ctor, run);
         let mut slots = slots.iter();
@@ -3325,7 +3406,7 @@ impl Lowering<'_> {
         scrutinee: ValueId,
         ctor: barb::CtorId,
         locals: &mut Vec<Option<Held>>,
-        statics: &mut Vec<Option<barb::ConstId>>,
+        statics: &mut Vec<Option<Known>>,
     ) {
         let mut index = 0;
         for carried in self.fields_carried(ctor) {
@@ -3360,7 +3441,7 @@ impl Lowering<'_> {
         class: Class,
         arms: &[TagArm],
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
     ) -> Answer<Held> {
         let (
             TagArm {
@@ -3403,7 +3484,7 @@ impl Lowering<'_> {
         discriminator: ValueId,
         arms: &[TagArm],
         locals: &Locals,
-        statics: &[Option<barb::ConstId>],
+        statics: &[Option<Known>],
     ) -> Answer<Held> {
         let (
             TagArm {

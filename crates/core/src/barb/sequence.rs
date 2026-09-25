@@ -27,6 +27,8 @@ pub(super) fn recognise(program: &Program, length: &[bool]) -> Vec<Option<Sequen
                 Some(SequenceOperation::ReverseOnto)
             } else if prepends(program, id, &reversals) {
                 Some(SequenceOperation::Prepend)
+            } else if drops(program, id) {
+                Some(SequenceOperation::Drop)
             } else {
                 None
             }
@@ -145,6 +147,105 @@ fn prepends(program: &Program, id: FnId, reversals: &[bool]) -> bool {
         && program.bindings(body.bindings).len() == 2
 }
 
+/// Whether `id` takes a count of elements off the front of a sequence,
+/// matching the count first or the sequence first:
+///
+/// ```text
+/// d(list, n) = match n                d(list, n) = match list
+///   zero => list                        empty => empty or list
+///   step(m) => match list               push(x, rest) => match n
+///     empty => empty                      zero => list
+///     push(x, rest) => d(rest, m)         step(m) => d(rest, m)
+/// ```
+#[expect(
+    clippy::too_many_lines,
+    reason = "each condition of the two drop shapes is one early return, read in order"
+)]
+fn drops(program: &Program, id: FnId) -> bool {
+    let params = program.params(id);
+    let (Some(body), &[list, count]) = (program.function(id).body(), params) else {
+        return false;
+    };
+    let Some((empty, push, recursive)) = sequence(program, list) else {
+        return false;
+    };
+    let TypeShape::Natural {
+        empty: zero,
+        push: succ,
+        ..
+    } = type_shape(program, count)
+    else {
+        return false;
+    };
+    if program.function(id).result != list {
+        return false;
+    }
+    let Some((on, arms)) = top_match(program, body) else {
+        return false;
+    };
+    let is = |body: Body, local: usize| {
+        body.bindings.is_empty() && program.expr(body.tail) == Expr::Atom(Atom(Local::at(local)))
+    };
+    let is_empty = |body: Body| {
+        body.bindings.is_empty()
+            && match program.expr(body.tail) {
+                Expr::Con(ctor, _) => ctor == empty,
+                Expr::Static(value) => program.constant(value).constructor() == empty,
+                Expr::Atom(_) | Expr::Call(..) | Expr::Match(..) => false,
+            }
+    };
+    // The call going round, on the rest at `rest` and the count less one at
+    // `fewer`.
+    let again = |body: Body, rest: usize, fewer: usize| {
+        let Expr::Call(callee, args) = program.expr(body.tail) else {
+            return false;
+        };
+        body.bindings.is_empty()
+            && callee == id
+            && program.atoms(args) == [Atom(Local::at(rest)), Atom(Local::at(fewer))]
+    };
+    let inner = |arm: Arm, on: usize| {
+        if !arm.body.bindings.is_empty() {
+            return None;
+        }
+        let Expr::Match(Atom(matched), arms) = program.expr(arm.body.tail) else {
+            return None;
+        };
+        (matched.index() == on).then_some(arms)
+    };
+    match on {
+        1 => {
+            let Some([done, step]) = split_arms(program, arms, zero, succ) else {
+                return false;
+            };
+            // The step binds the count less one at 2, and a push its fields
+            // at 3 and 4.
+            let Some(arms) = inner(step, 0) else {
+                return false;
+            };
+            let Some([nil, cons]) = split_arms(program, arms, empty, push) else {
+                return false;
+            };
+            is(done.body, 0) && is_empty(nil.body) && again(cons.body, 3 + recursive, 2)
+        }
+        0 => {
+            let Some([nil, cons]) = split_arms(program, arms, empty, push) else {
+                return false;
+            };
+            let Some(arms) = inner(cons, 1) else {
+                return false;
+            };
+            let Some([done, step]) = split_arms(program, arms, zero, succ) else {
+                return false;
+            };
+            (is(nil.body, 0) || is_empty(nil.body))
+                && is(done.body, 0)
+                && again(step.body, 2 + recursive, 4)
+        }
+        _ => false,
+    }
+}
+
 /// A body that is nothing but a match on a parameter: which one, and its
 /// arms.
 fn top_match(program: &Program, body: Body) -> Option<(usize, Range)> {
@@ -157,7 +258,7 @@ fn top_match(program: &Program, body: Body) -> Option<(usize, Range)> {
     Some((on.index(), arms))
 }
 
-/// A sequence's two arms, the empty one first.
+/// Two arms, the one for `empty` first.
 fn split_arms(program: &Program, arms: Range, empty: CtorId, push: CtorId) -> Option<[Arm; 2]> {
     let &[first, second] = program.arms(arms) else {
         return None;

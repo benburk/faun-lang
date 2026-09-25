@@ -121,7 +121,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   pushed for a step -- as `SequenceOperation::ReverseOnto`, and one that is a
   reversal onto nothing reversed again onto its second argument as
   `SequenceOperation::Prepend`. Both keep their bodies and are answered by
-  machine lowering as one buffer operation: room made once, then a copy.
+  machine lowering as one buffer operation: room made once, then a copy. A
+  definition taking a count of elements off the front -- the sequence for
+  nought, the empty one for an empty sequence, itself on the rest and the
+  count less one otherwise, matching either first -- is
+  `SequenceOperation::Drop`, answered as the same buffer holding fewer, and
+  known bytes less some of their front as the same bytes further on.
 - `affine.rs`: derive small affine summaries from recognized natural addition and
   multiplication by constants, without adding an expression kind or expanding
   nonlinear products.
@@ -139,6 +144,10 @@ x    ::= a parameter, a binding, or a field an arm bound
   walk also takes the arm a match on a local written as a constructor or a
   known value selects, with its fields what built it, and replaces a match
   whose arms bind nothing and are term-for-term the same with that arm.
+- `invariant.rs`: a parameter every call from outside hands the same known
+  value, and every call from inside passes on as it came, is that value:
+  the definition binds it first and reads it there, so what reads it inside
+  a loop reads something known. The parameter stays, read by nothing.
 - `descent.rs`: a definition taking two numbers of one natural type down
   together -- nought answers one base case, a step and nought another, two
   steps call it again on both predecessors with nothing else changed -- is
@@ -210,12 +219,20 @@ two types -- so nothing infers a provider or an effect from the display name.
    through sums and products.
 8. Sweep: where there is an entry, drop every definition it does not reach,
    renumbering function IDs in order. Types, constructors and constants stay.
-9. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
-   pure arithmetic or lengths; retain calls of unknown meaning and matches.
+9. Invariant arguments: a parameter every remaining caller hands one known
+   value is bound to that value in its definition. After the sweep, so only
+   callers the entry reaches count, and after folding, so what they hand is
+   known.
+10. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+    pure arithmetic or lengths; retain calls of unknown meaning and matches.
 
 Every normalizing stage (1, 3 and 7) also decides what is already decided: a
 match on a known constructor is its arm, and a match whose arms agree is that
-arm. Fusion and descent add definitions; a fused walk's name joins its two
+arm. A match that is the last binding of a body answering a match on it, and
+read nothing else there, becomes one match: where each of its arms ends by
+building a constructor, that arm goes on into the second's arm for it. Only
+where no arm of the second is taken by two of the first, so nothing is copied
+twice. Fusion and descent add definitions; a fused walk's name joins its two
 halves' with `+`, and what they replace stays until nothing calls it.
 
 Each stage runs once, always; there are no switches. Tests isolating one stage

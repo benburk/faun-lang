@@ -19,18 +19,34 @@
 //! lowering writes over something it has counted, so dropping one never
 //! takes away a program's failure to finish.
 //!
+//! A result of a function no call reads is not answered at all: the
+//! function's signature loses it, and what worked it out is then read by
+//! nothing. The entry answers what its target reads, and an external what
+//! its provider writes, so neither changes.
+//!
 //! What no instruction left names any more is dropped from the data and
 //! globals too, so an image carries only what the program reaches.
 
-use super::{DataId, Exit, Op, Origin, Program, RegionId, ValueId, rewrite};
+use crate::index::append_range;
+
+use super::rewrite::Declarations;
+use super::{
+    Builder, DataId, Exit, FunctionId, Op, Origin, Program, RegionId, Returns, Terminator, ValueId,
+    rewrite,
+};
 
 /// Rebuild `source` without the instructions nothing reads.
 #[must_use]
 pub(super) fn prune(source: &Program) -> Program {
+    let read = Read::of(source);
+    let declared = declarations(source, &read.answered);
     let mut pass = Prune {
-        read: Read::of(source),
+        read,
+        function: FunctionId::at(0),
+        yields: Vec::new(),
+        breaks: Vec::new(),
     };
-    let mut pruned = rewrite::rebuild(source, &mut pass);
+    let mut pruned = rewrite::rebuild_declared(source, declared, &mut pass);
     pack(&mut pruned);
     pruned
 }
@@ -84,22 +100,181 @@ fn pack(program: &mut Program) {
     program.globals = globals;
 }
 
+/// The declarations with every result nothing reads taken out.
+fn declarations(source: &Program, answered: &[Vec<bool>]) -> Declarations {
+    let mut declared = Declarations::of(source);
+    for (id, kept) in answered.iter().enumerate() {
+        let function = &mut declared.functions[FunctionId::at(id)];
+        let Returns::Values(returns) = function.returns else {
+            continue;
+        };
+        if kept.iter().all(|&kept| kept) {
+            continue;
+        }
+        let classes: Vec<_> = source
+            .signature(returns)
+            .iter()
+            .zip(kept)
+            .filter(|&(_, &kept)| kept)
+            .map(|(&class, _)| class)
+            .collect();
+        function.returns = Returns::Values(append_range(&mut declared.signature, &classes));
+    }
+    declared
+}
+
 struct Prune {
     read: Read,
+    /// The function whose body is being rebuilt.
+    function: FunctionId,
+    /// Which results each `if` and loop being rebuilt keeps, innermost
+    /// last: what a `yield` and a `break` in it still hand over.
+    yields: Vec<Vec<bool>>,
+    breaks: Vec<Vec<bool>>,
 }
 
 impl rewrite::Pass for Prune {
     fn op(
         &mut self,
         rebuild: &rewrite::Rebuild<'_>,
-        _: &mut super::Builder,
+        b: &mut Builder,
         op: Op,
         results: &[ValueId],
     ) -> bool {
         // Writing nothing and saying nothing about the old results is how
         // an instruction goes away: nothing left reads them.
-        !self.read.wanted(rebuild.source(), &op, results)
+        if !self.read.wanted(rebuild.source(), &op, results) {
+            return true;
+        }
+        match op {
+            Op::If { .. } | Op::Loop { .. } => {
+                self.container(rebuild, b, op, results);
+                true
+            }
+            _ => self.call(rebuild, b, op, results),
+        }
     }
+
+    fn enter(
+        &mut self,
+        _: &rewrite::Rebuild<'_>,
+        _: &mut Builder,
+        function: FunctionId,
+        params: &[ValueId],
+    ) -> Vec<ValueId> {
+        self.function = function;
+        params.to_vec()
+    }
+
+    fn exit(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        terminator: Terminator,
+    ) -> bool {
+        let kept = match terminator.exit {
+            Exit::Return => &self.read.answered[self.function.index()],
+            Exit::Yield => self.yields.last().expect("a yield within an if"),
+            Exit::Break => self.breaks.last().expect("a break within a loop"),
+            Exit::Continue => return false,
+        };
+        let values: Vec<_> = rebuild
+            .source()
+            .values(terminator.values)
+            .iter()
+            .zip(kept)
+            .filter(|&(_, &kept)| kept)
+            .map(|(&value, _)| rebuild.value(value))
+            .collect();
+        match terminator.exit {
+            Exit::Return => b.ret(&values),
+            Exit::Yield => b.yield_(&values),
+            Exit::Break => b.break_(&values),
+            Exit::Continue => unreachable!("a continue is copied"),
+        }
+        true
+    }
+}
+
+impl Prune {
+    /// An `if` or a loop, answering only the results something reads.
+    fn container(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        op: Op,
+        results: &[ValueId],
+    ) {
+        let kept: Vec<_> = results
+            .iter()
+            .filter(|value| self.read.values[value.index()])
+            .copied()
+            .collect();
+        let mask = self.read.read_of(results);
+        let fresh = match op {
+            Op::If {
+                condition,
+                then_region,
+                else_region,
+            } => {
+                self.yields.push(mask);
+                let fresh = rebuild.if_(
+                    b,
+                    rebuild.value(condition),
+                    &kept,
+                    then_region,
+                    else_region,
+                    self,
+                );
+                self.yields.pop();
+                fresh
+            }
+            Op::Loop { initial, body } => {
+                self.breaks.push(mask);
+                let classes = rebuild.classes(&kept);
+                let fresh = b.loop_(&rebuild.args(initial), &classes, |b, params| {
+                    rebuild.region(b, body, params, self);
+                });
+                self.breaks.pop();
+                fresh
+            }
+            _ => unreachable!("only an if or a loop holds regions"),
+        };
+        for (&was, now) in kept.iter().zip(fresh) {
+            rebuild.stands_for(was, now);
+        }
+    }
+
+    /// A call, answering only the results its function still answers.
+    fn call(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        op: Op,
+        results: &[ValueId],
+    ) -> bool {
+        let Op::Call { function, args } = op else {
+            return false;
+        };
+        let kept = &self.read.answered[function.index()];
+        if kept.iter().all(|&kept| kept) {
+            return false;
+        }
+        let answered = b.call(function, &rebuild.args(args));
+        let old = results.iter().zip(kept).filter(|&(_, &kept)| kept);
+        for ((&was, _), now) in old.zip(answered) {
+            rebuild.stands_for(was, now);
+        }
+        true
+    }
+}
+
+/// What a region's `yield` and `break` hand their values to: the results of
+/// the `if` and the loop around it.
+#[derive(Clone, Copy, Default)]
+struct Handing<'a> {
+    yields: &'a [ValueId],
+    breaks: &'a [ValueId],
 }
 
 /// What a program reads, worked out by reading it backwards.
@@ -107,36 +282,92 @@ struct Read {
     values: Vec<bool>,
     regions: Vec<bool>,
     unread: Unread,
+    /// For each function, which of its results it answers: every one of the
+    /// entry's and an external's, and of the rest, those some call reads.
+    answered: Vec<Vec<bool>>,
 }
 
 impl Read {
     /// Read the program until what it reads settles: a load that goes can
-    /// be the only reader of a global, whose stores then go too, and what
-    /// they stored may have been the only reason something else stayed.
-    /// Each round reads no more than the last, so this stops.
+    /// be the only reader of a global, whose stores then go too, and a
+    /// result no call reads is not returned, so what worked it out may go.
+    /// Either may have been the only reason something else stayed. Each
+    /// round reads no more than the last, so this stops.
     fn of(source: &Program) -> Self {
-        let mut read = Self::with(source, Unread::of(source, None));
+        let every = source
+            .functions()
+            .iter()
+            .map(|function| vec![true; source.signature(function.returns.classes()).len()])
+            .collect();
+        let mut read = Self::with(source, Unread::of(source, None), every);
         loop {
             let unread = Unread::of(source, Some(&read));
-            if unread.read == read.unread.read {
+            let answered = read.called(source);
+            if unread.read == read.unread.read && answered == read.answered {
                 return read;
             }
-            read = Self::with(source, unread);
+            read = Self::with(source, unread, answered);
         }
     }
 
-    fn with(source: &Program, unread: Unread) -> Self {
+    fn with(source: &Program, unread: Unread, answered: Vec<Vec<bool>>) -> Self {
         let mut held = Self {
             values: vec![false; source.values_count()],
             regions: vec![false; source.regions.len()],
             unread,
+            answered,
         };
-        for function in source.functions() {
+        for (id, function) in source.functions().iter().enumerate() {
             if let Some(body) = function.body() {
-                held.region(source, body);
+                held.region(source, FunctionId::at(id), body, Handing::default());
             }
         }
         held
+    }
+
+    /// Which results each function answers, given what this reading read:
+    /// those a call kept reads, and all of the entry's and an external's.
+    fn called(&self, source: &Program) -> Vec<Vec<bool>> {
+        let mut answered: Vec<Vec<bool>> = source
+            .functions()
+            .iter()
+            .enumerate()
+            .map(|(id, function)| {
+                let kept = id == 0 || function.body().is_none();
+                vec![kept; self.answered[id].len()]
+            })
+            .collect();
+        for body in source.functions().iter().filter_map(super::Function::body) {
+            self.calls(source, body, &mut answered);
+        }
+        answered
+    }
+
+    /// Mark each result a kept call in `region` reads.
+    fn calls(&self, source: &Program, region: RegionId, answered: &mut [Vec<bool>]) {
+        for (op, results) in source.walk(region) {
+            if !self.wanted(source, op, results) {
+                continue;
+            }
+            match *op {
+                Op::Call { function, .. } => {
+                    let kept = &mut answered[function.index()];
+                    for (at, value) in results.iter().enumerate() {
+                        kept[at] |= self.values[value.index()];
+                    }
+                }
+                Op::If {
+                    then_region,
+                    else_region,
+                    ..
+                } => {
+                    self.calls(source, then_region, answered);
+                    self.calls(source, else_region, answered);
+                }
+                Op::Loop { body, .. } => self.calls(source, body, answered),
+                _ => {}
+            }
+        }
     }
 
     /// Whether an instruction is one the rebuild writes again.
@@ -156,11 +387,16 @@ impl Read {
     /// Read one region backwards, which is the order a reader is known in:
     /// nothing names a value written after it, so by the time an
     /// instruction is reached, everything that could want it has spoken.
-    fn region(&mut self, source: &Program, region: RegionId) {
+    fn region(
+        &mut self,
+        source: &Program,
+        function: FunctionId,
+        region: RegionId,
+        handing: Handing<'_>,
+    ) {
         self.regions[region.index()] = true;
-        let held = source.region(region);
-        if let Some(terminator) = held.terminator {
-            self.reads(source.values(terminator.values));
+        if let Some(terminator) = source.region(region).terminator {
+            self.leaves(source, function, terminator, handing);
         }
         for (op, results) in source
             .walk(region)
@@ -177,16 +413,51 @@ impl Read {
                     else_region,
                 } => {
                     self.reads(&[condition]);
-                    self.region(source, then_region);
-                    self.region(source, else_region);
+                    let arms = Handing {
+                        yields: results,
+                        breaks: handing.breaks,
+                    };
+                    self.region(source, function, then_region, arms);
+                    self.region(source, function, else_region, arms);
                 }
                 Op::Loop { initial, body } => {
                     self.reads(source.values(initial));
-                    self.region(source, body);
+                    let body_handing = Handing {
+                        yields: &[],
+                        breaks: results,
+                    };
+                    self.region(source, function, body, body_handing);
                 }
                 _ => self.reads(&operands(source, &op)),
             }
         }
+    }
+
+    /// Read what a region leaves with where what it becomes is read.
+    fn leaves(
+        &mut self,
+        source: &Program,
+        function: FunctionId,
+        terminator: Terminator,
+        handing: Handing<'_>,
+    ) {
+        let values = source.values(terminator.values);
+        let kept: Vec<_> = match terminator.exit {
+            Exit::Return => self.answered[function.index()].clone(),
+            Exit::Yield => self.read_of(handing.yields),
+            Exit::Break => self.read_of(handing.breaks),
+            Exit::Continue => vec![true; values.len()],
+        };
+        for (&value, kept) in values.iter().zip(kept) {
+            self.values[value.index()] |= kept;
+        }
+    }
+
+    fn read_of(&self, values: &[ValueId]) -> Vec<bool> {
+        values
+            .iter()
+            .map(|value| self.values[value.index()])
+            .collect()
     }
 
     /// Whether this instruction stays. A container stays for what it holds
