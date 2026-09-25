@@ -297,6 +297,48 @@ pub fn exits_with_the_low_bits_of_a_sum(bits: u32) -> Program {
     program
 }
 
+/// Say something known before the program ran, then leave.
+///
+/// The least a program can do that someone sees. The words are known, so
+/// they lie where the image puts them and are handed out from there; what a
+/// target writes is the write and the way out, and nothing to hold them in.
+/// What the write answers is not asked, so nothing is made of it either.
+///
+/// # Panics
+/// If the greeting does not fit the declared shapes.
+#[must_use]
+pub fn greets() -> Program {
+    let Ground {
+        mut program,
+        host,
+        nat,
+        never,
+        exit,
+        ..
+    } = ground();
+    let bytes = program.declare_type("Bytes");
+    program.define_type(bytes, &[("Nil", &[]), ("Cons", &[nat, bytes])]);
+    let stdout = program.declare_type("Stdout");
+    program.define_type(stdout, &[("Stdout", &[])]);
+    let output = program.ctor_at(stdout, 0);
+    let put = program.declare("stdout_put!", &[stdout, bytes], nat);
+    let greeting = program
+        .intern_byte_spine(bytes, b"Hello, world!")
+        .expect("the declared byte shape");
+
+    let main = program.declare("main!", &[host], never);
+    program.define(main, |b, args| {
+        let output = b.con(output, &[]);
+        let greeting = b.known(greeting);
+        b.call(put, &[output, greeting]);
+        let nought = b.number(nat, 0).expect("the declared natural shape");
+        let nought = b.known(nought);
+        b.call(exit, &[args[0], nought])
+    });
+    program.set_entry(main);
+    program
+}
+
 /// The sum of two counts, by counting one of them onto the other.
 fn adds(program: &mut Program, nat: TypeId) -> FnId {
     let succ = program.ctor_at(nat, 1);
@@ -435,5 +477,6 @@ pub fn every() -> Vec<(&'static str, Program)> {
             "a shared intermediate",
             exits_with_a_shared_intermediate(32),
         ),
+        ("a greeting", greets()),
     ]
 }

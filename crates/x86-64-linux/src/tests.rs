@@ -22,6 +22,7 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("the count under a guard", 147),
     ("the count and more", 150),
     ("a shared intermediate", 156),
+    ("a greeting", 157),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("exit zero", 127),
@@ -83,6 +84,7 @@ fn ladder_code_size_ratchets() {
             ("the count under a guard", 27),
             ("the count and more", 30),
             ("a shared intermediate", 36),
+            ("a greeting", 24),
         ]
     );
     assert_eq!(code[0].1, [0x31, 0xFF, 0x6A, 0x3C, 0x58, 0x0F, 0x05]);

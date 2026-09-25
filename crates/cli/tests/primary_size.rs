@@ -14,7 +14,7 @@ use faun_wasm32_wasi::Wasm32Wasi;
 use faun_x86_64_linux::X86_64Linux;
 
 /// Each rung: the ladder's name for it, and the same program in Faun.
-const RUNGS: [(&str, &str); 4] = [
+const RUNGS: [(&str, &str); 5] = [
     (
         "a constant",
         "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) -> host.exit!(0)\n",
@@ -31,13 +31,17 @@ const RUNGS: [(&str, &str); 4] = [
         "the low bits of a sum",
         "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!((count + count) % 256)\n",
     ),
+    (
+        "a greeting",
+        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  host.stdout.write!(\"Hello, world!\".to_utf8())\n  host.exit!(0)\n",
+    ),
 ];
 
 /// Each target, what it appends to an output name, and each rung's size.
-const SIZES: [(&dyn Target, &str, [u64; 4]); 3] = [
-    (&X86_64Linux, "", [127, 129, 134, 133]),
-    (&Mos6502Sim65, ".bin", [17, 31, 34, 32]),
-    (&Wasm32Wasi, ".wasm", [36, 158, 181, 181]),
+const SIZES: [(&dyn Target, &str, [u64; 5]); 3] = [
+    (&X86_64Linux, "", [127, 129, 134, 133, 157]),
+    (&Mos6502Sim65, ".bin", [17, 31, 34, 32, 51]),
+    (&Wasm32Wasi, ".wasm", [36, 158, 181, 181, 164]),
 ];
 
 #[test]
