@@ -230,7 +230,6 @@ fn path_to_continue(
 fn reads(program: &Program) -> Vec<u16> {
     let mut needs = vec![0u16; program.values_count()];
     let mut regions = Vec::new();
-    let mut joins = Vec::new();
     for function in program.functions() {
         let Some(body) = function.body() else {
             continue;
@@ -244,7 +243,6 @@ fn reads(program: &Program) -> Vec<u16> {
             } = *op
             {
                 regions.extend([then_region, else_region]);
-                joins.push(([then_region, else_region], results));
             }
             if let Op::Loop { body, .. } = *op {
                 regions.push(body);
@@ -268,47 +266,16 @@ fn reads(program: &Program) -> Vec<u16> {
         }
     }
     mark_region_outputs(program, &regions, &mut needs);
-    mark_yields(program, &joins, &mut needs);
     needs
 }
 
-/// What an arm yields is read as far as its `if`'s result is.
-///
-/// The walk meets an outer `if` before any inside it, so an inner result's
-/// needs are settled before they pass on to what its own arms yield.
-fn mark_yields(program: &Program, joins: &[([RegionId; 2], &[ValueId])], needs: &mut [u16]) {
-    for &(arms, results) in joins {
-        for arm in arms {
-            if !yields(program, arm) {
-                continue;
-            }
-            for (value, result) in program.outgoing(arm).iter().zip(results) {
-                needs[value.index()] = needs[value.index()].max(needs[result.index()]);
-            }
-        }
-    }
-}
-
-/// What a loop body carries out of it is read whole wherever it lands:
-/// the parameters it continues with are read before it is known how much
-/// of them will be.
+/// What a region carries out of it is read whole wherever it lands.
 fn mark_region_outputs(program: &Program, regions: &[RegionId], needs: &mut [u16]) {
     for &region in regions {
-        if yields(program, region) {
-            continue;
-        }
         for &value in program.outgoing(region) {
             needs[value.index()] = bits(program.class(value));
         }
     }
-}
-
-/// Whether a region ends by yielding to its enclosing `if`.
-fn yields(program: &Program, region: RegionId) -> bool {
-    program
-        .region(region)
-        .terminator
-        .is_some_and(|term| term.exit == Exit::Yield)
 }
 
 fn exit_status(program: &Program, op: &Op) -> Option<ValueId> {
@@ -1623,7 +1590,10 @@ impl Lowering<'_> {
 
     /// Whether this arm reaches its enclosing `if`'s continuation.
     fn yields(&self, region: RegionId) -> bool {
-        yields(self.program, region)
+        self.program
+            .region(region)
+            .terminator
+            .is_some_and(|term| term.exit == Exit::Yield)
     }
 
     fn conditional(
