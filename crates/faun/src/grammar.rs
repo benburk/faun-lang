@@ -5,10 +5,10 @@
 //! kinds do not retry one another after constructing syntax trees.
 
 use super::ast::{
-    AliasDecl, BinaryOp, Binding, Body, Clause, Constraint, ConstructorDecl, DataDecl,
-    DataRepresentation, Export, ExportsDecl, Exposure, Expr, ExprKind, HeaderDecl, HeaderKind,
-    ImportDecl, Item, MethodItem, Module, Name, Numeral, NumeralKind, Pattern, SignatureDecl, Span,
-    StringPart, Type, UnaryOp,
+    AliasDecl, BinaryOp, Binding, Body, Clause, Constraint, ConstraintAliasDecl, ConstructorDecl,
+    DataDecl, DataRepresentation, Export, ExportsDecl, Exposure, Expr, ExprKind, HeaderDecl,
+    HeaderKind, ImportDecl, Item, MethodItem, Module, Name, Numeral, NumeralKind, Pattern,
+    SignatureDecl, Span, StringPart, Type, UnaryOp,
 };
 use super::lex::{Kind, Token};
 use super::source::SourceId;
@@ -176,6 +176,7 @@ peg::parser! {
             / import:import_decl() { Item::Import(import) }
             / exports:exports_decl() { Item::Exports(exports) }
             / alias:alias_decl() { Item::Alias(alias) }
+            / constraints:constraint_alias_decl() { Item::Constraints(constraints) }
             / data:data_decl() { Item::Data(data) }
             / declaration:term_declaration() { term_item(declaration) }
 
@@ -229,6 +230,17 @@ peg::parser! {
                     span: head.span().through(type_span(&ty)),
                     name: name(head),
                     ty,
+                }
+            }
+
+        rule constraint_alias_decl() -> ConstraintAliasDecl
+            = head:type_ident() adj(Kind::LParen) parameters:(ident() ++ sep()) rparen()
+              quiet!{tok(Kind::Eq)} constraints:constraints() {
+                ConstraintAliasDecl {
+                    span: head.span().through(constraints.1),
+                    name: name(head),
+                    parameters: parameters.into_iter().map(name).collect(),
+                    constraints: constraints.0,
                 }
             }
 
@@ -326,8 +338,11 @@ peg::parser! {
                     result,
                 }
             }
+            // Not the head of the declaration after a `where` clause, which
+            // an application looks like up to its `=` or `:`.
             / head:type_ident() adj(Kind::LParen)
-              arguments:(ty() ++ sep()) close:rparen() {
+              arguments:(ty() ++ sep()) close:rparen()
+              !(tok(Kind::Eq) / tok(Kind::Colon)) {
                 Constraint::Alias {
                     span: head.span().through(close.span()),
                     name: name(head),

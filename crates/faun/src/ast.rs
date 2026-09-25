@@ -71,6 +71,7 @@ pub enum Item {
     Exports(ExportsDecl),
     Data(DataDecl),
     Alias(AliasDecl),
+    Constraints(ConstraintAliasDecl),
     Signature(SignatureDecl),
     Clause(Clause),
 }
@@ -81,6 +82,16 @@ pub struct AliasDecl {
     pub span: Span,
     pub name: Name,
     pub ty: Type,
+}
+
+/// `Name(a) = where ...`: a name for requirements a `where` clause may
+/// apply together, which is no type and mints nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConstraintAliasDecl {
+    pub span: Span,
+    pub name: Name,
+    pub parameters: Vec<Name>,
+    pub constraints: Vec<Constraint>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

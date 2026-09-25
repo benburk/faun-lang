@@ -129,6 +129,7 @@ pub(crate) fn validate(module: &Module, source: &str) -> Result<(), LiteralError
             | Item::Import(_)
             | Item::Exports(_)
             | Item::Alias(_)
+            | Item::Constraints(_)
             | Item::Signature(_) => {}
         }
     }

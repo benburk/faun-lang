@@ -12,7 +12,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::ast::{DataDecl, DataRepresentation, Export, Item, MethodItem, Module, Name, Span};
+use super::ast::{
+    AliasDecl, ConstraintAliasDecl, DataDecl, DataRepresentation, Export, Item, MethodItem, Module,
+    Name, Span,
+};
 use super::diagnostic::Diagnostic;
 use super::{SourceId, Sources, Symbol, Symbols, parse_in};
 
@@ -376,16 +379,18 @@ fn declarations(
     for item in &module.items {
         match item {
             Item::Data(data) => declare_data(&mut own, data, source, &namespace, symbols)?,
-            Item::Alias(alias) => {
-                let local = symbols.intern(alias.name.text(source));
+            // A constraint alias shares the types' namespace, so that it is
+            // exported and imported as one is, and owns as little as an alias.
+            Item::Alias(AliasDecl { name, .. })
+            | Item::Constraints(ConstraintAliasDecl { name, .. }) => {
+                let local = symbols.intern(name.text(source));
                 if own.types.contains_key(&local) {
                     return Err(Diagnostic::new(format!(
                         "type `{}` is declared more than once",
-                        alias.name.text(source)
+                        name.text(source)
                     )));
                 }
-                let canonical =
-                    symbols.intern(&format!("{namespace}$${}", alias.name.text(source)));
+                let canonical = symbols.intern(&format!("{namespace}$${}", name.text(source)));
                 own.types.insert(
                     local,
                     TypeBinding {

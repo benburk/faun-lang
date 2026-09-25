@@ -231,6 +231,39 @@ const RUNNING: &[(&str, &str, u32)] = &[
            host.exit!(same + differ + ordered + weigh([(1 2) (3 4)].contains((3 4)) 16))",
         63,
     ),
+    (
+        "constraint aliases compose, each keeping its own variables",
+        "import sealed {Sized}
+
+         Additive(a) = where
+           a.zero : a
+           a.add : a a -> a
+
+         Summable(a) = where
+           Additive(a)
+           a.to_str : a -> Str
+
+         total : List(a) -> a where Summable(a) Additive(a)
+         total(values) -> values.fold(a.zero() |sum value| sum + value)
+
+         Tally(r) = where
+           r.fold : r Nat (Nat e -> Nat) -> Nat
+
+         tally : r e -> Nat where Tally(r)
+         tally(values _) -> values.fold(0 |count _| count + 1)
+
+         Crate : [Crate(Nat)].(
+           size : Crate -> Nat
+           size(Crate(n)) -> n
+         )
+
+         measure : a -> Nat where Sized(a)
+         measure(x) -> x.size()
+
+         main! : Host -> []
+         main!(host) -> host.exit!(total([1 2 3]) + total([-4 -5]).abs() + tally([7 8] \"e\") + measure(Crate(20)))",
+        37,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -444,6 +477,39 @@ const REFUSED: &[(&str, &str, &str)] = &[
         "same : {x: Nat *} {x: Nat *} -> Bool
          same(a b) -> a == b",
         "a record with `*` has no `equals`",
+    ),
+    (
+        "a constraint alias may not apply itself",
+        "Forever(a) = where
+           Forever(a)",
+        "constraint alias `Forever` applies itself",
+    ),
+    (
+        "a member required twice must be required alike",
+        "Nought(a) = where
+           a.zero : a
+
+         pick : a -> a where Nought(a) a.zero : Nat
+         pick(x) -> x",
+        "`a.zero` is required twice, at two different types",
+    ),
+    (
+        "a constraint alias bounds type variables",
+        "Nought(a) = where
+           a.zero : a
+
+         pick : Nat -> Nat where Nought(Nat)
+         pick(x) -> x",
+        "is given a type rather than a type variable",
+    ),
+    (
+        "a constraint alias is applied only in a `where` clause",
+        "Nought(a) = where
+           a.zero : a
+
+         pick : Nought -> Nat
+         pick(_) -> 0",
+        "constraint alias",
     ),
 ];
 

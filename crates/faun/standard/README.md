@@ -75,7 +75,12 @@ infers them, so `double(x) -> x.mul(2)` serves every type with a `mul`. Where
 every method a generic receiver could have shares a shape, that shape is
 context before any default, so the `2` is whatever `x` is, built through its
 type's `of_nat`. Each specialization calls the concrete type's own member.
-Constraint aliases are not here yet.
+`Name(a) = where ...` names requirements that a `where` clause applies
+together as `Name(a)`. An alias is no type and has no implementation: it
+expands where it is applied, and composes, exports and imports as a type name
+does. A variable its body names besides its parameters is its own, apart from
+the clause's; a member required twice alike is required once, and twice
+differently is refused, as is an alias that applies itself.
 
 Records are structural and unordered. `{name: Str *}` is a record with at
 least a `name`, and reading `.name` asks exactly that of whatever record it

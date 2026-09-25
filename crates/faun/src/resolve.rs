@@ -73,6 +73,7 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
     let mut modules = Vec::with_capacity(loaded.modules.len());
     let mut sites = 0;
     let mut aliases = HashMap::new();
+    let mut constraint_aliases = HashMap::new();
     for module in &loaded.modules {
         let source = loaded
             .sources
@@ -86,12 +87,16 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
             source,
             &scope,
             (&mut loaded.symbols, &mut sites),
-            &mut aliases,
+            (&mut aliases, &mut constraint_aliases),
         );
         modules.push(resolved.map_err(|error| located(&loaded, error))?);
     }
-    expand_aliases(&mut modules, &aliases, &loaded.symbols)
-        .map_err(|error| located(&loaded, error))?;
+    expand_aliases(
+        &mut modules,
+        (&aliases, &constraint_aliases),
+        &mut loaded.symbols,
+    )
+    .map_err(|error| located(&loaded, error))?;
     Ok(ResolvedProgram {
         module_sources: loaded.modules.iter().map(|module| module.source).collect(),
         package: loaded.package,
@@ -114,12 +119,23 @@ fn located(loaded: &LoadedProgram, error: ResolveError) -> Diagnostic {
 /// Each alias's definition, resolved in the module that wrote it.
 type Aliases = HashMap<Symbol, (h::Type, ModuleId, s::Span)>;
 
+/// A constraint alias, `Name(a) = where ...`: its parameters, and what it
+/// requires of them, applications of other aliases included.
+struct ConstraintAlias {
+    parameters: Vec<Symbol>,
+    constraints: Vec<h::Constraint>,
+    module: ModuleId,
+    span: s::Span,
+}
+
+type ConstraintAliases = HashMap<Symbol, ConstraintAlias>;
+
 fn resolve_module(
     module: &LoadedModule,
     source: &str,
     scope: &Interface,
     (symbols, sites): (&mut Symbols, &mut u32),
-    aliases: &mut Aliases,
+    (aliases, constraint_aliases): (&mut Aliases, &mut ConstraintAliases),
 ) -> Result<h::Module, ResolveError> {
     let mut items = Vec::new();
     for item in &module.syntax.items {
@@ -158,6 +174,42 @@ fn resolve_module(
                 }
                 aliases.insert(canonical, (ty, module.id, alias.span));
             }
+            s::Item::Constraints(alias) => {
+                let local = symbols.intern(alias.name.text(source));
+                let canonical = scope.types[&local].canonical;
+                let mut parameters = Vec::with_capacity(alias.parameters.len());
+                for parameter in &alias.parameters {
+                    let parameter = symbols.intern(parameter.text(source));
+                    if parameters.contains(&parameter) {
+                        return Err(error(
+                            module.id,
+                            alias.span,
+                            format!(
+                                "constraint alias `{}` names its parameter `{}` twice",
+                                alias.name.text(source),
+                                symbols.text(parameter)
+                            ),
+                        ));
+                    }
+                    parameters.push(parameter);
+                }
+                let constraints = alias
+                    .constraints
+                    .iter()
+                    .map(|constraint| {
+                        resolve_constraint(module.id, constraint, source, scope, symbols)
+                    })
+                    .collect::<Result<_, _>>()?;
+                constraint_aliases.insert(
+                    canonical,
+                    ConstraintAlias {
+                        parameters,
+                        constraints,
+                        module: module.id,
+                        span: alias.span,
+                    },
+                );
+            }
             s::Item::Header(_) | s::Item::Import(_) | s::Item::Exports(_) => {}
         }
     }
@@ -193,9 +245,24 @@ fn has_variable(ty: &h::Type) -> bool {
 /// so a bare record already has it, and nothing downstream sees the alias.
 fn expand_aliases(
     modules: &mut [h::Module],
-    aliases: &Aliases,
-    symbols: &Symbols,
+    (aliases, constraint_aliases): (&Aliases, &ConstraintAliases),
+    symbols: &mut Symbols,
 ) -> Result<(), ResolveError> {
+    // Every constraint alias is expanded once over its own parameters, so
+    // one applying itself, or applied wrongly, is refused where it is
+    // declared whether or not anything applies it.
+    for (&name, alias) in constraint_aliases {
+        let applied = h::Constraint::Alias {
+            name,
+            arguments: alias
+                .parameters
+                .iter()
+                .map(|&parameter| h::Type::Variable(parameter))
+                .collect(),
+        };
+        expand_constraints(&[applied], constraint_aliases, symbols)
+            .map_err(|message| error(alias.module, alias.span, message))?;
+    }
     let mut expanded = Aliases::new();
     for (&alias, &(_, module, span)) in aliases {
         let ty = expand(
@@ -220,17 +287,18 @@ fn expand_aliases(
                         .chain(data.wrapper.iter_mut().map(|wrapper| &mut wrapper.field));
                     for field in fields {
                         *field = expand(field, &expanded, symbols, &mut Vec::new())
+                            .and_then(|field| typed(field, constraint_aliases, symbols))
                             .map_err(|message| error(id, span, message))?;
                     }
                     for method in &mut data.methods {
                         if let h::MethodItem::Signature(signature) = method {
-                            expand_signature(signature, &expanded, symbols)
+                            expand_signature(signature, (&expanded, constraint_aliases), symbols)
                                 .map_err(|message| error(id, signature.span, message))?;
                         }
                     }
                 }
                 h::Item::Signature(signature) => {
-                    expand_signature(signature, &expanded, symbols)
+                    expand_signature(signature, (&expanded, constraint_aliases), symbols)
                         .map_err(|message| error(id, signature.span, message))?;
                 }
                 h::Item::Clause(_) => {}
@@ -242,9 +310,11 @@ fn expand_aliases(
 
 fn expand_signature(
     signature: &mut h::SignatureDecl,
-    aliases: &Aliases,
-    symbols: &Symbols,
+    (aliases, constraint_aliases): (&Aliases, &ConstraintAliases),
+    symbols: &mut Symbols,
 ) -> Result<(), String> {
+    signature.constraints =
+        expand_constraints(&signature.constraints, constraint_aliases, symbols)?;
     let written = signature
         .parameters
         .iter_mut()
@@ -259,9 +329,279 @@ fn expand_signature(
                 }),
         );
     for ty in written {
-        *ty = expand(ty, aliases, symbols, &mut Vec::new())?;
+        *ty = typed(
+            expand(ty, aliases, symbols, &mut Vec::new())?,
+            constraint_aliases,
+            symbols,
+        )?;
     }
     Ok(())
+}
+
+/// `ty`, where it names no constraint alias as a type.
+fn typed(
+    ty: h::Type,
+    constraint_aliases: &ConstraintAliases,
+    symbols: &Symbols,
+) -> Result<h::Type, String> {
+    fn named(ty: &h::Type, constraint_aliases: &ConstraintAliases) -> Option<Symbol> {
+        let each = |types: &[h::Type]| types.iter().find_map(|ty| named(ty, constraint_aliases));
+        match ty {
+            h::Type::Named(name, _) if constraint_aliases.contains_key(name) => Some(*name),
+            h::Type::Named(_, arguments) | h::Type::Tuple(arguments) => each(arguments),
+            h::Type::Variable(_) => None,
+            h::Type::Function(parameters, result) => {
+                each(parameters).or_else(|| named(result, constraint_aliases))
+            }
+            h::Type::Variants(tags) => tags.iter().find_map(|tag| each(&tag.fields)),
+            h::Type::Record(fields, _) => fields
+                .iter()
+                .find_map(|(_, field)| named(field, constraint_aliases)),
+        }
+    }
+    named(&ty, constraint_aliases).map_or(Ok(ty), |alias| {
+        Err(format!(
+            "`{}` is a constraint alias, which is applied in a `where` clause and is no type",
+            spelled(alias, symbols)
+        ))
+    })
+}
+
+/// A `where` clause with each constraint alias it applies replaced by the
+/// members that alias requires. A variable an alias's body names besides
+/// its parameters is the alias's own: renamed apart from the clause's, and
+/// the same in every constraint of one application, so an application
+/// written twice requires the same thing twice. A member required twice
+/// alike is required once; required twice differently, it is refused.
+fn expand_constraints(
+    written: &[h::Constraint],
+    aliases: &ConstraintAliases,
+    symbols: &mut Symbols,
+) -> Result<Vec<h::Constraint>, String> {
+    let mut expansion = Expansion {
+        aliases,
+        applications: Vec::new(),
+        expanding: Vec::new(),
+        members: Vec::new(),
+    };
+    for constraint in written {
+        expansion.add(constraint.clone(), symbols)?;
+    }
+    Ok(expansion.members)
+}
+
+struct Expansion<'a> {
+    aliases: &'a ConstraintAliases,
+    /// Each application met, by alias and arguments: where it stands here
+    /// names the variables of its own.
+    applications: Vec<(Symbol, String)>,
+    /// The aliases being expanded, innermost last.
+    expanding: Vec<Symbol>,
+    /// The members required so far, each once.
+    members: Vec<h::Constraint>,
+}
+
+impl Expansion<'_> {
+    fn add(&mut self, constraint: h::Constraint, symbols: &mut Symbols) -> Result<(), String> {
+        let (variable, member, ty) = match constraint {
+            h::Constraint::Member {
+                variable,
+                member,
+                ty,
+            } => (variable, member, ty),
+            h::Constraint::Alias { name, arguments } => {
+                return self.apply(name, &arguments, symbols);
+            }
+        };
+        let earlier = self.members.iter().find_map(|required| match required {
+            h::Constraint::Member {
+                variable: other,
+                member: named,
+                ty,
+            } if *other == variable && *named == member => Some(ty),
+            _ => None,
+        });
+        match earlier {
+            Some(earlier) if *earlier == ty => Ok(()),
+            Some(_) => Err(format!(
+                "`{}.{}` is required twice, at two different types",
+                symbols.text(variable),
+                symbols.text(member)
+            )),
+            None => {
+                self.members.push(h::Constraint::Member {
+                    variable,
+                    member,
+                    ty,
+                });
+                Ok(())
+            }
+        }
+    }
+
+    fn apply(
+        &mut self,
+        name: Symbol,
+        arguments: &[h::Type],
+        symbols: &mut Symbols,
+    ) -> Result<(), String> {
+        let aliases = self.aliases;
+        let spelled = spelled(name, symbols);
+        let alias = aliases
+            .get(&name)
+            .ok_or_else(|| format!("`{spelled}` is not a constraint alias"))?;
+        if alias.parameters.len() != arguments.len() {
+            return Err(format!(
+                "constraint alias `{spelled}` takes {} arguments, and is given {}",
+                alias.parameters.len(),
+                arguments.len()
+            ));
+        }
+        if self.expanding.contains(&name) {
+            return Err(format!("constraint alias `{spelled}` applies itself"));
+        }
+        let application = (name, format!("{arguments:?}"));
+        let index = self
+            .applications
+            .iter()
+            .position(|known| *known == application)
+            .unwrap_or_else(|| {
+                self.applications.push(application);
+                self.applications.len() - 1
+            });
+        let mut substitution: HashMap<Symbol, h::Type> = alias
+            .parameters
+            .iter()
+            .copied()
+            .zip(arguments.iter().cloned())
+            .collect();
+        let mut own = Vec::new();
+        for constraint in &alias.constraints {
+            match constraint {
+                h::Constraint::Member { variable, ty, .. } => {
+                    own.push(*variable);
+                    type_variables(ty, &mut own);
+                }
+                h::Constraint::Alias { arguments, .. } => {
+                    for argument in arguments {
+                        type_variables(argument, &mut own);
+                    }
+                }
+            }
+        }
+        for variable in own {
+            // A quote is in no identifier, so the renamed variable is no
+            // name a clause could write.
+            substitution.entry(variable).or_insert_with(|| {
+                let renamed = format!("{}'{index}", symbols.text(variable));
+                h::Type::Variable(symbols.intern(&renamed))
+            });
+        }
+        self.expanding.push(name);
+        for constraint in &alias.constraints {
+            let constraint = match constraint {
+                h::Constraint::Member {
+                    variable,
+                    member,
+                    ty,
+                } => {
+                    let h::Type::Variable(variable) = substitution[variable] else {
+                        return Err(format!(
+                            "constraint alias `{spelled}` bounds `{}`, which is given a type rather than a type variable",
+                            symbols.text(*variable)
+                        ));
+                    };
+                    h::Constraint::Member {
+                        variable,
+                        member: *member,
+                        ty: substitute(ty, &substitution),
+                    }
+                }
+                h::Constraint::Alias { name, arguments } => h::Constraint::Alias {
+                    name: *name,
+                    arguments: arguments
+                        .iter()
+                        .map(|argument| substitute(argument, &substitution))
+                        .collect(),
+                },
+            };
+            self.add(constraint, symbols)?;
+        }
+        self.expanding.pop();
+        Ok(())
+    }
+}
+
+/// A declared name as it was written, without its module's prefix.
+fn spelled(name: Symbol, symbols: &Symbols) -> String {
+    let text = symbols.text(name);
+    text.rsplit_once("$$")
+        .map_or(text, |(_, spelled)| spelled)
+        .to_owned()
+}
+
+/// Every type variable `ty` names, in the order written.
+fn type_variables(ty: &h::Type, out: &mut Vec<Symbol>) {
+    match ty {
+        h::Type::Variable(variable) => out.push(*variable),
+        h::Type::Named(_, arguments) | h::Type::Tuple(arguments) => {
+            for argument in arguments {
+                type_variables(argument, out);
+            }
+        }
+        h::Type::Function(parameters, result) => {
+            for parameter in parameters {
+                type_variables(parameter, out);
+            }
+            type_variables(result, out);
+        }
+        h::Type::Variants(tags) => {
+            for field in tags.iter().flat_map(|tag| &tag.fields) {
+                type_variables(field, out);
+            }
+        }
+        h::Type::Record(fields, _) => {
+            for (_, field) in fields {
+                type_variables(field, out);
+            }
+        }
+    }
+}
+
+/// `ty` with each variable `substitution` names replaced.
+fn substitute(ty: &h::Type, substitution: &HashMap<Symbol, h::Type>) -> h::Type {
+    let each = |types: &[h::Type]| -> Vec<h::Type> {
+        types
+            .iter()
+            .map(|ty| substitute(ty, substitution))
+            .collect()
+    };
+    match ty {
+        h::Type::Variable(variable) => substitution
+            .get(variable)
+            .cloned()
+            .unwrap_or_else(|| ty.clone()),
+        h::Type::Named(name, arguments) => h::Type::Named(*name, each(arguments)),
+        h::Type::Tuple(members) => h::Type::Tuple(each(members)),
+        h::Type::Function(parameters, result) => {
+            h::Type::Function(each(parameters), Box::new(substitute(result, substitution)))
+        }
+        h::Type::Variants(tags) => h::Type::Variants(
+            tags.iter()
+                .map(|tag| h::ConstructorDecl {
+                    name: tag.name,
+                    fields: each(&tag.fields),
+                })
+                .collect(),
+        ),
+        h::Type::Record(fields, open) => h::Type::Record(
+            fields
+                .iter()
+                .map(|(name, field)| (*name, substitute(field, substitution)))
+                .collect(),
+            *open,
+        ),
+    }
 }
 
 /// `ty` with every alias replaced by its definition, refusing an alias
@@ -444,37 +784,57 @@ fn resolve_signature(
         constraints: signature
             .constraints
             .iter()
-            .map(|constraint| {
-                Ok(match constraint {
-                    s::Constraint::Member {
-                        variable,
-                        member,
-                        parameters,
-                        result,
-                        ..
-                    } => h::Constraint::Member {
-                        variable: symbols.intern(variable.text(source)),
-                        member: symbols.intern(member.text(source)),
-                        ty: h::Type::Function(
-                            parameters
-                                .iter()
-                                .map(|ty| resolve_type(module, ty, source, scope, symbols))
-                                .collect::<Result<_, _>>()?,
-                            Box::new(resolve_type(module, result, source, scope, symbols)?),
-                        ),
-                    },
-                    s::Constraint::Alias {
-                        name, arguments, ..
-                    } => h::Constraint::Alias {
-                        name: symbols.intern(name.text(source)),
-                        arguments: arguments
-                            .iter()
-                            .map(|ty| resolve_type(module, ty, source, scope, symbols))
-                            .collect::<Result<_, _>>()?,
-                    },
-                })
-            })
+            .map(|constraint| resolve_constraint(module, constraint, source, scope, symbols))
             .collect::<Result<_, ResolveError>>()?,
+    })
+}
+
+fn resolve_constraint(
+    module: ModuleId,
+    constraint: &s::Constraint,
+    source: &str,
+    scope: &Interface,
+    symbols: &mut Symbols,
+) -> Result<h::Constraint, ResolveError> {
+    Ok(match constraint {
+        s::Constraint::Member {
+            variable,
+            member,
+            parameters,
+            result,
+            ..
+        } => h::Constraint::Member {
+            variable: symbols.intern(variable.text(source)),
+            member: symbols.intern(member.text(source)),
+            ty: h::Type::Function(
+                parameters
+                    .iter()
+                    .map(|ty| resolve_type(module, ty, source, scope, symbols))
+                    .collect::<Result<_, _>>()?,
+                Box::new(resolve_type(module, result, source, scope, symbols)?),
+            ),
+        },
+        s::Constraint::Alias {
+            span,
+            name,
+            arguments,
+        } => {
+            let spelling = symbols.intern(name.text(source));
+            let binding = scope.types.get(&spelling).ok_or_else(|| {
+                error(
+                    module,
+                    *span,
+                    format!("unknown constraint alias `{}`", name.text(source)),
+                )
+            })?;
+            h::Constraint::Alias {
+                name: binding.canonical,
+                arguments: arguments
+                    .iter()
+                    .map(|ty| resolve_type(module, ty, source, scope, symbols))
+                    .collect::<Result<_, _>>()?,
+            }
+        }
     })
 }
 

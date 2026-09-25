@@ -1240,11 +1240,7 @@ impl<'a> Checker<'a> {
                     ty,
                 } => (*variable, *member, ty),
                 h::Constraint::Alias { .. } => {
-                    return Err(failure(
-                        module,
-                        signature.span,
-                        "constraint aliases are not here yet; write the members",
-                    ));
+                    unreachable!("resolution expands every constraint alias")
                 }
             };
             let Some(owner) = variables.get(&variable).cloned() else {
