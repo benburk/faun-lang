@@ -370,10 +370,42 @@ const RUNNING: &[(&str, &str, u32)] = &[
            host.exit!(tags + printed + results + opens([1 2 9]) * 64)",
         63 + 3 * 64,
     ),
+    (
+        "a definition is made for each callback, so a callback's own calls stop as they would alone",
+        "vowels : List(U8) -> Nat
+         vowels(bytes) -> bytes.count(|byte| ['a' 'e'].contains(byte))
+
+         twice : Nat (Nat -> Nat) -> Nat
+         twice(n f) -> f(f(n))
+
+         shifted : Nat (Nat -> Nat) -> Nat
+         shifted(n f) -> twice(n |x| f(x) + 1)
+
+         double : Nat -> Nat
+         double(n) -> n * 2
+
+         main! : Host -> []
+         main!(host) ->
+           counted = vowels(['a' 'b' 'e'])
+           wrapped = shifted(1 double)
+           nested = [[1 2] [3]].map(|inner| inner.map(|x| x * 10).sum()).sum()
+           host.exit!(counted + wrapped * 10 + nested)",
+        2 + 70 + 60,
+    ),
 ];
 
 /// Programs refused, and what the message says.
 const REFUSED: &[(&str, &str, &str)] = &[
+    (
+        "a callback wrapped anew each time round would need a definition for each round",
+        "nest : Nat (Nat -> Nat) -> Nat
+         nest(0 f) -> f(0)
+         nest(Succ(n) f) -> nest(n |x| f(x) + 1)
+
+         main! : Host -> []
+         main!(host) -> host.exit!(nest(3 |x| x))",
+        "wraps the callback it was handed",
+    ),
     (
         "every alternative of an or-pattern binds the same names",
         "Shape : [Circle(Nat) Dot]

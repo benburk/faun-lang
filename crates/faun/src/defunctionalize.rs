@@ -1,5 +1,10 @@
 //! Defunctionalize specialized terms, making every function value data.
 //!
+//! [`crate::callbacks`] runs first and leaves no function value: every
+//! callback is specialized into the definition it is handed to. What is
+//! described below is what this pass does with a function value that
+//! reaches it, which the frontend no longer hands it.
+//!
 //! Each function type becomes a closure type whose constructors are the
 //! closures of that type the program makes: a global function, a constructor
 //! used as a function, or a lambda holding the locals it captures. Calling a
@@ -265,7 +270,7 @@ impl Defunctionalizer {
 }
 
 /// The locals a lambda's body reads that its parameters do not bind.
-fn captures(patterns: &[Pattern], body: &specialize::Expr) -> Vec<(LocalId, Type)> {
+pub(crate) fn captures(patterns: &[Pattern], body: &specialize::Expr) -> Vec<(LocalId, Type)> {
     let mut bound = HashSet::new();
     for pattern in patterns {
         pattern_locals(pattern, &mut bound);

@@ -1972,7 +1972,11 @@ fn type_name(ty: &Type, symbols: &crate::Symbols) -> String {
 }
 
 fn function_name(key: &FunctionKey, symbols: &crate::Symbols) -> String {
-    source_name(key.name, symbols).to_string()
+    let name = source_name(key.name, symbols);
+    match key.instance {
+        specialize::Instance::Lambda(_) => format!("lambda in {name}"),
+        specialize::Instance::Written | specialize::Instance::Called(_) => name.to_owned(),
+    }
 }
 
 fn closure_name(key: &ClosureKey, symbols: &crate::Symbols) -> String {

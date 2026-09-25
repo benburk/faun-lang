@@ -58,6 +58,20 @@ impl Type {
 pub(crate) struct FunctionKey {
     pub(crate) name: Symbol,
     pub(crate) ty: Type,
+    /// Which of the definitions made from `name` at `ty` this is.
+    pub(crate) instance: Instance,
+}
+
+/// A definition as written, or one made from it for the callbacks it is
+/// handed; see [`crate::callbacks`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum Instance {
+    Written,
+    /// The definition for one set of callbacks, numbered.
+    Called(u32),
+    /// A lambda written in the definition, for one set of the callbacks it
+    /// reads, numbered.
+    Lambda(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -253,6 +267,7 @@ fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, Specializ
         roots.push(FunctionKey {
             name: clause.name,
             ty,
+            instance: Instance::Written,
         });
     }
     Ok(roots)
@@ -466,6 +481,7 @@ impl<'a> Specializer<'a> {
         Ok(FunctionKey {
             name: entry,
             ty: entry_ty,
+            instance: Instance::Written,
         })
     }
 
@@ -494,7 +510,7 @@ impl<'a> Specializer<'a> {
             data: self.data,
         };
         crate::second_class::check(&program)?;
-        Ok(program)
+        crate::callbacks::specialize(program)
     }
 
     fn request(&mut self, key: FunctionKey) {
@@ -1089,6 +1105,7 @@ impl<'a> Specializer<'a> {
                 let key = FunctionKey {
                     name: *name,
                     ty: ty.clone(),
+                    instance: Instance::Written,
                 };
                 self.request(key.clone());
                 ExprKind::Function(key)
@@ -1193,6 +1210,7 @@ impl<'a> Specializer<'a> {
                         let key = FunctionKey {
                             name: *name,
                             ty: head_ty,
+                            instance: Instance::Written,
                         };
                         self.request(key.clone());
                         ExprKind::DirectCall(key, arguments)
@@ -1210,6 +1228,7 @@ impl<'a> Specializer<'a> {
                         let key = FunctionKey {
                             name: target,
                             ty: Type::Function(parameters.collect(), Box::new(ty.clone())),
+                            instance: Instance::Written,
                         };
                         self.request(key.clone());
                         ExprKind::DirectCall(key, arguments)
@@ -1588,7 +1607,11 @@ impl<'a> Specializer<'a> {
         parameters.extend_from_slice(arguments);
         let ty = Type::Function(parameters, Box::new(result.clone()));
         if self.is_structural(name, ty.function().map(|(p, _)| p)) {
-            return Ok(FunctionKey { name, ty });
+            return Ok(FunctionKey {
+                name,
+                ty,
+                instance: Instance::Written,
+            });
         }
         let scheme = self
             .checked
@@ -1597,7 +1620,11 @@ impl<'a> Specializer<'a> {
             .ok_or_else(|| error("method target has no inferred scheme"))?;
         let mut substitution = HashMap::new();
         match_type(&scheme.ty, &ty, &mut substitution)?;
-        Ok(FunctionKey { name, ty })
+        Ok(FunctionKey {
+            name,
+            ty,
+            instance: Instance::Written,
+        })
     }
 
     fn literal_site(
@@ -1651,6 +1678,7 @@ impl<'a> Specializer<'a> {
                 let key = FunctionKey {
                     name: *function,
                     ty: Type::Function(parameters.clone(), result),
+                    instance: Instance::Written,
                 };
                 self.request(key.clone());
                 ExprKind::DirectCall(

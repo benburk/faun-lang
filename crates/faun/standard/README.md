@@ -202,6 +202,19 @@ bucket(1 | 2) -> 1
 bucket(_) -> 2
 ```
 
+## Callbacks
+
+A function is passed straight into a call and never held, so what each
+function parameter is, is known where it is passed. A definition taking a
+function is made once for each set of callbacks it is handed, as in Ori, and
+calling its parameter is a direct call of the callback; a lambda is a
+definition of its own, handed what it reads from where it was written. Each
+callback's calls are then seen to stop as they would on their own:
+`bytes.count(|byte| ['a' 'e'].contains(byte))` goes round only as `contains`
+does. A recursive call that wraps the callback it was handed in a new lambda
+each time round is refused, since it would need a definition for every
+round; recurse on data that says what to call instead.
+
 ## Expectations
 
 `expect` followed by a body is a claim a module makes of its definitions:

@@ -12,8 +12,9 @@
 //! source spans. Module loading and qualification then produce symbol-based
 //! HIR without merging raw ASTs. Checking performs Hindley–Milner inference,
 //! nominal receiver-directed method resolution, and contextual literal
-//! elaboration. The package's functions are then specialized,
-//! defunctionalized, and lowered to Barb. [`compile_barb_to_image`] hands that Barb to
+//! elaboration. The package's functions are then specialized, each taking a
+//! function once for every set of callbacks it is handed, and lowered to
+//! Barb. [`compile_barb_to_image`] hands that Barb to
 //! `faun_core` for the machine tier and to the target for its image.
 
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ use faun_core::targets::Target;
 pub mod ast;
 mod barb_lower;
 pub mod blessed;
+mod callbacks;
 pub mod check;
 mod defunctionalize;
 pub mod diagnostic;
