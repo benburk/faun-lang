@@ -1224,48 +1224,69 @@ impl<'a> Checker<'a> {
 
     /// A signature's `where` bounds, over its own type variables. A
     /// variable a bound alone mentions is quantified too: which type it is,
-    /// the bound's implementation says at each specialization.
+    /// the bound's implementation says at each specialization. A bound may
+    /// be on such a variable, one a bound on a variable already determined
+    /// mentions, since that bound's implementation determines it in turn;
+    /// on any other, it could never be met, and is refused.
     fn written_bounds(
         &mut self,
         module: ModuleId,
         signature: &h::SignatureDecl,
         variables: &mut HashMap<Symbol, Ty>,
     ) -> Result<Vec<Bound>, CheckError> {
-        let mut bounds = Vec::with_capacity(signature.constraints.len());
-        for constraint in &signature.constraints {
-            let (variable, member, ty) = match constraint {
-                h::Constraint::Member {
-                    variable,
+        let mut bounds: Vec<Option<Bound>> = vec![None; signature.constraints.len()];
+        loop {
+            let mut progress = false;
+            for (constraint, bound) in signature.constraints.iter().zip(&mut bounds) {
+                let (variable, member, ty) = match constraint {
+                    h::Constraint::Member {
+                        variable,
+                        member,
+                        ty,
+                    } => (*variable, *member, ty),
+                    h::Constraint::Alias { .. } => {
+                        unreachable!("resolution expands every constraint alias")
+                    }
+                };
+                if bound.is_some() {
+                    continue;
+                }
+                let Some(owner) = variables.get(&variable).cloned() else {
+                    continue;
+                };
+                let ty = self.surface_type(ty, variables);
+                // A member taking the type first is a method of its values;
+                // anything else is reached through the type.
+                let associated = !matches!(&ty, Ty::Function(parameters, _)
+                    if parameters.first().is_some_and(|first| *first == owner));
+                *bound = Some(Bound {
+                    owner,
                     member,
                     ty,
-                } => (*variable, *member, ty),
-                h::Constraint::Alias { .. } => {
-                    unreachable!("resolution expands every constraint alias")
-                }
-            };
-            let Some(owner) = variables.get(&variable).cloned() else {
-                return Err(failure(
-                    module,
-                    signature.span,
-                    format!(
-                        "`where` bounds `{}`, which the signature does not have",
-                        self.symbols.text(variable)
-                    ),
-                ));
-            };
-            let ty = self.surface_type(ty, variables);
-            // A member taking the type first is a method of its values;
-            // anything else is reached through the type.
-            let associated = !matches!(&ty, Ty::Function(parameters, _)
-                if parameters.first().is_some_and(|first| *first == owner));
-            bounds.push(Bound {
-                owner,
-                member,
-                ty,
-                associated,
-            });
+                    associated,
+                });
+                progress = true;
+            }
+            if !progress {
+                break;
+            }
         }
-        Ok(bounds)
+        if let Some(h::Constraint::Member { variable, .. }) = signature
+            .constraints
+            .iter()
+            .zip(&bounds)
+            .find_map(|(constraint, bound)| bound.is_none().then_some(constraint))
+        {
+            return Err(failure(
+                module,
+                signature.span,
+                format!(
+                    "`where` bounds `{}`, which neither the signature nor another bound determines",
+                    self.symbols.text(*variable)
+                ),
+            ));
+        }
+        Ok(bounds.into_iter().flatten().collect())
     }
 
     /// Give every nonempty tag row in result position a tail, which the
@@ -3442,26 +3463,31 @@ impl<'a> Checker<'a> {
         let implementations = self.methods.get(&pending.name).cloned().unwrap_or_default();
         let receiver = self.infer.resolve(&pending.receiver);
         // A rigid receiver is a signed body's own variable: what it has is
-        // what its bounds say.
+        // what its bounds say. One not yet known may be such a variable too,
+        // so a bound is as much a candidate for it as a declared method.
+        let bounded = self
+            .current
+            .iter()
+            .filter(|bound| {
+                bound.member == pending.name
+                    && bound.associated == (pending.reach == Reach::Type)
+                    && match &receiver {
+                        Ty::Rigid(_) => self.infer.resolve(&bound.owner) == receiver,
+                        Ty::Var(_) => true,
+                        _ => false,
+                    }
+            })
+            .map(|bound| MethodImpl {
+                owner: pending.name,
+                target: pending.name,
+                scheme: Scheme {
+                    variables: Vec::new(),
+                    ty: bound.ty.clone(),
+                },
+                bound: true,
+            });
         if let Ty::Rigid(_) = receiver {
-            return self
-                .current
-                .iter()
-                .filter(|bound| {
-                    bound.member == pending.name
-                        && bound.associated == (pending.reach == Reach::Type)
-                        && self.infer.resolve(&bound.owner) == receiver
-                })
-                .map(|bound| MethodImpl {
-                    owner: pending.name,
-                    target: pending.name,
-                    scheme: Scheme {
-                        variables: Vec::new(),
-                        ty: bound.ty.clone(),
-                    },
-                    bound: true,
-                })
-                .collect();
+            return bounded.collect();
         }
         let visible = &self.visible_methods[&pending.module];
         implementations
@@ -3473,6 +3499,7 @@ impl<'a> Checker<'a> {
                 _ => false,
             })
             .cloned()
+            .chain(bounded)
             .collect()
     }
 

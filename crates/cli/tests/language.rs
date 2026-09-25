@@ -264,6 +264,22 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> host.exit!(total([1 2 3]) + total([-4 -5]).abs() + tally([7 8] \"e\") + measure(Crate(20)))",
         37,
     ),
+    (
+        "a bound's implementation determines a variable another bound is on",
+        "Person : [Person(Str)].(
+           name : Person -> Str
+           name(Person(name)) -> name
+         )
+
+         row : r -> Nat where
+           r.fold : r Nat (Nat x -> Nat) -> Nat
+           x.name : x -> Str
+         row(items) -> items.fold(0 |total item| total + item.name().len())
+
+         main! : Host -> []
+         main!(host) -> host.exit!(row([Person(\"ab\") Person(\"cde\")]))",
+        5,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -446,7 +462,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
         "a bound names a variable its signature has",
         "pick : a -> a where b.zero : b
          pick(x) -> x",
-        "`where` bounds `b`, which the signature does not have",
+        "`where` bounds `b`, which neither the signature nor another bound determines",
     ),
     (
         "a type variable is named only where a signature bounds it",
@@ -510,6 +526,16 @@ const REFUSED: &[(&str, &str, &str)] = &[
          pick : Nought -> Nat
          pick(_) -> 0",
         "constraint alias",
+    ),
+    (
+        "a variable no implementation determines is refused where it is used",
+        "count : r -> Nat where
+           r.fold : r c (c Nat -> c) -> c
+         count(_) -> 0
+
+         main! : Host -> []
+         main!(host) -> host.exit!(count([1 2]))",
+        "nothing determines the types a `where` bound's member `fold` takes here",
     ),
 ];
 

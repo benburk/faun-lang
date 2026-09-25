@@ -274,6 +274,8 @@ fn holds_function(ty: &Type) -> bool {
 
 struct Specializer<'a> {
     checked: &'a Types,
+    /// The spellings a refusal names.
+    symbols: &'a crate::Symbols,
     prelude: &'a PreludeIds,
     expression_types: HashMap<(ModuleId, crate::ast::Span), &'a InferredType>,
     clause_types: HashMap<(ModuleId, crate::ast::Span), &'a ClauseSite>,
@@ -412,6 +414,7 @@ impl<'a> Specializer<'a> {
             .collect();
         Ok(Self {
             checked,
+            symbols: &resolved.symbols,
             prelude,
             expression_types,
             clause_types,
@@ -543,7 +546,8 @@ impl<'a> Specializer<'a> {
                 .ok_or_else(|| error("checked clause type is missing"))?;
             let mut substitution = HashMap::new();
             match_type(&site.ty, &key.ty, &mut substitution)?;
-            self.discharge(&site.bounds, &mut substitution)?;
+            self.discharge(&site.bounds, &mut substitution)
+                .map_err(|message| located(module, clause.span, &message))?;
             let (parameters, _) = key
                 .ty
                 .function()
@@ -1263,23 +1267,28 @@ impl<'a> Specializer<'a> {
 
     /// Fix what a definition's bounds determine: once an owner is known, its
     /// member's implementation says the types of the member's other
-    /// positions, which may be all that says what a variable is. Runs until
-    /// nothing more is determined.
+    /// positions, which may be all that says what a variable is. The bound's
+    /// shape and the implementation's signature are met from both sides, so
+    /// a position either one knows fixes the other's. Runs until nothing
+    /// more is determined; a bound still open then names a variable nothing
+    /// determines, which is refused rather than guessed.
     fn discharge(
         &self,
         bounds: &[InferredBound],
         substitution: &mut HashMap<TypeVariable, Type>,
-    ) -> Result<(), SpecializeError> {
+    ) -> Result<(), String> {
         let mut open: Vec<&InferredBound> = bounds.iter().collect();
         loop {
-            let before = open.len();
+            let before = substitution.len();
             let mut waiting = Vec::new();
             for bound in open {
                 let Ok(owner) = substitute_type(&bound.owner, substitution) else {
                     waiting.push(bound);
                     continue;
                 };
-                let target = self.implementation(&owner, bound.member)?;
+                let target = self
+                    .implementation(&owner, bound.member)
+                    .map_err(|failure| failure.message)?;
                 // A record's or a tuple's own member takes two of it: the
                 // owner says all there is.
                 if self.is_structural(target, Some(std::slice::from_ref(&owner))) {
@@ -1289,29 +1298,36 @@ impl<'a> Specializer<'a> {
                     .checked
                     .values
                     .get(&target)
-                    .ok_or_else(|| error("a bound's implementation has no scheme"))?;
+                    .ok_or("a bound's implementation has no scheme")?;
                 let InferredType::Function(parameters, result) = &scheme.ty else {
                     continue;
                 };
-                // The implementation at this owner: matched by its receiver,
+                // The implementation at this owner: fixed by its receiver,
                 // or for a member of the type, by what it answers.
                 let mut fixed = HashMap::new();
-                let matched = if bound.associated {
+                let pinned = if bound.associated {
                     match_type(result, &owner, &mut fixed)
                 } else {
                     parameters
                         .first()
                         .map_or(Ok(()), |receiver| match_type(receiver, &owner, &mut fixed))
                 };
-                if matched.is_err() {
+                if pinned.is_err() {
                     continue;
                 }
-                if let Ok(concrete) = substitute_type(&scheme.ty, &fixed) {
-                    let _ = match_type(&bound.ty, &concrete, substitution);
+                while meet(&bound.ty, &scheme.ty, (substitution, &mut fixed)) {}
+                if substitute_type(&bound.ty, substitution).is_err() {
+                    waiting.push(bound);
                 }
             }
-            if waiting.is_empty() || waiting.len() == before {
+            if waiting.is_empty() {
                 return Ok(());
+            }
+            if substitution.len() == before {
+                return Err(format!(
+                    "nothing determines the types a `where` bound's member `{}` takes here",
+                    self.symbols.text(waiting[0].member)
+                ));
             }
             open = waiting;
         }
@@ -1607,6 +1623,68 @@ fn concrete_scheme(scheme: &InferredScheme) -> Result<Type, SpecializeError> {
         return Err(error("entry has an ambiguous polymorphic type"));
     }
     substitute_type(&scheme.ty, &HashMap::new())
+}
+
+/// Meet a bound's shape with its implementation's signature, each side's
+/// variables its own: where one side is known in full, the other is matched
+/// against it; where both are built alike, their parts meet. Answers
+/// whether either side learnt anything. A part neither knows yet, or rows
+/// neither side knows in full, wait for a later round.
+fn meet(
+    bound: &InferredType,
+    implementation: &InferredType,
+    (known, fixed): (
+        &mut HashMap<TypeVariable, Type>,
+        &mut HashMap<TypeVariable, Type>,
+    ),
+) -> bool {
+    /// Match `template` against `concrete` where it fits, learning nothing
+    /// where it does not; answers whether it learnt anything.
+    fn learn(
+        template: &InferredType,
+        concrete: &Type,
+        substitution: &mut HashMap<TypeVariable, Type>,
+    ) -> bool {
+        let mut trial = substitution.clone();
+        if match_type(template, concrete, &mut trial).is_ok() && trial.len() > substitution.len() {
+            *substitution = trial;
+            return true;
+        }
+        false
+    }
+    if let Ok(concrete) = substitute_type(implementation, fixed) {
+        return learn(bound, &concrete, known);
+    }
+    if let Ok(concrete) = substitute_type(bound, known) {
+        return learn(implementation, &concrete, fixed);
+    }
+    let mut learnt = false;
+    let mut each = |bounds: &[InferredType], implementations: &[InferredType]| {
+        for (bound, implementation) in bounds.iter().zip(implementations) {
+            learnt |= meet(bound, implementation, (&mut *known, &mut *fixed));
+        }
+    };
+    match (bound, implementation) {
+        (InferredType::Named(a, bounds), InferredType::Named(b, implementations))
+            if a == b && bounds.len() == implementations.len() =>
+        {
+            each(bounds, implementations);
+        }
+        (InferredType::Tuple(bounds), InferredType::Tuple(implementations))
+            if bounds.len() == implementations.len() =>
+        {
+            each(bounds, implementations);
+        }
+        (
+            InferredType::Function(bounds, bound_result),
+            InferredType::Function(implementations, implementation_result),
+        ) if bounds.len() == implementations.len() => {
+            each(bounds, implementations);
+            learnt |= meet(bound_result, implementation_result, (known, fixed));
+        }
+        _ => {}
+    }
+    learnt
 }
 
 fn substitute_type(

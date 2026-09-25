@@ -75,6 +75,12 @@ infers them, so `double(x) -> x.mul(2)` serves every type with a `mul`. Where
 every method a generic receiver could have shares a shape, that shape is
 context before any default, so the `2` is whatever `x` is, built through its
 type's `of_nat`. Each specialization calls the concrete type's own member.
+A bound may mention a variable the signature does not, and another bound may be
+on it: in `r.fold : r Nat (Nat x -> Nat) -> Nat` with `x.name : x -> Str`, `x`
+is whatever `r`'s `fold` hands over, which `r`'s implementation says at each
+specialization. A bound on a variable neither the signature nor such a bound
+reaches is refused, and one whose types no implementation determines is refused
+where it is used rather than guessed.
 `Name(a) = where ...` names requirements that a `where` clause applies
 together as `Name(a)`. An alias is no type and has no implementation: it
 expands where it is applied, and composes, exports and imports as a type name
