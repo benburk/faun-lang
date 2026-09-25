@@ -1,7 +1,17 @@
 # Polymorphic list utilities that need neither tuples, records, constraints,
-# nor postfix propagation.
+# nor postfix propagation. They follow Ori's standard list: the receiver
+# comes first, so `xs.get(i)` means `get(xs i)`.
+#
+# A lookup that can miss answers a `Result` whose error names the miss.
+# Faun has no loose tags yet, so each is a nominal type of one constructor,
+# spelled as the tag it stands for: a caller writes `Err(OutOfBounds)`
+# either way.
 
-exports {List.*}
+exports {List.* OutOfBounds.* Empty.* NotFound.*}
+
+OutOfBounds : [OutOfBounds]
+Empty : [Empty]
+NotFound : [NotFound]
 
 List(a) : [Nil Cons(a List(a))].(
   len : List(a) -> Nat
@@ -27,18 +37,126 @@ List(a) : [Nil Cons(a List(a))].(
   map([] _) -> []
   map([head *tail] f) -> [f(head) *map(tail f)]
 
+  map2 : List(a) List(b) (a b -> c) -> List(c)
+  map2([head *tail] [other *rest] f) -> [f(head other) *map2(tail rest f)]
+  map2(_ _ _) -> []
+
   flat_map : List(a) (a -> List(b)) -> List(b)
   flat_map([] _) -> []
   flat_map([head *tail] f) -> extend(f(head) flat_map(tail f))
+
+  flatten : List(List(a)) -> List(a)
+  flatten([]) -> []
+  flatten([head *tail]) -> extend(head flatten(tail))
+
+  # The lists with `separator` between neighbours and at neither edge.
+  join : List(List(a)) List(a) -> List(a)
+  join([] _) -> []
+  join([only] _) -> only
+  join([head *tail] separator) -> extend(extend(head separator) join(tail separator))
+
+  filter : List(a) (a -> Bool) -> List(a)
+  filter([] _) -> []
+  filter([head *tail] keep) if keep(head) -> [head *filter(tail keep)]
+  filter([_ *tail] keep) -> filter(tail keep)
+
+  count : List(a) (a -> Bool) -> Nat
+  count([] _) -> 0
+  count([head *tail] keep) if keep(head) -> count(tail keep) + 1
+  count([_ *tail] keep) -> count(tail keep)
+
+  any : List(a) (a -> Bool) -> Bool
+  any([] _) -> False
+  any([head *tail] test) -> test(head) | any(tail test)
+
+  all : List(a) (a -> Bool) -> Bool
+  all([] _) -> True
+  all([head *tail] test) -> test(head) & all(tail test)
 
   fold : List(a) b (b a -> b) -> b
   fold([] state _) -> state
   fold([head *tail] state f) -> fold(tail f(state head) f)
 
+  # The fold from the right: `f` takes the element before the state.
+  fold_right : List(a) b (a b -> b) -> b
+  fold_right([] state _) -> state
+  fold_right([head *tail] state f) -> f(head fold_right(tail state f))
+
+  # Every state a left fold passes through, without the seed.
+  trail : List(a) b (b a -> b) -> List(b)
+  trail([] _ _) -> []
+  trail([head *tail] state f) ->
+    next = f(state head)
+    [next *trail(tail next f)]
+
   reverse : List(a) -> List(a)
   reverse(values) -> reverse_into(values [])
+
+  first : List(a) -> Result(a Empty)
+  first([]) -> Err(Empty)
+  first([head *_]) -> Ok(head)
+
+  last : List(a) -> Result(a Empty)
+  last([]) -> Err(Empty)
+  last([only]) -> Ok(only)
+  last([_ *tail]) -> last(tail)
+
+  # The element at `index`, counting from nought.
+  get : List(a) Nat -> Result(a OutOfBounds)
+  get([] _) -> Err(OutOfBounds)
+  get([head *_] 0) -> Ok(head)
+  get([_ *tail] Succ(index)) -> get(tail index)
+
+  get_or : List(a) Nat a -> a
+  get_or(values index fallback) -> get(values index).ok_or(fallback)
+
+  # The list with the element at `index` replaced by `value`.
+  set : List(a) Nat a -> Result(List(a) OutOfBounds)
+  set([] _ _) -> Err(OutOfBounds)
+  set([_ *tail] 0 value) -> Ok([value *tail])
+  set([head *tail] Succ(index) value) -> set(tail index value).map_ok(|rest| [head *rest])
+
+  find : List(a) (a -> Bool) -> Result(a NotFound)
+  find([] _) -> Err(NotFound)
+  find([head *_] test) if test(head) -> Ok(head)
+  find([_ *tail] test) -> find(tail test)
+
+  find_index : List(a) (a -> Bool) -> Result(Nat NotFound)
+  find_index([] _) -> Err(NotFound)
+  find_index([head *_] test) if test(head) -> Ok(0)
+  find_index([_ *tail] test) -> find_index(tail test).map_ok(|index| index + 1)
+
+  take : List(a) Nat -> List(a)
+  take([head *tail] Succ(count)) -> [head *take(tail count)]
+  take(_ _) -> []
+
+  drop : List(a) Nat -> List(a)
+  drop(values 0) -> values
+  drop([] _) -> []
+  drop([_ *tail] Succ(count)) -> drop(tail count)
+
+  take_while : List(a) (a -> Bool) -> List(a)
+  take_while([head *tail] keep) if keep(head) -> [head *take_while(tail keep)]
+  take_while(_ _) -> []
+
+  drop_while : List(a) (a -> Bool) -> List(a)
+  drop_while([head *tail] skip) if skip(head) -> drop_while(tail skip)
+  drop_while(values _) -> values
+
+  # `0 1 ... count - 1`, written `List.range(count)`.
+  range : Nat -> List(Nat)
+  range(count) -> range_from(0 count)
+
+  # `count` copies of `value`, written `List.repeat(value count)`.
+  repeat : a Nat -> List(a)
+  repeat(_ 0) -> []
+  repeat(value Succ(count)) -> [value *repeat(value count)]
 )
 
 reverse_into : List(a) List(a) -> List(a)
 reverse_into([] output) -> output
 reverse_into([head *tail] output) -> reverse_into(tail [head *output])
+
+range_from : Nat Nat -> List(Nat)
+range_from(_ 0) -> []
+range_from(floor Succ(count)) -> [floor *range_from(floor + 1 count)]

@@ -19,5 +19,8 @@ faun-mos6502-sim65.workspace = true
 faun-wasm32-wasi.workspace = true
 faun-x86-64-linux.workspace = true
 
+[dev-dependencies]
+num-bigint = "0.4.8"
+
 [lints]
 workspace = true

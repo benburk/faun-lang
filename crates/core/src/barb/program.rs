@@ -3,7 +3,7 @@
 use super::budget::Budget;
 use super::builder::Builder;
 use super::constant::{self, Constant, ConstantPool, ConstructionError, Held, Shape, Value};
-use super::facts::{Facts, Operation};
+use super::facts::{Facts, Recognised};
 use super::model::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Expr, ExprId, Field, FieldDetail, FnId, Function,
     Parameter, Symbol, Type, TypeDefinition, TypeId,
@@ -36,7 +36,7 @@ pub struct Program {
     /// Which functions are recognised equations, one entry per function once
     /// worked out. Rewriting a body keeps what it means, so this outlives
     /// every optimization; only defining a body or a type forgets it.
-    operations: Derived<Vec<Option<Operation>>>,
+    recognised: Derived<Recognised>,
     /// What [`Self::analyze`] found, until anything it read changes.
     facts: Derived<Option<Facts>>,
 }
@@ -158,21 +158,27 @@ impl Program {
         self.terms.write(id, expr);
     }
 
-    /// Which functions are recognised equations, by function: worked out the
-    /// first time anything asks, and kept while bodies are only rewritten.
-    pub(super) fn operations(&mut self) -> &[Option<Operation>] {
-        if self.operations.0.len() != self.functions.len() {
-            self.operations.0 = super::arithmetic::recognise(self);
+    /// Which functions are recognised equations or questions about a
+    /// sequence, by function: worked out the first time anything asks, and
+    /// kept while bodies are only rewritten.
+    pub(super) fn recognised(&mut self) -> &Recognised {
+        if self.recognised.0.operations.len() != self.functions.len() {
+            let operations = super::arithmetic::recognise(self);
+            let sequences = super::arithmetic::recognise_sequences(self, &operations);
+            self.recognised.0 = Recognised {
+                operations,
+                sequences,
+            };
         }
-        &self.operations.0
+        &self.recognised.0
     }
 
     /// Work out what every term, parameter, result and field can hold, and
     /// keep it until the program changes. Lowering reads what this found;
     /// the program is answered back so that reading follows directly.
     pub fn analyze(&mut self) -> &Self {
-        let operations = self.operations().to_vec();
-        let facts = super::facts::analyze(self, operations, &super::Assumed::default());
+        let recognised = self.recognised().clone();
+        let facts = super::facts::analyze(self, recognised, &super::Assumed::default());
         self.facts.0 = Some(facts);
         self
     }
@@ -181,8 +187,8 @@ impl Program {
     /// `assumed` says. The tier that knows a target asks this; the answer is
     /// its own, and the program's facts stay what the program alone says.
     pub fn assuming(&mut self, assumed: &super::Assumed) -> Facts {
-        let operations = self.operations().to_vec();
-        super::facts::analyze(self, operations, assumed)
+        let recognised = self.recognised().clone();
+        super::facts::analyze(self, recognised, assumed)
     }
 
     /// What [`Self::analyze`] found, where nothing it read has changed since.
@@ -194,7 +200,7 @@ impl Program {
     /// Forget everything worked out about this program: a declaration or a
     /// body now says something it did not.
     fn redefined(&mut self) {
-        self.operations.0.clear();
+        self.recognised.0 = Recognised::default();
         self.facts.0 = None;
     }
 

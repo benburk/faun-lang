@@ -5,15 +5,16 @@
 use super::{Atom, Body, ConstantView, Expr, ExprId, FnId, Operation, Program};
 
 pub(super) fn laws(program: &mut Program) {
-    let operations = program.operations().to_vec();
+    let recognised = program.recognised().clone();
+    let operations = recognised.operations.as_slice();
     for at in 0..program.functions().len() {
-        if operations[at].is_some() {
+        if recognised.answered(FnId::at(at)) {
             continue;
         }
         let id = FnId::at(at);
         if let Some(body) = program.function(id).body() {
             let mut small = vec![None; program.params(id).len()];
-            in_body(program, &operations, body, &mut small, 128);
+            in_body(program, operations, body, &mut small, 128);
         }
     }
 }

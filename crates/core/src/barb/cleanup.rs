@@ -1,7 +1,7 @@
 //! Backward liveness for inert bindings, followed by capture-free renaming.
 //! Matches and calls of unknown meaning are retained even when their answers
-//! are unused. A structurally recognized arithmetic call is pure and total,
-//! so it is inert. Dropping a constructor never drops eager opaque calls that
+//! are unused. A structurally recognized call -- arithmetic, or a question
+//! about a sequence -- is pure and total, so it is inert. Dropping a constructor never drops eager opaque calls that
 //! produced its fields.
 //! Rebuild into fresh term pools, then replace the old pools in one commit.
 //! Declarations and constants stay in place; expression IDs and ranges change.
@@ -9,10 +9,11 @@
 use super::terms::TermArena;
 use std::collections::HashMap;
 
+use super::facts::Recognised;
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
 
 pub(super) fn cleanup(program: &mut Program) {
-    let operations = program.operations().to_vec();
+    let recognised = program.recognised().clone();
     let mut rewrite = Rewrite {
         source: program,
         terms: TermArena::default(),
@@ -20,17 +21,17 @@ pub(super) fn cleanup(program: &mut Program) {
     };
     let mut bodies = vec![];
     // Every definition is a root, not just the entry or its reachable callees.
-    for (at, op) in operations.iter().enumerate() {
+    for at in 0..program.functions().len() {
         let id = FnId::at(at);
         let Some(body) = program.function(id).body() else {
             continue;
         };
-        let body = if op.is_some() {
+        let body = if recognised.answered(id) {
             // Protected equations need new pool references, but no rewriting.
             rewrite.copy_body(body)
         } else {
             let count = program.params(id).len();
-            let (plan, _) = plan_body(program, &operations, body, count);
+            let (plan, _) = plan_body(program, &recognised, body, count);
             let locals = (0..count).map(|at| Some(Atom(Local::at(at)))).collect();
             rewrite.body(plan, locals, count)
         };
@@ -52,22 +53,22 @@ struct PlannedExpr {
 
 fn plan_body(
     program: &Program,
-    operations: &[Option<super::Operation>],
+    recognised: &Recognised,
     body: Body,
     base: usize,
 ) -> (PlannedBody, Vec<bool>) {
     let bindings = program.bindings(body.bindings);
     let mut live = vec![false; base + bindings.len()];
-    let tail = plan_expr(program, operations, body.tail, &mut live);
+    let tail = plan_expr(program, recognised, body.tail, &mut live);
     let mut kept = Vec::with_capacity(bindings.len());
     for &id in bindings.iter().rev() {
         let needed = live.pop().expect("one local per binding");
         let eager = match program.expr(id) {
-            Expr::Call(called, _) => operations[called.index()].is_none(),
+            Expr::Call(called, _) => !recognised.answered(called),
             Expr::Match(..) => true,
             Expr::Atom(..) | Expr::Static(..) | Expr::Con(..) => false,
         };
-        kept.push((needed || eager).then(|| plan_expr(program, operations, id, &mut live)));
+        kept.push((needed || eager).then(|| plan_expr(program, recognised, id, &mut live)));
     }
     kept.reverse();
     (
@@ -81,7 +82,7 @@ fn plan_body(
 
 fn plan_expr(
     program: &Program,
-    operations: &[Option<super::Operation>],
+    recognised: &Recognised,
     id: ExprId,
     live: &mut [bool],
 ) -> PlannedExpr {
@@ -98,7 +99,7 @@ fn plan_expr(
             live[value.0.index()] = true;
             for arm in program.arms(arms) {
                 let base = live.len() + program.fields(arm.ctor).len();
-                let (plan, captures) = plan_body(program, operations, arm.body, base);
+                let (plan, captures) = plan_body(program, recognised, arm.body, base);
                 // Fields are local to this arm, not captures of its parent.
                 for (used, captured) in live.iter_mut().zip(captures) {
                     *used |= captured;

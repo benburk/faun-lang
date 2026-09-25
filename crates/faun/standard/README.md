@@ -3,6 +3,18 @@
 `standard.fn` is the bootstrap package root. It exports `Bool`, `Nat`, `Int`,
 `U8`, `List`, `Result`, and `Str` from sibling modules.
 
+`List` follows Ori's standard list wherever a function needs no tuples,
+records, method constraints, or `?`: `len`, `is_empty`, `append`, `extend`,
+`prepend`, `map`, `map2`, `flat_map`, `flatten`, `join`, `filter`, `count`,
+`any`, `all`, `fold`, `fold_right`, `trail`, `reverse`, `first`, `last`,
+`get`, `get_or`, `set`, `find`, `find_index`, `take`, `drop`, `take_while`,
+`drop_while`, and the constructors `List.range(n)` and `List.repeat(x n)`. A
+lookup that can miss answers `Err(OutOfBounds)`, `Err(Empty)` or
+`Err(NotFound)`. Ori's are loose tags; until Faun has those, each is a
+nominal one-constructor type the list module exports, spelled the same at
+every use. Nothing is recognized by name: `len` is answered from the length a
+list holds because Barb recognizes what it computes.
+
 ```sh
 cargo run -- check crates/faun/examples/utilities.fn
 cargo run -- emit --target x86_64-linux barb crates/faun/examples/main.fn

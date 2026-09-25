@@ -25,6 +25,7 @@
 //! without a last step, an argument from outside -- it says so and the
 //! tiers below hold what they must.
 
+use super::facts::{Recognised, SequenceOperation};
 use super::model::{Body, CtorId, Expr, ExprId, FnId, Range, TypeId};
 use super::program::Program;
 use super::{Shape, shape, single_field};
@@ -56,6 +57,10 @@ const WIDEN: usize = 8;
 /// settles, so this is the room that takes rather than a guess.
 const ROUNDS: usize = 24;
 
+/// How many times the walk goes round afterwards to take back what widening
+/// gave up. Each round carries a narrower bound one call further.
+const NARROWINGS: usize = 8;
+
 /// Final conservative ranges consumed by lowering.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Ranges {
@@ -70,11 +75,7 @@ pub(super) struct Ranges {
     pub fields: Vec<Bounds>,
 }
 
-pub(super) fn analyze(
-    program: &Program,
-    operations: &[Option<super::Operation>],
-    assumed: &Assumed,
-) -> Ranges {
+pub(super) fn analyze(program: &Program, recognised: &Recognised, assumed: &Assumed) -> Ranges {
     let count = program.functions().len();
     let mut held = Propagation::start(program, assumed);
 
@@ -84,7 +85,7 @@ pub(super) fn analyze(
         for at in 0..count {
             again |= once(
                 program,
-                operations,
+                recognised,
                 assumed,
                 &mut held,
                 (FnId::at(at), round),
@@ -105,6 +106,18 @@ pub(super) fn analyze(
         held.forget();
     }
 
+    // Widening gives up more than recursion needs it to: a remainder of a
+    // count that grew is still below its divisor, and what is handed that
+    // remainder is too. Going round again from a bound that holds, without
+    // widening, only takes away what nothing reaches.
+    for _ in 0..NARROWINGS {
+        let next = narrowed(program, recognised, assumed, &held);
+        if next == held {
+            break;
+        }
+        held = next;
+    }
+
     finish(program, assumed, held)
 }
 
@@ -122,6 +135,8 @@ pub struct Assumed {
     pub parameters: Vec<(usize, Bounds)>,
     /// What every value of a constructor holds in one field.
     pub fields: Vec<(CtorId, usize, Bounds)>,
+    /// What any sequence's length can be, where anything says.
+    pub length: Option<Bounds>,
 }
 
 impl Assumed {
@@ -251,6 +266,7 @@ const fn anything(held: Option<Bounds>) -> Bounds {
 
 /// What the walk has worked out so far, which is what it goes round again
 /// to add to.
+#[derive(PartialEq, Eq)]
 struct Propagation {
     params: Vec<Vec<Option<Bounds>>>,
     results: Vec<Option<Bounds>>,
@@ -347,6 +363,7 @@ enum Binding {
 
 /// What one walk hands on: the arguments it called with, what it built into
 /// each field, and the types of values it met built out of sight.
+#[derive(Default)]
 struct Found {
     calls: Vec<(FnId, Vec<Bounds>)>,
     built: Vec<(usize, Bounds)>,
@@ -357,59 +374,113 @@ struct Found {
 /// than what was already known, which is what says to go round again.
 fn once(
     program: &Program,
-    operations: &[Option<super::Operation>],
+    recognised: &Recognised,
     assumed: &Assumed,
     held: &mut Propagation,
     (id, round): (FnId, usize),
 ) -> bool {
-    let at = id.index();
-    let params: Option<Vec<Bounds>> = held.params[at].iter().copied().collect();
-    let Some(params) = params else { return false };
+    // Results change only after this walk; borrowing retains the same
+    // per-function snapshot without copying the whole table each round.
+    let (mut terms, mut matched) = (
+        std::mem::take(&mut held.terms),
+        std::mem::take(&mut held.matched),
+    );
+    let walked = walk(
+        (program, recognised, assumed),
+        held,
+        id,
+        (&mut terms, &mut matched),
+    );
+    held.terms = terms;
+    held.matched = matched;
+    let Some((answer, found)) = walked else {
+        return false;
+    };
+    let again = settle(&mut held.results[id.index()], answer, round);
+    held.learn(program, assumed, found, round) || again
+}
+
+/// Every definition once more, reading only what `held` knows and building
+/// what that says afresh. Where `held` already holds everything its walks
+/// find, so does the answer, and it holds no more: a bound widened past
+/// what the program reaches comes back down.
+fn narrowed(
+    program: &Program,
+    recognised: &Recognised,
+    assumed: &Assumed,
+    held: &Propagation,
+) -> Propagation {
+    let mut next = Propagation::start(program, assumed);
+    for at in 0..program.functions().len() {
+        let Some((answer, found)) = walk(
+            (program, recognised, assumed),
+            held,
+            FnId::at(at),
+            (&mut next.terms, &mut next.matched),
+        ) else {
+            continue;
+        };
+        next.results[at] = Some(answer);
+        next.learn(program, assumed, found, 0);
+    }
+    next
+}
+
+/// What one definition answers and hands on, given what `held` knows, with
+/// what each of its terms answers joined into `terms` and `matched`. Nothing,
+/// while nothing has handed it anything.
+fn walk(
+    (program, recognised, assumed): (&Program, &Recognised, &Assumed),
+    held: &Propagation,
+    id: FnId,
+    (terms, matched): (&mut [Bounds], &mut [Bounds]),
+) -> Option<(Bounds, Found)> {
+    let params: Vec<Bounds> = held.params[id.index()]
+        .iter()
+        .copied()
+        .collect::<Option<_>>()?;
     let Some(body) = program.function(id).body() else {
         // Something outside answers, and nothing about a declaration can be
         // read, so what comes back from one is what the tier above said.
         let result = program.function(id).result;
         let answered = assumed.result(id).and(assumed.value(program, result));
-        return settle(&mut held.results[at], answered, round);
+        return Some((answered, Found::default()));
     };
 
     // A recognized equation is evaluated as that operation, not walked as
     // unary recursion. Besides being cheaper, this avoids widening a huge
     // countdown one predecessor at a time.
-    if let Some(op) = operations[at] {
-        return settle(
-            &mut held.results[at],
-            operation(program, op, params[0], params[1]),
-            round,
-        );
+    if let Some(op) = recognised.operations[id.index()] {
+        let answer = operation(program, op, params[0], params[1]);
+        return Some((answer, Found::default()));
+    }
+    // A sequence holds its length, so a count of one reads it; what it can
+    // be is what the tier holding sequences says.
+    if recognised.sequences[id.index()] == Some(SequenceOperation::Length) {
+        return Some((assumed.length.unwrap_or(Bounds::ANY), Found::default()));
     }
 
-    // Results change only after this walk; borrowing retains the same
-    // per-function snapshot without copying the whole table each round.
     let mut walk = FunctionWalk {
         program,
         assumed,
-        operations,
+        operations: &recognised.operations,
         results: &held.results,
         fields: &held.fields,
         built: Vec::new(),
         outside: Vec::new(),
         predicates: vec![None; params.len()],
         scope: params,
-        terms: std::mem::take(&mut held.terms),
-        matched: std::mem::take(&mut held.matched),
+        terms,
+        matched,
         calls: Vec::new(),
     };
     let answer = walk.body(body);
-    held.terms = walk.terms;
-    held.matched = walk.matched;
     let found = Found {
         calls: walk.calls,
         built: walk.built,
         outside: walk.outside,
     };
-    let again = settle(&mut held.results[at], answer, round);
-    held.learn(program, assumed, found, round) || again
+    Some((answer, found))
 }
 
 /// Widen `held` by `found`, answering whether that changed it. Past the
@@ -463,8 +534,8 @@ struct FunctionWalk<'a> {
     scope: Vec<Bounds>,
     predicates: Vec<Option<(super::Operation, usize, usize)>>,
     /// And what each term answers, joined over every walk of it.
-    terms: Vec<Bounds>,
-    matched: Vec<Bounds>,
+    terms: &'a mut [Bounds],
+    matched: &'a mut [Bounds],
     calls: Vec<(FnId, Vec<Bounds>)>,
 }
 

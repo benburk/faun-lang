@@ -68,9 +68,35 @@ impl Operation {
     }
 }
 
+/// A question about a sequence, answered from how a sequence is held rather
+/// than by walking it. Like an [`Operation`], it is recognized from what a
+/// definition computes, never from its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SequenceOperation {
+    /// How many elements the one parameter holds: nought for the empty
+    /// sequence and one more than the rest's for a step, whatever the
+    /// element.
+    Length,
+}
+
+/// Which definitions are recognized, one entry per function in each table.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Recognised {
+    pub operations: Vec<Option<Operation>>,
+    pub sequences: Vec<Option<SequenceOperation>>,
+}
+
+impl Recognised {
+    /// Whether a call to `id` is answered as what it was recognized as,
+    /// rather than by walking its body.
+    pub(super) fn answered(&self, id: FnId) -> bool {
+        self.operations[id.index()].is_some() || self.sequences[id.index()].is_some()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
-    operations: Vec<Option<Operation>>,
+    recognised: Recognised,
     ranges: Ranges,
     affine: Vec<Option<Affine>>,
 }
@@ -78,7 +104,21 @@ pub struct Facts {
 impl Facts {
     #[must_use]
     pub fn operation(&self, id: FnId) -> Option<Operation> {
-        self.operations.get(id.index()).copied().flatten()
+        self.recognised
+            .operations
+            .get(id.index())
+            .copied()
+            .flatten()
+    }
+    /// Whether a call to `id` is answered as what it was recognized as,
+    /// rather than by walking its body.
+    #[must_use]
+    pub fn answered(&self, id: FnId) -> bool {
+        self.operation(id).is_some() || self.sequence_operation(id).is_some()
+    }
+    #[must_use]
+    pub fn sequence_operation(&self, id: FnId) -> Option<SequenceOperation> {
+        self.recognised.sequences.get(id.index()).copied().flatten()
     }
     #[must_use]
     pub fn held(&self, id: ExprId) -> Bounds {
@@ -130,13 +170,13 @@ impl Facts {
 #[must_use]
 pub(super) fn analyze(
     program: &Program,
-    operations: Vec<Option<Operation>>,
+    recognised: Recognised,
     assumed: &super::Assumed,
 ) -> Facts {
-    let ranges = super::bounds::analyze(program, &operations, assumed);
-    let affine = super::affine::analyze(program, &operations);
+    let ranges = super::bounds::analyze(program, &recognised, assumed);
+    let affine = super::affine::analyze(program, &recognised.operations);
     Facts {
-        operations,
+        recognised,
         ranges,
         affine,
     }

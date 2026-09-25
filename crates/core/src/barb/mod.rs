@@ -114,7 +114,7 @@ pub use constant::{
 // question from how a value is held. Representation selection asks
 // `TypeShape`, so nothing outside this tier needs this one.
 pub(crate) use constant::Shape;
-pub use facts::{Facts, Operation};
+pub use facts::{Facts, Operation, SequenceOperation};
 
 /// What analysis finds in `program`, worked out on a copy, for a test that
 /// reads facts beside the program itself.

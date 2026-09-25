@@ -752,3 +752,133 @@ fn a_long_countdown_settles_with_nought_as_its_least() {
     );
     assert_eq!(facts.answers(main), Bounds::at(0));
 }
+
+/// A count with no last step is given no greatest bound, but its remainder
+/// by 256 is still below 256, and so is what that remainder is handed to:
+/// widening the count must not widen them with it.
+#[test]
+fn a_remainder_of_a_widened_count_stays_below_its_divisor() {
+    let mut library = fixture::Library::new();
+    let (nat, zero, succ) = (library.nat, library.zero, library.succ);
+    let divisor = library.number(256);
+    let program = &mut library.program;
+    let count = program.declare("count", &[nat], nat);
+    program.define(count, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                b.con(zero, &[])
+            } else {
+                let rest = b.call(count, &[fields[0]]);
+                b.con(succ, &[rest])
+            }
+        })
+    });
+    let sink = program.declare("sink", &[nat], nat);
+    let main = program.declare("main", &[nat], nat);
+    program.define(main, |b, args| {
+        let counted = b.call(count, &[args[0]]);
+        let divisor = b.known(divisor);
+        let low = b.call(library.modulo, &[counted, divisor]);
+        b.call(sink, &[low])
+    });
+    program.set_entry(main);
+    let facts = analyzed(program);
+    let below = Bounds {
+        low: 0,
+        high: Some(255),
+    };
+    assert_eq!(facts.answers(count), Bounds::ANY);
+    assert_eq!(facts.answers(library.modulo), below);
+    assert_eq!(facts.takes(sink), [below]);
+}
+
+/// How a step of a list is counted, for [`counted`].
+#[derive(Clone, Copy, Debug)]
+enum Step {
+    /// `Succ(count(rest))`.
+    Succ,
+    /// `1 + count(rest)`.
+    OnePlus,
+    /// `count(rest) + 1`.
+    PlusOne,
+    /// `element + count(rest)`: a sum, not a count.
+    PlusElement,
+    /// `Succ(Succ(count(rest)))`: twice the length.
+    Twice,
+    /// `Succ(count(rest))`, but from one: the length and one more.
+    FromOne,
+}
+
+/// A list declared step first, its rest before its element when
+/// `rest_first`, and a count of it stepping as `step` says.
+fn counted(step: Step, rest_first: bool) -> (Program, FnId) {
+    let mut library = fixture::Library::new();
+    let one = library.number(1);
+    let (nat, zero, succ, add) = (library.nat, library.zero, library.succ, library.add);
+    let p = &mut library.program;
+    let list = p.declare_type("List");
+    let fields = if rest_first { [list, nat] } else { [nat, list] };
+    p.define_type(list, &[("Cons", &fields), ("Nil", &[])]);
+    let nil = p.ctor_at(list, 1);
+    let (element, rest) = if rest_first { (1, 0) } else { (0, 1) };
+    let count = p.declare("count", &[list], nat);
+    p.define(count, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == nil {
+                let nought = b.con(zero, &[]);
+                return match step {
+                    Step::FromOne => b.con(succ, &[nought]),
+                    _ => nought,
+                };
+            }
+            let counted = b.call(count, &[fields[rest]]);
+            match step {
+                Step::Succ | Step::FromOne => b.con(succ, &[counted]),
+                Step::OnePlus => {
+                    let one = b.known(one);
+                    b.call(add, &[one, counted])
+                }
+                Step::PlusOne => {
+                    let one = b.known(one);
+                    b.call(add, &[counted, one])
+                }
+                Step::PlusElement => b.call(add, &[fields[element], counted]),
+                Step::Twice => {
+                    let stepped = b.con(succ, &[counted]);
+                    b.con(succ, &[stepped])
+                }
+            }
+        })
+    });
+    (library.program, count)
+}
+
+/// A count of a list is its length however the step adds its one, whichever
+/// constructor comes first and wherever the rest is; nothing reads a name.
+#[test]
+fn a_count_of_a_list_is_its_length() {
+    for step in [Step::Succ, Step::OnePlus, Step::PlusOne] {
+        for rest_first in [false, true] {
+            let (program, count) = counted(step, rest_first);
+            assert_eq!(
+                analyzed(&program).sequence_operation(count),
+                Some(SequenceOperation::Length),
+                "{step:?}, rest first: {rest_first}"
+            );
+        }
+    }
+}
+
+/// A walk that adds its elements, counts two per step or starts from one
+/// is not a length, however close it comes.
+#[test]
+fn a_near_miss_of_a_count_is_not_a_length() {
+    for step in [Step::PlusElement, Step::Twice, Step::FromOne] {
+        let (program, count) = counted(step, false);
+        assert_eq!(
+            analyzed(&program).sequence_operation(count),
+            None,
+            "{step:?}"
+        );
+    }
+}

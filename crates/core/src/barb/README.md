@@ -76,7 +76,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   endpoint-indexed, so closure considers only composable paths and stops at the
   first counterexample. Frontend typing and well-formed arena references remain
   preconditions, not proofs supplied here.
-- `arithmetic.rs`: recognize induction equations, without range analysis.
+- `arithmetic.rs`: recognize induction equations, without range analysis. The
+  same equations recognize a count of a sequence -- nought when empty, one more
+  than the rest's for a step, never reading the element -- as a
+  `SequenceOperation::Length`, a separate table from the binary `Operation`s.
+  A recognized definition of either kind keeps its body: passes neither rewrite
+  nor inline it, and cleanup treats its calls as inert.
 - `bounds.rs`: interval arithmetic and interprocedural range propagation.
   Each constructor field holds the join of every value built into it, by
   construction or in a constant; reading one back answers no more. Fields of
@@ -86,7 +91,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   target supplies what it knows. A field of an enumeration type is also
   bounded by its tag count. A spine's rest is read as a step of its count and
   says nothing; a sequence's element holds what was built into it, and a
-  known byte string records the range of its bytes.
+  known byte string records the range of its bytes. A recognized length
+  answers what `Assumed` says a length can be; machine lowering says a word.
+  Widening settles what recursion leaves growing; a few narrowing rounds then
+  walk every definition afresh from the settled state, without widening, and
+  take back what nothing reaches -- a remainder of a widened count is still
+  below its divisor, and so is whatever it is handed to.
   `Propagation` is the evolving state; `Ranges` is the conservative final result.
 - `affine.rs`: derive small affine summaries from recognized natural addition and
   multiplication by constants, without adding an expression kind or expanding
@@ -138,7 +148,7 @@ two types -- so nothing infers a provider or an effect from the display name.
    operations and directional monus/division chains, then push power-of-two moduli
    through sums and products.
 6. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
-   pure arithmetic; retain calls of unknown meaning and matches.
+   pure arithmetic or lengths; retain calls of unknown meaning and matches.
 
 Each stage runs once, always; there are no switches. Tests isolating one stage
 call it directly within the crate. Inlining is also what gives range analysis
@@ -179,7 +189,7 @@ Cleanup walks bindings backward, accounting for captures in nested match arms, t
 renames retained locals. Dead constructor chains disappear in this single traversal;
 there is no fixed-point loop. Matches and calls of unknown meaning are conservatively
 retained even when their results are unused. Calls structurally recognized as pure,
-total arithmetic are inert and may go. In particular, dropping a constructor does
+total arithmetic or lengths are inert and may go. In particular, dropping a constructor does
 not drop opaque eager calls that computed its fields. Folded, now-unused product
 constants no longer demand runtime representations; live products lower to
 their fields' machine values and payload-carrying sums to machine cells.

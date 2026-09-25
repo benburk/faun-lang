@@ -26,7 +26,8 @@
 //!   product of two leaves. The sequence is the buffer's last `len`
 //!   elements, so its rest is the same buffer one shorter: taking a sequence
 //!   apart builds nothing, and adding to one writes in place where nothing
-//!   else holds the buffer.
+//!   else holds the buffer. A definition recognized as its length is never
+//!   emitted; a call to one reads the length leaf.
 //! - everything else with fields is a managed cell.
 //! - a cell's fields are held at the class the cell says, which is the class
 //!   a projection reads them back at. A field held flat is its leaves, laid
@@ -108,6 +109,8 @@ pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program
 enum Callee<'a> {
     Unreachable,
     Instruction(barb::Operation),
+    /// Answered from how the sequence it is handed is held.
+    Sequence(barb::SequenceOperation),
     Function(FunctionId),
     External {
         id: FunctionId,
@@ -170,6 +173,10 @@ fn declare<'a>(
         }
         if let Some(operation) = facts.operation(id) {
             callees.push(Callee::Instruction(operation));
+            continue;
+        }
+        if let Some(operation) = facts.sequence_operation(id) {
+            callees.push(Callee::Sequence(operation));
             continue;
         }
         let function = program.function(id);
@@ -407,7 +414,7 @@ impl<'a> Demand<'a> {
             }
             let function = program.function(id);
             demand.type_(function.result)?;
-            if facts.operation(id).is_none()
+            if !facts.answered(id)
                 && let Some(body) = function.body()
             {
                 demand.body(body)?;
@@ -444,7 +451,7 @@ impl<'a> Demand<'a> {
             let mut changed = false;
             for at in 0..self.program.functions().len() {
                 let id = barb::FnId::at(at);
-                if !self.reached[at] || self.facts.operation(id).is_some() {
+                if !self.reached[at] || self.facts.answered(id) {
                     continue;
                 }
                 let Some(body) = self.program.function(id).body() else {
@@ -913,10 +920,8 @@ fn read_before_walking(
         .enumerate()
         .map(|(at, function)| {
             let id = barb::FnId::at(at);
-            let mut takes = vec![
-                function.body().is_none() || facts.operation(id).is_some();
-                program.params(id).len()
-            ];
+            let mut takes =
+                vec![function.body().is_none() || facts.answered(id); program.params(id).len()];
             if let Some(first) = takes.first_mut()
                 && asks_with_authority(program, routines, function)
             {
@@ -962,6 +967,7 @@ fn assumed(program: &barb::Program, routines: &Routines) -> barb::Assumed {
     if let Some(entry) = program.entry() {
         handed(program, routines, entry, &mut assumed);
     }
+    assumed.length = Some(routines.length());
     assumed
 }
 
@@ -1689,6 +1695,9 @@ impl Lowering<'_> {
                     &args,
                 )));
             }
+            Callee::Sequence(barb::SequenceOperation::Length) => {
+                return Answer::Value(Held::One(self.length(b, expr, arguments, locals)));
+            }
             Callee::External {
                 id,
                 routine,
@@ -1710,6 +1719,32 @@ impl Lowering<'_> {
             Callee::Unreachable => unreachable!("a lowered call must have been demanded"),
         };
         self.answered(b, expr, function, &results, answers)
+    }
+
+    /// How many elements a sequence holds, which is its length leaf.
+    fn length(
+        &self,
+        b: &mut super::Builder,
+        expr: barb::ExprId,
+        arguments: barb::Range,
+        locals: &Locals,
+    ) -> ValueId {
+        let [sequence] = self.barb.atoms(arguments) else {
+            unreachable!("a length is of one sequence");
+        };
+        let len = locals[sequence.0.index()]
+            .as_ref()
+            .expect("a counted sequence is carried")
+            .values()[1];
+        // A length is held in a word, which is what the tier above was told
+        // a length can be; only a class with no greatest number needs it
+        // converted.
+        let class = self.width(expr);
+        if class == Class::Natural {
+            b.convert(class, len)
+        } else {
+            len
+        }
     }
 
     /// What a call answers: what its result type does, which is nothing

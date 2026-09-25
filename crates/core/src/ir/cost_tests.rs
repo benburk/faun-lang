@@ -213,10 +213,10 @@ fn a_list_round_trip_costs_what_is_recorded() {
     assert_eq!(
         cost(&round_trip(100)),
         Cost {
-            allocations: 114,
+            allocations: 14,
             retains: 0,
-            releases: 215,
-            stored_bytes: 16592,
+            releases: 14,
+            stored_bytes: 10560,
         }
     );
 }
@@ -228,19 +228,24 @@ fn a_list_round_trip_costs_what_is_recorded() {
 fn only_what_a_function_consumes_is_owned() {
     let machine = lower(&mut round_trip(3), &Routines::builtin().with_word(64)).unwrap();
     let owned = ownership::owned_parameters(&machine);
-    let of = |name: &str| {
-        let id = machine
+    let lowered = |name: &str| {
+        machine
             .functions
             .iter_enumerated()
             .find(|(_, function)| machine.name(function.name) == name)
-            .map_or_else(|| panic!("`{name}` is lowered"), |(id, _)| id);
+            .map(|(id, _)| id)
+    };
+    let of = |name: &str| {
+        let id = lowered(name).unwrap_or_else(|| panic!("`{name}` is lowered"));
         owned[id.index()].clone()
     };
     // A list is two parameters, its buffer and its length; only a buffer
-    // carries a claim.
+    // carries a claim. `reverse` takes its first list apart and grows its
+    // second.
     assert_eq!(of("build"), [false, true, false]);
     assert_eq!(of("reverse"), [false, false, true, false]);
-    assert_eq!(of("length"), [false, false]);
+    // A count of a list reads the length it holds, and is not lowered.
+    assert_eq!(lowered("length"), None);
 }
 
 /// A value read last by an `if` is released inside each arm, where that arm

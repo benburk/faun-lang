@@ -234,8 +234,10 @@ fn held_bounds(class: Class) -> crate::barb::Bounds {
 /// its own target does not answer for is refused by the target.
 #[derive(Clone, Debug, Default)]
 pub struct Routines {
-    routines: Vec<Routine>,
+    contracts: Vec<Routine>,
     startup: Vec<Startup>,
+    /// How many bits a host word is, once a target has said.
+    word: Option<u16>,
 }
 
 impl Routines {
@@ -255,7 +257,7 @@ impl Routines {
         let offered = |name: &str, takes: &[Takes], returns| held(name, true, takes, returns);
         let hidden = |name: &str, takes: &[Takes], returns| held(name, false, takes, returns);
         let word = Takes::Scalar(Class::Word);
-        let routines = vec![
+        let contracts = vec![
             // One argument, two machine values: a program hands over a
             // string and a machine reads where it starts and how long it is.
             offered("write!", &[Takes::StaticBytes], Returns::Unit),
@@ -274,14 +276,18 @@ impl Routines {
                 class: Class::Word,
             },
         ];
-        Self { routines, startup }
+        Self {
+            contracts,
+            startup,
+            word: None,
+        }
     }
 
     /// Resolve the finite range of a host word for a particular target.
     /// The range is a host contract, not a bound on the language's Nat type.
     #[must_use]
     pub fn with_word(mut self, bits: u16) -> Self {
-        for routine in &mut self.routines {
+        for routine in &mut self.contracts {
             if routine.returns == Returns::Value(Class::Word) {
                 routine.returns = Returns::Value(Class::fixed(bits));
             }
@@ -291,18 +297,26 @@ impl Routines {
                 value.class = Class::fixed(bits);
             }
         }
+        self.word = Some(bits);
         self
+    }
+
+    /// What a sequence's length can be. A sequence is held in memory, and
+    /// how many elements it has is a word, so no more than a word holds.
+    #[must_use]
+    pub fn length(&self) -> crate::barb::Bounds {
+        held_bounds(self.word.map_or(Class::Word, Class::fixed))
     }
 
     /// Every routine a program may call by name.
     pub fn offered(&self) -> impl Iterator<Item = &Routine> {
-        self.routines.iter().filter(|routine| routine.offered)
+        self.contracts.iter().filter(|routine| routine.offered)
     }
 
     /// The routine a target answers to by `name`.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&Routine> {
-        self.routines.iter().find(|routine| routine.name == name)
+        self.contracts.iter().find(|routine| routine.name == name)
     }
 
     /// The startup value a target hands the entry by `name`.
@@ -327,8 +341,8 @@ impl Routines {
     #[must_use]
     pub fn only(&self, names: &[&str]) -> Self {
         Self {
-            routines: self
-                .routines
+            contracts: self
+                .contracts
                 .iter()
                 .filter(|routine| names.contains(&routine.name.as_str()))
                 .cloned()
@@ -339,12 +353,13 @@ impl Routines {
                 .filter(|value| names.contains(&value.name.as_str()))
                 .cloned()
                 .collect(),
+            word: self.word,
         }
     }
 
     /// Take one more in, which is how a routine somebody wrote down arrives.
     pub fn push(&mut self, routine: Routine) {
-        self.routines.push(routine);
+        self.contracts.push(routine);
     }
 }
 

@@ -1,4 +1,5 @@
-//! Structural arithmetic recognition. Names are never consulted.
+//! Structural arithmetic recognition, and the count of a sequence. Names are
+//! never consulted.
 //!
 //! Each check is an induction equation: evaluate the nonrecursive part of
 //! a definition on zero/successor cases, leaving recursive calls opaque,
@@ -11,7 +12,9 @@ use num_traits::{One, Zero};
 
 use super::constant::{ConstantView, Shape};
 use super::shape;
-use super::{Body, CtorId, Expr, FnId, Operation, Program, TypeId};
+use super::{
+    Body, CtorId, Expr, FnId, Operation, Program, SequenceOperation, TypeId, TypeShape, type_shape,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Term {
@@ -111,6 +114,52 @@ fn recognise_one(program: &Program, id: FnId, facts: &[Option<Operation>]) -> Op
         }
     }
     None
+}
+
+/// Which definitions answer a question about a sequence, given which are
+/// already recognised arithmetic.
+pub(super) fn recognise_sequences(
+    program: &Program,
+    facts: &[Option<Operation>],
+) -> Vec<Option<SequenceOperation>> {
+    (0..program.functions().len())
+        .map(|at| length(program, FnId::at(at), facts).then_some(SequenceOperation::Length))
+        .collect()
+}
+
+/// A count of a sequence: nought for the empty one, and one more than the
+/// count of the rest for a step. The element is a variable the answer must
+/// not mention, so a definition reading it counts something else.
+fn length(program: &Program, id: FnId, facts: &[Option<Operation>]) -> bool {
+    let [sequence] = program.params(id) else {
+        return false;
+    };
+    let TypeShape::Sequence {
+        empty,
+        push,
+        recursive,
+        ..
+    } = type_shape(program, *sequence)
+    else {
+        return false;
+    };
+    let Some(normal) = Normal::new(program, id, facts, program.function(id).result) else {
+        return false;
+    };
+    let (element, rest) = (Term::Variable(1), Term::Variable(0));
+    let mut fields = vec![element.clone(), element];
+    fields[recursive] = rest.clone();
+    let counted = Term::Recursive(vec![rest]);
+    let one = Term::Number(BigUint::one());
+    let counts = [
+        succ(counted.clone()),
+        known(Operation::Add, one.clone(), counted.clone()),
+        known(Operation::Add, counted, one),
+    ];
+    normal.run(vec![Term::Constructor(empty, vec![])]) == Some(zero())
+        && normal
+            .run(vec![Term::Constructor(push, fields)])
+            .is_some_and(|step| counts.contains(&step))
 }
 
 // The checks needing two constructor columns are separate: failing to

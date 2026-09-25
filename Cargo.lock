@@ -34,6 +34,7 @@ dependencies = [
  "faun-mos6502-sim65",
  "faun-wasm32-wasi",
  "faun-x86-64-linux",
+ "num-bigint",
 ]
 
 [[package]]

@@ -10,11 +10,12 @@ pub(crate) fn fold(program: &mut Program) {
 }
 
 pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
-    let operations = program.operations().to_vec();
+    let recognised = program.recognised().clone();
+    let operations = recognised.operations.as_slice();
     let mut budget = Budget::new(limits);
     for at in 0..program.functions().len() {
         // Keep the induction equations intact for subsequent recognition.
-        if operations[at].is_some() {
+        if recognised.answered(FnId::at(at)) {
             continue;
         }
         if budget.remaining == 0 {
@@ -27,7 +28,7 @@ pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
         let mut known = vec![Err(CannotFold::DynamicInput); program.params(id).len()];
         in_body(
             program,
-            &operations,
+            operations,
             body,
             &mut known,
             &mut budget,

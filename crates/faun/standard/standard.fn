@@ -8,8 +8,8 @@ import bool {Bool.*}
 import nat {Nat.*}
 import int {Int.*}
 import u8 {U8}
-import list {List.*}
+import list {List.* OutOfBounds.* Empty.* NotFound.*}
 import result {Result.*}
 import str {Str}
 
-exports {Bool.* Nat.* Int.* U8 List.* Result.* Str}
+exports {Bool.* Nat.* Int.* U8 List.* OutOfBounds.* Empty.* NotFound.* Result.* Str}

@@ -344,6 +344,35 @@ fn a_list_built_at_run_time_is_a_buffer() {
     assert_eq!(status(&prepared), 4);
 }
 
+/// A list's length is what its buffer says it holds: counting one reads
+/// that, and walks nothing.
+const LENGTH: &str = "import std.host {Host}
+
+                      small : Nat -> Nat
+                      small(0) -> 0
+                      small(Succ(_)) -> 1
+
+                      count : Nat List(Nat) -> List(Nat)
+                      count(0 acc) -> acc
+                      count(Succ(k) acc) -> count(k [k *acc])
+
+                      main! : Host -> []
+                      main!(host) -> host.exit!(count(4 + small(host.argc) []).len())";
+
+#[test]
+fn a_list_is_counted_by_the_length_it_holds() {
+    let program = read(LENGTH).expect("a program counting a list");
+    let prepared = TARGET
+        .prepare(&program)
+        .expect("a program any target holds");
+    assert!(
+        !prepared.render().contains("List.len"),
+        "{}",
+        prepared.render()
+    );
+    assert_eq!(status(&prepared), 5);
+}
+
 /// A target's calling convention is not a language limit: preparation packs
 /// what a boundary cannot carry into a cell, so these run everywhere.
 #[test]
@@ -638,6 +667,59 @@ const ARITHMETIC_MOD_ZERO: &str = arithmetic!("a % z");
 const ARITHMETIC_LESS: &str = arithmetic!("below(b a).to_nat()");
 const ARITHMETIC_EQUAL: &str = arithmetic!("a.equals(a).to_nat()");
 const ARITHMETIC_UNEQUAL: &str = arithmetic!("a.equals(b).to_nat()");
+
+/// The standard list's functions over `[0 1 2 3 4]`, whose last element
+/// is worked out while the program runs so that nothing here is folded
+/// before a target sees it.
+macro_rules! listed {
+    ($answer:literal) => {
+        concat!(
+            "import std.host {Host}
+             small : Nat -> Nat
+             small(0) -> 0
+             small(Succ(_)) -> 1
+             main! : Host -> []
+             main!(host) ->
+               n = 4 + small(host.argc)
+               xs = [0 1 2 3 n - 1]
+               host.exit!(",
+            $answer,
+            ")"
+        )
+    };
+}
+const LIST_GET: &str = listed!("xs.get(3).ok_or(9) + xs.get(n).ok_or(9) * 10");
+const LIST_SET: &str = listed!("xs.set(1 7).ok_or([]).get_or(1 0)");
+const LIST_FIND: &str =
+    listed!("xs.find(|x| x % 2 == 1).ok_or(9) + xs.find(|x| x == 7).ok_or(9) * 10");
+const LIST_FILTER: &str = listed!("xs.filter(|x| x % 2 == 1).len()");
+const LIST_DROP_TAKE: &str = listed!("xs.drop(1).take(2).get_or(1 9)");
+const LIST_TAKE_PAST: &str = listed!("xs.take(9).len()");
+const LIST_LAST: &str = listed!("xs.last().ok_or(9)");
+
+/// Programs using the standard list, and what each leaves with. A lookup
+/// that can miss answers a `Result`, which a target holds as a cell, so
+/// each is prepared before it runs.
+const LISTED: &[(&str, &str, i32)] = &[
+    ("a list read at an index", LIST_GET, 93),
+    ("a list with an element replaced", LIST_SET, 7),
+    ("a list searched", LIST_FIND, 91),
+    ("a list filtered and counted", LIST_FILTER, 2),
+    ("a list dropped from and taken from", LIST_DROP_TAKE, 2),
+    ("a list taken past its end", LIST_TAKE_PAST, 5),
+    ("the last of a list", LIST_LAST, 4),
+];
+
+#[test]
+fn the_standard_list_answers_what_a_program_says() {
+    for (name, text, answer) in LISTED {
+        let program = read(text).unwrap_or_else(|error| panic!("{name}: {error}\n{text}"));
+        let prepared = TARGET
+            .prepare(&program)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(status(&prepared), *answer, "{name}");
+    }
+}
 
 #[test]
 fn it_answers_what_a_program_says() {
