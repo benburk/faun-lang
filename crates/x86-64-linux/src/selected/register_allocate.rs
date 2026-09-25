@@ -472,6 +472,13 @@ struct Allocator<'a> {
     /// Each function's next spill slot. Slots are numbered within a
     /// function, so its frame holds only what it spills.
     next_spill: Vec<u32>,
+    /// What the instruction being allocated reads, writes or uses as
+    /// scratch: a value put out of its register may wait in any other.
+    busy: RegSet,
+    /// Once its operands are read, the registers the instruction clobbers:
+    /// a value moves out of one of those before the instruction runs, but
+    /// out of any other only after, when the instruction has written it.
+    late: Option<RegSet>,
 }
 
 impl<'a> Allocator<'a> {
@@ -499,6 +506,8 @@ impl<'a> Allocator<'a> {
             owner: entry,
             // Slot zero is reserved for breaking parallel-copy cycles.
             next_spill: vec![1; function_count(selected)],
+            busy: RegSet(0),
+            late: None,
         })
     }
 
@@ -567,6 +576,10 @@ impl<'a> Allocator<'a> {
     )]
     fn allocate_instruction(&mut self, block: BlockId, points: &InstPoints) -> Result<(), String> {
         let inst = self.selected.instructions[points.instruction];
+        // Waiting somewhere the instruction clobbers would only be waiting
+        // to be moved again.
+        let requirements = inst.opcode.requirements();
+        self.busy = RegSet(requirements.scratch.0 | requirements.effects.clobbers.0);
         self.expire_to(points.early);
         self.fill_live(points.early, &[], inst.opcode.requirements().scratch)?;
         let operands = &self.selected.operands[inst.operands.range()];
@@ -625,6 +638,10 @@ impl<'a> Allocator<'a> {
             .into_iter()
             .map(|location| location.ok_or_else(|| "x86 use has no allocated location".to_owned()))
             .collect::<Result<Vec<_>, _>>()?;
+        let read = assigned.iter().fold(0, |held, location| match *location {
+            Location::Register(reg) => held | RegSet::of(&[reg]).0,
+            Location::Spill(_) => held,
+        });
         self.plan_operand_moves(points.instruction, operands, &before, &assigned)?;
         self.operand_locations[points.instruction.index()] = Some(assigned);
         self.evict_reserved(inst.opcode.requirements().scratch, &protected)?;
@@ -633,9 +650,24 @@ impl<'a> Allocator<'a> {
         self.expire_to(points.late);
         let requirements = inst.opcode.requirements();
         let result = inst.result;
+        // What the instruction reads, what it writes, and where its result
+        // goes: a value living on past it can wait anywhere else.
+        let answered = match inst.operand_spec(0).map(|spec| spec.constraint) {
+            Some(Constraint::Fixed(reg)) if result.is_some() => Some(reg),
+            _ => tied,
+        };
+        let written = RegSet(
+            read | requirements.effects.clobbers.0
+                | requirements.scratch.0
+                | answered.map_or(0, |reg| RegSet::of(&[reg]).0),
+        );
+        self.busy = written;
+        self.late = Some(RegSet(
+            requirements.effects.clobbers.0 | requirements.scratch.0,
+        ));
         for reg in REGISTERS {
             if requirements.effects.clobbers.contains(reg) || requirements.scratch.contains(reg) {
-                self.spill_register(reg, result)?;
+                self.evacuate(reg, result)?;
             }
         }
         if let Some(value) = result {
@@ -648,8 +680,11 @@ impl<'a> Allocator<'a> {
                 match spec.constraint {
                     Constraint::Fixed(reg) => self.put_in_register(value, reg, &[])?,
                     Constraint::Any => {
+                        // A preferred register is worth taking where it is
+                        // free, not worth putting something else out for.
                         if let Some(reg) = self.preferred[value.index()]
                             && !requirements.scratch.contains(reg)
+                            && self.register_occupant(reg).is_none()
                         {
                             self.put_in_register(value, reg, &[])?;
                         } else {
@@ -668,6 +703,8 @@ impl<'a> Allocator<'a> {
             requirements.scratch,
         )?;
         self.record(block, points.late);
+        self.busy = RegSet(0);
+        self.late = None;
         Ok(())
     }
 
@@ -766,8 +803,11 @@ impl<'a> Allocator<'a> {
                     "x86 fixed register {reg:?} holds two simultaneous operands"
                 ));
             }
-            let spilled = self.spill(held)?;
-            self.placement.set(held, spilled);
+            // Where `value` is going is taken, so the other cannot wait there.
+            let busy = self.busy;
+            self.busy = RegSet(busy.0 | RegSet::of(&[reg]).0);
+            self.displace(held, reg)?;
+            self.busy = busy;
         }
         self.placement.set(value, Location::Register(reg));
         Ok(())
@@ -788,13 +828,27 @@ impl<'a> Allocator<'a> {
         Ok(Location::Spill(slot))
     }
 
-    fn spill_register(&mut self, reg: Reg, except: Option<VReg>) -> Result<(), String> {
+    /// Move what `reg` holds out of the way of the instruction being
+    /// allocated.
+    fn evacuate(&mut self, reg: Reg, except: Option<VReg>) -> Result<(), String> {
         if let Some(value) = self.register_occupant(reg)
             && Some(value) != except
         {
-            let spilled = self.spill(value)?;
-            self.placement.set(value, spilled);
+            self.displace(value, reg)?;
         }
+        Ok(())
+    }
+
+    /// Put `value` out of `reg`: into one the instruction being allocated
+    /// leaves alone where one is free and a move can be made in time, and
+    /// otherwise to memory.
+    fn displace(&mut self, value: VReg, reg: Reg) -> Result<(), String> {
+        let in_time = self.late.is_none_or(|clobbered| clobbered.contains(reg));
+        let moved = match self.free_register(self.busy).filter(|_| in_time) {
+            Some(free) => Location::Register(free),
+            None => self.spill(value)?,
+        };
+        self.placement.set(value, moved);
         Ok(())
     }
 
