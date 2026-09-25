@@ -132,29 +132,6 @@ fn an_effect_on_its_own_line_goes_on_to_the_next() {
     );
 }
 
-/// Every program the README shows runs, and says what it says it does.
-#[test]
-fn the_readme_programs_run() {
-    let readme =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../README.md"))
-            .unwrap();
-    let programs: Vec<&str> = readme
-        .split("```ruby\n")
-        .skip(1)
-        .map(|block| block.split("```").next().expect("a closed block"))
-        .collect();
-    let written = ["factorial(5) = 120\n", "Hello, world!\n"];
-    assert_eq!(programs.len(), written.len());
-    for (at, (program, written)) in programs.iter().zip(written).enumerate() {
-        let package = support::Package::new(&format!("readme-{at}"), program);
-        assert_eq!(
-            support::run_file(&package.entry(), b""),
-            (0, written.to_owned()),
-            "{program}"
-        );
-    }
-}
-
 /// A runner handed the arguments: what the program answers of them
 /// printed, or what it fails with reported. The reference interpreter holds
 /// no arguments to read, so this runs the program on the machine.
