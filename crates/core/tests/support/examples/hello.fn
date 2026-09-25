@@ -3,6 +3,4 @@
 import std.host {Host}
 
 main! : Host -> []
-main!(host) ->
-  said = host.stdout.write_all!("Hello, world!\n".to_utf8())
-  host.exit!(0)
+main!(host) -> host.print!("Hello, world!\n")

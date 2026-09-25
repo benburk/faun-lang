@@ -65,3 +65,44 @@ fn streams_answer_what_they_moved_or_what_they_met() {
         );
     }
 }
+
+/// A pure program run by the host: what it answers printed, an error it
+/// answers reported, and each as its status.
+#[test]
+fn runners_print_what_a_program_answers_and_report_what_it_fails_with() {
+    let answering = support::Package::new(
+        "run",
+        "import std.host {Host}
+
+         answer : {} -> Nat
+         answer(_) -> 42
+
+         main! : Host -> []
+         main!(host) -> host.run!(answer)",
+    );
+    assert_eq!(
+        support::run_file(&answering.entry(), b""),
+        (0, "42".to_owned())
+    );
+
+    let checking = support::Package::new(
+        "run-result-text",
+        "import std.host {Host}
+
+         check : {stdin: Str} -> Result(Nat Str)
+         check({stdin}) if stdin.len() > 3 -> Err(\"too long\")
+         check({stdin}) -> Ok(stdin.len())
+
+         main! : Host -> []
+         main!(host) -> host.run_result_text!(check)",
+    );
+    assert_eq!(
+        support::run_file(&checking.entry(), b"ab"),
+        (0, "2".to_owned())
+    );
+    // The error goes to standard error, which this host drops.
+    assert_eq!(
+        support::run_file(&checking.entry(), b"abcd"),
+        (1, String::new())
+    );
+}

@@ -22,6 +22,48 @@ Host : {argc: Nat}.(
 
   stderr : Host -> Stderr
   stderr(_) -> Stderr
+
+  # Finish with `status`: nought is done, and anything else says what went
+  # wrong.
+  complete! : Host Nat -> []
+  complete!(host status) -> host.exit!(status)
+
+  # Print `text` and finish: nought, or one where it could not be written.
+  print! : Host Str -> []
+  print!(host text) ->
+    status = finish!(host.stdout text)
+    complete!(host status)
+
+  # Run a program of no input, printing what it answers.
+  run! : Host ({} -> a) -> [] where a.to_str : a -> Str
+  run!(host app) ->
+    status = finish!(host.stdout app({}))
+    complete!(host status)
+
+  # Run a program of standard input as text, printing what it answers; one
+  # the input cannot be read for is not run.
+  run_text! : Host ({stdin: Str} -> a) -> [] where a.to_str : a -> Str
+  run_text!(host app) ->
+    input = host.stdin.read_to_str!()
+    status = serve_text!(host.stdout host.stderr input app)
+    complete!(host status)
+
+  # Run a program that may fail: printing what it answers, or reporting
+  # its error on standard error and finishing with one.
+  run_result! : Host ({} -> Result(a e)) -> [] where
+    a.to_str : a -> Str
+    e.to_str : e -> Str
+  run_result!(host app) ->
+    status = finish_result!(host.stdout host.stderr app({}))
+    complete!(host status)
+
+  run_result_text! : Host ({stdin: Str} -> Result(a e)) -> [] where
+    a.to_str : a -> Str
+    e.to_str : e -> Str
+  run_result_text!(host app) ->
+    input = host.stdin.read_to_str!()
+    status = serve_result_text!(host.stdout host.stderr input app)
+    complete!(host status)
 )
 
 # What reading or writing a stream can meet.
@@ -92,6 +134,13 @@ Stderr : [Stderr].(
     wrote = write_rest!(output bytes bytes.len())
     done = wrote?
     Ok(bytes.len())
+
+  # Say what went wrong, where something did.
+  report_result! : Stderr Result(Nat IoError) -> {}
+  report_result!(_ Ok(_)) -> {}
+  report_result!(errors Err(error)) ->
+    status = report!(errors error.to_str())
+    {}
 )
 
 # What the target answers for, a run of bytes at a time: how many moved,
@@ -103,6 +152,50 @@ stdout_put! : Stdout List(U8) -> Nat
 stdout_failure! : Stdout -> Nat
 stderr_put! : Stderr List(U8) -> Nat
 stderr_failure! : Stderr -> Nat
+
+# What a runner finishes with: nought where what it printed was written.
+finish! : Stdout a -> Nat where a.to_str : a -> Str
+finish!(output value) ->
+  wrote = output.write_all!(value.to_str().to_utf8())
+  written_status(wrote)
+
+written_status : Result(Nat IoError) -> Nat
+written_status(Ok(_)) -> 0
+written_status(Err(_)) -> 1
+
+finish_result! : Stdout Stderr Result(a e) -> Nat where
+  a.to_str : a -> Str
+  e.to_str : e -> Str
+finish_result!(output _ Ok(value)) -> finish!(output value)
+finish_result!(_ errors Err(error)) -> report!(errors error.to_str())
+
+# `error: ` and what went wrong, on standard error: one, or two where even
+# that could not be written.
+report! : Stderr Str -> Nat
+report!(errors text) ->
+  wrote = errors.write_all!("error: ${text}
+".to_utf8())
+  reported_status(wrote)
+
+reported_status : Result(Nat IoError) -> Nat
+reported_status(Ok(_)) -> 1
+reported_status(Err(_)) -> 2
+
+unread! : Stderr [Io(IoError) LimitExceeded InvalidUtf8] -> Nat
+unread!(errors Io(error)) -> report!(errors error.to_str())
+unread!(errors LimitExceeded) -> report!(errors "LimitExceeded")
+unread!(errors InvalidUtf8) -> report!(errors "InvalidUtf8")
+
+serve_text! : Stdout Stderr Result(Str [Io(IoError) LimitExceeded InvalidUtf8]) ({stdin: Str} -> a) -> Nat where
+  a.to_str : a -> Str
+serve_text!(_ errors Err(error) _) -> unread!(errors error)
+serve_text!(output _ Ok(input) app) -> finish!(output app({stdin: input}))
+
+serve_result_text! : Stdout Stderr Result(Str [Io(IoError) LimitExceeded InvalidUtf8]) ({stdin: Str} -> Result(a e)) -> Nat where
+  a.to_str : a -> Str
+  e.to_str : e -> Str
+serve_result_text!(_ errors Err(error) _) -> unread!(errors error)
+serve_result_text!(output errors Ok(input) app) -> finish_result!(output errors app({stdin: input}))
 
 taken! : Stdin Nat Nat -> Result(List(U8) IoError)
 taken!(input got 0) ->

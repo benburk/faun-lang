@@ -140,6 +140,14 @@ each bounded by fuel so it is seen to stop. The `Host`, `Stdin`, `Stdout` and
 of a value's own type is reached whether or not the type was imported, so
 `host.stdout.write_all!(bytes)` needs only `Host`.
 
+`Host` also has Ori's runners, which finish the program for it: `print!`
+writes a text; `run!` and `run_text!` run a pure function of nothing or of
+`{stdin: Str}` and print what it answers; `run_result!` and
+`run_result_text!` do the same for one answering a `Result`, reporting an
+error on standard error as `error: ...`. Each finishes with status nought, or
+one where something went wrong, so `main!(host) -> host.run_text!(app)` is a
+whole program.
+
 A target answers for smaller primitives than these: moving a run of bytes that
 lie in memory, answering how many or `-errno`. Machine lowering builds each
 stream routine on its primitive through a scratch region of one run, and keeps
