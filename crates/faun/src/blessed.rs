@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+use faun_core::float::Operation;
 use num_bigint::BigUint;
 
 use super::modules::{LoadedProgram, TypeBinding};
@@ -70,6 +71,10 @@ pub struct Float {
     pub name: String,
     pub of_decimal: Symbol,
     pub neg: Symbol,
+    /// Its format, and the methods that compute an IEEE 754 operation of
+    /// it, which Barb is told of; see `faun_core::barb::Program::claim`.
+    pub format: faun_core::float::Format,
+    pub operations: Vec<(Symbol, Operation)>,
 }
 
 /// A prelude word a numeral may be: the type, how a natural becomes one,
@@ -128,11 +133,29 @@ impl PreludeIds {
             .into_iter()
             .filter_map(|name| {
                 let binding = binding(program, name).ok()?;
+                let operations = [
+                    ("add", Operation::Add),
+                    ("sub", Operation::Sub),
+                    ("mul", Operation::Mul),
+                    ("div", Operation::Div),
+                    ("sqrt", Operation::Sqrt),
+                ]
+                .into_iter()
+                .filter_map(|(spelled, operation)| {
+                    Some((method(program, &binding, name, spelled).ok()?, operation))
+                })
+                .collect();
                 Some(Float {
                     ty: binding.canonical,
                     name: name.to_owned(),
                     of_decimal: method(program, &binding, name, "of_decimal").ok()?,
                     neg: method(program, &binding, name, "neg").ok()?,
+                    format: if name == "F32" {
+                        faun_core::float::Format::Binary32
+                    } else {
+                        faun_core::float::Format::Binary64
+                    },
+                    operations,
                 })
             })
             .collect();

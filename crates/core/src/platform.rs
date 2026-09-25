@@ -269,6 +269,9 @@ pub struct Routines {
     startup: Vec<Startup>,
     /// How many bits a host word is, once a target has said.
     word: Option<u16>,
+    /// Whether its machine computes IEEE 754 arithmetic itself: see
+    /// [`Self::with_floats`].
+    floats: bool,
 }
 
 impl Routines {
@@ -360,6 +363,7 @@ impl Routines {
             contracts,
             startup,
             word: None,
+            floats: false,
         }
     }
 
@@ -385,6 +389,22 @@ impl Routines {
     #[must_use]
     pub const fn word(&self) -> Option<u16> {
         self.word
+    }
+
+    /// Say that the machine computes each [`crate::float::Float`] with an
+    /// instruction of its own, correctly rounded to nearest-even and never
+    /// trapping, so that a definition claimed to compute one is answered by
+    /// the instruction rather than by its body.
+    #[must_use]
+    pub const fn with_floats(mut self) -> Self {
+        self.floats = true;
+        self
+    }
+
+    /// Whether its machine computes IEEE 754 arithmetic itself.
+    #[must_use]
+    pub const fn floats(&self) -> bool {
+        self.floats
     }
 
     /// What a sequence's length can be. A sequence is held in memory, and
@@ -440,6 +460,7 @@ impl Routines {
                 .cloned()
                 .collect(),
             word: self.word,
+            floats: self.floats,
         }
     }
 

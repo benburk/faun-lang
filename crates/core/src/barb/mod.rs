@@ -83,6 +83,7 @@ mod arithmetic;
 mod bounds;
 mod budget;
 mod builder;
+mod claim;
 mod cleanup;
 mod constant;
 mod copy;

@@ -159,6 +159,9 @@ pub struct Function {
     pub(super) parameters: Range,
     pub result: TypeId,
     pub definition: Definition,
+    /// The IEEE 754 operation its body computes, where the program that
+    /// built it says so: see [`super::Program::claim`].
+    pub float: Option<crate::float::Float>,
 }
 
 impl Function {

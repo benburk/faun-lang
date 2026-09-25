@@ -407,6 +407,14 @@ impl<'a> Lowering<'a> {
                 self.asm.multiply();
                 self.forget(Reg::Rdx);
             }
+            (Opcode::Float, Immediate::Float(float)) => {
+                let right = if float.operation.arity() == 2 {
+                    Some(reg(1)?)
+                } else {
+                    None
+                };
+                self.asm.float(float, result()?, reg(0)?, right);
+            }
             (Opcode::Divide | Opcode::Modulo, Immediate::Bits(_)) => {
                 self.emit_division(inst.opcode == Opcode::Modulo);
             }

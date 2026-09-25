@@ -594,6 +594,26 @@ impl<'a> Lowerer<'a> {
             .insert((wrapper, ty.clone()), self.output.ctor_at(id, 0));
     }
 
+    /// The IEEE 754 operation `key` computes, where it is one of the
+    /// standard floats' own, at the float's type: the one place a float's
+    /// meaning is taken from its name, since no equation says it.
+    fn float(&self, key: &FunctionKey) -> Option<faun_core::float::Float> {
+        let (parameters, _) = key.ty.function()?;
+        self.prelude.floats.iter().find_map(|float| {
+            let (_, operation) = float
+                .operations
+                .iter()
+                .find(|(method, _)| *method == key.name)?;
+            parameters
+                .iter()
+                .all(|ty| matches!(ty, Type::Named(name, arguments) if *name == float.ty && arguments.is_empty()))
+                .then_some(faun_core::float::Float {
+                    operation: *operation,
+                    format: float.format,
+                })
+        })
+    }
+
     fn declare_functions(&mut self) -> Result<(), LowerError> {
         for function in &self.program.functions {
             let (parameters, result) = function
@@ -616,6 +636,9 @@ impl<'a> Lowerer<'a> {
             if let Some(provider) = function.provider {
                 let provider = self.resolved.symbols.text(provider);
                 self.output.answered_by(id, provider);
+            }
+            if let Some(float) = self.float(&function.key) {
+                self.output.claim(id, float);
             }
             self.function_ids.insert(function.key.clone(), id);
         }

@@ -7,6 +7,7 @@
 
 pub mod barb;
 pub mod facts;
+pub mod float;
 pub mod index;
 pub mod ir;
 pub mod platform;

@@ -72,15 +72,17 @@ U8 : Nat.(
   to_ascii_upper(byte) if byte.is_ascii_lower() -> byte - 32
   to_ascii_upper(byte) -> byte
 
-  # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`.
+  # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`. Two words' bits
+  # make a word, so the remainder changes nothing; it is what shows
+  # the answer is one, which nothing recognizes of `Nat`'s bitwise walk.
   and : U8 U8 -> U8
-  and(U8(a) U8(b)) -> U8(a & b)
+  and(U8(a) U8(b)) -> U8((a & b) % 256)
 
   or : U8 U8 -> U8
-  or(U8(a) U8(b)) -> U8(a | b)
+  or(U8(a) U8(b)) -> U8((a | b) % 256)
 
   xor : U8 U8 -> U8
-  xor(U8(a) U8(b)) -> U8(a ^ b)
+  xor(U8(a) U8(b)) -> U8((a ^ b) % 256)
 
   # Every bit flipped.
   bit_not : U8 -> U8

@@ -172,6 +172,14 @@ pub(crate) enum Inst {
     },
     Multiply,
     Divide,
+    /// `dst` = `float` of the patterns in `left` and, for a binary one,
+    /// `right`, through `xmm0` and `xmm1`.
+    Float {
+        float: faun_core::float::Float,
+        dst: Reg,
+        left: Reg,
+        right: Option<Reg>,
+    },
     Syscall,
     LoadStack {
         dst: Reg,
@@ -405,6 +413,21 @@ impl AllocatedBuilder {
 
     pub(crate) fn divide(&mut self) {
         self.push(Inst::Divide);
+    }
+
+    pub(crate) fn float(
+        &mut self,
+        float: faun_core::float::Float,
+        dst: Reg,
+        left: Reg,
+        right: Option<Reg>,
+    ) {
+        self.push(Inst::Float {
+            float,
+            dst,
+            left,
+            right,
+        });
     }
 
     pub(crate) fn syscall(&mut self) {

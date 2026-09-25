@@ -30,6 +30,12 @@ value semantics. a bodyless call is a value the target computes
   what runs; a program with no entry is checked, keeps every definition, and
   lowers to nothing
 - must be fully defunctionalized and monomorphized
+- a function with a body may be claimed to compute an IEEE 754 operation
+  (`Program::claim`), where the frontend knows what no equation says. Its
+  body must then compute that operation on the patterns its wrapped naturals
+  hold, up to which NaN pattern a NaN is; validation checks only the claim's
+  shape. A target with float instructions answers it with one; everything
+  else, the evaluator excepted, walks the body.
 
 ## The IR
 
@@ -79,6 +85,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   endpoint-indexed, so closure considers only composable paths and stops at the
   first counterexample. Frontend typing and well-formed arena references remain
   preconditions, not proofs supplied here.
+- `claim.rs`: what a claimed float is -- a natural in one-field wrappers,
+  taken and answered at one type -- and answering a claimed call from its
+  operands' patterns with the host's arithmetic (`crate::float`). A claimed
+  definition is treated as a recognized one: kept, never inlined, and inert
+  to cleanup. Range analysis gives its answer, and each wrapper it is built
+  into, the whole format: a machine's NaN need not be the body's.
 - `arithmetic.rs`: recognize induction equations, without range analysis. The
   same equations recognize a count of a sequence -- nought when empty, one more
   than the rest's for a step, never reading the element -- as a
@@ -93,8 +105,11 @@ x    ::= a parameter, a binding, or a field an arm bound
   says of them. Barb itself assumes nothing: the tier lowering a program for a
   target supplies what it knows. A field of an enumeration type is also
   bounded by its tag count. A spine's rest is read as a step of its count and
-  says nothing; a sequence's element holds what was built into it, and a
-  known byte string records the range of its bytes. A recognized length
+  says nothing; a sequence's element holds what was built into it, a known
+  byte string records the range of its bytes, and a known sequence of up to
+  4096 other elements what each element's fields hold. A remainder by a
+  natural known outright is below it even past what a `u64` bound says, so
+  `n % 2^64` is a word. A recognized length
   answers what `Assumed` says a length can be; machine lowering says a word.
   Widening settles what recursion leaves growing; a few narrowing rounds then
   walk every definition afresh from the settled state, without widening, and
@@ -186,7 +201,10 @@ two types -- so nothing infers a provider or an effect from the display name.
    calling itself, which machine lowering makes a loop where the call is a tail.
 4. Fusion: a list built by one walk and read once by another is never built.
 5. Arithmetic identities justified by structurally recognized `Operation` facts.
-6. Constant folding with one shared evaluation budget for the entire pass.
+6. Constant folding, each definition after what it calls, so that a caller
+   meets its callees' answers as constants; each definition draws at most a
+   per-definition allowance from the pass's budget, so a costly answer
+   declined in one leaves the rest something to fold with.
 7. Bounded algebraic normalization: combine constants across recognized associative
    operations and directional monus/division chains, then push power-of-two moduli
    through sums and products.
@@ -215,7 +233,8 @@ cloning the program. Function roots change only after all bodies have been rebui
 so inlining always reads original callees and respects their original cost/depth
 limits. Superseded slots remain until cleanup.
 
-`FoldLimits` bounds aggregate work, encoded value size and evaluation depth. Work
+`FoldLimits` bounds aggregate work, work per definition, encoded value size and
+evaluation depth. Work
 includes expression visits, copied bytes and conservative bigint word-operation
 estimates. Result-size and work checks precede native arithmetic and constructor
 concatenation. Limits are optimization policy, never language integer limits; a

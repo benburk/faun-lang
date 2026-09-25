@@ -246,6 +246,15 @@ pub enum Op {
         function: FunctionId,
         args: Range,
     },
+    /// IEEE 754 arithmetic on bit patterns: each operand, and what this
+    /// writes, is the pattern of a value of `float`'s format, held as a
+    /// number of that many bits. Written only for a target that computes
+    /// these itself (see [`crate::platform::Routines::with_floats`]), for
+    /// which it is one instruction; a NaN it writes may be any NaN.
+    Float {
+        float: crate::float::Float,
+        operands: Range,
+    },
     If {
         condition: ValueId,
         then_region: RegionId,

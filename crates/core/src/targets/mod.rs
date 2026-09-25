@@ -50,10 +50,21 @@ pub trait Target: fmt::Debug {
     /// What a compiler knows is not what any one machine can do, so a
     /// program naming something this target has no answer for is refused
     /// where it is written rather than after it is lowered.
+    /// Whether it computes IEEE 754 binary32 and binary64 arithmetic with
+    /// instructions of its own; see [`crate::platform::Routines::with_floats`].
+    fn floats(&self) -> bool {
+        false
+    }
+
     fn routines(&self) -> crate::platform::Routines {
-        crate::platform::Routines::builtin()
+        let routines = crate::platform::Routines::builtin()
             .only(self.provides())
-            .with_word(self.word())
+            .with_word(self.word());
+        if self.floats() {
+            routines.with_floats()
+        } else {
+            routines
+        }
     }
 
     /// The image an already validated, accepted scalar program becomes.

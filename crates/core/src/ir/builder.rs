@@ -225,6 +225,15 @@ impl Builder<'_> {
         self.push(op, &[]);
     }
 
+    /// `float` of the patterns `operands` hold, a pattern of its format.
+    pub fn float(&mut self, float: crate::float::Float, operands: &[ValueId]) -> ValueId {
+        let operands = self.program.hold(operands);
+        self.push_one(
+            Op::Float { float, operands },
+            Class::fixed(float.format.bits()),
+        )
+    }
+
     pub fn convert(&mut self, class: Class, value: ValueId) -> ValueId {
         self.push_one(Op::Convert { value }, class)
     }

@@ -820,6 +820,14 @@ impl<H: Host> Machine<'_, H> {
             Op::Convert { value } => {
                 self.convert(self.result_class(results)?, self.value(value)?)?
             }
+            Op::Float { float, operands } => {
+                let patterns = self
+                    .values(operands)?
+                    .iter()
+                    .map(|pattern| u64::try_from(pattern).map_err(|_| invalid("a float's operand")))
+                    .collect::<Result<Vec<_>, _>>()?;
+                BigUint::from(float.calculate(&patterns))
+            }
             Op::Load {
                 width,
                 address,

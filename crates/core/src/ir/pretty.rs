@@ -156,6 +156,9 @@ impl Program {
             Op::Binary { op, left, right } => {
                 format!("{op:?} v{}, v{}", left.index(), right.index())
             }
+            Op::Float { float, operands } => {
+                format!("{float} {}", arguments(self.values(operands)))
+            }
             Op::Shift {
                 direction,
                 value,

@@ -137,6 +137,9 @@ pub struct Assumed {
     pub fields: Vec<(CtorId, usize, Bounds)>,
     /// What any sequence's length can be, where anything says.
     pub length: Option<Bounds>,
+    /// Whether a claimed float is answered by a machine rather than by its
+    /// body; where it is not, the claim is no fact of the program's.
+    pub floats: bool,
 }
 
 impl Assumed {
@@ -469,6 +472,7 @@ fn walk(
         built: Vec::new(),
         outside: Vec::new(),
         predicates: vec![None; params.len()],
+        exact: vec![None; params.len()],
         scope: params,
         terms,
         matched,
@@ -519,6 +523,10 @@ fn settle(held: &mut Option<Bounds>, found: Bounds, round: usize) -> bool {
     *held != Some(before)
 }
 
+/// The most elements of a constant sequence read one by one for what its
+/// fields hold; past this, its fields could hold anything.
+const ELEMENTS_READ: u64 = 4096;
+
 /// One walk over one definition, with what it hands to what it calls.
 struct FunctionWalk<'a> {
     program: &'a Program,
@@ -533,6 +541,10 @@ struct FunctionWalk<'a> {
     /// What each level holds here, which arms take back as they end.
     scope: Vec<Bounds>,
     predicates: Vec<Option<(super::Operation, usize, usize)>>,
+    /// The natural each level is known to be outright, where it is one a
+    /// bound cannot say exactly: past what a `u64` holds, `2^64` among
+    /// them, which a remainder below it needs to be known as.
+    exact: Vec<Option<u128>>,
     /// And what each term answers, joined over every walk of it.
     terms: &'a mut [Bounds],
     matched: &'a mut [Bounds],
@@ -568,10 +580,58 @@ impl FunctionWalk<'_> {
                 Expr::Atom(a) => self.predicates[a.0.index()],
                 _ => None,
             };
+            let exact = self.exact(binding);
             self.scope.push(held);
             self.predicates.push(predicate);
+            self.exact.push(exact);
         }
         self.expr(body.tail)
+    }
+
+    /// What a call answers, beyond what its equations or its body say: a
+    /// remainder is below its divisor, even one past what a bound can say
+    /// exactly, so `n % 2^64` is a number a word holds; and a claimed float
+    /// may be answered by a machine rather than its body, whose NaN need not
+    /// be the body's -- any pattern of the format, built into each wrapper
+    /// out of sight.
+    fn claimed(&mut self, called: FnId, args: Range, mut answer: Bounds) -> Bounds {
+        if self.operations.get(called.index()).copied().flatten() == Some(super::Operation::Mod)
+            && let Some(divisor) = self.exact[self.program.atoms(args)[1].0.index()]
+            && let Ok(greatest) = u64::try_from(divisor.saturating_sub(1))
+            && divisor > 0
+        {
+            answer = answer.and(Bounds {
+                low: 0,
+                high: Some(greatest),
+            });
+        }
+        let function = self.program.function(called);
+        if let Some(float) = function.float
+            && let Some((wrappers, _)) = super::claim::wrapped(self.program, function.result)
+        {
+            let pattern = Bounds {
+                low: 0,
+                high: Some(float.format.greatest()),
+            };
+            for constructor in wrappers {
+                self.built
+                    .push((slot(self.program, constructor, 0), pattern));
+            }
+            answer = answer.or(pattern);
+        }
+        answer
+    }
+
+    /// The natural a binding is outright, where it is one.
+    fn exact(&self, binding: ExprId) -> Option<u128> {
+        match self.program.expr(binding) {
+            Expr::Static(value) => match self.program.constant(value).view() {
+                super::ConstantView::Natural(number) => u128::try_from(number.to_biguint()).ok(),
+                _ => None,
+            },
+            Expr::Atom(a) => self.exact[a.0.index()],
+            _ => None,
+        }
     }
 
     /// What a term answers, held against the term so that the tier below
@@ -617,6 +677,7 @@ impl FunctionWalk<'_> {
             Some(op) => operation(self.program, op, held[0], held[1]),
             None => self.results[called.index()].unwrap_or(Bounds::NOTHING),
         };
+        let answer = self.claimed(called, args, answer);
         self.calls.push((called, held));
         if self
             .program
@@ -641,6 +702,7 @@ impl FunctionWalk<'_> {
         };
         let mut budget = super::Budget::new(super::FoldLimits {
             work: u64::MAX,
+            work_per_function: u64::MAX,
             max_bytes: usize::MAX,
             max_depth: usize::MAX,
         });
@@ -655,18 +717,23 @@ impl FunctionWalk<'_> {
         }
     }
 
-    /// A run of bytes holds each byte in its element field. A spine of
-    /// anything else is not read element by element here, so its fields
-    /// could hold anything.
+    /// A run of bytes holds each byte in its element field. A short spine
+    /// of anything else is read element by element, as a constructor's
+    /// fields are; a long one is not, so its fields could hold anything.
     fn spine_fields(&mut self, owner: TypeId, spine: super::SpineView<'_>) {
-        let (
-            Shape::Spine {
-                cons, recursive, ..
-            },
-            Some(bytes),
-        ) = (shape(self.program, owner), spine.to_bytes())
+        let Shape::Spine {
+            cons, recursive, ..
+        } = shape(self.program, owner)
         else {
             self.outside.push(owner);
+            return;
+        };
+        let Some(bytes) = spine.to_bytes() else {
+            if spine.length() > ELEMENTS_READ.into() {
+                self.outside.push(owner);
+            } else {
+                self.spine_elements(spine, cons, recursive);
+            }
             return;
         };
         let (Some(&low), Some(&high)) = (bytes.iter().min(), bytes.iter().max()) else {
@@ -680,6 +747,29 @@ impl FunctionWalk<'_> {
                 high: Some(u64::from(high)),
             },
         ));
+    }
+
+    /// Each element's fields of a constant spine, built into `cons`.
+    fn spine_elements(&mut self, spine: super::SpineView<'_>, cons: CtorId, recursive: usize) {
+        let mut budget = super::Budget::new(super::FoldLimits {
+            work: u64::MAX,
+            work_per_function: u64::MAX,
+            max_bytes: usize::MAX,
+            max_depth: usize::MAX,
+        });
+        let elements = spine
+            .elements(&mut budget)
+            .expect("validated constants can be revisited");
+        for fields in elements {
+            for (at, field) in fields.into_iter().enumerate() {
+                let at = if at >= recursive { at + 1 } else { at };
+                self.built.push((
+                    slot(self.program, cons, at),
+                    constant_bounds(self.program, field),
+                ));
+                self.constant_fields(field);
+            }
+        }
     }
 
     /// A number's empty constructor is nought and its other one is one more
@@ -716,10 +806,12 @@ impl FunctionWalk<'_> {
         let mut answer = None;
         let outer = self.scope.clone();
         let predicates = self.predicates.clone();
+        let exact = self.exact.clone();
         let mut surviving: Option<Vec<Bounds>> = None;
         for arm in self.program.arms(arms) {
             self.scope.clone_from(&outer);
             self.predicates.clone_from(&predicates);
+            self.exact.clone_from(&exact);
             let level = self.scope.len();
             if !self.enter(scrutinee, arm.ctor) {
                 continue;
@@ -739,6 +831,7 @@ impl FunctionWalk<'_> {
         }
         self.scope = surviving.unwrap_or(outer);
         self.predicates = predicates;
+        self.exact = exact;
         // Where no arm is reached, nothing is: a value nothing knows yet is
         // a value no constructor could have built.
         answer.unwrap_or(Bounds::NOTHING)
@@ -783,6 +876,7 @@ impl FunctionWalk<'_> {
             }
         }
         self.predicates.resize(self.scope.len(), None);
+        self.exact.resize(self.scope.len(), None);
         true
     }
 

@@ -207,6 +207,7 @@ impl References<'_> {
                 reference(&p.functions, function, "function")?;
                 self.values(args)?;
             }
+            Op::Float { operands, .. } => self.values(operands)?,
             Op::If {
                 condition,
                 then_region,
@@ -507,6 +508,7 @@ impl Checker<'_> {
             } => self.monus(left, right, results)?,
             Op::Binary { left, right, .. } => self.binary(left, right, results)?,
             Op::Shift { value, by, .. } => self.shift(value, by, results)?,
+            Op::Float { float, operands } => self.float(float, operands, results)?,
             Op::Compare { left, right, .. } => {
                 self.comparison(left, right)?;
                 self.results(results, &[Class::Word])?;
@@ -682,6 +684,36 @@ impl Checker<'_> {
     /// instruction that does nothing. An arbitrary-precision natural has no
     /// bits to move -- its products go through the helpers -- and neither has
     /// an address.
+    /// Patterns in and one out, each no wider than the format's.
+    fn float(
+        &self,
+        float: crate::float::Float,
+        operands: Range,
+        results: &[ValueId],
+    ) -> Result<(), String> {
+        let [result] = results else {
+            return Err("a float operation must have one result".into());
+        };
+        let pattern = Class::fixed(float.format.bits());
+        if !self.program.class(*result).fits(pattern) || !pattern.fits(self.program.class(*result))
+        {
+            return Err(format!(
+                "{float} must answer a pattern of {} bits",
+                float.format.bits()
+            ));
+        }
+        let operands = self.program.values(operands);
+        if operands.len() != float.operation.arity() {
+            return Err(format!(
+                "{float} takes {} operands",
+                float.operation.arity()
+            ));
+        }
+        operands
+            .iter()
+            .try_for_each(|&operand| self.require(operand, pattern))
+    }
+
     fn shift(&self, value: ValueId, by: u16, results: &[ValueId]) -> Result<(), String> {
         let [result] = results else {
             return Err("shift must have one result".into());

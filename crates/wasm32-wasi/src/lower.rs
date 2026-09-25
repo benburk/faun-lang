@@ -510,6 +510,7 @@ impl Lowering<'_> {
         let program = self.program;
         match op {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
+            Op::Float { .. } => unreachable!("this target says it computes no floats"),
             Op::Cell { .. }
             | Op::CellTag { .. }
             | Op::CellField { .. }

@@ -3,6 +3,8 @@
 use num_bigint::BigUint;
 use num_traits::Zero;
 
+use crate::float::Float;
+
 use super::affine::Affine;
 use super::bounds::{Bounds, Ranges};
 use super::model::{CtorId, ExprId, FnId};
@@ -88,13 +90,18 @@ pub enum SequenceOperation {
 pub(super) struct Recognised {
     pub operations: Vec<Option<Operation>>,
     pub sequences: Vec<Option<SequenceOperation>>,
+    /// What a definition's claim says it computes; see
+    /// [`super::Program::claim`].
+    pub floats: Vec<Option<Float>>,
 }
 
 impl Recognised {
     /// Whether a call to `id` is answered as what it was recognized as,
     /// rather than by walking its body.
     pub(super) fn answered(&self, id: FnId) -> bool {
-        self.operations[id.index()].is_some() || self.sequences[id.index()].is_some()
+        self.operations[id.index()].is_some()
+            || self.sequences[id.index()].is_some()
+            || self.floats[id.index()].is_some()
     }
 }
 
@@ -118,7 +125,16 @@ impl Facts {
     /// rather than by walking its body.
     #[must_use]
     pub fn answered(&self, id: FnId) -> bool {
-        self.operation(id).is_some() || self.sequence_operation(id).is_some()
+        self.operation(id).is_some()
+            || self.sequence_operation(id).is_some()
+            || self.float(id).is_some()
+    }
+    /// The IEEE 754 operation `id` was claimed to compute: an answer a
+    /// target with the instruction gives in its place, and one without it
+    /// by walking the body.
+    #[must_use]
+    pub fn float(&self, id: FnId) -> Option<Float> {
+        self.recognised.floats.get(id.index()).copied().flatten()
     }
     #[must_use]
     pub fn sequence_operation(&self, id: FnId) -> Option<SequenceOperation> {
@@ -174,9 +190,12 @@ impl Facts {
 #[must_use]
 pub(super) fn analyze(
     program: &Program,
-    recognised: Recognised,
+    mut recognised: Recognised,
     assumed: &super::Assumed,
 ) -> Facts {
+    if !assumed.floats {
+        recognised.floats.fill(None);
+    }
     let ranges = super::bounds::analyze(program, &recognised, assumed);
     let affine = super::affine::analyze(program, &recognised.operations);
     Facts {

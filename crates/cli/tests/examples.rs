@@ -179,3 +179,19 @@ fn the_syntax_examples_hold() {
     assert_eq!(failed, Vec::<String>::new());
     assert_eq!(count, 92);
 }
+
+/// The n-body benchmark's energies, after nought, one and ten steps, are
+/// the ones the benchmarks game gives: built and run on this machine as
+/// `faun test` does, since its floats are the machine's own.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn the_nbody_example_holds() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .arg("test")
+        .arg(example("nbody/main.fn"))
+        .output()
+        .unwrap();
+    let said = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{said}");
+    assert_eq!(said, "3 expectations hold\n");
+}

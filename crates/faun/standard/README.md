@@ -28,8 +28,28 @@ basic operations and `fma`, `sqrt`, the roundings to integers, conversions,
 `to_precision`. `cmp` is the standard's total order, and `equals` follows it:
 a NaN equals itself and `-0.0` is not `0.0`; `partial_cmp` and
 `numeric_equals` are the hardware's. Ori's contract for them, rule by rule,
-is `examples/floats/`. They are software, and slow to build: a program of
-many `F64` operations takes the release compiler seconds.
+is `examples/floats/`.
+
+Their `add`, `sub`, `mul`, `div` and `sqrt` are the one place the compiler
+takes a meaning from a name: nothing an equation says makes a definition
+IEEE 754's addition, so lowering tells Barb that these five, at each
+float's own type, compute that operation (`Program::claim`). The
+definitions stay, and answer wherever nothing faster does: on a target
+without float instructions, and in a program the claims are taken from to
+check them, as `examples/floats/` is asked both ways. Folding answers a
+claimed call from its operands with the host's own arithmetic, and x86-64
+with one SSE2 instruction; a NaN may then be any NaN's pattern, which no
+program can tell, since `to_bits`, `cmp` and `sign_bit` read every NaN as
+one. What is left in software -- `of_decimal`, the conversions and the
+text -- costs a program that runs it thousands of instructions an
+operation, and constant folding what it can a hundred thousand steps of
+its budget: a numeral is folded, but slowly.
+
+The words' `and`, `or` and `xor` reduce their answer modulo the word's
+size. Two words' bits make a word, so the remainder changes nothing; it is
+what shows range analysis the answer is one, since `Nat`'s bitwise walk is
+recognized as nothing, and so what lets a `U64`, and an `F64` over it, be
+held in a machine word rather than as a natural of any size.
 
 `Nat.from_str` and `Int.from_str` read decimal text, `Err(Malformed)` where it
 is not one: digits only, and for an `Int` a leading `-`. `Nat`, `Int` and `U8`

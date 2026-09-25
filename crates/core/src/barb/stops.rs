@@ -166,6 +166,12 @@ pub(super) fn stops(program: &Program) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// Every definition, each after everything it calls, but for those calling
+/// each other, which come together in no particular order.
+pub(super) fn callees_first(program: &Program) -> Vec<FnId> {
+    rounds(&graph(program)).into_iter().flatten().collect()
+}
+
 /// The rounds a program's calls make: every definition in one reaches every
 /// other in it, and comes back.
 ///

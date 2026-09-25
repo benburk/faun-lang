@@ -795,6 +795,15 @@ impl Pass<'_> {
             Op::Binary { op, left, right } => {
                 b.binary_at(self.source.class(results[0]), op, v(left), v(right))
             }
+            Op::Float { float, operands } => {
+                let operands: Vec<_> = self
+                    .source
+                    .values(operands)
+                    .iter()
+                    .map(|&old| v(old))
+                    .collect();
+                b.float(float, &operands)
+            }
             // A shift is never over a natural, so there is no helper for it
             // and nothing to choose between here.
             Op::Shift {

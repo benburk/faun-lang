@@ -58,22 +58,7 @@ impl Evaluator<'_> {
             }
             Expr::Call(called, fields) => {
                 let fields = self.args(fields, env, budget)?;
-                if let Some(op) = self.operations[called.index()] {
-                    return self.arithmetic(
-                        op,
-                        self.program.function(called).result,
-                        &fields,
-                        budget,
-                    );
-                }
-                self.body(
-                    self.program
-                        .function(called)
-                        .body()
-                        .ok_or(CannotFold::ExternalCall)?,
-                    fields.into_iter().map(Ok).collect(),
-                    budget,
-                )
+                self.call(called, fields, budget)
             }
             Expr::Match(value, arms) => self.branch(
                 env[value.0.index()].as_ref().map_err(|e| *e)?,
@@ -82,6 +67,28 @@ impl Evaluator<'_> {
                 budget,
             ),
         }
+    }
+
+    /// A call's answer: from its operands where it is claimed or recognized,
+    /// and otherwise by walking its body.
+    fn call(&self, called: super::FnId, fields: Vec<Held>, budget: &mut Budget) -> Evaluation {
+        let function = self.program.function(called);
+        if let Some(float) = function.float {
+            budget.spend(u64::try_from(fields.len()).map_err(|_| LimitExceeded::Work)?)?;
+            let answered =
+                super::claim::answer(self.program, float, function.result, &fields, budget);
+            if let Some(answered) = answered {
+                return answered;
+            }
+        }
+        if let Some(op) = self.operations[called.index()] {
+            return self.arithmetic(op, function.result, &fields, budget);
+        }
+        self.body(
+            function.body().ok_or(CannotFold::ExternalCall)?,
+            fields.into_iter().map(Ok).collect(),
+            budget,
+        )
     }
 
     fn construct(&self, ctor: super::CtorId, fields: &[Held], budget: &mut Budget) -> Evaluation {

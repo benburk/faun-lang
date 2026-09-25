@@ -215,6 +215,8 @@ fn making_arguments(machine: &mut Program, routines: &Routines) -> FunctionId {
 enum Callee<'a> {
     Unreachable,
     Instruction(barb::Operation),
+    /// Answered by the target's own IEEE 754 instruction.
+    Float(crate::float::Float),
     /// Answered from how the sequence it is handed is held.
     Sequence(barb::SequenceOperation),
     Function(FunctionId),
@@ -304,6 +306,10 @@ fn declare<'a>(
         }
         if let Some(operation) = facts.operation(id) {
             callees.push(Callee::Instruction(operation));
+            continue;
+        }
+        if let Some(float) = facts.float(id) {
+            callees.push(Callee::Float(float));
             continue;
         }
         if let Some(operation) = facts.sequence_operation(id) {
@@ -1231,7 +1237,10 @@ fn asks_with_authority(
 /// What the target says of values from outside the program: what each
 /// routine it answers for answers, and what it hands the entry.
 fn assumed(program: &barb::Program, routines: &Routines) -> barb::Assumed {
-    let mut assumed = barb::Assumed::default();
+    let mut assumed = barb::Assumed {
+        floats: routines.floats(),
+        ..barb::Assumed::default()
+    };
     for (at, function) in program.functions().iter().enumerate() {
         if let Some(provider) = function.provider()
             && let Some(bounds) = routines
@@ -2066,6 +2075,7 @@ impl Lowering<'_> {
     ) {
         let mut budget = barb::Budget::new(barb::FoldLimits {
             work: u64::MAX,
+            work_per_function: u64::MAX,
             max_bytes: usize::MAX,
             max_depth: usize::MAX,
         });
@@ -2132,11 +2142,10 @@ impl Lowering<'_> {
             _ => None,
         };
         let Some(bytes) = bytes else {
-            self.refuse(format!(
-                "`{}` holds something per element that is not a byte, which this tier cannot lay out yet",
-                self.barb.name(self.barb.type_(owner).name)
-            ));
-            return Self::unrolled_bytes(b, &[], None);
+            let barb::ConstantView::Spine(spine) = value.view() else {
+                unreachable!("a sequence constant is a spine");
+            };
+            return self.static_elements(b, spine, push, recursive);
         };
         if bytes.is_empty() {
             return Self::unrolled_bytes(b, &[], None);
@@ -2157,6 +2166,45 @@ impl Lowering<'_> {
             return Self::pushed_bytes(b, start, total, class);
         }
         Self::unrolled_bytes(b, &bytes, element)
+    }
+
+    /// Known elements of any kind pushed one at a time, from the last, each
+    /// as the values its fields are held in.
+    fn static_elements(
+        &self,
+        b: &mut super::Builder,
+        spine: barb::SpineView<'_>,
+        push: barb::CtorId,
+        recursive: usize,
+    ) -> [ValueId; 2] {
+        let mut budget = barb::Budget::new(barb::FoldLimits {
+            work: u64::MAX,
+            work_per_function: u64::MAX,
+            max_bytes: usize::MAX,
+            max_depth: usize::MAX,
+        });
+        let elements = spine
+            .elements(&mut budget)
+            .expect("validated constants can be revisited");
+        let mut buffer = b.buffer_empty();
+        for (len, fields) in elements.iter().rev().enumerate() {
+            let len = b.constant(
+                Class::Word,
+                u64::try_from(len).expect("a length fits 64 bits"),
+            );
+            let mut values = Vec::new();
+            for (at, &field) in fields.iter().enumerate() {
+                let at = if at >= recursive { at + 1 } else { at };
+                match self.field_carried(push, at) {
+                    Some(Carried::One(class)) => values.push(self.static_value(b, class, field)),
+                    Some(Carried::Flat(_)) => self.static_leaves(b, field, &mut values),
+                    None => {}
+                }
+            }
+            buffer = b.buffer_push(buffer, len, &values);
+        }
+        let len = u64::try_from(elements.len()).expect("a length fits 64 bits");
+        [buffer, b.constant(Class::Word, len)]
     }
 
     /// Known bytes pushed one at a time, from the last, each as `element`
@@ -2223,6 +2271,10 @@ impl Lowering<'_> {
                     self.width(expr),
                     &args,
                 )));
+            }
+            Callee::Float(float) => {
+                let args = self.call_arguments(function, arguments, locals);
+                return Answer::Value(Held::One(b.float(*float, &args)));
             }
             Callee::Sequence(barb::SequenceOperation::Length) => {
                 return Answer::Value(Held::One(self.length(b, expr, arguments, locals)));

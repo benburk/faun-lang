@@ -127,7 +127,41 @@ pub(crate) fn test_file(entry: &std::path::Path) -> (Vec<String>, usize) {
     (failed, count)
 }
 
-fn run_barb(mut barb: faun_core::barb::Program, input: &[u8], errno: Option<u64>) -> (u32, String) {
+/// As [`test_file`], with every definition claimed to compute a float
+/// answering by its body rather than by the host's instruction: the
+/// standard's own arithmetic, asked the same questions.
+pub(crate) fn test_file_by_definitions(entry: &std::path::Path) -> (Vec<String>, usize) {
+    let mut tests = faun::lower_tests_to_barb(entry, &X86_64Linux)
+        .unwrap_or_else(|error| panic!("{}", error.message));
+    tests.barb.disclaim();
+    let count = tests.expectations.len();
+    // Software arithmetic takes the interpreter many steps an operation.
+    let (status, written) = run_barb_fueled(tests.barb, &[], None, 20_000_000_000);
+    assert_eq!(status, 0, "{written}");
+    let failed = written
+        .split_whitespace()
+        .map(|number| {
+            let location = &tests.expectations[number.parse::<usize>().unwrap() - 1];
+            format!(
+                "{}:{}",
+                location.path.file_name().unwrap().to_string_lossy(),
+                location.line
+            )
+        })
+        .collect();
+    (failed, count)
+}
+
+fn run_barb(barb: faun_core::barb::Program, input: &[u8], errno: Option<u64>) -> (u32, String) {
+    run_barb_fueled(barb, input, errno, 100_000_000)
+}
+
+fn run_barb_fueled(
+    mut barb: faun_core::barb::Program,
+    input: &[u8],
+    errno: Option<u64>,
+    fuel: u64,
+) -> (u32, String) {
     faun_core::barb::optimize(&mut barb);
     let machine = faun_core::lower_to_machine_ir(&mut barb, &X86_64Linux.routines())
         .unwrap_or_else(|error| panic!("{error}"));
@@ -147,7 +181,7 @@ fn run_barb(mut barb: faun_core::barb::Program, input: &[u8], errno: Option<u64>
         main,
         &handed,
         evaluate::Config {
-            fuel: 100_000_000,
+            fuel,
             ..evaluate::Config::default()
         },
         &mut streams,

@@ -135,12 +135,13 @@ fn floats_read_add_divide_and_say_themselves() {
 
 /// `F32` and `F64` keep the IEEE 754 contract Ori's floats state, rule by
 /// rule, each expectation the host FPU's answer, built and run on this
-/// machine as `faun test` does. Compiling them takes the release build
-/// seconds and a debug build minutes, so they are asked with
+/// machine as `faun test` does, and asked again of the standard's own
+/// definitions on the reference interpreter. The definitions take the
+/// release build minutes, so they are asked with
 /// `cargo test --release -p faun-cli --test expectations -- --ignored`.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 #[test]
-#[ignore = "minutes in a debug build; run with --release -- --ignored"]
+#[ignore = "minutes even in a release build; run with --release -- --ignored"]
 fn floats_keep_the_ieee_contract() {
     let floats =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/floats");
@@ -153,5 +154,12 @@ fn floats_keep_the_ieee_contract() {
         let said = String::from_utf8(output.stdout).unwrap();
         assert!(output.status.success(), "{entry}: {said}");
         assert_eq!(said, format!("{count} expectations hold\n"), "{entry}");
+        // The machine answers with its instructions; the standard's own
+        // definitions must answer the same, where no instruction does.
+        assert_eq!(
+            support::test_file_by_definitions(&floats.join(entry)),
+            (Vec::new(), count),
+            "{entry} by its definitions"
+        );
     }
 }

@@ -39,15 +39,17 @@ U64 : Nat.(
   to_str : U64 -> Str
   to_str(U64(value)) -> value.to_str()
 
-  # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`.
+  # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`. Two words' bits
+  # make a word, so the remainder changes nothing; it is what shows
+  # the answer is one, which nothing recognizes of `Nat`'s bitwise walk.
   and : U64 U64 -> U64
-  and(U64(a) U64(b)) -> U64(a & b)
+  and(U64(a) U64(b)) -> U64((a & b) % 18446744073709551616)
 
   or : U64 U64 -> U64
-  or(U64(a) U64(b)) -> U64(a | b)
+  or(U64(a) U64(b)) -> U64((a | b) % 18446744073709551616)
 
   xor : U64 U64 -> U64
-  xor(U64(a) U64(b)) -> U64(a ^ b)
+  xor(U64(a) U64(b)) -> U64((a ^ b) % 18446744073709551616)
 
   # Every bit flipped.
   bit_not : U64 -> U64

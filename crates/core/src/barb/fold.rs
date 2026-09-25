@@ -3,7 +3,7 @@
 
 use super::budget::{Budget, FoldLimits};
 use super::evaluate::{CannotFold, Evaluation, Evaluator};
-use super::{Body, Expr, ExprId, FnId, Operation, Program};
+use super::{Body, Expr, ExprId, Operation, Program};
 
 pub(crate) fn fold(program: &mut Program) {
     fold_with_limits(program, FoldLimits::default());
@@ -12,19 +12,25 @@ pub(crate) fn fold(program: &mut Program) {
 pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
     let recognised = program.recognised().clone();
     let operations = recognised.operations.as_slice();
-    let mut budget = Budget::new(limits);
-    for at in 0..program.functions().len() {
+    let mut remaining = limits.work;
+    // A definition is folded after what it calls, so a call of one whose
+    // answer is known outright is a constant by the time a caller asks.
+    for id in super::stops::callees_first(program) {
         // Keep the induction equations intact for subsequent recognition.
-        if recognised.answered(FnId::at(at)) {
+        if recognised.answered(id) {
             continue;
         }
-        if budget.remaining == 0 {
+        if remaining == 0 {
             break;
         }
-        let id = FnId::at(at);
         let Some(body) = program.function(id).body() else {
             continue;
         };
+        let allowance = remaining.min(limits.work_per_function);
+        let mut budget = Budget::new(FoldLimits {
+            work: allowance,
+            ..limits
+        });
         let mut known = vec![Err(CannotFold::DynamicInput); program.params(id).len()];
         in_body(
             program,
@@ -34,6 +40,7 @@ pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
             &mut budget,
             limits.max_depth,
         );
+        remaining -= allowance - budget.remaining;
     }
 }
 

@@ -335,7 +335,7 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
             each(*value);
         }
         Op::Convert { value, .. } | Op::Shift { value, .. } => each(*value),
-        Op::Call { args, .. } => {
+        Op::Call { args, .. } | Op::Float { operands: args, .. } => {
             program.values(*args).iter().copied().for_each(each);
         }
         Op::If { condition, .. } => each(*condition),
@@ -2392,6 +2392,7 @@ impl Lowering<'_> {
         let program = self.program;
         match op {
             Op::NaturalConstant(_) => unreachable!("target acceptance rejects arbitrary precision"),
+            Op::Float { .. } => unreachable!("this target says it computes no floats"),
             Op::Cell { .. }
             | Op::CellTag { .. }
             | Op::CellField { .. }

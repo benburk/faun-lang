@@ -316,6 +316,7 @@ impl<'a> Rebuild<'a> {
                 b.store(width, self.value(address), offset, self.value(value));
                 Vec::new()
             }
+            Op::Float { float, operands } => vec![b.float(float, &self.args(operands))],
             Op::Convert { value } => {
                 vec![b.convert(self.source.class(results[0]), self.value(value))]
             }

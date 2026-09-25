@@ -59,6 +59,12 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 bits,
             } => asm.shift(direction, dst, by, bits),
             Inst::Multiply => asm.multiply(),
+            Inst::Float {
+                float,
+                dst,
+                left,
+                right,
+            } => asm.float(float, dst, left, right),
             Inst::Divide => asm.divide(),
             Inst::Syscall => asm.syscall(),
             Inst::LoadStack { dst, displacement } => asm.load_slot(dst, displacement),
@@ -458,6 +464,36 @@ impl RawEncoder {
     fn multiply(&mut self) {
         self.step();
         self.emit(&[0x48, 0xF7, 0xE1]);
+    }
+
+    /// `dst` = `float` of `left` and `right`: each pattern moved into an
+    /// `xmm` register, one scalar SSE instruction, and the answer moved
+    /// back. A binary32 pattern moves as a doubleword, which clears the
+    /// upper half of `dst`.
+    fn float(&mut self, float: faun_core::float::Float, dst: Reg, left: Reg, right: Option<Reg>) {
+        use faun_core::float::{Format, Operation};
+        let wide = float.format == Format::Binary64;
+        self.step();
+        // movq/movd xmm0, left; movq/movd xmm1, right
+        for (xmm, gpr) in [(0u8, Some(left)), (1, right)] {
+            let Some(gpr) = gpr else { continue };
+            self.emit(&[0x66]);
+            self.rex(wide, None, gpr);
+            self.emit(&[0x0F, 0x6E, 0xC0 | (xmm << 3) | gpr.low()]);
+        }
+        let prefix = if wide { 0xF2 } else { 0xF3 };
+        let (opcode, source) = match float.operation {
+            Operation::Add => (0x58, 1),
+            Operation::Mul => (0x59, 1),
+            Operation::Sub => (0x5C, 1),
+            Operation::Div => (0x5E, 1),
+            Operation::Sqrt => (0x51, 0),
+        };
+        self.emit(&[prefix, 0x0F, opcode, 0xC0 | source]);
+        // movq/movd dst, xmm0
+        self.emit(&[0x66]);
+        self.rex(wide, None, dst);
+        self.emit(&[0x0F, 0x7E, 0xC0 | dst.low()]);
     }
 
     /// Unsigned RAX = RDX:RAX / RCX, RDX = remainder. The caller guards zero.

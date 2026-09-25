@@ -140,6 +140,44 @@ impl<'a> SpineView<'a> {
         }
         (at == self.0.bytes.len()).then_some(bytes)
     }
+
+    /// Borrow each element's fields but the rest, first element first,
+    /// without materializing them.
+    ///
+    /// # Errors
+    /// If locating encoded field boundaries exceeds the budget, or the
+    /// spine has more elements than a word counts.
+    pub fn elements(self, budget: &mut Budget) -> Result<Vec<Vec<Constant<'a>>>, LimitExceeded> {
+        let Shape::Spine {
+            cons, recursive, ..
+        } = shape(self.0.types, self.0.owner)
+        else {
+            unreachable!("a spine view has a spine's shape");
+        };
+        let (count, mut at) = read_u64(self.0.bytes);
+        let count = count
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or(LimitExceeded::ValueSize)?;
+        budget.bytes(self.0.bytes.len())?;
+        let mut elements = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut fields = Vec::new();
+            for (index, &owner) in self.0.types.fields(cons).iter().enumerate() {
+                if index == recursive {
+                    continue;
+                }
+                let took = field_extent(self.0.types, owner, &self.0.bytes[at..], budget)?;
+                fields.push(Constant::new(
+                    self.0.types,
+                    owner,
+                    &self.0.bytes[at..at + took],
+                ));
+                at += took;
+            }
+            elements.push(fields);
+        }
+        Ok(elements)
+    }
 }
 
 impl<'a> ConstructorView<'a> {

@@ -83,6 +83,7 @@ pub(crate) fn single_field_constant<'a>(
 ) -> Constant<'a> {
     let mut budget = Budget::new(super::FoldLimits {
         work: u64::MAX,
+        work_per_function: u64::MAX,
         max_bytes: usize::MAX,
         max_depth: program.types().len(),
     });
@@ -165,9 +166,15 @@ impl Program {
         if self.recognised.0.operations.len() != self.functions.len() {
             let operations = super::arithmetic::recognise(self);
             let sequences = super::arithmetic::recognise_sequences(self, &operations);
+            let floats = self
+                .functions
+                .iter()
+                .map(|function| function.float)
+                .collect();
             self.recognised.0 = Recognised {
                 operations,
                 sequences,
+                floats,
             };
         }
         &self.recognised.0
@@ -430,7 +437,33 @@ impl Program {
             parameters,
             result,
             definition: super::Definition::External { symbol: name },
+            float: None,
         })
+    }
+
+    /// Say that `id`'s body computes `float` on the patterns its parameters
+    /// hold, as the program building it knows and nothing here can check:
+    /// no equation says what an IEEE 754 operation is. The body stays, and
+    /// answers wherever nothing faster does -- the evaluator, a target with
+    /// no float instructions -- so a claim that is wrong is a program whose
+    /// answer depends on its target; validation checks only its shape.
+    ///
+    /// A claimed definition is treated as a recognized one: passes neither
+    /// rewrite nor inline it, folding answers a call of it from its
+    /// operands, and cleanup treats its calls as inert.
+    pub fn claim(&mut self, id: FnId, float: crate::float::Float) {
+        self.redefined();
+        self.functions[id].float = Some(float);
+    }
+
+    /// Forget every claim, so that each claimed definition answers by its
+    /// body wherever it is called: how a body is checked against what was
+    /// claimed of it.
+    pub fn disclaim(&mut self) {
+        self.redefined();
+        for function in &mut self.functions {
+            function.float = None;
+        }
     }
 
     /// Say what answers for a declaration out there, where a program calls

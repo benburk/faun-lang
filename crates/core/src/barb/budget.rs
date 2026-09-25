@@ -2,11 +2,15 @@
 
 use std::fmt;
 
-/// Resource limits for one whole folding pass, not language integer limits.
+/// Resource limits for one folding pass, not language integer limits.
 /// Work counts visits, copied bytes and conservative bigint word operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FoldLimits {
+    /// What a whole pass may spend.
     pub work: u64,
+    /// What one definition may spend of it, so that a costly answer
+    /// declined in one leaves the rest something to fold with.
+    pub work_per_function: u64,
     pub max_bytes: usize,
     pub max_depth: usize,
 }
@@ -14,7 +18,8 @@ pub struct FoldLimits {
 impl Default for FoldLimits {
     fn default() -> Self {
         Self {
-            work: 1_000_000,
+            work: 8_000_000,
+            work_per_function: 1_000_000,
             max_bytes: 8192,
             max_depth: 128,
         }

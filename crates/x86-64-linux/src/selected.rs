@@ -148,6 +148,9 @@ pub(crate) enum Opcode {
     /// Where the arguments' addresses lie: just past the count.
     ArgumentVector,
     ReadByte,
+    /// IEEE 754 arithmetic on patterns held in general registers, moved
+    /// through `xmm0` and `xmm1`, which nothing else holds anything in.
+    Float,
 }
 
 impl Opcode {
@@ -216,7 +219,9 @@ impl Opcode {
             // Comparison and setcc are one atomic selected pseudo. Their
             // internal flags do not escape the pseudo.
             | Self::Equal
-            | Self::Below => Effects::PURE,
+            | Self::Below
+            // SSE arithmetic leaves the flags as they were.
+            | Self::Float => Effects::PURE,
             Self::Add | Self::Subtract | Self::Monus | Self::Shift => arithmetic,
             Self::ArgumentVector => Effects {
                 clobbers: RegSet::of(&[Reg::Rcx]),
@@ -274,7 +279,8 @@ impl Opcode {
             | Self::Exit
             | Self::Grow
             | Self::ReadByte
-            | Self::ArgumentVector => Expansion::Sequence,
+            | Self::ArgumentVector
+            | Self::Float => Expansion::Sequence,
             _ => Expansion::Single,
         };
         let scratch = match self {
@@ -304,6 +310,7 @@ enum Immediate {
     Memory { width: Width, offset: Offset },
     Shift { up: bool, by: u8, bits: u16 },
     Function(FunctionId),
+    Float(faun_core::float::Float),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -606,6 +613,10 @@ impl Selected {
             | Opcode::ArgumentVector
             | Opcode::ReadByte => 0,
             Opcode::Load | Opcode::Convert | Opcode::Shift | Opcode::Exit | Opcode::Grow => 1,
+            Opcode::Float => match inst.immediate {
+                Immediate::Float(float) => float.operation.arity(),
+                _ => usize::MAX,
+            },
             Opcode::Add
             | Opcode::Subtract
             | Opcode::Monus
@@ -1032,7 +1043,8 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             | Opcode::Equal
             | Opcode::Below
             | Opcode::Convert
-            | Opcode::ArgumentCount => effects == Effects::PURE,
+            | Opcode::ArgumentCount
+            | Opcode::Float => effects == Effects::PURE,
         };
     if valid {
         Ok(())
@@ -1044,6 +1056,10 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one accepted immediate per opcode, in the order they are declared"
+)]
 fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
     let valid = matches!(
         (inst.opcode, inst.immediate),
@@ -1064,6 +1080,7 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
             | (Opcode::Load | Opcode::Store, Immediate::Memory { .. })
             | (Opcode::Shift, Immediate::Shift { .. })
             | (Opcode::Call, Immediate::Function(_))
+            | (Opcode::Float, Immediate::Float(_))
             | (
                 Opcode::Write
                     | Opcode::PutOut
@@ -1409,6 +1426,16 @@ impl Selector<'_> {
                         bits: source.class(results[0]).bits(WORD_BITS),
                     },
                 ),
+                SourceOp::Float { float, operands } => {
+                    let operands = source.values(operands).to_vec();
+                    self.emit(
+                        block,
+                        Opcode::Float,
+                        results.first().copied(),
+                        &operands,
+                        Immediate::Float(float),
+                    );
+                }
                 SourceOp::Call { function, args } => {
                     let callee = source.function(function);
                     let opcode = if let Some(symbol) = callee.external() {
