@@ -24,7 +24,10 @@ use std::collections::HashMap;
 
 use super::copy::{self, Redirect, Scope};
 use super::facts::Recognised;
-use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range, TypeId, TypeShape};
+use super::{
+    Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range, SequenceOperation, TypeId,
+    TypeShape,
+};
 
 /// Fuse every producer read once by a consumer, in every body.
 pub(crate) fn fuse(program: &mut Program) {
@@ -35,6 +38,7 @@ pub(crate) fn fuse(program: &mut Program) {
         producers: HashMap::new(),
         consumers: HashMap::new(),
         fused: HashMap::new(),
+        prepends: HashMap::new(),
         program,
     };
     let mut bodies = Vec::new();
@@ -105,6 +109,9 @@ struct Fusion<'a> {
     producers: HashMap<FnId, Option<Producer>>,
     consumers: HashMap<FnId, Option<Consumer>>,
     fused: HashMap<(FnId, FnId), FnId>,
+    /// The definition putting one sequence of each type before another in
+    /// order, found or written the first time it is wanted.
+    prepends: HashMap<TypeId, FnId>,
 }
 
 /// A local no fused body may read: what a parameter or field the fused walk
@@ -120,7 +127,11 @@ impl Fusion<'_> {
         exprs.push(body.tail);
         while let Some(id) = exprs.pop() {
             match self.program.expr(id) {
-                Expr::Call(callee, _) if self.producer(callee).is_some() => return true,
+                Expr::Call(callee, _)
+                    if self.producer(callee).is_some() || self.reversal(callee) =>
+                {
+                    return true;
+                }
                 Expr::Match(_, arms) => {
                     for arm in self.program.arms(arms).to_vec() {
                         exprs.extend_from_slice(self.program.bindings(arm.body.bindings));
@@ -187,7 +198,7 @@ impl Fusion<'_> {
             return None;
         };
         let acc = acc.index();
-        if acc >= arity || acc == list || !self.reverses(reverse) {
+        if acc >= arity || acc == list || !super::sequence::reverses(self.program, reverse) {
             return None;
         }
         // What it builds is a list too, but not necessarily of what it walks.
@@ -291,62 +302,6 @@ impl Fusion<'_> {
                 .sum(),
             Expr::Atom(_) | Expr::Con(..) | Expr::Static(_) => Some(0),
         }
-    }
-
-    /// Whether `id` reverses its first argument onto its second:
-    ///
-    /// ```text
-    /// r(list, onto) = match list
-    ///   empty => onto
-    ///   push(x, rest) => r(rest, push(x, onto))
-    /// ```
-    #[expect(
-        clippy::too_many_lines,
-        reason = "each condition of the reversal shape is one early return, read in order"
-    )]
-    fn reverses(&self, id: FnId) -> bool {
-        let Some(body) = self.program.function(id).body() else {
-            return false;
-        };
-        let Some((0, arms)) = self.top_match(body) else {
-            return false;
-        };
-        let params = self.program.params(id);
-        let Some((empty, push, recursive)) = self.sequence(params[0]) else {
-            return false;
-        };
-        if params.len() != 2 || params[1] != params[0] {
-            return false;
-        }
-        let Some([nil_arm, push_arm]) = self.split_arms(arms, empty, push) else {
-            return false;
-        };
-        if !nil_arm.body.bindings.is_empty()
-            || self.program.expr(nil_arm.body.tail) != Expr::Atom(Atom(Local::at(1)))
-        {
-            return false;
-        }
-        let element = 2 + (1 - recursive);
-        let rest = 2 + recursive;
-        let Expr::Call(again, args) = self.program.expr(push_arm.body.tail) else {
-            return false;
-        };
-        let &[Atom(first), Atom(second)] = self.program.atoms(args) else {
-            return false;
-        };
-        if again != id || first.index() != rest {
-            return false;
-        }
-        let Some(pushed) = self.bound(push_arm.body, 4, second.index()) else {
-            return false;
-        };
-        let Expr::Con(ctor, fields) = self.program.expr(pushed) else {
-            return false;
-        };
-        let fields = self.program.atoms(fields);
-        ctor == push
-            && fields[recursive].0.index() == 1
-            && fields[1 - recursive].0.index() == element
     }
 
     /// A body that is nothing but a match on a parameter: which one, and
@@ -603,6 +558,82 @@ impl Fusion<'_> {
         copy::close(self.program, scope, answer)
     }
 
+    /// A sequence reversed onto nothing, `made`, and reversed again onto
+    /// another by `callee`, is put before that other in order.
+    fn prepended(
+        &mut self,
+        callee: FnId,
+        made: &Deferred,
+        written: &[Atom],
+        args: &[Atom],
+    ) -> Deferred {
+        debug_assert!(
+            self.reversal(made.callee),
+            "only a reversal is deferred for one"
+        );
+        let ty = self.program.params(callee)[0];
+        Deferred {
+            callee: self.prepending(ty, callee),
+            written: vec![made.written[0], written[1]],
+            args: vec![made.args[0], args[1]],
+        }
+    }
+
+    /// Whether `id` is recognized as reversing one sequence onto another.
+    fn reversal(&self, id: FnId) -> bool {
+        self.recognised.sequences.get(id.index()) == Some(&Some(SequenceOperation::ReverseOnto))
+    }
+
+    /// Whether a reversal onto nothing is read once, by another reversal
+    /// later in the same body, as what it reverses.
+    fn reversed_twice(&self, call: &Deferred, body: Body, base: usize, level: usize) -> bool {
+        let Some(onto) = self.bound(body, base, call.written[1].0.index()) else {
+            return false;
+        };
+        let Some((empty, _, _)) = self.sequence(self.program.params(call.callee)[1]) else {
+            return false;
+        };
+        if !self.empty_constant(onto, empty) || self.reads_after(body, base, level) != 1 {
+            return false;
+        }
+        let mut rest = self.program.bindings(body.bindings)[level + 1 - base..].to_vec();
+        rest.push(body.tail);
+        rest.into_iter().any(|id| {
+            let Expr::Call(callee, args) = self.program.expr(id) else {
+                return false;
+            };
+            self.reversal(callee) && self.program.atoms(args)[0].0.index() == level
+        })
+    }
+
+    /// The definition recognized as putting one sequence of type `ty` before
+    /// another in order, or one written here as `reverse` reversed onto
+    /// nothing and reversed again, which is recognized as one.
+    fn prepending(&mut self, ty: TypeId, reverse: FnId) -> FnId {
+        if let Some(&id) = self.prepends.get(&ty) {
+            return id;
+        }
+        let found = (0..self.recognised.sequences.len())
+            .map(FnId::at)
+            .find(|&id| {
+                self.recognised.sequences[id.index()] == Some(SequenceOperation::Prepend)
+                    && self.program.params(id) == [ty, ty]
+            });
+        let id = found.unwrap_or_else(|| {
+            let (empty, _, _) = self.sequence(ty).expect("a reversal is of sequences");
+            let id = self.program.declare("prepend", &[ty, ty], ty);
+            self.program.define(id, |b, args| {
+                let nothing = b.con(empty, &[]);
+                let reversed = b.call(reverse, &[args[0], nothing]);
+                b.call(reverse, &[reversed, args[1]])
+            });
+            self.pure.push(true);
+            id
+        });
+        self.prepends.insert(ty, id);
+        id
+    }
+
     /// Rewrite a body, fusing each producer read once by a consumer.
     fn rewrite_body(&mut self, body: Body, locals: Vec<Atom>, level: usize) -> Body {
         let mut scope = Scope::at(level);
@@ -680,6 +711,11 @@ impl Fusion<'_> {
             written: written.to_vec(),
             args: args.to_vec(),
         };
+        if self.reversal(callee)
+            && let Some(made) = deferred.remove(&written[0].0.index())
+        {
+            return self.prepended(callee, &made, written, args);
+        }
         let Some(Consumer { list: taken }) = self.consumer(callee) else {
             return plain;
         };
@@ -713,6 +749,9 @@ impl Fusion<'_> {
     /// Whether a call is a producer's, building onto nothing, whose answer
     /// is read once and by a consumer's call later in the same body.
     fn defers(&mut self, call: &Deferred, body: Body, base: usize, level: usize) -> bool {
+        if self.reversal(call.callee) {
+            return self.reversed_twice(call, body, base, level);
+        }
         let Some(Producer { acc, .. }) = self.producer(call.callee) else {
             return false;
         };

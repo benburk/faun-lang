@@ -86,6 +86,12 @@ fn managed_runtime(
     let has_cells = holds(source, Class::Cell) || has_buffers;
     let buffers = has_buffers.then(|| sequence::declare(output));
     let cells = has_cells.then(|| cell::append(output, library, buffers, config.word_bits));
+    let prepends = source
+        .functions()
+        .iter()
+        .filter_map(super::Function::body)
+        .flat_map(|body| source.walk_within(body))
+        .any(|(op, _)| matches!(op, Op::BufferPrepend { .. }));
     let sequences = buffers.zip(cells).map(|(release, cells)| {
         sequence::append(
             output,
@@ -93,7 +99,7 @@ fn managed_runtime(
             library,
             cells,
             layouts(source),
-            config.word_bits,
+            (config.word_bits, prepends),
         )
     });
     (cells, sequences)
@@ -748,6 +754,29 @@ impl Pass<'_> {
                     .map(|&old| self.take(b, scopes, live, at, old))
                     .collect();
                 self.push(b, buffer, v(len), fields, &claimed)
+            }
+            Op::BufferPrepend {
+                buffer,
+                len,
+                from,
+                from_len,
+                reversed,
+            } => {
+                let buffer = self.take(b, scopes, live, at, buffer);
+                let word = |b: &mut Builder, len| {
+                    if b.class(len) == Class::Word {
+                        len
+                    } else {
+                        b.convert(Class::Word, len)
+                    }
+                };
+                let (len, from_len) = (word(b, v(len)), word(b, v(from_len)));
+                let routine = self
+                    .sequences
+                    .as_ref()
+                    .expect("buffer helpers were requested")
+                    .prepend(reversed);
+                b.call_one(routine, &[buffer, len, v(from), from_len])
             }
             Op::BufferField { buffer, len, index } => {
                 self.buffer_field(b, results[0], v(buffer), v(len), index)

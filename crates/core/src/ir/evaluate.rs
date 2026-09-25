@@ -769,6 +769,21 @@ impl<H: Host> Machine<'_, H> {
                 self.buffers.push(elements);
                 BigUint::from(self.buffers.len())
             }
+            Op::BufferPrepend {
+                buffer,
+                len,
+                from,
+                from_len,
+                reversed,
+            } => {
+                let mut elements = self.elements(from, from_len)?.to_vec();
+                if reversed {
+                    elements.reverse();
+                }
+                elements.extend_from_slice(self.elements(buffer, len)?);
+                self.buffers.push(elements);
+                BigUint::from(self.buffers.len())
+            }
             Op::BufferField { buffer, len, index } => self
                 .elements(buffer, len)?
                 .first()

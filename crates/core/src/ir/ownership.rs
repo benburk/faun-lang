@@ -134,6 +134,7 @@ fn consumed_in(source: &Program, region: RegionId, owned: &[Vec<bool>], out: &mu
                 out.push(buffer);
                 out.extend_from_slice(source.values(fields));
             }
+            Op::BufferPrepend { buffer, .. } => out.push(buffer),
             Op::Convert { value } if source.class(value) == source.class(results[0]) => {
                 out.push(value);
             }

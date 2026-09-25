@@ -101,6 +101,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   take back what nothing reaches -- a remainder of a widened count is still
   below its divisor, and so is whatever it is handed to.
   `Propagation` is the evolving state; `Ranges` is the conservative final result.
+- `sequence.rs`: recognize a definition reversing one sequence onto
+  another -- the other for the empty one, itself on the rest onto the element
+  pushed for a step -- as `SequenceOperation::ReverseOnto`, and one that is a
+  reversal onto nothing reversed again onto its second argument as
+  `SequenceOperation::Prepend`. Both keep their bodies and are answered by
+  machine lowering as one buffer operation: room made once, then a copy.
 - `affine.rs`: derive small affine summaries from recognized natural addition and
   multiplication by constants, without adding an expression kind or expanding
   nonlinear products.
@@ -132,7 +138,10 @@ x    ::= a parameter, a binding, or a field an arm bound
   in one walk. Where the consumer is itself a producer, so is the fused one,
   so a chain fuses a link at a time. Only definitions reaching no bodyless
   call take part: fusing interleaves their work and cuts the producer short
-  where the consumer stops. Nothing is recognized by name.
+  where the consumer stops. Nothing is recognized by name. The same walk
+  turns a list reversed onto nothing and read once, by a reversal of it onto
+  another, into one prepend in order: the recognized definition for that
+  type, or one declared in the shape recognition reads.
 - `sweep.rs`: dropping the definitions an entry does not reach, once
   validation has checked them and inlining and fusion have copied what they
   needed out of them.

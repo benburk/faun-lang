@@ -174,6 +174,17 @@ impl References<'_> {
                 self.value(len)?;
                 self.values(fields)?;
             }
+            Op::BufferPrepend {
+                buffer,
+                len,
+                from,
+                from_len,
+                ..
+            } => {
+                for value in [buffer, len, from, from_len] {
+                    self.value(value)?;
+                }
+            }
             Op::Binary { left, right, .. }
             | Op::Compare { left, right, .. }
             | Op::BufferField {
@@ -463,6 +474,19 @@ impl Checker<'_> {
                 for &field in self.program.values(fields) {
                     self.read(field)?;
                 }
+                self.results(results, &[Class::Buffer])?;
+            }
+            Op::BufferPrepend {
+                buffer,
+                len,
+                from,
+                from_len,
+                ..
+            } => {
+                self.require(buffer, Class::Buffer)?;
+                self.length(len)?;
+                self.require(from, Class::Buffer)?;
+                self.length(from_len)?;
                 self.results(results, &[Class::Buffer])?;
             }
             Op::BufferField { buffer, len, .. } => {

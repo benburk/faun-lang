@@ -132,6 +132,20 @@ impl Program {
                 len.index(),
                 arguments(self.values(fields))
             ),
+            Op::BufferPrepend {
+                buffer,
+                len,
+                from,
+                from_len,
+                reversed,
+            } => format!(
+                "buffer_prepend{} v{}, v{}, v{}, v{}",
+                if reversed { "_reversed" } else { "" },
+                buffer.index(),
+                len.index(),
+                from.index(),
+                from_len.index()
+            ),
             Op::BufferField { buffer, len, index } => {
                 format!(
                     "buffer_field v{}, v{}, {index}",

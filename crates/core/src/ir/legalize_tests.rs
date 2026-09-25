@@ -734,3 +734,81 @@ fn scalar_fast_path_has_no_runtime_code_data_or_globals() {
     .unwrap();
     assert_eq!(format!("{p:?}"), format!("{scalar:?}"));
 }
+
+/// One buffer's elements put before another's, in order and reversed, onto
+/// a buffer nothing else holds and onto one something else still reads:
+/// every element is where the reference puts it, and every claim an
+/// element holds -- naturals past half a word are objects -- is given back.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture builds both buffers, prepends, and reads every element back"
+)]
+fn a_buffer_prepended_answers_the_reference_and_leaks_nothing() {
+    for bits in [32, 64] {
+        let half = natural::half(bits);
+        for reversed in [false, true] {
+            for shared in [false, true] {
+                let (mut p, main) = Program::new("main");
+                p.define(main, |b, _| {
+                    let zero = b.constant(Class::Word, 0);
+                    b.ret(&[zero]);
+                });
+                let test = p.declare("test", &[Class::Word], &[Class::Natural]);
+                p.define(test, |b, args| {
+                    let base = b.convert(Class::Natural, args[0]);
+                    let push = |b: &mut Builder, buffer, len: u64, value| {
+                        let len = b.constant(Class::Word, len);
+                        b.buffer_push(buffer, len, &[value])
+                    };
+                    let mut from = b.buffer_empty();
+                    for (at, offset) in (0u64..).zip([1, half, 3]) {
+                        let offset = b.constant(Class::Word, offset);
+                        let offset = b.convert(Class::Natural, offset);
+                        let value = b.binary(Binary::Add, base, offset);
+                        from = push(b, from, at, value);
+                    }
+                    let mut onto = b.buffer_empty();
+                    for (at, value) in (0u64..).zip([7, 9]) {
+                        let value = b.constant(Class::Word, value);
+                        let value = b.convert(Class::Natural, value);
+                        onto = push(b, onto, at, value);
+                    }
+                    let (three, two) = (b.constant(Class::Word, 3), b.constant(Class::Word, 2));
+                    let joined = b.buffer_prepend((onto, two), (from, three), reversed);
+                    // Every element, each weighted by where it is.
+                    let mut total = b.constant(Class::Natural, 0);
+                    for (at, place) in (0u64..5).zip(0u32..) {
+                        let len = b.constant(Class::Word, 5 - at);
+                        let value = b.buffer_field(Class::Natural, joined, len, 0);
+                        let weight = b.constant(Class::Natural, 10u64.pow(place));
+                        let weighted = b.binary(Binary::Mul, value, weight);
+                        total = b.binary(Binary::Add, total, weighted);
+                    }
+                    if shared {
+                        let first = b.buffer_field(Class::Natural, onto, two, 0);
+                        total = b.binary(Binary::Add, total, first);
+                    }
+                    b.ret(&[total]);
+                });
+                let config = Config {
+                    word_bits: bits,
+                    heap_bytes: 4096,
+                    grows: false,
+                };
+                let scalar = legalize(&p, config).expect("legalized");
+                let args = [BigUint::from(5u8)];
+                let expected = run(&p, test, &args, bits).returned().unwrap()[0].clone();
+                let actual = run(&scalar, test, &args, bits);
+                let answer = decoded(&scalar, &actual, bits);
+                assert_eq!(answer, expected, "{bits} {reversed} {shared}");
+                // What is left is the answer, which is past half a word.
+                assert_eq!(
+                    live_objects(&scalar, &actual, config),
+                    1,
+                    "{bits} {reversed} {shared}"
+                );
+            }
+        }
+    }
+}

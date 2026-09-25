@@ -27,7 +27,9 @@
 //!   elements, so its rest is the same buffer one shorter: taking a sequence
 //!   apart builds nothing, and adding to one writes in place where nothing
 //!   else holds the buffer. A definition recognized as its length is never
-//!   emitted; a call to one reads the length leaf.
+//!   emitted; a call to one reads the length leaf. Nor is one recognized as
+//!   putting one sequence's elements before another's, reversed or in
+//!   order: a call to one is a single buffer operation.
 //! - a sum whose fields are all numbers is held flat too, as a tagged
 //!   union: its tag, then a run of slots each constructor lays its fields'
 //!   leaves in, numbers of a machine's width in the first slots and
@@ -2225,6 +2227,13 @@ impl Lowering<'_> {
             Callee::Sequence(barb::SequenceOperation::Length) => {
                 return Answer::Value(Held::One(self.length(b, expr, arguments, locals)));
             }
+            Callee::Sequence(
+                operation @ (barb::SequenceOperation::ReverseOnto
+                | barb::SequenceOperation::Prepend),
+            ) => {
+                let reversed = *operation == barb::SequenceOperation::ReverseOnto;
+                return Answer::Value(Self::prepended(b, arguments, locals, reversed, self.barb));
+            }
             Callee::External {
                 id,
                 routine,
@@ -2259,6 +2268,34 @@ impl Lowering<'_> {
             Callee::Unreachable => unreachable!("a lowered call must have been demanded"),
         };
         self.answered(b, expr, function, &results, answers)
+    }
+
+    /// One sequence's elements put before another's, as the buffer holding
+    /// them and how many there are: in order, or reversed.
+    fn prepended(
+        b: &mut super::Builder,
+        arguments: barb::Range,
+        locals: &Locals,
+        reversed: bool,
+        program: &barb::Program,
+    ) -> Held {
+        let &[from, onto] = program.atoms(arguments) else {
+            unreachable!("a prepend is of two sequences");
+        };
+        let held = |atom: barb::Atom| {
+            let values = locals[atom.0.index()]
+                .as_ref()
+                .expect("a prepended sequence is carried")
+                .values();
+            (values[0], values[1])
+        };
+        let (from, onto) = (held(from), held(onto));
+        let buffer = b.buffer_prepend(onto, from, reversed);
+        let len = b.binary(Binary::Add, onto.1, from.1);
+        Held::Flat {
+            leaves: sequence_run(),
+            values: [buffer, len].as_slice().into(),
+        }
     }
 
     /// How many elements a sequence holds, which is its length leaf.

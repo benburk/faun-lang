@@ -208,6 +208,13 @@ pub(super) fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
             read.extend_from_slice(source.values(fields));
             read
         }
+        Op::BufferPrepend {
+            buffer,
+            len,
+            from,
+            from_len,
+            ..
+        } => vec![buffer, len, from, from_len],
         Op::Binary { left, right, .. }
         | Op::Compare { left, right, .. }
         | Op::BufferField {

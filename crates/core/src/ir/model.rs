@@ -174,6 +174,19 @@ pub enum Op {
         len: ValueId,
         fields: Range,
     },
+    /// The buffer whose last `len + from_len` elements are the last
+    /// `from_len` of `from` -- in the order `from` holds them, or the other
+    /// way round -- followed by the last `len` of `buffer`. Takes a claim to
+    /// `buffer`, so one nothing else holds with room in front is written in
+    /// place; `from` is borrowed, and each element copied out of it is
+    /// claimed again. Both hold elements of one layout.
+    BufferPrepend {
+        buffer: ValueId,
+        len: ValueId,
+        from: ValueId,
+        from_len: ValueId,
+        reversed: bool,
+    },
     /// Read leaf `index` of the first of the last `len` elements of
     /// `buffer`. The result value says the leaf's class.
     BufferField {

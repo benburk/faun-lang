@@ -271,6 +271,17 @@ impl<'a> Rebuild<'a> {
                 len,
                 fields,
             } => vec![b.buffer_push(self.value(buffer), self.value(len), &self.args(fields))],
+            Op::BufferPrepend {
+                buffer,
+                len,
+                from,
+                from_len,
+                reversed,
+            } => vec![b.buffer_prepend(
+                (self.value(buffer), self.value(len)),
+                (self.value(from), self.value(from_len)),
+                reversed,
+            )],
             Op::BufferField { buffer, len, index } => vec![b.buffer_field(
                 self.source.class(results[0]),
                 self.value(buffer),

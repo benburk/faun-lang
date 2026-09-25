@@ -214,10 +214,10 @@ fn a_list_round_trip_costs_what_is_recorded() {
     assert_eq!(
         cost(&round_trip(100)),
         Cost {
-            allocations: 12,
+            allocations: 8,
             retains: 0,
-            releases: 12,
-            stored_bytes: 6640,
+            releases: 8,
+            stored_bytes: 4336,
         }
     );
 }
@@ -241,12 +241,11 @@ fn only_what_a_function_consumes_is_owned() {
         owned[id.index()].clone()
     };
     // A list is two parameters, its buffer and its length; only a buffer
-    // carries a claim. `reverse` takes its first list apart and grows its
-    // second. It calls itself in tail position, so it is a loop, and a
-    // loop's state holds a claim: it takes one to the list it takes apart
-    // too, once, on the way in, which the costs above show is nothing more.
+    // carries a claim. `build` grows the list it is handed, so it owns it.
     assert_eq!(of("build"), [false, true, false]);
-    assert_eq!(of("reverse"), [true, false, true, false]);
+    // A reversal onto another list is answered by copying one buffer's
+    // elements in front of the other's, and is not lowered.
+    assert_eq!(lowered("reverse"), None);
     // A count of a list reads the length it holds, and is not lowered.
     assert_eq!(lowered("length"), None);
 }

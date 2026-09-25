@@ -122,9 +122,10 @@ pub(super) fn recognise_sequences(
     program: &Program,
     facts: &[Option<Operation>],
 ) -> Vec<Option<SequenceOperation>> {
-    (0..program.functions().len())
-        .map(|at| length(program, FnId::at(at), facts).then_some(SequenceOperation::Length))
-        .collect()
+    let counts: Vec<_> = (0..program.functions().len())
+        .map(|at| length(program, FnId::at(at), facts))
+        .collect();
+    super::sequence::recognise(program, &counts)
 }
 
 /// A count of a sequence: nought for the empty one, and one more than the

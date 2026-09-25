@@ -695,6 +695,14 @@ const LIST_FILTER: &str = listed!("xs.filter(|x| x % 2 == 1).len()");
 const LIST_DROP_TAKE: &str = listed!("xs.drop(1).take(2).get_or(1 9)");
 const LIST_TAKE_PAST: &str = listed!("xs.take(9).len()");
 const LIST_LAST: &str = listed!("xs.last().ok_or(9)");
+// A list put before itself, which its buffer is shared with.
+const LIST_EXTEND: &str = listed!("xs.extend(xs).get_or(6 9) * 10 + xs.extend(xs).get_or(9 9)");
+const LIST_REVERSE: &str = listed!("xs.reverse().get_or(0 9) * 10 + xs.reverse().get_or(4 9)");
+// Elements that are lists themselves, each holding a claim to its buffer.
+// What a list of lists holds is not bounded, so the answer is made to fit.
+const LIST_OF_LISTS: &str = listed!(
+    "([xs xs.drop(3)].reverse().get_or(0 []).get_or(0 9) % 10) + ([[xs] [xs.drop(4)]].flatten().get_or(1 []).get_or(0 9) % 10) * 10"
+);
 
 /// Programs using the standard list, and what each leaves with. A lookup
 /// that can miss answers a `Result`, which a target holds as a cell, so
@@ -707,7 +715,24 @@ const LISTED: &[(&str, &str, i32)] = &[
     ("a list dropped from and taken from", LIST_DROP_TAKE, 2),
     ("a list taken past its end", LIST_TAKE_PAST, 5),
     ("the last of a list", LIST_LAST, 4),
+    ("a list put before itself", LIST_EXTEND, 14),
+    ("a list reversed", LIST_REVERSE, 40),
 ];
+
+/// Lists of lists reversed and flattened: elements holding a claim to a
+/// buffer of their own. What a list of lists holds is not bounded, so a
+/// target without runtime naturals has no place for it yet.
+#[test]
+fn lists_of_lists_are_put_before_one_another() {
+    if TARGET.word() == 16 {
+        return;
+    }
+    let program = read(LIST_OF_LISTS).expect("a program");
+    let prepared = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(status(&prepared), 43);
+}
 
 #[test]
 fn the_standard_list_answers_what_a_program_says() {

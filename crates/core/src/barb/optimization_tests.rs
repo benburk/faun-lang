@@ -961,6 +961,7 @@ fn deep_evaluation_declines_without_exhausting_aggregate_fuel() {
 /// the same way, `total` folds a list into a sum, and `index_over(xs limit
 /// at)` counts from `at` to the first element past `limit`.
 struct Walks {
+    reverse: FnId,
     nat: super::TypeId,
     list: super::TypeId,
     zero: super::CtorId,
@@ -1052,6 +1053,7 @@ fn walks() -> (Program, Walks) {
         })
     });
     let walks = Walks {
+        reverse,
         nat,
         list,
         zero,
@@ -1304,5 +1306,59 @@ fn a_decided_match_is_its_arm() {
             let expected = run(&original, decided, args.clone(), &mut vec![]);
             assert_eq!(run(&p, decided, args, &mut vec![]), expected);
         }
+    }
+}
+
+/// A reversal onto another list, and a reversal of one onto nothing
+/// reversed again, are recognized by their equations: what a buffer does
+/// in one step. A walk doing anything else to what it moves is neither.
+#[test]
+fn reversals_and_prepends_are_recognized() {
+    let (mut p, w) = walks();
+    let extend = p.declare("extend", &[w.list, w.list], w.list);
+    p.define(extend, |b, args| {
+        let empty = b.con(w.nil, &[]);
+        let reversed = b.call(w.reverse, &[args[0], empty]);
+        b.call(w.reverse, &[reversed, args[1]])
+    });
+    let recognised = p.recognised().clone();
+    let of = |id: FnId| recognised.sequences[id.index()];
+    assert_eq!(of(w.reverse), Some(super::SequenceOperation::ReverseOnto));
+    assert_eq!(of(extend), Some(super::SequenceOperation::Prepend));
+    assert_eq!(of(w.bump), None);
+    assert_eq!(of(w.total), None);
+}
+
+/// A list reversed onto nothing and read once, by a reversal onto another,
+/// is never built: the two are one prepend in order.
+#[test]
+fn a_list_reversed_twice_is_prepended() {
+    let (mut p, w) = walks();
+    let joined = p.declare("joined", &[w.list, w.list], w.nat);
+    p.define(joined, |b, args| {
+        let empty = b.con(w.nil, &[]);
+        let reversed = b.call(w.reverse, &[args[0], empty]);
+        let both = b.call(w.reverse, &[reversed, args[1]]);
+        let zero = b.con(w.zero, &[]);
+        b.call(w.index_over, &[both, zero, zero])
+    });
+    validate(&p).unwrap();
+    let original = p.clone();
+    super::fuse::fuse(&mut p);
+    validate(&p).unwrap();
+    let called = callees(&p, joined);
+    assert!(!called.contains(&w.reverse), "{}", p.render());
+    let recognised = p.recognised().clone();
+    assert!(called.iter().any(|&id| {
+        recognised.sequences[id.index()] == Some(super::SequenceOperation::Prepend)
+    }));
+    for (left, right) in [(&[][..], &[][..]), (&[0, 0, 3], &[5]), (&[0], &[0, 0, 2])] {
+        let args = vec![w.list_of(&original, left), w.list_of(&original, right)];
+        let expected = run(&original, joined, args.clone(), &mut vec![]);
+        assert_eq!(
+            run(&p, joined, args, &mut vec![]),
+            expected,
+            "{left:?} {right:?}"
+        );
     }
 }

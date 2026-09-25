@@ -77,6 +77,10 @@ pub enum SequenceOperation {
     /// sequence and one more than the rest's for a step, whatever the
     /// element.
     Length,
+    /// The first parameter's elements put before the second's, last first.
+    ReverseOnto,
+    /// The first parameter's elements put before the second's, in order.
+    Prepend,
 }
 
 /// Which definitions are recognized, one entry per function in each table.

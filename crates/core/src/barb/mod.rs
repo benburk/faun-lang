@@ -100,6 +100,7 @@ mod normalize;
 mod optimize;
 mod pretty;
 mod program;
+mod sequence;
 mod stops;
 mod sweep;
 mod terms;

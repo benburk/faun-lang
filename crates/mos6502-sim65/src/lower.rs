@@ -290,6 +290,10 @@ fn exit_status(program: &Program, op: &Op) -> Option<ValueId> {
         .flatten()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per instruction, naming what each reads"
+)]
 fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     match op {
         Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) | Op::BufferEmpty => {}
@@ -306,6 +310,15 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
             each(*len);
             program.values(*fields).iter().copied().for_each(&mut each);
         }
+        Op::BufferPrepend {
+            buffer,
+            len,
+            from,
+            from_len,
+            ..
+        } => [*buffer, *len, *from, *from_len]
+            .into_iter()
+            .for_each(&mut each),
         Op::Binary { left, right, .. }
         | Op::Compare { left, right, .. }
         | Op::BufferField {
@@ -2384,6 +2397,7 @@ impl Lowering<'_> {
             | Op::CellField { .. }
             | Op::BufferEmpty
             | Op::BufferPush { .. }
+            | Op::BufferPrepend { .. }
             | Op::BufferField { .. } => {
                 unreachable!("target preparation legalizes abstract cells")
             }

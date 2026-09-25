@@ -119,6 +119,26 @@ impl Builder<'_> {
         )
     }
 
+    /// Put the last `from_len` elements of `from`, in order or reversed,
+    /// before the last `len` of `buffer`.
+    pub fn buffer_prepend(
+        &mut self,
+        (buffer, len): (ValueId, ValueId),
+        (from, from_len): (ValueId, ValueId),
+        reversed: bool,
+    ) -> ValueId {
+        self.push_one(
+            Op::BufferPrepend {
+                buffer,
+                len,
+                from,
+                from_len,
+                reversed,
+            },
+            Class::Buffer,
+        )
+    }
+
     /// Read leaf `index` of the first of the last `len` elements, as `class`.
     pub fn buffer_field(
         &mut self,
