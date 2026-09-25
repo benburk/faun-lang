@@ -1341,9 +1341,20 @@ impl Selector<'_> {
                     Immediate::Data(data),
                 ),
                 SourceOp::Binary { op, left, right } => {
+                    // A monus of what can be no less than what it takes
+                    // away never borrows, so it is the difference.
+                    let borrows = || {
+                        let least = source.class(left).facts().map_or(0, |facts| facts.low);
+                        source
+                            .class(right)
+                            .facts()
+                            .and_then(|facts| facts.high)
+                            .is_none_or(|most| most > least)
+                    };
                     let opcode = match op {
                         Binary::Add => Opcode::Add,
                         Binary::Sub => Opcode::Subtract,
+                        Binary::Monus if !borrows() => Opcode::Subtract,
                         Binary::Monus => Opcode::Monus,
                         Binary::Mul => Opcode::Multiply,
                         Binary::Div => Opcode::Divide,
@@ -1351,7 +1362,7 @@ impl Selector<'_> {
                     };
                     // A monus answers no more than its left operand, and is
                     // worked out as wide as that is.
-                    let width = if op == Binary::Monus {
+                    let width = if opcode == Opcode::Monus {
                         left
                     } else {
                         results[0]

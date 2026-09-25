@@ -29,7 +29,7 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("two and two", 134),
     ("hello world", 158),
     ("a call", 143),
-    ("recursion", 191),
+    ("recursion", 189),
     ("values across a call", 256),
     ("the heap", 178),
     ("a byte", 209),
@@ -50,12 +50,12 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("two-and-two", 128),
     ("double", 128),
     ("leave", 128),
-    ("bool", 161),
+    ("bool", 159),
     ("nat", 423),
     ("width", 145),
     ("argc", 145),
     ("expressions", 151),
-    ("hello", 242),
+    ("hello", 238),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [204, 215, 214];
 
