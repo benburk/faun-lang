@@ -573,6 +573,36 @@ mod tests {
     }
 
     #[test]
+    fn a_tail_rewrite_leaves_alone_what_a_label_enters() {
+        let mut builder = AllocatedBuilder::default();
+        builder.push_imm8(5);
+        builder.pop(Reg::Rcx);
+        assert!(builder.fold_alu_immediate(Alu::Add, Reg::Rax, Reg::Rcx, 64));
+
+        let inside = builder.label();
+        builder.push_imm8(5);
+        builder.bind(inside);
+        builder.pop(Reg::Rcx);
+        assert!(!builder.fold_alu_immediate(Alu::Add, Reg::Rax, Reg::Rcx, 64));
+
+        let after = builder.label();
+        builder.load_stack(Reg::Rax, 8);
+        builder.bind(after);
+        builder.narrow(Reg::Rax, 8);
+        let program = builder.finish().unwrap();
+        assert!(matches!(
+            program.instructions(),
+            [
+                Inst::AluImmediate { immediate: 5, .. },
+                Inst::PushImmediate(5),
+                Inst::Pop { dst: Reg::Rcx },
+                Inst::LoadStack { .. },
+                Inst::Narrow { .. },
+            ]
+        ));
+    }
+
+    #[test]
     fn an_unencodable_frame_slot_is_a_verification_error() {
         let mut builder = AllocatedBuilder::default();
         builder.load_slot(Reg::Rax, FrameSlot::at(u32::MAX));
