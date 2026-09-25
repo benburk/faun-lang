@@ -560,13 +560,38 @@ struct PendingNumeral {
     resolved: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 struct Infer {
     links: Vec<Option<Ty>>,
     next_rigid: u32,
+    /// The variables bound since the outermost open probe began, which it
+    /// unbinds when it ends.
+    trail: Vec<u32>,
+    probing: bool,
 }
 
 impl Infer {
+    /// What `trial` answers, with every variable it made or bound undone:
+    /// a probe costs what it does, not what inference holds.
+    fn probe<T>(&mut self, trial: impl FnOnce(&mut Self) -> T) -> T {
+        let (variables, bound, outer) = (self.links.len(), self.trail.len(), self.probing);
+        self.probing = true;
+        let answer = trial(self);
+        for id in self.trail.drain(bound..) {
+            self.links[usize::try_from(id).expect("u32 fits usize")] = None;
+        }
+        self.links.truncate(variables);
+        self.probing = outer;
+        answer
+    }
+
+    fn bind(&mut self, id: u32, ty: Ty) {
+        if self.probing {
+            self.trail.push(id);
+        }
+        self.links[usize::try_from(id).expect("u32 fits usize")] = Some(ty);
+    }
+
     fn fresh(&mut self) -> Ty {
         let id = u32::try_from(self.links.len()).expect("fewer than 2^32 inference variables");
         self.links.push(None);
@@ -633,7 +658,7 @@ impl Infer {
                 if contains(other, *id) {
                     Err(Mismatch::Reason("a type would contain itself"))
                 } else {
-                    self.links[usize::try_from(*id).expect("u32 fits usize")] = Some(other.clone());
+                    self.bind(*id, other.clone());
                     Ok(())
                 }
             }
@@ -2982,29 +3007,29 @@ impl<'a> Checker<'a> {
                 .iter()
                 .filter(|implementation| visible.contains(&implementation.target))
                 .filter_map(|implementation| {
-                    let mut trial = self.infer.clone();
-                    match trial.instantiate(&implementation.scheme) {
-                        Ty::Function(parameters, result)
-                            if parameters.len() == pending.arguments.len() + 1 =>
-                        {
-                            let receiver = trial.resolve(&parameters[0]);
-                            let shape = |ty: &Ty| {
-                                let ty = trial.resolve(ty);
-                                if ty == receiver {
-                                    Some(None)
-                                } else if free_variables(&ty).is_empty() {
-                                    Some(Some(ty))
-                                } else {
-                                    None
-                                }
-                            };
-                            Some((
-                                parameters[1..].iter().map(shape).collect::<Vec<_>>(),
-                                shape(&result),
-                            ))
-                        }
-                        _ => None,
-                    }
+                    self.infer
+                        .probe(|trial| match trial.instantiate(&implementation.scheme) {
+                            Ty::Function(parameters, result)
+                                if parameters.len() == pending.arguments.len() + 1 =>
+                            {
+                                let receiver = trial.resolve(&parameters[0]);
+                                let shape = |ty: &Ty| {
+                                    let ty = trial.resolve(ty);
+                                    if ty == receiver {
+                                        Some(None)
+                                    } else if free_variables(&ty).is_empty() {
+                                        Some(Some(ty))
+                                    } else {
+                                        None
+                                    }
+                                };
+                                Some((
+                                    parameters[1..].iter().map(shape).collect::<Vec<_>>(),
+                                    shape(&result),
+                                ))
+                            }
+                            _ => None,
+                        })
                 })
                 .collect();
             let Some((first_arguments, first_result)) = shapes.first().cloned() else {
@@ -3386,18 +3411,18 @@ impl<'a> Checker<'a> {
                     Some(false) => {}
                 }
                 let owned = self.owned_methods(&pending);
-                let candidates: Vec<_> = owned
-                    .iter()
-                    .filter(|implementation| self.fits(&pending, implementation))
-                    .cloned()
-                    .collect();
+                // The one method the receiver has is applied whether or not
+                // it fits, which says why where it does not.
+                let candidates: Vec<_> = if let [only] = owned.as_slice() {
+                    vec![only.clone()]
+                } else {
+                    owned
+                        .iter()
+                        .filter(|implementation| self.fits(&pending, implementation))
+                        .cloned()
+                        .collect()
+                };
                 match candidates.as_slice() {
-                    // The one method the receiver has, with arguments it does
-                    // not take: applying it says which argument is wrong.
-                    [] if owned.len() == 1 => {
-                        self.apply_method(&pending, &owned[0])?;
-                        unreachable!("a method that does not fit fails to apply");
-                    }
                     // A field of a receiver nothing else says anything of is
                     // a field of whatever record it turns out to be.
                     [] if pending.reach == Reach::Bare
@@ -3465,7 +3490,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn field_candidates(&self, pending: &PendingMethod) -> Vec<Scheme> {
+    fn field_candidates(&mut self, pending: &PendingMethod) -> Vec<Scheme> {
         if pending.reach != Reach::Bare || !pending.arguments.is_empty() {
             return Vec::new();
         }
@@ -3484,8 +3509,9 @@ impl<'a> Checker<'a> {
                 _ => false,
             })
             .filter(|field| {
-                let mut trial = self.infer.clone();
-                apply_signature(&mut trial, pending, &field.scheme, self.symbols).is_ok()
+                self.infer.probe(|trial| {
+                    apply_signature(trial, pending, &field.scheme, self.symbols).is_ok()
+                })
             })
             .map(|field| field.scheme.clone())
             .collect()
@@ -3644,9 +3670,10 @@ impl<'a> Checker<'a> {
     }
 
     /// Whether `implementation` takes the arguments given at `pending`.
-    fn fits(&self, pending: &PendingMethod, implementation: &MethodImpl) -> bool {
-        let mut trial = self.infer.clone();
-        apply_signature(&mut trial, pending, &implementation.scheme, self.symbols).is_ok()
+    fn fits(&mut self, pending: &PendingMethod, implementation: &MethodImpl) -> bool {
+        let symbols = self.symbols;
+        self.infer
+            .probe(|trial| apply_signature(trial, pending, &implementation.scheme, symbols).is_ok())
     }
 
     fn apply_field(&mut self, pending: &PendingMethod, scheme: &Scheme) -> Result<(), CheckError> {
