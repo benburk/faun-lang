@@ -78,9 +78,9 @@ argument          = LAMBDA_BAR operand { operand } "|" expr
                   | expr ;
 
 primary           = TYPE | untyped-primary ;
-untyped-primary   = ( NUMBER | CHAR ) [ ".." ( NUMBER | CHAR ) ]
+untyped-primary   = ( NUMBER | CHAR ) [ ".." range-end ]
                   | DECIMAL
-                  | "_"
+                  | "_" [ ".." range-end ]
                   | NAME
                   | EFFECT
                   | STR_START { STR_TEXT | SPLICE_START expr SPLICE_END } STR_END
@@ -88,3 +88,7 @@ untyped-primary   = ( NUMBER | CHAR ) [ ".." ( NUMBER | CHAR ) ]
                   | "[" { expr } [ rest ] "]"
                   | "{" { NAME [ ":" expr ] } [ rest ] "}" ;
 rest              = REST [ expr ] ;
+
+(* A range's end may be negated, or `_` to leave that side open. Its start
+   is negated as an operand is, `-3..5`, and the parser holds the `-` to it. *)
+range-end         = NUMBER | CHAR | "_" | NEGATE ( NUMBER | CHAR ) ;

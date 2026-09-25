@@ -902,8 +902,8 @@ impl<'a> Specializer<'a> {
         ty: &Type,
         (next, tests): (&mut u32, &mut Vec<Expr>),
     ) -> Result<Pattern, SpecializeError> {
-        // A range binds nothing it shows: a fresh name, and its bounds
-        // asked of that name, each through the type's `cmp`.
+        // A range binds nothing it shows: a fresh name, and each end it has
+        // asked of that name, through the type's `cmp`.
         if let h::Pattern::Range(start, end) = pattern {
             let local = h::LocalId(*next);
             *next = next.checked_add(1).expect("fewer than 2^32 locals");
@@ -913,10 +913,21 @@ impl<'a> Specializer<'a> {
                 ty: ty.clone(),
                 kind: ExprKind::Local(local),
             };
-            let low = self.natural_numeral(module, span, start.clone(), false, ty)?;
-            let high = self.natural_numeral(module, span, end.clone(), false, ty)?;
-            tests.push(self.at_most((module, span), low, held.clone(), ty)?);
-            tests.push(self.at_most((module, span), held, high, ty)?);
+            if let Some(start) = start {
+                let low = self.natural_numeral(
+                    module,
+                    span,
+                    start.magnitude.clone(),
+                    start.negative,
+                    ty,
+                )?;
+                tests.push(self.at_most((module, span), low, held.clone(), ty)?);
+            }
+            if let Some(end) = end {
+                let high =
+                    self.natural_numeral(module, span, end.magnitude.clone(), end.negative, ty)?;
+                tests.push(self.at_most((module, span), held, high, ty)?);
+            }
             return Ok(Pattern::Bind(local));
         }
         let readings = &self.checked.readings;

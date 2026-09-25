@@ -161,10 +161,10 @@ fn validate_pattern(pattern: &Pattern, source: &str) -> Result<(), LiteralError>
             .iter()
             .try_for_each(|field| validate_pattern(field, source)),
         Pattern::Number { numeral, .. } => validate_numeral(*numeral, source),
-        Pattern::Range { start, end, .. } => {
-            validate_numeral(*start, source)?;
-            validate_numeral(*end, source)
-        }
+        Pattern::Range { start, end, .. } => start
+            .iter()
+            .chain(end)
+            .try_for_each(|bound| validate_numeral(bound.numeral, source)),
         Pattern::List { elements, rest, .. } => {
             elements
                 .iter()

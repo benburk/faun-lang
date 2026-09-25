@@ -291,6 +291,13 @@ pub struct Numeral {
     pub kind: NumeralKind,
 }
 
+/// One end of a range: a numeral, negated or not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bound {
+    pub numeral: Numeral,
+    pub negative: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumeralKind {
     Number,
@@ -342,10 +349,11 @@ pub enum Pattern {
         numeral: Numeral,
         negative: bool,
     },
+    /// `lo..hi`, either end `_` to leave that side open.
     Range {
         span: Span,
-        start: Numeral,
-        end: Numeral,
+        start: Option<Bound>,
+        end: Option<Bound>,
     },
     List {
         span: Span,
@@ -422,8 +430,9 @@ pub enum ExprKind {
     /// before its line says it is a pattern, and refused by the parser
     /// wherever it is not one, so it never leaves the parser.
     Wild,
-    /// `1..9`: as `Wild`, a pattern's alone, which never leaves the parser.
-    Range(Numeral, Numeral),
+    /// `1..9`, or `_..-1`: as `Wild`, a pattern's alone, which never leaves
+    /// the parser. An end written `_` is open.
+    Range(Option<Bound>, Option<Bound>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

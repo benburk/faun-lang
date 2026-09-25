@@ -1164,12 +1164,16 @@ impl ClauseResolver<'_> {
                     .expect("literals were validated while parsing"),
                 negative: *negative,
             }),
-            s::Pattern::Range { start, end, .. } => Ok(h::Pattern::Range(
-                literal::magnitude(*start, self.source)
-                    .expect("literals were validated while parsing"),
-                literal::magnitude(*end, self.source)
-                    .expect("literals were validated while parsing"),
-            )),
+            s::Pattern::Range { start, end, .. } => {
+                let bound = |bound: &Option<s::Bound>| {
+                    bound.map(|bound| h::Bound {
+                        magnitude: literal::magnitude(bound.numeral, self.source)
+                            .expect("literals were validated while parsing"),
+                        negative: bound.negative,
+                    })
+                };
+                Ok(h::Pattern::Range(bound(start), bound(end)))
+            }
             s::Pattern::List { elements, rest, .. } => Ok(h::Pattern::List(
                 elements
                     .iter()

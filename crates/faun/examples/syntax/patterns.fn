@@ -93,6 +93,28 @@ near_zero(_) -> False
 
 expect near_zero(2) & !near_zero(3) & !near_zero(-1)
 
+# An end may be negative, and either may be `_`, leaving that side open.
+sign : Int -> Nat
+sign(_..-1) -> 0
+sign(0) -> 1
+sign(1.._) -> 2
+sign(_) -> 3
+
+expect sign(-7) == 0 & sign(-1) == 0 & sign(0) == 1 & sign(1) == 2 & sign(80) == 2
+
+band : Int -> Nat
+band(-10..-5) -> 1
+band(-4..4) -> 2
+band(_) -> 0
+
+expect band(-10) == 1 & band(-5) == 1 & band(-11) == 0 & band(-4) == 2 & band(4) == 2 & band(5) == 0
+
+high : U8 -> Bool
+high(0x80.._) -> True
+high(_) -> False
+
+expect high(0x80) & high(0xff) & !high(0x7f)
+
 # Ends past a word's size, and the one value a range of one end holds.
 wide : U64 -> Nat
 wide(5..5) -> 1

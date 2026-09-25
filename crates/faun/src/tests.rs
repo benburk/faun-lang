@@ -150,6 +150,10 @@ fn what_is_not_a_pattern_or_only_a_pattern_says_so() {
         ("f(x) -> [x *]\n", "a list's rest names what follows"),
         ("f(x) -> 1..2\n", "a range stands only in a pattern"),
         ("f(9..0) -> 1\n", "`9..0` is reversed"),
+        ("f(-1..-5) -> 1\n", "`-1..-5` is reversed"),
+        ("f(1..-1) -> 1\n", "`1..-1` is reversed"),
+        ("f(_.._) -> 1\n", "`_.._` bounds nothing"),
+        ("f(-(1..3)) -> 1\n", "`-(1..3)` is not a pattern"),
         (
             "f(x) -> x\ny\nf : Nat -> Nat\nz\n",
             "belongs to no definition",
@@ -227,4 +231,28 @@ fn a_guard_is_one_expression_and_only_a_clause_has_one() {
         let error = parse(source).unwrap_err();
         assert!(error.message.contains(said), "{source}: {}", error.message);
     }
+}
+
+#[test]
+fn a_range_s_ends_may_be_negated_or_left_open() {
+    let written = patterns("f(_..-1 -3..5 0.._ -2..-1) -> 1\n");
+    let ends: Vec<_> = written
+        .iter()
+        .map(|pattern| match pattern {
+            Pattern::Range { start, end, .. } => (
+                start.map(|bound| bound.negative),
+                end.map(|bound| bound.negative),
+            ),
+            other => panic!("a range, found {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        ends,
+        [
+            (None, Some(true)),
+            (Some(true), Some(false)),
+            (Some(false), None),
+            (Some(true), Some(true)),
+        ]
+    );
 }

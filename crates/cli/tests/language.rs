@@ -404,6 +404,16 @@ const REFUSED: &[(&str, &str, &str)] = &[
         "a range runs up, and `'9'..'0'` is reversed",
     ),
     (
+        "a range's ends are numerals its type takes, negative or not",
+        "small : Nat -> Bool
+         small(_..-1) -> True
+         small(_) -> False
+
+         main! : Host -> []
+         main!(host) -> host.exit!(0)",
+        "a negative numeral cannot be a Nat",
+    ),
+    (
         "a clause holding a range covers nothing",
         "small : Nat -> Nat
          small(0..9) -> 1

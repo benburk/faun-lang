@@ -575,6 +575,16 @@ fn the_grammar_reads_and_refuses_what_the_parser_does() {
 }
 
 #[test]
+fn the_grammar_reads_and_refuses_a_range_s_ends_as_the_parser_does() {
+    let grammar = Grammar::read(GRAMMAR);
+    let read = "f(_..-1 -3..5 'a'.._ -2..-1 [0x80..0xbf *r]) -> 1\n";
+    assert!(agree(&grammar, read, read), "{read} is read");
+    for refused in ["f(1..) -> 1\n", "f(1..-_) -> 1\n", "f(_..x) -> 1\n"] {
+        assert!(!agree(&grammar, refused, refused), "{refused} is refused");
+    }
+}
+
+#[test]
 fn a_choice_the_next_token_cannot_make_is_found() {
     let alike = Grammar::read("file = a | b ; a = NAME ; b = NAME TYPE ;");
     assert_eq!(alike.conflicts(), ["`file`: two branches begin alike"]);

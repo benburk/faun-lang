@@ -14,7 +14,7 @@
 //! is; such a form is refused wherever it stays an expression.
 
 use super::ast::{
-    AliasDecl, Binding, Body, Clause, Constraint, ConstraintAliasDecl, DataDecl,
+    AliasDecl, Binding, Body, Bound, Clause, Constraint, ConstraintAliasDecl, DataDecl,
     DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item, MethodItem,
     Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
 };
@@ -598,13 +598,16 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
             }
             _ => Err(not_a_pattern()),
         },
+        ExprKind::Range(None, None) => {
+            Err(error(span, "`_.._` bounds nothing: it is the wildcard `_`"))
+        }
         ExprKind::Range(start, end) => {
-            // A malformed end is told when literals are validated.
-            let reversed = crate::literal::magnitude(start, source)
-                .ok()
-                .zip(crate::literal::magnitude(end, source).ok())
-                .is_some_and(|(start, end)| start > end);
-            if reversed {
+            if start.zip(end).is_some_and(|(start, end)| {
+                // A malformed end is told when literals are validated.
+                bound_value(start, source)
+                    .zip(bound_value(end, source))
+                    .is_some_and(|(start, end)| start > end)
+            }) {
                 return Err(error(
                     span,
                     format!(
@@ -767,4 +770,15 @@ fn expression(expr: &Expr) -> Result<(), Error> {
             expression(right)
         }
     }
+}
+
+/// The value a range's end is written as, where its numeral reads.
+fn bound_value(bound: Bound, source: &str) -> Option<num_bigint::BigInt> {
+    let magnitude =
+        num_bigint::BigInt::from(crate::literal::magnitude(bound.numeral, source).ok()?);
+    Some(if bound.negative {
+        -magnitude
+    } else {
+        magnitude
+    })
 }

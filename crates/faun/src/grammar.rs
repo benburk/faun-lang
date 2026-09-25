@@ -12,7 +12,7 @@
 //! line, so one file's errors are all found at once.
 
 use super::ast::{
-    BinaryOp, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl, Exposure, Expr,
+    BinaryOp, Bound, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl, Exposure, Expr,
     ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span, StringPart,
     Type, UnaryOp,
 };
@@ -599,7 +599,7 @@ impl Parser<'_> {
         match self.peek() {
             Kind::Negate => {
                 let token = self.bump();
-                Ok(unary(UnaryOp::Negate, token, self.operand()?))
+                Ok(negated(token, self.operand()?))
             }
             Kind::Bang => {
                 let token = self.bump();
@@ -692,13 +692,23 @@ impl Parser<'_> {
     fn primary(&mut self) -> Parsed<Expr> {
         match self.peek() {
             Kind::Number | Kind::Char => self.numeral(),
-            Kind::Decimal | Kind::Wild | Kind::TypeIdent | Kind::Ident | Kind::EffectIdent => {
+            Kind::Wild => {
+                let token = self.bump();
+                if self.eat(Kind::DotDot).is_none() {
+                    return Ok(atom(token, ExprKind::Wild));
+                }
+                let (end, span) = self.range_end()?;
+                Ok(Expr {
+                    span: token.span().through(span),
+                    kind: ExprKind::Range(None, end),
+                })
+            }
+            Kind::Decimal | Kind::TypeIdent | Kind::Ident | Kind::EffectIdent => {
                 let token = self.bump();
                 Ok(atom(
                     token,
                     match token.kind {
                         Kind::Decimal => ExprKind::Number(numeral(token)),
-                        Kind::Wild => ExprKind::Wild,
                         _ => ExprKind::Name(name(token)),
                     },
                 ))
@@ -714,23 +724,50 @@ impl Parser<'_> {
         }
     }
 
-    /// A numeral, or a range of two.
+    /// A numeral, or a range from it.
     fn numeral(&mut self) -> Parsed<Expr> {
         let start = self.bump();
         if self.eat(Kind::DotDot).is_none() {
             return Ok(atom(start, ExprKind::Number(numeral(start))));
         }
-        let end = match self.peek() {
-            Kind::Number | Kind::Char => self.bump(),
-            _ => {
-                self.note("the range's last numeral");
-                return Err(self.fail());
-            }
+        let (end, span) = self.range_end()?;
+        let start = Bound {
+            numeral: numeral(start),
+            negative: false,
         };
         Ok(Expr {
-            span: start.span().through(end.span()),
-            kind: ExprKind::Range(numeral(start), numeral(end)),
+            span: start.numeral.span.through(span),
+            kind: ExprKind::Range(Some(start), end),
         })
+    }
+
+    /// `range-end`: a numeral, negated or not, or `_` for no end.
+    fn range_end(&mut self) -> Parsed<(Option<Bound>, Span)> {
+        if let Some(wild) = self.eat(Kind::Wild) {
+            return Ok((None, wild.span()));
+        }
+        let minus = self.eat(Kind::Negate);
+        match self.peek() {
+            Kind::Number | Kind::Char => {
+                let end = self.bump();
+                let span =
+                    minus.map_or_else(|| end.span(), |minus| minus.span().through(end.span()));
+                Ok((
+                    Some(Bound {
+                        numeral: numeral(end),
+                        negative: minus.is_some(),
+                    }),
+                    span,
+                ))
+            }
+            _ => {
+                if minus.is_none() {
+                    self.note("`_`");
+                }
+                self.note("the range's last numeral");
+                Err(self.fail())
+            }
+        }
     }
 
     /// A tuple, or one value grouped.
@@ -856,6 +893,28 @@ fn atom(token: Token, kind: ExprKind) -> Expr {
     Expr {
         span: token.span(),
         kind,
+    }
+}
+
+/// `-` and what it negates. A range whose first end it is held to,
+/// `-3..5`, takes it as that end's sign.
+fn negated(token: Token, value: Expr) -> Expr {
+    match value.kind {
+        ExprKind::Range(Some(start), end)
+            if !start.negative && start.numeral.span.start == token.span().end =>
+        {
+            Expr {
+                span: token.span().through(value.span),
+                kind: ExprKind::Range(
+                    Some(Bound {
+                        negative: true,
+                        ..start
+                    }),
+                    end,
+                ),
+            }
+        }
+        _ => unary(UnaryOp::Negate, token, value),
     }
 }
 

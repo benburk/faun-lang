@@ -225,19 +225,21 @@ bucket(_) -> 2
 ## Ranges
 
 A range pattern, `lo..hi` of numerals or characters, is inclusive at both
-ends and follows Ori (`notes/forms/pattern-matching.md` there): it binds
-nothing, and is a test of the value's `cmp` at both ends, asked with the
+ends and follows Ori (`notes/forms/pattern-matching.md` there). Either end
+may be negative, `-10..-1`, or `_`, leaving that side open: `_..-1` and
+`0x80.._`; `_.._` is refused as the wildcard it would be. A range binds
+nothing, and is a test of the value's `cmp` at each end it has, asked with the
 clause's other literal tests before its guard. A clause holding one is
 guarded, so it covers nothing, and a group of them ends in a clause without.
 A reversed range, which could match nothing, is refused. Unlike Ori's, a
 range may stand in an or-pattern's alternative, since each alternative is a
-row of its own, as a word's numeral already may. Ori's open ends, `_..hi`
-and `lo.._`, and negative ends are not read yet.
+row of its own, as a word's numeral already may.
 
 ```
 utf8([0xe0 0xa0..0xbf 0x80..0xbf *rest]) -> utf8(rest)
 is_digit(U8('0'..'9')) -> True
 is_digit(_) -> False
+sign(_..-1) -> Negative
 ```
 
 ## Callbacks

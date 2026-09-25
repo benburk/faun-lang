@@ -140,6 +140,13 @@ pub struct Dual {
     pub home: Option<Symbol>,
 }
 
+/// One end of a range pattern: a magnitude, negated or not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Bound {
+    pub magnitude: BigUint,
+    pub negative: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
     Wild,
@@ -155,7 +162,8 @@ pub enum Pattern {
         magnitude: BigUint,
         negative: bool,
     },
-    Range(BigUint, BigUint),
+    /// `lo..hi`, inclusive, either end open where it is `None`.
+    Range(Option<Bound>, Option<Bound>),
     List(Vec<Self>, Option<Box<Self>>),
     /// Named fields, and whether the pattern ignores the others.
     Record(Vec<(Symbol, Self)>, bool),

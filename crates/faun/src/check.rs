@@ -1933,12 +1933,12 @@ impl<'a> Checker<'a> {
                 Ok(())
             }
             h::Pattern::Range(start, end) => {
-                for magnitude in [start, end] {
+                for bound in start.iter().chain(end) {
                     self.pending_numerals.push(PendingNumeral {
                         module,
                         span,
-                        magnitude: magnitude.clone(),
-                        negative: false,
+                        magnitude: bound.magnitude.clone(),
+                        negative: bound.negative,
                         scale: None,
                         ty: expected.clone(),
                         resolved: false,
