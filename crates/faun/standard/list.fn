@@ -171,9 +171,11 @@ List(a) : [Nil Cons(a List(a))].(
   drop_while([head *tail] skip) if skip(head) -> drop_while(tail skip)
   drop_while(values _) -> values
 
-  # `0 1 ... count - 1`, written `List.range(count)`.
+  # `0 1 ... count - 1`, written `List.range(count)`. Built from the end,
+  # each element the count that is left: every one is below `count`, which
+  # is what a compiler reading the recursion can see.
   range : Nat -> List(Nat)
-  range(count) -> range_from(0 count)
+  range(count) -> range_into(count [])
 
   # `count` copies of `value`, written `List.repeat(value count)`.
   repeat : a Nat -> List(a)
@@ -190,6 +192,6 @@ reverse_into([head *tail] output) -> reverse_into(tail [head *output])
 put : List(a) Nat a -> List(a)
 put(values index value) -> List.set(values index value).ok_or(values)
 
-range_from : Nat Nat -> List(Nat)
-range_from(_ 0) -> []
-range_from(floor Succ(count)) -> [floor *range_from(floor + 1 count)]
+range_into : Nat List(Nat) -> List(Nat)
+range_into(0 built) -> built
+range_into(Succ(left) built) -> range_into(left [left *built])
