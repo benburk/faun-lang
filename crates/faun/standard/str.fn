@@ -153,8 +153,8 @@ between(byte low high) -> byte.to_nat() >= low & byte.to_nat() <= high
 
 bytes_cmp : List(U8) List(U8) -> Order
 bytes_cmp([] []) -> Eq
-bytes_cmp([] [_ *_]) -> Lt
-bytes_cmp([_ *_] []) -> Gt
+bytes_cmp([] [_ *]) -> Lt
+bytes_cmp([_ *] []) -> Gt
 bytes_cmp([a *left] [b *right]) -> then_cmp(a.cmp(b) left right)
 
 then_cmp : Order List(U8) List(U8) -> Order

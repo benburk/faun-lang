@@ -13,6 +13,17 @@
 //! begin with, outside every bracket but a method block's. So a line runs on
 //! after `->`, `=` or an operator, and into a next line beginning `.`, an
 //! infix operator, `where` or `if`, and a list or a call spans lines freely.
+//!
+//! An operator is read by its spacing, one rule for all of them: after an
+//! operand, space on both sides or neither makes it infix, `a - b` or `a-b`,
+//! and space before it only makes it a prefix, beginning an element of its
+//! own, `[a *rest]`. Where no operand comes before it, it is a prefix however
+//! it is spaced. So `-` is [`Kind::Negate`] or [`Kind::Minus`], `*` a
+//! [`Kind::Rest`] (also alone before a closing bracket, `[_ *]`) or
+//! [`Kind::Star`], and `|` a [`Kind::LambdaBar`] or [`Kind::Bar`]. An infix
+//! operator spaced on one side only is [`Kind::Lopsided`], and a `-` beginning
+//! an element after another, `[a -b]`, is [`Kind::NegatedElement`] unless it
+//! negates a numeral, `[-4 -5]`: both are errors the parser reports.
 
 // Token recognition is clearer as one exhaustive byte match than as forwarding
 // helpers cut to satisfy a line-count heuristic.
@@ -69,12 +80,22 @@ pub enum Kind {
     Gt,
     Ge,
     Plus,
+    /// `-` between two operands.
     Minus,
+    /// `-` beginning an operand: a negation.
+    Negate,
+    /// `*` between two operands.
     Star,
+    /// `*` beginning the rest of a list or a record, or standing alone for
+    /// one unnamed.
+    Rest,
     Slash,
     Percent,
     Amp,
+    /// `|` between two operands, or closing a lambda's parameters.
     Bar,
+    /// `|` opening a lambda's parameters.
+    LambdaBar,
     Caret,
     Bang,
     Question,
@@ -87,6 +108,11 @@ pub enum Kind {
     /// A character no token starts with, or a literal left unfinished. The
     /// parser reports it where it meets it.
     Error,
+    /// An infix operator with space on one side only, `a- b`: an error.
+    Lopsided,
+    /// A `-` beginning an element straight after another, `[a -b]`, where it
+    /// negates no numeral: an error, being so near `a - b`.
+    NegatedElement,
     /// The end of a line of items or of a body; see the module notes.
     Newline,
     /// The end of the text: every token stream ends with one.
@@ -113,6 +139,26 @@ impl Kind {
                 | Self::DotStar
                 | Self::Question
                 | Self::Error
+        )
+    }
+
+    /// Whether this token only ever stands between two operands.
+    const fn infix(self) -> bool {
+        matches!(
+            self,
+            Self::Plus
+                | Self::Minus
+                | Self::Star
+                | Self::Slash
+                | Self::Percent
+                | Self::Amp
+                | Self::Caret
+                | Self::EqEq
+                | Self::Ne
+                | Self::Lt
+                | Self::Le
+                | Self::Gt
+                | Self::Ge
         )
     }
 
@@ -303,6 +349,7 @@ impl Lexer<'_> {
                 newline_before: false,
             });
         }
+        let kind = self.classify(kind);
         match kind {
             Kind::DotParen => self.brackets.push(Bracket::Lines),
             Kind::LParen | Kind::LBracket | Kind::LBrace => self.brackets.push(Bracket::Joined),
@@ -322,6 +369,41 @@ impl Lexer<'_> {
         self.newline_before = false;
     }
 
+    /// An operator just lexed, read by its spacing and by whether an operand
+    /// comes before it; see the module notes.
+    fn classify(&self, kind: Kind) -> Kind {
+        let operand = self.out.last().is_some_and(|last| last.kind.ends_line());
+        let (before, after) = (self.space_before, self.space_after());
+        let prefix = !operand || before && !after;
+        match kind {
+            Kind::Minus if !operand => Kind::Negate,
+            Kind::Minus if prefix && self.bytes.get(self.at).is_some_and(u8::is_ascii_digit) => {
+                Kind::Negate
+            }
+            Kind::Minus if prefix => Kind::NegatedElement,
+            Kind::Star if prefix || before && self.closes_next() => Kind::Rest,
+            Kind::Bar if prefix => Kind::LambdaBar,
+            kind if kind.infix() && before != after => Kind::Lopsided,
+            kind => kind,
+        }
+    }
+
+    /// Whether space, a comment or the end of the text follows what was just
+    /// lexed.
+    fn space_after(&self) -> bool {
+        self.bytes
+            .get(self.at)
+            .is_none_or(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'#'))
+    }
+
+    /// Whether the next token, past any space, closes a list or a record.
+    fn closes_next(&self) -> bool {
+        self.bytes[self.at..]
+            .iter()
+            .find(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+            .is_some_and(|byte| matches!(byte, b']' | b'}'))
+    }
+
     /// Whether the line break before `kind`, just lexed, ends a line.
     fn ends_line_before(&self, kind: Kind) -> bool {
         let lines = self.modes.is_empty()
@@ -329,11 +411,7 @@ impl Lexer<'_> {
                 .brackets
                 .last()
                 .is_none_or(|bracket| *bracket == Bracket::Lines);
-        let held_minus = kind == Kind::Minus
-            && self
-                .bytes
-                .get(self.at)
-                .is_some_and(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'#'));
+        let held_minus = kind == Kind::Minus && !self.space_after();
         lines
             && kind != Kind::Eof
             && self.out.last().is_some_and(|last| last.kind.ends_line())
@@ -660,7 +738,10 @@ mod tests {
         assert_eq!(kinds("a ->\nb"), [Ident, Arrow, Ident, Kind::Eof]);
         assert_eq!(kinds("a\n  .b"), [Ident, Dot, Ident, Kind::Eof]);
         assert_eq!(kinds("a\n- b"), [Ident, Minus, Ident, Kind::Eof]);
-        assert_eq!(kinds("a\n-b"), [Ident, Newline, Minus, Ident, Kind::Eof]);
+        assert_eq!(
+            kinds("a\n-b"),
+            [Ident, Newline, Kind::Negate, Ident, Kind::Eof]
+        );
         // Brackets join their lines, but a method block holds lines of items.
         assert_eq!(kinds("(a\nb)"), [LParen, Ident, Ident, RParen, Kind::Eof]);
         assert_eq!(
@@ -678,6 +759,30 @@ mod tests {
         );
         assert_eq!(kinds("\"${a\nb}\"")[2..4], [Ident, Ident]);
         assert_eq!(kinds("a\n"), [Ident, Kind::Eof]);
+    }
+
+    #[test]
+    fn an_operator_is_read_by_its_spacing() {
+        use Kind::{
+            Bar, Ident, LBracket, LambdaBar, Lopsided, Minus, Negate, NegatedElement, Number,
+            RBrace, RBracket, Rest, Star,
+        };
+        assert_eq!(kinds("a - b")[1], Minus);
+        assert_eq!(kinds("a-b")[1], Minus);
+        assert_eq!(kinds("x = - b")[2], Negate);
+        assert_eq!(
+            kinds("[-4 -5]")[..5],
+            [LBracket, Negate, Number, Negate, Number]
+        );
+        assert_eq!(kinds("[a -b]")[2], NegatedElement);
+        assert_eq!(kinds("a- b")[1], Lopsided);
+        assert_eq!(kinds("a +b")[1], Lopsided);
+        assert_eq!(kinds("a * b")[1], Star);
+        assert_eq!(kinds("[a *rest]")[2..4], [Rest, Ident]);
+        assert_eq!(kinds("[_ *]")[2..4], [Rest, RBracket]);
+        assert_eq!(kinds("{x * }")[2..4], [Rest, RBrace]);
+        assert_eq!(kinds("a | b")[1], Bar);
+        assert_eq!(kinds("f(a |x| x)")[3..7], [LambdaBar, Ident, Bar, Ident]);
     }
 
     #[test]

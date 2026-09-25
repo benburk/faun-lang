@@ -57,6 +57,13 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     }
 }
 
+/// What follows a type name and its parameters at the head of an item.
+enum Declared {
+    Alias(Type),
+    Constraints((Vec<Constraint>, Span)),
+    Data(Type, Option<(Vec<MethodItem>, Span)>),
+}
+
 enum TermDeclaration {
     Signature(Vec<Type>, Type, Vec<Constraint>, Span),
     Clause(Vec<Pattern>, Option<Expr>, Body),
@@ -73,7 +80,7 @@ fn binding_ahead(tokens: &[Token], at: usize) -> bool {
     };
     let end = match first.kind {
         Kind::Ident | Kind::Wild | Kind::Number => Some(at + 1),
-        Kind::Minus
+        Kind::Negate
             if tokens
                 .get(at + 1)
                 .is_some_and(|token| token.kind == Kind::Number && !token.space_before) =>
@@ -208,8 +215,6 @@ peg::parser! {
             = quiet!{[token if token.kind == kind && !token.space_before]}
         rule sep()
             = quiet!{&[token if token.space_before]}
-        rule tight()
-            = quiet!{&[token if !token.space_before]}
         rule chain_dot() -> Token
             = quiet!{[token if token.kind == Kind::Dot && (!token.space_before || token.newline_before)]}
         rule eof()
@@ -246,9 +251,7 @@ peg::parser! {
             = header:header() { Item::Header(header) }
             / import:import_decl() { Item::Import(import) }
             / exports:exports_decl() { Item::Exports(exports) }
-            / alias:alias_decl() { Item::Alias(alias) }
-            / constraints:constraint_alias_decl() { Item::Constraints(constraints) }
-            / data:data_decl() { Item::Data(data) }
+            / declaration:type_declaration() { declaration }
             / expect:expect_decl() { Item::Expect(expect) }
             / declaration:term_declaration() { term_item(declaration) }
 
@@ -322,49 +325,18 @@ peg::parser! {
                 Export { name: name(exported), constructors: constructors.is_some() }
             }
 
-        rule alias_decl() -> AliasDecl
-            = head:type_ident() quiet!{tok(Kind::Eq)} ty:ty() {
-                AliasDecl {
-                    span: head.span().through(type_span(&ty)),
-                    name: name(head),
-                    ty,
+        // `Name = ty`, `Name(a) = where ...` or `Name(a) : ty`, told apart
+        // after the name and its parameters by the token that follows.
+        rule type_declaration() -> Item
+            = head:type_ident() params:type_params()? declared:(
+                tok(Kind::Eq) declared:(
+                    constraints:constraints() { Declared::Constraints(constraints) }
+                    / ty:ty() { Declared::Alias(ty) }
+                ) { declared }
+                / colon() representation:ty() methods:method_block()? {
+                    Declared::Data(representation, methods)
                 }
-            }
-
-        rule constraint_alias_decl() -> ConstraintAliasDecl
-            = head:type_ident() adj(Kind::LParen) parameters:(ident() ++ sep()) rparen()
-              quiet!{tok(Kind::Eq)} constraints:constraints() {
-                ConstraintAliasDecl {
-                    span: head.span().through(constraints.1),
-                    name: name(head),
-                    parameters: parameters.into_iter().map(name).collect(),
-                    constraints: constraints.0,
-                }
-            }
-
-        rule data_decl() -> DataDecl
-            = head:type_ident() params:type_params()? colon()
-              representation:data_representation()
-              methods:method_block()?
-              {
-                let end = methods.as_ref().map_or(representation.1, |methods| methods.1);
-                DataDecl {
-                    span: head.span().through(end),
-                    name: name(head),
-                    params: params.unwrap_or_default(),
-                    representation: representation.0,
-                    methods: methods.map_or_else(Vec::new, |methods| methods.0),
-                }
-            }
-
-        rule data_representation() -> (DataRepresentation, Span)
-            = lbracket() constructors:(constructor() ** sep()) close:rbracket() {
-                (DataRepresentation::Sum(constructors), close.span())
-            }
-            / represented:ty() {
-                let span = type_span(&represented);
-                (DataRepresentation::Wrapper(represented), span)
-            }
+            ) {? type_declaration(head, params, declared) }
 
         rule type_params() -> Vec<Name>
             = adj(Kind::LParen) params:(ident() ++ sep()) rparen() {
@@ -403,20 +375,13 @@ peg::parser! {
             }
 
         rule signature_type() -> (Vec<Type>, Type, Vec<Constraint>, Span)
-            = parameters:(ty() ++ sep()) arrow() result:ty()
-              constraints:constraints()? {
+            = shape:member_type() constraints:constraints()? {
+                let (parameters, result) = shape;
                 let end = constraints.as_ref().map_or_else(
                     || type_span(&result),
                     |constraints| constraints.1,
                 );
                 (parameters, result, constraints.map_or_else(Vec::new, |value| value.0), end)
-            }
-            / result:ty() constraints:constraints()? {
-                let end = constraints.as_ref().map_or_else(
-                    || type_span(&result),
-                    |constraints| constraints.1,
-                );
-                (Vec::new(), result, constraints.map_or_else(Vec::new, |value| value.0), end)
             }
 
         rule constraints() -> (Vec<Constraint>, Span)
@@ -451,9 +416,17 @@ peg::parser! {
                 }
             }
 
+        // Parameters and an arrow to the result, or the result alone.
         rule member_type() -> (Vec<Type>, Type)
-            = parameters:(ty() ++ sep()) arrow() result:ty() { (parameters, result) }
-            / result:ty() { (Vec::new(), result) }
+            = types:(ty() ++ sep()) result:(arrow() result:ty() { result })? {?
+                match result {
+                    Some(result) => Ok((types, result)),
+                    None if types.len() == 1 => {
+                        Ok((Vec::new(), types.into_iter().next().expect("one")))
+                    }
+                    None => Err("`->` and the result after the parameter types"),
+                }
+            }
 
         rule ty() -> Type
             = head:type_ident()
@@ -464,20 +437,20 @@ peg::parser! {
                 }
             }
             / variable:ident() { named_type(variable, Vec::new(), variable.span()) }
-            / open:lparen() parameters:(ty() ++ sep()) arrow() result:ty() close:rparen() {
-                Type::Function {
-                    span: open.span().through(close.span()),
-                    parameters,
-                    result: Box::new(result),
+            // A function type, a tuple, or one type grouped.
+            / open:lparen() members:(ty() ++ sep()) result:(arrow() result:ty() { result })?
+              close:rparen() {
+                let span = open.span().through(close.span());
+                match result {
+                    Some(result) => Type::Function {
+                        span,
+                        parameters: members,
+                        result: Box::new(result),
+                    },
+                    None if members.len() == 1 => members.into_iter().next().expect("one"),
+                    None => Type::Tuple { span, members },
                 }
             }
-            / open:lparen() members:(ty() **<2,> sep()) close:rparen() {
-                Type::Tuple {
-                    span: open.span().through(close.span()),
-                    members,
-                }
-            }
-            / lparen() grouped:ty() rparen() { grouped }
             / open:lbracket() constructors:(constructor() ** sep()) close:rbracket() {
                 Type::Variants {
                     span: open.span().through(close.span()),
@@ -485,7 +458,7 @@ peg::parser! {
                 }
             }
             / open:lbrace() fields:(record_type_field() ** sep())
-              rest:(sep()? tok(Kind::Star))? close:rbrace() {
+              rest:tok(Kind::Rest)? close:rbrace() {
                 Type::Record {
                     span: open.span().through(close.span()),
                     fields,
@@ -547,34 +520,33 @@ peg::parser! {
             }
 
         rule single_pattern() -> Pattern
-            = start:(tok(Kind::Number) / tok(Kind::Char)) adj(Kind::DotDot)
-              end:(adj(Kind::Number) / adj(Kind::Char)) {
-                Pattern::Range {
-                    span: start.span().through(end.span()),
-                    start: numeral(start),
-                    end: numeral(end),
-                }
+            = start:(tok(Kind::Number) / tok(Kind::Char))
+              end:(adj(Kind::DotDot) end:(adj(Kind::Number) / adj(Kind::Char)) { end })? {
+                end.map_or_else(
+                    || Pattern::Number {
+                        span: start.span(),
+                        numeral: numeral(start),
+                        negative: false,
+                    },
+                    |end| Pattern::Range {
+                        span: start.span().through(end.span()),
+                        start: numeral(start),
+                        end: numeral(end),
+                    },
+                )
             }
-            / minus:tok(Kind::Minus) value:(adj(Kind::Number) / adj(Kind::Char)) {
+            / minus:tok(Kind::Negate) value:(tok(Kind::Number) / tok(Kind::Char)) {
                 Pattern::Number {
                     span: minus.span().through(value.span()),
                     numeral: numeral(value),
                     negative: true,
                 }
             }
-            / value:(tok(Kind::Number) / tok(Kind::Char)) {
-                Pattern::Number {
-                    span: value.span(),
-                    numeral: numeral(value),
-                    negative: false,
-                }
-            }
             // `[a *]` takes a rest it does not name.
             / open:lbracket() elements:(pattern() ** sep())
-              rest:(sep()? star:tok(Kind::Star)
-                  rest:(tight() rest:pattern() { rest })? {
-                      rest.unwrap_or_else(|| Pattern::Wild(star.span()))
-                  })?
+              rest:(star:tok(Kind::Rest) rest:pattern()? {
+                  rest.unwrap_or_else(|| Pattern::Wild(star.span()))
+              })?
               close:rbracket() {
                 Pattern::List {
                     span: open.span().through(close.span()),
@@ -589,15 +561,19 @@ peg::parser! {
                     parts,
                 }
             }
-            / open:lparen() members:(pattern() **<2,> sep()) close:rparen() {
-                Pattern::Tuple {
-                    span: open.span().through(close.span()),
-                    members,
+            // A tuple, or one pattern grouped.
+            / open:lparen() members:(pattern() ++ sep()) close:rparen() {
+                if members.len() == 1 {
+                    members.into_iter().next().expect("one")
+                } else {
+                    Pattern::Tuple {
+                        span: open.span().through(close.span()),
+                        members,
+                    }
                 }
             }
-            / lparen() grouped:pattern() rparen() { grouped }
             / open:lbrace() fields:(record_pattern_field() ** sep())
-              rest:(sep()? tok(Kind::Star))? close:rbrace() {
+              rest:tok(Kind::Rest)? close:rbrace() {
                 Pattern::Record {
                     span: open.span().through(close.span()),
                     fields,
@@ -628,7 +604,7 @@ peg::parser! {
             }
 
         pub rule expr() -> Expr = precedence! {
-            left:(@) bar_sep() right:@ { binary(BinaryOp::Or, left, right) }
+            left:(@) tok(Kind::Bar) right:@ { binary(BinaryOp::Or, left, right) }
             --
             left:(@) tok(Kind::Caret) right:@ { binary(BinaryOp::Xor, left, right) }
             --
@@ -642,14 +618,14 @@ peg::parser! {
             left:(@) tok(Kind::Ge) right:@ { binary(BinaryOp::GreaterEqual, left, right) }
             --
             left:(@) tok(Kind::Plus) right:@ { binary(BinaryOp::Add, left, right) }
-            left:(@) minus_sep() right:@ { binary(BinaryOp::Subtract, left, right) }
+            left:(@) tok(Kind::Minus) right:@ { binary(BinaryOp::Subtract, left, right) }
             --
             left:(@) tok(Kind::Slash) right:@ { binary(BinaryOp::Divide, left, right) }
             left:(@) tok(Kind::Percent) right:@ { binary(BinaryOp::Remainder, left, right) }
-            left:(@) star_sep() right:@ { binary(BinaryOp::Multiply, left, right) }
+            left:(@) tok(Kind::Star) right:@ { binary(BinaryOp::Multiply, left, right) }
             --
-            token:tok(Kind::Minus) tight() value:@ { unary(UnaryOp::Negate, token, value) }
-            token:tok(Kind::Bang) tight() value:@ { unary(UnaryOp::Not, token, value) }
+            token:tok(Kind::Negate) value:@ { unary(UnaryOp::Negate, token, value) }
+            token:tok(Kind::Bang) value:@ { unary(UnaryOp::Not, token, value) }
             --
             head:@ args:call_args() {
                 let span = head.span.through(args.1);
@@ -675,9 +651,6 @@ peg::parser! {
             primary:primary() { primary }
         }
 
-        rule bar_sep() = adj(Kind::Bar) / tok(Kind::Bar) sep()
-        rule minus_sep() = adj(Kind::Minus) / tok(Kind::Minus) sep()
-        rule star_sep() = adj(Kind::Star) / tok(Kind::Star) sep()
 
         rule call_args() -> (Vec<Expr>, Span)
             = adj(Kind::LParen) args:(argument() ** sep()) close:rparen() {
@@ -687,7 +660,8 @@ peg::parser! {
         rule argument() -> Expr = lambda() / expr()
 
         rule lambda() -> Expr
-            = open:tok(Kind::Bar) patterns:(single_pattern() ++ sep()) tok(Kind::Bar) body:expr() {
+            = open:tok(Kind::LambdaBar) patterns:(single_pattern() ++ sep()) tok(Kind::Bar)
+              body:expr() {
                 Expr {
                     span: open.span().through(body.span),
                     kind: ExprKind::Lambda(patterns, Box::new(body)),
@@ -708,11 +682,14 @@ peg::parser! {
             / string:string() { string }
             / list:list() { list }
             / record:record() { record }
-            / open:lparen() members:(expr() **<2,> sep()) close:rparen() {
-                Expr { span: open.span().through(close.span()), kind: ExprKind::Tuple(members) }
-            }
-            / open:lparen() value:expr() close:rparen() {
-                Expr { span: open.span().through(close.span()), ..value }
+            // A tuple, or one value grouped.
+            / open:lparen() members:(expr() ++ sep()) close:rparen() {
+                let span = open.span().through(close.span());
+                if members.len() == 1 {
+                    Expr { span, ..members.into_iter().next().expect("one") }
+                } else {
+                    Expr { span, kind: ExprKind::Tuple(members) }
+                }
             }
             / token:quiet!{[token if matches!(token.kind,
                 Kind::TypeIdent | Kind::Ident | Kind::EffectIdent)]} {
@@ -736,7 +713,7 @@ peg::parser! {
 
         rule record() -> Expr
             = open:lbrace() fields:(record_expr_field() ** sep())
-              base:(sep()? tok(Kind::Star) tight() base:expr() { base })? close:rbrace() {
+              base:(tok(Kind::Rest) base:expr() { base })? close:rbrace() {
                 let span = open.span().through(close.span());
                 match base {
                     Some(base) => Expr { span, kind: ExprKind::Update(fields, Box::new(base)) },
@@ -753,13 +730,58 @@ peg::parser! {
 
         rule list() -> Expr
             = open:lbracket() elements:(expr() ** sep())
-              rest:(sep()? tok(Kind::Star) tight() rest:expr() { rest })?
+              rest:(tok(Kind::Rest) rest:expr() { rest })?
               close:rbracket() {
                 Expr {
                     span: open.span().through(close.span()),
                     kind: ExprKind::List(elements, rest.map(Box::new)),
                 }
             }
+    }
+}
+
+/// The item a type name heads: an alias of no parameters, a constraint alias
+/// of some, or a data declaration, whose representation in brackets is its
+/// constructors.
+fn type_declaration(
+    head: Token,
+    params: Option<Vec<Name>>,
+    declared: Declared,
+) -> Result<Item, &'static str> {
+    match (declared, params) {
+        (Declared::Alias(ty), None) => Ok(Item::Alias(AliasDecl {
+            span: head.span().through(type_span(&ty)),
+            name: name(head),
+            ty,
+        })),
+        (Declared::Alias(_), Some(_)) => {
+            Err("`where` and the constraints a parameterized alias stands for")
+        }
+        (Declared::Constraints((constraints, end)), Some(parameters)) => {
+            Ok(Item::Constraints(ConstraintAliasDecl {
+                span: head.span().through(end),
+                name: name(head),
+                parameters,
+                constraints,
+            }))
+        }
+        (Declared::Constraints(_), None) => Err("`(` and the parameters a constraint alias takes"),
+        (Declared::Data(represented, methods), params) => {
+            let end = methods
+                .as_ref()
+                .map_or_else(|| type_span(&represented), |methods| methods.1);
+            let representation = match represented {
+                Type::Variants { constructors, .. } => DataRepresentation::Sum(constructors),
+                wrapped => DataRepresentation::Wrapper(wrapped),
+            };
+            Ok(Item::Data(DataDecl {
+                span: head.span().through(end),
+                name: name(head),
+                params: params.unwrap_or_default(),
+                representation,
+                methods: methods.map_or_else(Vec::new, |methods| methods.0),
+            }))
+        }
     }
 }
 

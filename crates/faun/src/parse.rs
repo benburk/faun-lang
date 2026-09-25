@@ -124,6 +124,13 @@ fn syntax_error(
         Kind::Error => format!("invalid token `{}`", token.text(source)),
         Kind::Eof => format!("expected {} before the end of the file", error.expected),
         Kind::Newline => format!("expected {} before the end of the line", error.expected),
+        Kind::Lopsided => {
+            let operator = token.text(source);
+            format!(
+                "`{operator}` has space on one side only: write `a {operator} b`, or `a{operator}b`"
+            )
+        }
+        Kind::NegatedElement => "this `-` begins an element of its own: write `a - b` to subtract, or `(-b)` for a negated element".to_owned(),
         _ => format!(
             "expected {}, found `{}`",
             error.expected,

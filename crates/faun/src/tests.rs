@@ -63,3 +63,31 @@ fn a_line_goes_on_after_an_arrow_or_an_operator_and_into_a_chain() {
         Item::Signature(signature) if signature.constraints.len() == 2
     ));
 }
+
+#[test]
+fn spacing_that_could_mean_two_things_is_refused() {
+    let error = parse("f(a b) ->\n  [a -b]\n").unwrap_err();
+    assert!(error.message.contains("`(-b)`"), "{}", error.message);
+    let error = parse("f(a b) -> a- b\n").unwrap_err();
+    assert!(
+        error.message.contains("`-` has space on one side only"),
+        "{}",
+        error.message
+    );
+    let lines = body("f(a) ->\n  [-4 -5 *a]\n");
+    assert!(
+        matches!(lines.result.kind, ExprKind::List(ref elements, Some(_)) if elements.len() == 2)
+    );
+}
+
+#[test]
+fn parentheses_nest_without_trying_each_reading_again() {
+    let depth = 200;
+    let source = format!("f(x) -> {}x{}\n", "(".repeat(depth), ")".repeat(depth));
+    assert!(matches!(body(&source).result.kind, ExprKind::Name(_)));
+    let types = parse("f : (a b -> c) (a b) (a) -> {x: a *}\n").unwrap();
+    assert!(matches!(
+        &types.items[0],
+        Item::Signature(signature) if signature.parameters.len() == 3
+    ));
+}
