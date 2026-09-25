@@ -230,6 +230,18 @@ built by pushing their bytes from the end. The reference interpreter keeps
 each buffer as a list of elements and gives a push a fresh one, so its answers
 do not depend on writing in place.
 
+## Saturating subtraction
+
+`Binary::Monus` answers `left - right`, or zero where `right` is the greater.
+Barb's natural monus lowers to it directly rather than to a comparison guarding
+`Sub`. Its operands follow the comparison rule -- numbers of one kind -- and its
+result may be any numeric class, including one narrower than either operand,
+since the answer never exceeds `left`. Only naturals' monus answers `Natural`,
+and runtime-natural legalization maps it to the same helper as `Sub`. Targets
+compute it at the operands' width, where the borrow is, and choose the answer
+from that borrow: a conditional clear on x86-64, `select` on wasm32, and a carry
+branch on the 6502. `Sub` keeps its fit requirement on fixed classes.
+
 ## Passes
 
 `ir::optimize(program)` runs a small fixed schedule after validation, in this

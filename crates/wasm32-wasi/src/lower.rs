@@ -57,6 +57,8 @@ const I32_DIV_U: u8 = 0x6E;
 const I32_REM_U: u8 = 0x70;
 const I32_EQ: u8 = 0x46;
 const I32_LT_U: u8 = 0x49;
+const I32_GE_U: u8 = 0x4F;
+const SELECT: u8 = 0x1B;
 const EMPTY: u8 = 0x40;
 
 /// How wide a class is held, which for anything unfixed is a word.
@@ -488,6 +490,10 @@ impl Lowering<'_> {
                 let opcode = match op {
                     Binary::Add => I32_ADD,
                     Binary::Sub => I32_SUB,
+                    Binary::Monus => {
+                        self.monus(*left, *right, results[0]);
+                        return;
+                    }
                     Binary::Mul => {
                         self.push(*left);
                         self.push(*right);
@@ -608,6 +614,20 @@ impl Lowering<'_> {
         self.push(left);
         self.push(right);
         self.body.byte(opcode);
+        self.set(result);
+    }
+
+    /// The wrapped difference where nothing borrowed, and zero where
+    /// something did, chosen without a branch.
+    fn monus(&mut self, left: ValueId, right: ValueId, result: ValueId) {
+        self.push(left);
+        self.push(right);
+        self.body.byte(I32_SUB);
+        self.constant_i32(0);
+        self.push(left);
+        self.push(right);
+        self.body.byte(I32_GE_U);
+        self.body.byte(SELECT);
         self.set(result);
     }
 

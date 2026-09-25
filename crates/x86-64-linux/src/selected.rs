@@ -153,6 +153,9 @@ pub(crate) enum Opcode {
     DataAddress,
     Add,
     Subtract,
+    /// Saturating subtraction at its operands' width: a subtraction, and a
+    /// zero where it borrowed.
+    Monus,
     Multiply,
     Divide,
     Modulo,
@@ -211,7 +214,7 @@ impl Opcode {
             // internal flags do not escape the pseudo.
             | Self::Equal
             | Self::Below => Effects::PURE,
-            Self::Add | Self::Subtract | Self::Shift => arithmetic,
+            Self::Add | Self::Subtract | Self::Monus | Self::Shift => arithmetic,
             Self::Multiply | Self::Divide | Self::Modulo => Effects {
                 clobbers: RegSet::of(&[Reg::Rdx]),
                 ..arithmetic
@@ -314,7 +317,7 @@ impl Inst {
         }
         let use_at = at.checked_sub(def)?;
         let constraint = match self.opcode {
-            Opcode::Add | Opcode::Subtract if use_at == 0 => Constraint::Tied(0),
+            Opcode::Add | Opcode::Subtract | Opcode::Monus if use_at == 0 => Constraint::Tied(0),
             Opcode::Convert | Opcode::Shift if use_at == 0 => Constraint::Fixed(Reg::Rax),
             Opcode::Multiply | Opcode::Divide | Opcode::Modulo if use_at == 0 => {
                 Constraint::Fixed(Reg::Rax)
@@ -598,6 +601,7 @@ impl Selected {
             Opcode::Load | Opcode::Convert | Opcode::Shift | Opcode::Exit | Opcode::Grow => 1,
             Opcode::Add
             | Opcode::Subtract
+            | Opcode::Monus
             | Opcode::Multiply
             | Opcode::Divide
             | Opcode::Modulo
@@ -661,7 +665,8 @@ impl Selected {
             ));
         }
         let represented = match inst.opcode {
-            Opcode::Equal | Opcode::Below => self
+            // A monus works at its operands' width, where the borrow is.
+            Opcode::Equal | Opcode::Below | Opcode::Monus => self
                 .operands
                 .get(inst.operands.range().start)
                 .map(|&value| self.width(value))
@@ -997,6 +1002,7 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             }
             Opcode::Add
             | Opcode::Subtract
+            | Opcode::Monus
             | Opcode::Multiply
             | Opcode::Divide
             | Opcode::Modulo
@@ -1025,6 +1031,7 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
             | (
                 Opcode::Add
                     | Opcode::Subtract
+                    | Opcode::Monus
                     | Opcode::Multiply
                     | Opcode::Divide
                     | Opcode::Modulo
@@ -1303,16 +1310,24 @@ impl Selector<'_> {
                     let opcode = match op {
                         Binary::Add => Opcode::Add,
                         Binary::Sub => Opcode::Subtract,
+                        Binary::Monus => Opcode::Monus,
                         Binary::Mul => Opcode::Multiply,
                         Binary::Div => Opcode::Divide,
                         Binary::Mod => Opcode::Modulo,
+                    };
+                    // A monus answers no more than its left operand, and is
+                    // worked out as wide as that is.
+                    let width = if op == Binary::Monus {
+                        left
+                    } else {
+                        results[0]
                     };
                     self.emit(
                         block,
                         opcode,
                         results.first().copied(),
                         &[left, right],
-                        Immediate::Bits(source.class(results[0]).bits(WORD_BITS)),
+                        Immediate::Bits(source.class(width).bits(WORD_BITS)),
                     );
                 }
                 SourceOp::Compare {

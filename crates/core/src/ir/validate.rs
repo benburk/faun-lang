@@ -1,8 +1,8 @@
 //! What a target is entitled to assume.
 
 use super::model::{
-    Class, Definition, Exit, Function, Op, Origin, Range, RegionId, Returns, Symbol, Terminator,
-    ValueId, Width,
+    Binary, Class, Definition, Exit, Function, Op, Origin, Range, RegionId, Returns, Symbol,
+    Terminator, ValueId, Width,
 };
 use super::program::Program;
 use crate::index::{Id, Pool};
@@ -476,6 +476,11 @@ impl Checker<'_> {
             }
             Op::NaturalConstant(_) => self.results(results, &[Class::Natural])?,
             Op::AddressOf(_) => self.results(results, &[Class::Address])?,
+            Op::Binary {
+                op: Binary::Monus,
+                left,
+                right,
+            } => self.monus(left, right, results)?,
             Op::Binary { left, right, .. } => self.binary(left, right, results)?,
             Op::Shift { value, by, .. } => self.shift(value, by, results)?,
             Op::Compare { left, right, .. } => {
@@ -617,6 +622,32 @@ impl Checker<'_> {
         }
         self.require(left, held)?;
         self.require(right, held)
+    }
+
+    /// Saturating subtraction reads its operands as a comparison does and
+    /// answers at any numeric class, since it answers no more than `left`.
+    /// Only a natural's monus answers a natural: nothing else makes one.
+    fn monus(&self, left: ValueId, right: ValueId, results: &[ValueId]) -> Result<(), String> {
+        let [result] = results else {
+            return Err("binary operation must have one result".into());
+        };
+        self.comparison(left, right)?;
+        let operands = self.read(left)?;
+        if operands == Class::Address {
+            return Err("a monus subtracts numbers, not addresses".into());
+        }
+        let held = self.program.class(*result);
+        let natural = operands == Class::Natural;
+        match held {
+            Class::Address | Class::Cell | Class::Buffer => {
+                Err("arithmetic result must be numeric".into())
+            }
+            Class::Natural if !natural => Err("a monus of machine values answers one".into()),
+            Class::Held(_) | Class::Word if natural => {
+                Err("a monus of naturals answers a natural".into())
+            }
+            Class::Natural | Class::Held(_) | Class::Word => Ok(()),
+        }
     }
 
     /// A shift moves a value the machine holds, by a distance it does not

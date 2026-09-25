@@ -114,6 +114,8 @@ fn binary_program(class: Class, op: Binary) -> (Program, FunctionId) {
 
 fn natural_model(op: Binary, left: &BigUint, right: &BigUint) -> BigUint {
     match op {
+        Binary::Monus if left < right => BigUint::default(),
+        Binary::Monus => left - right,
         Binary::Mul => left * right,
         Binary::Div => {
             if right == &BigUint::default() {
@@ -144,7 +146,7 @@ fn direct_natural_operations_preserve_full_magnitudes_and_total_zero_semantics()
         small,
         large,
     ];
-    for op in [Binary::Mul, Binary::Div, Binary::Mod] {
+    for op in [Binary::Monus, Binary::Mul, Binary::Div, Binary::Mod] {
         let (p, f) = binary_program(Class::Natural, op);
         for left in &cases {
             for right in &cases {
@@ -166,6 +168,36 @@ fn direct_natural_operations_preserve_full_magnitudes_and_total_zero_semantics()
             }
         }
     }
+}
+
+#[test]
+fn a_monus_saturates_and_answers_at_its_own_class() {
+    let (mut p, _) = Program::new("main");
+    let check = p.declare(
+        "check",
+        &[Class::fixed(9), Class::fixed(9)],
+        &[Class::fixed(5)],
+    );
+    // What the answer can be is narrower than either operand, as a bound
+    // proved above this tier can say.
+    p.define(check, |b, args| {
+        let answer = b.binary_at(Class::fixed(5), Binary::Monus, args[0], args[1]);
+        b.ret(&[answer]);
+    });
+    for (left, right, answer) in [(281, 255, 26u8), (255, 255, 0), (250, 255, 0), (0, 511, 0)] {
+        assert_eq!(
+            run(&p, check, &[left, right], 16)
+                .unwrap()
+                .returned()
+                .unwrap(),
+            vec![BigUint::from(answer)],
+            "{left} {right}"
+        );
+    }
+    assert_eq!(
+        run(&p, check, &[511, 0], 16),
+        Err(Error::DoesNotFit(Class::fixed(5)))
+    );
 }
 
 #[test]

@@ -1,5 +1,4 @@
 //! Preserve arithmetic and its range-selected classes until target selection.
-//! Only monus needs a portable guard around machine subtraction.
 
 use super::{Binary, Builder, Class, Relation, ValueId};
 use crate::barb::Operation;
@@ -66,6 +65,9 @@ pub(super) fn lower(
     left: ValueId,
     right: ValueId,
 ) -> ValueId {
+    if op == Operation::Monus {
+        return monus(b, result, left, right);
+    }
     // Where the answer lives, if there is room there for what either side
     // brings: then nothing is converted afterwards and the answer says what
     // the tier above proved it can be, rather than what it needed room for.
@@ -83,10 +85,10 @@ pub(super) fn lower(
     // happens to be on the left.
     let answer = match op {
         Operation::Add => b.binary_at(class, Binary::Add, left, right),
-        Operation::Monus => monus(b, class, left, right),
         Operation::Mul => b.binary_at(class, Binary::Mul, left, right),
         Operation::Div => b.binary_at(class, Binary::Div, left, right),
         Operation::Mod => b.binary_at(class, Binary::Mod, left, right),
+        Operation::Monus => unreachable!("monus lowered above"),
         Operation::Equals { .. } | Operation::LessThan { .. } => {
             unreachable!("comparison lowered separately")
         }
@@ -94,18 +96,18 @@ pub(super) fn lower(
     at(b, answer, result)
 }
 
-fn monus(b: &mut Builder, class: Class, left: ValueId, right: ValueId) -> ValueId {
-    let less = b.compare(Relation::Less, left, right);
-    b.if_(
-        less,
-        &[class],
-        |b| {
-            let zero = b.constant(class, 0);
-            b.yield_(&[zero]);
-        },
-        |b| {
-            let value = b.binary_at(class, Binary::Sub, left, right);
-            b.yield_(&[value]);
-        },
-    )[0]
+/// A monus reads its operands as a comparison does, and answers at the
+/// class the tier above proved, which may be narrower than either operand:
+/// the answer is never more than `left`. Only a natural's monus answers a
+/// natural, so a machine answer to one is converted afterwards.
+fn monus(b: &mut Builder, result: Class, left: ValueId, right: ValueId) -> ValueId {
+    let class = widest(b.class(left), b.class(right));
+    let left = at(b, left, class);
+    let right = at(b, right, class);
+    let natural = class == Class::Natural;
+    if natural == (result == Class::Natural) {
+        return b.binary_at(result, Binary::Monus, left, right);
+    }
+    let answer = b.binary_at(class, Binary::Monus, left, right);
+    at(b, answer, result)
 }

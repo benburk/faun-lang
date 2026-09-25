@@ -72,12 +72,14 @@ fn a_natural_constant_is_compact_and_does_not_alias_a_word() {
 fn runtime_arithmetic_survives_barb_lowering_as_operations() {
     let routines = crate::platform::Routines::builtin();
     for (name, expected) in [
+        ("sub", Binary::Monus),
         ("mul", Binary::Mul),
         ("div", Binary::Div),
         ("mod", Binary::Mod),
     ] {
         let mut library = barb::fixture::Library::new();
         let operation = match expected {
+            Binary::Monus => library.sub,
             Binary::Mul => library.mul,
             Binary::Div => library.div,
             _ => library.modulo,
@@ -114,6 +116,14 @@ fn runtime_arithmetic_survives_barb_lowering_as_operations() {
         assert!(
             !machine.every(body).any(|op| matches!(op, Op::Loop { .. })),
             "{name} must not become a portable value-counting loop"
+        );
+        assert_eq!(
+            machine
+                .every(body)
+                .filter(|op| matches!(op, Op::If { .. }))
+                .count(),
+            1,
+            "{name}: only the count's guard branches; a monus needs none of its own"
         );
         assert!(
             (0..machine.values_count())

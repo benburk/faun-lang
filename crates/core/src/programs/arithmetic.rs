@@ -65,56 +65,9 @@ pub fn cases(bits: u16, op: Binary, pairs: &[(u64, u64)]) -> Program {
                 Binary::Mod => left.checked_rem(right).unwrap_or(left),
                 Binary::Add => left.checked_add(right).expect("a fitting sum"),
                 Binary::Sub => left.checked_sub(right).expect("a guarded subtraction"),
+                Binary::Monus => left.saturating_sub(right),
             };
             let args = [left, right, expected].map(|value| b.constant(class, value));
-            let result = b.call_one(check, &args);
-            passed = b.binary(Binary::Add, passed, result);
-        }
-        let count = b.constant(
-            Class::Word,
-            u64::try_from(pairs.len()).expect("a few cases"),
-        );
-        let failures = b.binary(Binary::Sub, count, passed);
-        b.ret(&[failures]);
-    });
-    program
-}
-
-/// Saturating subtraction as Barb writes it, `if a < b then 0 else a - b`.
-///
-/// Parameters keep it a runtime question. A target may answer it with the
-/// subtraction alone, whose borrow is the comparison; the caller's pairs
-/// straddle byte boundaries so that a borrow lost between bytes shows.
-///
-/// # Panics
-/// If the corpus cannot fit in a machine word.
-#[must_use]
-pub fn monus(bits: u16, pairs: &[(u64, u64)]) -> Program {
-    let class = Class::fixed(bits);
-    let (mut program, main) = Program::new("main");
-    let check = program.declare("check", &[class, class, class], &[Class::Word]);
-    program.define(check, |b, args| {
-        let less = b.compare(Relation::Less, args[0], args[1]);
-        let answer = b.if_(
-            less,
-            &[class],
-            |b| {
-                let zero = b.constant(class, 0);
-                b.yield_(&[zero]);
-            },
-            |b| {
-                let difference = b.binary(Binary::Sub, args[0], args[1]);
-                b.yield_(&[difference]);
-            },
-        );
-        let equal = b.compare(Relation::Equal, answer[0], args[2]);
-        b.ret(&[equal]);
-    });
-    program.define(main, |b, _| {
-        let mut passed = b.constant(Class::Word, 0);
-        for &(left, right) in pairs {
-            let args =
-                [left, right, left.saturating_sub(right)].map(|value| b.constant(class, value));
             let result = b.call_one(check, &args);
             passed = b.binary(Binary::Add, passed, result);
         }

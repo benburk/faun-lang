@@ -371,8 +371,8 @@ fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)
 fn model(op: Binary, a: &BigUint, c: &BigUint) -> BigUint {
     match op {
         Binary::Add => a + c,
-        Binary::Sub if a < c => BigUint::default(),
-        Binary::Sub => a - c,
+        Binary::Sub | Binary::Monus if a < c => BigUint::default(),
+        Binary::Sub | Binary::Monus => a - c,
         Binary::Mul => a * c,
         Binary::Div if c == &BigUint::default() => BigUint::default(),
         Binary::Div => a / c,

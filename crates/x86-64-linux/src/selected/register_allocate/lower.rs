@@ -371,6 +371,24 @@ impl<'a> Lowering<'a> {
                     self.asm.alu(op, result()?, source_reg, bits);
                 }
             }
+            (Opcode::Monus, Immediate::Bits(bits)) => {
+                let source = self.selected.operands[inst.operands.range()][1];
+                let source_reg = reg(1)?;
+                if self.is_unique_constant(source)
+                    && self
+                        .asm
+                        .fold_alu_immediate(Alu::Subtract, result()?, source_reg, bits)
+                {
+                    self.forget(source_reg);
+                } else {
+                    self.asm.alu(Alu::Subtract, result()?, source_reg, bits);
+                }
+                // Nothing borrowed means the difference stands.
+                let kept = self.asm.label();
+                self.asm.jump_if(Condition::NotBelow, kept);
+                self.asm.xor_self(result()?);
+                self.asm.bind(kept);
+            }
             (Opcode::Multiply, Immediate::Bits(_)) => {
                 self.asm.multiply();
                 self.forget(Reg::Rdx);

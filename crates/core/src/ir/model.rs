@@ -94,6 +94,12 @@ pub enum Binary {
     /// Word subtraction; on `Natural`, truncated subtraction (monus).
     /// Lowering uses it for predecessors only on a nonzero branch.
     Sub,
+    /// Saturating subtraction: `left - right`, or zero where `right` is the
+    /// greater. It needs no guard for its answer to fit, and since that
+    /// answer is never more than `left`, its class may be narrower than its
+    /// operands', which are only required to be alike, as a comparison's are.
+    /// A target works it out at the operands' width, where the borrow is.
+    Monus,
     /// Product. A fixed result is a fit requirement, not a modulus.
     Mul,
     /// Unsigned quotient, with `Div(x, 0) = 0`.

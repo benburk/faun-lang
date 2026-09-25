@@ -588,8 +588,12 @@ impl<H: Host> Machine<'_, H> {
         left: BigUint,
         right: BigUint,
     ) -> Result<BigUint, Error> {
-        self.fit(class, &left)?;
-        self.fit(class, &right)?;
+        // A monus answers at a class its operands need not fit; they were
+        // checked where they were made.
+        if op != Binary::Monus {
+            self.fit(class, &left)?;
+            self.fit(class, &right)?;
+        }
         let value = match op {
             Binary::Add => left + right,
             Binary::Mul => self.multiply(class, left, right)?,
@@ -607,8 +611,9 @@ impl<H: Host> Machine<'_, H> {
                     left % right
                 }
             }
-            Binary::Sub if left >= right => left - right,
+            Binary::Sub | Binary::Monus if left >= right => left - right,
             Binary::Sub if class == Class::Natural => BigUint::default(),
+            Binary::Monus => BigUint::default(),
             Binary::Sub if class == Class::Word => {
                 (BigUint::from(1u8) << usize::from(self.config.word_bits)) + left - right
             }

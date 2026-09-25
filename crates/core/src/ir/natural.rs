@@ -64,7 +64,8 @@ impl Helper {
     pub(super) const fn arithmetic(op: Binary) -> Self {
         match op {
             Binary::Add => Self::Add,
-            Binary::Sub => Self::Sub,
+            // A natural's subtraction is already truncated.
+            Binary::Sub | Binary::Monus => Self::Sub,
             Binary::Mul => Self::Mul,
             Binary::Div => Self::Div,
             Binary::Mod => Self::Mod,

@@ -1025,7 +1025,7 @@ fn runtime_arithmetic_boundaries_and_odd_widths() {
         if bits > TARGET.word() {
             continue;
         }
-        for op in [Binary::Mul, Binary::Div, Binary::Mod] {
+        for op in [Binary::Monus, Binary::Mul, Binary::Div, Binary::Mod] {
             assert_eq!(
                 status(&programs::arithmetic::boundaries(bits, op)),
                 0,
@@ -1080,7 +1080,7 @@ fn runtime_monus_across_byte_boundaries() {
         pairs.retain(|&(left, right)| left <= max && right <= max);
         for chunk in pairs.chunks(8) {
             assert_eq!(
-                status(&programs::arithmetic::monus(bits, chunk)),
+                status(&programs::arithmetic::cases(bits, Binary::Monus, chunk)),
                 0,
                 "{bits} {chunk:?}"
             );

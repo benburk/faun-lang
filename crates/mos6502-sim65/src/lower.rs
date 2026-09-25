@@ -67,7 +67,7 @@ impl Spans {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum Source {
     Const(u64),
     Addr(DataId),
@@ -1631,12 +1631,6 @@ impl Lowering<'_> {
             .pending
             .take_if(|(value, ..)| *value == condition)
             .map(|(_, relation, left, right)| (relation, left, right));
-        if let Some((Relation::Less, left, right)) = comparison
-            && let Some(difference) = self.monus_arm(left, right, then_region, else_region, results)
-        {
-            self.monus(left, right, difference, then_region, results);
-            return;
-        }
         let bound = self.comparison_bound(comparison);
         let (then_yields, else_yields) = (self.yields(then_region), self.yields(else_region));
 
@@ -1666,100 +1660,6 @@ impl Lowering<'_> {
         }
 
         self.both_arms(condition, comparison, then_region, else_region, results);
-    }
-
-    /// The difference an `if left < right then c else left - right` works
-    /// out, where `c` is a literal: its else arm is that one subtraction
-    /// and nothing more, and its then arm only names literals. Only where
-    /// the subtraction's borrow is no dearer than the comparison.
-    fn monus_arm(
-        &self,
-        left: ValueId,
-        right: ValueId,
-        then_region: RegionId,
-        else_region: RegionId,
-        results: &[ValueId],
-    ) -> Option<ValueId> {
-        let program = self.program;
-        let literal = |value: ValueId| {
-            matches!(
-                self.source[value.index()],
-                Source::Const(_) | Source::Addr(_)
-            )
-        };
-        let naming = |op: &Op| matches!(op, Op::Constant { .. } | Op::AddressOf(_));
-        if results.len() != 1 || !self.yields(then_region) || !self.yields(else_region) {
-            return None;
-        }
-        if !program.ops(then_region).iter().all(naming)
-            || !program
-                .outgoing(then_region)
-                .iter()
-                .all(|&value| literal(value))
-        {
-            return None;
-        }
-        let mut working = program.walk(else_region).filter(|(op, _)| !naming(op));
-        let (op, &[difference]) = working.next()? else {
-            return None;
-        };
-        let same = |a: ValueId, b: ValueId| {
-            a == b || (literal(a) && self.source[a.index()] == self.source[b.index()])
-        };
-        let subtracts = matches!(
-            *op,
-            Op::Binary { op: Binary::Sub, left: l, right: r } if same(l, left) && same(r, right)
-        );
-        // A difference of one byte out of a comparison of two needs a high
-        // byte worked out for its borrow alone, which pushes the low byte
-        // out of A; the comparison decides sooner on its own.
-        let narrow = !self.wide(left) && !self.wide(right);
-        (subtracts
-            && working.next().is_none()
-            && program.outgoing(else_region) == [difference]
-            && (narrow || self.wide(difference)))
-        .then_some(difference)
-    }
-
-    /// `left < right ? c : left - right` as the subtraction alone, whose
-    /// carry is the comparison: set exactly when `left` is at least `right`.
-    /// The difference goes where the `if`'s result lives before the branch,
-    /// since loads and stores leave the carry alone, and `c` replaces it
-    /// only on a borrow.
-    fn monus(
-        &mut self,
-        left: ValueId,
-        right: ValueId,
-        difference: ValueId,
-        then_region: RegionId,
-        results: &[ValueId],
-    ) {
-        let left = self.operand(left, T0);
-        let right = self.operand(right, T1);
-        let dest = self.dest(difference);
-        let low = self.begin_chain(Binary::Sub, right.byte(0));
-        self.load(left.byte(0));
-        self.accumulate(Binary::Sub, low);
-        self.asm.sta_zp(dest);
-        // High bytes that are the same literal or place leave the borrow as
-        // the low byte did, and a narrow difference has no high byte to keep.
-        let wide = self.wide(difference);
-        if wide || left.byte(1) != right.byte(1) {
-            self.load(left.byte(1));
-            self.accumulate(Binary::Sub, right.byte(1));
-            if wide {
-                self.asm.sta_zp(dest + 1);
-            }
-        }
-        self.commit(difference, dest);
-        self.transfer(&[difference], results);
-        let done = self.asm.label();
-        let kept = self.asm.branch_state(Cc::Carry, done);
-        self.ifs.push((results.to_vec(), None));
-        self.region(then_region);
-        self.ifs.pop();
-        let replaced = self.asm.state();
-        self.asm.bind_with(done, kept.join(replaced));
     }
 
     /// An `if` whose arms both yield, or neither does: the then arm jumps
@@ -2032,6 +1932,65 @@ impl Lowering<'_> {
 
     /// A step of one over a pair, which reaches the high byte only where the
     /// low one wrapped.
+    /// `left - right`, or nought where that borrows.
+    ///
+    /// The subtraction's carry is the comparison, set exactly where `left`
+    /// is at least `right`, so where the borrow is worked out anyway the
+    /// subtraction is the test. A one-byte answer out of two-byte operands
+    /// would work out a high byte for its borrow alone, pushing the low one
+    /// out of A; there the comparison decides first and only the low byte
+    /// is subtracted.
+    fn monus(&mut self, left: ValueId, right: ValueId, result: ValueId) {
+        let left = self.operand(left, T0);
+        let right = self.operand(right, T1);
+        let dest = self.dest(result);
+        let wide = self.wide(result);
+        // High bytes that are the same literal or place leave the borrow as
+        // the low byte did.
+        let ties = left.byte(1) == right.byte(1);
+        if ties || wide {
+            self.load(left.byte(0));
+            let low = self.begin_chain(Binary::Sub, right.byte(0));
+            self.accumulate(Binary::Sub, low);
+            self.asm.sta_zp(dest);
+            if !ties || wide {
+                self.load(left.byte(1));
+                self.accumulate(Binary::Sub, right.byte(1));
+                if wide {
+                    self.asm.sta_zp(dest + 1);
+                }
+            }
+            let kept = self.asm.label();
+            let at_kept = self.asm.branch_state(Cc::Carry, kept);
+            self.clear(dest, wide);
+            let borrowed = self.asm.state();
+            self.asm.bind_with(kept, at_kept.join(borrowed));
+        } else {
+            let under = self.asm.label();
+            let done = self.asm.label();
+            let at_under = self.holds(Relation::Less, left, right, under);
+            self.load(left.byte(0));
+            let low = self.begin_chain(Binary::Sub, right.byte(0));
+            self.accumulate(Binary::Sub, low);
+            self.asm.sta_zp(dest);
+            let subtracted = self.asm.state();
+            self.asm.jmp(done);
+            self.asm.bind_with(under, at_under);
+            self.clear(dest, false);
+            let borrowed = self.asm.state();
+            self.asm.bind_with(done, subtracted.join(borrowed));
+        }
+        self.commit(result, dest);
+    }
+
+    /// Nought in a place, one byte or both.
+    fn clear(&mut self, at: u8, wide: bool) {
+        self.asm.carry(Held::Imm(0), at);
+        if wide {
+            self.asm.carry(Held::Imm(0), at + 1);
+        }
+    }
+
     /// Ready the carry for the low byte of a sum or difference, and say
     /// what that byte is then combined with.
     ///
@@ -2452,6 +2411,11 @@ impl Lowering<'_> {
                 unreachable!("target preparation legalizes abstract cells")
             }
             Op::Constant { .. } | Op::AddressOf(_) => {}
+            Op::Binary {
+                op: Binary::Monus,
+                left,
+                right,
+            } => self.monus(*left, *right, results[0]),
             Op::Binary { op, left, right } => {
                 if self.halved_sums[results[0].index()].is_some() {
                     return;
