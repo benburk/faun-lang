@@ -356,7 +356,7 @@ fn a_run_that_changes_width_is_two_runs() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let narrow = Class::fixed(3);
-        let start = b.constant(narrow, 1);
+        let start = unknown(b, narrow, 1);
         let one = b.constant(narrow, 1);
         let held = b.binary_at(narrow, Binary::Add, start, one);
         let wide = b.convert(WIDE, held);
@@ -375,7 +375,7 @@ fn a_run_that_changes_width_is_two_runs() {
 fn a_step_something_reads_survives_the_run_it_is_part_of() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
-        let start = b.constant(WIDE, 0);
+        let start = unknown(b, WIDE, 0);
         let one = b.constant(WIDE, 1);
         let first = b.binary_at(WIDE, Binary::Add, start, one);
         let second = b.binary_at(WIDE, Binary::Add, first, one);
@@ -395,7 +395,7 @@ fn a_step_something_reads_survives_the_run_it_is_part_of() {
 fn a_step_of_something_worked_out_is_left_alone() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
-        let start = b.constant(WIDE, 1);
+        let start = unknown(b, WIDE, 1);
         let one = b.constant(WIDE, 1);
         let held = b.binary_at(WIDE, Binary::Add, start, one);
         let doubled = b.binary_at(WIDE, Binary::Add, held, held);
@@ -415,7 +415,7 @@ fn a_product_by_a_power_of_two_is_a_shift() {
     for (by, shifts, adds) in [(2u64, 1, 0), (8, 1, 0), (3, 0, 0), (1, 0, 0)] {
         let (mut p, main) = Program::new("main");
         p.define(main, |b, _| {
-            let start = b.constant(WIDE, 1);
+            let start = unknown(b, WIDE, 1);
             let places = b.constant(WIDE, by);
             let held = b.binary_at(WIDE, Binary::Mul, start, places);
             let answer = b.convert(Class::Word, held);
@@ -436,7 +436,7 @@ fn a_quotient_by_a_power_of_two_is_a_shift() {
     for (by, shifts) in [(2u64, 1), (256, 1), (512, 0), (6, 0)] {
         let (mut p, main) = Program::new("main");
         p.define(main, |b, _| {
-            let start = b.constant(WIDE, 384);
+            let start = unknown(b, WIDE, 384);
             let places = b.constant(WIDE, by);
             let held = b.binary_at(WIDE, Binary::Div, start, places);
             let answer = b.convert(Class::Word, held);
@@ -449,6 +449,110 @@ fn a_quotient_by_a_power_of_two_is_a_shift() {
 }
 
 const WIDE: Class = Class::fixed(9);
+
+/// `value` at `class`, where no pass can see it: whichever arm a comparison
+/// chose, each answering it. Arithmetic on it is arithmetic on something
+/// worked out, which is what a pass recognising shapes of arithmetic reads.
+fn unknown(b: &mut super::Builder, class: Class, value: u64) -> ValueId {
+    let zero = b.constant(Class::Word, 0);
+    let one = b.constant(Class::Word, 1);
+    let test = b.compare(Relation::Less, zero, one);
+    b.if_(
+        test,
+        &[class],
+        |b| {
+            let held = b.constant(class, value);
+            b.yield_(&[held]);
+        },
+        |b| {
+            let held = b.constant(class, value);
+            b.yield_(&[held]);
+        },
+    )[0]
+}
+
+/// Arithmetic on numbers known before the program runs is the number it
+/// comes to, and an identity is what it was applied to.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of folds and one of identities, each checked against the reference"
+)]
+fn arithmetic_on_known_numbers_is_the_number_it_comes_to() {
+    for (op, x, y) in [
+        (Binary::Add, 300, 11),
+        (Binary::Sub, 300, 11),
+        (Binary::Monus, 11, 300),
+        (Binary::Mul, 20, 25),
+        (Binary::Div, 300, 0),
+        (Binary::Mod, 300, 0),
+        (Binary::Mod, 300, 7),
+    ] {
+        let (mut p, main) = Program::new("main");
+        p.define(main, |b, _| {
+            let left = b.constant(WIDE, x);
+            let right = b.constant(WIDE, y);
+            let held = b.binary_at(WIDE, op, left, right);
+            let answer = b.convert(Class::Word, held);
+            b.ret(&[answer]);
+        });
+        let held = settled(&p);
+        assert_eq!(
+            count(&held, |op| matches!(
+                *op,
+                Op::Binary { .. } | Op::Shift { .. }
+            )),
+            0,
+            "{op:?} of {x} and {y}"
+        );
+    }
+    for (op, known, left_known) in [
+        (Binary::Add, 0, true),
+        (Binary::Add, 0, false),
+        (Binary::Sub, 0, false),
+        (Binary::Mul, 1, true),
+        (Binary::Div, 1, false),
+    ] {
+        let (mut p, main) = Program::new("main");
+        p.define(main, |b, _| {
+            let held = unknown(b, WIDE, 300);
+            let known = b.constant(WIDE, known);
+            let (left, right) = if left_known {
+                (known, held)
+            } else {
+                (held, known)
+            };
+            let answer = b.binary_at(WIDE, op, left, right);
+            let answer = b.convert(Class::Word, answer);
+            b.ret(&[answer]);
+        });
+        let held = settled(&p);
+        assert_eq!(
+            count(&held, |op| matches!(*op, Op::Binary { .. })),
+            0,
+            "{op:?} by {known}"
+        );
+        assert_eq!(returns(&held), BigUint::from(300u16));
+    }
+}
+
+/// A sum that would not fit the class it is claimed to fit is not folded
+/// into a number that does: that would be a pass choosing a modulus.
+#[test]
+fn a_known_sum_too_wide_for_its_class_is_left_alone() {
+    let narrow = Class::fixed(3);
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let left = b.constant(narrow, 6);
+        let right = b.constant(narrow, 5);
+        let held = b.binary_at(narrow, Binary::Add, left, right);
+        let answer = b.convert(Class::Word, held);
+        b.ret(&[answer]);
+    });
+    let held = optimize(&p);
+    validate(&held).expect("a sound program");
+    assert_eq!(count(&held, is_add), 1);
+}
 
 const fn is_add(op: &Op) -> bool {
     matches!(
@@ -469,7 +573,7 @@ fn stepped(class: Class, by: &[u64]) -> Program {
     let (mut p, main) = Program::new("main");
     let by = by.to_vec();
     p.define(main, |b, _| {
-        let mut held = b.constant(class, 3);
+        let mut held = unknown(b, class, 3);
         for step in by {
             let step = b.constant(class, step);
             held = b.binary_at(class, Binary::Add, held, step);
@@ -542,7 +646,7 @@ fn remainder(by: u64, value: u64) -> Program {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let class = Class::fixed(9);
-        let held = b.constant(class, value);
+        let held = unknown(b, class, value);
         let by = b.constant(class, by);
         let answer = b.binary_at(class, Binary::Mod, held, by);
         let answer = b.convert(Class::Word, answer);

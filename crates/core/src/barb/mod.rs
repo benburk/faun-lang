@@ -85,11 +85,14 @@ mod budget;
 mod builder;
 mod cleanup;
 mod constant;
+mod copy;
+mod descent;
 mod evaluate;
 mod facts;
 #[cfg(test)]
 pub(crate) mod fixture;
 mod fold;
+mod fuse;
 mod inline;
 mod laws;
 mod model;

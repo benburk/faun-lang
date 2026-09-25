@@ -8,6 +8,16 @@ pub(super) fn word(bytes: &[u8]) -> usize {
 }
 
 pub(super) fn no_live_objects(p: &Program, result: &Evaluation, config: Config) {
+    assert_eq!(
+        live_objects(p, result, config),
+        0,
+        "a mortal claim remains after return"
+    );
+}
+
+/// How many blocks of the private heap still hold a claim after `result`
+/// returned.
+pub(super) fn live_objects(p: &Program, result: &Evaluation, config: Config) -> usize {
     assert!(
         result.returned().is_some(),
         "unexpected runtime exhaustion: {result:?}"
@@ -24,6 +34,7 @@ pub(super) fn no_live_objects(p: &Program, result: &Evaluation, config: Config) 
     let width = usize::from(config.word_bits / 8);
     let mut at = usize::try_from(heap.start).unwrap();
     let end = at + config.heap_bytes;
+    let mut live = 0;
     while at < end {
         assert!(at + 3 * width <= end, "header escapes heap");
         let size = word(&result.globals[at..at + width]);
@@ -32,12 +43,11 @@ pub(super) fn no_live_objects(p: &Program, result: &Evaluation, config: Config) 
             "bad block at {at}"
         );
         assert!(size <= end - at, "block escapes heap");
-        assert_eq!(
-            word(&result.globals[at + width..at + 2 * width]),
-            0,
-            "mortal claim remains at {at} after return"
-        );
+        if word(&result.globals[at + width..at + 2 * width]) != 0 {
+            live += 1;
+        }
         at += size;
     }
     assert_eq!(at, end, "heap block chain");
+    live
 }

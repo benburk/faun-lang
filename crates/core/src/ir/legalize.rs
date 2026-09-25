@@ -15,7 +15,7 @@ use std::{cell::Cell, collections::BTreeMap};
 use num_bigint::BigUint;
 
 use super::cell::{self, Library as CellLibrary};
-use super::natural::{self, Config, Helper, Library, Needs};
+use super::natural::{self, Config, Helper, Inline, Library, Needs};
 use super::ownership::{self, Liveness, managed};
 use super::sequence::{self, Library as SequenceLibrary};
 use super::{
@@ -268,11 +268,23 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
     Ok(needs)
 }
 
+/// How a natural constant is held: as an immediate where it is small, and
+/// otherwise as an immortal object in the data.
+#[derive(Clone, Copy)]
+enum Known {
+    Small(u64),
+    Object(DataId),
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the walk, the small numbers and the interned objects stay together"
+)]
 fn constants(
     source: &Program,
     output: &mut Program,
     config: Config,
-) -> Result<BTreeMap<ValueId, DataId>, String> {
+) -> Result<BTreeMap<ValueId, Known>, String> {
     let mut interned = BTreeMap::new();
     let mut constants = BTreeMap::new();
     let mut pending: Vec<_> = source
@@ -302,14 +314,19 @@ fn constants(
             else {
                 continue;
             };
-            let data = if let Some(&data) = interned.get(&magnitude) {
-                data
+            let small = u64::try_from(&magnitude)
+                .ok()
+                .filter(|&n| n < natural::half(config.word_bits));
+            let known = if let Some(n) = small {
+                Known::Small(n)
+            } else if let Some(&data) = interned.get(&magnitude) {
+                Known::Object(data)
             } else {
                 let data = natural::constant(output, config, &magnitude)?;
                 interned.insert(magnitude, data);
-                data
+                Known::Object(data)
             };
-            constants.insert(results[0], data);
+            constants.insert(results[0], known);
         }
     }
     Ok(constants)
@@ -339,7 +356,7 @@ struct Pass<'a> {
     sequences: Option<SequenceLibrary>,
     word_bytes: u64,
     word_bits: u16,
-    constants: BTreeMap<ValueId, DataId>,
+    constants: BTreeMap<ValueId, Known>,
     // Validation establishes globally unique SSA definitions and lexical use.
     // Mapping is monotonic across functions and sibling regions, not path-local.
     // Cells let the builder's two sequential branch callbacks share this table
@@ -403,7 +420,7 @@ impl Pass<'_> {
 
     fn retained(&self, b: &mut Builder, class: Class, value: ValueId) -> ValueId {
         let function = match class {
-            Class::Natural => self.library.retain,
+            Class::Natural => return self.library.retain_value(b, value),
             Class::Cell | Class::Buffer => self.cells.expect("cell helpers were requested").retain,
             _ => return value,
         };
@@ -412,7 +429,7 @@ impl Pass<'_> {
 
     fn release(&self, b: &mut Builder, class: Class, value: ValueId) {
         let function = match class {
-            Class::Natural => self.library.release,
+            Class::Natural => return self.library.release_value(b, value),
             Class::Cell => self.cells.expect("cell helpers were requested").release,
             Class::Buffer => {
                 self.sequences
@@ -481,7 +498,7 @@ impl Pass<'_> {
         } else {
             b.convert(Class::Word, len)
         };
-        let room = b.call_one(sequences.reserve(&kinds), &[buffer, len]);
+        let room = sequences.room(b, &kinds, buffer, len);
         let capacity = b.load(Width::Word, room, super::Offset::Words(2));
         let one = b.constant(Class::Word, 1);
         let after = b.binary(Binary::Sub, capacity, len);
@@ -694,7 +711,10 @@ impl Pass<'_> {
             Op::Constant { .. } | Op::NaturalConstant(_)
                 if self.source.class(results[0]) == Class::Natural =>
             {
-                b.address_of(self.constants[&results[0]])
+                match self.constants[&results[0]] {
+                    Known::Small(n) => self.library.small(b, n).expect("a small constant"),
+                    Known::Object(data) => b.address_of(data),
+                }
             }
             Op::Constant { value } => b.constant(self.source.class(results[0]), value),
             Op::NaturalConstant(data) => b.kept_natural(data),
@@ -732,10 +752,17 @@ impl Pass<'_> {
             Op::BufferField { buffer, len, index } => {
                 self.buffer_field(b, results[0], v(buffer), v(len), index)
             }
-            Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => {
-                let function = self.library.require(Helper::arithmetic(op));
-                b.call_one(function, &[v(left), v(right)])
-            }
+            Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => match op
+            {
+                Binary::Add => self.library.inline(b, Inline::Add, v(left), v(right)),
+                Binary::Sub | Binary::Monus => {
+                    self.library.inline(b, Inline::Monus, v(left), v(right))
+                }
+                _ => {
+                    let function = self.library.require(Helper::arithmetic(op));
+                    b.call_one(function, &[v(left), v(right)])
+                }
+            },
             Op::Binary { op, left, right } => {
                 b.binary_at(self.source.class(results[0]), op, v(left), v(right))
             }
@@ -751,8 +778,7 @@ impl Pass<'_> {
                 left,
                 right,
             } if self.source.class(left) == Class::Natural => {
-                let ordering =
-                    b.call_one(self.library.require(Helper::Compare), &[v(left), v(right)]);
+                let ordering = self.library.inline(b, Inline::Compare, v(left), v(right));
                 let wanted = b.constant(Class::Word, u64::from(relation == Relation::Equal));
                 b.compare(Relation::Equal, ordering, wanted)
             }

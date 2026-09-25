@@ -279,6 +279,68 @@ fn default_pipeline_removes_folded_library_temporaries() {
     }
 }
 
+/// A sum of numbers is held as its tag and slots, each slot as wide as the
+/// widest leaf any constructor puts there; nothing is built as a cell, and
+/// a projection reads a leaf back at the class its field says.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture declares its types, builds its values, and checks the signature"
+)]
+fn tagged_union_slots_are_as_wide_as_what_is_built_there() {
+    let mut standard = Standard::new();
+    let (nat, zero) = (standard.library.nat, standard.library.zero);
+    let p = &mut standard.library.program;
+    let pair = p.declare_type("Pair");
+    p.define_type(pair, &[("NoPair", &[]), ("MkPair", &[nat, nat])]);
+    let mk_pair = p.ctor_at(pair, 1);
+    let first = p.declare("first", &[pair], nat);
+    p.define(first, |b, args| {
+        b.match_(args[0], pair, |b, ctor, fields| {
+            if ctor == mk_pair {
+                fields[0]
+            } else {
+                b.con(zero, &[])
+            }
+        })
+    });
+    let source = standard.main(|b, host, s| {
+        let n = b.call(s.world.input, &[host]);
+        let nought = b.con(s.library.zero, &[]);
+        let held = b.con(mk_pair, &[n, nought]);
+        let n = b.call(first, &[held]);
+        let two = s.nat(b, 2);
+        let rest = b.call(s.library.modulo, &[n, two]);
+        s.exit(b, host, rest)
+    });
+    let machine = lower_program(&source).unwrap();
+    validate(&machine).unwrap();
+    let rendered = machine.render();
+    assert!(
+        !machine.ops.iter().any(|op| matches!(op, Op::Cell { .. })),
+        "{rendered}"
+    );
+    let first = machine
+        .functions()
+        .iter()
+        .find(|function| machine.name(function.name) == "first")
+        .unwrap();
+    // The tag, then a slot for each number a machine holds: the byte read,
+    // and the nought beside it.
+    assert_eq!(
+        machine.signature(first.params),
+        [
+            Class::fixed(1),
+            Class::Held(barb::Bounds {
+                low: 0,
+                high: Some(511)
+            }),
+            Class::fixed(0)
+        ],
+        "{rendered}"
+    );
+}
+
 /// A byte converted from a count and back, or a count made signed and its
 /// magnitude taken; each answers nought.
 fn runtime_product(byte: bool) -> barb::Program {
@@ -306,8 +368,8 @@ fn default_pipeline_accepts_runtime_product_programs() {
 }
 
 /// A byte is a product of eight flags, held flat as eight words; a signed
-/// number is a sum carrying a payload, held as a cell. Neither unused
-/// binding is erased by lowering.
+/// number is a sum carrying a number, held flat as its tag and a slot.
+/// Neither builds a cell, and neither unused binding is erased by lowering.
 #[test]
 fn runtime_products_and_signed_sums_lower_without_erasing_unused_bindings() {
     let zero_byte = Standard::new().main(|b, host, s| {
@@ -316,7 +378,7 @@ fn runtime_products_and_signed_sums_lower_without_erasing_unused_bindings() {
     });
     for (source, cells) in [
         (runtime_product(true), false),
-        (runtime_product(false), true),
+        (runtime_product(false), false),
         (zero_byte, false),
     ] {
         let machine = lower_program(&source).unwrap();
@@ -574,9 +636,10 @@ fn cell_fields_are_held_at_the_class_their_projection_reads() {
     let mut standard = Standard::new();
     let (nat, zero) = (standard.library.nat, standard.library.zero);
     let p = &mut standard.library.program;
+    // It reaches itself, so no run of slots bounds it and it is a cell.
     let pair = p.declare_type("Pair");
-    p.define_type(pair, &[("NoPair", &[]), ("MkPair", &[nat, nat])]);
-    let mk_pair = p.ctor_at(pair, 1);
+    p.define_type(pair, &[("NoPair", &[]), ("MkPair", &[nat, nat, pair])]);
+    let (no_pair, mk_pair) = (p.ctor_at(pair, 0), p.ctor_at(pair, 1));
     let first = p.declare("first", &[pair], nat);
     p.define(first, |b, args| {
         b.match_(args[0], pair, |b, ctor, fields| {
@@ -590,7 +653,8 @@ fn cell_fields_are_held_at_the_class_their_projection_reads() {
     let source = standard.main(|b, host, s| {
         let n = b.call(s.world.input, &[host]);
         let nought = b.con(s.library.zero, &[]);
-        let held = b.con(mk_pair, &[n, nought]);
+        let rest = b.con(no_pair, &[]);
+        let held = b.con(mk_pair, &[n, nought, rest]);
         let n = b.call(first, &[held]);
         let two = s.nat(b, 2);
         let rest = b.call(s.library.modulo, &[n, two]);
@@ -628,7 +692,8 @@ fn cell_fields_are_held_at_the_class_their_projection_reads() {
                 low: 0,
                 high: Some(511)
             }),
-            Class::fixed(0)
+            Class::fixed(0),
+            Class::Cell
         ],
         "{rendered}"
     );

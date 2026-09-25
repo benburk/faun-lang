@@ -152,6 +152,9 @@ pub trait Target: fmt::Debug {
                 grows: self.word() != 16,
             },
         )?;
+        // What legalization wrote -- offsets from known sizes, steps by
+        // known strides -- is worked out again with the word's width known.
+        let prepared = crate::ir::optimize(&prepared);
         self.accepts(&prepared)?;
         Ok(prepared)
     }

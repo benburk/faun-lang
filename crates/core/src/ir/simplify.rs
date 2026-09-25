@@ -17,6 +17,15 @@
 //! arithmetic, but lowering can still introduce constructor steps and callers
 //! can build machine IR directly. Here four steps of one become a step of
 //! four regardless of where they came from.
+//!
+//! And the same for arithmetic on numbers known before the program runs,
+//! which legalization writes a great deal of: an offset is a count of words
+//! times a word's bytes, plus a header, plus which leaf. Two known numbers
+//! are one, and adding nought or multiplying by one is what was there. At a
+//! machine word's width that is worked out modulo the word, which only a
+//! program whose layout is bound says how wide it is; a class that is a fit
+//! requirement is worked out exactly, and left alone where the answer would
+//! not fit it.
 
 use crate::facts::Facts;
 
@@ -42,6 +51,8 @@ pub(super) fn simplify(source: &Program) -> Program {
     let mut pass = Simplify {
         wrote: Wrote::of(source),
         steps: vec![None; source.values_count()],
+        folded: vec![None; source.values_count()],
+        word_bits: source.layout.map(|layout| layout.word_bits),
     };
     rewrite::rebuild(source, &mut pass)
 }
@@ -52,6 +63,11 @@ struct Simplify {
     /// found to be a step past anything. Written as the walk goes, since
     /// what a step is past is whatever the walk has already written.
     steps: Vec<Option<Step>>,
+    /// What each old value comes to where it was worked out here from
+    /// numbers known before the program runs.
+    folded: Vec<Option<u64>>,
+    /// How wide a machine word is, where the program says.
+    word_bits: Option<u16>,
 }
 
 /// A value reached by adding a known number to another value, all at one
@@ -69,6 +85,10 @@ struct Step {
 }
 
 impl rewrite::Pass for Simplify {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per shape the pass recognises"
+    )]
     fn op(
         &mut self,
         rebuild: &rewrite::Rebuild<'_>,
@@ -76,6 +96,11 @@ impl rewrite::Pass for Simplify {
         op: Op,
         results: &[ValueId],
     ) -> bool {
+        if let Op::Binary { op, left, right } = op
+            && self.folding(rebuild, b, op, [left, right], results[0])
+        {
+            return true;
+        }
         match op {
             Op::Convert { value } => {
                 let class = rebuild.source().class(results[0]);
@@ -180,7 +205,7 @@ impl Simplify {
             rebuild.stands_for(result, held);
             return true;
         }
-        let Some(number) = self.wrote.number(value) else {
+        let Some(number) = self.number(value) else {
             return false;
         };
         if !matches!(class, Class::Held(_)) {
@@ -193,8 +218,92 @@ impl Simplify {
     /// How many places a value multiplies or divides by, where it is a power
     /// of two known before the program runs.
     fn places(&self, value: ValueId) -> Option<u32> {
-        let number = self.wrote.number(value)?;
+        let number = self.number(value)?;
         number.is_power_of_two().then(|| number.trailing_zeros())
+    }
+
+    /// The number an old value is, where a constant wrote it or it was
+    /// worked out here from ones.
+    fn number(&self, value: ValueId) -> Option<u64> {
+        self.wrote
+            .number(value)
+            .or_else(|| self.folded[value.index()])
+    }
+
+    /// Arithmetic whose answer is known, or is one of its operands.
+    fn folding(
+        &mut self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        op: Binary,
+        [left, right]: [ValueId; 2],
+        result: ValueId,
+    ) -> bool {
+        let class = rebuild.source().class(result);
+        if !matches!(class, Class::Word | Class::Held(_)) {
+            return false;
+        }
+        let (x, y) = (self.number(left), self.number(right));
+        if let (Some(x), Some(y)) = (x, y)
+            && let Some(answer) = self.calculated(op, x, y, class)
+        {
+            self.folded[result.index()] = Some(answer);
+            rebuild.stands_for(result, b.constant(class, answer));
+            return true;
+        }
+        // What was there already, where it fits where it is read.
+        let same = match (op, x, y) {
+            (Binary::Add | Binary::Sub | Binary::Monus, _, Some(0))
+            | (Binary::Mul | Binary::Div, _, Some(1)) => Some(left),
+            (Binary::Add, Some(0), _) | (Binary::Mul, Some(1), _) => Some(right),
+            _ => None,
+        };
+        if let Some(same) = same {
+            let held = rebuild.value(same);
+            if b.class(held).fits(class) {
+                rebuild.stands_for(result, held);
+                return true;
+            }
+        }
+        if matches!(op, Binary::Mul) && (x == Some(0) || y == Some(0)) {
+            self.folded[result.index()] = Some(0);
+            rebuild.stands_for(result, b.constant(class, 0));
+            return true;
+        }
+        false
+    }
+
+    /// What `op` answers for two known numbers at `class`: modulo a word
+    /// where the class is one and the program says how wide, and exactly
+    /// where the class is a fit requirement the answer meets.
+    fn calculated(&self, op: Binary, x: u64, y: u64, class: Class) -> Option<u64> {
+        let answer = match class {
+            Class::Word => {
+                let bits = self.word_bits?;
+                let answer = match op {
+                    Binary::Add => x.wrapping_add(y),
+                    Binary::Sub => x.wrapping_sub(y),
+                    Binary::Monus => x.saturating_sub(y),
+                    Binary::Mul => x.wrapping_mul(y),
+                    Binary::Div => x.checked_div(y).unwrap_or(0),
+                    Binary::Mod => x.checked_rem(y).unwrap_or(x),
+                };
+                return Some(if bits >= 64 {
+                    answer
+                } else {
+                    answer & ((1 << bits) - 1)
+                });
+            }
+            _ => match op {
+                Binary::Add => x.checked_add(y)?,
+                Binary::Sub => x.checked_sub(y)?,
+                Binary::Monus => x.saturating_sub(y),
+                Binary::Mul => x.checked_mul(y)?,
+                Binary::Div => x.checked_div(y).unwrap_or(0),
+                Binary::Mod => x.checked_rem(y).unwrap_or(x),
+            },
+        };
+        (wrap(class, answer) == answer).then_some(answer)
     }
 
     /// A remainder by a power of two is the bits below it, which is what
@@ -211,7 +320,7 @@ impl Simplify {
         right: ValueId,
         result: ValueId,
     ) -> bool {
-        let Some(by) = self.wrote.number(right) else {
+        let Some(by) = self.number(right) else {
             return false;
         };
         if !by.is_power_of_two() {
@@ -284,7 +393,7 @@ impl Simplify {
         if !matches!(class, Class::Word | Class::Held(_)) {
             return None;
         }
-        let by = self.wrote.number(right)?;
+        let by = self.number(right)?;
         let width = class.width();
         let held = match self.steps[left.index()] {
             Some(held) if held.width == width => Step {

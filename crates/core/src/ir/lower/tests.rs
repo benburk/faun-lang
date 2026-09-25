@@ -59,94 +59,118 @@ fn tag_planning_visits_each_body_once_and_preserves_every_suffix_join() {
     clippy::too_many_lines,
     reason = "one fixture covers product construction, sum tags, projection, calls, and evaluation"
 )]
-fn payload_sums_are_cells_holding_their_products_flat() {
-    let mut source = barb::Program::default();
-    let nat = source.declare_type("Nat");
-    source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
-    let pair = source.declare_type("Pair");
-    source.define_type(pair, &[("Pair", &[nat, nat])]);
-    let pair_ctor = source.ctor_at(pair, 0);
-    let maybe = source.declare_type("MaybePair");
-    source.define_type(maybe, &[("None", &[]), ("Some", &[pair])]);
-    let some = source.ctor_at(maybe, 1);
-    let zero = source.intern_number(nat, 0).unwrap();
-    let forty = source.intern_number(nat, 40).unwrap();
-    let two = source.intern_number(nat, 2).unwrap();
+fn payload_sums_hold_their_products_flat() {
+    for reaching in [false, true] {
+        let mut source = barb::Program::default();
+        let nat = source.declare_type("Nat");
+        source.define_type(nat, &[("Zero", &[]), ("Succ", &[nat])]);
+        let pair = source.declare_type("Pair");
+        source.define_type(pair, &[("Pair", &[nat, nat])]);
+        let pair_ctor = source.ctor_at(pair, 0);
+        // One reaching itself through its fields has no bound on its size,
+        // so it is a cell; one that does not is a tagged union. Reaching
+        // itself twice keeps it from being a sequence.
+        let maybe = source.declare_type("MaybePair");
+        if reaching {
+            source.define_type(maybe, &[("None", &[]), ("Some", &[pair, maybe, maybe])]);
+        } else {
+            source.define_type(maybe, &[("None", &[]), ("Some", &[pair])]);
+        }
+        let (none, some) = (source.ctor_at(maybe, 0), source.ctor_at(maybe, 1));
+        let zero = source.intern_number(nat, 0).unwrap();
+        let forty = source.intern_number(nat, 40).unwrap();
+        let two = source.intern_number(nat, 2).unwrap();
 
-    let second = source.declare("second", &[pair], nat);
-    source.define(second, |b, args| {
-        b.match_(args[0], pair, |_, _, fields| fields[1])
-    });
-    let value = source.declare("value", &[maybe], nat);
-    source.define(value, |b, args| {
-        b.match_(args[0], maybe, |b, ctor, fields| {
-            if ctor == some {
-                b.call(second, &[fields[0]])
+        let second = source.declare("second", &[pair], nat);
+        source.define(second, |b, args| {
+            b.match_(args[0], pair, |_, _, fields| fields[1])
+        });
+        let value = source.declare("value", &[maybe], nat);
+        source.define(value, |b, args| {
+            b.match_(args[0], maybe, |b, ctor, fields| {
+                if ctor == some {
+                    b.call(second, &[fields[0]])
+                } else {
+                    b.known(zero)
+                }
+            })
+        });
+        let run = source.declare("run", &[], nat);
+        source.define(run, |b, _| {
+            let first = b.known(forty);
+            let second = b.known(two);
+            let pair = b.con(pair_ctor, &[first, second]);
+            let some = if reaching {
+                let rest = b.con(none, &[]);
+                b.con(some, &[pair, rest, rest])
             } else {
-                b.known(zero)
-            }
-        })
-    });
-    let run = source.declare("run", &[], nat);
-    source.define(run, |b, _| {
-        let first = b.known(forty);
-        let second = b.known(two);
-        let pair = b.con(pair_ctor, &[first, second]);
-        let some = b.con(some, &[pair]);
-        b.call(value, &[some])
-    });
-    let none = source.ctor_at(maybe, 0);
-    let main = source.declare("main", &[], nat);
-    source.define(main, |b, _| {
-        b.call(run, &[]);
-        // `value` is handed both, so which one it is is asked.
-        let none = b.con(none, &[]);
-        b.call(value, &[none]);
-        b.known(zero)
-    });
-    source.set_entry(main);
+                b.con(some, &[pair])
+            };
+            b.call(value, &[some])
+        });
+        let main = source.declare("main", &[], nat);
+        source.define(main, |b, _| {
+            b.call(run, &[]);
+            // `value` is handed both, so which one it is is asked.
+            let none = b.con(none, &[]);
+            b.call(value, &[none]);
+            b.known(zero)
+        });
+        source.set_entry(main);
 
-    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
-    // `Some`'s pair is laid inline as two fields, and
-    // nothing projects a pair back out as a cell of its own.
-    let built: Vec<_> = machine
-        .ops
-        .iter()
-        .filter_map(|op| match *op {
-            Op::Cell { fields, .. } => Some(fields.len()),
-            _ => None,
-        })
-        .collect();
-    // `None` is built too, holding nothing.
-    assert_eq!(built, [2, 0], "{}", machine.render());
-    assert!(
-        machine
+        let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
+        // `Some`'s pair is laid inline as two leaves, and nothing projects a
+        // pair back out as a cell of its own.
+        let built: Vec<_> = machine
             .ops
             .iter()
-            .any(|op| matches!(op, Op::CellTag { .. }))
-    );
-    assert!(
-        machine
-            .ops
-            .iter()
-            .any(|op| matches!(op, Op::CellField { .. }))
-    );
-    let run = FunctionId::at(
-        machine
-            .functions()
-            .iter()
-            .position(|function| machine.name(function.name) == "run")
-            .unwrap(),
-    );
-    let result = evaluate::evaluate(
-        &machine,
-        run,
-        &[],
-        evaluate::Config::default(),
-        &mut evaluate::RejectHost,
-    )
-    .unwrap();
-    assert_eq!(result.returned().unwrap(), &[BigUint::from(2u8)]);
+            .filter_map(|op| match *op {
+                Op::Cell { fields, .. } => Some(fields.len()),
+                _ => None,
+            })
+            .collect();
+        let (tag, field) = (
+            machine
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::CellTag { .. })),
+            machine
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::CellField { .. })),
+        );
+        if reaching {
+            // The rest and `main`'s `None` are built too, holding nothing.
+            assert_eq!(built, [0, 4, 0], "{}", machine.render());
+            assert!(tag && field, "{}", machine.render());
+        } else {
+            // The tag and the pair's two leaves, and no object at all.
+            assert!(built.is_empty(), "{}", machine.render());
+            assert!(!tag && !field, "{}", machine.render());
+            let value = machine
+                .functions()
+                .iter()
+                .find(|function| machine.name(function.name) == "value")
+                .unwrap();
+            assert_eq!(machine.signature(value.params).len(), 3);
+        }
+        let run = FunctionId::at(
+            machine
+                .functions()
+                .iter()
+                .position(|function| machine.name(function.name) == "run")
+                .unwrap(),
+        );
+        let result = evaluate::evaluate(
+            &machine,
+            run,
+            &[],
+            evaluate::Config::default(),
+            &mut evaluate::RejectHost,
+        )
+        .unwrap();
+        assert_eq!(result.returned().unwrap(), &[BigUint::from(2u8)]);
+    }
 }
 
 fn selection() -> Program {

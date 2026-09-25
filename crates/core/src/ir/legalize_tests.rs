@@ -4,7 +4,7 @@ use num_bigint::BigUint;
 
 use super::evaluate::{self, Evaluation, Host, HostResult, Memory};
 use super::natural::Config;
-use super::test_support::{no_live_objects, word};
+use super::test_support::{live_objects, no_live_objects, word};
 use super::*;
 
 #[test]
@@ -115,6 +115,10 @@ fn base() -> (Program, FunctionId) {
 
 fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
     let address = word(&evaluation.returned().unwrap()[0].to_bytes_le());
+    let half = usize::try_from(natural::half(bits)).unwrap();
+    if address >= half {
+        return BigUint::from(address - half);
+    }
     let globals = p.data().len() + 2;
     let (bytes, start) = if address >= globals {
         (&evaluation.globals[..], address - globals)
@@ -133,6 +137,80 @@ fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
         );
     }
     BigUint::from_bytes_le(digits)
+}
+
+/// Around half a word, where a natural stops being an immediate and starts
+/// being an object: every operation, on every pair of numbers either side,
+/// answers what the reference answers, at every width.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "differential fixture over widths, operations, and pairs either side of the boundary"
+)]
+fn arithmetic_across_the_immediate_boundary_matches_the_reference() {
+    for bits in [16, 32, 64] {
+        let half = natural::half(bits);
+        let most = u64::MAX >> (64 - bits);
+        let values = [0, 1, half - 2, half - 1, half, half + 1, most];
+        let ops = [
+            Ok(Binary::Add),
+            Ok(Binary::Sub),
+            Ok(Binary::Mul),
+            Ok(Binary::Div),
+            Ok(Binary::Mod),
+            Err(Relation::Equal),
+            Err(Relation::Less),
+        ];
+        for op in ops {
+            let (mut p, main) = Program::new("main");
+            p.define(main, |b, _| {
+                let zero = b.constant(Class::Word, 0);
+                b.ret(&[zero]);
+            });
+            let result = if op.is_ok() {
+                Class::Natural
+            } else {
+                Class::Word
+            };
+            let test = p.declare("test", &[Class::Word, Class::Word], &[result]);
+            p.define(test, |b, args| {
+                let left = b.convert(Class::Natural, args[0]);
+                let right = b.convert(Class::Natural, args[1]);
+                let answer = match op {
+                    Ok(op) => b.binary(op, left, right),
+                    Err(relation) => b.compare(relation, left, right),
+                };
+                b.ret(&[answer]);
+            });
+            let config = Config {
+                word_bits: bits,
+                heap_bytes: 2048,
+                grows: false,
+            };
+            let scalar = legalize(&p, config).expect("legalized");
+            for &x in &values {
+                for &y in &values {
+                    let args = [BigUint::from(x), BigUint::from(y)];
+                    let expected = run(&p, test, &args, bits).returned().unwrap()[0].clone();
+                    let actual = run(&scalar, test, &args, bits);
+                    let answer = if op.is_ok() {
+                        decoded(&scalar, &actual, bits)
+                    } else {
+                        actual.returned().unwrap()[0].clone()
+                    };
+                    assert_eq!(answer, expected, "{bits} {op:?} {x} {y}");
+                    // An answer below half a word is an immediate, and one
+                    // at or past it the one object still claimed.
+                    let object = op.is_ok() && answer >= BigUint::from(half);
+                    assert_eq!(
+                        live_objects(&scalar, &actual, config),
+                        usize::from(object),
+                        "{bits} {op:?} {x} {y}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -561,7 +639,8 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
         let mark = routines.declare(&mut p, "mark");
         p.define(main, |b, _| {
             b.call(mark, &[]);
-            let word = b.constant(Class::Word, 100);
+            // Past where immediates stop, so each is an object.
+            let word = b.constant(Class::Word, natural::half(bits) + 100);
             // Both are read after the second is made, so both are live when
             // it asks for room: a dead first one would already be released.
             let first = b.convert(Class::Natural, word);

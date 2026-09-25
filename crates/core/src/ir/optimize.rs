@@ -8,6 +8,10 @@
 //!
 //! Each stage runs at most once, in this order. Nothing here is a fixed
 //! point, and nothing here changes what a program means.
+//!
+//! Preparation for a target runs the schedule again once legalization has
+//! written the runtime: its offsets are arithmetic on sizes known before the
+//! program runs, which only then is at a width the program says.
 
 use super::{Program, prune, simplify};
 

@@ -66,3 +66,8 @@ factorial : Nat -> Nat
 factorial(0) -> 1
 factorial(m) -> m * factorial(m - 1)
 ```
+
+## Open design questions
+
+- How to do FFI
+- How to do concurrency

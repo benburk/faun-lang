@@ -3,6 +3,14 @@
 //! Structural normalization substitutes aliases without planning any inlining.
 //! Expanding rewrites use the policy in `inline`; both preserve eager bindings
 //! and protect recognized arithmetic definitions from changes to their equations.
+//!
+//! Every walk also decides what is already decided. A match on a local
+//! written as a constructor, or as a known value, is the arm for that
+//! constructor, with its fields what built it: nothing is tested. And a
+//! match whose arms bind nothing and are the same asks a question whose
+//! answer changes nothing, so it is that arm. Neither drops or reorders a
+//! binding: the arm taken is the one that would have run, and the arms that
+//! are not were never going to.
 
 use super::budget::{Budget, FoldLimits};
 use super::evaluate::Evaluator;
@@ -69,6 +77,7 @@ fn rewrite(program: &mut Program, inlining: Option<Inlining>, algebra_limits: Op
         inlining,
         algebra: algebra_limits.map(Budget::new),
         inline_depth: 0,
+        written: Vec::new(),
     };
     // Reads name existing entries; writes only append. Keep all function roots
     // unchanged until the end, so later callers still inline original bodies
@@ -87,6 +96,7 @@ fn rewrite(program: &mut Program, inlining: Option<Inlining>, algebra_limits: Op
         }
         let count = rewrite.program.params(id).len();
         let locals: Vec<_> = (0..count).map(|at| Atom(Local::at(at))).collect();
+        rewrite.written.clear();
         let body = rewrite.body(body, locals, count);
         bodies.push((id, body));
     }
@@ -103,7 +113,20 @@ struct Rewrite<'a> {
     /// structural or inlining walk that must not perform algebraic rewrites.
     algebra: Option<Budget>,
     inline_depth: usize,
+    /// What wrote each local of the body being rebuilt, by level, where a
+    /// binding of it did: a parameter or a field an arm took apart says
+    /// nothing. Arms reuse levels, so this is cut back to where each begins.
+    written: Vec<Option<ExprId>>,
 }
+/// What rebuilding a match came to.
+enum Matched {
+    Rebuilt(Expr),
+    /// Every arm binds nothing and says the same: this one.
+    Same(Body),
+    /// Every arm puts back what it took apart.
+    Scrutinee,
+}
+
 struct Scope {
     bindings: Vec<ExprId>,
     level: usize,
@@ -122,6 +145,8 @@ impl Scope {
 }
 impl Rewrite<'_> {
     fn body(&mut self, body: Body, locals: Vec<Atom>, level: usize) -> Body {
+        self.written.truncate(level);
+        self.written.resize(level, None);
         let mut scope = Scope {
             bindings: vec![],
             level,
@@ -143,6 +168,10 @@ impl Rewrite<'_> {
         }
         self.expr(body.tail, &locals, scope)
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per expression kind, and the match arm decides before it rebuilds"
+    )]
     fn expr(&mut self, id: ExprId, locals: &[Atom], scope: &mut Scope) -> Atom {
         let expr = match self.program.expr(id) {
             Expr::Atom(a) => return locals[a.0.index()],
@@ -172,43 +201,175 @@ impl Rewrite<'_> {
                 }
                 Expr::Call(called, self.program.terms.hold_atoms(args.into_iter()))
             }
-            Expr::Match(value, arms) => match self.matching(value, arms, locals, scope) {
-                Some(held) => held,
-                // One that puts back what it took apart is what it took apart.
-                None => return locals[value.0.index()],
-            },
+            Expr::Match(value, arms) => {
+                let scrutinee = locals[value.0.index()];
+                if let Some(answer) = self.selected(scrutinee, arms, locals, scope) {
+                    return answer;
+                }
+                match self.matching(value, arms, locals, scope) {
+                    Matched::Rebuilt(held) => held,
+                    Matched::Same(body) => return self.spliced(body, scope),
+                    // One that puts back what it took apart is what it took apart.
+                    Matched::Scrutinee => return scrutinee,
+                }
+            }
         };
-        let id = self.program.terms.push(expr);
-        scope.bindings.push(id);
-        let value = Atom(Local::at(scope.level));
-        scope.level += 1;
-        value
+        self.push(expr, scope)
     }
-    /// Rebuild a match's arms, or nothing at all where every arm puts back
-    /// the constructor it took apart and the match is its own scrutinee.
-    fn matching(
+
+    /// The arm a match takes where its scrutinee was written as one
+    /// constructor or as a known value, taken where the match stands: its
+    /// fields are the atoms that built it, or known values of their own.
+    fn selected(
         &mut self,
-        value: Atom,
+        scrutinee: Atom,
         arms: Range,
         locals: &[Atom],
-        scope: &Scope,
-    ) -> Option<Expr> {
+        scope: &mut Scope,
+    ) -> Option<Atom> {
+        let wrote = (*self.written.get(scrutinee.0.index())?)?;
+        let (ctor, fields) = match self.program.expr(wrote) {
+            Expr::Con(ctor, fields) => (ctor, self.program.atoms(fields).to_vec()),
+            Expr::Static(value) => self.opened(value, scope)?,
+            Expr::Atom(_) | Expr::Call(..) | Expr::Match(..) => return None,
+        };
+        let arm = self
+            .program
+            .arms(arms)
+            .iter()
+            .find(|arm| arm.ctor == ctor)
+            .copied()?;
+        let mut inner = locals.to_vec();
+        inner.extend(fields);
+        Some(self.into(arm.body, inner, scope))
+    }
+
+    /// A known value's constructor, and each of its fields as a known value
+    /// of its own, bound here. A known number is its successor's step, or
+    /// nought; a known sequence is left to be taken apart where it runs.
+    fn opened(
+        &mut self,
+        value: super::ConstId,
+        scope: &mut Scope,
+    ) -> Option<(super::CtorId, Vec<Atom>)> {
+        let constant = self.program.constant(value);
+        let ctor = constant.constructor();
+        let owner = constant.owner();
+        let fields: Vec<_> = match constant.view() {
+            super::ConstantView::Constructor(view) => {
+                let mut budget = Budget::new(FoldLimits::default());
+                let fields = view.fields(&mut budget).ok()?;
+                fields
+                    .into_iter()
+                    .map(|field| field.to_owned(&mut budget))
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok()?
+                    .into_iter()
+                    .map(|held| self.program.intern_held(&held))
+                    .collect()
+            }
+            super::ConstantView::Natural(number) => {
+                let number = number.to_biguint();
+                if number == num_bigint::BigUint::default() {
+                    Vec::new()
+                } else {
+                    let before = number - 1u8;
+                    vec![self.program.intern_natural(owner, &before).ok()?]
+                }
+            }
+            super::ConstantView::Spine(_) => return None,
+        };
+        let atoms = fields
+            .into_iter()
+            .map(|field| self.push(Expr::Static(field), scope))
+            .collect();
+        Some((ctor, atoms))
+    }
+
+    /// A rebuilt arm that binds nothing, laid where the match stood: its
+    /// bindings already take the levels they would take here.
+    fn spliced(&mut self, body: Body, scope: &mut Scope) -> Atom {
+        for &binding in &self.program.bindings(body.bindings).to_vec() {
+            scope.bindings.push(binding);
+            self.written.truncate(scope.level);
+            self.written.push(Some(binding));
+            scope.level += 1;
+        }
+        match self.program.expr(body.tail) {
+            Expr::Atom(atom) => atom,
+            tail => self.push(tail, scope),
+        }
+    }
+    /// Rebuild a match's arms: as a match, as the one arm every arm is, or
+    /// as its scrutinee where every arm puts back the constructor it took
+    /// apart.
+    fn matching(&mut self, value: Atom, arms: Range, locals: &[Atom], scope: &Scope) -> Matched {
         let mut found = vec![];
         for at in arms.range() {
             let arm = self.program.terms.arm(at);
             let fields = self.program.fields(arm.ctor).len();
             let mut inner = locals.to_vec();
             inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
+            // A sibling arm's bindings may have taken this arm's fields'
+            // levels, and what wrote them is not what this arm binds.
+            self.written.truncate(scope.level);
             found.push(Arm {
                 ctor: arm.ctor,
                 body: self.body(arm.body, inner, scope.level + fields),
             });
         }
+        self.written.truncate(scope.level);
         if rebuilt(self.program, &found, scope.level) {
-            return None;
+            return Matched::Scrutinee;
+        }
+        if let Some((first, rest)) = found.split_first()
+            && self.program.fields(first.ctor).is_empty()
+            && rest.iter().all(|arm| {
+                self.program.fields(arm.ctor).is_empty() && self.same_body(first.body, arm.body)
+            })
+        {
+            return Matched::Same(first.body);
         }
         let arms = self.program.terms.hold_arms(&found);
-        Some(Expr::Match(locals[value.0.index()], arms))
+        Matched::Rebuilt(Expr::Match(locals[value.0.index()], arms))
+    }
+
+    /// Whether two bodies say the same thing, term for term. Known values
+    /// are compared by what they are, since equal ones are held apart.
+    fn same_body(&self, a: Body, b: Body) -> bool {
+        let (left, right) = (
+            self.program.bindings(a.bindings),
+            self.program.bindings(b.bindings),
+        );
+        left.len() == right.len()
+            && left.iter().zip(right).all(|(&x, &y)| self.same_expr(x, y))
+            && self.same_expr(a.tail, b.tail)
+    }
+
+    fn same_expr(&self, a: ExprId, b: ExprId) -> bool {
+        match (self.program.expr(a), self.program.expr(b)) {
+            (Expr::Atom(x), Expr::Atom(y)) => x == y,
+            (Expr::Static(x), Expr::Static(y)) => {
+                let (x, y) = (self.program.constant(x), self.program.constant(y));
+                x.owner() == y.owner() && x.encoded() == y.encoded()
+            }
+            (Expr::Con(x, xs), Expr::Con(y, ys)) => {
+                x == y && self.program.atoms(xs) == self.program.atoms(ys)
+            }
+            (Expr::Call(x, xs), Expr::Call(y, ys)) => {
+                x == y && self.program.atoms(xs) == self.program.atoms(ys)
+            }
+            (Expr::Match(x, xs), Expr::Match(y, ys)) => {
+                let (xs, ys) = (self.program.arms(xs), self.program.arms(ys));
+                x == y
+                    && xs.len() == ys.len()
+                    && xs
+                        .iter()
+                        .zip(ys)
+                        .all(|(l, r)| l.ctor == r.ctor && self.same_body(l.body, r.body))
+            }
+            _ => false,
+        }
     }
 
     /// Combine the constants in a left-associated monus or quotient.
@@ -489,6 +650,9 @@ impl Rewrite<'_> {
         let id = self.program.terms.push(expr);
         scope.bindings.push(id);
         let held = Atom(Local::at(scope.level));
+        self.written.truncate(scope.level);
+        self.written.resize(scope.level, None);
+        self.written.push(Some(id));
         scope.level += 1;
         held
     }

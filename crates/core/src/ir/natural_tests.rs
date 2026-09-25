@@ -29,7 +29,12 @@ impl Host for Observer {
         match name {
             "exit!" => Ok(HostResult::Halt(args.to_vec())),
             "observe" => {
-                let address = args[0].to_u64_digits()[0];
+                let address = args[0].to_u64_digits().first().copied().unwrap_or(0);
+                let half = natural::half(u16::try_from(self.word * 8).unwrap());
+                if address >= half {
+                    self.seen.push(BigUint::from(address - half));
+                    return Ok(HostResult::Return(vec![]));
+                }
                 let header = memory.read(address, 3 * self.word)?;
                 let size = read_word(&header[..self.word]);
                 let refs = read_word(&header[self.word..2 * self.word]);
@@ -137,7 +142,7 @@ fn observe_and_release(
     value: super::ValueId,
 ) {
     b.call(observer, &[value]);
-    b.call(lib.release, &[value]);
+    lib.release_value(b, value);
 }
 
 #[test]
@@ -145,7 +150,7 @@ fn static_layout_configuration_and_pruning() {
     for bits in [16, 32, 64] {
         let conf = config(bits);
         let word = usize::from(bits / 8);
-        let (mut p, lib, _) = program(conf, Needs::default());
+        let (mut p, _, _) = program(conf, Needs::default());
         assert!(p.globals().is_empty(), "no allocation family requested");
         assert_eq!(
             p.functions().len(),
@@ -154,7 +159,8 @@ fn static_layout_configuration_and_pruning() {
         );
         let magnitude = (BigUint::from(1u8) << 130usize) + BigUint::from(257u32);
         let datum = natural::constant(&mut p, conf, &magnitude).unwrap();
-        for (datum, expected) in [(lib.zero, BigUint::default()), (datum, magnitude)] {
+        let zero = natural::constant(&mut p, conf, &BigUint::default()).unwrap();
+        for (datum, expected) in [(zero, BigUint::default()), (datum, magnitude)] {
             let span = p.datum(datum);
             let bytes = &p.data()[usize::try_from(span.start).unwrap()
                 ..usize::try_from(span.start + span.len).unwrap()];
@@ -447,10 +453,10 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
                 let done = b.compare(Relation::Equal, i, rounds);
                 b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
                 let a = b.call_one(lib.require(Helper::FromWord), args);
-                let alias = b.call_one(lib.retain, &[a]);
-                b.call(lib.release, &[a]);
+                let alias = lib.retain_value(b, a);
+                lib.release_value(b, a);
                 let sum = b.call_one(lib.require(Helper::Add), &[alias, alias]);
-                b.call(lib.release, &[alias]);
+                lib.release_value(b, alias);
                 observe_and_release(b, &lib, observer, sum);
                 let next = b.binary(Binary::Add, i, one);
                 b.continue_(&[next]);
@@ -489,8 +495,8 @@ fn freed_adjacent_blocks_coalesce_for_a_larger_allocation() {
             let first = b.call_one(lib.require(Helper::FromWord), args);
             let second = b.call_one(lib.require(Helper::FromWord), args);
             let last = b.call_one(lib.require(Helper::FromWord), args);
-            b.call(lib.release, &[first]);
-            b.call(lib.release, &[second]);
+            lib.release_value(b, first);
+            lib.release_value(b, second);
             let big = b.address_of(big);
             let sum = b.call_one(lib.require(Helper::Add), &[big, big]);
             observe_and_release(b, &lib, observer, sum);
@@ -525,11 +531,11 @@ fn exhaustion_halts_without_corrupting_the_heap() {
             let zero = b.constant(WORD, 0);
             b.ret(&[zero]);
         });
-        let (evaluation, seen) = run(&p, check, &[BigUint::from(1u8)], bits);
+        let (evaluation, seen) = run(&p, check, &[past_half(bits, 1)], bits);
         assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
         assert_eq!(
             seen,
-            [BigUint::from(1u8)],
+            [past_half(bits, 1)],
             "effects before OOM happen exactly once"
         );
         assert_eq!(evaluation.globals.len(), 4 * word);
@@ -572,7 +578,7 @@ fn reference_count_exhaustion_does_not_create_an_immortal_object() {
         let max = u64::MAX >> (64 - bits);
         p.define(check, |b, _| {
             let one = b.constant(WORD, 1);
-            let object = b.call_one(lib.require(Helper::FromWord), &[one]);
+            let object = object(b, &lib, 1);
             // Test-only injection: no feasible test needs MAX-1 live aliases.
             let count = b.constant(WORD, max - 1);
             b.store(super::Width::Word, object, super::Offset::Words(1), count);
@@ -602,6 +608,16 @@ fn repeat(b: &mut Builder<'_>, times: u64, body: impl FnOnce(&mut Builder<'_>)) 
 fn promote(b: &mut Builder<'_>, lib: &Library, value: u64) -> super::ValueId {
     let value = b.constant(WORD, value);
     b.call_one(lib.require(Helper::FromWord), &[value])
+}
+
+/// A natural held as an object: `value` past where immediates stop.
+fn object(b: &mut Builder<'_>, lib: &Library, value: u64) -> super::ValueId {
+    promote(b, lib, lib.half + value)
+}
+
+/// What [`object`] holds.
+fn past_half(bits: u16, value: u64) -> BigUint {
+    BigUint::from(natural::half(bits) + value)
 }
 
 fn observed_product(
@@ -665,8 +681,8 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
             let left = promote(b, &lib, 513);
             let right = promote(b, &lib, 514);
             let result = b.call_one(lib.require(Helper::Mod), &[left, right]);
-            b.call(lib.release, &[left]);
-            b.call(lib.release, &[right]);
+            lib.release_value(b, left);
+            lib.release_value(b, right);
             let replacement = promote(b, &lib, 9);
             observe_and_release(b, &lib, observer, result);
             observe_and_release(b, &lib, observer, replacement);
@@ -683,24 +699,24 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
 fn fragmented_check(p: &mut Program, lib: &Library, big: DataId, remove_middle: bool) {
     let observer = observer(p);
     p.define(p.entry(), |b, _| {
-        let first = promote(b, lib, 1);
-        let middle = promote(b, lib, 2);
-        let third = promote(b, lib, 3);
-        let last = promote(b, lib, 4);
-        b.call(lib.release, &[first]);
-        b.call(lib.release, &[third]);
+        let first = object(b, lib, 1);
+        let middle = object(b, lib, 2);
+        let third = object(b, lib, 3);
+        let last = object(b, lib, 4);
+        lib.release_value(b, first);
+        lib.release_value(b, third);
         if remove_middle {
-            b.call(lib.release, &[middle]);
+            lib.release_value(b, middle);
         }
         let big = b.address_of(big);
         let result = b.call_one(lib.require(Helper::Add), &[big, big]);
         // Keep the 5W result alive: this request must take the 7W remainder.
-        let replacement = promote(b, lib, 9);
+        let replacement = object(b, lib, 9);
         observe_and_release(b, lib, observer, result);
         observe_and_release(b, lib, observer, replacement);
         observe_and_release(b, lib, observer, last);
         if !remove_middle {
-            b.call(lib.release, &[middle]);
+            lib.release_value(b, middle);
         }
         let zero = b.constant(WORD, 0);
         b.ret(&[zero]);
@@ -729,8 +745,8 @@ fn coalescing_stops_at_live_blocks_and_later_reuses_the_joined_run() {
                     seen,
                     [
                         &magnitude + &magnitude,
-                        BigUint::from(9u8),
-                        BigUint::from(4u8)
+                        past_half(bits, 9),
+                        past_half(bits, 4)
                     ]
                 );
                 assert_eq!(blocks, [(5 * word, 0), (7 * word, 0), (4 * word, 0)]);
@@ -738,26 +754,27 @@ fn coalescing_stops_at_live_blocks_and_later_reuses_the_joined_run() {
             } else {
                 assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
                 assert!(seen.is_empty());
-                still_fragmented(&evaluation.globals, word);
+                still_fragmented(&evaluation.globals, bits);
             }
         }
     }
 }
 
-fn still_fragmented(globals: &[u8], word: usize) {
+fn still_fragmented(globals: &[u8], bits: u16) {
+    let word = usize::from(bits / 8);
     assert_eq!(
         partition(globals, word),
         [(4 * word, 0), (4 * word, 1), (4 * word, 0), (4 * word, 1)]
     );
     // The failed allocation did not modify either surviving full magnitude.
-    for (offset, value) in [(4 * word, 2u8), (12 * word, 4u8)] {
+    for (offset, value) in [(4 * word, 2), (12 * word, 4)] {
         let len =
             usize::try_from(read_word(&globals[offset + 2 * word..offset + 3 * word])).unwrap();
-        assert_eq!(len, 1);
+        assert_eq!(len, word);
         let start = offset + 3 * word;
         assert_eq!(
             BigUint::from_bytes_le(&globals[start..start + len]),
-            BigUint::from(value)
+            past_half(bits, value)
         );
     }
 }
@@ -794,7 +811,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
             repeat(b, 100, |b| {
                 let input = promote(b, &lib, 513);
                 let result = b.call_one(lib.require(Helper::Mul), &[input, input]);
-                b.call(lib.release, &[input]);
+                lib.release_value(b, input);
                 observe_and_release(b, &lib, observer, result);
             });
             let pair = sentinel_pair(b, sentinel, tail);
@@ -829,7 +846,7 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
                 let sum = b.call_one(lib.require(Helper::Add), &[dense, one]);
                 b.call(observer, &[sum]);
                 let difference = b.call_one(lib.require(Helper::Sub), &[sum, one]);
-                b.call(lib.release, &[sum]);
+                lib.release_value(b, sum);
                 observe_and_release(b, &lib, observer, difference);
             });
             let zero = b.constant(WORD, 0);
@@ -956,7 +973,7 @@ fn retain_and_release_reject_zero_counts_without_resurrecting_storage() {
         for retaining in [false, true] {
             let (mut p, lib, entry) = program(conf, Needs::from([Helper::FromWord]));
             p.define(entry, |b, _| {
-                let object = promote(b, &lib, 1);
+                let object = object(b, &lib, 1);
                 let zero = b.constant(WORD, 0);
                 b.store(super::Width::Word, object, super::Offset::Words(1), zero);
                 let function = if retaining { lib.retain } else { lib.release };
@@ -980,12 +997,12 @@ fn immortal_and_mortal_identity_results_have_correct_claims() {
         let check = p.declare("identity", &[WORD], &[WORD]);
         p.define(check, |b, args| {
             let a = b.call_one(lib.require(Helper::FromWord), args);
-            let zero = b.address_of(lib.zero);
+            let zero = lib.small(b, 0).unwrap();
             let same = b.call_one(lib.require(Helper::Mod), &[a, zero]);
-            b.call(lib.release, &[a]);
+            lib.release_value(b, a);
             observe_and_release(b, &lib, observer, same);
-            let alias = b.call_one(lib.retain, &[zero]);
-            b.call(lib.release, &[zero]);
+            let alias = lib.retain_value(b, zero);
+            lib.release_value(b, zero);
             observe_and_release(b, &lib, observer, alias);
             let zero = b.constant(WORD, 0);
             b.ret(&[zero]);

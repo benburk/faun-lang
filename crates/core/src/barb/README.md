@@ -111,7 +111,28 @@ x    ::= a parameter, a binding, or a field an arm bound
   survive rewriting; expression-indexed facts do not.
 - `normalize.rs`: capture-free structural rebuilding; `inline.rs`: expansion
   eligibility, copy costs and budgets. Structural-only normalization does not
-  construct an inlining plan or compute its recursion/copy-cost tables.
+  construct an inlining plan or compute its recursion/copy-cost tables. Every
+  walk also takes the arm a match on a local written as a constructor or a
+  known value selects, with its fields what built it, and replaces a match
+  whose arms bind nothing and are term-for-term the same with that arm.
+- `descent.rs`: a definition taking two numbers of one natural type down
+  together -- nought answers one base case, a step and nought another, two
+  steps call it again on both predecessors with nothing else changed -- is
+  those base cases applied to `a monus b` and `b monus a`, so it calls itself
+  no more and may be inlined. The monus is the definition recognized as one
+  over that type, or one declared in the shape recognition reads.
+- `fuse.rs`: a producer walks a list, pushes one element onto an accumulator
+  per step and answers it reversed; a consumer takes a list apart from the
+  front, reading its rest only as the argument of tail calls to itself. A
+  producer's call onto an empty accumulator read once, by a consumer's call
+  later in the same body, becomes a call of a new definition doing both steps
+  in one walk. Where the consumer is itself a producer, so is the fused one,
+  so a chain fuses a link at a time. Only definitions reaching no bodyless
+  call take part: fusing interleaves their work and cuts the producer short
+  where the consumer stops. Nothing is recognized by name.
+- `copy.rs`: copying terms into a body under construction through a map of
+  locals, with an optional redirect of one function's calls; what fusion and
+  descent build new bodies with.
 - `constant.rs`, `constant/view.rs`, `constant/checked.rs`: compact encoding,
   validated semantic views, and checked construction.
   Views read magnitudes and constructors without materializing trees.
@@ -141,18 +162,26 @@ two types -- so nothing infers a provider or an effect from the display name.
 `optimize(program)` runs a small fixed schedule after validation:
 
 1. Structural normalization: substitute local aliases, without expanding calls.
-2. Helper inlining: non-arithmetic helpers other than loop breakers. In each
+2. Descent: rewrite definitions taking two numbers down together as their
+   base cases on the two differences, so they no longer recurse.
+3. Helper inlining: non-arithmetic helpers other than loop breakers. In each
    recursive component, a definition calling itself is a breaker, and so are
    enough of the rest that no cycle is left among the others; each other one may
    be copied into its caller, so definitions calling each other become one
    calling itself, which machine lowering makes a loop where the call is a tail.
-3. Arithmetic identities justified by structurally recognized `Operation` facts.
-4. Constant folding with one shared evaluation budget for the entire pass.
-5. Bounded algebraic normalization: combine constants across recognized associative
+4. Fusion: a list built by one walk and read once by another is never built.
+5. Arithmetic identities justified by structurally recognized `Operation` facts.
+6. Constant folding with one shared evaluation budget for the entire pass.
+7. Bounded algebraic normalization: combine constants across recognized associative
    operations and directional monus/division chains, then push power-of-two moduli
    through sums and products.
-6. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+8. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
    pure arithmetic or lengths; retain calls of unknown meaning and matches.
+
+Every normalizing stage (1, 3 and 7) also decides what is already decided: a
+match on a known constructor is its arm, and a match whose arms agree is that
+arm. Fusion and descent add definitions; a fused walk's name joins its two
+halves' with `+`, and what they replace stays until nothing calls it.
 
 Each stage runs once, always; there are no switches. Tests isolating one stage
 call it directly within the crate. Inlining is also what gives range analysis

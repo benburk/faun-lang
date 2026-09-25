@@ -28,6 +28,14 @@
 //!   apart builds nothing, and adding to one writes in place where nothing
 //!   else holds the buffer. A definition recognized as its length is never
 //!   emitted; a call to one reads the length leaf.
+//! - a sum whose fields are all numbers is held flat too, as a tagged
+//!   union: its tag, then a run of slots each constructor lays its fields'
+//!   leaves in, numbers of a machine's width in the first slots and
+//!   arbitrary-precision ones after. A slot a constructor leaves empty holds
+//!   nought. Building one allocates nothing, and matching one tests the tag
+//!   it holds. A sum that reaches itself through its fields has no such
+//!   bound on its size, and one holding a list or a cell has nothing to put
+//!   in a slot left empty, so both are cells.
 //! - everything else with fields is a managed cell.
 //! - a cell's fields are held at the class the cell says, which is the class
 //!   a projection reads them back at. A field held flat is its leaves, laid
@@ -429,6 +437,10 @@ enum Storage {
     Flat(barb::Range),
     /// A sequence: a buffer and a length, as [`SEQUENCE_LEAVES`] says.
     Seq,
+    /// A sum held as its tag and its slots: a run in the leaf pool, the tag
+    /// first, then the slots for numbers a machine holds, then those for
+    /// arbitrary-precision ones.
+    Tagged(barb::Range),
 }
 
 /// The leaves every sequence is held as, which open every leaf pool.
@@ -442,7 +454,7 @@ fn sequence_run() -> barb::Range {
 impl Storage {
     fn carried(self) -> bool {
         match self {
-            Self::Scalar | Self::Cell | Self::Flat(_) | Self::Seq => true,
+            Self::Scalar | Self::Cell | Self::Flat(_) | Self::Seq | Self::Tagged(_) => true,
             Self::Erased => false,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
         }
@@ -454,7 +466,7 @@ impl Storage {
         match self {
             Self::Scalar => Some(Carried::One(width(bounds))),
             Self::Cell => Some(Carried::One(Class::Cell)),
-            Self::Flat(leaves) => Some(Carried::Flat(leaves)),
+            Self::Flat(leaves) | Self::Tagged(leaves) => Some(Carried::Flat(leaves)),
             Self::Seq => Some(Carried::Flat(sequence_run())),
             Self::Erased => None,
             Self::Undemanded => panic!("a lowered type must have been demanded"),
@@ -799,6 +811,13 @@ impl<'a> Demand<'a> {
             self.carries[ty.index()] = flat;
             return Ok(());
         }
+        if storage == Storage::Cell
+            && let Some(sum) = summed(self.program, ty)
+            && let Some(tagged) = self.tag(ty, sum)?
+        {
+            self.carries[ty.index()] = tagged;
+            return Ok(());
+        }
         if matches!(storage, Storage::Cell | Storage::Seq) {
             return self.type_fields(ty);
         }
@@ -840,6 +859,74 @@ impl<'a> Demand<'a> {
                 Storage::Flat(append_range(&mut self.leaves, &leaves))
             }
         }))
+    }
+
+    /// How a sum is held once its fields are demanded: as its tag and slots
+    /// where every leaf is a number and they fit, and `None` to keep it a
+    /// cell. A wrapper around a sum is held as that sum.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "demanding the fields and laying out their slots are one decision"
+    )]
+    fn tag(&mut self, ty: barb::TypeId, sum: barb::TypeId) -> Result<Option<Storage>, String> {
+        if sum != ty {
+            self.type_(sum)?;
+            let inner = self.carries[sum.index()];
+            return Ok(matches!(inner, Storage::Tagged(_)).then_some(inner));
+        }
+        let ctors: Vec<_> = (0..self.program.ctors(ty).len())
+            .map(|tag| {
+                self.program
+                    .ctor_at(ty, u32::try_from(tag).expect("a sane tag"))
+            })
+            .collect();
+        for &ctor in &ctors {
+            for field in self.program.fields(ctor).to_vec() {
+                self.type_(field)?;
+            }
+        }
+        let mut scalars: Vec<Class> = Vec::new();
+        let mut naturals = 0;
+        for &ctor in &ctors {
+            let (mut scalar, mut natural) = (0, 0);
+            for at in 0..self.program.fields(ctor).len() {
+                let Some(carried) =
+                    field_carried(self.program, self.facts, &self.carries, ctor, at)
+                else {
+                    continue;
+                };
+                for &class in classes(&self.leaves, &carried) {
+                    match class {
+                        Class::Natural => natural += 1,
+                        Class::Held(_) | Class::Word => {
+                            match scalars.get_mut(scalar) {
+                                Some(slot) => *slot = super::arithmetic::widest(*slot, class),
+                                None => scalars.push(class),
+                            }
+                            scalar += 1;
+                        }
+                        // Nothing stands in a slot a constructor leaves
+                        // empty where a list or a cell would go.
+                        Class::Cell | Class::Buffer | Class::Address => return Ok(None),
+                    }
+                }
+            }
+            naturals = usize::max(naturals, natural);
+        }
+        if 1 + scalars.len() + naturals > FLAT_LEAVES {
+            return Ok(None);
+        }
+        let most = u64::try_from(ctors.len() - 1).expect("a sane constructor count");
+        let mut leaves = vec![Class::Held(crate::facts::Facts {
+            low: 0,
+            high: Some(most),
+        })];
+        leaves.extend(scalars);
+        leaves.extend(std::iter::repeat_n(Class::Natural, naturals));
+        Ok(Some(Storage::Tagged(append_range(
+            &mut self.leaves,
+            &leaves,
+        ))))
     }
 
     /// Demand every field of every constructor, as a cell's.
@@ -1034,6 +1121,39 @@ fn flattened(program: &barb::Program, id: barb::TypeId) -> Option<barb::TypeId> 
     Some(product)
 }
 
+/// The sum a type is held as a tagged union of, if it may be one: read
+/// through wrappers, and refused where the sum reaches itself through the
+/// types of its fields, which no run of slots bounds.
+fn summed(program: &barb::Program, id: barb::TypeId) -> Option<barb::TypeId> {
+    let sum = peeled(program, id)?;
+    if barb::type_shape(program, sum) != barb::TypeShape::Sum {
+        return None;
+    }
+    let mut seen = vec![false; program.types().len()];
+    let mut waiting: Vec<_> = program
+        .ctors(sum)
+        .iter()
+        .flat_map(|ctor| program.types_of(ctor.fields))
+        .copied()
+        .collect();
+    while let Some(field) = waiting.pop() {
+        if field == sum {
+            return None;
+        }
+        if std::mem::replace(&mut seen[field.index()], true) {
+            continue;
+        }
+        waiting.extend(
+            program
+                .ctors(field)
+                .iter()
+                .flat_map(|ctor| program.types_of(ctor.fields))
+                .copied(),
+        );
+    }
+    Some(sum)
+}
+
 /// What field `at` of `ctor` is held as, where it carries anything.
 ///
 /// A number is as wide as every value built into that field, which is all a
@@ -1053,7 +1173,7 @@ fn field_carried(
             Some(Carried::One(Class::Word))
         }
         Storage::Scalar => Some(Carried::One(width(held))),
-        Storage::Flat(run) => Some(Carried::Flat(run)),
+        Storage::Flat(run) | Storage::Tagged(run) => Some(Carried::Flat(run)),
         Storage::Seq => Some(Carried::Flat(sequence_run())),
         Storage::Erased => None,
         Storage::Undemanded => panic!("a bound field type must have been demanded"),
@@ -1970,10 +2090,18 @@ impl Lowering<'_> {
             out.extend(self.static_sequence(b, value));
             return;
         }
+        let storage = self.carries[value.owner().index()];
         let value = barb::single_field_constant(self.barb, value);
         let barb::ConstantView::Constructor(ctor) = value.view() else {
             unreachable!("a product constant is a constructor");
         };
+        if let Storage::Tagged(run) = storage {
+            let mut fields = Vec::new();
+            self.static_fields(b, ctor, &mut fields);
+            let held = self.tagged(b, ctor.constructor(), run, &fields);
+            out.extend_from_slice(held.values());
+            return;
+        }
         self.static_fields(b, ctor, out);
     }
 
@@ -2603,6 +2731,11 @@ impl Lowering<'_> {
         if self.carries[owner.index()] == Storage::Seq {
             return Some(self.construct_sequence(b, ctor, args, locals));
         }
+        if let Storage::Tagged(run) = self.carries[owner.index()] {
+            let mut fields = Vec::new();
+            self.field_values(b, ctor, args, locals, &mut fields);
+            return Some(self.tagged(b, ctor, run, &fields));
+        }
         let class = match self.carried(owner, self.facts.held(expr)) {
             Carried::Flat(leaves) => {
                 let mut values = Vec::new();
@@ -2623,6 +2756,57 @@ impl Lowering<'_> {
             return Some(Held::One(b.constant(class, u64::from(self.barb.tag(ctor)))));
         }
         Some(Held::One(self.count(b, class, args, locals)))
+    }
+
+    /// A tagged union of `ctor`, whose fields' leaves are `fields`: its tag,
+    /// then each leaf in its slot, and nought in every slot it leaves empty.
+    fn tagged(
+        &self,
+        b: &mut super::Builder,
+        ctor: barb::CtorId,
+        run: barb::Range,
+        fields: &[ValueId],
+    ) -> Held {
+        let classes = &self.leaves[run.range()];
+        let mut values: Vec<Option<ValueId>> = vec![None; classes.len()];
+        values[0] = Some(b.constant(classes[0], u64::from(self.barb.tag(ctor))));
+        for (&slot, &value) in self.slots(ctor, run).iter().zip(fields) {
+            values[slot] = Some(met(b, value, classes[slot]));
+        }
+        let values: Vec<_> = values
+            .into_iter()
+            .zip(classes)
+            .map(|(value, &class)| value.unwrap_or_else(|| b.constant(class, 0)))
+            .collect();
+        Held::Flat {
+            leaves: run,
+            values: values.into(),
+        }
+    }
+
+    /// Where in a tagged union's run each leaf of `ctor`'s fields is held,
+    /// in order: numbers a machine holds in the slots after the tag, and
+    /// arbitrary-precision ones in the slots after those.
+    fn slots(&self, ctor: barb::CtorId, run: barb::Range) -> Vec<usize> {
+        let classes = &self.leaves[run.range()];
+        let scalars = classes[1..]
+            .iter()
+            .take_while(|&&class| class != Class::Natural)
+            .count();
+        let (mut scalar, mut natural) = (0, 0);
+        let mut slots = Vec::new();
+        for carried in self.fields_carried(ctor).flatten() {
+            for &class in self.classes(&carried) {
+                if class == Class::Natural {
+                    slots.push(1 + scalars + natural);
+                    natural += 1;
+                } else {
+                    slots.push(1 + scalar);
+                    scalar += 1;
+                }
+            }
+        }
+        slots
     }
 
     /// An empty sequence is an empty buffer; a step pushes its element onto
@@ -2740,10 +2924,11 @@ impl Lowering<'_> {
         if self.carries[owner.index()] == Storage::Seq {
             return self.sequence_branch(b, scrutinee, [first, second], locals, statics);
         }
-        // More than one arm means the value says which, so it is held, and
-        // held in one value: a product is held flat, and it has one arm.
-        let scrutinee = scrutinee.one();
-        if self.carries[owner.index()] == Storage::Cell {
+        let held_apart = matches!(
+            self.carries[owner.index()],
+            Storage::Cell | Storage::Tagged(_)
+        );
+        if held_apart {
             let planned = {
                 let mut carried: Vec<_> = locals
                     .iter()
@@ -2767,9 +2952,17 @@ impl Lowering<'_> {
                 }
                 planned
             };
-            let tag = b.cell_tag(scrutinee);
+            // A cell says which it is where it lies; a tagged union says it
+            // in its first leaf.
+            let tag = match scrutinee {
+                Held::One(cell) => b.cell_tag(*cell),
+                Held::Flat { values, .. } => values[0],
+            };
             return self.cell_tags(b, scrutinee, tag, &planned, locals, statics);
         }
+        // More than one arm means the value says which, so it is held, and
+        // held in one value: a product is held flat, and it has one arm.
+        let scrutinee = scrutinee.one();
         // A number is the one thing left that is held as a scalar and still
         // has two arms: which constructor it is, is whether it is nought.
         // This asks the classifier representation selection asks, not the
@@ -2921,6 +3114,9 @@ impl Lowering<'_> {
                 self.bind_sequence_fields(b, scrutinee, arm.ctor, &mut inner, &mut inner_statics);
             } else if let Storage::Flat(_) = self.carries[owner.index()] {
                 self.bind_flat_fields(scrutinee.values(), arm.ctor, &mut inner, &mut inner_statics);
+            } else if let Storage::Tagged(run) = self.carries[owner.index()] {
+                let values = scrutinee.values();
+                self.bind_tagged_fields(b, values, (arm.ctor, run), &mut inner, &mut inner_statics);
             } else if self.carries[owner.index()] == Storage::Cell {
                 self.bind_cell_fields(b, scrutinee.one(), arm.ctor, &mut inner, &mut inner_statics);
             } else if let barb::TypeShape::Sequence { push, .. }
@@ -3004,6 +3200,36 @@ impl Lowering<'_> {
         debug_assert!(rest.is_empty(), "every leaf belongs to a field");
     }
 
+    /// Taking a tagged union apart reads each field's leaves from the slots
+    /// its constructor laid them in, at the classes the field says: a slot
+    /// is as wide as the widest leaf any constructor puts in it.
+    fn bind_tagged_fields(
+        &self,
+        b: &mut super::Builder,
+        values: &[ValueId],
+        (ctor, run): (barb::CtorId, barb::Range),
+        locals: &mut Vec<Option<Held>>,
+        statics: &mut Vec<Option<barb::ConstId>>,
+    ) {
+        let slots = self.slots(ctor, run);
+        let mut slots = slots.iter();
+        for carried in self.fields_carried(ctor) {
+            let field = carried.map(|carried| {
+                let leaves: Vec<_> = self
+                    .classes(&carried)
+                    .iter()
+                    .map(|&class| {
+                        let slot = *slots.next().expect("a slot per leaf");
+                        met(b, values[slot], class)
+                    })
+                    .collect();
+                Held::of(carried, &leaves)
+            });
+            locals.push(field);
+            statics.push(None);
+        }
+    }
+
     fn bind_cell_fields(
         &self,
         b: &mut super::Builder,
@@ -3079,10 +3305,12 @@ impl Lowering<'_> {
         answer.map(|carried| Held::of(carried, &results))
     }
 
+    /// Matching a cell or a tagged union asks which constructor its tag
+    /// says, arm by arm, and each arm takes its fields apart.
     fn cell_tags(
         &self,
         b: &mut super::Builder,
-        scrutinee: ValueId,
+        held: &Held,
         discriminator: ValueId,
         arms: &[TagArm],
         locals: &Locals,
@@ -3095,22 +3323,22 @@ impl Lowering<'_> {
             },
             rest,
         ) = arms.split_first().expect("an arm to match");
-        let held = Held::One(scrutinee);
         if rest.is_empty() {
-            return self.only_arm(b, Some(&held), arm, locals, statics);
+            return self.only_arm(b, Some(held), arm, locals, statics);
         }
         let join = self.join(*answer);
-        let tag = b.constant(Class::Word, u64::from(self.barb.tag(arm.ctor)));
+        let class = b.class(discriminator);
+        let tag = b.constant(class, u64::from(self.barb.tag(arm.ctor)));
         let is_this_one = b.compare(Relation::Equal, discriminator, tag);
         let results = b.if_(
             is_this_one,
             &join,
             |b| {
-                let answer = self.only_arm(b, Some(&held), arm, locals, statics);
+                let answer = self.only_arm(b, Some(held), arm, locals, statics);
                 yielded(b, answer, &join);
             },
             |b| {
-                let answer = self.cell_tags(b, scrutinee, discriminator, rest, locals, statics);
+                let answer = self.cell_tags(b, held, discriminator, rest, locals, statics);
                 yielded(b, answer, &join);
             },
         );

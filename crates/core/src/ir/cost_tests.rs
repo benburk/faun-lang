@@ -214,10 +214,10 @@ fn a_list_round_trip_costs_what_is_recorded() {
     assert_eq!(
         cost(&round_trip(100)),
         Cost {
-            allocations: 14,
+            allocations: 12,
             retains: 0,
-            releases: 14,
-            stored_bytes: 10560,
+            releases: 12,
+            stored_bytes: 6640,
         }
     );
 }
@@ -292,27 +292,51 @@ fn a_claim_read_last_by_a_branch_is_released_in_each_arm() {
         .find(|(_, function)| scalar.name(function.name) == "nat.release")
         .map(|(id, _)| id)
         .unwrap();
-    let releases = |region: RegionId| {
-        scalar
-            .walk(region)
-            .filter(|(op, _)| matches!(**op, Op::Call { function, .. } if function == release))
-            .count()
-    };
     let body = scalar.function(main).body().unwrap();
+    // The branch the program wrote is the one answering a word; any other
+    // is legalization asking whether a natural is an immediate.
     let (then_region, else_region) = scalar
         .walk(body)
-        .find_map(|(op, _)| match *op {
+        .find_map(|(op, results)| match *op {
             Op::If {
                 then_region,
                 else_region,
                 ..
-            } => Some((then_region, else_region)),
+            } if !results.is_empty() => Some((then_region, else_region)),
             _ => None,
         })
         .unwrap();
+    let branch = (then_region, else_region);
+    let releases = |region| releases_in(&scalar, region, release, branch);
     assert_eq!(releases(body), 0, "{}", scalar.render());
     assert_eq!(releases(then_region), 1, "{}", scalar.render());
     assert_eq!(releases(else_region), 1, "{}", scalar.render());
+}
+
+/// Calls of `release` in a region, looking into every branch and loop in it
+/// but `skip`.
+fn releases_in(
+    scalar: &Program,
+    region: RegionId,
+    release: FunctionId,
+    skip: (RegionId, RegionId),
+) -> usize {
+    scalar
+        .walk(region)
+        .map(|(op, _)| match *op {
+            Op::Call { function, .. } if function == release => 1,
+            Op::If {
+                then_region,
+                else_region,
+                ..
+            } if (then_region, else_region) != skip => {
+                releases_in(scalar, then_region, release, skip)
+                    + releases_in(scalar, else_region, release, skip)
+            }
+            Op::Loop { body, .. } => releases_in(scalar, body, release, skip),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// A machine program pushing `n` elements onto one sequence, each element a

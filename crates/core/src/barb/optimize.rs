@@ -16,7 +16,9 @@ use super::{FoldLimits, InlineLimits, Program};
 /// range handles. Declaration and constant IDs are preserved.
 pub fn optimize(program: &mut Program) {
     super::structural(program);
+    super::descent::descend(program);
     super::normalize_with_limits(program, InlineLimits::default());
+    super::fuse::fuse(program);
     super::laws::laws(program);
     super::fold(program);
     super::normalize::algebra(program, FoldLimits::default());

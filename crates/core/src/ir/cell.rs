@@ -49,7 +49,7 @@ pub(super) fn append(
         release,
         allocate: naturals.require(Helper::Allocate),
     };
-    define_release(program, library, (naturals.release, buffers), word_bits);
+    define_release(program, library, (naturals, buffers), word_bits);
     library
 }
 
@@ -76,7 +76,7 @@ fn pair_address(b: &mut Builder<'_>, object: ValueId, index: ValueId, word_bytes
 fn define_release(
     program: &mut Program,
     library: Library,
-    (natural_release, buffer_release): (FunctionId, Option<FunctionId>),
+    (naturals, buffer_release): (&NaturalLibrary, Option<FunctionId>),
     word_bits: u16,
 ) {
     let word_bytes = u64::from(word_bits / 8);
@@ -105,7 +105,7 @@ fn define_release(
                         is_natural,
                         &[],
                         |b| {
-                            b.call(natural_release, &[value]);
+                            naturals.release_value(b, value);
                             b.yield_(&[]);
                         },
                         |b| {
@@ -147,7 +147,7 @@ fn define_release(
             },
             |b| b.yield_(&[]),
         );
-        b.call(natural_release, &[object]);
+        b.call(naturals.release, &[object]);
         b.ret(&[]);
     });
 }

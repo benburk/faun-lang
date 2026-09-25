@@ -36,9 +36,11 @@ fn schedules() -> Vec<(&'static str, Stages)> {
     vec![
         ("nothing", |_| {}),
         ("structural", super::structural),
+        ("descent", super::descent::descend),
         ("inlining", |p| {
             normalize_with_limits(p, InlineLimits::default());
         }),
+        ("fusion", super::fuse::fuse),
         ("laws", super::laws::laws),
         ("folding", fold),
         ("algebra", |p| {
@@ -956,4 +958,356 @@ fn deep_evaluation_declines_without_exhausting_aggregate_fuel() {
         CannotFold::Limit(LimitExceeded::Depth)
     );
     assert!(budget.remaining > 0);
+}
+
+/// A list of numbers, its reversal, and walks over it written the way a
+/// standard library writes them: `bump` builds `x + 1` for each `x` onto an
+/// accumulator and answers it reversed, `running` builds each sum so far
+/// the same way, `total` folds a list into a sum, and `index_over(xs limit
+/// at)` counts from `at` to the first element past `limit`.
+struct Walks {
+    nat: super::TypeId,
+    list: super::TypeId,
+    zero: super::CtorId,
+    nil: super::CtorId,
+    cons: super::CtorId,
+    add: FnId,
+    bump: FnId,
+    running: FnId,
+    total: FnId,
+    index_over: FnId,
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one definition per walk, each as a library writes it"
+)]
+fn walks() -> (Program, Walks) {
+    let library = super::fixture::Library::new();
+    let (nat, zero, succ, add) = (library.nat, library.zero, library.succ, library.add);
+    let (less_than, true_, bool_) = (library.less_than, library.true_, library.bool_);
+    let mut p = library.program;
+    let list = p.declare_type("List");
+    p.define_type(list, &[("Nil", &[]), ("Cons", &[nat, list])]);
+    let (nil, cons) = (p.ctor_at(list, 0), p.ctor_at(list, 1));
+    let reverse = p.declare("reverse", &[list, list], list);
+    p.define(reverse, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == nil {
+                args[1]
+            } else {
+                let onto = b.con(cons, &[fields[0], args[1]]);
+                b.call(reverse, &[fields[1], onto])
+            }
+        })
+    });
+    let bump = p.declare("bump", &[list, list], list);
+    p.define(bump, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == nil {
+                let empty = b.con(nil, &[]);
+                b.call(reverse, &[args[1], empty])
+            } else {
+                let next = b.con(succ, &[fields[0]]);
+                let built = b.con(cons, &[next, args[1]]);
+                b.call(bump, &[fields[1], built])
+            }
+        })
+    });
+    let running = p.declare("running", &[list, nat, list], list);
+    p.define(running, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == nil {
+                let empty = b.con(nil, &[]);
+                b.call(reverse, &[args[2], empty])
+            } else {
+                let sum = b.call(add, &[args[1], fields[0]]);
+                let built = b.con(cons, &[sum, args[2]]);
+                b.call(running, &[fields[1], sum, built])
+            }
+        })
+    });
+    let total = p.declare("total", &[list, nat], nat);
+    p.define(total, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == nil {
+                args[1]
+            } else {
+                let sum = b.call(add, &[args[1], fields[0]]);
+                b.call(total, &[fields[1], sum])
+            }
+        })
+    });
+    let index_over = p.declare("index_over", &[list, nat, nat], nat);
+    p.define(index_over, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == nil {
+                args[2]
+            } else {
+                let over = b.call(less_than, &[args[1], fields[0]]);
+                b.match_(over, bool_, |b, ctor, _| {
+                    if ctor == true_ {
+                        args[2]
+                    } else {
+                        let next = b.con(succ, &[args[2]]);
+                        b.call(index_over, &[fields[1], args[1], next])
+                    }
+                })
+            }
+        })
+    });
+    let walks = Walks {
+        nat,
+        list,
+        zero,
+        nil,
+        cons,
+        add,
+        bump,
+        running,
+        total,
+        index_over,
+    };
+    (p, walks)
+}
+
+impl Walks {
+    fn list_of(&self, program: &Program, values: &[u64]) -> Value {
+        values
+            .iter()
+            .rev()
+            .fold(Value(self.nil, vec![]), |rest, &n| {
+                Value(
+                    self.cons,
+                    vec![super::tests::nat(program, self.nat, n), rest],
+                )
+            })
+    }
+}
+
+/// Every function a body calls, anywhere in it.
+fn callees(program: &Program, id: FnId) -> Vec<FnId> {
+    let mut found = vec![];
+    let body = program.function(id).body().unwrap();
+    let mut exprs: Vec<_> = program.bindings(body.bindings).to_vec();
+    exprs.push(body.tail);
+    while let Some(expr) = exprs.pop() {
+        match program.expr(expr) {
+            Expr::Call(called, _) => found.push(called),
+            Expr::Match(_, arms) => {
+                for arm in program.arms(arms) {
+                    exprs.extend_from_slice(program.bindings(arm.body.bindings));
+                    exprs.push(arm.body.tail);
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// A list built by one walk and read once by another is never built: the
+/// two become one walk over what the first walks, and a chain of them
+/// fuses a link at a time.
+#[test]
+fn a_list_built_and_walked_once_is_never_built() {
+    let (mut p, w) = walks();
+    // total(bump(xs [])) and index_over(running(bump(xs []) 0 []) 5 0).
+    let summed = p.declare("summed", &[w.list], w.nat);
+    p.define(summed, |b, args| {
+        let empty = b.con(w.nil, &[]);
+        let bumped = b.call(w.bump, &[args[0], empty]);
+        let zero = b.con(w.zero, &[]);
+        b.call(w.total, &[bumped, zero])
+    });
+    let five = p.intern_number(w.nat, 5).unwrap();
+    let found = p.declare("found", &[w.list], w.nat);
+    p.define(found, |b, args| {
+        let empty = b.con(w.nil, &[]);
+        let bumped = b.call(w.bump, &[args[0], empty]);
+        let zero = b.con(w.zero, &[]);
+        let more = b.con(w.nil, &[]);
+        let sums = b.call(w.running, &[bumped, zero, more]);
+        let five = b.known(five);
+        b.call(w.index_over, &[sums, five, zero])
+    });
+    validate(&p).unwrap();
+    let original = p.clone();
+    super::fuse::fuse(&mut p);
+    validate(&p).unwrap();
+    for id in [summed, found] {
+        let called = callees(&p, id);
+        assert_eq!(called.len(), 1, "one walk, not {called:?}");
+        let name = p.name(p.function(called[0]).name);
+        assert!(name.starts_with("bump+"), "{name}");
+        for values in [&[][..], &[0], &[1, 2, 3], &[4, 0, 9, 1]] {
+            let args = vec![w.list_of(&original, values)];
+            let expected = run(&original, id, args.clone(), &mut vec![]);
+            assert_eq!(run(&p, id, args, &mut vec![]), expected, "{values:?}");
+        }
+    }
+    // The chain became one walk doing all three steps.
+    let chained = callees(&p, found)[0];
+    assert_eq!(p.name(p.function(chained).name), "bump+running+index_over");
+}
+
+/// A list read twice is built once and read twice: fusing it into one
+/// reader would leave the other nothing to read.
+#[test]
+fn a_list_read_twice_is_built() {
+    let (mut p, w) = walks();
+    let twice = p.declare("twice", &[w.list], w.nat);
+    p.define(twice, |b, args| {
+        let empty = b.con(w.nil, &[]);
+        let bumped = b.call(w.bump, &[args[0], empty]);
+        let zero = b.con(w.zero, &[]);
+        let first = b.call(w.total, &[bumped, zero]);
+        let second = b.call(w.total, &[bumped, zero]);
+        b.call(w.add, &[first, second])
+    });
+    super::fuse::fuse(&mut p);
+    validate(&p).unwrap();
+    assert!(callees(&p, twice).contains(&w.bump));
+}
+
+/// A walk reaching something outside may do something while it walks, so
+/// what it does is neither interleaved with another walk nor cut short.
+#[test]
+fn a_walk_reaching_a_bodyless_call_is_not_fused() {
+    let (mut p, w) = walks();
+    let effect = p.declare("effect!", &[w.nat], w.nat);
+    let noisy = p.declare("noisy", &[w.list, w.nat], w.nat);
+    p.define(noisy, |b, args| {
+        b.match_(args[0], w.list, |b, ctor, fields| {
+            if ctor == w.nil {
+                args[1]
+            } else {
+                let said = b.call(effect, &[fields[0]]);
+                let sum = b.call(w.add, &[args[1], said]);
+                b.call(noisy, &[fields[1], sum])
+            }
+        })
+    });
+    let main = p.declare("main", &[w.list], w.nat);
+    p.define(main, |b, args| {
+        let empty = b.con(w.nil, &[]);
+        let bumped = b.call(w.bump, &[args[0], empty]);
+        let zero = b.con(w.zero, &[]);
+        b.call(noisy, &[bumped, zero])
+    });
+    super::fuse::fuse(&mut p);
+    validate(&p).unwrap();
+    assert!(callees(&p, main).contains(&w.bump));
+}
+
+/// A definition taking two numbers down together until one is nought is
+/// what its base cases answer for the two differences, and calls itself no
+/// more; a caller may then take it in whole.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "two definitions of the shape, rewritten and compared on every small pair"
+)]
+fn a_descent_of_two_numbers_is_their_differences() {
+    let library = super::fixture::Library::new();
+    let (nat, zero, succ, bool_) = (library.nat, library.zero, library.succ, library.bool_);
+    let (false_, true_) = (library.false_, library.true_);
+    let mut p = library.program;
+    // at_most(a b): whether a <= b, by taking both down.
+    let at_most = p.declare("at_most", &[nat, nat], bool_);
+    p.define(at_most, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                b.con(true_, &[])
+            } else {
+                let x = fields[0];
+                b.match_(args[1], nat, |b, ctor, fields| {
+                    if ctor == zero {
+                        b.con(false_, &[])
+                    } else {
+                        b.call(at_most, &[x, fields[0]])
+                    }
+                })
+            }
+        })
+    });
+    // gap(a b): b - a where a <= b, and a - b past it, plus one.
+    let gap = p.declare("gap", &[nat, nat], nat);
+    p.define(gap, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                args[1]
+            } else {
+                let x = fields[0];
+                b.match_(args[1], nat, |b, ctor, fields| {
+                    if ctor == zero {
+                        b.con(succ, &[x])
+                    } else {
+                        b.call(gap, &[x, fields[0]])
+                    }
+                })
+            }
+        })
+    });
+    validate(&p).unwrap();
+    let original = p.clone();
+    super::descent::descend(&mut p);
+    validate(&p).unwrap();
+    for id in [at_most, gap] {
+        assert!(!callees(&p, id).contains(&id), "no longer calls itself");
+        for a in 0..5 {
+            for c in 0..5 {
+                let args = vec![super::tests::nat(&p, nat, a), super::tests::nat(&p, nat, c)];
+                let expected = run(&original, id, args.clone(), &mut vec![]);
+                assert_eq!(run(&p, id, args, &mut vec![]), expected, "({a} {c})");
+            }
+        }
+    }
+}
+
+/// A match on a value written as a constructor takes that constructor's
+/// arm, and one whose arms bind nothing and say the same is that arm.
+#[test]
+fn a_decided_match_is_its_arm() {
+    let library = super::fixture::Library::new();
+    let (nat, zero, succ) = (library.nat, library.zero, library.succ);
+    let (bool_, add) = (library.bool_, library.add);
+    let mut p = library.program;
+    let decided = p.declare("decided", &[nat, bool_], nat);
+    p.define(decided, |b, args| {
+        let one = b.con(zero, &[]);
+        let one = b.con(succ, &[one]);
+        // Known to be a step: its arm, with the field that built it.
+        let known = b.match_(one, nat, |b, ctor, fields| {
+            if ctor == zero {
+                b.con(zero, &[])
+            } else {
+                b.call(add, &[fields[0], args[0]])
+            }
+        });
+        // Either way the same.
+        b.match_(args[1], bool_, |b, _, _| b.call(add, &[known, known]))
+    });
+    validate(&p).unwrap();
+    let original = p.clone();
+    super::structural(&mut p);
+    validate(&p).unwrap();
+    let body = p.function(decided).body().unwrap();
+    let mut exprs: Vec<_> = p.bindings(body.bindings).to_vec();
+    exprs.push(body.tail);
+    assert!(
+        exprs
+            .iter()
+            .all(|&expr| !matches!(p.expr(expr), Expr::Match(..))),
+        "{}",
+        p.render()
+    );
+    for n in 0..3 {
+        for flag in [0, 1] {
+            let flag = Value(p.ctor_at(bool_, flag), vec![]);
+            let args = vec![super::tests::nat(&p, nat, n), flag];
+            let expected = run(&original, decided, args.clone(), &mut vec![]);
+            assert_eq!(run(&p, decided, args, &mut vec![]), expected);
+        }
+    }
 }

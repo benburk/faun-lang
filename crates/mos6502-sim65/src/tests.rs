@@ -50,7 +50,7 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("double", 17),
     ("leave", 17),
     ("bool", 88),
-    ("nat", 285),
+    ("nat", 187),
     ("width", 48),
     ("argc", 48),
     ("expressions", 50),

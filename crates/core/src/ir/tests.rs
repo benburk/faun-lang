@@ -300,8 +300,14 @@ fn a_value_too_wide_for_a_routine_is_refused() {
     assert!(refused.contains("`narrow`"), "{refused}");
 }
 
-/// A payload-carrying constructor is a cell, not merely its tag.
+/// A payload-carrying constructor is its tag and its payload, not merely
+/// its tag: a sum of numbers is a tagged union, whose slot is as wide as
+/// what the routine read answers.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture declares its types and host, builds the program, and checks its signature"
+)]
 fn a_constructor_that_carries_something_is_not_a_tag() {
     let routines = crate::platform::Routines::builtin();
     let mut source = barb::Program::default();
@@ -331,8 +337,24 @@ fn a_constructor_that_carries_something_is_not_a_tag() {
     });
     source.set_entry(main);
     let program = lower(&mut source, &routines).unwrap();
-    assert!(program.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
-    assert!(program.classes.as_slice().contains(&Class::Cell));
+    let unwrap = program
+        .functions()
+        .iter()
+        .find(|function| program.name(function.name) == "unwrap")
+        .unwrap();
+    assert_eq!(
+        program.signature(unwrap.params),
+        [
+            Class::fixed(1),
+            Class::Held(barb::Bounds {
+                low: 0,
+                high: Some(511)
+            })
+        ],
+        "{}",
+        program.render()
+    );
+    assert!(!program.ops.iter().any(|op| matches!(op, Op::Cell { .. })));
 }
 
 /// What a routine reads is what the name means, not what a program hands

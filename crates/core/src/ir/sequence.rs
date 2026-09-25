@@ -15,8 +15,11 @@
 //! Pushing onto a buffer nothing else holds writes into the free element in
 //! front of the sequence, releasing whatever an earlier, longer sequence
 //! left there. Otherwise, or where there is no room, the sequence is copied
-//! into a new buffer with as much room in front as it has elements, so a
-//! run of pushes copies each element a bounded number of times.
+//! into a new buffer with as much room in front as it has elements, and at
+//! least [`MINIMUM_CAPACITY`], so a run of pushes copies each element a
+//! bounded number of times. Where an element's leaves are all scalars, the
+//! push writes the first case itself and calls for the second, a copy of
+//! scalars is a copy of words, and a release walks no elements.
 
 use std::collections::BTreeMap;
 
@@ -29,6 +32,10 @@ const W: Class = Class::Word;
 
 /// The first word after the header that holds a kind.
 const KINDS: u64 = 5;
+
+/// The fewest elements a buffer grows to, so that one begun empty is not
+/// copied at two elements, then four, then eight.
+const MINIMUM_CAPACITY: u64 = 8;
 
 /// The generated routines: one release, and one reservation per element
 /// layout, by the kinds of its leaves.
@@ -44,6 +51,59 @@ impl Library {
     /// If the layout was not declared when the library was appended.
     pub(super) fn reserve(&self, kinds: &[u64]) -> FunctionId {
         self.reserve[kinds]
+    }
+
+    /// Make room for one element of `kinds` in front of the last `len`
+    /// elements of `buffer`, whose claim this takes, as the reservation
+    /// routine does: answering a buffer nothing else holds with that slot
+    /// free.
+    ///
+    /// Where every leaf is a scalar, the common case is written here rather
+    /// than called: a buffer nothing else holds with room in front is
+    /// written in place, and the slot needs only counting as held, since a
+    /// scalar left there by a longer sequence holds no claim to give up.
+    /// Anything else is the routine's.
+    pub(super) fn room(
+        &self,
+        b: &mut Builder<'_>,
+        kinds: &[u64],
+        buffer: ValueId,
+        len: ValueId,
+    ) -> ValueId {
+        let reserve = self.reserve(kinds);
+        if kinds.iter().any(|&kind| kind != cell::SCALAR) {
+            return b.call_one(reserve, &[buffer, len]);
+        }
+        let refs = b.load(Width::Word, buffer, Offset::Words(1));
+        let capacity = b.load(Width::Word, buffer, Offset::Words(2));
+        let one = number(b, 1);
+        let alone = b.compare(Relation::Equal, refs, one);
+        let room = b.compare(Relation::Less, len, capacity);
+        let both = b.binary(Binary::Mul, alone, room);
+        b.if_(
+            both,
+            &[A],
+            |b| {
+                let before = b.binary(Binary::Sub, capacity, len);
+                let slot = b.binary(Binary::Sub, before, one);
+                let low = b.load(Width::Word, buffer, Offset::Words(3));
+                let fresh = b.compare(Relation::Less, slot, low);
+                b.if_(
+                    fresh,
+                    &[],
+                    |b| {
+                        b.store(Width::Word, buffer, Offset::Words(3), slot);
+                        b.yield_(&[]);
+                    },
+                    |b| b.yield_(&[]),
+                );
+                b.yield_(&[buffer]);
+            },
+            |b| {
+                let room = b.call_one(reserve, &[buffer, len]);
+                b.yield_(&[room]);
+            },
+        )[0]
     }
 }
 
@@ -65,6 +125,7 @@ pub(super) fn append(
     let word = Word {
         bytes: u64::from(word_bits / 8),
         naturals: naturals.release,
+        half: naturals.half,
         cells: cells.release,
         buffers: release,
     };
@@ -91,6 +152,8 @@ pub(super) fn append(
 struct Word {
     bytes: u64,
     naturals: FunctionId,
+    /// Where immediate naturals begin, which hold no claim.
+    half: u64,
     cells: FunctionId,
     buffers: FunctionId,
 }
@@ -104,8 +167,28 @@ impl Word {
             cell::BUFFER => self.buffers,
             _ => return,
         };
+        if kind == cell::NATURAL {
+            let small = self.small(b, value);
+            b.if_(
+                small,
+                &[],
+                |b| b.yield_(&[]),
+                |b| {
+                    let value = b.convert(A, value);
+                    b.call(function, &[value]);
+                    b.yield_(&[]);
+                },
+            );
+            return;
+        }
         let value = b.convert(A, value);
         b.call(function, &[value]);
+    }
+
+    /// One where a word holds an immediate natural rather than an object.
+    fn small(self, b: &mut Builder<'_>, value: ValueId) -> ValueId {
+        let below = number(b, self.half - 1);
+        b.compare(Relation::Less, below, value)
     }
 }
 
@@ -188,6 +271,10 @@ pub(super) fn allocate(
 
 /// Release a buffer: where this is the last claim, every element it holds
 /// claims for, then the block.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the generated release routine keeps its walk and object layout together"
+)]
 fn define_release(program: &mut Program, word: Word) {
     let word_bits = u16::try_from(word.bytes * 8).expect("a word width");
     program.define(word.buffers, |b, args| {
@@ -206,20 +293,31 @@ fn define_release(program: &mut Program, word: Word) {
                 let end = b.binary(Binary::Mul, capacity, stride);
                 let kinds = number(b, KINDS);
                 let slots = b.binary(Binary::Add, kinds, stride);
-                b.loop_(&[first], &[], |b, state| {
-                    let at = state[0];
-                    let done = b.compare(Relation::Equal, at, end);
-                    b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                    let leaf = b.binary(Binary::Mod, at, stride);
-                    let kind_word = b.binary(Binary::Add, kinds, leaf);
-                    let kind = load_word(b, object, kind_word, word_bits);
-                    let slot = b.binary(Binary::Add, slots, at);
-                    let value = load_word(b, object, slot, word_bits);
-                    release_by_kind(b, word, kind, value);
-                    let one = number(b, 1);
-                    let next = b.binary(Binary::Add, at, one);
-                    b.continue_(&[next]);
-                });
+                // A buffer of scalars holds no claims, and its elements are
+                // not worth a walk to find that out one at a time.
+                let holds = holds_claims(b, object, stride, word_bits);
+                b.if_(
+                    holds,
+                    &[],
+                    |b| {
+                        b.loop_(&[first], &[], |b, state| {
+                            let at = state[0];
+                            let done = b.compare(Relation::Equal, at, end);
+                            b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+                            let leaf = b.binary(Binary::Mod, at, stride);
+                            let kind_word = b.binary(Binary::Add, kinds, leaf);
+                            let kind = load_word(b, object, kind_word, word_bits);
+                            let slot = b.binary(Binary::Add, slots, at);
+                            let value = load_word(b, object, slot, word_bits);
+                            release_by_kind(b, word, kind, value);
+                            let one = number(b, 1);
+                            let next = b.binary(Binary::Add, at, one);
+                            b.continue_(&[next]);
+                        });
+                        b.yield_(&[]);
+                    },
+                    |b| b.yield_(&[]),
+                );
                 b.yield_(&[]);
             },
             |b| b.yield_(&[]),
@@ -227,6 +325,25 @@ fn define_release(program: &mut Program, word: Word) {
         b.call(word.naturals, &[object]);
         b.ret(&[]);
     });
+}
+
+/// Whether any leaf of a buffer's elements is of a kind holding a claim:
+/// one where it is, nought where every leaf is a scalar.
+fn holds_claims(b: &mut Builder<'_>, object: ValueId, stride: ValueId, word_bits: u16) -> ValueId {
+    let zero = number(b, 0);
+    b.loop_(&[zero], &[W], |b, state| {
+        let leaf = state[0];
+        let done = b.compare(Relation::Equal, leaf, stride);
+        b.if_(done, &[], |b| b.break_(&[zero]), |b| b.yield_(&[]));
+        let kinds = number(b, KINDS);
+        let at = b.binary(Binary::Add, kinds, leaf);
+        let kind = load_word(b, object, at, word_bits);
+        let scalar = number(b, cell::SCALAR);
+        let plain = b.compare(Relation::Equal, kind, scalar);
+        let one = number(b, 1);
+        let next = b.binary(Binary::Add, leaf, one);
+        b.if_(plain, &[], |b| b.continue_(&[next]), |b| b.break_(&[one]));
+    })[0]
 }
 
 /// Release `value` by a kind read while the program runs.
@@ -326,7 +443,17 @@ fn define_reserve(
                 // element it copies, then give up this one.
                 let grown = b.binary(Binary::Add, len, one);
                 let two = number(b, 2);
-                let fresh_capacity = b.binary(Binary::Mul, grown, two);
+                let doubled = b.binary(Binary::Mul, grown, two);
+                // A buffer only just begun grows a few times before it
+                // holds anything worth copying; begin it with some room.
+                let least = number(b, MINIMUM_CAPACITY);
+                let small = b.compare(Relation::Less, doubled, least);
+                let fresh_capacity = b.if_(
+                    small,
+                    &[W],
+                    |b| b.yield_(&[least]),
+                    |b| b.yield_(&[doubled]),
+                )[0];
                 let fresh = allocate(b, allocate_block, kinds, fresh_capacity, word.bytes);
                 let slot = b.binary(Binary::Sub, fresh_capacity, grown);
                 b.store(Width::Word, fresh, Offset::Words(3), slot);
@@ -337,6 +464,23 @@ fn define_reserve(
                 let to = element_word(b, stride, to_element);
                 let words = b.binary(Binary::Mul, len, stride);
                 let zero = number(b, 0);
+                // Scalars hold no claims: copying them is copying words.
+                if kinds.iter().all(|&kind| kind == cell::SCALAR) {
+                    b.loop_(&[zero], &[], |b, state| {
+                        let at = state[0];
+                        let done = b.compare(Relation::Equal, at, words);
+                        b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+                        let source = b.binary(Binary::Add, from, at);
+                        let value = load_word(b, object, source, word_bits);
+                        let target = b.binary(Binary::Add, to, at);
+                        store_word(b, fresh, target, value, word_bits);
+                        let next = b.binary(Binary::Add, at, one);
+                        b.continue_(&[next]);
+                    });
+                    b.call(word.buffers, &[object]);
+                    b.yield_(&[fresh]);
+                    return;
+                }
                 b.loop_(&[zero], &[], |b, state| {
                     let at = state[0];
                     let done = b.compare(Relation::Equal, at, words);
@@ -349,6 +493,12 @@ fn define_reserve(
                     let kind = load_word(b, fresh, kind_word, word_bits);
                     let scalar = number(b, cell::SCALAR);
                     let plain = b.compare(Relation::Equal, kind, scalar);
+                    // An immediate natural holds no claim to take.
+                    let natural = number(b, cell::NATURAL);
+                    let is_natural = b.compare(Relation::Equal, kind, natural);
+                    let small = word.small(b, value);
+                    let immediate = b.binary(Binary::Mul, is_natural, small);
+                    let plain = b.binary(Binary::Add, plain, immediate);
                     b.if_(
                         plain,
                         &[],
