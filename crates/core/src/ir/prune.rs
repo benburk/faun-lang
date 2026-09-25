@@ -31,14 +31,14 @@ struct Prune {
 impl rewrite::Pass for Prune {
     fn op(
         &mut self,
-        _: &rewrite::Rebuild<'_>,
+        rebuild: &rewrite::Rebuild<'_>,
         _: &mut super::Builder,
         op: Op,
         results: &[ValueId],
     ) -> bool {
         // Writing nothing and saying nothing about the old results is how
         // an instruction goes away: nothing left reads them.
-        !self.read.wanted(&op, results)
+        !self.read.wanted(rebuild.source(), &op, results)
     }
 }
 
@@ -63,8 +63,11 @@ impl Read {
     }
 
     /// Whether an instruction is one the rebuild writes again.
-    fn wanted(&self, op: &Op, results: &[ValueId]) -> bool {
+    fn wanted(&self, source: &Program, op: &Op, results: &[ValueId]) -> bool {
         match *op {
+            Op::Call { function, .. } if source.function(function).inert => {
+                results.iter().any(|value| self.values[value.index()])
+            }
             Op::Store { .. } | Op::Call { .. } | Op::Loop { .. } => true,
             Op::If { then_region, .. } => self.regions[then_region.index()],
             _ => results.iter().any(|value| self.values[value.index()]),
@@ -113,6 +116,7 @@ impl Read {
     fn needed(&self, source: &Program, op: &Op, results: &[ValueId]) -> bool {
         let answered = || results.iter().any(|value| self.values[value.index()]);
         match *op {
+            Op::Call { function, .. } if source.function(function).inert => answered(),
             Op::Store { .. } | Op::Call { .. } | Op::Loop { .. } => true,
             Op::If {
                 then_region,

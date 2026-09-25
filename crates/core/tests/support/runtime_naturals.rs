@@ -147,7 +147,7 @@ const SQUARES: &str = "import std.host {Host}
                          e = square(d)
                          f = square(e)
                          huge = square(f)
-                         count = host.argc
+                         count = host.args.len()
                          product = huge * count
                          quotient = product / huge
                          host.exit!(quotient.equals(1).to_nat())";

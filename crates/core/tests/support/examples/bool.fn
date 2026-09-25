@@ -13,6 +13,6 @@ down(Succ(k)) -> k
 
 main! : Host -> []
 main!(host) ->
-  n = host.argc
+  n = host.args.len()
   held = False.not().and(False.or(is_zero(down(n))))
   host.exit!(held.select(4 0))

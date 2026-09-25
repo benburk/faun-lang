@@ -71,8 +71,9 @@ fn types(out: &mut Bytes, code: &Code) {
             let (params, returns) = match *name {
                 // (fd, iovs, iovs_len, transferred)
                 "fd_write" | "fd_read" => (4, 1),
-                "proc_exit" => (1, 0),      // (status)
-                "args_sizes_get" => (2, 1), // (argc_out, argv_size_out)
+                "proc_exit" => (1, 0), // (status)
+                // (argc_out, argv_size_out), and (argv, argv_buf)
+                "args_sizes_get" | "args_get" => (2, 1),
                 other => panic!("no signature for `{other}`"),
             };
             signature(s, params, returns);

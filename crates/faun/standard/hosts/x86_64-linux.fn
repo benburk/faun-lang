@@ -11,7 +11,8 @@
 
 exports {Host Stdin Stdout Stderr IoError.*}
 
-Host : {argc: Nat}.(
+# The arguments the program was run with, its own name first.
+Host : {args: List(Str)}.(
   exit! : Host Nat -> []
 
   stdin : Host -> Stdin

@@ -26,5 +26,20 @@ pub fn lower_to_machine_ir(
 ) -> Result<ir::Program, String> {
     let held = ir::lower(program, routines)?;
     ir::validate(&held)?;
-    Ok(ir::optimize(&held))
+    let optimized = ir::optimize(&held);
+    // A program that reads only how many arguments it has keeps no call
+    // making them a list, and is lowered again without one, so that what
+    // it holds is what it would have held counting them.
+    let made = optimized
+        .functions()
+        .iter()
+        .position(|function| optimized.name(function.name) == ir::MAKE_ARGUMENTS);
+    if let Some(made) = made
+        && !optimized.calls(ir::FunctionId::at(made))
+    {
+        let counted = ir::lower_counting_arguments(program, routines)?;
+        ir::validate(&counted)?;
+        return Ok(ir::optimize(&counted));
+    }
+    Ok(optimized)
 }

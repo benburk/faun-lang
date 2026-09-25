@@ -21,15 +21,15 @@ const RUNGS: [(&str, &str); 4] = [
     ),
     (
         "the count",
-        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.argc\n  host.exit!(count)\n",
+        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!(count)\n",
     ),
     (
         "the count and a constant",
-        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.argc\n  host.exit!((count + 4) % 256)\n",
+        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!((count + 4) % 256)\n",
     ),
     (
         "the low bits of a sum",
-        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.argc\n  host.exit!((count + count) % 256)\n",
+        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!((count + count) % 256)\n",
     ),
 ];
 

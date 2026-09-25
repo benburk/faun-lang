@@ -1872,18 +1872,21 @@ mod tests {
             let mut program = lower_package_to_barb(&checked, first_order, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
-            // `Host` holds the startup values its target produces; `main!` is
-            // the entry as written, and a routine is asked with the `Host`
-            // it was handed, as the source says.
-            assert!(rendered.starts_with("Nat = Zero | Succ(Nat)\nHost = Host(argc: Nat)\n\n"));
+            // `Host` holds what its target hands the program; `main!` is the
+            // entry as written, and a routine is asked with the `Host` it
+            // was handed, as the source says.
+            assert!(
+                rendered.contains("\nHost = Host(args: List<Str>)\n"),
+                "{rendered}"
+            );
             assert!(rendered.contains("main!(v0: Host) -> [] ="), "{rendered}");
             assert!(rendered.contains("Host.exit!(v0: Host, v1: Nat) -> [] = <elsewhere>"));
-            assert!(rendered.contains("Host.exit!(v0, v1)"), "{rendered}");
+            assert!(rendered.contains("Host.exit!(v0, v2)"), "{rendered}");
             assert!(!rendered.contains("start"));
             assert!(!rendered.contains('$'));
             let machine = faun_core::lower_to_machine_ir(&mut program.clone(), &routines).unwrap();
-            // The target produces `argc` into the entry's frame, as wide as
-            // its word.
+            // A program reading only how many arguments it has is handed
+            // `argc` alone, into the entry's frame, as wide as its word.
             let entry = machine.entry();
             assert_eq!(machine.parameter_names(entry).collect::<Vec<_>>(), ["argc"]);
             let body = machine.function(entry).body().unwrap();

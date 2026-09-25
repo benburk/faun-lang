@@ -317,6 +317,10 @@ pub struct Function {
     pub(super) parameters: Range,
     pub returns: Returns<Range>,
     pub definition: Definition,
+    /// Whether a call of it does nothing but answer, so that a call whose
+    /// answer nothing reads may go. Only a body this tier writes itself is,
+    /// since nothing below can tell what a body does beyond answering.
+    pub inert: bool,
 }
 
 impl Function {

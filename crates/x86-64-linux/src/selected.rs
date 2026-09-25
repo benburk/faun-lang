@@ -145,6 +145,8 @@ pub(crate) enum Opcode {
     Exit,
     Grow,
     ArgumentCount,
+    /// Where the arguments' addresses lie: just past the count.
+    ArgumentVector,
     ReadByte,
 }
 
@@ -216,6 +218,10 @@ impl Opcode {
             | Self::Equal
             | Self::Below => Effects::PURE,
             Self::Add | Self::Subtract | Self::Monus | Self::Shift => arithmetic,
+            Self::ArgumentVector => Effects {
+                clobbers: RegSet::of(&[Reg::Rcx]),
+                ..arithmetic
+            },
             Self::Multiply | Self::Divide | Self::Modulo => Effects {
                 clobbers: RegSet::of(&[Reg::Rdx]),
                 ..arithmetic
@@ -267,7 +273,8 @@ impl Opcode {
             | Self::TakeIn
             | Self::Exit
             | Self::Grow
-            | Self::ReadByte => Expansion::Sequence,
+            | Self::ReadByte
+            | Self::ArgumentVector => Expansion::Sequence,
             _ => Expansion::Single,
         };
         let scratch = match self {
@@ -277,6 +284,7 @@ impl Opcode {
             Self::Exit => RegSet::of(&[Reg::Rax]),
             Self::Grow => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10, Reg::R8, Reg::R9]),
             Self::ReadByte => RegSet::of(&[Reg::Rax, Reg::Rcx, Reg::Rdi, Reg::Rsi]),
+            Self::ArgumentVector => RegSet::of(&[Reg::Rcx]),
             _ => RegSet(0),
         };
         Requirements {
@@ -592,7 +600,11 @@ impl Selected {
     fn verify_inst_shape(&self, inst: Inst, id: InstId) -> Result<(), String> {
         let uses = self.operands[inst.operands.range()].len();
         let expected = match inst.opcode {
-            Opcode::Constant | Opcode::DataAddress | Opcode::ArgumentCount | Opcode::ReadByte => 0,
+            Opcode::Constant
+            | Opcode::DataAddress
+            | Opcode::ArgumentCount
+            | Opcode::ArgumentVector
+            | Opcode::ReadByte => 0,
             Opcode::Load | Opcode::Convert | Opcode::Shift | Opcode::Exit | Opcode::Grow => 1,
             Opcode::Add
             | Opcode::Subtract
@@ -1014,7 +1026,8 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             | Opcode::Multiply
             | Opcode::Divide
             | Opcode::Modulo
-            | Opcode::Shift => effects.flags == Access::Write,
+            | Opcode::Shift
+            | Opcode::ArgumentVector => effects.flags == Access::Write,
             Opcode::DataAddress
             | Opcode::Equal
             | Opcode::Below
@@ -1059,6 +1072,7 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
                     | Opcode::Exit
                     | Opcode::Grow
                     | Opcode::ArgumentCount
+                    | Opcode::ArgumentVector
                     | Opcode::ReadByte,
                 Immediate::None
             )
@@ -1162,14 +1176,12 @@ impl Selector<'_> {
     ) -> Result<BlockId, String> {
         if program_entry {
             let block = self.block(owner, &[]);
-            for &value in params {
-                self.emit(
-                    block,
-                    Opcode::ArgumentCount,
-                    Some(value),
-                    &[],
-                    Immediate::None,
-                );
+            // The count, then where the arguments' addresses lie.
+            for (&value, opcode) in params
+                .iter()
+                .zip([Opcode::ArgumentCount, Opcode::ArgumentVector])
+            {
+                self.emit(block, opcode, Some(value), &[], Immediate::None);
             }
             return Ok(block);
         }

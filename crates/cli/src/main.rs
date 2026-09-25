@@ -39,6 +39,8 @@ enum Command {
     Run {
         target: &'static dyn Target,
         source: PathBuf,
+        /// What the program is run with, after its own name.
+        args: Vec<String>,
     },
     Emit {
         target: &'static dyn Target,
@@ -133,10 +135,17 @@ fn cli() -> OptionParser<Command> {
 
     let target = target_parser();
     let source = positional::<PathBuf>("PATH").help("The source file to compile and run");
-    let run = construct!(Command::Run { target, source })
-        .to_options()
-        .descr("Compile a Faun program for the selected machine and run it")
-        .command("run");
+    let args = positional::<String>("ARGS")
+        .help("What the program is run with; after `--`, even what looks like an option")
+        .many();
+    let run = construct!(Command::Run {
+        target,
+        source,
+        args
+    })
+    .to_options()
+    .descr("Compile a Faun program for the selected machine and run it")
+    .command("run");
 
     choice([
         check.boxed(),
@@ -168,7 +177,11 @@ fn dispatch(command: Command) -> Result<(), String> {
             output,
             target,
         } => build(&source, target, &output),
-        Command::Run { source, target } => run(&source, target),
+        Command::Run {
+            source,
+            target,
+            args,
+        } => run(&source, target, &args),
         Command::Emit {
             target,
             stage,
@@ -201,7 +214,7 @@ fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), String
 }
 
 /// Compile for the machine this runs on, run it, and exit as it did.
-fn run(source: &Path, target: &dyn Target) -> Result<(), String> {
+fn run(source: &Path, target: &dyn Target, args: &[String]) -> Result<(), String> {
     if NATIVE.is_none_or(|native| native.name() != target.name()) {
         return Err(format!(
             "{} programs do not run on this machine",
@@ -214,6 +227,7 @@ fn run(source: &Path, target: &dyn Target) -> Result<(), String> {
         .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
     let status = write(target, &image, &directory.join("program")).and_then(|program| {
         Process::new(&program)
+            .args(args)
             .status()
             .map_err(|error| format!("cannot run {}: {error}", program.display()))
     });

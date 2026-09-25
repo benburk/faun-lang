@@ -349,6 +349,12 @@ impl Routines {
                 name: "argc".to_owned(),
                 class: Class::Word,
             },
+            // Where the arguments' addresses lie, one word each, and each
+            // argument where its address says, ended by a nought byte.
+            Startup {
+                name: "argv".to_owned(),
+                class: Class::Address,
+            },
         ];
         Self {
             contracts,

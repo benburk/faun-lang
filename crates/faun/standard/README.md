@@ -116,7 +116,7 @@ diverge as targets offer different capabilities. Each declares Ori's host
 streams:
 
 ```
-Host : {argc: Nat}.(
+Host : {args: List(Str)}.(
   exit! : Host Nat -> []
   stdin : Host -> Stdin
   stdout : Host -> Stdout
@@ -166,15 +166,16 @@ stream routine on its primitive through a scratch region of one run, and keeps
 the last error for the host module to ask after. What a routine answers as a
 byte string is known to be bytes wherever a program reads them.
 
-`Host` is authority carrying the startup values its target produces. A field
-such as `host.argc` is read like any record field; the target produces it into
-the entry's frame before `main!` runs, and nothing asks for it again. In Barb,
-`Host` holds its fields itself, `Host(argc: Nat)`, and `main!` is the entry as
-written; nothing there says how wide `argc` is. Machine lowering recognizes a
-field named for one of the target's startup values, holds it as the target's
-startup table says, names the entry's parameter for it, and drops the ones
-nothing reads, so a target produces only the startup values a program uses. A
-read field the target cannot produce is refused by the target.
+`Host` is authority carrying what its target hands the program: `host.args`,
+the arguments it was run with, its own name first, read like any record
+field. `host.args.len()` is how many there are, and
+`host.args.get_or(1 "world")` the first after its name. In Barb, `Host` holds
+its fields itself, `Host(args: List<Str>)`, and `main!` is the entry as
+written. A target hands the entry the arguments as C lays them out, a count
+and where their addresses lie, as its startup table says; machine lowering
+makes them the list of strings where the entry begins, once, and only for a
+program that reads them. One that reads only how many there are is handed the
+count alone and makes no list, and one that reads neither is handed nothing.
 
 `Host`'s bodyless methods are the effects the target answers for, called as
 `host.stdout.write_all!(bytes)`. A program orders its effects by threading `Host` through
@@ -182,4 +183,4 @@ them. Barb calls each routine with the `Host` it was handed, as the source
 says, and keeps the order and number of calls to anything bodyless. A routine
 asked with authority reads nothing of it, so machine lowering hands nothing
 for it, and passing `Host` along is not reading what it carries: a program
-that never reads `host.argc` makes its target produce nothing.
+that never reads `host.args` makes its target produce nothing.

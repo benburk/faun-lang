@@ -67,6 +67,18 @@ fn bits(class: Class) -> u16 {
     class.bits(WORD_BITS)
 }
 
+/// The entry's second parameter, where it asks where the arguments lie.
+fn entry_argv(program: &Program) -> Option<ValueId> {
+    let entry = program.entry();
+    (program.parameter_names(entry).nth(1) == Some("argv")).then(|| {
+        let body = program
+            .function(entry)
+            .body()
+            .expect("the entry has a body");
+        program.values(program.region(body).params)[1]
+    })
+}
+
 fn entry_argc(program: &Program) -> Option<ValueId> {
     let entry = program.entry();
     (program.parameter_names(entry).next() == Some("argc")).then(|| {
@@ -131,6 +143,9 @@ pub(crate) fn lower(program: &Program) -> Code {
     }
     if entry_argc(program).is_some() {
         state.imports.push("args_sizes_get");
+    }
+    if entry_argv(program).is_some() {
+        state.imports.push("args_get");
     }
 
     let bodies = state.bodies();
@@ -391,6 +406,9 @@ impl Lowering<'_> {
                 && let Some(argc) = entry_argc(self.program)
             {
                 self.count(argc);
+                if let Some(argv) = entry_argv(self.program) {
+                    self.vector(argc, argv);
+                }
             }
             self.region(body);
             // Wasm does not infer that both branches return, or that a
@@ -791,6 +809,38 @@ impl Lowering<'_> {
         self.constant_i32(ARGC);
         self.access(Width::Word, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
         self.set(result);
+    }
+
+    /// The arguments, in fresh pages: their addresses, then their text.
+    /// `args_sizes_get` left how long the text is in the cell beside the
+    /// count, and the addresses take a word each.
+    fn vector(&mut self, count: ValueId, addresses: ValueId) {
+        self.push(count);
+        self.constant_i32(WORD);
+        self.body.byte(I32_MUL);
+        self.constant_i32(NWRITTEN);
+        self.access(Width::Word, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.body.byte(I32_ADD);
+        self.constant_i32((1 << PAGE_BITS) - 1);
+        self.body.byte(I32_ADD);
+        self.constant_i32(PAGE_BITS);
+        self.body.byte(I32_SHR_U);
+        self.body.byte(MEMORY_GROW);
+        self.body.uleb(0);
+        self.constant_i32(PAGE_BITS);
+        self.body.byte(I32_SHL);
+        self.set(addresses);
+        self.push(addresses);
+        self.push(addresses);
+        self.push(count);
+        self.constant_i32(WORD);
+        self.body.byte(I32_MUL);
+        self.body.byte(I32_ADD);
+        let get = self
+            .import("args_get")
+            .expect("the arguments import args_get");
+        self.call(get);
+        self.body.byte(DROP); // The errno, which there is nobody to tell.
     }
 
     fn access(&mut self, width: Width, offset: Offset, byte: u8, word: u8) {

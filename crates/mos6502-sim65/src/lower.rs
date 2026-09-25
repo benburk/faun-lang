@@ -509,6 +509,23 @@ impl Lowering<'_> {
         if self.program.reaches("grow") {
             self.set_pair(HEAP, heap);
         }
+        self.take_arguments(heap);
+
+        // An entry that leaves through the exit hook itself never comes back
+        // here, so there is nothing to write for after it: no result to read
+        // out of `R0`, and no second way out. It is written next, so running
+        // off the end of this is entering it.
+        if !self.program.comes_back(self.program.entry()) {
+            return;
+        }
+        let entry = self.starts[self.program.entry().index()];
+        self.asm.jsr(entry);
+        self.asm.lda_zp(R0);
+        self.asm.jmp_abs(HOOK_EXIT);
+    }
+
+    /// The count and the arguments, where the entry reads them.
+    fn take_arguments(&mut self, heap: u16) {
         // The hook is handed where to write the arguments themselves, in `A`
         // and `X`, and reads where the argument stack is from the pair the
         // image header named. Nothing has asked for memory yet, so it is
@@ -533,19 +550,19 @@ impl Lowering<'_> {
             if self.counts_wide() {
                 self.asm.stx_zp(ARGC + 1);
             }
+            // The simulator wrote the arguments on its C stack, and where
+            // their addresses lie at the place it was handed: that is the
+            // entry's second argument.
+            if self.entry_argv().is_some() {
+                self.set_pair(T0, heap);
+                self.asm.ldy_imm(0);
+                self.asm.lda_ind_y(T0);
+                self.asm.sta_zp(ARGS + 2);
+                self.asm.iny();
+                self.asm.lda_ind_y(T0);
+                self.asm.sta_zp(ARGS + 3);
+            }
         }
-
-        // An entry that leaves through the exit hook itself never comes back
-        // here, so there is nothing to write for after it: no result to read
-        // out of `R0`, and no second way out. It is written next, so running
-        // off the end of this is entering it.
-        if !self.program.comes_back(self.program.entry()) {
-            return;
-        }
-        let entry = self.starts[self.program.entry().index()];
-        self.asm.jsr(entry);
-        self.asm.lda_zp(R0);
-        self.asm.jmp_abs(HOOK_EXIT);
     }
 
     /// Whether anything reads more of the count than its low byte.
@@ -555,6 +572,19 @@ impl Lowering<'_> {
     /// program that asks the count narrows it.
     fn counts_wide(&self) -> bool {
         self.entry_argc().is_some_and(|value| self.wide(value))
+    }
+
+    /// The entry's second parameter, where it asks where the arguments lie.
+    fn entry_argv(&self) -> Option<ValueId> {
+        let entry = self.program.entry();
+        (self.program.parameter_names(entry).nth(1) == Some("argv")).then(|| {
+            let body = self
+                .program
+                .function(entry)
+                .body()
+                .expect("the entry has a body");
+            self.program.values(self.program.region(body).params)[1]
+        })
     }
 
     fn entry_argc(&self) -> Option<ValueId> {
@@ -660,6 +690,7 @@ impl Lowering<'_> {
             held.retain(|&value| value != argc);
             self.source[argc.index()] = Source::Home(ARGC);
         }
+
         // Value numbers are unique across the program, so what one function
         // marks cannot be mistaken for another's.
         self.mark(body, &uses);
@@ -677,7 +708,16 @@ impl Lowering<'_> {
         });
         held.sort_by_key(|value| (core::cmp::Reverse(weight[value.index()]), value.index()));
 
-        let spans = self.spans(body);
+        // A shared value lives where its partner does, so the place has to
+        // outlast both: one a call outlives makes the pair one too.
+        let mut spans = self.spans(body);
+        for &(value, param) in &shared {
+            let (first, last) = (spans.first[value.index()], spans.last[value.index()]);
+            if first <= last {
+                spans.touch(param, first);
+                spans.touch(param, last);
+            }
+        }
         let plan = self.place(&held, &spans)?;
         for (value, param) in shared {
             self.source[value.index()] = self.source[param.index()];

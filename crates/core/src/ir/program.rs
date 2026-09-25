@@ -208,6 +208,16 @@ impl Program {
         })
     }
 
+    /// Whether anything in the program calls `function`.
+    #[must_use]
+    pub fn calls(&self, function: FunctionId) -> bool {
+        self.functions
+            .iter()
+            .filter_map(Function::body)
+            .flat_map(|body| self.every(body))
+            .any(|op| matches!(*op, Op::Call { function: called, .. } if called == function))
+    }
+
     /// Whether anything in the program calls a routine by this name.
     #[must_use]
     pub fn reaches(&self, name: &str) -> bool {
@@ -394,6 +404,12 @@ impl Program {
         self.external_named(name, &params, returns)
     }
 
+    /// Say that a call of `function` does nothing but answer, so one whose
+    /// answer nothing reads may go.
+    pub fn mark_inert(&mut self, function: FunctionId) {
+        self.functions[function].inert = true;
+    }
+
     /// Declare an external with explicit parameter names.
     pub fn external_named(
         &mut self,
@@ -413,6 +429,7 @@ impl Program {
             parameters,
             returns,
             definition: Definition::External,
+            inert: false,
         })
     }
 
@@ -451,6 +468,7 @@ impl Program {
             parameters,
             returns: Returns::Values(returns),
             definition: Definition::Declared(body),
+            inert: false,
         })
     }
 

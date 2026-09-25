@@ -96,6 +96,7 @@ impl Target for Mos6502Sim65 {
             "read_byte!",
             "grow",
             "argc",
+            "argv",
         ]
     }
 
@@ -105,10 +106,10 @@ impl Target for Mos6502Sim65 {
 
     fn limits(&self, program: &Program) -> Result<(), String> {
         let entry = program.entry();
-        // Each entry parameter is a startup value, and argc is the only one
-        // this target produces.
+        // Each entry parameter is a startup value: the count, then where the
+        // arguments' addresses lie.
         for (at, name) in program.parameter_names(entry).enumerate() {
-            if at != 0 || name != "argc" {
+            if ![(0, "argc"), (1, "argv")].contains(&(at, name)) {
                 return Err(format!(
                     "mos6502-sim65 cannot supply entry parameter {at} `{name}`"
                 ));

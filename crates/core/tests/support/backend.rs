@@ -245,7 +245,7 @@ const PRODUCTS: &str = "import std.host {Host}
 
                         main! : Host -> []
                         main!(host) ->
-                          count = host.argc
+                          count = host.args.len()
                           flag = is_one(count)
                           start = T(swap(P(False flag)) True)
                           kept = unwrap(Just(start))
@@ -284,7 +284,7 @@ const NUMBER_PAIR: &str = "import std.host {Host}
 
                            main! : Host -> []
                            main!(host) ->
-                             count = host.argc
+                             count = host.args.len()
                              p = swap(P(small(count) 2))
                              host.exit!(both(p))";
 
@@ -325,7 +325,7 @@ const LIST: &str = "import std.host {Host}
 
                     main! : Host -> []
                     main!(host) ->
-                      c = host.argc
+                      c = host.args.len()
                       n = small(c)
                       counted = count(4 + n [])
                       host.exit!(head(turn(counted [])))";
@@ -357,7 +357,7 @@ const LENGTH: &str = "import std.host {Host}
                       count(Succ(k) acc) -> count(k [k *acc])
 
                       main! : Host -> []
-                      main!(host) -> host.exit!(count(4 + small(host.argc) []).len())";
+                      main!(host) -> host.exit!(count(4 + small(host.args.len()) []).len())";
 
 #[test]
 fn a_list_is_counted_by_the_length_it_holds() {
@@ -415,7 +415,7 @@ fn an_unread_startup_value_is_never_produced() {
     let reads = read(
         "import std.host {Host}
          main! : Host -> []
-         main!(host) -> host.exit!(host.argc)",
+         main!(host) -> host.exit!(host.args.len())",
     )
     .expect("a program reading argc");
     assert_eq!(
@@ -534,7 +534,7 @@ const WRITTEN: &[(&str, &str, i32)] = &[
          finish!(host False _) -> host.exit!(0)
          main! : Host -> []
          main!(host) ->
-           count = host.argc
+           count = host.args.len()
            finish!(host below(count 2) count)",
         2,
     ),
@@ -550,7 +550,7 @@ const WRITTEN: &[(&str, &str, i32)] = &[
          finish!(host False _) -> host.exit!(7)
          main! : Host -> []
          main!(host) ->
-           count = host.argc
+           count = host.args.len()
            finish!(host below(count 1) count)",
         7,
     ),
@@ -650,7 +650,7 @@ macro_rules! arithmetic {
             ")
              main! : Host -> []
              main!(host) ->
-               count = host.argc
+               count = host.args.len()
                finish!(host below(count 2) count)"
         )
     };
@@ -679,7 +679,7 @@ macro_rules! listed {
              small(Succ(_)) -> 1
              main! : Host -> []
              main!(host) ->
-               n = 4 + small(host.argc)
+               n = 4 + small(host.args.len())
                xs = [0 1 2 3 n - 1]
                host.exit!(",
             $answer,
@@ -762,6 +762,33 @@ fn it_reads_standard_input() {
         assert_eq!(status, (100_100 + 4) % 256);
         assert_eq!(echoed.len(), long.len());
     }
+}
+
+/// The arguments a program is run with are a list of strings, its own name
+/// first: a greeting names the first after it, or the world where there is
+/// none, and the count is how many there are.
+#[test]
+fn it_greets_whom_it_is_handed() {
+    let program = read(
+        "import std.host {Host}
+
+         main! : Host -> []
+         main!(host) ->
+           name = host.args.get_or(1 \"world\")
+           host.println!(\"Hello, ${name}!\")
+           host.exit!(host.args.len())",
+    )
+    .expect("a program reading its arguments");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let counts = [1, 2, 3];
+    let greeted: Vec<_> = counts
+        .iter()
+        .map(|&count| (i32::from(count), if count == 1 { "world" } else { "dummy" }))
+        .map(|(count, name)| (count, format!("Hello, {name}!\n")))
+        .collect();
+    assert_eq!(execute_counts(&program, &counts), greeted);
 }
 
 /// Advent of Code 2015, day one, on an input far longer than a stack of
@@ -1013,7 +1040,7 @@ const ZERO_WIDTH: &str = "import std.host {Host}
 
                           keep_zero! : Host Nat -> Nat
                           keep_zero!(host n) ->
-                            observed = host.argc
+                            observed = host.args.len()
                             n
 
                           select_zero! : Host Bool -> Nat
@@ -1026,7 +1053,7 @@ const ZERO_WIDTH: &str = "import std.host {Host}
 
                           main! : Host -> []
                           main!(host) ->
-                            count = host.argc
+                            count = host.args.len()
                             first = count.equals(1)
                             z = select_zero!(host first)
                             host.exit!(zero_or_one(first z))";
@@ -1045,6 +1072,10 @@ fn source_zero_width_scalars_cross_calls_and_joins() {
             (0..program.values_count())
                 .any(|at| { program.class(ValueId::at(at)) == Class::fixed(0) })
         );
+        // Unoptimized, the host is handed on whole, arguments and all.
+        let program = TARGET
+            .prepare(&program)
+            .expect("a program this machine holds");
         let counts = [1, 2, 3, 33];
         for (argc, (status, stdout)) in counts.into_iter().zip(execute_counts(&program, &counts)) {
             assert_eq!(

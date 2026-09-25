@@ -83,7 +83,7 @@ pub use builder::Builder;
 pub use fit::{Budget, fit};
 pub use layout::Layout;
 pub use legalize::legalize;
-pub use lower::lower;
+pub use lower::{MAKE_ARGUMENTS, lower, lower_counting_arguments};
 pub use model::{
     Binary, Class, DataId, Definition, Direction, Exit, Function, FunctionId, Offset, Op, Origin,
     Range, Region, RegionId, Relation, Returns, Span, Terminator, ValueId, Width,

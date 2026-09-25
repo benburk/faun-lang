@@ -514,6 +514,21 @@ impl<'a> Lowering<'a> {
                     self.forget(dst);
                 }
             }
+            (Opcode::ArgumentVector, Immediate::None) => {
+                // The count lies just above the entry's frame, and the
+                // addresses just above the count.
+                let dst = result()?;
+                let owner = self.owner_at(points.late);
+                let displacement = self
+                    .spill_slots(owner)
+                    .checked_mul(8)
+                    .and_then(|bytes| bytes.checked_add(8))
+                    .ok_or_else(|| "x86 entry frame displacement overflows".to_owned())?;
+                self.mov_reg(dst, Reg::Rsp, RegisterWidth::Word);
+                self.materialize(Reg::Rcx, u64::from(displacement));
+                self.asm.alu(Alu::Add, dst, Reg::Rcx, 64);
+                self.forget(dst);
+            }
             (Opcode::ReadByte, Immediate::None) => {
                 let dst = result()?;
                 debug_assert_eq!(dst, Reg::Rdx);

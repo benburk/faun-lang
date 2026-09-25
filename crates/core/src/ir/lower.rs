@@ -66,6 +66,39 @@ mod tests;
 /// Names a program with no entry, which has nothing to run, and the first
 /// type whose representation is not decided.
 pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program, String> {
+    lower_with(program, routines, Arguments::Made)
+}
+
+/// The same, where the program is known to read only how many arguments it
+/// was handed: the list is never made, and nothing of it is left to hold.
+///
+/// # Errors
+/// As [`lower`].
+pub fn lower_counting_arguments(
+    program: &mut barb::Program,
+    routines: &Routines,
+) -> Result<Program, String> {
+    lower_with(program, routines, Arguments::Counted)
+}
+
+/// The name of the routine making the arguments a list, which a caller may
+/// look for to learn whether anything still reads the list.
+pub const MAKE_ARGUMENTS: &str = "host.arguments";
+
+/// What the entry does with the arguments it is handed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Arguments {
+    /// Makes them the list of strings the program holds.
+    Made,
+    /// Counts them, and holds an empty list the program never reads.
+    Counted,
+}
+
+fn lower_with(
+    program: &mut barb::Program,
+    routines: &Routines,
+    wanted: Arguments,
+) -> Result<Program, String> {
     barb::validate(program)?;
     let assumed = assumed(program, routines);
     let facts = &program.assuming(&assumed);
@@ -76,7 +109,7 @@ pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program
     // Only values actually lowered need a representation. Merely declaring
     // a library type (or retaining an old expression in the arena) does not.
     let demand = Demand::discover(program, facts, routines, entry)?;
-    let entry_params = demand.named_params(entry);
+    let (entry_params, arguments) = entry_parameters(&demand, entry, routines, wanted)?;
     let borrowed: Vec<_> = entry_params
         .iter()
         .map(|(name, class)| (name.as_str(), *class))
@@ -94,6 +127,11 @@ pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program
         callees,
         refused: std::cell::RefCell::default(),
         looping: std::cell::RefCell::default(),
+        arguments: arguments.map(|at| {
+            let made =
+                (wanted == Arguments::Made).then(|| making_arguments(&mut machine, routines));
+            (at, made)
+        }),
     };
     for (at, callee) in lowering.callees.iter().enumerate() {
         let id = barb::FnId::at(at);
@@ -103,6 +141,63 @@ pub fn lower(program: &mut barb::Program, routines: &Routines) -> Result<Program
     }
     validate(&machine)?;
     Ok(machine)
+}
+
+/// Parameters by name and class, in order.
+type NamedParams = Vec<(String, Class)>;
+
+/// The entry's parameters as a machine hands them over, and where among them
+/// the arguments are, where the entry reads them. The arguments come as C
+/// lays them out, a count and where their addresses lie, and are made a list
+/// of strings where the entry begins; only a program reading the list is
+/// handed where it lies. Each is held as the target's startup table says.
+fn entry_parameters(
+    demand: &Demand<'_>,
+    entry: barb::FnId,
+    routines: &Routines,
+    wanted: Arguments,
+) -> Result<(NamedParams, Option<usize>), String> {
+    let mut params = demand.named_params(entry);
+    let arguments = params.windows(2).position(|pair| {
+        pair == [
+            ("args.0".to_owned(), Class::Buffer),
+            ("args.1".to_owned(), Class::Word),
+        ]
+    });
+    if let Some(at) = arguments {
+        let handed: &[&str] = match wanted {
+            Arguments::Made => &["argc", "argv"],
+            Arguments::Counted => &["argc"],
+        };
+        let handed = handed
+            .iter()
+            .map(|&name| {
+                routines
+                    .startup(name)
+                    .map(|value| (name.to_owned(), value.class))
+                    .ok_or_else(|| format!("the target hands the entry no `{name}`"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        params.splice(at..at + 2, handed);
+    }
+    Ok((params, arguments))
+}
+
+/// The routine making the arguments a list of strings, which does nothing
+/// else, so a call of it nothing reads goes.
+fn making_arguments(machine: &mut Program, routines: &Routines) -> FunctionId {
+    let word = u64::from(routines.word().unwrap_or(64) / 8);
+    let made = machine.declare(
+        MAKE_ARGUMENTS,
+        &[Class::Word, Class::Address],
+        &SEQUENCE_LEAVES,
+    );
+    machine.define(made, |b, args| {
+        let list = Lowering::arguments(b, (args[0], args[1]), word);
+        b.ret(&list);
+    });
+    machine.mark_inert(made);
+    made
 }
 
 /// One entry per source function; no fabricated IDs for non-functions.
@@ -1082,7 +1177,30 @@ fn handed(
             {
                 assumed.fields.push((constructor, at, bounds));
             }
+            if program.field_name(constructor, at) == Some("args") {
+                assume_argument_bytes(program, field, assumed);
+            }
             waiting.push(field);
+        }
+    }
+}
+
+/// The arguments are strings of bytes the target handed over, so their
+/// bytes are bytes.
+fn assume_argument_bytes(
+    program: &barb::Program,
+    field: barb::TypeId,
+    assumed: &mut barb::Assumed,
+) {
+    if let barb::TypeShape::Sequence { element, .. } = barb::type_shape(program, field)
+        && let Some(places) = byte_places(program, element)
+    {
+        let byte = barb::Bounds {
+            low: 0,
+            high: Some(255),
+        };
+        for (constructor, at) in places {
+            assumed.fields.push((constructor, at, byte));
         }
     }
 }
@@ -1108,17 +1226,13 @@ fn startup(
 /// Each leaf's name, for a value of `ty` held as `carried`: the name of the
 /// field it is held in, reading through wrappers and flat products, where a
 /// definition named one, and `fallback` with its place where none did.
-fn leaf_names(
-    demand: &Demand<'_>,
-    ty: barb::TypeId,
-    carried: Carried,
+/// What a run of wrappers around `ty` holds, and the name the innermost
+/// named field gives it, or `fallback` where none is named.
+fn unwrapped(
+    program: &barb::Program,
+    mut ty: barb::TypeId,
     fallback: &str,
-) -> Vec<String> {
-    let program = demand.program;
-    let count = classes(&demand.leaves, &carried).len();
-    let placed = || (0..count).map(|at| format!("{fallback}.{at}")).collect();
-    // A wrapper's one field found what it holds.
-    let mut ty = ty;
+) -> (barb::TypeId, String) {
     let mut held_as = fallback.to_owned();
     for _ in 0..=program.types().len() {
         let barb::TypeShape::Wrapper { constructor, field } = barb::type_shape(program, ty) else {
@@ -1129,10 +1243,27 @@ fn leaf_names(
         }
         ty = field;
     }
+    (ty, held_as)
+}
+
+fn leaf_names(
+    demand: &Demand<'_>,
+    ty: barb::TypeId,
+    carried: Carried,
+    fallback: &str,
+) -> Vec<String> {
+    let program = demand.program;
+    let count = classes(&demand.leaves, &carried).len();
+    let placed = |base: &str| (0..count).map(|at| format!("{base}.{at}")).collect();
+    let (ty, held_as) = unwrapped(program, ty, fallback);
     let (Carried::Flat(_), barb::TypeShape::Product { constructor }) =
         (carried, barb::type_shape(program, ty))
     else {
-        return if count == 1 { vec![held_as] } else { placed() };
+        return if count == 1 {
+            vec![held_as]
+        } else {
+            placed(&held_as)
+        };
     };
     let mut found = Vec::with_capacity(count);
     for at in 0..program.fields(constructor).len() {
@@ -1153,7 +1284,7 @@ fn leaf_names(
     if found.len() == count {
         found
     } else {
-        placed()
+        placed(fallback)
     }
 }
 
@@ -1438,6 +1569,10 @@ struct Lowering<'a> {
     /// The function being lowered as a loop, and the calls of itself in
     /// tail position, each of which goes round again rather than calling.
     looping: std::cell::RefCell<Option<(barb::FnId, Vec<barb::ExprId>)>>,
+    /// Where among the entry's parameters the arguments' count and array
+    /// are, and the routine making the list of strings from them, where the
+    /// program reads the list.
+    arguments: Option<(usize, Option<FunctionId>)>,
 }
 
 /// Local values, one entry per source local: `None` where it carries nothing.
@@ -1506,7 +1641,12 @@ impl Lowering<'_> {
         };
         if tails.is_empty() {
             machine.try_define(into, |b, params| {
-                let mut locals = self.parameters(id, params);
+                let params = if entry {
+                    self.arguments_made(b, params)
+                } else {
+                    params.to_vec()
+                };
+                let mut locals = self.parameters(id, &params);
                 let mut statics = vec![None; locals.len()];
                 let answer = self.body(b, body, &mut locals, &mut statics);
                 returned(b, answer, &destination)
@@ -1518,6 +1658,74 @@ impl Lowering<'_> {
         // and what it could not lay out is said once, here, where lowering
         // can still refuse the program.
         self.refused.borrow_mut().take().map_or(Ok(()), Err)
+    }
+
+    /// The entry's parameters, with the arguments' count and array made the
+    /// list of strings the program holds.
+    fn arguments_made(&self, b: &mut super::Builder, params: &[ValueId]) -> Vec<ValueId> {
+        let Some((at, made)) = self.arguments else {
+            return params.to_vec();
+        };
+        // How many there are is the count: a program that asks only that
+        // reads no list, and the call making one goes.
+        let (list, handed) = match made {
+            Some(made) => (b.call(made, &[params[at], params[at + 1]])[0], 2),
+            None => (b.buffer_empty(), 1),
+        };
+        let mut params = params.to_vec();
+        params.splice(at..at + handed, [list, params[at]]);
+        params
+    }
+
+    /// Each of `count` strings whose addresses lie from `array`, a word of
+    /// `word` bytes each, as a sequence of byte strings: pushed from the
+    /// last, each read up to the nought byte that ends it.
+    fn arguments(
+        b: &mut super::Builder,
+        (count, array): (ValueId, ValueId),
+        word: u64,
+    ) -> [ValueId; 2] {
+        let empty = b.buffer_empty();
+        let none = b.constant(Class::Word, 0);
+        let built = b.loop_(&[empty, none], &SEQUENCE_LEAVES, |b, state| {
+            let (held, len) = (state[0], state[1]);
+            let done = b.compare(Relation::Equal, len, count);
+            b.if_(done, &[], |b| b.break_(&[held, len]), |b| b.yield_(&[]));
+            let one = b.constant(Class::Word, 1);
+            let rest = b.binary(Binary::Sub, count, len);
+            let index = b.binary(Binary::Sub, rest, one);
+            let width = b.constant(Class::Word, word);
+            let offset = b.binary(Binary::Mul, index, width);
+            let base = b.convert(Class::Word, array);
+            let slot = b.binary(Binary::Add, base, offset);
+            let slot = b.convert(Class::Address, slot);
+            let start = b.load(super::Width::Word, slot, super::Offset::Words(0));
+            let start = b.convert(Class::Address, start);
+            let length = Self::terminated(b, start);
+            let text = Self::pushed_bytes(b, start, length, Class::fixed(8));
+            let longer = b.buffer_push(held, len, &text);
+            let more = b.binary(Binary::Add, len, one);
+            b.continue_(&[longer, more]);
+        });
+        [built[0], built[1]]
+    }
+
+    /// How many bytes lie from `start` before a nought one.
+    fn terminated(b: &mut super::Builder, start: ValueId) -> ValueId {
+        let none = b.constant(Class::Word, 0);
+        b.loop_(&[none], &[Class::Word], |b, state| {
+            let len = state[0];
+            let base = b.convert(Class::Word, start);
+            let place = b.binary(Binary::Add, base, len);
+            let place = b.convert(Class::Address, place);
+            let byte = b.load(super::Width::Byte, place, super::Offset::Bytes(0));
+            let nought = b.constant(Class::Word, 0);
+            let ended = b.compare(Relation::Equal, byte, nought);
+            b.if_(ended, &[], |b| b.break_(&[len]), |b| b.yield_(&[]));
+            let one = b.constant(Class::Word, 1);
+            let more = b.binary(Binary::Add, len, one);
+            b.continue_(&[more]);
+        })[0]
     }
 
     /// A function calling itself in tail position, which goes round again
@@ -1803,7 +2011,8 @@ impl Lowering<'_> {
         {
             let data = b.data(&bytes);
             let total = b.data_len(data);
-            return Self::pushed_bytes(b, data, total, class);
+            let start = b.address_of(data);
+            return Self::pushed_bytes(b, start, total, class);
         }
         Self::unrolled_bytes(b, &bytes, element)
     }
@@ -2267,14 +2476,15 @@ impl Lowering<'_> {
             |b| b.yield_(&[count]),
             |b| b.yield_(&[room]),
         )[0];
-        Self::pushed_bytes(b, io.scratch, run, Class::fixed(8))
+        let start = b.address_of(io.scratch);
+        Self::pushed_bytes(b, start, run, Class::fixed(8))
     }
 
     /// The first `total` bytes where `data` lies, as a sequence of elements
     /// of `class`: pushed from the last, since a sequence grows at its front.
     fn pushed_bytes(
         b: &mut super::Builder,
-        data: super::DataId,
+        start: ValueId,
         total: ValueId,
         class: Class,
     ) -> [ValueId; 2] {
@@ -2287,7 +2497,6 @@ impl Lowering<'_> {
             let one = b.constant(Class::Word, 1);
             let rest = b.binary(Binary::Sub, total, len);
             let at = b.binary(Binary::Sub, rest, one);
-            let start = b.address_of(data);
             let base = b.convert(Class::Word, start);
             let place = b.binary(Binary::Add, base, at);
             let place = b.convert(Class::Address, place);

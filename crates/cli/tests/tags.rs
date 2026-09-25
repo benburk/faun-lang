@@ -180,7 +180,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          code(Err(B)) -> 60
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(wide(host.argc - 1)) + code(wide(7)))",
+         main!(host) -> host.exit!(code(wide(host.args.len() - 1)) + code(wide(7)))",
         57,
     ),
 ];

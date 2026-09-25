@@ -2,5 +2,5 @@ import std.host {Host}
 
 main! : Host -> []
 main!(host) ->
-  count = host.argc
+  count = host.args.len()
   host.exit!(count)

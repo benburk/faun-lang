@@ -53,7 +53,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
 
          main! : Host -> []
          main!(host) ->
-           n = host.argc + 2
+           n = host.args.len() + 2
            a = bit(n < 5) + bit(n <= 3) * 2 + bit(n > 3) * 4 + bit(n >= 3) * 8
            b = bit(-2 < 1) * 16 + bit(-3 < -2) * 32 + bit(False < True) * 64 + bit(2 > 7) * 128
            host.exit!(a + b)",
@@ -165,7 +165,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
         "a splice is its value's text",
         "main! : Host -> []
          main!(host) ->
-           n = host.argc + 41
+           n = host.args.len() + 41
            host.exit!((\"n is ${n}, big ${n > 3}, neg ${-7}!\".len() + \"${n}${n}\".len() * 10) % 256)",
         66,
     ),
@@ -506,7 +506,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
         "a line of its own is not a way to throw a value away",
         "main! : Host -> []
          main!(host) ->
-           host.argc + 1
+           host.args.len() + 1
            host.exit!(0)",
         "this value is worked out and then thrown away",
     ),

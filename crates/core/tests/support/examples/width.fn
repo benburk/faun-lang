@@ -34,5 +34,5 @@ finish!(host False _) -> host.exit!(0)
 
 main! : Host -> []
 main!(host) ->
-  count = host.argc
+  count = host.args.len()
   finish!(host below(count 2) count)

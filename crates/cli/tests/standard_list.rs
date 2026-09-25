@@ -133,7 +133,7 @@ fn every_list_function_answers_what_ori_says() {
 
                  main! : Host -> []
                  main!(host) ->
-                   n = 4 + small(host.argc)
+                   n = 4 + small(host.args.len())
                    xs = [0 1 2 3 n - 1]
                    host.exit!(({answer}) % 256)"
             ),

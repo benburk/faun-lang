@@ -22,5 +22,5 @@ main!(host) ->
   eight = four + four
   sixteen = eight + eight
   limit = sixteen + sixteen
-  count = host.argc
+  count = host.args.len()
   finish!(host below(count limit) count)

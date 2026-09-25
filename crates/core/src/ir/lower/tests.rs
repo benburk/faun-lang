@@ -266,6 +266,7 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
         callees: vec![],
         refused: std::cell::RefCell::default(),
         looping: std::cell::RefCell::default(),
+        arguments: None,
     };
     let body = source.function(entry).body().unwrap();
     let word = Some(Carried::One(Class::Word));

@@ -64,7 +64,7 @@ impl Case {
 
              main! : Host -> []
              main!(host) ->
-               count = host.argc
+               count = host.args.len()
                finish!(host below(count 32) count)"
         )
     }
