@@ -1,7 +1,7 @@
 # Primary frontend standard library
 
-`standard.fn` is the bootstrap package root. It exports `Bool`, `Nat`, `Int`,
-`U8`, `List`, `Result`, and `Str` from sibling modules.
+`standard.fn` is the bootstrap package root. It exports `Bool`, `Order`, `Nat`,
+`Int`, `U8`, `List`, `Result`, and `Str` from sibling modules.
 
 `List` follows Ori's standard list wherever a function needs no tuples,
 records, method constraints, or `?`: `len`, `is_empty`, `append`, `extend`,
@@ -49,7 +49,9 @@ The package deliberately omits hashing, tuples, record rows and updates, method
 constraints, and bodyless derivation. Concrete core equality methods are written manually;
 generic equality for `List` and `Result` waits for method constraints.
 
-`Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. Natural subtraction is
+`Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by
+defining one `cmp : T T -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of
+its `Order`, so they cannot disagree; `Bool`, `Nat`, `Int` and `U8` define it. Natural subtraction is
 monus. Signed division truncates toward zero and its remainder has the dividend's
 sign. For every type, division by zero returns zero and `a % 0` returns `a`.
 `U8` arithmetic uses unsigned representatives and wraps modulo 256; in particular,

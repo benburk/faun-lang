@@ -50,6 +50,14 @@ Int : [Pos(Nat) NegSucc(Nat)].(
   mod(NegSucc(a) Pos(b)) -> neg(of_nat((a + 1) % b))
   mod(NegSucc(a) NegSucc(b)) -> neg(of_nat((a + 1) % (b + 1)))
 
+  # Every negative before every natural; among negatives, the larger
+  # predecessor is further below.
+  cmp : Int Int -> Order
+  cmp(Pos(a) Pos(b)) -> a.cmp(b)
+  cmp(NegSucc(a) NegSucc(b)) -> b.cmp(a)
+  cmp(Pos(_) NegSucc(_)) -> Gt
+  cmp(NegSucc(_) Pos(_)) -> Lt
+
   equals : Int Int -> Bool
   equals(Pos(a) Pos(b)) -> a.equals(b)
   equals(NegSucc(a) NegSucc(b)) -> a.equals(b)

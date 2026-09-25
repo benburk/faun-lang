@@ -675,11 +675,43 @@ impl<'a> Specializer<'a> {
                 let target = self.method_site(module, expression.span)?;
                 let left = self.expr(module, left, substitution)?;
                 let right = self.expr(module, right, substitution)?;
+                let ordering = matches!(
+                    operator,
+                    crate::ast::BinaryOp::Less
+                        | crate::ast::BinaryOp::LessEqual
+                        | crate::ast::BinaryOp::Greater
+                        | crate::ast::BinaryOp::GreaterEqual
+                );
+                let answered = if ordering {
+                    Type::Named(self.prelude.order, Vec::new())
+                } else {
+                    ty.clone()
+                };
                 let key =
-                    self.method_key(target, &left.ty, std::slice::from_ref(&right.ty), &ty)?;
+                    self.method_key(target, &left.ty, std::slice::from_ref(&right.ty), &answered)?;
                 self.request(key.clone());
                 let call = ExprKind::DirectCall(key, vec![left, right]);
-                if matches!(operator, crate::ast::BinaryOp::NotEqual) {
+                let view = match operator {
+                    crate::ast::BinaryOp::Less => Some(self.prelude.order_lt),
+                    crate::ast::BinaryOp::LessEqual => Some(self.prelude.order_le),
+                    crate::ast::BinaryOp::Greater => Some(self.prelude.order_gt),
+                    crate::ast::BinaryOp::GreaterEqual => Some(self.prelude.order_ge),
+                    _ => None,
+                };
+                if let Some(view) = view {
+                    // The operator reads its view of what `cmp` answered.
+                    let order = Type::Named(self.prelude.order, Vec::new());
+                    let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
+                    let view = self.method_key(view, &order, &[], &bool_ty)?;
+                    self.request(view.clone());
+                    let compared = Expr {
+                        module,
+                        span: expression.span,
+                        ty: order,
+                        kind: call,
+                    };
+                    ExprKind::DirectCall(view, vec![compared])
+                } else if matches!(operator, crate::ast::BinaryOp::NotEqual) {
                     let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
                     let not = self.method_key(self.prelude.bool_not, &bool_ty, &[], &bool_ty)?;
                     self.request(not.clone());

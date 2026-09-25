@@ -3,8 +3,6 @@
 
 import std.host {Host}
 
-Order : [Lt Eq Gt]
-
 cmp : Nat Nat -> Order
 cmp(0 0) -> Eq
 cmp(0 Succ(_)) -> Lt

@@ -46,6 +46,32 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> host.exit!(cat(5).ok_or(0) + sum({x: 1 y: 2}) + total([4]))",
         12,
     ),
+    (
+        "the ordering operators are views of one cmp",
+        "bit : Bool -> Nat
+         bit(b) -> b.to_nat()
+
+         main! : Host -> []
+         main!(host) ->
+           n = host.argc + 2
+           a = bit(n < 5) + bit(n <= 3) * 2 + bit(n > 3) * 4 + bit(n >= 3) * 8
+           b = bit(-2 < 1) * 16 + bit(-3 < -2) * 32 + bit(False < True) * 64 + bit(2 > 7) * 128
+           host.exit!(a + b)",
+        123,
+    ),
+    (
+        "a type is ordered by defining cmp",
+        "Size : [Small Large].(
+           cmp : Size Size -> Order
+           cmp(Small Large) -> Lt
+           cmp(Large Small) -> Gt
+           cmp(_ _) -> Eq
+         )
+
+         main! : Host -> []
+         main!(host) -> host.exit!((Small < Large).to_nat() + (Large <= Small).to_nat() * 2)",
+        1,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -122,6 +148,14 @@ const REFUSED: &[(&str, &str, &str)] = &[
 
          Numbers = List(Nat)",
         "owns no constructors",
+    ),
+    (
+        "a type without cmp has no order",
+        "Size : [Small Large]
+
+         main! : Host -> []
+         main!(host) -> host.exit!((Small < Large).to_nat())",
+        "method `cmp`",
     ),
 ];
 

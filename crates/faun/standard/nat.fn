@@ -42,12 +42,27 @@ Nat : [Zero Succ(Nat)].(
   times(0 value _) -> value
   times(Succ(count) value f) -> times(count f(value) f)
 
+  # One comparison each way, which the compiler recognizes as instructions,
+  # rather than a walk down both counts.
+  cmp : Nat Nat -> Order
+  cmp(a b) -> nat_order(nat_below(a b) a.equals(b))
+
   equals : Nat Nat -> Bool
   equals(0 0) -> True
   equals(0 Succ(_)) -> False
   equals(Succ(_) 0) -> False
   equals(Succ(a) Succ(b)) -> equals(a b)
 )
+
+nat_below : Nat Nat -> Bool
+nat_below(_ 0) -> False
+nat_below(0 Succ(_)) -> True
+nat_below(Succ(a) Succ(b)) -> nat_below(a b)
+
+nat_order : Bool Bool -> Order
+nat_order(True _) -> Lt
+nat_order(False True) -> Eq
+nat_order(False False) -> Gt
 
 div_step(True quotient) -> Succ(quotient)
 div_step(False quotient) -> quotient

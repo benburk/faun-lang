@@ -29,6 +29,12 @@ Bool : [False True].(
   to_nat(False) -> 0
   to_nat(True) -> 1
 
+  # False before True.
+  cmp : Bool Bool -> Order
+  cmp(False True) -> Lt
+  cmp(True False) -> Gt
+  cmp(_ _) -> Eq
+
   equals : Bool Bool -> Bool
   equals(False False) -> True
   equals(True True) -> True

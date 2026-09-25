@@ -579,14 +579,14 @@ macro_rules! ordering {
     ($which:literal) => {
         concat!(
             "import std.host {Host}
-             Order : [Lt Eq Gt]
-             rank : Order -> Nat
-             rank(Lt) -> 0
-             rank(Eq) -> 1
-             rank(Gt) -> 2
-             pick : Nat -> Order
-             pick(0) -> Lt
-             pick(Succ(_)) -> Gt
+             Place : [First Second Third]
+             rank : Place -> Nat
+             rank(First) -> 0
+             rank(Second) -> 1
+             rank(Third) -> 2
+             pick : Nat -> Place
+             pick(0) -> First
+             pick(Succ(_)) -> Third
              main! : Host -> []
              main!(host) -> host.exit!(rank(pick(",
             $which,
@@ -603,7 +603,6 @@ macro_rules! columns {
     ($answer:literal) => {
         concat!(
             "import std.host {Host}
-             Order : [Lt Eq Gt]
              sub : Nat Nat -> Nat
              sub(0 _) -> 0
              sub(Succ(m) 0) -> Succ(m)

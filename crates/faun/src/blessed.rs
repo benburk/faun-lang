@@ -30,6 +30,13 @@ pub struct PreludeIds {
     pub u8_constructor: Symbol,
     pub list_nil: Symbol,
     pub list_cons: Symbol,
+    /// A comparison's answer, and the fixed view of it each ordering
+    /// operator reads: `<` is `lt`, `<=` is `le`, and so on.
+    pub order: Symbol,
+    pub order_lt: Symbol,
+    pub order_le: Symbol,
+    pub order_gt: Symbol,
+    pub order_ge: Symbol,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +68,7 @@ impl PreludeIds {
         let str_ = binding_with_private_constructor(program, "Str")?;
         let u8_ = binding_with_private_constructor(program, "U8")?;
         let list = binding(program, "List")?;
+        let order = binding(program, "Order")?;
         Ok(Self {
             bool_: bool_.canonical,
             nat: nat.canonical,
@@ -77,6 +85,11 @@ impl PreludeIds {
             u8_constructor: constructor(program, &u8_, "U8", "U8")?,
             list_nil: constructor(program, &list, "List", "Nil")?,
             list_cons: constructor(program, &list, "List", "Cons")?,
+            order: order.canonical,
+            order_lt: method(program, &order, "Order", "lt")?,
+            order_le: method(program, &order, "Order", "le")?,
+            order_gt: method(program, &order, "Order", "gt")?,
+            order_ge: method(program, &order, "Order", "ge")?,
         })
     }
 }
@@ -267,9 +280,13 @@ mod tests {
             "exports {List.*}\nList(a) : [Nil Cons(a List(a))]\n",
         );
         fixture.write("str.fn", "exports {Str}\nStr : List(U8)\n");
+        fixture.write(
+            "order.fn",
+            "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool lt(Lt) -> True lt(_) -> False le : Order -> Bool le(Gt) -> False le(_) -> True gt : Order -> Bool gt(Gt) -> True gt(_) -> False ge : Order -> Bool ge(Lt) -> False ge(_) -> True)\n",
+        );
         let root = fixture.write(
             "standard.fn",
-            "package {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
+            "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Order.* Nat.* Int.* U8 List.* Str}\n",
         );
         let entry = fixture.write("main.fn", "id(x) -> x\n");
         // The loader owns all source text, so removing the fixture afterwards

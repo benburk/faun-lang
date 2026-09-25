@@ -21,6 +21,9 @@ U8 : Nat.(
   mod : U8 U8 -> U8
   mod(U8(a) U8(b)) -> U8((a % b) % 256)
 
+  cmp : U8 U8 -> Order
+  cmp(U8(a) U8(b)) -> a.cmp(b)
+
   equals : U8 U8 -> Bool
   equals(U8(a) U8(b)) -> a.equals(b)
 )

@@ -1,0 +1,28 @@
+# The answer of a three-way comparison. A type is ordered by defining one
+# `cmp : T T -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of its
+# answer, so they cannot disagree about it: exactly one of `Lt`, `Eq`, `Gt`
+# holds for any pair.
+
+exports {Order.*}
+
+Order : [Lt Eq Gt].(
+  lt : Order -> Bool
+  lt(Lt) -> True
+  lt(_) -> False
+
+  le : Order -> Bool
+  le(Gt) -> False
+  le(_) -> True
+
+  gt : Order -> Bool
+  gt(Gt) -> True
+  gt(_) -> False
+
+  ge : Order -> Bool
+  ge(Lt) -> False
+  ge(_) -> True
+
+  eq : Order -> Bool
+  eq(Eq) -> True
+  eq(_) -> False
+)

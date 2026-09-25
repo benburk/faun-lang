@@ -1694,6 +1694,9 @@ impl<'a> Checker<'a> {
                         | super::ast::BinaryOp::Greater
                         | super::ast::BinaryOp::GreaterEqual
                 ) {
+                    // Each ordering operator is a fixed view of one `cmp`.
+                    let order = Ty::Named(self.prelude.order, Vec::new());
+                    self.unify_at(module, expression.span, &result, &order)?;
                     Ok(self.bool_type())
                 } else {
                     Ok(result)
@@ -1984,19 +1987,30 @@ impl<'a> Checker<'a> {
         {
             return Err(self.ambiguous(pending));
         }
-        for index in numeral_start..self.pending_numerals.len() {
+        // A numeral nothing typed takes its default one at a time, a
+        // negative one first since only `Int` holds it, and what that
+        // settles may type the rest: in `-2 < 1` the `1` is compared with an
+        // `Int`, so it is one.
+        loop {
+            let undecided = |negative: bool| {
+                (numeral_start..self.pending_numerals.len()).find(|&index| {
+                    let numeral = &self.pending_numerals[index];
+                    !numeral.resolved
+                        && numeral.negative == negative
+                        && matches!(self.infer.resolve(&numeral.ty), Ty::Var(_))
+                })
+            };
+            let Some(index) = undecided(true).or_else(|| undecided(false)) else {
+                break;
+            };
             let numeral = self.pending_numerals[index].clone();
-            if numeral.resolved {
-                continue;
-            }
-            if matches!(self.infer.resolve(&numeral.ty), Ty::Var(_)) {
-                let default = if numeral.negative {
-                    Ty::Named(self.prelude.int, Vec::new())
-                } else {
-                    Ty::Named(self.prelude.nat, Vec::new())
-                };
-                self.unify_at(numeral.module, numeral.span, &numeral.ty, &default)?;
-            }
+            let default = if numeral.negative {
+                Ty::Named(self.prelude.int, Vec::new())
+            } else {
+                Ty::Named(self.prelude.nat, Vec::new())
+            };
+            self.unify_at(numeral.module, numeral.span, &numeral.ty, &default)?;
+            self.settle(marks)?;
         }
         self.settle_methods(method_start, true)?;
         for index in numeral_start..self.pending_numerals.len() {
@@ -3080,9 +3094,13 @@ mod tests {
                 "exports {List.*}\nList(a) : [Nil Cons(a List(a))]\n",
             );
             self.write("str.fn", "exports {Str}\nStr : List(U8)\n");
+            self.write(
+            "order.fn",
+            "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool lt(Lt) -> True lt(_) -> False le : Order -> Bool le(Gt) -> False le(_) -> True gt : Order -> Bool gt(Gt) -> True gt(_) -> False ge : Order -> Bool ge(Lt) -> False ge(_) -> True)\n",
+        );
             let standard = self.write(
                 "standard.fn",
-                "package {}\nimport bool {Bool.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Nat.* Int.* U8 List.* Str}\n",
+                "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport str {Str}\nexports {Bool.* Order.* Nat.* Int.* U8 List.* Str}\n",
             );
             let entry = self.write("main.fn", entry_source);
             let host = self.write("host.fn", "exports {Host}\nHost : {argc: Nat}\n");
