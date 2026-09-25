@@ -140,13 +140,6 @@ Stderr : [Stderr].(
     wrote = write_rest!(output bytes bytes.len())
     done = wrote?
     Ok(bytes.len())
-
-  # Say what went wrong, where something did.
-  report_result! : Stderr Result(Nat IoError) -> {}
-  report_result!(_ Ok(_)) -> {}
-  report_result!(errors Err(error)) ->
-    status = report!(errors error.to_str())
-    {}
 )
 
 # What the target answers for, a run of bytes at a time: how many moved,
