@@ -7,6 +7,8 @@
 
 mod lower;
 
+use std::collections::HashMap;
+
 use super::{BlockId, Constraint, InstId, Reg, RegSet, Selected, Terminator, VReg, successors};
 use crate::machine::FrameSlot;
 use crate::parallel_copy::{
@@ -284,11 +286,74 @@ fn visit_terminator_values(
     }
 }
 
+/// Where each value is, kept with each register's occupant and the values
+/// placed at all, so that asking who holds a register, or letting go of what
+/// is no longer live, costs what is placed rather than every value the
+/// program has.
+struct Placement {
+    locations: Vec<Option<Location>>,
+    occupants: [Option<VReg>; 16],
+    placed: Vec<VReg>,
+}
+
+impl Placement {
+    fn new(values: usize) -> Self {
+        Self {
+            locations: vec![None; values],
+            occupants: [None; 16],
+            placed: Vec::new(),
+        }
+    }
+
+    fn get(&self, value: VReg) -> Option<Location> {
+        self.locations[value.index()]
+    }
+
+    /// Place `value` at `location`, which a register's occupant has left.
+    fn set(&mut self, value: VReg, location: Location) {
+        match self.locations[value.index()] {
+            Some(Location::Register(reg)) => {
+                if self.occupants[usize::from(u8::from(reg))] == Some(value) {
+                    self.occupants[usize::from(u8::from(reg))] = None;
+                }
+            }
+            Some(Location::Spill(_)) => {}
+            None => self.placed.push(value),
+        }
+        if let Location::Register(reg) = location {
+            self.occupants[usize::from(u8::from(reg))] = Some(value);
+        }
+        self.locations[value.index()] = Some(location);
+    }
+
+    fn occupant(&self, reg: Reg) -> Option<VReg> {
+        self.occupants[usize::from(u8::from(reg))]
+    }
+
+    /// Let go of every placed value `keep` does not hold on to.
+    fn keep(&mut self, keep: impl Fn(VReg) -> bool) {
+        let (locations, occupants) = (&mut self.locations, &mut self.occupants);
+        self.placed.retain(|&value| {
+            if keep(value) {
+                return true;
+            }
+            if let Some(Location::Register(reg)) = locations[value.index()] {
+                occupants[usize::from(u8::from(reg))] = None;
+            }
+            locations[value.index()] = None;
+            false
+        });
+    }
+}
+
 struct Allocator<'a> {
     selected: &'a Selected,
     liveness: &'a Liveness,
     states: Vec<Option<PointState>>,
-    locations: Vec<Option<Location>>,
+    placement: Placement,
+    /// The register each value is best defined in, where every fixed use of
+    /// it agrees on one.
+    preferred: Vec<Option<Reg>>,
     operand_locations: Vec<Option<Vec<Location>>>,
     operand_moves: Vec<Option<Vec<CopyMove>>>,
     edge_moves: Vec<EdgeMoves>,
@@ -296,7 +361,11 @@ struct Allocator<'a> {
     edges: u32,
     entry: FunctionId,
     value_spills: Vec<Option<SpillSlot>>,
-    next_spill: u32,
+    /// The function whose blocks are being allocated.
+    owner: FunctionId,
+    /// Each function's next spill slot. Slots are numbered within a
+    /// function, so its frame holds only what it spills.
+    next_spill: Vec<u32>,
 }
 
 impl<'a> Allocator<'a> {
@@ -312,7 +381,8 @@ impl<'a> Allocator<'a> {
             selected,
             liveness,
             states: (0..liveness.at.len()).map(|_| None).collect(),
-            locations: vec![None; selected.widths.len()],
+            placement: Placement::new(selected.widths.len()),
+            preferred: preferred_registers(selected, entry),
             operand_locations: vec![None; selected.instructions.len()],
             operand_moves: vec![None; selected.instructions.len()],
             edge_moves: Vec::new(),
@@ -320,17 +390,19 @@ impl<'a> Allocator<'a> {
             edges: 0,
             entry,
             value_spills: vec![None; selected.widths.len()],
+            owner: entry,
             // Slot zero is reserved for breaking parallel-copy cycles.
-            next_spill: 1,
+            next_spill: vec![1; function_count(selected)],
         })
     }
 
     fn run(mut self) -> Result<Allocation, String> {
         for layout in &self.liveness.blocks {
-            self.locations.fill(None);
+            self.owner = self.selected.blocks[layout.block].owner;
+            self.placement.keep(|_| false);
             self.allocate_entry(layout)?;
             for points in &layout.instructions {
-                self.allocate_instruction(points)?;
+                self.allocate_instruction(layout.block, points)?;
             }
             self.allocate_terminator(layout)?;
         }
@@ -340,16 +412,14 @@ impl<'a> Allocator<'a> {
         let operand_locations =
             collect_instruction_data(self.operand_locations, "operand allocation")?;
         let operand_moves = collect_instruction_data(self.operand_moves, "operand move plan")?;
-        let total_spill_slots =
-            required_spill_slots(&segments, &transitions, &operand_moves, &self.edge_moves)?;
         let spill_slots = function_spill_slots(
             self.selected,
             self.liveness,
+            &segments,
             &transitions,
             &operand_moves,
             &self.edge_moves,
-            total_spill_slots,
-        );
+        )?;
         Ok(Allocation {
             segments,
             transitions,
@@ -375,7 +445,7 @@ impl<'a> Allocator<'a> {
             }
         }
         for &value in params {
-            if self.locations[value.index()].is_none() {
+            if self.placement.get(value).is_none() {
                 self.put_anywhere(value, &protected, RegSet(0))?;
                 protected.push(value);
             }
@@ -389,12 +459,15 @@ impl<'a> Allocator<'a> {
         clippy::too_many_lines,
         reason = "early uses, clobbers, and late definitions are allocated as one instruction"
     )]
-    fn allocate_instruction(&mut self, points: &InstPoints) -> Result<(), String> {
+    fn allocate_instruction(&mut self, block: BlockId, points: &InstPoints) -> Result<(), String> {
         let inst = self.selected.instructions[points.instruction];
         self.expire_to(points.early);
         self.fill_live(points.early, &[], inst.opcode.requirements().scratch)?;
-        let before = self.locations.clone();
         let operands = &self.selected.operands[inst.operands.range()];
+        let before: Vec<_> = operands
+            .iter()
+            .map(|&value| self.placement.get(value))
+            .collect();
         let def_offset = usize::from(inst.result.is_some());
         let mut protected = Vec::new();
         let mut tied = None;
@@ -449,7 +522,7 @@ impl<'a> Allocator<'a> {
         self.plan_operand_moves(points.instruction, operands, &before, &assigned)?;
         self.operand_locations[points.instruction.index()] = Some(assigned);
         self.evict_reserved(inst.opcode.requirements().scratch, &protected)?;
-        self.record(self.point_block(points.early), points.early);
+        self.record(block, points.early);
 
         self.expire_to(points.late);
         let requirements = inst.opcode.requirements();
@@ -469,7 +542,7 @@ impl<'a> Allocator<'a> {
                 match spec.constraint {
                     Constraint::Fixed(reg) => self.put_in_register(value, reg, &[])?,
                     Constraint::Any => {
-                        if let Some(reg) = self.preferred_register(value)
+                        if let Some(reg) = self.preferred[value.index()]
                             && !requirements.scratch.contains(reg)
                         {
                             self.put_in_register(value, reg, &[])?;
@@ -488,47 +561,8 @@ impl<'a> Allocator<'a> {
             &result.into_iter().collect::<Vec<_>>(),
             requirements.scratch,
         )?;
-        self.record(self.point_block(points.late), points.late);
+        self.record(block, points.late);
         Ok(())
-    }
-
-    fn preferred_register(&self, value: VReg) -> Option<Reg> {
-        let mut preferred = None;
-        for inst in &self.selected.instructions {
-            let def_offset = usize::from(inst.result.is_some());
-            for (at, &operand) in self.selected.operands[inst.operands.range()]
-                .iter()
-                .enumerate()
-            {
-                if operand != value {
-                    continue;
-                }
-                let Constraint::Fixed(reg) = inst.operand_spec(def_offset + at)?.constraint else {
-                    continue;
-                };
-                if preferred.is_some_and(|held| held != reg) {
-                    return None;
-                }
-                preferred = Some(reg);
-            }
-        }
-        for block in &self.selected.blocks {
-            let Terminator::Return { values } = block.terminator else {
-                continue;
-            };
-            if self.selected.operands[values.range()].contains(&value) {
-                let result_reg = if block.owner == self.entry {
-                    Reg::Rdi
-                } else {
-                    Reg::Rax
-                };
-                if preferred.is_some_and(|held| held != result_reg) {
-                    return None;
-                }
-                preferred = Some(result_reg);
-            }
-        }
-        preferred
     }
 
     fn allocate_terminator(&mut self, layout: &BlockPoints) -> Result<(), String> {
@@ -565,7 +599,7 @@ impl<'a> Allocator<'a> {
         reserved: RegSet,
     ) -> Result<(), String> {
         for value in self.liveness.at[point.index()].iter() {
-            if self.locations[value.index()].is_none() {
+            if self.placement.get(value).is_none() {
                 self.put_anywhere(value, protected, reserved)?;
             }
         }
@@ -573,11 +607,8 @@ impl<'a> Allocator<'a> {
     }
 
     fn expire_to(&mut self, point: Point) {
-        for (at, location) in self.locations.iter_mut().enumerate() {
-            if location.is_some() && !self.liveness.at[point.index()].contains(VReg::at(at)) {
-                *location = None;
-            }
-        }
+        let live = &self.liveness.at[point.index()];
+        self.placement.keep(|value| live.contains(value));
     }
 
     fn put_anywhere(
@@ -589,7 +620,8 @@ impl<'a> Allocator<'a> {
         if let Some(reg) = self.free_register(reserved) {
             self.put_in_register(value, reg, protected)
         } else {
-            self.locations[value.index()] = Some(self.spill(value)?);
+            let spilled = self.spill(value)?;
+            self.placement.set(value, spilled);
             Ok(())
         }
     }
@@ -600,7 +632,7 @@ impl<'a> Allocator<'a> {
         protected: &[VReg],
         reserved: RegSet,
     ) -> Result<Reg, String> {
-        if let Some(Location::Register(reg)) = self.locations[value.index()]
+        if let Some(Location::Register(reg)) = self.placement.get(value)
             && !reserved.contains(reg)
         {
             return Ok(reg);
@@ -628,9 +660,10 @@ impl<'a> Allocator<'a> {
                     "x86 fixed register {reg:?} holds two simultaneous operands"
                 ));
             }
-            self.locations[held.index()] = Some(self.spill(held)?);
+            let spilled = self.spill(held)?;
+            self.placement.set(held, spilled);
         }
-        self.locations[value.index()] = Some(Location::Register(reg));
+        self.placement.set(value, Location::Register(reg));
         Ok(())
     }
 
@@ -638,9 +671,9 @@ impl<'a> Allocator<'a> {
         let slot = if let Some(slot) = self.value_spills[value.index()] {
             slot
         } else {
-            let slot = SpillSlot(self.next_spill);
-            self.next_spill = self
-                .next_spill
+            let next = &mut self.next_spill[self.owner.index()];
+            let slot = SpillSlot(*next);
+            *next = next
                 .checked_add(1)
                 .ok_or_else(|| "x86 allocation has over 4G spill slots".to_owned())?;
             self.value_spills[value.index()] = Some(slot);
@@ -653,7 +686,8 @@ impl<'a> Allocator<'a> {
         if let Some(value) = self.register_occupant(reg)
             && Some(value) != except
         {
-            self.locations[value.index()] = Some(self.spill(value)?);
+            let spilled = self.spill(value)?;
+            self.placement.set(value, spilled);
         }
         Ok(())
     }
@@ -668,19 +702,15 @@ impl<'a> Allocator<'a> {
                         "x86 scratch register {reg:?} conflicts with an operand"
                     ));
                 }
-                self.locations[value.index()] = Some(self.spill(value)?);
+                let spilled = self.spill(value)?;
+                self.placement.set(value, spilled);
             }
         }
         Ok(())
     }
 
     fn register_occupant(&self, reg: Reg) -> Option<VReg> {
-        self.locations
-            .iter()
-            .enumerate()
-            .find_map(|(at, &location)| {
-                (location == Some(Location::Register(reg))).then_some(VReg::at(at))
-            })
+        self.placement.occupant(reg)
     }
 
     fn free_register(&self, reserved: RegSet) -> Option<Reg> {
@@ -695,22 +725,13 @@ impl<'a> Allocator<'a> {
             .map(|value| {
                 (
                     value,
-                    self.locations[value.index()].expect("every live value has a location"),
+                    self.placement
+                        .get(value)
+                        .expect("every live value has a location"),
                 )
             })
             .collect();
         self.states[point.index()] = Some(PointState { block, values });
-    }
-
-    fn point_block(&self, point: Point) -> BlockId {
-        self.liveness
-            .blocks
-            .iter()
-            .find(|layout| {
-                layout.entry.index() <= point.index() && point.index() <= layout.terminator.index()
-            })
-            .expect("every point belongs to a block")
-            .block
     }
 
     fn plan_operand_moves(
@@ -721,8 +742,8 @@ impl<'a> Allocator<'a> {
         assigned: &[Location],
     ) -> Result<(), String> {
         let mut copies = Vec::new();
-        for (&value, &destination) in operands.iter().zip(assigned) {
-            let source = before[value.index()].ok_or_else(|| {
+        for ((&value, &source), &destination) in operands.iter().zip(before).zip(assigned) {
+            let source = source.ok_or_else(|| {
                 format!("x86 operand v{} has no incoming location", value.index())
             })?;
             let copy = ParallelCopy::between(place(source), place(destination));
@@ -966,122 +987,164 @@ impl<'a> Allocator<'a> {
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "frame use combines split, operand, and CFG-edge move plans"
-)]
+/// The register each value is best defined in: the one every fixed use of
+/// it, and every return of it, asks for, where they agree; none where they
+/// differ or nothing asks.
+fn preferred_registers(selected: &Selected, entry: FunctionId) -> Vec<Option<Reg>> {
+    // `None` is asked for by nothing yet, `Some(None)` by uses that differ.
+    let mut asked: Vec<Option<Option<Reg>>> = vec![None; selected.widths.len()];
+    let mut ask = |value: VReg, reg: Option<Reg>| {
+        let held = &mut asked[value.index()];
+        *held = match *held {
+            None => Some(reg),
+            Some(Some(before)) if Some(before) == reg => Some(Some(before)),
+            Some(_) => Some(None),
+        };
+    };
+    for inst in &selected.instructions {
+        let def_offset = usize::from(inst.result.is_some());
+        for (at, &operand) in selected.operands[inst.operands.range()].iter().enumerate() {
+            match inst
+                .operand_spec(def_offset + at)
+                .map(|spec| spec.constraint)
+            {
+                Some(Constraint::Fixed(reg)) => ask(operand, Some(reg)),
+                Some(_) => {}
+                None => ask(operand, None),
+            }
+        }
+    }
+    for block in &selected.blocks {
+        let Terminator::Return { values } = block.terminator else {
+            continue;
+        };
+        let result = if block.owner == entry {
+            Reg::Rdi
+        } else {
+            Reg::Rax
+        };
+        for &value in &selected.operands[values.range()] {
+            ask(value, Some(result));
+        }
+    }
+    asked.into_iter().map(Option::flatten).collect()
+}
+
+/// The frame slots each function needs: past the last slot any of its
+/// values or moves uses, and one at least where a move it makes goes through
+/// the frame, if only for the temporary slot nought that breaks a cycle of
+/// copies; none where it uses no frame.
+///
+/// Slots are numbered within a function, and a move is within one function,
+/// so each function is sized by its own. The transitions at one point are
+/// planned together once, as the moves made there.
 fn function_spill_slots(
     selected: &Selected,
     liveness: &Liveness,
-    transitions: &[Transition],
-    operand_moves: &[Vec<CopyMove>],
-    edge_moves: &[EdgeMoves],
-    total: u32,
-) -> Vec<u32> {
-    let slots = selected
-        .functions
-        .iter()
-        .map(|function| function.source.index())
-        .max()
-        .map_or(0, |last| last + 1);
-    let mut required = vec![0; slots];
-    let uses_frame = |owner: FunctionId| {
-        let owns_point = |point: Point| {
-            liveness.blocks.iter().any(|layout| {
-                selected.blocks[layout.block].owner == owner
-                    && layout.entry.index() <= point.index()
-                    && point.index() <= layout.terminator.index()
-            })
-        };
-        let transition_moves_use_frame = transitions.iter().enumerate().any(|(at, transition)| {
-            if !owns_point(transition.at)
-                || transitions[..at]
-                    .iter()
-                    .any(|held| held.at == transition.at)
-            {
-                return false;
-            }
-            let copies: Vec<_> = transitions
-                .iter()
-                .filter(|held| held.at == transition.at)
-                .map(|held| ParallelCopy::between(place(held.from), place(held.to)))
-                .collect();
-            parallel_copy::plan(&copies, (total > 0).then(|| Place::Frame(FrameSlot::at(0))))
-                .expect("allocation transition copies were already planned")
-                .moves()
-                .iter()
-                .any(move_uses_frame)
-        });
-        transition_moves_use_frame
-            || liveness.blocks.iter().any(|layout| {
-                selected.blocks[layout.block].owner == owner
-                    && layout.instructions.iter().any(|points| {
-                        operand_moves[points.instruction.index()]
-                            .iter()
-                            .any(move_uses_frame)
-                    })
-            })
-            || edge_moves.iter().any(|edge| {
-                selected.blocks[edge.from].owner == owner && edge.moves.iter().any(move_uses_frame)
-            })
-    };
-    for function in &selected.functions {
-        if uses_frame(function.source) {
-            required[function.source.index()] = total;
-        }
-    }
-    required
-}
-
-const fn move_uses_frame(movement: &CopyMove) -> bool {
-    let CopySource::Place(source) = movement.source();
-    matches!(source, Place::Frame(_)) || matches!(movement.destination(), Place::Frame(_))
-}
-
-fn required_spill_slots(
     segments: &[Segment],
     transitions: &[Transition],
     operand_moves: &[Vec<CopyMove>],
     edge_moves: &[EdgeMoves],
-) -> Result<u32, String> {
-    let mut last = None;
-    let mut note_location = |location: Location| {
-        if let Location::Spill(SpillSlot(slot)) = location {
-            last = Some(last.map_or(slot, |held: u32| held.max(slot)));
-        }
-    };
+) -> Result<Vec<u32>, String> {
+    // Whether each function uses its frame, and the last slot it names.
+    let mut frame: Vec<(bool, Option<u32>)> = vec![(false, None); function_count(selected)];
+    let owner_at = |point| owner_at(selected, liveness, point);
     for segment in segments {
-        note_location(segment.location);
+        let owner = owner_at(segment.start)
+            .ok_or_else(|| "x86 spill segment has no owning function".to_owned())?;
+        frame_note(&mut frame, owner, place(segment.location));
     }
-    for transition in transitions {
-        note_location(transition.from);
-        note_location(transition.to);
+    // The transitions at each point are planned as the moves made there,
+    // with slot nought to break a cycle.
+    for (point, copies) in &copies_at_points(transitions) {
+        let owner =
+            owner_at(*point).ok_or_else(|| "x86 transition has no owning function".to_owned())?;
+        let plan = parallel_copy::plan(copies, Some(Place::Frame(FrameSlot::at(0))))
+            .expect("allocation transition copies were already planned");
+        note_moves(&mut frame, owner, plan.moves());
     }
-    let mut note_move = |movement: &CopyMove| {
-        let CopySource::Place(source) = movement.source();
-        for place in [source, movement.destination()] {
-            if let Place::Frame(slot) = place {
-                last = Some(last.map_or_else(|| slot.number(), |held| held.max(slot.number())));
-            }
+    for layout in &liveness.blocks {
+        let owner = selected.blocks[layout.block].owner;
+        for points in &layout.instructions {
+            note_moves(
+                &mut frame,
+                owner,
+                &operand_moves[points.instruction.index()],
+            );
         }
-    };
-    for movement in operand_moves
+    }
+    for edge in edge_moves {
+        note_moves(&mut frame, selected.blocks[edge.from].owner, &edge.moves);
+    }
+    frame
+        .into_iter()
+        .map(|(uses, last)| {
+            if !uses {
+                return Ok(0);
+            }
+            last.unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| "x86 spill frame exceeds 4G slots".to_owned())
+        })
+        .collect()
+}
+
+/// How many functions an index by function source needs room for.
+fn function_count(selected: &Selected) -> usize {
+    selected
+        .functions
         .iter()
-        .flatten()
-        .chain(edge_moves.iter().flat_map(|edge| &edge.moves))
-    {
-        note_move(movement);
+        .map(|function| function.source.index())
+        .max()
+        .map_or(0, |last| last + 1)
+}
+
+/// The function whose block holds `point`: blocks take consecutive runs of
+/// points in order, so it is the last block beginning at or before it.
+fn owner_at(selected: &Selected, liveness: &Liveness, point: Point) -> Option<FunctionId> {
+    let after = liveness
+        .blocks
+        .partition_point(|layout| layout.entry.index() <= point.index());
+    let layout = &liveness.blocks[after.checked_sub(1)?];
+    (point.index() <= layout.terminator.index()).then(|| selected.blocks[layout.block].owner)
+}
+
+/// The copies each transition makes, gathered by the point they are made
+/// at, in the order the points first appear.
+fn copies_at_points(transitions: &[Transition]) -> Vec<(Point, Vec<ParallelCopy>)> {
+    let mut at_point: Vec<(Point, Vec<ParallelCopy>)> = Vec::new();
+    let mut found: HashMap<usize, usize> = HashMap::new();
+    for transition in transitions {
+        let copy = ParallelCopy::between(place(transition.from), place(transition.to));
+        if let Some(&group) = found.get(&transition.at.index()) {
+            at_point[group].1.push(copy);
+        } else {
+            found.insert(transition.at.index(), at_point.len());
+            at_point.push((transition.at, vec![copy]));
+        }
     }
-    // Transition groups are replanned together during final lowering and may
-    // discover a cycle not present in an individual operand plan. Slot zero
-    // is reserved for that temporary.
-    if !transitions.is_empty() && last.is_none() {
-        last = Some(0);
+    at_point
+}
+
+/// Note that `owner` uses its frame wherever `moves` go through it.
+fn note_moves(frame: &mut [(bool, Option<u32>)], owner: FunctionId, moves: &[CopyMove]) {
+    for movement in moves {
+        let CopySource::Place(source) = movement.source();
+        frame_note(frame, owner, source);
+        frame_note(frame, owner, movement.destination());
     }
-    last.map_or(Ok(0), |last| {
-        last.checked_add(1)
-            .ok_or_else(|| "x86 spill frame exceeds 4G slots".to_owned())
-    })
+}
+
+/// Note that `owner` uses its frame at `place`, when `place` is in it.
+fn frame_note(frame: &mut [(bool, Option<u32>)], owner: FunctionId, place: Place) {
+    let held = &mut frame[owner.index()];
+    if let Place::Frame(slot) = place {
+        held.0 = true;
+        held.1 = Some(
+            held.1
+                .map_or_else(|| slot.number(), |last| last.max(slot.number())),
+        );
+    }
 }
 
 fn collect_instruction_data<T>(
