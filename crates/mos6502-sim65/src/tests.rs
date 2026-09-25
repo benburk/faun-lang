@@ -55,7 +55,7 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("argc", 50),
     ("expressions", 52),
 ];
-const ARITHMETIC_SIZES: [usize; 3] = [209, 248, 246];
+const ARITHMETIC_SIZES: [usize; 3] = [209, 247, 245];
 
 fn code(program: &faun_core::ir::Program) -> Vec<u8> {
     TARGET

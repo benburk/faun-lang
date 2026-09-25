@@ -411,8 +411,15 @@ pub(crate) struct Assembler {
     /// Kept while instructions are selected rather than recovered afterward,
     /// since every emitted instruction passes through this owner.
     state: MachineState,
-    /// Labels said to be reached only by running into them.
-    fallen: Vec<usize>,
+    /// What every edge written so far into each unbound label agrees on,
+    /// or `None` where nothing has jumped there yet.
+    arriving: Vec<Option<MachineState>>,
+    /// What each bound label took to be known there. An edge written after
+    /// the label must agree with it.
+    assumed: Vec<Option<MachineState>>,
+    /// Whether the next instruction is reached by running into it, which
+    /// is not so after a jump or a return.
+    unreached: bool,
     /// Zero-page bytes something outside the program reads.
     ///
     /// What reads a byte is otherwise read off the instructions, and an
@@ -449,39 +456,59 @@ impl Assembler {
 
     pub(crate) fn label(&mut self) -> Label {
         self.labels.push(None);
+        self.arriving.push(None);
+        self.assumed.push(None);
         Label(self.labels.len() - 1)
     }
 
     /// Say that a label stands here, which is before whatever comes next.
+    ///
+    /// What is known there is what every edge into it agrees on: each jump
+    /// and branch written to it so far, and running into it where that
+    /// happens. Every edge must be written before the label is bound, save
+    /// for ones that agree with what it assumed; a loop's head, which its
+    /// own body jumps back to, is bound with [`Self::bind_reentered`].
     pub(crate) fn bind(&mut self, label: Label) {
+        let arriving = self.arriving[label.0].take();
+        self.state = match (arriving, self.unreached) {
+            (Some(arriving), false) => arriving.join(self.state),
+            (Some(arriving), true) => arriving,
+            (None, false) => self.state,
+            (None, true) => MachineState::UNKNOWN,
+        };
+        self.place(label);
+    }
+
+    /// Bind a label something reaches after it is bound, such as a loop's
+    /// head, or from where nothing here sees, such as a function's start.
+    /// Nothing is assumed there.
+    pub(crate) fn bind_reentered(&mut self, label: Label) {
+        self.arriving[label.0] = None;
         self.state = MachineState::UNKNOWN;
+        self.place(label);
+    }
+
+    fn place(&mut self, label: Label) {
+        self.assumed[label.0] = Some(self.state);
+        self.unreached = false;
         self.labels[label.0] = Some(self.insts.len());
     }
 
-    /// Bind a label after joining all of its incoming edge states.
+    /// Record an edge into `label` carrying `state`.
     ///
-    /// The caller also proves there is no unrepresented fallthrough. This is
-    /// used both for a branch around a terminal arm and for comparison
-    /// sequences that merge several edges explicitly.
-    pub(crate) fn bind_with(&mut self, label: Label, state: MachineState) {
-        self.state = state;
-        self.labels[label.0] = Some(self.insts.len());
-    }
-
-    /// The same, for a label nothing jumps to.
-    ///
-    /// What is known about the registers survives it, there being no other
-    /// way to arrive. Saying so is a claim about the whole program
-    /// rather than about what has been written so far, so [`Self::finish`]
-    /// checks it before writing anything down.
-    pub(crate) fn bind_fallen_into(&mut self, label: Label) {
-        self.labels[label.0] = Some(self.insts.len());
-        self.fallen.push(label.0);
-    }
-
-    /// State on the current fallthrough edge.
-    pub(crate) const fn state(&self) -> MachineState {
-        self.state
+    /// # Panics
+    /// If the label is already bound and assumed something this edge does
+    /// not bring: the code after it was chosen on a fact that is not so.
+    fn arrive(&mut self, label: Label, state: MachineState) {
+        if let Some(assumed) = self.assumed[label.0] {
+            assert!(
+                assumed.join(state) == assumed,
+                "an edge into a bound label contradicts what it assumed"
+            );
+            return;
+        }
+        let arriving = &mut self.arriving[label.0];
+        *arriving = Some(arriving.map_or(state, |known| known.join(state)));
     }
 
     /// Whether reading this byte would change the accumulator.
@@ -790,7 +817,6 @@ impl Assembler {
     ///
     /// If a label was never bound, or the image outgrew the machine.
     pub(crate) fn finish(mut self) -> Vec<u8> {
-        self.check_nothing_jumps_where_nothing_should();
         self.drop_unread_stores();
         self.thread_jumps();
         self.drop_repeated_jumps();
@@ -971,28 +997,6 @@ impl Assembler {
             .collect();
     }
 
-    /// Check that every label said to be only fallen into really is.
-    ///
-    /// What [`Self::bind_fallen_into`] claims cannot be known while the
-    /// instructions are being written, since what jumps where is only
-    /// settled once they all are.
-    ///
-    /// # Panics
-    /// If anything names such a label.
-    fn check_nothing_jumps_where_nothing_should(&self) {
-        for inst in &self.insts {
-            let (Inst::Branch { to, .. } | Inst::Absolute { to, .. } | Inst::Half { to, .. }) =
-                *inst
-            else {
-                continue;
-            };
-            assert!(
-                !self.fallen.contains(&to.0),
-                "something jumps to a label said to be only fallen into"
-            );
-        }
-    }
-
     /// Which branches do not reach, and where every step lands once they
     /// have the width they need.
     ///
@@ -1063,6 +1067,8 @@ impl Assembler {
 
     /// Half of a label's address, as an immediate.
     pub(crate) fn lda_imm_half(&mut self, label: Label, half: Half) {
+        // An address taken is somewhere anything may go, knowing nothing.
+        self.arrive(label, MachineState::UNKNOWN);
         self.state = MachineState {
             acc: Register::NOTHING,
             flags: Flags {
@@ -1260,26 +1266,26 @@ impl Assembler {
         self.op(Mnemonic::Rts, Operand::Implied);
     }
 
+    /// A branch: its target learns the condition held, and what runs on
+    /// from here learns it did not.
     pub(crate) fn branch(&mut self, cc: Cc, label: Label) {
-        let _ = self.branch_state(cc, label);
-    }
-
-    /// Branch and return what its taken edge establishes. The state retained
-    /// here is the inverse fact established on the fallthrough edge.
-    pub(crate) fn branch_state(&mut self, cc: Cc, label: Label) -> MachineState {
-        let taken = self.state.on_branch(cc, true);
+        self.arrive(label, self.state.on_branch(cc, true));
         self.state = self.state.on_branch(cc, false);
         self.insts.push(Inst::Branch { cc, to: label });
-        taken
     }
 
     fn op(&mut self, mnemonic: Mnemonic, operand: Operand) {
         self.state = self.after(mnemonic, operand);
+        self.unreached |= matches!(mnemonic, Mnemonic::Jmp | Mnemonic::Rts);
         self.insts.push(Inst::Op { mnemonic, operand });
     }
 
+    /// A `jmp` or `jsr` to a label, which arrives there with what the
+    /// machine holds: neither instruction changes a register or a flag.
     fn absolute(&mut self, mnemonic: Mnemonic, to: Label) {
+        self.arrive(to, self.state);
         self.state = MachineState::UNKNOWN;
+        self.unreached |= mnemonic == Mnemonic::Jmp;
         self.insts.push(Inst::Absolute { mnemonic, to });
     }
 }
@@ -1373,17 +1379,60 @@ mod tests {
     }
 
     #[test]
-    fn a_branch_refines_both_edges_and_joins_only_agreement() {
+    fn a_branch_refines_both_edges_and_a_label_joins_only_agreement() {
         let mut asm = Assembler::new(0x200);
         let target = asm.label();
-        let taken = asm.branch_state(Cc::NoCarry, target);
-        let fallthrough = asm.state();
-        assert_eq!(taken.flags.carry, Some(false));
-        assert_eq!(fallthrough.flags.carry, Some(true));
-        assert_eq!(taken.join(fallthrough).flags.carry, None);
-
-        asm.bind_with(target, taken);
+        asm.branch(Cc::NoCarry, target);
+        assert_eq!(asm.state.flags.carry, Some(true));
+        let joined = asm.label();
+        asm.branch(Cc::Carry, joined);
+        // Only the branch reaches `target`, having found carry clear.
+        asm.bind(target);
         assert_eq!(asm.state.flags.carry, Some(false));
-        assert_eq!(asm.finish(), [0x90, 0x00]);
+        // Running into `joined` with carry clear, and branching to it with
+        // carry set, leaves carry unknown there.
+        asm.bind(joined);
+        assert_eq!(asm.state.flags.carry, None);
+        assert_eq!(asm.finish(), [0x90, 0x02, 0xB0, 0x00]);
+    }
+
+    #[test]
+    fn a_jump_carries_what_it_knows_and_nothing_runs_on_after_it() {
+        let mut asm = Assembler::new(0x200);
+        let end = asm.label();
+        let unreached = asm.label();
+        asm.lda_imm(7);
+        asm.sta_zp(0x20);
+        asm.jmp(end);
+        asm.lda_imm(9);
+        // The jump is the only way here: what ran on after it never does.
+        asm.bind(end);
+        assert!(!asm.needs_load(Held::Zero(0x20)));
+        asm.rts();
+        // Nothing reaches this, so nothing is known here.
+        asm.bind(unreached);
+        assert!(asm.needs_load(Held::Zero(0x20)));
+    }
+
+    #[test]
+    #[should_panic(expected = "contradicts what it assumed")]
+    fn an_edge_back_into_a_label_must_agree_with_what_it_assumed() {
+        let mut asm = Assembler::new(0x200);
+        let head = asm.label();
+        asm.lda_imm(7);
+        asm.bind(head);
+        asm.lda_imm(8);
+        asm.jmp(head);
+    }
+
+    #[test]
+    fn a_reentered_label_assumes_nothing() {
+        let mut asm = Assembler::new(0x200);
+        let head = asm.label();
+        asm.lda_imm(7);
+        asm.bind_reentered(head);
+        assert!(asm.needs_load(Held::Imm(7)));
+        asm.lda_imm(8);
+        asm.jmp(head);
     }
 }
