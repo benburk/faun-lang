@@ -70,8 +70,17 @@ pub enum Item {
     Import(ImportDecl),
     Exports(ExportsDecl),
     Data(DataDecl),
+    Alias(AliasDecl),
     Signature(SignatureDecl),
     Clause(Clause),
+}
+
+/// `Name = Type`: a second spelling of a type, which mints nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AliasDecl {
+    pub span: Span,
+    pub name: Name,
+    pub ty: Type,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

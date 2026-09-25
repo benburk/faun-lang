@@ -25,6 +25,27 @@ const RUNNING: &[(&str, &str, u32)] = &[
            host.exit!(doubled + wrapped)",
         9,
     ),
+    (
+        "an alias is its type",
+        "MyError = [NotFound SomethingElse]
+         Point = {x: Nat y: Nat}
+         Numbers = List(Nat)
+
+         cat : Nat -> Result(Nat MyError)
+         cat(0) -> Err(NotFound)
+         cat(1) -> Err(SomethingElse)
+         cat(n) -> Ok(n)
+
+         sum : Point -> Nat
+         sum({x y}) -> x + y
+
+         total : Numbers -> Nat
+         total(xs) -> xs.fold(0 |s x| s + x)
+
+         main! : Host -> []
+         main!(host) -> host.exit!(cat(5).ok_or(0) + sum({x: 1 y: 2}) + total([4]))",
+        12,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -76,6 +97,31 @@ const REFUSED: &[(&str, &str, &str)] = &[
          main! : Host -> []
          main!(host) -> host.exit!([zero].len())",
         "reached as `name()`",
+    ),
+    (
+        "an alias does not name itself",
+        "Chain = List(Chain)",
+        "alias `Chain` names itself",
+    ),
+    (
+        "an alias has no type variables",
+        "Pairs = List(a)",
+        "has no type variables",
+    ),
+    (
+        "an alias takes no arguments",
+        "Numbers = List(Nat)
+
+         total : Numbers(Nat) -> Nat
+         total(_) -> 0",
+        "`Numbers` is an alias and takes no arguments",
+    ),
+    (
+        "an alias owns no constructors to export",
+        "exports {Numbers.*}
+
+         Numbers = List(Nat)",
+        "owns no constructors",
     ),
 ];
 

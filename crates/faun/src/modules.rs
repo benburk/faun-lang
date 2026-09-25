@@ -31,6 +31,8 @@ pub struct TypeBinding {
     pub canonical: Symbol,
     pub constructors: HashMap<Symbol, Symbol>,
     pub methods: HashMap<Symbol, Symbol>,
+    /// Whether the name is a transparent alias, which owns nothing.
+    pub alias: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -374,6 +376,26 @@ fn declarations(
     for item in &module.items {
         match item {
             Item::Data(data) => declare_data(&mut own, data, source, &namespace, symbols)?,
+            Item::Alias(alias) => {
+                let local = symbols.intern(alias.name.text(source));
+                if own.types.contains_key(&local) {
+                    return Err(Diagnostic::new(format!(
+                        "type `{}` is declared more than once",
+                        alias.name.text(source)
+                    )));
+                }
+                let canonical =
+                    symbols.intern(&format!("{namespace}$${}", alias.name.text(source)));
+                own.types.insert(
+                    local,
+                    TypeBinding {
+                        canonical,
+                        constructors: HashMap::new(),
+                        methods: HashMap::new(),
+                        alias: true,
+                    },
+                );
+            }
             Item::Signature(signature) => {
                 declare_value(&mut own, signature.name, source, &namespace, symbols)?;
             }
@@ -405,6 +427,7 @@ fn declare_data(
         canonical,
         constructors: HashMap::new(),
         methods: HashMap::new(),
+        alias: false,
     };
     match &data.representation {
         DataRepresentation::Sum(constructors) => {
@@ -544,6 +567,12 @@ fn exports(
             )?;
         }
         if let Some(binding) = scope.types.get(&local) {
+            if binding.alias && export.constructors {
+                return Err(Diagnostic::new(format!(
+                    "`{}` is an alias, which owns no constructors for `.*` to export",
+                    export.name.text(source)
+                )));
+            }
             let mut visible = binding.clone();
             if !export.constructors {
                 visible.constructors.clear();

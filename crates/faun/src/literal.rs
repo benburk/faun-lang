@@ -125,7 +125,11 @@ pub(crate) fn validate(module: &Module, source: &str) -> Result<(), LiteralError
                 }
             }
             Item::Clause(clause) => validate_clause(clause, source)?,
-            Item::Header(_) | Item::Import(_) | Item::Exports(_) | Item::Signature(_) => {}
+            Item::Header(_)
+            | Item::Import(_)
+            | Item::Exports(_)
+            | Item::Alias(_)
+            | Item::Signature(_) => {}
         }
     }
     Ok(())

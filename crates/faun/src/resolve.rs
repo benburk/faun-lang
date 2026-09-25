@@ -72,6 +72,7 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
     let prelude = loaded.module(loaded.prelude).public.clone();
     let mut modules = Vec::with_capacity(loaded.modules.len());
     let mut sites = 0;
+    let mut aliases = HashMap::new();
     for module in &loaded.modules {
         let source = loaded
             .sources
@@ -80,15 +81,17 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
             .text();
         let mut scope = prelude.clone();
         scope.merge(&module.scope, &loaded.symbols, "module scope")?;
-        let resolved = resolve_module(module, source, &scope, &mut loaded.symbols, &mut sites);
-        modules.push(resolved.map_err(|error| {
-            let source = loaded
-                .sources
-                .get(module.source)
-                .expect("loaded module has source");
-            Diagnostic::new(error.message).at(source, error.span)
-        })?);
+        let resolved = resolve_module(
+            module,
+            source,
+            &scope,
+            (&mut loaded.symbols, &mut sites),
+            &mut aliases,
+        );
+        modules.push(resolved.map_err(|error| located(&loaded, error))?);
     }
+    expand_aliases(&mut modules, &aliases, &loaded.symbols)
+        .map_err(|error| located(&loaded, error))?;
     Ok(ResolvedProgram {
         module_sources: loaded.modules.iter().map(|module| module.source).collect(),
         package: loaded.package,
@@ -98,12 +101,25 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
     })
 }
 
+/// A resolve error as a diagnostic at the place it names.
+fn located(loaded: &LoadedProgram, error: ResolveError) -> Diagnostic {
+    let module = loaded.module(error.module);
+    let source = loaded
+        .sources
+        .get(module.source)
+        .expect("loaded module has source");
+    Diagnostic::new(error.message).at(source, error.span)
+}
+
+/// Each alias's definition, resolved in the module that wrote it.
+type Aliases = HashMap<Symbol, (h::Type, ModuleId, s::Span)>;
+
 fn resolve_module(
     module: &LoadedModule,
     source: &str,
     scope: &Interface,
-    symbols: &mut Symbols,
-    sites: &mut u32,
+    (symbols, sites): (&mut Symbols, &mut u32),
+    aliases: &mut Aliases,
 ) -> Result<h::Module, ResolveError> {
     let mut items = Vec::new();
     for item in &module.syntax.items {
@@ -129,6 +145,19 @@ fn resolve_module(
                     (symbols, sites),
                 )?));
             }
+            s::Item::Alias(alias) => {
+                let local = symbols.intern(alias.name.text(source));
+                let canonical = scope.types[&local].canonical;
+                let ty = resolve_type(module.id, &alias.ty, source, scope, symbols)?;
+                if has_variable(&ty) {
+                    return Err(error(
+                        module.id,
+                        alias.span,
+                        "an alias names one type and has no type variables; a type with parameters is declared with `:`",
+                    ));
+                }
+                aliases.insert(canonical, (ty, module.id, alias.span));
+            }
             s::Item::Header(_) | s::Item::Import(_) | s::Item::Exports(_) => {}
         }
     }
@@ -143,6 +172,162 @@ fn resolve_module(
         source: module.id,
         visible_methods,
         items,
+    })
+}
+
+fn has_variable(ty: &h::Type) -> bool {
+    match ty {
+        h::Type::Variable(_) => true,
+        h::Type::Named(_, arguments) => arguments.iter().any(has_variable),
+        h::Type::Function(parameters, result) => {
+            parameters.iter().any(has_variable) || has_variable(result)
+        }
+        h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).any(has_variable),
+        h::Type::Record(fields) => fields.iter().any(|(_, field)| has_variable(field)),
+    }
+}
+
+/// Replace every alias in the program's written types by what it names.
+/// An alias is transparent: `Point = {x: Nat y: Nat}` is the record type,
+/// so a bare record already has it, and nothing downstream sees the alias.
+fn expand_aliases(
+    modules: &mut [h::Module],
+    aliases: &Aliases,
+    symbols: &Symbols,
+) -> Result<(), ResolveError> {
+    let mut expanded = Aliases::new();
+    for (&alias, &(_, module, span)) in aliases {
+        let ty = expand(
+            &h::Type::Named(alias, Vec::new()),
+            aliases,
+            symbols,
+            &mut Vec::new(),
+        )
+        .map_err(|message| error(module, span, message))?;
+        expanded.insert(alias, (ty, module, span));
+    }
+    for module in modules {
+        let id = module.source;
+        for item in &mut module.items {
+            match item {
+                h::Item::Data(data) => {
+                    let span = data.span;
+                    let fields = data
+                        .constructors
+                        .iter_mut()
+                        .flat_map(|constructor| &mut constructor.fields)
+                        .chain(data.wrapper.iter_mut().map(|wrapper| &mut wrapper.field));
+                    for field in fields {
+                        *field = expand(field, &expanded, symbols, &mut Vec::new())
+                            .map_err(|message| error(id, span, message))?;
+                    }
+                    for method in &mut data.methods {
+                        if let h::MethodItem::Signature(signature) = method {
+                            expand_signature(signature, &expanded, symbols)
+                                .map_err(|message| error(id, signature.span, message))?;
+                        }
+                    }
+                }
+                h::Item::Signature(signature) => {
+                    expand_signature(signature, &expanded, symbols)
+                        .map_err(|message| error(id, signature.span, message))?;
+                }
+                h::Item::Clause(_) => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn expand_signature(
+    signature: &mut h::SignatureDecl,
+    aliases: &Aliases,
+    symbols: &Symbols,
+) -> Result<(), String> {
+    let written = signature
+        .parameters
+        .iter_mut()
+        .chain(std::iter::once(&mut signature.result))
+        .chain(
+            signature
+                .constraints
+                .iter_mut()
+                .flat_map(|constraint| &mut constraint.arguments),
+        );
+    for ty in written {
+        *ty = expand(ty, aliases, symbols, &mut Vec::new())?;
+    }
+    Ok(())
+}
+
+/// `ty` with every alias replaced by its definition, refusing an alias
+/// given arguments or one reached again while it is being expanded.
+fn expand(
+    ty: &h::Type,
+    aliases: &Aliases,
+    symbols: &Symbols,
+    expanding: &mut Vec<Symbol>,
+) -> Result<h::Type, String> {
+    let spelled = |name: Symbol| {
+        let text = symbols.text(name);
+        text.rsplit_once("$$")
+            .map_or(text, |(_, spelled)| spelled)
+            .to_owned()
+    };
+    Ok(match ty {
+        h::Type::Named(name, arguments) if aliases.contains_key(name) => {
+            if !arguments.is_empty() {
+                return Err(format!(
+                    "`{}` is an alias and takes no arguments",
+                    spelled(*name)
+                ));
+            }
+            if expanding.contains(name) {
+                return Err(format!(
+                    "alias `{}` names itself; a recursive type is declared with `:`",
+                    spelled(*name)
+                ));
+            }
+            expanding.push(*name);
+            let definition = expand(&aliases[name].0, aliases, symbols, expanding)?;
+            expanding.pop();
+            definition
+        }
+        h::Type::Named(name, arguments) => h::Type::Named(
+            *name,
+            arguments
+                .iter()
+                .map(|argument| expand(argument, aliases, symbols, expanding))
+                .collect::<Result<_, _>>()?,
+        ),
+        h::Type::Variable(_) => ty.clone(),
+        h::Type::Function(parameters, result) => h::Type::Function(
+            parameters
+                .iter()
+                .map(|parameter| expand(parameter, aliases, symbols, expanding))
+                .collect::<Result<_, _>>()?,
+            Box::new(expand(result, aliases, symbols, expanding)?),
+        ),
+        h::Type::Variants(tags) => h::Type::Variants(
+            tags.iter()
+                .map(|tag| {
+                    Ok(h::ConstructorDecl {
+                        name: tag.name,
+                        fields: tag
+                            .fields
+                            .iter()
+                            .map(|field| expand(field, aliases, symbols, expanding))
+                            .collect::<Result<_, String>>()?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
+        ),
+        h::Type::Record(fields) => h::Type::Record(
+            fields
+                .iter()
+                .map(|(name, field)| Ok((*name, expand(field, aliases, symbols, expanding)?)))
+                .collect::<Result<_, String>>()?,
+        ),
     })
 }
 

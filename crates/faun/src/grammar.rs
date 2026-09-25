@@ -5,10 +5,10 @@
 //! kinds do not retry one another after constructing syntax trees.
 
 use super::ast::{
-    BinaryOp, Binding, Body, Clause, Constraint, ConstructorDecl, DataDecl, DataRepresentation,
-    Export, ExportsDecl, Exposure, Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, Item,
-    MethodItem, Module, Name, Numeral, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type,
-    UnaryOp,
+    AliasDecl, BinaryOp, Binding, Body, Clause, Constraint, ConstructorDecl, DataDecl,
+    DataRepresentation, Export, ExportsDecl, Exposure, Expr, ExprKind, HeaderDecl, HeaderKind,
+    ImportDecl, Item, MethodItem, Module, Name, Numeral, NumeralKind, Pattern, SignatureDecl, Span,
+    StringPart, Type, UnaryOp,
 };
 use super::lex::{Kind, Token};
 use super::source::SourceId;
@@ -173,6 +173,7 @@ peg::parser! {
             = header:header() { Item::Header(header) }
             / import:import_decl() { Item::Import(import) }
             / exports:exports_decl() { Item::Exports(exports) }
+            / alias:alias_decl() { Item::Alias(alias) }
             / data:data_decl() { Item::Data(data) }
             / declaration:term_declaration() { term_item(declaration) }
 
@@ -218,6 +219,15 @@ peg::parser! {
         rule export() -> Export
             = exported:source_name() constructors:adj(Kind::DotStar)? {
                 Export { name: name(exported), constructors: constructors.is_some() }
+            }
+
+        rule alias_decl() -> AliasDecl
+            = head:type_ident() quiet!{tok(Kind::Eq)} ty:ty() {
+                AliasDecl {
+                    span: head.span().through(type_span(&ty)),
+                    name: name(head),
+                    ty,
+                }
             }
 
         rule data_decl() -> DataDecl
