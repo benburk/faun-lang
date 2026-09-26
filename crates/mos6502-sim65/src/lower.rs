@@ -32,6 +32,24 @@ struct Plan {
     homes: Vec<u8>,
 }
 
+/// The first of `places`, or a new one while fewer than `most` are taken,
+/// that holds nothing wanted while `span` is, now holding that too.
+fn free(places: &mut Vec<Vec<(usize, usize)>>, span: (usize, usize), most: usize) -> Option<usize> {
+    let apart = |&(first, last): &(usize, usize)| last < span.0 || span.1 < first;
+    // Something never touched is wanted nowhere, and shares with nothing.
+    let at = places
+        .iter()
+        .position(|held| span.0 <= span.1 && held.iter().all(apart))
+        .or_else(|| {
+            (places.len() < most).then(|| {
+                places.push(Vec::new());
+                places.len() - 1
+            })
+        })?;
+    places[at].push(span);
+    Some(at)
+}
+
 /// Where each value is first and last touched in emission order, and where
 /// the calls are. A value whose span holds a call is live across it.
 #[derive(Default)]
@@ -743,25 +761,38 @@ impl Lowering<'_> {
     /// someone to give them back to.
     fn place(&mut self, held: &[ValueId], spans: &Spans) -> Result<Plan, String> {
         let mut plan = Plan::default();
+        // Each pair and slot, with the spans of what it holds: a value no
+        // longer wanted leaves its place to one wanted only after.
+        let mut homes: Vec<Vec<(usize, usize)>> = Vec::new();
+        let mut slots: Vec<Vec<(usize, usize)>> = Vec::new();
         for &value in held {
+            let span = (spans.first[value.index()], spans.last[value.index()]);
             // A callee takes the pairs from the same place, so a value a
             // call outlives cannot hold one; the frame is out of a callee's
             // reach, and that is where such a value goes.
-            let exposed = spans.crosses_call(value);
-            match u8::try_from(plan.homes.len()) {
-                Ok(taken) if taken < HOME_COUNT && !exposed => {
-                    let pair = HOMES + 2 * taken;
+            // The most used take a pair each, as they come; after them,
+            // one whose pair is no longer wanted may take it again.
+            let home = if spans.crosses_call(value) {
+                None
+            } else if homes.len() < usize::from(HOME_COUNT) {
+                homes.push(vec![span]);
+                Some(homes.len() - 1)
+            } else {
+                free(&mut homes, span, 0)
+            };
+            if let Some(at) = home {
+                let pair = HOMES + 2 * u8::try_from(at).expect("fewer pairs than a byte counts");
+                if at == plan.homes.len() {
                     plan.homes.push(pair);
-                    self.source[value.index()] = Source::Home(pair);
                 }
-                _ => {
-                    self.source[value.index()] = Source::Slot(plan.frame);
-                    plan.frame = plan
-                        .frame
-                        .checked_add(2)
-                        .ok_or_else(|| "frame exceeds 254 bytes (127 spilled values)".to_owned())?;
-                }
+                self.source[value.index()] = Source::Home(pair);
+                continue;
             }
+            let at = free(&mut slots, span, 127)
+                .ok_or_else(|| "frame exceeds 254 bytes (127 spilled values)".to_owned())?;
+            let slot = u8::try_from(2 * at).expect("127 slots are 254 bytes");
+            plan.frame = plan.frame.max(slot + 2);
+            self.source[value.index()] = Source::Slot(slot);
         }
         Ok(plan)
     }

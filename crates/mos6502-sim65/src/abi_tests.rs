@@ -46,21 +46,28 @@ fn region_transfer_limit_does_not_restrict_function_parameters() {
     }
 }
 
+/// A function holding `pairs` places at once: that many values worked out,
+/// then added up, so each is wanted until its turn comes, and the first sum
+/// is wanted beside all of them.
 fn frame(pairs: usize) -> Program {
     let (mut program, main) = Program::new("main");
     program.define(main, |b, _| {
         let zero = b.constant(Class::Word, 0);
-        for _ in 0..pairs {
-            b.binary(Binary::Add, zero, zero);
-        }
-        b.ret(&[zero]);
+        let held: Vec<_> = (1..pairs)
+            .map(|_| b.binary(Binary::Add, zero, zero))
+            .collect();
+        let total = held[1..]
+            .iter()
+            .fold(held[0], |total, &value| b.binary(Binary::Add, total, value));
+        b.ret(&[total]);
     });
     program
 }
 
 #[test]
 fn checks_actual_spill_plan_before_emission() {
-    // Sixteen home pairs are not part of the byte-indexed software frame.
+    // Sixteen home pairs are not part of the byte-indexed software frame,
+    // and a slot is held by one value at a time.
     let fitting = frame(16 + 127);
     validate(&fitting).unwrap();
     Mos6502Sim65.accepts(&fitting).unwrap();

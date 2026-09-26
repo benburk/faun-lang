@@ -542,8 +542,15 @@ impl Wrote {
             for (side, held) in sides.iter_mut().enumerate() {
                 let yielded = source.outgoing(regions[side]);
                 for (&was, &value) in results.iter().zip(yielded) {
+                    // What stands for the result must be something the
+                    // result could be: an arm the tier above found is never
+                    // taken may answer anything.
+                    let class = source.class(was);
+                    if !source.class(value).fits(class) {
+                        continue;
+                    }
                     let answered = match self.number(value) {
-                        Some(number) => Answered::Number(number, source.class(value)),
+                        Some(number) => Answered::Number(number, class),
                         None if !inside.contains(&value) => Answered::Before(value),
                         None => continue,
                     };

@@ -247,7 +247,22 @@ impl<'a> Rebuild<'a> {
                 pass,
             ),
             Op::Loop { initial, body } => {
-                let initial = self.args(initial);
+                // A loop goes round at the classes it was written with,
+                // however much narrower what now starts it is.
+                let params = self.source.values(self.source.region(body).params);
+                let initial: Vec<_> = self
+                    .args(initial)
+                    .into_iter()
+                    .zip(params)
+                    .map(|(value, &param)| {
+                        let class = self.source.class(param);
+                        if b.class(value) == class {
+                            value
+                        } else {
+                            b.convert(class, value)
+                        }
+                    })
+                    .collect();
                 b.loop_(&initial, &self.classes(results), |b, params| {
                     self.region(b, body, params, pass);
                 })

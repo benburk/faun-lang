@@ -1234,12 +1234,59 @@ fn hazards(selected: &Selected, liveness: &Liveness) -> Vec<RegSet> {
     hazards
 }
 
+/// What a block is handed, where it is not needed past the handing, is
+/// where the block's parameter will be. Answers whether anything was
+/// learned.
+fn handed_hazards(
+    selected: &Selected,
+    liveness: &Liveness,
+    entries: &[Option<Point>],
+    hazards: &mut [RegSet],
+) -> bool {
+    let mut learned = false;
+    for block in &selected.blocks {
+        let edges: &[(BlockId, Range)] = &match block.terminator {
+            Terminator::Jump { target, args } => vec![(target, args)],
+            Terminator::Branch {
+                then_target,
+                then_args,
+                else_target,
+                else_args,
+                ..
+            } => vec![(then_target, then_args), (else_target, else_args)],
+            Terminator::Return { .. } | Terminator::Halt => Vec::new(),
+        };
+        for &(target, args) in edges {
+            let target_block = selected.blocks[target];
+            let params = &selected.block_params[target_block.params.range()];
+            let Some(entry) = entries[target.index()] else {
+                continue;
+            };
+            for (&arg, &param) in selected.operands[args.range()].iter().zip(params) {
+                if arg == param || liveness.at[entry.index()].contains(arg) {
+                    continue;
+                }
+                let joined = hazards[arg.index()].0 | hazards[param.index()].0;
+                if joined != hazards[arg.index()].0 {
+                    hazards[arg.index()].0 = joined;
+                    learned = true;
+                }
+            }
+        }
+    }
+    learned
+}
+
 /// An operand overwritten with the result where it is read for the last
 /// time is where that result will be, so it had best avoid what the result
 /// must.
 fn tie_hazards(selected: &Selected, liveness: &Liveness, hazards: &mut [RegSet]) {
+    let mut entries = vec![None; selected.blocks.len()];
+    for layout in &liveness.blocks {
+        entries[layout.block.index()] = Some(layout.entry);
+    }
     loop {
-        let mut learned = false;
+        let mut learned = handed_hazards(selected, liveness, &entries, hazards);
         for points in liveness
             .blocks
             .iter()

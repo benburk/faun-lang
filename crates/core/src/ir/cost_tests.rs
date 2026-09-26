@@ -227,7 +227,33 @@ fn a_list_round_trip_costs_what_is_recorded() {
 /// walk only takes apart is borrowed, and so is a count.
 #[test]
 fn only_what_a_function_consumes_is_owned() {
-    let machine = lower(&mut round_trip(3), &Routines::builtin().with_word(64)).unwrap();
+    // Called from one place, `build` would be the loop that place goes
+    // round; called from two, it is a function of its own.
+    let mut source = round_trip(3);
+    let named = |source: &barb::Program, name: &str| {
+        (0..source.functions().len())
+            .map(barb::FnId::at)
+            .find(|&id| source.name(source.function(id).name) == name)
+            .expect("a definition by that name")
+    };
+    let (build, main) = (named(&source, "build"), named(&source, "main"));
+    let [nat, list] = source.params(build) else {
+        unreachable!("build takes a count and a list");
+    };
+    let (nat, list) = (*nat, *list);
+    let nil = source.ctor_at(list, 0);
+    let nought = source.intern_number(nat, 0).unwrap();
+    let twice = source.declare("twice", &[], nat);
+    source.define(twice, |b, _| {
+        b.call(main, &[]);
+        let none = b.known(nought);
+        let empty = b.con(nil, &[]);
+        let listed = b.call(build, &[none, empty]);
+        b.call(build, &[none, listed]);
+        b.known(nought)
+    });
+    source.set_entry(twice);
+    let machine = lower(&mut source, &Routines::builtin().with_word(64)).unwrap();
     let owned = ownership::owned_parameters(&machine);
     let lowered = |name: &str| {
         machine

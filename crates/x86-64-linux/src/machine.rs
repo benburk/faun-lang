@@ -498,11 +498,10 @@ impl AllocatedBuilder {
 
     pub(crate) fn fold_alu_immediate(&mut self, op: Alu, dst: Reg, src: Reg, bits: u16) -> bool {
         let len = self.code.insts().len();
-        if self.code.labelled_from(len.saturating_sub(1)) {
-            return false;
-        }
         // Nought compared with is a register tested against itself, which
-        // sets the same flags as the comparison and takes no immediate.
+        // sets the same flags as the comparison and takes no immediate. The
+        // test stands where the nought was written, so a jump to either
+        // lands on it, and it needs nothing the nought held.
         if op == Alu::Compare
             && let Some(&Inst::XorSelf { dst: materialized }) = self.code.insts().last()
             && materialized == src
@@ -515,6 +514,9 @@ impl AllocatedBuilder {
                 bits,
             });
             return true;
+        }
+        if self.code.labelled_from(len.saturating_sub(1)) {
+            return false;
         }
         let immediate = match self.code.insts().get(len.wrapping_sub(2)..) {
             Some(

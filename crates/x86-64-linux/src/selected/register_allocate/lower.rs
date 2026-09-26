@@ -289,6 +289,13 @@ impl<'a> Lowering<'a> {
         }
     }
 
+    /// Whether `value` is nought, and nothing but one comparison reads it.
+    fn is_only_nought(&self, value: VReg) -> bool {
+        self.uses.definitions[value.index()].is_some_and(|definition| {
+            self.selected.instructions[definition].immediate == Immediate::Integer(0)
+        }) && self.uses.operands[value.index()] == 1
+    }
+
     fn is_unique_constant(&self, value: VReg) -> bool {
         let Some(definition_id) = self.uses.definitions[value.index()] else {
             return false;
@@ -438,7 +445,9 @@ impl<'a> Lowering<'a> {
             (Opcode::Equal | Opcode::Below, Immediate::Bits(bits)) => {
                 let source = self.selected.operands[inst.operands.range()][1];
                 let source_reg = reg(1)?;
-                if self.is_unique_constant(source)
+                // Nought read here alone was just written, or the fold
+                // finds nothing to take back; the fold forgets the register.
+                if (self.is_unique_constant(source) || self.is_only_nought(source))
                     && self
                         .asm
                         .fold_alu_immediate(Alu::Compare, reg(0)?, source_reg, bits)

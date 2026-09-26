@@ -43,7 +43,7 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("a countdown", 86),
     ("a carried total", 82),
     ("a step first", 86),
-    ("a long arm", 960),
+    ("a long arm", 559),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("exit", 17),
@@ -55,7 +55,7 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("width", 48),
     ("argc", 48),
     ("expressions", 50),
-    ("hello", 233),
+    ("hello", 218),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [209, 247, 245];
 

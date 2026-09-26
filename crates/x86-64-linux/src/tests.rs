@@ -40,22 +40,22 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("less", 140),
     ("two worked out", 169),
     ("a flag", 219),
-    ("a countdown", 170),
-    ("a carried total", 156),
+    ("a countdown", 166),
+    ("a carried total", 154),
     ("a step first", 191),
-    ("a long arm", 266),
+    ("a long arm", 264),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("exit", 128),
     ("two-and-two", 128),
     ("double", 128),
     ("leave", 128),
-    ("bool", 159),
-    ("nat", 389),
+    ("bool", 157),
+    ("nat", 381),
     ("width", 145),
     ("argc", 145),
     ("expressions", 151),
-    ("hello", 220),
+    ("hello", 208),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [201, 212, 211];
 
