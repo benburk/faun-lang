@@ -5,7 +5,7 @@
 
 use super::model::{
     Binary, Class, DataId, Direction, Exit, FunctionId, Offset, Op, Range, Region, RegionId,
-    Relation, Terminator, ValueId, Width, wrap,
+    Relation, ShapeId, Terminator, ValueId, Width, wrap,
 };
 use super::program::Program;
 
@@ -86,9 +86,15 @@ impl Builder<'_> {
     }
 
     /// Construct an immutable algebraic object from borrowed fields.
-    pub fn cell(&mut self, tag: u32, fields: &[ValueId]) -> ValueId {
+    pub fn cell(&mut self, tag: u32, shape: ShapeId, fields: &[ValueId]) -> ValueId {
         let fields = self.program.hold(fields);
-        self.push_one(Op::Cell { tag, fields }, Class::Cell)
+        self.push_one(Op::Cell { tag, fields, shape }, Class::Cell)
+    }
+
+    /// The shape whose leaves are `classes`, which an object or a buffer's
+    /// elements are stored as.
+    pub fn shape(&mut self, classes: &[Class]) -> ShapeId {
+        self.program.shape(classes)
     }
 
     /// Read a cell's constructor tag.
@@ -96,9 +102,14 @@ impl Builder<'_> {
         self.push_one(Op::CellTag { cell }, Class::Word)
     }
 
-    /// Read one field as `class`.
-    pub fn cell_field(&mut self, class: Class, cell: ValueId, index: u32) -> ValueId {
-        self.push_one(Op::CellField { cell, index }, class)
+    /// Read one field of an object of `shape` as `class`.
+    pub fn cell_field(
+        &mut self,
+        (class, shape): (Class, ShapeId),
+        cell: ValueId,
+        index: u32,
+    ) -> ValueId {
+        self.push_one(Op::CellField { cell, index, shape }, class)
     }
 
     /// A buffer holding no elements.
@@ -107,13 +118,19 @@ impl Builder<'_> {
     }
 
     /// Put one element, as its leaves, before the last `len` of `buffer`.
-    pub fn buffer_push(&mut self, buffer: ValueId, len: ValueId, fields: &[ValueId]) -> ValueId {
+    pub fn buffer_push(
+        &mut self,
+        (buffer, len): (ValueId, ValueId),
+        shape: ShapeId,
+        fields: &[ValueId],
+    ) -> ValueId {
         let fields = self.program.hold(fields);
         self.push_one(
             Op::BufferPush {
                 buffer,
                 len,
                 fields,
+                shape,
             },
             Class::Buffer,
         )
@@ -142,12 +159,19 @@ impl Builder<'_> {
     /// Read leaf `index` of the first of the last `len` elements, as `class`.
     pub fn buffer_field(
         &mut self,
-        class: Class,
-        buffer: ValueId,
-        len: ValueId,
+        (class, shape): (Class, ShapeId),
+        (buffer, len): (ValueId, ValueId),
         index: u32,
     ) -> ValueId {
-        self.push_one(Op::BufferField { buffer, len, index }, class)
+        self.push_one(
+            Op::BufferField {
+                buffer,
+                len,
+                index,
+                shape,
+            },
+            class,
+        )
     }
 
     pub fn data_len(&mut self, data: DataId) -> ValueId {

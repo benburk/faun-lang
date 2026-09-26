@@ -399,7 +399,8 @@ mod tests {
         let (mut program, main) = Program::new("main");
         program.define(main, |b, _| {
             let field = b.constant(Class::Word, 1);
-            b.cell(0, &[field]);
+            let word = b.shape(&[Class::Word]);
+            b.cell(0, word, &[field]);
             let status = b.constant(Class::Word, 0);
             b.ret(&[status]);
         });

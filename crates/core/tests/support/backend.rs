@@ -243,7 +243,8 @@ fn target_runs_managed_products_across_calls_and_matches() {
             matches,
             &[Class::Word],
             |b| {
-                let field = b.cell_field(Class::Word, params[0], 0);
+                let word = b.shape(&[Class::Word]);
+                let field = b.cell_field((Class::Word, word), params[0], 0);
                 b.yield_(&[field]);
             },
             |b| {
@@ -256,7 +257,8 @@ fn target_runs_managed_products_across_calls_and_matches() {
     let exit = TARGET.routines().declare(&mut machine, "exit!");
     machine.define(main, |b, _| {
         let field = b.constant(Class::Word, 42);
-        let cell = b.cell(1, &[field]);
+        let word = b.shape(&[Class::Word]);
+        let cell = b.cell(1, word, &[field]);
         let result = b.call_one(value, &[cell]);
         b.call(exit, &[result]);
     });
@@ -835,6 +837,68 @@ fn it_writes_what_a_program_writes() {
     for (name, program, held) in programs::printing() {
         assert_eq!(execute(&program).1, held, "{name}");
     }
+}
+
+/// Lists of every kind of element, built from a number the program is
+/// handed so nothing is worked out before it runs, then joined, reversed,
+/// mapped and compared: bools, bytes, pairs of a small number and a wider
+/// one, strings, lists of lists, and records holding strings. Each element
+/// is laid out as it is, so each kind is its own layout. Two at a time, so
+/// each program is small enough for every machine.
+#[test]
+fn lists_of_every_element_hold_what_they_were_given() {
+    const KINDS: &str = "held : Bool -> Nat
+         held(True) -> 1
+         held(False) -> 0
+
+         bools : Nat -> Bool
+         bools(n) -> [n == 1, n == 2, True].reverse() == [True, False, True]
+
+         bytes : Nat -> Bool
+         bytes(n) -> \"xy${n}\".to_utf8().reverse() == \"1yx\".to_utf8()
+
+         pairs : Nat -> Bool
+         pairs(n) -> [(n, 300 + n), (2, 5)].map(|(small, wide)| small + wide) == [302, 7]
+
+         strings : Nat -> Bool
+         strings(n) -> [\"a${n}\", \"bb\", \"c\"].extend([\"d\"]).reverse() == [\"d\", \"c\", \"bb\", \"a1\"]
+
+         nested : Nat -> Bool
+         nested(n) -> [[n, 2], [3]].extend([[4, 5, 6]]).map(|xs| xs.len()) == [2, 1, 3]
+
+         records : Nat -> Bool
+         records(n) -> named([{name: \"a${n}\", size: n}, {name: \"b\", size: 2}])
+
+         named : List({name: Str, size: Nat}) -> Bool
+         named(held) -> held.map(|r| r.name) == [\"a1\", \"b\"] & held.map(|r| r.size) == [1, 2]";
+    for (first, second) in [
+        ("bools", "bytes"),
+        ("pairs", "nested"),
+        ("strings", "records"),
+    ] {
+        let text = format!(
+            "import std.host {{Host}}
+
+             main! : Host -> []
+             main!(host) ->
+               n = host.args.len() % 4
+               host.exit!(held({first}(n)) + held({second}(n)) * 2)
+
+             {KINDS}"
+        );
+        let program = read(&text).unwrap_or_else(|e| panic!("{first}: {e}"));
+        let program = TARGET
+            .prepare(&program)
+            .unwrap_or_else(|e| panic!("{first}: {e}"));
+        assert_eq!(status(&program), 3, "{first} and {second}");
+    }
+}
+
+/// Memory two and four bytes wide, as well as a byte and a word.
+#[test]
+fn it_stores_narrower_than_a_word() {
+    let program = programs::stores_narrower_than_a_word(TARGET.word());
+    assert_eq!(status(&program), 6);
 }
 
 #[test]

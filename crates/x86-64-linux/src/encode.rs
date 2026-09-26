@@ -41,6 +41,8 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 displacement,
             } => match width {
                 MemoryWidth::Byte => asm.load_byte(dst, base, displacement),
+                MemoryWidth::Bits16 => asm.load_bits16(dst, base, displacement),
+                MemoryWidth::Bits32 => asm.load_bits32(dst, base, displacement),
                 MemoryWidth::Word => asm.load_word(dst, base, displacement),
             },
             Inst::Store {
@@ -50,6 +52,8 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 displacement,
             } => match width {
                 MemoryWidth::Byte => asm.store_byte(src, base, displacement),
+                MemoryWidth::Bits16 => asm.store_bits16(src, base, displacement),
+                MemoryWidth::Bits32 => asm.store_bits32(src, base, displacement),
                 MemoryWidth::Word => asm.store_word(src, base, displacement),
             },
             Inst::Narrow { dst, bits } => asm.narrow(dst, bits),
@@ -390,8 +394,42 @@ impl RawEncoder {
         self.at(&[0x88], src, base, disp);
     }
 
+    /// Two bytes, zero-extended on the way in.
+    fn load_bits16(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.step();
+        self.at(&[0x0F, 0xB7], dst, base, disp);
+    }
+
+    /// The low two bytes, which the operand-size prefix asks for.
+    fn store_bits16(&mut self, src: Reg, base: Reg, disp: i32) {
+        self.step();
+        self.emit(&[0x66]);
+        self.at_narrow(&[0x89], src, base, disp);
+    }
+
+    /// Four bytes: a 32-bit move zero-extends what it writes.
+    fn load_bits32(&mut self, dst: Reg, base: Reg, disp: i32) {
+        self.step();
+        self.at_narrow(&[0x8B], dst, base, disp);
+    }
+
+    fn store_bits32(&mut self, src: Reg, base: Reg, disp: i32) {
+        self.step();
+        self.at_narrow(&[0x89], src, base, disp);
+    }
+
     fn at(&mut self, opcode: &[u8], reg: Reg, base: Reg, disp: i32) {
         self.rex(true, Some(reg), base);
+        self.addressed(opcode, reg, base, disp);
+    }
+
+    /// The same with no `REX.W`, for an operand narrower than a word.
+    fn at_narrow(&mut self, opcode: &[u8], reg: Reg, base: Reg, disp: i32) {
+        self.rex(false, Some(reg), base);
+        self.addressed(opcode, reg, base, disp);
+    }
+
+    fn addressed(&mut self, opcode: &[u8], reg: Reg, base: Reg, disp: i32) {
         self.emit(opcode);
         self.emit(&[0x80 | (reg.low() << 3) | base.low()]);
         self.emit(&disp.to_le_bytes());

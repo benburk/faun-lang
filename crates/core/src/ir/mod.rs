@@ -71,6 +71,7 @@ mod model;
 pub mod natural;
 mod optimize;
 mod ownership;
+mod packing;
 mod pretty;
 mod program;
 mod prune;
@@ -86,7 +87,7 @@ pub use legalize::legalize;
 pub use lower::{MAKE_ARGUMENTS, lower, lower_counting_arguments};
 pub use model::{
     Binary, Class, DataId, Definition, Direction, Exit, Function, FunctionId, Offset, Op, Origin,
-    Range, Region, RegionId, Relation, Returns, Span, Terminator, ValueId, Width,
+    Range, Region, RegionId, Relation, Returns, ShapeId, Span, Terminator, ValueId, Width,
 };
 pub use optimize::optimize;
 pub use program::Program;

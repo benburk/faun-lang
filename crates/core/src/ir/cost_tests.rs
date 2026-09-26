@@ -217,7 +217,7 @@ fn a_list_round_trip_costs_what_is_recorded() {
             allocations: 8,
             retains: 0,
             releases: 8,
-            stored_bytes: 4336,
+            stored_bytes: 1910,
         }
     );
 }
@@ -379,8 +379,10 @@ fn pushes(n: u64) -> Program {
             let (buffer, len) = (state[0], state[1]);
             let done = b.compare(Relation::Equal, len, limit);
             b.if_(done, &[], |b| b.break_(&[buffer, len]), |b| b.yield_(&[]));
-            let boxed = b.cell(0, &[len]);
-            let grown = b.buffer_push(buffer, len, &[len, boxed]);
+            let word = b.shape(&[Class::Word]);
+            let boxed = b.cell(0, word, &[len]);
+            let pairs = b.shape(&[Class::Word, Class::Cell]);
+            let grown = b.buffer_push((buffer, len), pairs, &[len, boxed]);
             let one = b.constant(Class::Word, 1);
             let longer = b.binary(Binary::Add, len, one);
             b.continue_(&[grown, longer]);
@@ -389,15 +391,17 @@ fn pushes(n: u64) -> Program {
         let one = b.constant(Class::Word, 1);
         let longer = b.binary(Binary::Add, len, one);
         let seven = b.constant(Class::Word, 7);
-        let mark = b.cell(1, &[]);
-        let left = b.buffer_push(buffer, len, &[seven, mark]);
-        let mark = b.cell(1, &[]);
-        let right = b.buffer_push(buffer, len, &[seven, mark]);
-        let a = b.buffer_field(Class::Word, left, longer, 0);
-        let c = b.buffer_field(Class::Word, right, longer, 0);
-        let last = b.buffer_field(Class::Cell, left, one, 1);
-        let last = b.cell_field(Class::Word, last, 0);
-        let first = b.buffer_field(Class::Word, buffer, len, 0);
+        let (none, word) = (b.shape(&[]), b.shape(&[Class::Word]));
+        let pairs = b.shape(&[Class::Word, Class::Cell]);
+        let mark = b.cell(1, none, &[]);
+        let left = b.buffer_push((buffer, len), pairs, &[seven, mark]);
+        let mark = b.cell(1, none, &[]);
+        let right = b.buffer_push((buffer, len), pairs, &[seven, mark]);
+        let a = b.buffer_field((Class::Word, pairs), (left, longer), 0);
+        let c = b.buffer_field((Class::Word, pairs), (right, longer), 0);
+        let last = b.buffer_field((Class::Cell, pairs), (left, one), 1);
+        let last = b.cell_field((Class::Word, word), last, 0);
+        let first = b.buffer_field((Class::Word, pairs), (buffer, len), 0);
         let sum = b.binary(Binary::Add, a, c);
         let sum = b.binary(Binary::Add, sum, last);
         let sum = b.binary(Binary::Add, sum, first);

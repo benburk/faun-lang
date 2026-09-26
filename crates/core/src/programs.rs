@@ -524,6 +524,49 @@ pub fn stores_a_byte() -> Program {
     program
 }
 
+/// Two bytes stored after a byte and read back, and four the same way on a
+/// machine whose word holds them.
+///
+/// Each is read back as it was, zero-extended, and the byte before it is
+/// untouched. 6 where every one holds, the four counted twice, and counted
+/// as holding where the word is too narrow to ask.
+///
+/// # Panics
+/// If `word_bits` is not a width a machine has.
+#[must_use]
+pub fn stores_narrower_than_a_word(word_bits: u16) -> Program {
+    let (mut program, main) = Program::new("main");
+    let grow = crate::platform::Routines::builtin().declare(&mut program, "grow");
+    program.define(main, |b, _| {
+        let size = b.constant(Word, 4096);
+        let page = b.call_one(grow, &[size]);
+        let wanted = |b: &mut Builder, width, at, value, fill| {
+            let before = b.constant(Word, fill);
+            b.store(Width::Byte, page, Offset::Bytes(at - 1), before);
+            let held = b.constant(Word, value);
+            b.store(width, page, Offset::Bytes(at), held);
+            let back = b.load(width, page, Offset::Bytes(at));
+            let expected = b.constant(Word, value);
+            let same = b.compare(Relation::Equal, back, expected);
+            let neighbour = b.load(Width::Byte, page, Offset::Bytes(at - 1));
+            let fill = b.constant(Word, fill);
+            let kept = b.compare(Relation::Equal, neighbour, fill);
+            b.binary(Binary::Add, same, kept)
+        };
+        let answer = wanted(b, Width::Bits16, 2, 0xBEEF, 0xAA);
+        let answer = if word_bits >= 32 {
+            let wider = wanted(b, Width::Bits32, 8, 0xDEAD_BEEF, 0x55);
+            let wider = b.binary(Binary::Add, wider, wider);
+            b.binary(Binary::Add, answer, wider)
+        } else {
+            let four = b.constant(Word, 4);
+            b.binary(Binary::Add, answer, four)
+        };
+        b.ret(&[answer]);
+    });
+    program
+}
+
 /// A counter in a writable datum, bumped by a function called three times.
 /// Nothing but storage outliving a call can answer 3.
 #[must_use]

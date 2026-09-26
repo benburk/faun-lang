@@ -1,8 +1,8 @@
 //! What a target is entitled to assume.
 
 use super::model::{
-    Binary, Class, Definition, Exit, Function, Op, Origin, Range, RegionId, Returns, Symbol,
-    Terminator, ValueId, Width,
+    Binary, Class, Definition, Exit, Function, Op, Origin, Range, RegionId, Returns, ShapeId,
+    Symbol, Terminator, ValueId, Width,
 };
 use super::program::Program;
 use crate::index::{Id, Pool};
@@ -163,16 +163,28 @@ impl References<'_> {
             Op::Constant { .. } | Op::BufferEmpty => {}
             Op::NaturalConstant(id) => self.natural_datum(id)?,
             Op::AddressOf(id) => return self.datum(id).map(|_| ()),
-            Op::Cell { fields, .. } => self.values(fields)?,
-            Op::CellTag { cell } | Op::CellField { cell, .. } => self.value(cell)?,
+            Op::Cell { fields, shape, .. } => {
+                reference(&p.shapes, shape, "shape")?;
+                self.values(fields)?;
+            }
+            Op::CellTag { cell } => self.value(cell)?,
+            Op::CellField { cell, shape, .. } => {
+                reference(&p.shapes, shape, "shape")?;
+                self.value(cell)?;
+            }
             Op::BufferPush {
                 buffer,
                 len,
                 fields,
+                shape,
             } => {
+                reference(&p.shapes, shape, "shape")?;
                 self.value(buffer)?;
                 self.value(len)?;
                 self.values(fields)?;
+            }
+            Op::BufferField { shape, .. } if p.shapes.get(shape).is_none() => {
+                return Err("invalid shape reference".into());
             }
             Op::BufferPrepend {
                 buffer,
@@ -450,31 +462,30 @@ impl Checker<'_> {
                     return Err("a managed value cannot be fabricated by a scalar constant".into());
                 }
             }
-            Op::Cell { fields, .. } => {
-                for &field in self.program.values(fields) {
-                    self.read(field)?;
-                }
+            Op::Cell { fields, shape, .. } => {
+                self.shaped(fields, shape)?;
                 self.results(results, &[Class::Cell])?;
             }
             Op::CellTag { cell } => {
                 self.require(cell, Class::Cell)?;
                 self.results(results, &[Class::Word])?;
             }
-            Op::CellField { cell, .. } => {
+            Op::CellField {
+                cell, index, shape, ..
+            } => {
                 self.require(cell, Class::Cell)?;
-                self.one(results)?;
+                self.leaf(results, index, shape)?;
             }
             Op::BufferEmpty => self.results(results, &[Class::Buffer])?,
             Op::BufferPush {
                 buffer,
                 len,
                 fields,
+                shape,
             } => {
                 self.require(buffer, Class::Buffer)?;
                 self.length(len)?;
-                for &field in self.program.values(fields) {
-                    self.read(field)?;
-                }
+                self.shaped(fields, shape)?;
                 self.results(results, &[Class::Buffer])?;
             }
             Op::BufferPrepend {
@@ -490,10 +501,15 @@ impl Checker<'_> {
                 self.length(from_len)?;
                 self.results(results, &[Class::Buffer])?;
             }
-            Op::BufferField { buffer, len, .. } => {
+            Op::BufferField {
+                buffer,
+                len,
+                index,
+                shape,
+            } => {
                 self.require(buffer, Class::Buffer)?;
                 self.length(len)?;
-                self.one(results)?;
+                self.leaf(results, index, shape)?;
             }
             Op::Convert { value } => {
                 let class = self.one(results)?;
@@ -513,7 +529,8 @@ impl Checker<'_> {
                 self.comparison(left, right)?;
                 self.results(results, &[Class::Word])?;
             }
-            Op::Load { address, .. } => {
+            Op::Load { width, address, .. } => {
+                self.width(width)?;
                 self.require(address, Class::Address)?;
                 // Even a byte load zero-extends into a Word in this IR.
                 self.results(results, &[Class::Word])?;
@@ -524,6 +541,7 @@ impl Checker<'_> {
                 value,
                 ..
             } => {
+                self.width(width)?;
                 self.store(width, address, value)?;
                 self.results(results, &[])?;
             }
@@ -746,6 +764,52 @@ impl Checker<'_> {
             return Err(format!("{left:?} and {right:?} in one comparison"));
         }
         Ok(())
+    }
+
+    /// Fields stored as `shape` says: one per leaf, each something the
+    /// leaf's class holds.
+    fn shaped(&self, fields: Range, shape: ShapeId) -> Result<(), String> {
+        let fields = self.program.values(fields);
+        let leaves = self.program.shaped(shape);
+        if fields.len() != leaves.len() {
+            return Err(format!(
+                "{} fields stored as a shape of {} leaves",
+                fields.len(),
+                leaves.len()
+            ));
+        }
+        for (&field, &leaf) in fields.iter().zip(leaves) {
+            let held = self.read(field)?;
+            if !(held == leaf || held.fits(leaf)) {
+                return Err(format!("{held:?} stored as a leaf of {leaf:?}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// One leaf of `shape` read back.
+    fn leaf(&self, results: &[ValueId], index: u32, shape: ShapeId) -> Result<(), String> {
+        self.one(results)?;
+        let leaves = self.program.shaped(shape);
+        if usize::try_from(index).map_or(true, |index| index >= leaves.len()) {
+            return Err(format!(
+                "leaf {index} of a shape of {} leaves",
+                leaves.len()
+            ));
+        }
+        Ok(())
+    }
+
+    /// A width no wider than the word, where the program says how wide that
+    /// is.
+    fn width(&self, width: Width) -> Result<(), String> {
+        match self.program.layout {
+            Some(layout) if width.bytes(layout.word_bits) > layout.word_bits / 8 => Err(format!(
+                "{width:?} is wider than a {} bit word",
+                layout.word_bits
+            )),
+            _ => Ok(()),
+        }
     }
 
     fn store(&self, width: Width, address: ValueId, value: ValueId) -> Result<(), String> {

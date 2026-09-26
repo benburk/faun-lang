@@ -3,7 +3,7 @@
 use super::builder::Builder;
 use super::model::{
     Class, DataId, Definition, Exit, Function, FunctionId, Op, Origin, Parameter, Range, Region,
-    RegionId, Returns, Span, Symbol, ValueId,
+    RegionId, Returns, ShapeId, Span, Symbol, ValueId,
 };
 use crate::index::{Pool, append_range};
 
@@ -44,6 +44,10 @@ pub struct Program {
     /// Every name the program uses, each once, end to end.
     pub(super) names: Vec<u8>,
     pub(super) symbols: Pool<Symbol, Range>,
+    /// Each shape an object or a buffer's elements are stored as: a run of
+    /// `shaped`, one class per leaf.
+    pub(super) shapes: Pool<ShapeId, Range>,
+    pub(super) shaped: Vec<Class>,
 }
 impl Program {
     /// The layout required by serialized data, if representation is bound.
@@ -84,6 +88,34 @@ impl Program {
     /// Keep a list of existing values, giving back the run it occupies.
     pub(super) fn hold(&mut self, values: &[ValueId]) -> Range {
         append_range(&mut self.operands, values)
+    }
+
+    /// The shape whose leaves are `classes`: one already held where one is,
+    /// since an object and every read of it name one shape.
+    pub fn shape(&mut self, classes: &[Class]) -> ShapeId {
+        if let Some(found) = self
+            .shapes
+            .ids()
+            .find(|&id| &self.shaped[self.shapes[id].range()] == classes)
+        {
+            return found;
+        }
+        let range = append_range(&mut self.shaped, classes);
+        self.shapes.push(range)
+    }
+
+    /// The leaves of `shape`, in order.
+    ///
+    /// # Panics
+    /// If `shape` is not one of this program's.
+    #[must_use]
+    pub fn shaped(&self, shape: ShapeId) -> &[Class] {
+        &self.shaped[self.shapes[shape].range()]
+    }
+
+    /// Every shape the program holds.
+    pub fn shape_ids(&self) -> impl Iterator<Item = ShapeId> + '_ {
+        self.shapes.ids()
     }
 
     /// The classes a run in the signature pool names.

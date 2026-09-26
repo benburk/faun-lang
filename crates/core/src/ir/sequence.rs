@@ -8,57 +8,70 @@
 //! - word 2: its capacity, in elements;
 //! - word 3: the lowest element it holds claims for, which is everything
 //!   from there to the end;
-//! - word 4: its stride, the words each element takes, one per leaf;
-//! - one word per leaf saying what kind of value it is, as cells say;
-//! - the elements, `capacity` of them, `stride` words each.
+//! - word 4: its stride, the bytes from one element to the next;
+//! - word 5: the address of its elements' descriptor, or nought where no
+//!   leaf of an element holds a claim;
+//! - the elements, `capacity` of them, each laid out as
+//!   [`super::packing`] says, one stride apart.
+//!
+//! So a sequence of bytes is a run of bytes, in order, and one of any other
+//! element is the run of them Rust would lay out, which a copy moves as
+//! bytes.
 //!
 //! Pushing onto a buffer nothing else holds writes into the free element in
-//! front of the sequence, releasing whatever an earlier, longer sequence
+//! front of the sequence, giving up whatever an earlier, longer sequence
 //! left there. Otherwise, or where there is no room, the sequence is copied
 //! into a new buffer with as much room in front as it has elements, and at
 //! least [`MINIMUM_CAPACITY`], so a run of pushes copies each element a
 //! bounded number of times. Putting a sequence's elements before another's
-//! makes room for all of them at once, the same way, then copies them: a
-//! copy of words where no leaf holds a claim. Where an element's leaves are
-//! all scalars, the
-//! push writes the first case itself and calls for the second, a copy of
-//! scalars is a copy of words, and a release walks no elements.
+//! makes room for all of them at once, the same way, then copies them. A
+//! copy takes another claim to what each element it copies holds, and a
+//! release gives them up, each walking the descriptor, so a buffer of
+//! scalars walks nothing.
 
 use std::collections::BTreeMap;
 
-use super::cell::{self, Library as CellLibrary};
+use super::cell::{self, Claims, byte_offset, number};
 use super::natural::{Helper, Library as NaturalLibrary};
-use super::{Binary, Builder, Class, FunctionId, Offset, Program, Relation, ValueId, Width};
+use super::packing::Packed;
+use super::{
+    Binary, Builder, Class, DataId, FunctionId, Offset, Program, Relation, ValueId, Width,
+};
 
 const A: Class = Class::Address;
 const W: Class = Class::Word;
 
-/// The first word after the header that holds a kind.
-const KINDS: u64 = 5;
+const CAPACITY: i32 = 2;
+const LOW: i32 = 3;
+const STRIDE: i32 = 4;
+const DESCRIPTOR: i32 = 5;
+/// The word the elements begin at.
+const ELEMENTS: u64 = 6;
 
 /// The fewest elements a buffer grows to, so that one begun empty is not
 /// copied at two elements, then four, then eight.
 const MINIMUM_CAPACITY: u64 = 8;
 
+/// What distinguishes one element layout from another to the runtime: its
+/// stride and where its claims lie.
+type Key = (u64, Vec<(u64, u64)>);
+
 /// The generated routines: one release, and one reservation per element
-/// layout, by the kinds of its leaves.
+/// layout.
 pub(super) struct Library {
     pub release: FunctionId,
-    reserve: BTreeMap<Vec<u64>, FunctionId>,
+    reserve: BTreeMap<Key, FunctionId>,
     /// Putting a sequence's elements before another's, in order and
     /// reversed, where the program does.
     prepend: Option<[FunctionId; 2]>,
+    word_bits: u16,
+}
+
+fn key(element: &Packed) -> Key {
+    (element.size, element.managed().collect())
 }
 
 impl Library {
-    /// The routine making room for one element of this layout.
-    ///
-    /// # Panics
-    /// If the layout was not declared when the library was appended.
-    pub(super) fn reserve(&self, kinds: &[u64]) -> FunctionId {
-        self.reserve[kinds]
-    }
-
     /// The routine putting a sequence's elements before another's: in
     /// order, or reversed.
     ///
@@ -68,29 +81,32 @@ impl Library {
         self.prepend.expect("prepending was requested")[usize::from(reversed)]
     }
 
-    /// Make room for one element of `kinds` in front of the last `len`
+    /// Make room for one element of `element` in front of the last `len`
     /// elements of `buffer`, whose claim this takes, as the reservation
     /// routine does: answering a buffer nothing else holds with that slot
     /// free.
     ///
-    /// Where every leaf is a scalar, the common case is written here rather
+    /// Where no leaf holds a claim, the common case is written here rather
     /// than called: a buffer nothing else holds with room in front is
     /// written in place, and the slot needs only counting as held, since a
     /// scalar left there by a longer sequence holds no claim to give up.
     /// Anything else is the routine's.
+    ///
+    /// # Panics
+    /// If the layout was not declared when the library was appended.
     pub(super) fn room(
         &self,
         b: &mut Builder<'_>,
-        kinds: &[u64],
+        element: &Packed,
         buffer: ValueId,
         len: ValueId,
     ) -> ValueId {
-        let reserve = self.reserve(kinds);
-        if kinds.iter().any(|&kind| kind != cell::SCALAR) {
+        let reserve = self.reserve[&key(element)];
+        if element.managed().next().is_some() {
             return b.call_one(reserve, &[buffer, len]);
         }
         let refs = b.load(Width::Word, buffer, Offset::Words(1));
-        let capacity = b.load(Width::Word, buffer, Offset::Words(2));
+        let capacity = b.load(Width::Word, buffer, Offset::Words(CAPACITY));
         let one = number(b, 1);
         let alone = b.compare(Relation::Equal, refs, one);
         let room = b.compare(Relation::Less, len, capacity);
@@ -101,13 +117,13 @@ impl Library {
             |b| {
                 let before = b.binary(Binary::Sub, capacity, len);
                 let slot = b.binary(Binary::Sub, before, one);
-                let low = b.load(Width::Word, buffer, Offset::Words(3));
+                let low = b.load(Width::Word, buffer, Offset::Words(LOW));
                 let fresh = b.compare(Relation::Less, slot, low);
                 b.if_(
                     fresh,
                     &[],
                     |b| {
-                        b.store(Width::Word, buffer, Offset::Words(3), slot);
+                        b.store(Width::Word, buffer, Offset::Words(LOW), slot);
                         b.yield_(&[]);
                     },
                     |b| b.yield_(&[]),
@@ -120,6 +136,23 @@ impl Library {
             },
         )[0]
     }
+
+    /// Where element `index` of `buffer` begins, its stride known.
+    pub(super) fn element(
+        &self,
+        b: &mut Builder<'_>,
+        buffer: ValueId,
+        stride: u64,
+        index: ValueId,
+    ) -> ValueId {
+        let stride = number(b, stride);
+        element_at(b, buffer, (stride, index), self.word_bits)
+    }
+
+    /// The capacity of `buffer`, in elements.
+    pub(super) fn capacity(b: &mut Builder<'_>, buffer: ValueId) -> ValueId {
+        b.load(Width::Word, buffer, Offset::Words(CAPACITY))
+    }
 }
 
 /// Declare the release routine, so cells and buffers can release one
@@ -128,176 +161,233 @@ pub(super) fn declare(program: &mut Program) -> FunctionId {
     program.declare("seq.release", &[A], &[])
 }
 
-/// Define the release routine and one reservation per layout.
+/// Define the release routine and one reservation per element layout.
 pub(super) fn append(
     program: &mut Program,
     release: FunctionId,
     naturals: &NaturalLibrary,
-    cells: CellLibrary,
-    layouts: impl IntoIterator<Item = Vec<u64>>,
+    cells: cell::Library,
+    elements: impl IntoIterator<Item = (Packed, Option<DataId>)>,
     (word_bits, prepends): (u16, bool),
 ) -> Library {
-    let word = Word {
-        bytes: u64::from(word_bits / 8),
+    let claims = Claims {
+        word_bits,
+        retain: naturals.retain,
         naturals: naturals.release,
         half: naturals.half,
         cells: cells.release,
-        buffers: release,
+        buffers: Some(release),
     };
-    define_release(program, word);
     let allocate = naturals.require(Helper::Allocate);
-    let reserve = layouts
-        .into_iter()
-        .map(|kinds| {
-            let name = format!(
-                "seq.reserve.{}",
-                kinds.iter().map(u64::to_string).collect::<String>()
-            );
-            let id = program.declare(&name, &[A, W], &[A]);
-            define_reserve(program, id, &kinds, word, (naturals.retain, allocate));
-            (kinds, id)
-        })
-        .collect();
-    let prepend = prepends.then(|| define_prepending(program, word, (naturals.retain, allocate)));
+    let moving = define_move(program, word_bits);
+    let runtime = Runtime {
+        claims,
+        release,
+        block: naturals.release,
+        allocate,
+        moving,
+    };
+    define_release(program, runtime);
+    let mut reserve = BTreeMap::new();
+    for (element, descriptor) in elements {
+        let key = key(&element);
+        if reserve.contains_key(&key) {
+            continue;
+        }
+        let name = format!("seq.reserve.{}", reserve.len());
+        let id = program.declare(&name, &[A, W], &[A]);
+        define_reserve(program, id, (&element, descriptor), runtime);
+        reserve.insert(key, id);
+    }
+    let prepend = prepends.then(|| define_prepending(program, runtime));
     Library {
         release,
         reserve,
         prepend,
+        word_bits,
     }
 }
 
-/// What every routine here needs: the word's width in bytes and the
-/// releases for each kind of managed value.
+/// What every routine here calls on.
 #[derive(Clone, Copy)]
-struct Word {
-    bytes: u64,
-    naturals: FunctionId,
-    /// Where immediate naturals begin, which hold no claim.
-    half: u64,
-    cells: FunctionId,
-    buffers: FunctionId,
+struct Runtime {
+    claims: Claims,
+    /// Releases a buffer.
+    release: FunctionId,
+    /// Gives up the block an object lies in.
+    block: FunctionId,
+    allocate: FunctionId,
+    /// `seq.move(source, dest, bytes)`.
+    moving: FunctionId,
 }
 
-impl Word {
-    /// Release a value of `kind`, where it carries a claim.
-    fn release(self, b: &mut Builder<'_>, kind: u64, value: ValueId) {
-        let function = match kind {
-            cell::NATURAL => self.naturals,
-            cell::CELL => self.cells,
-            cell::BUFFER => self.buffers,
-            _ => return,
-        };
-        if kind == cell::NATURAL {
-            let small = self.small(b, value);
-            b.if_(
-                small,
-                &[],
-                |b| b.yield_(&[]),
-                |b| {
-                    let value = b.convert(A, value);
-                    b.call(function, &[value]);
-                    b.yield_(&[]);
-                },
-            );
-            return;
-        }
-        let value = b.convert(A, value);
-        b.call(function, &[value]);
+impl Runtime {
+    fn word_bytes(self) -> u64 {
+        u64::from(self.claims.word_bits / 8)
     }
 
-    /// One where a word holds an immediate natural rather than an object.
-    fn small(self, b: &mut Builder<'_>, value: ValueId) -> ValueId {
-        let below = number(b, self.half - 1);
-        b.compare(Relation::Less, below, value)
+    /// Give up the claims elements `from` up to `to` of `object` hold, as
+    /// `descriptor` lists them, where it lists any.
+    fn release_elements(
+        self,
+        b: &mut Builder<'_>,
+        (object, descriptor): (ValueId, ValueId),
+        (from, to): (ValueId, ValueId),
+    ) {
+        self.each_element(
+            b,
+            (object, descriptor),
+            (from, to),
+            &mut |b, kind, value| {
+                self.claims.release_by_kind(b, kind, value);
+            },
+        );
+    }
+
+    /// Take another claim to what elements `from` up to `to` of `object`
+    /// hold, as `descriptor` lists them, where it lists any.
+    fn claim_elements(
+        self,
+        b: &mut Builder<'_>,
+        (object, descriptor): (ValueId, ValueId),
+        (from, to): (ValueId, ValueId),
+    ) {
+        self.each_element(
+            b,
+            (object, descriptor),
+            (from, to),
+            &mut |b, kind, value| {
+                self.claims.claim(b, kind, value);
+            },
+        );
+    }
+
+    fn each_element(
+        self,
+        b: &mut Builder<'_>,
+        (object, descriptor): (ValueId, ValueId),
+        (from, to): (ValueId, ValueId),
+        each: &mut dyn FnMut(&mut Builder<'_>, ValueId, ValueId),
+    ) {
+        let zero = number(b, 0);
+        let none = b.compare(Relation::Equal, descriptor, zero);
+        b.if_(
+            none,
+            &[],
+            |b| b.yield_(&[]),
+            |b| {
+                let descriptor = b.convert(A, descriptor);
+                let stride = b.load(Width::Word, object, Offset::Words(STRIDE));
+                b.loop_(&[from], &[], |b, state| {
+                    let at = state[0];
+                    let done = b.compare(Relation::Equal, at, to);
+                    b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+                    let element = element_at(b, object, (stride, at), self.claims.word_bits);
+                    self.claims.each(b, (descriptor, element), each);
+                    let one = number(b, 1);
+                    let next = b.binary(Binary::Add, at, one);
+                    b.continue_(&[next]);
+                });
+                b.yield_(&[]);
+            },
+        );
+    }
+
+    /// A buffer with room for `capacity` elements one `stride` apart,
+    /// described by `descriptor`, holding none of them yet.
+    fn allocate(
+        self,
+        b: &mut Builder<'_>,
+        (stride, descriptor): (ValueId, ValueId),
+        capacity: ValueId,
+    ) -> ValueId {
+        allocate(
+            b,
+            self.allocate,
+            (stride, descriptor),
+            capacity,
+            self.word_bytes(),
+        )
     }
 }
 
-fn number(b: &mut Builder<'_>, value: u64) -> ValueId {
-    b.constant(W, value)
-}
-
-/// A count of leaves or elements, as a word holds it.
-pub(super) fn count(n: usize) -> u64 {
-    u64::try_from(n).expect("a count fits 64 bits")
-}
-
-/// The address of word `index` of `object`, where the index is worked out
-/// while the program runs.
-fn word_at(b: &mut Builder<'_>, object: ValueId, index: ValueId, bytes: u64) -> ValueId {
-    let bytes = number(b, bytes);
-    let offset = b.binary(Binary::Mul, index, bytes);
-    let base = b.convert(W, object);
-    let address = b.binary(Binary::Add, base, offset);
-    b.convert(A, address)
-}
-
-/// The word holding leaf 0 of element `element` of a buffer with `stride`.
-pub(super) fn element_word(b: &mut Builder<'_>, stride: ValueId, element: ValueId) -> ValueId {
-    let kinds = number(b, KINDS);
-    let first = b.binary(Binary::Add, kinds, stride);
-    let skipped = b.binary(Binary::Mul, element, stride);
-    b.binary(Binary::Add, first, skipped)
-}
-
-/// Load word `index`, worked out while the program runs.
-pub(super) fn load_word(
+/// Where element `index` of `object` begins, its elements `stride` apart.
+fn element_at(
     b: &mut Builder<'_>,
     object: ValueId,
-    index: ValueId,
+    (stride, index): (ValueId, ValueId),
     word_bits: u16,
 ) -> ValueId {
-    let address = word_at(b, object, index, u64::from(word_bits / 8));
-    b.load(Width::Word, address, Offset::Words(0))
+    let header = number(b, ELEMENTS * u64::from(word_bits / 8));
+    let skipped = b.binary(Binary::Mul, index, stride);
+    let bytes = b.binary(Binary::Add, header, skipped);
+    byte_offset(b, object, bytes)
 }
 
-/// Store `value` at word `index`, worked out while the program runs.
-pub(super) fn store_word(
-    b: &mut Builder<'_>,
-    object: ValueId,
-    index: ValueId,
-    value: ValueId,
-    word_bits: u16,
-) {
-    let address = word_at(b, object, index, u64::from(word_bits / 8));
-    b.store(Width::Word, address, Offset::Words(0), value);
-}
-
-/// Allocate a buffer with room for `capacity` elements of `kinds`, holding
-/// none of them yet. `allocate` takes the bytes after the header's third word.
+/// Allocate a buffer with room for `capacity` elements one `stride` apart,
+/// described by `descriptor`, holding none of them yet. `allocate` takes
+/// the bytes after the header's third word.
 pub(super) fn allocate(
     b: &mut Builder<'_>,
     allocate: FunctionId,
-    kinds: &[u64],
+    (stride, descriptor): (ValueId, ValueId),
     capacity: ValueId,
     word_bytes: u64,
 ) -> ValueId {
-    let stride = number(b, count(kinds.len()));
-    let slots = b.binary(Binary::Mul, capacity, stride);
-    let fixed = number(b, 2 + count(kinds.len()));
-    let words = b.binary(Binary::Add, slots, fixed);
-    let bytes = number(b, word_bytes);
-    let bytes = b.binary(Binary::Mul, words, bytes);
+    let elements = b.binary(Binary::Mul, capacity, stride);
+    let fixed = number(b, (ELEMENTS - 3) * word_bytes);
+    let bytes = b.binary(Binary::Add, elements, fixed);
     let object = b.call_one(allocate, &[bytes]);
-    b.store(Width::Word, object, Offset::Words(2), capacity);
-    b.store(Width::Word, object, Offset::Words(3), capacity);
-    b.store(Width::Word, object, Offset::Words(4), stride);
-    for (at, &kind) in kinds.iter().enumerate() {
-        let kind = number(b, kind);
-        let at = i32::try_from(KINDS + count(at)).expect("a small layout");
-        b.store(Width::Word, object, Offset::Words(at), kind);
-    }
+    b.store(Width::Word, object, Offset::Words(CAPACITY), capacity);
+    b.store(Width::Word, object, Offset::Words(LOW), capacity);
+    b.store(Width::Word, object, Offset::Words(STRIDE), stride);
+    b.store(Width::Word, object, Offset::Words(DESCRIPTOR), descriptor);
     object
+}
+
+/// A buffer holding nothing, and room for nothing: whatever is first pushed
+/// onto it makes a buffer of its own layout.
+pub(super) fn empty(b: &mut Builder<'_>, allocate_block: FunctionId, word_bytes: u64) -> ValueId {
+    let none = number(b, 0);
+    allocate(b, allocate_block, (none, none), none, word_bytes)
+}
+
+/// `seq.move(source, dest, bytes)`: copy a run of bytes, a word at a time
+/// while a word is left and a byte at a time after.
+fn define_move(program: &mut Program, word_bits: u16) -> FunctionId {
+    let word = u64::from(word_bits / 8);
+    let id = program.declare("seq.move", &[A, A, W], &[]);
+    program.define(id, |b, args| {
+        let (source, dest, bytes) = (args[0], args[1], args[2]);
+        let zero = number(b, 0);
+        let whole = number(b, word);
+        let tail = b.binary(Binary::Mod, bytes, whole);
+        let words = b.binary(Binary::Sub, bytes, tail);
+        let copy = |b: &mut Builder<'_>, (from, to): (ValueId, ValueId), width, step| {
+            b.loop_(&[from], &[], |b, state| {
+                let at = state[0];
+                let done = b.compare(Relation::Equal, at, to);
+                b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+                let read = byte_offset(b, source, at);
+                let value = b.load(width, read, Offset::Words(0));
+                let write = byte_offset(b, dest, at);
+                b.store(width, write, Offset::Words(0), value);
+                let step = number(b, step);
+                let next = b.binary(Binary::Add, at, step);
+                b.continue_(&[next]);
+            });
+        };
+        copy(b, (zero, words), Width::Word, word);
+        copy(b, (words, bytes), Width::Byte, 1);
+        b.ret(&[]);
+    });
+    id
 }
 
 /// Release a buffer: where this is the last claim, every element it holds
 /// claims for, then the block.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the generated release routine keeps its walk and object layout together"
-)]
-fn define_release(program: &mut Program, word: Word) {
-    let word_bits = u16::try_from(word.bytes * 8).expect("a word width");
-    program.define(word.buffers, |b, args| {
+fn define_release(program: &mut Program, runtime: Runtime) {
+    program.define(runtime.release, |b, args| {
         let object = args[0];
         let refs = b.load(Width::Word, object, Offset::Words(1));
         let one = number(b, 1);
@@ -306,102 +396,22 @@ fn define_release(program: &mut Program, word: Word) {
             last,
             &[],
             |b| {
-                let capacity = b.load(Width::Word, object, Offset::Words(2));
-                let low = b.load(Width::Word, object, Offset::Words(3));
-                let stride = b.load(Width::Word, object, Offset::Words(4));
-                let first = b.binary(Binary::Mul, low, stride);
-                let end = b.binary(Binary::Mul, capacity, stride);
-                let kinds = number(b, KINDS);
-                let slots = b.binary(Binary::Add, kinds, stride);
-                // A buffer of scalars holds no claims, and its elements are
-                // not worth a walk to find that out one at a time.
-                let holds = holds_claims(b, object, stride, word_bits);
-                b.if_(
-                    holds,
-                    &[],
-                    |b| {
-                        b.loop_(&[first], &[], |b, state| {
-                            let at = state[0];
-                            let done = b.compare(Relation::Equal, at, end);
-                            b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                            let leaf = b.binary(Binary::Mod, at, stride);
-                            let kind_word = b.binary(Binary::Add, kinds, leaf);
-                            let kind = load_word(b, object, kind_word, word_bits);
-                            let slot = b.binary(Binary::Add, slots, at);
-                            let value = load_word(b, object, slot, word_bits);
-                            release_by_kind(b, word, kind, value);
-                            let one = number(b, 1);
-                            let next = b.binary(Binary::Add, at, one);
-                            b.continue_(&[next]);
-                        });
-                        b.yield_(&[]);
-                    },
-                    |b| b.yield_(&[]),
-                );
+                let capacity = b.load(Width::Word, object, Offset::Words(CAPACITY));
+                let low = b.load(Width::Word, object, Offset::Words(LOW));
+                let descriptor = b.load(Width::Word, object, Offset::Words(DESCRIPTOR));
+                runtime.release_elements(b, (object, descriptor), (low, capacity));
                 b.yield_(&[]);
             },
             |b| b.yield_(&[]),
         );
-        b.call(word.naturals, &[object]);
+        b.call(runtime.block, &[object]);
         b.ret(&[]);
     });
 }
 
-/// Whether any leaf of a buffer's elements is of a kind holding a claim:
-/// one where it is, nought where every leaf is a scalar.
-fn holds_claims(b: &mut Builder<'_>, object: ValueId, stride: ValueId, word_bits: u16) -> ValueId {
-    let zero = number(b, 0);
-    b.loop_(&[zero], &[W], |b, state| {
-        let leaf = state[0];
-        let done = b.compare(Relation::Equal, leaf, stride);
-        b.if_(done, &[], |b| b.break_(&[zero]), |b| b.yield_(&[]));
-        let kinds = number(b, KINDS);
-        let at = b.binary(Binary::Add, kinds, leaf);
-        let kind = load_word(b, object, at, word_bits);
-        let scalar = number(b, cell::SCALAR);
-        let plain = b.compare(Relation::Equal, kind, scalar);
-        let one = number(b, 1);
-        let next = b.binary(Binary::Add, leaf, one);
-        b.if_(plain, &[], |b| b.continue_(&[next]), |b| b.break_(&[one]));
-    })[0]
-}
-
-/// Release `value` by a kind read while the program runs.
-fn release_by_kind(b: &mut Builder<'_>, word: Word, kind: ValueId, value: ValueId) {
-    choose_release(
-        b,
-        word,
-        kind,
-        value,
-        &[cell::NATURAL, cell::CELL, cell::BUFFER],
-    );
-}
-
-/// Ask whether `kind` is the first of `kinds`, releasing as that if so and
-/// asking about the rest otherwise.
-fn choose_release(b: &mut Builder<'_>, word: Word, kind: ValueId, value: ValueId, kinds: &[u64]) {
-    let Some((&wanted, rest)) = kinds.split_first() else {
-        return;
-    };
-    let expected = number(b, wanted);
-    let this = b.compare(Relation::Equal, kind, expected);
-    b.if_(
-        this,
-        &[],
-        |b| {
-            word.release(b, wanted, value);
-            b.yield_(&[]);
-        },
-        |b| {
-            choose_release(b, word, kind, value, rest);
-            b.yield_(&[]);
-        },
-    );
-}
-
-/// Make room for one element of `kinds` in front of the last `len` elements
-/// of a buffer whose claim this takes, answering a buffer nothing else holds
-/// whose element at `capacity - len - 1` holds no claim.
+/// Make room for one element of `element` in front of the last `len`
+/// elements of a buffer whose claim this takes, answering a buffer nothing
+/// else holds whose element at `capacity - len - 1` holds no claim.
 #[expect(
     clippy::too_many_lines,
     reason = "the in-place and copying paths share one routine's layout"
@@ -409,19 +419,19 @@ fn choose_release(b: &mut Builder<'_>, word: Word, kind: ValueId, value: ValueId
 fn define_reserve(
     program: &mut Program,
     id: FunctionId,
-    kinds: &[u64],
-    word: Word,
-    (retain, allocate_block): (FunctionId, FunctionId),
+    (element, descriptor): (&Packed, Option<DataId>),
+    runtime: Runtime,
 ) {
-    let word_bits = u16::try_from(word.bytes * 8).expect("a word width");
+    let word_bits = runtime.claims.word_bits;
     program.define(id, |b, args| {
         let (object, len) = (args[0], args[1]);
         let refs = b.load(Width::Word, object, Offset::Words(1));
-        let capacity = b.load(Width::Word, object, Offset::Words(2));
+        let capacity = b.load(Width::Word, object, Offset::Words(CAPACITY));
         let one = number(b, 1);
         let alone = b.compare(Relation::Equal, refs, one);
         let room = b.compare(Relation::Less, len, capacity);
         let both = b.binary(Binary::Mul, alone, room);
+        let stride = number(b, element.size);
         let answer = b.if_(
             both,
             &[A],
@@ -431,26 +441,21 @@ fn define_reserve(
                 // sequence left there, or count it as held from now on.
                 let before = b.binary(Binary::Sub, capacity, len);
                 let slot = b.binary(Binary::Sub, before, one);
-                let low = b.load(Width::Word, object, Offset::Words(3));
+                let low = b.load(Width::Word, object, Offset::Words(LOW));
                 let fresh = b.compare(Relation::Less, slot, low);
-                let stride = number(b, count(kinds.len()));
                 b.if_(
                     fresh,
                     &[],
                     |b| {
-                        b.store(Width::Word, object, Offset::Words(3), slot);
+                        b.store(Width::Word, object, Offset::Words(LOW), slot);
                         b.yield_(&[]);
                     },
                     |b| {
-                        let first = element_word(b, stride, slot);
-                        for (leaf, &kind) in kinds.iter().enumerate() {
-                            if !matches!(kind, cell::NATURAL | cell::CELL | cell::BUFFER) {
-                                continue;
-                            }
-                            let leaf = number(b, count(leaf));
-                            let at = b.binary(Binary::Add, first, leaf);
-                            let value = load_word(b, object, at, word_bits);
-                            word.release(b, kind, value);
+                        let at = element_at(b, object, (stride, slot), word_bits);
+                        for (offset, kind) in element.managed() {
+                            let offset = i32::try_from(offset).expect("a small element");
+                            let value = b.load(Width::Word, at, Offset::Bytes(offset));
+                            runtime.claims.release(b, kind, value);
                         }
                         b.yield_(&[]);
                     },
@@ -459,8 +464,8 @@ fn define_reserve(
             },
             |b| {
                 // Shared or full: copy the sequence to the end of a buffer
-                // with as much room again in front, holding a claim to each
-                // element it copies, then give up this one.
+                // with as much room again in front, holding a claim to what
+                // each element it copies holds, then give up this one.
                 let grown = b.binary(Binary::Add, len, one);
                 let two = number(b, 2);
                 let doubled = b.binary(Binary::Mul, grown, two);
@@ -474,67 +479,26 @@ fn define_reserve(
                     |b| b.yield_(&[least]),
                     |b| b.yield_(&[doubled]),
                 )[0];
-                let fresh = allocate(b, allocate_block, kinds, fresh_capacity, word.bytes);
+                let described = match descriptor {
+                    Some(data) => {
+                        let at = b.address_of(data);
+                        b.convert(W, at)
+                    }
+                    None => number(b, 0),
+                };
+                let fresh = runtime.allocate(b, (stride, described), fresh_capacity);
                 let slot = b.binary(Binary::Sub, fresh_capacity, grown);
-                b.store(Width::Word, fresh, Offset::Words(3), slot);
-                let stride = number(b, count(kinds.len()));
+                b.store(Width::Word, fresh, Offset::Words(LOW), slot);
                 let from_element = b.binary(Binary::Sub, capacity, len);
-                let from = element_word(b, stride, from_element);
+                let from = element_at(b, object, (stride, from_element), word_bits);
                 let to_element = b.binary(Binary::Sub, fresh_capacity, len);
-                let to = element_word(b, stride, to_element);
-                let words = b.binary(Binary::Mul, len, stride);
-                let zero = number(b, 0);
-                // Scalars hold no claims: copying them is copying words.
-                if kinds.iter().all(|&kind| kind == cell::SCALAR) {
-                    b.loop_(&[zero], &[], |b, state| {
-                        let at = state[0];
-                        let done = b.compare(Relation::Equal, at, words);
-                        b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                        let source = b.binary(Binary::Add, from, at);
-                        let value = load_word(b, object, source, word_bits);
-                        let target = b.binary(Binary::Add, to, at);
-                        store_word(b, fresh, target, value, word_bits);
-                        let next = b.binary(Binary::Add, at, one);
-                        b.continue_(&[next]);
-                    });
-                    b.call(word.buffers, &[object]);
-                    b.yield_(&[fresh]);
-                    return;
+                let to = element_at(b, fresh, (stride, to_element), word_bits);
+                let bytes = b.binary(Binary::Mul, len, stride);
+                b.call(runtime.moving, &[from, to, bytes]);
+                if descriptor.is_some() {
+                    runtime.claim_elements(b, (fresh, described), (to_element, fresh_capacity));
                 }
-                b.loop_(&[zero], &[], |b, state| {
-                    let at = state[0];
-                    let done = b.compare(Relation::Equal, at, words);
-                    b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                    let source = b.binary(Binary::Add, from, at);
-                    let value = load_word(b, object, source, word_bits);
-                    let leaf = b.binary(Binary::Mod, at, stride);
-                    let kinds_start = number(b, KINDS);
-                    let kind_word = b.binary(Binary::Add, kinds_start, leaf);
-                    let kind = load_word(b, fresh, kind_word, word_bits);
-                    let scalar = number(b, cell::SCALAR);
-                    let plain = b.compare(Relation::Equal, kind, scalar);
-                    // An immediate natural holds no claim to take.
-                    let natural = number(b, cell::NATURAL);
-                    let is_natural = b.compare(Relation::Equal, kind, natural);
-                    let small = word.small(b, value);
-                    let immediate = b.binary(Binary::Mul, is_natural, small);
-                    let plain = b.binary(Binary::Add, plain, immediate);
-                    b.if_(
-                        plain,
-                        &[],
-                        |b| b.yield_(&[]),
-                        |b| {
-                            let held = b.convert(A, value);
-                            b.call(retain, &[held]);
-                            b.yield_(&[]);
-                        },
-                    );
-                    let target = b.binary(Binary::Add, to, at);
-                    store_word(b, fresh, target, value, word_bits);
-                    let next = b.binary(Binary::Add, at, one);
-                    b.continue_(&[next]);
-                });
-                b.call(word.buffers, &[object]);
+                b.call(runtime.release, &[object]);
                 b.yield_(&[fresh]);
             },
         );
@@ -546,7 +510,9 @@ fn define_reserve(
 ///
 /// Each is small, so that a machine with a small frame holds it: one makes
 /// room, two copy a run of elements -- in order, and last first -- and the
-/// two entries call them. Every one takes four arguments at most.
+/// two entries call them. Every one takes four arguments at most. Each reads
+/// the layout from the buffers it is handed rather than being made one per
+/// layout.
 #[derive(Clone, Copy)]
 struct Prepending {
     room: FunctionId,
@@ -555,18 +521,13 @@ struct Prepending {
 }
 
 /// Define both prepending entries and what they call.
-fn define_prepending(
-    program: &mut Program,
-    word: Word,
-    (retain, allocate): (FunctionId, FunctionId),
-) -> [FunctionId; 2] {
-    let copying = Copying { word, retain };
+fn define_prepending(program: &mut Program, runtime: Runtime) -> [FunctionId; 2] {
     let copy = program.declare("seq.copy", &[A, A, W, A], &[]);
-    copying.define_copy(program, copy);
+    define_copy(program, copy, runtime);
     let copy_reversed = program.declare("seq.copy_reversed", &[A, A, W, A], &[]);
-    copying.define_copy_reversed(program, copy_reversed);
+    define_copy_reversed(program, copy_reversed, runtime);
     let room = program.declare("seq.room", &[A, W, A, W], &[A]);
-    copying.define_room(program, room, (copy, allocate));
+    define_room(program, room, (copy, runtime));
     let routines = Prepending {
         room,
         copy,
@@ -579,7 +540,7 @@ fn define_prepending(
             "seq.prepend"
         };
         let id = program.declare(name, &[A, W, A, W], &[A]);
-        define_prepend(program, id, word, routines, reversed);
+        define_prepend(program, id, runtime, routines, reversed);
         id
     })
 }
@@ -590,330 +551,188 @@ fn define_prepending(
 fn define_prepend(
     program: &mut Program,
     id: FunctionId,
-    word: Word,
+    runtime: Runtime,
     routines: Prepending,
     reversed: bool,
 ) {
+    let word_bits = runtime.claims.word_bits;
     program.define(id, |b, args| {
         let (target, len, from, count) = (args[0], args[1], args[2], args[3]);
         let zero = number(b, 0);
         let nothing = b.compare(Relation::Equal, count, zero);
         b.if_(nothing, &[], |b| b.ret(&[target]), |b| b.yield_(&[]));
         let dest = b.call_one(routines.room, &[target, len, from, count]);
-        let stride = b.load(Width::Word, from, Offset::Words(4));
-        let dest_capacity = b.load(Width::Word, dest, Offset::Words(2));
+        let stride = b.load(Width::Word, from, Offset::Words(STRIDE));
+        let dest_capacity = b.load(Width::Word, dest, Offset::Words(CAPACITY));
         let dest_free = b.binary(Binary::Sub, dest_capacity, len);
         let into = b.binary(Binary::Sub, dest_free, count);
-        let into = element_address(b, dest, stride, into, word.bytes);
-        let from_capacity = b.load(Width::Word, from, Offset::Words(2));
+        let into = element_at(b, dest, (stride, into), word_bits);
+        let from_capacity = b.load(Width::Word, from, Offset::Words(CAPACITY));
         if reversed {
             let one = number(b, 1);
             let last = b.binary(Binary::Sub, from_capacity, one);
-            let last = element_address(b, from, stride, last, word.bytes);
+            let last = element_at(b, from, (stride, last), word_bits);
             b.call(routines.copy_reversed, &[last, into, count, from]);
         } else {
             let first = b.binary(Binary::Sub, from_capacity, count);
-            let first = element_address(b, from, stride, first, word.bytes);
-            let words = b.binary(Binary::Mul, count, stride);
-            b.call(routines.copy, &[first, into, words, from]);
+            let first = element_at(b, from, (stride, first), word_bits);
+            b.call(routines.copy, &[first, into, count, from]);
         }
         b.ret(&[dest]);
     });
 }
 
-/// Where element `element` of `object` begins.
-fn element_address(
-    b: &mut Builder<'_>,
-    object: ValueId,
-    stride: ValueId,
-    element: ValueId,
-    bytes: u64,
-) -> ValueId {
-    let index = element_word(b, stride, element);
-    word_at(b, object, index, bytes)
-}
-
-/// What copying elements needs: how to release what a leaf holds, and how
-/// to take another claim to it.
-#[derive(Clone, Copy)]
-struct Copying {
-    word: Word,
-    retain: FunctionId,
-}
-
-impl Copying {
-    fn word_bits(self) -> u16 {
-        u16::try_from(self.word.bytes * 8).expect("a word width")
-    }
-
-    /// `seq.room(target, len, from, count)`: a buffer nothing else holds
-    /// with room for `count` elements of `from`'s layout before the last
-    /// `len` of `target`, whose claim this takes.
-    ///
-    /// The layout is read from `from`, which holds at least one element and
-    /// so was made with it; `target` may be one begun empty, which says
-    /// none. One nothing else holds with that room is written in place,
-    /// giving up whatever claims a longer sequence left there. Otherwise
-    /// its elements are copied into one with as much room again, and at
-    /// least [`MINIMUM_CAPACITY`], as a push would.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the in-place and growing paths share the room they make"
-    )]
-    fn define_room(
-        self,
-        program: &mut Program,
-        id: FunctionId,
-        (copy, allocate): (FunctionId, FunctionId),
-    ) {
-        let word = self.word;
-        program.define(id, |b, args| {
-            let (target, len, from, count) = (args[0], args[1], args[2], args[3]);
-            let one = number(b, 1);
-            let stride = b.load(Width::Word, from, Offset::Words(4));
-            let refs = b.load(Width::Word, target, Offset::Words(1));
-            let capacity = b.load(Width::Word, target, Offset::Words(2));
-            let alone = b.compare(Relation::Equal, refs, one);
-            let free = b.binary(Binary::Sub, capacity, len);
-            let short = b.compare(Relation::Less, free, count);
-            let room = b.binary(Binary::Sub, one, short);
-            let both = b.binary(Binary::Mul, alone, room);
-            b.if_(
-                both,
-                &[],
-                |b| {
-                    let start = b.binary(Binary::Sub, free, count);
-                    let low = b.load(Width::Word, target, Offset::Words(3));
-                    let below = b.compare(Relation::Less, start, low);
-                    b.if_(
-                        below,
-                        &[],
-                        |b| {
-                            // Nothing below the lowest claimed element holds one.
-                            b.store(Width::Word, target, Offset::Words(3), start);
-                            self.release(b, target, (low, free));
-                            b.yield_(&[]);
-                        },
-                        |b| {
-                            self.release(b, target, (start, free));
-                            b.yield_(&[]);
-                        },
-                    );
-                    b.ret(&[target]);
-                },
-                |b| b.yield_(&[]),
-            );
-            let total = b.binary(Binary::Add, len, count);
-            let two = number(b, 2);
-            let doubled = b.binary(Binary::Mul, total, two);
-            let least = number(b, MINIMUM_CAPACITY);
-            let small = b.compare(Relation::Less, doubled, least);
-            let fresh_capacity = b.if_(
-                small,
-                &[W],
-                |b| b.yield_(&[least]),
-                |b| b.yield_(&[doubled]),
-            )[0];
-            let fresh = allocate_like(b, allocate, from, (stride, fresh_capacity), word);
-            let slot = b.binary(Binary::Sub, fresh_capacity, total);
-            b.store(Width::Word, fresh, Offset::Words(3), slot);
-            let source = element_address(b, target, stride, free, word.bytes);
-            let into = b.binary(Binary::Sub, fresh_capacity, len);
-            let into = element_address(b, fresh, stride, into, word.bytes);
-            let words = b.binary(Binary::Mul, len, stride);
-            b.call(copy, &[source, into, words, from]);
-            b.call(word.buffers, &[target]);
-            b.ret(&[fresh]);
-        });
-    }
-
-    /// `seq.copy(source, dest, words, like)`: copy a run of words, taking
-    /// another claim to each that holds one, as `like`'s layout says. A
-    /// layout of scalars is a copy of words and nothing else.
-    fn define_copy(self, program: &mut Program, id: FunctionId) {
-        let word_bits = self.word_bits();
-        let bytes = self.word.bytes;
-        program.define(id, |b, args| {
-            let (source, dest, words, like) = (args[0], args[1], args[2], args[3]);
-            let stride = b.load(Width::Word, like, Offset::Words(4));
-            let held = holds_claims(b, like, stride, word_bits);
-            let zero = number(b, 0);
-            b.loop_(&[zero], &[], |b, state| {
-                let at = state[0];
-                let done = b.compare(Relation::Equal, at, words);
-                b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                let value = load_word(b, source, at, word_bits);
+/// `seq.room(target, len, from, count)`: a buffer nothing else holds with
+/// room for `count` elements of `from`'s layout before the last `len` of
+/// `target`, whose claim this takes.
+///
+/// The layout is read from `from`, which holds at least one element and so
+/// was made with it; `target` may be one begun empty, which says none. One
+/// nothing else holds with that room is written in place, giving up
+/// whatever claims a longer sequence left there. Otherwise its elements are
+/// copied into one with as much room again, and at least
+/// [`MINIMUM_CAPACITY`], as a push would.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the in-place and growing paths share the room they make"
+)]
+fn define_room(program: &mut Program, id: FunctionId, (copy, runtime): (FunctionId, Runtime)) {
+    let word_bits = runtime.claims.word_bits;
+    program.define(id, |b, args| {
+        let (target, len, from, count) = (args[0], args[1], args[2], args[3]);
+        let one = number(b, 1);
+        let stride = b.load(Width::Word, from, Offset::Words(STRIDE));
+        let described = b.load(Width::Word, from, Offset::Words(DESCRIPTOR));
+        let refs = b.load(Width::Word, target, Offset::Words(1));
+        let capacity = b.load(Width::Word, target, Offset::Words(CAPACITY));
+        let alone = b.compare(Relation::Equal, refs, one);
+        let free = b.binary(Binary::Sub, capacity, len);
+        let short = b.compare(Relation::Less, free, count);
+        let room = b.binary(Binary::Sub, one, short);
+        let both = b.binary(Binary::Mul, alone, room);
+        b.if_(
+            both,
+            &[],
+            |b| {
+                let start = b.binary(Binary::Sub, free, count);
+                let low = b.load(Width::Word, target, Offset::Words(LOW));
+                let below = b.compare(Relation::Less, start, low);
                 b.if_(
-                    held,
+                    below,
                     &[],
                     |b| {
-                        let leaf = b.binary(Binary::Mod, at, stride);
-                        self.claim_leaf(b, like, leaf, value);
+                        // Nothing below the lowest claimed element holds one.
+                        b.store(Width::Word, target, Offset::Words(LOW), start);
+                        runtime.release_elements(b, (target, described), (low, free));
                         b.yield_(&[]);
                     },
-                    |b| b.yield_(&[]),
+                    |b| {
+                        runtime.release_elements(b, (target, described), (start, free));
+                        b.yield_(&[]);
+                    },
                 );
-                let place = word_at(b, dest, at, bytes);
-                b.store(Width::Word, place, Offset::Words(0), value);
+                b.ret(&[target]);
+            },
+            |b| b.yield_(&[]),
+        );
+        let total = b.binary(Binary::Add, len, count);
+        let two = number(b, 2);
+        let doubled = b.binary(Binary::Mul, total, two);
+        let least = number(b, MINIMUM_CAPACITY);
+        let small = b.compare(Relation::Less, doubled, least);
+        let fresh_capacity = b.if_(
+            small,
+            &[W],
+            |b| b.yield_(&[least]),
+            |b| b.yield_(&[doubled]),
+        )[0];
+        let fresh = runtime.allocate(b, (stride, described), fresh_capacity);
+        let slot = b.binary(Binary::Sub, fresh_capacity, total);
+        b.store(Width::Word, fresh, Offset::Words(LOW), slot);
+        let source = element_at(b, target, (stride, free), word_bits);
+        let into = b.binary(Binary::Sub, fresh_capacity, len);
+        let into = element_at(b, fresh, (stride, into), word_bits);
+        b.call(copy, &[source, into, len, from]);
+        b.call(runtime.release, &[target]);
+        b.ret(&[fresh]);
+    });
+}
+
+/// `seq.copy(source, dest, count, like)`: copy `count` elements of `like`'s
+/// layout, taking another claim to what each holds. A layout of scalars is
+/// a copy of bytes and nothing else.
+fn define_copy(program: &mut Program, id: FunctionId, runtime: Runtime) {
+    program.define(id, |b, args| {
+        let (source, dest, count, like) = (args[0], args[1], args[2], args[3]);
+        let stride = b.load(Width::Word, like, Offset::Words(STRIDE));
+        let described = b.load(Width::Word, like, Offset::Words(DESCRIPTOR));
+        let bytes = b.binary(Binary::Mul, count, stride);
+        b.call(runtime.moving, &[source, dest, bytes]);
+        claim_run(b, runtime, (dest, count), (stride, described));
+        b.ret(&[]);
+    });
+}
+
+/// `seq.copy_reversed(last, dest, count, like)`: copy `count` elements
+/// ending with the one at `last`, last first, taking another claim to what
+/// each holds.
+fn define_copy_reversed(program: &mut Program, id: FunctionId, runtime: Runtime) {
+    program.define(id, |b, args| {
+        let (last, dest, count, like) = (args[0], args[1], args[2], args[3]);
+        let stride = b.load(Width::Word, like, Offset::Words(STRIDE));
+        let described = b.load(Width::Word, like, Offset::Words(DESCRIPTOR));
+        let zero = number(b, 0);
+        b.loop_(&[zero], &[], |b, state| {
+            let at = state[0];
+            let done = b.compare(Relation::Equal, at, count);
+            b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+            let distance = b.binary(Binary::Mul, at, stride);
+            let read = b.convert(W, last);
+            let read = b.binary(Binary::Sub, read, distance);
+            let read = b.convert(A, read);
+            let write = byte_offset(b, dest, distance);
+            b.call(runtime.moving, &[read, write, stride]);
+            let one = number(b, 1);
+            let next = b.binary(Binary::Add, at, one);
+            b.continue_(&[next]);
+        });
+        claim_run(b, runtime, (dest, count), (stride, described));
+        b.ret(&[]);
+    });
+}
+
+/// Take another claim to what each of `count` elements from `dest` holds,
+/// as `described` lists, where it lists anything.
+fn claim_run(
+    b: &mut Builder<'_>,
+    runtime: Runtime,
+    (dest, count): (ValueId, ValueId),
+    (stride, described): (ValueId, ValueId),
+) {
+    let zero = number(b, 0);
+    let none = b.compare(Relation::Equal, described, zero);
+    b.if_(
+        none,
+        &[],
+        |b| b.yield_(&[]),
+        |b| {
+            let descriptor = b.convert(A, described);
+            b.loop_(&[zero], &[], |b, state| {
+                let at = state[0];
+                let done = b.compare(Relation::Equal, at, count);
+                b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+                let distance = b.binary(Binary::Mul, at, stride);
+                let element = byte_offset(b, dest, distance);
+                runtime
+                    .claims
+                    .each(b, (descriptor, element), &mut |b, kind, value| {
+                        runtime.claims.claim(b, kind, value);
+                    });
                 let one = number(b, 1);
                 let next = b.binary(Binary::Add, at, one);
                 b.continue_(&[next]);
             });
-            b.ret(&[]);
-        });
-    }
-
-    /// `seq.copy_reversed(last, dest, count, like)`: copy `count` elements
-    /// ending with the one at `last`, last first, taking another claim to
-    /// each leaf that holds one.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one generated loop over elements and one over their leaves"
-    )]
-    fn define_copy_reversed(self, program: &mut Program, id: FunctionId) {
-        let word_bits = self.word_bits();
-        let bytes = self.word.bytes;
-        program.define(id, |b, args| {
-            let (last, dest, count, like) = (args[0], args[1], args[2], args[3]);
-            let stride = b.load(Width::Word, like, Offset::Words(4));
-            let held = holds_claims(b, like, stride, word_bits);
-            let step = number(b, bytes);
-            let step = b.binary(Binary::Mul, stride, step);
-            let zero = number(b, 0);
-            b.loop_(&[last, dest], &[], |b, state| {
-                let (read, write) = (state[0], state[1]);
-                let written = b.convert(W, write);
-                let started = b.convert(W, dest);
-                let done_bytes = b.binary(Binary::Sub, written, started);
-                let all = b.binary(Binary::Mul, count, step);
-                let done = b.compare(Relation::Equal, done_bytes, all);
-                b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                b.loop_(&[zero], &[], |b, state| {
-                    let leaf = state[0];
-                    let finished = b.compare(Relation::Equal, leaf, stride);
-                    b.if_(finished, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                    let value = load_word(b, read, leaf, word_bits);
-                    b.if_(
-                        held,
-                        &[],
-                        |b| {
-                            self.claim_leaf(b, like, leaf, value);
-                            b.yield_(&[]);
-                        },
-                        |b| b.yield_(&[]),
-                    );
-                    let place = word_at(b, write, leaf, bytes);
-                    b.store(Width::Word, place, Offset::Words(0), value);
-                    let one = number(b, 1);
-                    let next = b.binary(Binary::Add, leaf, one);
-                    b.continue_(&[next]);
-                });
-                let read = b.convert(W, read);
-                let read = b.binary(Binary::Sub, read, step);
-                let read = b.convert(A, read);
-                let write = b.binary(Binary::Add, written, step);
-                let write = b.convert(A, write);
-                b.continue_(&[read, write]);
-            });
-            b.ret(&[]);
-        });
-    }
-
-    /// Take another claim to a value held as leaf `leaf` of `like`'s
-    /// layout: none for a scalar or an immediate natural.
-    fn claim_leaf(self, b: &mut Builder<'_>, like: ValueId, leaf: ValueId, value: ValueId) {
-        let word_bits = self.word_bits();
-        let kinds = number(b, KINDS);
-        let kind_word = b.binary(Binary::Add, kinds, leaf);
-        let kind = load_word(b, like, kind_word, word_bits);
-        let scalar = number(b, cell::SCALAR);
-        let plain = b.compare(Relation::Equal, kind, scalar);
-        let natural = number(b, cell::NATURAL);
-        let is_natural = b.compare(Relation::Equal, kind, natural);
-        let small = self.word.small(b, value);
-        let immediate = b.binary(Binary::Mul, is_natural, small);
-        let skip = b.binary(Binary::Add, plain, immediate);
-        b.if_(
-            skip,
-            &[],
-            |b| b.yield_(&[]),
-            |b| {
-                let held = b.convert(A, value);
-                b.call(self.retain, &[held]);
-                b.yield_(&[]);
-            },
-        );
-    }
-
-    /// Give up the claims elements `from` up to `to` of `object` hold, where
-    /// its layout holds any.
-    fn release(self, b: &mut Builder<'_>, object: ValueId, (from, to): (ValueId, ValueId)) {
-        let word_bits = self.word_bits();
-        let stride = b.load(Width::Word, object, Offset::Words(4));
-        let held = holds_claims(b, object, stride, word_bits);
-        b.if_(
-            held,
-            &[],
-            |b| {
-                // Words counted from the first element, as the release
-                // routine counts them, so a word's leaf is its remainder.
-                let first = b.binary(Binary::Mul, from, stride);
-                let end = b.binary(Binary::Mul, to, stride);
-                let kinds = number(b, KINDS);
-                let slots = b.binary(Binary::Add, kinds, stride);
-                b.loop_(&[first], &[], |b, state| {
-                    let at = state[0];
-                    let done = b.compare(Relation::Equal, at, end);
-                    b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-                    let leaf = b.binary(Binary::Mod, at, stride);
-                    let kind_word = b.binary(Binary::Add, kinds, leaf);
-                    let kind = load_word(b, object, kind_word, word_bits);
-                    let slot = b.binary(Binary::Add, slots, at);
-                    let value = load_word(b, object, slot, word_bits);
-                    release_by_kind(b, self.word, kind, value);
-                    let one = number(b, 1);
-                    let next = b.binary(Binary::Add, at, one);
-                    b.continue_(&[next]);
-                });
-                b.yield_(&[]);
-            },
-            |b| b.yield_(&[]),
-        );
-    }
-}
-
-/// Allocate a buffer with room for `capacity` elements of the layout
-/// `like` holds, holding none of them yet.
-fn allocate_like(
-    b: &mut Builder<'_>,
-    allocate: FunctionId,
-    like: ValueId,
-    (stride, capacity): (ValueId, ValueId),
-    word: Word,
-) -> ValueId {
-    let word_bits = u16::try_from(word.bytes * 8).expect("a word width");
-    let slots = b.binary(Binary::Mul, capacity, stride);
-    let fixed = number(b, 2);
-    let words = b.binary(Binary::Add, slots, fixed);
-    let words = b.binary(Binary::Add, words, stride);
-    let bytes = number(b, word.bytes);
-    let bytes = b.binary(Binary::Mul, words, bytes);
-    let object = b.call_one(allocate, &[bytes]);
-    b.store(Width::Word, object, Offset::Words(2), capacity);
-    b.store(Width::Word, object, Offset::Words(3), capacity);
-    b.store(Width::Word, object, Offset::Words(4), stride);
-    let zero = number(b, 0);
-    b.loop_(&[zero], &[], |b, state| {
-        let leaf = state[0];
-        let done = b.compare(Relation::Equal, leaf, stride);
-        b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-        let kinds = number(b, KINDS);
-        let at = b.binary(Binary::Add, kinds, leaf);
-        let kind = load_word(b, like, at, word_bits);
-        store_word(b, object, at, kind, word_bits);
-        let one = number(b, 1);
-        let next = b.binary(Binary::Add, leaf, one);
-        b.continue_(&[next]);
-    });
-    object
+            b.yield_(&[]);
+        },
+    );
 }

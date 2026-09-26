@@ -639,6 +639,7 @@ pub(super) fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
             buffer,
             len,
             fields,
+            ..
         } => {
             let mut read = vec![buffer, len];
             read.extend_from_slice(source.values(fields));

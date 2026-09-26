@@ -9,7 +9,7 @@ use crate::index::index;
 // `Symbol` is a name, held as a run of characters in the program's own
 // pool. Most passes compare and copy symbols as integers; renderers read
 // function names, and targets read logical-entry parameter names.
-index!(pub ValueId, DataId, FunctionId, RegionId, Symbol);
+index!(pub ValueId, DataId, FunctionId, RegionId, Symbol, ShapeId);
 
 /// Which of a program's two regions a datum sits in.
 ///
@@ -124,10 +124,31 @@ pub enum Direction {
     Down,
 }
 
+/// How much of memory a load reads or a store writes.
+///
+/// A load answers the bytes read, zero-extended; a store writes the low
+/// bytes of its value. Nothing is wider than a word, so a width wider than
+/// the target's word is never asked of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Width {
     Byte,
+    Bits16,
+    Bits32,
+    /// As wide as an address, whatever the target's is.
     Word,
+}
+
+impl Width {
+    /// How many bytes it is, on a target whose word is `word_bits` wide.
+    #[must_use]
+    pub const fn bytes(self, word_bits: u16) -> u16 {
+        match self {
+            Self::Byte => 1,
+            Self::Bits16 => 2,
+            Self::Bits32 => 4,
+            Self::Word => word_bits / 8,
+        }
+    }
 }
 
 /// A distance from an address, in units the target scales. `Words` is how a
@@ -148,20 +169,25 @@ pub enum Op {
     /// Unsigned magnitude in little-endian bytes, held in the data pool.
     NaturalConstant(DataId),
     AddressOf(DataId),
-    /// Construct one immutable algebraic object. Fields retain their own
-    /// classes; `tag` is meaningful only within the erased source type.
+    /// Construct one immutable algebraic object. `tag` is meaningful only
+    /// within the erased source type. Each field is stored at the class its
+    /// `shape` says, which every read of the object reads it back at, so
+    /// where each field lies is legalization's to decide from the shape.
     Cell {
         tag: u32,
         fields: Range,
+        shape: ShapeId,
     },
     /// Read the constructor tag of a cell.
     CellTag {
         cell: ValueId,
     },
-    /// Read one field. The result value says the field's class.
+    /// Read one field of an object of `shape`. The result value says the
+    /// class it is read as.
     CellField {
         cell: ValueId,
         index: u32,
+        shape: ShapeId,
     },
     /// A buffer holding no elements.
     BufferEmpty,
@@ -173,6 +199,8 @@ pub enum Op {
         buffer: ValueId,
         len: ValueId,
         fields: Range,
+        /// The leaves of every element of the buffer, as it holds them.
+        shape: ShapeId,
     },
     /// The buffer whose last `len + from_len` elements are the last
     /// `from_len` of `from` -- in the order `from` holds them, or the other
@@ -188,11 +216,13 @@ pub enum Op {
         reversed: bool,
     },
     /// Read leaf `index` of the first of the last `len` elements of
-    /// `buffer`. The result value says the leaf's class.
+    /// `buffer`, whose elements are of `shape`. The result value says the
+    /// class it is read as.
     BufferField {
         buffer: ValueId,
         len: ValueId,
         index: u32,
+        shape: ShapeId,
     },
     Binary {
         op: Binary,

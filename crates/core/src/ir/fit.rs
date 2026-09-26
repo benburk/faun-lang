@@ -251,6 +251,19 @@ fn classes(classes: &[Class], limit: usize) -> Vec<Class> {
     packed
 }
 
+/// How a value is held in the cell a run crosses in: a number as a word.
+///
+/// What packs a run knows the classes of what it hands over, and what
+/// unpacks it the classes it takes, and the two differ where a narrower
+/// value is handed to something taking a wider one. A cell is laid out by
+/// the classes it holds, so both lay it out by what neither can disagree on.
+const fn crossing(class: Class) -> Class {
+    match class {
+        Class::Held(_) => Class::Word,
+        other => other,
+    }
+}
+
 /// A run as it crosses: all of it where it fits, and otherwise one short of
 /// the limit followed by a cell holding the rest.
 fn pack(b: &mut Builder, values: &[ValueId], limit: usize) -> Vec<ValueId> {
@@ -259,7 +272,9 @@ fn pack(b: &mut Builder, values: &[ValueId], limit: usize) -> Vec<ValueId> {
     }
     let (kept, rest) = values.split_at(limit - 1);
     let mut packed = kept.to_vec();
-    packed.push(b.cell(0, rest));
+    let classes: Vec<_> = rest.iter().map(|&value| crossing(b.class(value))).collect();
+    let shape = b.shape(&classes);
+    packed.push(b.cell(0, shape, rest));
     packed
 }
 
@@ -272,8 +287,10 @@ fn unpack(b: &mut Builder, crossed: &[ValueId], classes: &[Class], limit: usize)
     let (kept, cell) = crossed.split_at(limit - 1);
     let cell = cell[0];
     let mut values = kept.to_vec();
+    let crossed: Vec<_> = classes[limit - 1..].iter().copied().map(crossing).collect();
+    let shape = b.shape(&crossed);
     for (index, &class) in (0u32..).zip(&classes[limit - 1..]) {
-        values.push(b.cell_field(class, cell, index));
+        values.push(b.cell_field((class, shape), cell, index));
     }
     values
 }

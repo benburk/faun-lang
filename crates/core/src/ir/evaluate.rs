@@ -746,7 +746,7 @@ impl<H: Host> Machine<'_, H> {
             Op::Constant { value } => self.constant(self.result_class(results)?, value)?,
             Op::NaturalConstant(id) => self.natural(id)?,
             Op::AddressOf(id) => BigUint::from(self.datum_address(id)?),
-            Op::Cell { tag, fields } => {
+            Op::Cell { tag, fields, .. } => {
                 let fields = self.values(fields)?;
                 self.cells.push(CellValue { tag, fields });
                 BigUint::from(self.cells.len())
@@ -760,6 +760,7 @@ impl<H: Host> Machine<'_, H> {
                 buffer,
                 len,
                 fields,
+                ..
             } => {
                 let first = self.values(fields)?;
                 let rest = self.elements(buffer, len)?;
@@ -784,13 +785,15 @@ impl<H: Host> Machine<'_, H> {
                 self.buffers.push(elements);
                 BigUint::from(self.buffers.len())
             }
-            Op::BufferField { buffer, len, index } => self
+            Op::BufferField {
+                buffer, len, index, ..
+            } => self
                 .elements(buffer, len)?
                 .first()
                 .and_then(|element| element.get(usize::try_from(index).ok()?))
                 .cloned()
                 .ok_or_else(|| invalid("buffer field"))?,
-            Op::CellField { cell, index } => self
+            Op::CellField { cell, index, .. } => self
                 .cell(cell)?
                 .fields
                 .get(usize::try_from(index).map_err(|_| invalid("cell field index"))?)
@@ -916,10 +919,7 @@ impl<H: Host> Machine<'_, H> {
     }
 
     fn bytes(&self, width: Width) -> usize {
-        match width {
-            Width::Byte => 1,
-            Width::Word => usize::from(self.config.word_bits / 8),
-        }
+        usize::from(width.bytes(self.config.word_bits))
     }
 
     fn store(

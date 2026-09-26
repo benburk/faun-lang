@@ -38,6 +38,7 @@ impl Program {
             let end = u64::from(span.start) + u64::from(span.len);
             let _ = writeln!(out, "d{id} = {:?}[{}..{end}]", span.origin, span.start);
         }
+        self.render_shapes(&mut out);
         for (id, function) in self.functions().iter().enumerate() {
             let params = self.render_params(FunctionId::at(id));
             let returns = match function.returns {
@@ -57,6 +58,19 @@ impl Program {
         }
         self.render_regions(&mut out);
         out
+    }
+
+    /// Each shape an object or an element is stored as, by the leaves it
+    /// names.
+    fn render_shapes(&self, out: &mut String) {
+        for shape in self.shape_ids() {
+            let _ = writeln!(
+                out,
+                "s{} = ({})",
+                shape.index(),
+                class_list(self.shaped(shape))
+            );
+        }
     }
 
     fn render_params(&self, id: FunctionId) -> String {
@@ -114,23 +128,33 @@ impl Program {
             Op::Constant { value, .. } => format!("const {value}"),
             Op::NaturalConstant(data) => format!("natural d{}", data.index()),
             Op::AddressOf(data) => format!("address d{}", data.index()),
-            Op::Cell { tag, fields } => {
-                format!("cell {tag}({})", arguments(self.values(fields)))
+            Op::Cell { tag, fields, shape } => {
+                format!(
+                    "cell {tag}({}) as s{}",
+                    arguments(self.values(fields)),
+                    shape.index()
+                )
             }
             Op::CellTag { cell } => format!("cell_tag v{}", cell.index()),
-            Op::CellField { cell, index } => {
-                format!("cell_field v{}, {index}", cell.index())
+            Op::CellField { cell, index, shape } => {
+                format!(
+                    "cell_field v{}, {index} of s{}",
+                    cell.index(),
+                    shape.index()
+                )
             }
             Op::BufferEmpty => "buffer_empty".to_owned(),
             Op::BufferPush {
                 buffer,
                 len,
                 fields,
+                shape,
             } => format!(
-                "buffer_push v{}, v{}, ({})",
+                "buffer_push v{}, v{}, ({}) as s{}",
                 buffer.index(),
                 len.index(),
-                arguments(self.values(fields))
+                arguments(self.values(fields)),
+                shape.index()
             ),
             Op::BufferPrepend {
                 buffer,
@@ -146,11 +170,17 @@ impl Program {
                 from.index(),
                 from_len.index()
             ),
-            Op::BufferField { buffer, len, index } => {
+            Op::BufferField {
+                buffer,
+                len,
+                index,
+                shape,
+            } => {
                 format!(
-                    "buffer_field v{}, v{}, {index}",
+                    "buffer_field v{}, v{}, {index} of s{}",
                     buffer.index(),
-                    len.index()
+                    len.index(),
+                    shape.index()
                 )
             }
             Op::Binary { op, left, right } => {

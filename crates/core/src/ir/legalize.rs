@@ -17,10 +17,11 @@ use num_bigint::BigUint;
 use super::cell::{self, Library as CellLibrary};
 use super::natural::{self, Config, Helper, Inline, Library, Needs};
 use super::ownership::{self, Liveness, managed};
+use super::packing::Packed;
 use super::sequence::{self, Library as SequenceLibrary};
 use super::{
-    Binary, Builder, Class, DataId, Definition, Exit, Op, Origin, Program, Range, RegionId,
-    Relation, Terminator, ValueId, Width, validate,
+    Binary, Builder, Class, DataId, Definition, Exit, Offset, Op, Origin, Program, Range, RegionId,
+    Relation, ShapeId, Terminator, ValueId, Width, validate,
 };
 
 /// Rebuild a validated program with naturals represented by immutable objects.
@@ -56,14 +57,15 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     output.runtime_cells |= has_cells;
     output.runtime_naturals |= has_naturals;
     let library = natural::append(&mut output, config, needs)?;
-    let (cells, sequences) = managed_runtime(&mut output, source, &library, config);
+    let shapes = Shapes::of(source, &mut output, config.word_bits)?;
+    let (cells, sequences) = managed_runtime(&mut output, source, &library, (config, &shapes));
     let constants = constants(source, &mut output, config)?;
     let pass = Pass {
         source,
         library,
         cells,
+        shapes,
         word_bytes: u64::from(config.word_bits / 8),
-        word_bits: config.word_bits,
         sequences,
         constants,
         values: vec![Cell::new(None); source.values_count()],
@@ -80,7 +82,7 @@ fn managed_runtime(
     output: &mut Program,
     source: &Program,
     library: &Library,
-    config: Config,
+    (config, shapes): (Config, &Shapes),
 ) -> (Option<CellLibrary>, Option<SequenceLibrary>) {
     let has_buffers = holds(source, Class::Buffer);
     let has_cells = holds(source, Class::Cell) || has_buffers;
@@ -98,7 +100,12 @@ fn managed_runtime(
             release,
             library,
             cells,
-            layouts(source),
+            elements(source).into_iter().map(|shape| {
+                (
+                    shapes.packed[shape.index()].clone(),
+                    shapes.descriptors[shape.index()],
+                )
+            }),
             (config.word_bits, prepends),
         )
     });
@@ -135,6 +142,8 @@ fn skeleton(source: &Program) -> Program {
         regions: Pool::default(),
         names: source.names.clone(),
         symbols: source.symbols.clone(),
+        shapes: source.shapes.clone(),
+        shaped: source.shaped.clone(),
     };
     for id in output.functions.ids() {
         if output.functions[id].body().is_some() {
@@ -155,24 +164,71 @@ const fn top(scopes: &mut [Scope]) -> &mut Scope {
     scopes.last_mut().expect("a region being walked")
 }
 
-/// The leaf kinds of every element a program pushes onto a buffer, each once.
-fn layouts(source: &Program) -> std::collections::BTreeSet<Vec<u64>> {
+/// The shape of every element a program pushes onto a buffer, each once.
+fn elements(source: &Program) -> std::collections::BTreeSet<ShapeId> {
     source
         .functions()
         .iter()
         .filter_map(super::Function::body)
         .flat_map(|body| source.walk_within(body))
         .filter_map(|(op, _)| match *op {
-            Op::BufferPush { fields, .. } => Some(
-                source
-                    .values(fields)
-                    .iter()
-                    .map(|&field| cell::kind(source.class(field)))
-                    .collect(),
-            ),
+            Op::BufferPush { shape, .. } => Some(shape),
             _ => None,
         })
         .collect()
+}
+
+/// Every shape a program holds laid out, and the descriptor of each whose
+/// leaves hold a claim, in the data.
+struct Shapes {
+    packed: Vec<Packed>,
+    descriptors: Vec<Option<DataId>>,
+}
+
+impl Shapes {
+    fn of(source: &Program, output: &mut Program, word_bits: u16) -> Result<Self, String> {
+        let packed: Vec<_> = source
+            .shape_ids()
+            .map(|shape| Packed::of(source.shaped(shape), word_bits))
+            .collect();
+        // What any object holds lies past a header of six words at most,
+        // and what a target reaches from an address is an `i32` away.
+        let header = 6 * u64::from(word_bits / 8);
+        if packed
+            .iter()
+            .any(|packed| i32::try_from(packed.size + header).is_err())
+        {
+            return Err("an object's fields do not fit the target".into());
+        }
+        let descriptors = packed
+            .iter()
+            .map(|packed| {
+                packed
+                    .descriptor(word_bits)
+                    .map(|bytes: Vec<u8>| output.intern(&bytes))
+            })
+            .collect();
+        Ok(Self {
+            packed,
+            descriptors,
+        })
+    }
+
+    fn packed(&self, shape: ShapeId) -> &Packed {
+        &self.packed[shape.index()]
+    }
+
+    /// Where `shape`'s descriptor lies, as a word, or nought where it has
+    /// none.
+    fn descriptor(&self, b: &mut Builder, shape: ShapeId) -> ValueId {
+        match self.descriptors[shape.index()] {
+            Some(data) => {
+                let at = b.address_of(data);
+                b.convert(Class::Word, at)
+            }
+            None => b.constant(Class::Word, 0),
+        }
+    }
 }
 
 const fn representation(class: Class) -> Class {
@@ -214,10 +270,6 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one scan collects natural helpers and checks each abstract cell operation"
-)]
 fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
     check_classes(source, config)?;
     let mut needs = Needs::default();
@@ -251,21 +303,6 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
                     return Err(
                         "storing a managed value has no scalar memory representation".into(),
                     );
-                }
-                Op::Cell { fields, .. } => {
-                    let arity = source.values(fields).len();
-                    let words = arity
-                        .checked_mul(2)
-                        .and_then(|n| n.checked_add(1))
-                        .ok_or_else(|| "cell payload size overflow".to_owned())?;
-                    let bytes = words
-                        .checked_mul(usize::from(config.word_bits / 8))
-                        .ok_or_else(|| "cell payload size overflow".to_owned())?;
-                    if u64::try_from(bytes).is_err()
-                        || i32::try_from(arity.saturating_mul(2).saturating_add(5)).is_err()
-                    {
-                        return Err("cell payload does not fit the target".into());
-                    }
                 }
                 _ => {}
             }
@@ -359,9 +396,9 @@ struct Pass<'a> {
     source: &'a Program,
     library: Library,
     cells: Option<CellLibrary>,
+    shapes: Shapes,
     sequences: Option<SequenceLibrary>,
     word_bytes: u64,
-    word_bits: u16,
     constants: BTreeMap<ValueId, Known>,
     // Validation establishes globally unique SSA definitions and lexical use.
     // Mapping is monotonic across functions and sibling regions, not path-local.
@@ -453,30 +490,74 @@ impl Pass<'_> {
         &self,
         b: &mut Builder,
         tag: u32,
-        fields: Range,
+        shape: ShapeId,
         claimed: &[ValueId],
     ) -> ValueId {
-        let fields = self.source.values(fields);
-        let payload_words = fields.len() * 2 + 1;
-        let payload_bytes =
-            u64::try_from(payload_words).expect("checked cell payload") * self.word_bytes;
+        let packed = self.shapes.packed(shape);
         let library = self.cells.expect("cell helpers were requested");
-        let bytes = b.constant(Class::Word, payload_bytes);
+        // The descriptor's word, then the fields.
+        let bytes = b.constant(Class::Word, self.word_bytes + packed.size);
         let object = b.call_one(library.allocate, &[bytes]);
         let tag = b.constant(Class::Word, u64::from(tag));
-        b.store(Width::Word, object, super::Offset::Words(2), tag);
-        let arity = b.constant(
-            Class::Word,
-            u64::try_from(fields.len()).expect("checked cell arity"),
+        b.store(Width::Word, object, Offset::Words(cell::TAG), tag);
+        let descriptor = self.shapes.descriptor(b, shape);
+        b.store(
+            Width::Word,
+            object,
+            Offset::Words(cell::DESCRIPTOR),
+            descriptor,
         );
-        b.store(Width::Word, object, super::Offset::Words(3), arity);
-        for (index, (&old, &value)) in fields.iter().zip(claimed).enumerate() {
-            let kind = b.constant(Class::Word, cell::kind(self.source.class(old)));
-            let at = i32::try_from(index * 2 + 4).expect("checked cell field offset");
-            b.store(Width::Word, object, super::Offset::Words(at), kind);
-            b.store(Width::Word, object, super::Offset::Words(at + 1), value);
-        }
+        let fields = self.fields_at();
+        Self::store_leaves(b, (object, fields), packed, claimed);
         object
+    }
+
+    /// Where an object's fields begin, in bytes from its start.
+    fn fields_at(&self) -> u64 {
+        self.word_bytes * u64::from(cell::FIELDS.unsigned_abs())
+    }
+
+    /// Store each leaf of `packed` from `values`, the first `at` bytes past
+    /// `object`.
+    fn store_leaves(
+        b: &mut Builder,
+        (object, at): (ValueId, u64),
+        packed: &Packed,
+        values: &[ValueId],
+    ) {
+        for (leaf, &value) in packed.leaves.iter().zip(values) {
+            let Some(width) = leaf.width else {
+                continue;
+            };
+            let offset = i32::try_from(at + leaf.offset).expect("checked object layout");
+            b.store(width, object, Offset::Bytes(offset), value);
+        }
+    }
+
+    /// Load leaf `index` of `packed`, the first `at` bytes past `object`,
+    /// as `old_result` is read, holding a claim to it.
+    fn load_leaf(
+        &self,
+        b: &mut Builder,
+        old_result: ValueId,
+        (object, at): (ValueId, u64),
+        (packed, index): (&Packed, u32),
+    ) -> ValueId {
+        let leaf = packed.leaves[usize::try_from(index).expect("checked leaf index")];
+        let class = self.source.class(old_result);
+        let represented = representation(class);
+        let Some(width) = leaf.width else {
+            // What takes no room can only be nought.
+            return b.constant(represented, 0);
+        };
+        let offset = i32::try_from(at + leaf.offset).expect("checked object layout");
+        let value = b.load(width, object, Offset::Bytes(offset));
+        let value = if represented == Class::Word {
+            value
+        } else {
+            b.convert(represented, value)
+        };
+        self.retained(b, class, value)
     }
 
     /// Push one element, whose leaves' claims it takes, onto a buffer whose
@@ -484,17 +565,11 @@ impl Pass<'_> {
     fn push(
         &self,
         b: &mut Builder,
-        buffer: ValueId,
-        len: ValueId,
-        fields: Range,
+        (buffer, len): (ValueId, ValueId),
+        shape: ShapeId,
         claimed: &[ValueId],
     ) -> ValueId {
-        let kinds: Vec<_> = self
-            .source
-            .values(fields)
-            .iter()
-            .map(|&old| cell::kind(self.source.class(old)))
-            .collect();
+        let packed = self.shapes.packed(shape);
         let sequences = self
             .sequences
             .as_ref()
@@ -504,23 +579,13 @@ impl Pass<'_> {
         } else {
             b.convert(Class::Word, len)
         };
-        let room = sequences.room(b, &kinds, buffer, len);
-        let capacity = b.load(Width::Word, room, super::Offset::Words(2));
+        let room = sequences.room(b, packed, buffer, len);
+        let capacity = SequenceLibrary::capacity(b, room);
         let one = b.constant(Class::Word, 1);
         let after = b.binary(Binary::Sub, capacity, len);
         let slot = b.binary(Binary::Sub, after, one);
-        let stride = b.constant(Class::Word, sequence::count(kinds.len()));
-        let first = sequence::element_word(b, stride, slot);
-        for (leaf, &value) in claimed.iter().enumerate() {
-            let leaf = b.constant(Class::Word, sequence::count(leaf));
-            let at = b.binary(Binary::Add, first, leaf);
-            let value = if matches!(b.class(value), Class::Word | Class::Address) {
-                value
-            } else {
-                b.convert(Class::Word, value)
-            };
-            sequence::store_word(b, room, at, value, self.word_bits);
-        }
+        let element = sequences.element(b, room, packed.size, slot);
+        Self::store_leaves(b, (element, 0), packed, claimed);
         room
     }
 
@@ -529,30 +594,23 @@ impl Pass<'_> {
         &self,
         b: &mut Builder,
         old_result: ValueId,
-        buffer: ValueId,
-        len: ValueId,
-        index: u32,
+        (buffer, len): (ValueId, ValueId),
+        (shape, index): (ShapeId, u32),
     ) -> ValueId {
-        let capacity = b.load(Width::Word, buffer, super::Offset::Words(2));
-        let stride = b.load(Width::Word, buffer, super::Offset::Words(4));
+        let packed = self.shapes.packed(shape);
+        let sequences = self
+            .sequences
+            .as_ref()
+            .expect("buffer helpers were requested");
+        let capacity = SequenceLibrary::capacity(b, buffer);
         let len = if b.class(len) == Class::Word {
             len
         } else {
             b.convert(Class::Word, len)
         };
-        let element = b.binary(Binary::Sub, capacity, len);
-        let first = sequence::element_word(b, stride, element);
-        let leaf = b.constant(Class::Word, u64::from(index));
-        let at = b.binary(Binary::Add, first, leaf);
-        let value = sequence::load_word(b, buffer, at, self.word_bits);
-        let class = self.source.class(old_result);
-        let represented = representation(class);
-        let value = if represented == Class::Word {
-            value
-        } else {
-            b.convert(represented, value)
-        };
-        self.retained(b, class, value)
+        let first = b.binary(Binary::Sub, capacity, len);
+        let element = sequences.element(b, buffer, packed.size, first);
+        self.load_leaf(b, old_result, (element, 0), (packed, index))
     }
 
     fn cell_field(
@@ -560,19 +618,11 @@ impl Pass<'_> {
         b: &mut Builder,
         old_result: ValueId,
         cell: ValueId,
-        index: u32,
+        (shape, index): (ShapeId, u32),
     ) -> ValueId {
-        let index = usize::try_from(index).expect("checked cell field index");
-        let at = i32::try_from(index * 2 + 5).expect("checked cell field offset");
-        let value = b.load(Width::Word, self.value(cell), super::Offset::Words(at));
-        let class = self.source.class(old_result);
-        let represented = representation(class);
-        let value = if represented == Class::Word {
-            value
-        } else {
-            b.convert(represented, value)
-        };
-        self.retained(b, class, value)
+        let packed = self.shapes.packed(shape);
+        let fields = self.fields_at();
+        self.load_leaf(b, old_result, (self.value(cell), fields), (packed, index))
     }
 
     /// Walk one region holding `held` on entry: claims handed down by an
@@ -725,26 +775,28 @@ impl Pass<'_> {
             Op::Constant { value } => b.constant(self.source.class(results[0]), value),
             Op::NaturalConstant(data) => b.kept_natural(data),
             Op::AddressOf(data) => b.address_of(data),
-            Op::Cell { tag, fields } => {
+            Op::Cell { tag, fields, shape } => {
                 let claimed: Vec<_> = self
                     .source
                     .values(fields)
                     .iter()
                     .map(|&old| self.take(b, scopes, live, at, old))
                     .collect();
-                self.construct_cell(b, tag, fields, &claimed)
+                self.construct_cell(b, tag, shape, &claimed)
             }
-            Op::CellTag { cell } => b.load(Width::Word, v(cell), super::Offset::Words(2)),
-            Op::CellField { cell, index } => self.cell_field(b, results[0], cell, index),
+            Op::CellTag { cell } => b.load(Width::Word, v(cell), Offset::Words(cell::TAG)),
+            Op::CellField { cell, index, shape } => {
+                self.cell_field(b, results[0], cell, (shape, index))
+            }
             Op::BufferEmpty => {
                 let library = self.cells.expect("cell helpers were requested");
-                let none = b.constant(Class::Word, 0);
-                sequence::allocate(b, library.allocate, &[], none, self.word_bytes)
+                sequence::empty(b, library.allocate, self.word_bytes)
             }
             Op::BufferPush {
                 buffer,
                 len,
                 fields,
+                shape,
             } => {
                 let buffer = self.take(b, scopes, live, at, buffer);
                 let claimed: Vec<_> = self
@@ -753,7 +805,7 @@ impl Pass<'_> {
                     .iter()
                     .map(|&old| self.take(b, scopes, live, at, old))
                     .collect();
-                self.push(b, buffer, v(len), fields, &claimed)
+                self.push(b, (buffer, v(len)), shape, &claimed)
             }
             Op::BufferPrepend {
                 buffer,
@@ -778,9 +830,12 @@ impl Pass<'_> {
                     .prepend(reversed);
                 b.call_one(routine, &[buffer, len, v(from), from_len])
             }
-            Op::BufferField { buffer, len, index } => {
-                self.buffer_field(b, results[0], v(buffer), v(len), index)
-            }
+            Op::BufferField {
+                buffer,
+                len,
+                index,
+                shape,
+            } => self.buffer_field(b, results[0], (v(buffer), v(len)), (shape, index)),
             Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => match op
             {
                 Binary::Add => self.library.inline(b, Inline::Add, v(left), v(right)),

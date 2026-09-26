@@ -323,6 +323,7 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
             buffer,
             len,
             fields,
+            ..
         } => {
             each(*buffer);
             each(*len);
@@ -1790,12 +1791,11 @@ impl Lowering<'_> {
         self.asm.ldy_imm(at);
         self.asm.lda_ind_y(PTR);
         self.asm.sta_zp(T0);
-        match width {
-            Width::Byte => self.asm.lda_imm(0),
-            Width::Word => {
-                self.asm.iny();
-                self.asm.lda_ind_y(PTR);
-            }
+        if width == Width::Byte {
+            self.asm.lda_imm(0);
+        } else {
+            self.asm.iny();
+            self.asm.lda_ind_y(PTR);
         }
         self.asm.sta_zp(T0 + 1);
         self.commit(result, T0);
@@ -2576,13 +2576,13 @@ impl Lowering<'_> {
                 width,
                 address,
                 offset,
-            } => self.load_at(*width, *address, *offset, results[0]),
+            } => self.load_at(held(*width), *address, *offset, results[0]),
             Op::Store {
                 width,
                 address,
                 offset,
                 value,
-            } => self.store_at(*width, *address, *offset, *value),
+            } => self.store_at(held(*width), *address, *offset, *value),
             Op::Convert { value } => {
                 self.convert(program.class(results[0]), *value, results[0]);
             }
@@ -2653,6 +2653,16 @@ impl Lowering<'_> {
         let back = self.asm.label();
         self.asm.jsr_abs(at, back);
         self.asm.bind(back);
+    }
+}
+
+/// A memory width as this machine moves it: sixteen bits is its word, and
+/// nothing is wider than that.
+fn held(width: Width) -> Width {
+    match width {
+        Width::Byte => Width::Byte,
+        Width::Bits16 | Width::Word => Width::Word,
+        Width::Bits32 => unreachable!("nothing is wider than a word, which validation checks"),
     }
 }
 

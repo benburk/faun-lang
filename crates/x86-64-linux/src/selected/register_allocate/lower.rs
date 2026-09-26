@@ -889,6 +889,8 @@ fn materialize(asm: &mut AllocatedBuilder, dst: Reg, value: u64) {
 const fn memory_width(width: Width) -> MemoryWidth {
     match width {
         Width::Byte => MemoryWidth::Byte,
+        Width::Bits16 => MemoryWidth::Bits16,
+        Width::Bits32 => MemoryWidth::Bits32,
         Width::Word => MemoryWidth::Word,
     }
 }

@@ -82,6 +82,8 @@ pub(crate) enum Condition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MemoryWidth {
     Byte,
+    Bits16,
+    Bits32,
     Word,
 }
 

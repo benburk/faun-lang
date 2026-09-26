@@ -137,6 +137,8 @@ fn skeleton(source: &Program, declared: Declarations) -> Program {
         regions: Pool::default(),
         names: source.names.clone(),
         symbols: source.symbols.clone(),
+        shapes: source.shapes.clone(),
+        shaped: source.shaped.clone(),
     };
     for id in output.functions.ids() {
         if output.functions[id].body().is_some() {
@@ -289,14 +291,19 @@ impl<'a> Rebuild<'a> {
             Op::Constant { value } => vec![b.constant(self.source.class(results[0]), value)],
             Op::NaturalConstant(data) => vec![b.kept_natural(data)],
             Op::AddressOf(data) => vec![b.address_of(data)],
-            Op::Cell { tag, fields } => vec![b.cell(tag, &self.args(fields))],
+            Op::Cell { tag, fields, shape } => vec![b.cell(tag, shape, &self.args(fields))],
             Op::CellTag { cell } => vec![b.cell_tag(self.value(cell))],
             Op::BufferEmpty => vec![b.buffer_empty()],
             Op::BufferPush {
                 buffer,
                 len,
                 fields,
-            } => vec![b.buffer_push(self.value(buffer), self.value(len), &self.args(fields))],
+                shape,
+            } => vec![b.buffer_push(
+                (self.value(buffer), self.value(len)),
+                shape,
+                &self.args(fields),
+            )],
             Op::BufferPrepend {
                 buffer,
                 len,
@@ -308,15 +315,21 @@ impl<'a> Rebuild<'a> {
                 (self.value(from), self.value(from_len)),
                 reversed,
             )],
-            Op::BufferField { buffer, len, index } => vec![b.buffer_field(
-                self.source.class(results[0]),
-                self.value(buffer),
-                self.value(len),
+            Op::BufferField {
+                buffer,
+                len,
+                index,
+                shape,
+            } => vec![b.buffer_field(
+                (self.source.class(results[0]), shape),
+                (self.value(buffer), self.value(len)),
                 index,
             )],
-            Op::CellField { cell, index } => {
-                vec![b.cell_field(self.source.class(results[0]), self.value(cell), index)]
-            }
+            Op::CellField { cell, index, shape } => vec![b.cell_field(
+                (self.source.class(results[0]), shape),
+                self.value(cell),
+                index,
+            )],
             Op::Binary { op, left, right } => vec![b.binary_at(
                 self.source.class(results[0]),
                 op,

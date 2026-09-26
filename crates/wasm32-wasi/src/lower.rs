@@ -47,6 +47,11 @@ const I32_LOAD: u8 = 0x28;
 const I32_LOAD8_U: u8 = 0x2D;
 const I32_STORE: u8 = 0x36;
 const I32_STORE8: u8 = 0x3A;
+const I32_LOAD16_U: u8 = 0x2F;
+const I32_STORE16: u8 = 0x3B;
+/// The loads and the stores, a byte, two, and a word wide.
+const LOADS: [u8; 3] = [I32_LOAD8_U, I32_LOAD16_U, I32_LOAD];
+const STORES: [u8; 3] = [I32_STORE8, I32_STORE16, I32_STORE];
 const I32_AND: u8 = 0x71;
 const I32_SHL: u8 = 0x74;
 const I32_SHR_U: u8 = 0x76;
@@ -634,14 +639,14 @@ impl Lowering<'_> {
 
     fn load_at(&mut self, width: Width, address: ValueId, offset: Offset, result: ValueId) {
         self.push(address);
-        self.access(width, offset, I32_LOAD8_U, I32_LOAD);
+        self.access(width, offset, LOADS);
         self.set(result);
     }
 
     fn store_at(&mut self, width: Width, address: ValueId, offset: Offset, value: ValueId) {
         self.push(address);
         self.push(value);
-        self.access(width, offset, I32_STORE8, I32_STORE);
+        self.access(width, offset, STORES);
     }
 
     /// A word here is 32 bits, so anything narrower is masked back down.
@@ -820,7 +825,7 @@ impl Lowering<'_> {
         self.call(sizes);
         self.body.byte(DROP);
         self.constant_i32(ARGC);
-        self.access(Width::Word, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.access(Width::Word, Offset::Bytes(0), LOADS);
         self.set(result);
     }
 
@@ -832,7 +837,7 @@ impl Lowering<'_> {
         self.constant_i32(WORD);
         self.body.byte(I32_MUL);
         self.constant_i32(NWRITTEN);
-        self.access(Width::Word, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.access(Width::Word, Offset::Bytes(0), LOADS);
         self.body.byte(I32_ADD);
         self.constant_i32((1 << PAGE_BITS) - 1);
         self.body.byte(I32_ADD);
@@ -856,14 +861,16 @@ impl Lowering<'_> {
         self.body.byte(DROP); // The errno, which there is nobody to tell.
     }
 
-    fn access(&mut self, width: Width, offset: Offset, byte: u8, word: u8) {
+    /// A load or store, as `[byte, half, word]` names each width's opcode.
+    fn access(&mut self, width: Width, offset: Offset, [byte, half, word]: [u8; 3]) {
         let bytes = match offset {
             Offset::Bytes(bytes) => bytes,
             Offset::Words(words) => words * WORD,
         };
         let (opcode, align) = match width {
             Width::Byte => (byte, 0),
-            Width::Word => (word, 2),
+            Width::Bits16 => (half, 1),
+            Width::Bits32 | Width::Word => (word, 2),
         };
         self.body.byte(opcode);
         self.body.uleb(align);
@@ -1001,7 +1008,7 @@ impl Lowering<'_> {
         self.body.byte(I32);
         self.open();
         self.constant_i32(NWRITTEN);
-        self.access(Width::Word, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.access(Width::Word, Offset::Bytes(0), LOADS);
         self.body.byte(ELSE);
         self.constant_i32(0);
         self.push(result);
@@ -1028,14 +1035,14 @@ impl Lowering<'_> {
         self.open();
 
         self.constant_i32(NWRITTEN);
-        self.access(Width::Word, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.access(Width::Word, Offset::Bytes(0), LOADS);
         self.constant_i32(1);
         self.body.byte(I32_EQ);
         self.body.byte(IF);
         self.body.byte(I32); // one i32 result
         self.open();
         self.constant_i32(read.byte.cast_signed());
-        self.access(Width::Byte, Offset::Bytes(0), I32_LOAD8_U, I32_LOAD);
+        self.access(Width::Byte, Offset::Bytes(0), LOADS);
         self.constant_i32(1);
         self.body.byte(I32_ADD);
         self.body.byte(ELSE);

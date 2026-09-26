@@ -55,7 +55,7 @@ use std::rc::Rc;
 use crate::barb;
 use crate::index::append_range;
 
-use super::model::{Binary, Class, FunctionId, Relation, ValueId};
+use super::model::{Binary, Class, FunctionId, Relation, ShapeId, ValueId};
 use super::program::Program;
 use super::validate::validate;
 use crate::platform::{Built, Returns, Routine, Routines, Takes, reads, takes as takes_sentence};
@@ -127,6 +127,7 @@ fn lower_with(
     let (mut machine, main) =
         Program::new_with_params(program.name(program.function(entry).name), &borrowed);
     let callees = declare(&demand, routines, &mut machine, (entry, main))?;
+    let bytes = any_byte_element(program, facts, &demand.carries);
 
     let lowering = Lowering {
         barb: program,
@@ -138,8 +139,8 @@ fn lower_with(
         refused: std::cell::RefCell::default(),
         looping: std::cell::RefCell::default(),
         arguments: arguments.map(|at| {
-            let made =
-                (wanted == Arguments::Made).then(|| making_arguments(&mut machine, routines));
+            let made = (wanted == Arguments::Made)
+                .then(|| making_arguments(&mut machine, routines, bytes));
             (at, made)
         }),
     };
@@ -195,7 +196,7 @@ fn entry_parameters(
 
 /// The routine making the arguments a list of strings, which does nothing
 /// else, so a call of it nothing reads goes.
-fn making_arguments(machine: &mut Program, routines: &Routines) -> FunctionId {
+fn making_arguments(machine: &mut Program, routines: &Routines, bytes: Class) -> FunctionId {
     let word = u64::from(routines.word().unwrap_or(64) / 8);
     let made = machine.declare(
         MAKE_ARGUMENTS,
@@ -203,7 +204,7 @@ fn making_arguments(machine: &mut Program, routines: &Routines) -> FunctionId {
         &SEQUENCE_LEAVES,
     );
     machine.define(made, |b, args| {
-        let list = Lowering::arguments(b, (args[0], args[1]), word);
+        let list = Lowering::arguments(b, (args[0], args[1]), (word, bytes));
         b.ret(&list);
     });
     machine.mark_inert(made);
@@ -1504,6 +1505,38 @@ fn leaf_names(
 /// Whether a type's values are a run of bytes: a sequence whose element is
 /// a number no wider than one. Wrappers are read through, since one adds
 /// nothing to what a value is.
+/// The class a byte string of type `id` holds each byte at, as the program
+/// reads it back: whatever every byte stored in it fits.
+fn byte_element(
+    program: &barb::Program,
+    facts: &barb::Facts,
+    carries: &[Storage],
+    id: barb::TypeId,
+) -> Class {
+    peeled(program, id)
+        .and_then(|id| match barb::type_shape(program, id) {
+            barb::TypeShape::Sequence {
+                push, recursive, ..
+            } => field_carried(program, facts, carries, push, usize::from(recursive == 0)),
+            _ => None,
+        })
+        .and_then(|carried| match carried {
+            Carried::One(class) => Some(class),
+            Carried::Flat(_) => None,
+        })
+        .unwrap_or(Class::fixed(8))
+}
+
+/// The same, for the program's byte strings, which are of one type.
+fn any_byte_element(program: &barb::Program, facts: &barb::Facts, carries: &[Storage]) -> Class {
+    (0..program.types().len())
+        .map(barb::TypeId::at)
+        .find(|&id| carries[id.index()] == Storage::Seq && byte_shaped(program, id))
+        .map_or(Class::fixed(8), |id| {
+            byte_element(program, facts, carries, id)
+        })
+}
+
 fn byte_shaped(program: &barb::Program, id: barb::TypeId) -> bool {
     let Some(id) = peeled(program, id) else {
         return false;
@@ -1816,6 +1849,27 @@ impl Lowering<'_> {
         field_carried(self.barb, self.facts, &self.carries, ctor, at)
     }
 
+    /// The shape an object of `ctor` is stored as: every leaf of every field
+    /// that carries anything, in order.
+    fn cell_shape(&self, b: &mut super::Builder, ctor: barb::CtorId) -> ShapeId {
+        let leaves: Vec<Class> = self
+            .fields_carried(ctor)
+            .flatten()
+            .flat_map(|carried| self.classes(&carried).to_vec())
+            .collect();
+        b.shape(&leaves)
+    }
+
+    /// The shape of each element of the sequence `push` builds, whose
+    /// element is its field `element`.
+    fn element_shape(&self, b: &mut super::Builder, push: barb::CtorId, element: usize) -> ShapeId {
+        let leaves = self
+            .field_carried(push, element)
+            .map(|carried| self.classes(&carried).to_vec())
+            .unwrap_or_default();
+        b.shape(&leaves)
+    }
+
     /// What each field of `ctor` is held as, in order.
     fn fields_carried(&self, ctor: barb::CtorId) -> impl Iterator<Item = Option<Carried>> + '_ {
         (0..self.barb.fields(ctor).len()).map(move |at| self.field_carried(ctor, at))
@@ -1896,7 +1950,7 @@ impl Lowering<'_> {
     fn arguments(
         b: &mut super::Builder,
         (count, array): (ValueId, ValueId),
-        word: u64,
+        (word, bytes): (u64, Class),
     ) -> [ValueId; 2] {
         let empty = b.buffer_empty();
         let none = b.constant(Class::Word, 0);
@@ -1915,8 +1969,9 @@ impl Lowering<'_> {
             let start = b.load(super::Width::Word, slot, super::Offset::Words(0));
             let start = b.convert(Class::Address, start);
             let length = Self::terminated(b, start);
-            let text = Self::pushed_bytes(b, start, length, Class::fixed(8));
-            let longer = b.buffer_push(held, len, &text);
+            let text = Self::pushed_bytes(b, start, length, bytes);
+            let strings = b.shape(&SEQUENCE_LEAVES);
+            let longer = b.buffer_push((held, len), strings, &text);
             let more = b.binary(Binary::Add, len, one);
             b.continue_(&[longer, more]);
         });
@@ -2239,7 +2294,8 @@ impl Lowering<'_> {
     fn static_cell(&self, b: &mut super::Builder, ctor: barb::ConstructorView<'_>) -> ValueId {
         let mut fields = Vec::new();
         self.static_fields(b, ctor, &mut fields);
-        b.cell(self.barb.tag(ctor.constructor()), &fields)
+        let shape = self.cell_shape(b, ctor.constructor());
+        b.cell(self.barb.tag(ctor.constructor()), shape, &fields)
     }
 
     /// Build a known sequence by pushing its elements, from its end back:
@@ -2319,7 +2375,8 @@ impl Lowering<'_> {
                     None => {}
                 }
             }
-            buffer = b.buffer_push(buffer, len, &values);
+            let shape = self.element_shape(b, push, usize::from(recursive == 0));
+            buffer = b.buffer_push((buffer, len), shape, &values);
         }
         let len = u64::try_from(elements.len()).expect("a length fits 64 bits");
         [buffer, b.constant(Class::Word, len)]
@@ -2343,7 +2400,8 @@ impl Lowering<'_> {
                 .map(|class| b.constant(class, u64::from(byte)))
                 .into_iter()
                 .collect();
-            buffer = b.buffer_push(buffer, len, &fields);
+            let shape = b.shape(element.as_slice());
+            buffer = b.buffer_push((buffer, len), shape, &fields);
         }
         [buffer, b.constant(Class::Word, len)]
     }
@@ -2746,28 +2804,30 @@ impl Lowering<'_> {
             Built::Put(_) | Built::Name(_) => {
                 let ended = matches!(built, Built::Name(_));
                 let mut args = Vec::with_capacity(carried.len() + 1);
-                for (&atom, takes) in carried.iter().zip(&routine.takes) {
+                for (&(atom, ty), takes) in carried.iter().zip(&routine.takes) {
                     match takes {
                         Takes::Scalar(_) => args.push(Self::scalar(locals, atom)),
                         Takes::StaticBytes | Takes::Bytes => {
-                            args.extend(self.run(b, atom, locals, statics, (io, ended)));
+                            let bytes = self.byte_element(ty);
+                            args.extend(self.run(b, atom, locals, statics, (io, ended, bytes)));
                         }
                     }
                 }
                 vec![b.call_one(primitive(), &args)]
             }
             Built::Take(_) => {
-                let (&count, before) = carried.split_last().expect("a count to take");
+                let (&(count, _), before) = carried.split_last().expect("a count to take");
                 let mut args: Vec<_> = before
                     .iter()
-                    .map(|&atom| Self::scalar(locals, atom))
+                    .map(|&(atom, _)| Self::scalar(locals, atom))
                     .collect();
                 args.extend(Self::room(b, Self::scalar(locals, count), io));
                 vec![b.call_one(primitive(), &args)]
             }
             Built::Taken => {
-                let &count = carried.last().expect("a count taken");
-                Self::taken(b, Self::scalar(locals, count), io).to_vec()
+                let &(count, _) = carried.last().expect("a count taken");
+                let bytes = self.byte_element(self.barb.function(asked.0).result);
+                Self::taken(b, Self::scalar(locals, count), (io, bytes)).to_vec()
             }
         }
     }
@@ -2778,15 +2838,20 @@ impl Lowering<'_> {
         &self,
         (function, arguments): (barb::FnId, barb::Range),
         routine: &Routine,
-    ) -> Vec<barb::Atom> {
+    ) -> Vec<(barb::Atom, barb::TypeId)> {
         self.barb
             .atoms(arguments)
             .iter()
             .zip(self.barb.params(function))
             .skip(authority(routine))
             .filter(|(_, ty)| self.carries[ty.index()] != Storage::Erased)
-            .map(|(atom, _)| *atom)
+            .map(|(atom, ty)| (*atom, *ty))
             .collect()
+    }
+
+    /// The class a byte string of type `ty` holds each byte at.
+    fn byte_element(&self, ty: barb::TypeId) -> Class {
+        byte_element(self.barb, self.facts, &self.carries, ty)
     }
 
     /// A byte string, as where it starts and how many bytes a primitive
@@ -2800,7 +2865,7 @@ impl Lowering<'_> {
         atom: barb::Atom,
         locals: &Locals,
         statics: &[Option<Known>],
-        (io, ended): (Io, bool),
+        (io, ended, element): (Io, bool, Class),
     ) -> [ValueId; 2] {
         if let Some(Known { value, skip }) = statics[atom.0.index()] {
             let mut bytes = self.bytes(value);
@@ -2829,7 +2894,7 @@ impl Lowering<'_> {
         let [buffer, len] = held.values() else {
             unreachable!("a byte string is held as a sequence");
         };
-        let run = Self::copied_run(b, (*buffer, *len), (io, ended));
+        let run = Self::copied_run(b, (*buffer, *len), (io, ended), element);
         [b.address_of(io.scratch), run]
     }
 
@@ -2839,6 +2904,7 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         (buffer, len): (ValueId, ValueId),
         (io, ended): (Io, bool),
+        element: Class,
     ) -> ValueId {
         let mut room = b.data_len(io.scratch);
         if ended {
@@ -2858,7 +2924,8 @@ impl Lowering<'_> {
             let done = b.compare(Relation::Equal, at, run);
             b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
             let left = b.binary(Binary::Sub, len, at);
-            let value = b.buffer_field(Class::fixed(8), buffer, left, 0);
+            let bytes = b.shape(&[element]);
+            let value = b.buffer_field((element, bytes), (buffer, left), 0);
             let place = Self::scratch_at(b, io, at);
             b.store(super::Width::Byte, place, super::Offset::Bytes(0), value);
             let one = b.constant(Class::Word, 1);
@@ -2899,9 +2966,9 @@ impl Lowering<'_> {
     /// The first `count` bytes of the scratch region, no more than a run,
     /// as a sequence: pushed from the last, since a sequence grows at its
     /// front.
-    fn taken(b: &mut super::Builder, count: ValueId, io: Io) -> [ValueId; 2] {
+    fn taken(b: &mut super::Builder, count: ValueId, (io, element): (Io, Class)) -> [ValueId; 2] {
         let [start, run] = Self::room(b, count, io);
-        Self::pushed_bytes(b, start, run, Class::fixed(8))
+        Self::pushed_bytes(b, start, run, element)
     }
 
     /// The first `total` bytes where `data` lies, as a sequence of elements
@@ -2926,7 +2993,8 @@ impl Lowering<'_> {
             let place = b.convert(Class::Address, place);
             let byte = b.load(super::Width::Byte, place, super::Offset::Bytes(0));
             let byte = b.convert(class, byte);
-            let longer = b.buffer_push(held, len, &[byte]);
+            let bytes = b.shape(&[class]);
+            let longer = b.buffer_push((held, len), bytes, &[byte]);
             let more = b.binary(Binary::Add, len, one);
             b.continue_(&[longer, more]);
         });
@@ -3037,14 +3105,26 @@ impl Lowering<'_> {
             Carried::One(class) => class,
         };
         if class == Class::Cell {
-            let mut fields = Vec::new();
-            self.field_values(b, ctor, args, locals, &mut fields);
-            return Some(Held::One(b.cell(self.barb.tag(ctor), &fields)));
+            return Some(Held::One(self.object(b, ctor, args, locals)));
         }
         if tagged(self.barb, owner) {
             return Some(Held::One(b.constant(class, u64::from(self.barb.tag(ctor)))));
         }
         Some(Held::One(self.count(b, class, args, locals)))
+    }
+
+    /// An object of `ctor` holding `args`, stored as its shape says.
+    fn object(
+        &self,
+        b: &mut super::Builder,
+        ctor: barb::CtorId,
+        args: barb::Range,
+        locals: &Locals,
+    ) -> ValueId {
+        let mut fields = Vec::new();
+        self.field_values(b, ctor, args, locals, &mut fields);
+        let shape = self.cell_shape(b, ctor);
+        b.cell(self.barb.tag(ctor), shape, &fields)
     }
 
     /// A tagged union of `ctor`, whose fields' leaves are `fields`: its tag,
@@ -3132,7 +3212,8 @@ impl Lowering<'_> {
                     fields.push(met(b, value, class));
                 }
             }
-            let pushed = b.buffer_push(buffer, len, &fields);
+            let shape = self.element_shape(b, ctor, element);
+            let pushed = b.buffer_push((buffer, len), shape, &fields);
             let one = b.constant(Class::Word, 1);
             [pushed, b.binary(Binary::Add, len, one)]
         };
@@ -3456,9 +3537,10 @@ impl Lowering<'_> {
                     let shorter = b.binary(Binary::Sub, len, one);
                     return Held::of(carried, &[buffer, shorter]);
                 }
+                let shape = self.element_shape(b, ctor, at);
                 let values: Vec<_> = (0u32..)
                     .zip(self.classes(&carried))
-                    .map(|(leaf, &class)| b.buffer_field(class, buffer, len, leaf))
+                    .map(|(leaf, &class)| b.buffer_field((class, shape), (buffer, len), leaf))
                     .collect();
                 Held::of(carried, &values)
             });
@@ -3528,13 +3610,14 @@ impl Lowering<'_> {
         statics: &mut Vec<Option<Known>>,
     ) {
         let mut index = 0;
+        let shape = self.cell_shape(b, ctor);
         for carried in self.fields_carried(ctor) {
             let field = carried.map(|carried| {
                 let values: Vec<_> = self
                     .classes(&carried)
                     .iter()
                     .map(|&class| {
-                        let field = b.cell_field(class, scrutinee, index);
+                        let field = b.cell_field((class, shape), scrutinee, index);
                         index += 1;
                         field
                     })

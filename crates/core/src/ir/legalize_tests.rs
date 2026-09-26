@@ -18,11 +18,12 @@ fn nested_cells_are_legalized_to_managed_objects_and_released() {
     source.define(identity, |b, params| b.ret(params));
     source.define(main, |b, _| {
         let answer = b.constant(Class::Word, 42);
-        let inner = b.cell(7, &[answer]);
-        let outer = b.cell(3, &[inner]);
+        let (word, cell) = (b.shape(&[Class::Word]), b.shape(&[Class::Cell]));
+        let inner = b.cell(7, word, &[answer]);
+        let outer = b.cell(3, cell, &[inner]);
         let returned = b.call_one(identity, &[outer]);
-        let projected = b.cell_field(Class::Cell, returned, 0);
-        let result = b.cell_field(Class::Word, projected, 0);
+        let projected = b.cell_field((Class::Cell, cell), returned, 0);
+        let result = b.cell_field((Class::Word, word), projected, 0);
         b.ret(&[result]);
     });
     let config = Config {
@@ -49,8 +50,9 @@ fn a_cell_holding_a_natural_retains_and_releases_that_field() {
     source.define(main, |b, _| {
         let word = b.constant(Class::Word, 42);
         let counted = b.convert(Class::Natural, word);
-        let cell = b.cell(1, &[counted]);
-        let field = b.cell_field(Class::Natural, cell, 0);
+        let natural = b.shape(&[Class::Natural]);
+        let cell = b.cell(1, natural, &[counted]);
+        let field = b.cell_field((Class::Natural, natural), cell, 0);
         let answer = b.convert(Class::Word, field);
         b.ret(&[answer]);
     });
@@ -761,8 +763,10 @@ fn a_buffer_prepended_answers_the_reference_and_leaks_nothing() {
                     let base = b.convert(Class::Natural, args[0]);
                     let push = |b: &mut Builder, buffer, len: u64, value| {
                         let len = b.constant(Class::Word, len);
-                        b.buffer_push(buffer, len, &[value])
+                        let natural = b.shape(&[Class::Natural]);
+                        b.buffer_push((buffer, len), natural, &[value])
                     };
+                    let natural = b.shape(&[Class::Natural]);
                     let mut from = b.buffer_empty();
                     for (at, offset) in (0u64..).zip([1, half, 3]) {
                         let offset = b.constant(Class::Word, offset);
@@ -782,13 +786,13 @@ fn a_buffer_prepended_answers_the_reference_and_leaks_nothing() {
                     let mut total = b.constant(Class::Natural, 0);
                     for (at, place) in (0u64..5).zip(0u32..) {
                         let len = b.constant(Class::Word, 5 - at);
-                        let value = b.buffer_field(Class::Natural, joined, len, 0);
+                        let value = b.buffer_field((Class::Natural, natural), (joined, len), 0);
                         let weight = b.constant(Class::Natural, 10u64.pow(place));
                         let weighted = b.binary(Binary::Mul, value, weight);
                         total = b.binary(Binary::Add, total, weighted);
                     }
                     if shared {
-                        let first = b.buffer_field(Class::Natural, onto, two, 0);
+                        let first = b.buffer_field((Class::Natural, natural), (onto, two), 0);
                         total = b.binary(Binary::Add, total, first);
                     }
                     b.ret(&[total]);
