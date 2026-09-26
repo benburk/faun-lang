@@ -233,7 +233,10 @@ name reaching above it, by `..`, from the root or through a link, is refused as
 whatever it is handed, so its host module refuses a name from the root or
 holding a `..` itself, and cannot see a link. A name holds no nought byte; where the kernel reads a
 name up to one, the host module appends one, in place where the name's buffer
-has room and nothing else holds it.
+has room and nothing else holds it. How long a name may be is the target's to
+say: Linux and a WASI host refuse one too long themselves, and sim65, which
+would copy a longer one past its own 1024 bytes, is never handed one over
+1023.
 
 A `File` is a resource: whatever opens one must use it up exactly once on
 every way it goes on, by closing it or answering it to something that does.

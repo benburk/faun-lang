@@ -227,9 +227,12 @@ made : Mode -> Nat
 made(_) -> 3
 
 # Open `name`, ended by a nought byte as cc65 reads one, so none may be in it,
-# and none reaching above where the program runs.
+# and none reaching above where the program runs. sim65 copies a name, and
+# the nought byte after it, into 1024 bytes of its own without counting, so
+# a longer one is refused here, as Linux refuses one too long: error 36.
 named! : (Files, List(U8), (Nat, Nat)) -> Result(File, IoError)
 named!(_, name, _) if name.contains(0) -> Err(Other(22))
+named!(_, name, _) if name.len() > 1023 -> Err(Other(36))
 named!(_, name, _) if escapes(name) -> Err(Escapes)
 named!(files, name, how) -> opening!(files, name.append(0), how, 8)
 
