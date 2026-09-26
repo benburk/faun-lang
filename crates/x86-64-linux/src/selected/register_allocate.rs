@@ -479,6 +479,9 @@ struct Allocator<'a> {
     /// a value moves out of one of those before the instruction runs, but
     /// out of any other only after, when the instruction has written it.
     late: Option<RegSet>,
+    /// For each value, every register some instruction it lives across
+    /// writes or needs: one outside these holds it without moving.
+    hazards: Vec<RegSet>,
 }
 
 impl<'a> Allocator<'a> {
@@ -508,6 +511,7 @@ impl<'a> Allocator<'a> {
             next_spill: vec![1; function_count(selected)],
             busy: RegSet(0),
             late: None,
+            hazards: hazards(selected, liveness),
         })
     }
 
@@ -760,7 +764,7 @@ impl<'a> Allocator<'a> {
         protected: &[VReg],
         reserved: RegSet,
     ) -> Result<(), String> {
-        if let Some(reg) = self.free_register(reserved) {
+        if let Some(reg) = self.free_register_for(value, reserved) {
             self.put_in_register(value, reg, protected)
         } else {
             let spilled = self.spill(value)?;
@@ -780,7 +784,7 @@ impl<'a> Allocator<'a> {
         {
             return Ok(reg);
         }
-        let reg = self.free_register(reserved).or_else(|| {
+        let reg = self.free_register_for(value, reserved).or_else(|| {
             REGISTERS.into_iter().rev().find(|&candidate| {
                 !reserved.contains(candidate)
                     && self
@@ -844,7 +848,7 @@ impl<'a> Allocator<'a> {
     /// otherwise to memory.
     fn displace(&mut self, value: VReg, reg: Reg) -> Result<(), String> {
         let in_time = self.late.is_none_or(|clobbered| clobbered.contains(reg));
-        let moved = match self.free_register(self.busy).filter(|_| in_time) {
+        let moved = match self.free_register_for(value, self.busy).filter(|_| in_time) {
             Some(free) => Location::Register(free),
             None => self.spill(value)?,
         };
@@ -877,6 +881,14 @@ impl<'a> Allocator<'a> {
         REGISTERS
             .into_iter()
             .find(|&reg| !reserved.contains(reg) && self.register_occupant(reg).is_none())
+    }
+
+    /// A free register for `value`: one nothing it lives across disturbs
+    /// where there is one, and otherwise any.
+    fn free_register_for(&self, value: VReg, reserved: RegSet) -> Option<Reg> {
+        let undisturbed = RegSet(reserved.0 | self.hazards[value.index()].0);
+        self.free_register(undisturbed)
+            .or_else(|| self.free_register(reserved))
     }
 
     fn record(&mut self, block: BlockId, point: Point) {
@@ -1190,6 +1202,72 @@ fn preferred_registers(selected: &Selected, entry: FunctionId) -> Vec<Option<Reg
     let mut preferred: Vec<_> = asked.into_iter().map(Option::flatten).collect();
     tie_back(selected, &mut preferred);
     preferred
+}
+
+/// Every register each value would have to leave: what an instruction it
+/// is live across clobbers, uses as scratch, or takes an operand or answers
+/// in, by a register of its own.
+fn hazards(selected: &Selected, liveness: &Liveness) -> Vec<RegSet> {
+    let mut hazards = vec![RegSet(0); selected.widths.len()];
+    for layout in &liveness.blocks {
+        for points in &layout.instructions {
+            let inst = selected.instructions[points.instruction];
+            let requirements = inst.opcode.requirements();
+            let mut disturbed = requirements.effects.clobbers.0 | requirements.scratch.0;
+            let count = usize::from(inst.result.is_some()) + inst.operands.range().len();
+            for at in 0..count {
+                if let Some(Constraint::Fixed(reg)) =
+                    inst.operand_spec(at).map(|spec| spec.constraint)
+                {
+                    disturbed |= RegSet::of(&[reg]).0;
+                }
+            }
+            let before = &liveness.at[points.early.index()];
+            for value in liveness.at[points.late.index()].iter() {
+                if before.contains(value) && Some(value) != inst.result {
+                    hazards[value.index()].0 |= disturbed;
+                }
+            }
+        }
+    }
+    tie_hazards(selected, liveness, &mut hazards);
+    hazards
+}
+
+/// An operand overwritten with the result where it is read for the last
+/// time is where that result will be, so it had best avoid what the result
+/// must.
+fn tie_hazards(selected: &Selected, liveness: &Liveness, hazards: &mut [RegSet]) {
+    loop {
+        let mut learned = false;
+        for points in liveness
+            .blocks
+            .iter()
+            .rev()
+            .flat_map(|layout| layout.instructions.iter().rev())
+        {
+            let inst = selected.instructions[points.instruction];
+            let (Some(result), Some(&tied)) = (
+                inst.result,
+                selected.operands[inst.operands.range()].first(),
+            ) else {
+                continue;
+            };
+            if inst.operand_spec(1).map(|spec| spec.constraint) != Some(Constraint::Tied(0))
+                || liveness.at[points.late.index()].contains(tied)
+            {
+                continue;
+            }
+            let joined = hazards[tied.index()].0 | hazards[result.index()].0;
+            if joined != hazards[tied.index()].0 {
+                hazards[tied.index()].0 = joined;
+                learned = true;
+            }
+        }
+        if !learned {
+            return;
+        }
+    }
 }
 
 /// An operand an instruction overwrites with its result, read nowhere else,
