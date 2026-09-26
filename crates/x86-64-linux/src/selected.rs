@@ -168,8 +168,6 @@ impl Opcode {
             Self::Multiply
             | Self::Divide
             | Self::Modulo
-            | Self::Convert
-            | Self::Shift
             | Self::Call
             | Self::PutOut
             | Self::PutErr
@@ -333,8 +331,13 @@ impl Inst {
         }
         let use_at = at.checked_sub(def)?;
         let constraint = match self.opcode {
-            Opcode::Add | Opcode::Subtract | Opcode::Monus if use_at == 0 => Constraint::Tied(0),
-            Opcode::Convert | Opcode::Shift if use_at == 0 => Constraint::Fixed(Reg::Rax),
+            // Worked out where the first operand was, whichever register
+            // that is.
+            Opcode::Add | Opcode::Subtract | Opcode::Monus | Opcode::Convert | Opcode::Shift
+                if use_at == 0 =>
+            {
+                Constraint::Tied(0)
+            }
             Opcode::Multiply | Opcode::Divide | Opcode::Modulo if use_at == 0 => {
                 Constraint::Fixed(Reg::Rax)
             }

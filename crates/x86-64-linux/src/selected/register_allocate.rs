@@ -1187,7 +1187,43 @@ fn preferred_registers(selected: &Selected, entry: FunctionId) -> Vec<Option<Reg
             ask(value, Some(result));
         }
     }
-    asked.into_iter().map(Option::flatten).collect()
+    let mut preferred: Vec<_> = asked.into_iter().map(Option::flatten).collect();
+    tie_back(selected, &mut preferred);
+    preferred
+}
+
+/// An operand an instruction overwrites with its result, read nowhere else,
+/// is best held where that result is, so nothing moves between them. Back
+/// along a run of such instructions until nothing more is learned.
+fn tie_back(selected: &Selected, preferred: &mut [Option<Reg>]) {
+    let mut reads = vec![0u32; preferred.len()];
+    for &operand in &selected.operands {
+        reads[operand.index()] += 1;
+    }
+    loop {
+        let mut learned = false;
+        for inst in selected.instructions.iter().rev() {
+            let Some(result) = inst.result else {
+                continue;
+            };
+            let Some(&tied) = selected.operands[inst.operands.range()].first() else {
+                continue;
+            };
+            if inst.operand_spec(1).map(|spec| spec.constraint) != Some(Constraint::Tied(0))
+                || reads[tied.index()] != 1
+                || preferred[tied.index()].is_some()
+            {
+                continue;
+            }
+            if let Some(reg) = preferred[result.index()] {
+                preferred[tied.index()] = Some(reg);
+                learned = true;
+            }
+        }
+        if !learned {
+            return;
+        }
+    }
 }
 
 /// The frame slots each function needs: past the last slot any of its

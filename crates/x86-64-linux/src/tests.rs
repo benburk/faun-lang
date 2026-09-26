@@ -17,8 +17,8 @@ const RUNNER: Option<&str> = None;
 const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 127),
     ("the count", 129),
-    ("the count and a constant", 134),
-    ("the low bits of a sum", 133),
+    ("the count and a constant", 132),
+    ("the low bits of a sum", 131),
     ("the count under a guard", 147),
     ("the count and more", 150),
     ("a shared intermediate", 156),
@@ -32,11 +32,11 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("recursion", 189),
     ("values across a call", 256),
     ("the heap", 178),
-    ("a byte", 209),
+    ("a byte", 208),
     ("a global", 244),
     ("writing the heap", 196),
-    ("a computed length", 203),
-    ("eight bits", 135),
+    ("a computed length", 200),
+    ("eight bits", 133),
     ("less", 140),
     ("two worked out", 169),
     ("a flag", 219),
@@ -55,9 +55,9 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("width", 145),
     ("argc", 145),
     ("expressions", 151),
-    ("hello", 238),
+    ("hello", 232),
 ];
-const ARITHMETIC_SIZES: [usize; 3] = [204, 215, 214];
+const ARITHMETIC_SIZES: [usize; 3] = [201, 212, 211];
 
 #[test]
 fn ladder_code_size_ratchets() {
@@ -80,8 +80,8 @@ fn ladder_code_size_ratchets() {
         [
             ("a constant", 7),
             ("the count", 9),
-            ("the count and a constant", 14),
-            ("the low bits of a sum", 13),
+            ("the count and a constant", 12),
+            ("the low bits of a sum", 11),
             ("the count under a guard", 27),
             ("the count and more", 30),
             ("a shared intermediate", 36),

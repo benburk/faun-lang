@@ -272,6 +272,23 @@ impl<'a> Lowering<'a> {
         self.selected.blocks[self.block_at(point)].owner
     }
 
+    /// How many bits `value` can take: what its class says, or fewer where
+    /// it was moved down from something narrower than that.
+    fn held_width(&self, value: VReg) -> u16 {
+        let width = self.selected.widths[value.index()];
+        let Some(definition) = self.uses.definitions[value.index()] else {
+            return width;
+        };
+        let definition = self.selected.instructions[definition];
+        match definition.immediate {
+            Immediate::Shift { up: false, by, .. } => {
+                let moved = self.selected.operands[definition.operands.range()][0];
+                width.min(self.selected.widths[moved.index()].saturating_sub(u16::from(by)))
+            }
+            _ => width,
+        }
+    }
+
     fn is_unique_constant(&self, value: VReg) -> bool {
         let Some(definition_id) = self.uses.definitions[value.index()] else {
             return false;
@@ -455,7 +472,7 @@ impl<'a> Lowering<'a> {
             }
             (Opcode::Convert, Immediate::Bits(bits)) => {
                 let input = self.selected.operands[inst.operands.range()][0];
-                if bits < self.selected.widths[input.index()] {
+                if bits < self.held_width(input) {
                     self.asm.narrow(result()?, bits);
                 }
             }
