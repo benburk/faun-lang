@@ -61,7 +61,9 @@ have `min` and `max`, and `U8` the ASCII tests `is_digit`, `is_ascii_lower`,
 byte order and `equals` from it, `from_ascii`, `from_utf8` and `to_utf8`.
 `Bool`, the integers and `Str` say themselves with `to_str`, and a splice
 `${value}` in a string is its value's `to_str`, the pieces joined with
-`concat`. For reading text there are `is_empty`, `split` at a separator,
+`concat`. A string or character literal writes `\n`, `\r`, `\t`, `\0`,
+`\\`, `\"`, `\'` and `\$` for themselves, and `\u{...}` for any scalar by
+its one to six hexadecimal digits, as Rust does. For reading text there are `is_empty`, `split` at a separator,
 `lines` at `\n` or `\r\n`, `trim` of ASCII white space, `starts_with`,
 `ends_with`, `drop_prefix` and `drop_suffix`; for writing it,
 `Str.join(pieces, separator)` and `repeat`. Matching and cutting go byte by

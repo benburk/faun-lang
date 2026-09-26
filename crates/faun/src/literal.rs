@@ -55,14 +55,40 @@ pub fn decode_text(text: &str) -> Result<Cow<'_, str>, String> {
             '"' => out.push('"'),
             '\'' => out.push('\''),
             '$' => out.push('$'),
+            '0' => out.push('\0'),
+            'u' => out.push(unicode(&mut chars)?),
             other => {
                 return Err(format!(
-                    "unknown escape `\\{other}`; use `\\n`, `\\r`, `\\t`, `\\\\`, `\\\"`, `\\'`, or `\\$`"
+                    "unknown escape `\\{other}`; use `\\n`, `\\r`, `\\t`, `\\0`, `\\\\`, `\\\"`, `\\'`, `\\$`, or `\\u{{...}}`"
                 ));
             }
         }
     }
     Ok(Cow::Owned(out))
+}
+
+/// The scalar a `\u{...}` escape names, read from just after the `u`: one
+/// to six hexadecimal digits in braces, as Rust writes one.
+fn unicode(chars: &mut std::str::Chars<'_>) -> Result<char, String> {
+    let malformed =
+        || "a `\\u` escape is one to six hexadecimal digits in braces, as `\\u{e9}`".to_owned();
+    if chars.next() != Some('{') {
+        return Err(malformed());
+    }
+    let mut value: u32 = 0;
+    let mut digits = 0;
+    loop {
+        match chars.next() {
+            Some('}') if digits > 0 => break,
+            Some(digit) if digits < 6 => {
+                let digit = digit.to_digit(16).ok_or_else(malformed)?;
+                value = value * 16 + digit;
+                digits += 1;
+            }
+            _ => return Err(malformed()),
+        }
+    }
+    char::from_u32(value).ok_or_else(|| format!("`\\u{{{value:x}}}` is not a Unicode scalar value"))
 }
 
 /// Decode a numeral or character literal to its nonnegative magnitude.
@@ -322,6 +348,29 @@ mod tests {
         ));
         assert_eq!(decode_text("a\\nb").unwrap(), "a\nb");
         assert!(decode_text("\\q").unwrap_err().contains("unknown escape"));
+    }
+
+    /// A nought byte, and any scalar by its number, as Rust writes them.
+    #[test]
+    fn nought_and_any_scalar_have_escapes() {
+        assert_eq!(decode_text("a\\0b").unwrap(), "a\0b");
+        assert_eq!(decode_text("\\u{e9}\\u{1F600}").unwrap(), "\u{e9}\u{1F600}");
+        for malformed in ["\\u", "\\u{}", "\\u{1234567}", "\\u{zz}", "\\ue9", "\\u{e9"] {
+            assert!(
+                decode_text(malformed).unwrap_err().contains("hexadecimal"),
+                "{malformed}"
+            );
+        }
+        assert!(
+            decode_text("\\u{D800}")
+                .unwrap_err()
+                .contains("not a Unicode scalar")
+        );
+        assert!(
+            decode_text("\\u{110000}")
+                .unwrap_err()
+                .contains("not a Unicode scalar")
+        );
     }
 
     #[test]

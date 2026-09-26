@@ -46,6 +46,31 @@ fn a_lent_file_may_be_held_where_a_function_leaves() {
     assert_eq!(left["output.txt"], text);
 }
 
+/// A name holding a nought byte is refused before the target is asked,
+/// which would read it as ending there: nothing named by its front is made.
+#[test]
+fn a_name_holding_a_nought_byte_is_refused() {
+    let package = Package::new(
+        "nought-name",
+        "import std.host {Host, File, IoError, IoError.*, Mode.*}
+
+         main! : Host -> []
+         main!(host) ->
+           opened = host.files.open!(\"bad\\0name\", Overwrite)
+           status = shut!(opened)
+           host.exit!(status)
+
+         shut! : Result(File, IoError) -> Nat
+         shut!(Ok(file)) ->
+           closed = file.close!()
+           0
+         shut!(Err(Other(_))) -> 6
+         shut!(Err(_)) -> 7",
+    );
+    let (status, _, left) = support::run_among(&package.entry(), Directory::new());
+    assert_eq!((status, left), (6, Directory::new()));
+}
+
 /// What opens a file and what is refused of it, each with what is wrong.
 const REFUSED: &[(&str, &str, &str)] = &[
     (
