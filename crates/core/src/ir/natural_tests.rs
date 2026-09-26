@@ -40,13 +40,13 @@ impl Host for Observer {
                 let refs = read_word(&header[self.word..2 * self.word]);
                 let len = read_word(&header[2 * self.word..]);
                 assert!(refs > 0, "observing a released result");
-                assert!(len + u64::try_from(3 * self.word).unwrap() <= size);
-                let digits = memory.read(
-                    address + u64::try_from(3 * self.word).unwrap(),
-                    usize::try_from(len).unwrap(),
-                )?;
+                let word = u64::try_from(self.word).unwrap();
+                assert!((len + 3) * word <= size);
+                let digits =
+                    memory.read(address + 3 * word, usize::try_from(len * word).unwrap())?;
+                // Each digit is a word, and the last is not nought.
                 assert!(
-                    digits.is_empty() || digits.last() != Some(&0),
+                    digits.is_empty() || digits[digits.len() - self.word..].iter().any(|&d| d != 0),
                     "normalized result"
                 );
                 self.seen.push(BigUint::from_bytes_le(digits));
@@ -168,7 +168,7 @@ fn static_layout_configuration_and_pruning() {
             assert_eq!(read_word(&bytes[word..2 * word]), u64::MAX >> (64 - bits));
             let len = usize::try_from(read_word(&bytes[2 * word..3 * word])).unwrap();
             assert_eq!(
-                BigUint::from_bytes_le(&bytes[3 * word..3 * word + len]),
+                BigUint::from_bytes_le(&bytes[3 * word..3 * word + len * word]),
                 expected
             );
         }
@@ -303,12 +303,31 @@ fn samples(bits: u16) -> Vec<(BigUint, BigUint)> {
         (huge.clone(), huge),
         ((n(1) << 128usize) + n(1), (n(1) << 65usize) + n(3)),
     ];
+    // Knuth's rare case, as Hacker's Delight tests it: an estimate still one
+    // too big after its corrections, so a divisor is added back. Digits
+    // from the least: [0, 0, B/2, B/2 - 1] by [1, 0, B/2].
+    let digit = n(1) << usize::from(bits);
+    let half = &digit >> 1usize;
+    let square = &digit * &digit;
+    pairs.push((
+        &half * &square + (&half - n(1)) * &square * &digit,
+        &half * &square + n(1),
+    ));
     let mut seed = 0x917d_5a32_0ed6_c41bu64;
+    let mut next = || {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        seed
+    };
     for _ in 0..12 {
-        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-        let a = seed;
-        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-        pairs.push((n(a), n(seed)));
+        let a = next();
+        pairs.push((n(a), n(next())));
+    }
+    // Several digits by several, at every word width.
+    for (long, short) in [(5, 2), (4, 3), (3, 2), (6, 4)] {
+        let mut wide =
+            |count: usize| (0..count).fold(n(0), |held, _| (held << 64usize) + n(next()));
+        let a = wide(long);
+        pairs.push((a, wide(short)));
     }
     pairs
 }
@@ -351,6 +370,83 @@ fn all_arithmetic_matches_biguint_at_every_word_width() {
             }
         }
     }
+}
+
+/// A program dividing only by words carries no long division: none of the
+/// routines it calls are there.
+#[test]
+fn division_by_a_word_carries_no_long_division() {
+    for bits in [16, 32, 64] {
+        let (p, _, _) = program(
+            config(bits),
+            Needs::from([Helper::DivWord, Helper::ModWord]),
+        );
+        for long in [
+            "nat.divmod",
+            "nat.estimate",
+            "nat.multiply_out",
+            "nat.add_back",
+        ] {
+            assert!(
+                !p.functions().iter().any(|f| p.name(f.name) == long),
+                "{bits}: {long}"
+            );
+        }
+    }
+}
+
+/// Dividing by a word answers what dividing by that number does, for every
+/// dividend: by nought, across the immediate boundary, and by the largest.
+#[test]
+fn division_by_a_word_matches_biguint() {
+    for bits in [16, 32, 64] {
+        let conf = config(bits);
+        let (mut p, lib, _) = program(conf, Needs::from([Helper::DivWord, Helper::ModWord]));
+        let checks = word_division_checks(&mut p, &lib);
+        let max = (1u64 << (bits - 1) << 1).wrapping_sub(1);
+        let half = 1u64 << (bits - 1);
+        let divisors = [0, 1, 7, 10, half - 1, half, max, 0x9e37 & max];
+        let dividends: Vec<_> = samples(bits)
+            .into_iter()
+            .map(|(a, _)| {
+                let data = natural::constant(&mut p, conf, &a).unwrap();
+                (a, data)
+            })
+            .collect();
+        for (op, check) in checks {
+            for ((a, data), d) in dividends.iter().flat_map(|a| divisors.map(|d| (a, d))) {
+                let args = [data_address(&p, *data), BigUint::from(d)];
+                let (evaluation, seen) = run(&p, check, &args, bits);
+                assert!(evaluation.returned().is_some(), "{bits} {op:?} {a} {d}");
+                let expected = model(op, a, &BigUint::from(d));
+                assert_eq!(seen, [expected, a.clone()], "{bits} {op:?} {a} {d}");
+                free_heap(&evaluation.globals, usize::from(bits / 8));
+            }
+        }
+    }
+}
+
+/// A check for each division by a word: what it answers, then its dividend,
+/// which it borrows.
+fn word_division_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)> {
+    let observer = observer(p);
+    [
+        (Binary::Div, Helper::DivWord),
+        (Binary::Mod, Helper::ModWord),
+    ]
+    .into_iter()
+    .map(|(op, helper)| {
+        let check = p.declare("check", &[ADDRESS, WORD], &[WORD]);
+        p.define(check, |b, args| {
+            let out = b.call_one(lib.require(helper), args);
+            observe_and_release(b, lib, observer, out);
+            b.call(observer, &[args[0]]);
+            let zero = b.constant(WORD, 0);
+            b.ret(&[zero]);
+        });
+        (op, check)
+    })
+    .collect()
 }
 
 fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)> {
@@ -710,7 +806,8 @@ fn fragmented_check(p: &mut Program, lib: &Library, big: DataId, remove_middle: 
         }
         let big = b.address_of(big);
         let result = b.call_one(lib.require(Helper::Add), &[big, big]);
-        // Keep the 5W result alive: this request must take the 7W remainder.
+        // Keep the 6W result alive: this request must take the 6W remainder,
+        // whose last two words are too few to split off.
         let replacement = object(b, lib, 9);
         observe_and_release(b, lib, observer, result);
         observe_and_release(b, lib, observer, replacement);
@@ -749,7 +846,7 @@ fn coalescing_stops_at_live_blocks_and_later_reuses_the_joined_run() {
                         past_half(bits, 4)
                     ]
                 );
-                assert_eq!(blocks, [(5 * word, 0), (7 * word, 0), (4 * word, 0)]);
+                assert_eq!(blocks, [(6 * word, 0), (6 * word, 0), (4 * word, 0)]);
                 free_heap(&evaluation.globals, word);
             } else {
                 assert_eq!(evaluation.halted().unwrap(), [BigUint::from(2u8)]);
@@ -770,10 +867,10 @@ fn still_fragmented(globals: &[u8], bits: u16) {
     for (offset, value) in [(4 * word, 2), (12 * word, 4)] {
         let len =
             usize::try_from(read_word(&globals[offset + 2 * word..offset + 3 * word])).unwrap();
-        assert_eq!(len, word);
+        assert_eq!(len, 1);
         let start = offset + 3 * word;
         assert_eq!(
-            BigUint::from_bytes_le(&globals[start..start + len]),
+            BigUint::from_bytes_le(&globals[start..start + len * word]),
             past_half(bits, value)
         );
     }
@@ -880,9 +977,12 @@ fn division_boundaries() -> Vec<(BigUint, BigUint, BigUint, BigUint)> {
 #[test]
 fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
     for bits in [16, 32, 64] {
+        // Room for long division's three scratch objects -- the scaled
+        // dividend and divisor, and the quotient -- and little more, so the
+        // product's freed digits are what they reuse.
         let conf = Config {
             word_bits: bits,
-            heap_bytes: 128,
+            heap_bytes: 256,
             grows: false,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul, Helper::Div, Helper::Mod]));
@@ -906,7 +1006,11 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
             let right = natural::constant(&mut p, conf, &b).unwrap();
             let args = [data_address(&p, left), data_address(&p, right)];
             let (evaluation, seen) = run(&p, check, &args, bits);
-            assert!(evaluation.returned().is_some());
+            assert!(
+                evaluation.returned().is_some(),
+                "{bits} {a} {b}: {:?} {seen:?}",
+                evaluation.halted()
+            );
             assert_eq!(seen, [&dense * &dense, quotient, remainder]);
             free_heap(&evaluation.globals, usize::from(bits / 8));
         }
@@ -945,7 +1049,11 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
         b.ret(&[zero]);
     });
     let (evaluation, seen) = run(&p, entry, &[], bits);
-    assert!(evaluation.returned().is_some());
+    assert!(
+        evaluation.returned().is_some(),
+        "{bits} {op:?}: {:?}",
+        evaluation.halted()
+    );
     let expected = op.map_or_else(|| BigUint::from(513u32), |op| model(op, &left, &right));
     assert_eq!(seen, [expected]);
     free_heap(&evaluation.globals, usize::from(bits / 8));

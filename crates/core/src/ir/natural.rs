@@ -1,4 +1,4 @@
-//! Shared machine-IR natural arithmetic on base-256 digits.
+//! Shared machine-IR natural arithmetic on digits a word wide.
 //!
 //! A natural is held in a word. One below half a word is an immediate: the
 //! word is the number plus half a word, so its top bit is set, it is no
@@ -15,7 +15,20 @@
 //! Inputs are borrowed; every natural result owns a claim, which for an
 //! immediate is nothing. The caller must release it. Objects have three
 //! target-word headers: total block bytes, reference count, and normalized
-//! digit count. Digits are little endian.
+//! digit count. Each digit is a word, and the least significant comes
+//! first, so a number takes as few loop steps as a word holds it in.
+//!
+//! Nothing here asks a target for more than a word's arithmetic, which
+//! wraps. A carry out of a sum is the sum coming out less than what was
+//! added, and a digit's product with another is worked out from the halves
+//! of each, each product of halves fitting a word. A target free to do
+//! better -- an add with carry, a multiply answering both words -- sees the
+//! pattern where it lowers these.
+//!
+//! Division is Knuth's algorithm D, a digit of the quotient at a time, each
+//! estimated from the top digits and corrected, with both operands scaled
+//! so the divisor's top bit is set. By a single digit it is short division,
+//! which scales the dividend as it reads it and allocates only the quotient.
 //! Static objects have an all-ones count. Mortal objects live in a private,
 //! reusable, coalescing heap that starts in the globals. Where the target's
 //! `grow` has more to give, a full heap asks it for an arena at least as large
@@ -38,7 +51,8 @@
 use num_bigint::BigUint;
 
 use super::{
-    Binary, Builder, Class, DataId, FunctionId, Offset, Program, Relation, ValueId, Width,
+    Binary, Builder, Class, DataId, Direction, FunctionId, Offset, Program, Relation, ValueId,
+    Width,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -60,19 +74,26 @@ pub(super) enum Helper {
     Mul,
     Div,
     Mod,
+    /// A quotient by a divisor known to fit a word, which only short
+    /// division ever answers.
+    DivWord,
+    /// The same, for a remainder.
+    ModWord,
     Compare,
     FromWord,
     ToWord,
 }
 
 impl Helper {
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::Allocate,
         Self::Add,
         Self::Sub,
         Self::Mul,
         Self::Div,
         Self::Mod,
+        Self::DivWord,
+        Self::ModWord,
         Self::Compare,
         Self::FromWord,
         Self::ToWord,
@@ -149,6 +170,11 @@ impl Library {
     /// it is small enough to be an immediate.
     pub(super) fn small(&self, b: &mut Builder<'_>, n: u64) -> Option<ValueId> {
         (n < self.half).then(|| small(b, self.half, n))
+    }
+
+    /// The immediate holding `n`, a word known to be below half a word.
+    pub(super) fn small_word(&self, b: &mut Builder<'_>, n: ValueId) -> ValueId {
+        small_word(b, self.half, n)
     }
 
     /// Take another claim to a natural, where it is an object.
@@ -316,10 +342,12 @@ pub(super) fn constant(
     while digits.last() == Some(&0) {
         digits.pop();
     }
-    let size = digits
-        .len()
-        .checked_add(4 * word - 1)
-        .map(|n| n / word * word)
+    // Little-endian bytes are little-endian words, the last padded out.
+    let count = digits.len().div_ceil(word);
+    digits.resize(count * word, 0);
+    let size = count
+        .checked_add(3)
+        .and_then(|n| n.checked_mul(word))
         .ok_or_else(|| "natural constant is too large".to_owned())?;
     if !u64::try_from(size).is_ok_and(|n| n <= max) || u32::try_from(size).is_err() {
         return Err("natural constant does not fit the target address space".to_owned());
@@ -341,7 +369,7 @@ pub(super) fn constant(
     let mut bytes = vec![0; size];
     header(&mut bytes, 0, size64(size), word);
     header(&mut bytes, 1, max, word);
-    header(&mut bytes, 2, size64(digits.len()), word);
+    header(&mut bytes, 2, size64(count), word);
     bytes[3 * word..3 * word + digits.len()].copy_from_slice(&digits);
     Ok(program.intern(&bytes))
 }
@@ -385,19 +413,67 @@ fn set_length(b: &mut Builder<'_>, a: ValueId, n: ValueId) {
 }
 
 fn digit_address(b: &mut Builder<'_>, a: ValueId, i: ValueId, word: usize) -> ValueId {
+    let bytes = number(b, size64(word));
+    let offset = b.binary(Binary::Mul, i, bytes);
     let header = number(b, size64(3 * word));
-    let offset = add(b, i, header);
+    let offset = add(b, offset, header);
     address(b, a, offset)
 }
 
 fn read_digit(b: &mut Builder<'_>, a: ValueId, i: ValueId, word: usize) -> ValueId {
     let at = digit_address(b, a, i, word);
-    b.load(Width::Byte, at, Offset::Bytes(0))
+    b.load(Width::Word, at, Offset::Bytes(0))
 }
 
 fn write_digit(b: &mut Builder<'_>, a: ValueId, i: ValueId, v: ValueId, word: usize) {
     let at = digit_address(b, a, i, word);
-    b.store(Width::Byte, at, Offset::Bytes(0), v);
+    b.store(Width::Word, at, Offset::Bytes(0), v);
+}
+
+/// `x + y + carry` for digits and a carry of nought or one: the digit of
+/// the sum, and its carry. Each add wraps, and came out less than what it
+/// added exactly where it carried; at most one of the two does.
+fn add_carry(b: &mut Builder<'_>, x: ValueId, y: ValueId, carry: ValueId) -> (ValueId, ValueId) {
+    let partial = add(b, x, y);
+    let first = lt(b, partial, x);
+    let sum = add(b, partial, carry);
+    let second = lt(b, sum, partial);
+    (sum, add(b, first, second))
+}
+
+/// `x - y - borrow` for digits and a borrow of nought or one: the digit of
+/// the difference, and its borrow. At most one of the two borrows.
+fn sub_borrow(b: &mut Builder<'_>, x: ValueId, y: ValueId, borrow: ValueId) -> (ValueId, ValueId) {
+    let partial = sub(b, x, y);
+    let first = lt(b, x, y);
+    let difference = sub(b, partial, borrow);
+    let second = lt(b, partial, borrow);
+    (difference, add(b, first, second))
+}
+
+/// The two digits of `x * y`, low then high, from the four products of
+/// their halves, each of which fits a word.
+fn mul_wide(b: &mut Builder<'_>, x: ValueId, y: ValueId, word: usize) -> (ValueId, ValueId) {
+    let bits = u16::try_from(word * 4).expect("half a word's bits fit u16");
+    let half = number(b, 1 << bits);
+    let [x0, y0] = [x, y].map(|v| b.binary(Binary::Mod, v, half));
+    let [x1, y1] = [x, y].map(|v| b.shift(W, Direction::Down, v, bits));
+    let low = b.binary(Binary::Mul, x0, y0);
+    let across = b.binary(Binary::Mul, x0, y1);
+    let back = b.binary(Binary::Mul, x1, y0);
+    let high = b.binary(Binary::Mul, x1, y1);
+    // The two middle products may carry past the word, which is a whole
+    // half-word's worth of the high digit.
+    let middle = add(b, across, back);
+    let middle_carry = lt(b, middle, across);
+    let shifted = b.shift(W, Direction::Up, middle, bits);
+    let lo = add(b, low, shifted);
+    let low_carry = lt(b, lo, low);
+    let upper = b.shift(W, Direction::Down, middle, bits);
+    let carried = b.shift(W, Direction::Up, middle_carry, bits);
+    let hi = add(b, high, upper);
+    let hi = add(b, hi, carried);
+    (lo, add(b, hi, low_carry))
 }
 
 fn declare(p: &mut Program, name: &str, params: &[Class], result: &[Class]) -> FunctionId {
@@ -457,14 +533,21 @@ pub(super) fn append(
         if needs.contains(Helper::Allocate) {
             library.insert(Helper::Allocate, alloc);
         }
-        let digits = digits_allocation(program, alloc, fail, half);
+        // What the allocator would take, in digits: the heap less a header,
+        // or, where the heap grows, a quarter of the address space.
+        let most = if config.grows {
+            max / 4
+        } else {
+            size64(config.heap_bytes - 3 * word)
+        } / size64(word);
+        let digits = digits_allocation(program, (alloc, fail), (half, word, most));
         let trim = trimming(program, word);
         let narrow = narrow.expect("arithmetic reads a small result back as a word");
-        let finish = finishing(program, (trim, narrow), release, (half, word));
+        let finish = finishing(program, (trim, narrow), release, half);
         let boxed = boxing(program, digits, trim, word);
         let storage = Storage {
-            config,
             word,
+            most,
             half,
             alloc: digits,
             trim,
@@ -527,8 +610,10 @@ fn claims(program: &mut Program, max: u64) -> (FunctionId, FunctionId, FunctionI
 
 #[derive(Clone, Copy)]
 struct Storage {
-    config: Config,
     word: usize,
+    /// The most digits one object is asked for: past this, a request fails
+    /// before its size is worked out.
+    most: u64,
     half: u64,
     /// Allocates an object for digits, in the lower half of the address
     /// space where an object has to be.
@@ -546,6 +631,19 @@ impl Storage {
     fn append(self, p: &mut Program, needs: Needs, compare: Option<FunctionId>, lib: &mut Library) {
         if needs.contains(Helper::FromWord) {
             lib.insert(Helper::FromWord, promotion(p, self));
+        }
+        let divides = [Helper::Div, Helper::Mod, Helper::DivWord, Helper::ModWord]
+            .into_iter()
+            .any(|h| needs.contains(h));
+        let divisions = divides.then(|| Divisions::append(p, self));
+        for (helper, result) in [
+            (Helper::DivWord, DivisionResult::Quotient),
+            (Helper::ModWord, DivisionResult::Remainder),
+        ] {
+            if needs.contains(helper) {
+                let divisions = divisions.expect("a division has its short division");
+                lib.insert(helper, self.by_word(p, divisions.short, result, lib.retain));
+            }
         }
         if needs.contains(Helper::Mul) {
             let objects = multiplication(p, self);
@@ -565,7 +663,7 @@ impl Storage {
                 .any(|h| needs.contains(h))
             {
                 let compare = compare.expect("subtraction and division compare digits");
-                self.append_subdivision(p, needs, lib, (digit, compare));
+                self.append_subdivision(p, needs, lib, (digit, compare), divisions);
             }
         }
     }
@@ -576,6 +674,7 @@ impl Storage {
         needs: Needs,
         lib: &mut Library,
         (digit, compare): (FunctionId, FunctionId),
+        divisions: Option<Divisions>,
     ) {
         let subtract = subtracting(p, digit, self.trim, self.word);
         if needs.contains(Helper::Sub) {
@@ -583,7 +682,8 @@ impl Storage {
             lib.insert(Helper::Sub, self.difference(p, objects));
         }
         if needs.contains(Helper::Div) || needs.contains(Helper::Mod) {
-            let divmod = division(p, self, compare, subtract, lib.retain);
+            let divisions = divisions.expect("a division has its short division");
+            let divmod = division(p, self, (compare, lib.retain), divisions);
             if needs.contains(Helper::Div) {
                 lib.insert(
                     Helper::Div,
@@ -739,6 +839,55 @@ impl Storage {
         f
     }
 
+    /// A quotient or remainder by `d`, a word: by nought as every division
+    /// by nought answers, an immediate by the word's own division, and an
+    /// object by short division. No long division is reached, so a program
+    /// dividing only by words carries none.
+    fn by_word(
+        self,
+        p: &mut Program,
+        short: FunctionId,
+        result: DivisionResult,
+        retain: FunctionId,
+    ) -> FunctionId {
+        let half = self.half;
+        let (name, mode, op) = match result {
+            DivisionResult::Quotient => ("nat.div_word", 0, Binary::Div),
+            DivisionResult::Remainder => ("nat.mod_word", 1, Binary::Mod),
+        };
+        let f = declare(p, name, &[A, W], &[A]);
+        p.define(f, |b, args| {
+            let (a, d) = (args[0], args[1]);
+            let zero = number(b, 0);
+            let by_nought = eq(b, d, zero);
+            let small_a = is_small(b, half, a);
+            b.if_(
+                by_nought,
+                &[],
+                |b| {
+                    let out = by_nought_answer(b, (a, small_a), result, (retain, half));
+                    b.ret(&[out]);
+                },
+                |b| b.yield_(&[]),
+            );
+            b.if_(
+                small_a,
+                &[],
+                |b| {
+                    let x = unwrapped(b, half, a);
+                    let out = b.binary(op, x, d);
+                    let held = small_word(b, half, out);
+                    b.ret(&[held]);
+                },
+                |b| b.yield_(&[]),
+            );
+            let mode = number(b, mode);
+            let out = b.call_one(short, &[a, d, mode]);
+            b.ret(&[out]);
+        });
+        f
+    }
+
     /// Call a routine reading digits with `a` and `c` as objects, then
     /// `rest`, boxing whichever is an immediate and releasing that box
     /// afterwards.
@@ -780,6 +929,31 @@ impl Storage {
             );
         }
         out
+    }
+}
+
+/// What dividing `a` by nought answers: nought, or `a` itself, which is
+/// owned where it is answered, as the `a` handed in is not.
+fn by_nought_answer(
+    b: &mut Builder<'_>,
+    (a, small_a): (ValueId, ValueId),
+    result: DivisionResult,
+    (retain, half): (FunctionId, u64),
+) -> ValueId {
+    match result {
+        DivisionResult::Quotient => small(b, half, 0),
+        DivisionResult::Remainder => {
+            b.if_(
+                small_a,
+                &[],
+                |b| b.yield_(&[]),
+                |b| {
+                    b.call(retain, &[a]);
+                    b.yield_(&[]);
+                },
+            );
+            a
+        }
     }
 }
 
@@ -1435,16 +1609,16 @@ fn finishing(
     p: &mut Program,
     (trim, narrow): (FunctionId, FunctionId),
     release: FunctionId,
-    (half, word): (u64, usize),
+    half: u64,
 ) -> FunctionId {
     let f = declare(p, "nat.finish", &[A], &[A]);
     p.define(f, |b, args| {
         let a = args[0];
         b.call(trim, &[a]);
         let len = length(b, a);
-        // More digits than a word has is more than half a word holds.
-        let most = number(b, size64(word));
-        let wide = lt(b, most, len);
+        // Two digits is more than half a word holds.
+        let one = number(b, 1);
+        let wide = lt(b, one, len);
         b.if_(wide, &[], |b| b.ret(&[a]), |b| b.yield_(&[]));
         let value = b.call_one(narrow, &[a]);
         let top = number(b, half);
@@ -1464,18 +1638,30 @@ fn finishing(
     f
 }
 
-/// Allocate an object for `cap` digits, which has to lie where no
+/// Allocate an object for `count` digits, which has to lie where no
 /// immediate does. Every target places its heap far below that; one that
 /// did not would have a natural it could not tell from a number.
 fn digits_allocation(
     p: &mut Program,
-    alloc: FunctionId,
-    fail: FunctionId,
-    half: u64,
+    (alloc, fail): (FunctionId, FunctionId),
+    (half, word, most): (u64, usize, u64),
 ) -> FunctionId {
     let f = declare(p, "nat.digits", &[W], &[A]);
     p.define(f, |b, args| {
-        let out = b.call_one(alloc, &[args[0]]);
+        let count = args[0];
+        let limit = number(b, most);
+        let huge = lt(b, limit, count);
+        b.if_(
+            huge,
+            &[],
+            |b| {
+                b.call(fail, &[]);
+            },
+            |b| b.yield_(&[]),
+        );
+        let bytes = number(b, size64(word));
+        let bytes = b.binary(Binary::Mul, count, bytes);
+        let out = b.call_one(alloc, &[bytes]);
         let high = is_small(b, half, out);
         b.if_(
             high,
@@ -1485,6 +1671,8 @@ fn digits_allocation(
             },
             |b| b.yield_(&[]),
         );
+        // No request is for none, which would be the shared empty object.
+        set_length(b, out, count);
         b.ret(&[out]);
     });
     f
@@ -1495,23 +1683,10 @@ fn digits_allocation(
 fn boxing(p: &mut Program, digits: FunctionId, trim: FunctionId, word: usize) -> FunctionId {
     let f = declare(p, "nat.box", &[W], &[A]);
     p.define(f, |b, args| {
-        let value = args[0];
-        let cap = number(b, size64(word));
-        let out = b.call_one(digits, &[cap]);
-        let nil = number(b, 0);
-        let radix = number(b, 256);
         let one = number(b, 1);
-        b.loop_(&[nil, value], &[], |b, state| {
-            let i = state[0];
-            let n = state[1];
-            let done = eq(b, i, cap);
-            b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-            let low = b.binary(Binary::Mod, n, radix);
-            let high = b.binary(Binary::Div, n, radix);
-            write_digit(b, out, i, low, word);
-            let next = add(b, i, one);
-            b.continue_(&[next, high]);
-        });
+        let out = b.call_one(digits, &[one]);
+        let nil = number(b, 0);
+        write_digit(b, out, nil, args[0], word);
         b.call(trim, &[out]);
         b.ret(&[out]);
     });
@@ -1558,7 +1733,7 @@ fn addition(p: &mut Program, storage: Storage, digit: FunctionId) -> FunctionId 
         alloc,
         finish,
         fail,
-        config,
+        most,
         word,
         ..
     } = storage;
@@ -1570,7 +1745,7 @@ fn addition(p: &mut Program, storage: Storage, digit: FunctionId) -> FunctionId 
         let lc = length(b, c);
         let less = lt(b, la, lc);
         let len = b.if_(less, &[W], |b| b.yield_(&[lc]), |b| b.yield_(&[la]))[0];
-        let limit = number(b, size64(config.heap_bytes - 3 * word));
+        let limit = number(b, most);
         let fits = lt(b, len, limit);
         b.if_(
             fits,
@@ -1582,7 +1757,6 @@ fn addition(p: &mut Program, storage: Storage, digit: FunctionId) -> FunctionId 
         );
         let one = number(b, 1);
         let zero = number(b, 0);
-        let radix = number(b, 256);
         let cap = add(b, len, one);
         let out = b.call_one(alloc, &[cap]);
         let carry = b.loop_(&[zero, zero], &[W], |b, state| {
@@ -1592,13 +1766,10 @@ fn addition(p: &mut Program, storage: Storage, digit: FunctionId) -> FunctionId 
             b.if_(done, &[], |b| b.break_(&[carry]), |b| b.yield_(&[]));
             let x = b.call_one(digit, &[a, i]);
             let y = b.call_one(digit, &[c, i]);
-            let sum = add(b, x, y);
-            let sum = add(b, sum, carry);
-            let low = b.binary(Binary::Mod, sum, radix);
-            let high = b.binary(Binary::Div, sum, radix);
-            write_digit(b, out, i, low, word);
+            let (sum, carry) = add_carry(b, x, y, carry);
+            write_digit(b, out, i, sum, word);
             let next = add(b, i, one);
-            b.continue_(&[next, high]);
+            b.continue_(&[next, carry]);
         })[0];
         write_digit(b, out, len, carry, word);
         let result = b.call_one(finish, &[out]);
@@ -1616,7 +1787,6 @@ fn subtracting(p: &mut Program, digit: FunctionId, trim: FunctionId, word: usize
         let len = length(b, a);
         let zero = number(b, 0);
         let one = number(b, 1);
-        let radix = number(b, 256);
         b.loop_(&[zero, zero], &[], |b, state| {
             let i = state[0];
             let borrow = state[1];
@@ -1624,21 +1794,7 @@ fn subtracting(p: &mut Program, digit: FunctionId, trim: FunctionId, word: usize
             b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
             let x = read_digit(b, a, i, word);
             let y = b.call_one(digit, &[c, i]);
-            let y = add(b, y, borrow);
-            let borrow = lt(b, x, y);
-            let low = b.if_(
-                borrow,
-                &[W],
-                |b| {
-                    let wide = add(b, x, radix);
-                    let low = sub(b, wide, y);
-                    b.yield_(&[low]);
-                },
-                |b| {
-                    let low = sub(b, x, y);
-                    b.yield_(&[low]);
-                },
-            )[0];
+            let (low, borrow) = sub_borrow(b, x, y, borrow);
             write_digit(b, a, i, low, word);
             let next = add(b, i, one);
             b.continue_(&[next, borrow]);
@@ -1713,7 +1869,6 @@ fn multiply_row(p: &mut Program, word: usize) -> FunctionId {
         let len = length(b, c);
         let zero = number(b, 0);
         let one = number(b, 1);
-        let radix = number(b, 256);
         let carry = b.loop_(&[zero, zero], &[W], |b, state| {
             let j = state[0];
             let carry = state[1];
@@ -1722,15 +1877,14 @@ fn multiply_row(p: &mut Program, word: usize) -> FunctionId {
             let y = read_digit(b, c, j, word);
             let at = add(b, i, j);
             let acc = read_digit(b, out, at, word);
-            // 255*255 + 255 + 255 = 65535, even on a 16-bit target.
-            let product = b.binary(Binary::Mul, x, y);
-            let sum = add(b, product, acc);
-            let sum = add(b, sum, carry);
-            let low = b.binary(Binary::Mod, sum, radix);
-            let high = b.binary(Binary::Div, sum, radix);
-            write_digit(b, out, at, low, word);
+            // (B-1)(B-1) + (B-1) + (B-1) is B*B - 1: two digits, so the
+            // high digit and what adding carried is one digit again.
+            let (low, high) = mul_wide(b, x, y, word);
+            let (sum, carried) = add_carry(b, low, acc, carry);
+            write_digit(b, out, at, sum, word);
             let next = add(b, j, one);
-            b.continue_(&[next, high]);
+            let carry = add(b, high, carried);
+            b.continue_(&[next, carry]);
         })[0];
         let at = add(b, i, len);
         write_digit(b, out, at, carry, word);
@@ -1748,7 +1902,7 @@ fn multiplication(p: &mut Program, storage: Storage) -> FunctionId {
         alloc,
         finish,
         fail,
-        config,
+        most,
         word,
         half,
         ..
@@ -1775,7 +1929,7 @@ fn multiplication(p: &mut Program, storage: Storage) -> FunctionId {
             );
         }
         // Check each component before addition, including large static inputs.
-        let limit = number(b, size64(config.heap_bytes - 3 * word));
+        let limit = number(b, most);
         let huge = lt(b, limit, la);
         b.if_(
             huge,
@@ -1813,92 +1967,557 @@ fn multiplication(p: &mut Program, storage: Storage) -> FunctionId {
     f
 }
 
-// r <- 2*r+bit, in a unique remainder with one spare digit.
-fn shifting(p: &mut Program, word: usize) -> FunctionId {
-    let f = declare(p, "nat.shift_in", &[A, W], &[]);
+/// The quotient of the two digits `high:low` by `divisor`, whose top bit
+/// is set and which is more than `high`, so that the quotient is a digit:
+/// Hacker's Delight's `divlu`, a half digit at a time, so that nothing it
+/// divides or multiplies is wider than a word.
+fn dividing_word(p: &mut Program, word: usize) -> FunctionId {
+    let bits = u16::try_from(word * 4).expect("half a word's bits fit u16");
+    let f = declare(p, "nat.divide_word", &[W, W, W], &[W]);
     p.define(f, |b, args| {
-        let out = args[0];
-        let bit = args[1];
-        let len = length(b, out);
-        let zero = number(b, 0);
+        let (high, low, divisor) = (args[0], args[1], args[2]);
+        let base = number(b, 1 << bits);
+        let upper = b.shift(W, Direction::Down, divisor, bits);
+        let lower = b.binary(Binary::Mod, divisor, base);
+        let first = b.shift(W, Direction::Down, low, bits);
+        let second = b.binary(Binary::Mod, low, base);
+        let halves = (upper, lower);
+        let q1 = half_quotient(b, (high, first), halves, bits);
+        // What is left is less than the divisor, so the word it wraps to
+        // is exactly it.
+        let lifted = b.shift(W, Direction::Up, high, bits);
+        let lifted = add(b, lifted, first);
+        let taken = b.binary(Binary::Mul, q1, divisor);
+        let rest = sub(b, lifted, taken);
+        let q0 = half_quotient(b, (rest, second), halves, bits);
+        let q = b.shift(W, Direction::Up, q1, bits);
+        let q = add(b, q, q0);
+        b.ret(&[q]);
+    });
+    f
+}
+
+/// One half digit of `divlu`'s quotient: `high` and the next half digit
+/// `next`, divided by the divisor's halves. The estimate from the upper
+/// half alone is too big by two at most, and is brought down while it is
+/// at least a half digit's base or its product with the lower half passes
+/// what is left.
+fn half_quotient(
+    b: &mut Builder<'_>,
+    (high, next): (ValueId, ValueId),
+    (upper, lower): (ValueId, ValueId),
+    bits: u16,
+) -> ValueId {
+    let base = number(b, 1 << bits);
+    let guess = b.binary(Binary::Div, high, upper);
+    let product = b.binary(Binary::Mul, guess, upper);
+    let rest = sub(b, high, product);
+    b.loop_(&[guess, rest], &[W], |b, state| {
+        let (q, r) = (state[0], state[1]);
+        let most = number(b, (1 << bits) - 1);
+        let wide = lt(b, most, q);
+        let over = b.if_(
+            wide,
+            &[W],
+            |b| {
+                let yes = number(b, 1);
+                b.yield_(&[yes]);
+            },
+            |b| {
+                // `r` is below the base here, so this is a word.
+                let product = b.binary(Binary::Mul, q, lower);
+                let lifted = b.shift(W, Direction::Up, r, bits);
+                let lifted = add(b, lifted, next);
+                let over = lt(b, lifted, product);
+                b.yield_(&[over]);
+            },
+        )[0];
+        let one = number(b, 1);
+        let fine = lt(b, over, one);
+        b.if_(fine, &[], |b| b.break_(&[q]), |b| b.yield_(&[]));
+        let q = sub(b, q, one);
+        let r = add(b, r, upper);
+        let small = lt(b, r, base);
+        b.if_(small, &[], |b| b.continue_(&[q, r]), |b| b.break_(&[q]));
+    })[0]
+}
+
+/// The power of two taking `top`, a digit that is not nought, to one whose
+/// top bit is set: what both operands of a division are scaled by.
+fn normalizing(p: &mut Program, half: u64) -> FunctionId {
+    let f = declare(p, "nat.normal", &[W], &[W]);
+    p.define(f, |b, args| {
         let one = number(b, 1);
         let two = number(b, 2);
-        let radix = number(b, 256);
-        let carry = b.loop_(&[zero, bit], &[W], |b, state| {
-            let i = state[0];
-            let carry = state[1];
+        let pow = b.loop_(&[one, args[0]], &[W], |b, state| {
+            let (pow, x) = (state[0], state[1]);
+            let below = number(b, half - 1);
+            let set = lt(b, below, x);
+            b.if_(set, &[], |b| b.break_(&[pow]), |b| b.yield_(&[]));
+            let pow = b.binary(Binary::Mul, pow, two);
+            let x = b.binary(Binary::Mul, x, two);
+            b.continue_(&[pow, x]);
+        })[0];
+        b.ret(&[pow]);
+    });
+    f
+}
+
+/// Write `from`'s digits times `pow`, a power of two, into `to`: what
+/// carries out of the last. A digit times a power of two is its bits moved
+/// up, so the carry in fills bits the product left nought.
+fn scaling(p: &mut Program, word: usize) -> FunctionId {
+    let f = declare(p, "nat.scale", &[A, A, W], &[W]);
+    p.define(f, |b, args| {
+        let (from, to, pow) = (args[0], args[1], args[2]);
+        let len = length(b, from);
+        let zero = number(b, 0);
+        let one = number(b, 1);
+        let carry = b.loop_(&[zero, zero], &[W], |b, state| {
+            let (i, carry) = (state[0], state[1]);
             let done = eq(b, i, len);
             b.if_(done, &[], |b| b.break_(&[carry]), |b| b.yield_(&[]));
-            let x = read_digit(b, out, i, word);
-            let doubled = b.binary(Binary::Mul, x, two);
-            let sum = add(b, doubled, carry);
-            let low = b.binary(Binary::Mod, sum, radix);
-            let high = b.binary(Binary::Div, sum, radix);
-            write_digit(b, out, i, low, word);
+            let x = read_digit(b, from, i, word);
+            let (low, high) = mul_wide(b, x, pow, word);
+            let digit = add(b, low, carry);
+            write_digit(b, to, i, digit, word);
             let next = add(b, i, one);
             b.continue_(&[next, high]);
         })[0];
-        let empty = eq(b, carry, zero);
-        b.if_(
-            empty,
-            &[],
-            |b| b.yield_(&[]),
-            |b| {
-                write_digit(b, out, len, carry, word);
-                let next = add(b, len, one);
-                set_length(b, out, next);
-                b.yield_(&[]);
-            },
-        );
+        b.ret(&[carry]);
+    });
+    f
+}
+
+/// The first `len` digits of `r`, divided by `pow`, a power of two, in
+/// place: each digit's bits moved down, and the next one's low bits moved
+/// in above them. `r` has a digit past those.
+fn unscaling(p: &mut Program, half: u64, word: usize) -> FunctionId {
+    let f = declare(p, "nat.unscale", &[A, W, W], &[]);
+    p.define(f, |b, args| {
+        let (r, len, pow) = (args[0], args[1], args[2]);
+        let worth = worth(b, half, pow);
+        let zero = number(b, 0);
+        let one = number(b, 1);
+        b.loop_(&[zero], &[], |b, state| {
+            let i = state[0];
+            let done = eq(b, i, len);
+            b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+            let x = read_digit(b, r, i, word);
+            let next = add(b, i, one);
+            let y = read_digit(b, r, next, word);
+            let moved = b.binary(Binary::Div, x, pow);
+            let rest = b.binary(Binary::Mul, y, worth);
+            let digit = add(b, moved, rest);
+            write_digit(b, r, i, digit, word);
+            b.continue_(&[next]);
+        });
         b.ret(&[]);
     });
     f
 }
 
-fn divide_digit(
-    p: &mut Program,
-    compare: FunctionId,
-    subtract: FunctionId,
-    word: usize,
-) -> FunctionId {
-    let shift = shifting(p, word);
-    // This one-byte quotient step keeps the division's outer loop small.
-    let step = declare(p, "nat.divide_digit", &[A, A, W], &[W]);
-    p.define(step, |b, args| {
-        let r = args[0];
-        let divisor = args[1];
-        let digit = args[2];
-        let zero = number(b, 0);
+/// Knuth's estimate of the quotient digit at `j`: the top two digits there
+/// of the scaled remainder `u`, divided by the scaled divisor `v`'s top
+/// digit, then brought down while its product with `v`'s next digit passes
+/// what the three top digits of `u` leave. It is then at most one too big.
+fn estimating(p: &mut Program, divide: FunctionId, word: usize) -> FunctionId {
+    let f = declare(p, "nat.estimate", &[A, A, W], &[W]);
+    p.define(f, |b, args| {
+        let (u, v, j) = (args[0], args[1], args[2]);
+        let n = length(b, v);
+        let one = number(b, 1);
+        let at = add(b, j, n);
+        let u2 = read_digit(b, u, at, word);
+        let at = sub(b, at, one);
+        let u1 = read_digit(b, u, at, word);
+        let top = sub(b, n, one);
+        let v1 = read_digit(b, v, top, word);
+        let [q, r, over] = first_estimate(b, divide, (u2, u1, v1), word);
+        // A remainder past a digit, or no next digit, settles it.
         let two = number(b, 2);
-        let top = number(b, 128);
-        let answer = b.loop_(&[top, zero], &[W], |b, state| {
-            let mask = state[0];
-            let quotient = state[1];
-            let done = eq(b, mask, zero);
-            b.if_(done, &[], |b| b.break_(&[quotient]), |b| b.yield_(&[]));
-            let part = b.binary(Binary::Div, digit, mask);
-            let bit = b.binary(Binary::Mod, part, two);
-            b.call(shift, &[r, bit]);
-            let order = b.call_one(compare, &[r, divisor]);
-            let less = eq(b, order, zero);
-            let quotient = b.if_(
-                less,
-                &[W],
-                |b| b.yield_(&[quotient]),
-                |b| {
-                    b.call(subtract, &[r, divisor]);
-                    let next = add(b, quotient, mask);
-                    b.yield_(&[next]);
-                },
-            )[0];
-            let next = b.binary(Binary::Div, mask, two);
-            b.continue_(&[next, quotient]);
-        })[0];
-        b.ret(&[answer]);
+        let short = lt(b, n, two);
+        let settled = add(b, over, short);
+        let zero = number(b, 0);
+        let open = eq(b, settled, zero);
+        b.if_(open, &[], |b| b.yield_(&[]), |b| b.ret(&[q]));
+        let next = sub(b, top, one);
+        let v2 = read_digit(b, v, next, word);
+        let at = sub(b, at, one);
+        let u0 = read_digit(b, u, at, word);
+        let q = corrected(b, [q, r], (v1, v2, u0), word);
+        b.ret(&[q]);
     });
-    step
+    f
 }
 
+/// The estimate from the top two digits `u2:u1` of what is left and the
+/// top digit `v1` of the divisor, the remainder it leaves, and one where
+/// that remainder is past a digit. The top digit of what is left is at most
+/// the divisor's; where it is the divisor's, the quotient digit is the
+/// largest there is.
+fn first_estimate(
+    b: &mut Builder<'_>,
+    divide: FunctionId,
+    (u2, u1, v1): (ValueId, ValueId, ValueId),
+    word: usize,
+) -> [ValueId; 3] {
+    let below = lt(b, u2, v1);
+    let start = b.if_(
+        below,
+        &[W, W, W],
+        |b| {
+            let q = b.call_one(divide, &[u2, u1, v1]);
+            let taken = b.binary(Binary::Mul, q, v1);
+            let r = sub(b, u1, taken);
+            let zero = number(b, 0);
+            b.yield_(&[q, r, zero]);
+        },
+        |b| {
+            let q = number(b, u64::MAX >> (64 - 8 * word));
+            let r = add(b, u1, v1);
+            let over = lt(b, r, u1);
+            b.yield_(&[q, r, over]);
+        },
+    );
+    [start[0], start[1], start[2]]
+}
+
+/// The estimate, and `r` it leaves, as `start` holds them, brought down while its product with the
+/// divisor's next digit `v2` passes `r` and the next digit `u0` of what is
+/// left, or until `r` passes a digit. Twice at most.
+fn corrected(
+    b: &mut Builder<'_>,
+    start: [ValueId; 2],
+    (v1, v2, u0): (ValueId, ValueId, ValueId),
+    word: usize,
+) -> ValueId {
+    b.loop_(&start, &[W], |b, state| {
+        let (q, r) = (state[0], state[1]);
+        let (low, high) = mul_wide(b, q, v2, word);
+        let past = lt(b, r, high);
+        let level = eq(b, high, r);
+        let low_past = lt(b, u0, low);
+        let level_past = b.binary(Binary::Mul, level, low_past);
+        let over = add(b, past, level_past);
+        let one = number(b, 1);
+        let fine = lt(b, over, one);
+        b.if_(fine, &[], |b| b.break_(&[q]), |b| b.yield_(&[]));
+        let q = sub(b, q, one);
+        let grown = add(b, r, v1);
+        let wrapped = lt(b, grown, r);
+        b.if_(
+            wrapped,
+            &[],
+            |b| b.break_(&[q]),
+            |b| b.continue_(&[q, grown]),
+        );
+    })[0]
+}
+
+/// Take `q` times `v` from the digits of `u` from `j`, as many as `v` has:
+/// what is still to be taken from the digit after them.
+fn multiplying_out(p: &mut Program, word: usize) -> FunctionId {
+    let f = declare(p, "nat.multiply_out", &[A, A, W, W], &[W]);
+    p.define(f, |b, args| {
+        let (u, v, j, q) = (args[0], args[1], args[2], args[3]);
+        let n = length(b, v);
+        let zero = number(b, 0);
+        let one = number(b, 1);
+        let owed = b.loop_(&[zero, zero], &[W], |b, state| {
+            let (i, owed) = (state[0], state[1]);
+            let done = eq(b, i, n);
+            b.if_(done, &[], |b| b.break_(&[owed]), |b| b.yield_(&[]));
+            let y = read_digit(b, v, i, word);
+            let (low, high) = mul_wide(b, q, y, word);
+            let at = add(b, i, j);
+            let x = read_digit(b, u, at, word);
+            let (digit, borrowed) = sub_borrow(b, x, low, owed);
+            write_digit(b, u, at, digit, word);
+            let next = add(b, i, one);
+            let owed = add(b, high, borrowed);
+            b.continue_(&[next, owed]);
+        })[0];
+        b.ret(&[owed]);
+    });
+    f
+}
+
+/// Add `v` back to the digits of `u` from `j`, where a quotient digit took
+/// one `v` too many: what carries out of the last.
+fn adding_back(p: &mut Program, word: usize) -> FunctionId {
+    let f = declare(p, "nat.add_back", &[A, A, W], &[W]);
+    p.define(f, |b, args| {
+        let (u, v, j) = (args[0], args[1], args[2]);
+        let n = length(b, v);
+        let zero = number(b, 0);
+        let one = number(b, 1);
+        let carry = b.loop_(&[zero, zero], &[W], |b, state| {
+            let (i, carry) = (state[0], state[1]);
+            let done = eq(b, i, n);
+            b.if_(done, &[], |b| b.break_(&[carry]), |b| b.yield_(&[]));
+            let at = add(b, i, j);
+            let x = read_digit(b, u, at, word);
+            let y = read_digit(b, v, i, word);
+            let (sum, carry) = add_carry(b, x, y, carry);
+            write_digit(b, u, at, sum, word);
+            let next = add(b, i, one);
+            b.continue_(&[next, carry]);
+        })[0];
+        b.ret(&[carry]);
+    });
+    f
+}
+
+/// The routines one quotient digit of a long division calls.
+#[derive(Clone, Copy)]
+struct Steps {
+    estimate: FunctionId,
+    multiply_out: FunctionId,
+    add_back: FunctionId,
+}
+
+/// The quotient digit at `j` of dividing the scaled `u` by the scaled `v`,
+/// taking that many `v` from `u`, as Knuth's algorithm D does.
+fn quotient_digit(
+    b: &mut Builder<'_>,
+    steps: Steps,
+    (u, v, j): (ValueId, ValueId, ValueId),
+    word: usize,
+) -> ValueId {
+    let q = b.call_one(steps.estimate, &[u, v, j]);
+    let owed = b.call_one(steps.multiply_out, &[u, v, j, q]);
+    let n = length(b, v);
+    let top = add(b, j, n);
+    let x = read_digit(b, u, top, word);
+    let rest = sub(b, x, owed);
+    write_digit(b, u, top, rest, word);
+    // Taking too much leaves the top digit short; the estimate was one too
+    // big, and one `v` goes back.
+    let short = lt(b, x, owed);
+    b.if_(
+        short,
+        &[W],
+        |b| {
+            let carry = b.call_one(steps.add_back, &[u, v, j]);
+            let x = read_digit(b, u, top, word);
+            let x = add(b, x, carry);
+            write_digit(b, u, top, x, word);
+            let one = number(b, 1);
+            let q = sub(b, q, one);
+            b.yield_(&[q]);
+        },
+        |b| b.yield_(&[q]),
+    )[0]
+}
+
+/// What every division shares: dividing two digits by one, the power of
+/// two that sets a digit's top bit, and short division by one digit.
+#[derive(Clone, Copy)]
+struct Divisions {
+    two_by_one: FunctionId,
+    normal: FunctionId,
+    short: FunctionId,
+}
+
+impl Divisions {
+    fn append(p: &mut Program, storage: Storage) -> Self {
+        let two_by_one = dividing_word(p, storage.word);
+        let normal = normalizing(p, storage.half);
+        Self {
+            two_by_one,
+            normal,
+            short: short_division(p, storage, (normal, two_by_one)),
+        }
+    }
+}
+
+/// Division by one digit, `d`, a digit of the quotient at a time from the
+/// top: the dividend is scaled as it is read, each digit from itself and
+/// the one below, so nothing but the quotient is allocated, and nothing at
+/// all for a remainder. This is what writing a number in decimal asks.
+fn short_division(
+    p: &mut Program,
+    storage: Storage,
+    (normal, divide): (FunctionId, FunctionId),
+) -> FunctionId {
+    let Storage {
+        alloc,
+        finish,
+        word,
+        half,
+        ..
+    } = storage;
+    let from_word = promotion(p, storage);
+    let f = declare(p, "nat.divide_short", &[A, W, W], &[A]);
+    p.define(f, |b, args| {
+        let (a, d, remainder) = (args[0], args[1], args[2]);
+        nought_if_empty(b, a, half);
+        let pow = b.call_one(normal, &[d]);
+        let q = quotient_room(b, alloc, (a, remainder), half);
+        let short = Shortened {
+            a,
+            q,
+            remainder,
+            pow,
+            worth: worth(b, half, pow),
+            divisor: b.binary(Binary::Mul, d, pow),
+        };
+        let r = short_digits(b, short, divide, word);
+        let out = b.if_(
+            remainder,
+            &[A],
+            |b| {
+                // What is left, scaled back: a word, held as a natural.
+                let r = b.binary(Binary::Div, r, pow);
+                let out = b.call_one(from_word, &[r]);
+                b.yield_(&[out]);
+            },
+            |b| {
+                let out = b.call_one(finish, &[q]);
+                b.yield_(&[out]);
+            },
+        )[0];
+        b.ret(&[out]);
+    });
+    f
+}
+
+/// Answer nought where `a` is an object with no digits, which is nought,
+/// and so is all it divides to.
+fn nought_if_empty(b: &mut Builder<'_>, a: ValueId, half: u64) {
+    let len = length(b, a);
+    let zero = number(b, 0);
+    let empty = eq(b, len, zero);
+    b.if_(
+        empty,
+        &[],
+        |b| {
+            let none = small(b, half, 0);
+            b.ret(&[none]);
+        },
+        |b| b.yield_(&[]),
+    );
+}
+
+/// Room for the quotient of dividing `a`, as many digits as it has, where
+/// more than the `remainder` is wanted; otherwise an immediate nothing
+/// writes to.
+fn quotient_room(
+    b: &mut Builder<'_>,
+    alloc: FunctionId,
+    (a, remainder): (ValueId, ValueId),
+    half: u64,
+) -> ValueId {
+    b.if_(
+        remainder,
+        &[A],
+        |b| {
+            let none = small(b, half, 0);
+            b.yield_(&[none]);
+        },
+        |b| {
+            let len = length(b, a);
+            let q = b.call_one(alloc, &[len]);
+            b.yield_(&[q]);
+        },
+    )[0]
+}
+
+/// What a short division's loop reads and writes: the dividend `a`, the quotient
+/// `q` it writes unless it wants only the `remainder`, the power `pow` the
+/// digit was scaled by, what a digit is `worth` in the next one up, and the
+/// scaled `divisor`.
+#[derive(Clone, Copy)]
+struct Shortened {
+    a: ValueId,
+    q: ValueId,
+    remainder: ValueId,
+    pow: ValueId,
+    worth: ValueId,
+    divisor: ValueId,
+}
+
+/// A short division's digits, from the top: what is left of the scaled
+/// dividend at the end.
+fn short_digits(b: &mut Builder<'_>, short: Shortened, divide: FunctionId, word: usize) -> ValueId {
+    let Shortened {
+        a,
+        q,
+        remainder,
+        pow,
+        worth,
+        divisor,
+    } = short;
+    let len = length(b, a);
+    let zero = number(b, 0);
+    let one = number(b, 1);
+    let last = sub(b, len, one);
+    let x = read_digit(b, a, last, word);
+    let first = b.binary(Binary::Div, x, worth);
+    b.loop_(&[len, first], &[W], |b, state| {
+        let (n, r) = (state[0], state[1]);
+        let done = eq(b, n, zero);
+        b.if_(done, &[], |b| b.break_(&[r]), |b| b.yield_(&[]));
+        let i = sub(b, n, one);
+        let digit = scaled_digit(b, (a, i), (pow, worth), word);
+        let quotient = b.call_one(divide, &[r, digit, divisor]);
+        let taken = b.binary(Binary::Mul, quotient, divisor);
+        let r = sub(b, digit, taken);
+        b.if_(
+            remainder,
+            &[],
+            |b| b.yield_(&[]),
+            |b| {
+                write_digit(b, q, i, quotient, word);
+                b.yield_(&[]);
+            },
+        );
+        b.continue_(&[i, r]);
+    })[0]
+}
+
+/// Digit `i` of `a` scaled by `pow`: its own bits moved up, and the top
+/// bits of the digit below moved in, which dividing that by `worth` gives.
+fn scaled_digit(
+    b: &mut Builder<'_>,
+    (a, i): (ValueId, ValueId),
+    (pow, worth): (ValueId, ValueId),
+    word: usize,
+) -> ValueId {
+    let x = read_digit(b, a, i, word);
+    let moved = b.binary(Binary::Mul, x, pow);
+    let zero = number(b, 0);
+    let bottom = eq(b, i, zero);
+    let below = b.if_(
+        bottom,
+        &[W],
+        |b| b.yield_(&[zero]),
+        |b| {
+            let one = number(b, 1);
+            let lower = sub(b, i, one);
+            let y = read_digit(b, a, lower, word);
+            let up = b.binary(Binary::Div, y, worth);
+            b.yield_(&[up]);
+        },
+    )[0];
+    add(b, moved, below)
+}
+
+/// What a digit is worth in the one below it once both are scaled by
+/// `pow`, a power of two: the base over `pow`. Where `pow` is one that is
+/// the base, which wraps to nought, and a quotient by nought is nought, so
+/// nothing moves between digits, as nothing should.
+fn worth(b: &mut Builder<'_>, half: u64, pow: ValueId) -> ValueId {
+    let top = number(b, half);
+    let two = number(b, 2);
+    let worth = b.binary(Binary::Div, top, pow);
+    b.binary(Binary::Mul, worth, two)
+}
+
+/// Long division a digit at a time. Both operands are scaled by the power
+/// of two setting the divisor's top bit, which is what makes each quotient
+/// digit's estimate close; the remainder is scaled back.
 #[expect(
     clippy::too_many_lines,
     reason = "one generated div/mod routine and its scratch lifetimes"
@@ -1906,9 +2525,8 @@ fn divide_digit(
 fn division(
     p: &mut Program,
     storage: Storage,
-    compare: FunctionId,
-    subtract: FunctionId,
-    retain: FunctionId,
+    (compare, retain): (FunctionId, FunctionId),
+    divisions: Divisions,
 ) -> FunctionId {
     let Storage {
         alloc,
@@ -1918,7 +2536,18 @@ fn division(
         release,
         ..
     } = storage;
-    let step = divide_digit(p, compare, subtract, word);
+    let Divisions {
+        two_by_one,
+        normal,
+        short,
+    } = divisions;
+    let scale = scaling(p, word);
+    let unscale = unscaling(p, half, word);
+    let steps = Steps {
+        estimate: estimating(p, two_by_one, word),
+        multiply_out: multiplying_out(p, word),
+        add_back: adding_back(p, word),
+    };
     let f = declare(p, "nat.divmod", &[A, A, W], &[A]);
     p.define(f, |b, args| {
         let a = args[0];
@@ -1954,31 +2583,51 @@ fn division(
                 |b| b.yield_(&[]),
             );
         }
-        // lc+1 cannot overflow: a valid object also has its three-word header.
-        let cap = add(b, lc, one);
-        let r = b.call_one(alloc, &[cap]);
-        set_length(b, r, nil);
-        let q = b.call_one(alloc, &[la]);
-        b.loop_(&[la], &[], |b, state| {
+        let last = sub(b, lc, one);
+        let top = read_digit(b, c, last, word);
+        let single = eq(b, lc, one);
+        b.if_(
+            single,
+            &[],
+            |b| {
+                let out = b.call_one(short, &[a, top, remainder]);
+                b.ret(&[out]);
+            },
+            |b| b.yield_(&[]),
+        );
+        let pow = b.call_one(normal, &[top]);
+        let v = b.call_one(alloc, &[lc]);
+        b.call(scale, &[c, v, pow]);
+        // `la+1` cannot overflow: a valid object also has its header.
+        let cap = add(b, la, one);
+        let u = b.call_one(alloc, &[cap]);
+        let carry = b.call_one(scale, &[a, u, pow]);
+        write_digit(b, u, la, carry, word);
+        let count = sub(b, la, lc);
+        let count = add(b, count, one);
+        let q = b.call_one(alloc, &[count]);
+        b.loop_(&[count], &[], |b, state| {
             let n = state[0];
             let done = eq(b, n, nil);
             b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-            let i = sub(b, n, one);
-            let digit = read_digit(b, a, i, word);
-            let quotient = b.call_one(step, &[r, c, digit]);
-            write_digit(b, q, i, quotient, word);
-            b.continue_(&[i]);
+            let j = sub(b, n, one);
+            let digit = quotient_digit(b, steps, (u, v, j), word);
+            write_digit(b, q, j, digit, word);
+            b.continue_(&[j]);
         });
+        b.call(release, &[v]);
         let out = b.if_(
             remainder,
             &[A],
             |b| {
                 b.call(release, &[q]);
-                let out = b.call_one(finish, &[r]);
+                b.call(unscale, &[u, lc, pow]);
+                set_length(b, u, lc);
+                let out = b.call_one(finish, &[u]);
                 b.yield_(&[out]);
             },
             |b| {
-                b.call(release, &[r]);
+                b.call(release, &[u]);
                 let out = b.call_one(finish, &[q]);
                 b.yield_(&[out]);
             },
@@ -2023,23 +2672,17 @@ fn narrowing(p: &mut Program, word: usize) -> FunctionId {
     p.define(f, |b, args| {
         let a = args[0];
         let len = length(b, a);
-        let max = number(b, size64(word));
-        let less = lt(b, len, max);
-        let count = b.if_(less, &[W], |b| b.yield_(&[len]), |b| b.yield_(&[max]))[0];
         let zero = number(b, 0);
-        let one = number(b, 1);
-        let radix = number(b, 256);
-        let out = b.loop_(&[count, zero], &[W], |b, state| {
-            let n = state[0];
-            let value = state[1];
-            let done = eq(b, n, zero);
-            b.if_(done, &[], |b| b.break_(&[value]), |b| b.yield_(&[]));
-            let i = sub(b, n, one);
-            let digit = read_digit(b, a, i, word);
-            let high = b.binary(Binary::Mul, value, radix);
-            let value = add(b, high, digit);
-            b.continue_(&[i, value]);
-        })[0];
+        let empty = eq(b, len, zero);
+        let out = b.if_(
+            empty,
+            &[W],
+            |b| b.yield_(&[zero]),
+            |b| {
+                let low = read_digit(b, a, zero, word);
+                b.yield_(&[low]);
+            },
+        )[0];
         b.ret(&[out]);
     });
     f

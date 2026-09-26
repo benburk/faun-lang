@@ -46,7 +46,8 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         return Err("natural representation needs a 16, 32, or 64 bit word".into());
     }
     source.check_layout(config.layout())?;
-    let needs = inspect(source, config)?;
+    let divisors = word_divisors(source, config.word_bits);
+    let needs = inspect(source, config, &divisors)?;
     let has_naturals = holds(source, Class::Natural);
     let has_cells = holds(source, Class::Cell) || holds(source, Class::Buffer);
     if !has_naturals && !has_cells {
@@ -68,6 +69,7 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         word_bytes: u64::from(config.word_bits / 8),
         sequences,
         constants,
+        divisors,
         values: vec![Cell::new(None); source.values_count()],
         owned: ownership::owned_parameters(source),
     };
@@ -382,7 +384,57 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
     Ok(())
 }
 
-fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
+/// A natural divisor known to fit a word, so that dividing by it is short
+/// division: as the scalar it was converted from, or as a constant.
+#[derive(Clone, Copy)]
+enum Divisor {
+    Scalar(ValueId),
+    Constant(u64),
+}
+
+/// Every natural a program makes from a scalar or knows as a word-sized
+/// constant, by the value that is it.
+fn word_divisors(source: &Program, word_bits: u16) -> BTreeMap<ValueId, Divisor> {
+    let mut divisors = BTreeMap::new();
+    for body in source.functions().iter().filter_map(super::Function::body) {
+        for (op, results) in source.walk_within(body) {
+            let [result] = results[..] else {
+                continue;
+            };
+            if source.class(result) != Class::Natural {
+                continue;
+            }
+            match *op {
+                Op::Convert { value }
+                    if matches!(source.class(value), Class::Word | Class::Held(_)) =>
+                {
+                    divisors.insert(result, Divisor::Scalar(value));
+                }
+                Op::Constant { value } if value >> (word_bits - 1) >> 1 == 0 => {
+                    divisors.insert(result, Divisor::Constant(value));
+                }
+                _ => {}
+            }
+        }
+    }
+    divisors
+}
+
+/// The helper a natural operation calls: one dividing by a word where the
+/// divisor is known to be one.
+fn helper_for(op: Binary, right: ValueId, divisors: &BTreeMap<ValueId, Divisor>) -> Helper {
+    match op {
+        Binary::Div if divisors.contains_key(&right) => Helper::DivWord,
+        Binary::Mod if divisors.contains_key(&right) => Helper::ModWord,
+        _ => Helper::arithmetic(op),
+    }
+}
+
+fn inspect(
+    source: &Program,
+    config: Config,
+    divisors: &BTreeMap<ValueId, Divisor>,
+) -> Result<Needs, String> {
     check_classes(source, config)?;
     let mut needs = Needs::default();
     if [Class::Cell, Class::Buffer]
@@ -394,23 +446,18 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
     for body in source.functions().iter().filter_map(super::Function::body) {
         for (op, results) in source.walk_within(body) {
             match *op {
-                Op::Binary { op, left, .. } if source.class(left) == Class::Natural => {
-                    needs.insert(Helper::arithmetic(op));
+                Op::Binary { op, left, right } if source.class(left) == Class::Natural => {
+                    needs.insert(helper_for(op, right, divisors));
                 }
                 Op::Compare { left, .. } if source.class(left) == Class::Natural => {
                     needs.insert(Helper::Compare);
                 }
-                Op::Convert { value } => match (source.class(value), source.class(results[0])) {
-                    (Class::Address, Class::Natural) | (Class::Natural, Class::Address) => {
-                        return Err(
-                            "addresses cannot be reinterpreted as naturals or vice versa".into(),
-                        );
+                Op::Convert { value } => {
+                    let classes = (source.class(value), source.class(results[0]));
+                    if let Some(helper) = conversion(classes, config.word_bits)? {
+                        needs.insert(helper);
                     }
-                    (Class::Natural, Class::Natural) => {}
-                    (_, Class::Natural) => needs.insert(Helper::FromWord),
-                    (Class::Natural, _) => needs.insert(Helper::ToWord),
-                    _ => {}
-                },
+                }
                 Op::Store { value, .. } if managed(source.class(value)) => {
                     return Err(
                         "storing a managed value has no scalar memory representation".into(),
@@ -421,6 +468,25 @@ fn inspect(source: &Program, config: Config) -> Result<Needs, String> {
         }
     }
     Ok(needs)
+}
+
+/// The helper converting a value of one class to another asks for, if any.
+fn conversion(classes: (Class, Class), word_bits: u16) -> Result<Option<Helper>, String> {
+    Ok(match classes {
+        (Class::Address, Class::Natural) | (Class::Natural, Class::Address) => {
+            return Err("addresses cannot be reinterpreted as naturals or vice versa".into());
+        }
+        (Class::Natural, Class::Natural) => None,
+        (from, Class::Natural) if !always_small(from, word_bits) => Some(Helper::FromWord),
+        (Class::Natural, _) => Some(Helper::ToWord),
+        _ => None,
+    })
+}
+
+/// Whether every number of `class` is below half a word, and so is held as
+/// a natural without asking whether it is an object.
+fn always_small(class: Class, word_bits: u16) -> bool {
+    matches!(class, Class::Held(_)) && class.width().is_some_and(|bits| bits < word_bits)
 }
 
 /// How a natural constant is held: as an immediate where it is small, and
@@ -512,6 +578,7 @@ struct Pass<'a> {
     sequences: Option<SequenceLibrary>,
     word_bytes: u64,
     constants: BTreeMap<ValueId, Known>,
+    divisors: BTreeMap<ValueId, Divisor>,
     // Validation establishes globally unique SSA definitions and lexical use.
     // Mapping is monotonic across functions and sibling regions, not path-local.
     // Cells let the builder's two sequential branch callbacks share this table
@@ -536,6 +603,10 @@ struct Scope {
 }
 
 impl Pass<'_> {
+    fn word_bits(&self) -> u16 {
+        u16::try_from(self.word_bytes * 8).expect("a word's bits fit u16")
+    }
+
     /// Rebuild every function body into `output`.
     fn define_bodies(&self, output: &mut Program) {
         for (id, function) in self.source.functions.iter_enumerated() {
@@ -966,8 +1037,21 @@ impl Pass<'_> {
                     self.library.inline(b, Inline::Monus, v(left), v(right))
                 }
                 _ => {
-                    let function = self.library.require(Helper::arithmetic(op));
-                    b.call_one(function, &[v(left), v(right)])
+                    let function = self.library.require(helper_for(op, right, &self.divisors));
+                    let divisor = match self.divisors.get(&right) {
+                        Some(&Divisor::Scalar(value))
+                            if matches!(op, Binary::Div | Binary::Mod) =>
+                        {
+                            word(b, v(value))
+                        }
+                        Some(&Divisor::Constant(value))
+                            if matches!(op, Binary::Div | Binary::Mod) =>
+                        {
+                            b.constant(Class::Word, value)
+                        }
+                        _ => v(right),
+                    };
+                    b.call_one(function, &[v(left), divisor])
                 }
             },
             Op::Binary { op, left, right } => {
@@ -1008,6 +1092,11 @@ impl Pass<'_> {
                 match (self.source.class(value), class) {
                     (Class::Natural, Class::Natural) | (Class::Cell, Class::Cell) => {
                         self.take(b, scopes, live, at, value)
+                    }
+                    // A number narrower than half a word is an immediate.
+                    (from, Class::Natural) if always_small(from, self.word_bits()) => {
+                        let number = word(b, v(value));
+                        self.library.small_word(b, number)
                     }
                     (_, Class::Natural) => {
                         b.call_one(self.library.require(Helper::FromWord), &[v(value)])

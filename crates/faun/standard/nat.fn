@@ -90,9 +90,16 @@ Nat : [Zero, Succ(Nat)].(
 # only counts down, which says the walk stops: `n` has fewer digits than
 # it is large.
 nat_decimal : (Nat, Nat) -> List(U8)
-nat_decimal(n, _) if n < 10 -> [U8.of_nat(n + '0')]
-nat_decimal(_, 0) -> []
-nat_decimal(n, Succ(rest)) -> nat_decimal(n / 10, rest).append(U8.of_nat(n % 10 + '0'))
+nat_decimal(n, fuel) -> nat_decimal_onto(n, fuel, [])
+
+# The decimal digits of `n` before `written`, the least significant taken
+# first and put in front, so the walk is a loop holding one number at a
+# time however many digits it has.
+nat_decimal_onto : (Nat, Nat, List(U8)) -> List(U8)
+nat_decimal_onto(n, _, written) if n < 10 -> [U8.of_nat(n + '0'), *written]
+nat_decimal_onto(_, 0, written) -> written
+nat_decimal_onto(n, Succ(rest), written) ->
+  nat_decimal_onto(n / 10, rest, [U8.of_nat(n % 10 + '0'), *written])
 
 # The number `bytes` go on to write, having written `value` so far, and
 # whether a digit was seen yet.

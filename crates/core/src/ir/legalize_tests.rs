@@ -129,8 +129,12 @@ fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
     };
     let w = usize::from(bits / 8);
     let len = word(&bytes[start + 2 * w..start + 3 * w]);
-    let digits = &bytes[start + 3 * w..start + 3 * w + len];
-    assert!(digits.last().is_none_or(|&byte| byte != 0), "normalized");
+    // Each digit is a word, and the last is not nought.
+    let digits = &bytes[start + 3 * w..start + 3 * w + len * w];
+    assert!(
+        digits.is_empty() || digits[digits.len() - w..].iter().any(|&byte| byte != 0),
+        "normalized"
+    );
     if address >= globals {
         assert_eq!(
             word(&bytes[start + w..start + 2 * w]),
