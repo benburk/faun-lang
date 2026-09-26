@@ -22,8 +22,9 @@
 use super::copy::{self, Scope};
 use super::{Atom, Body, ConstId, Expr, FnId, Local, Program};
 
-/// Give every such definition the values its callers all hand it.
-pub(crate) fn invariant(program: &mut Program) {
+/// Give every such definition the values its callers all hand it: which
+/// definitions those are.
+pub(crate) fn invariant(program: &mut Program) -> Vec<FnId> {
     let found = Handed::of(program);
     let mut bodies = Vec::new();
     for (at, handed) in found.params.iter().enumerate() {
@@ -36,7 +37,9 @@ pub(crate) fn invariant(program: &mut Program) {
         }
         bodies.push((id, held(program, body, handed)));
     }
+    let changed = bodies.iter().map(|&(id, _)| id).collect();
     program.replace_bodies(bodies);
+    changed
 }
 
 /// What a parameter is at every call seen so far.

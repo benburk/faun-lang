@@ -81,7 +81,7 @@ impl Inlining {
 // Count expressions, bindings, argument slots and arms which copying a body
 // can allocate. Nested expansions pay separately; aliases may cost less than
 // this conservative estimate. This walk does not recurse on the Rust stack.
-fn cost(program: &Program, body: Body) -> usize {
+pub(super) fn cost(program: &Program, body: Body) -> usize {
     let mut pending = vec![body];
     let mut cost = 0usize;
     while let Some(body) = pending.pop() {

@@ -148,6 +148,10 @@ x    ::= a parameter, a binding, or a field an arm bound
   value, and every call from inside passes on as it came, is that value:
   the definition binds it first and reads it there, so what reads it inside
   a loop reads something known. The parameter stays, read by nothing.
+- `specialize.rs`: where callers hand such a parameter different known
+  values, a copy of the definition holding each, calling itself; kept, and
+  given the calls handing its value, only where folding it decides a match
+  between two or more arms.
 - `descent.rs`: a definition taking two numbers of one natural type down
   together -- nought answers one base case, a step and nought another, two
   steps call it again on both predecessors with nothing else changed -- is
@@ -214,26 +218,35 @@ two types -- so nothing infers a provider or an effect from the display name.
    meets its callees' answers as constants; each definition draws at most a
    per-definition allowance from the pass's budget, so a costly answer
    declined in one leaves the rest something to fold with.
-7. Invariant arguments: a parameter every caller the entry reaches hands one
+7. Specialization: a parameter a definition passes on to itself as it came,
+   which callers hand different known values, gets a copy of the definition
+   for each value, at most four, folded with that value bound. A copy is kept,
+   and takes the calls handing its value, only where that decides a match
+   between two or more arms, so a loop is not copied for values it only
+   carries.
+8. Invariant arguments: a parameter every caller the entry reaches hands one
    known value is bound to that value in its definition. After folding, so
    what they hand is known, and before algebraic normalization, which reads a
-   known sequence's length as a number.
-8. Bounded algebraic normalization: combine constants across recognized associative
+   known sequence's length as a number. Each definition given a value is then
+   folded again, with a budget of its own, so what it asks of that value is
+   answered too.
+9. Bounded algebraic normalization: combine constants across recognized associative
    operations and directional monus/division chains, then push power-of-two moduli
    through sums and products.
-9. Sweep: where there is an entry, drop every definition it does not reach,
-   renumbering function IDs in order. Types, constructors and constants stay.
-10. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+10. Sweep: where there is an entry, drop every definition it does not reach,
+    renumbering function IDs in order. Types, constructors and constants stay.
+11. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
     pure arithmetic or lengths; retain calls of unknown meaning and matches.
 
-Every normalizing stage (1, 3 and 8) also decides what is already decided: a
+Every normalizing stage (1, 3 and 9) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
 number, and a match whose arms agree is that
 arm. A match that is the last binding of a body answering a match on it, and
 read nothing else there, becomes one match: where each of its arms ends by
 building a constructor, that arm goes on into the second's arm for it. Only
 where no arm of the second is taken by two of the first, so nothing is copied
-twice. Fusion and descent add definitions; a fused walk's name joins its two
+twice. Fusion, descent and specialization add definitions; a copy's name is its
+original's and a number after a dot; a fused walk's name joins its two
 halves' with `+`, and what they replace stays until nothing calls it.
 
 Each stage runs once, always; there are no switches. Tests isolating one stage

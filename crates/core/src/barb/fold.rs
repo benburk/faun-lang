@@ -3,19 +3,34 @@
 
 use super::budget::{Budget, FoldLimits};
 use super::evaluate::{CannotFold, Evaluation, Evaluator};
-use super::{Body, Expr, ExprId, Operation, Program};
+use super::{Body, Expr, ExprId, FnId, Operation, Program};
 
 pub(crate) fn fold(program: &mut Program) {
     fold_with_limits(program, FoldLimits::default());
 }
 
 pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
+    let order = super::stops::callees_first(program);
+    fold_in(program, order, limits);
+}
+
+/// Fold again only `changed`, which a later stage handed something new to
+/// read, with a budget of its own.
+pub(crate) fn refold(program: &mut Program, changed: &[FnId]) {
+    let order = super::stops::callees_first(program)
+        .into_iter()
+        .filter(|id| changed.contains(id))
+        .collect();
+    fold_in(program, order, FoldLimits::default());
+}
+
+fn fold_in(program: &mut Program, order: Vec<FnId>, limits: FoldLimits) {
     let recognised = program.recognised().clone();
     let operations = recognised.operations.as_slice();
     let mut remaining = limits.work;
     // A definition is folded after what it calls, so a call of one whose
     // answer is known outright is a constant by the time a caller asks.
-    for id in super::stops::callees_first(program) {
+    for id in order {
         // Keep the induction equations intact for subsequent recognition.
         if recognised.answered(id) {
             continue;

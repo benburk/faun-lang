@@ -82,6 +82,63 @@ fn an_application_builds_only_what_main_reaches() {
     faun::compile_barb_to_image(barb, &X86_64Linux).unwrap();
 }
 
+/// A loop every caller hands the same string holds the string itself, and
+/// what it asks of the string is then answered before the program runs.
+#[test]
+fn what_a_loop_asks_of_a_value_every_caller_hands_it_is_folded() {
+    let package = Package::new(
+        "invariant",
+        "import std.host {Host}\n\n\
+         seek : (List(U8), Nat) -> Nat\n\
+         seek(name, _) if name.contains(0) -> 1\n\
+         seek(_, 0) -> 0\n\
+         seek(name, Succ(fuel)) -> seek(name, fuel)\n\n\
+         main! : Host -> []\n\
+         main!(host) -> host.exit!(seek(\"a.txt\".to_utf8(), host.args.len()))\n",
+    );
+    let mut barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    assert!(barb.render().contains("List.any"));
+    faun_core::barb::optimize(&mut barb);
+    let rendered = barb.render();
+    assert!(!rendered.contains("List.any"), "{rendered}");
+}
+
+/// Where callers hand a loop different strings, each gets a copy of the
+/// loop holding its own, and what it asks of it is answered there: but only
+/// where that decides which way the loop goes.
+#[test]
+fn a_loop_handed_different_strings_is_copied_for_each_where_that_decides_something() {
+    let seek = "seek : (List(U8), Nat) -> Nat\n\
+                seek(name, _) if name.contains(0) -> 1\n\
+                seek(_, 0) -> 0\n\
+                seek(name, Succ(fuel)) -> seek(name, fuel)\n\n\
+                count : (List(U8), Nat) -> Nat\n\
+                count(_, 0) -> 0\n\
+                count(name, Succ(fuel)) -> name.len() + count(name, fuel)\n\n";
+    let package = Package::new(
+        "specialized",
+        &format!(
+            "import std.host {{Host}}\n\n{seek}\
+             main! : Host -> []\n\
+             main!(host) ->\n  \
+               n = host.args.len()\n  \
+               host.exit!(seek(\"a.txt\".to_utf8(), n) + seek(\"b.txt\".to_utf8(), n) \
+               + count(\"a\".to_utf8(), n) + count(\"bb\".to_utf8(), n))\n"
+        ),
+    );
+    let mut barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    faun_core::barb::optimize(&mut barb);
+    let rendered = barb.render();
+    assert!(!rendered.contains("List.any"), "{rendered}");
+    assert!(!rendered.contains("\nseek("), "{rendered}");
+    // Knowing its string decides nothing in `count`, so there is one.
+    let counts = rendered
+        .lines()
+        .filter(|line| line.starts_with("count"))
+        .count();
+    assert_eq!(counts, 1, "{rendered}");
+}
+
 #[test]
 fn a_definition_taking_a_function_is_compiled_where_it_is_called() {
     let package = Package::new(

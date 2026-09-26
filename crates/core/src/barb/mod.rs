@@ -103,6 +103,7 @@ mod optimize;
 mod pretty;
 mod program;
 mod sequence;
+mod specialize;
 mod stops;
 mod sweep;
 mod terms;
