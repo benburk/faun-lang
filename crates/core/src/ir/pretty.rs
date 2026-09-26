@@ -143,46 +143,28 @@ impl Program {
                     shape.index()
                 )
             }
-            Op::BufferEmpty => "buffer_empty".to_owned(),
-            Op::BufferPush {
-                buffer,
-                len,
-                fields,
-                shape,
-            } => format!(
-                "buffer_push v{}, v{}, ({}) as s{}",
-                buffer.index(),
-                len.index(),
-                arguments(self.values(fields)),
+            Op::BufferEmpty { shape } => format!("buffer_empty of s{}", shape.index()),
+            Op::BufferPush { operands, shape } => format!(
+                "buffer_push {} of s{}",
+                arguments(self.values(operands)),
                 shape.index()
             ),
-            Op::BufferPrepend {
-                buffer,
-                len,
-                from,
-                from_len,
-                reversed,
-            } => format!(
-                "buffer_prepend{} v{}, v{}, v{}, v{}",
+            Op::BufferPrepend { operands, reversed } => format!(
+                "buffer_prepend{} {}",
                 if reversed { "_reversed" } else { "" },
-                buffer.index(),
-                len.index(),
-                from.index(),
-                from_len.index()
+                arguments(self.values(operands))
             ),
             Op::BufferField {
                 buffer,
-                len,
+                start,
                 index,
                 shape,
-            } => {
-                format!(
-                    "buffer_field v{}, v{}, {index} of s{}",
-                    buffer.index(),
-                    len.index(),
-                    shape.index()
-                )
-            }
+            } => format!(
+                "buffer_field v{}, v{}, {index} of s{}",
+                buffer.index(),
+                start.index(),
+                shape.index()
+            ),
             Op::Binary { op, left, right } => {
                 format!("{op:?} v{}, v{}", left.index(), right.index())
             }

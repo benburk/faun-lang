@@ -752,45 +752,50 @@ impl<H: Host> Machine<'_, H> {
                 BigUint::from(self.cells.len())
             }
             Op::CellTag { cell } => BigUint::from(self.cell(cell)?.tag),
-            Op::BufferEmpty => {
+            Op::BufferEmpty { .. } => {
                 self.buffers.push(Vec::new());
                 BigUint::from(self.buffers.len())
             }
-            Op::BufferPush {
-                buffer,
-                len,
-                fields,
-                ..
-            } => {
-                let first = self.values(fields)?;
-                let rest = self.elements(buffer, len)?;
+            // A sequence built here is a buffer of its own, starting at its
+            // first element.
+            Op::BufferPush { operands, .. } => {
+                let operands = self.ids(operands)?.to_vec();
+                let (sequence, fields) = operands.split_at(3);
+                let first = fields
+                    .iter()
+                    .map(|&id| self.value(id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let rest = self.elements((sequence[0], sequence[1], sequence[2]))?;
                 let mut elements = Vec::with_capacity(rest.len() + 1);
                 elements.push(first);
                 elements.extend_from_slice(rest);
                 self.buffers.push(elements);
-                BigUint::from(self.buffers.len())
+                return Ok(vec![BigUint::from(self.buffers.len()), BigUint::ZERO]);
             }
-            Op::BufferPrepend {
-                buffer,
-                len,
-                from,
-                from_len,
-                reversed,
-            } => {
-                let mut elements = self.elements(from, from_len)?.to_vec();
+            Op::BufferPrepend { operands, reversed } => {
+                let operands = self.ids(operands)?.to_vec();
+                let mut elements = self
+                    .elements((operands[3], operands[4], operands[5]))?
+                    .to_vec();
                 if reversed {
                     elements.reverse();
                 }
-                elements.extend_from_slice(self.elements(buffer, len)?);
+                elements.extend_from_slice(self.elements((
+                    operands[0],
+                    operands[1],
+                    operands[2],
+                ))?);
                 self.buffers.push(elements);
-                BigUint::from(self.buffers.len())
+                return Ok(vec![BigUint::from(self.buffers.len()), BigUint::ZERO]);
             }
             Op::BufferField {
-                buffer, len, index, ..
+                buffer,
+                start,
+                index,
+                ..
             } => self
-                .elements(buffer, len)?
-                .first()
-                .and_then(|element| element.get(usize::try_from(index).ok()?))
+                .element(buffer, start)?
+                .get(usize::try_from(index).map_err(|_| invalid("buffer field"))?)
                 .cloned()
                 .ok_or_else(|| invalid("buffer field"))?,
             Op::CellField { cell, index, .. } => self
@@ -850,20 +855,37 @@ impl<H: Host> Machine<'_, H> {
         Ok(vec![value])
     }
 
-    /// The last `len` elements of a buffer: what a sequence of that length
-    /// holds.
-    fn elements(&self, buffer: ValueId, len: ValueId) -> Result<&[Vec<BigUint>], Error> {
+    /// The `len` elements of a buffer from `start`: what a sequence holds.
+    fn elements(
+        &self,
+        (buffer, start, len): (ValueId, ValueId, ValueId),
+    ) -> Result<&[Vec<BigUint>], Error> {
+        let elements = self.buffer(buffer)?;
+        let start = usize::try_from(self.value(start)?).map_err(|_| invalid("buffer start"))?;
+        let len = usize::try_from(self.value(len)?).map_err(|_| invalid("buffer length"))?;
+        start
+            .checked_add(len)
+            .and_then(|end| elements.get(start..end))
+            .ok_or_else(|| invalid("buffer length"))
+    }
+
+    /// Element `start` of a buffer.
+    fn element(&self, buffer: ValueId, start: ValueId) -> Result<&[BigUint], Error> {
+        let elements = self.buffer(buffer)?;
+        let start = usize::try_from(self.value(start)?).map_err(|_| invalid("buffer start"))?;
+        elements
+            .get(start)
+            .map(Vec::as_slice)
+            .ok_or_else(|| invalid("buffer start"))
+    }
+
+    fn buffer(&self, buffer: ValueId) -> Result<&[Vec<BigUint>], Error> {
         let handle = usize::try_from(self.value(buffer)?).map_err(|_| invalid("buffer handle"))?;
-        let elements = handle
+        handle
             .checked_sub(1)
             .and_then(|at| self.buffers.get(at))
-            .ok_or_else(|| invalid("buffer handle"))?;
-        let len = usize::try_from(self.value(len)?).map_err(|_| invalid("buffer length"))?;
-        let start = elements
-            .len()
-            .checked_sub(len)
-            .ok_or_else(|| invalid("buffer length"))?;
-        Ok(&elements[start..])
+            .map(Vec::as_slice)
+            .ok_or_else(|| invalid("buffer handle"))
     }
 
     fn cell(&self, id: ValueId) -> Result<&CellValue, Error> {

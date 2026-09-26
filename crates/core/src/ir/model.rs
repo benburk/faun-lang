@@ -189,38 +189,41 @@ pub enum Op {
         index: u32,
         shape: ShapeId,
     },
-    /// A buffer holding no elements.
-    BufferEmpty,
-    /// The buffer whose last `len + 1` elements are `fields`, one value per
-    /// leaf of the new first element, followed by the last `len` of
-    /// `buffer`. Takes a claim to `buffer` and to each field, so a buffer
-    /// nothing else holds may be written in place.
-    BufferPush {
-        buffer: ValueId,
-        len: ValueId,
-        fields: Range,
-        /// The leaves of every element of the buffer, as it holds them.
+    /// A buffer holding no elements, whose elements are to be of `shape`.
+    ///
+    /// A sequence is a buffer, where in it the sequence starts, and how many
+    /// elements it has: the `len` elements from element `start`, in order.
+    /// Sequences share a buffer, each a run of it, so the tail of one is
+    /// the same buffer from one element further on.
+    BufferEmpty {
         shape: ShapeId,
     },
-    /// The buffer whose last `len + from_len` elements are the last
-    /// `from_len` of `from` -- in the order `from` holds them, or the other
-    /// way round -- followed by the last `len` of `buffer`. Takes a claim to
-    /// `buffer`, so one nothing else holds with room in front is written in
-    /// place; `from` is borrowed, and each element copied out of it is
+    /// The sequence whose elements are `fields`, one value per leaf of a new
+    /// first element, followed by the sequence `operands` begins with: a
+    /// buffer, a start and a length, then the fields. Answers a buffer and
+    /// where in it the longer sequence starts. Takes a claim to the buffer
+    /// and to each field, so a buffer nothing else holds with room in front
+    /// is written in place.
+    BufferPush {
+        operands: Range,
+        shape: ShapeId,
+    },
+    /// The sequence of the elements of one -- in its order, or the other way
+    /// round -- followed by those of another: `operands` are the other's
+    /// buffer, start and length, then the one's. Answers a buffer and where
+    /// in it the joined sequence starts. Takes a claim to the other's
+    /// buffer, so one nothing else holds with room in front is written in
+    /// place; the one's is borrowed, and each element copied out of it is
     /// claimed again. Both hold elements of one layout.
     BufferPrepend {
-        buffer: ValueId,
-        len: ValueId,
-        from: ValueId,
-        from_len: ValueId,
+        operands: Range,
         reversed: bool,
     },
-    /// Read leaf `index` of the first of the last `len` elements of
-    /// `buffer`, whose elements are of `shape`. The result value says the
-    /// class it is read as.
+    /// Read leaf `index` of element `start` of `buffer`, whose elements are
+    /// of `shape`. The result value says the class it is read as.
     BufferField {
         buffer: ValueId,
-        len: ValueId,
+        start: ValueId,
         index: u32,
         shape: ShapeId,
     },

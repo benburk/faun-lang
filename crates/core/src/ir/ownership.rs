@@ -130,11 +130,14 @@ fn consumed_in(source: &Program, region: RegionId, owned: &[Vec<bool>], out: &mu
     for (op, results) in source.walk(region) {
         match *op {
             Op::Cell { fields, .. } => out.extend_from_slice(source.values(fields)),
-            Op::BufferPush { buffer, fields, .. } => {
-                out.push(buffer);
-                out.extend_from_slice(source.values(fields));
+            // A push takes its buffer and its fields, past the start and
+            // length; a prepend, the buffer it puts elements before.
+            Op::BufferPush { operands, .. } => {
+                let operands = source.values(operands);
+                out.push(operands[0]);
+                out.extend_from_slice(&operands[3..]);
             }
-            Op::BufferPrepend { buffer, .. } => out.push(buffer),
+            Op::BufferPrepend { operands, .. } => out.push(source.values(operands)[0]),
             Op::Convert { value } if source.class(value) == source.class(results[0]) => {
                 out.push(value);
             }

@@ -308,41 +308,27 @@ fn exit_status(program: &Program, op: &Op) -> Option<ValueId> {
         .flatten()
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm per instruction, naming what each reads"
-)]
 fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     match op {
-        Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) | Op::BufferEmpty => {}
-        Op::Cell { fields, .. } => {
+        Op::Constant { .. }
+        | Op::NaturalConstant(_)
+        | Op::AddressOf(_)
+        | Op::BufferEmpty { .. } => {}
+        Op::Cell { fields, .. }
+        | Op::BufferPush {
+            operands: fields, ..
+        }
+        | Op::BufferPrepend {
+            operands: fields, ..
+        } => {
             program.values(*fields).iter().copied().for_each(&mut each);
         }
         Op::CellTag { cell } | Op::CellField { cell, .. } => each(*cell),
-        Op::BufferPush {
-            buffer,
-            len,
-            fields,
-            ..
-        } => {
-            each(*buffer);
-            each(*len);
-            program.values(*fields).iter().copied().for_each(&mut each);
-        }
-        Op::BufferPrepend {
-            buffer,
-            len,
-            from,
-            from_len,
-            ..
-        } => [*buffer, *len, *from, *from_len]
-            .into_iter()
-            .for_each(&mut each),
         Op::Binary { left, right, .. }
         | Op::Compare { left, right, .. }
         | Op::BufferField {
             buffer: left,
-            len: right,
+            start: right,
             ..
         } => {
             each(*left);
@@ -2462,7 +2448,7 @@ impl Lowering<'_> {
             Op::Cell { .. }
             | Op::CellTag { .. }
             | Op::CellField { .. }
-            | Op::BufferEmpty
+            | Op::BufferEmpty { .. }
             | Op::BufferPush { .. }
             | Op::BufferPrepend { .. }
             | Op::BufferField { .. } => {

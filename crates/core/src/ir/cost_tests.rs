@@ -217,7 +217,7 @@ fn a_list_round_trip_costs_what_is_recorded() {
             allocations: 8,
             retains: 0,
             releases: 8,
-            stored_bytes: 1910,
+            stored_bytes: 1262,
         }
     );
 }
@@ -266,9 +266,10 @@ fn only_what_a_function_consumes_is_owned() {
         let id = lowered(name).unwrap_or_else(|| panic!("`{name}` is lowered"));
         owned[id.index()].clone()
     };
-    // A list is two parameters, its buffer and its length; only a buffer
-    // carries a claim. `build` grows the list it is handed, so it owns it.
-    assert_eq!(of("build"), [false, true, false]);
+    // A list is three parameters, its buffer, start and length; only a
+    // buffer carries a claim. `build` grows the list it is handed, so it
+    // owns it.
+    assert_eq!(of("build"), [false, true, false, false]);
     // A reversal onto another list is answered by copying one buffer's
     // elements in front of the other's, and is not lowered.
     assert_eq!(lowered("reverse"), None);
@@ -369,39 +370,47 @@ fn releases_in(
 /// sharing its tail, each one element longer. It answers the sum of both
 /// forks' first counts (seven each), the count in the last element's cell
 /// (nought) and the count first in the unforked sequence (`n - 1`): `n + 13`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one program built, forked, and read back from each fork"
+)]
 fn pushes(n: u64) -> Program {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
-        let empty = b.buffer_empty();
+        let pairs = b.shape(&[Class::Word, Class::Cell]);
+        let empty = b.buffer_empty(pairs);
         let zero = b.constant(Class::Word, 0);
         let limit = b.constant(Class::Word, n);
-        let built = b.loop_(&[empty, zero], &[Class::Buffer, Class::Word], |b, state| {
-            let (buffer, len) = (state[0], state[1]);
+        let sequence = [Class::Buffer, Class::Word, Class::Word];
+        let built = b.loop_(&[empty, zero, zero], &sequence, |b, state| {
+            let (buffer, start, len) = (state[0], state[1], state[2]);
             let done = b.compare(Relation::Equal, len, limit);
-            b.if_(done, &[], |b| b.break_(&[buffer, len]), |b| b.yield_(&[]));
+            b.if_(
+                done,
+                &[],
+                |b| b.break_(&[buffer, start, len]),
+                |b| b.yield_(&[]),
+            );
             let word = b.shape(&[Class::Word]);
             let boxed = b.cell(0, word, &[len]);
-            let pairs = b.shape(&[Class::Word, Class::Cell]);
-            let grown = b.buffer_push((buffer, len), pairs, &[len, boxed]);
+            let [grown, earlier] = b.buffer_push((buffer, start, len), pairs, &[len, boxed]);
             let one = b.constant(Class::Word, 1);
             let longer = b.binary(Binary::Add, len, one);
-            b.continue_(&[grown, longer]);
+            b.continue_(&[grown, earlier, longer]);
         });
-        let (buffer, len) = (built[0], built[1]);
-        let one = b.constant(Class::Word, 1);
-        let longer = b.binary(Binary::Add, len, one);
+        let (buffer, start, len) = (built[0], built[1], built[2]);
         let seven = b.constant(Class::Word, 7);
         let (none, word) = (b.shape(&[]), b.shape(&[Class::Word]));
-        let pairs = b.shape(&[Class::Word, Class::Cell]);
         let mark = b.cell(1, none, &[]);
-        let left = b.buffer_push((buffer, len), pairs, &[seven, mark]);
+        let [left, left_start] = b.buffer_push((buffer, start, len), pairs, &[seven, mark]);
         let mark = b.cell(1, none, &[]);
-        let right = b.buffer_push((buffer, len), pairs, &[seven, mark]);
-        let a = b.buffer_field((Class::Word, pairs), (left, longer), 0);
-        let c = b.buffer_field((Class::Word, pairs), (right, longer), 0);
-        let last = b.buffer_field((Class::Cell, pairs), (left, one), 1);
+        let right = b.buffer_push((buffer, start, len), pairs, &[seven, mark]);
+        let a = b.buffer_field((Class::Word, pairs), (left, left_start), 0);
+        let c = b.buffer_field((Class::Word, pairs), right.into(), 0);
+        let past = b.binary(Binary::Add, left_start, len);
+        let last = b.buffer_field((Class::Cell, pairs), (left, past), 1);
         let last = b.cell_field((Class::Word, word), last, 0);
-        let first = b.buffer_field((Class::Word, pairs), (buffer, len), 0);
+        let first = b.buffer_field((Class::Word, pairs), (buffer, start), 0);
         let sum = b.binary(Binary::Add, a, c);
         let sum = b.binary(Binary::Add, sum, last);
         let sum = b.binary(Binary::Add, sum, first);

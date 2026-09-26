@@ -761,38 +761,43 @@ fn a_buffer_prepended_answers_the_reference_and_leaks_nothing() {
                 let test = p.declare("test", &[Class::Word], &[Class::Natural]);
                 p.define(test, |b, args| {
                     let base = b.convert(Class::Natural, args[0]);
-                    let push = |b: &mut Builder, buffer, len: u64, value| {
-                        let len = b.constant(Class::Word, len);
-                        let natural = b.shape(&[Class::Natural]);
-                        b.buffer_push((buffer, len), natural, &[value])
-                    };
                     let natural = b.shape(&[Class::Natural]);
-                    let mut from = b.buffer_empty();
+                    let push = |b: &mut Builder, [buffer, start]: [ValueId; 2], len: u64, value| {
+                        let len = b.constant(Class::Word, len);
+                        b.buffer_push((buffer, start, len), natural, &[value])
+                    };
+                    let nought = b.constant(Class::Word, 0);
+                    let mut from = [b.buffer_empty(natural), nought];
                     for (at, offset) in (0u64..).zip([1, half, 3]) {
                         let offset = b.constant(Class::Word, offset);
                         let offset = b.convert(Class::Natural, offset);
                         let value = b.binary(Binary::Add, base, offset);
                         from = push(b, from, at, value);
                     }
-                    let mut onto = b.buffer_empty();
+                    let mut onto = [b.buffer_empty(natural), nought];
                     for (at, value) in (0u64..).zip([7, 9]) {
                         let value = b.constant(Class::Word, value);
                         let value = b.convert(Class::Natural, value);
                         onto = push(b, onto, at, value);
                     }
                     let (three, two) = (b.constant(Class::Word, 3), b.constant(Class::Word, 2));
-                    let joined = b.buffer_prepend((onto, two), (from, three), reversed);
+                    let [joined, first] = b.buffer_prepend(
+                        (onto[0], onto[1], two),
+                        (from[0], from[1], three),
+                        reversed,
+                    );
                     // Every element, each weighted by where it is.
                     let mut total = b.constant(Class::Natural, 0);
                     for (at, place) in (0u64..5).zip(0u32..) {
-                        let len = b.constant(Class::Word, 5 - at);
-                        let value = b.buffer_field((Class::Natural, natural), (joined, len), 0);
+                        let at = b.constant(Class::Word, at);
+                        let at = b.binary(Binary::Add, first, at);
+                        let value = b.buffer_field((Class::Natural, natural), (joined, at), 0);
                         let weight = b.constant(Class::Natural, 10u64.pow(place));
                         let weighted = b.binary(Binary::Mul, value, weight);
                         total = b.binary(Binary::Add, total, weighted);
                     }
                     if shared {
-                        let first = b.buffer_field((Class::Natural, natural), (onto, two), 0);
+                        let first = b.buffer_field((Class::Natural, natural), onto.into(), 0);
                         total = b.binary(Binary::Add, total, first);
                     }
                     b.ret(&[total]);

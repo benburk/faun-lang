@@ -112,61 +112,64 @@ impl Builder<'_> {
         self.push_one(Op::CellField { cell, index, shape }, class)
     }
 
-    /// A buffer holding no elements.
-    pub fn buffer_empty(&mut self) -> ValueId {
-        self.push_one(Op::BufferEmpty, Class::Buffer)
+    /// A buffer holding no elements, which is to hold elements of `shape`.
+    pub fn buffer_empty(&mut self, shape: ShapeId) -> ValueId {
+        self.push_one(Op::BufferEmpty { shape }, Class::Buffer)
     }
 
-    /// Put one element, as its leaves, before the last `len` of `buffer`.
+    /// Put one element, as its leaves, before the sequence of `len` elements
+    /// from `start` of `buffer`: the buffer and start of the longer one.
     pub fn buffer_push(
         &mut self,
-        (buffer, len): (ValueId, ValueId),
+        (buffer, start, len): (ValueId, ValueId, ValueId),
         shape: ShapeId,
         fields: &[ValueId],
-    ) -> ValueId {
-        let fields = self.program.hold(fields);
-        self.push_one(
-            Op::BufferPush {
-                buffer,
-                len,
-                fields,
-                shape,
-            },
-            Class::Buffer,
-        )
+    ) -> [ValueId; 2] {
+        let mut operands = vec![buffer, start, len];
+        operands.extend_from_slice(fields);
+        let operands = self.program.hold(&operands);
+        let [buffer, start] = self.push(
+            Op::BufferPush { operands, shape },
+            &[Class::Buffer, Class::Word],
+        )[..] else {
+            unreachable!("a push answers a buffer and a start")
+        };
+        [buffer, start]
     }
 
-    /// Put the last `from_len` elements of `from`, in order or reversed,
-    /// before the last `len` of `buffer`.
+    /// Put the elements of the sequence `from`, in order or reversed, before
+    /// the sequence `onto`, each a buffer, a start and a length: the buffer
+    /// and start of the joined one.
     pub fn buffer_prepend(
         &mut self,
-        (buffer, len): (ValueId, ValueId),
-        (from, from_len): (ValueId, ValueId),
+        (buffer, start, len): (ValueId, ValueId, ValueId),
+        (from, from_start, from_len): (ValueId, ValueId, ValueId),
         reversed: bool,
-    ) -> ValueId {
-        self.push_one(
-            Op::BufferPrepend {
-                buffer,
-                len,
-                from,
-                from_len,
-                reversed,
-            },
-            Class::Buffer,
-        )
+    ) -> [ValueId; 2] {
+        let operands = self
+            .program
+            .hold(&[buffer, start, len, from, from_start, from_len]);
+        let [buffer, start] = self.push(
+            Op::BufferPrepend { operands, reversed },
+            &[Class::Buffer, Class::Word],
+        )[..] else {
+            unreachable!("a prepend answers a buffer and a start")
+        };
+        [buffer, start]
     }
 
-    /// Read leaf `index` of the first of the last `len` elements, as `class`.
+    /// Read leaf `index` of element `start` of `buffer`, whose elements are
+    /// of `shape`, as `class`.
     pub fn buffer_field(
         &mut self,
         (class, shape): (Class, ShapeId),
-        (buffer, len): (ValueId, ValueId),
+        (buffer, start): (ValueId, ValueId),
         index: u32,
     ) -> ValueId {
         self.push_one(
             Op::BufferField {
                 buffer,
-                len,
+                start,
                 index,
                 shape,
             },

@@ -630,33 +630,23 @@ fn returns(source: &Program, region: RegionId) -> bool {
 /// Containers are handled where their regions are.
 pub(super) fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
     match *op {
-        Op::Constant { .. } | Op::NaturalConstant(_) | Op::AddressOf(_) | Op::BufferEmpty => {
-            Vec::new()
+        Op::Constant { .. }
+        | Op::NaturalConstant(_)
+        | Op::AddressOf(_)
+        | Op::BufferEmpty { .. } => Vec::new(),
+        Op::Cell { fields, .. }
+        | Op::BufferPush {
+            operands: fields, ..
         }
-        Op::Cell { fields, .. } => source.values(fields).to_vec(),
+        | Op::BufferPrepend {
+            operands: fields, ..
+        } => source.values(fields).to_vec(),
         Op::CellTag { cell } | Op::CellField { cell, .. } => vec![cell],
-        Op::BufferPush {
-            buffer,
-            len,
-            fields,
-            ..
-        } => {
-            let mut read = vec![buffer, len];
-            read.extend_from_slice(source.values(fields));
-            read
-        }
-        Op::BufferPrepend {
-            buffer,
-            len,
-            from,
-            from_len,
-            ..
-        } => vec![buffer, len, from, from_len],
         Op::Binary { left, right, .. }
         | Op::Compare { left, right, .. }
         | Op::BufferField {
             buffer: left,
-            len: right,
+            start: right,
             ..
         } => vec![left, right],
         Op::Load { address, .. } => vec![address],

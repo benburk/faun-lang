@@ -169,10 +169,11 @@ fn entry_parameters(
     wanted: Arguments,
 ) -> Result<(NamedParams, Option<usize>), String> {
     let mut params = demand.named_params(entry);
-    let arguments = params.windows(2).position(|pair| {
-        pair == [
+    let arguments = params.windows(3).position(|run| {
+        run == [
             ("args.0".to_owned(), Class::Buffer),
             ("args.1".to_owned(), Class::Word),
+            ("args.2".to_owned(), Class::Word),
         ]
     });
     if let Some(at) = arguments {
@@ -189,7 +190,7 @@ fn entry_parameters(
                     .ok_or_else(|| format!("the target hands the entry no `{name}`"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        params.splice(at..at + 2, handed);
+        params.splice(at..at + SEQUENCE_LEAVES.len(), handed);
     }
     Ok((params, arguments))
 }
@@ -523,7 +524,8 @@ enum Storage {
     Cell,
     /// A product held as its leaves: a run in the leaf pool, never empty.
     Flat(barb::Range),
-    /// A sequence: a buffer and a length, as [`SEQUENCE_LEAVES`] says.
+    /// A sequence: a buffer, where in it the sequence starts, and a length,
+    /// as [`SEQUENCE_LEAVES`] says.
     Seq,
     /// A sum held as its tag and its slots: a run in the leaf pool, the tag
     /// first, then the slots for numbers a machine holds, then those for
@@ -532,7 +534,7 @@ enum Storage {
 }
 
 /// The leaves every sequence is held as, which open every leaf pool.
-const SEQUENCE_LEAVES: [Class; 2] = [Class::Buffer, Class::Word];
+const SEQUENCE_LEAVES: [Class; 3] = [Class::Buffer, Class::Word, Class::Word];
 
 /// The run [`SEQUENCE_LEAVES`] occupy.
 fn sequence_run() -> barb::Range {
@@ -1935,12 +1937,15 @@ impl Lowering<'_> {
         };
         // How many there are is the count: a program that asks only that
         // reads no list, and the call making one goes.
-        let (list, handed) = match made {
-            Some(made) => (b.call(made, &[params[at], params[at + 1]])[0], 2),
-            None => (b.buffer_empty(), 1),
+        let (list, handed) = if let Some(made) = made {
+            let list = b.call(made, &[params[at], params[at + 1]]);
+            ([list[0], list[1]], 2)
+        } else {
+            let strings = b.shape(&SEQUENCE_LEAVES);
+            ([b.buffer_empty(strings), b.constant(Class::Word, 0)], 1)
         };
         let mut params = params.to_vec();
-        params.splice(at..at + handed, [list, params[at]]);
+        params.splice(at..at + handed, [list[0], list[1], params[at]]);
         params
     }
 
@@ -1951,13 +1956,19 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         (count, array): (ValueId, ValueId),
         (word, bytes): (u64, Class),
-    ) -> [ValueId; 2] {
-        let empty = b.buffer_empty();
+    ) -> [ValueId; 3] {
+        let strings = b.shape(&SEQUENCE_LEAVES);
+        let empty = b.buffer_empty(strings);
         let none = b.constant(Class::Word, 0);
-        let built = b.loop_(&[empty, none], &SEQUENCE_LEAVES, |b, state| {
-            let (held, len) = (state[0], state[1]);
+        let built = b.loop_(&[empty, none, none], &SEQUENCE_LEAVES, |b, state| {
+            let (held, first, len) = (state[0], state[1], state[2]);
             let done = b.compare(Relation::Equal, len, count);
-            b.if_(done, &[], |b| b.break_(&[held, len]), |b| b.yield_(&[]));
+            b.if_(
+                done,
+                &[],
+                |b| b.break_(&[held, first, len]),
+                |b| b.yield_(&[]),
+            );
             let one = b.constant(Class::Word, 1);
             let rest = b.binary(Binary::Sub, count, len);
             let index = b.binary(Binary::Sub, rest, one);
@@ -1970,12 +1981,11 @@ impl Lowering<'_> {
             let start = b.convert(Class::Address, start);
             let length = Self::terminated(b, start);
             let text = Self::pushed_bytes(b, start, length, bytes);
-            let strings = b.shape(&SEQUENCE_LEAVES);
-            let longer = b.buffer_push((held, len), strings, &text);
+            let [longer, earlier] = b.buffer_push((held, first, len), strings, &text);
             let more = b.binary(Binary::Add, len, one);
-            b.continue_(&[longer, more]);
+            b.continue_(&[longer, earlier, more]);
         });
-        [built[0], built[1]]
+        [built[0], built[1], built[2]]
     }
 
     /// How many bytes lie from `start` before a nought one.
@@ -2300,7 +2310,7 @@ impl Lowering<'_> {
 
     /// Build a known sequence by pushing its elements, from its end back:
     /// the buffer is nothing else's, so each push writes in place.
-    fn static_sequence(&self, b: &mut super::Builder, value: barb::Constant<'_>) -> [ValueId; 2] {
+    fn static_sequence(&self, b: &mut super::Builder, value: barb::Constant<'_>) -> [ValueId; 3] {
         let owner = peeled(self.barb, value.owner()).expect("a sequence is not cyclic");
         let barb::TypeShape::Sequence {
             push, recursive, ..
@@ -2322,7 +2332,9 @@ impl Lowering<'_> {
             return self.static_elements(b, spine, push, recursive);
         };
         if bytes.is_empty() {
-            return Self::unrolled_bytes(b, &[], None);
+            let shape = self.element_shape(b, push, usize::from(recursive == 0));
+            let none = b.constant(Class::Word, 0);
+            return [b.buffer_empty(shape), none, none];
         }
         let element = match self.field_carried(push, usize::from(recursive == 0)) {
             Some(Carried::One(class)) => Some(class),
@@ -2350,7 +2362,7 @@ impl Lowering<'_> {
         spine: barb::SpineView<'_>,
         push: barb::CtorId,
         recursive: usize,
-    ) -> [ValueId; 2] {
+    ) -> [ValueId; 3] {
         let mut budget = barb::Budget::new(barb::FoldLimits {
             work: u64::MAX,
             work_per_function: u64::MAX,
@@ -2360,7 +2372,9 @@ impl Lowering<'_> {
         let elements = spine
             .elements(&mut budget)
             .expect("validated constants can be revisited");
-        let mut buffer = b.buffer_empty();
+        let shape = self.element_shape(b, push, usize::from(recursive == 0));
+        let mut buffer = b.buffer_empty(shape);
+        let mut first = b.constant(Class::Word, 0);
         for (len, fields) in elements.iter().rev().enumerate() {
             let len = b.constant(
                 Class::Word,
@@ -2375,11 +2389,10 @@ impl Lowering<'_> {
                     None => {}
                 }
             }
-            let shape = self.element_shape(b, push, usize::from(recursive == 0));
-            buffer = b.buffer_push((buffer, len), shape, &values);
+            [buffer, first] = b.buffer_push((buffer, first, len), shape, &values);
         }
         let len = u64::try_from(elements.len()).expect("a length fits 64 bits");
-        [buffer, b.constant(Class::Word, len)]
+        [buffer, first, b.constant(Class::Word, len)]
     }
 
     /// Known bytes pushed one at a time, from the last, each as `element`
@@ -2388,9 +2401,11 @@ impl Lowering<'_> {
         b: &mut super::Builder,
         bytes: &[u8],
         element: Option<Class>,
-    ) -> [ValueId; 2] {
+    ) -> [ValueId; 3] {
         let len = u64::try_from(bytes.len()).expect("a length fits 64 bits");
-        let mut buffer = b.buffer_empty();
+        let shape = b.shape(element.as_slice());
+        let mut buffer = b.buffer_empty(shape);
+        let mut first = b.constant(Class::Word, 0);
         for (len, &byte) in bytes.iter().rev().enumerate() {
             let len = b.constant(
                 Class::Word,
@@ -2400,10 +2415,9 @@ impl Lowering<'_> {
                 .map(|class| b.constant(class, u64::from(byte)))
                 .into_iter()
                 .collect();
-            let shape = b.shape(element.as_slice());
-            buffer = b.buffer_push((buffer, len), shape, &fields);
+            [buffer, first] = b.buffer_push((buffer, first, len), shape, &fields);
         }
-        [buffer, b.constant(Class::Word, len)]
+        [buffer, first, b.constant(Class::Word, len)]
     }
 
     /// Record the first thing this tier cannot lay out. Emission has no
@@ -2539,19 +2553,19 @@ impl Lowering<'_> {
                 .as_ref()
                 .expect("a prepended sequence is carried")
                 .values();
-            (values[0], values[1])
+            (values[0], values[1], values[2])
         };
         let (from, onto) = (held(from), held(onto));
-        let buffer = b.buffer_prepend(onto, from, reversed);
-        let len = b.binary(Binary::Add, onto.1, from.1);
+        let [buffer, first] = b.buffer_prepend(onto, from, reversed);
+        let len = b.binary(Binary::Add, onto.2, from.2);
         Held::Flat {
             leaves: sequence_run(),
-            values: [buffer, len].as_slice().into(),
+            values: [buffer, first, len].as_slice().into(),
         }
     }
 
     /// A sequence without as many of its first elements as a count says:
-    /// the same buffer, holding fewer of its last.
+    /// the same buffer, from that many elements on.
     fn dropped(&self, b: &mut super::Builder, arguments: barb::Range, locals: &Locals) -> Held {
         let &[sequence, count] = self.barb.atoms(arguments) else {
             unreachable!("a drop is of a sequence and a count");
@@ -2560,12 +2574,13 @@ impl Lowering<'_> {
             .as_ref()
             .expect("a dropped sequence is carried")
             .values();
-        let (buffer, len) = (values[0], values[1]);
+        let (buffer, first, len) = (values[0], values[1], values[2]);
         let skipped = Self::skipped(b, Self::scalar(locals, count), (len, None));
+        let later = b.binary(Binary::Add, first, skipped);
         let rest = b.binary(Binary::Sub, len, skipped);
         Held::Flat {
             leaves: sequence_run(),
-            values: [buffer, rest].as_slice().into(),
+            values: [buffer, later, rest].as_slice().into(),
         }
     }
 
@@ -2621,7 +2636,7 @@ impl Lowering<'_> {
             locals[sequence.0.index()]
                 .as_ref()
                 .expect("a counted sequence is carried")
-                .values()[1]
+                .values()[2]
         };
         // A length is held in a word, which is what the tier above was told
         // a length can be; only a class with no greatest number needs it
@@ -2891,10 +2906,10 @@ impl Lowering<'_> {
         let held = locals[atom.0.index()]
             .as_ref()
             .expect("a string handed out is carried");
-        let [buffer, len] = held.values() else {
+        let [buffer, first, len] = held.values() else {
             unreachable!("a byte string is held as a sequence");
         };
-        let run = Self::copied_run(b, (*buffer, *len), (io, ended), element);
+        let run = Self::copied_run(b, (*buffer, *first, *len), (io, ended), element);
         [b.address_of(io.scratch), run]
     }
 
@@ -2902,7 +2917,7 @@ impl Lowering<'_> {
     /// nought byte after them where they are `ended`: how many.
     fn copied_run(
         b: &mut super::Builder,
-        (buffer, len): (ValueId, ValueId),
+        (buffer, first, len): (ValueId, ValueId, ValueId),
         (io, ended): (Io, bool),
         element: Class,
     ) -> ValueId {
@@ -2923,9 +2938,9 @@ impl Lowering<'_> {
             let at = state[0];
             let done = b.compare(Relation::Equal, at, run);
             b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-            let left = b.binary(Binary::Sub, len, at);
+            let index = b.binary(Binary::Add, first, at);
             let bytes = b.shape(&[element]);
-            let value = b.buffer_field((element, bytes), (buffer, left), 0);
+            let value = b.buffer_field((element, bytes), (buffer, index), 0);
             let place = Self::scratch_at(b, io, at);
             b.store(super::Width::Byte, place, super::Offset::Bytes(0), value);
             let one = b.constant(Class::Word, 1);
@@ -2966,7 +2981,7 @@ impl Lowering<'_> {
     /// The first `count` bytes of the scratch region, no more than a run,
     /// as a sequence: pushed from the last, since a sequence grows at its
     /// front.
-    fn taken(b: &mut super::Builder, count: ValueId, (io, element): (Io, Class)) -> [ValueId; 2] {
+    fn taken(b: &mut super::Builder, count: ValueId, (io, element): (Io, Class)) -> [ValueId; 3] {
         let [start, run] = Self::room(b, count, io);
         Self::pushed_bytes(b, start, run, element)
     }
@@ -2978,13 +2993,19 @@ impl Lowering<'_> {
         start: ValueId,
         total: ValueId,
         class: Class,
-    ) -> [ValueId; 2] {
-        let empty = b.buffer_empty();
+    ) -> [ValueId; 3] {
+        let bytes = b.shape(&[class]);
+        let empty = b.buffer_empty(bytes);
         let none = b.constant(Class::Word, 0);
-        let built = b.loop_(&[empty, none], &SEQUENCE_LEAVES, |b, state| {
-            let (held, len) = (state[0], state[1]);
+        let built = b.loop_(&[empty, none, none], &SEQUENCE_LEAVES, |b, state| {
+            let (held, first, len) = (state[0], state[1], state[2]);
             let done = b.compare(Relation::Equal, len, total);
-            b.if_(done, &[], |b| b.break_(&[held, len]), |b| b.yield_(&[]));
+            b.if_(
+                done,
+                &[],
+                |b| b.break_(&[held, first, len]),
+                |b| b.yield_(&[]),
+            );
             let one = b.constant(Class::Word, 1);
             let rest = b.binary(Binary::Sub, total, len);
             let at = b.binary(Binary::Sub, rest, one);
@@ -2993,12 +3014,11 @@ impl Lowering<'_> {
             let place = b.convert(Class::Address, place);
             let byte = b.load(super::Width::Byte, place, super::Offset::Bytes(0));
             let byte = b.convert(class, byte);
-            let bytes = b.shape(&[class]);
-            let longer = b.buffer_push((held, len), bytes, &[byte]);
+            let [longer, earlier] = b.buffer_push((held, first, len), bytes, &[byte]);
             let more = b.binary(Binary::Add, len, one);
-            b.continue_(&[longer, more]);
+            b.continue_(&[longer, earlier, more]);
         });
-        [built[0], built[1]]
+        [built[0], built[1], built[2]]
     }
 
     /// The bytes a compile-time byte string holds, read off its encoding.
@@ -3189,38 +3209,58 @@ impl Lowering<'_> {
     ) -> Held {
         let owner = self.barb.ctor(ctor).owner;
         let barb::TypeShape::Sequence {
-            empty, recursive, ..
+            empty,
+            push,
+            recursive,
+            ..
         } = barb::type_shape(self.barb, owner)
         else {
             unreachable!("a sequence's constructor belongs to a sequence");
         };
         let values = if ctor == empty {
-            [b.buffer_empty(), b.constant(Class::Word, 0)]
+            let shape = self.element_shape(b, push, usize::from(recursive == 0));
+            let none = b.constant(Class::Word, 0);
+            [b.buffer_empty(shape), none, none]
         } else {
-            let atoms = self.barb.atoms(args);
-            let rest = locals[atoms[recursive].0.index()]
-                .as_ref()
-                .expect("a sequence's rest is carried");
-            let (buffer, len) = (rest.values()[0], rest.values()[1]);
-            let element = usize::from(recursive == 0);
-            let mut fields = Vec::new();
-            if let Some(carried) = self.field_carried(ctor, element) {
-                let held = locals[atoms[element].0.index()]
-                    .as_ref()
-                    .expect("a carried element carries a value");
-                for (&value, &class) in held.values().iter().zip(self.classes(&carried)) {
-                    fields.push(met(b, value, class));
-                }
-            }
-            let shape = self.element_shape(b, ctor, element);
-            let pushed = b.buffer_push((buffer, len), shape, &fields);
-            let one = b.constant(Class::Word, 1);
-            [pushed, b.binary(Binary::Add, len, one)]
+            self.pushed(b, (ctor, recursive), args, locals)
         };
         Held::Flat {
             leaves: sequence_run(),
             values: values.as_slice().into(),
         }
+    }
+
+    /// A sequence of `ctor`, which pushes its element before its rest,
+    /// field `recursive`: the rest's buffer, taking its claim, where the
+    /// longer sequence starts, and one more than it counted.
+    fn pushed(
+        &self,
+        b: &mut super::Builder,
+        (ctor, recursive): (barb::CtorId, usize),
+        args: barb::Range,
+        locals: &Locals,
+    ) -> [ValueId; 3] {
+        let atoms = self.barb.atoms(args);
+        let rest = locals[atoms[recursive].0.index()]
+            .as_ref()
+            .expect("a sequence's rest is carried");
+        let &[buffer, first, len] = rest.values() else {
+            unreachable!("a sequence is held as its buffer, start and length");
+        };
+        let element = usize::from(recursive == 0);
+        let mut fields = Vec::new();
+        if let Some(carried) = self.field_carried(ctor, element) {
+            let held = locals[atoms[element].0.index()]
+                .as_ref()
+                .expect("a carried element carries a value");
+            for (&value, &class) in held.values().iter().zip(self.classes(&carried)) {
+                fields.push(met(b, value, class));
+            }
+        }
+        let shape = self.element_shape(b, ctor, element);
+        let [pushed, earlier] = b.buffer_push((buffer, first, len), shape, &fields);
+        let one = b.constant(Class::Word, 1);
+        [pushed, earlier, b.binary(Binary::Add, len, one)]
     }
 
     /// A number built from constructors: nought, or one more than its field.
@@ -3393,7 +3433,7 @@ impl Lowering<'_> {
             (arms[1], arms[0])
         };
         let join = self.join(answer);
-        let len = scrutinee.values()[1];
+        let len = scrutinee.values()[2];
         let nought = b.constant(Class::Word, 0);
         let is_empty = b.compare(Relation::Equal, len, nought);
         let results = b.if_(
@@ -3516,7 +3556,8 @@ impl Lowering<'_> {
     }
 
     /// A step of a sequence binds its element, read from the buffer, and its
-    /// rest, which is the same buffer one shorter. An empty one binds nothing.
+    /// rest, which is the same buffer from one element on. An empty one binds
+    /// nothing.
     fn bind_sequence_fields(
         &self,
         b: &mut super::Builder,
@@ -3529,18 +3570,21 @@ impl Lowering<'_> {
         let barb::TypeShape::Sequence { recursive, .. } = barb::type_shape(self.barb, owner) else {
             unreachable!("a sequence's constructor belongs to a sequence");
         };
-        let (buffer, len) = (scrutinee.values()[0], scrutinee.values()[1]);
+        let &[buffer, first, len] = scrutinee.values() else {
+            unreachable!("a sequence is held as its buffer, start and length");
+        };
         for (at, carried) in self.fields_carried(ctor).enumerate() {
             let field = carried.map(|carried| {
                 if at == recursive {
                     let one = b.constant(Class::Word, 1);
+                    let later = b.binary(Binary::Add, first, one);
                     let shorter = b.binary(Binary::Sub, len, one);
-                    return Held::of(carried, &[buffer, shorter]);
+                    return Held::of(carried, &[buffer, later, shorter]);
                 }
                 let shape = self.element_shape(b, ctor, at);
                 let values: Vec<_> = (0u32..)
                     .zip(self.classes(&carried))
-                    .map(|(leaf, &class)| b.buffer_field((class, shape), (buffer, len), leaf))
+                    .map(|(leaf, &class)| b.buffer_field((class, shape), (buffer, first), leaf))
                     .collect();
                 Held::of(carried, &values)
             });

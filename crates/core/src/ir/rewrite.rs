@@ -293,36 +293,30 @@ impl<'a> Rebuild<'a> {
             Op::AddressOf(data) => vec![b.address_of(data)],
             Op::Cell { tag, fields, shape } => vec![b.cell(tag, shape, &self.args(fields))],
             Op::CellTag { cell } => vec![b.cell_tag(self.value(cell))],
-            Op::BufferEmpty => vec![b.buffer_empty()],
-            Op::BufferPush {
-                buffer,
-                len,
-                fields,
-                shape,
-            } => vec![b.buffer_push(
-                (self.value(buffer), self.value(len)),
-                shape,
-                &self.args(fields),
-            )],
-            Op::BufferPrepend {
-                buffer,
-                len,
-                from,
-                from_len,
-                reversed,
-            } => vec![b.buffer_prepend(
-                (self.value(buffer), self.value(len)),
-                (self.value(from), self.value(from_len)),
-                reversed,
-            )],
+            Op::BufferEmpty { shape } => vec![b.buffer_empty(shape)],
+            Op::BufferPush { operands, shape } => {
+                let operands = self.args(operands);
+                let (sequence, fields) = operands.split_at(3);
+                b.buffer_push((sequence[0], sequence[1], sequence[2]), shape, fields)
+                    .to_vec()
+            }
+            Op::BufferPrepend { operands, reversed } => {
+                let operands = self.args(operands);
+                b.buffer_prepend(
+                    (operands[0], operands[1], operands[2]),
+                    (operands[3], operands[4], operands[5]),
+                    reversed,
+                )
+                .to_vec()
+            }
             Op::BufferField {
                 buffer,
-                len,
+                start,
                 index,
                 shape,
             } => vec![b.buffer_field(
                 (self.source.class(results[0]), shape),
-                (self.value(buffer), self.value(len)),
+                (self.value(buffer), self.value(start)),
                 index,
             )],
             Op::CellField { cell, index, shape } => vec![b.cell_field(

@@ -160,7 +160,8 @@ impl References<'_> {
     fn op(&self, op: Op) -> Result<(), String> {
         let p = self.0;
         match op {
-            Op::Constant { .. } | Op::BufferEmpty => {}
+            Op::Constant { .. } => {}
+            Op::BufferEmpty { shape } => reference(&p.shapes, shape, "shape")?,
             Op::NaturalConstant(id) => self.natural_datum(id)?,
             Op::AddressOf(id) => return self.datum(id).map(|_| ()),
             Op::Cell { fields, shape, .. } => {
@@ -172,36 +173,18 @@ impl References<'_> {
                 reference(&p.shapes, shape, "shape")?;
                 self.value(cell)?;
             }
-            Op::BufferPush {
-                buffer,
-                len,
-                fields,
-                shape,
-            } => {
+            Op::BufferPush { operands, shape } => {
                 reference(&p.shapes, shape, "shape")?;
-                self.value(buffer)?;
-                self.value(len)?;
-                self.values(fields)?;
+                self.values(operands)?;
             }
             Op::BufferField { shape, .. } if p.shapes.get(shape).is_none() => {
                 return Err("invalid shape reference".into());
-            }
-            Op::BufferPrepend {
-                buffer,
-                len,
-                from,
-                from_len,
-                ..
-            } => {
-                for value in [buffer, len, from, from_len] {
-                    self.value(value)?;
-                }
             }
             Op::Binary { left, right, .. }
             | Op::Compare { left, right, .. }
             | Op::BufferField {
                 buffer: left,
-                len: right,
+                start: right,
                 ..
             }
             | Op::Store {
@@ -219,7 +202,9 @@ impl References<'_> {
                 reference(&p.functions, function, "function")?;
                 self.values(args)?;
             }
-            Op::Float { operands, .. } => self.values(operands)?,
+            Op::BufferPrepend { operands, .. } | Op::Float { operands, .. } => {
+                self.values(operands)?;
+            }
             Op::If {
                 condition,
                 then_region,
@@ -463,7 +448,7 @@ impl Checker<'_> {
                 }
             }
             Op::Cell { fields, shape, .. } => {
-                self.shaped(fields, shape)?;
+                self.shaped(self.program.values(fields), shape)?;
                 self.results(results, &[Class::Cell])?;
             }
             Op::CellTag { cell } => {
@@ -476,39 +461,33 @@ impl Checker<'_> {
                 self.require(cell, Class::Cell)?;
                 self.leaf(results, index, shape)?;
             }
-            Op::BufferEmpty => self.results(results, &[Class::Buffer])?,
-            Op::BufferPush {
-                buffer,
-                len,
-                fields,
-                shape,
-            } => {
-                self.require(buffer, Class::Buffer)?;
-                self.length(len)?;
+            Op::BufferEmpty { .. } => self.results(results, &[Class::Buffer])?,
+            Op::BufferPush { operands, shape } => {
+                let operands = self.program.values(operands);
+                let Some((sequence, fields)) = operands.split_first_chunk::<3>() else {
+                    return Err("a push names no sequence".into());
+                };
+                self.sequence(*sequence)?;
                 self.shaped(fields, shape)?;
-                self.results(results, &[Class::Buffer])?;
+                self.results(results, &[Class::Buffer, Class::Word])?;
             }
-            Op::BufferPrepend {
-                buffer,
-                len,
-                from,
-                from_len,
-                ..
-            } => {
-                self.require(buffer, Class::Buffer)?;
-                self.length(len)?;
-                self.require(from, Class::Buffer)?;
-                self.length(from_len)?;
-                self.results(results, &[Class::Buffer])?;
+            Op::BufferPrepend { operands, .. } => {
+                let operands = self.program.values(operands);
+                let Ok(both) = <[ValueId; 6]>::try_from(operands) else {
+                    return Err("a prepend names two sequences".into());
+                };
+                self.sequence([both[0], both[1], both[2]])?;
+                self.sequence([both[3], both[4], both[5]])?;
+                self.results(results, &[Class::Buffer, Class::Word])?;
             }
             Op::BufferField {
                 buffer,
-                len,
+                start,
                 index,
                 shape,
             } => {
                 self.require(buffer, Class::Buffer)?;
-                self.length(len)?;
+                self.length(start)?;
                 self.leaf(results, index, shape)?;
             }
             Op::Convert { value } => {
@@ -768,8 +747,7 @@ impl Checker<'_> {
 
     /// Fields stored as `shape` says: one per leaf, each something the
     /// leaf's class holds.
-    fn shaped(&self, fields: Range, shape: ShapeId) -> Result<(), String> {
-        let fields = self.program.values(fields);
+    fn shaped(&self, fields: &[ValueId], shape: ShapeId) -> Result<(), String> {
         let leaves = self.program.shaped(shape);
         if fields.len() != leaves.len() {
             return Err(format!(
@@ -785,6 +763,14 @@ impl Checker<'_> {
             }
         }
         Ok(())
+    }
+
+    /// A sequence: a buffer, where in it the sequence starts, and how many
+    /// elements it has.
+    fn sequence(&self, [buffer, start, len]: [ValueId; 3]) -> Result<(), String> {
+        self.require(buffer, Class::Buffer)?;
+        self.length(start)?;
+        self.length(len)
     }
 
     /// One leaf of `shape` read back.

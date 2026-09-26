@@ -159,6 +159,15 @@ fn skeleton(source: &Program) -> Program {
     output
 }
 
+/// A count as a word, however narrow it was held.
+fn word(b: &mut Builder, value: ValueId) -> ValueId {
+    if b.class(value) == Class::Word {
+        value
+    } else {
+        b.convert(Class::Word, value)
+    }
+}
+
 /// The innermost scope, which is the region being walked.
 const fn top(scopes: &mut [Scope]) -> &mut Scope {
     scopes.last_mut().expect("a region being walked")
@@ -560,41 +569,33 @@ impl Pass<'_> {
         self.retained(b, class, value)
     }
 
-    /// Push one element, whose leaves' claims it takes, onto a buffer whose
-    /// claim it takes: make room in front of the sequence, then write there.
+    /// Push one element, whose leaves' claims it takes, onto a sequence
+    /// whose buffer's claim it takes: make room in front of the sequence,
+    /// then write there. The buffer and where the longer sequence starts.
     fn push(
         &self,
         b: &mut Builder,
-        (buffer, len): (ValueId, ValueId),
+        sequence: (ValueId, ValueId, ValueId),
         shape: ShapeId,
         claimed: &[ValueId],
-    ) -> ValueId {
+    ) -> [ValueId; 2] {
         let packed = self.shapes.packed(shape);
         let sequences = self
             .sequences
             .as_ref()
             .expect("buffer helpers were requested");
-        let len = if b.class(len) == Class::Word {
-            len
-        } else {
-            b.convert(Class::Word, len)
-        };
-        let room = sequences.room(b, packed, buffer, len);
-        let capacity = SequenceLibrary::capacity(b, room);
-        let one = b.constant(Class::Word, 1);
-        let after = b.binary(Binary::Sub, capacity, len);
-        let slot = b.binary(Binary::Sub, after, one);
-        let element = sequences.element(b, room, packed.size, slot);
+        let [room, front] = sequences.room(b, packed, sequence);
+        let element = sequences.element(b, room, packed.size, front);
         Self::store_leaves(b, (element, 0), packed, claimed);
-        room
+        [room, front]
     }
 
-    /// Read one leaf of a sequence's first element, holding a claim to it.
+    /// Read one leaf of element `start` of a buffer, holding a claim to it.
     fn buffer_field(
         &self,
         b: &mut Builder,
         old_result: ValueId,
-        (buffer, len): (ValueId, ValueId),
+        (buffer, start): (ValueId, ValueId),
         (shape, index): (ShapeId, u32),
     ) -> ValueId {
         let packed = self.shapes.packed(shape);
@@ -602,14 +603,8 @@ impl Pass<'_> {
             .sequences
             .as_ref()
             .expect("buffer helpers were requested");
-        let capacity = SequenceLibrary::capacity(b, buffer);
-        let len = if b.class(len) == Class::Word {
-            len
-        } else {
-            b.convert(Class::Word, len)
-        };
-        let first = b.binary(Binary::Sub, capacity, len);
-        let element = sequences.element(b, buffer, packed.size, first);
+        let start = word(b, start);
+        let element = sequences.element(b, buffer, packed.size, start);
         self.load_leaf(b, old_result, (element, 0), (packed, index))
     }
 
@@ -788,54 +783,52 @@ impl Pass<'_> {
             Op::CellField { cell, index, shape } => {
                 self.cell_field(b, results[0], cell, (shape, index))
             }
-            Op::BufferEmpty => {
+            Op::BufferEmpty { shape } => {
                 let library = self.cells.expect("cell helpers were requested");
-                sequence::empty(b, library.allocate, self.word_bytes)
+                let stride = b.constant(Class::Word, self.shapes.packed(shape).size);
+                let descriptor = self.shapes.descriptor(b, shape);
+                let none = b.constant(Class::Word, 0);
+                sequence::allocate(
+                    b,
+                    library.allocate,
+                    (stride, descriptor),
+                    none,
+                    self.word_bytes,
+                )
             }
-            Op::BufferPush {
-                buffer,
-                len,
-                fields,
-                shape,
-            } => {
-                let buffer = self.take(b, scopes, live, at, buffer);
-                let claimed: Vec<_> = self
-                    .source
-                    .values(fields)
+            Op::BufferPush { operands, shape } => {
+                let operands = self.source.values(operands);
+                let buffer = self.take(b, scopes, live, at, operands[0]);
+                let (start, len) = (word(b, v(operands[1])), word(b, v(operands[2])));
+                let claimed: Vec<_> = operands[3..]
                     .iter()
                     .map(|&old| self.take(b, scopes, live, at, old))
                     .collect();
-                self.push(b, (buffer, v(len)), shape, &claimed)
+                return self.push(b, (buffer, start, len), shape, &claimed).to_vec();
             }
-            Op::BufferPrepend {
-                buffer,
-                len,
-                from,
-                from_len,
-                reversed,
-            } => {
-                let buffer = self.take(b, scopes, live, at, buffer);
-                let word = |b: &mut Builder, len| {
-                    if b.class(len) == Class::Word {
-                        len
-                    } else {
-                        b.convert(Class::Word, len)
-                    }
-                };
-                let (len, from_len) = (word(b, v(len)), word(b, v(from_len)));
-                let routine = self
+            Op::BufferPrepend { operands, reversed } => {
+                let operands = self.source.values(operands);
+                let buffer = self.take(b, scopes, live, at, operands[0]);
+                let [start, len, from_start, count] =
+                    [1, 2, 4, 5].map(|at| word(b, v(operands[at])));
+                return self
                     .sequences
                     .as_ref()
                     .expect("buffer helpers were requested")
-                    .prepend(reversed);
-                b.call_one(routine, &[buffer, len, v(from), from_len])
+                    .prepend(
+                        b,
+                        (buffer, start, len),
+                        (v(operands[3]), from_start, count),
+                        reversed,
+                    )
+                    .to_vec();
             }
             Op::BufferField {
                 buffer,
-                len,
+                start,
                 index,
                 shape,
-            } => self.buffer_field(b, results[0], (v(buffer), v(len)), (shape, index)),
+            } => self.buffer_field(b, results[0], (v(buffer), v(start)), (shape, index)),
             Op::Binary { op, left, right } if self.source.class(left) == Class::Natural => match op
             {
                 Binary::Add => self.library.inline(b, Inline::Add, v(left), v(right)),
