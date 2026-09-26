@@ -34,9 +34,9 @@ pub enum Takes {
     /// A run of bytes known before the program runs, handed over as the
     /// address it starts at and the number of bytes it is.
     StaticBytes,
-    /// A byte string of any kind: one known before the program runs goes
-    /// over where it lies, and one worked out while it runs is copied out
-    /// in runs through the primitive the routine is built on.
+    /// A byte string of any kind, handed over where it lies: in data where
+    /// it is known before the program runs, and otherwise in the buffer
+    /// holding it, which lives until the primitive answers.
     Bytes,
 }
 
@@ -67,9 +67,9 @@ pub enum Returns {
     Never,
     Unit,
     Value(Class),
-    /// A byte string the program then holds, gathered through the
-    /// primitive the routine is built on.
-    Bytes,
+    /// A byte string the primitive the routine is built on filled, and what
+    /// the primitive answered: the program holds both.
+    Filled,
 }
 
 /// A routine, as every tier that reads one reads it.
@@ -115,28 +115,25 @@ pub struct Routine {
     pub consumes: bool,
 }
 
-/// A routine lowering builds on a primitive, or on memory alone.
+/// A routine lowering builds on a primitive.
 ///
 /// Each answers what its primitive does, as the primitive answers it: how
-/// many bytes a stream moved, or the error it met that far short of the top
-/// of a word, which is how a kernel answers `-errno`. Telling which is the
-/// program's to do, so nothing is kept between one call and the next. Every
-/// argument but a byte string or the count is handed on as it is, in order.
+/// many bytes a stream moved, or the descriptor a name opened as, or the
+/// error it met that far short of the top of a word, which is how a kernel
+/// answers `-errno`. Telling which is the program's to do, so nothing is
+/// kept between one call and the next. Every argument but a byte string or
+/// the count is handed on as it is, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Built {
-    /// Hand the primitive a byte string's first run, all of it where it is
-    /// known before the program runs: how many bytes went.
+    /// Hand the primitive a byte string where it lies: where its first byte
+    /// is and how many bytes it has, whether it was known before the
+    /// program ran or worked out since. What the primitive answers.
     Put(String),
-    /// Hand the primitive a name: a byte string as [`Built::Put`] does, with
-    /// a nought byte after it that its length leaves out. Only a run's room,
-    /// less one, of a name worked out while the program runs is handed.
-    Name(String),
-    /// Ask the primitive for up to a count of bytes, the last argument, into
-    /// a scratch region of a run: how many came, nought at the end of the
-    /// stream.
-    Take(String),
-    /// The first bytes of that region, as many as are asked, as a string.
-    Taken,
+    /// Ask the primitive for up to a count of bytes, the last argument,
+    /// into a new byte string's buffer, from its first byte: the string of
+    /// as many as came, none where the primitive answered an error, and
+    /// what the primitive answered.
+    Read(String),
 }
 
 impl Routine {
@@ -204,7 +201,7 @@ impl Routine {
     pub const fn answers(&self) -> Option<Class> {
         match self.returns {
             Returns::Value(class) => Some(class),
-            Returns::Unit | Returns::Never | Returns::Bytes => None,
+            Returns::Unit | Returns::Never | Returns::Filled => None,
         }
     }
 
@@ -319,7 +316,7 @@ impl Routines {
         let word = Takes::Scalar(Class::Word);
         let count = Returns::Value(Class::Word);
         let contracts = vec![
-            // What a descriptor names, a run of bytes at a time, and a name
+            // What a descriptor names, bytes where they lie, and a name
             // opened as one: standard input, output and error are the first
             // three. How many bytes moved, or the descriptor, or an error.
             described(
@@ -329,19 +326,21 @@ impl Routines {
                 Built::Put("write_fd!".into()),
             ),
             described(
-                "fd_take!",
+                "fd_read!",
                 &[word, word],
-                count,
-                Built::Take("read_fd!".into()),
+                Returns::Filled,
+                Built::Read("read_fd!".into()),
             ),
-            described("fd_taken!", &[word], Returns::Bytes, Built::Taken),
             // A name beneath where the program runs, how it is opened, and
             // who may then read or write what it names, where it is made.
-            described(
+            // A target whose kernel reads names up to a nought byte has its
+            // host module end the name with one.
+            held(
                 "fd_open!",
+                (true, true),
                 &[Takes::Bytes, word, word],
                 count,
-                Built::Name("open_at!".into()),
+                Some(Built::Put("open_at!".into())),
             ),
             Routine {
                 consumes: true,
@@ -349,8 +348,7 @@ impl Routines {
             },
             offered("exit!", &[word], Returns::Never),
             // Bytes where they lie to or from what a descriptor names, and a
-            // name, ended by a nought byte, opened: how many, or the
-            // descriptor, or an error.
+            // name opened: how many, or the descriptor, or an error.
             primitive("write_fd!", &[word, Takes::StaticBytes], count),
             primitive(
                 "read_fd!",

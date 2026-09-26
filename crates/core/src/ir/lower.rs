@@ -243,25 +243,14 @@ enum Callee<'a> {
         /// What each argument it is handed becomes, after erasure.
         handed: Vec<Handed>,
     },
-    /// A routine built here, on a primitive or on memory alone.
+    /// A routine built here on a primitive, which reads or fills bytes
+    /// where they lie.
     Built {
         routine: &'a Routine,
         built: &'a Built,
-        primitive: Option<FunctionId>,
-        io: Io,
+        primitive: FunctionId,
     },
 }
-
-/// What every built routine shares: where a run of bytes is copied, for a
-/// primitive to read or write where it lies.
-#[derive(Clone, Copy)]
-struct Io {
-    scratch: super::DataId,
-}
-
-/// How many bytes move in one run. Its room is in every image that moves
-/// any, so it is small.
-const SCRATCH: usize = 256;
 
 /// The longest known byte string pushed one byte at a time; a longer one is
 /// pushed by a loop over its bytes in data.
@@ -305,7 +294,6 @@ fn declare<'a>(
 ) -> Result<Vec<Callee<'a>>, String> {
     let (program, facts) = (demand.program, demand.facts);
     let mut callees = Vec::with_capacity(program.functions().len());
-    let mut io = None;
     for (at, reached) in demand.reached.iter().enumerate() {
         let id = barb::FnId::at(at);
         if id == entry {
@@ -368,25 +356,16 @@ fn declare<'a>(
                     ));
                 }
                 if let Some(built) = &wanted.built {
-                    let primitive = match built {
-                        Built::Put(through) | Built::Take(through) | Built::Name(through) => {
-                            let Some(primitive) = routines.get(through) else {
-                                return Err(format!(
-                                    "nothing answers for `{through}`, which `{outside}` is built on"
-                                ));
-                            };
-                            Some(primitive.declare(machine))
-                        }
-                        Built::Taken => None,
+                    let (Built::Put(through) | Built::Read(through)) = built;
+                    let Some(primitive) = routines.get(through) else {
+                        return Err(format!(
+                            "nothing answers for `{through}`, which `{outside}` is built on"
+                        ));
                     };
-                    let io = *io.get_or_insert_with(|| Io {
-                        scratch: machine.global(&[0; SCRATCH]),
-                    });
                     callees.push(Callee::Built {
                         routine: wanted,
                         built,
-                        primitive,
-                        io,
+                        primitive: primitive.declare(machine),
                     });
                     continue;
                 }
@@ -499,7 +478,7 @@ fn provided(wanted: &Routine, handed: &[Handed], returns: &[Class]) -> Result<()
         }
     }
     let answers: Vec<Class> = match wanted.returns {
-        Returns::Bytes => SEQUENCE_LEAVES.to_vec(),
+        Returns::Filled => [SEQUENCE_LEAVES.as_slice(), &[Class::Word]].concat(),
         _ => wanted.answers().into_iter().collect(),
     };
     if returns.len() != answers.len() {
@@ -828,7 +807,14 @@ impl<'a> Demand<'a> {
             .zip(&wanted.takes)
             .map(|((ty, bounds), takes)| match takes {
                 Takes::StaticBytes | Takes::Bytes => {
-                    if byte_shaped(self.program, *ty) {
+                    // The primitive reads the bytes where they lie, so each
+                    // must be held in one byte.
+                    let one_byte = |ty| {
+                        byte_element(self.program, self.facts, &self.carries, ty)
+                            .width()
+                            .is_some_and(|bits| (1..=8).contains(&bits))
+                    };
+                    if byte_shaped(self.program, *ty) && one_byte(*ty) {
                         Ok(Handed::Bytes)
                     } else {
                         Err(format!(
@@ -1334,18 +1320,23 @@ fn assumed(program: &barb::Program, routines: &Routines) -> barb::Assumed {
         if let Some(provider) = function.provider()
             && routines
                 .get(program.name(provider))
-                .is_some_and(|routine| routine.returns == Returns::Bytes)
-            && let Some(places) = byte_places(program, function.result)
+                .is_some_and(|routine| routine.returns == Returns::Filled)
+            && let barb::TypeShape::Product { constructor } =
+                barb::type_shape(program, function.result)
+            && let &[bytes, _] = program.fields(constructor)
         {
             // Every byte a routine answers is one, and a byte type's values
-            // are bytes wherever they were built.
+            // are bytes wherever they were built; what the primitive
+            // answered beside them is a word, and the type holding both is
+            // the routine's own.
             let byte = barb::Bounds {
                 low: 0,
                 high: Some(255),
             };
-            for (constructor, at) in places {
-                assumed.fields.push((constructor, at, byte));
+            for (field_of, at) in byte_places(program, bytes).into_iter().flatten() {
+                assumed.fields.push((field_of, at, byte));
             }
+            assumed.fields.push((constructor, 1, routines.length()));
         }
     }
     if let Some(entry) = program.entry() {
@@ -2504,11 +2495,9 @@ impl Lowering<'_> {
                 routine,
                 built,
                 primitive,
-                io,
             } => {
                 let asked = (function, arguments);
-                let results =
-                    self.built(b, asked, locals, statics, (routine, built, *primitive, *io));
+                let results = self.built(b, asked, locals, statics, (routine, built, *primitive));
                 (results, None)
             }
             Callee::Inline { params, returns } => {
@@ -2829,38 +2818,47 @@ impl Lowering<'_> {
         asked: (barb::FnId, barb::Range),
         locals: &Locals,
         statics: &[Option<Known>],
-        (routine, built, primitive, io): (&Routine, &Built, Option<FunctionId>, Io),
+        (routine, built, primitive): (&Routine, &Built, FunctionId),
     ) -> Vec<ValueId> {
         let carried = self.handed_atoms(asked, routine);
-        let primitive = || primitive.expect("a routine built on a primitive has one");
         match built {
-            Built::Put(_) | Built::Name(_) => {
-                let ended = matches!(built, Built::Name(_));
+            Built::Put(_) => {
                 let mut args = Vec::with_capacity(carried.len() + 1);
+                let mut held = Vec::new();
                 for (&(atom, ty), takes) in carried.iter().zip(&routine.takes) {
                     match takes {
                         Takes::Scalar(_) => args.push(Self::scalar(locals, atom)),
                         Takes::StaticBytes | Takes::Bytes => {
                             let bytes = self.byte_element(ty);
-                            args.extend(self.run(b, atom, locals, statics, (io, ended, bytes)));
+                            let (run, buffer) = self.run(b, atom, locals, statics, bytes);
+                            args.extend(run);
+                            held.extend(buffer);
                         }
                     }
                 }
-                vec![b.call_one(primitive(), &args)]
+                let answer = b.call_one(primitive, &args);
+                // The primitive read the bytes where they lie, so what holds
+                // them goes only after it answers.
+                for buffer in held {
+                    b.keep(buffer);
+                }
+                vec![answer]
             }
-            Built::Take(_) => {
-                let (&(count, _), before) = carried.split_last().expect("a count to take");
-                let mut args: Vec<_> = before
-                    .iter()
-                    .map(|&(atom, _)| Self::scalar(locals, atom))
-                    .collect();
-                args.extend(Self::room(b, Self::scalar(locals, count), io));
-                vec![b.call_one(primitive(), &args)]
-            }
-            Built::Taken => {
-                let &(count, _) = carried.last().expect("a count taken");
-                let bytes = self.byte_element(self.barb.function(asked.0).result);
-                Self::taken(b, Self::scalar(locals, count), (io, bytes)).to_vec()
+            Built::Read(_) => {
+                let [(descriptor, _), (count, _)] = carried[..] else {
+                    unreachable!("a read is handed a descriptor and a count");
+                };
+                let bytes = self.filled_element(self.barb.function(asked.0).result);
+                Self::filled(
+                    b,
+                    primitive,
+                    (
+                        Self::scalar(locals, descriptor),
+                        Self::scalar(locals, count),
+                    ),
+                    bytes,
+                )
+                .to_vec()
             }
         }
     }
@@ -2888,38 +2886,31 @@ impl Lowering<'_> {
     }
 
     /// A byte string, as where it starts and how many bytes a primitive
-    /// reads there: where it lies, all of it, if it is known before the
-    /// program runs, and otherwise its first run, copied to the scratch
-    /// region. One `ended` is a name, and a nought byte follows it there,
-    /// which the bytes counted leave out.
+    /// reads there, and the buffer holding them if one does: where it lies
+    /// in data if it is known before the program runs, and otherwise where
+    /// its bytes lie in the buffer holding them.
     fn run(
         &self,
         b: &mut super::Builder,
         atom: barb::Atom,
         locals: &Locals,
         statics: &[Option<Known>],
-        (io, ended, element): (Io, bool, Class),
-    ) -> [ValueId; 2] {
+        element: Class,
+    ) -> ([ValueId; 2], Option<ValueId>) {
         if let Some(Known { value, skip }) = statics[atom.0.index()] {
-            let mut bytes = self.bytes(value);
+            let bytes = self.bytes(value);
             let known = u64::try_from(bytes.len()).expect("a length fits 64 bits");
-            if ended {
-                bytes.push(0);
-            }
             let data = b.data(&bytes);
             let at = b.address_of(data);
-            let len = if ended {
-                b.constant(Class::Word, known)
-            } else {
-                b.data_len(data)
-            };
-            return skip.map_or([at, len], |count| {
+            let len = b.data_len(data);
+            let run = skip.map_or([at, len], |count| {
                 let skipped = Self::skipped(b, Self::scalar(locals, count), (len, Some(known)));
                 let start = b.convert(Class::Word, at);
                 let start = b.binary(Binary::Add, start, skipped);
                 let rest = b.binary(Binary::Sub, len, skipped);
                 [b.convert(Class::Address, start), rest]
             });
+            return (run, None);
         }
         let held = locals[atom.0.index()]
             .as_ref()
@@ -2927,81 +2918,46 @@ impl Lowering<'_> {
         let [buffer, first, len] = held.values() else {
             unreachable!("a byte string is held as a sequence");
         };
-        let run = Self::copied_run(b, (*buffer, *first, *len), (io, ended), element);
-        [b.address_of(io.scratch), run]
+        let bytes = b.shape(&[element]);
+        let at = b.buffer_at((*buffer, *first), bytes);
+        ([at, *len], Some(*buffer))
     }
 
-    /// Copy a sequence's first run of bytes to the scratch region, and a
-    /// nought byte after them where they are `ended`: how many.
-    fn copied_run(
+    /// The class the byte string a read answers holds each byte at: the
+    /// first of the pair it answers.
+    fn filled_element(&self, ty: barb::TypeId) -> Class {
+        let barb::TypeShape::Product { constructor } = barb::type_shape(self.barb, ty) else {
+            unreachable!("a read answers a pair");
+        };
+        self.byte_element(self.barb.fields(constructor)[0])
+    }
+
+    /// Room for `count` bytes, which the primitive fills from `descriptor`:
+    /// as many of them as it says it filled, and what it answered, which is
+    /// more than `count` only where it refused.
+    fn filled(
         b: &mut super::Builder,
-        (buffer, first, len): (ValueId, ValueId, ValueId),
-        (io, ended): (Io, bool),
+        primitive: FunctionId,
+        (descriptor, count): (ValueId, ValueId),
         element: Class,
-    ) -> ValueId {
-        let mut room = b.data_len(io.scratch);
-        if ended {
-            let one = b.constant(Class::Word, 1);
-            room = b.binary(Binary::Sub, room, one);
-        }
-        let fits = b.compare(Relation::Less, len, room);
-        let run = b.if_(
-            fits,
-            &[Class::Word],
-            |b| b.yield_(&[len]),
-            |b| b.yield_(&[room]),
-        )[0];
-        let none = b.constant(Class::Word, 0);
-        b.loop_(&[none], &[], |b, state| {
-            let at = state[0];
-            let done = b.compare(Relation::Equal, at, run);
-            b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
-            let index = b.binary(Binary::Add, first, at);
-            let bytes = b.shape(&[element]);
-            let value = b.buffer_field((element, bytes), (buffer, index), 0);
-            let place = Self::scratch_at(b, io, at);
-            b.store(super::Width::Byte, place, super::Offset::Bytes(0), value);
-            let one = b.constant(Class::Word, 1);
-            let next = b.binary(Binary::Add, at, one);
-            b.continue_(&[next]);
-        });
-        if ended {
-            let place = Self::scratch_at(b, io, run);
-            let nought = b.constant(Class::fixed(8), 0);
-            b.store(super::Width::Byte, place, super::Offset::Bytes(0), nought);
-        }
-        run
-    }
-
-    /// Where the scratch region's byte `at` lies.
-    fn scratch_at(b: &mut super::Builder, io: Io, at: ValueId) -> ValueId {
-        let start = b.address_of(io.scratch);
-        let base = b.convert(Class::Word, start);
-        let place = b.binary(Binary::Add, base, at);
-        b.convert(Class::Address, place)
-    }
-
-    /// Room in the scratch region for up to `count` bytes, no more than a
-    /// run: where it starts, and how many.
-    fn room(b: &mut super::Builder, count: ValueId, io: Io) -> [ValueId; 2] {
+    ) -> [ValueId; 4] {
         let count = met(b, count, Class::Word);
-        let room = b.data_len(io.scratch);
-        let fits = b.compare(Relation::Less, count, room);
-        let run = b.if_(
-            fits,
+        let bytes = b.shape(&[element]);
+        let room = b.buffer_room(count, bytes);
+        let start = b.constant(Class::Word, 0);
+        let at = b.buffer_at((room, start), bytes);
+        let answer = b.call_one(primitive, &[descriptor, at, count]);
+        let refused = b.compare(Relation::Less, count, answer);
+        let got = b.if_(
+            refused,
             &[Class::Word],
-            |b| b.yield_(&[count]),
-            |b| b.yield_(&[room]),
+            |b| {
+                let none = b.constant(Class::Word, 0);
+                b.yield_(&[none]);
+            },
+            |b| b.yield_(&[answer]),
         )[0];
-        [b.address_of(io.scratch), run]
-    }
-
-    /// The first `count` bytes of the scratch region, no more than a run,
-    /// as a sequence: pushed from the last, since a sequence grows at its
-    /// front.
-    fn taken(b: &mut super::Builder, count: ValueId, (io, element): (Io, Class)) -> [ValueId; 3] {
-        let [start, run] = Self::room(b, count, io);
-        Self::pushed_bytes(b, start, run, element)
+        [room, start, got, answer]
     }
 
     /// The first `total` bytes where `data` lies, as a sequence of elements

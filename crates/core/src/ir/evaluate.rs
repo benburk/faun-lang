@@ -752,10 +752,13 @@ impl<H: Host> Machine<'_, H> {
                 BigUint::from(self.cells.len())
             }
             Op::CellTag { cell } => BigUint::from(self.cell(cell)?.tag),
-            Op::BufferEmpty { .. } => {
+            Op::BufferEmpty { .. } | Op::BufferRoom { .. } => {
                 self.buffers.push(Vec::new());
                 BigUint::from(self.buffers.len())
             }
+            // Nothing outside reads a buffer this tier has not laid out.
+            Op::BufferAt { .. } => return Err(invalid("a buffer's address before layout")),
+            Op::Keep { .. } => return Ok(Vec::new()),
             // A sequence built here is a buffer of its own, starting at its
             // first element.
             Op::BufferPush { operands, .. } => {

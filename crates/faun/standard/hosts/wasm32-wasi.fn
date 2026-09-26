@@ -202,13 +202,13 @@ File : [File(Nat)].(
     Ok(bytes.len())
 )
 
-# What the target answers for, a run of bytes at a time: how many moved, or
-# the descriptor opened, or the error met, as `outcome` reads it. A name is
-# handed ended by a nought byte, so one holding a nought byte is not
-# handed, and no more than 255 bytes of one are.
+# What the target answers for: how many bytes moved, or the descriptor
+# opened, or the error met, as `outcome` reads it. Bytes are handed where
+# they lie, and a read fills a list of its own, answered beside what the
+# target said. A name is handed with its length, so one holding a nought
+# byte is not handed, since the target would read it as ending there.
 fd_put! : (Nat, List(U8)) -> Nat
-fd_take! : (Nat, Nat) -> Nat
-fd_taken! : Nat -> List(U8)
+fd_read! : (Nat, Nat) -> (List(U8), Nat)
 fd_open! : (Files, List(U8), Nat, Nat) -> Nat
 fd_close! : File -> Nat
 
@@ -234,7 +234,6 @@ made(_) -> 6291831
 # Open `name`, asking again, up to `fuel` times, where the kernel was
 # interrupted or found the name moving under it.
 opening! : (Files, List(U8), (Nat, Nat), Nat) -> Result(File, IoError)
-opening!(_, name, _, _) if name.len() > 255 -> Err(Other(37))
 opening!(_, name, _, _) if name.contains(0) -> Err(Other(28))
 opening!(files, name, (how, made), fuel) ->
   answer = fd_open!(files, name, how, made)
@@ -246,11 +245,15 @@ opened!(files, name, how, Succ(fuel), Err(Other(27))) -> opening!(files, name, h
 opened!(files, name, how, Succ(fuel), Err(Other(6))) -> opening!(files, name, how, fuel)
 opened!(_, _, _, _, Err(error)) -> Err(error)
 
-# Up to `count` bytes from what `fd` names, no more than a run.
+# Up to `count` bytes from what `fd` names, and no more than 65536.
 read_from! : (Nat, Nat) -> Result(List(U8), IoError)
 read_from!(fd, count) ->
-  got = fd_take!(fd, 256 - (256 - count))
-  taken!(outcome(got))
+  (bytes, answer) = fd_read!(fd, 65536 - (65536 - count))
+  filled(bytes, outcome(answer))
+
+filled : (List(U8), Result(Nat, IoError)) -> Result(List(U8), IoError)
+filled(bytes, Ok(_)) -> Ok(bytes)
+filled(_, Err(error)) -> Err(error)
 
 # Every byte to the end of what `input` reads, as text.
 read_text! : r -> Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]) where
@@ -304,12 +307,6 @@ serve_result_text! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, I
 serve_result_text!(_, errors, Err(error), _) -> unread!(errors, error)
 serve_result_text!(output, errors, Ok(input), app) -> finish_result!(output, errors, app({stdin: input}))
 
-taken! : Result(Nat, IoError) -> Result(List(U8), IoError)
-taken!(Ok(got)) ->
-  bytes = fd_taken!(got)
-  Ok(bytes)
-taken!(Err(error)) -> Err(error)
-
 # What the target answers: a number, or an error that far short of the top of
 # a word, as a kernel answers `-errno`. No error is more than 4095, so an
 # answer that far from the top or nearer is one.
@@ -320,29 +317,20 @@ answered : (Nat, Nat) -> Result(Nat, IoError)
 answered(answer, 0) -> Ok(answer)
 answered(answer, Succ(_)) -> Err(io_error(4294967295 - (answer - 1)))
 
-# Chunks to the end, the latest first; each read takes one fuel.
-read_chunks! : (r, Nat, List(List(U8))) -> Result(List(U8), [Io(IoError), LimitExceeded]) where
+# Every byte to the end, after `read`; each read takes one fuel. Each chunk
+# goes on the end of what came before, in place where there is room.
+read_chunks! : (r, Nat, List(U8)) -> Result(List(U8), [Io(IoError), LimitExceeded]) where
   r.read! : (r, Nat) -> Result(List(U8), IoError)
 read_chunks!(_, 0, _) -> Err(LimitExceeded)
-read_chunks!(input, Succ(fuel), chunks) ->
-  read = input.read!(65536)
-  chunk = read.map_err(Io)?
-  read_on!(input, fuel, chunks, chunk)
+read_chunks!(input, Succ(fuel), read) ->
+  got = input.read!(65536)
+  chunk = got.map_err(Io)?
+  read_on!(input, fuel, read, chunk)
 
-read_on! : (r, Nat, List(List(U8)), List(U8)) -> Result(List(U8), [Io(IoError), LimitExceeded]) where
+read_on! : (r, Nat, List(U8), List(U8)) -> Result(List(U8), [Io(IoError), LimitExceeded]) where
   r.read! : (r, Nat) -> Result(List(U8), IoError)
-read_on!(_, _, chunks, []) -> Ok(joined(chunks, []))
-read_on!(input, fuel, chunks, chunk) -> read_chunks!(input, fuel, [chunk, *chunks])
-
-# The chunks, latest first, in the order they came, before `built`: each is
-# put in front a byte at a time from its end, so every step is a loop.
-joined : (List(List(U8)), List(U8)) -> List(U8)
-joined([], built) -> built
-joined([chunk, *chunks], built) -> joined(chunks, prepended(chunk.reverse(), built))
-
-prepended : (List(U8), List(U8)) -> List(U8)
-prepended([], built) -> built
-prepended([byte, *rest], built) -> prepended(rest, [byte, *built])
+read_on!(_, _, read, []) -> Ok(read)
+read_on!(input, fuel, read, chunk) -> read_chunks!(input, fuel, read.extend(chunk))
 
 # Write the last `left` of `bytes` until none are left, one fuel a byte: a
 # stream that keeps taking none runs out of it. Nothing is counted, since a

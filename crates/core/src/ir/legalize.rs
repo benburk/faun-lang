@@ -823,6 +823,26 @@ impl Pass<'_> {
                 self.cell_field(b, results[0], cell, (shape, index))
             }
             Op::BufferEmpty { shape } => self.shapes.empty(b, shape),
+            Op::BufferRoom { count, shape } => {
+                let library = self.cells.expect("cell helpers were requested");
+                let stride = b.constant(Class::Word, self.shapes.packed(shape).size);
+                let none = b.constant(Class::Word, 0);
+                let count = word(b, v(count));
+                sequence::allocate(b, library.allocate, (stride, none), count, self.word_bytes)
+            }
+            Op::BufferAt {
+                buffer,
+                start,
+                shape,
+            } => {
+                let start = word(b, v(start));
+                self.sequences
+                    .as_ref()
+                    .expect("buffer helpers were requested")
+                    .element(b, v(buffer), self.shapes.packed(shape).size, start)
+            }
+            // What it holds is released after it, as after any last use.
+            Op::Keep { .. } => return Vec::new(),
             Op::BufferPush { operands, shape } => {
                 let operands = self.source.values(operands);
                 let buffer = self.take(b, scopes, live, at, operands[0]);

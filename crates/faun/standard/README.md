@@ -210,7 +210,7 @@ with `IoError` the tags `NotFound`, `Denied`, `AlreadyExists`, `NotADirectory`,
 `IsADirectory`, `NotEmpty`, `Escapes`, `BrokenPipe`, `NoSpace`, `Unsupported`
 and `Other(Nat)`, each
 host reading its own error numbers into them. A `read!` or `write!` moves some
-bytes, a run of at most 256, and answers how many; `read_to_end!` and
+bytes, at most 64 KiB read at once (1 KiB on sim65), and answers how many; `read_to_end!` and
 `write_all!` are Faun in the host module, going on until the stream is done,
 each bounded by fuel so it is seen to stop. The `Host`, `Stdin`, `Stdout`,
 `Stderr`, `Files` and `File` constructors remain private, so only the target
@@ -218,9 +218,10 @@ makes one. A method of a value's own type is reached whether or not the type
 was imported, so `host.stdout.write_all!(bytes)` needs only `Host`.
 
 Every stream is what a descriptor names, the standard three first, and a
-target answers for five routines over descriptors: a run written, a run read
-into a scratch region and the bytes taken from it, a name opened, and a
-descriptor closed. Each answers a number, or an error as a kernel does, that
+target answers for four routines over descriptors: bytes written, bytes read,
+a name opened, and a descriptor closed. Bytes cross where they lie: a write
+hands the target the list's own bytes, and a read fills a new list the target
+is handed room in, so nothing is copied on the way. Each answers a number, or an error as a kernel does, that
 far short of the top of a word; the host module's `outcome` tells which, so
 nothing is kept between one call and the next.
 
@@ -228,8 +229,9 @@ nothing is kept between one call and the next.
 name reaching above it, by `..`, from the root or through a link, is refused as
 `Escapes` where the target can tell, and as `Denied` under WASI. sim65 opens
 whatever it is handed, so its host module refuses a name from the root or
-holding a `..` itself, and cannot see a link. A name is at most 255 bytes and
-holds no nought byte.
+holding a `..` itself, and cannot see a link. A name holds no nought byte; where the kernel reads a
+name up to one, the host module appends one, in place where the name's buffer
+has room and nothing else holds it.
 
 A `File` is a resource: whatever opens one must use it up exactly once on
 every way it goes on, by closing it or answering it to something that does.

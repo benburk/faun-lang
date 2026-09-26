@@ -159,6 +159,20 @@ impl Program {
                 arguments(self.values(operands)),
                 shape.index()
             ),
+            Op::BufferRoom { count, shape } => {
+                format!("buffer_room v{} of s{}", count.index(), shape.index())
+            }
+            Op::BufferAt {
+                buffer,
+                start,
+                shape,
+            } => format!(
+                "buffer_at v{}, v{} of s{}",
+                buffer.index(),
+                start.index(),
+                shape.index()
+            ),
+            Op::Keep { value } => format!("keep v{}", value.index()),
             Op::BufferField {
                 buffer,
                 start,

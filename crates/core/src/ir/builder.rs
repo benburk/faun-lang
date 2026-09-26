@@ -161,6 +161,30 @@ impl Builder<'_> {
         self.two(Op::BufferExtend { operands, shape })
     }
 
+    /// A buffer nothing else holds with room for `count` elements of `shape`,
+    /// holding none of them.
+    pub fn buffer_room(&mut self, count: ValueId, shape: ShapeId) -> ValueId {
+        self.push_one(Op::BufferRoom { count, shape }, Class::Buffer)
+    }
+
+    /// Where element `start` of `buffer`, whose elements are of `shape`,
+    /// lies.
+    pub fn buffer_at(&mut self, (buffer, start): (ValueId, ValueId), shape: ShapeId) -> ValueId {
+        self.push_one(
+            Op::BufferAt {
+                buffer,
+                start,
+                shape,
+            },
+            Class::Address,
+        )
+    }
+
+    /// Hold `value` until here.
+    pub fn keep(&mut self, value: ValueId) {
+        self.push(Op::Keep { value }, &[]);
+    }
+
     /// An instruction answering a sequence's buffer and start.
     fn two(&mut self, op: Op) -> [ValueId; 2] {
         let [buffer, start] = self.push(op, &[Class::Buffer, Class::Word])[..] else {

@@ -173,12 +173,23 @@ impl References<'_> {
                 reference(&p.shapes, shape, "shape")?;
                 self.value(cell)?;
             }
-            Op::BufferField { shape, .. } if p.shapes.get(shape).is_none() => {
+            Op::BufferField { shape, .. } | Op::BufferAt { shape, .. }
+                if p.shapes.get(shape).is_none() =>
+            {
                 return Err("invalid shape reference".into());
+            }
+            Op::BufferRoom { count, shape } => {
+                reference(&p.shapes, shape, "shape")?;
+                self.value(count)?;
             }
             Op::Binary { left, right, .. }
             | Op::Compare { left, right, .. }
             | Op::BufferField {
+                buffer: left,
+                start: right,
+                ..
+            }
+            | Op::BufferAt {
                 buffer: left,
                 start: right,
                 ..
@@ -193,7 +204,8 @@ impl References<'_> {
             }
             Op::Load { address: value, .. }
             | Op::Convert { value, .. }
-            | Op::Shift { value, .. } => self.value(value)?,
+            | Op::Shift { value, .. }
+            | Op::Keep { value } => self.value(value)?,
             Op::Call { function, args } => {
                 reference(&p.functions, function, "function")?;
                 self.values(args)?;
@@ -489,6 +501,27 @@ impl Checker<'_> {
                 self.require(buffer, Class::Buffer)?;
                 self.length(start)?;
                 self.leaf(results, index, shape)?;
+            }
+            Op::BufferRoom { count, shape } => {
+                self.length(count)?;
+                if self
+                    .program
+                    .shaped(shape)
+                    .iter()
+                    .any(|&leaf| super::ownership::managed(leaf))
+                {
+                    return Err("a buffer to be written from outside holds only scalars".into());
+                }
+                self.results(results, &[Class::Buffer])?;
+            }
+            Op::BufferAt { buffer, start, .. } => {
+                self.require(buffer, Class::Buffer)?;
+                self.length(start)?;
+                self.results(results, &[Class::Address])?;
+            }
+            Op::Keep { value } => {
+                self.read(value)?;
+                self.results(results, &[])?;
             }
             Op::Convert { value } => {
                 let class = self.one(results)?;

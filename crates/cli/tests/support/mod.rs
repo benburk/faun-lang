@@ -356,7 +356,9 @@ impl Host for Streams {
                     .map(|went| u64::try_from(went).expect("a count"))
             }
             "open_at!" => {
-                let name = memory.read(word(&args[0]), count(&args[1]))?.to_vec();
+                // A name is handed ended by a nought byte, as Linux reads it.
+                let name = memory.read(word(&args[0]), count(&args[1]))?;
+                let name = name.strip_suffix(&[0]).unwrap_or(name).to_vec();
                 self.open(&name, word(&args[2]))
             }
             "fd_close!" => self.close(word(&args[0])),

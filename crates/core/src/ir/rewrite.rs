@@ -318,6 +318,16 @@ impl<'a> Rebuild<'a> {
                 )
                 .to_vec()
             }
+            Op::BufferRoom { count, shape } => vec![b.buffer_room(self.value(count), shape)],
+            Op::BufferAt {
+                buffer,
+                start,
+                shape,
+            } => vec![b.buffer_at((self.value(buffer), self.value(start)), shape)],
+            Op::Keep { value } => {
+                b.keep(self.value(value));
+                Vec::new()
+            }
             Op::BufferField {
                 buffer,
                 start,

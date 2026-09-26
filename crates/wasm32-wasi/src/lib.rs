@@ -40,8 +40,7 @@ impl Target for Wasm32Wasi {
     fn provides(&self) -> &'static [&'static str] {
         &[
             "fd_put!",
-            "fd_take!",
-            "fd_taken!",
+            "fd_read!",
             "fd_open!",
             "fd_close!",
             "exit!",

@@ -230,6 +230,29 @@ pub enum Op {
         operands: Range,
         shape: ShapeId,
     },
+    /// A buffer nothing else holds, with room for `count` elements of
+    /// `shape`, which holds no claim, holding none of them yet: for
+    /// something outside to write elements into where they lie, from its
+    /// first.
+    BufferRoom {
+        count: ValueId,
+        shape: ShapeId,
+    },
+    /// Where element `start` of `buffer`, whose elements are of `shape`,
+    /// lies: the first of a sequence's elements, which lie one after another
+    /// from there, for something outside to read or write where they lie.
+    /// The buffer is borrowed, and is only held for as long as something
+    /// uses it: see [`Op::Keep`].
+    BufferAt {
+        buffer: ValueId,
+        start: ValueId,
+        shape: ShapeId,
+    },
+    /// Hold `value` until here, doing nothing with it: what keeps a buffer
+    /// alive while something outside reads or writes where it lies.
+    Keep {
+        value: ValueId,
+    },
     /// Read leaf `index` of element `start` of `buffer`, whose elements are
     /// of `shape`. The result value says the class it is read as.
     BufferField {

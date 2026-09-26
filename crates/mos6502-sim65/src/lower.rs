@@ -308,6 +308,7 @@ fn exit_status(program: &Program, op: &Op) -> Option<ValueId> {
         .flatten()
 }
 
+#[expect(clippy::too_many_lines, reason = "one exhaustive arm per operation")]
 fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
     match op {
         Op::Constant { .. }
@@ -326,23 +327,33 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
         } => {
             program.values(*fields).iter().copied().for_each(&mut each);
         }
-        Op::CellTag { cell } | Op::CellField { cell, .. } => each(*cell),
+        Op::CellTag { cell: value }
+        | Op::CellField { cell: value, .. }
+        | Op::BufferRoom { count: value, .. }
+        | Op::Keep { value }
+        | Op::Load { address: value, .. }
+        | Op::Convert { value, .. }
+        | Op::Shift { value, .. } => each(*value),
         Op::Binary { left, right, .. }
         | Op::Compare { left, right, .. }
         | Op::BufferField {
             buffer: left,
             start: right,
             ..
+        }
+        | Op::BufferAt {
+            buffer: left,
+            start: right,
+            ..
+        }
+        | Op::Store {
+            address: left,
+            value: right,
+            ..
         } => {
             each(*left);
             each(*right);
         }
-        Op::Load { address, .. } => each(*address),
-        Op::Store { address, value, .. } => {
-            each(*address);
-            each(*value);
-        }
-        Op::Convert { value, .. } | Op::Shift { value, .. } => each(*value),
         Op::Call { args, .. } | Op::Float { operands: args, .. } => {
             program.values(*args).iter().copied().for_each(each);
         }
@@ -2455,6 +2466,9 @@ impl Lowering<'_> {
             | Op::BufferPush { .. }
             | Op::BufferPrepend { .. }
             | Op::BufferExtend { .. }
+            | Op::BufferRoom { .. }
+            | Op::BufferAt { .. }
+            | Op::Keep { .. }
             | Op::BufferField { .. } => {
                 unreachable!("target preparation legalizes abstract cells")
             }
