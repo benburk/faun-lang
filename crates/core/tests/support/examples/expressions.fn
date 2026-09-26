@@ -3,16 +3,16 @@
 
 import std.host {Host}
 
-below : Nat Nat -> Bool
-below(_ 0) -> False
-below(0 Succ(_)) -> True
-below(Succ(a) Succ(b)) -> below(a b)
+below : (Nat, Nat) -> Bool
+below(_, 0) -> False
+below(0, Succ(_)) -> True
+below(Succ(a), Succ(b)) -> below(a, b)
 
-finish! : Host Bool Nat -> []
-finish!(host True n) ->
+finish! : (Host, Bool, Nat) -> []
+finish!(host, True, n) ->
   a = n + 2
   host.exit!(a + n)
-finish!(host False _) -> host.exit!(0)
+finish!(host, False, _) -> host.exit!(0)
 
 main! : Host -> []
 main!(host) ->
@@ -23,4 +23,4 @@ main!(host) ->
   sixteen = eight + eight
   limit = sixteen + sixteen
   count = host.args.len()
-  finish!(host below(count limit) count)
+  finish!(host, below(count, limit), count)

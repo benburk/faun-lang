@@ -196,8 +196,8 @@ fn size_change_rejects_non_decreasing_arithmetic() {
     let (div, modulo) = (lib.div, lib.modulo);
     let p = &mut lib.program;
     // stall(Zero) -> Zero
-    // stall(Succ(n)) -> value = Succ(n) one = Succ(Zero) stall_mod(div(value one))
-    // stall_mod(n) -> zero = Zero stall(mod(n zero))
+    // stall(Succ(n)) -> value = Succ(n) one = Succ(Zero) stall_mod(div(value, one))
+    // stall_mod(n) -> zero = Zero stall(mod(n, zero))
     let stall = p.declare("stall", &[nat], nat);
     let stall_mod = p.declare("stall_mod", &[nat], nat);
     p.define(stall, |b, args| {

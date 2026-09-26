@@ -9,11 +9,11 @@
 # so it is seen to stop, and a stream that never ends runs out of it: as many
 # reads as a word counts.
 
-exports {Host Stdin Stdout Stderr IoError.*}
+exports {Host, Stdin, Stdout, Stderr, IoError.*}
 
 # The arguments the program was run with, its own name first.
 Host : {args: List(Str)}.(
-  exit! : Host Nat -> []
+  exit! : (Host, Nat) -> []
 
   stdin : Host -> Stdin
   stdin(_) -> Stdin
@@ -26,69 +26,69 @@ Host : {args: List(Str)}.(
 
   # Finish with `status`: nought is done, and anything else says what went
   # wrong.
-  complete! : Host Nat -> []
-  complete!(host status) -> host.exit!(status)
+  complete! : (Host, Nat) -> []
+  complete!(host, status) -> host.exit!(status)
 
   # `text` on standard output, all of it.
-  print! : Host Str -> Result({} IoError)
-  print!(host text) ->
+  print! : (Host, Str) -> Result({}, IoError)
+  print!(host, text) ->
     wrote = host.stdout.write_all!(text.to_utf8())
     went = wrote?
     Ok({})
 
   # `text` and a line's end on standard output.
-  println! : Host Str -> Result({} IoError)
-  println!(host text) -> host.print!("${text}\n")
+  println! : (Host, Str) -> Result({}, IoError)
+  println!(host, text) -> host.print!("${text}\n")
 
   # Run a program of no input, printing what it answers.
-  run! : Host ({} -> a) -> [] where a.to_str : a -> Str
-  run!(host app) ->
-    status = finish!(host.stdout app({}))
-    complete!(host status)
+  run! : (Host, {} -> a) -> [] where a.to_str : a -> Str
+  run!(host, app) ->
+    status = finish!(host.stdout, app({}))
+    complete!(host, status)
 
   # Run a program of the arguments the program was run with, its own name
   # first, printing what it answers.
-  run_args! : Host ({args: List(Str)} -> a) -> [] where a.to_str : a -> Str
-  run_args!(host app) ->
-    status = finish!(host.stdout app({args: host.args}))
-    complete!(host status)
+  run_args! : (Host, {args: List(Str)} -> a) -> [] where a.to_str : a -> Str
+  run_args!(host, app) ->
+    status = finish!(host.stdout, app({args: host.args}))
+    complete!(host, status)
 
   # Run a program of standard input as text, printing what it answers; one
   # the input cannot be read for is not run.
-  run_text! : Host ({stdin: Str} -> a) -> [] where a.to_str : a -> Str
-  run_text!(host app) ->
+  run_text! : (Host, {stdin: Str} -> a) -> [] where a.to_str : a -> Str
+  run_text!(host, app) ->
     input = host.stdin.read_to_str!()
-    status = serve_text!(host.stdout host.stderr input app)
-    complete!(host status)
+    status = serve_text!(host.stdout, host.stderr, input, app)
+    complete!(host, status)
 
   # Run a program that may fail: printing what it answers, or reporting
   # its error on standard error and finishing with one.
-  run_result! : Host ({} -> Result(a e)) -> [] where
+  run_result! : (Host, {} -> Result(a, e)) -> [] where
     a.to_str : a -> Str
     e.to_str : e -> Str
-  run_result!(host app) ->
-    status = finish_result!(host.stdout host.stderr app({}))
-    complete!(host status)
+  run_result!(host, app) ->
+    status = finish_result!(host.stdout, host.stderr, app({}))
+    complete!(host, status)
 
-  run_result_args! : Host ({args: List(Str)} -> Result(a e)) -> [] where
+  run_result_args! : (Host, {args: List(Str)} -> Result(a, e)) -> [] where
     a.to_str : a -> Str
     e.to_str : e -> Str
-  run_result_args!(host app) ->
-    status = finish_result!(host.stdout host.stderr app({args: host.args}))
-    complete!(host status)
+  run_result_args!(host, app) ->
+    status = finish_result!(host.stdout, host.stderr, app({args: host.args}))
+    complete!(host, status)
 
-  run_result_text! : Host ({stdin: Str} -> Result(a e)) -> [] where
+  run_result_text! : (Host, {stdin: Str} -> Result(a, e)) -> [] where
     a.to_str : a -> Str
     e.to_str : e -> Str
-  run_result_text!(host app) ->
+  run_result_text!(host, app) ->
     input = host.stdin.read_to_str!()
-    status = serve_result_text!(host.stdout host.stderr input app)
-    complete!(host status)
+    status = serve_result_text!(host.stdout, host.stderr, input, app)
+    complete!(host, status)
 )
 
 # What reading or writing a stream can meet.
-IoError : [NotFound Denied AlreadyExists NotADirectory IsADirectory NotEmpty
-           Escapes BrokenPipe NoSpace Unsupported Other(Nat)].(
+IoError : [NotFound, Denied, AlreadyExists, NotADirectory, IsADirectory, NotEmpty,
+           Escapes, BrokenPipe, NoSpace, Unsupported, Other(Nat)].(
   to_str : IoError -> Str
   to_str(NotFound) -> "NotFound"
   to_str(Denied) -> "Denied"
@@ -105,18 +105,18 @@ IoError : [NotFound Denied AlreadyExists NotADirectory IsADirectory NotEmpty
 
 Stdin : [Stdin].(
   # Up to `count` bytes, fewer where fewer are ready, and none at the end.
-  read! : Stdin Nat -> Result(List(U8) IoError)
-  read!(input count) ->
-    got = stdin_take!(input 256 - (256 - count))
+  read! : (Stdin, Nat) -> Result(List(U8), IoError)
+  read!(input, count) ->
+    got = stdin_take!(input, 256 - (256 - count))
     failure = stdin_failure!(input)
-    taken!(input got failure)
+    taken!(input, got, failure)
 
   # Every byte to the end.
-  read_to_end! : Stdin -> Result(List(U8) [Io(IoError) LimitExceeded])
-  read_to_end!(input) -> read_chunks!(input 65535 [])
+  read_to_end! : Stdin -> Result(List(U8), [Io(IoError), LimitExceeded])
+  read_to_end!(input) -> read_chunks!(input, 65535, [])
 
   # Every byte to the end, as text.
-  read_to_str! : Stdin -> Result(Str [Io(IoError) LimitExceeded InvalidUtf8])
+  read_to_str! : Stdin -> Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8])
   read_to_str!(input) ->
     read = input.read_to_end!()
     bytes = read?
@@ -126,120 +126,120 @@ Stdin : [Stdin].(
 
 Stdout : [Stdout].(
   # Some of `bytes`, from the first: how many went.
-  write! : Stdout List(U8) -> Result(Nat IoError)
-  write!(output bytes) ->
-    went = stdout_put!(output bytes)
+  write! : (Stdout, List(U8)) -> Result(Nat, IoError)
+  write!(output, bytes) ->
+    went = stdout_put!(output, bytes)
     failure = stdout_failure!(output)
-    written(went failure)
+    written(went, failure)
 
   # All of `bytes`: how many that is.
-  write_all! : Stdout List(U8) -> Result(Nat IoError)
-  write_all!(output bytes) ->
-    wrote = write_rest!(output bytes bytes.len() bytes.len())
+  write_all! : (Stdout, List(U8)) -> Result(Nat, IoError)
+  write_all!(output, bytes) ->
+    wrote = write_rest!(output, bytes, bytes.len(), bytes.len())
     done = wrote?
     Ok(bytes.len())
 )
 
 Stderr : [Stderr].(
   # Some of `bytes`, from the first: how many went.
-  write! : Stderr List(U8) -> Result(Nat IoError)
-  write!(output bytes) ->
-    went = stderr_put!(output bytes)
+  write! : (Stderr, List(U8)) -> Result(Nat, IoError)
+  write!(output, bytes) ->
+    went = stderr_put!(output, bytes)
     failure = stderr_failure!(output)
-    written(went failure)
+    written(went, failure)
 
   # All of `bytes`: how many that is.
-  write_all! : Stderr List(U8) -> Result(Nat IoError)
-  write_all!(output bytes) ->
-    wrote = write_rest!(output bytes bytes.len() bytes.len())
+  write_all! : (Stderr, List(U8)) -> Result(Nat, IoError)
+  write_all!(output, bytes) ->
+    wrote = write_rest!(output, bytes, bytes.len(), bytes.len())
     done = wrote?
     Ok(bytes.len())
 )
 
 # What the target answers for, a run of bytes at a time: how many moved,
 # and the error the last move met, nought for none.
-stdin_take! : Stdin Nat -> Nat
-stdin_bytes! : Stdin Nat -> List(U8)
+stdin_take! : (Stdin, Nat) -> Nat
+stdin_bytes! : (Stdin, Nat) -> List(U8)
 stdin_failure! : Stdin -> Nat
-stdout_put! : Stdout List(U8) -> Nat
+stdout_put! : (Stdout, List(U8)) -> Nat
 stdout_failure! : Stdout -> Nat
-stderr_put! : Stderr List(U8) -> Nat
+stderr_put! : (Stderr, List(U8)) -> Nat
 stderr_failure! : Stderr -> Nat
 
 # What a runner finishes with: nought where what it printed was written.
-finish! : Stdout a -> Nat where a.to_str : a -> Str
-finish!(output value) ->
+finish! : (Stdout, a) -> Nat where a.to_str : a -> Str
+finish!(output, value) ->
   wrote = output.write_all!(value.to_str().to_utf8())
   written_status(wrote)
 
-written_status : Result(Nat IoError) -> Nat
+written_status : Result(Nat, IoError) -> Nat
 written_status(Ok(_)) -> 0
 written_status(Err(_)) -> 1
 
-finish_result! : Stdout Stderr Result(a e) -> Nat where
+finish_result! : (Stdout, Stderr, Result(a, e)) -> Nat where
   a.to_str : a -> Str
   e.to_str : e -> Str
-finish_result!(output _ Ok(value)) -> finish!(output value)
-finish_result!(_ errors Err(error)) -> report!(errors error.to_str())
+finish_result!(output, _, Ok(value)) -> finish!(output, value)
+finish_result!(_, errors, Err(error)) -> report!(errors, error.to_str())
 
 # `error: ` and what went wrong, on standard error: one, or two where even
 # that could not be written.
-report! : Stderr Str -> Nat
-report!(errors text) ->
+report! : (Stderr, Str) -> Nat
+report!(errors, text) ->
   wrote = errors.write_all!("error: ${text}\n".to_utf8())
   reported_status(wrote)
 
-reported_status : Result(Nat IoError) -> Nat
+reported_status : Result(Nat, IoError) -> Nat
 reported_status(Ok(_)) -> 1
 reported_status(Err(_)) -> 2
 
-unread! : Stderr [Io(IoError) LimitExceeded InvalidUtf8] -> Nat
-unread!(errors Io(error)) -> report!(errors error.to_str())
-unread!(errors LimitExceeded) -> report!(errors "LimitExceeded")
-unread!(errors InvalidUtf8) -> report!(errors "InvalidUtf8")
+unread! : (Stderr, [Io(IoError), LimitExceeded, InvalidUtf8]) -> Nat
+unread!(errors, Io(error)) -> report!(errors, error.to_str())
+unread!(errors, LimitExceeded) -> report!(errors, "LimitExceeded")
+unread!(errors, InvalidUtf8) -> report!(errors, "InvalidUtf8")
 
-serve_text! : Stdout Stderr Result(Str [Io(IoError) LimitExceeded InvalidUtf8]) ({stdin: Str} -> a) -> Nat where
+serve_text! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), {stdin: Str} -> a) -> Nat where
   a.to_str : a -> Str
-serve_text!(_ errors Err(error) _) -> unread!(errors error)
-serve_text!(output _ Ok(input) app) -> finish!(output app({stdin: input}))
+serve_text!(_, errors, Err(error), _) -> unread!(errors, error)
+serve_text!(output, _, Ok(input), app) -> finish!(output, app({stdin: input}))
 
-serve_result_text! : Stdout Stderr Result(Str [Io(IoError) LimitExceeded InvalidUtf8]) ({stdin: Str} -> Result(a e)) -> Nat where
+serve_result_text! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), {stdin: Str} -> Result(a, e)) -> Nat where
   a.to_str : a -> Str
   e.to_str : e -> Str
-serve_result_text!(_ errors Err(error) _) -> unread!(errors error)
-serve_result_text!(output errors Ok(input) app) -> finish_result!(output errors app({stdin: input}))
+serve_result_text!(_, errors, Err(error), _) -> unread!(errors, error)
+serve_result_text!(output, errors, Ok(input), app) -> finish_result!(output, errors, app({stdin: input}))
 
-taken! : Stdin Nat Nat -> Result(List(U8) IoError)
-taken!(input got 0) ->
-  bytes = stdin_bytes!(input got)
+taken! : (Stdin, Nat, Nat) -> Result(List(U8), IoError)
+taken!(input, got, 0) ->
+  bytes = stdin_bytes!(input, got)
   Ok(bytes)
-taken!(_ _ code) -> Err(io_error(code))
+taken!(_, _, code) -> Err(io_error(code))
 
-written : Nat Nat -> Result(Nat IoError)
-written(went 0) -> Ok(went)
-written(_ code) -> Err(io_error(code))
+written : (Nat, Nat) -> Result(Nat, IoError)
+written(went, 0) -> Ok(went)
+written(_, code) -> Err(io_error(code))
 
 # Chunks to the end, the latest first; each read takes one fuel.
-read_chunks! : Stdin Nat List(List(U8)) -> Result(List(U8) [Io(IoError) LimitExceeded])
-read_chunks!(_ 0 _) -> Err(LimitExceeded)
-read_chunks!(input Succ(fuel) chunks) ->
+read_chunks! : (Stdin, Nat, List(List(U8))) -> Result(List(U8), [Io(IoError), LimitExceeded])
+read_chunks!(_, 0, _) -> Err(LimitExceeded)
+read_chunks!(input, Succ(fuel), chunks) ->
   read = input.read!(65536)
   chunk = read.map_err(Io)?
-  read_on!(input fuel chunks chunk)
+  read_on!(input, fuel, chunks, chunk)
 
-read_on! : Stdin Nat List(List(U8)) List(U8) -> Result(List(U8) [Io(IoError) LimitExceeded])
-read_on!(_ _ chunks []) -> Ok(joined(chunks []))
-read_on!(input fuel chunks chunk) -> read_chunks!(input fuel [chunk *chunks])
+read_on! : (Stdin, Nat, List(List(U8)), List(U8)) -> Result(List(U8), [Io(IoError), LimitExceeded])
+read_on!(_, _, chunks, []) -> Ok(joined(chunks, []))
+read_on!(input, fuel, chunks, chunk) -> read_chunks!(input, fuel, [chunk, *chunks])
 
 # The chunks, latest first, in the order they came, before `built`: each is
 # put in front a byte at a time from its end, so every step is a loop.
-joined : List(List(U8)) List(U8) -> List(U8)
-joined([] built) -> built
-joined([chunk *chunks] built) -> joined(chunks prepended(chunk.reverse() built))
+joined : (List(List(U8)), List(U8)) -> List(U8)
+joined([], built) -> built
+joined([chunk, *chunks], built) -> joined(chunks, prepended(chunk.reverse(), built))
 
-prepended : List(U8) List(U8) -> List(U8)
-prepended([] built) -> built
-prepended([byte *rest] built) -> prepended(rest [byte *built])
+prepended : (List(U8), List(U8)) -> List(U8)
+prepended([], built) -> built
+prepended([byte, *rest], built) -> prepended(rest, [byte, *built])
 
 # Write the last `left` of `bytes` until none are left, one fuel a byte: a
 # stream that keeps taking none runs out of it. Nothing is counted, since a
@@ -247,14 +247,14 @@ prepended([byte *rest] built) -> prepended(rest [byte *built])
 # a target picks: once it ends well, every byte went. The bytes go round
 # unchanged, so bytes known before the program runs are still known on every
 # round, and what is left only falls, so it is never more than there were.
-write_rest! : w List(U8) Nat Nat -> Result({} IoError) where
-  w.write! : w List(U8) -> Result(Nat IoError)
-write_rest!(_ _ 0 _) -> Ok({})
-write_rest!(_ _ _ 0) -> Err(Other(5))
-write_rest!(output bytes left Succ(fuel)) ->
+write_rest! : (w, List(U8), Nat, Nat) -> Result({}, IoError) where
+  w.write! : (w, List(U8)) -> Result(Nat, IoError)
+write_rest!(_, _, 0, _) -> Ok({})
+write_rest!(_, _, _, 0) -> Err(Other(5))
+write_rest!(output, bytes, left, Succ(fuel)) ->
   wrote = output.write!(bytes.drop(bytes.len() - left))
   went = wrote?
-  write_rest!(output bytes left - went fuel)
+  write_rest!(output, bytes, left - went, fuel)
 
 # sim65 says only that a call failed, which is error one.
 io_error : Nat -> IoError

@@ -18,23 +18,23 @@ U32 : Nat.(
   to_nat : U32 -> Nat
   to_nat(U32(value)) -> value
 
-  add : U32 U32 -> U32
-  add(U32(a) U32(b)) -> U32((a + b) % 4294967296)
+  add : (U32, U32) -> U32
+  add(U32(a), U32(b)) -> U32((a + b) % 4294967296)
 
-  sub : U32 U32 -> U32
-  sub(U32(a) U32(b)) -> U32((a + 4294967296 - b) % 4294967296)
+  sub : (U32, U32) -> U32
+  sub(U32(a), U32(b)) -> U32((a + 4294967296 - b) % 4294967296)
 
-  mul : U32 U32 -> U32
-  mul(U32(a) U32(b)) -> U32((a * b) % 4294967296)
+  mul : (U32, U32) -> U32
+  mul(U32(a), U32(b)) -> U32((a * b) % 4294967296)
 
-  div : U32 U32 -> U32
-  div(U32(a) U32(b)) -> U32(a / b)
+  div : (U32, U32) -> U32
+  div(U32(a), U32(b)) -> U32(a / b)
 
-  mod : U32 U32 -> U32
-  mod(U32(a) U32(b)) -> U32(a % b)
+  mod : (U32, U32) -> U32
+  mod(U32(a), U32(b)) -> U32(a % b)
 
-  cmp : U32 U32 -> Order
-  cmp(U32(a) U32(b)) -> a.cmp(b)
+  cmp : (U32, U32) -> Order
+  cmp(U32(a), U32(b)) -> a.cmp(b)
 
   to_str : U32 -> Str
   to_str(U32(value)) -> value.to_str()
@@ -42,14 +42,14 @@ U32 : Nat.(
   # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`. Two words' bits
   # make a word, so the remainder changes nothing; it is what shows
   # the answer is one, which nothing recognizes of `Nat`'s bitwise walk.
-  and : U32 U32 -> U32
-  and(U32(a) U32(b)) -> U32((a & b) % 4294967296)
+  and : (U32, U32) -> U32
+  and(U32(a), U32(b)) -> U32((a & b) % 4294967296)
 
-  or : U32 U32 -> U32
-  or(U32(a) U32(b)) -> U32((a | b) % 4294967296)
+  or : (U32, U32) -> U32
+  or(U32(a), U32(b)) -> U32((a | b) % 4294967296)
 
-  xor : U32 U32 -> U32
-  xor(U32(a) U32(b)) -> U32((a ^ b) % 4294967296)
+  xor : (U32, U32) -> U32
+  xor(U32(a), U32(b)) -> U32((a ^ b) % 4294967296)
 
   # Every bit flipped.
   bit_not : U32 -> U32
@@ -57,25 +57,25 @@ U32 : Nat.(
 
   # The bits moved up by `amount`, those past the top lost: nought where
   # `amount` is the width or more.
-  shift_left : U32 Nat -> U32
-  shift_left(U32(a) amount) if amount < 32 -> of_nat(a * 2.pow(amount))
-  shift_left(_ _) -> U32(0)
+  shift_left : (U32, Nat) -> U32
+  shift_left(U32(a), amount) if amount < 32 -> of_nat(a * 2.pow(amount))
+  shift_left(_, _) -> U32(0)
 
   # The bits moved down by `amount`, those below the bottom lost.
-  shift_right : U32 Nat -> U32
-  shift_right(U32(a) amount) if amount < 32 -> U32(a / 2.pow(amount))
-  shift_right(_ _) -> U32(0)
+  shift_right : (U32, Nat) -> U32
+  shift_right(U32(a), amount) if amount < 32 -> U32(a / 2.pow(amount))
+  shift_right(_, _) -> U32(0)
 
   # The bits moved up by `amount`, those past the top coming round to the
   # bottom. The width round is no change.
-  rotate_left : U32 Nat -> U32
-  rotate_left(U32(a) amount) ->
+  rotate_left : (U32, Nat) -> U32
+  rotate_left(U32(a), amount) ->
     shift = amount % 32
     of_nat(a * 2.pow(shift) + a / 2.pow(32 - shift))
 
-  rotate_right : U32 Nat -> U32
-  rotate_right(word amount) -> rotate_left(word 32 - amount % 32)
+  rotate_right : (U32, Nat) -> U32
+  rotate_right(word, amount) -> rotate_left(word, 32 - amount % 32)
 
-  equals : U32 U32 -> Bool
-  equals(U32(a) U32(b)) -> a.equals(b)
+  equals : (U32, U32) -> Bool
+  equals(U32(a), U32(b)) -> a.equals(b)
 )

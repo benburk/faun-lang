@@ -22,5 +22,5 @@ expect !True == False
 
 # A method binds tighter than any operator, and a chain reads left to right.
 expect 3.max(4) * 2 == 8
-expect [3 1 2].sort().reverse() == [3 2 1]
+expect [3, 1, 2].sort().reverse() == [3, 2, 1]
 expect (-2).min(1) == -2

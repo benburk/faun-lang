@@ -65,7 +65,7 @@ impl Library {
                 }
             })
         });
-        // signed_mul(a b): the product of the magnitudes, negative where
+        // signed_mul(a, b): the product of the magnitudes, negative where
         // exactly one side is.
         let signed_mul = p.declare("signed_mul", &[signed, signed], signed);
         p.define(signed_mul, |b, args| {
@@ -90,21 +90,21 @@ impl Library {
                 })
             })
         });
-        // pair_swap(Pair(a b)) -> Pair(b a)
+        // pair_swap(Pair(a, b)) -> Pair(b, a)
         let pair_swap = p.declare("pair_swap", &[pair], pair);
         p.define(pair_swap, |b, args| {
             b.match_(args[0], pair, |b, _, fields| {
                 b.con(both, &[fields[1], fields[0]])
             })
         });
-        // pair_sum(Pair(a b)) -> add(a b)
+        // pair_sum(Pair(a, b)) -> add(a, b)
         let pair_sum = p.declare("pair_sum", &[pair], nat);
         p.define(pair_sum, |b, args| {
             b.match_(args[0], pair, |b, _, fields| {
                 b.call(add, &[fields[0], fields[1]])
             })
         });
-        // pair_scaled(Pair(a b) n) -> Pair(mul(a n) mul(b n))
+        // pair_scaled(Pair(a, b), n) -> Pair(mul(a, n), mul(b, n))
         let pair_scaled = p.declare("pair_scaled", &[pair, nat], pair);
         p.define(pair_scaled, |b, args| {
             b.match_(args[0], pair, |b, _, fields| {
@@ -325,7 +325,7 @@ fn library_meaning_does_not_depend_on_names_or_constructor_order() {
     }
 }
 
-/// `magnitude(NegSucc(sub(add(k one) one)))` for `k = 254`, over a number
+/// `magnitude(NegSucc(sub(add(k, one), one)))` for `k = 254`, over a number
 /// type and a signed type that are, where `renamed`, called otherwise, with
 /// their constructors declared the other way round and the arithmetic
 /// called otherwise too.

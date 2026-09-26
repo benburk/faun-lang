@@ -13,28 +13,28 @@ use support::Package;
 const RUNNING: &[(&str, &str, u32)] = &[
     (
         "failures from two producers join in one row",
-        "cat : Nat -> Result(Nat [NotFound SomethingElse])
+        "cat : Nat -> Result(Nat, [NotFound, SomethingElse])
          cat(0) -> Err(NotFound)
          cat(1) -> Err(SomethingElse)
          cat(n) -> Ok(n)
 
-         dog : Nat -> Result(Nat [Blah NotFound])
+         dog : Nat -> Result(Nat, [Blah, NotFound])
          dog(0) -> Err(NotFound)
          dog(1) -> Err(Blah)
          dog(n) -> Ok(n)
 
-         pick : Bool Nat -> Result(Nat [Blah NotFound SomethingElse])
-         pick(True n) -> cat(n)
-         pick(False n) -> dog(n)
+         pick : (Bool, Nat) -> Result(Nat, [Blah, NotFound, SomethingElse])
+         pick(True, n) -> cat(n)
+         pick(False, n) -> dog(n)
 
-         code : Result(Nat [Blah NotFound SomethingElse]) -> Nat
+         code : Result(Nat, [Blah, NotFound, SomethingElse]) -> Nat
          code(Ok(n)) -> n
          code(Err(NotFound)) -> 100
          code(Err(SomethingElse)) -> 101
          code(Err(Blah)) -> 102
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(pick(False 1)) + code(pick(True 0)) - 200)",
+         main!(host) -> host.exit!(code(pick(False, 1)) + code(pick(True, 0)) - 200)",
         2,
     ),
     (
@@ -49,30 +49,30 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
     (
         "a closed row answered where a caller widens it is widened",
-        "same : [A B] -> [A B]
+        "same : [A, B] -> [A, B]
          same(x) -> x
 
-         code : [A B C] -> Nat
+         code : [A, B, C] -> Nat
          code(A) -> 1
          code(B) -> 2
          code(C) -> 3
 
-         pick : Bool -> [A B C]
+         pick : Bool -> [A, B, C]
          pick(True) -> same(B)
          pick(False) -> C
 
-         kept : List([A B]) -> List([A B])
+         kept : List([A, B]) -> List([A, B])
          kept(xs) -> xs
 
          main! : Host -> []
          main!(host) ->
-           listed = kept([A B]).map(|x| code(x)).fold(0 |s x| s + x)
+           listed = kept([A, B]).map(|x| code(x)).fold(0, |s, x| s + x)
            host.exit!(code(pick(True)) * 10 + code(pick(False)) + listed * 50)",
         173,
     ),
     (
         "a row inside a tag is widened with it",
-        "wrap : Result(Nat [Empty]) -> Result(Nat [Outer([Empty])])
+        "wrap : Result(Nat, [Empty]) -> Result(Nat, [Outer([Empty])])
          wrap(Ok(n)) -> Ok(n)
          wrap(Err(e)) -> Err(Outer(e))
 
@@ -86,18 +86,18 @@ const RUNNING: &[(&str, &str, u32)] = &[
     (
         "a lambda matches the tag a library answers",
         "main! : Host -> []
-         main!(host) -> host.exit!([1 2].get(5).map_err(|OutOfBounds| 9).err_or(0))",
+         main!(host) -> host.exit!([1, 2].get(5).map_err(|OutOfBounds| 9).err_or(0))",
         9,
     ),
     (
         "one word is a tag or a constructor as its position decides",
-        "Light : [Low High].(
+        "Light : [Low, High].(
            brightness : Light -> Nat
            brightness(Low) -> 1
            brightness(High) -> 10
          )
 
-         lift : [Low Found(Nat)] -> Light
+         lift : [Low, Found(Nat)] -> Light
          lift(Low) -> Low
          lift(Found(_)) -> High
 
@@ -107,8 +107,8 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
     (
         "two types may each declare a word",
-        "Match : [Failed(Nat) Matched]
-         Parse : [Failed(Nat) Parsed]
+        "Match : [Failed(Nat), Matched]
+         Parse : [Failed(Nat), Parsed]
 
          blame : Match -> Parse
          blame(Failed(m)) -> Failed(m + 1)
@@ -124,8 +124,8 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
     (
         "a qualified constructor names its type outright",
-        "Match : [Failed(Nat) Matched]
-         Parse : [Failed(Nat) Parsed]
+        "Match : [Failed(Nat), Matched]
+         Parse : [Failed(Nat), Parsed]
 
          pick(n) -> Parse.Failed(n)
 
@@ -140,7 +140,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
         "a word a module keeps private is free for others to write as a tag",
         "import sealed {Failure}
 
-         code : [NotFound Other] -> Nat
+         code : [NotFound, Other] -> Nat
          code(NotFound) -> 3
          code(Other) -> 4
 
@@ -150,31 +150,31 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
     (
         "a tag where a function is wanted builds the tag from its fields",
-        "cat : Nat -> Result(Nat [NotFound])
+        "cat : Nat -> Result(Nat, [NotFound])
          cat(0) -> Err(NotFound)
          cat(n) -> Ok(n)
 
-         code : Result(Nat [CatFailure([NotFound])]) -> Nat
+         code : Result(Nat, [CatFailure([NotFound])]) -> Nat
          code(Ok(n)) -> n
          code(Err(CatFailure(NotFound))) -> 7
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(cat(0).map_err(CatFailure)) + code(cat(3).map_err(CatFailure)) + [1 2].map(Boxed).len())",
+         main!(host) -> host.exit!(code(cat(0).map_err(CatFailure)) + code(cat(3).map_err(CatFailure)) + [1, 2].map(Boxed).len())",
         12,
     ),
     (
         "a result bound before `?` answers its error at the wider row",
-        "narrow : Nat -> Result(Nat [A])
+        "narrow : Nat -> Result(Nat, [A])
          narrow(0) -> Err(A)
          narrow(n) -> Ok(n)
 
-         wide : Nat -> Result(Nat [B A])
+         wide : Nat -> Result(Nat, [B, A])
          wide(n) ->
            taken = narrow(n)
            kept = taken?
            Ok(kept)
 
-         code : Result(Nat [B A]) -> Nat
+         code : Result(Nat, [B, A]) -> Nat
          code(Ok(n)) -> n % 10
          code(Err(A)) -> 50
          code(Err(B)) -> 60
@@ -189,9 +189,9 @@ const RUNNING: &[(&str, &str, u32)] = &[
 const REFUSED: &[(&str, &str, &str)] = &[
     (
         "a body answers a tag its signature does not hold",
-        "first : List(a) -> Result(a [Empty])
+        "first : List(a) -> Result(a, [Empty])
          first([]) -> Err(Nope)
-         first([h *_]) -> Ok(h)",
+         first([h, *_]) -> Ok(h)",
         "`Nope` is not among the tags of `[Empty]`",
     ),
     (
@@ -201,34 +201,34 @@ const REFUSED: &[(&str, &str, &str)] = &[
 
          main! : Host -> []
          main!(host) -> host.exit!(f(C))",
-        "`C` is not among the tags of `[A B]`",
+        "`C` is not among the tags of `[A, B]`",
     ),
     (
         "a signature's row must be covered",
-        "g : [A B C] -> Nat
+        "g : [A, B, C] -> Nat
          g(A) -> 1
          g(B) -> 2",
         "no clause matches `g(C)`",
     ),
     (
         "a tag inside a constructor must be covered",
-        "describe : Result(Nat [Missing Invalid(Nat)]) -> Nat
+        "describe : Result(Nat, [Missing, Invalid(Nat)]) -> Nat
          describe(Ok(n)) -> n
          describe(Err(Missing)) -> 1",
         "no clause matches `describe(Err(Invalid(_)))`",
     ),
     (
         "a word two types claim with nothing to decide is ambiguous",
-        "Match : [Failed(Nat) Matched]
-         Parse : [Failed(Nat) Parsed]
+        "Match : [Failed(Nat), Matched]
+         Parse : [Failed(Nat), Parsed]
 
          orphan(m) -> Failed(m)",
         "nothing decides between `Match.Failed` and `Parse.Failed`",
     ),
     (
         "inside a block, the block's word is its own constructor",
-        "Parse : [Failed(Nat) Parsed]
-         Match : [Failed(Nat) Matched].(
+        "Parse : [Failed(Nat), Parsed]
+         Match : [Failed(Nat), Matched].(
            wrong : Nat -> Parse
            wrong(n) -> Failed(n)
          )",
@@ -236,11 +236,11 @@ const REFUSED: &[(&str, &str, &str)] = &[
     ),
     (
         "a structural tag cannot forge a sealed type",
-        "import sealed {Failure accept}
+        "import sealed {Failure, accept}
 
          main! : Host -> []
          main!(host) -> host.exit!(accept(NotFound))",
-        "Failure and [NotFound *]",
+        "Failure and [NotFound, *]",
     ),
     (
         "a sealed constructor is not reached by qualifying it",

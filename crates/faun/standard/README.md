@@ -14,7 +14,7 @@ is the ring's, not monus.
 
 A numeral with a point, `1.5` or `1.0e-12`, is a float's, and only a float's:
 `F32` or `F64` as its position decides, and `F64` where nothing does, built
-through the float's `of_decimal(digits scale)`, `digits / 10^scale`, and
+through the float's `of_decimal(digits, scale)`, `digits / 10^scale`, and
 negated through its `neg`. A numeral without one is never a float, so `3` is
 not an `F64`; `3.0` is.
 
@@ -64,7 +64,7 @@ byte order and `equals` from it, `from_ascii`, `from_utf8` and `to_utf8`.
 `concat`. For reading text there are `is_empty`, `split` at a separator,
 `lines` at `\n` or `\r\n`, `trim` of ASCII white space, `starts_with`,
 `ends_with`, `drop_prefix` and `drop_suffix`; for writing it,
-`Str.join(pieces separator)` and `repeat`. Matching and cutting go byte by
+`Str.join(pieces, separator)` and `repeat`. Matching and cutting go byte by
 byte, which no character boundary can fall inside. There is no slicing by
 position. A numeral pattern of a word and a string pattern are each a test
 of equality, asked before the clause's guard.
@@ -76,9 +76,9 @@ of equality, asked before the clause's guard.
 `contains`, `sum`, `take`, `drop`, `take_while`, `drop_while`, `split_at`,
 `partition`, `zip`, `unzip`, `cross`, `enumerate`, `windows`, `min`, `max`,
 `sort`, `sort_on` and `to_str`, and the constructors `List.range(n)` and
-`List.repeat(x n)`. `sort` is a stable merge sort by the element's `cmp`, and
-`sort_on` by a key's. `to_str` writes a list as Ori does, `[1 2 3]`. A list
-pattern's rest may go unnamed, as `[a b *]`. A
+`List.repeat(x, n)`. `sort` is a stable merge sort by the element's `cmp`, and
+`sort_on` by a key's. `to_str` writes a list as it is written, `[1, 2, 3]`. A list
+pattern's rest may go unnamed, as `[a, b, *]`. A
 lookup that can miss answers a structural tag: `Err(OutOfBounds)`,
 `Err(Empty)` or `Err(NotFound)`. Nothing is recognized by name: `len` is
 answered from the length a list holds because Barb recognizes what it
@@ -89,8 +89,8 @@ computes.
 Tags follow Ori (`notes/values/tags.md` there). A capitalised word no visible
 declaration claims is a structural tag: it belongs to no module and needs no
 import, and rows of tags join by unification where values meet, so
-`[NotFound SomethingElse]` and `[Blah NotFound]` flow into one
-`[Blah NotFound SomethingElse]`. A row written in a signature is closed for
+`[NotFound, SomethingElse]` and `[Blah, NotFound]` flow into one
+`[Blah, NotFound, SomethingElse]`. A row written in a signature is closed for
 the body, which may answer only those tags, and open to callers, which may
 join it with their own. A row in a parameter is what a definition handles
 and stays closed. Clauses that take a row apart with no catch-all close it,
@@ -131,14 +131,15 @@ The package deliberately omits hashing and bodyless derivation.
 
 Generic code that uses a method has a `where` bound, as in Ori: structural,
 met by any type having the member, with no trait and no runtime dictionary.
-A signature writes them, `sum : List(a) -> a where a.zero : a a.add : a a -> a`,
-a value member called on the type as `a.zero()`; an unsigned definition
+A signature writes them after `where`, each member on a line of its own:
+`sum : List(a) -> a where` over `a.zero : a` and `a.add : (a, a) -> a`, a
+value member called on the type as `a.zero()`; an unsigned definition
 infers them, so `double(x) -> x.mul(2)` serves every type with a `mul`. Where
 every method a generic receiver could have shares a shape, that shape is
 context before any default, so the `2` is whatever `x` is, built through its
 type's `of_nat`. Each specialization calls the concrete type's own member.
 A bound may mention a variable the signature does not, and another bound may be
-on it: in `r.fold : r Nat (Nat x -> Nat) -> Nat` with `x.name : x -> Str`, `x`
+on it: in `r.fold : (r, Nat, (Nat, x) -> Nat) -> Nat` with `x.name : x -> Str`, `x`
 is whatever `r`'s `fold` hands over, which `r`'s implementation says at each
 specialization. A bound on a variable neither the signature nor such a bound
 reaches is refused, and one whose types no implementation determines is refused
@@ -150,11 +151,11 @@ does. A variable its body names besides its parameters is its own, apart from
 the clause's; a member required twice alike is required once, and twice
 differently is refused, as is an alias that applies itself.
 
-Records are structural and unordered. `{name: Str *}` is a record with at
+Records are structural and unordered. `{name: Str, *}` is a record with at
 least a `name`, and reading `.name` asks exactly that of whatever record it
-is given; `{x *}` in a pattern names some fields and takes the rest;
-`{x: e *r}` is `r` with `x` replaced, and adds or retypes nothing. A tuple
-`(a b)` is a positional product of two or more, built by its literal and
+is given; `{x, *}` in a pattern names some fields and takes the rest;
+`{x: e, *r}` is `r` with `x` replaced, and adds or retypes nothing. A tuple
+`(a, b)` is a positional product of two or more, built by its literal and
 taken apart by a pattern, and never unifies with a record. A binding may
 take a record or tuple apart, since that always matches. A closed record and a
 tuple have `equals` without declaring it, as a tag row does, each component
@@ -171,7 +172,7 @@ also have `zero`, and `bit_not`, `shift_left`, `shift_right`, `rotate_left` and
 is nought. `Int` has no bitwise operations.
 
 `Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by
-defining one `cmp : T T -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of
+defining one `cmp : (T, T) -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of
 its `Order`, so they cannot disagree; `Bool`, `Nat`, `Int` and `U8` define it. Natural subtraction is
 monus. Signed division truncates toward zero and its remainder has the dividend's
 sign. For every type, division by zero returns zero and `a % 0` returns `a`.
@@ -187,21 +188,22 @@ streams:
 
 ```
 Host : {args: List(Str)}.(
-  exit! : Host Nat -> []
+  exit! : (Host, Nat) -> []
   stdin : Host -> Stdin
   stdout : Host -> Stdout
   stderr : Host -> Stderr
 )
 
-Stdin    read! : Stdin Nat -> Result(List(U8) IoError)
-         read_to_end! : Stdin -> Result(List(U8) [Io(IoError) LimitExceeded])
-         read_to_str! : Stdin -> Result(Str [Io(IoError) LimitExceeded InvalidUtf8])
-Stdout   write!, write_all! : Stdout List(U8) -> Result(Nat IoError)
-Stderr   write!, write_all! : Stderr List(U8) -> Result(Nat IoError)
+Stdin    read! : (Stdin, Nat) -> Result(List(U8), IoError)
+         read_to_end! : Stdin -> Result(List(U8), [Io(IoError), LimitExceeded])
+         read_to_str! : Stdin -> Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8])
+Stdout   write!, write_all! : (Stdout, List(U8)) -> Result(Nat, IoError)
+Stderr   write!, write_all! : (Stderr, List(U8)) -> Result(Nat, IoError)
 ```
 
-with `IoError` the tags `NotFound Denied AlreadyExists NotADirectory
-IsADirectory NotEmpty Escapes BrokenPipe NoSpace Unsupported Other(Nat)`, each
+with `IoError` the tags `NotFound`, `Denied`, `AlreadyExists`, `NotADirectory`,
+`IsADirectory`, `NotEmpty`, `Escapes`, `BrokenPipe`, `NoSpace`, `Unsupported`
+and `Other(Nat)`, each
 host reading its own error numbers into them. A `read!` or `write!` moves some
 bytes, a run of at most 256, and answers how many; `read_to_end!` and
 `write_all!` are Faun in the host module, going on until the stream is done,
@@ -211,7 +213,7 @@ of a value's own type is reached whether or not the type was imported, so
 `host.stdout.write_all!(bytes)` needs only `Host`.
 
 `host.print!(text)` and `host.println!(text)` write a text to standard output,
-the second with a line's end, and answer `Result({} IoError)`. An effect whose
+the second with a line's end, and answer `Result({}, IoError)`. An effect whose
 answer nothing needs is written on a line of its own, which binds it to `_`.
 Only an effect, a call of a name ending `!`, may stand so; anything else is
 bound to a name:
@@ -270,7 +272,7 @@ function is made once for each set of callbacks it is handed, as in Ori, and
 calling its parameter is a direct call of the callback; a lambda is a
 definition of its own, handed what it reads from where it was written. Each
 callback's calls are then seen to stop as they would on their own:
-`bytes.count(|byte| ['a' 'e'].contains(byte))` goes round only as `contains`
+`bytes.count(|byte| ['a', 'e'].contains(byte))` goes round only as `contains`
 does. A recursive call that wraps the callback it was handed in a new lambda
 each time round is refused, since it would need a definition for every
 round; recurse on data that says what to call instead.
@@ -344,7 +346,7 @@ start and what it asks of it is found on `Host` without importing it.
 `Host` is authority carrying what its target hands the program: `host.args`,
 the arguments it was run with, its own name first, read like any record
 field. `host.args.len()` is how many there are, and
-`host.args.get_or(1 "world")` the first after its name. In Barb, `Host` holds
+`host.args.get_or(1, "world")` the first after its name. In Barb, `Host` holds
 its fields itself, `Host(args: List<Str>)`, and `main!` is the entry as
 written. A target hands the entry the arguments as C lays them out, a count
 and where their addresses lie, as its startup table says; machine lowering

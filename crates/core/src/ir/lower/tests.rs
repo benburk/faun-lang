@@ -605,7 +605,7 @@ fn products_are_held_flat_across_calls_and_nesting() {
     let seven = source.intern_number(nat, 7).unwrap();
     let five = source.intern_number(nat, 5).unwrap();
 
-    // rotate(Triple(Pair(a f) b)) -> Triple(Pair(b f) a)
+    // rotate(Triple(Pair(a, f), b)) -> Triple(Pair(b, f), a)
     let rotate = source.declare("rotate", &[triple], triple);
     source.define(rotate, |b, args| {
         b.match_(args[0], triple, |b, _, fields| {

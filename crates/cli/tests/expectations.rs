@@ -23,7 +23,7 @@ fn a_test_build_asks_every_expectation_in_the_package() {
          expect double(2) == 4
          expect double(half(6)) == 7
          expect
-           doubled = [1 2 3].map(double)
+           doubled = [1, 2, 3].map(double)
            doubled.len() == 3
              & doubled.last().ok_or(0) == 6
 
@@ -121,10 +121,10 @@ fn floats_read_add_divide_and_say_themselves() {
     let package = Package::new(
         "floats",
         "third : F32
-         third() -> F32.div(1.0 3.0)
+         third() -> F32.div(1.0, 3.0)
 
          expect 0.1.add(0.2).to_str() == \"0.30000000000000004\"
-         expect F32.add(0.1 0.2) == 0.3
+         expect F32.add(0.1, 0.2) == 0.3
          expect third().to_str() == \"0.33333334\"
          expect (-2.5).to_str() == \"-2.5\" & 2.5E2 == 250.0 & 1.0e-12.to_str() == \"1.0e-12\"
          expect F64.from_str(\"0.1\") == Ok(0.1) & F32.from_str(\"1e\") == Err(Malformed)

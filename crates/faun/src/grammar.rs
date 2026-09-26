@@ -78,7 +78,7 @@ const fn infix(kind: Kind) -> Option<(u8, BinaryOp)> {
 const fn begins_expr(kind: Kind) -> bool {
     matches!(
         kind,
-        Kind::Negate
+        Kind::Minus
             | Kind::Bang
             | Kind::Number
             | Kind::Char
@@ -148,6 +148,29 @@ impl Parser<'_> {
         }
     }
 
+    /// `xs = x [ "," [ xs ] ]`, or nothing where it is not `required`: an
+    /// `item` wherever one `begins`, commas between, and perhaps one after,
+    /// which is said with the items.
+    fn separated<T>(
+        &mut self,
+        required: bool,
+        begins: fn(Kind) -> bool,
+        what: &'static str,
+        mut item: impl FnMut(&mut Self) -> Parsed<T>,
+    ) -> Parsed<(Vec<T>, bool)> {
+        let mut items = Vec::new();
+        while required && items.is_empty() || begins(self.peek()) {
+            items.push(item(self)?);
+            if self.eat(Kind::Comma).is_none() {
+                self.note("`,`");
+                return Ok((items, false));
+            }
+        }
+        self.note(what);
+        let trailing = !items.is_empty();
+        Ok((items, trailing))
+    }
+
     /// Why the current token cannot be read: what was looked for, or what
     /// is wrong with the token itself.
     fn fail(&self) -> SyntaxError {
@@ -156,20 +179,10 @@ impl Parser<'_> {
         let message = match token.kind {
             Kind::Error if token.start == token.end => "unterminated string literal".to_owned(),
             Kind::Error => format!("invalid token `{text}`"),
-            Kind::Lopsided => {
-                format!("`{text}` has space on one side only: write `a {text} b`, or `a{text}b`")
-            }
-            Kind::NegatedElement => "this `-` begins an element of its own: write `a - b` to \
-                                     subtract, or `(-b)` for a negated element"
-                .to_owned(),
             Kind::Detached if matches!(text, "." | "..") => {
                 format!("`{text}` goes against what it joins: no space around it")
             }
             Kind::Detached => format!("`{text}` goes against what it follows: no space before it"),
-            Kind::Adjacent => {
-                let before = self.tokens[self.at - 1].text(self.source);
-                format!("`{before}` and `{text}` are two elements: part them with a space")
-            }
             kind => {
                 let mut expected = self.expected.clone();
                 expected.sort_unstable();
@@ -311,22 +324,26 @@ impl Parser<'_> {
     fn package(&mut self) -> Parsed<HeaderDecl> {
         let start = self.bump();
         self.expect(Kind::LBrace, "`{`")?;
-        let mut dependencies = Vec::new();
-        while let Some(named) = self.eat(Kind::Ident) {
-            self.expect(Kind::Colon, "`:`")?;
-            self.expect(Kind::StrStart, "a path")?;
-            let mut path = Vec::new();
-            while let Some(text) = self.eat(Kind::StrText) {
-                path.push(text.span());
-            }
-            let close = self.expect(Kind::StrEnd, "the path's closing quote")?;
-            dependencies.push(Dependency {
-                span: named.span().through(close.span()),
-                name: name(named),
-                path,
-            });
-        }
-        self.note("a name");
+        let (dependencies, _) = self.separated(
+            false,
+            |kind| kind == Kind::Ident,
+            "a name",
+            |parser| {
+                let named = parser.bump();
+                parser.expect(Kind::Colon, "`:`")?;
+                parser.expect(Kind::StrStart, "a path")?;
+                let mut path = Vec::new();
+                while let Some(text) = parser.eat(Kind::StrText) {
+                    path.push(text.span());
+                }
+                let close = parser.expect(Kind::StrEnd, "the path's closing quote")?;
+                Ok(Dependency {
+                    span: named.span().through(close.span()),
+                    name: name(named),
+                    path,
+                })
+            },
+        )?;
         let close = self.expect(Kind::RBrace, "`}`")?;
         Ok(HeaderDecl {
             span: start.span().through(close.span()),
@@ -342,21 +359,19 @@ impl Parser<'_> {
             path.push(name(self.expect(Kind::Ident, "a name")?));
         }
         self.expect(Kind::LBrace, "`{`")?;
-        let mut exposures = Vec::new();
-        while is_name(self.peek()) {
-            let exported = self.bump();
-            let constructors = self.eat(Kind::DotStar).is_some();
-            let local = match self.eat(Kind::Colon) {
-                Some(_) => self.any_name()?,
+        let (exposures, _) = self.separated(false, is_name, "a name", |parser| {
+            let exported = parser.bump();
+            let constructors = parser.eat(Kind::DotStar).is_some();
+            let local = match parser.eat(Kind::Colon) {
+                Some(_) => parser.any_name()?,
                 None => exported,
             };
-            exposures.push(Exposure {
+            Ok(Exposure {
                 exported: name(exported),
                 local: name(local),
                 constructors,
-            });
-        }
-        self.note("a name");
+            })
+        })?;
         let close = self.expect(Kind::RBrace, "`}`")?;
         Ok(ImportDecl {
             span: start.span().through(close.span()),
@@ -368,15 +383,13 @@ impl Parser<'_> {
     fn exports(&mut self) -> Parsed<ExportsDecl> {
         let start = self.bump();
         self.expect(Kind::LBrace, "`{`")?;
-        let mut exports = Vec::new();
-        while is_name(self.peek()) {
-            let exported = self.bump();
-            exports.push(Export {
+        let (exports, _) = self.separated(false, is_name, "a name", |parser| {
+            let exported = parser.bump();
+            Ok(Export {
                 name: name(exported),
-                constructors: self.eat(Kind::DotStar).is_some(),
-            });
-        }
-        self.note("a name");
+                constructors: parser.eat(Kind::DotStar).is_some(),
+            })
+        })?;
         let close = self.expect(Kind::RBrace, "`}`")?;
         Ok(ExportsDecl {
             span: start.span().through(close.span()),
@@ -417,28 +430,16 @@ impl Parser<'_> {
         })
     }
 
-    /// `signature`: parameters and an arrow to the result, or the result
-    /// alone.
+    /// A signature's `type`: a function type's parameters and result, or the
+    /// result alone.
     fn signature(&mut self) -> Parsed<(Vec<Type>, Type)> {
-        let mut types = self.types()?;
-        if self.eat(Kind::Arrow).is_some() {
-            return Ok((types, self.ty()?));
-        }
-        if types.len() == 1 {
-            return Ok((Vec::new(), types.pop().expect("one type")));
-        }
-        self.note("`->` and the result after the parameter types");
-        Err(self.fail())
+        let (parameters, result) = self.function()?;
+        Ok((parameters.unwrap_or_default(), result))
     }
 
-    /// `type { type }`.
+    /// `types`: one or more.
     fn types(&mut self) -> Parsed<Vec<Type>> {
-        let mut types = vec![self.ty()?];
-        while begins_type(self.peek()) {
-            types.push(self.ty()?);
-        }
-        self.note_type_starts();
-        Ok(types)
+        Ok(self.separated(true, begins_type, "a type", Self::ty)?.0)
     }
 
     /// `constraints`: after `where`, aliases, and a member's constraint
@@ -455,6 +456,10 @@ impl Parser<'_> {
                 name: name(head),
                 arguments,
             });
+            if self.eat(Kind::Comma).is_none() {
+                self.note("`,`");
+                return self.constrained(constraints);
+            }
         }
         if let Some(variable) = self.eat(Kind::Ident) {
             self.expect(Kind::Dot, "`.`")?;
@@ -475,6 +480,11 @@ impl Parser<'_> {
                 result,
             });
         }
+        self.constrained(constraints)
+    }
+
+    /// Constraints and where they end, if there are any.
+    fn constrained(&mut self, constraints: Vec<Constraint>) -> Parsed<(Vec<Constraint>, Span)> {
         let end = constraints.last().map(Constraint::span).ok_or_else(|| {
             self.note("a constraint");
             self.fail()
@@ -484,62 +494,96 @@ impl Parser<'_> {
 
     /// `type`.
     fn ty(&mut self) -> Parsed<Type> {
-        match self.peek() {
-            Kind::TypeIdent => {
-                let head = self.bump();
-                let (arguments, end) = self.type_arguments(head.span())?;
-                Ok(named_type(head, arguments, end))
-            }
-            Kind::Ident => {
-                let variable = self.bump();
-                Ok(named_type(variable, Vec::new(), variable.span()))
-            }
-            Kind::LParen => self.parenthesized_type(),
-            Kind::LBracket => self.variants(),
-            Kind::LBrace => self.record_type(),
-            _ => {
-                self.note_type_starts();
-                Err(self.fail())
-            }
-        }
-    }
-
-    /// A function type, a tuple, or one type grouped.
-    fn parenthesized_type(&mut self) -> Parsed<Type> {
-        let open = self.bump();
-        let mut members = self.types()?;
-        let result = if self.eat(Kind::Arrow).is_some() {
-            Some(self.ty()?)
-        } else {
-            self.note("`->`");
-            None
-        };
-        let span = open
-            .span()
-            .through(self.expect(Kind::RParen, "`)`")?.span());
-        Ok(match result {
-            Some(result) => Type::Function {
-                span,
-                parameters: members,
+        let start = self.tokens[self.at].span();
+        Ok(match self.function()? {
+            (None, ty) => ty,
+            (Some(parameters), result) => Type::Function {
+                span: start.through(type_span(&result)),
+                parameters,
                 result: Box::new(result),
             },
-            None if members.len() == 1 => members.pop().expect("one type"),
-            None => Type::Tuple { span, members },
         })
     }
 
-    /// `[A B(x)]`: a tag row's constructors.
+    /// `type`: an operand, and the parameters it is if an arrow follows.
+    fn function(&mut self) -> Parsed<(Option<Vec<Type>>, Type)> {
+        let operand = self.type_operand()?;
+        if self.eat(Kind::Arrow).is_none() {
+            self.note("`->`");
+            return Ok((None, Self::alone(operand)?));
+        }
+        let parameters = match operand {
+            Operand::Listed { members, .. } => members,
+            Operand::One(ty) => vec![ty],
+        };
+        let result = self.type_operand()?;
+        Ok((Some(parameters), Self::alone(result)?))
+    }
+
+    /// A type operand with no arrow after it: parenthesized, one type
+    /// grouped or a tuple.
+    fn alone(operand: Operand) -> Parsed<Type> {
+        match operand {
+            Operand::One(ty) => Ok(ty),
+            Operand::Listed {
+                mut members,
+                span,
+                trailing,
+            } => match members.len() {
+                1 if !trailing => Ok(members.pop().expect("one type")),
+                1 => Err(one_tuple(span)),
+                _ => Ok(Type::Tuple { span, members }),
+            },
+        }
+    }
+
+    /// `type-operand`.
+    fn type_operand(&mut self) -> Parsed<Operand> {
+        Ok(Operand::One(match self.peek() {
+            Kind::TypeIdent => {
+                let head = self.bump();
+                let (arguments, end) = self.type_arguments(head.span())?;
+                named_type(head, arguments, end)
+            }
+            Kind::Ident => {
+                let variable = self.bump();
+                named_type(variable, Vec::new(), variable.span())
+            }
+            Kind::LParen => {
+                let open = self.bump();
+                let (members, trailing) = self.separated(true, begins_type, "a type", Self::ty)?;
+                let close = self.expect(Kind::RParen, "`)`")?;
+                return Ok(Operand::Listed {
+                    members,
+                    span: open.span().through(close.span()),
+                    trailing,
+                });
+            }
+            Kind::LBracket => self.variants()?,
+            Kind::LBrace => self.record_type()?,
+            _ => {
+                self.note_type_starts();
+                return Err(self.fail());
+            }
+        }))
+    }
+
+    /// `[A, B(x)]`: a tag row's constructors.
     fn variants(&mut self) -> Parsed<Type> {
         let open = self.bump();
-        let mut constructors = Vec::new();
-        while let Some(head) = self.eat(Kind::TypeIdent) {
-            let (fields, _) = self.type_arguments(head.span())?;
-            constructors.push(ConstructorDecl {
-                name: name(head),
-                fields,
-            });
-        }
-        self.note("a type name");
+        let (constructors, _) = self.separated(
+            false,
+            |kind| kind == Kind::TypeIdent,
+            "a type name",
+            |parser| {
+                let head = parser.bump();
+                let (fields, _) = parser.type_arguments(head.span())?;
+                Ok(ConstructorDecl {
+                    name: name(head),
+                    fields,
+                })
+            },
+        )?;
         let close = self.expect(Kind::RBracket, "`]`")?;
         Ok(Type::Variants {
             span: open.span().through(close.span()),
@@ -547,16 +591,26 @@ impl Parser<'_> {
         })
     }
 
-    /// `{x: A}`, or `{x: A *}`, open to more fields.
+    /// `{x: A}`, or `{x: A, *}`, open to more fields.
     fn record_type(&mut self) -> Parsed<Type> {
         let open = self.bump();
-        let mut fields = Vec::new();
-        while let Some(field) = self.eat(Kind::Ident) {
-            self.expect(Kind::Colon, "`:`")?;
-            fields.push((name(field), self.ty()?));
+        let (fields, trailing) = self.separated(
+            false,
+            |kind| kind == Kind::Ident,
+            "a name",
+            |parser| {
+                let field = parser.bump();
+                parser.expect(Kind::Colon, "`:`")?;
+                Ok((name(field), parser.ty()?))
+            },
+        )?;
+        let open_record = (fields.is_empty() || trailing) && {
+            self.note("`*`");
+            self.eat(Kind::Star).is_some()
+        };
+        if open_record {
+            self.eat(Kind::Comma);
         }
-        self.note("a name");
-        let open_record = self.eat(Kind::Rest).is_some();
         let close = self.expect(Kind::RBrace, "`}`")?;
         Ok(Type::Record {
             span: open.span().through(close.span()),
@@ -565,7 +619,7 @@ impl Parser<'_> {
         })
     }
 
-    /// A type name's arguments, `(A B)`, if it is given any, and where it
+    /// A type name's arguments, `(A, B)`, if it is given any, and where it
     /// ends, from `end` where it is given none.
     fn type_arguments(&mut self, end: Span) -> Parsed<(Vec<Type>, Span)> {
         if self.eat(Kind::CallParen).is_none() {
@@ -597,7 +651,7 @@ impl Parser<'_> {
     /// `operand`: prefixes, a primary, and its postfixes.
     fn operand(&mut self) -> Parsed<Expr> {
         match self.peek() {
-            Kind::Negate => {
+            Kind::Minus => {
                 let token = self.bump();
                 Ok(negated(token, self.operand()?))
             }
@@ -651,27 +705,27 @@ impl Parser<'_> {
     /// A call's arguments, and where they end.
     fn arguments(&mut self) -> Parsed<(Vec<Expr>, Span)> {
         self.bump();
-        let mut arguments = Vec::new();
-        loop {
-            match self.peek() {
-                Kind::LambdaBar => arguments.push(self.lambda()?),
-                kind if begins_expr(kind) => arguments.push(self.expr()?),
-                _ => break,
-            }
-        }
-        self.note("an expression");
+        let (arguments, _) = self.separated(
+            false,
+            |kind| kind == Kind::Bar || begins_expr(kind),
+            "an expression",
+            |parser| {
+                if parser.peek() == Kind::Bar {
+                    parser.lambda()
+                } else {
+                    parser.expr()
+                }
+            },
+        )?;
         let close = self.expect(Kind::RParen, "`)`")?;
         Ok((arguments, close.span()))
     }
 
-    /// `|x Some(y)| body`: its parameters are operands, being no `or`,
+    /// `|x, Some(y)| body`: its parameters are operands, being no `or`,
     /// each the pattern it spells.
     fn lambda(&mut self) -> Parsed<Expr> {
         let open = self.bump();
-        let mut parameters = vec![self.operand()?];
-        while begins_expr(self.peek()) {
-            parameters.push(self.operand()?);
-        }
+        let (parameters, _) = self.separated(true, begins_expr, "a pattern", Self::operand)?;
         self.expect(Kind::Bar, "`|`")?;
         let body = self.expr()?;
         let patterns = parameters
@@ -746,7 +800,7 @@ impl Parser<'_> {
         if let Some(wild) = self.eat(Kind::Wild) {
             return Ok((None, wild.span()));
         }
-        let minus = self.eat(Kind::Negate);
+        let minus = self.eat(Kind::Minus);
         match self.peek() {
             Kind::Number | Kind::Char => {
                 let end = self.bump();
@@ -773,24 +827,21 @@ impl Parser<'_> {
     /// A tuple, or one value grouped.
     fn parenthesized(&mut self) -> Parsed<Expr> {
         let open = self.bump();
-        let mut members = vec![self.expr()?];
-        while begins_expr(self.peek()) {
-            members.push(self.expr()?);
-        }
-        self.note("an expression");
+        let (mut members, trailing) =
+            self.separated(true, begins_expr, "an expression", Self::expr)?;
         let span = open
             .span()
             .through(self.expect(Kind::RParen, "`)`")?.span());
-        Ok(if members.len() == 1 {
-            Expr {
+        Ok(match members.len() {
+            1 if !trailing => Expr {
                 span,
                 ..members.pop().expect("one value")
-            }
-        } else {
-            Expr {
+            },
+            1 => return Err(one_tuple(span)),
+            _ => Expr {
                 span,
                 kind: ExprKind::Tuple(members),
-            }
+            },
         })
     }
 
@@ -817,12 +868,9 @@ impl Parser<'_> {
 
     fn list(&mut self) -> Parsed<Expr> {
         let open = self.bump();
-        let mut elements = Vec::new();
-        while begins_expr(self.peek()) {
-            elements.push(self.expr()?);
-        }
-        self.note("an expression");
-        let rest = self.rest()?;
+        let (elements, trailing) =
+            self.separated(false, begins_expr, "an expression", Self::expr)?;
+        let rest = self.rest(elements.is_empty() || trailing)?;
         let close = self.expect(Kind::RBracket, "`]`")?;
         Ok(Expr {
             span: open.span().through(close.span()),
@@ -832,16 +880,20 @@ impl Parser<'_> {
 
     fn record(&mut self) -> Parsed<Expr> {
         let open = self.bump();
-        let mut fields = Vec::new();
-        while let Some(field) = self.eat(Kind::Ident) {
-            let value = match self.eat(Kind::Colon) {
-                Some(_) => self.expr()?,
-                None => atom(field, ExprKind::Name(name(field))),
-            };
-            fields.push((name(field), value));
-        }
-        self.note("a name");
-        let base = self.rest()?;
+        let (fields, trailing) = self.separated(
+            false,
+            |kind| kind == Kind::Ident,
+            "a name",
+            |parser| {
+                let field = parser.bump();
+                let value = match parser.eat(Kind::Colon) {
+                    Some(_) => parser.expr()?,
+                    None => atom(field, ExprKind::Name(name(field))),
+                };
+                Ok((name(field), value))
+            },
+        )?;
+        let base = self.rest(fields.is_empty() || trailing)?;
         let span = open
             .span()
             .through(self.expect(Kind::RBrace, "`}`")?.span());
@@ -854,15 +906,41 @@ impl Parser<'_> {
         })
     }
 
-    /// `rest`: `*rest`, or `*` alone, a pattern's rest it does not name.
-    fn rest(&mut self) -> Parsed<Option<Expr>> {
-        let Some(star) = self.eat(Kind::Rest) else {
+    /// `rest`, where one may stand: `*rest`, or `*` alone, a pattern's
+    /// rest it does not name, and perhaps a comma after it.
+    fn rest(&mut self, may: bool) -> Parsed<Option<Expr>> {
+        if !may {
+            return Ok(None);
+        }
+        self.note("`*`");
+        let Some(star) = self.eat(Kind::Star) else {
             return Ok(None);
         };
-        if begins_expr(self.peek()) {
-            return self.expr().map(Some);
-        }
-        Ok(Some(atom(star, ExprKind::Wild)))
+        let rest = if begins_expr(self.peek()) {
+            self.expr()?
+        } else {
+            atom(star, ExprKind::Wild)
+        };
+        self.eat(Kind::Comma);
+        Ok(Some(rest))
+    }
+}
+
+/// A type operand: parenthesized types, which are a function type's
+/// parameters where an arrow follows, or one type.
+enum Operand {
+    Listed {
+        members: Vec<Type>,
+        span: Span,
+        trailing: bool,
+    },
+    One(Type),
+}
+
+fn one_tuple(span: Span) -> SyntaxError {
+    SyntaxError {
+        span,
+        message: "a tuple has at least two members: write `(a)` to group one".to_owned(),
     }
 }
 

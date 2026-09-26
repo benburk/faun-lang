@@ -14,12 +14,12 @@ part1(input) -> parse(input).sum()
 
 part2 : Str -> Nat
 part2(input) -> parse(input)
-  .trail(0 Int.add)
+  .trail(0, Int.add)
   .find_index(|floor| floor == -1)
   .map_ok(|index| index + 1)
   .ok_or(0)
 
-app : {stdin: Str} -> Result(Str Str)
+app : {stdin: Str} -> Result(Str, Str)
 app(input) -> Ok("part1: ${part1(input.stdin)} part2: ${part2(input.stdin)}\n")
 
 main!(host) -> host.run_result_text!(app)

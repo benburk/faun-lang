@@ -14,9 +14,9 @@ use faun_x86_64_linux::X86_64Linux;
 use num_bigint::BigUint;
 
 /// A module every package may import, whose constructors it keeps.
-pub(crate) const SEALED: &str = "exports {Failure accept Sized}
+pub(crate) const SEALED: &str = "exports {Failure, accept, Sized}
 
-Failure : [NotFound SomethingElse]
+Failure : [NotFound, SomethingElse]
 
 Sized(a) = where
   a.size : a -> Nat

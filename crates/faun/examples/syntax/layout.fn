@@ -3,13 +3,13 @@
 # Indentation carries no meaning.
 
 # A body is its bindings, one to a line, and ends with its answer.
-area : Nat Nat -> Nat
-area(width height) ->
+area : (Nat, Nat) -> Nat
+area(width, height) ->
   inner_width = width - 2
   inner_height = height - 2
   inner_width * inner_height
 
-expect area(5 4) == 6
+expect area(5, 4) == 6
 
 # The answer may begin on the line after the arrow.
 answer : Nat
@@ -19,13 +19,13 @@ answer() ->
 expect answer() == 42
 
 # An operator at a line's end carries it on.
-total : Nat Nat Nat -> Nat
-total(a b c) ->
+total : (Nat, Nat, Nat) -> Nat
+total(a, b, c) ->
   a +
     b *
     c
 
-expect total(1 2 3) == 7
+expect total(1, 2, 3) == 7
 
 # A chain goes on at a line that begins with `.`.
 evens_doubled : List(Nat) -> List(Nat)
@@ -34,7 +34,7 @@ evens_doubled(values) ->
     .filter(|n| n % 2 == 0)
     .map(|n| n * 2)
 
-expect evens_doubled([1 2 3 4]) == [4 8]
+expect evens_doubled([1, 2, 3, 4]) == [4, 8]
 
 # Parentheses group, however deep.
 expect ((((1)))) + (((2))) == 3
@@ -48,7 +48,7 @@ expect commented(1) == 1
 
 # An expectation may be a body of its own.
 expect
-  doubled = [1 2 3].map(|n| n * 2)
+  doubled = [1, 2, 3].map(|n| n * 2)
   doubled.len() == 3
     & doubled.last().ok_or(0) == 6
 

@@ -1,11 +1,11 @@
 # The answer of a three-way comparison. A type is ordered by defining one
-# `cmp : T T -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of its
+# `cmp : (T, T) -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of its
 # answer, so they cannot disagree about it: exactly one of `Lt`, `Eq`, `Gt`
 # holds for any pair.
 
 exports {Order.*}
 
-Order : [Lt Eq Gt].(
+Order : [Lt, Eq, Gt].(
   lt : Order -> Bool
   lt(Lt) -> True
   lt(_) -> False
@@ -28,7 +28,7 @@ Order : [Lt Eq Gt].(
 
   # This order, or where it is `Eq`, the next: how a tuple is ordered
   # position by position.
-  then : Order Order -> Order
-  then(Eq next) -> next
-  then(decided _) -> decided
+  then : (Order, Order) -> Order
+  then(Eq, next) -> next
+  then(decided, _) -> decided
 )

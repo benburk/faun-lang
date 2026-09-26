@@ -212,44 +212,44 @@ fn target_runs_managed_products_across_calls_and_matches() {
 /// and joins two, so there the same program also runs packed.
 const PRODUCTS: &str = "import std.host {Host}
 
-                        Pair : [P(Bool Bool)]
-                        Triple : [T(Pair Bool)]
-                        Maybe : [Nothing Just(Triple)]
+                        Pair : [P(Bool, Bool)]
+                        Triple : [T(Pair, Bool)]
+                        Maybe : [Nothing, Just(Triple)]
 
                         is_one : Nat -> Bool
                         is_one(1) -> True
                         is_one(_) -> False
 
                         swap : Pair -> Pair
-                        swap(P(a b)) -> P(b a)
+                        swap(P(a, b)) -> P(b, a)
 
                         second : Pair -> Bool
-                        second(P(_ b)) -> b
+                        second(P(_, b)) -> b
 
-                        spin : Pair Bool -> Triple
-                        spin(P(a b) c) -> T(P(b c) a)
+                        spin : (Pair, Bool) -> Triple
+                        spin(P(a, b), c) -> T(P(b, c), a)
 
                         rotate : Triple -> Triple
-                        rotate(T(p c)) -> spin(p c)
+                        rotate(T(p, c)) -> spin(p, c)
 
-                        choose : Bool Triple -> Triple
-                        choose(True t) -> rotate(t)
-                        choose(False t) -> t
+                        choose : (Bool, Triple) -> Triple
+                        choose(True, t) -> rotate(t)
+                        choose(False, t) -> t
 
                         unwrap : Maybe -> Triple
-                        unwrap(Nothing) -> T(P(True True) True)
+                        unwrap(Nothing) -> T(P(True, True), True)
                         unwrap(Just(t)) -> t
 
                         status : Triple -> Nat
-                        status(T(p c)) -> c.and(second(p)).select(4 0)
+                        status(T(p, c)) -> c.and(second(p)).select(4, 0)
 
                         main! : Host -> []
                         main!(host) ->
                           count = host.args.len()
                           flag = is_one(count)
-                          start = T(swap(P(False flag)) True)
+                          start = T(swap(P(False, flag)), True)
                           kept = unwrap(Just(start))
-                          host.exit!(status(choose(flag kept)))";
+                          host.exit!(status(choose(flag, kept)))";
 
 #[test]
 fn products_cross_calls_joins_and_cells_as_their_fields() {
@@ -270,13 +270,13 @@ fn products_cross_calls_joins_and_cells_as_their_fields() {
 /// status proven to fit.
 const NUMBER_PAIR: &str = "import std.host {Host}
 
-                           Pair : [P(Nat Nat)]
+                           Pair : [P(Nat, Nat)]
 
                            swap : Pair -> Pair
-                           swap(P(a b)) -> P(b a)
+                           swap(P(a, b)) -> P(b, a)
 
                            both : Pair -> Nat
-                           both(P(a b)) -> a + b
+                           both(P(a, b)) -> a + b
 
                            small : Nat -> Nat
                            small(0) -> 0
@@ -285,7 +285,7 @@ const NUMBER_PAIR: &str = "import std.host {Host}
                            main! : Host -> []
                            main!(host) ->
                              count = host.args.len()
-                             p = swap(P(small(count) 2))
+                             p = swap(P(small(count), 2))
                              host.exit!(both(p))";
 
 #[test]
@@ -311,24 +311,24 @@ const LIST: &str = "import std.host {Host}
                     small(0) -> 0
                     small(Succ(_)) -> 1
 
-                    count : Nat List(Nat) -> List(Nat)
-                    count(0 acc) -> acc
-                    count(Succ(k) acc) -> count(k [k *acc])
+                    count : (Nat, List(Nat)) -> List(Nat)
+                    count(0, acc) -> acc
+                    count(Succ(k), acc) -> count(k, [k, *acc])
 
-                    turn : List(Nat) List(Nat) -> List(Nat)
-                    turn([] acc) -> acc
-                    turn([h *t] acc) -> turn(t [h *acc])
+                    turn : (List(Nat), List(Nat)) -> List(Nat)
+                    turn([], acc) -> acc
+                    turn([h, *t], acc) -> turn(t, [h, *acc])
 
                     head : List(Nat) -> Nat
                     head([]) -> 0
-                    head([h *_]) -> h
+                    head([h, *_]) -> h
 
                     main! : Host -> []
                     main!(host) ->
                       c = host.args.len()
                       n = small(c)
-                      counted = count(4 + n [])
-                      host.exit!(head(turn(counted [])))";
+                      counted = count(4 + n, [])
+                      host.exit!(head(turn(counted, [])))";
 
 #[test]
 fn a_list_built_at_run_time_is_a_buffer() {
@@ -352,12 +352,12 @@ const LENGTH: &str = "import std.host {Host}
                       small(0) -> 0
                       small(Succ(_)) -> 1
 
-                      count : Nat List(Nat) -> List(Nat)
-                      count(0 acc) -> acc
-                      count(Succ(k) acc) -> count(k [k *acc])
+                      count : (Nat, List(Nat)) -> List(Nat)
+                      count(0, acc) -> acc
+                      count(Succ(k), acc) -> count(k, [k, *acc])
 
                       main! : Host -> []
-                      main!(host) -> host.exit!(count(4 + small(host.args.len()) []).len())";
+                      main!(host) -> host.exit!(count(4 + small(host.args.len()), []).len())";
 
 #[test]
 fn a_list_is_counted_by_the_length_it_holds() {
@@ -509,10 +509,10 @@ const WRITTEN: &[(&str, &str, i32)] = &[
     (
         "a name that leaves",
         "import std.host {Host}
-         die! : Host Nat -> []
-         die!(host n) -> host.exit!(n)
+         die! : (Host, Nat) -> []
+         die!(host, n) -> host.exit!(n)
          main! : Host -> []
-         main!(host) -> die!(host 2)",
+         main!(host) -> die!(host, 2)",
         2,
     ),
     (
@@ -525,33 +525,33 @@ const WRITTEN: &[(&str, &str, i32)] = &[
     (
         "how many arguments",
         "import std.host {Host}
-         below : Nat Nat -> Bool
-         below(_ 0) -> False
-         below(0 Succ(_)) -> True
-         below(Succ(a) Succ(b)) -> below(a b)
-         finish! : Host Bool Nat -> []
-         finish!(host True n) -> host.exit!(n + n)
-         finish!(host False _) -> host.exit!(0)
+         below : (Nat, Nat) -> Bool
+         below(_, 0) -> False
+         below(0, Succ(_)) -> True
+         below(Succ(a), Succ(b)) -> below(a, b)
+         finish! : (Host, Bool, Nat) -> []
+         finish!(host, True, n) -> host.exit!(n + n)
+         finish!(host, False, _) -> host.exit!(0)
          main! : Host -> []
          main!(host) ->
            count = host.args.len()
-           finish!(host below(count 2) count)",
+           finish!(host, below(count, 2), count)",
         2,
     ),
     (
         "a runtime guard exits early",
         "import std.host {Host}
-         below : Nat Nat -> Bool
-         below(_ 0) -> False
-         below(0 Succ(_)) -> True
-         below(Succ(a) Succ(b)) -> below(a b)
-         finish! : Host Bool Nat -> []
-         finish!(host True n) -> host.exit!(n)
-         finish!(host False _) -> host.exit!(7)
+         below : (Nat, Nat) -> Bool
+         below(_, 0) -> False
+         below(0, Succ(_)) -> True
+         below(Succ(a), Succ(b)) -> below(a, b)
+         finish! : (Host, Bool, Nat) -> []
+         finish!(host, True, n) -> host.exit!(n)
+         finish!(host, False, _) -> host.exit!(7)
          main! : Host -> []
          main!(host) ->
            count = host.args.len()
-           finish!(host below(count 1) count)",
+           finish!(host, below(count, 1), count)",
         7,
     ),
     ("a tag", ORDER_LT, 0),
@@ -579,7 +579,7 @@ macro_rules! ordering {
     ($which:literal) => {
         concat!(
             "import std.host {Host}
-             Place : [First Second Third]
+             Place : [First, Second, Third]
              rank : Place -> Nat
              rank(First) -> 0
              rank(Second) -> 1
@@ -603,15 +603,15 @@ macro_rules! columns {
     ($answer:literal) => {
         concat!(
             "import std.host {Host}
-             sub : Nat Nat -> Nat
-             sub(0 _) -> 0
-             sub(Succ(m) 0) -> Succ(m)
-             sub(Succ(m) Succ(n)) -> sub(m n)
-             cmp : Nat Nat -> Order
-             cmp(0 0) -> Eq
-             cmp(0 Succ(_)) -> Lt
-             cmp(Succ(_) 0) -> Gt
-             cmp(Succ(m) Succ(n)) -> cmp(m n)
+             sub : (Nat, Nat) -> Nat
+             sub(0, _) -> 0
+             sub(Succ(m), 0) -> Succ(m)
+             sub(Succ(m), Succ(n)) -> sub(m, n)
+             cmp : (Nat, Nat) -> Order
+             cmp(0, 0) -> Eq
+             cmp(0, Succ(_)) -> Lt
+             cmp(Succ(_), 0) -> Gt
+             cmp(Succ(m), Succ(n)) -> cmp(m, n)
              rank : Order -> Nat
              rank(Lt) -> 0
              rank(Eq) -> 1
@@ -623,11 +623,11 @@ macro_rules! columns {
         )
     };
 }
-const COLUMNS_MONUS: &str = columns!("sub(3 1)");
-const COLUMNS_UNDERFLOW: &str = columns!("sub(1 3)");
-const COLUMNS_LESS: &str = columns!("rank(cmp(1 3))");
-const COLUMNS_SAME: &str = columns!("rank(cmp(3 3))");
-const COLUMNS_MORE: &str = columns!("rank(cmp(3 1))");
+const COLUMNS_MONUS: &str = columns!("sub(3, 1)");
+const COLUMNS_UNDERFLOW: &str = columns!("sub(1, 3)");
+const COLUMNS_LESS: &str = columns!("rank(cmp(1, 3))");
+const COLUMNS_SAME: &str = columns!("rank(cmp(3, 3))");
+const COLUMNS_MORE: &str = columns!("rank(cmp(3, 1))");
 
 /// Runtime arithmetic: the count cannot fold, and the guard is what makes
 /// what follows fit even on the smallest target.
@@ -635,13 +635,13 @@ macro_rules! arithmetic {
     ($answer:literal) => {
         concat!(
             "import std.host {Host}
-             below : Nat Nat -> Bool
-             below(_ 0) -> False
-             below(0 Succ(_)) -> True
-             below(Succ(a) Succ(b)) -> below(a b)
-             finish! : Host Bool Nat -> []
-             finish!(host False _) -> host.exit!(0)
-             finish!(host True n) ->
+             below : (Nat, Nat) -> Bool
+             below(_, 0) -> False
+             below(0, Succ(_)) -> True
+             below(Succ(a), Succ(b)) -> below(a, b)
+             finish! : (Host, Bool, Nat) -> []
+             finish!(host, False, _) -> host.exit!(0)
+             finish!(host, True, n) ->
                a = n + 8
                b = n + 1
                z = n - n
@@ -651,7 +651,7 @@ macro_rules! arithmetic {
              main! : Host -> []
              main!(host) ->
                count = host.args.len()
-               finish!(host below(count 2) count)"
+               finish!(host, below(count, 2), count)"
         )
     };
 }
@@ -663,11 +663,11 @@ const ARITHMETIC_DIV: &str = arithmetic!("a / b");
 const ARITHMETIC_MOD: &str = arithmetic!("a % b");
 const ARITHMETIC_DIV_ZERO: &str = arithmetic!("a / z");
 const ARITHMETIC_MOD_ZERO: &str = arithmetic!("a % z");
-const ARITHMETIC_LESS: &str = arithmetic!("below(b a).to_nat()");
+const ARITHMETIC_LESS: &str = arithmetic!("below(b, a).to_nat()");
 const ARITHMETIC_EQUAL: &str = arithmetic!("a.equals(a).to_nat()");
 const ARITHMETIC_UNEQUAL: &str = arithmetic!("a.equals(b).to_nat()");
 
-/// The standard list's functions over `[0 1 2 3 4]`, whose last element
+/// The standard list's functions over `[0, 1, 2, 3, 4]`, whose last element
 /// is worked out while the program runs so that nothing here is folded
 /// before a target sees it.
 macro_rules! listed {
@@ -680,7 +680,7 @@ macro_rules! listed {
              main! : Host -> []
              main!(host) ->
                n = 4 + small(host.args.len())
-               xs = [0 1 2 3 n - 1]
+               xs = [0, 1, 2, 3, n - 1]
                host.exit!(",
             $answer,
             ")"
@@ -688,20 +688,20 @@ macro_rules! listed {
     };
 }
 const LIST_GET: &str = listed!("xs.get(3).ok_or(9) + xs.get(n).ok_or(9) * 10");
-const LIST_SET: &str = listed!("xs.set(1 7).ok_or([]).get_or(1 0)");
+const LIST_SET: &str = listed!("xs.set(1, 7).ok_or([]).get_or(1, 0)");
 const LIST_FIND: &str =
     listed!("xs.find(|x| x % 2 == 1).ok_or(9) + xs.find(|x| x == 7).ok_or(9) * 10");
 const LIST_FILTER: &str = listed!("xs.filter(|x| x % 2 == 1).len()");
-const LIST_DROP_TAKE: &str = listed!("xs.drop(1).take(2).get_or(1 9)");
+const LIST_DROP_TAKE: &str = listed!("xs.drop(1).take(2).get_or(1, 9)");
 const LIST_TAKE_PAST: &str = listed!("xs.take(9).len()");
 const LIST_LAST: &str = listed!("xs.last().ok_or(9)");
 // A list put before itself, which its buffer is shared with.
-const LIST_EXTEND: &str = listed!("xs.extend(xs).get_or(6 9) * 10 + xs.extend(xs).get_or(9 9)");
-const LIST_REVERSE: &str = listed!("xs.reverse().get_or(0 9) * 10 + xs.reverse().get_or(4 9)");
+const LIST_EXTEND: &str = listed!("xs.extend(xs).get_or(6, 9) * 10 + xs.extend(xs).get_or(9, 9)");
+const LIST_REVERSE: &str = listed!("xs.reverse().get_or(0, 9) * 10 + xs.reverse().get_or(4, 9)");
 // Elements that are lists themselves, each holding a claim to its buffer.
 // What a list of lists holds is not bounded, so the answer is made to fit.
 const LIST_OF_LISTS: &str = listed!(
-    "([xs xs.drop(3)].reverse().get_or(0 []).get_or(0 9) % 10) + ([[xs] [xs.drop(4)]].flatten().get_or(1 []).get_or(0 9) % 10) * 10"
+    "([xs, xs.drop(3)].reverse().get_or(0, []).get_or(0, 9) % 10) + ([[xs], [xs.drop(4)]].flatten().get_or(1, []).get_or(0, 9) % 10) * 10"
 );
 
 /// Programs using the standard list, and what each leaves with. A lookup
@@ -799,7 +799,7 @@ fn it_greets_whom_it_is_handed() {
 
          main! : Host -> []
          main!(host) ->
-           name = host.args.get_or(1 \"world\")
+           name = host.args.get_or(1, \"world\")
            host.println!(\"Hello, ${name}!\")
            host.exit!(host.args.len())",
     )
@@ -850,8 +850,8 @@ fn it_runs_a_packages_expectations() {
 
                 expect bucket(2) == 1 & bucket(7) == 2
                 expect total(\"3, 4,5\") == 12
-                expect [3 1 2].sort() == [3 2 1]
-                expect \"b\\na\".lines().sort() == [\"a\" \"b\"]
+                expect [3, 1, 2].sort() == [3, 2, 1]
+                expect \"b\\na\".lines().sort() == [\"a\", \"b\"]
 
                 main!(host) -> host.exit!(9)";
     let program = faun::expectations(text, &TARGET).expect("the expectations compile");
@@ -1100,25 +1100,25 @@ fn runnable_expression_example_uses_runtime_arguments() {
 /// call.
 const ZERO_WIDTH: &str = "import std.host {Host}
 
-                          keep_zero! : Host Nat -> Nat
-                          keep_zero!(host n) ->
+                          keep_zero! : (Host, Nat) -> Nat
+                          keep_zero!(host, n) ->
                             observed = host.args.len()
                             n
 
-                          select_zero! : Host Bool -> Nat
-                          select_zero!(host False) -> keep_zero!(host 0)
-                          select_zero!(host True) -> keep_zero!(host 0)
+                          select_zero! : (Host, Bool) -> Nat
+                          select_zero!(host, False) -> keep_zero!(host, 0)
+                          select_zero!(host, True) -> keep_zero!(host, 0)
 
-                          zero_or_one : Bool Nat -> Nat
-                          zero_or_one(False n) -> n
-                          zero_or_one(True n) -> Succ(n)
+                          zero_or_one : (Bool, Nat) -> Nat
+                          zero_or_one(False, n) -> n
+                          zero_or_one(True, n) -> Succ(n)
 
                           main! : Host -> []
                           main!(host) ->
                             count = host.args.len()
                             first = count.equals(1)
-                            z = select_zero!(host first)
-                            host.exit!(zero_or_one(first z))";
+                            z = select_zero!(host, first)
+                            host.exit!(zero_or_one(first, z))";
 
 #[test]
 fn source_zero_width_scalars_cross_calls_and_joins() {

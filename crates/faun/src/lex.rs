@@ -1,11 +1,8 @@
 //! The lexer: source text to tokens.
 //!
-//! Ori's syntax separates by juxtaposition and binds by adjacency — `f(x)` is
-//! a call and `f (x)` two things, ` -x` negates where `a - b` subtracts — so
-//! every token carries whether space, and whether a newline, came before it.
-//! That is the whole of what the grammar asks about layout; the grammar itself
-//! never sees a space. Comments run from `#` to the end of the line and are
-//! space. A string is a run of pieces: text, and `${…}` splices whose contents
+//! Elements are separated by commas, so space means almost nothing: it only
+//! parts words, and says what binds by adjacency. The grammar itself never
+//! sees a space. Comments run from `#` to the end of the line and are space. A string is a run of pieces: text, and `${…}` splices whose contents
 //! are ordinary tokens, so the lexer keeps a stack of where it is.
 //!
 //! A line of items or of a body ends with a [`Kind::Newline`]: where a line
@@ -14,22 +11,11 @@
 //! after `->`, `=` or an operator, and into a next line beginning `.`, an
 //! infix operator, `where` or `if`, and a list or a call spans lines freely.
 //!
-//! An operator is read by its spacing, one rule for all of them: after an
-//! operand, space on both sides or neither makes it infix, `a - b` or `a-b`,
-//! and space before it only makes it a prefix, beginning an element of its
-//! own, `[a *rest]`. Where no operand comes before it, it is a prefix however
-//! it is spaced. So `-` is [`Kind::Negate`] or [`Kind::Minus`], `*` a
-//! [`Kind::Rest`] (also alone before a closing bracket, `[_ *]`) or
-//! [`Kind::Star`], and `|` a [`Kind::LambdaBar`] or [`Kind::Bar`]. An infix
-//! operator spaced on one side only is [`Kind::Lopsided`], and a `-` beginning
-//! an element after another, `[a -b]`, is [`Kind::NegatedElement`] unless it
-//! negates a numeral, `[-4 -5]`: both are errors the parser reports.
-//!
-//! What joins by adjacency is read here too, so the grammar reads kinds
-//! alone: a `(` against an operand is a call's, [`Kind::CallParen`]; `.`, `..`,
-//! `.*` and `?` go against what they join, or they are [`Kind::Detached`]; and
-//! an operand straight against another is [`Kind::Adjacent`], since elements
-//! side by side are parted by space.
+//! Whether `-`, `*` or `|` is a prefix or infix is the grammar's to say, by
+//! where it stands, as in any expression grammar. What joins by adjacency is
+//! read here, so the grammar reads kinds alone: a `(` against an operand is a
+//! call's, [`Kind::CallParen`]; and `.`, `..`, `.*` and `?` go against what
+//! they join, or they are [`Kind::Detached`].
 
 // Token recognition is clearer as one exhaustive byte match than as forwarding
 // helpers cut to satisfy a line-count heuristic.
@@ -88,23 +74,17 @@ pub enum Kind {
     Gt,
     Ge,
     Plus,
-    /// `-` between two operands.
+    /// `-`: a subtraction, or a negation.
     Minus,
-    /// `-` beginning an operand: a negation.
-    Negate,
-    /// `*` between two operands.
+    /// `*`: a multiplication, or a rest.
     Star,
-    /// `*` beginning the rest of a list or a record, or standing alone for
-    /// one unnamed.
-    Rest,
     Slash,
     Percent,
     Amp,
-    /// `|` between two operands, or closing a lambda's parameters.
+    /// `|`: an or, or a lambda's parameters.
     Bar,
-    /// `|` opening a lambda's parameters.
-    LambdaBar,
     Caret,
+    Comma,
     Bang,
     Question,
     KwIf,
@@ -116,16 +96,8 @@ pub enum Kind {
     /// A character no token starts with, or a literal left unfinished. The
     /// parser reports it where it meets it.
     Error,
-    /// An infix operator with space on one side only, `a- b`: an error.
-    Lopsided,
-    /// A `-` beginning an element straight after another, `[a -b]`, where it
-    /// negates no numeral: an error, being so near `a - b`.
-    NegatedElement,
     /// `.`, `..`, `.*` or `?` with space where it joins: an error.
     Detached,
-    /// An operand straight after another, `a"b"`: an error, as elements
-    /// side by side are parted by space.
-    Adjacent,
     /// The end of a line of items or of a body; see the module notes.
     Newline,
     /// The end of the text: every token stream ends with one.
@@ -152,48 +124,6 @@ impl Kind {
                 | Self::DotStar
                 | Self::Question
                 | Self::Error
-        )
-    }
-
-    /// Whether an operand can begin with this token.
-    const fn begins_operand(self) -> bool {
-        matches!(
-            self,
-            Self::Ident
-                | Self::EffectIdent
-                | Self::TypeIdent
-                | Self::Wild
-                | Self::Number
-                | Self::Decimal
-                | Self::Char
-                | Self::StrStart
-                | Self::LParen
-                | Self::LBracket
-                | Self::LBrace
-                | Self::Negate
-                | Self::Bang
-                | Self::LambdaBar
-                | Self::Rest
-        )
-    }
-
-    /// Whether this token only ever stands between two operands.
-    const fn infix(self) -> bool {
-        matches!(
-            self,
-            Self::Plus
-                | Self::Minus
-                | Self::Star
-                | Self::Slash
-                | Self::Percent
-                | Self::Amp
-                | Self::Caret
-                | Self::EqEq
-                | Self::Ne
-                | Self::Lt
-                | Self::Le
-                | Self::Gt
-                | Self::Ge
         )
     }
 
@@ -235,10 +165,6 @@ pub struct Token {
     pub kind: Kind,
     pub start: u32,
     pub end: u32,
-    /// Whether any space or comment separated this token from the one before.
-    pub space_before: bool,
-    /// Whether that space held a line break.
-    pub newline_before: bool,
 }
 
 impl Token {
@@ -380,8 +306,6 @@ impl Lexer<'_> {
                 kind: Kind::Newline,
                 start: at,
                 end: at,
-                space_before: false,
-                newline_before: false,
             });
         }
         let kind = self.classify(kind);
@@ -399,38 +323,23 @@ impl Lexer<'_> {
             kind,
             start: u32::try_from(start).expect("source length checked before lexing"),
             end: u32::try_from(self.at).expect("source length checked before lexing"),
-            space_before: self.space_before,
-            newline_before: self.newline_before,
         });
         self.space_before = false;
         self.newline_before = false;
     }
 
-    /// An operator just lexed, read by its spacing and by whether an operand
-    /// comes before it; see the module notes.
+    /// A token just lexed, read by what it is against: a `(` against an
+    /// operand opens a call, and `.`, `..`, `.*` and `?` must be against what
+    /// they join.
     fn classify(&self, kind: Kind) -> Kind {
         let operand = self.out.last().is_some_and(|last| last.kind.ends_line());
         let (before, after) = (self.space_before, self.space_after());
-        let prefix = !operand || before && !after;
-        let kind = match kind {
-            Kind::Minus if !operand => Kind::Negate,
-            Kind::Minus if prefix && self.bytes.get(self.at).is_some_and(u8::is_ascii_digit) => {
-                Kind::Negate
-            }
-            Kind::Minus if prefix => Kind::NegatedElement,
-            Kind::Star if prefix || before && self.closes_next() => Kind::Rest,
-            Kind::Bar if prefix => Kind::LambdaBar,
-            kind if kind.infix() && before != after => Kind::Lopsided,
+        match kind {
             Kind::LParen if operand && !before => Kind::CallParen,
             Kind::Dot if before && !self.newline_before || after => Kind::Detached,
             Kind::DotDot if before || after => Kind::Detached,
             Kind::DotStar | Kind::Question if before => Kind::Detached,
             kind => kind,
-        };
-        if operand && !before && kind.begins_operand() {
-            Kind::Adjacent
-        } else {
-            kind
         }
     }
 
@@ -440,14 +349,6 @@ impl Lexer<'_> {
         self.bytes
             .get(self.at)
             .is_none_or(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'#'))
-    }
-
-    /// Whether the next token, past any space, closes a list or a record.
-    fn closes_next(&self) -> bool {
-        self.bytes[self.at..]
-            .iter()
-            .find(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
-            .is_some_and(|byte| matches!(byte, b']' | b'}'))
     }
 
     /// Whether the line break before `kind`, just lexed, ends a line.
@@ -684,6 +585,7 @@ impl Lexer<'_> {
             b'|' => one(self, Kind::Bar),
             b'^' => one(self, Kind::Caret),
             b'?' => one(self, Kind::Question),
+            b',' => one(self, Kind::Comma),
             b':' => one(self, Kind::Colon),
             b'(' => one(self, Kind::LParen),
             b')' => one(self, Kind::RParen),
@@ -711,14 +613,12 @@ mod tests {
     }
 
     #[test]
-    fn adjacency_is_recorded_on_the_token() {
-        let tokens = lex("f (x)").unwrap();
-        assert_eq!(tokens[1].kind, Kind::LParen);
-        assert!(tokens[1].space_before);
-        let tokens = lex("f(x)").unwrap();
-        assert!(!tokens[1].space_before);
-        let tokens = lex("x\n  .y").unwrap();
-        assert!(tokens[1].newline_before && tokens[1].space_before);
+    fn a_call_s_paren_is_against_what_it_calls() {
+        assert_eq!(kinds("f(x)")[1], Kind::CallParen);
+        assert_eq!(kinds("f (x)")[1], Kind::LParen);
+        assert_eq!(kinds("f(a, b)")[3], Kind::Comma);
+        assert_eq!(kinds("x .y")[1], Kind::Detached);
+        assert_eq!(kinds("x\n  .y")[1], Kind::Dot);
     }
 
     #[test]
@@ -784,12 +684,12 @@ mod tests {
         assert_eq!(kinds("a ->\nb"), [Ident, Arrow, Ident, Kind::Eof]);
         assert_eq!(kinds("a\n  .b"), [Ident, Dot, Ident, Kind::Eof]);
         assert_eq!(kinds("a\n- b"), [Ident, Minus, Ident, Kind::Eof]);
-        assert_eq!(
-            kinds("a\n-b"),
-            [Ident, Newline, Kind::Negate, Ident, Kind::Eof]
-        );
+        assert_eq!(kinds("a\n-b"), [Ident, Newline, Minus, Ident, Kind::Eof]);
         // Brackets join their lines, but a method block holds lines of items.
-        assert_eq!(kinds("(a\nb)"), [LParen, Ident, Ident, RParen, Kind::Eof]);
+        assert_eq!(
+            kinds("(a,\nb)"),
+            [LParen, Ident, Kind::Comma, Ident, RParen, Kind::Eof]
+        );
         assert_eq!(
             kinds("T.(a\nb\n)"),
             [
@@ -808,27 +708,21 @@ mod tests {
     }
 
     #[test]
-    fn an_operator_is_read_by_its_spacing() {
-        use Kind::{
-            Bar, Ident, LBracket, LambdaBar, Lopsided, Minus, Negate, NegatedElement, Number,
-            RBrace, RBracket, Rest, Star,
-        };
-        assert_eq!(kinds("a - b")[1], Minus);
-        assert_eq!(kinds("a-b")[1], Minus);
-        assert_eq!(kinds("x = - b")[2], Negate);
-        assert_eq!(
-            kinds("[-4 -5]")[..5],
-            [LBracket, Negate, Number, Negate, Number]
-        );
-        assert_eq!(kinds("[a -b]")[2], NegatedElement);
-        assert_eq!(kinds("a- b")[1], Lopsided);
-        assert_eq!(kinds("a +b")[1], Lopsided);
-        assert_eq!(kinds("a * b")[1], Star);
-        assert_eq!(kinds("[a *rest]")[2..4], [Rest, Ident]);
-        assert_eq!(kinds("[_ *]")[2..4], [Rest, RBracket]);
-        assert_eq!(kinds("{x * }")[2..4], [Rest, RBrace]);
-        assert_eq!(kinds("a | b")[1], Bar);
-        assert_eq!(kinds("f(a |x| x)")[3..7], [LambdaBar, Ident, Bar, Ident]);
+    fn an_operator_is_one_kind_however_it_is_spaced() {
+        use Kind::{Bar, Minus, Star};
+        for (source, at, kind) in [
+            ("a - b", 1, Minus),
+            ("a-b", 1, Minus),
+            ("a -b", 1, Minus),
+            ("x = - b", 2, Minus),
+            ("[-4, -5]", 1, Minus),
+            ("a * b", 1, Star),
+            ("[a, *rest]", 3, Star),
+            ("a | b", 1, Bar),
+            ("f(a, |x| x)", 4, Bar),
+        ] {
+            assert_eq!(kinds(source)[at], kind, "{source}");
+        }
     }
 
     #[test]

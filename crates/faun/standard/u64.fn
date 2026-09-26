@@ -18,23 +18,23 @@ U64 : Nat.(
   to_nat : U64 -> Nat
   to_nat(U64(value)) -> value
 
-  add : U64 U64 -> U64
-  add(U64(a) U64(b)) -> U64((a + b) % 18446744073709551616)
+  add : (U64, U64) -> U64
+  add(U64(a), U64(b)) -> U64((a + b) % 18446744073709551616)
 
-  sub : U64 U64 -> U64
-  sub(U64(a) U64(b)) -> U64((a + 18446744073709551616 - b) % 18446744073709551616)
+  sub : (U64, U64) -> U64
+  sub(U64(a), U64(b)) -> U64((a + 18446744073709551616 - b) % 18446744073709551616)
 
-  mul : U64 U64 -> U64
-  mul(U64(a) U64(b)) -> U64((a * b) % 18446744073709551616)
+  mul : (U64, U64) -> U64
+  mul(U64(a), U64(b)) -> U64((a * b) % 18446744073709551616)
 
-  div : U64 U64 -> U64
-  div(U64(a) U64(b)) -> U64(a / b)
+  div : (U64, U64) -> U64
+  div(U64(a), U64(b)) -> U64(a / b)
 
-  mod : U64 U64 -> U64
-  mod(U64(a) U64(b)) -> U64(a % b)
+  mod : (U64, U64) -> U64
+  mod(U64(a), U64(b)) -> U64(a % b)
 
-  cmp : U64 U64 -> Order
-  cmp(U64(a) U64(b)) -> a.cmp(b)
+  cmp : (U64, U64) -> Order
+  cmp(U64(a), U64(b)) -> a.cmp(b)
 
   to_str : U64 -> Str
   to_str(U64(value)) -> value.to_str()
@@ -42,14 +42,14 @@ U64 : Nat.(
   # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`. Two words' bits
   # make a word, so the remainder changes nothing; it is what shows
   # the answer is one, which nothing recognizes of `Nat`'s bitwise walk.
-  and : U64 U64 -> U64
-  and(U64(a) U64(b)) -> U64((a & b) % 18446744073709551616)
+  and : (U64, U64) -> U64
+  and(U64(a), U64(b)) -> U64((a & b) % 18446744073709551616)
 
-  or : U64 U64 -> U64
-  or(U64(a) U64(b)) -> U64((a | b) % 18446744073709551616)
+  or : (U64, U64) -> U64
+  or(U64(a), U64(b)) -> U64((a | b) % 18446744073709551616)
 
-  xor : U64 U64 -> U64
-  xor(U64(a) U64(b)) -> U64((a ^ b) % 18446744073709551616)
+  xor : (U64, U64) -> U64
+  xor(U64(a), U64(b)) -> U64((a ^ b) % 18446744073709551616)
 
   # Every bit flipped.
   bit_not : U64 -> U64
@@ -57,27 +57,27 @@ U64 : Nat.(
 
   # The bits moved up by `amount`, those past the top lost: nought where
   # `amount` is the width or more.
-  shift_left : U64 Nat -> U64
-  shift_left(U64(a) amount) if amount < 64 -> of_nat(a * 2.pow(amount))
-  shift_left(_ _) -> U64(0)
+  shift_left : (U64, Nat) -> U64
+  shift_left(U64(a), amount) if amount < 64 -> of_nat(a * 2.pow(amount))
+  shift_left(_, _) -> U64(0)
 
   # The bits moved down by `amount`, those below the bottom lost.
-  shift_right : U64 Nat -> U64
-  shift_right(U64(a) amount) if amount < 64 -> U64(a / 2.pow(amount))
-  shift_right(_ _) -> U64(0)
+  shift_right : (U64, Nat) -> U64
+  shift_right(U64(a), amount) if amount < 64 -> U64(a / 2.pow(amount))
+  shift_right(_, _) -> U64(0)
 
   # The bits moved up by `amount`, those past the top coming round to the
   # bottom. The width round is no change.
-  rotate_left : U64 Nat -> U64
-  rotate_left(U64(a) amount) ->
+  rotate_left : (U64, Nat) -> U64
+  rotate_left(U64(a), amount) ->
     shift = amount % 64
     of_nat(a * 2.pow(shift) + a / 2.pow(64 - shift))
 
-  rotate_right : U64 Nat -> U64
-  rotate_right(word amount) -> rotate_left(word 64 - amount % 64)
+  rotate_right : (U64, Nat) -> U64
+  rotate_right(word, amount) -> rotate_left(word, 64 - amount % 64)
 
-  equals : U64 U64 -> Bool
-  equals(U64(a) U64(b)) -> a.equals(b)
+  equals : (U64, U64) -> Bool
+  equals(U64(a), U64(b)) -> a.equals(b)
 )
 
 expect U64.of_nat(0).bit_not() == 0xffffffffffffffff

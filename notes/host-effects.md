@@ -20,7 +20,7 @@ main!(host) -> ...
 - Borrow is the cheap / default contract. Consumption is exceptional and represented in the functions type signature
 
   ```ruby
-  read!  : File Buf -> Nat
+  read!  : (File, Buf) -> Nat
   close! : consume File -> ()
   ```
 
@@ -31,7 +31,7 @@ main!(host) -> ...
 
   ```ruby
   main! : Host -> []
-  exit! : consume Host Nat -> []
+  exit! : (consume Host, Nat) -> []
   ```
 
   with ordinary host calls borrowing `Host` and terminal operations consuming it.

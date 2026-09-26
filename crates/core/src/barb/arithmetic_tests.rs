@@ -358,8 +358,8 @@ fn an_early_exit_refines_the_continuation() {
     p.define_type(never, &[]);
     let exit = p.declare("exit!", &[host, nat], never);
     let input = p.declare("read_byte!", &[host], nat);
-    // bounded!(h True n) -> n
-    // bounded!(h False n) -> exit!(h Zero)
+    // bounded!(h, True, n) -> n
+    // bounded!(h, False, n) -> exit!(h, Zero)
     let bounded = p.declare("bounded!", &[host, bool_, nat], nat);
     p.define(bounded, |b, args| {
         b.match_(args[1], bool_, |b, ctor, _| {

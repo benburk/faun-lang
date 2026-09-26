@@ -47,16 +47,16 @@ impl Case {
         format!(
             "import std.host {{Host}}
 
-             below : Nat Nat -> Bool
-             below(_ 0) -> False
-             below(0 Succ(_)) -> True
-             below(Succ(a) Succ(b)) -> below(a b)
+             below : (Nat, Nat) -> Bool
+             below(_, 0) -> False
+             below(0, Succ(_)) -> True
+             below(Succ(a), Succ(b)) -> below(a, b)
 
-             finish! : Host Bool Nat -> []
-             finish!(host False _) ->
+             finish! : (Host, Bool, Nat) -> []
+             finish!(host, False, _) ->
                five = 5
                host.exit!(five * five * 4)
-             finish!(host True n) ->
+             finish!(host, True, n) ->
                two = 2
                three = two + 1
                five = three + two
@@ -65,7 +65,7 @@ impl Case {
              main! : Host -> []
              main!(host) ->
                count = host.args.len()
-               finish!(host below(count 32) count)"
+               finish!(host, below(count, 32), count)"
         )
     }
 

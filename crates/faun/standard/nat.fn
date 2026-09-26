@@ -3,7 +3,7 @@
 
 exports {Nat.*}
 
-Nat : [Zero Succ(Nat)].(
+Nat : [Zero, Succ(Nat)].(
   zero : Nat
   zero() -> 0
 
@@ -12,139 +12,139 @@ Nat : [Zero Succ(Nat)].(
   of_nat : Nat -> Nat
   of_nat(n) -> n
 
-  add : Nat Nat -> Nat
-  add(0 y) -> y
-  add(Succ(n) y) -> Succ(n + y)
+  add : (Nat, Nat) -> Nat
+  add(0, y) -> y
+  add(Succ(n), y) -> Succ(n + y)
 
-  sub : Nat Nat -> Nat
-  sub(0 _) -> 0
-  sub(Succ(m) 0) -> Succ(m)
-  sub(Succ(m) Succ(n)) -> m - n
+  sub : (Nat, Nat) -> Nat
+  sub(0, _) -> 0
+  sub(Succ(m), 0) -> Succ(m)
+  sub(Succ(m), Succ(n)) -> m - n
 
-  mul : Nat Nat -> Nat
-  mul(0 _) -> 0
-  mul(Succ(m) y) -> y + m * y
+  mul : (Nat, Nat) -> Nat
+  mul(0, _) -> 0
+  mul(Succ(m), y) -> y + m * y
 
-  div : Nat Nat -> Nat
-  div(_ 0) -> 0
-  div(0 Succ(_)) -> 0
-  div(Succ(a) Succ(b)) ->
-    quotient = div(a Succ(b))
-    div_step(equals(mod(a Succ(b)) b) quotient)
+  div : (Nat, Nat) -> Nat
+  div(_, 0) -> 0
+  div(0, Succ(_)) -> 0
+  div(Succ(a), Succ(b)) ->
+    quotient = div(a, Succ(b))
+    div_step(equals(mod(a, Succ(b)), b), quotient)
 
-  mod : Nat Nat -> Nat
-  mod(a 0) -> a
-  mod(0 Succ(_)) -> 0
-  mod(Succ(a) Succ(b)) ->
-    remainder = mod(a Succ(b))
-    mod_step(equals(remainder b) remainder)
+  mod : (Nat, Nat) -> Nat
+  mod(a, 0) -> a
+  mod(0, Succ(_)) -> 0
+  mod(Succ(a), Succ(b)) ->
+    remainder = mod(a, Succ(b))
+    mod_step(equals(remainder, b), remainder)
 
   # `base` to the `exponent`, squaring the base as the exponent halves: as
   # many steps as the exponent has bits, each going round again.
-  pow : Nat Nat -> Nat
-  pow(base exponent) -> pow_into(base exponent 1)
+  pow : (Nat, Nat) -> Nat
+  pow(base, exponent) -> pow_into(base, exponent, 1)
 
-  times : Nat a (a -> a) -> a
-  times(0 value _) -> value
-  times(Succ(count) value f) -> times(count f(value) f)
+  times : (Nat, a, a -> a) -> a
+  times(0, value, _) -> value
+  times(Succ(count), value, f) -> times(count, f(value), f)
 
   # One comparison each way, which the compiler recognizes as instructions,
   # rather than a walk down both counts.
-  cmp : Nat Nat -> Order
-  cmp(a b) -> nat_order(nat_below(a b) a.equals(b))
+  cmp : (Nat, Nat) -> Order
+  cmp(a, b) -> nat_order(nat_below(a, b), a.equals(b))
 
-  min : Nat Nat -> Nat
-  min(a b) -> (a <= b).select(a b)
+  min : (Nat, Nat) -> Nat
+  min(a, b) -> (a <= b).select(a, b)
 
-  max : Nat Nat -> Nat
-  max(a b) -> (a <= b).select(b a)
+  max : (Nat, Nat) -> Nat
+  max(a, b) -> (a <= b).select(b, a)
 
   # Bitwise, a bit of the answer for each place either has one: `a & b`,
   # `a | b` and `a ^ b`. Each walk goes on only while both have bits left.
-  and : Nat Nat -> Nat
-  and(a b) -> and_bits(a b 1 0)
+  and : (Nat, Nat) -> Nat
+  and(a, b) -> and_bits(a, b, 1, 0)
 
-  or : Nat Nat -> Nat
-  or(a b) -> or_bits(a b 1 0)
+  or : (Nat, Nat) -> Nat
+  or(a, b) -> or_bits(a, b, 1, 0)
 
-  xor : Nat Nat -> Nat
-  xor(a b) -> xor_bits(a b 1 0)
+  xor : (Nat, Nat) -> Nat
+  xor(a, b) -> xor_bits(a, b, 1, 0)
 
   # The decimal text.
   to_str : Nat -> Str
-  to_str(n) -> Str.from_ascii(nat_decimal(n n)).ok_or("")
+  to_str(n) -> Str.from_ascii(nat_decimal(n, n)).ok_or("")
 
   # `Ok` of the number `text` writes in decimal: one digit or more, and
   # nothing else, no sign and no space.
-  from_str : Str -> Result(Nat [Malformed])
-  from_str(text) -> nat_digits(text.to_utf8() 0 False)
+  from_str : Str -> Result(Nat, [Malformed])
+  from_str(text) -> nat_digits(text.to_utf8(), 0, False)
 
-  equals : Nat Nat -> Bool
-  equals(0 0) -> True
-  equals(0 Succ(_)) -> False
-  equals(Succ(_) 0) -> False
-  equals(Succ(a) Succ(b)) -> equals(a b)
+  equals : (Nat, Nat) -> Bool
+  equals(0, 0) -> True
+  equals(0, Succ(_)) -> False
+  equals(Succ(_), 0) -> False
+  equals(Succ(a), Succ(b)) -> equals(a, b)
 )
 
 # The decimal digits of `n`, most significant first. The second argument
 # only counts down, which says the walk stops: `n` has fewer digits than
 # it is large.
-nat_decimal : Nat Nat -> List(U8)
-nat_decimal(n _) if n < 10 -> [U8.of_nat(n + '0')]
-nat_decimal(_ 0) -> []
-nat_decimal(n Succ(rest)) -> nat_decimal(n / 10 rest).append(U8.of_nat(n % 10 + '0'))
+nat_decimal : (Nat, Nat) -> List(U8)
+nat_decimal(n, _) if n < 10 -> [U8.of_nat(n + '0')]
+nat_decimal(_, 0) -> []
+nat_decimal(n, Succ(rest)) -> nat_decimal(n / 10, rest).append(U8.of_nat(n % 10 + '0'))
 
 # The number `bytes` go on to write, having written `value` so far, and
 # whether a digit was seen yet.
-nat_digits : List(U8) Nat Bool -> Result(Nat [Malformed])
-nat_digits([] value seen) -> seen.select(Ok(value) Err(Malformed))
-nat_digits([byte *rest] value _) if byte.is_digit() ->
-  nat_digits(rest value * 10 + (byte.to_nat() - '0') True)
-nat_digits(_ _ _) -> Err(Malformed)
+nat_digits : (List(U8), Nat, Bool) -> Result(Nat, [Malformed])
+nat_digits([], value, seen) -> seen.select(Ok(value), Err(Malformed))
+nat_digits([byte, *rest], value, _) if byte.is_digit() ->
+  nat_digits(rest, value * 10 + (byte.to_nat() - '0'), True)
+nat_digits(_, _, _) -> Err(Malformed)
 
 # The bits of `a` and `b` combined from `place` up, added to `built`, the
 # bits below. Each step halves both, and stops where either has none left;
 # what is left of the other is then what it keeps.
-and_bits : Nat Nat Nat Nat -> Nat
-and_bits(0 _ _ built) -> built
-and_bits(_ 0 _ built) -> built
-and_bits(a b place built) -> and_bits(a / 2 b / 2 place * 2 built + a % 2 * (b % 2) * place)
+and_bits : (Nat, Nat, Nat, Nat) -> Nat
+and_bits(0, _, _, built) -> built
+and_bits(_, 0, _, built) -> built
+and_bits(a, b, place, built) -> and_bits(a / 2, b / 2, place * 2, built + a % 2 * (b % 2) * place)
 
-or_bits : Nat Nat Nat Nat -> Nat
-or_bits(0 b place built) -> built + b * place
-or_bits(a 0 place built) -> built + a * place
-or_bits(a b place built) ->
+or_bits : (Nat, Nat, Nat, Nat) -> Nat
+or_bits(0, b, place, built) -> built + b * place
+or_bits(a, 0, place, built) -> built + a * place
+or_bits(a, b, place, built) ->
   low = (a % 2 == 1 | b % 2 == 1).to_nat()
-  or_bits(a / 2 b / 2 place * 2 built + low * place)
+  or_bits(a / 2, b / 2, place * 2, built + low * place)
 
-xor_bits : Nat Nat Nat Nat -> Nat
-xor_bits(0 b place built) -> built + b * place
-xor_bits(a 0 place built) -> built + a * place
-xor_bits(a b place built) -> xor_bits(a / 2 b / 2 place * 2 built + (a + b) % 2 * place)
+xor_bits : (Nat, Nat, Nat, Nat) -> Nat
+xor_bits(0, b, place, built) -> built + b * place
+xor_bits(a, 0, place, built) -> built + a * place
+xor_bits(a, b, place, built) -> xor_bits(a / 2, b / 2, place * 2, built + (a + b) % 2 * place)
 
 # `built` times `base` to the `exponent`.
-pow_into : Nat Nat Nat -> Nat
-pow_into(_ 0 built) -> built
-pow_into(base 1 built) -> built * base
-pow_into(base exponent built) ->
-  kept = (exponent % 2 == 1).select(built * base built)
-  pow_into(base * base exponent / 2 kept)
+pow_into : (Nat, Nat, Nat) -> Nat
+pow_into(_, 0, built) -> built
+pow_into(base, 1, built) -> built * base
+pow_into(base, exponent, built) ->
+  kept = (exponent % 2 == 1).select(built * base, built)
+  pow_into(base * base, exponent / 2, kept)
 
-nat_below : Nat Nat -> Bool
-nat_below(_ 0) -> False
-nat_below(0 Succ(_)) -> True
-nat_below(Succ(a) Succ(b)) -> nat_below(a b)
+nat_below : (Nat, Nat) -> Bool
+nat_below(_, 0) -> False
+nat_below(0, Succ(_)) -> True
+nat_below(Succ(a), Succ(b)) -> nat_below(a, b)
 
-nat_order : Bool Bool -> Order
-nat_order(True _) -> Lt
-nat_order(False True) -> Eq
-nat_order(False False) -> Gt
+nat_order : (Bool, Bool) -> Order
+nat_order(True, _) -> Lt
+nat_order(False, True) -> Eq
+nat_order(False, False) -> Gt
 
-div_step(True quotient) -> Succ(quotient)
-div_step(False quotient) -> quotient
+div_step(True, quotient) -> Succ(quotient)
+div_step(False, quotient) -> quotient
 
-mod_step(True _) -> 0
-mod_step(False remainder) -> Succ(remainder)
+mod_step(True, _) -> 0
+mod_step(False, remainder) -> Succ(remainder)
 
 expect Nat.from_str("0").ok_or(9) == 0 & Nat.from_str("007").ok_or(0) == 7
 expect Nat.from_str("1234").ok_or(0) == 1234

@@ -125,7 +125,7 @@ pub struct Dependency {
     pub path: Vec<Span>,
 }
 
-/// `import foo.bar {Name Other.* source: local}`.
+/// `import foo.bar {Name, Other.*, source: local}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportDecl {
     pub span: Span,
@@ -133,7 +133,7 @@ pub struct ImportDecl {
     pub exposures: Vec<Exposure>,
 }
 
-/// `exports {Name Other.*}`.
+/// `exports {Name, Other.*}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportsDecl {
     pub span: Span,
@@ -153,7 +153,7 @@ pub struct Export {
     pub constructors: bool,
 }
 
-/// `Name(a) : [First Second(a)].(methods)` or `Name : Repr.(methods)`.
+/// `Name(a) : [First, Second(a)].(methods)` or `Name : Repr.(methods)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataDecl {
     pub span: Span,
@@ -192,7 +192,7 @@ pub enum MethodItem {
     Clause(Clause),
 }
 
-/// A signature such as `add : Nat Nat -> Nat where Hashable(a)`.
+/// A signature such as `add : (Nat, Nat) -> Nat where Hashable(a)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignatureDecl {
     pub span: Span,
@@ -205,7 +205,7 @@ pub struct SignatureDecl {
 /// One requirement in a `where` clause.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Constraint {
-    /// `a.add : a a -> a`, a method every type `a` stands for must have; or
+    /// `a.add : (a, a) -> a`, a method every type `a` stands for must have; or
     /// `a.zero : a`, a value it must supply, read as `a.zero()`.
     Member {
         span: Span,
@@ -247,14 +247,14 @@ pub enum Type {
         span: Span,
         constructors: Vec<ConstructorDecl>,
     },
-    /// `{x: T}`, or with `*`, `{x: T *}`: a record with at least these
+    /// `{x: T}`, or with `*`, `{x: T, *}`: a record with at least these
     /// fields, whatever else a caller's has.
     Record {
         span: Span,
         fields: Vec<(Name, Self)>,
         open: bool,
     },
-    /// `(A B)`: a positional product of two or more.
+    /// `(A, B)`: a positional product of two or more.
     Tuple { span: Span, members: Vec<Self> },
 }
 
@@ -360,7 +360,7 @@ pub enum Pattern {
         elements: Vec<Self>,
         rest: Option<Box<Self>>,
     },
-    /// `{x}`, or with `*`, `{x *}`: naming some fields and ignoring the rest.
+    /// `{x}`, or with `*`, `{x, *}`: naming some fields and ignoring the rest.
     Record {
         span: Span,
         fields: Vec<(Name, Self)>,
@@ -414,9 +414,9 @@ pub enum ExprKind {
     String(Vec<StringPart>),
     List(Vec<Expr>, Option<Box<Expr>>),
     Record(Vec<(Name, Expr)>),
-    /// `{x: e *base}`: `base` with the fields named replaced.
+    /// `{x: e, *base}`: `base` with the fields named replaced.
     Update(Vec<(Name, Expr)>, Box<Expr>),
-    /// `(a b)`: a positional product of two or more.
+    /// `(a, b)`: a positional product of two or more.
     Tuple(Vec<Expr>),
     Lambda(Vec<Pattern>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),

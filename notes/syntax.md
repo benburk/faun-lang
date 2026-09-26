@@ -11,9 +11,18 @@
 
 ## FAQ
 
-> Why no commas?
+> Why commas?
 
-- whitespace already separates lexical forms. A comma would repeat a boundary the parser has enough information to recognize
-- One separator rule applies uniformly to values, types, patterns, fields, imports, exports, and dependencies. There is no second punctuation convention or trailing-comma policy to learn
-- pro: narrower lines
-- con: harder to read handwritten code
+- They are what every reader expects, so the syntax spends none of its
+  strangeness on separators.
+- An argument with an operator in it stays readable: `lower(r * 10, s, k - 1)`.
+- Spacing never changes meaning. `f(a, -b)`, `[h, *t]` and `f(a, |x| x)` read
+  the same however they are spaced, and a dropped comma is a syntax error rather
+  than a silently different call.
+- Any sequence may end with a comma, so a list written one element per line
+  changes one line when an element is added.
+- A function type's parameters are parenthesized, as a clause head's are:
+  `add : (Nat, Nat) -> Nat`, and `fib : Nat -> Nat` for one.
+- A tuple has at least two members: `(a)` groups, and `(a,)` is an error.
+
+The case for and against, with measurements, is in [commas.md](commas.md).

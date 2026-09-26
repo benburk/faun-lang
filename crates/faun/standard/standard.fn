@@ -18,4 +18,4 @@ import str {Str}
 import float.f32 {F32}
 import float.f64 {F64}
 
-exports {Bool.* Order.* Nat.* Int.* U8 U16 U32 U64 List.* Result.* Str F32 F64}
+exports {Bool.*, Order.*, Nat.*, Int.*, U8, U16, U32, U64, List.*, Result.*, Str, F32, F64}

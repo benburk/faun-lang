@@ -40,8 +40,8 @@ impl Library {
         let (false_, true_) = (p.ctor_at(bool_, 0), p.ctor_at(bool_, 1));
         let two = [nat, nat];
 
-        // add(a Zero) -> a
-        // add(a Succ(b)) -> Succ(add(a b))
+        // add(a, Zero) -> a
+        // add(a, Succ(b)) -> Succ(add(a, b))
         let add = p.declare("add", &two, nat);
         p.define(add, |b, args| {
             b.match_(args[1], nat, |b, ctor, fields| {
@@ -54,9 +54,9 @@ impl Library {
             })
         });
 
-        // sub(Zero b) -> Zero
+        // sub(Zero, b) -> Zero
         // sub(Succ(a) Zero) -> Succ(a)
-        // sub(Succ(a) Succ(b)) -> sub(a b)
+        // sub(Succ(a), Succ(b)) -> sub(a, b)
         let sub = p.declare("sub", &two, nat);
         p.define(sub, |b, args| {
             b.match_(args[0], nat, |b, ctor, left| {
@@ -73,8 +73,8 @@ impl Library {
             })
         });
 
-        // mul(a Zero) -> Zero
-        // mul(a Succ(b)) -> add(a mul(a b))
+        // mul(a, Zero) -> Zero
+        // mul(a, Succ(b)) -> add(a, mul(a, b))
         let mul = p.declare("mul", &two, nat);
         p.define(mul, |b, args| {
             b.match_(args[1], nat, |b, ctor, fields| {
@@ -92,11 +92,11 @@ impl Library {
         let less_than = p.declare("less_than", &two, bool_);
         compare(&mut p, less_than, (nat, zero), [false_, true_, false_]);
 
-        // mod(a Zero) -> a
+        // mod(a, Zero) -> a
         // mod(Zero Succ(b)) -> Zero
-        // mod(Succ(a) Succ(b)) -> r = mod(a Succ(b)) mod_step(equals(r b) r)
-        // mod_step(True r) -> Zero
-        // mod_step(False r) -> Succ(r)
+        // mod(Succ(a), Succ(b)) -> r = mod(a, Succ(b)) mod_step(equals(r, b), r)
+        // mod_step(True, r) -> Zero
+        // mod_step(False, r) -> Succ(r)
         let mod_step = p.declare("mod_step", &[bool_, nat], nat);
         p.define(mod_step, |b, args| {
             b.match_(args[0], bool_, |b, ctor, _| {
@@ -125,12 +125,12 @@ impl Library {
             })
         });
 
-        // div(a Zero) -> Zero
+        // div(a, Zero) -> Zero
         // div(Zero Succ(b)) -> Zero
         // div(Succ(a) Succ(b)) -> q = div(a Succ(b))
         //   div_step(equals(mod(a Succ(b)) b) q)
-        // div_step(True q) -> Succ(q)
-        // div_step(False q) -> q
+        // div_step(True, q) -> Succ(q)
+        // div_step(False, q) -> q
         let div_step = p.declare("div_step", &[bool_, nat], nat);
         p.define(div_step, |b, args| {
             b.match_(args[0], bool_, |b, ctor, _| {

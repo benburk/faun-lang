@@ -865,7 +865,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "numbers.fn",
-            "exports {Nat.*}\nNat : [Zero Succ(Nat)]\nsecret() -> Zero\n",
+            "exports {Nat.*}\nNat : [Zero, Succ(Nat)]\nsecret() -> Zero\n",
         );
         let entry = fixture.write("main.fn", "import numbers {Nat.*}\nid(x) -> Succ(x)\n");
         let loaded = load_program(&entry, &fixture.empty_prelude(), &fixture.host()).unwrap();
@@ -917,7 +917,7 @@ mod tests {
     #[test]
     fn standard_namespaces_are_path_stable() {
         let fixture = Fixture::new();
-        fixture.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)]\n");
+        fixture.write("nat.fn", "exports {Nat.*}\nNat : [Zero, Succ(Nat)]\n");
         let root = fixture.write(
             "standard.fn",
             "package {}\nimport nat {Nat.*}\nexports {Nat.*}\n",

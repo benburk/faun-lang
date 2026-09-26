@@ -2,7 +2,7 @@
 # names from it: `.*` a type with its constructors and methods, and
 # `exported: local` a name under another.
 
-import geometry.shapes {Shape.* unit_square: unit}
+import geometry.shapes {Shape.*, unit_square: unit}
 
 expect unit().area() == 1
-expect Square(3).area() == 9 & Oblong(2 5).area() == 10
+expect Square(3).area() == 9 & Oblong(2, 5).area() == 10

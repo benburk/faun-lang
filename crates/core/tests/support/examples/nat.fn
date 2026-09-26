@@ -3,33 +3,33 @@
 
 import std.host {Host}
 
-cmp : Nat Nat -> Order
-cmp(0 0) -> Eq
-cmp(0 Succ(_)) -> Lt
-cmp(Succ(_) 0) -> Gt
-cmp(Succ(m) Succ(n)) -> cmp(m n)
+cmp : (Nat, Nat) -> Order
+cmp(0, 0) -> Eq
+cmp(0, Succ(_)) -> Lt
+cmp(Succ(_), 0) -> Gt
+cmp(Succ(m), Succ(n)) -> cmp(m, n)
 
 under : Order -> Bool
 under(Lt) -> True
 under(_) -> False
 
-min : Nat Nat -> Nat
-min(a b) -> under(cmp(a b)).select(a b)
+min : (Nat, Nat) -> Nat
+min(a, b) -> under(cmp(a, b)).select(a, b)
 
-below : Nat Nat -> Bool
-below(_ 0) -> False
-below(0 Succ(_)) -> True
-below(Succ(a) Succ(b)) -> below(a b)
+below : (Nat, Nat) -> Bool
+below(_, 0) -> False
+below(0, Succ(_)) -> True
+below(Succ(a), Succ(b)) -> below(a, b)
 
-finish! : Host Bool Nat -> []
-finish!(host True n) ->
+finish! : (Host, Bool, Nat) -> []
+finish!(host, True, n) ->
   two = n + n
   four = two * two
   eight = two * four
-  host.exit!(min(four eight - two))
-finish!(host False _) -> host.exit!(0)
+  host.exit!(min(four, eight - two))
+finish!(host, False, _) -> host.exit!(0)
 
 main! : Host -> []
 main!(host) ->
   count = host.args.len()
-  finish!(host below(count 2) count)
+  finish!(host, below(count, 2), count)

@@ -1210,7 +1210,7 @@ fn a_descent_of_two_numbers_is_their_differences() {
     let (nat, zero, succ, bool_) = (library.nat, library.zero, library.succ, library.bool_);
     let (false_, true_) = (library.false_, library.true_);
     let mut p = library.program;
-    // at_most(a b): whether a <= b, by taking both down.
+    // at_most(a, b): whether a <= b, by taking both down.
     let at_most = p.declare("at_most", &[nat, nat], bool_);
     p.define(at_most, |b, args| {
         b.match_(args[0], nat, |b, ctor, fields| {
@@ -1228,7 +1228,7 @@ fn a_descent_of_two_numbers_is_their_differences() {
             }
         })
     });
-    // gap(a b): b - a where a <= b, and a - b past it, plus one.
+    // gap(a, b): b - a where a <= b, and a - b past it, plus one.
     let gap = p.declare("gap", &[nat, nat], nat);
     p.define(gap, |b, args| {
         b.match_(args[0], nat, |b, ctor, fields| {

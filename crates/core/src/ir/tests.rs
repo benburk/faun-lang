@@ -29,7 +29,7 @@ pub(super) fn host(program: &mut barb::Program, nat: barb::TypeId) -> World {
     }
 }
 
-/// `bounded!(host test n)`: `n` where `test` is true, and leaving with
+/// `bounded!(host, test, n)`: `n` where `test` is true, and leaving with
 /// nought where it is false. A program writes this to prove a count small
 /// before it does arithmetic on it.
 pub(super) fn bounded(library: &mut barb::fixture::Library, world: &World) -> barb::FnId {

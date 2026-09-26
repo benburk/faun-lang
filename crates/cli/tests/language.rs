@@ -33,7 +33,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
     (
         "a type nothing pins is Nat",
         "main! : Host -> []
-         main!(host) -> host.exit!([].len() + [[] []].len())",
+         main!(host) -> host.exit!([].len() + [[], []].len())",
         2,
     ),
     (
@@ -43,30 +43,30 @@ const RUNNING: &[(&str, &str, u32)] = &[
 
          main! : Host -> []
          main!(host) ->
-           doubled = [1 2].map(twice).fold(0 |s x| s + x)
-           wrapped = [3].map(Ok).map(|r| r.ok_or(0)).fold(0 |s x| s + x)
+           doubled = [1, 2].map(twice).fold(0, |s, x| s + x)
+           wrapped = [3].map(Ok).map(|r| r.ok_or(0)).fold(0, |s, x| s + x)
            host.exit!(doubled + wrapped)",
         9,
     ),
     (
         "an alias is its type",
-        "MyError = [NotFound SomethingElse]
-         Point = {x: Nat y: Nat}
+        "MyError = [NotFound, SomethingElse]
+         Point = {x: Nat, y: Nat}
          Numbers = List(Nat)
 
-         cat : Nat -> Result(Nat MyError)
+         cat : Nat -> Result(Nat, MyError)
          cat(0) -> Err(NotFound)
          cat(1) -> Err(SomethingElse)
          cat(n) -> Ok(n)
 
          sum : Point -> Nat
-         sum({x y}) -> x + y
+         sum({x, y}) -> x + y
 
          total : Numbers -> Nat
-         total(xs) -> xs.fold(0 |s x| s + x)
+         total(xs) -> xs.fold(0, |s, x| s + x)
 
          main! : Host -> []
-         main!(host) -> host.exit!(cat(5).ok_or(0) + sum({x: 1 y: 2}) + total([4]))",
+         main!(host) -> host.exit!(cat(5).ok_or(0) + sum({x: 1, y: 2}) + total([4]))",
         12,
     ),
     (
@@ -84,11 +84,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
     (
         "a type is ordered by defining cmp",
-        "Size : [Small Large].(
-           cmp : Size Size -> Order
-           cmp(Small Large) -> Lt
-           cmp(Large Small) -> Gt
-           cmp(_ _) -> Eq
+        "Size : [Small, Large].(
+           cmp : (Size, Size) -> Order
+           cmp(Small, Large) -> Lt
+           cmp(Large, Small) -> Gt
+           cmp(_, _) -> Eq
          )
 
          main! : Host -> []
@@ -97,17 +97,17 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
     (
         "? answers an Err early and joins its producers' rows",
-        "cat : Nat -> Result(Nat [NotFound SomethingElse])
+        "cat : Nat -> Result(Nat, [NotFound, SomethingElse])
          cat(0) -> Err(NotFound)
          cat(1) -> Err(SomethingElse)
          cat(n) -> Ok(n)
 
-         dog : Nat -> Result(Nat [Blah NotFound])
+         dog : Nat -> Result(Nat, [Blah, NotFound])
          dog(0) -> Err(NotFound)
          dog(1) -> Err(Blah)
          dog(n) -> Ok(n)
 
-         foo : Nat -> Result(Nat [Blah NotFound SomethingElse])
+         foo : Nat -> Result(Nat, [Blah, NotFound, SomethingElse])
          foo(n) ->
            x = cat(n)?
            y = dog(n + 1)?
@@ -115,7 +115,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
 
          inline(n) -> Ok(cat(n)? + dog(n)? * 2)
 
-         code : Result(Nat [Blah NotFound SomethingElse]) -> Nat
+         code : Result(Nat, [Blah, NotFound, SomethingElse]) -> Nat
          code(Ok(n)) -> n
          code(Err(NotFound)) -> 100
          code(Err(SomethingElse)) -> 101
@@ -127,43 +127,43 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
     (
         "? in a lambda answers from the lambda",
-        "half : Nat -> Result(Nat [Odd])
+        "half : Nat -> Result(Nat, [Odd])
          half(n) if n % 2 == 0 -> Ok(n / 2)
          half(_) -> Err(Odd)
 
          main! : Host -> []
          main!(host) ->
-           halves = [2 4].map(|n| Ok(half(n)? + 1))
-           host.exit!(halves.map(|r| r.ok_or(0)).fold(0 |s x| s + x))",
+           halves = [2, 4].map(|n| Ok(half(n)? + 1))
+           host.exit!(halves.map(|r| r.ok_or(0)).fold(0, |s, x| s + x))",
         5,
     ),
     (
         "tuples, record rows, updates and destructuring",
-        "swap : (Nat Bool) -> (Bool Nat)
-         swap((n b)) -> (b n)
+        "swap : ((Nat, Bool)) -> (Bool, Nat)
+         swap((n, b)) -> (b, n)
 
-         first((k _)) -> k
+         first((k, _)) -> k
 
-         get_name : {name: Nat *} -> Nat
+         get_name : {name: Nat, *} -> Nat
          get_name(r) -> r.name
 
          age_of(r) -> r.age
 
-         older(r) -> {age: r.age + 1 *r}
+         older(r) -> {age: r.age + 1, *r}
 
-         sub(x y) -> subtract((x y))
-         subtract((0 _)) -> 0
-         subtract((Succ(m) 0)) -> Succ(m)
-         subtract((Succ(m) Succ(n))) -> subtract((m n))
+         sub(x, y) -> subtract((x, y))
+         subtract((0, _)) -> 0
+         subtract((Succ(m), 0)) -> Succ(m)
+         subtract((Succ(m), Succ(n))) -> subtract((m, n))
 
          main! : Host -> []
          main!(host) ->
-           (flag n) = swap((3 True))
-           user = {name: 7 age: 30 city: 2}
+           (flag, n) = swap((3, True))
+           user = {name: 7, age: 30, city: 2}
            bumped = older(user)
-           {age *} = bumped
-           pairs = [(1 2) (3 4)].map(|(a b)| a * b).fold(0 |s x| s + x)
-           host.exit!(n + flag.to_nat() + get_name(user) + age + age_of(user) + first((5 6)) + sub(9 4) + pairs)",
+           {age, *} = bumped
+           pairs = [(1, 2), (3, 4)].map(|(a, b)| a * b).fold(0, |s, x| s + x)
+           host.exit!(n + flag.to_nat() + get_name(user) + age + age_of(user) + first((5, 6)) + sub(9, 4) + pairs)",
         96,
     ),
     (
@@ -207,14 +207,14 @@ const RUNNING: &[(&str, &str, u32)] = &[
 
          total : List(a) -> a where
            a.zero : a
-           a.add : a a -> a
-         total(values) -> values.fold(a.zero() |sum value| sum.add(value))
+           a.add : (a, a) -> a
+         total(values) -> values.fold(a.zero(), |sum, value| sum.add(value))
 
          main! : Host -> []
          main!(host) ->
            a = double(3) + double(U8.of_nat(200)).to_nat()
-           b = [1 2 3].sum() + (-10 + [-1 -2].sum()).abs() + total([4 5])
-           c = [[1 2] [3]].contains([3]).to_nat() + ([1 2] == [1 2]).to_nat() * 2
+           b = [1, 2, 3].sum() + (-10 + [-1, -2].sum()).abs() + total([4, 5])
+           c = [[1, 2], [3]].contains([3]).to_nat() + ([1, 2] == [1, 2]).to_nat() * 2
            host.exit!(a + b + c)",
         181,
     ),
@@ -231,7 +231,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          bytes(b) if b.to_nat() > 100 -> 30
          bytes(_) -> 40
 
-         nested : Result(U8 Str) -> Nat
+         nested : Result(U8, Str) -> Nat
          nested(Ok(7)) -> 1
          nested(Err(\"x\")) -> 2
          nested(_) -> 3
@@ -242,16 +242,16 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
     (
         "a record or a tuple is equal by its parts, and a tuple ordered by them",
-        "weigh : Bool Nat -> Nat
-         weigh(True n) -> n
-         weigh(False _) -> 0
+        "weigh : (Bool, Nat) -> Nat
+         weigh(True, n) -> n
+         weigh(False, _) -> 0
 
          main! : Host -> []
          main!(host) ->
-           same = weigh((1 \"a\") == (1 \"a\") 1) + weigh({x: 1 y: [2 3]} == {y: [2 3] x: 1} 2)
-           differ = weigh((1 2) != (1 3) 4) + weigh({x: 1 y: [2]} == {x: 1 y: [3]} 64)
-           ordered = weigh((1 (2 \"b\")) < (1 (2 \"c\")) 8) + weigh((2 1) > (1 9) 32) + weigh((1 1) < (1 1) 128)
-           host.exit!(same + differ + ordered + weigh([(1 2) (3 4)].contains((3 4)) 16))",
+           same = weigh((1, \"a\") == (1, \"a\"), 1) + weigh({x: 1, y: [2, 3]} == {y: [2, 3], x: 1}, 2)
+           differ = weigh((1, 2) != (1, 3), 4) + weigh({x: 1, y: [2]} == {x: 1, y: [3]}, 64)
+           ordered = weigh((1, (2, \"b\")) < (1, (2, \"c\")), 8) + weigh((2, 1) > (1, 9), 32) + weigh((1, 1) < (1, 1), 128)
+           host.exit!(same + differ + ordered + weigh([(1, 2), (3, 4)].contains((3, 4)), 16))",
         63,
     ),
     (
@@ -260,20 +260,20 @@ const RUNNING: &[(&str, &str, u32)] = &[
 
          Additive(a) = where
            a.zero : a
-           a.add : a a -> a
+           a.add : (a, a) -> a
 
          Summable(a) = where
            Additive(a)
            a.to_str : a -> Str
 
-         total : List(a) -> a where Summable(a) Additive(a)
-         total(values) -> values.fold(a.zero() |sum value| sum + value)
+         total : List(a) -> a where Summable(a), Additive(a)
+         total(values) -> values.fold(a.zero(), |sum, value| sum + value)
 
          Tally(r) = where
-           r.fold : r Nat (Nat e -> Nat) -> Nat
+           r.fold : (r, Nat, (Nat, e) -> Nat) -> Nat
 
-         tally : r e -> Nat where Tally(r)
-         tally(values _) -> values.fold(0 |count _| count + 1)
+         tally : (r, e) -> Nat where Tally(r)
+         tally(values, _) -> values.fold(0, |count, _| count + 1)
 
          Crate : [Crate(Nat)].(
            size : Crate -> Nat
@@ -284,7 +284,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          measure(x) -> x.size()
 
          main! : Host -> []
-         main!(host) -> host.exit!(total([1 2 3]) + total([-4 -5]).abs() + tally([7 8] \"e\") + measure(Crate(20)))",
+         main!(host) -> host.exit!(total([1, 2, 3]) + total([-4, -5]).abs() + tally([7, 8], \"e\") + measure(Crate(20)))",
         37,
     ),
     (
@@ -295,12 +295,12 @@ const RUNNING: &[(&str, &str, u32)] = &[
          )
 
          row : r -> Nat where
-           r.fold : r Nat (Nat x -> Nat) -> Nat
+           r.fold : (r, Nat, (Nat, x) -> Nat) -> Nat
            x.name : x -> Str
-         row(items) -> items.fold(0 |total item| total + item.name().len())
+         row(items) -> items.fold(0, |total, item| total + item.name().len())
 
          main! : Host -> []
-         main!(host) -> host.exit!(row([Person(\"ab\") Person(\"cde\")]))",
+         main!(host) -> host.exit!(row([Person(\"ab\"), Person(\"cde\")]))",
         5,
     ),
     (
@@ -318,12 +318,12 @@ const RUNNING: &[(&str, &str, u32)] = &[
            big = n > 10
              & n < 20
              & negated(-7) == 7
-           host.exit!(big.select(n 0))",
+           host.exit!(big.select(n, 0))",
         14,
     ),
     (
         "an or-pattern matches either alternative, binding the same names",
-        "Shape : [Circle(Nat) Square(Nat) Dot]
+        "Shape : [Circle(Nat), Square(Nat), Dot]
 
          size : Shape -> Nat
          size(Circle(n) | Square(n)) -> n
@@ -335,28 +335,28 @@ const RUNNING: &[(&str, &str, u32)] = &[
          bucket(_) -> 2
 
          opens : List(Nat) -> Nat
-         opens([1 | 2 *_] | [_ 3 *_]) -> 1
+         opens([1 | 2, *_] | [_, 3, *_]) -> 1
          opens(_) -> 0
 
          main! : Host -> []
          main!(host) ->
            sizes = size(Circle(3)) + size(Square(4)) + size(Dot)
            buckets = bucket(0) + bucket(2) * 10 + bucket(7) * 100
-           opened = opens([2 9]) + opens([7 3]) * 2 + opens([7 4]) * 4
+           opened = opens([2, 9]) + opens([7, 3]) * 2 + opens([7, 4]) * 4
            host.exit!(sizes + buckets + opened)",
         7 + 210 + 3,
     ),
     (
         "tags compare and print structurally, and results compare by their sides",
-        "kind : Nat -> [Small Big(Nat)]
+        "kind : Nat -> [Small, Big(Nat)]
          kind(n) if n < 10 -> Small
          kind(n) -> Big(n)
 
-         parse : Str -> Result(Nat [Malformed])
+         parse : Str -> Result(Nat, [Malformed])
          parse(text) -> Nat.from_str(text)
 
          opens : List(Nat) -> Nat
-         opens([a b *]) -> a + b
+         opens([a, b, *]) -> a + b
          opens(_) -> 0
 
          bit : Bool -> Nat
@@ -367,28 +367,28 @@ const RUNNING: &[(&str, &str, u32)] = &[
            tags = bit(kind(3) == Small) + bit(kind(30) == Big(30)) * 2 + bit(kind(30) != Big(31)) * 4
            printed = bit(\"${kind(30)} ${kind(1)}\" == \"Big(30) Small\") * 8
            results = bit(parse(\"48\") == Ok(48)) * 16 + bit(parse(\"x\") == Err(Malformed)) * 32
-           host.exit!(tags + printed + results + opens([1 2 9]) * 64)",
+           host.exit!(tags + printed + results + opens([1, 2, 9]) * 64)",
         63 + 3 * 64,
     ),
     (
         "a definition is made for each callback, so a callback's own calls stop as they would alone",
         "vowels : List(U8) -> Nat
-         vowels(bytes) -> bytes.count(|byte| ['a' 'e'].contains(byte))
+         vowels(bytes) -> bytes.count(|byte| ['a', 'e'].contains(byte))
 
-         twice : Nat (Nat -> Nat) -> Nat
-         twice(n f) -> f(f(n))
+         twice : (Nat, Nat -> Nat) -> Nat
+         twice(n, f) -> f(f(n))
 
-         shifted : Nat (Nat -> Nat) -> Nat
-         shifted(n f) -> twice(n |x| f(x) + 1)
+         shifted : (Nat, Nat -> Nat) -> Nat
+         shifted(n, f) -> twice(n, |x| f(x) + 1)
 
          double : Nat -> Nat
          double(n) -> n * 2
 
          main! : Host -> []
          main!(host) ->
-           counted = vowels(['a' 'b' 'e'])
-           wrapped = shifted(1 double)
-           nested = [[1 2] [3]].map(|inner| inner.map(|x| x * 10).sum()).sum()
+           counted = vowels(['a', 'b', 'e'])
+           wrapped = shifted(1, double)
+           nested = [[1, 2], [3]].map(|inner| inner.map(|x| x * 10).sum()).sum()
            host.exit!(counted + wrapped * 10 + nested)",
         2 + 70 + 60,
     ),
@@ -425,7 +425,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
     (
         "a range is a test, which only a clause makes",
         "main! : Host -> []
-         main!(host) -> host.exit!([1 2].map(|0..9| 1).len())",
+         main!(host) -> host.exit!([1, 2].map(|0..9| 1).len())",
         "a range pattern is a test, which only a clause's guard makes",
     ),
     (
@@ -440,17 +440,17 @@ const REFUSED: &[(&str, &str, &str)] = &[
     ),
     (
         "a callback wrapped anew each time round would need a definition for each round",
-        "nest : Nat (Nat -> Nat) -> Nat
-         nest(0 f) -> f(0)
-         nest(Succ(n) f) -> nest(n |x| f(x) + 1)
+        "nest : (Nat, Nat -> Nat) -> Nat
+         nest(0, f) -> f(0)
+         nest(Succ(n), f) -> nest(n, |x| f(x) + 1)
 
          main! : Host -> []
-         main!(host) -> host.exit!(nest(3 |x| x))",
+         main!(host) -> host.exit!(nest(3, |x| x))",
         "wraps the callback it was handed",
     ),
     (
         "every alternative of an or-pattern binds the same names",
-        "Shape : [Circle(Nat) Dot]
+        "Shape : [Circle(Nat), Dot]
 
          size : Shape -> Nat
          size(Circle(n) | Dot) -> n",
@@ -458,14 +458,14 @@ const REFUSED: &[(&str, &str, &str)] = &[
     ),
     (
         "every alternative of an or-pattern binds a name at one type",
-        "size : [Count(Nat) Name(Str)] -> Nat
+        "size : [Count(Nat), Name(Str)] -> Nat
          size(Count(n) | Name(n)) -> 0",
         "type mismatch",
     ),
     (
         "a lambda's pattern holds no or-pattern",
         "total : List(Nat) -> Nat
-         total(values) -> values.fold(0 |sum (1 | 2)| sum)",
+         total(values) -> values.fold(0, |sum, (1 | 2)| sum)",
         "an `|` pattern may stand only among a clause's parameters",
     ),
     (
@@ -496,7 +496,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
          half(n) -> n / 2
 
          main! : Host -> []
-         main!(host) -> host.exit!(True.select(twice half)(3))",
+         main!(host) -> host.exit!(True.select(twice, half)(3))",
         "cannot be bound, answered, or stored",
     ),
     (
@@ -543,7 +543,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
     ),
     (
         "a type without cmp has no order",
-        "Size : [Small Large]
+        "Size : [Small, Large]
 
          main! : Host -> []
          main!(host) -> host.exit!((Small < Large).to_nat())",
@@ -551,17 +551,17 @@ const REFUSED: &[(&str, &str, &str)] = &[
     ),
     (
         "? admits no tag a signature does not hold",
-        "dog : Nat -> Result(Nat [Blah NotFound])
+        "dog : Nat -> Result(Nat, [Blah, NotFound])
          dog(0) -> Err(Blah)
          dog(n) -> Ok(n)
 
-         bar : Nat -> Result(Nat [NotFound])
+         bar : Nat -> Result(Nat, [NotFound])
          bar(n) -> Ok(dog(n)?)",
         "`Blah` is not among the tags of `[NotFound]`",
     ),
     (
         "? answers an Err, so its definition answers a Result",
-        "dog : Nat -> Result(Nat [Blah])
+        "dog : Nat -> Result(Nat, [Blah])
          dog(n) -> Ok(n)
 
          bar : Nat -> Nat
@@ -570,7 +570,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
     ),
     (
         "a tuple is not a record",
-        "pair() -> (1 2)
+        "pair() -> (1, 2)
 
          bad : {x: Nat} -> Nat
          bad(_) -> 0
@@ -581,7 +581,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
     ),
     (
         "a record without the field is refused where it is read",
-        "get_name : {name: Nat *} -> Nat
+        "get_name : {name: Nat, *} -> Nat
          get_name(r) -> r.name
 
          main! : Host -> []
@@ -591,15 +591,15 @@ const REFUSED: &[(&str, &str, &str)] = &[
     (
         "an update adds no field",
         "main! : Host -> []
-         main!(host) -> host.exit!({extra: 1 *{age: 3}}.age)",
+         main!(host) -> host.exit!({extra: 1, *{age: 3}}.age)",
         "has no field `extra`",
     ),
     (
         "a tuple's cases must be covered",
-        "both : (Bool Bool) -> Nat
-         both((True True)) -> 1
-         both((False _)) -> 0",
-        "no clause matches `both((True False))`",
+        "both : ((Bool, Bool)) -> Nat
+         both((True, True)) -> 1
+         both((False, _)) -> 0",
+        "no clause matches `both((True, False))`",
     ),
     (
         "a word is not written past its width",
@@ -668,21 +668,21 @@ const REFUSED: &[(&str, &str, &str)] = &[
     ),
     (
         "a record has no order of its fields",
-        "less : {x: Nat} {x: Nat} -> Bool
-         less(a b) -> a < b",
+        "less : ({x: Nat}, {x: Nat}) -> Bool
+         less(a, b) -> a < b",
         "no type-compatible field or method `cmp`",
     ),
     (
         "an open record's other fields are a caller's",
-        "same : {x: Nat *} {x: Nat *} -> Bool
-         same(a b) -> a == b",
+        "same : ({x: Nat, *}, {x: Nat, *}) -> Bool
+         same(a, b) -> a == b",
         "a record with `*` has no `equals`",
     ),
     (
         "only an effect stands on a line of its own",
         "main! : Host -> []
          main!(host) ->
-           [1 2].len()
+           [1, 2].len()
            host.exit!(0)",
         "this value is worked out and then thrown away; remove the line, or bind the value to a name if you need it",
     ),
@@ -705,7 +705,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
         "Nought(a) = where
            a.zero : a
 
-         pick : a -> a where Nought(a) a.zero : Nat
+         pick : a -> a where Nought(a), a.zero : Nat
          pick(x) -> x",
         "`a.zero` is required twice, at two different types",
     ),
@@ -730,11 +730,11 @@ const REFUSED: &[(&str, &str, &str)] = &[
     (
         "a variable no implementation determines is refused where it is used",
         "count : r -> Nat where
-           r.fold : r c (c Nat -> c) -> c
+           r.fold : (r, c, (c, Nat) -> c) -> c
          count(_) -> 0
 
          main! : Host -> []
-         main!(host) -> host.exit!(count([1 2]))",
+         main!(host) -> host.exit!(count([1, 2]))",
         "nothing determines the types a `where` bound's member `fold` takes here",
     ),
 ];

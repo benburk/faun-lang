@@ -2,8 +2,8 @@
 
 import std.host {Host}
 
-leave! : Host Nat -> []
-leave!(host n) -> host.exit!(n)
+leave! : (Host, Nat) -> []
+leave!(host, n) -> host.exit!(n)
 
 main! : Host -> []
-main!(host) -> leave!(host 2 + 2)
+main!(host) -> leave!(host, 2 + 2)

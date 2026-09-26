@@ -1,7 +1,7 @@
 //! Whether each definition's clauses cover every value its parameters hold.
 //!
 //! This runs on checked HIR, before specialization, so a generic definition
-//! nothing calls is judged too: whether `[]` and `[x *rest]` cover a list
+//! nothing calls is judged too: whether `[]` and `[x, *rest]` cover a list
 //! does not depend on what the list holds. It is Maranget's usefulness
 //! ("Warnings for pattern matching", 2007): the clauses cover everything
 //! exactly when a row of wildcards after them would match nothing, and when
@@ -493,7 +493,7 @@ impl<'a> Coverage<'a> {
             .iter()
             .map(|pattern| self.render(pattern, symbols))
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(", ")
     }
 
     /// An example pattern as the program would write it.
@@ -509,7 +509,7 @@ impl<'a> Coverage<'a> {
                     unreachable!("a list's cons takes a head and a tail")
                 };
                 format!(
-                    "[{} *{}]",
+                    "[{}, *{}]",
                     self.render(head, symbols),
                     self.render(tail, symbols)
                 )
@@ -535,7 +535,7 @@ impl<'a> Coverage<'a> {
                         self.render(field, symbols)
                     ))
                     .collect::<Vec<_>>()
-                    .join(" ")
+                    .join(", ")
             ),
         }
     }

@@ -287,7 +287,7 @@ fn has_variable(ty: &h::Type) -> bool {
 }
 
 /// Replace every alias in the program's written types by what it names.
-/// An alias is transparent: `Point = {x: Nat y: Nat}` is the record type,
+/// An alias is transparent: `Point = {x: Nat, y: Nat}` is the record type,
 /// so a bare record already has it, and nothing downstream sees the alias.
 fn expand_aliases(
     modules: &mut [h::Module],
@@ -1591,21 +1591,21 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "nat.fn",
-            "exports {Nat.*}\nNat : [Zero Succ(Nat)].(of_nat : Nat -> Nat\nof_nat(n) -> n)\n",
+            "exports {Nat.*}\nNat : [Zero, Succ(Nat)].(of_nat : Nat -> Nat\nof_nat(n) -> n)\n",
         );
         fixture.write(
             "int.fn",
-            "exports {Int.*}\nInt : [Pos(Nat) NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
+            "exports {Int.*}\nInt : [Pos(Nat), NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
         );
         fixture.write("u8.fn", "exports {U8.*}\nU8 : Nat\n");
         fixture.write(
             "list.fn",
-            "exports {List.*}\nList(a) : [Nil Cons(a List(a))]\n",
+            "exports {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
         );
         fixture.write("str.fn", "exports {Str}\nStr : List(U8)\n");
         let standard = fixture.write(
             "standard.fn",
-            "package {}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8.*}\nimport list {List.*}\nimport str {Str}\nexports {Nat.* Int.* U8.* List.* Str}\n",
+            "package {}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8.*}\nimport list {List.*}\nimport str {Str}\nexports {Nat.*, Int.*, U8.*, List.*, Str}\n",
         );
         let entry = fixture.write(
             "main.fn",

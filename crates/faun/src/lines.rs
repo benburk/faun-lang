@@ -329,7 +329,7 @@ impl<'s> Grouping<'s> {
     }
 
     /// A type's name and its parameters, if it is written with any:
-    /// `Name`, or `Name(a b)`.
+    /// `Name`, or `Name(a, b)`.
     fn type_head(&self, head: Expr) -> Result<(Name, Option<Vec<Name>>), Error> {
         let span = head.span;
         match head.kind {
@@ -397,7 +397,7 @@ impl<'s> Grouping<'s> {
         }
     }
 
-    /// `a.add : a a -> a`: a `where` list's constraint on a line of its own,
+    /// `a.add : (a, a) -> a`: a `where` list's constraint on a line of its own,
     /// added to the list just before it.
     fn constraint(
         &mut self,
@@ -643,7 +643,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
             if !matches!(base.kind, ExprKind::Wild) {
                 return Err(error(
                     base.span,
-                    "a record pattern names no rest: `{x *}` matches any other fields",
+                    "a record pattern names no rest: `{x, *}` matches any other fields",
                 ));
             }
             record(span, fields, true, source)
@@ -734,7 +734,7 @@ fn expression(expr: &Expr) -> Result<(), Error> {
             {
                 return Err(error(
                     rest.span,
-                    "a list's rest names what follows: `[a *rest]`",
+                    "a list's rest names what follows: `[a, *rest]`",
                 ));
             }
             elements
@@ -747,7 +747,7 @@ fn expression(expr: &Expr) -> Result<(), Error> {
             if matches!(base.kind, ExprKind::Wild) {
                 return Err(error(
                     base.span,
-                    "a record's rest names the record it updates: `{x: 1 *base}`",
+                    "a record's rest names the record it updates: `{x: 1, *base}`",
                 ));
             }
             fields

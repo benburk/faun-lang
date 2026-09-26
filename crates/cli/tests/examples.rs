@@ -42,7 +42,7 @@ fn minimal_hello_says_hello() {
 fn streams_answer_what_they_moved_or_what_they_met() {
     let package = support::Package::new(
         "streams",
-        "import std.host {Host IoError.*}
+        "import std.host {Host, IoError.*}
 
          main! : Host -> []
          main!(host) ->
@@ -51,7 +51,7 @@ fn streams_answer_what_they_moved_or_what_they_met() {
            wrote = host.stdout.write_all!(text.to_utf8())
            host.exit!(status(wrote))
 
-         status : Result(Nat IoError) -> Nat
+         status : Result(Nat, IoError) -> Nat
          status(Ok(n)) -> n % 100
          status(Err(BrokenPipe)) -> 101
          status(Err(NoSpace)) -> 102
@@ -99,7 +99,7 @@ fn runners_print_what_a_program_answers_and_report_what_it_fails_with() {
         "run-result-text",
         "import std.host {Host}
 
-         check : {stdin: Str} -> Result(Nat Str)
+         check : {stdin: Str} -> Result(Nat, Str)
          check({stdin}) if stdin.len() > 3 -> Err(\"too long\")
          check({stdin}) -> Ok(stdin.len())
 
@@ -128,11 +128,11 @@ fn an_effect_on_its_own_line_goes_on_to_the_next() {
            host.println!(\"Hello, world!\")
            name = \"Faun\"
            host.print!(\"Hi, \")
-           greet!(host name)
+           greet!(host, name)
            host.exit!(3)
 
-         greet! : Host Str -> {}
-         greet!(host name) ->
+         greet! : (Host, Str) -> {}
+         greet!(host, name) ->
            host.println!(name)
            {}",
     );
@@ -172,7 +172,7 @@ fn argument_runners_hand_the_program_its_arguments() {
 
     let second = support::Package::new(
         "run-result-args",
-        "second : {args: List(Str)} -> Result(Str [OutOfBounds])
+        "second : {args: List(Str)} -> Result(Str, [OutOfBounds])
          second({args}) -> args.get(1)
 
          main!(host) -> host.run_result_args!(second)",

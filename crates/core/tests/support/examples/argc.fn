@@ -2,16 +2,16 @@
 
 import std.host {Host}
 
-below : Nat Nat -> Bool
-below(_ 0) -> False
-below(0 Succ(_)) -> True
-below(Succ(a) Succ(b)) -> below(a b)
+below : (Nat, Nat) -> Bool
+below(_, 0) -> False
+below(0, Succ(_)) -> True
+below(Succ(a), Succ(b)) -> below(a, b)
 
-finish! : Host Bool Nat -> []
-finish!(host True n) -> host.exit!(n + n + n + n)
-finish!(host False _) -> host.exit!(0)
+finish! : (Host, Bool, Nat) -> []
+finish!(host, True, n) -> host.exit!(n + n + n + n)
+finish!(host, False, _) -> host.exit!(0)
 
 main! : Host -> []
 main!(host) ->
   count = host.args.len()
-  finish!(host below(count 2) count)
+  finish!(host, below(count, 2), count)

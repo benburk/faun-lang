@@ -74,7 +74,7 @@ impl Standard {
         let u8_zero = flags(p, "u8_zero", no);
         let u8_ones = flags(p, "u8_ones", yes);
 
-        // digit(False n) -> add(n n); digit(True n) -> Succ(add(n n))
+        // digit(False, n) -> add(n, n); digit(True, n) -> Succ(add(n, n))
         let digit = p.declare("u8_digit", &[bool_, nat], nat);
         p.define(digit, |b, args| {
             let doubled = b.call(add, &[args[1], args[1]]);
@@ -178,12 +178,12 @@ impl Standard {
         program
     }
 
-    /// `exit!(host status)`.
+    /// `exit!(host, status)`.
     fn exit(&self, b: &mut barb::Builder<'_>, host: barb::Atom, status: barb::Atom) -> barb::Atom {
         b.call(self.world.exit, &[host, status])
     }
 
-    /// `exit!(host Zero)`.
+    /// `exit!(host, Zero)`.
     fn exit_zero(&self, b: &mut barb::Builder<'_>, host: barb::Atom) -> barb::Atom {
         let zero = b.con(self.library.zero, &[]);
         self.exit(b, host, zero)
@@ -396,7 +396,7 @@ fn runtime_products_and_signed_sums_lower_without_erasing_unused_bindings() {
     }
 }
 
-/// `select!(host x)` leaves with nought where `x` is built by `good` and
+/// `select!(host, x)` leaves with nought where `x` is built by `good` and
 /// works out a byte's value where it is anything else, and `main!` calls it
 /// with a value built by `argument`.
 fn selected(owner_is_nat: bool, good: usize, argument: usize) -> barb::Program {
@@ -465,8 +465,8 @@ fn recognized_definition_bodies_do_not_demand_runtime_representations() {
         source.ctor_at(int, 0),
     );
     let world = host(&mut source, nat);
-    // add(a Zero) -> ignored = Pos(a) a
-    // add(a Succ(b)) -> Succ(add(a b))
+    // add(a, Zero) -> ignored = Pos(a) a
+    // add(a, Succ(b)) -> Succ(add(a, b))
     let add = source.declare("add", &[nat, nat], nat);
     source.define(add, |b, args| {
         b.match_(args[1], nat, |b, ctor, fields| {
@@ -508,7 +508,7 @@ fn unsupported_values_after_nonreturning_bindings_are_not_lowered() {
             standard.world.host,
         );
         let p = &mut standard.library.program;
-        // stop!(h Zero) -> exit!(h Zero); stop!(h Succ(n)) -> exit!(h Zero)
+        // stop!(h, Zero) -> exit!(h, Zero); stop!(h, Succ(n)) -> exit!(h, Zero)
         let stop = p.declare_named(
             "stop!",
             &[("host", host_type), ("n", nat)],

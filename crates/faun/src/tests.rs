@@ -55,7 +55,7 @@ fn a_line_goes_on_after_an_arrow_or_an_operator_and_into_a_chain() {
     let lines = body("f(x) ->\n  x\n    .g()\n    + 1 *\n    2\n");
     assert!(lines.bindings.is_empty());
     let module = parse(
-        "sum : List(a) -> a where\n  a.zero : a\n  a.add : a a -> a\nsum(values) -> values\n",
+        "sum : List(a) -> a where\n  a.zero : a\n  a.add : (a, a) -> a\nsum(values) -> values\n",
     )
     .unwrap();
     assert!(matches!(
@@ -65,16 +65,22 @@ fn a_line_goes_on_after_an_arrow_or_an_operator_and_into_a_chain() {
 }
 
 #[test]
-fn spacing_that_could_mean_two_things_is_refused() {
-    let error = parse("f(a b) ->\n  [a -b]\n").unwrap_err();
-    assert!(error.message.contains("`(-b)`"), "{}", error.message);
-    let error = parse("f(a b) -> a- b\n").unwrap_err();
+fn elements_are_parted_by_commas_however_they_are_spaced() {
+    let lines = body("f(a, b) ->\n  [a -b, a- b,]\n");
+    assert!(matches!(
+        lines.result.kind,
+        ExprKind::List(ref elements, None) if elements.len() == 2
+            && elements.iter().all(|element| matches!(element.kind, ExprKind::Binary(..)))
+    ));
+    let error = parse("f(a b) -> a\n").unwrap_err();
+    assert!(error.message.contains("`,`"), "{}", error.message);
+    let error = parse("f(a) -> (a,)\n").unwrap_err();
     assert!(
-        error.message.contains("`-` has space on one side only"),
+        error.message.contains("at least two members"),
         "{}",
         error.message
     );
-    let lines = body("f(a) ->\n  [-4 -5 *a]\n");
+    let lines = body("f(a) ->\n  [-4, -5, *a]\n");
     assert!(
         matches!(lines.result.kind, ExprKind::List(ref elements, Some(_)) if elements.len() == 2)
     );
@@ -85,7 +91,7 @@ fn parentheses_nest_without_trying_each_reading_again() {
     let depth = 200;
     let source = format!("f(x) -> {}x{}\n", "(".repeat(depth), ")".repeat(depth));
     assert!(matches!(body(&source).result.kind, ExprKind::Name(_)));
-    let types = parse("f : (a b -> c) (a b) (a) -> {x: a *}\n").unwrap();
+    let types = parse("f : ((a, b) -> c, (a, b), (a)) -> {x: a, *}\n").unwrap();
     assert!(matches!(
         &types.items[0],
         Item::Signature(signature) if signature.parameters.len() == 3
@@ -103,7 +109,7 @@ fn patterns(source: &str) -> Vec<Pattern> {
 #[test]
 fn a_pattern_is_the_expression_that_builds_what_it_matches() {
     let written = patterns(
-        "f(x _ Some(y) Opt.None [a *] [b *rest] {c *} {d e: 1} (g h) 1..9 -2 'z' \"s\" A | B) -> x\n",
+        "f(x, _, Some(y), Opt.None, [a, *], [b, *rest], {c, *}, {d, e: 1}, (g, h), 1..9, -2, 'z', \"s\", A | B) -> x\n",
     );
     assert!(matches!(
         written[..],
@@ -133,7 +139,7 @@ fn a_pattern_is_the_expression_that_builds_what_it_matches() {
             Pattern::Or { .. },
         ]
     ));
-    let lines = body("f(xs) ->\n  Some(y) = xs.first()\n  xs.map(|Some(z) _| z)\n");
+    let lines = body("f(xs) ->\n  Some(y) = xs.first()\n  xs.map(|Some(z), _| z)\n");
     assert!(matches!(
         lines.bindings[0].pattern,
         Pattern::Constructor { .. }
@@ -147,7 +153,7 @@ fn what_is_not_a_pattern_or_only_a_pattern_says_so() {
         ("f(x + 1) -> x\n", "`x + 1` is not a pattern"),
         ("f(g(x)) -> x\n", "`g(x)` is not a pattern"),
         ("f(x) -> _\n", "`_` stands only in a pattern"),
-        ("f(x) -> [x *]\n", "a list's rest names what follows"),
+        ("f(x) -> [x, *]\n", "a list's rest names what follows"),
         ("f(x) -> 1..2\n", "a range stands only in a pattern"),
         ("f(9..0) -> 1\n", "`9..0` is reversed"),
         ("f(-1..-5) -> 1\n", "`-1..-5` is reversed"),
@@ -171,7 +177,7 @@ fn what_is_not_a_pattern_or_only_a_pattern_says_so() {
 #[test]
 fn every_line_that_cannot_be_read_is_told_at_once() {
     let error =
-        parse("f(x) -> x .y\ng(y) -> y\nh(z) -> [z -w]\nk(w) -> w)\nm(v) -> v\n").unwrap_err();
+        parse("f(x) -> x .y\ng(y) -> y\nh(z) -> [z w]\nk(w) -> w)\nm(v) -> v\n").unwrap_err();
     let told: Vec<_> = std::iter::once(&error)
         .chain(&error.also)
         .map(|error| (error.line, error.message.as_str()))
@@ -180,7 +186,7 @@ fn every_line_that_cannot_be_read_is_told_at_once() {
     assert_eq!(told[0].0, 1);
     assert!(told[0].1.contains("no space around it"), "{told:?}");
     assert_eq!(told[1].0, 3);
-    assert!(told[1].1.contains("`(-b)`"), "{told:?}");
+    assert!(told[1].1.contains("`,`"), "{told:?}");
     assert_eq!(told[2].0, 4);
     assert!(told[2].1.contains("found `)`"), "{told:?}");
 }
@@ -201,7 +207,7 @@ fn clauses(source: &str) -> Vec<Clause> {
 #[test]
 fn a_guard_stands_between_a_clause_s_patterns_and_its_arrow() {
     let read = clauses(
-        "f(Some(x) y) if x > 1 & y.ok() | !x ->\n  z = x\n  z\nf(_ _) -> 0\ng(x) if\n  x -> x\n",
+        "f(Some(x), y) if x > 1 & y.ok() | !x ->\n  z = x\n  z\nf(_, _) -> 0\ng(x) if\n  x -> x\n",
     );
     let [guarded, fallback, continued] = &read[..] else {
         panic!("three clauses, found {read:?}");
@@ -235,7 +241,7 @@ fn a_guard_is_one_expression_and_only_a_clause_has_one() {
 
 #[test]
 fn a_range_s_ends_may_be_negated_or_left_open() {
-    let written = patterns("f(_..-1 -3..5 0.._ -2..-1) -> 1\n");
+    let written = patterns("f(_..-1, -3..5, 0.._, -2..-1) -> 1\n");
     let ends: Vec<_> = written
         .iter()
         .map(|pattern| match pattern {

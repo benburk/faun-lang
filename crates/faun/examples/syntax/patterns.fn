@@ -1,28 +1,28 @@
 # A pattern is written as the expression that builds what it matches.
 
 # Names and `_`.
-second : Nat Nat -> Nat
-second(_ b) -> b
+second : (Nat, Nat) -> Nat
+second(_, b) -> b
 
-expect second(1 2) == 2
+expect second(1, 2) == 2
 
 # Constructors, nested, and an or-pattern.
-Shape : [Circle(Nat) Rect(Nat Nat) Dot]
+Shape : [Circle(Nat), Rect(Nat, Nat), Dot]
 
 area : Shape -> Nat
 area(Circle(r)) -> 3 * r * r
-area(Rect(w h)) -> w * h
+area(Rect(w, h)) -> w * h
 area(Dot) -> 0
 
-expect area(Circle(2)) == 12 & area(Rect(2 5)) == 10 & area(Dot) == 0
+expect area(Circle(2)) == 12 & area(Rect(2, 5)) == 10 & area(Dot) == 0
 
 flat : Shape -> Bool
-flat(Dot | Rect(0 _) | Rect(_ 0)) -> True
+flat(Dot | Rect(0, _) | Rect(_, 0)) -> True
 flat(_) -> False
 
-expect flat(Dot) & flat(Rect(0 3)) & !flat(Rect(1 1)) & !flat(Circle(0))
+expect flat(Dot) & flat(Rect(0, 3)) & !flat(Rect(1, 1)) & !flat(Circle(0))
 
-unwrap : Result(Result(Nat Str) Str) -> Nat
+unwrap : Result(Result(Nat, Str), Str) -> Nat
 unwrap(Ok(Ok(n))) -> n
 unwrap(Ok(Err(_))) -> 1
 unwrap(Err(_)) -> 0
@@ -33,35 +33,35 @@ expect unwrap(Ok(Ok(7))) == 7 & unwrap(Ok(Err("no"))) == 1 & unwrap(Err("no")) =
 describe : List(Nat) -> Nat
 describe([]) -> 0
 describe([a]) -> a
-describe([a b]) -> a + b
-describe([a b *]) -> a * b
+describe([a, b]) -> a + b
+describe([a, b, *]) -> a * b
 
-expect describe([]) == 0 & describe([5]) == 5 & describe([2 3]) == 5 & describe([2 3 4]) == 6
+expect describe([]) == 0 & describe([5]) == 5 & describe([2, 3]) == 5 & describe([2, 3, 4]) == 6
 
 tail_len : List(Nat) -> Nat
-tail_len([_ *rest]) -> rest.len()
+tail_len([_, *rest]) -> rest.len()
 tail_len([]) -> 0
 
-expect tail_len([1 2 3]) == 2 & tail_len([]) == 0
+expect tail_len([1, 2, 3]) == 2 & tail_len([]) == 0
 
 # Records: fields by name, renamed, and left open.
-Point : {x: Nat y: Nat}
+Point : {x: Nat, y: Nat}
 
 sum_point : Point -> Nat
-sum_point(Point({x y})) -> x + y
+sum_point(Point({x, y})) -> x + y
 
-expect sum_point(Point({x: 2 y: 3})) == 5 & sum_point(Point({y: 3 x: 2})) == 5
+expect sum_point(Point({x: 2, y: 3})) == 5 & sum_point(Point({y: 3, x: 2})) == 5
 
-first_x : {x: Nat y: Nat} -> Nat
-first_x({x: across *}) -> across
+first_x : {x: Nat, y: Nat} -> Nat
+first_x({x: across, *}) -> across
 
-expect first_x({x: 4 y: 9}) == 4
+expect first_x({x: 4, y: 9}) == 4
 
 # Tuples.
-swap_sum : (Nat Nat) -> Nat
-swap_sum((a b)) -> b * 10 + a
+swap_sum : ((Nat, Nat)) -> Nat
+swap_sum((a, b)) -> b * 10 + a
 
-expect swap_sum((1 2)) == 21
+expect swap_sum((1, 2)) == 21
 
 # Numerals and negative numerals.
 classify : Int -> Nat
@@ -125,15 +125,15 @@ expect wide(5) == 1 & wide(4) == 0 & wide(20000000000) == 2 & wide(20000000001) 
 
 # Ranges within a list, as a table of UTF-8's three-byte forms.
 three_byte : List(U8) -> Bool
-three_byte([0xe0 0xa0..0xbf 0x80..0xbf]) -> True
-three_byte([0xe1..0xec 0x80..0xbf 0x80..0xbf]) -> True
+three_byte([0xe0, 0xa0..0xbf, 0x80..0xbf]) -> True
+three_byte([0xe1..0xec, 0x80..0xbf, 0x80..0xbf]) -> True
 three_byte(_) -> False
 
-expect three_byte([0xe0 0xa0 0x80]) & !three_byte([0xe0 0x9f 0x80]) & three_byte([0xe5 0xbf 0xbf])
+expect three_byte([0xe0, 0xa0, 0x80]) & !three_byte([0xe0, 0x9f, 0x80]) & three_byte([0xe5, 0xbf, 0xbf])
 
 # A range in a constructor, beside a guard, and in each of an or-pattern's
 # alternatives, which are a row each.
-reading : [Level(Nat) Off] -> Nat
+reading : [Level(Nat), Off] -> Nat
 reading(Level(0..9)) if True -> 0
 reading(Level(n)) -> n
 reading(Off) -> 99
@@ -155,10 +155,10 @@ greeting(_) -> 0
 expect greeting("hello") == 1 & greeting("hi") == 2 & greeting("hey") == 0
 
 # A binding takes a pattern, and so does a lambda's parameter.
-pair_sum : (Nat Nat) -> Nat
+pair_sum : ((Nat, Nat)) -> Nat
 pair_sum(pair) ->
-  (a b) = pair
+  (a, b) = pair
   a + b
 
-expect pair_sum((3 4)) == 7
-expect [(1 2) (3 4)].map(|(a b)| a * b) == [2 12]
+expect pair_sum((3, 4)) == 7
+expect [(1, 2), (3, 4)].map(|(a, b)| a * b) == [2, 12]

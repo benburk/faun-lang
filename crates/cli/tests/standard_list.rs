@@ -8,7 +8,7 @@ mod support;
 use support::Package;
 
 /// Each case: what it exercises, the status it exits with, and what it
-/// leaves with from `xs`, `[0 1 2 3 4]`, and `n`, its length.
+/// leaves with from `xs`, `[0, 1, 2, 3, 4]`, and `n`, its length.
 const CASES: &[(&str, &str, u32)] = &[
     ("len", "xs.len() + xs.take(0).len()", 5),
     (
@@ -16,31 +16,35 @@ const CASES: &[(&str, &str, u32)] = &[
         "xs.is_empty().to_nat() + xs.take(0).is_empty().to_nat() * 2",
         2,
     ),
-    ("append", "xs.append(9).get_or(5 0)", 9),
+    ("append", "xs.append(9).get_or(5, 0)", 9),
     (
         "extend",
-        "xs.extend([7 8]).get_or(6 0) + xs.extend([7 8]).len() * 10",
+        "xs.extend([7, 8]).get_or(6, 0) + xs.extend([7, 8]).len() * 10",
         78,
     ),
     (
         "prepend",
-        "xs.prepend(9).get_or(0 0) + xs.prepend(9).len() * 10",
+        "xs.prepend(9).get_or(0, 0) + xs.prepend(9).len() * 10",
         69,
     ),
-    ("map", "xs.map(|x| x * 2).get_or(4 0)", 8),
+    ("map", "xs.map(|x| x * 2).get_or(4, 0)", 8),
     (
         "map2",
-        "xs.map2([10 20] |a b| a + b).fold(0 |s x| s + x)",
+        "xs.map2([10, 20], |a, b| a + b).fold(0, |s, x| s + x)",
         31,
     ),
-    ("flat_map", "xs.flat_map(|x| [x x]).len()", 10),
-    ("flatten", "[[1 2] [] [3]].flatten().len()", 3),
+    ("flat_map", "xs.flat_map(|x| [x, x]).len()", 10),
+    ("flatten", "[[1, 2], [], [3]].flatten().len()", 3),
     (
         "join",
-        "[[1] [2 3] [4]].join([0 0]).len() + [[7]].join([0]).len() * 10",
+        "[[1], [2, 3], [4]].join([0, 0]).len() + [[7]].join([0]).len() * 10",
         18,
     ),
-    ("filter", "xs.filter(|x| x % 2 == 1).fold(0 |s x| s + x)", 4),
+    (
+        "filter",
+        "xs.filter(|x| x % 2 == 1).fold(0, |s, x| s + x)",
+        4,
+    ),
     ("count", "xs.count(|x| x % 2 == 0)", 3),
     (
         "any",
@@ -49,23 +53,23 @@ const CASES: &[(&str, &str, u32)] = &[
     ),
     (
         "all",
-        "[1 3].all(|x| x % 2 == 1).to_nat() + xs.all(|x| x % 2 == 1).to_nat() * 2",
+        "[1, 3].all(|x| x % 2 == 1).to_nat() + xs.all(|x| x % 2 == 1).to_nat() * 2",
         1,
     ),
-    ("fold", "xs.fold(0 |s x| s * 10 + x)", 1_234 % 256),
+    ("fold", "xs.fold(0, |s, x| s * 10 + x)", 1_234 % 256),
     (
         "fold_right",
-        "xs.fold_right(0 |x s| s * 10 + x)",
+        "xs.fold_right(0, |x, s| s * 10 + x)",
         43_210 % 256,
     ),
     (
         "trail",
-        "xs.trail(0 |s x| s + x).get_or(4 0) + xs.trail(0 |s x| s + x).len() * 20",
+        "xs.trail(0, |s, x| s + x).get_or(4, 0) + xs.trail(0, |s, x| s + x).len() * 20",
         110,
     ),
     (
         "reverse",
-        "xs.reverse().get_or(0 9) + xs.reverse().len() * 10",
+        "xs.reverse().get_or(0, 9) + xs.reverse().len() * 10",
         54,
     ),
     (
@@ -79,10 +83,10 @@ const CASES: &[(&str, &str, u32)] = &[
         94,
     ),
     ("get", "xs.get(3).ok_or(9) + xs.get(n).ok_or(9) * 10", 93),
-    ("get_or", "xs.get_or(2 9) + xs.get_or(n 9) * 10", 92),
+    ("get_or", "xs.get_or(2, 9) + xs.get_or(n, 9) * 10", 92),
     (
         "set",
-        "xs.set(1 7).ok_or([]).get_or(1 0) + xs.set(n 7).ok_or([]).len() * 10",
+        "xs.set(1, 7).ok_or([]).get_or(1, 0) + xs.set(n, 7).ok_or([]).len() * 10",
         7,
     ),
     (
@@ -97,26 +101,30 @@ const CASES: &[(&str, &str, u32)] = &[
     ),
     (
         "try_map",
-        "xs.try_map(|x| Ok(x + 1)).ok_or([]).fold(0 |s x| s + x)",
+        "xs.try_map(|x| Ok(x + 1)).ok_or([]).fold(0, |s, x| s + x)",
         15,
     ),
     (
         "exchange",
-        "xs.exchange(0 4).ok_or([]).get_or(0 9) + xs.exchange(0 n).ok_or([]).len() * 10",
+        "xs.exchange(0, 4).ok_or([]).get_or(0, 9) + xs.exchange(0, n).ok_or([]).len() * 10",
         4,
     ),
     ("take", "xs.take(2).len() + xs.take(9).len() * 10", 52),
-    ("drop", "xs.drop(1).get_or(0 9) + xs.drop(9).len() * 10", 1),
+    ("drop", "xs.drop(1).get_or(0, 9) + xs.drop(9).len() * 10", 1),
     ("take_while", "xs.take_while(|x| x % 4 == x).len()", 4),
-    ("drop_while", "xs.drop_while(|x| x % 4 == x).get_or(0 9)", 4),
+    (
+        "drop_while",
+        "xs.drop_while(|x| x % 4 == x).get_or(0, 9)",
+        4,
+    ),
     (
         "range",
-        "List.range(n).fold(0 |s x| s + x) + List.range(0).len()",
+        "List.range(n).fold(0, |s, x| s + x) + List.range(0).len()",
         10,
     ),
     (
         "repeat",
-        "List.repeat(7 3).fold(0 |s x| s + x) + List.repeat(7 0).len()",
+        "List.repeat(7, 3).fold(0, |s, x| s + x) + List.repeat(7, 0).len()",
         21,
     ),
 ];
@@ -134,7 +142,7 @@ fn every_list_function_answers_what_ori_says() {
                  main! : Host -> []
                  main!(host) ->
                    n = 4 + small(host.args.len())
-                   xs = [0 1 2 3 n - 1]
+                   xs = [0, 1, 2, 3, n - 1]
                    host.exit!(({answer}) % 256)"
             ),
         );

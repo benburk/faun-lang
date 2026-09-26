@@ -4,7 +4,7 @@
 # Ori's oracle harness. `faun test` asks them, and so does
 # `cargo test --release -p faun-cli --test expectations -- --ignored`.
 
-import helpers {f f64 is_unordered is_eq}
+import helpers {f, f64, is_unordered, is_eq}
 
 # --- binary64 ---
 
@@ -12,14 +12,14 @@ import helpers {f f64 is_unordered is_eq}
 # nothing else types. The values that differ from binary32 are the ones
 # that show what the width buys.
 expect 1.0.add(1.0) == 2.0
-expect F64.equals(0.1.add(0.2) 0.3).not()
+expect F64.equals(0.1.add(0.2), 0.3).not()
 expect 0.1.add(0.2).to_str() == "0.30000000000000004"
 expect 1.0.div(3.0).to_str() == "0.3333333333333333"
 expect 2.0.sqrt().to_bits() == 0x3ff6a09e667f3bcd
 expect 9007199254740992.0.add(1.0) == 9007199254740992.0   # a tie past 2^53, to even
 expect 9007199254740992.0.add(3.0) == 9007199254740996.0
 expect F64.to_bits(0.1) == 0x3fb999999999999a
-expect F64.fma(f64(0x3ff0000000000001) f64(0x3ff0000000000001) f64(0xbff0000000000002)).to_bits() == 0x3970000000000000
+expect F64.fma(f64(0x3ff0000000000001), f64(0x3ff0000000000001), f64(0xbff0000000000002)).to_bits() == 0x3970000000000000
 expect F64.infinity().sub(F64.infinity()).to_bits() == 0x7ff8000000000000
 expect F64.nan() == F64.nan()
 expect F64.infinity() < F64.nan()
@@ -36,7 +36,7 @@ expect F64.of_nat(2.pow(100)).to_str() == "1.2676506002282294e30"
 expect F64.integer_part(1.0e18) == Ok(Int.of_nat(10.pow(18)))
 expect (-0.5).ceil().to_str() == "-0.0"
 expect 2.5.round_even() == 2.0
-expect [1.5 2.5].sum() == 4.0
+expect [1.5, 2.5].sum() == 4.0
 expect F64.to_str(F64.from_str("3.4028235e38").ok_or(0.0)) == "3.4028235e38"   # every binary32 is a binary64
 
 # A conversion rounds; a reading refuses to.
@@ -88,6 +88,6 @@ expect 0.000012345.to_precision(2) == "1.2e-5"
 expect 99.99.to_precision(3) == "100"
 expect 7.0.to_precision(0) == "7"
 expect 0.0.to_precision(3) == "0.00"
-expect F32.to_fixed(0.1 10) == "0.1000000015"
-expect F32.to_exponent(0.1 3) == "1.000e-1"
-expect F32.to_precision(F32.largest() 4) == "3.403e38"
+expect F32.to_fixed(0.1, 10) == "0.1000000015"
+expect F32.to_exponent(0.1, 3) == "1.000e-1"
+expect F32.to_precision(F32.largest(), 4) == "3.403e38"

@@ -1,4 +1,4 @@
-exports {f f64 is_unordered is_eq}
+exports {f, f64, is_unordered, is_eq}
 
 f : U32 -> F32
 f(bits) -> F32.of_bits(bits)
@@ -6,10 +6,10 @@ f(bits) -> F32.of_bits(bits)
 f64 : U64 -> F64
 f64(bits) -> F64.of_bits(bits)
 
-is_unordered : Result(Order [Unordered]) -> Bool
+is_unordered : Result(Order, [Unordered]) -> Bool
 is_unordered(Err(Unordered)) -> True
 is_unordered(_) -> False
 
-is_eq : Result(Order [Unordered]) -> Bool
+is_eq : Result(Order, [Unordered]) -> Bool
 is_eq(Ok(Eq)) -> True
 is_eq(_) -> False

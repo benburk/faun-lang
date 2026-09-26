@@ -9,10 +9,10 @@ const RUNS: usize = 7;
 fn main() {
     let clauses = "id(x) -> x\n".repeat(LINES);
     let mixed_block = concat!(
-        "Tree(a) : [Leaf(a) Branch(Tree(a) Tree(a))]\n",
+        "Tree(a) : [Leaf(a), Branch(Tree(a), Tree(a))]\n",
         "size : Tree(Nat) -> Nat\n",
         "size(Leaf(_)) -> 1\n",
-        "size(Branch(left right)) -> size(left) + size(right) + 1\n",
+        "size(Branch(left, right)) -> size(left) + size(right) + 1\n",
         "compute(value) -> next = value.step(1) next * 2 + 3\n",
     );
     let mixed = mixed_block.repeat(LINES / 5);

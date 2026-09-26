@@ -286,7 +286,7 @@ pub fn check_application_abi(
                 ],
                 Box::new(InferredType::Variants(Vec::new(), None)),
             ),
-            "exit! : Host Nat -> []",
+            "exit! : (Host, Nat) -> []",
         ),
     ] {
         let Some(scheme) = checked.types.values.get(&name) else {
@@ -1323,7 +1323,7 @@ impl<'a> Checker<'a> {
     /// Give every nonempty tag row in result position a tail, which the
     /// scheme then quantifies.
     ///
-    /// A signature's `Result(a [Empty])` says what this definition fails
+    /// A signature's `Result(a, [Empty])` says what this definition fails
     /// with, and its body is checked against exactly that: skolemized, the
     /// tail is rigid, so a body answering another tag is refused. It says
     /// nothing about callers, whose business it is whether `Empty` travels
@@ -1957,7 +1957,7 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
-            // `{x *}` names some fields and takes a record with any others.
+            // `{x, *}` names some fields and takes a record with any others.
             h::Pattern::Record(fields, open) => {
                 let field_types: Vec<_> = fields
                     .iter()
@@ -3517,7 +3517,7 @@ impl<'a> Checker<'a> {
             .collect()
     }
 
-    /// Reading field `name` of a record: `{name: t *} -> t`, which reads it
+    /// Reading field `name` of a record: `{name: t, *} -> t`, which reads it
     /// from a record that has it and asks it of one that is open. Its two
     /// variables are the scheme's own, never linked, since a scheme is
     /// instantiated before it is used.
@@ -4361,17 +4361,24 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
                 .iter()
                 .map(|ty| show(ty, symbols))
                 .collect::<Vec<_>>()
-                .join(" ")
+                .join(", ")
         ),
-        Ty::Function(parameters, result) => format!(
-            "{} -> {}",
-            parameters
-                .iter()
-                .map(|ty| show(ty, symbols))
-                .collect::<Vec<_>>()
-                .join(" "),
-            show(result, symbols)
-        ),
+        // One parameter needs no parentheses, unless it is a tuple or a
+        // function, whose own would be read as the list's.
+        Ty::Function(parameters, result) => match parameters.as_slice() {
+            [one] if !matches!(one, Ty::Tuple(_) | Ty::Function(..)) => {
+                format!("{} -> {}", show(one, symbols), show(result, symbols))
+            }
+            _ => format!(
+                "({}) -> {}",
+                parameters
+                    .iter()
+                    .map(|ty| show(ty, symbols))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                show(result, symbols)
+            ),
+        },
         // An open row shows its rest as `*`: the tags a caller may add.
         Ty::Variants(tags, tail) => {
             let mut shown: Vec<_> = tags
@@ -4381,7 +4388,7 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
                         spelled(*name, symbols).to_owned()
                     } else {
                         let fields: Vec<_> = fields.iter().map(|ty| show(ty, symbols)).collect();
-                        format!("{}({})", spelled(*name, symbols), fields.join(" "))
+                        format!("{}({})", spelled(*name, symbols), fields.join(", "))
                     }
                 })
                 .collect();
@@ -4390,7 +4397,7 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
             if matches!(tail.as_deref(), Some(Ty::Var(_))) {
                 shown.push("*".to_owned());
             }
-            format!("[{}]", shown.join(" "))
+            format!("[{}]", shown.join(", "))
         }
         Ty::Record(fields, tail) => {
             let mut shown: Vec<_> = fields
@@ -4400,7 +4407,7 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
             if matches!(tail.as_deref(), Some(Ty::Var(_))) {
                 shown.push("*".to_owned());
             }
-            format!("{{{}}}", shown.join(" "))
+            format!("{{{}}}", shown.join(", "))
         }
         Ty::Tuple(members) => format!(
             "({})",
@@ -4408,7 +4415,7 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
                 .iter()
                 .map(|ty| show(ty, symbols))
                 .collect::<Vec<_>>()
-                .join(" ")
+                .join(", ")
         ),
     }
 }
@@ -4459,32 +4466,32 @@ mod tests {
         }
 
         fn load(&self, entry_source: &str) -> (PreludeIds, ResolvedProgram) {
-            self.write("bool.fn", "exports {Bool.*}\nBool : [False True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : Bool Bool -> Bool\nand(True True) -> True\nand(_ _) -> False)\n");
-            self.write("nat.fn", "exports {Nat.*}\nNat : [Zero Succ(Nat)].(add : Nat Nat -> Nat\nadd(0 y) -> y\nadd(Succ(n) y) -> Succ(n.add(y)))\n");
+            self.write("bool.fn", "exports {Bool.*}\nBool : [False, True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : (Bool, Bool) -> Bool\nand(True, True) -> True\nand(_, _) -> False)\n");
+            self.write("nat.fn", "exports {Nat.*}\nNat : [Zero, Succ(Nat)].(add : (Nat, Nat) -> Nat\nadd(0, y) -> y\nadd(Succ(n), y) -> Succ(n.add(y)))\n");
             self.write(
                 "int.fn",
-                "exports {Int.*}\nInt : [Pos(Nat) NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
+                "exports {Int.*}\nInt : [Pos(Nat), NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
             );
             self.write("u8.fn", "exports {U8}\nU8 : Nat\n");
             self.write(
                 "list.fn",
-                "exports {List.*}\nList(a) : [Nil Cons(a List(a))]\n",
+                "exports {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
             );
             self.write(
                 "str.fn",
-                "exports {Str}\nStr : List(U8).(concat : Str Str -> Str\nconcat(left _) -> left\nequals : Str Str -> Bool\nequals(_ _) -> False)\n",
+                "exports {Str}\nStr : List(U8).(concat : (Str, Str) -> Str\nconcat(left, _) -> left\nequals : (Str, Str) -> Bool\nequals(_, _) -> False)\n",
             );
             self.write(
                 "result.fn",
-                "exports {Result.*}\nResult(a e) : [Ok(a) Err(e)]\n",
+                "exports {Result.*}\nResult(a, e) : [Ok(a), Err(e)]\n",
             );
             self.write(
             "order.fn",
-            "exports {Order.*}\nOrder : [Lt Eq Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\nthen : Order Order -> Order\nthen(Eq next) -> next\nthen(decided _) -> decided)\n",
+            "exports {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
         );
             let standard = self.write(
                 "standard.fn",
-                "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport result {Result.*}\nimport str {Str}\nexports {Bool.* Order.* Nat.* Int.* U8 List.* Result.* Str}\n",
+                "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport result {Result.*}\nimport str {Str}\nexports {Bool.*, Order.*, Nat.*, Int.*, U8, List.*, Result.*, Str}\n",
             );
             let entry = self.write("main.fn", entry_source);
             let host = self.write("host.fn", "exports {Host}\nHost : {argc: Nat}\n");
@@ -4621,7 +4628,7 @@ mod tests {
     fn a_method_several_types_have_is_a_bound() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load(
-            "Flip : [Off On].(not : Flip -> Flip\nnot(Off) -> On\nnot(On) -> Off)\nflip(x) -> x.not()\n",
+            "Flip : [Off, On].(not : Flip -> Flip\nnot(Off) -> On\nnot(On) -> Off)\nflip(x) -> x.not()\n",
         );
         let checked = type_check(resolved, prelude).unwrap();
         let resolved = &checked.resolved;
@@ -4670,12 +4677,12 @@ mod tests {
         let fixture = Fixture::new();
         let entry = fixture.write(
             "arithmetic.fn",
-            "nat_ops : Nat Nat -> Nat\n\
-             nat_ops(a b) -> ((((a + b) - b) * b) / b) % b\n\
-             int_ops : Int Int -> Int\n\
-             int_ops(a b) -> ((((a + b) - b) * b) / b) % b\n\
-             u8_ops : U8 U8 -> U8\n\
-             u8_ops(a b) -> ((((a + b) - b) * b) / b) % b\n",
+            "nat_ops : (Nat, Nat) -> Nat\n\
+             nat_ops(a, b) -> ((((a + b) - b) * b) / b) % b\n\
+             int_ops : (Int, Int) -> Int\n\
+             int_ops(a, b) -> ((((a + b) - b) * b) / b) % b\n\
+             u8_ops : (U8, U8) -> U8\n\
+             u8_ops(a, b) -> ((((a + b) - b) * b) / b) % b\n",
         );
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
         let loaded = modules::load_program(&entry, &root, &crate::test_host()).unwrap();

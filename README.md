@@ -11,7 +11,7 @@ factorial(m) -> m * factorial(m - 1)
 
 # Effectful functions come from the host, and end with an exclamation mark
 main!(host) ->
-  name = host.args.get_or(0 "world")
+  name = host.args.get_or(0, "world")
   host.println!("Hello, ${name}!")
   host.exit!(0)
 ```
@@ -55,9 +55,9 @@ Programs
 - `expect` tests, run by `faun test`
 
 ```ruby
-gcd : Nat Nat -> Nat
-gcd(a 0) -> a
-gcd(a b) -> gcd(b a % b)
+gcd : (Nat, Nat) -> Nat
+gcd(a, 0) -> a
+gcd(a, b) -> gcd(b, a % b)
 
 fib : Nat -> Nat
 fib(0) -> 0

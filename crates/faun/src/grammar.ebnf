@@ -4,13 +4,14 @@
    `ebnf` tests check that it is, and that it reads what the parser reads.
 
    Terminals are token kinds: quoted, as spelled, or named in capitals. The
-   lexer decides what spacing means, so the grammar never sees a space:
+   lexer decides what adjacency means, so the grammar never sees a space:
      NEWLINE     the end of a line of items or of a body
      CALL_PAREN  `(` straight after an operand: a call's, or a type's
-     NEGATE      `-` beginning an operand
-     REST        `*` beginning a rest, or alone before `]` or `}`
-     LAMBDA_BAR  `|` opening a lambda's parameters
    and `.`, `..`, `.*` and `?` are written against what they join.
+
+   Elements are parted by commas, and a sequence may end with one: each
+   `xs = x [ "," [ xs ] ]` below is one or more `x`, commas between, and
+   perhaps one after.
 
    A pattern is written as the expression that builds what it matches, so a
    binding's or a clause's head is an expression here; the parser makes it a
@@ -36,28 +37,36 @@ trailer           = "=" ( constraints | expr )
 clause            = [ "if" expr ] "->" statement ;
 statement         = expr [ "=" expr ] ;
 
-directive         = "package" "{" { NAME ":" STR_START { STR_TEXT } STR_END } "}"
-                  | "import" NAME { "." NAME } "{" { exposure } "}"
-                  | "exports" "{" { any-name [ ".*" ] } "}" ;
-exposure          = any-name [ ".*" ] [ ":" any-name ] ;
+directive         = "package" "{" [ dependencies ] "}"
+                  | "import" NAME { "." NAME } "{" [ exposures ] "}"
+                  | "exports" "{" [ exported ] "}" ;
+dependencies      = NAME ":" STR_START { STR_TEXT } STR_END [ "," [ dependencies ] ] ;
+exposures         = any-name [ ".*" ] [ ":" any-name ] [ "," [ exposures ] ] ;
+exported          = any-name [ ".*" ] [ "," [ exported ] ] ;
 any-name          = NAME | EFFECT | TYPE ;
 
-(* A signature, a data declaration, or a `where` list's constraint. *)
-typed             = signature [ constraints ] [ methods ] ;
-signature         = type { type } [ "->" type ] ;
+(* A signature, a data declaration, or a `where` list's constraint. A
+   function type's parameters are the parenthesized types before its arrow,
+   or the one type there: `(Nat, Nat) -> Nat`, `Nat -> Nat`. *)
+typed             = type [ constraints ] [ methods ] ;
 methods           = ".(" [ line ] { NEWLINE [ line ] } ")" ;
 
 (* A member's constraint ends its line; more follow on lines of their own. *)
-constraints       = "where" ( alias-constraint { alias-constraint } [ member-constraint ]
-                            | member-constraint ) ;
-alias-constraint  = TYPE CALL_PAREN type { type } ")" ;
-member-constraint = NAME "." ( NAME | EFFECT ) ":" signature ;
+constraints       = "where" constraint-list ;
+constraint-list   = TYPE CALL_PAREN types ")" [ "," [ constraint-list ] ]
+                  | member-constraint ;
+member-constraint = NAME "." ( NAME | EFFECT ) ":" type ;
 
-type              = TYPE [ CALL_PAREN type { type } ")" ]
+type              = type-operand [ "->" type-operand ] ;
+type-operand      = TYPE [ CALL_PAREN types ")" ]
                   | NAME
-                  | "(" type { type } [ "->" type ] ")"
-                  | "[" { TYPE [ CALL_PAREN type { type } ")" ] } "]"
-                  | "{" { NAME ":" type } [ REST ] "}" ;
+                  | "(" types ")"
+                  | "[" [ variants ] "]"
+                  | "{" [ field-types ] "}" ;
+types             = type [ "," [ types ] ] ;
+variants          = TYPE [ CALL_PAREN types ")" ] [ "," [ variants ] ] ;
+field-types       = NAME ":" type [ "," [ field-types ] ]
+                  | "*" [ "," ] ;
 
 (* Infix operators, loosest first:
      |   ^   &   == != < <= > >=   + -   / % *
@@ -70,12 +79,14 @@ operand           = prefix operand
                   | primary { postfix } ;
 untyped-operand   = prefix operand
                   | untyped-primary { postfix } ;
-prefix            = NEGATE | "!" ;
-postfix           = CALL_PAREN { argument } ")"
+prefix            = "-" | "!" ;
+postfix           = CALL_PAREN [ arguments ] ")"
                   | "?"
                   | "." ( NAME | EFFECT | TYPE ) ;
-argument          = LAMBDA_BAR operand { operand } "|" expr
+arguments         = argument [ "," [ arguments ] ] ;
+argument          = "|" operands "|" expr
                   | expr ;
+operands          = operand [ "," [ operands ] ] ;
 
 primary           = TYPE | untyped-primary ;
 untyped-primary   = ( NUMBER | CHAR ) [ ".." range-end ]
@@ -84,11 +95,16 @@ untyped-primary   = ( NUMBER | CHAR ) [ ".." range-end ]
                   | NAME
                   | EFFECT
                   | STR_START { STR_TEXT | SPLICE_START expr SPLICE_END } STR_END
-                  | "(" expr { expr } ")"
-                  | "[" { expr } [ rest ] "]"
-                  | "{" { NAME [ ":" expr ] } [ rest ] "}" ;
-rest              = REST [ expr ] ;
+                  | "(" exprs ")"
+                  | "[" [ elements ] "]"
+                  | "{" [ fields ] "}" ;
+exprs             = expr [ "," [ exprs ] ] ;
+elements          = expr [ "," [ elements ] ]
+                  | rest ;
+fields            = NAME [ ":" expr ] [ "," [ fields ] ]
+                  | rest ;
+rest              = "*" [ expr ] [ "," ] ;
 
 (* A range's end may be negated, or `_` to leave that side open. Its start
    is negated as an operand is, `-3..5`, and the parser holds the `-` to it. *)
-range-end         = NUMBER | CHAR | "_" | NEGATE ( NUMBER | CHAR ) ;
+range-end         = NUMBER | CHAR | "_" | "-" ( NUMBER | CHAR ) ;

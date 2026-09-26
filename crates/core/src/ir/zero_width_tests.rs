@@ -121,14 +121,14 @@ fn program(word_bits: u16, optimized: bool) -> Program {
     let (zero, succ, yes) = (library.zero, library.succ, library.true_);
     let p = &mut hosted.library.program;
 
-    // keep_zero!(h n) -> observed = read_byte!(h) n
+    // keep_zero!(h, n) -> observed = read_byte!(h) n
     let keep_zero = p.declare_named("keep_zero!", &[("h", host), ("n", nat)], nat);
     p.define(keep_zero, |b, args| {
         b.call(input, &[args[0]]);
         args[1]
     });
-    // select_zero!(h False) -> keep_zero!(h Zero)
-    // select_zero!(h True) -> keep_zero!(h Zero)
+    // select_zero!(h, False) -> keep_zero!(h, Zero)
+    // select_zero!(h, True) -> keep_zero!(h, Zero)
     let select_zero = p.declare_named("select_zero!", &[("h", host), ("flag", bool_)], nat);
     p.define(select_zero, |b, args| {
         b.match_(args[1], bool_, |b, _, _| {
@@ -136,8 +136,8 @@ fn program(word_bits: u16, optimized: bool) -> Program {
             b.call(keep_zero, &[args[0], zero])
         })
     });
-    // zero_or_one(False n) -> n
-    // zero_or_one(True n) -> Succ(n)
+    // zero_or_one(False, n) -> n
+    // zero_or_one(True, n) -> Succ(n)
     let zero_or_one = p.declare("zero_or_one", &[bool_, nat], nat);
     p.define(zero_or_one, |b, args| {
         b.match_(args[0], bool_, |b, ctor, _| {
@@ -240,13 +240,13 @@ fn range_proven_zero_arithmetic_selects_fixed0() {
 /// What a comparison probe asks of the argument count.
 #[derive(Clone, Copy, Debug)]
 enum Probe {
-    /// `equals(n Succ(Zero))`
+    /// `equals(n, Succ(Zero))`
     IsOne,
-    /// `less_than(n Succ(Zero))`
+    /// `less_than(n, Succ(Zero))`
     BelowOne,
-    /// `equals(mod(n Succ(Zero)) Zero)`, which always holds.
+    /// `equals(mod(n, Succ(Zero)), Zero)`, which always holds.
     DividesByOne,
-    /// `less_than(n Zero)`, which never does.
+    /// `less_than(n, Zero)`, which never does.
     BelowZero,
 }
 
@@ -299,8 +299,8 @@ fn comparisons(
     };
     let equals = compare(p, "equals", [yes, no, no]);
     let less_than = compare(p, "less_than", [no, yes, no]);
-    // mod_step(True r) -> Zero
-    // mod_step(False r) -> Succ(r)
+    // mod_step(True, r) -> Zero
+    // mod_step(False, r) -> Succ(r)
     let mod_step = p.declare("mod_step", &[bool_, nat], nat);
     p.define(mod_step, |b, args| {
         b.match_(args[0], bool_, |b, ctor, _| {
@@ -311,9 +311,9 @@ fn comparisons(
             }
         })
     });
-    // mod(a Zero) -> a
+    // mod(a, Zero) -> a
     // mod(Zero Succ(b)) -> Zero
-    // mod(Succ(a) Succ(b)) -> r = mod(a Succ(b)) mod_step(equals(r b) r)
+    // mod(Succ(a), Succ(b)) -> r = mod(a, Succ(b)) mod_step(equals(r, b), r)
     let modulo = p.declare("mod", &[nat, nat], nat);
     p.define(modulo, |b, args| {
         b.match_(args[1], nat, |b, ctor, divisor| {
@@ -389,8 +389,8 @@ fn comparison_programs(word_bits: u16, order: [&str; 2], probe: Probe) -> (Progr
     let (host, never, input, exit) = host_routines(&mut p, nat);
     let ops = comparisons(&mut p, (nat, zero, succ), order);
     let probe = declare_probe(&mut p, (nat, zero, succ), &ops, probe);
-    // status!(h False) -> exit!(h Zero)
-    // status!(h True) -> exit!(h Succ(Zero))
+    // status!(h, False) -> exit!(h, Zero)
+    // status!(h, True) -> exit!(h, Succ(Zero))
     let status = p.declare_named("status!", &[("h", host), ("flag", ops.bool_)], never);
     p.define(status, |b, args| {
         b.match_(args[1], ops.bool_, |b, ctor, _| {

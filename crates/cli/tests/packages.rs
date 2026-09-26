@@ -86,7 +86,7 @@ fn an_application_builds_only_what_main_reaches() {
 fn a_definition_taking_a_function_is_compiled_where_it_is_called() {
     let package = Package::new(
         "higher-order",
-        "twice : (Nat -> Nat) Nat -> Nat\ntwice(f n) -> f(f(n))\n",
+        "twice : (Nat -> Nat, Nat) -> Nat\ntwice(f, n) -> f(f(n))\n",
     );
     let barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     assert!(!barb.render().contains("twice"));
@@ -113,13 +113,13 @@ fn clauses_that_leave_a_case_unmatched_are_refused_even_when_generic() {
     for (name, source, missing) in [
         (
             "first",
-            "first : List(a) -> a\nfirst([x *rest]) -> x\n",
+            "first : List(a) -> a\nfirst([x, *rest]) -> x\n",
             "first([])",
         ),
         (
             "pick",
-            "pick : Bool Bool -> Nat\npick(True _) -> 0\npick(_ True) -> 1\n",
-            "pick(False False)",
+            "pick : (Bool, Bool) -> Nat\npick(True, _) -> 0\npick(_, True) -> 1\n",
+            "pick(False, False)",
         ),
     ] {
         let package = Package::new(name, source);
@@ -142,7 +142,7 @@ fn clauses_that_leave_a_case_unmatched_are_refused_even_when_generic() {
 fn a_generic_definition_nothing_calls_is_judged_at_the_empty_type() {
     let total = Package::new(
         "length",
-        "length : List(a) -> Nat\nlength([]) -> 0\nlength([_ *rest]) -> 1 + length(rest)\n",
+        "length : List(a) -> Nat\nlength([]) -> 0\nlength([_, *rest]) -> 1 + length(rest)\n",
     );
     let barb = faun::lower_to_barb(&total.entry(), &X86_64Linux).unwrap();
     assert!(barb.render().contains("length(v0: List<[]>) -> Nat ="));
@@ -179,7 +179,7 @@ fn with_dependency(name: &str, entry: &str) -> Package {
 fn a_package_imports_the_root_of_one_it_depends_on() {
     let package = with_dependency(
         "dependency",
-        "package {\n  shapes: \"vendor/shapes/shapes\"\n}\n\nimport shapes {double_square}\n\neight : Nat\neight() -> double_square(2)\n\nexpect eight() == 8\n",
+        "package {\n  shapes: \"vendor/shapes/shapes\",\n}\n\nimport shapes {double_square}\n\neight : Nat\neight() -> double_square(2)\n\nexpect eight() == 8\n",
     );
     faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     let tests = faun::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();
@@ -209,7 +209,7 @@ fn a_dependency_is_reached_only_at_its_root() {
     );
     let twice = refused(
         "dependency-twice",
-        "package {\n  shapes: \"vendor/shapes/shapes\"\n  shapes: \"vendor/shapes/shapes\"\n}\n",
+        "package {\n  shapes: \"vendor/shapes/shapes\",\n  shapes: \"vendor/shapes/shapes\",\n}\n",
     );
     assert!(
         twice.contains("depends on `shapes` more than once"),

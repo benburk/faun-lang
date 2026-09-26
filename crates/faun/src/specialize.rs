@@ -694,7 +694,7 @@ impl<'a> Specializer<'a> {
                         }],
                     ),
                 });
-                let after = if index + 1 == count { ")" } else { " " };
+                let after = if index + 1 == count { ")" } else { ", " };
                 pieces.push(self.text(module, span, after)?);
             }
             let mut pieces = pieces.into_iter();

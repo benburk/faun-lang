@@ -19,29 +19,29 @@ U8 : Nat.(
   to_nat : U8 -> Nat
   to_nat(U8(value)) -> value
 
-  add : U8 U8 -> U8
-  add(U8(a) U8(b)) -> U8((a + b) % 256)
+  add : (U8, U8) -> U8
+  add(U8(a), U8(b)) -> U8((a + b) % 256)
 
-  sub : U8 U8 -> U8
-  sub(U8(a) U8(b)) -> U8((a + 256 - b) % 256)
+  sub : (U8, U8) -> U8
+  sub(U8(a), U8(b)) -> U8((a + 256 - b) % 256)
 
-  mul : U8 U8 -> U8
-  mul(U8(a) U8(b)) -> U8((a * b) % 256)
+  mul : (U8, U8) -> U8
+  mul(U8(a), U8(b)) -> U8((a * b) % 256)
 
-  div : U8 U8 -> U8
-  div(U8(a) U8(b)) -> U8(a / b)
+  div : (U8, U8) -> U8
+  div(U8(a), U8(b)) -> U8(a / b)
 
-  mod : U8 U8 -> U8
-  mod(U8(a) U8(b)) -> U8(a % b)
+  mod : (U8, U8) -> U8
+  mod(U8(a), U8(b)) -> U8(a % b)
 
-  cmp : U8 U8 -> Order
-  cmp(U8(a) U8(b)) -> a.cmp(b)
+  cmp : (U8, U8) -> Order
+  cmp(U8(a), U8(b)) -> a.cmp(b)
 
-  min : U8 U8 -> U8
-  min(a b) -> (a <= b).select(a b)
+  min : (U8, U8) -> U8
+  min(a, b) -> (a <= b).select(a, b)
 
-  max : U8 U8 -> U8
-  max(a b) -> (a <= b).select(b a)
+  max : (U8, U8) -> U8
+  max(a, b) -> (a <= b).select(b, a)
 
   to_str : U8 -> Str
   to_str(U8(value)) -> value.to_str()
@@ -75,14 +75,14 @@ U8 : Nat.(
   # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`. Two words' bits
   # make a word, so the remainder changes nothing; it is what shows
   # the answer is one, which nothing recognizes of `Nat`'s bitwise walk.
-  and : U8 U8 -> U8
-  and(U8(a) U8(b)) -> U8((a & b) % 256)
+  and : (U8, U8) -> U8
+  and(U8(a), U8(b)) -> U8((a & b) % 256)
 
-  or : U8 U8 -> U8
-  or(U8(a) U8(b)) -> U8((a | b) % 256)
+  or : (U8, U8) -> U8
+  or(U8(a), U8(b)) -> U8((a | b) % 256)
 
-  xor : U8 U8 -> U8
-  xor(U8(a) U8(b)) -> U8((a ^ b) % 256)
+  xor : (U8, U8) -> U8
+  xor(U8(a), U8(b)) -> U8((a ^ b) % 256)
 
   # Every bit flipped.
   bit_not : U8 -> U8
@@ -90,27 +90,27 @@ U8 : Nat.(
 
   # The bits moved up by `amount`, those past the top lost: nought where
   # `amount` is the width or more.
-  shift_left : U8 Nat -> U8
-  shift_left(U8(a) amount) if amount < 8 -> of_nat(a * 2.pow(amount))
-  shift_left(_ _) -> U8(0)
+  shift_left : (U8, Nat) -> U8
+  shift_left(U8(a), amount) if amount < 8 -> of_nat(a * 2.pow(amount))
+  shift_left(_, _) -> U8(0)
 
   # The bits moved down by `amount`, those below the bottom lost.
-  shift_right : U8 Nat -> U8
-  shift_right(U8(a) amount) if amount < 8 -> U8(a / 2.pow(amount))
-  shift_right(_ _) -> U8(0)
+  shift_right : (U8, Nat) -> U8
+  shift_right(U8(a), amount) if amount < 8 -> U8(a / 2.pow(amount))
+  shift_right(_, _) -> U8(0)
 
   # The bits moved up by `amount`, those past the top coming round to the
   # bottom. The width round is no change.
-  rotate_left : U8 Nat -> U8
-  rotate_left(U8(a) amount) ->
+  rotate_left : (U8, Nat) -> U8
+  rotate_left(U8(a), amount) ->
     shift = amount % 8
     of_nat(a * 2.pow(shift) + a / 2.pow(8 - shift))
 
-  rotate_right : U8 Nat -> U8
-  rotate_right(word amount) -> rotate_left(word 8 - amount % 8)
+  rotate_right : (U8, Nat) -> U8
+  rotate_right(word, amount) -> rotate_left(word, 8 - amount % 8)
 
-  equals : U8 U8 -> Bool
-  equals(U8(a) U8(b)) -> a.equals(b)
+  equals : (U8, U8) -> Bool
+  equals(U8(a), U8(b)) -> a.equals(b)
 )
 
 expect '7'.is_digit() & !'x'.is_digit() & !'/'.is_digit() & !':'.is_digit()

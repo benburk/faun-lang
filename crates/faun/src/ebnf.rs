@@ -81,9 +81,6 @@ fn terminal(spelling: &str) -> Kind {
         "SPLICE_START" => Kind::SpliceStart,
         "SPLICE_END" => Kind::SpliceEnd,
         "CALL_PAREN" => Kind::CallParen,
-        "NEGATE" => Kind::Negate,
-        "REST" => Kind::Rest,
-        "LAMBDA_BAR" => Kind::LambdaBar,
         "\"_\"" => Kind::Wild,
         "\"package\"" => Kind::KwPackage,
         "\"import\"" => Kind::KwImport,
@@ -120,6 +117,7 @@ fn terminal(spelling: &str) -> Kind {
         "\"/\"" => Kind::Slash,
         "\"%\"" => Kind::Percent,
         "\"*\"" => Kind::Star,
+        "\",\"" => Kind::Comma,
         other => panic!("grammar.ebnf names no token kind `{other}`"),
     }
 }
@@ -536,17 +534,17 @@ fn the_grammar_reads_every_program_in_the_repository_as_the_parser_does() {
 fn the_grammar_reads_and_refuses_what_the_parser_does() {
     let grammar = Grammar::read(GRAMMAR);
     let read = [
-        "import std.host {Host List.* x: y}\nexports {f Host.*}\npackage {md5: \"../md5\"}\n",
-        "f : List(a) (a -> b) -> {x: a *} where Show(a) Eq(a) a.show : a -> Str\n",
-        "sum : List(a) -> a where\n  a.zero : a\n  a.add : a a -> a\n",
-        "Maybe(a) : [None Some(a)].(\n  map : Maybe(a) (a -> b) -> Maybe(b)\n  map(None _) -> None\n  map(Some(x) f) -> Some(f(x))\n)\n",
-        "Name = (a b -> c)\nNum(a) = where a.add : a a -> a\n",
-        "f(x) if x > 0 ->\n  log!(x)\n  [y *rest] = x\n  {a b: c *} = y\n  -a * 2 + c?.d.e(|p Q(r)| p) | !b\n",
+        "import std.host {Host, List.*, x: y}\nexports {f, Host.*}\npackage {md5: \"../md5\"}\n",
+        "f : (List(a), a -> b) -> {x: a, *} where Show(a), Eq(a), a.show : a -> Str\n",
+        "sum : List(a) -> a where\n  a.zero : a\n  a.add : (a, a) -> a\n",
+        "Maybe(a) : [None, Some(a)].(\n  map : (Maybe(a), a -> b) -> Maybe(b)\n  map(None, _) -> None\n  map(Some(x), f) -> Some(f(x))\n)\n",
+        "Name = ((a, b) -> c)\nNum(a) = where a.add : (a, a) -> a\n",
+        "f(x) if x > 0 ->\n  log!(x)\n  [y, *rest] = x\n  {a, b: c, *} = y\n  -a * 2 + c?.d.e(|p, Q(r)| p) | !b\n",
         "expect 'a'..'z' == \"s${x}t\"\n",
-        "f(x) -> [(x) (x y) _ 1.5 -2 *xs]\nx = 1\nx\n",
+        "f(x) -> [(x), (x, y), _, 1.5, -2, *xs]\nx = 1\nx\n",
         "f(x) -> x\n  .map(g)\n  .filter(h) +\n  1\n",
-        "f([x *r] {a *}) if x.p(|y| y) ^ !a ->\n  r\nf(_ _) if\n  (a b) == c -> 0\n",
-        "T : [A B].(\n  f(A) if g() -> 1\n  f(_) -> 0\n)\n",
+        "f([x, *r], {a, *}) if x.p(|y| y) ^ !a ->\n  r\nf(_, _) if\n  (a, b) == c -> 0\n",
+        "T : [A, B].(\n  f(A) if g() -> 1\n  f(_) -> 0\n)\n",
         "",
     ];
     for source in read {
@@ -559,8 +557,7 @@ fn the_grammar_reads_and_refuses_what_the_parser_does() {
         "f(x) -> x .y\n",
         "f(x) -> x?? .y\n",
         "f(x) -> [a\"b\"]\n",
-        "f(x) -> a- b\n",
-        "f(x) -> [a -b]\n",
+        "f(x) -> [a b]\n",
         "f(x) -> (x -> x)\n",
         "f(x) -> x ->\n",
         "f(x) if -> x\n",
@@ -575,9 +572,26 @@ fn the_grammar_reads_and_refuses_what_the_parser_does() {
 }
 
 #[test]
+fn the_grammar_reads_and_refuses_commas_as_the_parser_does() {
+    let grammar = Grammar::read(GRAMMAR);
+    let read = "f(x,) -> [x, *,]\ng : (Nat,) -> {a: Nat, *,}\nh : ((a, b)) -> [A,]\n";
+    assert!(agree(&grammar, read, read), "{read} is read");
+    for refused in [
+        "f(x) -> [*r, a]\n",
+        "f(x) -> {a: 1 b}\n",
+        "f(x) -> (,)\n",
+        "f : a -> b -> c\n",
+        "f : (a b) -> c\n",
+        "f : {a: Nat *} -> c\n",
+    ] {
+        assert!(!agree(&grammar, refused, refused), "{refused} is refused");
+    }
+}
+
+#[test]
 fn the_grammar_reads_and_refuses_a_range_s_ends_as_the_parser_does() {
     let grammar = Grammar::read(GRAMMAR);
-    let read = "f(_..-1 -3..5 'a'.._ -2..-1 [0x80..0xbf *r]) -> 1\n";
+    let read = "f(_..-1, -3..5, 'a'.._, -2..-1, [0x80..0xbf, *r]) -> 1\n";
     assert!(agree(&grammar, read, read), "{read} is read");
     for refused in ["f(1..) -> 1\n", "f(1..-_) -> 1\n", "f(_..x) -> 1\n"] {
         assert!(!agree(&grammar, refused, refused), "{refused} is refused");

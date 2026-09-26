@@ -95,7 +95,7 @@ pub enum Type {
     Function(Vec<Self>, Box<Self>),
     /// A closed tag row, each tag named by its spelling.
     Variants(Vec<ConstructorDecl>),
-    /// A record's fields, and whether it is open: `{x: T *}` has at least
+    /// A record's fields, and whether it is open: `{x: T, *}` has at least
     /// `x`, and whatever else a caller's record does.
     Record(Vec<(Symbol, Self)>, bool),
     /// A positional product of two or more, which never passes for a record.
