@@ -128,32 +128,43 @@ impl Builder<'_> {
         let mut operands = vec![buffer, start, len];
         operands.extend_from_slice(fields);
         let operands = self.program.hold(&operands);
-        let [buffer, start] = self.push(
-            Op::BufferPush { operands, shape },
-            &[Class::Buffer, Class::Word],
-        )[..] else {
-            unreachable!("a push answers a buffer and a start")
-        };
-        [buffer, start]
+        self.two(Op::BufferPush { operands, shape })
     }
 
-    /// Put the elements of the sequence `from`, in order or reversed, before
-    /// the sequence `onto`, each a buffer, a start and a length: the buffer
-    /// and start of the joined one.
+    /// Put the elements of the sequence `from`, last first, before the
+    /// sequence `onto`, each a buffer, a start and a length, their elements
+    /// of `shape`: the buffer and start of the joined one.
     pub fn buffer_prepend(
         &mut self,
         (buffer, start, len): (ValueId, ValueId, ValueId),
         (from, from_start, from_len): (ValueId, ValueId, ValueId),
-        reversed: bool,
+        shape: ShapeId,
     ) -> [ValueId; 2] {
         let operands = self
             .program
             .hold(&[buffer, start, len, from, from_start, from_len]);
-        let [buffer, start] = self.push(
-            Op::BufferPrepend { operands, reversed },
-            &[Class::Buffer, Class::Word],
-        )[..] else {
-            unreachable!("a prepend answers a buffer and a start")
+        self.two(Op::BufferPrepend { operands, shape })
+    }
+
+    /// The elements of the sequence `first`, in order, followed by those of
+    /// `then`, each a buffer, a start and a length, their elements of
+    /// `shape`: the buffer and start of the joined one.
+    pub fn buffer_extend(
+        &mut self,
+        first: (ValueId, ValueId, ValueId),
+        then: (ValueId, ValueId, ValueId),
+        shape: ShapeId,
+    ) -> [ValueId; 2] {
+        let operands = self
+            .program
+            .hold(&[first.0, first.1, first.2, then.0, then.1, then.2]);
+        self.two(Op::BufferExtend { operands, shape })
+    }
+
+    /// An instruction answering a sequence's buffer and start.
+    fn two(&mut self, op: Op) -> [ValueId; 2] {
+        let [buffer, start] = self.push(op, &[Class::Buffer, Class::Word])[..] else {
+            unreachable!("a sequence is answered as a buffer and a start")
         };
         [buffer, start]
     }

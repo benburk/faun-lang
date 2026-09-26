@@ -320,6 +320,9 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
         }
         | Op::BufferPrepend {
             operands: fields, ..
+        }
+        | Op::BufferExtend {
+            operands: fields, ..
         } => {
             program.values(*fields).iter().copied().for_each(&mut each);
         }
@@ -2451,6 +2454,7 @@ impl Lowering<'_> {
             | Op::BufferEmpty { .. }
             | Op::BufferPush { .. }
             | Op::BufferPrepend { .. }
+            | Op::BufferExtend { .. }
             | Op::BufferField { .. } => {
                 unreachable!("target preparation legalizes abstract cells")
             }

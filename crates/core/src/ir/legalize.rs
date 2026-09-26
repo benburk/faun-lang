@@ -18,7 +18,7 @@ use super::cell::{self, Library as CellLibrary};
 use super::natural::{self, Config, Helper, Inline, Library, Needs};
 use super::ownership::{self, Liveness, managed};
 use super::packing::Packed;
-use super::sequence::{self, Library as SequenceLibrary};
+use super::sequence::{self, Growth, Library as SequenceLibrary};
 use super::{
     Binary, Builder, Class, DataId, Definition, Exit, Offset, Op, Origin, Program, Range, RegionId,
     Relation, ShapeId, Terminator, ValueId, Width, validate,
@@ -88,25 +88,20 @@ fn managed_runtime(
     let has_cells = holds(source, Class::Cell) || has_buffers;
     let buffers = has_buffers.then(|| sequence::declare(output));
     let cells = has_cells.then(|| cell::append(output, library, buffers, config.word_bits));
-    let prepends = source
-        .functions()
-        .iter()
-        .filter_map(super::Function::body)
-        .flat_map(|body| source.walk_within(body))
-        .any(|(op, _)| matches!(op, Op::BufferPrepend { .. }));
     let sequences = buffers.zip(cells).map(|(release, cells)| {
         sequence::append(
             output,
             release,
             library,
             cells,
-            elements(source).into_iter().map(|shape| {
+            growths(source).into_iter().map(|(growth, shape)| {
                 (
+                    growth,
                     shapes.packed[shape.index()].clone(),
                     shapes.descriptors[shape.index()],
                 )
             }),
-            (config.word_bits, prepends),
+            config.word_bits,
         )
     });
     (cells, sequences)
@@ -159,6 +154,18 @@ fn skeleton(source: &Program) -> Program {
     output
 }
 
+/// An empty buffer of elements of `packed`, as the data holds it: an
+/// immortal count, room for nothing, claims for nothing, and its stride. It
+/// names no descriptor, since it holds nothing a descriptor would describe.
+fn empty(packed: &Packed, word_bits: u16) -> Vec<u8> {
+    let word = usize::from(word_bits / 8);
+    let immortal = u64::MAX >> (64 - word_bits);
+    [0, immortal, 0, 0, 0, packed.size, 0]
+        .iter()
+        .flat_map(|value: &u64| value.to_le_bytes()[..word].to_vec())
+        .collect()
+}
+
 /// A count as a word, however narrow it was held.
 fn word(b: &mut Builder, value: ValueId) -> ValueId {
     if b.class(value) == Class::Word {
@@ -173,17 +180,28 @@ const fn top(scopes: &mut [Scope]) -> &mut Scope {
     scopes.last_mut().expect("a region being walked")
 }
 
-/// The shape of every element a program pushes onto a buffer, each once.
-fn elements(source: &Program) -> std::collections::BTreeSet<ShapeId> {
+/// Each way a program grows a sequence, and the shape of its elements, each
+/// once.
+fn growths(source: &Program) -> std::collections::BTreeSet<(Growth, ShapeId)> {
+    shapes_of(source, |op| match op {
+        Op::BufferPush { shape, .. } => Some((Growth::Push, shape)),
+        Op::BufferPrepend { shape, .. } => Some((Growth::Prepend, shape)),
+        Op::BufferExtend { shape, .. } => Some((Growth::Extend, shape)),
+        _ => None,
+    })
+}
+
+/// What `wanted` says of each instruction a program holds, each once.
+fn shapes_of<T: Ord>(
+    source: &Program,
+    wanted: impl Fn(Op) -> Option<T>,
+) -> std::collections::BTreeSet<T> {
     source
         .functions()
         .iter()
         .filter_map(super::Function::body)
         .flat_map(|body| source.walk_within(body))
-        .filter_map(|(op, _)| match *op {
-            Op::BufferPush { shape, .. } => Some(shape),
-            _ => None,
-        })
+        .filter_map(|(op, _)| wanted(*op))
         .collect()
 }
 
@@ -192,6 +210,10 @@ fn elements(source: &Program) -> std::collections::BTreeSet<ShapeId> {
 struct Shapes {
     packed: Vec<Packed>,
     descriptors: Vec<Option<DataId>>,
+    /// An empty buffer of each shape a program makes one of, in the data:
+    /// immortal, so nothing ever writes it or frees it, and whatever is
+    /// first put in it makes a buffer of its own.
+    empties: Vec<Option<DataId>>,
 }
 
 impl Shapes {
@@ -217,10 +239,27 @@ impl Shapes {
                     .map(|bytes: Vec<u8>| output.intern(&bytes))
             })
             .collect();
+        let made = shapes_of(source, |op| match op {
+            Op::BufferEmpty { shape } => Some(shape),
+            _ => None,
+        });
+        let empties = (0..packed.len())
+            .map(|at| {
+                made.contains(&ShapeId::at(at))
+                    .then(|| output.intern(&empty(&packed[at], word_bits)))
+            })
+            .collect();
         Ok(Self {
             packed,
             descriptors,
+            empties,
         })
+    }
+
+    /// Where the empty buffer of `shape` lies.
+    fn empty(&self, b: &mut Builder, shape: ShapeId) -> ValueId {
+        let data = self.empties[shape.index()].expect("the program makes an empty buffer");
+        b.address_of(data)
     }
 
     fn packed(&self, shape: ShapeId) -> &Packed {
@@ -783,19 +822,7 @@ impl Pass<'_> {
             Op::CellField { cell, index, shape } => {
                 self.cell_field(b, results[0], cell, (shape, index))
             }
-            Op::BufferEmpty { shape } => {
-                let library = self.cells.expect("cell helpers were requested");
-                let stride = b.constant(Class::Word, self.shapes.packed(shape).size);
-                let descriptor = self.shapes.descriptor(b, shape);
-                let none = b.constant(Class::Word, 0);
-                sequence::allocate(
-                    b,
-                    library.allocate,
-                    (stride, descriptor),
-                    none,
-                    self.word_bytes,
-                )
-            }
+            Op::BufferEmpty { shape } => self.shapes.empty(b, shape),
             Op::BufferPush { operands, shape } => {
                 let operands = self.source.values(operands);
                 let buffer = self.take(b, scopes, live, at, operands[0]);
@@ -806,7 +833,7 @@ impl Pass<'_> {
                     .collect();
                 return self.push(b, (buffer, start, len), shape, &claimed).to_vec();
             }
-            Op::BufferPrepend { operands, reversed } => {
+            Op::BufferPrepend { operands, shape } => {
                 let operands = self.source.values(operands);
                 let buffer = self.take(b, scopes, live, at, operands[0]);
                 let [start, len, from_start, count] =
@@ -817,9 +844,27 @@ impl Pass<'_> {
                     .expect("buffer helpers were requested")
                     .prepend(
                         b,
+                        self.shapes.packed(shape),
                         (buffer, start, len),
                         (v(operands[3]), from_start, count),
-                        reversed,
+                    )
+                    .to_vec();
+            }
+            Op::BufferExtend { operands, shape } => {
+                let operands = self.source.values(operands);
+                let first = self.take(b, scopes, live, at, operands[0]);
+                let then = self.take(b, scopes, live, at, operands[3]);
+                let [first_start, first_len, then_start, then_len] =
+                    [1, 2, 4, 5].map(|at| word(b, v(operands[at])));
+                return self
+                    .sequences
+                    .as_ref()
+                    .expect("buffer helpers were requested")
+                    .extend(
+                        b,
+                        self.shapes.packed(shape),
+                        (first, first_start, first_len),
+                        (then, then_start, then_len),
                     )
                     .to_vec();
             }

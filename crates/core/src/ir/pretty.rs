@@ -149,10 +149,15 @@ impl Program {
                 arguments(self.values(operands)),
                 shape.index()
             ),
-            Op::BufferPrepend { operands, reversed } => format!(
-                "buffer_prepend{} {}",
-                if reversed { "_reversed" } else { "" },
-                arguments(self.values(operands))
+            Op::BufferPrepend { operands, shape } => format!(
+                "buffer_prepend_reversed {} of s{}",
+                arguments(self.values(operands)),
+                shape.index()
+            ),
+            Op::BufferExtend { operands, shape } => format!(
+                "buffer_extend {} of s{}",
+                arguments(self.values(operands)),
+                shape.index()
             ),
             Op::BufferField {
                 buffer,

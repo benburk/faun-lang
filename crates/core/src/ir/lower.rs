@@ -1872,6 +1872,18 @@ impl Lowering<'_> {
         b.shape(&leaves)
     }
 
+    /// The shape of each element of a sequence of type `ty`.
+    fn sequence_shape(&self, b: &mut super::Builder, ty: barb::TypeId) -> ShapeId {
+        let owner = peeled(self.barb, ty).expect("a sequence is not cyclic");
+        let barb::TypeShape::Sequence {
+            push, recursive, ..
+        } = barb::type_shape(self.barb, owner)
+        else {
+            unreachable!("a sequence operation is of a sequence");
+        };
+        self.element_shape(b, push, usize::from(recursive == 0))
+    }
+
     /// What each field of `ctor` is held as, in order.
     fn fields_carried(&self, ctor: barb::CtorId) -> impl Iterator<Item = Option<Carried>> + '_ {
         (0..self.barb.fields(ctor).len()).map(move |at| self.field_carried(ctor, at))
@@ -2477,7 +2489,7 @@ impl Lowering<'_> {
                 | barb::SequenceOperation::Prepend),
             ) => {
                 let reversed = *operation == barb::SequenceOperation::ReverseOnto;
-                return Answer::Value(Self::prepended(b, arguments, locals, reversed, self.barb));
+                return Answer::Value(self.prepended(b, (function, arguments), locals, reversed));
             }
             Callee::External {
                 id,
@@ -2536,18 +2548,20 @@ impl Lowering<'_> {
         self.answered(b, expr, function, &results, answers)
     }
 
-    /// One sequence's elements put before another's, as the buffer holding
-    /// them and how many there are: in order, or reversed.
+    /// One sequence's elements put before another's, in order or reversed:
+    /// the buffer holding them, where in it they start, and how many.
     fn prepended(
+        &self,
         b: &mut super::Builder,
-        arguments: barb::Range,
+        (function, arguments): (barb::FnId, barb::Range),
         locals: &Locals,
         reversed: bool,
-        program: &barb::Program,
     ) -> Held {
-        let &[from, onto] = program.atoms(arguments) else {
+        let &[from, onto] = self.barb.atoms(arguments) else {
             unreachable!("a prepend is of two sequences");
         };
+        let sequence = self.barb.params(function)[0];
+        let shape = self.sequence_shape(b, sequence);
         let held = |atom: barb::Atom| {
             let values = locals[atom.0.index()]
                 .as_ref()
@@ -2556,7 +2570,11 @@ impl Lowering<'_> {
             (values[0], values[1], values[2])
         };
         let (from, onto) = (held(from), held(onto));
-        let [buffer, first] = b.buffer_prepend(onto, from, reversed);
+        let [buffer, first] = if reversed {
+            b.buffer_prepend(onto, from, shape)
+        } else {
+            b.buffer_extend(from, onto, shape)
+        };
         let len = b.binary(Binary::Add, onto.2, from.2);
         Held::Flat {
             leaves: sequence_run(),

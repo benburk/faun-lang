@@ -214,10 +214,10 @@ fn a_list_round_trip_costs_what_is_recorded() {
     assert_eq!(
         cost(&round_trip(100)),
         Cost {
-            allocations: 8,
+            allocations: 6,
             retains: 0,
             releases: 8,
-            stored_bytes: 1262,
+            stored_bytes: 1046,
         }
     );
 }

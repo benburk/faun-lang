@@ -251,3 +251,22 @@ fn files_answer_what_opening_one_met() {
     assert_eq!(status, 0);
     assert_eq!(left["here.txt"], b"there!");
 }
+
+/// Appending writes after a list's end where nothing else holds its
+/// buffer, and otherwise grows it with room after: twenty thousand appends
+/// are linear work, which a copy per append would not finish.
+#[test]
+fn appends_are_linear_work() {
+    let package = support::Package::new(
+        "appends",
+        "built : (Nat, List(Nat)) -> List(Nat)
+         built(0, values) -> values
+         built(Succ(n), values) -> built(n, values.append(n % 7))
+
+         main! : Host -> []
+         main!(host) ->
+           values = built(20000, [])
+           host.exit!(values.len() % 256 + values.get_or(19999, 9))",
+    );
+    assert_eq!(package.run(), 20000 % 256);
+}

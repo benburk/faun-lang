@@ -781,11 +781,13 @@ fn a_buffer_prepended_answers_the_reference_and_leaks_nothing() {
                         onto = push(b, onto, at, value);
                     }
                     let (three, two) = (b.constant(Class::Word, 3), b.constant(Class::Word, 2));
-                    let [joined, first] = b.buffer_prepend(
-                        (onto[0], onto[1], two),
-                        (from[0], from[1], three),
-                        reversed,
-                    );
+                    let (onto_three, from_three) =
+                        ((onto[0], onto[1], two), (from[0], from[1], three));
+                    let [joined, first] = if reversed {
+                        b.buffer_prepend(onto_three, from_three, natural)
+                    } else {
+                        b.buffer_extend(from_three, onto_three, natural)
+                    };
                     // Every element, each weighted by where it is.
                     let mut total = b.constant(Class::Natural, 0);
                     for (at, place) in (0u64..5).zip(0u32..) {

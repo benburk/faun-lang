@@ -533,6 +533,7 @@ impl Lowering<'_> {
             | Op::BufferEmpty { .. }
             | Op::BufferPush { .. }
             | Op::BufferPrepend { .. }
+            | Op::BufferExtend { .. }
             | Op::BufferField { .. } => {
                 unreachable!("target preparation legalizes abstract cells")
             }

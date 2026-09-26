@@ -173,10 +173,6 @@ impl References<'_> {
                 reference(&p.shapes, shape, "shape")?;
                 self.value(cell)?;
             }
-            Op::BufferPush { operands, shape } => {
-                reference(&p.shapes, shape, "shape")?;
-                self.values(operands)?;
-            }
             Op::BufferField { shape, .. } if p.shapes.get(shape).is_none() => {
                 return Err("invalid shape reference".into());
             }
@@ -202,9 +198,13 @@ impl References<'_> {
                 reference(&p.functions, function, "function")?;
                 self.values(args)?;
             }
-            Op::BufferPrepend { operands, .. } | Op::Float { operands, .. } => {
+            Op::BufferPush { operands, shape }
+            | Op::BufferPrepend { operands, shape }
+            | Op::BufferExtend { operands, shape } => {
+                reference(&p.shapes, shape, "shape")?;
                 self.values(operands)?;
             }
+            Op::Float { operands, .. } => self.values(operands)?,
             Op::If {
                 condition,
                 then_region,
@@ -471,7 +471,7 @@ impl Checker<'_> {
                 self.shaped(fields, shape)?;
                 self.results(results, &[Class::Buffer, Class::Word])?;
             }
-            Op::BufferPrepend { operands, .. } => {
+            Op::BufferPrepend { operands, .. } | Op::BufferExtend { operands, .. } => {
                 let operands = self.program.values(operands);
                 let Ok(both) = <[ValueId; 6]>::try_from(operands) else {
                     return Err("a prepend names two sequences".into());

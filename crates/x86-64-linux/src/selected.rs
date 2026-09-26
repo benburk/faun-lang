@@ -1341,6 +1341,7 @@ impl Selector<'_> {
                 | SourceOp::BufferEmpty { .. }
                 | SourceOp::BufferPush { .. }
                 | SourceOp::BufferPrepend { .. }
+                | SourceOp::BufferExtend { .. }
                 | SourceOp::BufferField { .. } => {
                     return Err("x86 selection received an abstract cell operation".to_owned());
                 }

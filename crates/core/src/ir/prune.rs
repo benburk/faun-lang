@@ -640,6 +640,9 @@ pub(super) fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
         }
         | Op::BufferPrepend {
             operands: fields, ..
+        }
+        | Op::BufferExtend {
+            operands: fields, ..
         } => source.values(fields).to_vec(),
         Op::CellTag { cell } | Op::CellField { cell, .. } => vec![cell],
         Op::Binary { left, right, .. }

@@ -772,19 +772,20 @@ impl<H: Host> Machine<'_, H> {
                 self.buffers.push(elements);
                 return Ok(vec![BigUint::from(self.buffers.len()), BigUint::ZERO]);
             }
-            Op::BufferPrepend { operands, reversed } => {
+            Op::BufferPrepend { operands, .. } | Op::BufferExtend { operands, .. } => {
                 let operands = self.ids(operands)?.to_vec();
-                let mut elements = self
-                    .elements((operands[3], operands[4], operands[5]))?
-                    .to_vec();
-                if reversed {
+                let [first, then] =
+                    [0, 3].map(|at| (operands[at], operands[at + 1], operands[at + 2]));
+                let (first, then) = if matches!(op, Op::BufferPrepend { .. }) {
+                    (then, first)
+                } else {
+                    (first, then)
+                };
+                let mut elements = self.elements(first)?.to_vec();
+                if matches!(op, Op::BufferPrepend { .. }) {
                     elements.reverse();
                 }
-                elements.extend_from_slice(self.elements((
-                    operands[0],
-                    operands[1],
-                    operands[2],
-                ))?);
+                elements.extend_from_slice(self.elements(then)?);
                 self.buffers.push(elements);
                 return Ok(vec![BigUint::from(self.buffers.len()), BigUint::ZERO]);
             }

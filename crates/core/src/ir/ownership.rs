@@ -138,6 +138,11 @@ fn consumed_in(source: &Program, region: RegionId, owned: &[Vec<bool>], out: &mu
                 out.extend_from_slice(&operands[3..]);
             }
             Op::BufferPrepend { operands, .. } => out.push(source.values(operands)[0]),
+            // Joining takes both, either of which may become the result.
+            Op::BufferExtend { operands, .. } => {
+                let operands = source.values(operands);
+                out.extend([operands[0], operands[3]]);
+            }
             Op::Convert { value } if source.class(value) == source.class(results[0]) => {
                 out.push(value);
             }

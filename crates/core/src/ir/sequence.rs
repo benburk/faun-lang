@@ -64,22 +64,41 @@ const MINIMUM_CAPACITY: u64 = 8;
 /// stride and where its claims lie.
 type Key = (u64, Vec<(u64, u64)>);
 
-/// The generated routines: one release, one reservation per element layout,
-/// and what putting one sequence before another calls.
+/// How a program grows sequences of one layout, each asking for a routine
+/// of its own, made only where the program grows one that way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Growth {
+    /// One element before a sequence.
+    Push,
+    /// Another's elements, last first, before a sequence.
+    Prepend,
+    /// Another's elements after a sequence.
+    Extend,
+}
+
+/// The generated routines: one release, one per way a layout is grown, and
+/// the copies growing by another sequence's elements calls.
 pub(super) struct Library {
     pub release: FunctionId,
-    reserve: BTreeMap<Key, FunctionId>,
-    prepend: Option<Prepending>,
+    routines: BTreeMap<(Growth, Key), FunctionId>,
+    copies: Option<Copies>,
     word_bits: u16,
 }
 
-/// What putting a sequence's elements before another's calls: room for them,
-/// then a copy of them in order or reversed.
+/// Copying a run of elements, in order and last first.
 #[derive(Clone, Copy)]
-struct Prepending {
-    room: FunctionId,
+struct Copies {
     copy: FunctionId,
     copy_reversed: FunctionId,
+}
+
+/// Where a grown buffer puts the sequence it copies: at its end, with room
+/// before for what is put in front, or at its start, with room after for
+/// what follows.
+#[derive(Clone, Copy)]
+enum Placed {
+    AtEnd,
+    AtStart,
 }
 
 fn key(element: &Packed) -> Key {
@@ -105,7 +124,7 @@ impl Library {
         element: &Packed,
         (buffer, start, len): (ValueId, ValueId, ValueId),
     ) -> [ValueId; 2] {
-        let reserve = self.reserve[&key(element)];
+        let reserve = self.routines[&(Growth::Push, key(element))];
         let one = number(b, 1);
         if element.managed().next().is_some() {
             let room = b.call_one(reserve, &[buffer, start, len]);
@@ -138,36 +157,111 @@ impl Library {
         [answer[0], answer[1]]
     }
 
-    /// Room for `count` elements before the sequence of `len` from `start`
-    /// of `buffer`, whose claim this takes, then the `count` from
-    /// `from_start` of `from` copied there, in order or reversed: the buffer
-    /// and where the joined sequence starts.
+    /// The `count` elements from `from_start` of `from`, last first, put
+    /// before the sequence of `len` from `start` of `buffer`, whose claim
+    /// this takes: the buffer and where the joined sequence starts.
     ///
     /// # Panics
-    /// If the program was not said to prepend when the library was appended.
+    /// If the layout was not said to be prepended to.
     pub(super) fn prepend(
         &self,
         b: &mut Builder<'_>,
+        element: &Packed,
         (buffer, start, len): (ValueId, ValueId, ValueId),
         (from, from_start, count): (ValueId, ValueId, ValueId),
-        reversed: bool,
     ) -> [ValueId; 2] {
-        let routines = self.prepend.expect("prepending was requested");
-        let room = b.call_one(routines.room, &[buffer, start, len, count]);
+        let routine = self.routines[&(Growth::Prepend, key(element))];
+        let copies = self.copies.expect("growing by a sequence copies one");
+        let room = b.call_one(routine, &[buffer, start, len, count]);
         let front = started(b, (buffer, room), (start, len), count);
-        let stride = b.load(Width::Word, room, Offset::Words(STRIDE));
-        let into = element_at(b, room, (stride, front), self.word_bits);
-        if reversed {
-            let one = number(b, 1);
-            let past = b.binary(Binary::Add, from_start, count);
-            let last = b.binary(Binary::Sub, past, one);
-            let last = element_at(b, from, (stride, last), self.word_bits);
-            b.call(routines.copy_reversed, &[last, into, count, room]);
-        } else {
-            let first = element_at(b, from, (stride, from_start), self.word_bits);
-            b.call(routines.copy, &[first, into, count, room]);
-        }
+        let into = self.element(b, room, element.size, front);
+        let one = number(b, 1);
+        let past = b.binary(Binary::Add, from_start, count);
+        let last = b.binary(Binary::Sub, past, one);
+        let last = self.element(b, from, element.size, last);
+        b.call(copies.copy_reversed, &[last, into, count, room]);
         [room, front]
+    }
+
+    /// The sequence `first` followed by `then`, each a buffer, a start and
+    /// a length, whose buffers' claims this takes: the other where one is
+    /// empty, the first written after where its buffer has room and nothing
+    /// else holds it, and otherwise both copied to the start of a buffer
+    /// with room after. The buffer and where the joined sequence starts.
+    ///
+    /// # Panics
+    /// If the layout was not said to be extended.
+    pub(super) fn extend(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
+        (first, first_start, first_len): (ValueId, ValueId, ValueId),
+        (then, then_start, then_len): (ValueId, ValueId, ValueId),
+    ) -> [ValueId; 2] {
+        let zero = number(b, 0);
+        let no_first = b.compare(Relation::Equal, first_len, zero);
+        let joined = b.if_(
+            no_first,
+            &[A, W],
+            |b| {
+                b.call(self.release, &[first]);
+                b.yield_(&[then, then_start]);
+            },
+            |b| {
+                let no_then = b.compare(Relation::Equal, then_len, zero);
+                let joined = b.if_(
+                    no_then,
+                    &[A, W],
+                    |b| {
+                        b.call(self.release, &[then]);
+                        b.yield_(&[first, first_start]);
+                    },
+                    |b| {
+                        let joined = self.joined(
+                            b,
+                            element,
+                            (first, first_start, first_len),
+                            (then, then_start, then_len),
+                        );
+                        b.yield_(&joined);
+                    },
+                );
+                b.yield_(&joined);
+            },
+        );
+        [joined[0], joined[1]]
+    }
+
+    /// Two sequences neither of which is empty, joined as
+    /// [`Library::extend`] joins them.
+    fn joined(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
+        (first, first_start, first_len): (ValueId, ValueId, ValueId),
+        (then, then_start, then_len): (ValueId, ValueId, ValueId),
+    ) -> [ValueId; 2] {
+        let after = self.routines[&(Growth::Extend, key(element))];
+        let copies = self.copies.expect("growing by a sequence copies one");
+        let room = b.call_one(after, &[first, first_start, first_len, then_len]);
+        let was = b.convert(W, first);
+        let is = b.convert(W, room);
+        let same = b.compare(Relation::Equal, was, is);
+        let start = b.if_(
+            same,
+            &[W],
+            |b| b.yield_(&[first_start]),
+            |b| {
+                let zero = number(b, 0);
+                b.yield_(&[zero]);
+            },
+        )[0];
+        let end = b.binary(Binary::Add, start, first_len);
+        let into = self.element(b, room, element.size, end);
+        let from = self.element(b, then, element.size, then_start);
+        b.call(copies.copy, &[from, into, then_len, room]);
+        b.call(self.release, &[then]);
+        [room, start]
     }
 
     /// Where element `index` of `buffer` begins, its stride known.
@@ -224,44 +318,73 @@ pub(super) fn append(
     release: FunctionId,
     naturals: &NaturalLibrary,
     cells: cell::Library,
-    elements: impl IntoIterator<Item = (Packed, Option<DataId>)>,
-    (word_bits, prepends): (u16, bool),
+    wanted: impl IntoIterator<Item = (Growth, Packed, Option<DataId>)>,
+    word_bits: u16,
 ) -> Library {
-    let claims = Claims {
-        word_bits,
-        retain: naturals.retain,
-        naturals: naturals.release,
-        half: naturals.half,
-        cells: cells.release,
-        buffers: Some(release),
-    };
-    let allocate = naturals.require(Helper::Allocate);
-    let moving = define_move(program, word_bits);
     let runtime = Runtime {
-        claims,
+        claims: Claims {
+            word_bits,
+            retain: naturals.retain,
+            naturals: naturals.release,
+            half: naturals.half,
+            cells: cells.release,
+            buffers: Some(release),
+        },
         release,
         block: naturals.release,
-        allocate,
-        moving,
+        allocate: naturals.require(Helper::Allocate),
+        moving: define_move(program, word_bits),
     };
     define_release(program, runtime);
-    let mut reserve = BTreeMap::new();
-    for (element, descriptor) in elements {
-        let key = key(&element);
-        if reserve.contains_key(&key) {
+    let mut routines = BTreeMap::new();
+    for (growth, element, descriptor) in wanted {
+        let key = (growth, key(&element));
+        if routines.contains_key(&key) {
             continue;
         }
-        let name = format!("seq.reserve.{}", reserve.len());
-        let id = program.declare(&name, &[A, W, W], &[A]);
-        define_reserve(program, id, (&element, descriptor), runtime);
-        reserve.insert(key, id);
+        let id = define_growth(
+            program,
+            growth,
+            (&element, descriptor),
+            (runtime, routines.len()),
+        );
+        routines.insert(key, id);
     }
-    let prepend = prepends.then(|| define_prepending(program, runtime));
+    let copies = routines
+        .keys()
+        .any(|(growth, _)| *growth != Growth::Push)
+        .then(|| define_copies(program, runtime));
     Library {
         release,
-        reserve,
-        prepend,
+        routines,
+        copies,
         word_bits,
+    }
+}
+
+/// The routine growing sequences of one layout one way, the `n`th made.
+fn define_growth(
+    program: &mut Program,
+    growth: Growth,
+    layout: (&Packed, Option<DataId>),
+    (runtime, n): (Runtime, usize),
+) -> FunctionId {
+    match growth {
+        Growth::Push => {
+            let id = program.declare(&format!("seq.reserve.{n}"), &[A, W, W], &[A]);
+            define_reserve(program, id, layout, runtime);
+            id
+        }
+        Growth::Prepend => {
+            let id = program.declare(&format!("seq.room.{n}"), &[A, W, W, W], &[A]);
+            define_room(program, id, layout, runtime);
+            id
+        }
+        Growth::Extend => {
+            let id = program.declare(&format!("seq.after.{n}"), &[A, W, W, W], &[A]);
+            define_after(program, id, layout, runtime);
+            id
+        }
     }
 }
 
@@ -335,14 +458,15 @@ impl Runtime {
 
     /// A buffer of `layout` with room for `total` elements and as many
     /// again, and at least [`MINIMUM_CAPACITY`], holding the `len` elements
-    /// from `start` of `object` at its end, with claims to what they hold;
-    /// the `total` less `len` before them are counted as holding claims and
-    /// free to write. `object` is given up.
+    /// from `start` of `object` where `placed` says, with claims to what
+    /// they hold; the `total` less `len` beside them are counted as holding
+    /// claims and free to write. `object` is given up.
     fn grown(
         self,
         b: &mut Builder<'_>,
         (object, start, len): (ValueId, ValueId, ValueId),
         (total, (stride, descriptor)): (ValueId, (ValueId, ValueId)),
+        placed: Placed,
     ) -> ValueId {
         let two = number(b, 2);
         let doubled = b.binary(Binary::Mul, total, two);
@@ -350,11 +474,20 @@ impl Runtime {
         let capacity = greater(b, doubled, least);
         let word_bytes = u64::from(self.word_bits() / 8);
         let fresh = allocate(b, self.allocate, (stride, descriptor), capacity, word_bytes);
-        let first = b.binary(Binary::Sub, capacity, total);
+        let (first, at) = match placed {
+            Placed::AtEnd => {
+                let first = b.binary(Binary::Sub, capacity, total);
+                (first, b.binary(Binary::Sub, capacity, len))
+            }
+            Placed::AtStart => {
+                let zero = number(b, 0);
+                (zero, zero)
+            }
+        };
+        let high = b.binary(Binary::Add, first, total);
         b.store(Width::Word, fresh, Offset::Words(LOW), first);
-        b.store(Width::Word, fresh, Offset::Words(HIGH), capacity);
+        b.store(Width::Word, fresh, Offset::Words(HIGH), high);
         let from = element_at(b, object, (stride, start), self.word_bits());
-        let at = b.binary(Binary::Sub, capacity, len);
         let to = element_at(b, fresh, (stride, at), self.word_bits());
         let bytes = b.binary(Binary::Mul, len, stride);
         b.call(self.moving, &[from, to, bytes]);
@@ -503,16 +636,9 @@ fn define_reserve(
             |b| {
                 // Shared, or with no room in front: copy the sequence to the
                 // end of a buffer with as much room again in front.
-                let stride = number(b, element.size);
-                let described = match descriptor {
-                    Some(data) => {
-                        let at = b.address_of(data);
-                        b.convert(W, at)
-                    }
-                    None => number(b, 0),
-                };
+                let layout = static_layout(b, element, descriptor);
                 let total = b.binary(Binary::Add, len, one);
-                let fresh = runtime.grown(b, (object, start, len), (total, (stride, described)));
+                let fresh = runtime.grown(b, (object, start, len), (total, layout), Placed::AtEnd);
                 b.yield_(&[fresh]);
             },
         );
@@ -520,31 +646,51 @@ fn define_reserve(
     });
 }
 
-/// Define what putting one sequence before another calls.
-fn define_prepending(program: &mut Program, runtime: Runtime) -> Prepending {
+/// A layout's stride and descriptor, known before the program runs, as the
+/// words a buffer's header holds them in.
+fn static_layout(
+    b: &mut Builder<'_>,
+    element: &Packed,
+    descriptor: Option<DataId>,
+) -> (ValueId, ValueId) {
+    let stride = number(b, element.size);
+    let described = match descriptor {
+        Some(data) => {
+            let at = b.address_of(data);
+            b.convert(W, at)
+        }
+        None => number(b, 0),
+    };
+    (stride, described)
+}
+
+/// Define the copies growing by another sequence's elements calls.
+fn define_copies(program: &mut Program, runtime: Runtime) -> Copies {
     let copy = program.declare("seq.copy", &[A, A, W, A], &[]);
     define_copy(program, copy, runtime);
     let copy_reversed = program.declare("seq.copy_reversed", &[A, A, W, A], &[]);
     define_copy_reversed(program, copy_reversed, runtime);
-    let room = program.declare("seq.room", &[A, W, W, W], &[A]);
-    define_room(program, room, runtime);
-    Prepending {
-        room,
+    Copies {
         copy,
         copy_reversed,
     }
 }
 
-/// `seq.room(target, start, len, count)`: a buffer nothing else holds with
-/// room for `count` elements of `target`'s layout before the sequence of
-/// `len` from `start` of `target`, whose claim this takes, and those
-/// elements counted as holding claims and free to write.
+/// `seq.room.n(target, start, len, count)`: a buffer nothing else holds with
+/// room for `count` elements of `element` before the sequence of `len` from
+/// `start` of `target`, whose claim this takes, and those elements counted
+/// as holding claims and free to write.
 ///
 /// One nothing else holds with that room is written in place, giving up
 /// whatever claims a longer sequence left there. Otherwise its elements are
 /// copied to the end of one with as much room again, and at least
 /// [`MINIMUM_CAPACITY`], as a push would.
-fn define_room(program: &mut Program, id: FunctionId, runtime: Runtime) {
+fn define_room(
+    program: &mut Program,
+    id: FunctionId,
+    (element, descriptor): (&Packed, Option<DataId>),
+    runtime: Runtime,
+) {
     program.define(id, |b, args| {
         let (target, start, len, count) = (args[0], args[1], args[2], args[3]);
         let one = number(b, 1);
@@ -563,10 +709,52 @@ fn define_room(program: &mut Program, id: FunctionId, runtime: Runtime) {
             },
             |b| b.yield_(&[]),
         );
-        let stride = b.load(Width::Word, target, Offset::Words(STRIDE));
-        let described = b.load(Width::Word, target, Offset::Words(DESCRIPTOR));
+        let layout = static_layout(b, element, descriptor);
         let total = b.binary(Binary::Add, len, count);
-        let fresh = runtime.grown(b, (target, start, len), (total, (stride, described)));
+        let fresh = runtime.grown(b, (target, start, len), (total, layout), Placed::AtEnd);
+        b.ret(&[fresh]);
+    });
+}
+
+/// `seq.after.n(object, start, len, count)`: a buffer nothing else holds
+/// with room for `count` elements of `element` after the sequence of `len`
+/// from `start` of `object`, whose claim this takes, and those elements
+/// counted as holding claims and free to write.
+///
+/// One nothing else holds with that room is written in place, giving up
+/// whatever claims a longer sequence left there. Otherwise its elements are
+/// copied to the start of one with as much room again after, and at least
+/// [`MINIMUM_CAPACITY`], so a run of appends copies each element a bounded
+/// number of times.
+fn define_after(
+    program: &mut Program,
+    id: FunctionId,
+    (element, descriptor): (&Packed, Option<DataId>),
+    runtime: Runtime,
+) {
+    program.define(id, |b, args| {
+        let (object, start, len, count) = (args[0], args[1], args[2], args[3]);
+        let one = number(b, 1);
+        let refs = b.load(Width::Word, object, Offset::Words(1));
+        let alone = b.compare(Relation::Equal, refs, one);
+        let capacity = b.load(Width::Word, object, Offset::Words(CAPACITY));
+        let end = b.binary(Binary::Add, start, len);
+        let past = b.binary(Binary::Add, end, count);
+        let short = b.compare(Relation::Less, capacity, past);
+        let room = b.binary(Binary::Sub, one, short);
+        let both = b.binary(Binary::Mul, alone, room);
+        b.if_(
+            both,
+            &[],
+            |b| {
+                runtime.claim_slots(b, object, (end, past));
+                b.ret(&[object]);
+            },
+            |b| b.yield_(&[]),
+        );
+        let layout = static_layout(b, element, descriptor);
+        let total = b.binary(Binary::Add, len, count);
+        let fresh = runtime.grown(b, (object, start, len), (total, layout), Placed::AtStart);
         b.ret(&[fresh]);
     });
 }

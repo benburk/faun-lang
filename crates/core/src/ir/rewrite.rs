@@ -300,12 +300,21 @@ impl<'a> Rebuild<'a> {
                 b.buffer_push((sequence[0], sequence[1], sequence[2]), shape, fields)
                     .to_vec()
             }
-            Op::BufferPrepend { operands, reversed } => {
+            Op::BufferPrepend { operands, shape } => {
                 let operands = self.args(operands);
                 b.buffer_prepend(
                     (operands[0], operands[1], operands[2]),
                     (operands[3], operands[4], operands[5]),
-                    reversed,
+                    shape,
+                )
+                .to_vec()
+            }
+            Op::BufferExtend { operands, shape } => {
+                let operands = self.args(operands);
+                b.buffer_extend(
+                    (operands[0], operands[1], operands[2]),
+                    (operands[3], operands[4], operands[5]),
+                    shape,
                 )
                 .to_vec()
             }

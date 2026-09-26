@@ -208,16 +208,27 @@ pub enum Op {
         operands: Range,
         shape: ShapeId,
     },
-    /// The sequence of the elements of one -- in its order, or the other way
-    /// round -- followed by those of another: `operands` are the other's
-    /// buffer, start and length, then the one's. Answers a buffer and where
-    /// in it the joined sequence starts. Takes a claim to the other's
-    /// buffer, so one nothing else holds with room in front is written in
-    /// place; the one's is borrowed, and each element copied out of it is
-    /// claimed again. Both hold elements of one layout.
+    /// The sequence of the elements of one, last first, followed by those of
+    /// another: `operands` are the other's buffer, start and length, then the
+    /// one's. Answers a buffer and where in it the joined sequence starts.
+    /// Takes a claim to the other's buffer, so one nothing else holds with
+    /// room in front is written in place; the one's is borrowed, and each
+    /// element copied out of it is claimed again. Both hold elements of
+    /// `shape`.
     BufferPrepend {
         operands: Range,
-        reversed: bool,
+        shape: ShapeId,
+    },
+    /// The sequence of the elements of one, in order, followed by those of
+    /// another: `operands` are the one's buffer, start and length, then the
+    /// other's. Answers a buffer and where in it the joined sequence starts.
+    /// Takes a claim to both buffers: one empty sequence answers the other,
+    /// a first nothing else holds with room after it is written after, and
+    /// otherwise both are copied, the joined sequence first in its buffer.
+    /// Both hold elements of `shape`.
+    BufferExtend {
+        operands: Range,
+        shape: ShapeId,
     },
     /// Read leaf `index` of element `start` of `buffer`, whose elements are
     /// of `shape`. The result value says the class it is read as.
