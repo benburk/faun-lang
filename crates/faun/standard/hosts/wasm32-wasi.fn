@@ -158,7 +158,7 @@ Files : [Files].(
   # the program runs, by `..` or from the root or through a link, is refused
   # as `Escapes`.
   open! : (Files, Str, Mode) -> Result(File, IoError)
-  open!(files, name, mode) -> opening!(files, name.to_utf8(), (flags(mode), made(mode)), 8)
+  open!(files, name, mode) -> named!(files, name.to_utf8(), (flags(mode), made(mode)))
 )
 
 # How a file is opened: to read it as it is; to write it from nothing, made
@@ -231,10 +231,15 @@ made(Append) -> 6291829
 made(CreateNew) -> 6291829
 made(_) -> 6291831
 
+# Open `name`, which WASI reads to its length, so none of it may be a
+# nought byte, which a host would read as ending it.
+named! : (Files, List(U8), (Nat, Nat)) -> Result(File, IoError)
+named!(_, name, _) if name.contains(0) -> Err(Other(28))
+named!(files, name, how) -> opening!(files, name, how, 8)
+
 # Open `name`, asking again, up to `fuel` times, where the kernel was
 # interrupted or found the name moving under it.
 opening! : (Files, List(U8), (Nat, Nat), Nat) -> Result(File, IoError)
-opening!(_, name, _, _) if name.contains(0) -> Err(Other(28))
 opening!(files, name, (how, made), fuel) ->
   answer = fd_open!(files, name, how, made)
   opened!(files, name, (how, made), fuel, outcome(answer))

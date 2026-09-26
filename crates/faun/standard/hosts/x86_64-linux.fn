@@ -158,7 +158,7 @@ Files : [Files].(
   # the program runs, by `..` or from the root or through a link, is refused
   # as `Escapes`.
   open! : (Files, Str, Mode) -> Result(File, IoError)
-  open!(files, name, mode) -> opening!(files, name.to_utf8(), (flags(mode), made(mode)), 8)
+  open!(files, name, mode) -> named!(files, name.to_utf8(), (flags(mode), made(mode)))
 )
 
 # How a file is opened: to read it as it is; to write it from nothing, made
@@ -228,12 +228,16 @@ made(Read) -> 0
 made(Edit) -> 0
 made(_) -> 438
 
+# Open `name`, ended by a nought byte as Linux reads one, so none may be in it.
+named! : (Files, List(U8), (Nat, Nat)) -> Result(File, IoError)
+named!(_, name, _) if name.contains(0) -> Err(Other(22))
+named!(files, name, how) -> opening!(files, name.append(0), how, 8)
+
 # Open `name`, asking again, up to `fuel` times, where the kernel was
 # interrupted or found the name moving under it.
 opening! : (Files, List(U8), (Nat, Nat), Nat) -> Result(File, IoError)
-opening!(_, name, _, _) if name.contains(0) -> Err(Other(22))
 opening!(files, name, (how, made), fuel) ->
-  answer = fd_open!(files, name.append(0), how, made)
+  answer = fd_open!(files, name, how, made)
   opened!(files, name, (how, made), fuel, outcome(answer))
 
 opened! : (Files, List(U8), (Nat, Nat), Nat, Result(Nat, IoError)) -> Result(File, IoError)
