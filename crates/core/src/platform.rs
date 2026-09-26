@@ -108,26 +108,35 @@ pub struct Routine {
     /// answers for itself. A target answers only for primitives, which never
     /// see a program's string.
     pub built: Option<Built>,
+    /// Whether it uses up what it is handed first: a resource, such as an
+    /// open file, of which nothing may be asked afterwards. A type some
+    /// routine uses up is a resource, which a program must use up exactly
+    /// once; nothing else says what one is.
+    pub consumes: bool,
 }
 
 /// A routine lowering builds on a primitive, or on memory alone.
 ///
-/// Each counts in bytes a stream moved, and a primitive answering
-/// more than it was asked to move is saying it failed: the error is that far
-/// short of the top of a word, which is how a kernel answers `-errno`. The
-/// routine answers nought then, and keeps the error for [`Built::Failure`].
+/// Each answers what its primitive does, as the primitive answers it: how
+/// many bytes a stream moved, or the error it met that far short of the top
+/// of a word, which is how a kernel answers `-errno`. Telling which is the
+/// program's to do, so nothing is kept between one call and the next. Every
+/// argument but a byte string or the count is handed on as it is, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Built {
     /// Hand the primitive a byte string's first run, all of it where it is
     /// known before the program runs: how many bytes went.
     Put(String),
-    /// Ask the primitive for up to a count of bytes, into a scratch region
-    /// of a run: how many came, nought at the end of the stream.
+    /// Hand the primitive a name: a byte string as [`Built::Put`] does, with
+    /// a nought byte after it that its length leaves out. Only a run's room,
+    /// less one, of a name worked out while the program runs is handed.
+    Name(String),
+    /// Ask the primitive for up to a count of bytes, the last argument, into
+    /// a scratch region of a run: how many came, nought at the end of the
+    /// stream.
     Take(String),
     /// The first bytes of that region, as many as are asked, as a string.
     Taken,
-    /// The error the last put or take met, nought for none, and then none.
-    Failure,
 }
 
 impl Routine {
@@ -290,12 +299,15 @@ impl Routines {
             takes: takes.to_vec(),
             returns,
             built,
+            consumes: false,
         };
         // What a program asks, it asks with the authority it was handed.
         let offered =
             |name: &str, takes: &[Takes], returns| held(name, (true, true), takes, returns, None);
-        let built = |name: &str, takes: &[Takes], returns, built: Built| {
-            held(name, (true, true), takes, returns, Some(built))
+        // What a descriptor names, a program asks of by holding the
+        // descriptor, which the routine reads.
+        let described = |name: &str, takes: &[Takes], returns, built: Built| {
+            held(name, (true, false), takes, returns, Some(built))
         };
         // A primitive a program's routines are built on is asked with the
         // same authority, though no program names it.
@@ -307,35 +319,45 @@ impl Routines {
         let word = Takes::Scalar(Class::Word);
         let count = Returns::Value(Class::Word);
         let contracts = vec![
-            // The streams a program reads and writes, a run at a time.
-            built(
-                "stdin_take!",
-                &[word],
+            // What a descriptor names, a run of bytes at a time, and a name
+            // opened as one: standard input, output and error are the first
+            // three. How many bytes moved, or the descriptor, or an error.
+            described(
+                "fd_put!",
+                &[word, Takes::Bytes],
                 count,
-                Built::Take("take_in!".into()),
+                Built::Put("write_fd!".into()),
             ),
-            built("stdin_bytes!", &[word], Returns::Bytes, Built::Taken),
-            built("stdin_failure!", &[], count, Built::Failure),
-            built(
-                "stdout_put!",
-                &[Takes::Bytes],
+            described(
+                "fd_take!",
+                &[word, word],
                 count,
-                Built::Put("put_out!".into()),
+                Built::Take("read_fd!".into()),
             ),
-            built("stdout_failure!", &[], count, Built::Failure),
-            built(
-                "stderr_put!",
-                &[Takes::Bytes],
+            described("fd_taken!", &[word], Returns::Bytes, Built::Taken),
+            // A name beneath where the program runs, how it is opened, and
+            // who may then read or write what it names, where it is made.
+            described(
+                "fd_open!",
+                &[Takes::Bytes, word, word],
                 count,
-                Built::Put("put_err!".into()),
+                Built::Name("open_at!".into()),
             ),
-            built("stderr_failure!", &[], count, Built::Failure),
+            Routine {
+                consumes: true,
+                ..held("fd_close!", (true, false), &[word], count, None)
+            },
             offered("exit!", &[word], Returns::Never),
-            // Bytes where they lie to standard output or error, and bytes from
-            // standard input to where they are to lie: how many, or an error.
-            primitive("put_out!", &[Takes::StaticBytes], count),
-            primitive("put_err!", &[Takes::StaticBytes], count),
-            primitive("take_in!", &[Takes::Scalar(Class::Address), word], count),
+            // Bytes where they lie to or from what a descriptor names, and a
+            // name, ended by a nought byte, opened: how many, or the
+            // descriptor, or an error.
+            primitive("write_fd!", &[word, Takes::StaticBytes], count),
+            primitive(
+                "read_fd!",
+                &[word, Takes::Scalar(Class::Address), word],
+                count,
+            ),
+            primitive("open_at!", &[Takes::StaticBytes, word, word], count),
             // One argument, two machine values: a machine reads where a run
             // of bytes starts and how long it is.
             primitive("write!", &[Takes::StaticBytes], Returns::Unit),

@@ -8,7 +8,7 @@
 use super::asm::{Assembler, Cc, Half, Held};
 use super::{
     ARG_COUNT, ARGC, ARGS, CSP, CSTACK_TOP, Code, FP, FRAMES_TOP, HEAP, HOME_COUNT, HOMES,
-    HOOK_ARGS, HOOK_EXIT, HOOK_READ, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
+    HOOK_ARGS, HOOK_CLOSE, HOOK_EXIT, HOOK_OPEN, HOOK_READ, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
 };
 use crate::WORD_BITS;
 use faun_core::ir::{
@@ -1447,17 +1447,17 @@ impl Lowering<'_> {
     /// Move bytes through sim65's `write(fd, buffer, count)` or
     /// `read(fd, buffer, count)` hook: the first two through `CSP`, the count
     /// in A and X, and what it answers left in A and X.
-    fn move_bytes(&mut self, args: &[ValueId], fd: u8, hook: u16) {
-        let buffer = self.operand(args[0], T1);
-        let count = self.operand(args[1], T0);
-        if let Some(at) = self.constant(args[0]) {
-            let block = self.intern([at, u16::from(fd)]);
+    fn move_bytes(&mut self, (fd, buffer, count): (Operand, ValueId, ValueId), hook: u16) {
+        let at = self.operand(buffer, T1);
+        let count = self.operand(count, T0);
+        if let (Some(at), Operand::Imm(fd)) = (self.constant(buffer), fd) {
+            let block = self.intern([at, fd]);
             self.asm.lda_imm_half(block, Half::Low);
             self.asm.sta_zp(CSP);
             self.asm.lda_imm_half(block, Half::High);
             self.asm.sta_zp(CSP + 1);
         } else {
-            self.build_arguments(buffer, fd);
+            self.build_arguments(&[at, fd]);
         }
         match count.byte(1) {
             Held::Imm(high) => self.asm.ldx_imm(high),
@@ -1467,10 +1467,43 @@ impl Lowering<'_> {
         self.jsr_hook(hook);
     }
 
-    /// Move bytes and answer how many moved, or the hook's `-1`, which is
-    /// a word that far short of the top: an error, the only one it says.
-    fn stream(&mut self, args: &[ValueId], fd: u8, hook: u16, result: ValueId) {
-        self.move_bytes(args, fd, hook);
+    /// Move bytes to or from what a descriptor names, and answer how many
+    /// moved, or the hook's `-1`, which is a word that far short of the
+    /// top: an error, the only one it says.
+    fn stream(&mut self, args: &[ValueId], hook: u16, result: ValueId) {
+        let fd = self.operand(args[0], PTR);
+        self.move_bytes((fd, args[1], args[2]), hook);
+        self.answered(result);
+    }
+
+    /// Open a name, ended by a nought byte, as cc65's `open` does: the
+    /// name, the flags and who may read and write what it makes, on the C
+    /// stack, and how many bytes of them in Y, since the last is optional.
+    /// The descriptor, or `-1`.
+    fn open_at(&mut self, args: &[ValueId], result: ValueId) {
+        let name = self.operand(args[0], T1);
+        let flags = self.operand(args[2], T0);
+        let made = self.operand(args[3], PTR);
+        self.build_arguments(&[made, flags, name]);
+        self.asm.ldy_imm(6);
+        self.jsr_hook(HOOK_OPEN);
+        self.answered(result);
+    }
+
+    /// Give up a descriptor, handed in A and X: nought, or `-1`.
+    fn close_fd(&mut self, args: &[ValueId], result: ValueId) {
+        let fd = self.operand(args[0], T0);
+        match fd.byte(1) {
+            Held::Imm(high) => self.asm.ldx_imm(high),
+            Held::Zero(at) => self.asm.ldx_zp(at),
+        }
+        self.load(fd.byte(0));
+        self.jsr_hook(HOOK_CLOSE);
+        self.answered(result);
+    }
+
+    /// What a hook left in A and X, as `result`.
+    fn answered(&mut self, result: ValueId) {
         self.asm.sta_zp(T0);
         self.asm.stx_zp(T0 + 1);
         self.commit(result, T0);
@@ -1508,21 +1541,22 @@ impl Lowering<'_> {
         self.commit(result, T0);
     }
 
-    /// A computed buffer, written into the block below the C stack top.
-    fn build_arguments(&mut self, buffer: Operand, fd: u8) {
-        self.set_pair(CSP, CSTACK_TOP - 4);
+    /// Words a hook pops, written into the block below the C stack top,
+    /// the first where the C stack pointer is left.
+    fn build_arguments(&mut self, words: &[Operand]) {
+        let bytes = u16::try_from(2 * words.len()).expect("a few words");
+        self.set_pair(CSP, CSTACK_TOP - bytes);
         self.asm.ldy_imm(0);
-        self.load(buffer.byte(0));
-        self.asm.sta_ind_y(CSP);
-        self.asm.iny();
-        self.load(buffer.byte(1));
-        self.asm.sta_ind_y(CSP);
-        self.asm.iny();
-        self.asm.lda_imm(fd);
-        self.asm.sta_ind_y(CSP);
-        self.asm.iny();
-        self.asm.lda_imm(0);
-        self.asm.sta_ind_y(CSP);
+        for (at, word) in words.iter().enumerate() {
+            if at > 0 {
+                self.asm.iny();
+            }
+            self.load(word.byte(0));
+            self.asm.sta_ind_y(CSP);
+            self.asm.iny();
+            self.load(word.byte(1));
+            self.asm.sta_ind_y(CSP);
+        }
     }
 
     /// The label of a block holding `words`, added to the pool if it is new.
@@ -1783,10 +1817,11 @@ impl Lowering<'_> {
 
     fn platform_call(&mut self, name: &str, args: &[ValueId], results: &[ValueId]) {
         match name {
-            "write!" => self.move_bytes(args, 1, HOOK_WRITE),
-            "put_out!" => self.stream(args, 1, HOOK_WRITE, results[0]),
-            "put_err!" => self.stream(args, 2, HOOK_WRITE, results[0]),
-            "take_in!" => self.stream(args, 0, HOOK_READ, results[0]),
+            "write!" => self.move_bytes((Operand::Imm(1), args[0], args[1]), HOOK_WRITE),
+            "write_fd!" => self.stream(args, HOOK_WRITE, results[0]),
+            "read_fd!" => self.stream(args, HOOK_READ, results[0]),
+            "open_at!" => self.open_at(args, results[0]),
+            "fd_close!" => self.close_fd(args, results[0]),
             "read_byte!" => self.read_byte(results[0]),
             "exit!" => {
                 let status = self.operand(args[0], T0);

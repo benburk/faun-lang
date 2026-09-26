@@ -1,0 +1,58 @@
+# Files held in a list are split, merged, and closed by functions that each
+# take some of them and hand the rest on, as Ori's `resource-list` does:
+# every one closed once, however it travelled. `inspect_all!` only looks at
+# the files it is handed; `close_head!` closes one and answers the rest;
+# `close_all!` closes every one. Nothing says which: each is found from
+# what the function does.
+
+import std.host {Host, File, Files, IoError, Mode.*}
+
+inspect_all! : List(File) -> Nat
+inspect_all!([]) -> 0
+inspect_all!([file, *rest]) ->
+  inspected = file.read!(0)
+  inspect_all!(rest)
+
+split : List(File) -> (List(File), List(File))
+split([]) -> ([], [])
+split([file, *rest]) -> halves(split(rest), file)
+
+halves : ((List(File), List(File)), File) -> (List(File), List(File))
+halves((left, right), file) -> (right, left.prepend(file))
+
+close_head! : List(File) -> List(File)
+close_head!([]) -> []
+close_head!([file, *rest]) ->
+  closed = file.close!()
+  rest
+
+close_all! : List(File) -> Nat
+close_all!([]) -> 0
+close_all!([file, *rest]) ->
+  closed = file.close!()
+  count = close_all!(rest)
+  count + 1
+
+main! : Host -> []
+main!(host) ->
+  opened = host.files.open!("a.tmp", Overwrite)
+  status = first!(opened, host.files)
+  host.exit!(status)
+
+first! : (Result(File, IoError), Files) -> Nat
+first!(Err(_), _) -> 1
+first!(Ok(a), files) ->
+  opened = files.open!("b.tmp", Overwrite)
+  second!(opened, a)
+
+second! : (Result(File, IoError), File) -> Nat
+second!(Err(_), a) ->
+  closed = a.close!()
+  1
+second!(Ok(b), a) ->
+  files = [a].extend([b]).reverse()
+  remaining = close_head!(files.extend([]))
+  length = remaining.len()
+  inspected = inspect_all!(remaining)
+  closed = close_all!(remaining)
+  (closed - length) % 256

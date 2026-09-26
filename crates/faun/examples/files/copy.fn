@@ -1,0 +1,37 @@
+# The whole file vocabulary in one pass, as Ori's `copy` does: open a file
+# beneath where the program runs, read it, close it, make another, write what
+# was read, close that. Every step answers a result, and every failure is a
+# value. A file the program opens is the program's to close: each is closed
+# before `?` is asked of what reading or writing it answered, so no way out
+# leaves one open.
+
+import std.host {Host, Files, Stdout, IoError.*, Mode.*}
+
+copy! : (Files, Stdout) -> Result(Nat, IoError)
+copy!(files, output) ->
+  source = files.open!("input.txt", Read)?
+  reading = source.read!(4096)
+  closing_source = source.close!()
+  contents = reading?
+  closed_source = closing_source?
+
+  target = files.open!("output.txt", Overwrite)?
+  writing = target.write_all!(contents)
+  closing_target = target.close!()
+  wrote = writing?
+  closed_target = closing_target?
+
+  said = output.write_all!("copied\n".to_utf8())?
+  Ok(0)
+
+main! : Host -> []
+main!(host) ->
+  copied = copy!(host.files, host.stdout)
+  host.exit!(status(copied))
+
+# Nought where it copied; otherwise what went wrong, as a status.
+status : Result(Nat, IoError) -> Nat
+status(Ok(_)) -> 0
+status(Err(NotFound)) -> 2
+status(Err(Escapes)) -> 3
+status(Err(_)) -> 1

@@ -294,7 +294,6 @@ fn answer_analysis_restores_locals_after_nonreturning_bindings() {
         takes: demand.takes,
         callees: vec![],
         refused: std::cell::RefCell::default(),
-        errors: Errors::default(),
         looping: std::cell::RefCell::default(),
         arguments: None,
     };
@@ -476,6 +475,7 @@ fn parameters_read_only_after_a_nonreturning_call_are_unused() {
         takes: vec![],
         returns: Returns::Never,
         built: None,
+        consumes: false,
     });
 
     let machine = lower(&mut source, &routines).unwrap();
@@ -510,6 +510,7 @@ fn external_parameter_names_survive_machine_lowering() {
         takes: vec![Takes::Scalar(Class::fixed(0))],
         returns: Returns::Never,
         built: None,
+        consumes: false,
     });
 
     let machine = lower(&mut source, &routines).unwrap();

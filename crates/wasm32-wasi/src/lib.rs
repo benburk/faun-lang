@@ -13,6 +13,7 @@ use faun_core::ir::Program;
 use faun_core::targets::{Target, write_image};
 
 const I32: u8 = 0x7F;
+const I64: u8 = 0x7E;
 const FUNC_TYPE: u8 = 0x60;
 const I32_CONST: u8 = 0x41;
 const CALL: u8 = 0x10;
@@ -38,17 +39,15 @@ impl Target for Wasm32Wasi {
 
     fn provides(&self) -> &'static [&'static str] {
         &[
-            "stdin_take!",
-            "stdin_bytes!",
-            "stdin_failure!",
-            "stdout_put!",
-            "stdout_failure!",
-            "stderr_put!",
-            "stderr_failure!",
+            "fd_put!",
+            "fd_take!",
+            "fd_taken!",
+            "fd_open!",
+            "fd_close!",
             "exit!",
-            "put_out!",
-            "put_err!",
-            "take_in!",
+            "write_fd!",
+            "read_fd!",
+            "open_at!",
             "write!",
             "read_byte!",
             "grow",

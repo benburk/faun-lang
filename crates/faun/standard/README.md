@@ -192,6 +192,7 @@ Host : {args: List(Str)}.(
   stdin : Host -> Stdin
   stdout : Host -> Stdout
   stderr : Host -> Stderr
+  files : Host -> Files
 )
 
 Stdin    read! : (Stdin, Nat) -> Result(List(U8), IoError)
@@ -199,6 +200,10 @@ Stdin    read! : (Stdin, Nat) -> Result(List(U8), IoError)
          read_to_str! : Stdin -> Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8])
 Stdout   write!, write_all! : (Stdout, List(U8)) -> Result(Nat, IoError)
 Stderr   write!, write_all! : (Stderr, List(U8)) -> Result(Nat, IoError)
+Files    open! : (Files, Str, Mode) -> Result(File, IoError)
+File     read!, read_to_end!, read_to_str!, write!, write_all!, as the streams
+         close! : File -> Result(Nat, IoError)
+Mode     [Read, Overwrite, Append, CreateNew, Edit, Load]
 ```
 
 with `IoError` the tags `NotFound`, `Denied`, `AlreadyExists`, `NotADirectory`,
@@ -207,10 +212,47 @@ and `Other(Nat)`, each
 host reading its own error numbers into them. A `read!` or `write!` moves some
 bytes, a run of at most 256, and answers how many; `read_to_end!` and
 `write_all!` are Faun in the host module, going on until the stream is done,
-each bounded by fuel so it is seen to stop. The `Host`, `Stdin`, `Stdout` and
-`Stderr` constructors remain private, so only the target makes one. A method
-of a value's own type is reached whether or not the type was imported, so
-`host.stdout.write_all!(bytes)` needs only `Host`.
+each bounded by fuel so it is seen to stop. The `Host`, `Stdin`, `Stdout`,
+`Stderr`, `Files` and `File` constructors remain private, so only the target
+makes one. A method of a value's own type is reached whether or not the type
+was imported, so `host.stdout.write_all!(bytes)` needs only `Host`.
+
+Every stream is what a descriptor names, the standard three first, and a
+target answers for five routines over descriptors: a run written, a run read
+into a scratch region and the bytes taken from it, a name opened, and a
+descriptor closed. Each answers a number, or an error as a kernel does, that
+far short of the top of a word; the host module's `outcome` tells which, so
+nothing is kept between one call and the next.
+
+`Files.open!` finds a name beneath where the program runs and nowhere else: a
+name reaching above it, by `..`, from the root or through a link, is refused as
+`Escapes` where the target can tell, and as `Denied` under WASI. sim65 opens
+whatever it is handed, so its host module refuses a name from the root or
+holding a `..` itself, and cannot see a link. A name is at most 255 bytes and
+holds no nought byte.
+
+A `File` is a resource: whatever opens one must use it up exactly once on
+every way it goes on, by closing it or answering it to something that does.
+Dropping one, using one after it is closed, and leaving by `?` while one is
+held are each refused where the program is checked. `?` closes nothing, so a
+file is closed before `?` is asked of what reading or writing it answered:
+
+```
+source = files.open!("input.txt", Read)?
+reading = source.read!(4096)
+closing = source.close!()
+contents = reading?
+closed = closing?
+```
+
+Nothing is written to say what a function does with a file it is handed:
+one that only reads, writes, or hands it on to what does the same lends it,
+and its caller still holds it; one that closes or answers it on every way it
+goes on takes it. A function that does one on some ways and the other on
+others is refused. What makes a type a resource is a routine the target
+declares as using up what it is handed, here closing a descriptor; a type
+holding a resource, such as `List(File)` or `Result(File, IoError)`, holds one
+too.
 
 `host.print!(text)` and `host.println!(text)` write a text to standard output,
 the second with a line's end, and answer `Result({}, IoError)`. An effect whose

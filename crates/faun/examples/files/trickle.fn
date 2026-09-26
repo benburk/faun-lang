@@ -1,0 +1,44 @@
+# A copy two bytes at a time, as Ori's `trickle` does, landing inside
+# characters written in more than one byte on purpose: bytes are bytes. The
+# functions copying only lend the files they are handed, and leave by `?`
+# while they hold them; the one that opened them closes both, on every way
+# it goes on, before it asks `?` of anything.
+
+import std.host {Host, Files, File, Stdout, IoError, Mode.*}
+
+trickle! : (File, File, Nat) -> Result(Nat, IoError)
+trickle!(_, _, 0) -> Ok(0)
+trickle!(source, target, Succ(fuel)) ->
+  chunk = source.read!(2)?
+  more!(chunk, source, target, fuel)
+
+more! : (List(U8), File, File, Nat) -> Result(Nat, IoError)
+more!([], _, _, _) -> Ok(0)
+more!(chunk, source, target, fuel) ->
+  wrote = target.write_all!(chunk)?
+  trickle!(source, target, fuel)
+
+copy! : (Files, Stdout) -> Result(Nat, IoError)
+copy!(files, output) ->
+  source = files.open!("input.txt", Read)?
+  making = files.open!("output.txt", Overwrite)
+  made!(making, source, output)
+
+made! : (Result(File, IoError), File, Stdout) -> Result(Nat, IoError)
+made!(Err(error), source, _) ->
+  closed = source.close!()
+  Err(error)
+made!(Ok(target), source, output) ->
+  copying = trickle!(source, target, 64)
+  closing_source = source.close!()
+  closing_target = target.close!()
+  copied = copying?
+  a = closing_source?
+  b = closing_target?
+  said = output.write_all!("trickled\n".to_utf8())?
+  Ok(0)
+
+main! : Host -> []
+main!(host) ->
+  copied = copy!(host.files, host.stdout)
+  host.exit!(copied.ok_or(1))

@@ -205,3 +205,49 @@ fn the_nbody_example_holds() {
     assert!(output.status.success(), "{said}");
     assert_eq!(said, "3 expectations hold\n");
 }
+
+/// What opening a file meets, as Linux says it: nothing there, something
+/// there already, and a name reaching above where the program runs. A
+/// write goes where the file was opened to write it.
+#[test]
+fn files_answer_what_opening_one_met() {
+    let package = support::Package::new(
+        "files",
+        "import std.host {Files, File, IoError.*, Mode.*}
+
+         main! : Host -> []
+         main!(host) ->
+           status = met!(host.files)
+           host.exit!(status)
+
+         met! : Files -> Nat
+         met!(files) ->
+           missing = files.open!(\"missing.txt\", Read)
+           again = files.open!(\"here.txt\", CreateNew)
+           above = files.open!(\"../above.txt\", Read)
+           kept = files.open!(\"here.txt\", Append)
+           said!(missing, again, above, kept)
+
+         said! : (Result(File, IoError), Result(File, IoError), Result(File, IoError), Result(File, IoError)) -> Nat
+         said!(Err(NotFound), Err(AlreadyExists), Err(Escapes), Ok(file)) ->
+           wrote = file.write_all!(\"!\".to_utf8())
+           closed = file.close!()
+           0
+         said!(missing, again, above, kept) ->
+           a = close_any!(missing)
+           b = close_any!(again)
+           c = close_any!(above)
+           d = close_any!(kept)
+           1
+
+         close_any! : Result(File, IoError) -> Nat
+         close_any!(Ok(file)) ->
+           closed = file.close!()
+           0
+         close_any!(Err(_)) -> 0",
+    );
+    let files = [("here.txt".to_owned(), b"there".to_vec())].into();
+    let (status, _, left) = support::run_among(&package.entry(), files);
+    assert_eq!(status, 0);
+    assert_eq!(left["here.txt"], b"there!");
+}

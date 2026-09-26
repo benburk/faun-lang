@@ -5,6 +5,7 @@
 // Each test crate that includes this uses the part it needs.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -105,6 +106,26 @@ pub(crate) fn run_failing(
     run_barb(barb, input, errno)
 }
 
+/// Files by name, beneath where a program runs.
+pub(crate) type Directory = BTreeMap<String, Vec<u8>>;
+
+/// The same, run where `files` lie: the status, what it wrote to standard
+/// output, and the files as it left them.
+pub(crate) fn run_among(entry: &std::path::Path, files: Directory) -> (u32, String, Directory) {
+    let mut barb = faun::lower_to_barb(entry, &X86_64Linux)
+        .unwrap_or_else(|error| panic!("{}", error.message));
+    let mut streams = Streams {
+        files,
+        ..Streams::default()
+    };
+    let status = run_on(&mut barb, &mut streams, 100_000_000);
+    (
+        status,
+        String::from_utf8(streams.output).expect("text written"),
+        streams.files,
+    )
+}
+
 /// Build the package at `entry` as `faun test` does and run it: the lines,
 /// `path:line`, of the expectations that do not hold, and how many there are.
 pub(crate) fn test_file(entry: &std::path::Path) -> (Vec<String>, usize) {
@@ -162,8 +183,22 @@ fn run_barb_fueled(
     errno: Option<u64>,
     fuel: u64,
 ) -> (u32, String) {
-    faun_core::barb::optimize(&mut barb);
-    let machine = faun_core::lower_to_machine_ir(&mut barb, &X86_64Linux.routines())
+    let mut streams = Streams {
+        input: input.iter().copied().collect(),
+        errno,
+        ..Streams::default()
+    };
+    let status = run_on(&mut barb, &mut streams, fuel);
+    (
+        status,
+        String::from_utf8(streams.output).expect("text written"),
+    )
+}
+
+/// Run `barb` against `streams`: the status it exits with.
+fn run_on(barb: &mut faun_core::barb::Program, streams: &mut Streams, fuel: u64) -> u32 {
+    faun_core::barb::optimize(barb);
+    let machine = faun_core::lower_to_machine_ir(barb, &X86_64Linux.routines())
         .unwrap_or_else(|error| panic!("{error}"));
     let prepared = X86_64Linux
         .prepare(&machine)
@@ -171,11 +206,6 @@ fn run_barb_fueled(
     let main = prepared.entry();
     // `argc` is handed only where the program reads it.
     let handed = vec![BigUint::from(1u8); prepared.parameter_names(main).count()];
-    let mut streams = Streams {
-        input: input.iter().copied().collect(),
-        output: Vec::new(),
-        errno,
-    };
     let evaluation = evaluate::evaluate(
         &prepared,
         main,
@@ -184,15 +214,11 @@ fn run_barb_fueled(
             fuel,
             ..evaluate::Config::default()
         },
-        &mut streams,
+        streams,
     )
     .unwrap_or_else(|error| panic!("{error:?}"));
     let halted = evaluation.halted().expect("a program that exits");
-    let status = u32::try_from(&halted[0]).expect("a status");
-    (
-        status,
-        String::from_utf8(streams.output).expect("text written"),
-    )
+    u32::try_from(&halted[0]).expect("a status")
 }
 
 impl Drop for Package {
@@ -201,13 +227,108 @@ impl Drop for Package {
     }
 }
 
-/// A host with standard input to hand out, standard output to keep, and
-/// standard error to drop.
+/// A host with standard input to hand out, standard output to keep,
+/// standard error to drop, and a directory of files to open, as Linux
+/// answers each: a count or a descriptor, or `-errno`.
+#[derive(Default)]
 struct Streams {
     input: std::collections::VecDeque<u8>,
     output: Vec<u8>,
     /// What every write to standard output fails with, if it fails.
     errno: Option<u64>,
+    files: Directory,
+    /// Each descriptor past the standard three: the name it opened, where
+    /// it reads or writes next, and whether it writes after the end.
+    open: Vec<Option<Opened>>,
+}
+
+struct Opened {
+    name: String,
+    at: usize,
+    append: bool,
+}
+
+/// Linux's `open` flags, as far as the host module asks for them.
+const O_CREAT: u64 = 0o100;
+const O_EXCL: u64 = 0o200;
+const O_TRUNC: u64 = 0o1000;
+const O_APPEND: u64 = 0o2000;
+
+impl Streams {
+    fn opened(&mut self, fd: u64) -> Option<&mut Opened> {
+        let at = usize::try_from(fd.checked_sub(3)?).ok()?;
+        self.open.get_mut(at)?.as_mut()
+    }
+
+    /// A name opened as `flags` say: its descriptor, or the error.
+    fn open(&mut self, name: &[u8], flags: u64) -> Result<u64, u64> {
+        let name = String::from_utf8(name.to_vec()).map_err(|_| 22u64)?;
+        // Beneath where the program runs, as `RESOLVE_BENEATH` answers.
+        if name.starts_with('/') || name.split('/').any(|part| part == "..") {
+            return Err(18);
+        }
+        match self.files.get_mut(&name) {
+            Some(_) if flags & O_CREAT != 0 && flags & O_EXCL != 0 => return Err(17),
+            Some(bytes) if flags & O_TRUNC != 0 => bytes.clear(),
+            Some(_) => {}
+            None if flags & O_CREAT != 0 => {
+                self.files.insert(name.clone(), Vec::new());
+            }
+            None => return Err(2),
+        }
+        self.open.push(Some(Opened {
+            name,
+            at: 0,
+            append: flags & O_APPEND != 0,
+        }));
+        Ok(u64::try_from(self.open.len()).expect("a descriptor") + 2)
+    }
+
+    /// Up to `asked` bytes from what `fd` names.
+    fn take(&mut self, fd: u64, asked: usize) -> Result<Vec<u8>, u64> {
+        if fd == 0 {
+            return Ok((0..asked).map_while(|_| self.input.pop_front()).collect());
+        }
+        let opened = self.opened(fd).ok_or(9u64)?;
+        let (name, from) = (opened.name.clone(), opened.at);
+        let held = &self.files[&name];
+        let from = from.min(held.len());
+        let taken = held[from..(from + asked).min(held.len())].to_vec();
+        self.opened(fd).expect("open").at = from + taken.len();
+        Ok(taken)
+    }
+
+    /// `bytes` to what `fd` names, all of them.
+    fn put(&mut self, fd: u64, bytes: &[u8]) -> Result<usize, u64> {
+        match fd {
+            1 if self.errno.is_some() => return Err(self.errno.expect("a failing write")),
+            1 => self.output.extend_from_slice(bytes),
+            2 => {}
+            _ => {
+                let opened = self.opened(fd).ok_or(9u64)?;
+                let (name, append, from) = (opened.name.clone(), opened.append, opened.at);
+                let held = self.files.get_mut(&name).expect("an open file");
+                let from = if append { held.len() } else { from };
+                let to = from + bytes.len();
+                held.resize(held.len().max(to), 0);
+                held[from..to].copy_from_slice(bytes);
+                self.opened(fd).expect("open").at = to;
+            }
+        }
+        Ok(bytes.len())
+    }
+
+    /// `fd` given up.
+    fn close(&mut self, fd: u64) -> Result<u64, u64> {
+        let at = usize::try_from(fd.checked_sub(3).ok_or(9u64)?).map_err(|_| 9u64)?;
+        match self.open.get_mut(at) {
+            Some(opened @ Some(_)) => {
+                *opened = None;
+                Ok(0)
+            }
+            _ => Err(9),
+        }
+    }
 }
 
 impl Host for Streams {
@@ -218,31 +339,31 @@ impl Host for Streams {
         memory: &mut Memory<'_>,
     ) -> Result<HostResult, Error> {
         let word = |value: &BigUint| u64::try_from(value).expect("a word");
-        match name {
-            "exit!" => Ok(HostResult::Halt(args.to_vec())),
+        let count = |value: &BigUint| usize::try_from(word(value)).expect("a count");
+        let answered = match name {
+            "exit!" => return Ok(HostResult::Halt(args.to_vec())),
             // Up to as many as asked, where they are to lie: how many.
-            "take_in!" => {
-                let asked = usize::try_from(word(&args[1])).expect("a count");
-                let taken: Vec<u8> = (0..asked).map_while(|_| self.input.pop_front()).collect();
-                memory.write(word(&args[0]), &taken)?;
-                Ok(HostResult::Return(vec![BigUint::from(taken.len())]))
-            }
+            "read_fd!" => self
+                .take(word(&args[0]), count(&args[2]))
+                .and_then(|taken| {
+                    memory.write(word(&args[1]), &taken).map_err(|_| 14u64)?;
+                    Ok(u64::try_from(taken.len()).expect("a count"))
+                }),
             // All of it, every time: how many.
-            "put_out!" if self.errno.is_some() => {
-                let errno = self.errno.expect("a failing write");
-                Ok(HostResult::Return(vec![BigUint::from(
-                    0u64.wrapping_sub(errno),
-                )]))
+            "write_fd!" => {
+                let bytes = memory.read(word(&args[1]), count(&args[2]))?.to_vec();
+                self.put(word(&args[0]), &bytes)
+                    .map(|went| u64::try_from(went).expect("a count"))
             }
-            "put_out!" | "put_err!" => {
-                let len = usize::try_from(word(&args[1])).expect("a length");
-                if name == "put_out!" {
-                    self.output
-                        .extend_from_slice(memory.read(word(&args[0]), len)?);
-                }
-                Ok(HostResult::Return(vec![BigUint::from(len)]))
+            "open_at!" => {
+                let name = memory.read(word(&args[0]), count(&args[1]))?.to_vec();
+                self.open(&name, word(&args[2]))
             }
-            _ => Err(Error::Host(name.to_owned())),
-        }
+            "fd_close!" => self.close(word(&args[0])),
+            _ => return Err(Error::Host(name.to_owned())),
+        };
+        Ok(HostResult::Return(vec![BigUint::from(
+            answered.unwrap_or_else(|errno| 0u64.wrapping_sub(errno)),
+        )]))
     }
 }

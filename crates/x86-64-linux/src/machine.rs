@@ -133,6 +133,9 @@ pub(crate) enum Inst {
         width: RegisterWidth,
     },
     PushImmediate(i8),
+    PushRegister {
+        src: Reg,
+    },
     Pop {
         dst: Reg,
     },
@@ -346,6 +349,10 @@ impl AllocatedBuilder {
         self.push(Inst::PushImmediate(value));
     }
 
+    pub(crate) fn push_reg(&mut self, src: Reg) {
+        self.push(Inst::PushRegister { src });
+    }
+
     pub(crate) fn pop(&mut self, dst: Reg) {
         self.push(Inst::Pop { dst });
     }
@@ -518,17 +525,12 @@ impl AllocatedBuilder {
         if self.code.labelled_from(len.saturating_sub(1)) {
             return false;
         }
-        let immediate = match self.code.insts().get(len.wrapping_sub(2)..) {
-            Some(
-                [
-                    Inst::PushImmediate(immediate),
-                    Inst::Pop { dst: materialized },
-                ],
-            ) if *materialized == src => i32::from(*immediate),
-            _ => return false,
+        let Some((written, immediate)) = written_constant(self.code.insts(), src, bits) else {
+            return false;
         };
-        self.code.remove(len - 1);
-        self.code.remove(len - 2);
+        for at in (len - written..len).rev() {
+            self.code.remove(at);
+        }
         self.push(Inst::AluImmediate {
             op,
             dst,
@@ -566,6 +568,37 @@ impl AllocatedBuilder {
             condition: Some(condition),
             target,
         });
+    }
+}
+
+/// How many of the last instructions wrote `src` as a constant, and the
+/// immediate an operation at `bits` reads as the same value: a byte pushed
+/// and popped, or a move whose immediate the operation's own sign-extends to
+/// what the move left.
+fn written_constant(insts: &[Inst], src: Reg, bits: u16) -> Option<(usize, i32)> {
+    match insts {
+        [
+            ..,
+            Inst::PushImmediate(immediate),
+            Inst::Pop { dst: materialized },
+        ] if *materialized == src => Some((2, i32::from(*immediate))),
+        [
+            ..,
+            Inst::MoveSignExtendedImmediate32 {
+                dst: materialized,
+                value,
+            },
+        ] if *materialized == src => Some((1, *value)),
+        [
+            ..,
+            Inst::MoveImmediate32 {
+                dst: materialized,
+                value,
+            },
+        ] if *materialized == src && (bits <= 32 || i32::try_from(*value).is_ok()) => {
+            Some((1, value.cast_signed()))
+        }
+        _ => None,
     }
 }
 
@@ -612,6 +645,34 @@ mod tests {
                 width: RegisterWidth::Low32
             }]
         );
+    }
+
+    /// A constant moved in as 32 bits the operation sign-extends alike is
+    /// its immediate; one moved in zero-extended is only where both agree.
+    #[test]
+    fn a_moved_constant_folds_where_its_immediate_means_the_same() {
+        let mut builder = AllocatedBuilder::default();
+        builder.mov_sext_imm32(Reg::Rcx, -4095);
+        assert!(builder.fold_alu_immediate(Alu::Compare, Reg::Rax, Reg::Rcx, 64));
+        builder.mov_imm32(Reg::Rcx, u32::MAX);
+        assert!(!builder.fold_alu_immediate(Alu::Compare, Reg::Rax, Reg::Rcx, 64));
+        assert!(builder.fold_alu_immediate(Alu::Compare, Reg::Rax, Reg::Rcx, 32));
+        let program = builder.finish().unwrap();
+        assert!(matches!(
+            program.instructions(),
+            [
+                Inst::AluImmediate {
+                    immediate: -4095,
+                    bits: 64,
+                    ..
+                },
+                Inst::AluImmediate {
+                    immediate: -1,
+                    bits: 32,
+                    ..
+                },
+            ]
+        ));
     }
 
     #[test]

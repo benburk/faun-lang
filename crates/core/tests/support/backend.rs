@@ -92,15 +92,7 @@ fn execute_cases(program: &Program, cases: &[(u16, &[u8])]) -> Vec<(i32, String)
         .accepts(program)
         .expect("a program this machine holds");
     let _lock = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
-    let dir = std::env::temp_dir().join(format!(
-        "faun-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("a clock after the epoch")
-            .as_nanos()
-    ));
-    fs::create_dir_all(&dir).expect("a scratch directory");
+    let dir = scratch("faun");
     let path = TARGET
         .write(&TARGET.emit(program), &dir.join("program"))
         .expect("somewhere to write it");
@@ -147,6 +139,92 @@ fn execute_cases(program: &Program, cases: &[(u16, &[u8])]) -> Vec<(i32, String)
 
 pub(super) fn status(program: &Program) -> i32 {
     execute(program).0
+}
+
+/// Files by name, as a program finds or leaves them where it runs.
+type Directory = std::collections::BTreeMap<String, Vec<u8>>;
+
+/// Emit `program` and run it where `files` lie, in a directory of their
+/// own: the status it exits with, and the files as it left them. A WASI
+/// runner is handed that directory as the one the program runs in.
+fn execute_among(program: &Program, files: &Directory) -> (i32, Directory) {
+    let dir = scratch("faun-files");
+    let work = dir.join("work");
+    fs::create_dir_all(&work).expect("a directory to run in");
+    for (name, bytes) in files {
+        fs::write(work.join(name), bytes).expect("a file to start with");
+    }
+    let path = TARGET
+        .write(&TARGET.emit(program), &dir.join("program"))
+        .expect("somewhere to write it");
+    let mut command = RUNNER.map_or_else(
+        || Command::new(&path),
+        |runner| {
+            let mut command = Command::new(runner);
+            if runner == "wasmtime" {
+                command.args(["run", "--dir", "."]);
+            }
+            command.arg(&path);
+            command
+        },
+    );
+    let output = command
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .output()
+        .expect("a machine to run it");
+    let code = output.status.code().expect("a program that exits");
+    let left = fs::read_dir(&work)
+        .expect("the files it left")
+        .map(|entry| {
+            let entry = entry.expect("a file it left");
+            (
+                entry.file_name().into_string().expect("a name"),
+                fs::read(entry.path()).expect("what it holds"),
+            )
+        })
+        .collect();
+    fs::remove_dir_all(&dir).expect("the scratch directory to go");
+    (code, left)
+}
+
+/// A directory of its own, made, named for this process and the moment.
+fn scratch(prefix: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "{prefix}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock after the epoch")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("a scratch directory");
+    dir
+}
+
+/// Every way a file is opened, beneath where the program runs, as
+/// `files.fn` says, and nothing made where there is nothing to read.
+#[test]
+fn it_opens_files_beneath_where_it_runs() {
+    let program = read(include_str!("files.fn")).expect("a program that opens files");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let input: Directory = [("input.txt".to_owned(), b"from the file\n".to_vec())].into();
+    let (code, left) = execute_among(&program, &input);
+    assert_eq!(code, 0);
+    let expected: Directory = [
+        ("created.txt".to_owned(), Vec::new()),
+        ("input.txt".to_owned(), b"from the file\n".to_vec()),
+        ("output.txt".to_owned(), b"from the file\n+tail".to_vec()),
+    ]
+    .into();
+    assert_eq!(left, expected);
+    // Nothing to read: the first open fails, and nothing is made.
+    assert_eq!(
+        execute_among(&program, &Directory::new()),
+        (2, Directory::new())
+    );
 }
 
 #[test]

@@ -204,6 +204,10 @@ fn nothing_is_written_after_a_routine_that_does_not_come_back() {
 /// routine at as many types as it uses it at -- there is no body to copy, so
 /// nothing is duplicated by saying it twice.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one program declared, its routine written down, and what is lowered read back"
+)]
 fn two_names_may_give_the_same_routine() {
     let mut program = barb::Program::default();
     let nat = program.declare_type("Nat");
@@ -238,6 +242,7 @@ fn two_names_may_give_the_same_routine() {
         takes: vec![crate::platform::Takes::Scalar(Class::Word)],
         returns: crate::platform::Returns::Value(Class::Word),
         built: None,
+        consumes: false,
     });
 
     let machine = lower(&mut program, &routines).expect("a representable program");
@@ -270,6 +275,7 @@ fn a_value_too_wide_for_a_routine_is_refused() {
         takes: vec![crate::platform::Takes::Scalar(Class::fixed(4))],
         returns: crate::platform::Returns::Unit,
         built: None,
+        consumes: false,
     });
 
     let held = |value: u64| {

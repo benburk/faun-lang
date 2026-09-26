@@ -1,7 +1,7 @@
 //! Only the sections this compiler needs are written, and any that would
 //! come out empty are left out entirely.
 
-use super::{Code, END, FUNC_TYPE, I32, I32_CONST};
+use super::{Code, END, FUNC_TYPE, I32, I32_CONST, I64};
 use faun_core::targets::bytes::{Bytes, len32};
 
 /// Section ids, in the order a module must list them.
@@ -68,18 +68,23 @@ fn types(out: &mut Bytes, code: &Code) {
     out.section(TYPE, |s| {
         s.uleb(len32(code.imports.len() + code.bodies.len()));
         for name in &code.imports {
-            let (params, returns) = match *name {
+            let (params, returns): (&[u8], u32) = match *name {
                 // (fd, iovs, iovs_len, transferred)
-                "fd_write" | "fd_read" => (4, 1),
-                "proc_exit" => (1, 0), // (status)
+                "fd_write" | "fd_read" => (&[I32; 4], 1),
+                "proc_exit" => (&[I32], 0), // (status)
                 // (argc_out, argv_size_out), and (argv, argv_buf)
-                "args_sizes_get" | "args_get" => (2, 1),
+                "args_sizes_get" | "args_get" => (&[I32; 2], 1),
+                // (dir, lookup flags, path, path_len, open flags, rights,
+                // rights inherited, descriptor flags, opened)
+                "path_open" => (&[I32, I32, I32, I32, I32, I64, I64, I32, I32], 1),
+                "fd_close" => (&[I32], 1), // (fd)
                 other => panic!("no signature for `{other}`"),
             };
             signature(s, params, returns);
         }
         for body in &code.bodies {
-            signature(s, body.params, body.returns);
+            let params = vec![I32; usize::try_from(body.params).expect("a few parameters")];
+            signature(s, &params, body.returns);
         }
     });
 }
@@ -136,13 +141,10 @@ fn data(out: &mut Bytes, code: &Code) {
     });
 }
 
-fn signature(out: &mut Bytes, params: u32, returns: u32) {
+fn signature(out: &mut Bytes, params: &[u8], returns: u32) {
     out.byte(FUNC_TYPE);
-    out.uleb(params);
-    out.bytes(&vec![
-        I32;
-        usize::try_from(params).expect("a few parameters")
-    ]);
+    out.uleb(len32(params.len()));
+    out.bytes(params);
     out.uleb(returns);
     out.bytes(&vec![I32; usize::try_from(returns).expect("a few results")]);
 }

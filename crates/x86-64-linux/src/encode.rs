@@ -27,6 +27,7 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 asm.mov_reg(dst, src, width == RegisterWidth::Word);
             }
             Inst::PushImmediate(value) => asm.push_imm8(value),
+            Inst::PushRegister { src } => asm.push_reg(src),
             Inst::Pop { dst } => asm.pop(dst),
             Inst::MoveImmediate32 { dst, value } => asm.mov_imm32(dst, value),
             Inst::MoveSignExtendedImmediate32 { dst, value } => {
@@ -327,6 +328,12 @@ impl RawEncoder {
     fn push_imm8(&mut self, value: i8) {
         self.step();
         self.emit(&[0x6A, value.cast_unsigned()]);
+    }
+
+    fn push_reg(&mut self, src: Reg) {
+        self.step();
+        self.rex(false, None, src);
+        self.emit(&[0x50 + src.low()]);
     }
 
     fn pop(&mut self, dst: Reg) {

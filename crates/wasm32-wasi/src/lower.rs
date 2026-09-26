@@ -18,7 +18,11 @@ use faun_core::targets::bytes::{Bytes, len32};
 
 const STDIN: i32 = 0;
 const STDOUT: i32 = 1;
-const STDERR: i32 = 2;
+/// The directory the runner hands over first, which is where the program
+/// runs: every name a program opens is found beneath it.
+const PREOPENED: i32 = 3;
+/// A link a name reaches is followed, though never above the directory.
+const SYMLINK_FOLLOW: i32 = 1;
 
 /// Linear memory: the cell `fd_write`/`fd_read` reports its byte count into,
 /// then argument scratch, four-byte aligned WASI vectors, then program data.
@@ -46,6 +50,7 @@ const I32_STORE8: u8 = 0x3A;
 const I32_AND: u8 = 0x71;
 const I32_SHL: u8 = 0x74;
 const I32_SHR_U: u8 = 0x76;
+const I64_EXTEND_I32_U: u8 = 0xAD;
 const MEMORY_GROW: u8 = 0x40;
 
 /// A word on this target, in bytes, and a page as a power of two.
@@ -112,8 +117,7 @@ pub(crate) fn lower(program: &Program) -> Code {
     // Keep following words aligned; the read buffer itself is one byte.
     let data_start = after_writes + read.map_or(0, |_| IOVEC_LEN + 4);
 
-    let writes = plan.writes > 0;
-    let takes = plan.takes;
+    let wanted = plan.wanted.clone();
     let mut state = Lowering {
         program,
         entry: program.entry(),
@@ -132,11 +136,11 @@ pub(crate) fn lower(program: &Program) -> Code {
 
     // Which imports exist decides their indices, so it has to be settled
     // before anything calls one.
-    if writes {
-        state.imports.push("fd_write");
-    }
-    if state.read.is_some() || takes {
-        state.imports.push("fd_read");
+    let reads = state.read.is_some();
+    for import in ["fd_write", "fd_read", "path_open", "fd_close"] {
+        if wanted.contains(&import) || (reads && import == "fd_read") {
+            state.imports.push(import);
+        }
     }
     if state.needs_proc_exit() {
         state.imports.push("proc_exit");
@@ -171,10 +175,12 @@ struct Frame {
 struct Plan {
     source: Vec<Source>,
     locals: u32,
+    /// How many vectors writes and takes read through, one each.
     writes: usize,
     reads: bool,
-    /// Whether anything takes a run of standard input.
-    takes: bool,
+    /// The imports writing a run, taking one, opening a name and closing a
+    /// descriptor are asked through, each once something asks.
+    wanted: Vec<&'static str>,
     functions: Vec<Option<Frame>>,
 }
 
@@ -187,7 +193,7 @@ impl Plan {
             locals: 0,
             writes: 0,
             reads: false,
-            takes: false,
+            wanted: Vec::new(),
             functions: Vec::new(),
         };
         let mut index = 0;
@@ -227,33 +233,38 @@ impl Plan {
                     }
                 }
             }
-            match *op {
-                Op::Call { function, .. }
-                    if program.function(function).external().is_some_and(|symbol| {
-                        matches!(program.name(symbol), "write!" | "put_out!" | "put_err!")
-                    }) =>
-                {
-                    self.writes += 1;
-                }
+            let called = match *op {
+                Op::Call { function, .. } => program
+                    .function(function)
+                    .external()
+                    .map(|symbol| program.name(symbol)),
+                _ => None,
+            };
+            let wanted = match called {
                 // A take reads through a vector of its own, so it counts as
-                // one, and it needs the read import.
-                Op::Call { function, .. }
-                    if program
-                        .function(function)
-                        .external()
-                        .is_some_and(|symbol| program.name(symbol) == "take_in!") =>
-                {
+                // one, as a write does.
+                Some("write!" | "write_fd!") => {
                     self.writes += 1;
-                    self.takes = true;
+                    Some("fd_write")
                 }
-                Op::Call { function, .. }
-                    if program
-                        .function(function)
-                        .external()
-                        .is_some_and(|symbol| program.name(symbol) == "read_byte!") =>
-                {
+                Some("read_fd!") => {
+                    self.writes += 1;
+                    Some("fd_read")
+                }
+                Some("read_byte!") => {
                     self.reads = true;
+                    None
                 }
+                Some("open_at!") => Some("path_open"),
+                Some("fd_close!") => Some("fd_close"),
+                _ => None,
+            };
+            if let Some(import) = wanted
+                && !self.wanted.contains(&import)
+            {
+                self.wanted.push(import);
+            }
+            match *op {
                 Op::If {
                     then_region,
                     else_region,
@@ -868,7 +879,9 @@ impl Lowering<'_> {
         position: Position,
     ) {
         match name {
-            "put_out!" | "put_err!" | "take_in!" => self.stream(name, args, results[0]),
+            "write_fd!" | "read_fd!" => self.stream(name, args, results[0]),
+            "open_at!" => self.open_at(args, results[0]),
+            "fd_close!" => self.close_fd(args[0], results[0]),
             "write!" => {
                 let index = self.written;
                 self.written += 1;
@@ -912,30 +925,73 @@ impl Lowering<'_> {
         }
     }
 
-    /// Move a run of bytes to standard output or error, or from standard
-    /// input, through a vector of this call's own: how many moved, or
-    /// `-errno`, as a kernel would answer.
+    /// Move a run of bytes to or from what a descriptor names, through a
+    /// vector of this call's own: how many moved, or `-errno`, as a kernel
+    /// would answer.
     fn stream(&mut self, name: &str, args: &[ValueId], result: ValueId) {
         let index = self.written;
         self.written += 1;
         let iovec = IOVECS + IOVEC_LEN * len32(index);
-        if let (Some(base), Some(length)) = (self.constant(args[0]), self.constant(args[1])) {
+        if let (Some(base), Some(length)) = (self.constant(args[1]), self.constant(args[2])) {
             self.iovecs[index] = Some((base, length));
         } else {
-            self.store(iovec, args[0]);
-            self.store(iovec + 4, args[1]);
+            self.store(iovec, args[1]);
+            self.store(iovec + 4, args[2]);
         }
-        let (fd, import) = match name {
-            "put_out!" => (STDOUT, "fd_write"),
-            "put_err!" => (STDERR, "fd_write"),
-            _ => (STDIN, "fd_read"),
+        let import = if name == "write_fd!" {
+            "fd_write"
+        } else {
+            "fd_read"
         };
-        self.constant_i32(fd);
+        self.push(args[0]);
         self.constant_i32(iovec.cast_signed());
         self.constant_i32(1);
         self.constant_i32(NWRITTEN);
         let call = self.import(import).expect("a transfer imports its call");
         self.call(call);
+        self.answered(result);
+    }
+
+    /// Open a name, ended by a nought byte, beneath the directory the
+    /// program runs in: the descriptor, or `-errno`. The flags hold
+    /// `path_open`'s open flags in their low byte and its descriptor flags
+    /// above; the rights, what may be done with what is opened.
+    fn open_at(&mut self, args: &[ValueId], result: ValueId) {
+        self.constant_i32(PREOPENED);
+        self.constant_i32(SYMLINK_FOLLOW);
+        self.push(args[0]);
+        self.push(args[1]);
+        self.push(args[2]);
+        self.constant_i32(0xFF);
+        self.body.byte(I32_AND);
+        for _ in 0..2 {
+            self.push(args[3]);
+            self.body.byte(I64_EXTEND_I32_U);
+        }
+        self.push(args[2]);
+        self.constant_i32(8);
+        self.body.byte(I32_SHR_U);
+        self.constant_i32(NWRITTEN);
+        let path_open = self.import("path_open").expect("an open imports path_open");
+        self.call(path_open);
+        self.answered(result);
+    }
+
+    /// Give up a descriptor: nought, or `-errno`. WASI answers nought for
+    /// none, so the answer is nought less what it answers.
+    fn close_fd(&mut self, fd: ValueId, result: ValueId) {
+        self.constant_i32(0);
+        self.push(fd);
+        let fd_close = self.import("fd_close").expect("a close imports fd_close");
+        self.call(fd_close);
+        self.body.byte(I32_SUB);
+        self.set(result);
+    }
+
+    /// What a call reporting through [`NWRITTEN`] answered, from the errno
+    /// it left: what it reported where it left nought, and `-errno`
+    /// otherwise.
+    fn answered(&mut self, result: ValueId) {
         // The errno, held while it decides which answer this is.
         self.set(result);
         self.push(result);

@@ -37,6 +37,7 @@ mod grammar;
 pub mod hir;
 pub mod host;
 pub mod lex;
+mod linearity;
 mod lines;
 pub mod literal;
 pub mod lower;
@@ -140,7 +141,9 @@ fn lower_resolved(
             None => Diagnostic::new(e.message),
         })?;
     let first_order = first_order::first_order(specialized);
-    barb_lower::lower_package_to_barb(&checked, first_order, &target.routines())
+    let routines = target.routines();
+    linearity::check(&first_order, &routines, &checked.resolved)?;
+    barb_lower::lower_package_to_barb(&checked, first_order, &routines)
 }
 
 /// Compile the Faun application at `source` to `target`'s image.

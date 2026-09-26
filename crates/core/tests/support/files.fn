@@ -1,0 +1,50 @@
+# Every way a file is opened, beneath where the program runs: one read, one
+# made or written over, one written after its end, and one made new, which is
+# there the second time it is asked for, and a name reaching above refused.
+# Each file opened is the program's to close, and is closed. Nothing to read
+# is status two.
+
+import std.host {Files, File, IoError.*, Host, Mode.*}
+
+main! : Host -> []
+main!(host) ->
+  copied = copy!(host.files)
+  host.exit!(copied.ok_or(2))
+
+copy! : Files -> Result(Nat, IoError)
+copy!(files) ->
+  source = files.open!("input.txt", Read)?
+  reading = source.read!(64)
+  closing = source.close!()
+  bytes = reading?
+  closed = closing?
+  target = files.open!("output.txt", Overwrite)?
+  wrote = write_and_close!(target, bytes)?
+  after = files.open!("output.txt", Append)?
+  added = write_and_close!(after, "+tail".to_utf8())?
+  made = files.open!("created.txt", CreateNew)?
+  shut = made.close!()?
+  again = files.open!("created.txt", CreateNew)
+  above = files.open!("../outside.txt", Read)
+  refused!(again, above)
+
+write_and_close! : (File, List(U8)) -> Result(Nat, IoError)
+write_and_close!(file, bytes) ->
+  writing = file.write_all!(bytes)
+  closing = file.close!()
+  count = writing?
+  done = closing?
+  Ok(count)
+
+refused! : (Result(File, IoError), Result(File, IoError)) -> Result(Nat, IoError)
+refused!(Err(_), Err(_)) -> Ok(0)
+refused!(Ok(file), Err(_)) ->
+  closing = file.close!()
+  Ok(3)
+refused!(Err(_), Ok(file)) ->
+  closing = file.close!()
+  Ok(4)
+refused!(Ok(file), Ok(other)) ->
+  closing = file.close!()
+  shutting = other.close!()
+  Ok(5)

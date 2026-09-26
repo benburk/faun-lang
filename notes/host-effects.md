@@ -17,14 +17,13 @@ main!(host) -> ...
 - Effectful host operations are explicit `!` calls. No host operation, cleanup callback, constructor/destructor, or other observable effect runs implicitly
 - Host modules can define opaque resource types for identify bearing external state, e.g. files, sockets, OS handles, Vulkan buffers, command buffers, Metal objects, etc.
 - Resources are unforgeable and linear. they cannot be copied or silently dropped. an effect can either borrow or consume them.
-- Borrow is the cheap / default contract. Consumption is exceptional and represented in the functions type signature
-
-  ```ruby
-  read!  : (File, Buf) -> Nat
-  close! : consume File -> ()
-  ```
-
-- Borrow/consume behavior may be inferred, but it remains part of the API contract and should be visible in signatures/docs.
+- Borrow is the cheap / default contract. Consumption is exceptional.
+- Borrow/consume behavior is inferred, as Ori does, rather than written in signatures: a
+  parameter only looked at on every path is lent, one used up or answered on every path is
+  taken, and paths that disagree are refused (`crates/faun/src/linearity.rs`). The one
+  written fact is the target's: a routine declared as using up its first argument
+  (`fd_close!`) makes that argument's type a resource. It remains part of the API contract;
+  an optional `consume` checked against the inferred contract is the way to make it visible.
 - Resource mutation inside the host implementation is fine. `Buffer.write!`, `Socket.send!`, etc. mutate external state without introducing ordinary source-level mutable values.
 - Explicit consuming operations handle cleanup: `close!`, `destroy!`, etc. No RAII/destructors/finalizers.
 - One plausible root model is:

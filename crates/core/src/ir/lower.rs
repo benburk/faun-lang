@@ -136,7 +136,6 @@ fn lower_with(
         takes: demand.takes,
         callees,
         refused: std::cell::RefCell::default(),
-        errors: Errors::default(),
         looping: std::cell::RefCell::default(),
         arguments: arguments.map(|at| {
             let made =
@@ -244,6 +243,7 @@ enum Callee<'a> {
     },
     /// A routine built here, on a primitive or on memory alone.
     Built {
+        routine: &'a Routine,
         built: &'a Built,
         primitive: Option<FunctionId>,
         io: Io,
@@ -251,13 +251,10 @@ enum Callee<'a> {
 }
 
 /// What every built routine shares: where a run of bytes is copied, for a
-/// primitive to read or write where it lies, and the last error met.
+/// primitive to read or write where it lies.
 #[derive(Clone, Copy)]
 struct Io {
     scratch: super::DataId,
-    failure: super::DataId,
-    /// The greatest word, from whose top an error is counted down.
-    top: u64,
 }
 
 /// How many bytes move in one run. Its room is in every image that moves
@@ -370,7 +367,7 @@ fn declare<'a>(
                 }
                 if let Some(built) = &wanted.built {
                     let primitive = match built {
-                        Built::Put(through) | Built::Take(through) => {
+                        Built::Put(through) | Built::Take(through) | Built::Name(through) => {
                             let Some(primitive) = routines.get(through) else {
                                 return Err(format!(
                                     "nothing answers for `{through}`, which `{outside}` is built on"
@@ -378,17 +375,13 @@ fn declare<'a>(
                             };
                             Some(primitive.declare(machine))
                         }
-                        Built::Taken | Built::Failure => None,
+                        Built::Taken => None,
                     };
-                    let io = *io.get_or_insert_with(|| {
-                        let bits = routines.word().unwrap_or(64);
-                        Io {
-                            scratch: machine.global(&[0; SCRATCH]),
-                            failure: machine.global(&[0; 8]),
-                            top: u64::MAX >> (64 - bits),
-                        }
+                    let io = *io.get_or_insert_with(|| Io {
+                        scratch: machine.global(&[0; SCRATCH]),
                     });
                     callees.push(Callee::Built {
+                        routine: wanted,
                         built,
                         primitive,
                         io,
@@ -1786,8 +1779,6 @@ struct Lowering<'a> {
     /// body is built. Region callbacks answer values rather than results,
     /// so a refusal is kept here instead of returned from each of them.
     refused: std::cell::RefCell<Option<String>>,
-    /// The errors reads and writes met, as far as a binding follows one.
-    errors: Errors,
     /// The function being lowered as a loop, and the calls of itself in
     /// tail position, each of which goes round again rather than calling.
     looping: std::cell::RefCell<Option<(barb::FnId, Vec<barb::ExprId>)>>,
@@ -1795,39 +1786,6 @@ struct Lowering<'a> {
     /// are, and the routine making the list of strings from them, where the
     /// program reads the list.
     arguments: Option<(usize, Option<FunctionId>)>,
-}
-
-/// The error the last binding's read or write met, and the one the binding
-/// being lowered follows. A failure asked for straight after is that error,
-/// with nothing between to change it, so it need not be read back from
-/// where it was kept.
-#[derive(Default)]
-struct Errors {
-    met: std::cell::Cell<Option<ValueId>>,
-    followed: std::cell::Cell<Option<ValueId>>,
-}
-
-impl Errors {
-    /// A read or write met `error`, or nought.
-    fn meet(&self, error: ValueId) {
-        self.met.set(Some(error));
-    }
-
-    /// The next binding follows the last.
-    fn step(&self) {
-        self.followed.set(self.met.take());
-    }
-
-    /// More than one way may lead on: nothing follows one read or write.
-    fn forget(&self) {
-        self.met.set(None);
-        self.followed.set(None);
-    }
-
-    /// The error the binding being lowered follows straight on from.
-    fn followed(&self) -> Option<ValueId> {
-        self.followed.take()
-    }
 }
 
 /// Local values, one entry per source local: `None` where it carries nothing.
@@ -2090,23 +2048,8 @@ impl Lowering<'_> {
         locals: &mut Vec<Option<Held>>,
         statics: &mut Vec<Option<Known>>,
     ) -> Answer<Held> {
-        let answer = self.bound(b, body, locals, statics);
-        // Where this body ends, more than one way may lead on: nothing
-        // after it follows one read or write in particular.
-        self.errors.forget();
-        answer
-    }
-
-    fn bound(
-        &self,
-        b: &mut super::Builder,
-        body: barb::Body,
-        locals: &mut Vec<Option<Held>>,
-        statics: &mut Vec<Option<Known>>,
-    ) -> Answer<Held> {
         for &binding in self.barb.bindings(body.bindings) {
             let static_value = self.propagate_static(binding, statics);
-            self.errors.step();
             match self.expr(b, binding, locals, statics) {
                 Answer::Value(value) => locals.push(Some(value)),
                 Answer::Nothing => locals.push(None),
@@ -2116,7 +2059,6 @@ impl Lowering<'_> {
             }
             statics.push(static_value);
         }
-        self.errors.step();
         self.expr(b, body.tail, locals, statics)
     }
 
@@ -2475,12 +2417,14 @@ impl Lowering<'_> {
                 (b.call(*id, &args), routine.answers())
             }
             Callee::Built {
+                routine,
                 built,
                 primitive,
                 io,
             } => {
                 let asked = (function, arguments);
-                let results = self.built(b, asked, locals, statics, (built, *primitive, *io));
+                let results =
+                    self.built(b, asked, locals, statics, (routine, built, *primitive, *io));
                 (results, None)
             }
             Callee::Inline { params, returns } => {
@@ -2794,129 +2738,90 @@ impl Lowering<'_> {
         asked: (barb::FnId, barb::Range),
         locals: &Locals,
         statics: &[Option<Known>],
-        (built, primitive, io): (&Built, Option<FunctionId>, Io),
+        (routine, built, primitive, io): (&Routine, &Built, Option<FunctionId>, Io),
     ) -> Vec<ValueId> {
+        let carried = self.handed_atoms(asked, routine);
         let primitive = || primitive.expect("a routine built on a primitive has one");
         match built {
-            Built::Put(_) => {
-                let [went, error] = self.put(b, asked, locals, statics, (primitive(), io));
-                self.errors.meet(error);
-                vec![went]
+            Built::Put(_) | Built::Name(_) => {
+                let ended = matches!(built, Built::Name(_));
+                let mut args = Vec::with_capacity(carried.len() + 1);
+                for (&atom, takes) in carried.iter().zip(&routine.takes) {
+                    match takes {
+                        Takes::Scalar(_) => args.push(Self::scalar(locals, atom)),
+                        Takes::StaticBytes | Takes::Bytes => {
+                            args.extend(self.run(b, atom, locals, statics, (io, ended)));
+                        }
+                    }
+                }
+                vec![b.call_one(primitive(), &args)]
             }
             Built::Take(_) => {
-                let count = self.handed_scalar(asked, locals);
-                let [came, error] = Self::take(b, count, (primitive(), io));
-                self.errors.meet(error);
-                vec![came]
+                let (&count, before) = carried.split_last().expect("a count to take");
+                let mut args: Vec<_> = before
+                    .iter()
+                    .map(|&atom| Self::scalar(locals, atom))
+                    .collect();
+                args.extend(Self::room(b, Self::scalar(locals, count), io));
+                vec![b.call_one(primitive(), &args)]
             }
             Built::Taken => {
-                let count = self.handed_scalar(asked, locals);
-                Self::taken(b, count, io).to_vec()
-            }
-            Built::Failure => {
-                let at = b.address_of(io.failure);
-                let failure = self
-                    .errors
-                    .followed()
-                    .unwrap_or_else(|| b.load(super::Width::Word, at, super::Offset::Words(0)));
-                let none = b.constant(Class::Word, 0);
-                b.store(super::Width::Word, at, super::Offset::Words(0), none);
-                vec![failure]
+                let &count = carried.last().expect("a count taken");
+                Self::taken(b, Self::scalar(locals, count), io).to_vec()
             }
         }
     }
 
-    /// The one argument a routine is called with past its authority, as the
-    /// word it is held in.
-    fn handed_scalar(
+    /// The arguments a routine is called with past its authority, those
+    /// carrying something, in order.
+    fn handed_atoms(
         &self,
         (function, arguments): (barb::FnId, barb::Range),
-        locals: &Locals,
-    ) -> ValueId {
-        let (atom, _) = self
-            .barb
+        routine: &Routine,
+    ) -> Vec<barb::Atom> {
+        self.barb
             .atoms(arguments)
             .iter()
             .zip(self.barb.params(function))
-            .skip(1)
-            .find(|(_, ty)| self.carries[ty.index()] != Storage::Erased)
-            .expect("a built routine's argument is carried");
-        Self::scalar(locals, *atom)
+            .skip(authority(routine))
+            .filter(|(_, ty)| self.carries[ty.index()] != Storage::Erased)
+            .map(|(atom, _)| *atom)
+            .collect()
     }
 
-    /// What a primitive answered, as a count: where it is more than it was
-    /// asked to move, it failed, and the error is kept and nought answered.
-    ///
-    /// Beside it, the error kept, or nought.
-    fn counted(b: &mut super::Builder, answer: ValueId, asked: ValueId, io: Io) -> [ValueId; 2] {
-        let failed = b.compare(Relation::Less, asked, answer);
-        let held = b.if_(
-            failed,
-            &[Class::Word, Class::Word],
-            |b| {
-                // `-error`, read as a word: the error is that far below the
-                // top, and one more.
-                let top = b.constant(Class::Word, io.top);
-                let one = b.constant(Class::Word, 1);
-                // More than was asked is at least one, so one less is short
-                // of the top: what is left is at least one, and never more
-                // than the top.
-                let less = b.binary_at(Class::Word, Binary::Sub, answer, one);
-                let error = Class::Held(crate::facts::Facts {
-                    low: 1,
-                    high: Some(io.top),
-                });
-                let error = b.binary_at(error, Binary::Monus, top, less);
-                let at = b.address_of(io.failure);
-                b.store(super::Width::Word, at, super::Offset::Words(0), error);
-                let none = b.constant(Class::Word, 0);
-                b.yield_(&[none, error]);
-            },
-            |b| {
-                let none = b.constant(Class::Word, 0);
-                b.yield_(&[answer, none]);
-            },
-        );
-        [held[0], held[1]]
-    }
-
-    /// Hand a byte string to the primitive: where it lies, all of it, if it
-    /// is known before the program runs, and otherwise its first run,
-    /// copied to the scratch region. How many bytes went, and the error
-    /// met, or nought.
-    fn put(
+    /// A byte string, as where it starts and how many bytes a primitive
+    /// reads there: where it lies, all of it, if it is known before the
+    /// program runs, and otherwise its first run, copied to the scratch
+    /// region. One `ended` is a name, and a nought byte follows it there,
+    /// which the bytes counted leave out.
+    fn run(
         &self,
         b: &mut super::Builder,
-        (function, arguments): (barb::FnId, barb::Range),
+        atom: barb::Atom,
         locals: &Locals,
         statics: &[Option<Known>],
-        (write, io): (FunctionId, Io),
+        (io, ended): (Io, bool),
     ) -> [ValueId; 2] {
-        // Past the authority it is asked with, the one argument carried.
-        let (atom, _) = self
-            .barb
-            .atoms(arguments)
-            .iter()
-            .zip(self.barb.params(function))
-            .skip(1)
-            .find(|(_, ty)| self.carries[ty.index()] != Storage::Erased)
-            .expect("a string handed out is carried");
-        let atom = *atom;
         if let Some(Known { value, skip }) = statics[atom.0.index()] {
-            let bytes = self.bytes(value);
+            let mut bytes = self.bytes(value);
             let known = u64::try_from(bytes.len()).expect("a length fits 64 bits");
+            if ended {
+                bytes.push(0);
+            }
             let data = b.data(&bytes);
             let at = b.address_of(data);
-            let len = b.data_len(data);
-            let (at, len) = skip.map_or((at, len), |count| {
+            let len = if ended {
+                b.constant(Class::Word, known)
+            } else {
+                b.data_len(data)
+            };
+            return skip.map_or([at, len], |count| {
                 let skipped = Self::skipped(b, Self::scalar(locals, count), (len, Some(known)));
                 let start = b.convert(Class::Word, at);
                 let start = b.binary(Binary::Add, start, skipped);
                 let rest = b.binary(Binary::Sub, len, skipped);
-                (b.convert(Class::Address, start), rest)
+                [b.convert(Class::Address, start), rest]
             });
-            let answer = b.call_one(write, &[at, len]);
-            return Self::counted(b, answer, len, io);
         }
         let held = locals[atom.0.index()]
             .as_ref()
@@ -2924,15 +2829,22 @@ impl Lowering<'_> {
         let [buffer, len] = held.values() else {
             unreachable!("a byte string is held as a sequence");
         };
-        let run = Self::copied_run(b, (*buffer, *len), io);
-        let start = b.address_of(io.scratch);
-        let answer = b.call_one(write, &[start, run]);
-        Self::counted(b, answer, run, io)
+        let run = Self::copied_run(b, (*buffer, *len), (io, ended));
+        [b.address_of(io.scratch), run]
     }
 
-    /// Copy a sequence's first run of bytes to the scratch region: how many.
-    fn copied_run(b: &mut super::Builder, (buffer, len): (ValueId, ValueId), io: Io) -> ValueId {
-        let room = b.data_len(io.scratch);
+    /// Copy a sequence's first run of bytes to the scratch region, and a
+    /// nought byte after them where they are `ended`: how many.
+    fn copied_run(
+        b: &mut super::Builder,
+        (buffer, len): (ValueId, ValueId),
+        (io, ended): (Io, bool),
+    ) -> ValueId {
+        let mut room = b.data_len(io.scratch);
+        if ended {
+            let one = b.constant(Class::Word, 1);
+            room = b.binary(Binary::Sub, room, one);
+        }
         let fits = b.compare(Relation::Less, len, room);
         let run = b.if_(
             fits,
@@ -2947,21 +2859,31 @@ impl Lowering<'_> {
             b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
             let left = b.binary(Binary::Sub, len, at);
             let value = b.buffer_field(Class::fixed(8), buffer, left, 0);
-            let start = b.address_of(io.scratch);
-            let base = b.convert(Class::Word, start);
-            let place = b.binary(Binary::Add, base, at);
-            let place = b.convert(Class::Address, place);
+            let place = Self::scratch_at(b, io, at);
             b.store(super::Width::Byte, place, super::Offset::Bytes(0), value);
             let one = b.constant(Class::Word, 1);
             let next = b.binary(Binary::Add, at, one);
             b.continue_(&[next]);
         });
+        if ended {
+            let place = Self::scratch_at(b, io, run);
+            let nought = b.constant(Class::fixed(8), 0);
+            b.store(super::Width::Byte, place, super::Offset::Bytes(0), nought);
+        }
         run
     }
 
-    /// Ask the primitive for up to `count` bytes, no more than a run, into
-    /// the scratch region: how many came, and the error met, or nought.
-    fn take(b: &mut super::Builder, count: ValueId, (read, io): (FunctionId, Io)) -> [ValueId; 2] {
+    /// Where the scratch region's byte `at` lies.
+    fn scratch_at(b: &mut super::Builder, io: Io, at: ValueId) -> ValueId {
+        let start = b.address_of(io.scratch);
+        let base = b.convert(Class::Word, start);
+        let place = b.binary(Binary::Add, base, at);
+        b.convert(Class::Address, place)
+    }
+
+    /// Room in the scratch region for up to `count` bytes, no more than a
+    /// run: where it starts, and how many.
+    fn room(b: &mut super::Builder, count: ValueId, io: Io) -> [ValueId; 2] {
         let count = met(b, count, Class::Word);
         let room = b.data_len(io.scratch);
         let fits = b.compare(Relation::Less, count, room);
@@ -2971,25 +2893,14 @@ impl Lowering<'_> {
             |b| b.yield_(&[count]),
             |b| b.yield_(&[room]),
         )[0];
-        let start = b.address_of(io.scratch);
-        let answer = b.call_one(read, &[start, run]);
-        Self::counted(b, answer, run, io)
+        [b.address_of(io.scratch), run]
     }
 
     /// The first `count` bytes of the scratch region, no more than a run,
     /// as a sequence: pushed from the last, since a sequence grows at its
     /// front.
     fn taken(b: &mut super::Builder, count: ValueId, io: Io) -> [ValueId; 2] {
-        let count = met(b, count, Class::Word);
-        let room = b.data_len(io.scratch);
-        let fits = b.compare(Relation::Less, count, room);
-        let run = b.if_(
-            fits,
-            &[Class::Word],
-            |b| b.yield_(&[count]),
-            |b| b.yield_(&[room]),
-        )[0];
-        let start = b.address_of(io.scratch);
+        let [start, run] = Self::room(b, count, io);
         Self::pushed_bytes(b, start, run, Class::fixed(8))
     }
 

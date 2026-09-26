@@ -318,17 +318,16 @@ pub fn greets() -> Program {
     } = ground();
     let bytes = program.declare_type("Bytes");
     program.define_type(bytes, &[("Nil", &[]), ("Cons", &[nat, bytes])]);
-    let stdout = program.declare_type("Stdout");
-    program.define_type(stdout, &[("Stdout", &[])]);
-    let output = program.ctor_at(stdout, 0);
-    let put = program.declare("stdout_put!", &[stdout, bytes], nat);
+    // Standard output is what the first descriptor past input names.
+    let put = program.declare("fd_put!", &[nat, bytes], nat);
     let greeting = program
         .intern_byte_spine(bytes, b"Hello, world!")
         .expect("the declared byte shape");
 
     let main = program.declare("main!", &[host], never);
     program.define(main, |b, args| {
-        let output = b.con(output, &[]);
+        let output = b.number(nat, 1).expect("the declared natural shape");
+        let output = b.known(output);
         let greeting = b.known(greeting);
         b.call(put, &[output, greeting]);
         let nought = b.number(nat, 0).expect("the declared natural shape");

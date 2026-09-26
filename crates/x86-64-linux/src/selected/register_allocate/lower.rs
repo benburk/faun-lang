@@ -16,11 +16,19 @@ use faun_core::ir::{DataId, FunctionId, Offset, Width};
 
 const SYS_READ: u64 = 0;
 const SYS_WRITE: u64 = 1;
+const SYS_CLOSE: u64 = 3;
+const SYS_OPENAT2: u64 = 437;
+/// A name is read from where the program runs.
+const AT_FDCWD: u64 = (-100i64).cast_unsigned();
+/// A name reaching above where it is read from, by `..`, from the root, or
+/// through a link, is refused.
+const RESOLVE_BENEATH: i8 = 0x08;
+/// How many bytes `openat2`'s `how` is: three words.
+const OPEN_HOW_BYTES: u64 = 24;
 const SYS_MMAP: u64 = 9;
 const SYS_EXIT: u64 = 60;
 const STDIN: u64 = 0;
 const STDOUT: u64 = 1;
-const STDERR: u64 = 2;
 const PROT_READ_WRITE: u64 = 0x3;
 const MAP_PRIVATE_ANONYMOUS: u64 = 0x22;
 const COPY_SCRATCH: Reg = Reg::R11;
@@ -511,17 +519,38 @@ impl<'a> Lowering<'a> {
                 self.asm.syscall();
                 self.forget_call_clobbers();
             }
-            (Opcode::PutOut | Opcode::PutErr | Opcode::TakeIn, Immediate::None) => {
-                let (call, fd) = match inst.opcode {
-                    Opcode::PutOut => (SYS_WRITE, STDOUT),
-                    Opcode::PutErr => (SYS_WRITE, STDERR),
-                    _ => (SYS_READ, STDIN),
+            (Opcode::WriteFd | Opcode::ReadFd | Opcode::CloseFd, Immediate::None) => {
+                let call = match inst.opcode {
+                    Opcode::WriteFd => SYS_WRITE,
+                    Opcode::ReadFd => SYS_READ,
+                    _ => SYS_CLOSE,
                 };
                 self.materialize(Reg::Rax, call);
-                self.materialize(Reg::Rdi, fd);
                 self.asm.syscall();
                 self.forget_call_clobbers();
                 // The count, or `-errno`, is where the kernel left it.
+                let dst = result()?;
+                debug_assert_eq!(dst, Reg::Rax);
+                self.forget(dst);
+            }
+            (Opcode::OpenAt, Immediate::None) => {
+                // `openat2`'s `how`, on the stack: the flags, the mode a
+                // file it makes is given, and that the name resolves
+                // beneath where the program runs. Each is pushed before
+                // anything is written, so wherever they were held is read
+                // as it was.
+                self.asm.push_imm8(RESOLVE_BENEATH);
+                self.asm.push_reg(reg(3)?);
+                self.asm.push_reg(reg(2)?);
+                self.asm.mov_reg(Reg::Rdx, Reg::Rsp, RegisterWidth::Word);
+                self.materialize(Reg::Rdi, AT_FDCWD);
+                self.materialize(Reg::R10, OPEN_HOW_BYTES);
+                self.materialize(Reg::Rax, SYS_OPENAT2);
+                self.asm.syscall();
+                self.forget_call_clobbers();
+                for _ in 0..3 {
+                    self.asm.pop(Reg::Rcx);
+                }
                 let dst = result()?;
                 debug_assert_eq!(dst, Reg::Rax);
                 self.forget(dst);

@@ -24,6 +24,10 @@
 //! side did: a number, or something worked out before either. Read that way,
 //! the first branch answers nothing anybody reads.
 //!
+//! And the same for a difference that stops at nought, asked whether it is
+//! nought: that is asking whether one number is no more than another, which
+//! is one comparison rather than a subtraction and a test.
+//!
 //! And the same for arithmetic on numbers known before the program runs,
 //! which legalization writes a great deal of: an offset is a count of words
 //! times a word's bytes, plus a header, plus which leaf. Two known numbers
@@ -36,7 +40,8 @@
 use crate::facts::Facts;
 
 use super::{
-    Binary, Builder, Class, Direction, Exit, Op, Program, RegionId, ValueId, model::wrap, rewrite,
+    Binary, Builder, Class, Direction, Exit, Op, Program, RegionId, Relation, ValueId, model::wrap,
+    rewrite,
 };
 
 /// The fewest bits a machine word has on any target this compiles for.
@@ -147,6 +152,11 @@ impl rewrite::Pass for Simplify {
                 then_region,
                 else_region,
             } => self.branching(rebuild, b, condition, [then_region, else_region], results),
+            Op::Compare {
+                relation: Relation::Equal,
+                left,
+                right,
+            } => self.at_most(rebuild, b, left, right, results[0]),
             _ => false,
         }
     }
@@ -218,6 +228,59 @@ impl Simplify {
             return false;
         }
         rebuild.stands_for(result, b.constant(class, wrap(class, number)));
+        true
+    }
+
+    /// `value ∸ bound == 0`, for a bound known before the program runs, as
+    /// `value < bound + 1`: where the value could be that next number, so
+    /// that it is held at least as wide as the number it is compared with.
+    fn at_most(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        left: ValueId,
+        right: ValueId,
+        result: ValueId,
+    ) -> bool {
+        if self.number(right) != Some(0) {
+            return false;
+        }
+        let Some((
+            Op::Binary {
+                op: Binary::Monus,
+                left: value,
+                right: bound,
+            },
+            _,
+            _,
+        )) = self.wrote.0[left.index()]
+        else {
+            return false;
+        };
+        let Some(next) = self.number(bound).and_then(|bound| bound.checked_add(1)) else {
+            return false;
+        };
+        let reaches = match rebuild.source().class(value) {
+            Class::Word => self
+                .word_bits
+                .is_some_and(|bits| bits >= 64 || next >> bits == 0),
+            class => class
+                .facts()
+                .and_then(|facts| facts.high)
+                .is_some_and(|high| next <= high),
+        };
+        if !reaches {
+            return false;
+        }
+        let next = b.constant(
+            Class::Held(Facts {
+                low: next,
+                high: Some(next),
+            }),
+            next,
+        );
+        let less = b.compare(Relation::Less, rebuild.value(value), next);
+        rebuild.stands_for(result, less);
         true
     }
 
@@ -577,7 +640,7 @@ impl Wrote {
     /// answer runs the arms the other way round.
     fn asks(&self, source: &Program, condition: ValueId) -> Option<(ValueId, bool)> {
         let Op::Compare {
-            relation: super::Relation::Equal,
+            relation: Relation::Equal,
             left,
             right,
         } = self.0[condition.index()]?.0

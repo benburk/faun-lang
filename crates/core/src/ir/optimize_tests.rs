@@ -626,6 +626,41 @@ fn a_remainder_by_anything_else_is_left_as_it_stands() {
     assert_eq!(returns(&held), BigUint::from(0u8), "300 mod 10");
 }
 
+/// A difference that stops at nought, asked whether it is nought, is asking
+/// whether one number is no more than the other: one comparison, and no
+/// subtraction left, answering what the two did.
+#[test]
+fn a_difference_asked_whether_it_is_nought_is_a_comparison() {
+    for value in [100u64, 200, 201, 300] {
+        let (mut p, main) = Program::new("main");
+        p.define(main, |b, _| {
+            let class = Class::fixed(9);
+            let held = unknown(b, class, value);
+            let bound = b.constant(class, 200);
+            let rest = b.binary_at(class, Binary::Monus, held, bound);
+            let nought = b.constant(class, 0);
+            let at_most = b.compare(Relation::Equal, rest, nought);
+            b.ret(&[at_most]);
+        });
+        let held = settled(&p);
+        let monus = |op: &Op| {
+            matches!(
+                *op,
+                Op::Binary {
+                    op: Binary::Monus,
+                    ..
+                }
+            )
+        };
+        assert_eq!(count(&held, monus), 0, "{value}");
+        assert_eq!(
+            returns(&held),
+            BigUint::from(u8::from(value <= 200)),
+            "{value}"
+        );
+    }
+}
+
 /// A value already narrow enough is read where it stands.
 #[test]
 fn a_conversion_that_takes_nothing_off_is_not_written() {
