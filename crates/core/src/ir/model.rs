@@ -198,6 +198,15 @@ pub enum Op {
     BufferEmpty {
         shape: ShapeId,
     },
+    /// A buffer known before the program runs, laid out in the image and
+    /// never freed: one element per byte of `elements`, each the value of
+    /// the one scalar leaf `shape` has. A known string is one of these, so
+    /// however long it is, it costs its bytes and nothing is copied to
+    /// build it.
+    BufferKnown {
+        elements: DataId,
+        shape: ShapeId,
+    },
     /// The sequence whose elements are `fields`, one value per leaf of a new
     /// first element, followed by the sequence `operands` begins with: a
     /// buffer, a start and a length, then the fields. Answers a buffer and

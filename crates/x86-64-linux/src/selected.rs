@@ -1339,6 +1339,7 @@ impl Selector<'_> {
                 | SourceOp::CellTag { .. }
                 | SourceOp::CellField { .. }
                 | SourceOp::BufferEmpty { .. }
+                | SourceOp::BufferKnown { .. }
                 | SourceOp::BufferPush { .. }
                 | SourceOp::BufferPrepend { .. }
                 | SourceOp::BufferExtend { .. }

@@ -1222,6 +1222,36 @@ fn has_constant_only_multiply(program: &Program, instructions: &[(&Op, &[ValueId
     })
 }
 
+/// A known string is laid out once, however long: its bytes are in the
+/// image as they are, so a longer one costs its bytes and nothing more, and
+/// a walk over it reads them there.
+#[test]
+fn a_long_known_string_is_laid_out_once() {
+    let program = |length: usize| {
+        let source = format!(
+            "import std.host {{Host}}
+
+             found : Bool -> Nat
+             found(True) -> 1
+             found(False) -> 0
+
+             main! : Host -> []
+             main!(host) ->
+               bytes = \"{}b\".to_utf8()
+               host.exit!(found(bytes.contains(98)) * 100 + bytes.len() % 100)",
+            "a".repeat(length)
+        );
+        let program = read(&source).expect("a program holding a long string");
+        TARGET
+            .prepare(&program)
+            .expect("a program this machine holds")
+    };
+    let (short, long) = (program(1000), program(4000));
+    let grown = bytes(&long).len() - bytes(&short).len();
+    assert!(grown < 2 * 3000, "3000 more bytes of text took {grown}");
+    assert_eq!(execute(&long).0, 101);
+}
+
 #[test]
 fn runnable_expression_example_uses_runtime_arguments() {
     let program = read(include_str!("examples/expressions.fn")).unwrap();

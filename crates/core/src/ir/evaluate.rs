@@ -757,6 +757,16 @@ impl<H: Host> Machine<'_, H> {
                 BigUint::from(self.buffers.len())
             }
             // Nothing outside reads a buffer this tier has not laid out.
+            Op::BufferKnown { elements, .. } => {
+                let elements = self
+                    .program
+                    .datum_bytes(elements)
+                    .iter()
+                    .map(|&byte| vec![BigUint::from(byte)])
+                    .collect();
+                self.buffers.push(elements);
+                BigUint::from(self.buffers.len())
+            }
             Op::BufferAt { .. } => return Err(invalid("a buffer's address before layout")),
             Op::Keep { .. } => return Ok(Vec::new()),
             // A sequence built here is a buffer of its own, starting at its

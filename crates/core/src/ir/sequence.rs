@@ -17,7 +17,10 @@
 //!
 //! So a sequence of bytes is a run of bytes, in order, and one of any other
 //! element is the run of them Rust would lay out, which a copy moves as
-//! bytes.
+//! bytes. A buffer known before the program runs -- an empty one of each
+//! element layout, and each known string -- is laid out in the image with
+//! the all-ones count of a static object, so nothing writes it or frees it,
+//! and nothing is built to make one.
 //!
 //! An element before a sequence's first, in a buffer nothing else holds, is
 //! the sequence's to write: a push writes it in place, giving up whatever

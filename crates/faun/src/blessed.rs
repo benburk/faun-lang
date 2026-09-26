@@ -210,6 +210,9 @@ pub enum NumeralType<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiteralExpr {
     Natural(BigUint),
+    /// A list of bytes known whole, held as its bytes rather than a
+    /// constructor per byte, however long it is.
+    Bytes(Vec<u8>),
     Construct(Symbol, Vec<Self>),
     Call(Symbol, Vec<Self>),
 }
@@ -310,15 +313,10 @@ impl std::error::Error for LiteralElaborationError {}
 /// Build a `Str` directly from valid UTF-8 bytes using its private wrappers.
 #[must_use]
 pub fn string(bytes: &[u8], prelude: &PreludeIds) -> LiteralExpr {
-    let mut list = LiteralExpr::Construct(prelude.list_nil, Vec::new());
-    for &byte in bytes.iter().rev() {
-        let byte = LiteralExpr::Construct(
-            prelude.u8_constructor,
-            vec![LiteralExpr::Natural(BigUint::from(byte))],
-        );
-        list = LiteralExpr::Construct(prelude.list_cons, vec![byte, list]);
-    }
-    LiteralExpr::Construct(prelude.str_constructor, vec![list])
+    LiteralExpr::Construct(
+        prelude.str_constructor,
+        vec![LiteralExpr::Bytes(bytes.to_vec())],
+    )
 }
 
 /// The word the prelude exports as `name`, where it has an `of_nat` and its
@@ -528,18 +526,19 @@ mod tests {
         );
     }
 
+    /// A string is its UTF-8 bytes behind the private wrapper, held whole
+    /// rather than a constructor per byte.
     #[test]
-    fn strings_use_private_utf8_cells() {
+    fn strings_are_their_utf8_bytes_behind_the_wrapper() {
         let loaded = loaded();
         let ids = PreludeIds::find_in(&loaded).unwrap();
         let value = string("é".as_bytes(), &ids);
-        let LiteralExpr::Construct(str_constructor, outer) = value else {
-            panic!("Str wrapper")
-        };
-        assert_eq!(str_constructor, ids.str_constructor);
-        let LiteralExpr::Construct(first_cons, _) = &outer[0] else {
-            panic!("first byte cell")
-        };
-        assert_eq!(*first_cons, ids.list_cons);
+        assert_eq!(
+            value,
+            LiteralExpr::Construct(
+                ids.str_constructor,
+                vec![LiteralExpr::Bytes("é".as_bytes().to_vec())]
+            )
+        );
     }
 }

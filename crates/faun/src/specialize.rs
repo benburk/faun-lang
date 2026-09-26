@@ -149,6 +149,8 @@ pub(crate) enum ExprKind {
     ConstructorFunction(Symbol),
     Construct(Symbol, Vec<Expr>),
     Natural(BigUint),
+    /// A `List(U8)` known whole.
+    Bytes(Vec<u8>),
     Record(Vec<(Symbol, Expr)>),
     /// A record with the fields named replaced.
     Update(Box<Expr>, Vec<(Symbol, Expr)>),
@@ -181,6 +183,7 @@ impl fmt::Display for SpecializeError {
 impl std::error::Error for SpecializeError {}
 
 /// Specialize what one parameterless `entry` reaches, and nothing else.
+#[cfg(test)]
 pub(crate) fn monomorphize_from_entry(
     checked: &CheckedProgram,
     entry: Symbol,
@@ -1737,6 +1740,7 @@ impl<'a> Specializer<'a> {
     ) -> Result<Expr, SpecializeError> {
         let kind = match literal {
             LiteralExpr::Natural(magnitude) => ExprKind::Natural(magnitude.clone()),
+            LiteralExpr::Bytes(bytes) => ExprKind::Bytes(bytes.clone()),
             LiteralExpr::Construct(constructor, fields) => {
                 let field_types = self.constructor_fields(*constructor, expected)?;
                 if fields.len() != field_types.len() {

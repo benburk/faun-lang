@@ -342,7 +342,8 @@ Ordinary constructor fields can be borrowed with a budget.
 
 `Program::intern` checks constructor trees; `intern_number`, `intern_natural`, `intern_byte_spine`, and their builder entry
 points return `Result`. Number insertion rejects undefined and non-natural shapes;
-byte-spine insertion requires one natural element field and one recursive field.
+byte-spine insertion requires one recursive field and one element field that is
+a natural or wraps one, since a wrapper encodes as what it wraps.
 All checks run before bytes are written. Failed construction never changes the
 pools. There is no way in from raw bytes, so every constant is canonically
 encoded; the folder builds compound constants from fields it has checked. The byte format and

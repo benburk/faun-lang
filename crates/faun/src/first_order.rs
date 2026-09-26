@@ -62,6 +62,8 @@ pub(crate) struct Expr {
 pub(crate) enum ExprKind {
     Local(LocalId),
     Natural(BigUint),
+    /// A `List(U8)` known whole.
+    Bytes(Vec<u8>),
     Construct(Symbol, Vec<Expr>),
     Record(Vec<(Symbol, Expr)>),
     /// A record with the fields named replaced.
@@ -129,6 +131,7 @@ fn expr(expression: specialize::Expr) -> Expr {
     let kind = match expression.kind {
         S::Local(local) => ExprKind::Local(local),
         S::Natural(magnitude) => ExprKind::Natural(magnitude),
+        S::Bytes(bytes) => ExprKind::Bytes(bytes),
         S::Construct(constructor, fields) => ExprKind::Construct(constructor, exprs(fields)),
         S::Record(fields) => ExprKind::Record(
             fields

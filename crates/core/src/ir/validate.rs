@@ -162,6 +162,13 @@ impl References<'_> {
         match op {
             Op::Constant { .. } => {}
             Op::BufferEmpty { shape } => reference(&p.shapes, shape, "shape")?,
+            Op::BufferKnown { elements, shape } => {
+                reference(&p.shapes, shape, "shape")?;
+                self.datum(elements)?;
+                if !matches!(p.shaped(shape), [Class::Held(_)]) {
+                    return Err("a known buffer's element is not one scalar".into());
+                }
+            }
             Op::NaturalConstant(id) => self.natural_datum(id)?,
             Op::AddressOf(id) => return self.datum(id).map(|_| ()),
             Op::Cell { fields, shape, .. } => {
@@ -473,7 +480,9 @@ impl Checker<'_> {
                 self.require(cell, Class::Cell)?;
                 self.leaf(results, index, shape)?;
             }
-            Op::BufferEmpty { .. } => self.results(results, &[Class::Buffer])?,
+            Op::BufferEmpty { .. } | Op::BufferKnown { .. } => {
+                self.results(results, &[Class::Buffer])?;
+            }
             Op::BufferPush { operands, shape } => {
                 let operands = self.program.values(operands);
                 let Some((sequence, fields)) = operands.split_first_chunk::<3>() else {

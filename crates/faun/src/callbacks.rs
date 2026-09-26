@@ -405,6 +405,7 @@ impl<'a> Callbacks<'a> {
             }
             ExprKind::Local(local) => ExprKind::Local(*local),
             ExprKind::Natural(magnitude) => ExprKind::Natural(magnitude.clone()),
+            ExprKind::Bytes(bytes) => ExprKind::Bytes(bytes.clone()),
             ExprKind::Construct(constructor, fields) => {
                 ExprKind::Construct(*constructor, self.exprs(frame, fields)?)
             }
@@ -620,7 +621,8 @@ fn for_each<'a>(expression: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
         ExprKind::Local(_)
         | ExprKind::Function(_)
         | ExprKind::ConstructorFunction(_)
-        | ExprKind::Natural(_) => {}
+        | ExprKind::Natural(_)
+        | ExprKind::Bytes(_) => {}
         ExprKind::Construct(_, list) | ExprKind::Tuple(list) | ExprKind::DirectCall(_, list) => {
             for each in list {
                 for_each(each, visit);
@@ -739,7 +741,7 @@ fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap
                 found.entry(*local).or_insert_with(|| expression.ty.clone());
             }
         }
-        S::Function(_) | S::ConstructorFunction(_) | S::Natural(_) => {}
+        S::Function(_) | S::ConstructorFunction(_) | S::Natural(_) | S::Bytes(_) => {}
         S::Construct(_, fields) | S::DirectCall(_, fields) | S::Tuple(fields) => {
             for field in fields {
                 free_locals(field, bound, found);

@@ -294,6 +294,7 @@ impl<'a> Rebuild<'a> {
             Op::Cell { tag, fields, shape } => vec![b.cell(tag, shape, &self.args(fields))],
             Op::CellTag { cell } => vec![b.cell_tag(self.value(cell))],
             Op::BufferEmpty { shape } => vec![b.buffer_empty(shape)],
+            Op::BufferKnown { elements, shape } => vec![b.buffer_known(elements, shape)],
             Op::BufferPush { operands, shape } => {
                 let operands = self.args(operands);
                 let (sequence, fields) = operands.split_at(3);

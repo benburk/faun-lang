@@ -87,7 +87,7 @@ impl Builder<'_> {
         self.program.intern(id, value)
     }
 
-    /// Hold bytes in a spine with one natural element field.
+    /// Hold bytes in a spine whose one element field is a natural, or wraps one.
     ///
     /// # Errors
     /// If the type is undefined or does not have that structural shape.

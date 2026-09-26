@@ -40,7 +40,6 @@ pub mod lex;
 mod linearity;
 mod lines;
 pub mod literal;
-pub mod lower;
 pub mod modules;
 mod parse;
 pub mod resolve;

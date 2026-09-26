@@ -21,7 +21,7 @@ use crate::specialize::{self, FunctionKey, Pattern, Type};
 use crate::{ModuleId, Symbol};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LowerError {
+pub(crate) struct LowerError {
     pub message: String,
     /// Where in the source it is about, when that is known.
     pub at: Option<(ModuleId, crate::ast::Span)>,
@@ -44,16 +44,10 @@ impl From<specialize::SpecializeError> for LowerError {
     }
 }
 
-/// Specialize the reachable program for its callbacks and emit Barb.
-///
-/// `entry` must name a monomorphic, parameterless function. The returned
-/// program contains only concrete types and saturated first-order calls.
-///
-/// # Errors
-///
-/// Reports ambiguous specialization, unsupported structural types or ranges,
-/// missing declarations, non-exhaustive clauses, and invalid literal shapes.
-pub fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, LowerError> {
+/// Specialize what `entry`, a monomorphic parameterless function, reaches
+/// and emit Barb, for a test to read one definition's lowering.
+#[cfg(test)]
+fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, LowerError> {
     let specialized = specialize::monomorphize_from_entry(checked, entry)?;
     let first_order = crate::first_order::first_order(specialized);
     Lowerer::new(checked, None, first_order)?.lower()
@@ -82,32 +76,6 @@ pub(crate) fn lower_package_to_barb(
             Some((module, span)) => checked.resolved.diagnostic(module, span, error.message),
             None => Diagnostic::new(error.message),
         })
-}
-
-/// Select a uniquely named checked value and lower it as the entry.
-///
-/// # Errors
-///
-/// Reports a missing or ambiguous source-level name in addition to the errors
-/// from [`program`].
-pub fn named_program(checked: &CheckedProgram, entry: &str) -> Result<barb::Program, LowerError> {
-    let resolved = &checked.resolved;
-    let suffix = format!("$${entry}");
-    let mut candidates = checked
-        .types
-        .values
-        .keys()
-        .copied()
-        .filter(|symbol| resolved.symbols.text(*symbol).ends_with(&suffix));
-    let selected = candidates
-        .next()
-        .ok_or_else(|| error(format!("no checked value is named `{entry}`")))?;
-    if candidates.next().is_some() {
-        return Err(error(format!(
-            "more than one checked value is named `{entry}`"
-        )));
-    }
-    program(checked, selected)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -368,7 +336,7 @@ impl<'a> Lowerer<'a> {
     fn collect_expr(&mut self, expression: &Expr, answer: &Type) -> Result<(), LowerError> {
         self.collect_type(&expression.ty)?;
         match &expression.kind {
-            ExprKind::Local(_) | ExprKind::Natural(_) => {}
+            ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
             ExprKind::Construct(_, fields) | ExprKind::DirectCall(_, fields) => {
                 for field in fields {
                     self.collect_expr(field, answer)?;
@@ -1516,7 +1484,7 @@ fn hoisted(body: &d::Body) -> d::Body {
 fn lifted(expression: &Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> Expr {
     let mut lift = |inner: &Expr| lifted(inner, bindings, fresh);
     let kind = match &expression.kind {
-        ExprKind::Local(_) | ExprKind::Natural(_) => {
+        ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {
             return expression.clone();
         }
         ExprKind::Construct(constructor, fields) => {
@@ -1582,6 +1550,13 @@ fn emit_expr(
             let constant = builder
                 .natural(nat, magnitude)
                 .expect("the Nat shape was validated before emission");
+            builder.known(constant)
+        }
+        ExprKind::Bytes(bytes) => {
+            let list = context.type_ids[&expression.ty];
+            let constant = builder
+                .bytes(list, bytes)
+                .expect("a byte list's shape was validated before emission");
             builder.known(constant)
         }
         ExprKind::Construct(constructor, fields) => {

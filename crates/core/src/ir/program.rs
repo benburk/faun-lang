@@ -307,6 +307,23 @@ impl Program {
         self.spans[data]
     }
 
+    /// The bytes a datum holds, as the image first holds them.
+    ///
+    /// # Panics
+    ///
+    /// If the datum lies beyond what the host addresses.
+    #[must_use]
+    pub fn datum_bytes(&self, data: DataId) -> &[u8] {
+        let span = self.spans[data];
+        let blob = match span.origin {
+            Origin::Data => &self.data,
+            Origin::Globals => &self.globals,
+        };
+        let start = usize::try_from(span.start).expect("a datum within the host");
+        let len = usize::try_from(span.len).expect("a datum within the host");
+        &blob[start..start + len]
+    }
+
     #[must_use]
     pub fn class(&self, value: ValueId) -> Class {
         self.classes[value]

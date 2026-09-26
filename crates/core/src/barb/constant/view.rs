@@ -343,7 +343,7 @@ impl<'a> Constant<'a> {
 
 /// Read through one-field products, which add nothing to an encoding.
 /// Bounded by the number of declared types, so a cycle ends the walk.
-fn peeled(types: TypeInfo<'_>, mut id: TypeId) -> Option<TypeId> {
+pub(super) fn peeled(types: TypeInfo<'_>, mut id: TypeId) -> Option<TypeId> {
     for _ in 0..=types.count() {
         match types.shape(id) {
             crate::barb::TypeShape::Wrapper { field, .. } => id = field,

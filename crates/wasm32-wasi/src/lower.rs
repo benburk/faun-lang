@@ -531,6 +531,7 @@ impl Lowering<'_> {
             | Op::CellTag { .. }
             | Op::CellField { .. }
             | Op::BufferEmpty { .. }
+            | Op::BufferKnown { .. }
             | Op::BufferPush { .. }
             | Op::BufferPrepend { .. }
             | Op::BufferExtend { .. }

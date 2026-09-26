@@ -667,7 +667,7 @@ impl Walk<'_, '_> {
     fn value(&mut self, expr: &d::Expr) -> Vec<Origin> {
         match &expr.kind {
             ExprKind::Local(_) => self.take(expr),
-            ExprKind::Natural(_) => Vec::new(),
+            ExprKind::Natural(_) | ExprKind::Bytes(_) => Vec::new(),
             ExprKind::Construct(_, fields) | ExprKind::Tuple(fields) => {
                 let mut origins = self.values(fields.iter());
                 if self.is_resource(&expr.ty) {

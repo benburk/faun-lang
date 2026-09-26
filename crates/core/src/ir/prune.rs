@@ -67,7 +67,10 @@ fn pack(program: &mut Program) {
             continue;
         };
         for op in program.every(body) {
-            if let Op::AddressOf(data) | Op::NaturalConstant(data) = *op {
+            if let Op::AddressOf(data)
+            | Op::NaturalConstant(data)
+            | Op::BufferKnown { elements: data, .. } = *op
+            {
                 named[data.index()] = true;
             }
         }
@@ -633,7 +636,8 @@ pub(super) fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
         Op::Constant { .. }
         | Op::NaturalConstant(_)
         | Op::AddressOf(_)
-        | Op::BufferEmpty { .. } => Vec::new(),
+        | Op::BufferEmpty { .. }
+        | Op::BufferKnown { .. } => Vec::new(),
         Op::Cell { fields, .. }
         | Op::BufferPush {
             operands: fields, ..

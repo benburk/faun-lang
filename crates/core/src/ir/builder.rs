@@ -117,6 +117,12 @@ impl Builder<'_> {
         self.push_one(Op::BufferEmpty { shape }, Class::Buffer)
     }
 
+    /// A buffer holding one element per byte of `elements`, each the value
+    /// of `shape`'s one scalar leaf, laid out before the program runs.
+    pub fn buffer_known(&mut self, elements: DataId, shape: ShapeId) -> ValueId {
+        self.push_one(Op::BufferKnown { elements, shape }, Class::Buffer)
+    }
+
     /// Put one element, as its leaves, before the sequence of `len` elements
     /// from `start` of `buffer`: the buffer and start of the longer one.
     pub fn buffer_push(

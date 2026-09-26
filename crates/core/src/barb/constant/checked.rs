@@ -84,7 +84,10 @@ pub(super) fn byte_spine(types: TypeInfo<'_>, owner: TypeId) -> Result<(), Const
     let Some((_, &element)) = elements.next() else {
         return Err(ConstructionError::NotByteSpine(owner));
     };
-    if elements.next().is_some() || natural(types, element).is_err() {
+    // A wrapper of a natural encodes as the natural, as reading one back
+    // says: a spine of `U8` is a spine of bytes.
+    let element = super::view::peeled(types, element);
+    if elements.next().is_some() || element.is_none_or(|element| natural(types, element).is_err()) {
         return Err(ConstructionError::NotByteSpine(owner));
     }
     Ok(())

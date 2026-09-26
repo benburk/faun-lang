@@ -889,7 +889,9 @@ fn a_wrapped_byte_string_is_handed_over_as_its_bytes() {
     source.set_entry(main);
     barb::validate(&source).unwrap();
 
-    let machine = lower(&mut source, &Routines::builtin()).unwrap();
+    // The string is lowered as a value too, which nothing reads once the
+    // call is handed its bytes, so only those are left.
+    let machine = crate::ir::optimize(&lower(&mut source, &Routines::builtin()).unwrap());
     assert_eq!(machine.data(), b"hi\n");
 }
 

@@ -158,12 +158,38 @@ fn skeleton(source: &Program) -> Program {
 /// immortal count, room for nothing, claims for nothing, and its stride. It
 /// names no descriptor, since it holds nothing a descriptor would describe.
 fn empty(packed: &Packed, word_bits: u16) -> Vec<u8> {
+    known(packed, &[], word_bits)
+}
+
+/// A buffer laid out before the program runs, holding one element per byte
+/// of `elements`, each that value in the element's one leaf: immortal, so
+/// nothing writes it or frees it, as [`sequence`] lays out any buffer.
+fn known(packed: &Packed, elements: &[u8], word_bits: u16) -> Vec<u8> {
     let word = usize::from(word_bits / 8);
     let immortal = u64::MAX >> (64 - word_bits);
-    [0, immortal, 0, 0, 0, packed.size, 0]
+    let count = u64::try_from(elements.len()).expect("a count fits 64 bits");
+    let mut bytes: Vec<u8> = [0, immortal, count, 0, count, packed.size, 0]
         .iter()
         .flat_map(|value: &u64| value.to_le_bytes()[..word].to_vec())
-        .collect()
+        .collect();
+    let stride = usize::try_from(packed.size).expect("a stride fits the host");
+    let leaf = packed.leaves[..].first();
+    for &element in elements {
+        let mut laid = vec![0; stride];
+        if let Some(&super::packing::Leaf {
+            offset,
+            width: Some(width),
+            ..
+        }) = leaf
+        {
+            let offset = usize::try_from(offset).expect("an offset fits the host");
+            let width = usize::from(width.bytes(word_bits));
+            laid[offset..offset + width]
+                .copy_from_slice(&u64::from(element).to_le_bytes()[..width]);
+        }
+        bytes.extend_from_slice(&laid);
+    }
+    bytes
 }
 
 /// A count as a word, however narrow it was held.
@@ -205,6 +231,45 @@ fn shapes_of<T: Ord>(
         .collect()
 }
 
+/// Each known buffer a program makes, by its elements and shape, and where
+/// it lies laid out.
+type Knowns = BTreeMap<(DataId, ShapeId), DataId>;
+
+/// The buffers a program knows before it runs, in the output's data: an
+/// empty one of each shape it makes one of, and each known one it makes.
+fn laid_out(
+    source: &Program,
+    output: &mut Program,
+    packed: &[Packed],
+    word_bits: u16,
+) -> (Vec<Option<DataId>>, Knowns) {
+    let made = shapes_of(source, |op| match op {
+        Op::BufferEmpty { shape } => Some(shape),
+        _ => None,
+    });
+    let empties = (0..packed.len())
+        .map(|at| {
+            made.contains(&ShapeId::at(at))
+                .then(|| output.intern(&empty(&packed[at], word_bits)))
+        })
+        .collect();
+    let knowns = shapes_of(source, |op| match op {
+        Op::BufferKnown { elements, shape } => Some((elements, shape)),
+        _ => None,
+    })
+    .into_iter()
+    .map(|(elements, shape)| {
+        let laid = known(
+            &packed[shape.index()],
+            source.datum_bytes(elements),
+            word_bits,
+        );
+        ((elements, shape), output.intern(&laid))
+    })
+    .collect();
+    (empties, knowns)
+}
+
 /// Every shape a program holds laid out, and the descriptor of each whose
 /// leaves hold a claim, in the data.
 struct Shapes {
@@ -214,6 +279,8 @@ struct Shapes {
     /// immortal, so nothing ever writes it or frees it, and whatever is
     /// first put in it makes a buffer of its own.
     empties: Vec<Option<DataId>>,
+    /// Each known buffer the program makes, of each shape, laid out.
+    knowns: Knowns,
 }
 
 impl Shapes {
@@ -239,21 +306,18 @@ impl Shapes {
                     .map(|bytes: Vec<u8>| output.intern(&bytes))
             })
             .collect();
-        let made = shapes_of(source, |op| match op {
-            Op::BufferEmpty { shape } => Some(shape),
-            _ => None,
-        });
-        let empties = (0..packed.len())
-            .map(|at| {
-                made.contains(&ShapeId::at(at))
-                    .then(|| output.intern(&empty(&packed[at], word_bits)))
-            })
-            .collect();
+        let (empties, knowns) = laid_out(source, output, &packed, word_bits);
         Ok(Self {
             packed,
             descriptors,
             empties,
+            knowns,
         })
+    }
+
+    /// Where the known buffer of `elements`, each of `shape`, lies.
+    fn known(&self, b: &mut Builder, elements: DataId, shape: ShapeId) -> ValueId {
+        b.address_of(self.knowns[&(elements, shape)])
     }
 
     /// Where the empty buffer of `shape` lies.
@@ -823,6 +887,7 @@ impl Pass<'_> {
                 self.cell_field(b, results[0], cell, (shape, index))
             }
             Op::BufferEmpty { shape } => self.shapes.empty(b, shape),
+            Op::BufferKnown { elements, shape } => self.shapes.known(b, elements, shape),
             Op::BufferRoom { count, shape } => {
                 let library = self.cells.expect("cell helpers were requested");
                 let stride = b.constant(Class::Word, self.shapes.packed(shape).size);

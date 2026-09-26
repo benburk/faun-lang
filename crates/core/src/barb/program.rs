@@ -518,7 +518,7 @@ impl Program {
         pool.natural(types, id, value)
     }
 
-    /// Encode bytes as a spine whose one element field is a natural.
+    /// Encode bytes as a spine whose one element field is a natural, or wraps one.
     ///
     /// # Errors
     /// If the owner is undefined or does not have that structural shape.

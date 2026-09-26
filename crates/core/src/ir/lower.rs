@@ -252,10 +252,6 @@ enum Callee<'a> {
     },
 }
 
-/// The longest known byte string pushed one byte at a time; a longer one is
-/// pushed by a loop over its bytes in data.
-const UNROLLED: usize = 4;
-
 /// What one argument of a call to something outside becomes.
 ///
 /// A byte string is not one machine value, so what a routine is handed is
@@ -2344,15 +2340,17 @@ impl Lowering<'_> {
             Some(Carried::Flat(_)) => unreachable!("a byte is not a product"),
             None => None,
         };
-        // A long one is pushed by a loop over its bytes where they lie, so
-        // that its size is in data rather than in code and a frame.
-        if let Some(class) = element
-            && bytes.len() > UNROLLED
-        {
+        // Laid out before the program runs, however long: nothing is built,
+        // and its size is its bytes.
+        if let Some(class @ Class::Held(_)) = element {
+            let shape = b.shape(&[class]);
             let data = b.data(&bytes);
-            let total = b.data_len(data);
-            let start = b.address_of(data);
-            return Self::pushed_bytes(b, start, total, class);
+            let start = b.constant(Class::Word, 0);
+            let len = b.constant(
+                Class::Word,
+                u64::try_from(bytes.len()).expect("a length fits 64 bits"),
+            );
+            return [b.buffer_known(data, shape), start, len];
         }
         Self::unrolled_bytes(b, &bytes, element)
     }

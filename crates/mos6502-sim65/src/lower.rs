@@ -314,7 +314,8 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
         Op::Constant { .. }
         | Op::NaturalConstant(_)
         | Op::AddressOf(_)
-        | Op::BufferEmpty { .. } => {}
+        | Op::BufferEmpty { .. }
+        | Op::BufferKnown { .. } => {}
         Op::Cell { fields, .. }
         | Op::BufferPush {
             operands: fields, ..
@@ -2463,6 +2464,7 @@ impl Lowering<'_> {
             | Op::CellTag { .. }
             | Op::CellField { .. }
             | Op::BufferEmpty { .. }
+            | Op::BufferKnown { .. }
             | Op::BufferPush { .. }
             | Op::BufferPrepend { .. }
             | Op::BufferExtend { .. }

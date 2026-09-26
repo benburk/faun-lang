@@ -144,6 +144,9 @@ impl Program {
                 )
             }
             Op::BufferEmpty { shape } => format!("buffer_empty of s{}", shape.index()),
+            Op::BufferKnown { elements, shape } => {
+                format!("buffer_known d{} of s{}", elements.index(), shape.index())
+            }
             Op::BufferPush { operands, shape } => format!(
                 "buffer_push {} of s{}",
                 arguments(self.values(operands)),

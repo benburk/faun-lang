@@ -31,25 +31,13 @@ fn body(body: &Body) -> Result<(), SpecializeError> {
 
 /// Check `expression`, which is a call's argument or head when `passed`.
 fn value(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
-    if let Type::Function(parameters, _) = &expression.ty {
-        if parameters.is_empty() {
-            return Err(located(
-                expression,
-                "a definition with no parameters is a value, reached as `name()`",
-            ));
-        }
-        if !passed {
-            return Err(located(
-                expression,
-                "a function may only be passed straight into a call; it cannot be bound, answered, or stored",
-            ));
-        }
-    }
+    placed(expression, passed)?;
     match &expression.kind {
         ExprKind::Local(_)
         | ExprKind::Function(_)
         | ExprKind::ConstructorFunction(_)
-        | ExprKind::Natural(_) => Ok(()),
+        | ExprKind::Natural(_)
+        | ExprKind::Bytes(_) => Ok(()),
         ExprKind::Construct(_, fields) => fields.iter().try_for_each(|field| value(field, false)),
         ExprKind::Record(fields) => fields.iter().try_for_each(|(_, field)| value(field, false)),
         ExprKind::Update(base, fields) => {
@@ -71,6 +59,27 @@ fn value(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
         ExprKind::Widen(inner) => value(inner, passed),
         ExprKind::Try(inner) => value(inner, false),
     }
+}
+
+/// A function, which may only go straight into a call, and never one with
+/// no parameters, which is a value.
+fn placed(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
+    let Type::Function(parameters, _) = &expression.ty else {
+        return Ok(());
+    };
+    if parameters.is_empty() {
+        return Err(located(
+            expression,
+            "a definition with no parameters is a value, reached as `name()`",
+        ));
+    }
+    if !passed {
+        return Err(located(
+            expression,
+            "a function may only be passed straight into a call; it cannot be bound, answered, or stored",
+        ));
+    }
+    Ok(())
 }
 
 fn located(expression: &Expr, message: &str) -> SpecializeError {
