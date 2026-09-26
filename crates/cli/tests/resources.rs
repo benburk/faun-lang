@@ -115,6 +115,39 @@ const REFUSED: &[(&str, &str, &str)] = &[
         "`maybe!` uses up the `File` its parameter 1 holds on one way it goes on and not on another",
     ),
     (
+        "a file a function is handed, held where its `?` leaves, is its fault and not its caller's",
+        "program! : Files -> Result(Nat, IoError)
+         program!(files) ->
+           file = files.open!(\"a.txt\", Read)?
+           used = use!(file)
+           Ok(0)
+
+         use! : File -> Result(Nat, IoError)
+         use!(file) ->
+           bytes = file.read!(4)?
+           closed = file.close!()?
+           Ok(0)",
+        "`use!` uses up the `File` its parameter 1 holds on one way it goes on and not on another",
+    ),
+    (
+        "a file closed on only some ways, handed on through another, is refused where it is closed",
+        "program! : Files -> Result(Nat, IoError)
+         program!(files) ->
+           file = files.open!(\"a.txt\", Read)?
+           n = through!(file)
+           Ok(n)
+
+         through! : File -> Nat
+         through!(file) -> maybe!(file, 3)
+
+         maybe! : (File, Nat) -> Nat
+         maybe!(_, 0) -> 0
+         maybe!(file, n) ->
+           closed = file.close!()
+           n",
+        "`maybe!` uses up the `File` its parameter 1 holds on one way it goes on and not on another",
+    ),
+    (
         "a file taken by a guard",
         "program! : Files -> Result(Nat, IoError)
          program!(files) ->

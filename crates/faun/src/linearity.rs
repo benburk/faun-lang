@@ -747,11 +747,14 @@ impl Walk<'_, '_> {
             }
             match contract(at) {
                 Contract::Lent => self.lend(argument),
-                Contract::Taken => {
+                // A callee that takes it on only some ways is refused where
+                // it is written; here it is taken, so the caller is not
+                // refused for that too.
+                Contract::Taken | Contract::Disagrees => {
                     let origins = self.value(argument);
                     self.used_up(&origins, place(argument));
                 }
-                Contract::Unknown | Contract::Disagrees => {
+                Contract::Unknown => {
                     let origins = self.value(argument);
                     self.handed_on(&origins);
                 }
@@ -768,11 +771,11 @@ impl Walk<'_, '_> {
             }
             match contract(at) {
                 Contract::Lent => {}
-                Contract::Taken => {
+                Contract::Taken | Contract::Disagrees => {
                     let origins = self.take(argument);
                     self.used_up(&origins, place(argument));
                 }
-                Contract::Unknown | Contract::Disagrees => {
+                Contract::Unknown => {
                     if let Some(held) = self.local(argument) {
                         self.held[held].state = State::Unknown;
                     }
