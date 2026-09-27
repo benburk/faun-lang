@@ -1,4 +1,7 @@
-//! ELF header, program headers, then the segments they describe. No padding.
+//! ELF header, program headers, then the segments they describe. In a
+//! program with naturals the data and the globals each start on a word,
+//! where an object in them has an even address, as a natural's must;
+//! nothing else is padded.
 //!
 //! Omitted, none of it consulted to execute a file:
 //!
@@ -38,6 +41,8 @@ pub(crate) const EHDR_LEN: u16 = 64;
 pub(crate) const PHDR_LEN: u16 = 56;
 const PAGE_SIZE: u64 = 0x1000;
 const PAGE: usize = 0x1000;
+/// What the data and the globals each start on, where naturals are held.
+const ALIGN: usize = 8;
 
 /// `p_flags`.
 const READ: u32 = 4;
@@ -63,7 +68,12 @@ pub(crate) fn image(code: &Code, program: &Program) -> Vec<u8> {
         program_header(&mut out, segment);
     }
     out.bytes(&relocated(code, &layout, program));
+    out.bytes(&vec![0; layout.data - layout.text - code.bytes.len()]);
     out.bytes(program.data());
+    out.bytes(&vec![
+        0;
+        layout.globals - layout.data - program.data().len()
+    ]);
     out.bytes(program.globals());
 
     out.finish()
@@ -73,6 +83,8 @@ struct Layout {
     /// File offset of the code, and of the data that follows it.
     text: usize,
     data: usize,
+    /// File offset of the globals.
+    globals: usize,
     /// Where the globals are *mapped*, which is not where they sit in the
     /// file: they need a page of their own to be writable in.
     globals_at: usize,
@@ -86,8 +98,17 @@ impl Layout {
         let writable = !program.globals().is_empty();
         let count = 1 + usize::from(writable);
         let text = usize::from(EHDR_LEN) + usize::from(PHDR_LEN) * count;
-        let data = text + code.bytes.len();
-        let globals = data + program.data().len();
+        // Only a region holding a natural's object is placed anywhere in
+        // particular.
+        let aligned = |at: usize, len: usize| {
+            if len == 0 || !program.has_runtime_naturals() {
+                at
+            } else {
+                at.next_multiple_of(ALIGN)
+            }
+        };
+        let data = aligned(text + code.bytes.len(), program.data().len());
+        let globals = aligned(data + program.data().len(), program.globals().len());
 
         // A page further on. The two mappings then land on different pages
         // of memory while sharing one page of the file, which the kernel
@@ -113,6 +134,7 @@ impl Layout {
         Self {
             text,
             data,
+            globals,
             globals_at,
             segments,
         }

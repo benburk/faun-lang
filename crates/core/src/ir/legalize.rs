@@ -1097,7 +1097,7 @@ impl Pass<'_> {
                     // A number narrower than half a word is an immediate.
                     (from, Class::Natural) if always_small(from, self.word_bits()) => {
                         let number = word(b, v(value));
-                        self.library.small_word(b, number)
+                        Library::small_word(b, number)
                     }
                     (_, Class::Natural) => {
                         b.call_one(self.library.require(Helper::FromWord), &[v(value)])

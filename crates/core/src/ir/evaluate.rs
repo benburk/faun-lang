@@ -165,7 +165,7 @@ impl Memory<'_> {
         let (origin, base, size) = if address >= self.globals_base {
             (Origin::Globals, self.globals_base, self.globals.len())
         } else {
-            (Origin::Data, 1, self.data.len())
+            (Origin::Data, DATA_BASE, self.data.len())
         };
         let start = address
             .checked_sub(base)
@@ -300,12 +300,26 @@ pub fn evaluate(
     machine.run()
 }
 
+/// Where the data begins: past nought, which no datum is, and on a word, as
+/// a target places it, so that an object in it has an even address.
+pub const DATA_BASE: u64 = 8;
+
+/// Where the globals begin: past the data and a byte more, so that nothing
+/// reaches from one into the other, and on a word.
+///
+/// # Errors
+/// If the data do not fit an address.
+pub fn globals_base(program: &Program) -> Result<u64, Error> {
+    u64::try_from(program.data.len())
+        .ok()
+        .and_then(|n| n.checked_add(DATA_BASE + 1))
+        .map(|n| n.next_multiple_of(8))
+        .ok_or(Error::InvalidMemory)
+}
+
 /// A fresh copy of the program's memory, placed where it fits the word.
 fn memory(program: &Program, config: Config) -> Result<Memory<'_>, Error> {
-    let globals_base = u64::try_from(program.data.len())
-        .ok()
-        .and_then(|n| n.checked_add(2))
-        .ok_or(Error::InvalidMemory)?;
+    let globals_base = globals_base(program)?;
     let end = globals_base
         .checked_add(u64::try_from(program.globals.len()).map_err(|_| Error::InvalidMemory)?)
         .ok_or(Error::InvalidMemory)?;
@@ -933,7 +947,7 @@ impl<H: Host> Machine<'_, H> {
             .get(id)
             .ok_or_else(|| invalid("data id"))?;
         let base = match span.origin {
-            Origin::Data => 1,
+            Origin::Data => DATA_BASE,
             Origin::Globals => self.memory.globals_base,
         };
         let address = base

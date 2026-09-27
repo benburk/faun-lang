@@ -119,15 +119,16 @@ fn base() -> (Program, FunctionId) {
 
 fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
     let address = word(&evaluation.returned().unwrap()[0].to_bytes_le());
-    let half = usize::try_from(natural::half(bits)).unwrap();
-    if address >= half {
-        return BigUint::from(address - half);
+    // An immediate is twice its number and one.
+    if address % 2 == 1 {
+        return BigUint::from(address >> 1);
     }
-    let globals = p.data().len() + 2;
+    let globals = usize::try_from(evaluate::globals_base(p).unwrap()).unwrap();
+    let data = usize::try_from(evaluate::DATA_BASE).unwrap();
     let (bytes, start) = if address >= globals {
         (&evaluation.globals[..], address - globals)
     } else {
-        (p.data(), address - 1)
+        (p.data(), address - data)
     };
     let w = usize::from(bits / 8);
     let len = word(&bytes[start + 2 * w..start + 3 * w]);

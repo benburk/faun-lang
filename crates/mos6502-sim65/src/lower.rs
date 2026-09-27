@@ -399,7 +399,9 @@ pub(crate) fn lower(program: &Program) -> Result<Code, String> {
             stack = false;
             continue;
         }
-        let end = usize::from(code.reset) + code.bytes.len();
+        // The heap starts past the image, on an even address, where every
+        // object's is.
+        let end = (usize::from(code.reset) + code.bytes.len()).next_multiple_of(2);
         let end = u16::try_from(end).map_err(|_| too_large(end))?;
         if end <= heap {
             return Ok(code);
@@ -437,7 +439,7 @@ fn assemble(program: &Program, heap: u16, stack: bool) -> Result<Code, String> {
     // The data sits at the front of the image and the code after it, so the
     // code's own addresses depend on how much data there is.
     let data = LOAD;
-    let blob = usize::from(data) + program.data().len() + program.globals().len();
+    let blob = usize::from(data) + super::globals_offset(program) + program.globals().len();
     let origin = u16::try_from(blob).map_err(|_| too_large(blob))?;
 
     let mut state = Lowering::new(program, Assembler::new(origin), data);
@@ -550,13 +552,17 @@ impl Lowering<'_> {
             self.asm.ldx_imm(0xFF);
             self.asm.txs();
         }
-        if self.plans.iter().flatten().any(|plan| plan.frame > 0) {
+        // A heap grows up toward the frames, which grow down toward it, so
+        // where the frames have reached is what the heap is measured
+        // against, whether or not anything has a frame yet.
+        let grows = self.program.reaches("grow");
+        if grows || self.plans.iter().flatten().any(|plan| plan.frame > 0) {
             self.set_pair(FP, FRAMES_TOP);
         }
-        if self.program.reaches("grow") {
+        if grows {
             self.set_pair(HEAP, heap);
         }
-        self.take_arguments(heap);
+        self.take_arguments(heap, grows);
 
         // An entry that leaves through the exit hook itself never comes back
         // here, so there is nothing to write for after it: no result to read
@@ -572,7 +578,7 @@ impl Lowering<'_> {
     }
 
     /// The count and the arguments, where the entry reads them.
-    fn take_arguments(&mut self, heap: u16) {
+    fn take_arguments(&mut self, heap: u16, grows: bool) {
         // The hook is handed where to write the arguments themselves, in `A`
         // and `X`, and reads where the argument stack is from the pair the
         // image header named. Nothing has asked for memory yet, so it is
@@ -597,6 +603,9 @@ impl Lowering<'_> {
             if self.counts_wide() {
                 self.asm.stx_zp(ARGC + 1);
             }
+            if grows {
+                self.past_arguments(heap);
+            }
             // The simulator wrote the arguments on its C stack, and where
             // their addresses lie at the place it was handed: that is the
             // entry's second argument.
@@ -610,6 +619,29 @@ impl Lowering<'_> {
                 self.asm.sta_zp(ARGS + 3);
             }
         }
+    }
+
+    /// Start the heap past the table of the arguments' addresses the hook
+    /// wrote where it begins: a pair for each argument and one more, whose
+    /// count the hook left in `A` and `X`.
+    fn past_arguments(&mut self, heap: u16) {
+        self.asm.sta_zp(T0);
+        self.asm.stx_zp(T0 + 1);
+        let next = self.asm.label();
+        self.asm.inc_zp(T0);
+        self.asm.branch(Cc::NotEqual, next);
+        self.asm.inc_zp(T0 + 1);
+        self.asm.bind(next);
+        self.asm.asl_zp(T0);
+        self.asm.rol_zp(T0 + 1);
+        let [low, high] = heap.to_le_bytes();
+        self.asm.clc();
+        self.asm.lda_zp(T0);
+        self.asm.adc_imm(low);
+        self.asm.sta_zp(HEAP);
+        self.asm.lda_zp(T0 + 1);
+        self.asm.adc_imm(high);
+        self.asm.sta_zp(HEAP + 1);
     }
 
     /// Whether anything reads more of the count than its low byte.
@@ -685,6 +717,9 @@ impl Lowering<'_> {
         if frame > 0 {
             self.adjust_frame(frame, FrameAction::Enter);
             self.reach_frame();
+            if self.program.reaches("grow") {
+                self.clear_of_heap();
+            }
         }
 
         // Arguments arrive in fixed pairs, so a callee takes its own copies
@@ -721,6 +756,21 @@ impl Lowering<'_> {
             self.asm.adc_imm(high);
         }
         self.asm.sta_zp(FP + 1);
+    }
+
+    /// Leave with status two, as a heap with no more room does, where the
+    /// frame just made reaches down into the heap.
+    fn clear_of_heap(&mut self) {
+        let clear = self.asm.label();
+        self.asm.sec();
+        self.asm.lda_zp(FP);
+        self.asm.sbc_zp(HEAP);
+        self.asm.lda_zp(FP + 1);
+        self.asm.sbc_zp(HEAP + 1);
+        self.asm.branch(Cc::Carry, clear);
+        self.asm.lda_imm(2);
+        self.asm.jmp_abs(HOOK_EXIT);
+        self.asm.bind(clear);
     }
 
     /// Point `FQ` 256 bytes past `FP`, where a frame that large has slots
@@ -1451,7 +1501,7 @@ impl Lowering<'_> {
         let base = match span.origin {
             Origin::Data => self.data,
             Origin::Globals => {
-                self.data + u16::try_from(self.program.data().len()).expect("in range")
+                self.data + u16::try_from(super::globals_offset(self.program)).expect("in range")
             }
         };
         base + u16::try_from(span.start).expect("in range")
@@ -1878,26 +1928,53 @@ impl Lowering<'_> {
                 self.asm.jmp_abs(HOOK_EXIT);
             }
             // There is no kernel to ask, so the region is the next unused
-            // memory above the image.
+            // memory above the image, as far as where the frames have
+            // reached down to.
             "grow" => {
-                self.read(T0, args[0]);
-                self.asm.lda_zp(HEAP);
-                self.asm.sta_zp(T1);
-                self.asm.lda_zp(HEAP + 1);
-                self.asm.sta_zp(T1 + 1);
-
-                self.asm.clc();
-                self.asm.lda_zp(HEAP);
-                self.asm.adc_zp(T0);
-                self.asm.sta_zp(HEAP);
-                self.asm.lda_zp(HEAP + 1);
-                self.asm.adc_zp(T0 + 1);
-                self.asm.sta_zp(HEAP + 1);
-
+                self.grow(args[0]);
                 self.commit(results[0], T1);
             }
             other => panic!("`{other}` is not one this answers for, which `accepts` says first"),
         }
+    }
+
+    /// `bytes` more of the heap, where it starts in `T1`: or, where that
+    /// would pass the frames or the end of memory, `$FFFF`, which is where
+    /// no request fits, as a target that has no more answers.
+    fn grow(&mut self, bytes: ValueId) {
+        self.read(T0, bytes);
+        let refused = self.asm.label();
+        let done = self.asm.label();
+        // Where the heap would end, in `T0`.
+        self.asm.clc();
+        self.asm.lda_zp(HEAP);
+        self.asm.adc_zp(T0);
+        self.asm.sta_zp(T0);
+        self.asm.lda_zp(HEAP + 1);
+        self.asm.adc_zp(T0 + 1);
+        self.asm.sta_zp(T0 + 1);
+        self.asm.branch(Cc::Carry, refused);
+        // Past the frame pointer is into the frames.
+        self.asm.sec();
+        self.asm.lda_zp(FP);
+        self.asm.sbc_zp(T0);
+        self.asm.lda_zp(FP + 1);
+        self.asm.sbc_zp(T0 + 1);
+        self.asm.branch(Cc::NoCarry, refused);
+        self.asm.lda_zp(HEAP);
+        self.asm.sta_zp(T1);
+        self.asm.lda_zp(HEAP + 1);
+        self.asm.sta_zp(T1 + 1);
+        self.asm.lda_zp(T0);
+        self.asm.sta_zp(HEAP);
+        self.asm.lda_zp(T0 + 1);
+        self.asm.sta_zp(HEAP + 1);
+        self.asm.jmp(done);
+        self.asm.bind(refused);
+        self.asm.lda_imm(0xFF);
+        self.asm.sta_zp(T1);
+        self.asm.sta_zp(T1 + 1);
+        self.asm.bind(done);
     }
 
     /// Arguments go in fixed pairs, so the callee has to take its copies

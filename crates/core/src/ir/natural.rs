@@ -1,11 +1,13 @@
 //! Shared machine-IR natural arithmetic on digits a word wide.
 //!
 //! A natural is held in a word. One below half a word is an immediate: the
-//! word is the number plus half a word, so its top bit is set, it is no
+//! word is twice the number and one, so its lowest bit is set, it is no
 //! object, and it holds no claim. Anything larger is an object, whose
-//! address every target places below half the address space. Every natural
-//! is held the one way its size says, so an immediate is always the smaller
-//! of an immediate and an object. Most numbers a program counts with are
+//! address is even, as every block and constant starts on a word, so an
+//! object may lie anywhere memory is. This is how OCaml holds an integer
+//! and V8 a small one. Every natural is held the one way its size says, so
+//! an immediate is always the smaller of an immediate and an object, and
+//! immediates are ordered as the words holding them are. Most numbers a program counts with are
 //! small, so most arithmetic allocates nothing: each routine answers two
 //! immediates itself where the answer is one, and legalization writes that
 //! case where it calls one. Otherwise an immediate operand is boxed for as
@@ -26,10 +28,12 @@
 //! so the divisor's top bit is set. By a single digit it is short division,
 //! which scales the dividend as it reads it and allocates only the quotient.
 //! Static objects have an all-ones count. Mortal objects live in a private,
-//! reusable, coalescing heap that starts in the globals. Where the target's
-//! `grow` has more to give, a full heap asks it for an arena at least as large
-//! as the heap so far; otherwise, and where it has no more, exhaustion exits
-//! with status two. A block comes back with its digits unwritten: every
+//! reusable, coalescing heap, none of which is in the image: where it grows,
+//! the target's `grow` gives it its first arena on the first allocation and
+//! a new one at least as large as the heap so far each time it is full, or,
+//! where that is more than the target has, as much as is wanted; where it
+//! does not, it is a fixed arena in the globals. Where there is no more,
+//! exhaustion exits with status two. A block comes back with its digits unwritten: every
 //! routine but the product writes each digit it reads, and the product
 //! clears its own.
 //!
@@ -55,7 +59,8 @@ use super::{
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
     pub word_bits: u16,
-    /// The heap every program starts with, in its globals.
+    /// The first arena a heap that grows asks the target for, or all of a
+    /// heap that does not, which is then in the globals.
     pub heap_bytes: usize,
     /// Whether the heap asks the target for more when it is full, rather
     /// than exiting. A target whose `grow` has nothing to bound it says no.
@@ -177,12 +182,12 @@ impl Library {
     /// The value a natural known before the program runs is held as, where
     /// it is small enough to be an immediate.
     pub(super) fn small(&self, b: &mut Builder<'_>, n: u64) -> Option<ValueId> {
-        (n < self.half).then(|| small(b, self.half, n))
+        (n < self.half).then(|| small(b, n))
     }
 
     /// The immediate holding `n`, a word known to be below half a word.
-    pub(super) fn small_word(&self, b: &mut Builder<'_>, n: ValueId) -> ValueId {
-        small_word(b, self.half, n)
+    pub(super) fn small_word(b: &mut Builder<'_>, n: ValueId) -> ValueId {
+        small_word(b, n)
     }
 
     /// Take another claim to a natural, where it is an object.
@@ -213,7 +218,6 @@ impl Library {
         a: ValueId,
         c: ValueId,
     ) -> ValueId {
-        let half = self.half;
         let helper = match op {
             Inline::Add => self.require(Helper::Add),
             Inline::Monus => self.require(Helper::Sub),
@@ -226,8 +230,8 @@ impl Library {
             Inline::Add | Inline::Monus => A,
             Inline::Compare => W,
         };
-        let small_a = is_small(b, half, a);
-        let small_c = is_small(b, half, c);
+        let small_a = is_small(b, a);
+        let small_c = is_small(b, c);
         let both = b.binary(Binary::Mul, small_a, small_c);
         let called = |b: &mut Builder<'_>| {
             let out = b.call_one(helper, &[a, c]);
@@ -243,12 +247,12 @@ impl Library {
                 let y = b.convert(W, c);
                 match op {
                     Inline::Add => {
-                        // `x` holds its number past half a word; adding
+                        // `x` holds twice its number and one; adding twice
                         // `c`'s number to it holds the sum the same way,
                         // unless the sum reaches half a word, which is
                         // exactly where adding goes past the word's top.
-                        let top = number(b, half);
-                        let over = sub(b, y, top);
+                        let one = number(b, 1);
+                        let over = sub(b, y, one);
                         let sum = add(b, x, over);
                         let outside = lt(b, sum, x);
                         let out = b.if_(outside, &[A], called, |b| {
@@ -258,8 +262,11 @@ impl Library {
                         b.yield_(&[out]);
                     }
                     Inline::Monus => {
+                        // Twice the difference, or nought; one more holds it.
                         let rest = b.binary(Binary::Monus, x, y);
-                        let held = small_word(b, half, rest);
+                        let one = number(b, 1);
+                        let held = add(b, rest, one);
+                        let held = b.convert(A, held);
                         b.yield_(&[held]);
                     }
                     Inline::Compare => {
@@ -463,8 +470,8 @@ pub(super) fn append(
     let mut library = Library {
         retain,
         release,
-        keep: unless_small(program, "nat.keep", retain, half),
-        drop: unless_small(program, "nat.drop", release, half),
+        keep: unless_small(program, "nat.keep", retain),
+        drop: unless_small(program, "nat.drop", release),
         inline_small: config.inline_small,
         half,
         helpers: [None; Helper::ALL.len()],
@@ -481,12 +488,12 @@ pub(super) fn append(
     if let Some(compare) = compare
         && needs.contains(Helper::Compare)
     {
-        library.insert(Helper::Compare, comparing(program, half, compare));
+        library.insert(Helper::Compare, comparing(program, compare));
     }
     if let Some(narrow) = narrow
         && needs.contains(Helper::ToWord)
     {
-        library.insert(Helper::ToWord, lowering(program, half, narrow));
+        library.insert(Helper::ToWord, lowering(program, narrow));
     }
     if arithmetic {
         let alloc = allocation(program, config, (word, max), (empty, fail))?;
@@ -500,7 +507,7 @@ pub(super) fn append(
         } else {
             size64(config.heap_bytes - 3 * word)
         } / size64(word);
-        let digits = digits_allocation(program, (alloc, fail), (half, word, most));
+        let digits = digits_allocation(program, (alloc, fail), (word, most));
         let trim = trimming(program, word);
         let narrow = narrow.expect("arithmetic reads a small result back as a word");
         let finish = finishing(program, (trim, narrow), release, half);
@@ -521,47 +528,46 @@ pub(super) fn append(
     Ok(library)
 }
 
-/// Where immediates begin: the upper half of a word. A number below it is
-/// held as itself plus this; an object is held as its address, which every
-/// target places in the lower half.
+/// Where immediates end: half a word. A number below it is held as twice
+/// itself and one; any other is an object.
 pub(super) const fn half(word_bits: u16) -> u64 {
     1 << (word_bits - 1)
 }
 
 /// The immediate holding `n`, which must be below `half`.
-fn small(b: &mut Builder<'_>, half: u64, n: u64) -> ValueId {
-    let held = number(b, n + half);
+fn small(b: &mut Builder<'_>, n: u64) -> ValueId {
+    let held = number(b, 2 * n + 1);
     b.convert(A, held)
 }
 
 /// The immediate holding a word known to be below `half`.
-fn small_word(b: &mut Builder<'_>, half: u64, n: ValueId) -> ValueId {
-    let top = number(b, half);
-    let held = add(b, n, top);
+fn small_word(b: &mut Builder<'_>, n: ValueId) -> ValueId {
+    let doubled = b.shift(W, Direction::Up, n, 1);
+    let one = number(b, 1);
+    let held = add(b, doubled, one);
     b.convert(A, held)
 }
 
-/// One where `value` is an immediate, nought where it is an object.
-fn is_small(b: &mut Builder<'_>, half: u64, value: ValueId) -> ValueId {
+/// One where `value` is an immediate, nought where it is an object: its
+/// lowest bit, which only an immediate's is.
+fn is_small(b: &mut Builder<'_>, value: ValueId) -> ValueId {
     let held = b.convert(W, value);
-    let below = number(b, half - 1);
-    lt(b, below, held)
+    b.convert(Class::fixed(1), held)
 }
 
 /// The number an immediate holds.
-fn unwrapped(b: &mut Builder<'_>, half: u64, value: ValueId) -> ValueId {
+fn unwrapped(b: &mut Builder<'_>, value: ValueId) -> ValueId {
     let held = b.convert(W, value);
-    let top = number(b, half);
-    sub(b, held, top)
+    b.shift(W, Direction::Down, held, 1)
 }
 
 /// A routine calling `count` with a natural where it is an object, and
 /// doing nothing where it is an immediate, which holds no claim.
-fn unless_small(program: &mut Program, name: &str, count: FunctionId, half: u64) -> FunctionId {
+fn unless_small(program: &mut Program, name: &str, count: FunctionId) -> FunctionId {
     let f = declare(program, name, &[A], &[]);
     program.define(f, |b, args| {
         let value = args[0];
-        let small = is_small(b, half, value);
+        let small = is_small(b, value);
         b.if_(
             small,
             &[],
@@ -623,7 +629,10 @@ impl Storage {
         ] {
             if needs.contains(helper) {
                 let divisions = divisions.expect("a division has its short division");
-                lib.insert(helper, self.by_word(p, divisions.short, result, lib.retain));
+                lib.insert(
+                    helper,
+                    Self::by_word(p, divisions.short, result, lib.retain),
+                );
             }
         }
         if needs.contains(Helper::Mul) {
@@ -690,7 +699,7 @@ impl Storage {
         let f = declare(p, "nat.add", &[A, A], &[A]);
         p.define(f, |b, args| {
             let (a, c) = (args[0], args[1]);
-            both_small(b, half, a, c, |b, x, y| {
+            both_small(b, a, c, |b, x, y| {
                 // Each is below half a word, so their sum is below a word.
                 let sum = add(b, x, y);
                 let top = number(b, half);
@@ -699,7 +708,7 @@ impl Storage {
                     fits,
                     &[],
                     |b| {
-                        let held = small_word(b, half, sum);
+                        let held = small_word(b, sum);
                         b.ret(&[held]);
                     },
                     |b| b.yield_(&[]),
@@ -713,22 +722,21 @@ impl Storage {
     }
 
     fn difference(self, p: &mut Program, objects: FunctionId) -> FunctionId {
-        let half = self.half;
         let f = declare(p, "nat.sub", &[A, A], &[A]);
         p.define(f, |b, args| {
             let (a, c) = (args[0], args[1]);
-            let small_a = is_small(b, half, a);
+            let small_a = is_small(b, a);
             b.if_(
                 small_a,
                 &[],
                 |b| {
-                    both_small(b, half, a, c, |b, x, y| {
+                    both_small(b, a, c, |b, x, y| {
                         let rest = b.binary(Binary::Monus, x, y);
-                        let held = small_word(b, half, rest);
+                        let held = small_word(b, rest);
                         b.ret(&[held]);
                     });
                     // An object is more than any immediate.
-                    let z = small(b, half, 0);
+                    let z = small(b, 0);
                     b.ret(&[z]);
                 },
                 |b| b.yield_(&[]),
@@ -746,7 +754,7 @@ impl Storage {
         let f = declare(p, "nat.mul", &[A, A], &[A]);
         p.define(f, |b, args| {
             let (a, c) = (args[0], args[1]);
-            both_small(b, half, a, c, |b, x, y| {
+            both_small(b, a, c, |b, x, y| {
                 let bound = number(b, root);
                 let low_x = lt(b, x, bound);
                 let low_y = lt(b, y, bound);
@@ -756,7 +764,7 @@ impl Storage {
                     &[],
                     |b| {
                         let product = b.binary(Binary::Mul, x, y);
-                        let held = small_word(b, half, product);
+                        let held = small_word(b, product);
                         b.ret(&[held]);
                     },
                     |b| b.yield_(&[]),
@@ -769,12 +777,7 @@ impl Storage {
         f
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the immediate cases of both division results beside the boxed fallback"
-    )]
     fn quotient(self, p: &mut Program, divmod: FunctionId, result: DivisionResult) -> FunctionId {
-        let half = self.half;
         let (name, mode) = match result {
             DivisionResult::Quotient => ("nat.div", 0),
             DivisionResult::Remainder => ("nat.mod", 1),
@@ -787,17 +790,17 @@ impl Storage {
             // an object, or anything by nought.
             let whole = |b: &mut Builder<'_>| {
                 let out = match result {
-                    DivisionResult::Quotient => small(b, half, 0),
+                    DivisionResult::Quotient => small(b, 0),
                     DivisionResult::Remainder => a,
                 };
                 b.ret(&[out]);
             };
-            let small_a = is_small(b, half, a);
+            let small_a = is_small(b, a);
             b.if_(
                 small_a,
                 &[],
                 |b| {
-                    both_small(b, half, a, c, |b, x, y| {
+                    both_small(b, a, c, |b, x, y| {
                         let nil = number(b, 0);
                         let by_nought = eq(b, y, nil);
                         b.if_(by_nought, &[], |b| whole(b), |b| b.yield_(&[]));
@@ -806,7 +809,7 @@ impl Storage {
                             DivisionResult::Remainder => Binary::Mod,
                         };
                         let out = b.binary(op, x, y);
-                        let held = small_word(b, half, out);
+                        let held = small_word(b, out);
                         b.ret(&[held]);
                     });
                     whole(b);
@@ -825,13 +828,11 @@ impl Storage {
     /// object by short division. No long division is reached, so a program
     /// dividing only by words carries none.
     fn by_word(
-        self,
         p: &mut Program,
         short: FunctionId,
         result: DivisionResult,
         retain: FunctionId,
     ) -> FunctionId {
-        let half = self.half;
         let (name, mode, op) = match result {
             DivisionResult::Quotient => ("nat.div_word", 0, Binary::Div),
             DivisionResult::Remainder => ("nat.mod_word", 1, Binary::Mod),
@@ -841,12 +842,12 @@ impl Storage {
             let (a, d) = (args[0], args[1]);
             let zero = number(b, 0);
             let by_nought = eq(b, d, zero);
-            let small_a = is_small(b, half, a);
+            let small_a = is_small(b, a);
             b.if_(
                 by_nought,
                 &[],
                 |b| {
-                    let out = by_nought_answer(b, (a, small_a), result, (retain, half));
+                    let out = by_nought_answer(b, (a, small_a), result, retain);
                     b.ret(&[out]);
                 },
                 |b| b.yield_(&[]),
@@ -855,9 +856,9 @@ impl Storage {
                 small_a,
                 &[],
                 |b| {
-                    let x = unwrapped(b, half, a);
+                    let x = unwrapped(b, a);
                     let out = b.binary(op, x, d);
-                    let held = small_word(b, half, out);
+                    let held = small_word(b, out);
                     b.ret(&[held]);
                 },
                 |b| b.yield_(&[]),
@@ -880,14 +881,14 @@ impl Storage {
         c: ValueId,
         rest: &[ValueId],
     ) -> ValueId {
-        let (half, boxed, release) = (self.half, self.boxed, self.release);
+        let (boxed, release) = (self.boxed, self.release);
         let held = [a, c].map(|value| {
-            let small = is_small(b, half, value);
+            let small = is_small(b, value);
             let object = b.if_(
                 small,
                 &[A],
                 |b| {
-                    let n = unwrapped(b, half, value);
+                    let n = unwrapped(b, value);
                     let object = b.call_one(boxed, &[n]);
                     b.yield_(&[object]);
                 },
@@ -919,10 +920,10 @@ fn by_nought_answer(
     b: &mut Builder<'_>,
     (a, small_a): (ValueId, ValueId),
     result: DivisionResult,
-    (retain, half): (FunctionId, u64),
+    retain: FunctionId,
 ) -> ValueId {
     match result {
-        DivisionResult::Quotient => small(b, half, 0),
+        DivisionResult::Quotient => small(b, 0),
         DivisionResult::Remainder => {
             b.if_(
                 small_a,
@@ -942,20 +943,19 @@ fn by_nought_answer(
 /// It ends its arm itself: answering the routine, or yielding to go on.
 fn both_small(
     b: &mut Builder<'_>,
-    half: u64,
     a: ValueId,
     c: ValueId,
     then: impl FnOnce(&mut Builder<'_>, ValueId, ValueId),
 ) {
-    let small_a = is_small(b, half, a);
-    let small_c = is_small(b, half, c);
+    let small_a = is_small(b, a);
+    let small_c = is_small(b, c);
     let both = b.binary(Binary::Mul, small_a, small_c);
     b.if_(
         both,
         &[],
         |b| {
-            let x = unwrapped(b, half, a);
-            let y = unwrapped(b, half, c);
+            let x = unwrapped(b, a);
+            let y = unwrapped(b, c);
             then(b, x, y);
         },
         |b| b.yield_(&[]),
@@ -969,12 +969,12 @@ fn both_small(
     clippy::too_many_lines,
     reason = "four cases of immediate and object, each answering an order"
 )]
-fn comparing(p: &mut Program, half: u64, objects: FunctionId) -> FunctionId {
+fn comparing(p: &mut Program, objects: FunctionId) -> FunctionId {
     let f = declare(p, "nat.compare", &[A, A], &[W]);
     p.define(f, |b, args| {
         let (a, c) = (args[0], args[1]);
-        let small_a = is_small(b, half, a);
-        let small_c = is_small(b, half, c);
+        let small_a = is_small(b, a);
+        let small_c = is_small(b, c);
         b.if_(
             small_a,
             &[],
@@ -1021,16 +1021,16 @@ fn comparing(p: &mut Program, half: u64, objects: FunctionId) -> FunctionId {
 }
 
 /// A natural's low word: an immediate's number, or an object's low digits.
-fn lowering(p: &mut Program, half: u64, objects: FunctionId) -> FunctionId {
+fn lowering(p: &mut Program, objects: FunctionId) -> FunctionId {
     let f = declare(p, "nat.to_word", &[A], &[W]);
     p.define(f, |b, args| {
         let a = args[0];
-        let small_a = is_small(b, half, a);
+        let small_a = is_small(b, a);
         b.if_(
             small_a,
             &[],
             |b| {
-                let n = unwrapped(b, half, a);
+                let n = unwrapped(b, a);
                 b.ret(&[n]);
             },
             |b| b.yield_(&[]),
@@ -1222,7 +1222,7 @@ fn allocation(
     (zero, fail): (DataId, FunctionId),
 ) -> Result<FunctionId, String> {
     if config.grows {
-        growing(program, config, (word, max), zero, fail)
+        Ok(growing(program, config, (word, max), zero, fail))
     } else {
         allocator(program, config, word, zero, fail)
     }
@@ -1232,12 +1232,14 @@ fn allocation(
 /// end. A next of nought is the first arena, the one in the globals.
 const ARENA_WORDS: usize = 2;
 
-/// The allocator of a heap that grows: a ring of arenas, the first in the
-/// globals and each other from the target's `grow`, searched first-fit from
-/// where the last allocation ended. Where no arena has room, a new one at
-/// least as large as the heap so far is asked for, so the heap doubles and
-/// a program asks the target a number of times logarithmic in what it
-/// holds.
+/// The allocator of a heap that grows: a ring of arenas, searched first-fit
+/// from where the last allocation ended. The first is in the globals and
+/// holds no blocks, so the image holds none of the heap: every other comes
+/// from the target's `grow`, the first of them `heap_bytes` large, which the
+/// first allocation asks for. Where no arena has room, a new one at least as
+/// large as the heap so far is asked for, so the heap doubles and a program
+/// asks the target a number of times logarithmic in what it holds; where
+/// the target has not that much, it is asked for no more than is wanted.
 ///
 /// Where the search starts is kept in the globals with the number of
 /// arenas and the heap's size. Every allocation moves it, so a search that
@@ -1252,32 +1254,23 @@ fn growing(
     (word, max): (usize, u64),
     zero: DataId,
     fail: FunctionId,
-) -> Result<FunctionId, String> {
+) -> FunctionId {
     let padding = (word - p.globals().len() % word) % word;
-    if p.globals()
-        .len()
-        .checked_add(padding)
-        .and_then(|n| n.checked_add(config.heap_bytes + 4 * word))
-        .is_none_or(|n| u32::try_from(n).is_err())
-    {
-        return Err("natural heap exceeds the globals pool".to_owned());
-    }
     if padding != 0 {
         p.global(&vec![0; padding]);
     }
     let start = ARENA_WORDS * word;
-    let mut bytes = vec![0; config.heap_bytes];
-    header(&mut bytes, 1, size64(config.heap_bytes), word);
-    header(
-        &mut bytes,
-        ARENA_WORDS,
-        size64(config.heap_bytes - start),
-        word,
-    );
+    // The first arena: its header, and no blocks, since its blocks end
+    // where they begin.
+    let mut bytes = vec![0; start];
+    header(&mut bytes, 1, size64(start), word);
     let heap = p.global(&bytes);
     // Where the search starts, as an arena (nought for the first) and an
-    // offset in it; how many arenas there are; how large the heap is.
-    let mut state = vec![0; 4 * word];
+    // offset in it; how many arenas there are; how large the heap is
+    // counted as, which is what the first arena asked for is; and how many
+    // arenas a search has begun, kept here rather than going round with it
+    // so that a search carries two values, as the narrowest target does.
+    let mut state = vec![0; 5 * word];
     header(&mut state, 1, size64(start), word);
     header(&mut state, 2, 1, word);
     header(&mut state, 3, size64(config.heap_bytes), word);
@@ -1338,8 +1331,9 @@ fn growing(
         let arena = arena_at(b, rover);
         let offset = b.load(Width::Word, kept, Offset::Words(1));
         let arenas = b.load(Width::Word, kept, Offset::Words(2));
-        let found = b.loop_(&[arena, offset, nil], &[A, W], |b, state| {
-            let (arena, offset, starts) = (state[0], state[1], state[2]);
+        b.store(Width::Word, kept, Offset::Words(4), nil);
+        let found = b.loop_(&[arena, offset], &[A, W], |b, state| {
+            let (arena, offset) = (state[0], state[1]);
             let end = b.load(Width::Word, arena, Offset::Words(1));
             let at_end = eq(b, offset, end);
             b.if_(
@@ -1348,8 +1342,11 @@ fn growing(
                 |b| {
                     // On to the next arena, having begun as many as there
                     // are after the one the search began part way through.
+                    let kept = b.address_of(kept_at);
+                    let starts = b.load(Width::Word, kept, Offset::Words(4));
                     let one = number(b, 1);
                     let more = add(b, starts, one);
+                    b.store(Width::Word, kept, Offset::Words(4), more);
                     let done = lt(b, arenas, more);
                     b.if_(
                         done,
@@ -1364,7 +1361,7 @@ fn growing(
                     let next = b.load(Width::Word, arena, Offset::Words(0));
                     let next = arena_at(b, next);
                     let start = number(b, size64(start));
-                    b.continue_(&[next, start, more]);
+                    b.continue_(&[next, start]);
                 },
                 |b| b.yield_(&[]),
             );
@@ -1385,7 +1382,7 @@ fn growing(
                         &[],
                         |b| {
                             let next = add(b, offset, merged);
-                            b.continue_(&[arena, next, starts]);
+                            b.continue_(&[arena, next]);
                         },
                         |b| {
                             b.call(claim, &[at, wanted, cap]);
@@ -1402,7 +1399,7 @@ fn growing(
                 },
                 |b| {
                     let next = add(b, offset, size);
-                    b.continue_(&[arena, next, starts]);
+                    b.continue_(&[arena, next]);
                 },
             );
         });
@@ -1421,13 +1418,28 @@ fn growing(
             |b| b.yield_(&[total]),
             |b| b.yield_(&[least]),
         )[0];
-        let page = b.call_one(grow, &[chunk]);
         // A target that has no more answers an address the chunk would run
-        // past the end of the address space from.
-        let top = number(b, max);
-        let room = sub(b, top, chunk);
-        let from = b.convert(W, page);
-        let refused = lt(b, room, from);
+        // past the end of the address space from. Refused as much as the
+        // heap so far, it is asked for as much as is wanted.
+        let refused = |b: &mut Builder<'_>, page: ValueId, chunk: ValueId| {
+            let top = number(b, max);
+            let room = sub(b, top, chunk);
+            let from = b.convert(W, page);
+            lt(b, room, from)
+        };
+        let page = b.call_one(grow, &[chunk]);
+        let first_refused = refused(b, page, chunk);
+        let got = b.if_(
+            first_refused,
+            &[A, W],
+            |b| {
+                let page = b.call_one(grow, &[least]);
+                b.yield_(&[page, least]);
+            },
+            |b| b.yield_(&[page, chunk]),
+        );
+        let (page, chunk) = (got[0], got[1]);
+        let refused = refused(b, page, chunk);
         b.if_(
             refused,
             &[],
@@ -1436,7 +1448,47 @@ fn growing(
             },
             |b| b.yield_(&[]),
         );
+        let from = b.convert(W, page);
         let after_first = b.load(Width::Word, first, Offset::Words(0));
+        let grown = add(b, total, chunk);
+        b.store(Width::Word, kept, Offset::Words(3), grown);
+        // Where the target hands out memory in one run, what it grants
+        // begins where the latest arena ends, and that arena is made longer
+        // rather than a new one begun: blocks either side of where they
+        // met are then one run, which a later search joins.
+        let latest = b.convert(A, after_first);
+        let any = lt(b, nil, after_first);
+        let extends = b.if_(
+            any,
+            &[W],
+            |b| {
+                let end = b.load(Width::Word, latest, Offset::Words(1));
+                let ends_at = add(b, after_first, end);
+                let joins = eq(b, ends_at, from);
+                b.yield_(&[joins]);
+            },
+            |b| b.yield_(&[nil]),
+        )[0];
+        b.if_(
+            extends,
+            &[],
+            |b| {
+                let end = b.load(Width::Word, latest, Offset::Words(1));
+                let longer = add(b, end, chunk);
+                b.store(Width::Word, latest, Offset::Words(1), longer);
+                let nil = number(b, 0);
+                b.store(Width::Word, page, Offset::Words(0), chunk);
+                b.store(Width::Word, page, Offset::Words(1), nil);
+                b.call(claim, &[page, wanted, cap]);
+                let taken = b.load(Width::Word, page, Offset::Words(0));
+                let after = add(b, end, taken);
+                let kept = b.address_of(kept_at);
+                b.store(Width::Word, kept, Offset::Words(0), after_first);
+                b.store(Width::Word, kept, Offset::Words(1), after);
+                b.ret(&[page]);
+            },
+            |b| b.yield_(&[]),
+        );
         b.store(Width::Word, page, Offset::Words(0), after_first);
         b.store(Width::Word, first, Offset::Words(0), from);
         b.store(Width::Word, page, Offset::Words(1), chunk);
@@ -1448,8 +1500,6 @@ fn growing(
         let one = number(b, 1);
         let arenas = add(b, arenas, one);
         b.store(Width::Word, kept, Offset::Words(2), arenas);
-        let grown = add(b, total, chunk);
-        b.store(Width::Word, kept, Offset::Words(3), grown);
         b.call(claim, &[at, wanted, cap]);
         let taken = b.load(Width::Word, at, Offset::Words(0));
         let after = add(b, header_bytes, taken);
@@ -1457,7 +1507,7 @@ fn growing(
         b.store(Width::Word, kept, Offset::Words(1), after);
         b.ret(&[at]);
     });
-    Ok(allocate)
+    allocate
 }
 
 fn coalescing(p: &mut Program) -> FunctionId {
@@ -1609,7 +1659,7 @@ fn finishing(
             &[],
             |b| {
                 b.call(release, &[a]);
-                let held = small_word(b, half, value);
+                let held = small_word(b, value);
                 b.ret(&[held]);
             },
             |b| b.yield_(&[]),
@@ -1619,13 +1669,12 @@ fn finishing(
     f
 }
 
-/// Allocate an object for `count` digits, which has to lie where no
-/// immediate does. Every target places its heap far below that; one that
-/// did not would have a natural it could not tell from a number.
+/// Allocate an object for `count` digits. Its address is even, as every
+/// block's is, so it is never taken for an immediate.
 fn digits_allocation(
     p: &mut Program,
     (alloc, fail): (FunctionId, FunctionId),
-    (half, word, most): (u64, usize, u64),
+    (word, most): (usize, u64),
 ) -> FunctionId {
     let f = declare(p, "nat.digits", &[W], &[A]);
     p.define(f, |b, args| {
@@ -1643,15 +1692,6 @@ fn digits_allocation(
         let bytes = number(b, size64(word));
         let bytes = b.binary(Binary::Mul, count, bytes);
         let out = b.call_one(alloc, &[bytes]);
-        let high = is_small(b, half, out);
-        b.if_(
-            high,
-            &[],
-            |b| {
-                b.call(fail, &[]);
-            },
-            |b| b.yield_(&[]),
-        );
         // No request is for none, which would be the shared empty object.
         set_length(b, out, count);
         b.ret(&[out]);
@@ -1786,10 +1826,6 @@ fn subtracting(p: &mut Program, digit: FunctionId, trim: FunctionId, word: usize
     f
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one generated monus routine and its scratch lifetimes"
-)]
 fn monus(
     p: &mut Program,
     storage: Storage,
@@ -1800,7 +1836,6 @@ fn monus(
         alloc,
         finish,
         word,
-        half,
         ..
     } = storage;
     let f = declare(p, "nat.sub_digits", &[A, A], &[A]);
@@ -1815,7 +1850,7 @@ fn monus(
             &[],
             |b| b.yield_(&[]),
             |b| {
-                let z = small(b, half, 0);
+                let z = small(b, 0);
                 b.ret(&[z]);
             },
         );
@@ -1885,7 +1920,6 @@ fn multiplication(p: &mut Program, storage: Storage) -> FunctionId {
         fail,
         most,
         word,
-        half,
         ..
     } = storage;
     let row = multiply_row(p, word);
@@ -1903,7 +1937,7 @@ fn multiplication(p: &mut Program, storage: Storage) -> FunctionId {
                 empty,
                 &[],
                 |b| {
-                    let z = small(b, half, 0);
+                    let z = small(b, 0);
                     b.ret(&[z]);
                 },
                 |b| b.yield_(&[]),
@@ -2339,9 +2373,9 @@ fn short_division(
     let f = declare(p, "nat.divide_short", &[A, W, W], &[A]);
     p.define(f, |b, args| {
         let (a, d, remainder) = (args[0], args[1], args[2]);
-        nought_if_empty(b, a, half);
+        nought_if_empty(b, a);
         let pow = b.call_one(normal, &[d]);
-        let q = quotient_room(b, alloc, (a, remainder), half);
+        let q = quotient_room(b, alloc, (a, remainder));
         let short = Shortened {
             a,
             q,
@@ -2372,7 +2406,7 @@ fn short_division(
 
 /// Answer nought where `a` is an object with no digits, which is nought,
 /// and so is all it divides to.
-fn nought_if_empty(b: &mut Builder<'_>, a: ValueId, half: u64) {
+fn nought_if_empty(b: &mut Builder<'_>, a: ValueId) {
     let len = length(b, a);
     let zero = number(b, 0);
     let empty = eq(b, len, zero);
@@ -2380,7 +2414,7 @@ fn nought_if_empty(b: &mut Builder<'_>, a: ValueId, half: u64) {
         empty,
         &[],
         |b| {
-            let none = small(b, half, 0);
+            let none = small(b, 0);
             b.ret(&[none]);
         },
         |b| b.yield_(&[]),
@@ -2394,13 +2428,12 @@ fn quotient_room(
     b: &mut Builder<'_>,
     alloc: FunctionId,
     (a, remainder): (ValueId, ValueId),
-    half: u64,
 ) -> ValueId {
     b.if_(
         remainder,
         &[A],
         |b| {
-            let none = small(b, half, 0);
+            let none = small(b, 0);
             b.yield_(&[none]);
         },
         |b| {
@@ -2561,7 +2594,7 @@ fn division(
                             b.yield_(&[kept]);
                         },
                         |b| {
-                            let z = small(b, half, 0);
+                            let z = small(b, 0);
                             b.yield_(&[z]);
                         },
                     )[0];
@@ -2643,7 +2676,7 @@ fn promotion(p: &mut Program, storage: Storage) -> FunctionId {
             fits,
             &[],
             |b| {
-                let held = small_word(b, half, value);
+                let held = small_word(b, value);
                 b.ret(&[held]);
             },
             |b| b.yield_(&[]),

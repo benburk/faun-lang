@@ -124,7 +124,7 @@ pub trait Target: fmt::Debug {
     }
 
     /// Fit boundaries to [`Self::budget`], then legalize representations
-    /// using a bounded, reusable private heap.
+    /// using a reusable private heap that grows as far as the target has room.
     /// Exhaustion terminates with status 2, never a wrapped natural result.
     /// On supported runtime targets, clients needing a different budget can
     /// call `ir::legalize` with an explicit `ir::natural::Config`, then compile
@@ -144,14 +144,10 @@ pub trait Target: fmt::Debug {
             program,
             crate::ir::natural::Config {
                 word_bits: self.word(),
-                heap_bytes: if self.word() == 16 {
-                    8 * 1024
-                } else {
-                    64 * 1024
-                },
-                // A 16-bit target's `grow` is the memory above its image,
-                // which nothing checks against its stack.
-                grows: self.word() != 16,
+                // The first arena the heap asks the target for; it grows
+                // from there, doubling, as far as the target has room.
+                heap_bytes: if self.word() == 16 { 1024 } else { 64 * 1024 },
+                grows: true,
                 // A 16-bit target runs short of room before it runs short of
                 // time, and a call is smaller than the case it saves.
                 inline_small: self.word() != 16,

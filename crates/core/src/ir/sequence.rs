@@ -329,7 +329,6 @@ pub(super) fn append(
             word_bits,
             retain: naturals.retain,
             naturals: naturals.release,
-            half: naturals.half,
             cells: cells.release,
             buffers: Some(release),
         },

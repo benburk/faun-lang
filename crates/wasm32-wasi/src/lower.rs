@@ -58,6 +58,9 @@ const I32_SHR_U: u8 = 0x76;
 const I64_EXTEND_I32_U: u8 = 0xAD;
 const MEMORY_GROW: u8 = 0x40;
 
+/// What the globals start on, where naturals are held.
+const ALIGN: u32 = 4;
+
 /// A word on this target, in bytes, and a page as a power of two.
 const WORD: i32 = 4;
 const PAGE_BITS: i32 = 16;
@@ -119,7 +122,8 @@ pub(crate) fn lower(program: &Program) -> Code {
         iovec: after_writes,
         byte: after_writes + IOVEC_LEN,
     });
-    // Keep following words aligned; the read buffer itself is one byte.
+    // Keep following words aligned, so an object in the data has an even
+    // address, as a natural's must; the read buffer itself is one byte.
     let data_start = after_writes + read.map_or(0, |_| IOVEC_LEN + 4);
 
     let wanted = plan.wanted.clone();
@@ -483,6 +487,10 @@ impl Lowering<'_> {
             });
         }
         let mut blob = self.program.data().to_vec();
+        blob.resize(
+            usize::try_from(self.globals_offset()).expect("an offset"),
+            0,
+        );
         blob.extend_from_slice(self.program.globals());
         if !blob.is_empty() {
             data.push(Segment {
@@ -1120,9 +1128,20 @@ impl Lowering<'_> {
         let span = self.program.datum(data);
         let base = match span.origin {
             Origin::Data => self.data_start,
-            Origin::Globals => self.data_start + len32(self.program.data().len()),
+            Origin::Globals => self.data_start + self.globals_offset(),
         };
         base + span.start
+    }
+
+    /// How far past the data's start the globals start: past the data, on
+    /// a word where they may hold a natural's object.
+    fn globals_offset(&self) -> u32 {
+        let data = len32(self.program.data().len());
+        if self.program.globals().is_empty() || !self.program.has_runtime_naturals() {
+            data
+        } else {
+            data.next_multiple_of(ALIGN)
+        }
     }
 
     fn constant_i32(&mut self, value: i32) {

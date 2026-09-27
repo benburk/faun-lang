@@ -7,9 +7,13 @@
 //! register reaches; the hardware stack carries only return addresses,
 //! which bounds recursion at 128 deep until those move too.
 //!
-//! The image is a twelve-byte header, the data, and the code, loaded at
-//! `$0200`. The platform is the simulator's hooks, and `grow` is a bump
-//! upwards from the end of the image toward the stack.
+//! The image is a twelve-byte header, the data, the globals and the code,
+//! loaded at `$0200`. The platform is the simulator's hooks. Memory past the
+//! image is the heap's and the frames': `grow` bumps the heap up from the
+//! image's end, refusing to pass where the frames have reached, and a
+//! function making a frame leaves with status two where it would reach down
+//! into the heap. Neither has a size of its own; each has what the other
+//! leaves.
 
 #[cfg(test)]
 mod abi_tests;
@@ -69,6 +73,19 @@ const HOOK_READ: u16 = 0xFFF6;
 const HOOK_WRITE: u16 = 0xFFF7;
 const HOOK_ARGS: u16 = 0xFFF8;
 const HOOK_EXIT: u16 = 0xFFF9;
+
+/// How far past the data's start the globals start: past the data, on an
+/// even address, where an object in them has one, as a natural's must.
+pub(crate) fn globals_offset(program: &Program) -> usize {
+    let data = program.data().len();
+    // Only globals that may hold a natural's object are placed anywhere in
+    // particular.
+    if program.globals().is_empty() || !program.has_runtime_naturals() {
+        data
+    } else {
+        data.next_multiple_of(2)
+    }
+}
 
 /// How wide this machine's own word is, which is the widest value it holds
 /// and what any class but a fixed one means here.
@@ -138,7 +155,6 @@ impl Target for Mos6502Sim65 {
                 region_limits(program, name, body)?;
             }
         }
-        memory_limits(program)?;
         lower::check_frames(program)?;
         // Only laying the code out says how large it is.
         lower::lower(program).map(|_| ())
@@ -153,29 +169,6 @@ impl Target for Mos6502Sim65 {
     fn write(&self, image: &[u8], output: &Path) -> io::Result<PathBuf> {
         write_image(output, ".bin", image, false)
     }
-}
-
-/// Where a natural's object must lie below: an address with the top bit set
-/// is read as a number held in the word itself.
-const NATURALS_BELOW: u32 = 0x8000;
-
-/// A program using the natural runtime has every object of it -- constants
-/// in the data, the heap in the globals -- before its code, from where the
-/// image loads; all of that lies below the half of memory an immediate's
-/// address would be in.
-fn memory_limits(program: &Program) -> Result<(), String> {
-    if !program.has_runtime_naturals() {
-        return Ok(());
-    }
-    let end = u32::from(LOAD)
-        + u32::try_from(program.data().len() + program.globals().len())
-            .map_err(|_| "mos6502-sim65 data does not fit memory".to_owned())?;
-    if end > NATURALS_BELOW {
-        return Err(format!(
-            "mos6502-sim65 data and heap end at ${end:04X}, past ${NATURALS_BELOW:04X}, below which a natural's objects must lie"
-        ));
-    }
-    Ok(())
 }
 
 /// Values a region edge carries: one per scratch pair.

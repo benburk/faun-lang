@@ -51,8 +51,6 @@ pub(super) struct Claims {
     pub word_bits: u16,
     pub retain: FunctionId,
     pub naturals: FunctionId,
-    /// Where immediate naturals begin, which hold no claim.
-    pub half: u64,
     pub cells: FunctionId,
     /// Only a program holding sequences has buffers to release.
     pub buffers: Option<FunctionId>,
@@ -63,7 +61,7 @@ impl Claims {
     pub(super) fn release(self, b: &mut Builder<'_>, kind: u64, value: ValueId) {
         let function = match kind {
             NATURAL => {
-                let small = self.small(b, value);
+                let small = Self::small(b, value);
                 b.if_(
                     small,
                     &[],
@@ -126,7 +124,7 @@ impl Claims {
     pub(super) fn claim(self, b: &mut Builder<'_>, kind: ValueId, value: ValueId) {
         let natural = number(b, NATURAL);
         let is_natural = b.compare(Relation::Equal, kind, natural);
-        let small = self.small(b, value);
+        let small = Self::small(b, value);
         let immediate = b.binary(Binary::Mul, is_natural, small);
         b.if_(
             immediate,
@@ -140,10 +138,11 @@ impl Claims {
         );
     }
 
-    /// One where a word holds an immediate natural rather than an object.
-    fn small(self, b: &mut Builder<'_>, value: ValueId) -> ValueId {
-        let below = number(b, self.half - 1);
-        b.compare(Relation::Less, below, value)
+    /// One where a word holds an immediate natural rather than an object:
+    /// its lowest bit, which no object's address has.
+    fn small(b: &mut Builder<'_>, value: ValueId) -> ValueId {
+        let held = b.convert(Class::Word, value);
+        b.convert(Class::fixed(1), held)
     }
 
     /// Do `each` for every claim the descriptor at `descriptor` lists, of
@@ -195,7 +194,6 @@ pub(super) fn append(
         word_bits,
         retain: naturals.retain,
         naturals: naturals.release,
-        half: naturals.half,
         cells: release,
         buffers,
     };

@@ -24,6 +24,9 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("a shared intermediate", 51),
     ("a greeting", 51),
 ];
+// A program that grows its heap pays 38 bytes for `grow` refusing to pass
+// the frames, and for the frame pointer being set for it to be measured
+// against, which is what lets the heap have all the memory the frames leave.
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("exit zero", 17),
     ("two and two", 40),
@@ -31,11 +34,11 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("a call", 78),
     ("recursion", 220),
     ("values across a call", 390),
-    ("the heap", 156),
-    ("a byte", 213),
+    ("the heap", 194),
+    ("a byte", 251),
     ("a global", 142),
-    ("writing the heap", 175),
-    ("a computed length", 188),
+    ("writing the heap", 213),
+    ("a computed length", 226),
     ("eight bits", 49),
     ("less", 53),
     ("two worked out", 83),
@@ -129,7 +132,7 @@ fn only_a_program_that_calls_something_sets_the_stack() {
         let image = TARGET
             .compile_machine_ir(program)
             .expect("scalar compilation");
-        let code = 12 + program.data().len() + program.globals().len();
+        let code = 12 + crate::globals_offset(program) + program.globals().len();
         image[code..].starts_with(SETS_IT)
     };
     assert!(

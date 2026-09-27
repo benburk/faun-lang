@@ -22,8 +22,7 @@ fn compilation_wrappers_fit_programs_to_native_abi_and_transfer_limits() {
     }
 }
 
-/// A program using the natural runtime compiles, its data and heap below
-/// the half of memory an immediate's address would be in.
+/// A program using the natural runtime compiles.
 #[test]
 fn runtime_naturals_compile_below_half_of_memory() {
     let (mut p, main) = Program::new("main");
@@ -36,10 +35,10 @@ fn runtime_naturals_compile_below_half_of_memory() {
     Mos6502Sim65.compile_machine_ir(&p).unwrap();
 }
 
-/// Data reaching past `$8000` would put the heap where an object's address
-/// reads as a number, so a program using naturals is refused there.
+/// An object's address is even wherever it lies, so data reaching past
+/// `$8000`, and a heap past it, hold naturals as well as any.
 #[test]
-fn naturals_are_refused_where_the_heap_would_pass_half_of_memory() {
+fn naturals_are_held_past_half_of_memory() {
     let (mut p, main) = Program::new("main");
     p.define(main, |b, _| {
         let far = b.data(&vec![1; 0x7000]);
@@ -54,9 +53,5 @@ fn naturals_are_refused_where_the_heap_would_pass_half_of_memory() {
         let result = b.convert(Class::Word, doubled);
         b.ret(&[result]);
     });
-    let error = Mos6502Sim65.compile_machine_ir(&p).unwrap_err();
-    assert!(
-        error.contains("below which a natural's objects must lie"),
-        "{error}"
-    );
+    Mos6502Sim65.compile_machine_ir(&p).unwrap();
 }

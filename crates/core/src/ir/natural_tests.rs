@@ -30,9 +30,9 @@ impl Host for Observer {
             "exit!" => Ok(HostResult::Halt(args.to_vec())),
             "observe" => {
                 let address = args[0].to_u64_digits().first().copied().unwrap_or(0);
-                let half = natural::half(u16::try_from(self.word * 8).unwrap());
-                if address >= half {
-                    self.seen.push(BigUint::from(address - half));
+                // An immediate is twice its number and one.
+                if address % 2 == 1 {
+                    self.seen.push(BigUint::from(address >> 1));
                     return Ok(HostResult::Return(vec![]));
                 }
                 let header = memory.read(address, 3 * self.word)?;
@@ -133,7 +133,7 @@ fn partition(globals: &[u8], word: usize) -> Vec<(usize, u64)> {
 }
 
 fn data_address(p: &Program, datum: DataId) -> BigUint {
-    BigUint::from(u64::from(p.datum(datum).start) + 1)
+    BigUint::from(u64::from(p.datum(datum).start) + evaluate::DATA_BASE)
 }
 
 fn observe_and_release(
@@ -452,6 +452,52 @@ fn word_division_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, Function
         (op, check)
     })
     .collect()
+}
+
+/// A heap that starts with a single small arena and asks for more as it
+/// fills, each grant running on from the last, which the latest arena is
+/// then made longer by: every answer is what it is with room to spare.
+#[test]
+fn a_heap_grown_a_run_at_a_time_answers_the_same() {
+    for bits in [16, 32, 64] {
+        let conf = Config {
+            word_bits: bits,
+            heap_bytes: 8 * usize::from(bits / 8),
+            grows: true,
+            inline_small: true,
+        };
+        let (mut p, lib, _) = program(
+            conf,
+            Needs::from([
+                Helper::Add,
+                Helper::Sub,
+                Helper::Mul,
+                Helper::Div,
+                Helper::Mod,
+            ]),
+        );
+        let checks = arithmetic_checks(&mut p, &lib);
+        let pairs: Vec<_> = samples(bits)
+            .into_iter()
+            .map(|(a, c)| {
+                let da = natural::constant(&mut p, conf, &a).unwrap();
+                let dc = natural::constant(&mut p, conf, &c).unwrap();
+                (a, c, da, dc)
+            })
+            .collect();
+        for (op, check) in checks {
+            for (a, c, da, dc) in &pairs {
+                let args = [data_address(&p, *da), data_address(&p, *dc)];
+                let (evaluation, seen) = run(&p, check, &args, bits);
+                assert!(evaluation.returned().is_some(), "{bits} {op:?} {a} {c}");
+                assert_eq!(
+                    seen,
+                    [model(op, a, c), a.clone(), c.clone()],
+                    "{bits} {op:?} {a} {c}"
+                );
+            }
+        }
+    }
 }
 
 fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)> {
@@ -913,8 +959,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
         p.global(&[0x5a]);
         let lib =
             natural::append(&mut p, conf, Needs::from([Helper::FromWord, Helper::Mul])).unwrap();
-        let tail = p.intern(&[0x6b]); // makes the interpreter's Globals base unaligned
-        assert_ne!((p.data().len() + 2 + word) % word, 0);
+        let tail = p.intern(&[0x6b]);
         let prefix = p.globals()[..word].to_vec();
         let observer = observer(&mut p);
         p.define(entry, |b, _| {
