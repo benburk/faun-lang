@@ -29,10 +29,10 @@ part2(input) -> play(input.trim().to_utf8(), 50).len()
 
 # Part two is ten more readings of part one's sequence, so main plays the
 # first forty rounds once and both answers share them.
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
   forty = play(input.stdin.trim().to_utf8(), 40)
-  Ok("part1: ${forty.len()} part2: ${play(forty, 10).len()}\n")
+  Ok({part1: forty.len(), part2: play(forty, 10).len()})
 
 # The published chain, one reading at a time, then five at once.
 expect step("1".to_utf8()) == "11".to_utf8()
@@ -44,4 +44,4 @@ expect play("1".to_utf8(), 5) == "312211".to_utf8()
 # A run longer than nine digits reads as a multi-digit count.
 expect step("11111111111".to_utf8()) == "111".to_utf8()
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

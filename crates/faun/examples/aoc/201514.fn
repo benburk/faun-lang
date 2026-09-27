@@ -78,10 +78,10 @@ part1(input, duration) -> lead(herd(input)?, duration)
 part2 : (Str, Nat) -> Result(Nat, Str)
 part2(input, duration) -> points(herd(input)?, duration)
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
   racers = herd(input.stdin)?
-  Ok("part1: ${lead(racers, race_length())?} part2: ${points(racers, race_length())?}\n")
+  Ok({part1: lead(racers, race_length())?, part2: points(racers, race_length())?})
 
 comet : Reindeer
 comet() -> Reindeer(14, 10, 127)
@@ -130,4 +130,4 @@ expect parse_reindeer("Comet can fly 14 km/s for 10 seconds, but then must rest 
 expect parse_reindeer("Comet can gallop 14 km/s for 10 seconds, but then must rest for 127 seconds.").is_err()
 expect parse_reindeer("Comet is fast.").is_err()
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

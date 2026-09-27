@@ -33,10 +33,10 @@ red(_) -> False
 red_handed : List((Str, Json)) -> Bool
 red_handed(members) -> members.any(red)
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Int, part2: Int}, Str)
 app(input) ->
   document = Json.from_str(input.stdin.trim()).err_as("invalid JSON")?
-  Ok("part1: ${total(document, Gross)} part2: ${total(document, Net)}\n")
+  Ok({part1: total(document, Gross), part2: total(document, Net)})
 
 adds_to : (Str, Int) -> Bool
 adds_to(text, expected) -> Json.from_str(text)
@@ -65,4 +65,4 @@ expect nets_to("[1,{\"c\":\"red\",\"b\":2},3]", 4)
 expect nets_to("{\"d\":\"red\",\"e\":[1,2,3,4],\"f\":5}", 0)
 expect nets_to("[1,\"red\",5]", 6)
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

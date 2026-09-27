@@ -56,10 +56,10 @@ part2(input, liters) -> fewest_ways(solve(input, liters)?)
 target : Nat
 target() -> 150
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
   counts = solve(input.stdin, target())?
-  Ok("part1: ${counts.len()} part2: ${fewest_ways(counts)?}\n")
+  Ok({part1: counts.len(), part2: fewest_ways(counts)?})
 
 example : Str
 example() -> "20\n15\n10\n5\n5\n"
@@ -83,4 +83,4 @@ expect part1("", 25).is_err()
 expect part1("10\nlarge\n20", 25).is_err()
 expect part1("10\n0\n20", 25).is_err()
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

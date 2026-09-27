@@ -129,12 +129,12 @@ net_score((total, gap)) -> total - gap
 part2 : Str -> Result(Int, Str)
 part2(input) -> strongest(rings(input)?.map(net_score))
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Int, part2: Int}, Str)
 app(input) ->
   scored = rings(input.stdin)?
   seated = strongest(scored.map(|(total, _)| total))?
   yourself = strongest(scored.map(net_score))?
-  Ok("part1: ${seated} part2: ${yourself}\n")
+  Ok({part1: seated, part2: yourself})
 
 example : Str
 example() -> Str.join(["Alice would gain 54 happiness units by sitting next to Bob.",
@@ -177,4 +177,4 @@ expect parse_rule("Alice would shrug 54 happiness units by sitting next to Bob."
 expect parse_rule("Alice would gain lots happiness units by sitting next to Bob.").is_err()
 expect parse_rule("Alice sat next to Bob.").is_err()
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

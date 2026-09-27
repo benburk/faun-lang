@@ -84,11 +84,11 @@ part2(input) ->
   first = solved(wiring, "a")?
   solved([("b", [first.to_str()]), *wiring], "a")
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
   first = part1(input.stdin)?
   second = part2(input.stdin)?
-  Ok("part1: ${first} part2: ${second}\n")
+  Ok({part1: first, part2: second})
 
 example : Str
 example() -> "123 -> x\n456 -> y\nx AND y -> d\nx OR y -> e\nx LSHIFT 2 -> f\ny RSHIFT 2 -> g\nNOT x -> h\nNOT y -> i\n"
@@ -120,4 +120,4 @@ expect signal_on("x MAYBE y -> a\n1 -> x\n2 -> y\n", "a").is_err()
 # A cycle waits out every sweep and is reported like any missing signal.
 expect signal_on("a -> b\nb -> a\n", "a").is_err()
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

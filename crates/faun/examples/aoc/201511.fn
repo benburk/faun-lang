@@ -79,11 +79,11 @@ next_password(password) ->
 
 # Part two is the same search started from part one's answer: the password
 # expired again, so it increments again.
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Str, part2: Str}, Str)
 app(input) ->
   first = next_password(input.stdin.trim()).err_as("no next password")?
   second = next_password(first).err_as("no next password")?
-  Ok("part1: ${first} part2: ${second}\n")
+  Ok({part1: first, part2: second})
 
 # The Security-Elf's three examples: a straight spoiled by confusing
 # letters, two pairs without a straight, a straight with only one pair.
@@ -98,4 +98,4 @@ expect valid("ghjaabcc".to_utf8())
 # this one clears i on its first jump and lands in a few hundred steps.
 expect next_password("ghijklmn") == Ok("ghjaabcc")
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

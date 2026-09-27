@@ -39,6 +39,14 @@ Result(a, e) : [Ok(a), Err(e)].(
   err_or(Ok(_), fallback) -> fallback
   err_or(Err(error), _) -> error
 
+  # `Ok(value)` or `Err(error)`, each by its own type's `to_str`, as a tag
+  # is written: which it was is the first thing it says.
+  to_str : Result(a, e) -> Str where
+    a.to_str : a -> Str
+    e.to_str : e -> Str
+  to_str(Ok(value)) -> "Ok(${value})"
+  to_str(Err(error)) -> "Err(${error})"
+
   # Both `Ok` with equal values, or both `Err` with equal errors, each by
   # its own type's `equals`. A tag row's is structural.
   equals : (Result(a, e), Result(a, e)) -> Bool where
@@ -52,3 +60,4 @@ Result(a, e) : [Ok(a), Err(e)].(
 expect Ok(1).err_as(Missing) == Ok(1) & Ok(1).err_as(Missing) != Ok(2)
 expect Err(Missing).map_ok(|n| n + 1) == Err(Missing) & Ok(3).err_as(Missing) != Err(Missing)
 expect Nat.from_str("48") == Ok(48) & Nat.from_str("x") == Err(Malformed)
+expect Nat.from_str("48").to_str() == "Ok(48)" & Nat.from_str("x").to_str() == "Err(Malformed)"

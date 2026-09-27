@@ -415,14 +415,16 @@ The standard library is a package too, and holds expectations of its own:
 expectation was written; what the compiler settled while compiling, it
 settled before the program ran.
 
-`Host` also has Ori's runners, which finish the program for it: `run!`,
-`run_args!`, `run_text!` and `run_input!` run a pure function of nothing, of
-`{args: List(Str)}`, of `{stdin: Str}` or of both, and print what it answers;
-`run_result!`, `run_result_args!`, `run_result_text!` and `run_result_input!`
-do the same for one answering a `Result`, reporting an error on standard error
-as `error: ...`. Each finishes with status nought, or one where something went
-wrong, so `main!(host) -> host.run_text!(app)` is a whole program, and
-`complete!` finishes with a status a program worked out itself.
+`Host` also has two runners, the quick way to a whole program: `run!` hands
+a pure function `{args: List(Str)}`, and `run_stdin!` reads standard input to
+its end first and hands `{args: List(Str), stdin: Str}`. Each prints what the
+function answers by its `to_str` and a line's end, and finishes with status
+nought. A function declares the fields it reads, `{stdin: Str, *}` taking the
+input and leaving the arguments; one answering a `Result` prints `Ok(...)` or
+`Err(...)`, which says which it was. So `main!(host) -> host.run_stdin!(app)`
+is a whole program, and one that must finish with another status writes its
+own `main!` and calls `exit!`. Only the host failing finishes otherwise: the
+answer not written, or input that cannot be read.
 
 A target answers for smaller primitives than these: moving a run of bytes that
 lie in memory, answering how many or `-errno`. Machine lowering builds each

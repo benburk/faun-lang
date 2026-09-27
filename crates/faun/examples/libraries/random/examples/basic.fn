@@ -15,7 +15,7 @@ draw(state, Succ(rest)) ->
   (value, next_state) = state.next()
   draw(next_state, rest).prepend(value)
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result(Str, Str)
 app(input) -> Nat.from_str(input.stdin.trim())
   .map_ok(report_draws)
   .err_as("expected a decimal seed on stdin")
@@ -33,4 +33,4 @@ expect draw(Random.seed(42), 6).map(U32.to_str) == [
   "1757328946"
 ]
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

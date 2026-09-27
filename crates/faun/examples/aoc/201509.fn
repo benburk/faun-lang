@@ -57,12 +57,12 @@ part1(input) -> tour_lengths(input)?.min().err_as("no places to visit")
 part2 : Str -> Result(Nat, Str)
 part2(input) -> tour_lengths(input)?.max().err_as("no places to visit")
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
   lengths = tour_lengths(input.stdin)?
   shortest = lengths.min().err_as("no places to visit")?
   longest = lengths.max().err_as("no places to visit")?
-  Ok("part1: ${shortest} part2: ${longest}\n")
+  Ok({part1: shortest, part2: longest})
 
 example : Str
 example() -> "London to Dublin = 464\nLondon to Belfast = 518\nDublin to Belfast = 141\n"
@@ -77,4 +77,4 @@ expect part1("A to B = 1\nC to D = 2\n").is_err()
 expect part1("London towards Dublin = 464\n").is_err()
 expect parse_edge("A to B = x").is_err()
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

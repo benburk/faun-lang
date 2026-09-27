@@ -78,7 +78,7 @@ report(Err(Invalid(message))) -> Err(message)
 report(Ok(config)) ->
   lead = "verbose=${config.verbose} count=${config.count}"
   tail = "mode=${config.mode} files=${config.rest.len()}"
-  Ok("${lead} output=${config.output} ${tail}\n")
+  Ok("${lead} output=${config.output} ${tail}")
 
 # Options may appear in any order and may be interspersed with positionals.
 expect parse_args(["input.ori", "--count", "3", "--verbose", "--output", "out.c"]) == Ok({
@@ -141,7 +141,7 @@ expect optional_args(["--no-verbose", "-c", "2", "-o", "out.c", "-m", "slow"]) =
   verbose: Ok(False), count: Ok(2), output: Ok("out.c"), mode: Ok(Slow), rest: []
 })
 
-main!(host) -> host.run_result_args!(cli)
+main!(host) -> host.run!(cli)
 
 cli : {args: List(Str)} -> Result(Str, Str)
 cli(input) -> app({args: input.args.drop(1)})

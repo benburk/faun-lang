@@ -1035,7 +1035,7 @@ fn a_long_walk_goes_round_rather_than_down() {
     let input = "(()".repeat(steps);
     assert_eq!(
         execute_with_input(&program, input.as_bytes()),
-        (0, format!("part1: {steps} part2: 0\n"))
+        (0, format!("Ok({{part1: {steps}, part2: 0}})\n"))
     );
 }
 

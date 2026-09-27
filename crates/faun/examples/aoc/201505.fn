@@ -37,8 +37,8 @@ is_nice_v2(text) ->
 part2 : Str -> Nat
 part2(input) -> input.trim().lines().count(is_nice_v2)
 
-app : {stdin: Str} -> Result(Str, Str)
-app(input) -> Ok("part1: ${part1(input.stdin)} part2: ${part2(input.stdin)}\n")
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
+app(input) -> Ok({part1: part1(input.stdin), part2: part2(input.stdin)})
 
 expect is_nice("ugknbfddgicrmopn")
 expect is_nice("aaa")
@@ -55,4 +55,4 @@ expect is_nice_v2("uurcxstgmygtbstg").not()
 expect is_nice_v2("ieodomkazucvgmuy").not()
 expect part2("qjhvhtzxzqqjkmpb\nxxyxx\nuurcxstgmygtbstg\nieodomkazucvgmuy\n") == 2
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

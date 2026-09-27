@@ -14,11 +14,11 @@ fn example(name: &str) -> PathBuf {
 #[test]
 fn advent_of_code_2015_day_one_answers_the_puzzle_examples() {
     let cases: &[(&str, &str)] = &[
-        ("(())", "part1: 0 part2: 0\n"),
-        ("(()(()(", "part1: 3 part2: 0\n"),
-        (")", "part1: -1 part2: 1\n"),
-        ("()())", "part1: -1 part2: 5\n"),
-        ("))(((((", "part1: 3 part2: 1\n"),
+        ("(())", "Ok({part1: 0, part2: 0})\n"),
+        ("(()(()(", "Ok({part1: 3, part2: 0})\n"),
+        (")", "Ok({part1: -1, part2: 1})\n"),
+        ("()())", "Ok({part1: -1, part2: 5})\n"),
+        ("))(((((", "Ok({part1: 3, part2: 1})\n"),
     ];
     for (input, expected) in cases {
         let (status, written) = support::run_file(&example("aoc/201501.fn"), input.as_bytes());
@@ -76,15 +76,16 @@ fn streams_answer_what_they_moved_or_what_they_met() {
     }
 }
 
-/// A pure program run by the host: what it answers printed, an error it
-/// answers reported, and each as its status.
+/// A pure program run by the host: what it answers printed and a line's
+/// end, a `Result` saying which it was, and status nought either way. An
+/// app reads the fields it declares, and the rest are handed all the same.
 #[test]
-fn runners_print_what_a_program_answers_and_report_what_it_fails_with() {
+fn runners_print_what_a_program_answers() {
     let answering = support::Package::new(
         "run",
         "import std.host {Host}
 
-         answer : {} -> Nat
+         answer : {args: List(Str), *} -> Nat
          answer(_) -> 42
 
          main! : Host -> []
@@ -92,28 +93,27 @@ fn runners_print_what_a_program_answers_and_report_what_it_fails_with() {
     );
     assert_eq!(
         support::run_file(&answering.entry(), b""),
-        (0, "42".to_owned())
+        (0, "42\n".to_owned())
     );
 
     let checking = support::Package::new(
-        "run-result-text",
+        "run-stdin",
         "import std.host {Host}
 
-         check : {stdin: Str} -> Result(Nat, Str)
-         check({stdin}) if stdin.len() > 3 -> Err(\"too long\")
-         check({stdin}) -> Ok(stdin.len())
+         check : {stdin: Str, *} -> Result(Nat, Str)
+         check({stdin, *}) if stdin.len() > 3 -> Err(\"too long\")
+         check({stdin, *}) -> Ok(stdin.len())
 
          main! : Host -> []
-         main!(host) -> host.run_result_text!(check)",
+         main!(host) -> host.run_stdin!(check)",
     );
     assert_eq!(
         support::run_file(&checking.entry(), b"ab"),
-        (0, "2".to_owned())
+        (0, "Ok(2)\n".to_owned())
     );
-    // The error goes to standard error, which this host drops.
     assert_eq!(
         support::run_file(&checking.entry(), b"abcd"),
-        (1, String::new())
+        (0, "Err(too long)\n".to_owned())
     );
 }
 
@@ -142,9 +142,9 @@ fn an_effect_on_its_own_line_goes_on_to_the_next() {
     );
 }
 
-/// A runner handed the arguments: what the program answers of them
-/// printed, or what it fails with reported. The reference interpreter holds
-/// no arguments to read, so this runs the program on the machine.
+/// A runner handed the arguments: what the program answers of them printed.
+/// The reference interpreter holds no arguments to read, so this runs the
+/// program on the machine.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 #[test]
 fn argument_runners_hand_the_program_its_arguments() {
@@ -166,25 +166,31 @@ fn argument_runners_hand_the_program_its_arguments() {
         "count : {args: List(Str)} -> Nat
          count({args}) -> args.len()
 
-         main!(host) -> host.run_args!(count)",
+         main!(host) -> host.run!(count)",
     );
-    assert_eq!(run(&counting, &["a", "b"]), (Some(0), "3".to_owned()));
+    assert_eq!(run(&counting, &["a", "b"]), (Some(0), "3\n".to_owned()));
 
     let second = support::Package::new(
         "run-result-args",
         "second : {args: List(Str)} -> Result(Str, [OutOfBounds])
          second({args}) -> args.get(1)
 
-         main!(host) -> host.run_result_args!(second)",
+         main!(host) -> host.run!(second)",
     );
-    assert_eq!(run(&second, &["hello"]), (Some(0), "hello".to_owned()));
-    assert_eq!(run(&second, &[]), (Some(1), String::new()));
+    assert_eq!(
+        run(&second, &["hello"]),
+        (Some(0), "Ok(hello)\n".to_owned())
+    );
+    assert_eq!(
+        run(&second, &[]),
+        (Some(0), "Err(OutOfBounds)\n".to_owned())
+    );
 }
 
-/// The input runners hand the program its arguments and standard input
-/// together, and `complete!` finishes with the status it is handed.
+/// The standard-input runner reads the input to its end and hands it to the
+/// program beside the arguments.
 #[test]
-fn input_runners_hand_the_program_arguments_and_input() {
+fn the_stdin_runner_hands_the_program_arguments_and_input() {
     let run = |package: &support::Package, args: &[&str], input: &str| {
         let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
             .arg("run")
@@ -207,9 +213,9 @@ fn input_runners_hand_the_program_arguments_and_input() {
         "both : {args: List(Str), stdin: Str} -> Str
          both({args, stdin}) -> \"${args.len()} ${stdin}\"
 
-         main!(host) -> host.run_input!(both)",
+         main!(host) -> host.run_stdin!(both)",
     );
-    assert_eq!(run(&both, &["a"], "in"), (Some(0), "2 in".to_owned()));
+    assert_eq!(run(&both, &["a"], "in"), (Some(0), "2 in\n".to_owned()));
     let named = support::Package::new(
         "run-result-input",
         "named : {args: List(Str), stdin: Str} -> Result(Str, [OutOfBounds])
@@ -217,12 +223,13 @@ fn input_runners_hand_the_program_arguments_and_input() {
            name = args.get(1)?
            Ok(\"${name}: ${stdin}\")
 
-         main!(host) -> host.run_result_input!(named)",
+         main!(host) -> host.run_stdin!(named)",
     );
-    assert_eq!(run(&named, &["x"], "y"), (Some(0), "x: y".to_owned()));
-    assert_eq!(run(&named, &[], "y"), (Some(1), String::new()));
-    let completing = support::Package::new("complete", "main!(host) -> host.complete!(5)");
-    assert_eq!(run(&completing, &[], ""), (Some(5), String::new()));
+    assert_eq!(run(&named, &["x"], "y"), (Some(0), "Ok(x: y)\n".to_owned()));
+    assert_eq!(
+        run(&named, &[], "y"),
+        (Some(0), "Err(OutOfBounds)\n".to_owned())
+    );
 }
 
 /// Ori's Advent of Code programs and example libraries, ported: every

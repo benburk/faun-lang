@@ -31,8 +31,8 @@ needs_escape(byte) -> byte == '"' | byte == '\\'
 part2 : Str -> Nat
 part2(input) -> input.trim().lines().map(encode_gap).sum()
 
-app : {stdin: Str} -> Result(Str, Str)
-app(input) -> Ok("part1: ${part1(input.stdin)} part2: ${part2(input.stdin)}\n")
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
+app(input) -> Ok({part1: part1(input.stdin), part2: part2(input.stdin)})
 
 example : Str
 example() -> "\"\"\n\"abc\"\n\"aaa\\\"aaa\"\n\"\\x27\"\n"
@@ -53,4 +53,4 @@ expect decode_gap("\"\\\\x27\"".to_utf8()) + 2 == 3
 expect part1("\n\n\"\"\n\"abc\"\n\"aaa\\\"aaa\"\n\"\\x27\"\n\n  ") == 12
 expect part2("\n\n\"\"\n\"abc\"\n\"aaa\\\"aaa\"\n\"\\x27\"\n\n  ") == 19
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

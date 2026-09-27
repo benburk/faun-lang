@@ -224,16 +224,16 @@ fn floats_read_add_divide_and_say_themselves() {
 fn a_float_is_read_from_standard_input() {
     let package = Package::new(
         "float-input",
-        "main!(host) -> host.run_text!(app)
+        "main!(host) -> host.run_stdin!(app)
 
-         app : {stdin: Str} -> Str
+         app : {stdin: Str, *} -> Str
          app(input) -> read(F64.from_str(input.stdin.trim()))
 
          read : Result(F64, [Malformed]) -> Str
          read(Ok(x)) -> x.mul(2.0).to_str()
          read(Err(Malformed)) -> \"err\"",
     );
-    for (input, said) in [("1.25", "2.5"), ("x", "err")] {
+    for (input, said) in [("1.25", "2.5\n"), ("x", "err\n")] {
         assert_eq!(
             support::run_file(&package.entry(), input.as_bytes()),
             (0, said.to_owned()),

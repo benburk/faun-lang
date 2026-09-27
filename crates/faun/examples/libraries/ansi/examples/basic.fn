@@ -13,7 +13,7 @@ banner(text) -> Ansi.color(
   {fg: Color.bright_cyan(), bg: Color.default()}
 )
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result(Str, Str)
 app(input) -> Ok(banner(input.stdin).concat("\n"))
 
 expect Ansi.escape(Control.erase_line()).to_utf8() == [27, '[', '2', 'K']
@@ -26,4 +26,4 @@ expect banner("Ori").to_utf8() == [
   27, '[', '0', 'm'
 ]
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

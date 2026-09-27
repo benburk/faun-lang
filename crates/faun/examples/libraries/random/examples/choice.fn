@@ -25,7 +25,7 @@ expect app({args: ["42", "rock", "paper", "scissors"]}) == Ok("scissors")
 expect app({args: ["42"]}) == Err(Empty)
 expect app({args: []}) == Err(OutOfBounds)
 
-main!(host) -> host.run_result_args!(cli)
+main!(host) -> host.run!(cli)
 
 cli : {args: List(Str)} -> Result(Str, [Empty, Malformed, OutOfBounds])
 cli(input) -> app({args: input.args.drop(1)})

@@ -139,11 +139,11 @@ dietary : Best -> Result(Nat, Str)
 dietary(Best(_, diet, True)) -> Ok(diet)
 dietary(Best(_, _, False)) -> Err("no 500-calorie recipe")
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) -> report(solve(input.stdin)?)
 
-report : Best -> Result(Str, Str)
-report(Best(best, diet, True)) -> Ok("part1: ${best} part2: ${diet}\n")
+report : Best -> Result({part1: Nat, part2: Nat}, Str)
+report(Best(best, diet, True)) -> Ok({part1: best, part2: diet})
 report(Best(_, _, False)) -> Err("no 500-calorie recipe")
 
 example : Str
@@ -175,4 +175,4 @@ expect parse_ingredient("Sugar capacity 1, durability 2, flavor 3, texture 4, ca
 expect parse_ingredient("Sugar: capacity sweet, durability 2, flavor 3, texture 4, calories 5").is_err()
 expect parse_ingredient("Sugar is delicious").is_err()
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

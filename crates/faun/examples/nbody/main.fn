@@ -136,11 +136,11 @@ energy([body, *rest]) ->
 app : {args: List(Str)} -> Result(Str, [OutOfBounds, Malformed])
 app(input) ->
   n = Nat.from_str(input.args.get(1)?)?
-  Ok("${energy(system()).to_fixed(9)}\n${energy(steps(system(), n)).to_fixed(9)}\n")
+  Ok("${energy(system()).to_fixed(9)}\n${energy(steps(system(), n)).to_fixed(9)}")
 
 expect energy(system()).to_fixed(9) == "-0.169075164"
 expect energy(steps(system(), 1)).to_fixed(9) == "-0.169074954"
 expect energy(steps(system(), 10)).to_fixed(9) == "-0.169073022"
 
 main! : Host -> []
-main!(host) -> host.run_result_args!(app)
+main!(host) -> host.run!(app)

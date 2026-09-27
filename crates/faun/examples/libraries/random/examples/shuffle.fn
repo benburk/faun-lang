@@ -24,7 +24,7 @@ expect
   (mixed, after) = Random.seed(42).shuffle(List.range(8))
   mixed == [2, 4, 5, 1, 0, 7, 3, 6]
 
-main!(host) -> host.run_result_args!(cli)
+main!(host) -> host.run!(cli)
 
 cli : {args: List(Str)} -> Result(Str, [OutOfBounds, Malformed])
 cli(input) -> app({args: input.args.drop(1)})

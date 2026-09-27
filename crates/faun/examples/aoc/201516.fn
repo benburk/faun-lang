@@ -117,12 +117,12 @@ part1(input) -> identify(input, Exact)
 part2 : Str -> Result(Nat, Str)
 part2(input) -> identify(input, Ranged)
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
   aunts = parse_sues(input.stdin)?
   exact = identify_sue(aunts, Exact)?
   ranged = identify_sue(aunts, Ranged)?
-  Ok("part1: ${exact} part2: ${ranged}\n")
+  Ok({part1: exact, part2: ranged})
 
 example : Str
 example() -> Str.join([
@@ -150,4 +150,4 @@ expect parse_sue("Sue 1: children: 3 cars: 2, perfumes: 1").is_err()
 expect parse_sue("Sue 1: children: 3,").is_err()
 expect parse_sue("Aunt Sue 1: children: 3").is_err()
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

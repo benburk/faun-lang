@@ -48,71 +48,26 @@ Host : {args: List(Str)}.(
   println! : (Host, Str) -> Result({}, IoError)
   println!(host, text) -> host.print!("${text}\n")
 
-  # Run a program of no input, printing what it answers.
-  run! : (Host, {} -> a) -> [] where a.to_str : a -> Str
+  # Run `app` on the arguments the program was run with, its own name
+  # first, and print what it answers and a line's end, finishing with
+  # status nought. It
+  # declares the fields it reads, `{args: List(Str), *}` or none at all.
+  # This is the quick way to a whole program: an app answering a `Result`
+  # prints `Ok(...)` or `Err(...)`, which says which it was, and one that
+  # must finish with another status writes its own `main!`.
+  run! : (Host, {args: List(Str)} -> a) -> [] where a.to_str : a -> Str
   run!(host, app) ->
-    status = finish!(host.stdout, app({}))
-    host.exit!(status)
-
-  # Run a program of the arguments the program was run with, its own name
-  # first, printing what it answers.
-  run_args! : (Host, {args: List(Str)} -> a) -> [] where a.to_str : a -> Str
-  run_args!(host, app) ->
     status = finish!(host.stdout, app({args: host.args}))
     host.exit!(status)
 
-  # Run a program of standard input as text, printing what it answers; one
-  # the input cannot be read for is not run.
-  run_text! : (Host, {stdin: Str} -> a) -> [] where a.to_str : a -> Str
-  run_text!(host, app) ->
+  # The same, having read standard input to its end first, handed to `app`
+  # as text beside the arguments. Input that cannot be read is reported on
+  # standard error, and the app is not run.
+  run_stdin! : (Host, {args: List(Str), stdin: Str} -> a) -> [] where a.to_str : a -> Str
+  run_stdin!(host, app) ->
     input = host.stdin.read_to_str!()
-    status = serve_text!(host.stdout, host.stderr, input, app)
+    status = serve_stdin!(host.stdout, host.stderr, input, host.args, app)
     host.exit!(status)
-
-  # Run a program that may fail: printing what it answers, or reporting
-  # its error on standard error and finishing with one.
-  run_result! : (Host, {} -> Result(a, e)) -> [] where
-    a.to_str : a -> Str
-    e.to_str : e -> Str
-  run_result!(host, app) ->
-    status = finish_result!(host.stdout, host.stderr, app({}))
-    host.exit!(status)
-
-  run_result_args! : (Host, {args: List(Str)} -> Result(a, e)) -> [] where
-    a.to_str : a -> Str
-    e.to_str : e -> Str
-  run_result_args!(host, app) ->
-    status = finish_result!(host.stdout, host.stderr, app({args: host.args}))
-    host.exit!(status)
-
-  run_result_text! : (Host, {stdin: Str} -> Result(a, e)) -> [] where
-    a.to_str : a -> Str
-    e.to_str : e -> Str
-  run_result_text!(host, app) ->
-    input = host.stdin.read_to_str!()
-    status = serve_result_text!(host.stdout, host.stderr, input, app)
-    host.exit!(status)
-
-  # Run a program of the arguments and standard input as text together,
-  # printing what it answers; one the input cannot be read for is not run.
-  run_input! : (Host, {args: List(Str), stdin: Str} -> a) -> [] where a.to_str : a -> Str
-  run_input!(host, app) ->
-    input = host.stdin.read_to_str!()
-    status = serve_input!(host.stdout, host.stderr, input, host.args, app)
-    host.exit!(status)
-
-  run_result_input! : (Host, {args: List(Str), stdin: Str} -> Result(a, e)) -> [] where
-    a.to_str : a -> Str
-    e.to_str : e -> Str
-  run_result_input!(host, app) ->
-    input = host.stdin.read_to_str!()
-    status = serve_result_input!(host.stdout, host.stderr, input, host.args, app)
-    host.exit!(status)
-
-  # Finish with `status`, as a runner finishes: nought is done. An entry
-  # answers nothing, so it finishes here either way.
-  complete! : (Host, Nat) -> []
-  complete!(host, status) -> host.exit!(status)
 )
 
 # What reading or writing a stream can meet.
@@ -290,20 +245,15 @@ read_text!(input) ->
   Ok(text)
 
 # What a runner finishes with: nought where what it printed was written.
+# `value` said on standard output, and a line's end after it.
 finish! : (Stdout, a) -> Nat where a.to_str : a -> Str
 finish!(output, value) ->
-  wrote = output.write_all!(value.to_str().to_utf8())
+  wrote = output.write_all!("${value}\n".to_utf8())
   written_status(wrote)
 
 written_status : Result(Nat, IoError) -> Nat
 written_status(Ok(_)) -> 0
 written_status(Err(_)) -> 1
-
-finish_result! : (Stdout, Stderr, Result(a, e)) -> Nat where
-  a.to_str : a -> Str
-  e.to_str : e -> Str
-finish_result!(output, _, Ok(value)) -> finish!(output, value)
-finish_result!(_, errors, Err(error)) -> report!(errors, error.to_str())
 
 # `error: ` and what went wrong, on standard error: one, or two where even
 # that could not be written.
@@ -321,27 +271,10 @@ unread!(errors, Io(error)) -> report!(errors, error.to_str())
 unread!(errors, LimitExceeded) -> report!(errors, "LimitExceeded")
 unread!(errors, InvalidUtf8) -> report!(errors, "InvalidUtf8")
 
-serve_text! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), {stdin: Str} -> a) -> Nat where
+serve_stdin! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), List(Str), {args: List(Str), stdin: Str} -> a) -> Nat where
   a.to_str : a -> Str
-serve_text!(_, errors, Err(error), _) -> unread!(errors, error)
-serve_text!(output, _, Ok(input), app) -> finish!(output, app({stdin: input}))
-
-serve_result_text! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), {stdin: Str} -> Result(a, e)) -> Nat where
-  a.to_str : a -> Str
-  e.to_str : e -> Str
-serve_result_text!(_, errors, Err(error), _) -> unread!(errors, error)
-serve_result_text!(output, errors, Ok(input), app) -> finish_result!(output, errors, app({stdin: input}))
-
-serve_input! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), List(Str), {args: List(Str), stdin: Str} -> a) -> Nat where
-  a.to_str : a -> Str
-serve_input!(_, errors, Err(error), _, _) -> unread!(errors, error)
-serve_input!(output, _, Ok(input), args, app) -> finish!(output, app({args: args, stdin: input}))
-
-serve_result_input! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), List(Str), {args: List(Str), stdin: Str} -> Result(a, e)) -> Nat where
-  a.to_str : a -> Str
-  e.to_str : e -> Str
-serve_result_input!(_, errors, Err(error), _, _) -> unread!(errors, error)
-serve_result_input!(output, errors, Ok(input), args, app) -> finish_result!(output, errors, app({args: args, stdin: input}))
+serve_stdin!(_, errors, Err(error), _, _) -> unread!(errors, error)
+serve_stdin!(output, _, Ok(input), args, app) -> finish!(output, app({args: args, stdin: input}))
 
 # What the target answers: a number, or an error that far short of the top of
 # a word, as a kernel answers `-errno`. No error is more than 4095, so an

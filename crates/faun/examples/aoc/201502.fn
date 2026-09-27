@@ -3,24 +3,26 @@
 # token first lets one clause head ask both questions at once: all numbers,
 # and exactly three of them — anything else is malformed.
 
-parse_box : Str -> Result({l: Nat, w: Nat, h: Nat}, [MalformedBox])
-parse_box(line) -> boxed(line.split("x").try_map(Nat.from_str))
+Box = {l: Nat, w: Nat, h: Nat}
 
-boxed : Result(List(Nat), e) -> Result({l: Nat, w: Nat, h: Nat}, [MalformedBox])
+boxed : Result(List(Nat), e) -> Result(Box, [MalformedBox])
 boxed(Ok([l, w, h])) -> Ok({l, w, h})
 boxed(_) -> Err(MalformedBox)
 
-parse_boxes : Str -> Result(List({l: Nat, w: Nat, h: Nat}), [MalformedBox])
+parse_box : Str -> Result(Box, [MalformedBox])
+parse_box(line) -> boxed(line.split("x").try_map(Nat.from_str))
+
+parse_boxes : Str -> Result(List(Box), [MalformedBox])
 parse_boxes(input) -> input.trim().lines().try_map(parse_box)
 
-paper : {l: Nat, w: Nat, h: Nat} -> Nat
+paper : Box -> Nat
 paper({l, w, h}) ->
   lw = l * w
   wh = w * h
   hl = h * l
   (lw + wh + hl) * 2 + lw.min(wh).min(hl)
 
-ribbon : {l: Nat, w: Nat, h: Nat} -> Nat
+ribbon : Box -> Nat
 ribbon({l, w, h}) ->
   perimeter = ((l + w) * 2).min((w + h) * 2).min((h + l) * 2)
   perimeter + l * w * h
@@ -31,16 +33,16 @@ part1(input) -> Ok(parse_boxes(input)?.map(paper).sum())
 part2 : Str -> Result(Nat, [MalformedBox])
 part2(input) -> Ok(parse_boxes(input)?.map(ribbon).sum())
 
-app : {stdin: Str} -> Result(Str, Str)
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
   boxes = parse_boxes(input.stdin).err_as("malformed box dimensions")?
   paper_total = boxes.map(paper).sum()
   ribbon_total = boxes.map(ribbon).sum()
-  Ok("part1: ${paper_total} part2: ${ribbon_total}\n")
+  Ok({part1: paper_total, part2: ribbon_total})
 
 expect part1("2x3x4\n1x1x10") == Ok(101)
 expect part2("2x3x4\n1x1x10") == Ok(48)
 expect parse_boxes("2x").is_err()
 expect parse_boxes("2x3x4oops").is_err()
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)

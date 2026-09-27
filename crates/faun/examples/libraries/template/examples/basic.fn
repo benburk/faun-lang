@@ -12,4 +12,4 @@ app : {stdin: Str, args: List(Str)} -> Result(Str, Str)
 app({stdin: _, args: []}) -> Err("usage: template_builder <function-name> < template")
 app({stdin: text, args: [name, *]}) -> compile_template(name, text).map_err(|error| error.to_str())
 
-main!(host) -> host.run_result_input!(app)
+main!(host) -> host.run_stdin!(app)

@@ -19,7 +19,7 @@ part2(input) -> parse(input)
   .map_ok(|index| index + 1)
   .ok_or(0)
 
-app : {stdin: Str} -> Result(Str, Str)
-app(input) -> Ok("part1: ${part1(input.stdin)} part2: ${part2(input.stdin)}\n")
+app : {stdin: Str, *} -> Result({part1: Int, part2: Nat}, Str)
+app(input) -> Ok({part1: part1(input.stdin), part2: part2(input.stdin)})
 
-main!(host) -> host.run_result_text!(app)
+main!(host) -> host.run_stdin!(app)
