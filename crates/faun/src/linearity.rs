@@ -178,7 +178,10 @@ impl<'a> Facts<'a> {
             .functions
             .iter()
             .map(|function| {
-                let routine = routines.get(resolved.symbols.text(function.provider?))?;
+                let d::Definition::External(provider) = function.definition else {
+                    return None;
+                };
+                let routine = routines.get(resolved.symbols.text(provider))?;
                 routine.consumes.then_some(0)
             })
             .collect();
@@ -215,12 +218,14 @@ impl<'a> Facts<'a> {
             .iter()
             .zip(&self.uses_up)
             .map(|(function, uses_up)| {
-                let count = function.key.ty.function().map_or(0, |(p, _)| p.len());
+                let count = function.key.signature.parameters.len();
                 (0..count)
-                    .map(|at| match (function.provider, uses_up) {
-                        (Some(_), Some(taken)) if *taken == at => Contract::Taken,
-                        (Some(_), _) => Contract::Lent,
-                        (None, _) => Contract::Unknown,
+                    .map(|at| match (&function.definition, uses_up) {
+                        (d::Definition::External(_), Some(taken)) if *taken == at => {
+                            Contract::Taken
+                        }
+                        (d::Definition::External(_), _) => Contract::Lent,
+                        (d::Definition::Body(_), _) => Contract::Unknown,
                     })
                     .collect()
             })
@@ -235,10 +240,11 @@ impl<'a> Facts<'a> {
                 let function = &self.program.functions[at];
                 let takes_any = function
                     .key
-                    .ty
-                    .function()
-                    .is_some_and(|(parameters, _)| parameters.iter().any(|p| self.carries(p)));
-                if function.provider.is_some() || !takes_any {
+                    .signature
+                    .parameters
+                    .iter()
+                    .any(|p| self.carries(p));
+                if matches!(function.definition, d::Definition::External(_)) || !takes_any {
                     known[at].clone()
                 } else {
                     self.walk(at, known, None)
@@ -257,12 +263,13 @@ impl<'a> Facts<'a> {
         mut found: Option<&mut Vec<Refusal>>,
     ) -> Vec<Contract> {
         let function = &self.program.functions[at];
-        let Some((parameters, _)) = function.key.ty.function() else {
-            return Vec::new();
+        let d::Definition::Body(clauses) = &function.definition else {
+            return known[at].clone();
         };
+        let parameters = &function.key.signature.parameters;
         let mut contracts = vec![Contract::Unknown; parameters.len()];
         let mut paths: Vec<Path> = Vec::new();
-        for clause in &function.clauses {
+        for clause in clauses {
             let mut walk = Walk {
                 facts: self,
                 known,
@@ -308,9 +315,9 @@ impl<'a> Facts<'a> {
         let name = self.name(function);
         let resource = self.program.functions[function]
             .key
-            .ty
-            .function()
-            .and_then(|(parameters, _)| parameters.get(parameter))
+            .signature
+            .parameters
+            .get(parameter)
             .and_then(|ty| self.resource_in(ty));
         Refusal {
             at: taken.or_else(|| kept.map(|(at, _)| at)),

@@ -219,7 +219,7 @@ impl<'a> Lowerer<'a> {
     fn lower(mut self) -> Result<barb::Program, LowerError> {
         self.declare_types();
         self.define_types()?;
-        self.declare_functions()?;
+        self.declare_functions();
         self.define_functions()?;
         self.define_widenings()?;
         if let Some(routines) = self.routines
@@ -278,16 +278,16 @@ impl<'a> Lowerer<'a> {
 
     fn discover_in(&mut self, functions: &[d::Function]) -> Result<(), LowerError> {
         for function in functions {
-            let (parameters, result) = function
-                .key
-                .ty
-                .function()
-                .expect("specialized globals have function types");
+            let parameters = &function.key.signature.parameters;
+            let result = function.key.signature.result.as_ref();
             for parameter in parameters {
                 self.collect_type(parameter)?;
             }
             self.collect_type(result)?;
-            for clause in &function.clauses {
+            let d::Definition::Body(clauses) = &function.definition else {
+                continue;
+            };
+            for clause in clauses {
                 // A numeral is tested for, and a test answers a `Bool`.
                 if clause.patterns.iter().any(holds_numeral) {
                     self.collect_type(&Type::Named(self.prelude.bool_, Vec::new()))?;
@@ -612,7 +612,7 @@ impl<'a> Lowerer<'a> {
     /// standard floats' own, at the float's type: the one place a float's
     /// meaning is taken from its name, since no equation says it.
     fn float(&self, key: &FunctionKey) -> Option<faun_core::float::Float> {
-        let (parameters, _) = key.ty.function()?;
+        let parameters = &key.signature.parameters;
         self.prelude.floats.iter().find_map(|float| {
             let (_, operation) = float
                 .operations
@@ -628,13 +628,10 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn declare_functions(&mut self) -> Result<(), LowerError> {
+    fn declare_functions(&mut self) {
         for function in &self.program.functions {
-            let (parameters, result) = function
-                .key
-                .ty
-                .function()
-                .ok_or_else(|| error("specialized global is not a function"))?;
+            let parameters = &function.key.signature.parameters;
+            let result = function.key.signature.result.as_ref();
             let parameters: Vec<_> = parameters
                 .iter()
                 .enumerate()
@@ -647,7 +644,7 @@ impl<'a> Lowerer<'a> {
             let result = self.type_ids[result];
             let name = function_name(&function.key, &self.resolved.symbols);
             let id = self.output.declare_named(&name, &borrowed, result);
-            if let Some(provider) = function.provider {
+            if let d::Definition::External(provider) = function.definition {
                 let provider = self.resolved.symbols.text(provider);
                 self.output.answered_by(id, provider);
             }
@@ -662,7 +659,6 @@ impl<'a> Lowerer<'a> {
                 .declare("widen", &[self.type_ids[from]], self.type_ids[to]);
             self.widen_ids.insert((from.clone(), to.clone()), id);
         }
-        Ok(())
     }
 
     /// Each widening rebuilds a value in the wider type: the constructor it
@@ -725,14 +721,10 @@ impl<'a> Lowerer<'a> {
     fn define_functions(&mut self) -> Result<(), LowerError> {
         let functions = std::mem::take(&mut self.program.functions);
         for function in functions {
-            if function.provider.is_some() {
+            let d::Definition::Body(clauses) = function.definition else {
                 continue;
-            }
-            let (parameters, _) = function
-                .key
-                .ty
-                .function()
-                .expect("specialized global is a function");
+            };
+            let parameters = &function.key.signature.parameters;
             let subjects: Vec<_> = parameters
                 .iter()
                 .enumerate()
@@ -741,8 +733,7 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                 })
                 .collect();
-            let rows: Vec<Row> = function
-                .clauses
+            let rows: Vec<Row> = clauses
                 .into_iter()
                 .map(|clause| Row {
                     patterns: clause.patterns,
@@ -757,11 +748,7 @@ impl<'a> Lowerer<'a> {
                 self.numeral_equals = Some(self.define_numeral_equals());
             }
             let function_id = self.function_ids[&function.key];
-            let (_, answer) = function
-                .key
-                .ty
-                .function()
-                .expect("specialized global is a function");
+            let answer = &function.key.signature.result;
             let context = EmitContext {
                 type_ids: &self.type_ids,
                 constructor_ids: &self.constructor_ids,
@@ -1754,14 +1741,15 @@ fn type_name(ty: &Type, symbols: &crate::Symbols) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        Type::Function(parameters, result) => format!(
+        Type::Function(signature) => format!(
             "({}) -> {}",
-            parameters
+            signature
+                .parameters
                 .iter()
                 .map(|parameter| type_name(parameter, symbols))
                 .collect::<Vec<_>>()
                 .join(", "),
-            type_name(result, symbols)
+            type_name(&signature.result, symbols)
         ),
         Type::Variants(tags) => format!(
             "[{}]",

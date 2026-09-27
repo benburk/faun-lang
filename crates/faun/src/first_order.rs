@@ -4,7 +4,8 @@
 //! into the definition it is handed to, and every call of one is direct.
 //! What is left is the specialized program with nothing but data flowing
 //! between definitions, which these types say by having no way to hold a
-//! function.
+//! function. Function signatures and the distinction between external providers
+//! and defined bodies survive callback lowering.
 
 use std::collections::HashMap;
 
@@ -26,8 +27,14 @@ pub(crate) struct Program {
 #[derive(Clone, Debug)]
 pub(crate) struct Function {
     pub(crate) key: FunctionKey,
-    pub(crate) clauses: Vec<Clause>,
-    pub(crate) provider: Option<Symbol>,
+    pub(crate) definition: Definition,
+}
+
+/// Keep a provider declaration separate from a body, even one with no clauses.
+#[derive(Clone, Debug)]
+pub(crate) enum Definition {
+    External(Symbol),
+    Body(Vec<Clause>),
 }
 
 #[derive(Clone, Debug)]

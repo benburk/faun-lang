@@ -7,12 +7,15 @@
 //! variable a caller fills with a function is caught where the function
 //! would be held.
 
-use crate::specialize::{Body, Clause, Expr, ExprKind, Program, SpecializeError, Type};
+use crate::specialize::{Body, Clause, Definition, Expr, ExprKind, Program, SpecializeError, Type};
 
 /// Refuse the first function value held anywhere but a call's argument.
 pub(crate) fn check(program: &Program) -> Result<(), SpecializeError> {
     for function in &program.functions {
-        for Clause { guard, body, .. } in &function.clauses {
+        let Definition::Body(clauses) = &function.definition else {
+            continue;
+        };
+        for Clause { guard, body, .. } in clauses {
             if let Some(guard) = guard {
                 value(guard, false)?;
             }
@@ -64,10 +67,10 @@ fn value(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
 /// A function, which may only go straight into a call, and never one with
 /// no parameters, which is a value.
 fn placed(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
-    let Type::Function(parameters, _) = &expression.ty else {
+    let Type::Function(signature) = &expression.ty else {
         return Ok(());
     };
-    if parameters.is_empty() {
+    if signature.parameters.is_empty() {
         return Err(located(
             expression,
             "a definition with no parameters is a value, reached as `name()`",

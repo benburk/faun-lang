@@ -29,8 +29,8 @@ use crate::Symbol;
 use crate::first_order as d;
 use crate::hir::{LocalId, SiteId};
 use crate::specialize::{
-    Body, Clause, Expr, ExprKind, Function, FunctionKey, Instance, Pattern, Program,
-    SpecializeError, Type,
+    Body, Clause, Definition, Expr, ExprKind, Function, FunctionKey, Instance, Pattern, Program,
+    Signature, SpecializeError, Type,
 };
 
 /// Replace every function value in `program` with the callbacks it stands
@@ -116,8 +116,10 @@ struct Frame {
 impl Frame {
     fn written(owner: FunctionKey, function: &Function) -> Self {
         let mut highest = 0;
-        for clause in &function.clauses {
-            highest = highest.max(clause_highest(clause));
+        if let Definition::Body(clauses) = &function.definition {
+            for clause in clauses {
+                highest = highest.max(clause_highest(clause));
+            }
         }
         Self {
             owner,
@@ -193,7 +195,10 @@ impl<'a> Callbacks<'a> {
     fn new(program: &'a Program) -> Self {
         let mut lambdas = HashMap::new();
         for function in &program.functions {
-            for clause in &function.clauses {
+            let Definition::Body(clauses) = &function.definition else {
+                continue;
+            };
+            for clause in clauses {
                 let mut found = |expression: &'a Expr| {
                     if let ExprKind::Lambda(site, patterns, body) = &expression.kind {
                         lambdas
@@ -222,7 +227,12 @@ impl<'a> Callbacks<'a> {
     }
 
     /// The definition `source` makes for `callbacks`, asked for once.
-    fn request(&mut self, source: Source, callbacks: Vec<Callback>, ty: Type) -> FunctionKey {
+    fn request(
+        &mut self,
+        source: Source,
+        callbacks: Vec<Callback>,
+        signature: Signature,
+    ) -> FunctionKey {
         if let Some(key) = self.made.get(&(source.clone(), callbacks.clone())) {
             return key.clone();
         }
@@ -231,7 +241,11 @@ impl<'a> Callbacks<'a> {
             Source::Written(key) => (key.name, Instance::Called(self.next)),
             Source::Lambda(owner, _) => (owner.name, Instance::Lambda(self.next)),
         };
-        let key = FunctionKey { name, ty, instance };
+        let key = FunctionKey {
+            name,
+            signature,
+            instance,
+        };
         self.made
             .insert((source.clone(), callbacks.clone()), key.clone());
         self.queue.push_back((source, callbacks, key.clone()));
@@ -264,18 +278,22 @@ impl<'a> Callbacks<'a> {
         frame: &Frame,
         callbacks: &[Callback],
     ) -> Result<d::Function, SpecializeError> {
-        let parameters = function
-            .key
-            .ty
-            .function()
-            .map(|(parameters, _)| parameters.to_vec())
-            .unwrap_or_default();
-        let mut clauses = Vec::with_capacity(function.clauses.len());
-        for clause in &function.clauses {
+        let written = match &function.definition {
+            Definition::External(provider) => {
+                return Ok(d::Function {
+                    key,
+                    definition: d::Definition::External(*provider),
+                });
+            }
+            Definition::Body(clauses) => clauses,
+        };
+        let parameters = &function.key.signature.parameters;
+        let mut clauses = Vec::with_capacity(written.len());
+        for clause in written {
             let mut frame = frame.again();
             let mut handed = callbacks.iter();
             let mut patterns = Vec::with_capacity(clause.patterns.len());
-            for (pattern, ty) in clause.patterns.iter().zip(&parameters) {
+            for (pattern, ty) in clause.patterns.iter().zip(parameters) {
                 if matches!(ty, Type::Function(..)) {
                     let callback = handed
                         .next()
@@ -297,8 +315,7 @@ impl<'a> Callbacks<'a> {
         }
         Ok(d::Function {
             key,
-            clauses,
-            provider: function.provider,
+            definition: d::Definition::Body(clauses),
         })
     }
 
@@ -344,10 +361,10 @@ impl<'a> Callbacks<'a> {
                 parameters.push(Pattern::Bind(*local));
             }
         }
-        let (types, _) = ty
-            .function()
-            .ok_or_else(|| internal("a lambda of a function type"))?;
-        for (pattern, ty) in patterns.iter().zip(types) {
+        let Type::Function(signature) = ty else {
+            return Err(internal("a lambda of a function type"));
+        };
+        for (pattern, ty) in patterns.iter().zip(&signature.parameters) {
             if matches!(ty, Type::Function(..)) {
                 let callback = handed
                     .next()
@@ -360,15 +377,14 @@ impl<'a> Callbacks<'a> {
         let result = self.expr(&mut frame, body)?;
         Ok(d::Function {
             key,
-            clauses: vec![d::Clause {
+            definition: d::Definition::Body(vec![d::Clause {
                 patterns: parameters,
                 guard: None,
                 body: d::Body {
                     bindings: Vec::new(),
                     result,
                 },
-            }],
-            provider: None,
+            }]),
         })
     }
 
@@ -461,13 +477,11 @@ impl<'a> Callbacks<'a> {
             ));
         }
         let handed = self.hand(frame, arguments)?;
-        let result = key
-            .ty
-            .function()
-            .map(|(_, result)| result.clone())
-            .ok_or_else(|| internal("a called definition of a function type"))?;
-        let ty = Type::Function(handed.types(), Box::new(result));
-        let made = self.request(Source::Written(key.clone()), handed.callbacks, ty);
+        let signature = Signature {
+            parameters: handed.types(),
+            result: key.signature.result.clone(),
+        };
+        let made = self.request(Source::Written(key.clone()), handed.callbacks, signature);
         Ok(d::ExprKind::DirectCall(made, handed.arguments))
     }
 
@@ -490,10 +504,17 @@ impl<'a> Callbacks<'a> {
                 let handed = self.hand(frame, arguments)?;
                 let mut types: Vec<Type> = carried.iter().map(|each| each.ty.clone()).collect();
                 types.extend(handed.types());
-                let ty = Type::Function(types, Box::new(answer.clone()));
+                let signature = Signature {
+                    parameters: types,
+                    result: Box::new(answer.clone()),
+                };
                 let mut callbacks = lambda.callbacks;
                 callbacks.extend(handed.callbacks);
-                let made = self.request(Source::Lambda(lambda.owner, lambda.site), callbacks, ty);
+                let made = self.request(
+                    Source::Lambda(lambda.owner, lambda.site),
+                    callbacks,
+                    signature,
+                );
                 let mut passed = carried;
                 passed.extend(handed.arguments);
                 Ok(d::ExprKind::DirectCall(made, passed))
@@ -601,11 +622,10 @@ fn carried(callback: &Callback, lambdas: &Lambdas) -> Vec<Type> {
 }
 
 fn takes_function(key: &FunctionKey) -> bool {
-    key.ty.function().is_some_and(|(parameters, _)| {
-        parameters
-            .iter()
-            .any(|parameter| matches!(parameter, Type::Function(..)))
-    })
+    key.signature
+        .parameters
+        .iter()
+        .any(|parameter| matches!(parameter, Type::Function(_)))
 }
 
 /// Visit every expression in `clause`, lambdas' bodies included.
@@ -805,5 +825,53 @@ fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
             }
         }
         Pattern::Wild | Pattern::Number { .. } | Pattern::Range | Pattern::String => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retains_signatures_and_distinguishes_empty_bodies_from_externals() {
+        let mut symbols = crate::Symbols::default();
+        let provider = symbols.intern("provider");
+        let key = |name| FunctionKey {
+            name,
+            signature: Signature {
+                parameters: vec![Type::empty()],
+                result: Box::new(Type::empty()),
+            },
+            instance: Instance::Written,
+        };
+        let external = key(symbols.intern("external"));
+        let defined = key(symbols.intern("defined"));
+        // No clause is needed for an uninhabited parameter. This is a body,
+        // not a declaration that asks a provider to supply one.
+        let program = lower(Program {
+            entry: None,
+            functions: vec![
+                Function {
+                    key: external.clone(),
+                    definition: Definition::External(provider),
+                },
+                Function {
+                    key: defined.clone(),
+                    definition: Definition::Body(Vec::new()),
+                },
+            ],
+            data: HashMap::new(),
+        })
+        .unwrap();
+        assert!(program.entry.is_none());
+        assert_eq!(program.functions.len(), 2);
+        assert_eq!(program.functions[0].key, external);
+        assert_eq!(program.functions[1].key, defined);
+        assert!(
+            matches!(program.functions[0].definition, d::Definition::External(found) if found == provider)
+        );
+        assert!(
+            matches!(&program.functions[1].definition, d::Definition::Body(clauses) if clauses.is_empty())
+        );
     }
 }

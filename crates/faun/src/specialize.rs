@@ -4,6 +4,8 @@
 //! entry signature and clones each reachable global at every concrete function
 //! type used by the program. Function values remain explicit until
 //! [`crate::callbacks`] makes each into the definition it is handed to.
+//! Every function key carries a signature, not an arbitrary type; an external
+//! names its provider instead of carrying an empty body.
 
 #![allow(clippy::too_many_lines)]
 
@@ -24,7 +26,7 @@ use crate::{ModuleId, Symbol};
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Type {
     Named(Symbol, Vec<Self>),
-    Function(Vec<Self>, Box<Self>),
+    Function(Signature),
     /// A closed tag row, its tags in one order so that two spellings of one
     /// row are one type. The empty row is the type with no values.
     Variants(Vec<(Symbol, Vec<Self>)>),
@@ -46,19 +48,28 @@ impl Type {
         Self::Variants(tags)
     }
 
-    pub(crate) fn function(&self) -> Option<(&[Self], &Self)> {
-        let Self::Function(parameters, result) = self else {
-            return None;
-        };
-        Some((parameters, result))
+    /// Take the signature at a checked function boundary.
+    fn into_signature(self) -> Result<Signature, SpecializeError> {
+        match self {
+            Self::Function(signature) => Ok(signature),
+            _ => Err(error("a checked function has a non-function type")),
+        }
     }
+}
+
+/// A concrete function's parameters and result, including callback signatures.
+/// The result is boxed to break the recursion through `Type::Function`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct Signature {
+    pub(crate) parameters: Vec<Type>,
+    pub(crate) result: Box<Type>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct FunctionKey {
     pub(crate) name: Symbol,
-    pub(crate) ty: Type,
-    /// Which of the definitions made from `name` at `ty` this is.
+    pub(crate) signature: Signature,
+    /// Which definition made from `name` at this signature this is.
     pub(crate) instance: Instance,
 }
 
@@ -91,8 +102,14 @@ pub(crate) struct Constructor {
 #[derive(Clone, Debug)]
 pub(crate) struct Function {
     pub(crate) key: FunctionKey,
-    pub(crate) clauses: Vec<Clause>,
-    pub(crate) provider: Option<Symbol>,
+    pub(crate) definition: Definition,
+}
+
+/// Keep a provider declaration separate from a body, even one with no clauses.
+#[derive(Clone, Debug)]
+pub(crate) enum Definition {
+    External(Symbol),
+    Body(Vec<Clause>),
 }
 
 #[derive(Clone, Debug)]
@@ -264,16 +281,13 @@ fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, Specializ
             .filter(|variable| ordinary.contains(variable))
             .map(|variable| (*variable, Type::empty()))
             .collect();
-        let ty = substitute_type(&scheme.ty, &placeholder)?;
-        let Some((parameters, _)) = ty.function() else {
-            continue;
-        };
-        if parameters.iter().any(holds_function) {
+        let signature = substitute_type(&scheme.ty, &placeholder)?.into_signature()?;
+        if signature.parameters.iter().any(holds_function) {
             continue;
         }
         roots.push(FunctionKey {
             name: clause.name,
-            ty,
+            signature,
             instance: Instance::Written,
         });
     }
@@ -283,7 +297,7 @@ fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, Specializ
 /// Whether a value of `ty` may hold a function, as far as its type says.
 fn holds_function(ty: &Type) -> bool {
     match ty {
-        Type::Function(_, _) => true,
+        Type::Function(_) => true,
         Type::Named(_, arguments) => arguments.iter().any(holds_function),
         Type::Record(fields) => fields.iter().any(|(_, field)| holds_function(field)),
         Type::Tuple(members) => members.iter().any(holds_function),
@@ -470,11 +484,8 @@ impl<'a> Specializer<'a> {
             .values
             .get(&entry)
             .ok_or_else(|| error("entry has no inferred type"))?;
-        let entry_ty = concrete_scheme(scheme)?;
-        let (parameters, _) = entry_ty
-            .function()
-            .ok_or_else(|| error("entry is not a function"))?;
-        let valid_parameters = match (application_host, parameters) {
+        let signature = concrete_scheme(scheme)?.into_signature()?;
+        let valid_parameters = match (application_host, signature.parameters.as_slice()) {
             (None, []) => true,
             (Some(host), [Type::Named(found, arguments)]) => *found == host && arguments.is_empty(),
             _ => false,
@@ -487,7 +498,7 @@ impl<'a> Specializer<'a> {
         }
         Ok(FunctionKey {
             name: entry,
-            ty: entry_ty,
+            signature,
             instance: Instance::Written,
         })
     }
@@ -531,7 +542,7 @@ impl<'a> Specializer<'a> {
 
     /// Ask for `key`, which the expression at `at` calls.
     fn request_at(&mut self, key: FunctionKey, at: (ModuleId, crate::ast::Span)) {
-        if self.is_structural(key.name, key.ty.function().map(|(p, _)| p)) {
+        if self.is_structural(key.name, &key.signature.parameters) {
             self.structural.entry(key.clone()).or_insert(at);
         }
         self.request(key);
@@ -540,8 +551,8 @@ impl<'a> Specializer<'a> {
     /// Whether `name` on these parameters is a closed record's or a
     /// tuple's own `equals`, `cmp`, `to_str` or `hash_into`, or a tag row's
     /// own `equals` or `to_str`.
-    fn is_structural(&self, name: Symbol, parameters: Option<&[Type]>) -> bool {
-        let receiver = parameters.and_then(<[Type]>::first);
+    fn is_structural(&self, name: Symbol, parameters: &[Type]) -> bool {
+        let receiver = parameters.first();
         let name = Some(name);
         (name == self.prelude.equals
             && matches!(
@@ -562,14 +573,16 @@ impl<'a> Specializer<'a> {
             return self.structural_function(key, at);
         }
         let clauses = self.definitions.get(&key.name).cloned().unwrap_or_default();
-        let provider =
-            if clauses.is_empty() {
-                Some(*self.signatures.get(&key.name).ok_or_else(|| {
-                    error("reachable function has neither a body nor a signature")
-                })?)
-            } else {
-                None
-            };
+        if clauses.is_empty() {
+            let provider = *self
+                .signatures
+                .get(&key.name)
+                .ok_or_else(|| error("reachable function has neither a body nor a signature"))?;
+            return Ok(Function {
+                key: key.clone(),
+                definition: Definition::External(provider),
+            });
+        }
         let mut specialized = Vec::with_capacity(clauses.len());
         for (module, clause) in clauses {
             let site = *self
@@ -577,20 +590,19 @@ impl<'a> Specializer<'a> {
                 .get(&clause.site)
                 .ok_or_else(|| error("checked clause type is missing"))?;
             let mut substitution = HashMap::new();
-            match_type(&site.ty, &key.ty, &mut substitution)?;
+            match_signature(&site.ty, &key.signature, &mut substitution)?;
             self.discharge(&site.bounds, &mut substitution)
                 .map_err(|message| located(module, clause.span, &message))?;
-            let (parameters, _) = key
-                .ty
-                .function()
-                .ok_or_else(|| error("a specialized definition is not a function"))?;
-            let parameters = parameters.to_vec();
-            specialized.extend(self.clause(module, clause, &substitution, &parameters)?);
+            specialized.extend(self.clause(
+                module,
+                clause,
+                &substitution,
+                &key.signature.parameters,
+            )?);
         }
         Ok(Function {
             key: key.clone(),
-            clauses: specialized,
-            provider,
+            definition: Definition::Body(specialized),
         })
     }
 
@@ -604,11 +616,8 @@ impl<'a> Specializer<'a> {
         key: &FunctionKey,
         at: (ModuleId, crate::ast::Span),
     ) -> Result<Function, SpecializeError> {
-        let (parameters, answer) = key
-            .ty
-            .function()
-            .ok_or_else(|| error("a structural member is not a function"))?;
-        let (receiver, answer) = (parameters[0].clone(), answer.clone());
+        let receiver = key.signature.parameters[0].clone();
+        let answer = key.signature.result.as_ref().clone();
         if Some(key.name) == self.prelude.to_str {
             return match &receiver {
                 Type::Variants(tags) => self.row_to_str(key, at, tags),
@@ -687,8 +696,7 @@ impl<'a> Specializer<'a> {
         };
         Ok(Function {
             key: key.clone(),
-            clauses,
-            provider: None,
+            definition: Definition::Body(clauses),
         })
     }
 
@@ -767,8 +775,7 @@ impl<'a> Specializer<'a> {
         }
         Ok(Function {
             key: key.clone(),
-            clauses,
-            provider: None,
+            definition: Definition::Body(clauses),
         })
     }
 
@@ -840,7 +847,7 @@ impl<'a> Specializer<'a> {
         }
         Ok(Function {
             key: key.clone(),
-            clauses: vec![Clause {
+            definition: Definition::Body(vec![Clause {
                 patterns: vec![shape(
                     (0..count)
                         .map(|index| Pattern::Bind(h::LocalId(index)))
@@ -851,8 +858,7 @@ impl<'a> Specializer<'a> {
                     bindings: Vec::new(),
                     result,
                 },
-            }],
-            provider: None,
+            }]),
         })
     }
 
@@ -1311,14 +1317,14 @@ impl<'a> Specializer<'a> {
             h::ExprKind::Global(name) => {
                 let key = FunctionKey {
                     name: *name,
-                    ty: ty.clone(),
+                    signature: ty.clone().into_signature()?,
                     instance: Instance::Written,
                 };
                 self.request(key.clone());
                 ExprKind::Function(key)
             }
             // A tag is built as the constructor of its row it names.
-            h::ExprKind::Tag(label) if matches!(ty, Type::Function(_, _)) => {
+            h::ExprKind::Tag(label) if matches!(ty, Type::Function(_)) => {
                 ExprKind::ConstructorFunction(*label)
             }
             h::ExprKind::Tag(label) => ExprKind::Construct(*label, Vec::new()),
@@ -1327,14 +1333,14 @@ impl<'a> Specializer<'a> {
             }
             h::ExprKind::Dual(dual) => {
                 let read = read(dual, &self.checked.readings);
-                if matches!(ty, Type::Function(_, _)) {
+                if matches!(ty, Type::Function(_)) {
                     ExprKind::ConstructorFunction(read)
                 } else {
                     ExprKind::Construct(read, Vec::new())
                 }
             }
             h::ExprKind::Constructor(constructor) => {
-                if matches!(ty, Type::Function(_, _)) {
+                if matches!(ty, Type::Function(_)) {
                     ExprKind::ConstructorFunction(*constructor)
                 } else {
                     ExprKind::Construct(*constructor, Vec::new())
@@ -1419,7 +1425,7 @@ impl<'a> Specializer<'a> {
                         let head_ty = self.expression_type(head.site, substitution)?;
                         let key = FunctionKey {
                             name: *name,
-                            ty: head_ty,
+                            signature: head_ty.into_signature()?,
                             instance: Instance::Written,
                         };
                         self.request(key.clone());
@@ -1437,7 +1443,10 @@ impl<'a> Specializer<'a> {
                         let parameters = arguments.iter().map(|argument| argument.ty.clone());
                         let key = FunctionKey {
                             name: target,
-                            ty: Type::Function(parameters.collect(), Box::new(ty.clone())),
+                            signature: Signature {
+                                parameters: parameters.collect(),
+                                result: Box::new(ty.clone()),
+                            },
                             instance: Instance::Written,
                         };
                         self.request(key.clone());
@@ -1646,7 +1655,7 @@ impl<'a> Specializer<'a> {
 
     /// Which method of `owner` is its `member`.
     fn implementation(&self, owner: &Type, member: Symbol) -> Result<Symbol, SpecializeError> {
-        if self.is_structural(member, Some(std::slice::from_ref(owner))) {
+        if self.is_structural(member, std::slice::from_ref(owner)) {
             return Ok(member);
         }
         let Type::Named(name, _) = owner else {
@@ -1686,7 +1695,7 @@ impl<'a> Specializer<'a> {
                     .map_err(|failure| failure.message)?;
                 // A record's or a tuple's own member takes two of it: the
                 // owner says all there is.
-                if self.is_structural(target, Some(std::slice::from_ref(&owner))) {
+                if self.is_structural(target, std::slice::from_ref(&owner)) {
                     continue;
                 }
                 let scheme = self
@@ -1856,11 +1865,14 @@ impl<'a> Specializer<'a> {
         let mut parameters = Vec::with_capacity(arguments.len() + 1);
         parameters.push(receiver.clone());
         parameters.extend_from_slice(arguments);
-        let ty = Type::Function(parameters, Box::new(result.clone()));
-        if self.is_structural(name, ty.function().map(|(p, _)| p)) {
+        let signature = Signature {
+            parameters,
+            result: Box::new(result.clone()),
+        };
+        if self.is_structural(name, &signature.parameters) {
             return Ok(FunctionKey {
                 name,
-                ty,
+                signature,
                 instance: Instance::Written,
             });
         }
@@ -1870,10 +1882,10 @@ impl<'a> Specializer<'a> {
             .get(&name)
             .ok_or_else(|| error("method target has no inferred scheme"))?;
         let mut substitution = HashMap::new();
-        match_type(&scheme.ty, &ty, &mut substitution)?;
+        match_signature(&scheme.ty, &signature, &mut substitution)?;
         Ok(FunctionKey {
             name,
-            ty,
+            signature,
             instance: Instance::Written,
         })
     }
@@ -1917,26 +1929,22 @@ impl<'a> Specializer<'a> {
                     .values
                     .get(function)
                     .ok_or_else(|| error("literal helper has no inferred scheme"))?;
-                let Type::Function(parameters, result) = scheme_result(scheme, expected)? else {
-                    unreachable!("a literal helper scheme is a function")
-                };
-                if arguments.len() != parameters.len() {
+                let signature = scheme_result(scheme, expected)?;
+                if arguments.len() != signature.parameters.len() {
                     return Err(error("literal helper arity does not match its declaration"));
                 }
                 let key = FunctionKey {
                     name: *function,
-                    ty: Type::Function(parameters.clone(), result),
+                    signature,
                     instance: Instance::Written,
                 };
                 self.request(key.clone());
-                ExprKind::DirectCall(
-                    key,
-                    arguments
-                        .iter()
-                        .zip(parameters)
-                        .map(|(argument, ty)| self.literal(module, span, argument, &ty))
-                        .collect::<Result<_, _>>()?,
-                )
+                let arguments = arguments
+                    .iter()
+                    .zip(&key.signature.parameters)
+                    .map(|(argument, ty)| self.literal(module, span, argument, ty))
+                    .collect::<Result<_, _>>()?;
+                ExprKind::DirectCall(key, arguments)
             }
         };
         Ok(Expr {
@@ -2155,13 +2163,13 @@ fn substitute_type(
                 .map(|argument| substitute_type(argument, substitution))
                 .collect::<Result<_, _>>()?,
         )),
-        InferredType::Function(parameters, result) => Ok(Type::Function(
-            parameters
+        InferredType::Function(parameters, result) => Ok(Type::Function(Signature {
+            parameters: parameters
                 .iter()
                 .map(|parameter| substitute_type(parameter, substitution))
                 .collect::<Result<_, _>>()?,
-            Box::new(substitute_type(result, substitution)?),
-        )),
+            result: Box::new(substitute_type(result, substitution)?),
+        })),
         // A rest nothing pinned holds no tags: no value the program builds
         // carries one it did not write.
         InferredType::Variants(tags, tail) => {
@@ -2219,6 +2227,24 @@ fn substitute_type(
     }
 }
 
+/// Match a checked signature without wrapping and cloning its concrete type.
+fn match_signature(
+    template: &InferredType,
+    concrete: &Signature,
+    substitution: &mut HashMap<TypeVariable, Type>,
+) -> Result<(), SpecializeError> {
+    let InferredType::Function(parameters, result) = template else {
+        return Err(error("a checked function has a non-function type"));
+    };
+    if parameters.len() != concrete.parameters.len() {
+        return Err(error("a concrete use does not match its inferred scheme"));
+    }
+    for (parameter, concrete) in parameters.iter().zip(&concrete.parameters) {
+        match_type(parameter, concrete, substitution)?;
+    }
+    match_type(result, &concrete.result, substitution)
+}
+
 fn match_type(
     template: &InferredType,
     concrete: &Type,
@@ -2243,11 +2269,8 @@ fn match_type(
             }
             Ok(())
         }
-        (InferredType::Function(ap, ar), Type::Function(bp, br)) if ap.len() == bp.len() => {
-            for (a, b) in ap.iter().zip(bp) {
-                match_type(a, b, substitution)?;
-            }
-            match_type(ar, br, substitution)
+        (InferredType::Function(..), Type::Function(signature)) => {
+            match_signature(template, signature, substitution)
         }
         (InferredType::Variants(tags, tail), Type::Variants(concrete)) => {
             for (label, fields) in tags {
@@ -2300,13 +2323,13 @@ fn match_type(
     }
 }
 
-fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Type, SpecializeError> {
+fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Signature, SpecializeError> {
     let InferredType::Function(_, template_result) = &scheme.ty else {
         return Err(error("literal helper is not a function"));
     };
     let mut substitution = HashMap::new();
     match_type(template_result, result, &mut substitution)?;
-    substitute_type(&scheme.ty, &substitution)
+    substitute_type(&scheme.ty, &substitution)?.into_signature()
 }
 
 pub(crate) fn surface_type(
@@ -2325,13 +2348,13 @@ pub(crate) fn surface_type(
             .get(variable)
             .cloned()
             .ok_or_else(|| error("data field contains an unbound type variable")),
-        h::Type::Function(parameters, result) => Ok(Type::Function(
-            parameters
+        h::Type::Function(parameters, result) => Ok(Type::Function(Signature {
+            parameters: parameters
                 .iter()
                 .map(|parameter| surface_type(parameter, variables))
                 .collect::<Result<_, _>>()?,
-            Box::new(surface_type(result, variables)?),
-        )),
+            result: Box::new(surface_type(result, variables)?),
+        })),
         h::Type::Variants(constructors) => Ok(Type::row(
             constructors
                 .iter()
