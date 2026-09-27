@@ -1222,6 +1222,36 @@ fn has_constant_only_multiply(program: &Program, instructions: &[(&Op, &[ValueId
     })
 }
 
+/// A number past what the word holds is held as words, and answers what it
+/// would whole: a sum, a product, a difference, a quotient by a small number
+/// and an order, each past sixteen bits, which the 6502's word is.
+#[test]
+fn a_number_wider_than_the_word_is_held_as_words() {
+    let program = read(
+        "import std.host {Host}
+
+         above : (Nat, Nat) -> Nat
+         above(x, limit) if x > limit -> 1
+         above(_, _) -> 0
+
+         main! : Host -> []
+         main!(host) ->
+           n = host.args.len() + 70000
+           m = n + n
+           p = n * 3
+           d = p - n
+           q = p / 7
+           host.exit!(above(m, 140001) + 2 * above(p, 210002) + 4 * above(d, 140001) + 8 * above(q, 30000) + 16 * above(m, 140002))",
+    )
+    .expect("a program with numbers wider than a small word");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    // One argument: 70001, twice 140002, thrice 210003, less once 140002,
+    // over seven 30000.
+    assert_eq!(execute(&program).0, 7);
+}
+
 /// A known string is laid out once, however long: its bytes are in the
 /// image as they are, so a longer one costs its bytes and nothing more, and
 /// a walk over it reads them there.

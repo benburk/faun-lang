@@ -578,10 +578,8 @@ fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
         assert!(legalize(&p, fixed_heap(64, 256)).is_err());
     }
     let (mut p, main) = Program::new("main");
-    // Wider than the machine, which is a program this cannot represent
-    // rather than one it can hold. Nothing above can write a width no
-    // number needs, so the width said here is one a smaller machine has
-    // not got.
+    // Wider than the machine's word, which splitting holds as words first;
+    // legalizing it as it stands would read it as one.
     p.define(main, |b, _| {
         b.constant(Class::fixed(17), 1);
         let zero = b.constant(Class::Word, 0);
@@ -590,8 +588,9 @@ fn unsupported_representations_are_errors_not_pointer_reinterpretations() {
     assert!(
         legalize(&p, fixed_heap(16, 256))
             .unwrap_err()
-            .contains("Fixed")
+            .contains("held as words")
     );
+    assert!(legalize(&split(&p, 16), fixed_heap(16, 256)).is_ok());
 }
 
 #[test]

@@ -37,9 +37,10 @@ use super::{
 /// image/pool/frame placement.
 ///
 /// # Errors
-/// Rejects invalid IR, unsupported host/address conversions, wide fixed-width
-/// values, invalid runtime configuration, and constants exceeding the layout.
-/// Wide `Fixed` remains unsupported: it is a fit assertion, not a modulus.
+/// Rejects invalid IR, unsupported host/address conversions, fixed widths
+/// wider than the word, invalid runtime configuration, and constants
+/// exceeding the layout. A fixed width wider than the word is held as words,
+/// which [`super::split`] makes it before this runs.
 pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     validate(source)?;
     if !matches!(config.word_bits, 16 | 32 | 64) {
@@ -359,7 +360,7 @@ fn check_classes(source: &Program, config: Config) -> Result<(), String> {
             && bits > config.word_bits
         {
             return Err(format!(
-                "natural legalization does not yet support Fixed {{ bits: {bits} }} on a {} bit target",
+                "a {bits}-bit number is held as words on a {}-bit target, which splitting does first",
                 config.word_bits
             ));
         }

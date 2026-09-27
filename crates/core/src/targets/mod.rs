@@ -136,6 +136,10 @@ pub trait Target: fmt::Debug {
     /// Reports invalid IR or a representation this target cannot safely emit.
     fn prepare(&self, program: &Program) -> Result<Program, String> {
         crate::ir::validate(program)?;
+        // A number wider than the word becomes words first, which may make
+        // more cross a boundary than fits; fitting then packs the rest.
+        let program = &crate::ir::split(program, self.word());
+        crate::ir::validate(program).map_err(|error| format!("after splitting: {error}"))?;
         let program = &crate::ir::fit(program, self.budget());
         // The 6502 backend has image/frame and hardware-stack limits not yet
         // audited for generated runtime helpers. Do not enter its infallible

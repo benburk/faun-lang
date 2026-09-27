@@ -62,6 +62,7 @@
 mod arithmetic;
 mod builder;
 mod cell;
+mod digits;
 pub mod evaluate;
 mod fit;
 mod layout;
@@ -78,6 +79,7 @@ mod prune;
 mod rewrite;
 mod sequence;
 mod simplify;
+mod split;
 mod validate;
 
 pub use builder::Builder;
@@ -91,6 +93,7 @@ pub use model::{
 };
 pub use optimize::optimize;
 pub use program::Program;
+pub use split::split;
 pub use validate::validate;
 
 #[cfg(test)]
@@ -115,6 +118,8 @@ mod optimize_tests;
 mod ownership_tests;
 #[cfg(test)]
 mod representation_tests;
+#[cfg(test)]
+mod split_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

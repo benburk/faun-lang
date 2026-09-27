@@ -19,11 +19,7 @@
 //! first, so a number takes as few loop steps as a word holds it in.
 //!
 //! Nothing here asks a target for more than a word's arithmetic, which
-//! wraps. A carry out of a sum is the sum coming out less than what was
-//! added, and a digit's product with another is worked out from the halves
-//! of each, each product of halves fitting a word. A target free to do
-//! better -- an add with carry, a multiply answering both words -- sees the
-//! pattern where it lowers these.
+//! wraps: digits are added, taken and multiplied as the `digits` module says.
 //!
 //! Division is Knuth's algorithm D, a digit of the quotient at a time, each
 //! estimated from the top digits and corrected, with both operands scaled
@@ -50,6 +46,7 @@
 
 use num_bigint::BigUint;
 
+use super::digits::{add_carry, mul_wide, sub_borrow};
 use super::{
     Binary, Builder, Class, DataId, Direction, FunctionId, Offset, Program, Relation, ValueId,
     Width,
@@ -430,50 +427,9 @@ fn write_digit(b: &mut Builder<'_>, a: ValueId, i: ValueId, v: ValueId, word: us
     b.store(Width::Word, at, Offset::Bytes(0), v);
 }
 
-/// `x + y + carry` for digits and a carry of nought or one: the digit of
-/// the sum, and its carry. Each add wraps, and came out less than what it
-/// added exactly where it carried; at most one of the two does.
-fn add_carry(b: &mut Builder<'_>, x: ValueId, y: ValueId, carry: ValueId) -> (ValueId, ValueId) {
-    let partial = add(b, x, y);
-    let first = lt(b, partial, x);
-    let sum = add(b, partial, carry);
-    let second = lt(b, sum, partial);
-    (sum, add(b, first, second))
-}
-
-/// `x - y - borrow` for digits and a borrow of nought or one: the digit of
-/// the difference, and its borrow. At most one of the two borrows.
-fn sub_borrow(b: &mut Builder<'_>, x: ValueId, y: ValueId, borrow: ValueId) -> (ValueId, ValueId) {
-    let partial = sub(b, x, y);
-    let first = lt(b, x, y);
-    let difference = sub(b, partial, borrow);
-    let second = lt(b, partial, borrow);
-    (difference, add(b, first, second))
-}
-
-/// The two digits of `x * y`, low then high, from the four products of
-/// their halves, each of which fits a word.
-fn mul_wide(b: &mut Builder<'_>, x: ValueId, y: ValueId, word: usize) -> (ValueId, ValueId) {
-    let bits = u16::try_from(word * 4).expect("half a word's bits fit u16");
-    let half = number(b, 1 << bits);
-    let [x0, y0] = [x, y].map(|v| b.binary(Binary::Mod, v, half));
-    let [x1, y1] = [x, y].map(|v| b.shift(W, Direction::Down, v, bits));
-    let low = b.binary(Binary::Mul, x0, y0);
-    let across = b.binary(Binary::Mul, x0, y1);
-    let back = b.binary(Binary::Mul, x1, y0);
-    let high = b.binary(Binary::Mul, x1, y1);
-    // The two middle products may carry past the word, which is a whole
-    // half-word's worth of the high digit.
-    let middle = add(b, across, back);
-    let middle_carry = lt(b, middle, across);
-    let shifted = b.shift(W, Direction::Up, middle, bits);
-    let lo = add(b, low, shifted);
-    let low_carry = lt(b, lo, low);
-    let upper = b.shift(W, Direction::Down, middle, bits);
-    let carried = b.shift(W, Direction::Up, middle_carry, bits);
-    let hi = add(b, high, upper);
-    let hi = add(b, hi, carried);
-    (lo, add(b, hi, low_carry))
+/// The bits of a target's word, from its bytes.
+fn word_bits(word: usize) -> u16 {
+    u16::try_from(word * 8).expect("a word's bits fit u16")
 }
 
 fn declare(p: &mut Program, name: &str, params: &[Class], result: &[Class]) -> FunctionId {
@@ -1879,7 +1835,7 @@ fn multiply_row(p: &mut Program, word: usize) -> FunctionId {
             let acc = read_digit(b, out, at, word);
             // (B-1)(B-1) + (B-1) + (B-1) is B*B - 1: two digits, so the
             // high digit and what adding carried is one digit again.
-            let (low, high) = mul_wide(b, x, y, word);
+            let (low, high) = mul_wide(b, x, y, word_bits(word));
             let (sum, carried) = add_carry(b, low, acc, carry);
             write_digit(b, out, at, sum, word);
             let next = add(b, j, one);
@@ -2078,7 +2034,7 @@ fn scaling(p: &mut Program, word: usize) -> FunctionId {
             let done = eq(b, i, len);
             b.if_(done, &[], |b| b.break_(&[carry]), |b| b.yield_(&[]));
             let x = read_digit(b, from, i, word);
-            let (low, high) = mul_wide(b, x, pow, word);
+            let (low, high) = mul_wide(b, x, pow, word_bits(word));
             let digit = add(b, low, carry);
             write_digit(b, to, i, digit, word);
             let next = add(b, i, one);
@@ -2194,7 +2150,7 @@ fn corrected(
 ) -> ValueId {
     b.loop_(&start, &[W], |b, state| {
         let (q, r) = (state[0], state[1]);
-        let (low, high) = mul_wide(b, q, v2, word);
+        let (low, high) = mul_wide(b, q, v2, word_bits(word));
         let past = lt(b, r, high);
         let level = eq(b, high, r);
         let low_past = lt(b, u0, low);
@@ -2229,7 +2185,7 @@ fn multiplying_out(p: &mut Program, word: usize) -> FunctionId {
             let done = eq(b, i, n);
             b.if_(done, &[], |b| b.break_(&[owed]), |b| b.yield_(&[]));
             let y = read_digit(b, v, i, word);
-            let (low, high) = mul_wide(b, q, y, word);
+            let (low, high) = mul_wide(b, q, y, word_bits(word));
             let at = add(b, i, j);
             let x = read_digit(b, u, at, word);
             let (digit, borrowed) = sub_borrow(b, x, low, owed);
