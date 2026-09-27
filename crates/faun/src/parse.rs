@@ -3,7 +3,7 @@ use std::fmt;
 use super::ast::Module;
 use super::ast::Span;
 use super::grammar;
-use super::lex::{self, Kind};
+use super::lex;
 use super::lines;
 use super::literal;
 use super::source::SourceId;
@@ -38,8 +38,8 @@ impl std::error::Error for ParseError {}
 ///
 /// # Errors
 ///
-/// Returns the first lexical or grammatical error with a one-based line and
-/// column. Forms outside the subset are syntax errors for now.
+/// Report syntax errors with one-based lines and columns, collecting those
+/// found by grammar recovery. Reject invalid literals and discarded pure values.
 pub fn parse(source: &str) -> Result<Module, ParseError> {
     parse_in(source, SourceId::DETACHED)
 }
@@ -51,7 +51,8 @@ pub fn parse(source: &str) -> Result<Module, ParseError> {
 ///
 /// # Errors
 ///
-/// Returns the first lexical or grammatical error.
+/// Report syntax errors as [`parse`] does. Reject invalid literals and
+/// discarded pure values.
 ///
 /// # Panics
 ///
@@ -59,9 +60,6 @@ pub fn parse(source: &str) -> Result<Module, ParseError> {
 /// offset; such a target cannot hold a maximum-size accepted source.
 pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError> {
     let tokens = lex::lex(source).map_err(|error| error_at(source, 0, error.to_string()))?;
-    let validate_literals = tokens
-        .iter()
-        .any(|token| matches!(token.kind, Kind::Char | Kind::StrText));
     let (lines, errors) = grammar::file(&tokens, source);
     let mut errors = errors
         .into_iter()
@@ -72,55 +70,12 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
     }
     let items =
         lines::items(lines, source).map_err(|error| spanned(source, error.span, error.message))?;
-    let mut module = Module {
-        source: SourceId::DETACHED,
+    literal::validate(&tokens, source)
+        .map_err(|error| spanned(source, error.span, error.message))?;
+    Ok(Module {
+        source: source_id,
         items,
-    };
-    if let Some(line) = discarded_values(&module, source) {
-        return Err(spanned(
-            source,
-            line,
-            "this value is worked out and then thrown away; remove the line, or bind the value to a name if you need it".to_owned(),
-        ));
-    }
-    if validate_literals {
-        literal::validate(&module, source).map_err(|error| {
-            let offset = usize::try_from(error.span.start).expect("u32 fits usize");
-            error_at(source, offset, error.message)
-        })?;
-    }
-    module.source = source_id;
-    Ok(module)
-}
-
-/// The first line of a body that keeps nothing of what it works out and is
-/// no effect: a call of a name ending `!`, directly or as a method, is the
-/// only thing worth asking for what it does.
-fn discarded_values(module: &Module, source: &str) -> Option<Span> {
-    use crate::ast::{ExprKind, Item, MethodItem};
-    let effect = |expression: &crate::ast::Expr| match &expression.kind {
-        ExprKind::Call(head, _) => {
-            matches!(&head.kind, ExprKind::Name(name) if name.text(source).ends_with('!'))
-        }
-        ExprKind::Method(_, name, _) => name.text(source).ends_with('!'),
-        _ => false,
-    };
-    let clauses = module.items.iter().flat_map(|item| match item {
-        Item::Clause(clause) | Item::Expect(clause) => vec![clause],
-        Item::Data(data) => data
-            .methods
-            .iter()
-            .filter_map(|method| match method {
-                MethodItem::Clause(clause) => Some(clause),
-                MethodItem::Signature(_) => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    });
-    clauses
-        .flat_map(|clause| &clause.body.bindings)
-        .find(|binding| binding.discarded && !effect(&binding.value))
-        .map(|binding| binding.value.span)
+    })
 }
 
 /// An error about the text `span` covers.

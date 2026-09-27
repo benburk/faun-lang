@@ -160,10 +160,7 @@ fn what_is_not_a_pattern_or_only_a_pattern_says_so() {
         ("f(1..-1) -> 1\n", "`1..-1` is reversed"),
         ("f(_.._) -> 1\n", "`_.._` bounds nothing"),
         ("f(-(1..3)) -> 1\n", "`-(1..3)` is not a pattern"),
-        (
-            "f(x) -> x\ny\nf : Nat -> Nat\nz\n",
-            "belongs to no definition",
-        ),
+        ("f(x) -> x\nf : Nat -> Nat\nz\n", "belongs to no definition"),
         (
             "F(x) -> x\n",
             "a clause begins with its name and its patterns",
@@ -261,4 +258,78 @@ fn a_range_s_ends_may_be_negated_or_left_open() {
             (Some(true), Some(true)),
         ]
     );
+}
+
+#[test]
+fn decimal_limits_do_not_depend_on_other_literals_in_the_file() {
+    for suffix in ["", "\ntext() -> \"text\"", "\ncharacter() -> 'x'"] {
+        for exponent in ["10001", "-10001", "4294967296"] {
+            let source = format!("number() -> 1.0e{exponent}{suffix}");
+            let error = parse(&source).unwrap_err();
+            assert!(error.message.contains("reaches past 10000"), "{error}");
+            assert_eq!((error.line, error.column), (1, 13));
+        }
+    }
+    for exponent in ["10000", "-10000"] {
+        parse(&format!("number() -> 1.0e{exponent}")).unwrap();
+    }
+}
+
+#[test]
+fn literal_validation_reaches_every_syntactic_position() {
+    for source in [
+        r#"value() -> "\q""#,
+        r#"match("\q") -> 0"#,
+        r"match('\q'..'z') -> 0",
+        r"match(x) if x == '\q' -> 0",
+        "value() ->\n  x = '\\q'\n  x",
+        r"value() -> map(|'\q'| 0)",
+        r#"value() -> "${'\q'}""#,
+        r#"value() -> "${"\q"}""#,
+        "T : Nat.(\n  value() -> \"\\q\"\n)",
+        r#"expect "\q" == """#,
+        r#"package {dep: "\q"}"#,
+    ] {
+        let error = parse(source).unwrap_err();
+        assert!(
+            error.message.contains("unknown escape"),
+            "{source}: {error}"
+        );
+    }
+}
+
+#[test]
+fn literal_errors_cover_the_literal_at_its_unicode_source_position() {
+    let source = "value() -> (\"é\", '\\q')";
+    let error = parse(source).unwrap_err();
+    let start = source.find("'\\q'").unwrap();
+    assert_eq!((error.offset, error.end), (start, start + 4));
+    assert_eq!((error.line, error.column), (1, 18));
+}
+
+#[test]
+fn a_discarded_value_must_be_an_effect_in_every_kind_of_body() {
+    for source in [
+        "value(x) ->\n  x\n  x",
+        "value(x) ->\n  f(x)\n  x",
+        "value(x) ->\n  x.f()\n  x",
+        "T : Nat.(\n  value(x) ->\n    x\n    x\n)",
+        "expect\n  True\n  True",
+    ] {
+        let error = parse(source).unwrap_err();
+        assert!(
+            error.message.contains("then thrown away"),
+            "{source}: {error}"
+        );
+    }
+    for source in [
+        "value(x) ->\n  f!(x)\n  x",
+        "value(x) ->\n  x.f!()\n  x",
+        "value(x) ->\n  _ = f(x)\n  x",
+        "value(x) -> x",
+        "T : Nat.(\n  value(x) ->\n    f!(x)\n    x\n)",
+        "expect\n  f!()\n  True",
+    ] {
+        parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
 }

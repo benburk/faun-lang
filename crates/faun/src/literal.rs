@@ -9,10 +9,8 @@ use std::fmt;
 
 use num_bigint::BigUint;
 
-use super::ast::{
-    Body, Clause, Expr, ExprKind, Item, MethodItem, Module, Numeral, NumeralKind, Pattern, Span,
-    StringPart,
-};
+use super::ast::{Numeral, NumeralKind, Span};
+use super::lex::{Kind, Token};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiteralError {
@@ -111,24 +109,23 @@ pub fn magnitude(numeral: Numeral, source: &str) -> Result<BigUint, LiteralError
                     message: format!("invalid base-{} numeral `{text}`", numeral.radix(source)),
                 })
         }
-        NumeralKind::Character => character(numeral, text),
+        NumeralKind::Character => {
+            character(numeral.span, text).map(|value| BigUint::from(u32::from(value)))
+        }
     }
 }
 
 /// The scalar value a character literal, `text`, holds.
-fn character(numeral: Numeral, text: &str) -> Result<BigUint, LiteralError> {
+fn character(span: Span, text: &str) -> Result<char, LiteralError> {
     let refused = |message: &str| LiteralError {
-        span: numeral.span,
+        span,
         message: message.to_owned(),
     };
     let inner = text
         .strip_prefix('\'')
         .and_then(|text| text.strip_suffix('\''))
         .ok_or_else(|| refused("invalid character literal"))?;
-    let decoded = decode_text(inner).map_err(|message| LiteralError {
-        span: numeral.span,
-        message,
-    })?;
+    let decoded = decode_text(inner).map_err(|message| LiteralError { span, message })?;
     let mut characters = decoded.chars();
     let character = characters
         .next()
@@ -136,154 +133,36 @@ fn character(numeral: Numeral, text: &str) -> Result<BigUint, LiteralError> {
     if characters.next().is_some() {
         return Err(refused("a character literal contains more than one scalar"));
     }
-    Ok(BigUint::from(u32::from(character)))
+    Ok(character)
 }
 
-pub(crate) fn validate(module: &Module, source: &str) -> Result<(), LiteralError> {
-    for item in &module.items {
-        match item {
-            Item::Data(data) => {
-                for method in &data.methods {
-                    match method {
-                        MethodItem::Signature(_) => {}
-                        MethodItem::Clause(clause) => validate_clause(clause, source)?,
-                    }
-                }
+/// Validate literal tokens in source order, including package paths and
+/// literals nested in patterns or interpolations. Integers need no decoding:
+/// their digits have already been checked by the lexer.
+pub(crate) fn validate(tokens: &[Token], source: &str) -> Result<(), LiteralError> {
+    for token in tokens {
+        let span = token.span();
+        match token.kind {
+            Kind::Char => {
+                character(span, token.text(source))?;
             }
-            Item::Clause(clause) | Item::Expect(clause) => validate_clause(clause, source)?,
-            Item::Header(_)
-            | Item::Import(_)
-            | Item::Exports(_)
-            | Item::Alias(_)
-            | Item::Constraints(_)
-            | Item::Signature(_) => {}
+            Kind::Decimal => {
+                decimal(
+                    Numeral {
+                        span,
+                        kind: NumeralKind::Decimal,
+                    },
+                    source,
+                )?;
+            }
+            Kind::StrText => {
+                decode_text(token.text(source))
+                    .map_err(|message| LiteralError { span, message })?;
+            }
+            _ => {}
         }
     }
     Ok(())
-}
-
-fn validate_clause(clause: &Clause, source: &str) -> Result<(), LiteralError> {
-    for pattern in &clause.patterns {
-        validate_pattern(pattern, source)?;
-    }
-    if let Some(guard) = &clause.guard {
-        validate_expr(guard, source)?;
-    }
-    validate_body(&clause.body, source)
-}
-
-fn validate_body(body: &Body, source: &str) -> Result<(), LiteralError> {
-    for binding in &body.bindings {
-        validate_pattern(&binding.pattern, source)?;
-        validate_expr(&binding.value, source)?;
-    }
-    validate_expr(&body.result, source)
-}
-
-fn validate_pattern(pattern: &Pattern, source: &str) -> Result<(), LiteralError> {
-    match pattern {
-        Pattern::Wild(_) | Pattern::Bind(_) => Ok(()),
-        Pattern::Constructor { fields, .. } => fields
-            .iter()
-            .try_for_each(|field| validate_pattern(field, source)),
-        Pattern::Number { numeral, .. } => validate_numeral(*numeral, source),
-        Pattern::Range { start, end, .. } => start
-            .iter()
-            .chain(end)
-            .try_for_each(|bound| validate_numeral(bound.numeral, source)),
-        Pattern::List { elements, rest, .. } => {
-            elements
-                .iter()
-                .try_for_each(|element| validate_pattern(element, source))?;
-            rest.as_deref()
-                .map_or(Ok(()), |rest| validate_pattern(rest, source))
-        }
-        Pattern::Record { fields, .. } => fields
-            .iter()
-            .try_for_each(|(_, pattern)| validate_pattern(pattern, source)),
-        Pattern::Tuple { members, .. }
-        | Pattern::Or {
-            alternatives: members,
-            ..
-        } => members
-            .iter()
-            .try_for_each(|member| validate_pattern(member, source)),
-        Pattern::String { parts, .. } => parts.iter().try_for_each(|span| {
-            decode_text(span.text(source))
-                .map(|_| ())
-                .map_err(|message| LiteralError {
-                    span: *span,
-                    message,
-                })
-        }),
-    }
-}
-
-#[allow(clippy::too_many_lines)]
-fn validate_expr(expression: &Expr, source: &str) -> Result<(), LiteralError> {
-    match &expression.kind {
-        ExprKind::Name(_) => Ok(()),
-        ExprKind::Wild | ExprKind::Range(..) => {
-            unreachable!("the parser refuses a pattern's form outside a pattern")
-        }
-        ExprKind::Number(numeral) => validate_numeral(*numeral, source),
-        ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
-            StringPart::Text(span) => {
-                decode_text(span.text(source))
-                    .map(|_| ())
-                    .map_err(|message| LiteralError {
-                        span: *span,
-                        message,
-                    })
-            }
-            StringPart::Splice(expression) => validate_expr(expression, source),
-        }),
-        ExprKind::List(elements, rest) => {
-            elements
-                .iter()
-                .try_for_each(|element| validate_expr(element, source))?;
-            rest.as_deref()
-                .map_or(Ok(()), |rest| validate_expr(rest, source))
-        }
-        ExprKind::Record(fields) => fields
-            .iter()
-            .try_for_each(|(_, value)| validate_expr(value, source)),
-        ExprKind::Try(value) => validate_expr(value, source),
-        ExprKind::Tuple(members) => members
-            .iter()
-            .try_for_each(|member| validate_expr(member, source)),
-        ExprKind::Update(fields, base) => {
-            validate_expr(base, source)?;
-            fields
-                .iter()
-                .try_for_each(|(_, value)| validate_expr(value, source))
-        }
-        ExprKind::Lambda(patterns, body) => {
-            patterns
-                .iter()
-                .try_for_each(|pattern| validate_pattern(pattern, source))?;
-            validate_expr(body, source)
-        }
-        ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
-            validate_expr(head, source)?;
-            arguments
-                .iter()
-                .try_for_each(|argument| validate_expr(argument, source))
-        }
-        ExprKind::Member(head, _) | ExprKind::Unary(_, head) => validate_expr(head, source),
-        ExprKind::Binary(_, left, right) => {
-            validate_expr(left, source)?;
-            validate_expr(right, source)
-        }
-    }
-}
-
-fn validate_numeral(numeral: Numeral, source: &str) -> Result<(), LiteralError> {
-    match numeral.kind {
-        NumeralKind::Character => magnitude(numeral, source).map(|_| ()),
-        NumeralKind::Decimal => decimal(numeral, source).map(|_| ()),
-        NumeralKind::Number => Ok(()),
-    }
 }
 
 /// The furthest a decimal's exponent may reach, either way: well past

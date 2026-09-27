@@ -501,11 +501,27 @@ fn body(mut lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
     let bindings = lines
         .into_iter()
         .map(|line| match line {
-            Statement::Value(value) => Ok(Binding {
-                pattern: Pattern::Wild(value.span),
-                value,
-                discarded: true,
-            }),
+            Statement::Value(value) => {
+                // Only a call written as an effect may discard its answer.
+                let effect = match &value.kind {
+                    ExprKind::Call(head, _) => {
+                        matches!(&head.kind, ExprKind::Name(name) if name.text(source).ends_with('!'))
+                    }
+                    ExprKind::Method(_, name, _) => name.text(source).ends_with('!'),
+                    _ => false,
+                };
+                if !effect {
+                    return Err(error(
+                        value.span,
+                        "this value is worked out and then thrown away; remove the line, or bind the value to a name if you need it",
+                    ));
+                }
+                Ok(Binding {
+                    pattern: Pattern::Wild(value.span),
+                    value,
+                    discarded: true,
+                })
+            }
             Statement::Binding(bound, value) => Ok(Binding {
                 pattern: pattern(bound, source)?,
                 value,
