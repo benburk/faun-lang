@@ -65,7 +65,7 @@ valid(letters) -> has_straight(letters)
   & has_two_pairs(letters)
 
 unconfusing : U8 -> Bool
-unconfusing(letter) -> confusing(letter).not()
+unconfusing(letter) -> !confusing(letter)
 
 search : (List(U8), Nat) -> Result(List(U8), [Exhausted])
 search(candidate, _) if valid(candidate) -> Ok(candidate)
@@ -87,9 +87,9 @@ app(input) ->
 
 # The Security-Elf's three examples: a straight spoiled by confusing
 # letters, two pairs without a straight, a straight with only one pair.
-expect valid("hijklmmn".to_utf8()).not()
-expect valid("abbceffg".to_utf8()).not()
-expect valid("abbcegjk".to_utf8()).not()
+expect !valid("hijklmmn".to_utf8())
+expect !valid("abbceffg".to_utf8())
+expect !valid("abbcegjk".to_utf8())
 expect valid("abcdffaa".to_utf8())
 expect valid("ghjaabcc".to_utf8())
 # The full abcdefgh example takes ~12k increments — past the compile-time

@@ -43,7 +43,7 @@ parse(input) -> input.trim().lines().try_map(parse_instruction)
 apply : (Bool, Action) -> Bool
 apply(_, TurnOn) -> True
 apply(_, TurnOff) -> False
-apply(light, Toggle) -> light.not()
+apply(light, Toggle) -> !light
 
 adjust_brightness : (Nat, Action) -> Nat
 adjust_brightness(brightness, TurnOn) -> brightness + 1

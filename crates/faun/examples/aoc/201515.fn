@@ -21,12 +21,12 @@ integer(text) -> Int.from_str(text).err_as(MalformedIngredient)
 # it was actually removed keeps a line with merely the right words from being
 # accepted when its punctuation is wrong.
 comma_integer : Str -> Result(Int, [MalformedIngredient])
-comma_integer(text) if text.ends_with(",").not() -> Err(MalformedIngredient)
+comma_integer(text) if !text.ends_with(",") -> Err(MalformedIngredient)
 comma_integer(text) -> integer(text.drop_suffix(","))
 
 ingredient_name : Str -> Result(Str, [MalformedIngredient])
 ingredient_name(label)
-  if label.ends_with(":").not() | label.drop_suffix(":").is_empty()
+  if !label.ends_with(":") | label.drop_suffix(":").is_empty()
   -> Err(MalformedIngredient)
 ingredient_name(label) -> Ok(label.drop_suffix(":"))
 

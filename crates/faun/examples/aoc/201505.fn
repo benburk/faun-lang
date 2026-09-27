@@ -17,7 +17,7 @@ is_nice(text) ->
   bytes = text.to_utf8()
   has_three_vowels = bytes.count(is_vowel) >= 3
   has_three_vowels & bytes.windows(2).any(doubled)
-    & bytes.windows(2).any(forbidden).not()
+    & !bytes.windows(2).any(forbidden)
 
 part1 : Str -> Nat
 part1(input) -> input.trim().lines().count(is_nice)
@@ -42,17 +42,17 @@ app(input) -> Ok({part1: part1(input.stdin), part2: part2(input.stdin)})
 
 expect is_nice("ugknbfddgicrmopn")
 expect is_nice("aaa")
-expect is_nice("jchzalrnumimnmhp").not()
-expect is_nice("haegwjzuvuyypxyu").not()
-expect is_nice("dvszwmarrgswjxmb").not()
+expect !is_nice("jchzalrnumimnmhp")
+expect !is_nice("haegwjzuvuyypxyu")
+expect !is_nice("dvszwmarrgswjxmb")
 expect part1("ugknbfddgicrmopn\naaa\njchzalrnumimnmhp\n") == 2
 
 expect is_nice_v2("xyxy")
-expect is_nice_v2("aaa").not()
+expect !is_nice_v2("aaa")
 expect is_nice_v2("qjhvhtzxzqqjkmpb")
 expect is_nice_v2("xxyxx")
-expect is_nice_v2("uurcxstgmygtbstg").not()
-expect is_nice_v2("ieodomkazucvgmuy").not()
+expect !is_nice_v2("uurcxstgmygtbstg")
+expect !is_nice_v2("ieodomkazucvgmuy")
 expect part2("qjhvhtzxzqqjkmpb\nxxyxx\nuurcxstgmygtbstg\nieodomkazucvgmuy\n") == 2
 
 main!(host) -> host.run_stdin!(app)

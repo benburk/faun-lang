@@ -30,7 +30,7 @@ compound(_) -> Err(UnknownCompound)
 
 label : Str -> Result(Str, [MalformedSue])
 label(text)
-  if text.ends_with(":").not() | text.drop_suffix(":").is_empty()
+  if !text.ends_with(":") | text.drop_suffix(":").is_empty()
   -> Err(MalformedSue)
 label(text) -> Ok(text.drop_suffix(":"))
 
@@ -41,7 +41,7 @@ number(text) -> Nat.from_str(label(text)?).err_as(MalformedSue)
 # part of the line's shape rejects a shifted or accidentally joined memory
 # rather than silently accepting its numeric prefix.
 interior_count : Str -> Result(Nat, [MalformedSue])
-interior_count(text) if text.ends_with(",").not() -> Err(MalformedSue)
+interior_count(text) if !text.ends_with(",") -> Err(MalformedSue)
 interior_count(text) -> Nat.from_str(text.drop_suffix(",")).err_as(MalformedSue)
 
 last_count : Str -> Result(Nat, [MalformedSue])

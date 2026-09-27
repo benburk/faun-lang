@@ -75,8 +75,8 @@ unspoken(rules) ->
 # A pair still owed a rule: two different guests, and no line saying how the
 # first feels about the second.
 unheard : ((Str, Str), Set((Str, Str))) -> Bool
-unheard((subject, neighbour), stated) -> (subject == neighbour).not()
-  & stated.contains((subject, neighbour)).not()
+unheard((subject, neighbour), stated) -> subject != neighbour
+  & !stated.contains((subject, neighbour))
 
 opinions : List(Rule) -> Result(Map((Str, Str), Int), Str)
 opinions(rules) -> spoken(unspoken(rules), rules)
