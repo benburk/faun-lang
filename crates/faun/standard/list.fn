@@ -10,6 +10,10 @@
 # answers backwards and turning it round once at the end, so a list is as
 # long as memory allows rather than as deep as a stack goes.
 
+import hasher {Hasher}
+import map {Map}
+import mixer {Mixer}
+
 exports {List.*}
 
 List(a) : [Nil, Cons(a, List(a))].(
@@ -77,6 +81,14 @@ List(a) : [Nil, Cons(a, List(a))].(
 
   # The same length, and equal elements in order, by the element's own
   # `equals`.
+  # `hasher` with `xs` fed: its length, then each item in order, so two
+  # lists written in sequence hash apart from one holding both.
+  hash_into : (List(a), h) -> h where
+    Hasher(h)
+    a.hash_into : (a, h) -> h
+  hash_into(xs, hasher) ->
+    fold(xs, hasher.write_u64(U64.of_nat(len(xs))), |fed, item| item.hash_into(fed))
+
   equals : (List(a), List(a)) -> Bool where a.equals : (a, a) -> Bool
   equals([], []) -> True
   equals([x, *left], [y, *right]) if x.equals(y) -> equals(left, right)
@@ -106,16 +118,17 @@ List(a) : [Nil, Cons(a, List(a))].(
 
   # The element at `index`, counting from nought.
   get : (List(a), Nat) -> Result(a, [OutOfBounds])
-  get([], _) -> Err(OutOfBounds)
-  get([head, *_], 0) -> Ok(head)
-  get([_, *tail], Succ(index)) -> get(tail, index)
+  get(values, index) -> front(drop(values, index))
 
   get_or : (List(a), Nat, a) -> a
   get_or(values, index, fallback) -> get(values, index).ok_or(fallback)
 
-  # The list with the element at `index` replaced by `value`.
+  # The list with the element at `index` replaced by `value`. A list
+  # nothing else holds is written where it lies, so a list threaded through
+  # repeated `set`s is not copied.
   set : (List(a), Nat, a) -> Result(List(a), [OutOfBounds])
-  set(values, index, value) -> set_into(values, index, value, [])
+  set(values, index, value) if index < len(values) -> Ok(put(values, index, value))
+  set(_, _, _) -> Err(OutOfBounds)
 
   # The elements exchanged at `i` and `j`, each read before either is
   # written, so a list threaded through here is swapped where it lies.
@@ -167,6 +180,24 @@ List(a) : [Nil, Cons(a, List(a))].(
   split_at(values, count) -> (take(values, count), drop(values, count))
 
   # The elements `keep` holds of, and those it does not, each in order.
+  # The elements of `values` gathered by `key`: each element in the group
+  # its key names, the groups in the order their keys first appear, and the
+  # elements within a group in the order they are read. `Map` observing
+  # insertion order is what makes both of those statable rather than
+  # incidental.
+  #
+  # Nothing is lost and nothing is duplicated: `values.group_by(key)
+  # .values().flatten()` is `values` reordered by where each key first
+  # appears and stable within a group, and `values.group_by(key).len()` is
+  # how many distinct keys there are. Each group is built by prepending and
+  # turned round at the end, so gathering does no work proportional to what
+  # a group already holds.
+  group_by : (List(v), v -> k) -> Map(k, List(v)) where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  group_by(values, key) ->
+    Map.map_values(fold(values, Map.empty(), |table, value| gathered(table, key(value), value)), reverse)
+
   partition : (List(a), a -> Bool) -> (List(a), List(a))
   partition(values, keep) -> partition_into(values, keep, [], [])
 
@@ -225,8 +256,19 @@ reverse_into([head, *tail], output) -> reverse_into(tail, [head, *output])
 
 # `values` with the element at `index` replaced, unchanged where there is
 # none: the store `exchange` makes once its reads have succeeded.
+# `table` with `value` put before the rest of `key`'s group.
+gathered : (Map(k, List(v)), k, v) -> Map(k, List(v)) where
+  k.hash_into : (k, Mixer) -> Mixer
+  k.equals : (k, k) -> Bool
+gathered(table, key, value) -> table.insert(key, [value, *table.get_or(key, [])])
+
+# `values` with the element at `index` replaced by `value`, and unchanged
+# where there is none. Written as a walk rebuilding the front, a compiler
+# reads it as one element written over, so it is never walked.
 put : (List(a), Nat, a) -> List(a)
-put(values, index, value) -> List.set(values, index, value).ok_or(values)
+put([], _, _) -> []
+put([_, *tail], 0, value) -> [value, *tail]
+put([head, *tail], Succ(index), value) -> [head, *put(tail, index, value)]
 
 range_into : (Nat, List(Nat)) -> List(Nat)
 range_into(0, built) -> built
@@ -276,10 +318,10 @@ trail_into([head, *tail], state, f, built) ->
   next = f(state, head)
   trail_into(tail, next, f, [next, *built])
 
-set_into : (List(a), Nat, a, List(a)) -> Result(List(a), [OutOfBounds])
-set_into([], _, _, _) -> Err(OutOfBounds)
-set_into([_, *tail], 0, value, built) -> Ok(reverse_into(built, [value, *tail]))
-set_into([head, *tail], Succ(index), value, built) -> set_into(tail, index, value, [head, *built])
+# The first element, as `get` answers it.
+front : List(a) -> Result(a, [OutOfBounds])
+front([]) -> Err(OutOfBounds)
+front([head, *_]) -> Ok(head)
 
 try_map_into : (List(a), a -> Result(b, e), List(b)) -> Result(List(b), e)
 try_map_into([], _, built) -> Ok(reverse_into(built, []))

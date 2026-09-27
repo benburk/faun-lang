@@ -799,6 +799,25 @@ impl<H: Host> Machine<'_, H> {
                 self.buffers.push(elements);
                 return Ok(vec![BigUint::from(self.buffers.len()), BigUint::ZERO]);
             }
+            Op::BufferReplace { operands, .. } => {
+                let operands = self.ids(operands)?.to_vec();
+                let (sequence, fields) = operands.split_at(4);
+                let written = fields
+                    .iter()
+                    .map(|&id| self.value(id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let index = self.value(sequence[3])?;
+                let mut elements = self
+                    .elements((sequence[0], sequence[1], sequence[2]))?
+                    .to_vec();
+                let slot = usize::try_from(&index)
+                    .ok()
+                    .and_then(|index| elements.get_mut(index))
+                    .ok_or_else(|| invalid("a replacement past its sequence"))?;
+                *slot = written;
+                self.buffers.push(elements);
+                return Ok(vec![BigUint::from(self.buffers.len()), BigUint::ZERO]);
+            }
             Op::BufferPrepend { operands, .. } | Op::BufferExtend { operands, .. } => {
                 let operands = self.ids(operands)?.to_vec();
                 let [first, then] =

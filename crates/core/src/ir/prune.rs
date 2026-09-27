@@ -642,6 +642,9 @@ pub(super) fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
         | Op::BufferPush {
             operands: fields, ..
         }
+        | Op::BufferReplace {
+            operands: fields, ..
+        }
         | Op::BufferPrepend {
             operands: fields, ..
         }

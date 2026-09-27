@@ -218,6 +218,7 @@ impl References<'_> {
                 self.values(args)?;
             }
             Op::BufferPush { operands, shape }
+            | Op::BufferReplace { operands, shape }
             | Op::BufferPrepend { operands, shape }
             | Op::BufferExtend { operands, shape } => {
                 reference(&p.shapes, shape, "shape")?;
@@ -489,6 +490,19 @@ impl Checker<'_> {
                     return Err("a push names no sequence".into());
                 };
                 self.sequence(*sequence)?;
+                self.shaped(fields, shape)?;
+                self.results(results, &[Class::Buffer, Class::Word])?;
+            }
+            Op::BufferReplace { operands, shape } => {
+                let operands = self.program.values(operands);
+                let Some((sequence, rest)) = operands.split_first_chunk::<3>() else {
+                    return Err("a replacement names no sequence".into());
+                };
+                let Some((index, fields)) = rest.split_first() else {
+                    return Err("a replacement names no index".into());
+                };
+                self.sequence(*sequence)?;
+                self.length(*index)?;
                 self.shaped(fields, shape)?;
                 self.results(results, &[Class::Buffer, Class::Word])?;
             }

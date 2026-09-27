@@ -328,6 +328,9 @@ fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
         | Op::BufferPush {
             operands: fields, ..
         }
+        | Op::BufferReplace {
+            operands: fields, ..
+        }
         | Op::BufferPrepend {
             operands: fields, ..
         }
@@ -2592,6 +2595,7 @@ impl Lowering<'_> {
             | Op::BufferEmpty { .. }
             | Op::BufferKnown { .. }
             | Op::BufferPush { .. }
+            | Op::BufferReplace { .. }
             | Op::BufferPrepend { .. }
             | Op::BufferExtend { .. }
             | Op::BufferRoom { .. }

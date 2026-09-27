@@ -1,6 +1,6 @@
-# Bootstrap standard package for the Ori-compatible frontend. It keeps the
-# useful arithmetic and polymorphic utilities that do not need method
-# constraints, hashing, or bodyless derivation.
+# Bootstrap standard package for the Ori-compatible frontend: the numbers,
+# lists, strings and results, hashing through `Hasher`, and the containers
+# over it and over `cmp`. It has no bodyless derivation.
 
 package {}
 
@@ -17,5 +17,11 @@ import result {Result.*}
 import str {Str}
 import float.f32 {F32}
 import float.f64 {F64}
+import hasher {Hasher}
+import map {Map}
+import mixer {Mixer}
+import set {Set}
+import sorted_map {SortedMap}
+import sorted_set {SortedSet}
 
-exports {Bool.*, Order.*, Nat.*, Int.*, U8, U16, U32, U64, List.*, Result.*, Str, F32, F64}
+exports {Bool.*, Order.*, Nat.*, Int.*, U8, U16, U32, U64, List.*, Result.*, Str, F32, F64, Hasher, Map, Mixer, Set, SortedMap, SortedSet}

@@ -125,23 +125,36 @@ pub(super) fn owned_parameters(source: &Program) -> Vec<Vec<bool>> {
     }
 }
 
+/// What an instruction building a sequence from `operands` takes a claim
+/// to. A push takes its buffer and its fields, past the start and length,
+/// and a replacement past its index too; a prepend, the buffer it puts
+/// elements before; and a join both, either of which may become the result.
+fn sequence_taken(op: &Op, operands: &[ValueId], out: &mut Vec<ValueId>) {
+    match op {
+        Op::BufferPush { .. } => {
+            out.push(operands[0]);
+            out.extend_from_slice(&operands[3..]);
+        }
+        Op::BufferReplace { .. } => {
+            out.push(operands[0]);
+            out.extend_from_slice(&operands[4..]);
+        }
+        Op::BufferPrepend { .. } => out.push(operands[0]),
+        Op::BufferExtend { .. } => out.extend([operands[0], operands[3]]),
+        _ => unreachable!("only a sequence's instructions build one from operands"),
+    }
+}
+
 /// The values some instruction in a region, or its exit, takes a claim to.
 fn consumed_in(source: &Program, region: RegionId, owned: &[Vec<bool>], out: &mut Vec<ValueId>) {
     for (op, results) in source.walk(region) {
         match *op {
             Op::Cell { fields, .. } => out.extend_from_slice(source.values(fields)),
-            // A push takes its buffer and its fields, past the start and
-            // length; a prepend, the buffer it puts elements before.
-            Op::BufferPush { operands, .. } => {
-                let operands = source.values(operands);
-                out.push(operands[0]);
-                out.extend_from_slice(&operands[3..]);
-            }
-            Op::BufferPrepend { operands, .. } => out.push(source.values(operands)[0]),
-            // Joining takes both, either of which may become the result.
-            Op::BufferExtend { operands, .. } => {
-                let operands = source.values(operands);
-                out.extend([operands[0], operands[3]]);
+            Op::BufferPush { operands, .. }
+            | Op::BufferReplace { operands, .. }
+            | Op::BufferPrepend { operands, .. }
+            | Op::BufferExtend { operands, .. } => {
+                sequence_taken(op, source.values(operands), out);
             }
             Op::Convert { value } if source.class(value) == source.class(results[0]) => {
                 out.push(value);

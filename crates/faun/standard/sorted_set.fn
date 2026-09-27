@@ -1,0 +1,68 @@
+# A persistent set sorted by member: a SortedMap whose keys are the members.
+# The wrapper is private, so what the map carries beside each key is
+# nobody's business — and the balancing, the key-order observation, and any
+# future change of representation are inherited from SortedMap rather than
+# maintained twice.
+
+import sorted_map {SortedMap}
+
+exports {SortedSet}
+
+SortedSet(k) : SortedMap(k, Bool).(
+  # The empty set.
+  empty : SortedSet(k)
+  empty() -> SortedSet(SortedMap.empty())
+
+  # The set whose only member is `key`.
+  singleton : k -> SortedSet(k) where k.cmp : (k, k) -> Order
+  singleton(key) -> SortedSet(SortedMap.empty().insert(key, True))
+
+  # Whether `set` has no members.
+  is_empty : SortedSet(k) -> Bool
+  is_empty(SortedSet(members)) -> SortedMap.is_empty(members)
+
+  # `set` with `key` as a member; membership is idempotent.
+  insert : (SortedSet(k), k) -> SortedSet(k) where k.cmp : (k, k) -> Order
+  insert(SortedSet(members), key) -> SortedSet(SortedMap.insert(members, key, True))
+
+  # `set` without `key`; unchanged when `key` is not a member.
+  remove : (SortedSet(k), k) -> SortedSet(k) where k.cmp : (k, k) -> Order
+  remove(SortedSet(members), key) -> SortedSet(SortedMap.remove(members, key))
+
+  # The members of either set. Union is commutative, associative, and
+  # idempotent, and `empty` is its identity.
+  union : (SortedSet(k), SortedSet(k)) -> SortedSet(k) where k.cmp : (k, k) -> Order
+  union(set, other) -> fold(other, set, insert)
+
+  # The members of both sets.
+  intersection : (SortedSet(k), SortedSet(k)) -> SortedSet(k) where k.cmp : (k, k) -> Order
+  intersection(set, other) -> of_list(to_list(set).filter(|key| contains(other, key)))
+
+  # The members of `set` that are not members of `other`. With
+  # `intersection` it partitions `set` without loss:
+  # `set.difference(other).union(set.intersection(other))` is `set`.
+  difference : (SortedSet(k), SortedSet(k)) -> SortedSet(k) where k.cmp : (k, k) -> Order
+  difference(set, other) -> fold(other, set, remove)
+
+  # Whether `key` is a member of `set`.
+  contains : (SortedSet(k), k) -> Bool where k.cmp : (k, k) -> Order
+  contains(SortedSet(members), key) -> SortedMap.contains(members, key)
+
+  # The number of members of `set`.
+  len : SortedSet(k) -> Nat
+  len(SortedSet(members)) -> SortedMap.len(members)
+
+  # The result of combining the members of `set` in ascending order, beginning
+  # with `initial`.
+  fold : (SortedSet(k), a, (a, k) -> a) -> a
+  fold(set, initial, combine) -> to_list(set).fold(initial, combine)
+
+  # The members of `set` in ascending order — the set's one observable shape.
+  to_list : SortedSet(k) -> List(k)
+  to_list(SortedSet(members)) -> SortedMap.keys(members)
+
+  # The set whose members are the items of `list`, later duplicates winning as
+  # repeated `insert` calls would.
+  of_list : List(k) -> SortedSet(k) where k.cmp : (k, k) -> Order
+  of_list(items) -> items.fold(empty(), insert)
+)

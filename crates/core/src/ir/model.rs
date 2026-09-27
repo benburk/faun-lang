@@ -217,6 +217,17 @@ pub enum Op {
         operands: Range,
         shape: ShapeId,
     },
+    /// The sequence `operands` begins with -- a buffer, a start and a
+    /// length -- with its element at the index that follows, which must be
+    /// below the length, replaced by the one whose leaves are the rest,
+    /// `fields`. Answers a buffer and where in it the sequence starts. Takes
+    /// a claim to the buffer and to each field, so a buffer nothing else
+    /// holds is written where it lies, giving up what the element replaced
+    /// held; a shared one is copied first.
+    BufferReplace {
+        operands: Range,
+        shape: ShapeId,
+    },
     /// The sequence of the elements of one, last first, followed by those of
     /// another: `operands` are the other's buffer, start and length, then the
     /// one's. Answers a buffer and where in it the joined sequence starts.

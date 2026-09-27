@@ -1,0 +1,33 @@
+# The standard library's own hasher, and what only its own containers may
+# do with one: start it from a seed and read its digest. The standard
+# package exports the type alone, so a program can bound a key over `Map`
+# by `k.hash_into : (k, Mixer) -> Mixer`; its wrapper is private, and
+# neither a seed nor a digest is exported, so a program feeds one through
+# the write methods and nothing else, and how it mixes, and the digest it
+# yields, are free to change without changing any program.
+
+exports {Mixer, mixer_seeded, mixer_finish}
+
+# A multiply-and-xor over each word fed.
+Mixer : U64.(
+  # `mixer` with `word` fed.
+  write_u64 : (Mixer, U64) -> Mixer
+  write_u64(Mixer(state), word) -> Mixer(state.xor(word).mul(0x100000001b3))
+
+  # `mixer` with each byte fed in order, after the count: two byte fields
+  # written in sequence hash apart from one field holding both.
+  write_bytes : (Mixer, List(U8)) -> Mixer
+  write_bytes(mixer, bytes) ->
+    bytes.fold(
+      write_u64(mixer, U64.of_nat(bytes.len())),
+      |fed, byte| write_u64(fed, U64.of_nat(byte.to_nat())),
+    )
+)
+
+# The state hashing begins from under `seed`; the unseeded map's seed is 0.
+mixer_seeded : U64 -> Mixer
+mixer_seeded(seed) -> Mixer(seed.xor(0xcbf29ce484222325).mul(0x100000001b3))
+
+# The digest: the high bits folded down.
+mixer_finish : Mixer -> U64
+mixer_finish(Mixer(state)) -> state.xor(state.shift_right(32))

@@ -2,6 +2,8 @@
 # the private Str and U8 wrappers directly; everything else reaches a string
 # through these methods, and cannot take one apart by shape.
 
+import hasher {Hasher}
+
 exports {Str}
 
 Str : List(U8).(
@@ -25,6 +27,10 @@ Str : List(U8).(
   # a collation.
   cmp : (Str, Str) -> Order
   cmp(Str(left), Str(right)) -> bytes_cmp(left, right)
+
+  # `hasher` with the string fed: its bytes, after their count.
+  hash_into : (Str, h) -> h where Hasher(h)
+  hash_into(Str(bytes), hasher) -> hasher.write_bytes(bytes)
 
   equals : (Str, Str) -> Bool
   equals(left, right) -> cmp(left, right).eq()

@@ -541,6 +541,7 @@ impl Lowering<'_> {
             | Op::BufferEmpty { .. }
             | Op::BufferKnown { .. }
             | Op::BufferPush { .. }
+            | Op::BufferReplace { .. }
             | Op::BufferPrepend { .. }
             | Op::BufferExtend { .. }
             | Op::BufferRoom { .. }

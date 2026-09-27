@@ -152,6 +152,11 @@ impl Program {
                 arguments(self.values(operands)),
                 shape.index()
             ),
+            Op::BufferReplace { operands, shape } => format!(
+                "buffer_replace {} of s{}",
+                arguments(self.values(operands)),
+                shape.index()
+            ),
             Op::BufferPrepend { operands, shape } => format!(
                 "buffer_prepend_reversed {} of s{}",
                 arguments(self.values(operands)),

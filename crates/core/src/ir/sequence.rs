@@ -22,6 +22,10 @@
 //! the all-ones count of a static object, so nothing writes it or frees it,
 //! and nothing is built to make one.
 //!
+//! An element of a sequence, in a buffer nothing else holds, is the
+//! sequence's to write over, giving up what it held; in a shared buffer the
+//! sequence is copied first, as a push copies it.
+//!
 //! An element before a sequence's first, in a buffer nothing else holds, is
 //! the sequence's to write: a push writes it in place, giving up whatever
 //! claims a longer sequence left there. Otherwise, or where there is no room
@@ -67,8 +71,8 @@ const MINIMUM_CAPACITY: u64 = 8;
 /// stride and where its claims lie.
 type Key = (u64, Vec<(u64, u64)>);
 
-/// How a program grows sequences of one layout, each asking for a routine
-/// of its own, made only where the program grows one that way.
+/// How a program grows or writes sequences of one layout, each asking for
+/// a routine of its own, made only where the program does it that way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Growth {
     /// One element before a sequence.
@@ -77,6 +81,8 @@ pub(super) enum Growth {
     Prepend,
     /// Another's elements after a sequence.
     Extend,
+    /// One element of a sequence written over.
+    Replace,
 }
 
 /// The generated routines: one release, one per way a layout is grown, and
@@ -158,6 +164,47 @@ impl Library {
             },
         );
         [answer[0], answer[1]]
+    }
+
+    /// The sequence of `len` from `start` of `buffer`, whose claim this
+    /// takes, with its element `index`, below `len`, free to write: a
+    /// buffer nothing else holds, where the sequence starts in it, and where
+    /// the element lies. What the element held is given up.
+    ///
+    /// Where no leaf holds a claim, a buffer nothing else holds is written
+    /// here rather than called for, as [`Library::room`] does.
+    ///
+    /// # Panics
+    /// If the layout was not said to be written over.
+    pub(super) fn replace(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
+        (buffer, start, len): (ValueId, ValueId, ValueId),
+        index: ValueId,
+    ) -> [ValueId; 3] {
+        let own = self.routines[&(Growth::Replace, key(element))];
+        let owned = if element.managed().next().is_some() {
+            b.call_one(own, &[buffer, start, len, index])
+        } else {
+            let refs = b.load(Width::Word, buffer, Offset::Words(1));
+            let one = number(b, 1);
+            let alone = b.compare(Relation::Equal, refs, one);
+            b.if_(
+                alone,
+                &[A],
+                |b| b.yield_(&[buffer]),
+                |b| {
+                    let fresh = b.call_one(own, &[buffer, start, len, index]);
+                    b.yield_(&[fresh]);
+                },
+            )[0]
+        };
+        let zero = number(b, 0);
+        let front = started(b, (buffer, owned), (start, len), zero);
+        let at = b.binary(Binary::Add, front, index);
+        let written = self.element(b, owned, element.size, at);
+        [owned, front, written]
     }
 
     /// The `count` elements from `from_start` of `from`, last first, put
@@ -354,7 +401,7 @@ pub(super) fn append(
     }
     let copies = routines
         .keys()
-        .any(|(growth, _)| *growth != Growth::Push)
+        .any(|(growth, _)| matches!(growth, Growth::Prepend | Growth::Extend))
         .then(|| define_copies(program, runtime));
     Library {
         release,
@@ -385,6 +432,11 @@ fn define_growth(
         Growth::Extend => {
             let id = program.declare(&format!("seq.after.{n}"), &[A, W, W, W], &[A]);
             define_after(program, id, layout, runtime);
+            id
+        }
+        Growth::Replace => {
+            let id = program.declare(&format!("seq.own.{n}"), &[A, W, W, W], &[A]);
+            define_own(program, id, layout, runtime);
             id
         }
     }
@@ -758,6 +810,51 @@ fn define_after(
         let total = b.binary(Binary::Add, len, count);
         let fresh = runtime.grown(b, (object, start, len), (total, layout), Placed::AtStart);
         b.ret(&[fresh]);
+    });
+}
+
+/// `seq.own.n(object, start, len, index)`: a buffer nothing else holds
+/// holding the sequence of `len` from `start` of `object`, whose claim this
+/// takes, with what its element `index` holds given up, free to write.
+///
+/// One nothing else holds is the answer. Otherwise its elements are copied
+/// to the end of one with as much room again in front, and at least
+/// [`MINIMUM_CAPACITY`], as a push would, each claimed again, and the
+/// copy's element `index` gives up what it was just claimed for.
+fn define_own(
+    program: &mut Program,
+    id: FunctionId,
+    (element, descriptor): (&Packed, Option<DataId>),
+    runtime: Runtime,
+) {
+    program.define(id, |b, args| {
+        let (object, start, len, index) = (args[0], args[1], args[2], args[3]);
+        let one = number(b, 1);
+        let refs = b.load(Width::Word, object, Offset::Words(1));
+        let alone = b.compare(Relation::Equal, refs, one);
+        let (owned, first) = {
+            let answer = b.if_(
+                alone,
+                &[A, W],
+                |b| b.yield_(&[object, start]),
+                |b| {
+                    let layout = static_layout(b, element, descriptor);
+                    let fresh =
+                        runtime.grown(b, (object, start, len), (len, layout), Placed::AtEnd);
+                    let capacity = b.load(Width::Word, fresh, Offset::Words(CAPACITY));
+                    let first = b.binary(Binary::Sub, capacity, len);
+                    b.yield_(&[fresh, first]);
+                },
+            );
+            (answer[0], answer[1])
+        };
+        if descriptor.is_some() {
+            let described = b.load(Width::Word, owned, Offset::Words(DESCRIPTOR));
+            let at = b.binary(Binary::Add, first, index);
+            let past = b.binary(Binary::Add, at, one);
+            runtime.release_elements(b, (owned, described), (at, past));
+        }
+        b.ret(&[owned]);
     });
 }
 

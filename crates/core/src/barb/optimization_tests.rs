@@ -965,6 +965,7 @@ struct Walks {
     nat: super::TypeId,
     list: super::TypeId,
     zero: super::CtorId,
+    succ: super::CtorId,
     nil: super::CtorId,
     cons: super::CtorId,
     add: FnId,
@@ -1057,6 +1058,7 @@ fn walks() -> (Program, Walks) {
         nat,
         list,
         zero,
+        succ,
         nil,
         cons,
         add,
@@ -1327,6 +1329,46 @@ fn reversals_and_prepends_are_recognized() {
     assert_eq!(of(extend), Some(super::SequenceOperation::Prepend));
     assert_eq!(of(w.bump), None);
     assert_eq!(of(w.total), None);
+}
+
+/// A walk rebuilding a list's front with the element a count reaches
+/// replaced is recognized as one element written over. One that writes
+/// anything but the value it was handed is not.
+#[test]
+fn replacements_are_recognized() {
+    let (mut p, w) = walks();
+    let replace = |p: &mut Program, name: &str, bumped: bool| {
+        let id = p.declare(name, &[w.list, w.nat, w.nat], w.list);
+        p.define(id, |b, args| {
+            b.match_(args[0], w.list, |b, ctor, fields| {
+                if ctor == w.nil {
+                    return b.con(w.nil, &[]);
+                }
+                let (head, rest) = (fields[0], fields[1]);
+                b.match_(args[1], w.nat, |b, ctor, fewer| {
+                    if ctor == w.zero {
+                        let value = if bumped {
+                            b.con(w.succ, &[args[2]])
+                        } else {
+                            args[2]
+                        };
+                        b.con(w.cons, &[value, rest])
+                    } else {
+                        let later = b.call(id, &[rest, fewer[0], args[2]]);
+                        b.con(w.cons, &[head, later])
+                    }
+                })
+            })
+        });
+        id
+    };
+    let put = replace(&mut p, "put", false);
+    let bumped = replace(&mut p, "bumped", true);
+    validate(&p).unwrap();
+    let recognised = p.recognised().clone();
+    let of = |id: FnId| recognised.sequences[id.index()];
+    assert_eq!(of(put), Some(super::SequenceOperation::Replace));
+    assert_eq!(of(bumped), None);
 }
 
 /// A list reversed onto nothing and read once, by a reversal onto another,

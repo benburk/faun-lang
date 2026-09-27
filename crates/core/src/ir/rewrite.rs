@@ -301,6 +301,17 @@ impl<'a> Rebuild<'a> {
                 b.buffer_push((sequence[0], sequence[1], sequence[2]), shape, fields)
                     .to_vec()
             }
+            Op::BufferReplace { operands, shape } => {
+                let operands = self.args(operands);
+                let (sequence, fields) = operands.split_at(4);
+                b.buffer_replace(
+                    (sequence[0], sequence[1], sequence[2]),
+                    sequence[3],
+                    shape,
+                    fields,
+                )
+                .to_vec()
+            }
             Op::BufferPrepend { operands, shape } => {
                 let operands = self.args(operands);
                 b.buffer_prepend(

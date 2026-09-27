@@ -52,6 +52,7 @@ pub struct PreludeIds {
     pub equals: Option<Symbol>,
     pub cmp: Option<Symbol>,
     pub to_str: Option<Symbol>,
+    pub hash_into: Option<Symbol>,
     /// What `?` takes apart and answers with.
     pub result: Symbol,
     pub result_ok: Symbol,
@@ -188,6 +189,7 @@ impl PreludeIds {
             equals: program.symbols.find("equals"),
             cmp: program.symbols.find("cmp"),
             to_str: program.symbols.find("to_str"),
+            hash_into: program.symbols.find("hash_into"),
             result: result.canonical,
             result_ok: constructor(program, &result, "Result", "Ok")?,
             result_err: constructor(program, &result, "Result", "Err")?,

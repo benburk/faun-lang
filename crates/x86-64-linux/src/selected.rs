@@ -1341,6 +1341,7 @@ impl Selector<'_> {
                 | SourceOp::BufferEmpty { .. }
                 | SourceOp::BufferKnown { .. }
                 | SourceOp::BufferPush { .. }
+                | SourceOp::BufferReplace { .. }
                 | SourceOp::BufferPrepend { .. }
                 | SourceOp::BufferExtend { .. }
                 | SourceOp::BufferRoom { .. }

@@ -3501,13 +3501,16 @@ impl<'a> Checker<'a> {
         let Some(fields) = self.fields.get(&pending.name) else {
             return Vec::new();
         };
+        // A receiver not yet known waits to be known, and is at the last
+        // a record having the field: which declared types have a field of
+        // that name says nothing of it, and one declared anywhere would
+        // otherwise change what an unrelated projection means.
+        let Ty::Named(owner, _) = receiver else {
+            return Vec::new();
+        };
         fields
             .iter()
-            .filter(|field| match &receiver {
-                Ty::Named(owner, _) => field.owner == *owner,
-                Ty::Var(_) => true,
-                _ => false,
-            })
+            .filter(|field| field.owner == owner)
             .filter(|field| {
                 self.infer.probe(|trial| {
                     apply_signature(trial, pending, &field.scheme, self.symbols).is_ok()
@@ -3557,10 +3560,16 @@ impl<'a> Checker<'a> {
             _ => return Ok(Some(false)),
         };
         let spelled = self.symbols.text(pending.name);
+        // `hash_into` feeds each component to a hasher and answers it fed:
+        // what it answers is whatever hasher it was handed.
+        let hashing = spelled == "hash_into"
+            && matches!(receiver, Ty::Tuple(_) | Ty::Record(..))
+            && pending.arguments.len() == 1;
         let answer = match (spelled, &receiver) {
             ("equals", _) => Ty::Named(self.prelude.bool_, Vec::new()),
             ("cmp", Ty::Tuple(_)) => Ty::Named(self.prelude.order, Vec::new()),
             ("to_str", Ty::Variants(..)) => Ty::Named(self.prelude.str_, Vec::new()),
+            _ if hashing => pending.arguments[0].clone(),
             _ => return Ok(Some(false)),
         };
         if let Ty::Record(_, Some(tail)) = &receiver {
@@ -3591,21 +3600,30 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        // `to_str` takes the value alone; the others take a second like it.
+        // `to_str` takes the value alone, `hash_into` a hasher, and the
+        // others a second like it.
         let unary = spelled == "to_str";
         match pending.arguments.as_slice() {
             [] if unary => {}
+            [_] if hashing => {}
             [other] if !unary => self.unify_at(pending.module, pending.span, other, &receiver)?,
             _ => return Ok(Some(false)),
         }
         self.unify_at(pending.module, pending.span, &pending.result, &answer)?;
         for component in components {
+            let arguments = if unary {
+                Vec::new()
+            } else if hashing {
+                vec![answer.clone()]
+            } else {
+                vec![component.clone()]
+            };
             self.pending_methods.push(PendingMethod {
                 module: pending.module,
                 span: pending.span,
                 name: pending.name,
                 receiver: component.clone(),
-                arguments: if unary { Vec::new() } else { vec![component] },
+                arguments,
                 result: answer.clone(),
                 reach: Reach::Called,
                 resolved: false,

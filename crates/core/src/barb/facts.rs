@@ -86,6 +86,9 @@ pub enum SequenceOperation {
     /// The first parameter without as many of its first elements as the
     /// second counts, or without all of them where it counts more.
     Drop,
+    /// The first parameter with the element the second counts to replaced
+    /// by the third, or unchanged where it counts past the last.
+    Replace,
 }
 
 /// Which definitions are recognized, one entry per function in each table.

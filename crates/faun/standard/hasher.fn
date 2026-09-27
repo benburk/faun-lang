@@ -1,0 +1,13 @@
+# What a key may do to a hasher: feed it a word, or a byte string. That is
+# the whole interface, and it is write-only on purpose — a key's `hash_into`
+# holds a hasher and can only add to it, so nothing a key does can read a
+# digest out. Any type with these two methods is a hasher: the standard
+# map's own (mixer.fn), and any a library writes for containers of its own,
+# which every `hash_into` then feeds alike. A record's or a tuple's own
+# `hash_into` feeds its members in order.
+
+exports {Hasher}
+
+Hasher(h) = where
+  h.write_u64 : (h, U64) -> h
+  h.write_bytes : (h, List(U8)) -> h

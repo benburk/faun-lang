@@ -2473,6 +2473,9 @@ impl Lowering<'_> {
             Callee::Sequence(barb::SequenceOperation::Drop) => {
                 return Answer::Value(self.dropped(b, arguments, locals));
             }
+            Callee::Sequence(barb::SequenceOperation::Replace) => {
+                return Answer::Value(self.replaced(b, (function, arguments), locals));
+            }
             Callee::Sequence(
                 operation @ (barb::SequenceOperation::ReverseOnto
                 | barb::SequenceOperation::Prepend),
@@ -2562,7 +2565,7 @@ impl Lowering<'_> {
         } else {
             b.buffer_extend(from, onto, shape)
         };
-        let len = b.binary(Binary::Add, onto.2, from.2);
+        let len = b.binary_at(Class::Word, Binary::Add, onto.2, from.2);
         Held::Flat {
             leaves: sequence_run(),
             values: [buffer, first, len].as_slice().into(),
@@ -2582,10 +2585,55 @@ impl Lowering<'_> {
         let (buffer, first, len) = (values[0], values[1], values[2]);
         let skipped = Self::skipped(b, Self::scalar(locals, count), (len, None));
         let later = b.binary(Binary::Add, first, skipped);
-        let rest = b.binary(Binary::Sub, len, skipped);
+        let rest = b.binary_at(Class::Word, Binary::Sub, len, skipped);
         Held::Flat {
             leaves: sequence_run(),
             values: [buffer, later, rest].as_slice().into(),
+        }
+    }
+
+    /// A sequence with the element a count reaches replaced by a value: the
+    /// same buffer written where nothing else holds it, and the sequence
+    /// unchanged where the count reaches past its last.
+    fn replaced(
+        &self,
+        b: &mut super::Builder,
+        (function, arguments): (barb::FnId, barb::Range),
+        locals: &Locals,
+    ) -> Held {
+        let &[sequence, count, value] = self.barb.atoms(arguments) else {
+            unreachable!("a replacement is of a sequence, a count and a value");
+        };
+        let barb::TypeShape::Sequence {
+            push, recursive, ..
+        } = barb::type_shape(self.barb, self.barb.params(function)[0])
+        else {
+            unreachable!("a replacement is of a sequence");
+        };
+        let &[buffer, first, len] = locals[sequence.0.index()]
+            .as_ref()
+            .expect("a replaced sequence is carried")
+            .values()
+        else {
+            unreachable!("a sequence is held as its buffer, start and length");
+        };
+        let element = usize::from(recursive == 0);
+        let fields = self.element_leaves(b, (push, element), value, locals);
+        let shape = self.element_shape(b, push, element);
+        let index = Self::skipped(b, Self::scalar(locals, count), (len, None));
+        let within = b.compare(Relation::Less, index, len);
+        let written = b.if_(
+            within,
+            &[Class::Buffer, Class::Word],
+            |b| {
+                let written = b.buffer_replace((buffer, first, len), index, shape, &fields);
+                b.yield_(&written);
+            },
+            |b| b.yield_(&[buffer, first]),
+        );
+        Held::Flat {
+            leaves: sequence_run(),
+            values: [written[0], written[1], len].as_slice().into(),
         }
     }
 
@@ -3220,19 +3268,38 @@ impl Lowering<'_> {
             unreachable!("a sequence is held as its buffer, start and length");
         };
         let element = usize::from(recursive == 0);
-        let mut fields = Vec::new();
-        if let Some(carried) = self.field_carried(ctor, element) {
-            let held = locals[atoms[element].0.index()]
-                .as_ref()
-                .expect("a carried element carries a value");
-            for (&value, &class) in held.values().iter().zip(self.classes(&carried)) {
-                fields.push(met(b, value, class));
-            }
-        }
+        let fields = self.element_leaves(b, (ctor, element), atoms[element], locals);
         let shape = self.element_shape(b, ctor, element);
         let [pushed, earlier] = b.buffer_push((buffer, first, len), shape, &fields);
         let one = b.constant(Class::Word, 1);
-        [pushed, earlier, b.binary(Binary::Add, len, one)]
+        [
+            pushed,
+            earlier,
+            b.binary_at(Class::Word, Binary::Add, len, one),
+        ]
+    }
+
+    /// The leaves of `value`, an element of a sequence pushed by `ctor` as
+    /// its field `element`, each at the class the element is laid out at:
+    /// none where the element carries nothing.
+    fn element_leaves(
+        &self,
+        b: &mut super::Builder,
+        (ctor, element): (barb::CtorId, usize),
+        value: barb::Atom,
+        locals: &Locals,
+    ) -> Vec<ValueId> {
+        let Some(carried) = self.field_carried(ctor, element) else {
+            return Vec::new();
+        };
+        let held = locals[value.0.index()]
+            .as_ref()
+            .expect("a carried element carries a value");
+        held.values()
+            .iter()
+            .zip(self.classes(&carried))
+            .map(|(&value, &class)| met(b, value, class))
+            .collect()
     }
 
     /// A number built from constructors: nought, or one more than its field.
@@ -3550,7 +3617,10 @@ impl Lowering<'_> {
                 if at == recursive {
                     let one = b.constant(Class::Word, 1);
                     let later = b.binary(Binary::Add, first, one);
-                    let shorter = b.binary(Binary::Sub, len, one);
+                    // A length is counted in a word, whatever its class
+                    // says it can be: the host's count of its arguments
+                    // says more.
+                    let shorter = b.binary_at(Class::Word, Binary::Sub, len, one);
                     return Held::of(carried, &[buffer, later, shorter]);
                 }
                 let shape = self.element_shape(b, ctor, at);

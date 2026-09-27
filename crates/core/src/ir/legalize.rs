@@ -216,6 +216,7 @@ fn growths(source: &Program) -> std::collections::BTreeSet<(Growth, ShapeId)> {
         Op::BufferPush { shape, .. } => Some((Growth::Push, shape)),
         Op::BufferPrepend { shape, .. } => Some((Growth::Prepend, shape)),
         Op::BufferExtend { shape, .. } => Some((Growth::Extend, shape)),
+        Op::BufferReplace { shape, .. } => Some((Growth::Replace, shape)),
         _ => None,
     })
 }
@@ -765,6 +766,26 @@ impl Pass<'_> {
         [room, front]
     }
 
+    /// The sequence with element `index` replaced by the one whose leaves
+    /// are `claimed`: written where it lies in a buffer nothing else holds.
+    fn replace(
+        &self,
+        b: &mut Builder,
+        sequence: (ValueId, ValueId, ValueId),
+        index: ValueId,
+        shape: ShapeId,
+        claimed: &[ValueId],
+    ) -> [ValueId; 2] {
+        let packed = self.shapes.packed(shape);
+        let sequences = self
+            .sequences
+            .as_ref()
+            .expect("buffer helpers were requested");
+        let [owned, front, element] = sequences.replace(b, packed, sequence, index);
+        Self::store_leaves(b, (element, 0), packed, claimed);
+        [owned, front]
+    }
+
     /// Read one leaf of element `start` of a buffer, holding a claim to it.
     fn buffer_field(
         &self,
@@ -989,6 +1010,18 @@ impl Pass<'_> {
                     .map(|&old| self.take(b, scopes, live, at, old))
                     .collect();
                 return self.push(b, (buffer, start, len), shape, &claimed).to_vec();
+            }
+            Op::BufferReplace { operands, shape } => {
+                let operands = self.source.values(operands);
+                let buffer = self.take(b, scopes, live, at, operands[0]);
+                let [start, len, index] = [1, 2, 3].map(|at| word(b, v(operands[at])));
+                let claimed: Vec<_> = operands[4..]
+                    .iter()
+                    .map(|&old| self.take(b, scopes, live, at, old))
+                    .collect();
+                return self
+                    .replace(b, (buffer, start, len), index, shape, &claimed)
+                    .to_vec();
             }
             Op::BufferPrepend { operands, shape } => {
                 let operands = self.source.values(operands);

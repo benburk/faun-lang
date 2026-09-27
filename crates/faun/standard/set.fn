@@ -1,0 +1,83 @@
+# The set, as a map whose values say nothing: every promise `Map` makes —
+# keys by `hash_into`, members back in insertion order, a mixer no program
+# observes — holds here by construction. `SortedSet` is the alternative for
+# members that must come back in order.
+
+import map {Map}
+import mixer {Mixer}
+
+exports {Set}
+
+# A set of keys: a map whose values say nothing. Its members come back in
+# insertion order.
+Set(k) : Map(k, Bool).(
+  # The empty set.
+  empty : Set(k)
+  empty() -> Set(Map.empty())
+
+  # Whether `set` has no members.
+  is_empty : Set(k) -> Bool
+  is_empty(Set(members)) -> Map.is_empty(members)
+
+  # The number of members of `set`.
+  len : Set(k) -> Nat
+  len(Set(members)) -> Map.len(members)
+
+  # `set` with `key` as a member; membership is idempotent.
+  insert : (Set(k), k) -> Set(k) where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  insert(Set(members), key) -> Set(Map.insert(members, key, True))
+
+  # `set` without `key`; unchanged when `key` is not a member.
+  remove : (Set(k), k) -> Set(k) where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  remove(Set(members), key) -> Set(Map.remove(members, key))
+
+  # Whether `key` is a member of `set`.
+  contains : (Set(k), k) -> Bool where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  contains(Set(members), key) -> Map.contains(members, key)
+
+  # The members of `set` in insertion order.
+  to_list : Set(k) -> List(k)
+  to_list(Set(members)) -> Map.keys(members)
+
+  # The result of combining the members of `set` in insertion order,
+  # beginning with `initial`.
+  fold : (Set(k), a, (a, k) -> a) -> a
+  fold(set, initial, combine) -> to_list(set).fold(initial, combine)
+
+  # The set whose members are the items of `list`.
+  of_list : List(k) -> Set(k) where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  of_list(items) -> items.fold(empty(), insert)
+
+  # The members of either set.
+  union : (Set(k), Set(k)) -> Set(k) where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  union(set, other) -> fold(other, set, insert)
+
+  # The members of `set` that are not members of `other`.
+  difference : (Set(k), Set(k)) -> Set(k) where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  difference(set, other) -> fold(other, set, remove)
+
+  # The members of both sets.
+  intersection : (Set(k), Set(k)) -> Set(k) where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  intersection(set, other) -> of_list(to_list(set).filter(|key| contains(other, key)))
+
+  # Whether `set` and `other` have the same members, in whatever order
+  # either was built. Linear in the size.
+  equals : (Set(k), Set(k)) -> Bool where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  equals(set, other) -> len(set) == len(other) & to_list(set).all(|key| contains(other, key))
+)

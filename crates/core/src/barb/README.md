@@ -126,7 +126,13 @@ x    ::= a parameter, a binding, or a field an arm bound
   nought, the empty one for an empty sequence, itself on the rest and the
   count less one otherwise, matching either first -- is
   `SequenceOperation::Drop`, answered as the same buffer holding fewer, and
-  known bytes less some of their front as the same bytes further on.
+  known bytes less some of their front as the same bytes further on. A
+  definition rebuilding a sequence's front with the element a count reaches
+  replaced by a value -- the empty sequence or itself for an empty one, the
+  value pushed before the rest at nought, and the element pushed before
+  itself on the rest and the count less one otherwise -- is
+  `SequenceOperation::Replace`, answered as one element written over: where
+  the buffer, and in place where nothing else holds it.
 - `affine.rs`: derive small affine summaries from recognized natural addition and
   multiplication by constants, without adding an expression kind or expanding
   nonlinear products.

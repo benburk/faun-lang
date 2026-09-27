@@ -1,8 +1,9 @@
 # Primary frontend standard library
 
 `standard.fn` is the bootstrap package root. It exports `Bool`, `Order`, `Nat`,
-`Int`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`, `List`, `Result`, and `Str` from
-sibling modules.
+`Int`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`, `List`, `Result`, `Str`,
+`Hasher`, `Map`, `Mixer`, `Set`, `SortedMap` and `SortedSet` from sibling
+modules.
 
 A numeral takes its type from its position, as in Ori, and may be only a
 `Nat`, `Int`, `U8`, `U16`, `U32` or `U64`; nothing else is made numeric by the
@@ -129,7 +130,21 @@ cargo run -- check crates/faun/examples/utilities.fn
 cargo run -- emit --target x86_64-linux barb crates/faun/examples/main.fn
 ```
 
-The package deliberately omits hashing and bodyless derivation.
+A key says what it is made of through `hash_into : (T, h) -> h`, generic over
+any hasher: `Hasher(h)` is the alias for a type with `write_u64` and
+`write_bytes`, and nothing more, so a key can feed a hasher but never read a
+digest out. The numbers, `Bool`, `Str` and `List` define it; a tuple or a
+closed record has its own, feeding its members in order. `Map` and `Set`
+feed the library's own `Mixer` (`mixer.fn`) and keep their entries in
+insertion order, so no program observes the mixing. The package exports
+`Mixer` as a type alone, for a generic signature over a map to bound its
+key by `k.hash_into : (k, Mixer) -> Mixer`; neither its seed nor its digest
+is exported. `SortedMap` and `SortedSet` are AVL trees ordered by the key's
+`cmp`, for keys that must come back in order. `List.group_by` gathers into a
+`Map`.
+
+The package has no bodyless derivation: a declared type's `equals`, `cmp`
+or `hash_into` is written out, as `Map`'s `Slot` writes its `equals`.
 
 Generic code that uses a method has a `where` bound, as in Ori: structural,
 met by any type having the member, with no trait and no runtime dictionary.

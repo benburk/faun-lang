@@ -4,6 +4,8 @@
 # above `numerals_below` is refused rather than wrapped. String syntax, and
 # nothing else outside, may build the wrapper directly.
 
+import hasher {Hasher}
+
 exports {U8}
 
 numerals_below : Nat
@@ -108,6 +110,10 @@ U8 : Nat.(
 
   rotate_right : (U8, Nat) -> U8
   rotate_right(word, amount) -> rotate_left(word, 8 - amount % 8)
+
+  # `hasher` with `a` fed: widened to a word.
+  hash_into : (U8, h) -> h where Hasher(h)
+  hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(to_nat(a)))
 
   equals : (U8, U8) -> Bool
   equals(U8(a), U8(b)) -> a.equals(b)

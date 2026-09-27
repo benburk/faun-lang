@@ -1,0 +1,187 @@
+# A persistent map sorted by key: the specialty beside `Map`, for keys that
+# must come back in order. The key's ordinary `cmp` method supplies the
+# order; no runtime dictionary or distinguished key type is involved.
+#
+# The representation is an AVL tree, and that sentence belongs only here: the
+# constructors are not exported, so callers build through `empty`/`insert`/
+# `of_list` and observe through `get`/`len`/`to_list`. Every observation is
+# stated in key order, which any ordered representation can honour — swapping
+# the tree for a B-tree is this file's business alone.
+#
+# `equals` is deliberately absent: two maps with the same contents may have
+# different shapes (insertion order decides), so structural equality would be
+# wrong. Compare maps by `to_list` when the need arises.
+
+exports {SortedMap}
+
+SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
+  # The empty map.
+  empty : SortedMap(k, v)
+  empty() -> Tip
+
+  # Whether `map` has no entries.
+  is_empty : SortedMap(k, v) -> Bool
+  is_empty(Tip) -> True
+  is_empty(_) -> False
+
+  # The number of entries in `map`.
+  len : SortedMap(k, v) -> Nat
+  len(Tip) -> 0
+  len(Bin(left, _, _, right, _)) -> len(left) + 1 + len(right)
+
+  # The value bound to `key` in `map`: `Ok(value)` when `key` is present;
+  # otherwise `Err(Missing)`.
+  get : (SortedMap(k, v), k) -> Result(v, [Missing]) where k.cmp : (k, k) -> Order
+  get(Tip, _) -> Err(Missing)
+  get(Bin(left, found, value, right, _), key) -> got(key.cmp(found), left, value, right, key)
+
+  # The value bound to `key` in `map`, and `fallback` where it is absent.
+  get_or : (SortedMap(k, v), k, v) -> v where k.cmp : (k, k) -> Order
+  get_or(map, key, fallback) -> get(map, key).ok_or(fallback)
+
+  # Whether `key` is bound in `map`.
+  contains : (SortedMap(k, v), k) -> Bool where k.cmp : (k, k) -> Order
+  contains(map, key) -> get(map, key).is_ok()
+
+  # `map` with `value` bound to `key`, replacing any existing binding for that
+  # key. An existing key keeps its position and takes the new value, so
+  # insertion is how callers overwrite.
+  insert : (SortedMap(k, v), k, v) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
+  insert(Tip, key, value) -> Bin(Tip, key, value, Tip, 1)
+  insert(Bin(left, found, existing, right, depth), key, value) ->
+    inserted_at(key.cmp(found), left, found, existing, right, depth, key, value)
+
+  # `map` without any binding for `key`; unchanged when `key` is absent, so
+  # removal is idempotent, and it undoes an `insert` of a key that was not
+  # bound before: the entries come back, if not the shape.
+  remove : (SortedMap(k, v), k) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
+  remove(Tip, _) -> Tip
+  remove(Bin(left, found, value, right, _), key) ->
+    removed_at(key.cmp(found), left, found, value, right, key)
+
+  # The keys of `map` in ascending order.
+  keys : SortedMap(k, v) -> List(k)
+  keys(map) -> to_list(map).map(|(key, _)| key)
+
+  # The values of `map`, in ascending order of their keys.
+  values : SortedMap(k, v) -> List(v)
+  values(map) -> to_list(map).map(|(_, value)| value)
+
+  # The result of combining the entries of `map` in ascending key order,
+  # beginning with `initial`, each entry as its key and value: the left
+  # subtree folded first, then this node, then the right.
+  fold : (SortedMap(k, v), a, (a, k, v) -> a) -> a
+  fold(Tip, initial, _) -> initial
+  fold(Bin(left, key, value, right, _), initial, combine) ->
+    fold(right, combine(fold(left, initial, combine), key, value), combine)
+
+  # The entries of `map` in ascending key order — the map's one observable
+  # shape.
+  to_list : SortedMap(k, v) -> List((k, v))
+  to_list(Tip) -> []
+  to_list(Bin(left, key, value, right, _)) ->
+    to_list(left).extend(to_list(right).prepend((key, value)))
+
+  # The map binding each entry of `entries`, later entries winning exactly as
+  # repeated `insert` calls would.
+  of_list : List((k, v)) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
+  of_list(entries) -> entries.fold(Tip, |built, (key, value)| insert(built, key, value))
+)
+
+height : SortedMap(k, v) -> Nat
+height(Tip) -> 0
+height(Bin(_, _, _, _, depth)) -> depth
+
+node : (SortedMap(k, v), k, v, SortedMap(k, v)) -> SortedMap(k, v)
+node(left, key, value, right) -> Bin(left, key, value, right, height(left).max(height(right)) + 1)
+
+# Rebuild a node whose children differ in height by at most one more than
+# AVL allows (one child just grew by one), restoring the invariant with the
+# classic single or double rotation toward the lighter side.
+balanced : (SortedMap(k, v), k, v, SortedMap(k, v)) -> SortedMap(k, v)
+balanced(left, key, value, right) if height(right) + 1 < height(left) ->
+  rotate_right(left, key, value, right)
+balanced(left, key, value, right) if height(left) + 1 < height(right) ->
+  rotate_left(left, key, value, right)
+balanced(left, key, value, right) -> node(left, key, value, right)
+
+# The left child grew. A heavier-or-level inner-left rotates once; a heavier
+# inner-right needs the double rotation through it.
+rotate_right : (SortedMap(k, v), k, v, SortedMap(k, v)) -> SortedMap(k, v)
+rotate_right(Tip, key, value, right) -> node(Tip, key, value, right)
+rotate_right(Bin(inner_left, pivot_key, pivot_value, inner_right, _), key, value, right) if height(inner_right) <= height(inner_left) ->
+  node(inner_left, pivot_key, pivot_value, node(inner_right, key, value, right))
+rotate_right(Bin(inner_left, pivot_key, pivot_value, Tip, depth), key, value, right) ->
+  node(Bin(inner_left, pivot_key, pivot_value, Tip, depth), key, value, right)
+rotate_right(Bin(inner_left, pivot_key, pivot_value, Bin(middle_left, middle_key, middle_value, middle_right, _), _), key, value, right) ->
+  node(
+    node(inner_left, pivot_key, pivot_value, middle_left),
+    middle_key,
+    middle_value,
+    node(middle_right, key, value, right),
+  )
+
+# The mirror image: the right child grew.
+rotate_left : (SortedMap(k, v), k, v, SortedMap(k, v)) -> SortedMap(k, v)
+rotate_left(left, key, value, Tip) -> node(left, key, value, Tip)
+rotate_left(left, key, value, Bin(inner_left, pivot_key, pivot_value, inner_right, _)) if height(inner_left) <= height(inner_right) ->
+  node(node(left, key, value, inner_left), pivot_key, pivot_value, inner_right)
+rotate_left(left, key, value, Bin(Tip, pivot_key, pivot_value, inner_right, depth)) ->
+  node(left, key, value, Bin(Tip, pivot_key, pivot_value, inner_right, depth))
+rotate_left(left, key, value, Bin(Bin(middle_left, middle_key, middle_value, middle_right, _), pivot_key, pivot_value, inner_right, _)) ->
+  node(
+    node(left, key, value, middle_left),
+    middle_key,
+    middle_value,
+    node(middle_right, pivot_key, pivot_value, inner_right),
+  )
+
+# The comparison's verdict walks left, stops, or walks right. The
+# children arrive straight from `get`'s pattern, so each walk descends.
+got : (Order, SortedMap(k, v), v, SortedMap(k, v), k) -> Result(v, [Missing]) where
+  k.cmp : (k, k) -> Order
+got(Lt, left, _, _, key) -> SortedMap.get(left, key)
+got(Eq, _, value, _, _) -> Ok(value)
+got(Gt, _, _, right, key) -> SortedMap.get(right, key)
+
+# The comparison's verdict replaces in place or descends, rebalancing the
+# grown side. The node arrives as its pieces, so the recursion into a
+# child is a descent the checker reads off the caller's pattern.
+inserted_at : (Order, SortedMap(k, v), k, v, SortedMap(k, v), Nat, k, v) -> SortedMap(k, v) where
+  k.cmp : (k, k) -> Order
+inserted_at(Eq, left, _, _, right, depth, key, value) -> Bin(left, key, value, right, depth)
+inserted_at(Lt, left, found, existing, right, _, key, value) ->
+  balanced(SortedMap.insert(left, key, value), found, existing, right)
+inserted_at(Gt, left, found, existing, right, _, key, value) ->
+  balanced(left, found, existing, SortedMap.insert(right, key, value))
+
+# The comparison's verdict removes here or descends, rebalancing the side
+# that did not shrink. The node arrives as its pieces, as for `inserted_at`,
+# so the recursion into a child is a descent the checker reads off the
+# caller's pattern.
+removed_at : (Order, SortedMap(k, v), k, v, SortedMap(k, v), k) -> SortedMap(k, v) where
+  k.cmp : (k, k) -> Order
+removed_at(Lt, left, found, value, right, key) ->
+  balanced(SortedMap.remove(left, key), found, value, right)
+removed_at(Gt, left, found, value, right, key) ->
+  balanced(left, found, value, SortedMap.remove(right, key))
+removed_at(Eq, left, _, _, right, _) -> joined(left, right)
+
+# The two children of a removed node as one tree. Every key on the left is
+# below every key on the right, so the right child's smallest entry can take
+# the removed node's place and the rest of the right child rebalances beside
+# it.
+joined : (SortedMap(k, v), SortedMap(k, v)) -> SortedMap(k, v)
+joined(left, Tip) -> left
+joined(left, Bin(inner_left, key, value, inner_right, _)) ->
+  ((least, least_value), rest) = split_smallest(inner_left, key, value, inner_right)
+  balanced(left, least, least_value, rest)
+
+# The smallest entry of the node `(left, key, value, right)` and that node
+# without it: the entry itself when nothing lies to its left, otherwise the
+# one found further left, with the path back up rebalanced.
+split_smallest : (SortedMap(k, v), k, v, SortedMap(k, v)) -> ((k, v), SortedMap(k, v))
+split_smallest(Tip, key, value, right) -> ((key, value), right)
+split_smallest(Bin(inner_left, inner_key, inner_value, inner_right, _), key, value, right) ->
+  (least, rest) = split_smallest(inner_left, inner_key, inner_value, inner_right)
+  (least, balanced(rest, key, value, right))

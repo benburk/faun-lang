@@ -1,6 +1,8 @@
 # Concrete Boolean utilities. Equality is written out while bodyless method
 # derivation remains outside the bootstrap frontend.
 
+import hasher {Hasher}
+
 exports {Bool.*}
 
 Bool : [False, True].(
@@ -38,6 +40,10 @@ Bool : [False, True].(
   to_str : Bool -> Str
   to_str(False) -> "False"
   to_str(True) -> "True"
+
+  # `hasher` with `a` fed: as 0 or 1.
+  hash_into : (Bool, h) -> h where Hasher(h)
+  hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(to_nat(a)))
 
   equals : (Bool, Bool) -> Bool
   equals(False, False) -> True

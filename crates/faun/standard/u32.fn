@@ -3,6 +3,8 @@
 # its modulus; a numeral builds one through `of_nat`, and one written at or
 # above `numerals_below` is refused rather than wrapped.
 
+import hasher {Hasher}
+
 exports {U32}
 
 numerals_below : Nat
@@ -75,6 +77,10 @@ U32 : Nat.(
 
   rotate_right : (U32, Nat) -> U32
   rotate_right(word, amount) -> rotate_left(word, 32 - amount % 32)
+
+  # `hasher` with `a` fed: widened to a word.
+  hash_into : (U32, h) -> h where Hasher(h)
+  hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(to_nat(a)))
 
   equals : (U32, U32) -> Bool
   equals(U32(a), U32(b)) -> a.equals(b)

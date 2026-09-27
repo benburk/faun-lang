@@ -1,6 +1,8 @@
 # Unary naturals and the small arithmetic kernel used by the bootstrap
 # standard library.
 
+import hasher {Hasher}
+
 exports {Nat.*}
 
 Nat : [Zero, Succ(Nat)].(
@@ -78,6 +80,10 @@ Nat : [Zero, Succ(Nat)].(
   # nothing else, no sign and no space.
   from_str : Str -> Result(Nat, [Malformed])
   from_str(text) -> nat_digits(text.to_utf8(), 0, False)
+
+  # `hasher` with `n` fed: its value.
+  hash_into : (Nat, h) -> h where Hasher(h)
+  hash_into(n, hasher) -> hasher.write_u64(U64.of_nat(n))
 
   equals : (Nat, Nat) -> Bool
   equals(0, 0) -> True

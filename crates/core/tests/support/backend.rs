@@ -890,6 +890,48 @@ fn lists_of_every_element_hold_what_they_were_given() {
     }
 }
 
+/// A list is written where it lies where nothing else holds it, and copied
+/// first where something does, which then reads what it held: numbers and
+/// strings, each replaced in a list threaded through a fold and in one held
+/// twice, and a position past the end refused.
+#[test]
+fn a_list_set_where_nothing_else_holds_it_is_written_in_place() {
+    let text = "import std.host {Host}
+
+         main! : Host -> []
+         main!(host) ->
+           n = host.args.len() % 4
+           host.exit!(held(threaded(n)) + held(shared(n)) * 2 + held(strings(n)) * 4 + held(past(n)) * 8)
+
+         held : Bool -> Nat
+         held(True) -> 1
+         held(False) -> 0
+
+         threaded : Nat -> Bool
+         threaded(n) -> List.range(n + 5).fold(List.repeat(0, n + 5), |xs, i| xs.set(i, i * i).ok_or([])) == [0, 1, 4, 9, 16, 25]
+
+         shared : Nat -> Bool
+         shared(n) ->
+           xs = [n, 2, 3]
+           ys = xs.set(0, 7).ok_or([])
+           xs == [1, 2, 3] & ys == [7, 2, 3]
+
+         strings : Nat -> Bool
+         strings(n) ->
+           names = [\"a${n}\", \"b\", \"c\"]
+           renamed = names.set(1, \"d${n}\").ok_or([])
+           again = renamed.set(2, \"e\").ok_or([])
+           names == [\"a1\", \"b\", \"c\"] & again == [\"a1\", \"d1\", \"e\"]
+
+         past : Nat -> Bool
+         past(n) -> [n].set(n, 5).is_err()";
+    let program = read(text).expect("a program");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(status(&program), 15);
+}
+
 /// Memory two and four bytes wide, as well as a byte and a word.
 #[test]
 fn it_stores_narrower_than_a_word() {

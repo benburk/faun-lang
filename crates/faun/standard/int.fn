@@ -1,6 +1,8 @@
 # Signed integers over Nat. Mixed-sign addition delegates to a structural
 # magnitude walk, avoiding ordering and guards in the bootstrap subset.
 
+import hasher {Hasher}
+
 exports {Int.*}
 
 Int : [Pos(Nat), NegSucc(Nat)].(
@@ -72,6 +74,10 @@ Int : [Pos(Nat), NegSucc(Nat)].(
   # negative one, as `Nat.from_str` reads the digits.
   from_str : Str -> Result(Int, [Malformed])
   from_str(text) -> signed(text.drop_prefix("-"), text)
+
+  # `hasher` with `a` fed: its sign, then its magnitude.
+  hash_into : (Int, h) -> h where Hasher(h)
+  hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(is_negative(a).to_nat())).write_u64(U64.of_nat(abs(a)))
 
   equals : (Int, Int) -> Bool
   equals(Pos(a), Pos(b)) -> a.equals(b)

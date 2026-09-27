@@ -537,8 +537,8 @@ impl<'a> Specializer<'a> {
     }
 
     /// Whether `name` on these parameters is a closed record's or a
-    /// tuple's own `equals` or `cmp`, or a tag row's own `equals` or
-    /// `to_str`.
+    /// tuple's own `equals`, `cmp` or `hash_into`, or a tag row's own
+    /// `equals` or `to_str`.
     fn is_structural(&self, name: Symbol, parameters: Option<&[Type]>) -> bool {
         let receiver = parameters.and_then(<[Type]>::first);
         let name = Some(name);
@@ -547,7 +547,7 @@ impl<'a> Specializer<'a> {
                 receiver,
                 Some(Type::Record(_) | Type::Tuple(_) | Type::Variants(_))
             ))
-            || (name == self.prelude.cmp
+            || ((name == self.prelude.cmp || name == self.prelude.hash_into)
                 && matches!(receiver, Some(Type::Record(_) | Type::Tuple(_))))
             || (name == self.prelude.to_str && matches!(receiver, Some(Type::Variants(_))))
     }
@@ -590,8 +590,9 @@ impl<'a> Specializer<'a> {
     }
 
     /// A record's, a tuple's or a tag row's `equals`, every component equal,
-    /// or a tuple's `cmp`, the first position not `Eq`, each component
-    /// compared by its own type's member. Values of a row are equal where
+    /// a tuple's `cmp`, the first position not `Eq`, or a record's or a
+    /// tuple's `hash_into`, each component fed in order, each component
+    /// taken by its own type's member. Values of a row are equal where
     /// they are one tag with equal fields.
     fn structural_function(
         &mut self,
@@ -608,9 +609,20 @@ impl<'a> Specializer<'a> {
         {
             return self.row_to_str(key, at, tags);
         }
+        let hashing = Some(key.name) == self.prelude.hash_into;
         let clauses = match &receiver {
+            Type::Tuple(members) if hashing => {
+                vec![self.fed(key, at, &answer, members, Pattern::Product)?]
+            }
             Type::Tuple(members) => {
                 vec![self.componentwise(key, at, &answer, members, Pattern::Product)?]
+            }
+            Type::Record(fields) if hashing => {
+                let components: Vec<Type> = fields.iter().map(|(_, ty)| ty.clone()).collect();
+                let shape = |binds: Vec<Pattern>| {
+                    Pattern::Record(fields.iter().map(|(name, _)| *name).zip(binds).collect())
+                };
+                vec![self.fed(key, at, &answer, &components, shape)?]
             }
             Type::Record(fields) => {
                 let components: Vec<Type> = fields.iter().map(|(_, ty)| ty.clone()).collect();
@@ -810,6 +822,56 @@ impl<'a> Specializer<'a> {
                 span,
                 ty: answer.clone(),
                 kind: ExprKind::DirectCall(join.clone(), vec![earlier, result]),
+            };
+        }
+        Ok(Clause {
+            patterns,
+            guard: None,
+            body: Body {
+                bindings: Vec::new(),
+                result,
+            },
+        })
+    }
+
+    /// The clause taking a value of one shape apart, `shape` holding the
+    /// binds of its `components`, and a hasher beside it, that feeds each
+    /// component to the hasher by the component type's own `hash_into`,
+    /// first to last, and answers the hasher fed.
+    fn fed(
+        &mut self,
+        key: &FunctionKey,
+        (module, span): (ModuleId, crate::ast::Span),
+        hasher: &Type,
+        components: &[Type],
+        shape: impl Fn(Vec<Pattern>) -> Pattern,
+    ) -> Result<Clause, SpecializeError> {
+        let count = u32::try_from(components.len())
+            .map_err(|_| error("a product has too many components"))?;
+        let patterns = vec![
+            shape(
+                (0..count)
+                    .map(|index| Pattern::Bind(h::LocalId(index)))
+                    .collect(),
+            ),
+            Pattern::Bind(h::LocalId(count)),
+        ];
+        let local = |index: u32, ty: &Type| Expr {
+            module,
+            span,
+            ty: ty.clone(),
+            kind: ExprKind::Local(h::LocalId(index)),
+        };
+        let mut result = local(count, hasher);
+        for (index, component) in (0..count).zip(components) {
+            let target = self.implementation(component, key.name)?;
+            let call = self.method_key(target, component, std::slice::from_ref(hasher), hasher)?;
+            self.request_at(call.clone(), (module, span));
+            result = Expr {
+                module,
+                span,
+                ty: hasher.clone(),
+                kind: ExprKind::DirectCall(call, vec![local(index, component), result]),
             };
         }
         Ok(Clause {

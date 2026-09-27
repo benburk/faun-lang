@@ -29,6 +29,8 @@ pub(super) fn recognise(program: &Program, length: &[bool]) -> Vec<Option<Sequen
                 Some(SequenceOperation::Prepend)
             } else if drops(program, id) {
                 Some(SequenceOperation::Drop)
+            } else if replaces(program, id) {
+                Some(SequenceOperation::Replace)
             } else {
                 None
             }
@@ -244,6 +246,97 @@ fn drops(program: &Program, id: FnId) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `id` replaces the element a count reaches with a value, matching
+/// the sequence first:
+///
+/// ```text
+/// s(list, n, x) = match list
+///   empty => empty or list
+///   push(y, rest) => match n
+///     zero => push(x, rest)
+///     step(m) => push(y, s(rest, m, x))
+/// ```
+#[expect(
+    clippy::too_many_lines,
+    reason = "each condition of the replacement shape is one early return, read in order"
+)]
+fn replaces(program: &Program, id: FnId) -> bool {
+    let params = program.params(id);
+    let (Some(body), &[list, count, value]) = (program.function(id).body(), params) else {
+        return false;
+    };
+    let Some((empty, push, recursive)) = sequence(program, list) else {
+        return false;
+    };
+    let TypeShape::Natural {
+        empty: zero,
+        push: succ,
+        ..
+    } = type_shape(program, count)
+    else {
+        return false;
+    };
+    // The element's type is the one the push's other field holds.
+    let element = program.fields(push)[1 - recursive];
+    if program.function(id).result != list || value != element {
+        return false;
+    }
+    let Some((0, arms)) = top_match(program, body) else {
+        return false;
+    };
+    let Some([nil, cons]) = split_arms(program, arms, empty, push) else {
+        return false;
+    };
+    let nil_answers = nil.body.bindings.is_empty()
+        && match program.expr(nil.body.tail) {
+            Expr::Atom(Atom(local)) => local.index() == 0,
+            Expr::Con(ctor, _) => ctor == empty,
+            Expr::Static(value) => program.constant(value).constructor() == empty,
+            Expr::Call(..) | Expr::Match(..) => false,
+        };
+    // The push binds its fields at 3 and 4, and the step the count less
+    // one at 5.
+    let (head, rest) = (3 + (1 - recursive), 3 + recursive);
+    if !nil_answers || !cons.body.bindings.is_empty() {
+        return false;
+    }
+    let Expr::Match(Atom(matched), arms) = program.expr(cons.body.tail) else {
+        return false;
+    };
+    let Some([done, step]) = split_arms(program, arms, zero, succ) else {
+        return false;
+    };
+    // A push of `first` before `second`, in the push's own field order.
+    let pushes = |expr: ExprId, first: usize, second: usize| {
+        let Expr::Con(ctor, fields) = program.expr(expr) else {
+            return false;
+        };
+        let mut expected = [Atom(Local::at(first)), Atom(Local::at(second))];
+        if recursive == 0 {
+            expected.reverse();
+        }
+        ctor == push && program.atoms(fields) == expected
+    };
+    let written = done.body.bindings.is_empty() && pushes(done.body.tail, 2, rest);
+    // The step's one binding, at 6, is the call going round.
+    let again = match program.bindings(step.body.bindings) {
+        &[call] => match program.expr(call) {
+            Expr::Call(callee, args) => {
+                callee == id
+                    && program.atoms(args)
+                        == [
+                            Atom(Local::at(rest)),
+                            Atom(Local::at(5)),
+                            Atom(Local::at(2)),
+                        ]
+            }
+            _ => false,
+        },
+        _ => false,
+    };
+    matched.index() == 1 && written && again && pushes(step.body.tail, head, 6)
 }
 
 /// A body that is nothing but a match on a parameter: which one, and its
