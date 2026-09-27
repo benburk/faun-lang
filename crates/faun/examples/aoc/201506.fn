@@ -1,0 +1,119 @@
+# Advent of Code 2015, day 6: Probably a Fire Hazard.
+# The grid is evaluated one coordinate at a time, so its million lights need no
+# million-element intermediate representation.
+
+Action : [TurnOn, TurnOff, Toggle]
+
+Instruction : [Instruction(
+  Action,
+  {left: Nat, top: Nat, right: Nat, bottom: Nat}
+)]
+
+parse_coordinate : Str -> Result((Nat, Nat), [MalformedInstruction])
+parse_coordinate(text) -> paired(text.split(",").try_map(Nat.from_str))
+
+paired : Result(List(Nat), e) -> Result((Nat, Nat), [MalformedInstruction])
+paired(Ok([x, y])) -> Ok((x, y))
+paired(_) -> Err(MalformedInstruction)
+
+parse_range : (Action, Str, Str) -> Result(Instruction, [MalformedInstruction])
+parse_range(action, start, end) ->
+  (left, top) = parse_coordinate(start)?
+  (right, bottom) = parse_coordinate(end)?
+  bounded(action, {left, top, right, bottom})
+
+bounded : (Action, {left: Nat, top: Nat, right: Nat, bottom: Nat}) -> Result(Instruction, [MalformedInstruction])
+bounded(action, {left, top, right, bottom})
+  if left <= right & top <= bottom & right < 1000 & bottom < 1000
+  -> Ok(Instruction(action, {left, top, right, bottom}))
+bounded(_, _) -> Err(MalformedInstruction)
+
+parse_instruction : Str -> Result(Instruction, [MalformedInstruction])
+parse_instruction(line) -> instruction(line.split(" "))
+
+instruction : List(Str) -> Result(Instruction, [MalformedInstruction])
+instruction(["turn", "on", start, "through", end]) -> parse_range(TurnOn, start, end)
+instruction(["turn", "off", start, "through", end]) -> parse_range(TurnOff, start, end)
+instruction(["toggle", start, "through", end]) -> parse_range(Toggle, start, end)
+instruction(_) -> Err(MalformedInstruction)
+
+parse : Str -> Result(List(Instruction), [MalformedInstruction])
+parse(input) -> input.trim().lines().try_map(parse_instruction)
+
+apply : (Bool, Action) -> Bool
+apply(_, TurnOn) -> True
+apply(_, TurnOff) -> False
+apply(light, Toggle) -> light.not()
+
+adjust_brightness : (Nat, Action) -> Nat
+adjust_brightness(brightness, TurnOn) -> brightness + 1
+adjust_brightness(brightness, TurnOff) -> brightness - 1
+adjust_brightness(brightness, Toggle) -> brightness + 2
+
+inside : (Nat, Nat, {left: Nat, top: Nat, right: Nat, bottom: Nat}) -> Bool
+inside(x, y, area) -> area.left <= x & x <= area.right
+  & area.top <= y & y <= area.bottom
+
+# One light's part-1 contribution: fold the instructions over a Bool.
+lit_cell : (List(Instruction), Nat, Nat) -> Nat
+lit_cell(instructions, x, y) ->
+  instructions.fold(False, |light, Instruction(action, area)|
+    inside(x, y, area).select(apply(light, action), light)).to_nat()
+
+# One light's part-2 contribution: the same fold over a brightness.
+brightness_cell : (List(Instruction), Nat, Nat) -> Nat
+brightness_cell(instructions, x, y) ->
+  instructions.fold(0, |brightness, Instruction(action, area)|
+    inside(x, y, area).select(adjust_brightness(brightness, action), brightness))
+
+# Both parts sum a per-cell score over the grid; only the scorer differs.
+row_sum : (List(Instruction), Nat, Nat, (List(Instruction), Nat, Nat) -> Nat) -> Nat
+row_sum(_, _, 0, _) -> 0
+row_sum(instructions, y, Succ(x), cell) ->
+  row_sum(instructions, y, x, cell) + cell(instructions, x, y)
+
+grid_sum : (List(Instruction), Nat, Nat, (List(Instruction), Nat, Nat) -> Nat) -> Nat
+grid_sum(_, _, 0, _) -> 0
+grid_sum(instructions, width, Succ(y), cell) ->
+  grid_sum(instructions, width, y, cell) + row_sum(instructions, y, width, cell)
+
+lit_count : (Str, Nat, Nat) -> Result(Nat, [MalformedInstruction])
+lit_count(input, width, height) -> Ok(grid_sum(parse(input)?, width, height, lit_cell))
+
+part1 : Str -> Result(Nat, [MalformedInstruction])
+part1(input) -> lit_count(input, 1000, 1000)
+
+brightness_count : (Str, Nat, Nat) -> Result(Nat, [MalformedInstruction])
+brightness_count(input, width, height) -> Ok(grid_sum(parse(input)?, width, height, brightness_cell))
+
+part2 : Str -> Result(Nat, [MalformedInstruction])
+part2(input) -> brightness_count(input, 1000, 1000)
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) -> run(parse(input.stdin))
+
+run : Result(List(Instruction), e) -> Result(Str, Str)
+run(Err(_)) -> Err("malformed lighting instruction")
+run(Ok(instructions)) ->
+  lights = grid_sum(instructions, 1000, 1000, lit_cell)
+  brightness = grid_sum(instructions, 1000, 1000, brightness_cell)
+  Ok("part1: ${lights} part2: ${brightness}\n")
+
+expect lit_count("turn on 0,0 through 2,2\n", 3, 3) == Ok(9)
+expect lit_count(
+  "turn on 0,0 through 2,2\ntoggle 0,0 through 2,0\nturn off 1,1 through 2,2\n",
+  3,
+  3
+) == Ok(2)
+expect brightness_count("turn on 0,0 through 0,0\n", 1, 1) == Ok(1)
+expect brightness_count("toggle 0,0 through 2,2\n", 3, 3) == Ok(18)
+expect brightness_count("turn off 0,0 through 2,2\n", 3, 3) == Ok(0)
+expect brightness_count(
+  "turn on 0,0 through 2,2\ntoggle 0,0 through 2,0\nturn off 1,1 through 2,2\n",
+  3,
+  3
+) == Ok(11)
+expect parse("turn sideways 0,0 through 1,1").is_err()
+expect parse("turn on 0,0 through 1000,1").is_err()
+
+main!(host) -> host.run_result_text!(app)

@@ -1,0 +1,49 @@
+# Advent of Code 2015, day 3: Perfectly Spherical Houses in a Vacuum.
+# Positions are tuples, so their structural `cmp` is enough to use them as
+# keys in the persistent set library.
+
+origin : (Int, Int)
+origin() -> (0, 0)
+
+step : ((Int, Int), U8) -> (Int, Int)
+step((x, y), '>') -> (x + 1, y)
+step((x, y), '<') -> (x - 1, y)
+step((x, y), '^') -> (x, y + 1)
+step((x, y), 'v') -> (x, y - 1)
+step(position, _) -> position
+
+trail : List(U8) -> List((Int, Int))
+trail(directions) -> directions.trail(origin(), step).prepend(origin())
+
+# Deal alternating cards into two hands. The first receives the even-indexed
+# directions and may have one extra; interleaving the hands recovers the input.
+deal : List(a) -> (List(a), List(a))
+deal([]) -> ([], [])
+deal([left]) -> ([left], [])
+deal([left, right, *rest]) ->
+  (lefts, rights) = deal(rest)
+  ([left, *lefts], [right, *rights])
+
+part1 : Str -> Nat
+part1(input) -> Set.of_list(trail(input.to_utf8())).len()
+
+part2 : Str -> Nat
+part2(input) ->
+  (santa, robo) = deal(input.to_utf8())
+  Set.of_list(trail(santa).extend(trail(robo))).len()
+
+app : {stdin: Str} -> Result(Str, Str)
+app({stdin}) -> Ok("part1: ${part1(stdin)} part2: ${part2(stdin)}\n")
+
+expect deal([1, 2, 3, 4, 5]) == ([1, 3, 5], [2, 4])
+expect deal([1, 2, 3, 4]) == ([1, 3], [2, 4])
+
+expect part1(">") == 2
+expect part1("^>v<") == 4
+expect part1("^v^v^v^v^v") == 2
+expect part2("") == 1
+expect part2("^v") == 3
+expect part2("^>v<") == 3
+expect part2("^v^v^v^v^v") == 11
+
+main!(host) -> host.run_result_text!(app)

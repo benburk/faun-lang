@@ -1,0 +1,15 @@
+# Build-time frontend for the sibling template library. The process boundary
+# supplies a template on stdin and its generated `Html` function name as argv[0].
+# tools/ori-template.fish handles those details for normal use.
+
+package {
+  template: "../src/template"
+}
+
+import template {compile_template}
+
+app : {stdin: Str, args: List(Str)} -> Result(Str, Str)
+app({stdin: _, args: []}) -> Err("usage: template_builder <function-name> < template")
+app({stdin: text, args: [name, *]}) -> compile_template(name, text).map_err(|error| error.to_str())
+
+main!(host) -> host.run_result_input!(app)

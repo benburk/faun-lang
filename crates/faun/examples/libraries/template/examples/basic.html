@@ -1,0 +1,20 @@
+<html lang="en">
+<head>
+  <title>Hello</title>
+</head>
+<body data-user="{{ model.name }}">
+<h1>Hello, {{ model.name }}!</h1>
+
+<ul>
+{% for item in model.items %}
+  <li>{{ item }}</li>
+{% endfor %}
+</ul>
+
+{% if model.show_footer %}
+<footer>{{{ model.footer }}}</footer>
+{% else %}
+<footer>Nothing more.</footer>
+{% endif %}
+</body>
+</html>

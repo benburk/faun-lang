@@ -1,0 +1,95 @@
+# A bounded cache that forgets its least-recently-used entries first.
+#
+# Purity makes honest what a mutable LRU hides: *reading refreshes recency*,
+# so `get` returns the cache beside the value — the same threaded-state shape
+# as a memo table — and a caller who drops the returned cache forfeits the
+# refresh. The recency order is the data structure itself: a list of entries,
+# most recently used first, so touching an entry is moving it to the front
+# and eviction is `take` — the list simply forgets its tail.
+#
+# Every operation walks the list once, O(room). That is the right trade for
+# the small caches this is for; the O(log n) spelling stamps entries with a
+# clock and pairs the entry map with an inverse stamp map, which `SortedMap`'s
+# `remove` now allows.
+
+package {}
+
+exports {Lru}
+
+Lru(k, v) : {recent: List((k, v)), room: Nat}.(
+  # An empty cache that will hold at most `room` entries.
+  empty : Nat -> Lru(k, v)
+  empty(room) -> Lru({recent: [], room})
+
+  len : Lru(k, v) -> Nat
+  len(Lru({recent, *})) -> List.len(recent)
+
+  # The keys, most recently used first — the eviction order, reversed.
+  keys : Lru(k, v) -> List(k)
+  keys(Lru({recent, *})) -> recent.map(|(key, _)| key)
+
+  # The value under `key`, and the cache with that use remembered: a hit
+  # moves its entry to the front.
+  get : (Lru(k, v), k) -> (Result(v, [Missing]), Lru(k, v)) where k.equals : (k, k) -> Bool
+  get(Lru({recent, room}), key) ->
+    (found, remaining) = pluck(recent, key)
+    refreshed(found, remaining, key, room)
+
+  # Insert or refresh: the entry goes to the front, any older entry under the
+  # same key leaves on the way past, and the room's worth survives.
+  put : (Lru(k, v), k, v) -> Lru(k, v) where k.equals : (k, k) -> Bool
+  put(Lru({recent, room}), key, value) ->
+    (_, remaining) = pluck(recent, key)
+    Lru({recent: [(key, value), *remaining].take(room), room})
+)
+
+# The entry under `wanted` pulled out in one walk: what was found, and the
+# list without it.
+pluck : (List((k, v)), k) -> (Result(v, [Missing]), List((k, v))) where k.equals : (k, k) -> Bool
+pluck([], _) -> (Err(Missing), [])
+pluck([(key, value), *rest], wanted) if key == wanted -> (Ok(value), rest)
+pluck([entry, *rest], wanted) ->
+  (found, remaining) = pluck(rest, wanted)
+  (found, [entry, *remaining])
+
+# A hit re-enters at the front; a miss leaves the order exactly as it was.
+refreshed : (Result(v, [Missing]), List((k, v)), k, Nat) -> (Result(v, [Missing]), Lru(k, v))
+refreshed(Ok(value), remaining, key, room) ->
+  (Ok(value), Lru({recent: [(key, value), *remaining], room}))
+refreshed(Err(Missing), remaining, _, room) -> (Err(Missing), Lru({recent: remaining, room}))
+
+# A fresh entry is readable back.
+expect
+  (found, _) = Lru.empty(2).put(1, "one").get(1)
+  found == Ok("one")
+
+# The room is a hard bound: the third entry pushes out the least recent.
+expect
+  cache = Lru.empty(2).put(1, "one").put(2, "two").put(3, "three")
+  (found, _) = cache.get(1)
+  found.is_err() & cache.len() == 2
+
+# Reading refreshes: after a get, the *other* entry is the eviction victim.
+expect
+  warm = Lru.empty(2).put(1, "one").put(2, "two")
+  (_, touched) = warm.get(1)
+  after = touched.put(3, "three")
+  (one, _) = after.get(1)
+  (two, _) = after.get(2)
+  one.is_ok() & two.is_err()
+
+# ...and dropping the returned cache forfeits the refresh: without the touch,
+# key 1 is the victim.
+expect
+  cold = Lru.empty(2).put(1, "one").put(2, "two").put(3, "three")
+  (one, _) = cold.get(1)
+  one.is_err()
+
+# Re-putting a key refreshes and replaces without growing.
+expect
+  cache = Lru.empty(2).put(1, "one").put(2, "two").put(1, "uno")
+  (found, _) = cache.get(1)
+  found == Ok("uno") & cache.len() == 2 & cache.keys() == [1, 2]
+
+# A zero-room cache remembers nothing, totally.
+expect Lru.empty(0).put(1, "one").len() == 0

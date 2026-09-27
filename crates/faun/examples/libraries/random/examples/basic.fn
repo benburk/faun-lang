@@ -1,0 +1,36 @@
+# Native smoke entry for the PCG generator: the 64-bit state advances in raw
+# machine words, and each drawn `U32` crosses back as one tagged immediate.
+# The seed arrives on stdin so constant folding cannot stand in for the
+# compiled arithmetic.
+
+package {
+  random: "../src/random"
+}
+
+import random {Random}
+
+draw : (Random, Nat) -> List(U32)
+draw(state, 0) -> []
+draw(state, Succ(rest)) ->
+  (value, next_state) = state.next()
+  draw(next_state, rest).prepend(value)
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) -> Nat.from_str(input.stdin.trim())
+  .map_ok(report_draws)
+  .err_as("expected a decimal seed on stdin")
+
+report_draws : Nat -> Str
+report_draws(seed) -> Str.join(draw(Random.seed(seed), 6).map(U32.to_str), "\n")
+
+# The same fixed vector random.ori pins, seen through the decimal printer.
+expect draw(Random.seed(42), 6).map(U32.to_str) == [
+  "3270867926",
+  "1795671209",
+  "1924641435",
+  "1143034755",
+  "4121910957",
+  "1757328946"
+]
+
+main!(host) -> host.run_result_text!(app)

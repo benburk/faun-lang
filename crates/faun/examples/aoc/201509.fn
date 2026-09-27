@@ -1,0 +1,80 @@
+# Advent of Code 2015, day 9: All in a Single Night.
+# The shortest Hamiltonian path: visit every location exactly once, starting
+# and ending anywhere. Not Dijkstra's problem — no prefix-optimality survives
+# "visit everything" — but the inputs are eight locations, so walking every
+# permutation is honest, and the combinatorics library generates them with
+# termination structural on the route length: no fuel anywhere in this file.
+
+package {
+  combinatorics: "../libraries/combinatorics/src/combinatorics"
+}
+
+import combinatorics {permutations}
+
+Edge : [Edge(Str, Str, Nat)]
+
+parse_edge : Str -> Result(Edge, [MalformedEdge])
+parse_edge(line) -> edge(line.split(" "))
+
+# The line's shape is the clause head: four tokens, two of them fixed words.
+edge : List(Str) -> Result(Edge, [MalformedEdge])
+edge([from, "to", to, "=", distance]) ->
+  Ok(Edge(from, to, Nat.from_str(distance).err_as(MalformedEdge)?))
+edge(_) -> Err(MalformedEdge)
+
+# Both directions of every pair: the routes read the table either way.
+distances : List(Edge) -> Map((Str, Str), Nat)
+distances(edges) -> edges.fold(Map.empty(), add_edge)
+
+add_edge : (Map((Str, Str), Nat), Edge) -> Map((Str, Str), Nat)
+add_edge(table, Edge(from, to, span)) -> table.insert((from, to), span).insert((to, from), span)
+
+places : List(Edge) -> List(Str)
+places(edges) -> edges.fold(Set.empty(), add_places).to_list()
+
+add_places : (Set(Str), Edge) -> Set(Str)
+add_places(seen, Edge(from, to, _)) -> seen.insert(from).insert(to)
+
+# A route's length is the sum of its consecutive legs.
+route_length : (List(Str), Map((Str, Str), Nat)) -> Result(Nat, Str)
+route_length(route, table) ->
+  legs = route.zip(route.drop(1)).try_map(|(from, to)|
+    table.get((from, to)).err_as("no distance between `${from}` and `${to}`"))
+  Ok(legs?.sum())
+
+# Every tour's length, computed once: both parts are one aggregation over
+# this list, the short way round and the scenic one.
+tour_lengths : Str -> Result(List(Nat), Str)
+tour_lengths(input) ->
+  edges = input.trim().lines().try_map(parse_edge).err_as("malformed distance line")?
+  table = distances(edges)
+  stops = places(edges)
+  permutations(stops, stops.len()).try_map(|route| route_length(route, table))
+
+part1 : Str -> Result(Nat, Str)
+part1(input) -> tour_lengths(input)?.min().err_as("no places to visit")
+
+part2 : Str -> Result(Nat, Str)
+part2(input) -> tour_lengths(input)?.max().err_as("no places to visit")
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  lengths = tour_lengths(input.stdin)?
+  shortest = lengths.min().err_as("no places to visit")?
+  longest = lengths.max().err_as("no places to visit")?
+  Ok("part1: ${shortest} part2: ${longest}\n")
+
+example : Str
+example() -> "London to Dublin = 464\nLondon to Belfast = 518\nDublin to Belfast = 141\n"
+
+expect part1(example()) == Ok(605)
+# The scenic route: the same tours, aggregated the other way.
+expect part2(example()) == Ok(982)
+# One pair is a route of its own length, either way round.
+expect part1("A to B = 7\n") == Ok(7)
+# A disconnected pair has no single-night route: the missing leg is named.
+expect part1("A to B = 1\nC to D = 2\n").is_err()
+expect part1("London towards Dublin = 464\n").is_err()
+expect parse_edge("A to B = x").is_err()
+
+main!(host) -> host.run_result_text!(app)

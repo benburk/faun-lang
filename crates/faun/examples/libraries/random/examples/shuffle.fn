@@ -1,0 +1,30 @@
+# A shuffled deck: the numbers `0 … n-1` in an order drawn from a seed.
+#
+# The interesting part is what does *not* happen. The range is built once,
+# every swap lands in that one buffer, the generator state travels as a
+# machine word, and the pair the walk threads never exists at runtime. The
+# deck is the allocation; the machinery around it is meant to vanish.
+#
+# argv[0] is the element count, argv[1] the seed.
+
+package {
+  random: "../src/random"
+}
+
+import random {Random}
+
+app : {args: List(Str)} -> Result(Str, [OutOfBounds, Malformed])
+app(input) ->
+  count = Nat.from_str(input.args.get(0)?)?
+  seed = Nat.from_str(input.args.get(1)?)?
+  (mixed, after) = Random.seed(seed).shuffle(List.range(count))
+  Ok(Str.join(mixed.map(Nat.to_str), " "))
+
+expect
+  (mixed, after) = Random.seed(42).shuffle(List.range(8))
+  mixed == [2, 4, 5, 1, 0, 7, 3, 6]
+
+main!(host) -> host.run_result_args!(cli)
+
+cli : {args: List(Str)} -> Result(Str, [OutOfBounds, Malformed])
+cli(input) -> app({args: input.args.drop(1)})

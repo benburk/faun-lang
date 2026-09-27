@@ -1,0 +1,27 @@
+# The cache observed from outside: feed it a line of numbers, report which
+# were still warm when they came round again — every repeat within the last
+# four distinct numbers is a hit, anything older was evicted.
+
+package {
+  lru: "../src/lru"
+}
+
+import lru {Lru}
+
+hits : (List(Nat), Lru(Nat, Nat), Nat) -> Nat
+hits([], _, warm) -> warm
+hits([n, *rest], cache, warm) ->
+  (found, touched) = cache.get(n)
+  hits(rest, touched.put(n, n), warm + found.is_ok().to_nat())
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  numbers = input.stdin.trim().split(" ").try_map(Nat.from_str)
+    .err_as("malformed number")?
+  Ok("hits: ${hits(numbers, Lru.empty(4), 0)}\n")
+
+expect hits([1, 2, 1, 3, 1, 4, 1], Lru.empty(2), 0) == 3
+expect hits([1, 2, 3, 4, 1], Lru.empty(4), 0) == 1
+expect hits([1, 2, 3, 4, 5, 1], Lru.empty(4), 0) == 0
+
+main!(host) -> host.run_result_text!(app)

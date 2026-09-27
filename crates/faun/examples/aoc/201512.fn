@@ -1,0 +1,68 @@
+# Advent of Code 2015, day 12: JSAbacusFramework.io.
+# The Accounting-Elves' books are a JSON document, and the balance is the
+# sum of every number in it. The JSON library does the reading; what is
+# left is one walk over the value it returns, which is the whole point of
+# parsing into a type: the traversal cannot forget a case, because `when`
+# checks the six shapes right here.
+#
+# Part two ignores any object with a "red" member — the elves double-counted
+# those — and only objects, never arrays. The rule rides along as a mode:
+# the gross balance counts everything, the net balance skips the red-handed.
+# The mode is a tag rather than a predicate so it dispatches in the head: the
+# red-handed rule is the clause `total(Object(members) Net) if red_handed(members) -> 0`.
+
+package {
+  json: "../libraries/json/src/json"
+}
+
+import json {
+  Json, Null, Bool, Number, String, Array, Object
+}
+
+total : (Json, [Gross, Net]) -> Int
+total((Null | Bool(_) | String(_)), _) -> 0
+total(Number(number), _) -> number
+total(Array(values), books) -> values.map(|value| total(value, books)).sum()
+total(Object(members), Net) if red_handed(members) -> 0
+total(Object(members), books) -> members.map(|(_, member)| total(member, books)).sum()
+
+red : ((Str, Json)) -> Bool
+red((_, String("red"))) -> True
+red(_) -> False
+
+red_handed : List((Str, Json)) -> Bool
+red_handed(members) -> members.any(red)
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  document = Json.from_str(input.stdin.trim()).err_as("invalid JSON")?
+  Ok("part1: ${total(document, Gross)} part2: ${total(document, Net)}\n")
+
+adds_to : (Str, Int) -> Bool
+adds_to(text, expected) -> Json.from_str(text)
+  .map_ok(|document| total(document, Gross) == expected)
+  .ok_or(False)
+
+nets_to : (Str, Int) -> Bool
+nets_to(text, expected) -> Json.from_str(text)
+  .map_ok(|document| total(document, Net) == expected)
+  .ok_or(False)
+
+# The puzzle's four pairs: flat, nested, cancelling, empty.
+expect adds_to("[1,2,3]", 6)
+expect adds_to("{\"a\":2,\"b\":4}", 6)
+expect adds_to("[[[3]]]", 3)
+expect adds_to("{\"a\":{\"b\":4},\"c\":-1}", 3)
+expect adds_to("{\"a\":[-1,1]}", 0)
+expect adds_to("[-1,{\"a\":1}]", 0)
+expect adds_to("[]", 0)
+expect adds_to("{}", 0)
+
+# Part two's four: unchanged, a red object dropped, a red root dropping
+# everything, and red in an array meaning nothing.
+expect nets_to("[1,2,3]", 6)
+expect nets_to("[1,{\"c\":\"red\",\"b\":2},3]", 4)
+expect nets_to("{\"d\":\"red\",\"e\":[1,2,3,4],\"f\":5}", 0)
+expect nets_to("[1,\"red\",5]", 6)
+
+main!(host) -> host.run_result_text!(app)

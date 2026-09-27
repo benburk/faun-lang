@@ -1,0 +1,101 @@
+# Advent of Code 2015, day 11: Corporate Policy.
+# Santa's next password is the first string after his current one that
+# satisfies the Security-Elf: an increasing three-letter straight, no
+# confusing letters, two different doubled letters. The incrementer counts
+# in the alphabet without i, l, and o — a bump steps past them, and one
+# sanitising jump clears any the input arrived with, since every password
+# between is invalid anyway. The search is total because the space is
+# finite: 26^8 increments laps it, so the fuel starts there and running
+# dry means no valid password of this length exists.
+
+confusing : U8 -> Bool
+confusing(letter) -> ['i', 'l', 'o'].contains(letter)
+
+# The next letter in counting order, stepping over the confusing three.
+bump : U8 -> U8
+bump(letter) ->
+  next = letter + 1
+  confusing(next).select(next + 1, next)
+
+# The rightmost letter bumps first, so the walk runs over the reversed
+# password; a z rolls over and carries into the column to its left.
+carry : List(U8) -> List(U8)
+carry([]) -> []
+carry(['z', *rest]) -> ['a', *carry(rest)]
+carry([first, *rest]) -> [bump(first), *rest]
+
+increment : List(U8) -> List(U8)
+increment(letters) -> carry(letters.reverse()).reverse()
+
+# Bump the first confusing letter and reset everything after it to a: no
+# valid password lies between, so the search takes the whole jump at once.
+sanitize : List(U8) -> List(U8)
+sanitize([]) -> []
+sanitize([first, *rest]) if confusing(first) -> [bump(first), *rest.map(|_| 'a')]
+sanitize([first, *rest]) -> [first, *sanitize(rest)]
+
+opens_straight : List(U8) -> Bool
+opens_straight([a, b, c, *]) -> b == a + 1 & c == b + 1
+opens_straight(_) -> False
+
+has_straight : List(U8) -> Bool
+has_straight(letters) if opens_straight(letters) -> True
+has_straight([_, *rest]) -> has_straight(rest)
+has_straight([]) -> False
+
+# The letters that appear doubled, one entry per non-overlapping pair.
+doubled : List(U8) -> List(U8)
+doubled([a, b, *tail]) if a == b -> [a, *doubled(tail)]
+doubled([_, *rest]) -> doubled(rest)
+doubled([]) -> []
+
+# Two different, non-overlapping pairs: some doubled letter differs from the
+# first one.
+has_two_pairs : List(U8) -> Bool
+has_two_pairs(letters) -> distinct(doubled(letters))
+
+# Some doubled letter differs from the first one.
+distinct : List(U8) -> Bool
+distinct([a, *rest]) -> rest.any(|letter| letter != a)
+distinct(_) -> False
+
+valid : List(U8) -> Bool
+valid(letters) -> has_straight(letters)
+  & letters.all(unconfusing)
+  & has_two_pairs(letters)
+
+unconfusing : U8 -> Bool
+unconfusing(letter) -> confusing(letter).not()
+
+search : (List(U8), Nat) -> Result(List(U8), [Exhausted])
+search(candidate, _) if valid(candidate) -> Ok(candidate)
+search(candidate, Succ(remaining)) -> search(increment(candidate), remaining)
+search(_, 0) -> Err(Exhausted)
+
+next_password : Str -> Result(Str, [Exhausted, InvalidUtf8])
+next_password(password) ->
+  found = search(sanitize(increment(password.to_utf8())), Nat.pow(26, 8))?
+  Ok(Str.from_utf8(found)?)
+
+# Part two is the same search started from part one's answer: the password
+# expired again, so it increments again.
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  first = next_password(input.stdin.trim()).err_as("no next password")?
+  second = next_password(first).err_as("no next password")?
+  Ok("part1: ${first} part2: ${second}\n")
+
+# The Security-Elf's three examples: a straight spoiled by confusing
+# letters, two pairs without a straight, a straight with only one pair.
+expect valid("hijklmmn".to_utf8()).not()
+expect valid("abbceffg".to_utf8()).not()
+expect valid("abbcegjk".to_utf8()).not()
+expect valid("abcdffaa".to_utf8())
+expect valid("ghjaabcc".to_utf8())
+# The full abcdefgh example takes ~12k increments — past the compile-time
+# evaluator's call-depth guard, since only the backend turns the search's
+# tail call into a loop. The corpus smoke trial runs it natively instead;
+# this one clears i on its first jump and lands in a few hundred steps.
+expect next_password("ghijklmn") == Ok("ghjaabcc")
+
+main!(host) -> host.run_result_text!(app)

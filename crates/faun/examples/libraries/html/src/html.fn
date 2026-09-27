@@ -1,0 +1,475 @@
+# Safe-by-default HTML construction, inspired by Hasnep/roc-html's Node,
+# Attribute, and explicit unescaped-content API (UPL-licensed).
+# Dynamic text and attribute values are
+# escaped during rendering; only `Html.dangerously_raw` bypasses escaping.
+# Element and attribute constructors are methods so call sites stay qualified:
+# `Html.div_with([Attribute.class("card")] [Html.text(name)])`; the common
+# attribute-free case is the denser `Html.div([Html.text(name)])`.
+
+package {}
+
+exports {Html, Attribute}
+
+Attribute : [
+  HtmlAttribute(Str, Str),
+  HtmlBooleanAttribute(Str)
+].(
+  equals : (Attribute, Attribute) -> Bool
+  equals(HtmlAttribute(a0, a1), HtmlAttribute(b0, b1)) -> a0 == b0 & a1 == b1
+  equals(HtmlBooleanAttribute(a0), HtmlBooleanAttribute(b0)) -> a0 == b0
+  equals(_, _) -> False
+
+  # Attribute names are emitted verbatim. Values are still escaped, but a
+  # dynamic name can change document structure, so the generic boundary is
+  # deliberately loud; prefer a named constructor below.
+  dangerously_attribute : (Str, Str) -> Attribute
+  dangerously_attribute(name, value) -> HtmlAttribute(name, value)
+
+  dangerously_boolean : Str -> Attribute
+  dangerously_boolean(name) -> HtmlBooleanAttribute(name)
+
+  id : Str -> Attribute
+  id(value) -> HtmlAttribute("id", value)
+
+  class : Str -> Attribute
+  class(value) -> HtmlAttribute("class", value)
+
+  classes : List(Str) -> Attribute
+  classes(values) -> HtmlAttribute("class", Str.join(values, " "))
+
+  href : Str -> Attribute
+  href(value) -> HtmlAttribute("href", value)
+
+  src : Str -> Attribute
+  src(value) -> HtmlAttribute("src", value)
+
+  alt : Str -> Attribute
+  alt(value) -> HtmlAttribute("alt", value)
+
+  title : Str -> Attribute
+  title(value) -> HtmlAttribute("title", value)
+
+  name : Str -> Attribute
+  name(value) -> HtmlAttribute("name", value)
+
+  value : Str -> Attribute
+  value(text) -> HtmlAttribute("value", text)
+
+  type : Str -> Attribute
+  type(value) -> HtmlAttribute("type", value)
+
+  rel : Str -> Attribute
+  rel(value) -> HtmlAttribute("rel", value)
+
+  content : Str -> Attribute
+  content(value) -> HtmlAttribute("content", value)
+
+  charset : Str -> Attribute
+  charset(value) -> HtmlAttribute("charset", value)
+
+  lang : Str -> Attribute
+  lang(value) -> HtmlAttribute("lang", value)
+
+  role : Str -> Attribute
+  role(value) -> HtmlAttribute("role", value)
+
+  style : Str -> Attribute
+  style(value) -> HtmlAttribute("style", value)
+
+  action : Str -> Attribute
+  action(value) -> HtmlAttribute("action", value)
+
+  method : Str -> Attribute
+  method(value) -> HtmlAttribute("method", value)
+
+  for : Str -> Attribute
+  for(value) -> HtmlAttribute("for", value)
+
+  placeholder : Str -> Attribute
+  placeholder(value) -> HtmlAttribute("placeholder", value)
+
+  target : Str -> Attribute
+  target(value) -> HtmlAttribute("target", value)
+
+  width : Str -> Attribute
+  width(value) -> HtmlAttribute("width", value)
+
+  height : Str -> Attribute
+  height(value) -> HtmlAttribute("height", value)
+
+  disabled : Attribute
+  disabled() -> HtmlBooleanAttribute("disabled")
+
+  checked : Attribute
+  checked() -> HtmlBooleanAttribute("checked")
+
+  selected : Attribute
+  selected() -> HtmlBooleanAttribute("selected")
+
+  required : Attribute
+  required() -> HtmlBooleanAttribute("required")
+
+  autofocus : Attribute
+  autofocus() -> HtmlBooleanAttribute("autofocus")
+
+  multiple : Attribute
+  multiple() -> HtmlBooleanAttribute("multiple")
+
+  hidden : Attribute
+  hidden() -> HtmlBooleanAttribute("hidden")
+)
+
+Html : [
+  HtmlText(Str),
+  HtmlRaw(Str),
+  HtmlElement(Str, List(Attribute), List(Html)),
+  HtmlVoidElement(Str, List(Attribute)),
+  HtmlFragment(List(Html))
+].(
+  text : Str -> Html
+  text(value) -> HtmlText(value)
+
+  fragment : List(Html) -> Html
+  fragment(children) -> HtmlFragment(children)
+
+  empty : Html
+  empty() -> HtmlFragment([])
+
+  dangerously_raw : Str -> Html
+  dangerously_raw(value) -> HtmlRaw(value)
+
+  # Element names are emitted verbatim. Dynamic names therefore use the same
+  # explicit unsafe vocabulary as raw markup; named constructors are preferred.
+  dangerously_element : (Str, List(Attribute), List(Html)) -> Html
+  dangerously_element(name, attributes, children) -> HtmlElement(name, attributes, children)
+
+  dangerously_void_element : (Str, List(Attribute)) -> Html
+  dangerously_void_element(name, attributes) -> HtmlVoidElement(name, attributes)
+
+  render : Html -> Str
+  render(node) -> html_render(node)
+
+  render_document : Html -> Str
+  render_document(node) -> "<!doctype html>".concat(html_render(node))
+
+  html : List(Html) -> Html
+  html(children) -> HtmlElement("html", [], children)
+  html_with : (List(Attribute), List(Html)) -> Html
+  html_with(attributes, children) -> HtmlElement("html", attributes, children)
+
+  head : List(Html) -> Html
+  head(children) -> HtmlElement("head", [], children)
+  head_with : (List(Attribute), List(Html)) -> Html
+  head_with(attributes, children) -> HtmlElement("head", attributes, children)
+
+  body : List(Html) -> Html
+  body(children) -> HtmlElement("body", [], children)
+  body_with : (List(Attribute), List(Html)) -> Html
+  body_with(attributes, children) -> HtmlElement("body", attributes, children)
+
+  title : List(Html) -> Html
+  title(children) -> HtmlElement("title", [], children)
+  title_with : (List(Attribute), List(Html)) -> Html
+  title_with(attributes, children) -> HtmlElement("title", attributes, children)
+
+  main : List(Html) -> Html
+  main(children) -> HtmlElement("main", [], children)
+  main_with : (List(Attribute), List(Html)) -> Html
+  main_with(attributes, children) -> HtmlElement("main", attributes, children)
+
+  header : List(Html) -> Html
+  header(children) -> HtmlElement("header", [], children)
+  header_with : (List(Attribute), List(Html)) -> Html
+  header_with(attributes, children) -> HtmlElement("header", attributes, children)
+
+  footer : List(Html) -> Html
+  footer(children) -> HtmlElement("footer", [], children)
+  footer_with : (List(Attribute), List(Html)) -> Html
+  footer_with(attributes, children) -> HtmlElement("footer", attributes, children)
+
+  nav : List(Html) -> Html
+  nav(children) -> HtmlElement("nav", [], children)
+  nav_with : (List(Attribute), List(Html)) -> Html
+  nav_with(attributes, children) -> HtmlElement("nav", attributes, children)
+
+  section : List(Html) -> Html
+  section(children) -> HtmlElement("section", [], children)
+  section_with : (List(Attribute), List(Html)) -> Html
+  section_with(attributes, children) -> HtmlElement("section", attributes, children)
+
+  article : List(Html) -> Html
+  article(children) -> HtmlElement("article", [], children)
+  article_with : (List(Attribute), List(Html)) -> Html
+  article_with(attributes, children) -> HtmlElement("article", attributes, children)
+
+  aside : List(Html) -> Html
+  aside(children) -> HtmlElement("aside", [], children)
+  aside_with : (List(Attribute), List(Html)) -> Html
+  aside_with(attributes, children) -> HtmlElement("aside", attributes, children)
+
+  div : List(Html) -> Html
+  div(children) -> HtmlElement("div", [], children)
+  div_with : (List(Attribute), List(Html)) -> Html
+  div_with(attributes, children) -> HtmlElement("div", attributes, children)
+
+  span : List(Html) -> Html
+  span(children) -> HtmlElement("span", [], children)
+  span_with : (List(Attribute), List(Html)) -> Html
+  span_with(attributes, children) -> HtmlElement("span", attributes, children)
+
+  p : List(Html) -> Html
+  p(children) -> HtmlElement("p", [], children)
+  p_with : (List(Attribute), List(Html)) -> Html
+  p_with(attributes, children) -> HtmlElement("p", attributes, children)
+
+  h1 : List(Html) -> Html
+  h1(children) -> HtmlElement("h1", [], children)
+  h1_with : (List(Attribute), List(Html)) -> Html
+  h1_with(attributes, children) -> HtmlElement("h1", attributes, children)
+
+  h2 : List(Html) -> Html
+  h2(children) -> HtmlElement("h2", [], children)
+  h2_with : (List(Attribute), List(Html)) -> Html
+  h2_with(attributes, children) -> HtmlElement("h2", attributes, children)
+
+  h3 : List(Html) -> Html
+  h3(children) -> HtmlElement("h3", [], children)
+  h3_with : (List(Attribute), List(Html)) -> Html
+  h3_with(attributes, children) -> HtmlElement("h3", attributes, children)
+
+  h4 : List(Html) -> Html
+  h4(children) -> HtmlElement("h4", [], children)
+  h4_with : (List(Attribute), List(Html)) -> Html
+  h4_with(attributes, children) -> HtmlElement("h4", attributes, children)
+
+  h5 : List(Html) -> Html
+  h5(children) -> HtmlElement("h5", [], children)
+  h5_with : (List(Attribute), List(Html)) -> Html
+  h5_with(attributes, children) -> HtmlElement("h5", attributes, children)
+
+  h6 : List(Html) -> Html
+  h6(children) -> HtmlElement("h6", [], children)
+  h6_with : (List(Attribute), List(Html)) -> Html
+  h6_with(attributes, children) -> HtmlElement("h6", attributes, children)
+
+  a : List(Html) -> Html
+  a(children) -> HtmlElement("a", [], children)
+  a_with : (List(Attribute), List(Html)) -> Html
+  a_with(attributes, children) -> HtmlElement("a", attributes, children)
+
+  ul : List(Html) -> Html
+  ul(children) -> HtmlElement("ul", [], children)
+  ul_with : (List(Attribute), List(Html)) -> Html
+  ul_with(attributes, children) -> HtmlElement("ul", attributes, children)
+
+  ol : List(Html) -> Html
+  ol(children) -> HtmlElement("ol", [], children)
+  ol_with : (List(Attribute), List(Html)) -> Html
+  ol_with(attributes, children) -> HtmlElement("ol", attributes, children)
+
+  li : List(Html) -> Html
+  li(children) -> HtmlElement("li", [], children)
+  li_with : (List(Attribute), List(Html)) -> Html
+  li_with(attributes, children) -> HtmlElement("li", attributes, children)
+
+  form : List(Html) -> Html
+  form(children) -> HtmlElement("form", [], children)
+  form_with : (List(Attribute), List(Html)) -> Html
+  form_with(attributes, children) -> HtmlElement("form", attributes, children)
+
+  label : List(Html) -> Html
+  label(children) -> HtmlElement("label", [], children)
+  label_with : (List(Attribute), List(Html)) -> Html
+  label_with(attributes, children) -> HtmlElement("label", attributes, children)
+
+  button : List(Html) -> Html
+  button(children) -> HtmlElement("button", [], children)
+  button_with : (List(Attribute), List(Html)) -> Html
+  button_with(attributes, children) -> HtmlElement("button", attributes, children)
+
+  textarea : List(Html) -> Html
+  textarea(children) -> HtmlElement("textarea", [], children)
+  textarea_with : (List(Attribute), List(Html)) -> Html
+  textarea_with(attributes, children) -> HtmlElement("textarea", attributes, children)
+
+  select : List(Html) -> Html
+  select(children) -> HtmlElement("select", [], children)
+  select_with : (List(Attribute), List(Html)) -> Html
+  select_with(attributes, children) -> HtmlElement("select", attributes, children)
+
+  option : List(Html) -> Html
+  option(children) -> HtmlElement("option", [], children)
+  option_with : (List(Attribute), List(Html)) -> Html
+  option_with(attributes, children) -> HtmlElement("option", attributes, children)
+
+  table : List(Html) -> Html
+  table(children) -> HtmlElement("table", [], children)
+  table_with : (List(Attribute), List(Html)) -> Html
+  table_with(attributes, children) -> HtmlElement("table", attributes, children)
+
+  thead : List(Html) -> Html
+  thead(children) -> HtmlElement("thead", [], children)
+  thead_with : (List(Attribute), List(Html)) -> Html
+  thead_with(attributes, children) -> HtmlElement("thead", attributes, children)
+
+  tbody : List(Html) -> Html
+  tbody(children) -> HtmlElement("tbody", [], children)
+  tbody_with : (List(Attribute), List(Html)) -> Html
+  tbody_with(attributes, children) -> HtmlElement("tbody", attributes, children)
+
+  tr : List(Html) -> Html
+  tr(children) -> HtmlElement("tr", [], children)
+  tr_with : (List(Attribute), List(Html)) -> Html
+  tr_with(attributes, children) -> HtmlElement("tr", attributes, children)
+
+  th : List(Html) -> Html
+  th(children) -> HtmlElement("th", [], children)
+  th_with : (List(Attribute), List(Html)) -> Html
+  th_with(attributes, children) -> HtmlElement("th", attributes, children)
+
+  td : List(Html) -> Html
+  td(children) -> HtmlElement("td", [], children)
+  td_with : (List(Attribute), List(Html)) -> Html
+  td_with(attributes, children) -> HtmlElement("td", attributes, children)
+
+  pre : List(Html) -> Html
+  pre(children) -> HtmlElement("pre", [], children)
+  pre_with : (List(Attribute), List(Html)) -> Html
+  pre_with(attributes, children) -> HtmlElement("pre", attributes, children)
+
+  code : List(Html) -> Html
+  code(children) -> HtmlElement("code", [], children)
+  code_with : (List(Attribute), List(Html)) -> Html
+  code_with(attributes, children) -> HtmlElement("code", attributes, children)
+
+  strong : List(Html) -> Html
+  strong(children) -> HtmlElement("strong", [], children)
+  strong_with : (List(Attribute), List(Html)) -> Html
+  strong_with(attributes, children) -> HtmlElement("strong", attributes, children)
+
+  em : List(Html) -> Html
+  em(children) -> HtmlElement("em", [], children)
+  em_with : (List(Attribute), List(Html)) -> Html
+  em_with(attributes, children) -> HtmlElement("em", attributes, children)
+
+  small : List(Html) -> Html
+  small(children) -> HtmlElement("small", [], children)
+  small_with : (List(Attribute), List(Html)) -> Html
+  small_with(attributes, children) -> HtmlElement("small", attributes, children)
+
+  # Script and style are HTML raw-text elements: entity escaping does not have
+  # normal text-node semantics inside them. Keep executable/style source on an
+  # explicit unsafe boundary rather than pretending `Html.text` is sufficient.
+  dangerously_script : Str -> Html
+  dangerously_script(source) -> HtmlElement("script", [], [HtmlRaw(source)])
+  dangerously_script_with : (List(Attribute), Str) -> Html
+  dangerously_script_with(attributes, source) -> HtmlElement("script", attributes, [HtmlRaw(source)])
+
+  dangerously_style : Str -> Html
+  dangerously_style(source) -> HtmlElement("style", [], [HtmlRaw(source)])
+  dangerously_style_with : (List(Attribute), Str) -> Html
+  dangerously_style_with(attributes, source) -> HtmlElement("style", attributes, [HtmlRaw(source)])
+
+  template : List(Html) -> Html
+  template(children) -> HtmlElement("template", [], children)
+  template_with : (List(Attribute), List(Html)) -> Html
+  template_with(attributes, children) -> HtmlElement("template", attributes, children)
+
+  meta : Html
+  meta() -> HtmlVoidElement("meta", [])
+  meta_with : List(Attribute) -> Html
+  meta_with(attributes) -> HtmlVoidElement("meta", attributes)
+
+  link : Html
+  link() -> HtmlVoidElement("link", [])
+  link_with : List(Attribute) -> Html
+  link_with(attributes) -> HtmlVoidElement("link", attributes)
+
+  input : Html
+  input() -> HtmlVoidElement("input", [])
+  input_with : List(Attribute) -> Html
+  input_with(attributes) -> HtmlVoidElement("input", attributes)
+
+  img : Html
+  img() -> HtmlVoidElement("img", [])
+  img_with : List(Attribute) -> Html
+  img_with(attributes) -> HtmlVoidElement("img", attributes)
+
+  br : Html
+  br() -> HtmlVoidElement("br", [])
+  br_with : List(Attribute) -> Html
+  br_with(attributes) -> HtmlVoidElement("br", attributes)
+
+  hr : Html
+  hr() -> HtmlVoidElement("hr", [])
+  hr_with : List(Attribute) -> Html
+  hr_with(attributes) -> HtmlVoidElement("hr", attributes)
+
+  source : Html
+  source() -> HtmlVoidElement("source", [])
+  source_with : List(Attribute) -> Html
+  source_with(attributes) -> HtmlVoidElement("source", attributes)
+)
+
+html_render : Html -> Str
+html_render(HtmlText(value)) -> html_escape(value)
+html_render(HtmlRaw(value)) -> value
+html_render(HtmlFragment(children)) -> html_render_children(children)
+html_render(HtmlVoidElement(name, attributes)) -> "<"
+  .concat(name)
+  .concat(html_render_attributes(attributes))
+  .concat(">")
+html_render(HtmlElement(name, attributes, children)) -> "<"
+  .concat(name)
+  .concat(html_render_attributes(attributes))
+  .concat(">")
+  .concat(html_render_children(children))
+  .concat("</")
+  .concat(name)
+  .concat(">")
+
+html_render_children : List(Html) -> Str
+html_render_children([]) -> ""
+html_render_children([child, *rest]) ->
+  html_render(child).concat(html_render_children(rest))
+
+html_render_attributes : List(Attribute) -> Str
+html_render_attributes([]) -> ""
+html_render_attributes([HtmlBooleanAttribute(name), *rest]) -> " "
+  .concat(name)
+  .concat(html_render_attributes(rest))
+html_render_attributes([HtmlAttribute(name, value), *rest]) -> " "
+  .concat(name)
+  .concat("=\"")
+  .concat(html_escape(value))
+  .concat("\"")
+  .concat(html_render_attributes(rest))
+
+html_escape : Str -> Str
+html_escape(text) -> Str.from_utf8(html_escape_bytes(text.to_utf8())).ok_or("")
+
+html_escape_bytes : List(U8) -> List(U8)
+html_escape_bytes([]) -> []
+html_escape_bytes(['&', *rest]) ->
+  "&amp;".to_utf8().extend(html_escape_bytes(rest))
+html_escape_bytes(['<', *rest]) ->
+  "&lt;".to_utf8().extend(html_escape_bytes(rest))
+html_escape_bytes(['>', *rest]) ->
+  "&gt;".to_utf8().extend(html_escape_bytes(rest))
+html_escape_bytes(['\"', *rest]) ->
+  "&quot;".to_utf8().extend(html_escape_bytes(rest))
+html_escape_bytes(['\'', *rest]) ->
+  "&#39;".to_utf8().extend(html_escape_bytes(rest))
+html_escape_bytes([byte, *rest]) -> html_escape_bytes(rest).prepend(byte)
+
+expect Html.text("<script>alert('x')</script>").render() == "&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"
+expect Html.div_with([Attribute.class("card")], [Html.text("A&B")]).render() == "<div class=\"card\">A&amp;B</div>"
+expect Html.input_with([Attribute.type("checkbox"), Attribute.checked()]).render() == "<input type=\"checkbox\" checked>"
+expect Html.div([Html.text("before"), Html.br(), Html.text("after")]).render() == "<div>before<br>after</div>"
+expect Html.a_with([Attribute.href("/?q=\"x\"&next=<y>")], [Html.text("go")]).render() == "<a href=\"/?q=&quot;x&quot;&amp;next=&lt;y&gt;\">go</a>"
+expect Html.fragment([
+  Html.text("safe <text>"),
+  Html.dangerously_raw("<strong>trusted</strong>")
+]).render().equals("safe &lt;text&gt;<strong>trusted</strong>")
+expect Html.html([Html.body([Html.h1([Html.text("Ori")])])]).render_document() == "<!doctype html><html><body><h1>Ori</h1></body></html>"
+expect Attribute.classes(["one", "two", "three"]) == Attribute.class("one two three")

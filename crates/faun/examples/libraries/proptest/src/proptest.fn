@@ -1,0 +1,121 @@
+# Property-based testing: instead of asserting a function on hand-picked
+# inputs, state a law — "for all x, p(x)" — and hold it against many generated
+# ones. When a case fails, *shrinking* walks the counterexample down to a
+# smallest value that still fails: the boundary of the bug, not the random
+# noise that happened to find it.
+#
+# Three ingredients, all ordinary total functions:
+#   a generator `Random -> (a Random)` draws a value and threads the PCG state;
+#   a property  `a -> Bool` is the law under test;
+#   a shrinker  `a -> List(a)` proposes smaller candidates for a failing value.
+#
+# Shrinking spends explicit fuel. That a shrinker's candidates get *smaller* is
+# the shrinker author's promise, not something the totality gate can know about
+# a function it is handed — so the descent that promise would justify is paid
+# for with a counter the gate can see.
+
+package {
+  random: "../../random/src/random"
+}
+
+import random {Random}
+
+exports {Verdict, gen_nat, gen_list, shrink_nat, shrink_list}
+
+Verdict(a) : [Passed, Falsified(a, a)].(
+  # Run `prop` against `trials` drawn values. The first failure is shrunk
+  # before it is reported: `Falsified(as_found smallest)`.
+  forall : (Nat, Random, Random -> (a, Random), a -> Bool, a -> List(a)) -> Verdict(a)
+  forall(0, state, gen, prop, shrink) -> Passed
+  forall(Succ(rest), state, gen, prop, shrink) ->
+    (value, next) = gen(state)
+    forall_step(prop(value), value, next, rest, gen, prop, shrink)
+
+  # The drawn value either upholds the law and the trials continue, or it is
+  # the counterexample to shrink. The verdict is computed, so it enters a head.
+  forall_step : (Bool, a, Random, Nat, Random -> (a, Random), a -> Bool, a -> List(a)) -> Verdict(a)
+  forall_step(True, _, next, rest, gen, prop, shrink) -> forall(rest, next, gen, prop, shrink)
+  forall_step(False, value, _, _, _, prop, shrink) ->
+    Falsified(value, proptest_minimize(value, prop, shrink, 1000))
+
+  passed : Verdict(a) -> Bool
+  passed(Passed) -> True
+  passed(Falsified(_, _)) -> False
+
+  # The counterexample as the generator drew it, or `default` when the
+  # property held. This is the noise shrinking cleans up; a report shows it
+  # beside `smallest` so the reader sees what shrinking bought.
+  found : (Verdict(a), a) -> a
+  found(Passed, default) -> default
+  found(Falsified(as_found, _), _) -> as_found
+
+  # The shrunk counterexample, or `default` when the property held.
+  smallest : (Verdict(a), a) -> a
+  smallest(Passed, default) -> default
+  smallest(Falsified(_, minimal), _) -> minimal
+)
+
+# Repeatedly replace the failing value with its first still-failing shrink
+# candidate; the value is minimal once every candidate passes. 1000 steps is
+# ample: the shrinkers below halve or decrement, so real descents are short.
+proptest_minimize : (a, a -> Bool, a -> List(a), Nat) -> a
+proptest_minimize(value, prop, shrink, 0) -> value
+proptest_minimize(value, prop, shrink, Succ(rest)) ->
+  proptest_minimize_step(proptest_refute(shrink(value), prop), value, prop, shrink, rest)
+
+# A still-failing candidate is the new value to minimize; exhaustion of the
+# candidates leaves the value minimal. The candidate is computed, so it heads.
+proptest_minimize_step : (Result(a, [Exhausted]), a, a -> Bool, a -> List(a), Nat) -> a
+proptest_minimize_step(Err(Exhausted), value, prop, shrink, rest) -> value
+proptest_minimize_step(Ok(smaller), value, prop, shrink, rest) ->
+  proptest_minimize(smaller, prop, shrink, rest)
+
+# The first candidate the property rejects, if any.
+proptest_refute : (List(a), a -> Bool) -> Result(a, [Exhausted])
+proptest_refute([], prop) -> Err(Exhausted)
+proptest_refute([c, *rest], prop) if prop(c) -> proptest_refute(rest, prop)
+proptest_refute([c, *rest], prop) -> Ok(c)
+
+# Draw a `Nat` in `0 ..= bound`.
+gen_nat : (Random, Nat) -> (Nat, Random)
+gen_nat(state, bound) ->
+  (value, next) = state.next()
+  (value.to_nat().mod(bound.add(1)), next)
+
+# Draw a list of at most `longest` elements, each drawn by `element`.
+gen_list : (Random, Nat, Random -> (a, Random)) -> (List(a), Random)
+gen_list(state, longest, element) ->
+  (len, next) = gen_nat(state, longest)
+  proptest_elements(next, len, element)
+
+proptest_elements : (Random, Nat, Random -> (a, Random)) -> (List(a), Random)
+proptest_elements(state, 0, element) -> ([], state)
+proptest_elements(state, Succ(rest), element) ->
+  (head, after_head) = element(state)
+  (tail, after_tail) = proptest_elements(after_head, rest, element)
+  (tail.prepend(head), after_tail)
+
+# Candidates for a failing `Nat`: zero outright, half, one less. Halving makes
+# minimization a binary search down to the property's true boundary.
+shrink_nat : Nat -> List(Nat)
+shrink_nat(0) -> []
+shrink_nat(Succ(m)) -> [0, Succ(m).div(2), m]
+
+# Candidates for a failing list: every one-element removal (shorter first),
+# then each element shrunk in place. Removals are tried before element
+# shrinks so minimization prefers *shorter* counterexamples.
+shrink_list : (List(a), a -> List(a)) -> List(List(a))
+shrink_list(xs, element) -> proptest_removals(xs)
+  .extend(proptest_pointwise(xs, element))
+
+proptest_removals : List(a) -> List(List(a))
+proptest_removals([]) -> []
+proptest_removals([h, *t]) -> proptest_removals(t)
+  .map(|shorter| shorter.prepend(h))
+  .prepend(t)
+
+proptest_pointwise : (List(a), a -> List(a)) -> List(List(a))
+proptest_pointwise([], _) -> []
+proptest_pointwise([h, *t], element) -> element(h)
+  .map(|smaller| t.prepend(smaller))
+  .extend(proptest_pointwise(t, element).map(|shrunk| shrunk.prepend(h)))

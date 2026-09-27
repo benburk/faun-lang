@@ -1,0 +1,178 @@
+# Advent of Code 2015, day 15: Science for Hungry People.
+# A recipe is a composition of exactly 100 teaspoons: choose an amount from
+# zero through what remains for the first ingredient, then compose the rest.
+# The final ingredient receives everything left, so no generated recipe can
+# use too much or too little and an n-ingredient kitchen has only
+# C(99 + n, n - 1) recipes rather than 101^n guesses.
+#
+# Capacity, durability, flavor, and texture are signed while they are added;
+# each is clamped to zero only after the whole recipe has been mixed. Calories
+# travel through the same sum but not the product. One search therefore keeps
+# both the unrestricted maximum and the 500-calorie maximum.
+
+package {}
+
+Ingredient : [Ingredient(Str, Int, Int, Int, Int, Int)]
+
+integer : Str -> Result(Int, [MalformedIngredient])
+integer(text) -> Int.from_str(text).err_as(MalformedIngredient)
+
+# Every property except calories carries a comma in the input. Checking that
+# it was actually removed keeps a line with merely the right words from being
+# accepted when its punctuation is wrong.
+comma_integer : Str -> Result(Int, [MalformedIngredient])
+comma_integer(text) if text.ends_with(",").not() -> Err(MalformedIngredient)
+comma_integer(text) -> integer(text.drop_suffix(","))
+
+ingredient_name : Str -> Result(Str, [MalformedIngredient])
+ingredient_name(label)
+  if label.ends_with(":").not() | label.drop_suffix(":").is_empty()
+  -> Err(MalformedIngredient)
+ingredient_name(label) -> Ok(label.drop_suffix(":"))
+
+parse_ingredient : Str -> Result(Ingredient, [MalformedIngredient])
+parse_ingredient(line) -> labelled(line.split(" "))
+
+labelled : List(Str) -> Result(Ingredient, [MalformedIngredient])
+labelled([label, "capacity", capacity, "durability", durability, "flavor", flavor,
+    "texture", texture, "calories", calories]) -> Ok(Ingredient(
+  ingredient_name(label)?,
+  comma_integer(capacity)?,
+  comma_integer(durability)?,
+  comma_integer(flavor)?,
+  comma_integer(texture)?,
+  integer(calories)?
+))
+labelled(_) -> Err(MalformedIngredient)
+
+ingredients : Str -> Result(List(Ingredient), Str)
+ingredients(input) -> input.trim().lines().try_map(parse_ingredient)
+  .err_as("malformed ingredient line")
+
+Totals : [Totals(Int, Int, Int, Int, Int)]
+Best : [Best(Nat, Nat, Bool)]
+
+empty_totals : Totals
+empty_totals() -> Totals(0, 0, 0, 0, 0)
+
+mix : (Totals, Ingredient, Nat) -> Totals
+mix(Totals(capacity, durability, flavor, texture, calories),
+    Ingredient(_, cap, durable, tasty, textured, energy), amount) ->
+  quantity = Int.of_nat(amount)
+  Totals(capacity + quantity * cap,
+    durability + quantity * durable,
+    flavor + quantity * tasty,
+    texture + quantity * textured,
+    calories + quantity * energy)
+
+# A negative property contributes zero; a non-negative one can leave `Int`
+# behind before multiplication, so every cookie score is naturally a `Nat`.
+nonnegative : Int -> Nat
+nonnegative(Pos(number)) -> number
+nonnegative(NegSucc(_)) -> 0
+
+cookie : Totals -> (Nat, Int)
+cookie(Totals(capacity, durability, flavor, texture, calories)) -> (
+  # `Nat.mul` descends through its receiver. Keeping every raw property on
+  # that side avoids recursing through a large partial product.
+  (nonnegative(capacity).mul(nonnegative(durability).mul(
+      nonnegative(flavor).mul(nonnegative(texture)))),
+    calories)
+)
+
+score : (List(Ingredient), List(Nat)) -> (Nat, Int)
+score(pantry, amounts) -> cookie(pantry.zip(amounts)
+  .fold(empty_totals(), |totals, (ingredient, amount)| mix(totals, ingredient, amount)))
+
+better : (Best, Best) -> Best
+better(Best(best, diet, found_diet), Best(other, other_diet, other_found)) ->
+  Best(best.max(other), diet.max(other_diet), found_diet.or(other_found))
+
+consider : Totals -> Best
+consider(totals) -> considered(cookie(totals))
+
+considered : ((Nat, Int)) -> Best
+considered((quality, calories)) if calories == 500 -> Best(quality, quality, True)
+considered((quality, _)) -> Best(quality, 0, False)
+
+# Fixing the last amount to whatever remains is the useful algebraic insight:
+# only n - 1 amounts are choices. Score each completed recipe immediately
+# rather than first materialising every composition and then scoring that huge
+# list. The fold retains just the two maxima and whether a 500-calorie recipe
+# was seen.
+search : (List(Ingredient), Nat, Totals) -> Best
+search([], _, _) -> Best(0, 0, False)
+search([last], remaining, totals) -> consider(mix(totals, last, remaining))
+search([ingredient, *rest], remaining, totals) ->
+  spoonfuls(remaining, ingredient, rest, remaining, totals)
+
+# Every amount of this ingredient from `amount` down to none, each followed
+# by a search of the rest, and the best kept. Direct recursion, so the
+# checker sees both descents plainly: the amount here, the pantry in
+# `search`.
+spoonfuls : (Nat, Ingredient, List(Ingredient), Nat, Totals) -> Best
+spoonfuls(0, ingredient, rest, remaining, totals) ->
+  search(rest, remaining, mix(totals, ingredient, 0))
+spoonfuls(Succ(n), ingredient, rest, remaining, totals) ->
+  amount = n + 1
+  better(
+    spoonfuls(n, ingredient, rest, remaining, totals),
+    search(rest, remaining - amount, mix(totals, ingredient, amount))
+  )
+
+solve : Str -> Result(Best, Str)
+solve(input) -> kitchen(ingredients(input)?)
+
+kitchen : List(Ingredient) -> Result(Best, Str)
+kitchen([]) -> Err("no ingredients in the kitchen")
+kitchen(pantry) -> Ok(search(pantry, 100, empty_totals()))
+
+part1 : Str -> Result(Nat, Str)
+part1(input) ->
+  Best(best, _, _) = solve(input)?
+  Ok(best)
+
+part2 : Str -> Result(Nat, Str)
+part2(input) -> dietary(solve(input)?)
+
+dietary : Best -> Result(Nat, Str)
+dietary(Best(_, diet, True)) -> Ok(diet)
+dietary(Best(_, _, False)) -> Err("no 500-calorie recipe")
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) -> report(solve(input.stdin)?)
+
+report : Best -> Result(Str, Str)
+report(Best(best, diet, True)) -> Ok("part1: ${best} part2: ${diet}\n")
+report(Best(_, _, False)) -> Err("no 500-calorie recipe")
+
+example : Str
+example() -> Str.join([
+  "Butterscotch: capacity -1, durability -2, flavor 6, texture 3, calories 8",
+  "Cinnamon: capacity 2, durability 3, flavor -2, texture -1, calories 3"
+], "\n")
+
+example_pantry : List(Ingredient)
+example_pantry() -> ingredients(example()).ok_or([])
+
+# The narration's 44/56 recipe has totals 68, 80, 152, and 76.
+expect ingredients(example()).is_ok()
+expect
+  (points, _) = score(example_pantry(), [44, 56])
+  points == 62842880
+expect part1(example()) == Ok(62842880)
+# At exactly 500 calories the best split is 40/60.
+expect part2(example()) == Ok(57600000)
+
+# A bad property can erase the product only after all ingredients contribute.
+expect
+  (points, _) = score(example_pantry(), [100, 0])
+  points == 0
+
+expect part1("").is_err()
+expect parse_ingredient("Sugar: capacity 1 durability 2, flavor 3, texture 4, calories 5").is_err()
+expect parse_ingredient("Sugar capacity 1, durability 2, flavor 3, texture 4, calories 5").is_err()
+expect parse_ingredient("Sugar: capacity sweet, durability 2, flavor 3, texture 4, calories 5").is_err()
+expect parse_ingredient("Sugar is delicious").is_err()
+
+main!(host) -> host.run_result_text!(app)

@@ -1,0 +1,135 @@
+# First-order argv scanning and claim tracking for clap.
+
+exports {
+  ShortMode, ResolvedShort, ArgSpec.*,
+  FlagScan, ValueScan,
+  spec_long, resolve_short,
+  scan_flag_spec, scan_value_spec,
+  collect_rest
+}
+
+ShortMode = [NoShort, Named(Str), Auto]
+ResolvedShort = [LongOnly, Short(Str)]
+
+# One option's whole configuration, named. Updates change one field with a
+# spread instead of threading the rest through a positional rebuild, and they
+# live here, on the type that owns the record.
+ArgSpec : {argv: List(Str), long: Str, short: ShortMode, about: Str}.(
+  new : (List(Str), Str) -> ArgSpec
+  new(argv, long) -> ArgSpec({argv, long, short: NoShort, about: ""})
+
+  short : (ArgSpec, Str) -> ArgSpec
+  short(ArgSpec(spec), name) -> ArgSpec({short: Named(name), *spec})
+
+  auto : ArgSpec -> ArgSpec
+  auto(ArgSpec(spec)) -> ArgSpec({short: Auto, *spec})
+
+  help : (ArgSpec, Str) -> ArgSpec
+  help(ArgSpec(spec), about) -> ArgSpec({about, *spec})
+)
+
+# A scan's outcomes are one flat union — a broken declaration (`BadSpec`) is
+# an outcome like any other, not an outer `Result` wrapping the interesting
+# ones. A successful scan carries the argv positions it consumed. Claims from
+# independently scanned options merge by index: a position claimed twice is
+# an overlap, and every position never claimed is a positional argument.
+FlagScan = [Absent, Found(Bool, List(Nat)), Repeated(Str), Conflict, BadSpec(Str)]
+ValueScan = [
+  Absent, Found(Str, List(Nat)), Repeated(Str), NeedsValue(Str), BadSpec(Str)
+]
+
+spec_long : ArgSpec -> Str
+spec_long(ArgSpec({long, *})) -> long
+
+resolve_short : (Str, ShortMode) -> Result(ResolvedShort, Str)
+resolve_short(_, NoShort) -> Ok(LongOnly)
+resolve_short(_, Named(name)) -> Ok(Short(validate_short(name)?))
+resolve_short(long, Auto) -> Ok(Short(initial_short(long)?))
+
+validate_short(name) -> checked_short(name.to_utf8(), name)
+
+checked_short([byte], name) if byte.is_ascii_letter() -> Ok(name)
+checked_short([_], name) ->
+  Err("short option `-${name}` must be an ASCII letter")
+checked_short(_, _) ->
+  Err("short option names must contain exactly one ASCII letter")
+
+initial_short(long) -> initial_byte(long.to_utf8(), long)
+
+initial_byte([], _) ->
+  Err("an automatically shortened long option cannot be empty")
+initial_byte([first, *], _) if first.is_ascii_letter() ->
+  Str.from_utf8([first]).err_as("short option was not UTF-8")
+initial_byte(_, long) ->
+  Err("option `--${long}` needs a leading ASCII letter for an automatic short")
+
+scan_flag_spec : ArgSpec -> FlagScan
+scan_flag_spec(ArgSpec({argv, long, short, *})) ->
+  flag_scanned(resolve_short(long, short), argv, long)
+
+flag_scanned(Err(message), _, _) -> BadSpec(message)
+flag_scanned(Ok(short), argv, long) -> scan_flag(argv, long, short, 0)
+
+scan_value_spec : ArgSpec -> ValueScan
+scan_value_spec(ArgSpec({argv, long, short, *})) ->
+  value_scanned(resolve_short(long, short), argv, long)
+
+value_scanned(Err(message), _, _) -> BadSpec(message)
+value_scanned(Ok(short), argv, long) -> scan_value(argv, long, short, 0)
+
+long_name(name) -> "--${name}"
+
+negative_name(name) -> "--no-${name}"
+
+short_name(name) -> "-${name}"
+
+is_positive(arg, long, _) if arg == long_name(long) -> True
+is_positive(arg, _, Short(name)) -> arg == short_name(name)
+is_positive(_, _, LongOnly) -> False
+
+scan_flag([], _, _, _) -> Absent
+scan_flag(["--", *], _, _, _) -> Absent
+scan_flag([arg, *rest], long, short, index) if is_positive(arg, long, short) ->
+  merge_flag(True, arg, scan_flag(rest, long, short, index + 1), index)
+scan_flag([arg, *rest], long, short, index) if arg == negative_name(long) ->
+  merge_flag(False, arg, scan_flag(rest, long, short, index + 1), index)
+scan_flag([_, *rest], long, short, index) -> scan_flag(rest, long, short, index + 1)
+
+# One occurrence combined with whatever the rest of argv held: nothing more is
+# a find, an agreeing find is a repeat, a disagreeing one a conflict.
+merge_flag(value, _, Absent, index) -> Found(value, [index])
+merge_flag(value, arg, Found(other, _), _) if value == other -> Repeated(arg)
+merge_flag(_, _, Found(_, _), _) -> Conflict
+merge_flag(_, _, Repeated(name), _) -> Repeated(name)
+merge_flag(_, _, Conflict, _) -> Conflict
+
+scan_value([], _, _, _) -> Absent
+scan_value(["--", *], _, _, _) -> Absent
+scan_value([arg], long, short, _) if is_positive(arg, long, short) -> NeedsValue(arg)
+scan_value([arg, value, *rest], long, short, index) if is_positive(arg, long, short) ->
+  merge_value(value, arg, scan_value(rest, long, short, index + 2), index)
+scan_value([_, *tail], long, short, index) -> scan_value(tail, long, short, index + 1)
+
+merge_value(value, _, Absent, index) -> Found(value, [index, index + 1])
+merge_value(_, arg, Found(_, _), _) -> Repeated(arg)
+merge_value(_, _, Repeated(name), _) -> Repeated(name)
+merge_value(_, _, NeedsValue(name), _) -> NeedsValue(name)
+
+option_like(arg) -> option_shaped(arg.to_utf8())
+
+option_shaped(['-', _, *]) -> True
+option_shaped(_) -> False
+
+# The positional arguments: every argv entry no option claimed, in order. An
+# unclaimed `--` ends option recognition and releases everything after it
+# verbatim; an unclaimed entry that still looks like an option is unknown.
+collect_rest : (List(Str), List(Nat)) -> Result(List(Str), Str)
+collect_rest(argv, claims) -> unclaimed(argv, claims, 0)
+
+unclaimed([], _, _) -> Ok([])
+unclaimed([_, *rest], claims, index) if claims.contains(index) ->
+  unclaimed(rest, claims, index + 1)
+unclaimed(["--", *rest], _, _) -> Ok(rest)
+unclaimed([arg, *], _, _) if option_like(arg) -> Err("unknown option `${arg}`")
+unclaimed([arg, *rest], claims, index) ->
+  Ok(unclaimed(rest, claims, index + 1)?.prepend(arg))

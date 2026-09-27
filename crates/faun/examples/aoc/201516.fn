@@ -1,0 +1,153 @@
+# Advent of Code 2015, day 16: Aunt Sue.
+# Each remembered fact is partial evidence, not a complete inventory: an aunt
+# agrees with the ticker tape when every fact present on her line agrees, and
+# compounds absent from that line say nothing at all.
+#
+# Part one reads the MFCSAM literally. Part two applies its retroencabulator
+# manual: cats and trees are reported below their real counts, pomeranians and
+# goldfish above them, and the other six readings remain exact. Both searches
+# therefore share the same parsed aunts and differ only at one comparison.
+
+package {}
+
+Compound : [Children, Cats, Samoyeds, Pomeranians, Akitas, Vizslas, Goldfish, Trees, Cars, Perfumes]
+Clue : [Clue(Compound, Nat)]
+Sue : [Sue(Nat, List(Clue))]
+Analysis : [Exact, Ranged]
+
+compound : Str -> Result(Compound, [UnknownCompound])
+compound("children") -> Ok(Children)
+compound("cats") -> Ok(Cats)
+compound("samoyeds") -> Ok(Samoyeds)
+compound("pomeranians") -> Ok(Pomeranians)
+compound("akitas") -> Ok(Akitas)
+compound("vizslas") -> Ok(Vizslas)
+compound("goldfish") -> Ok(Goldfish)
+compound("trees") -> Ok(Trees)
+compound("cars") -> Ok(Cars)
+compound("perfumes") -> Ok(Perfumes)
+compound(_) -> Err(UnknownCompound)
+
+label : Str -> Result(Str, [MalformedSue])
+label(text)
+  if text.ends_with(":").not() | text.drop_suffix(":").is_empty()
+  -> Err(MalformedSue)
+label(text) -> Ok(text.drop_suffix(":"))
+
+number : Str -> Result(Nat, [MalformedSue])
+number(text) -> Nat.from_str(label(text)?).err_as(MalformedSue)
+
+# Interior values carry commas; the last does not. Parsing the punctuation as
+# part of the line's shape rejects a shifted or accidentally joined memory
+# rather than silently accepting its numeric prefix.
+interior_count : Str -> Result(Nat, [MalformedSue])
+interior_count(text) if text.ends_with(",").not() -> Err(MalformedSue)
+interior_count(text) -> Nat.from_str(text.drop_suffix(",")).err_as(MalformedSue)
+
+last_count : Str -> Result(Nat, [MalformedSue])
+last_count(text) -> Nat.from_str(text).err_as(MalformedSue)
+
+memory : (Str, Nat) -> Result(Clue, [MalformedSue])
+memory(name, count) -> Ok(Clue(
+  compound(label(name)?).err_as(MalformedSue)?,
+  count
+))
+
+# Facts arrive as alternating labels and counts. Recursion consumes one pair
+# each time, with a separate final pair to enforce the missing trailing comma.
+memories : List(Str) -> Result(List(Clue), [MalformedSue])
+memories([]) -> Ok([])
+memories([name, count]) -> Ok([memory(name, last_count(count)?)?])
+memories([name, count, *rest]) -> Ok([memory(name, interior_count(count)?)?, *memories(rest)?])
+memories(_) -> Err(MalformedSue)
+
+parse_sue : Str -> Result(Sue, [MalformedSue])
+parse_sue(line) -> sued(line.split(" "))
+
+# A Sue with no facts is the two-token line, so the empty-memory case is a
+# head of its own rather than a second helper.
+sued : List(Str) -> Result(Sue, [MalformedSue])
+sued(["Sue", _]) -> Err(MalformedSue)
+sued(["Sue", identity, *facts]) -> Ok(Sue(number(identity)?, memories(facts)?))
+sued(_) -> Err(MalformedSue)
+
+parse_sues : Str -> Result(List(Sue), Str)
+parse_sues(input) -> input.trim().lines().try_map(parse_sue)
+  .err_as("malformed Aunt Sue line")
+
+reading : Compound -> Nat
+reading(Children) -> 3
+reading(Cats) -> 7
+reading(Samoyeds) -> 2
+reading(Pomeranians) -> 3
+reading(Akitas) -> 0
+reading(Vizslas) -> 0
+reading(Goldfish) -> 5
+reading(Trees) -> 3
+reading(Cars) -> 2
+reading(Perfumes) -> 1
+
+agrees : (Clue, Analysis) -> Bool
+agrees(Clue(Cats, remembered), Ranged) -> remembered > reading(Cats)
+agrees(Clue(Trees, remembered), Ranged) -> remembered > reading(Trees)
+agrees(Clue(Pomeranians, remembered), Ranged) -> remembered < reading(Pomeranians)
+agrees(Clue(Goldfish, remembered), Ranged) -> remembered < reading(Goldfish)
+agrees(Clue(kind, remembered), _) -> remembered == reading(kind)
+
+possible : (Sue, Analysis) -> Bool
+possible(Sue(_, remembered), analysis) -> remembered.all(|clue| agrees(clue, analysis))
+
+# The machine is useful only if the evidence identifies exactly one aunt.
+# Reporting ambiguity explicitly also catches duplicate Sue numbers without
+# pretending the first line was more trustworthy than the second.
+identify_sue : (List(Sue), Analysis) -> Result(Nat, Str)
+identify_sue(aunts, analysis) -> unique(aunts.filter(|aunt| possible(aunt, analysis)))
+
+unique : List(Sue) -> Result(Nat, Str)
+unique([Sue(identity, _)]) -> Ok(identity)
+unique([]) -> Err("no Aunt Sue matches the evidence")
+unique(_) -> Err("more than one Aunt Sue matches the evidence")
+
+identify : (Str, Analysis) -> Result(Nat, Str)
+identify(input, analysis) -> identify_sue(parse_sues(input)?, analysis)
+
+part1 : Str -> Result(Nat, Str)
+part1(input) -> identify(input, Exact)
+
+part2 : Str -> Result(Nat, Str)
+part2(input) -> identify(input, Ranged)
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  aunts = parse_sues(input.stdin)?
+  exact = identify_sue(aunts, Exact)?
+  ranged = identify_sue(aunts, Ranged)?
+  Ok("part1: ${exact} part2: ${ranged}\n")
+
+example : Str
+example() -> Str.join([
+  # Literal equality selects Sue 1, but the corrected inequalities reject her.
+  "Sue 1: cats: 7, trees: 3, pomeranians: 3",
+  # Every special reading is on the corrected side of the ticker-tape value.
+  "Sue 2: cats: 8, trees: 4, pomeranians: 2",
+  "Sue 3: children: 1, cars: 2, perfumes: 1"
+], "\n")
+
+expect part1(example()) == Ok(1)
+expect part2(example()) == Ok(2)
+
+# Missing compounds are unknown rather than zero: one remembered exact fact is
+# sufficient when every other aunt is ruled out.
+expect part1("Sue 42: children: 3") == Ok(42)
+# The six unaffected compounds still use equality under the corrected rules.
+expect part2("Sue 9: children: 3, akitas: 0, cars: 2") == Ok(9)
+
+expect part1("").is_err()
+expect identify("Sue 1: children: 3\nSue 2: children: 3", Exact).is_err()
+expect parse_sue("Sue 1: dragons: 2, cars: 2, perfumes: 1").is_err()
+expect parse_sue("Sue one: children: 3, cars: 2, perfumes: 1").is_err()
+expect parse_sue("Sue 1: children: 3 cars: 2, perfumes: 1").is_err()
+expect parse_sue("Sue 1: children: 3,").is_err()
+expect parse_sue("Aunt Sue 1: children: 3").is_err()
+
+main!(host) -> host.run_result_text!(app)

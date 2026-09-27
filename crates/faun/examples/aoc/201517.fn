@@ -1,0 +1,86 @@
+# Advent of Code 2015, day 17: No Such Thing as Too Much.
+# Every container is a physical object, so equal capacities remain distinct:
+# the two five-litre containers in the example occupy different positions in
+# the inventory and choosing either one follows a different branch.
+#
+# At each container there are exactly two choices, leave it or fill it. A
+# branch stops as soon as its remaining volume reaches zero, and one whose next
+# container is too large can only leave it. A successful branch returns just
+# how many containers it used. The resulting list is enough for both answers:
+# its length is part one, and part two counts its least value.
+
+package {}
+
+capacity : Str -> Result(Nat, [MalformedContainer])
+capacity(line) -> counted(Nat.from_str(line))
+
+counted : Result(Nat, e) -> Result(Nat, [MalformedContainer])
+counted(Ok(0)) -> Err(MalformedContainer)
+counted(Ok(liters)) -> Ok(liters)
+counted(Err(_)) -> Err(MalformedContainer)
+
+inventory : Str -> Result(List(Nat), Str)
+inventory(input) -> stocked(input.trim().lines().try_map(capacity))
+
+stocked : Result(List(Nat), e) -> Result(List(Nat), Str)
+stocked(Err(_)) -> Err("malformed container capacity")
+stocked(Ok([])) -> Err("no containers available")
+stocked(Ok(containers)) -> Ok(containers)
+
+# Search by physical container rather than capacity value. Peeling the list is
+# both the combinatorial step and the termination argument. The two recursive
+# results concatenate because their subsets are disjoint: one contains this
+# physical container and the other does not.
+container_counts : (List(Nat), Nat, Nat) -> List(Nat)
+container_counts(_, 0, used) -> [used]
+container_counts([], _, _) -> []
+container_counts([size, *rest], remaining, used) if size <= remaining ->
+  container_counts(rest, remaining - size, used + 1)
+    .extend(container_counts(rest, remaining, used))
+container_counts([_, *rest], remaining, used) -> container_counts(rest, remaining, used)
+
+solve : (Str, Nat) -> Result(List(Nat), Str)
+solve(input, liters) -> Ok(container_counts(inventory(input)?, liters, 0))
+
+fewest_ways : List(Nat) -> Result(Nat, Str)
+fewest_ways(counts) ->
+  fewest = counts.min().err_as("no combination holds the requested volume")?
+  Ok(counts.count(|used| used == fewest))
+
+part1 : (Str, Nat) -> Result(Nat, Str)
+part1(input, liters) -> Ok(solve(input, liters)?.len())
+
+part2 : (Str, Nat) -> Result(Nat, Str)
+part2(input, liters) -> fewest_ways(solve(input, liters)?)
+
+target : Nat
+target() -> 150
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  counts = solve(input.stdin, target())?
+  Ok("part1: ${counts.len()} part2: ${fewest_ways(counts)?}\n")
+
+example : Str
+example() -> "20\n15\n10\n5\n5\n"
+
+expect part1(example(), 25) == Ok(4)
+# Three of the four packings use two containers; 15 + 5 + 5 uses three.
+expect part2(example(), 25) == Ok(3)
+
+# Equal capacities denote separate containers: each five can accompany the
+# twenty independently, and choosing both remains a third physical subset.
+expect part1("20\n5\n5\n", 25) == Ok(2)
+expect part1("5\n5\n", 10) == Ok(1)
+
+# An empty target has one packing, the empty subset, using no containers.
+expect container_counts([10, 20], 0, 0) == [0]
+# No exact subset is a valid part-one count but leaves part two undefined.
+expect part1("10\n20\n", 15) == Ok(0)
+expect part2("10\n20\n", 15).is_err()
+
+expect part1("", 25).is_err()
+expect part1("10\nlarge\n20", 25).is_err()
+expect part1("10\n0\n20", 25).is_err()
+
+main!(host) -> host.run_result_text!(app)

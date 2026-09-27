@@ -1,0 +1,382 @@
+# ANSI terminal colors, styles, and cursor/display controls.
+# Adapted from lukewilliamboswell/roc-ansi under the UPL-1.0 license; see
+# LICENSE in this directory. The API keeps constructors private and exposes
+# qualified builders so terminal escape sequences are never assembled by hand.
+
+package {}
+
+exports {Ansi, Color, Style, Control}
+
+Ansi : [AnsiNamespace].(
+  # Render one CSI control sequence.
+  escape : Control -> Str
+  escape(control) -> ansi_csi(ansi_control_code(control))
+
+  # Prefix all styles in list order. Styles remain active until reset.
+  style : (Str, List(Style)) -> Str
+  style(text, styles) -> ansi_style(text, styles, "")
+
+  # Apply foreground and background colors, then restore terminal defaults.
+  color : (Str, {fg: Color, bg: Color}) -> Str
+  color(text, colors) -> ansi_style(
+    text,
+    [Style.foreground(colors.fg), Style.background(colors.bg)],
+    ""
+  ).concat(ansi_reset_style())
+
+  reset_style : Str
+  reset_style() -> ansi_reset_style()
+
+  reset_terminal : Str
+  reset_terminal() -> ansi_escape().concat("c")
+)
+
+ColorName : [
+  ColorBlack, ColorRed, ColorGreen, ColorYellow,
+  ColorBlue, ColorMagenta, ColorCyan, ColorWhite
+]
+
+Color : [
+  ColorDefault,
+  ColorStandard(ColorName),
+  ColorBright(ColorName),
+  ColorIndexed(U8),
+  ColorRgb(U8, U8, U8),
+  ColorHex(U32)
+].(
+  default : Color
+  default() -> ColorDefault
+
+  black : Color
+  black() -> ColorStandard(ColorBlack)
+
+  red : Color
+  red() -> ColorStandard(ColorRed)
+
+  green : Color
+  green() -> ColorStandard(ColorGreen)
+
+  yellow : Color
+  yellow() -> ColorStandard(ColorYellow)
+
+  blue : Color
+  blue() -> ColorStandard(ColorBlue)
+
+  magenta : Color
+  magenta() -> ColorStandard(ColorMagenta)
+
+  cyan : Color
+  cyan() -> ColorStandard(ColorCyan)
+
+  white : Color
+  white() -> ColorStandard(ColorWhite)
+
+  bright_black : Color
+  bright_black() -> ColorBright(ColorBlack)
+
+  bright_red : Color
+  bright_red() -> ColorBright(ColorRed)
+
+  bright_green : Color
+  bright_green() -> ColorBright(ColorGreen)
+
+  bright_yellow : Color
+  bright_yellow() -> ColorBright(ColorYellow)
+
+  bright_blue : Color
+  bright_blue() -> ColorBright(ColorBlue)
+
+  bright_magenta : Color
+  bright_magenta() -> ColorBright(ColorMagenta)
+
+  bright_cyan : Color
+  bright_cyan() -> ColorBright(ColorCyan)
+
+  bright_white : Color
+  bright_white() -> ColorBright(ColorWhite)
+
+  indexed : U8 -> Color
+  indexed(index) -> ColorIndexed(index)
+
+  rgb : (U8, U8, U8) -> Color
+  rgb(red, green, blue) -> ColorRgb(red, green, blue)
+
+  # Values above 0xffffff clamp to white, matching roc-ansi.
+  hex : U32 -> Color
+  hex(value) -> ColorHex(value)
+)
+
+Style : [
+  StyleReset,
+  StyleBold(Bool),
+  StyleFaint(Bool),
+  StyleItalic(Bool),
+  StyleUnderline(Bool),
+  StyleStrikethrough(Bool),
+  StyleInvert(Bool),
+  StyleForeground(Color),
+  StyleBackground(Color)
+].(
+  reset : Style
+  reset() -> StyleReset
+
+  bold : Style
+  bold() -> StyleBold(True)
+
+  bold_off : Style
+  bold_off() -> StyleBold(False)
+
+  faint : Style
+  faint() -> StyleFaint(True)
+
+  faint_off : Style
+  faint_off() -> StyleFaint(False)
+
+  italic : Style
+  italic() -> StyleItalic(True)
+
+  italic_off : Style
+  italic_off() -> StyleItalic(False)
+
+  underline : Style
+  underline() -> StyleUnderline(True)
+
+  underline_off : Style
+  underline_off() -> StyleUnderline(False)
+
+  strikethrough : Style
+  strikethrough() -> StyleStrikethrough(True)
+
+  strikethrough_off : Style
+  strikethrough_off() -> StyleStrikethrough(False)
+
+  invert : Style
+  invert() -> StyleInvert(True)
+
+  invert_off : Style
+  invert_off() -> StyleInvert(False)
+
+  foreground : Color -> Style
+  foreground(color) -> StyleForeground(color)
+
+  background : Color -> Style
+  background(color) -> StyleBackground(color)
+)
+
+Control : [
+  ControlScreenSize,
+  ControlCursorPosition,
+  ControlCursorSave,
+  ControlCursorRestore,
+  ControlCursorShow,
+  ControlCursorHide,
+  ControlCursorUp(Nat),
+  ControlCursorDown(Nat),
+  ControlCursorRight(Nat),
+  ControlCursorLeft(Nat),
+  ControlCursorNextRow(Nat),
+  ControlCursorPreviousRow(Nat),
+  ControlCursorTo(Nat, Nat),
+  ControlCursorColumn(Nat),
+  ControlEraseDisplayToEnd,
+  ControlEraseDisplayToStart,
+  ControlEraseDisplayAll,
+  ControlEraseLineToEnd,
+  ControlEraseLineToStart,
+  ControlEraseLineAll,
+  ControlScrollUp(Nat),
+  ControlScrollDown(Nat)
+].(
+  screen_size : Control
+  screen_size() -> ControlScreenSize
+
+  cursor_position : Control
+  cursor_position() -> ControlCursorPosition
+
+  cursor_save : Control
+  cursor_save() -> ControlCursorSave
+
+  cursor_restore : Control
+  cursor_restore() -> ControlCursorRestore
+
+  cursor_show : Control
+  cursor_show() -> ControlCursorShow
+
+  cursor_hide : Control
+  cursor_hide() -> ControlCursorHide
+
+  cursor_up : Nat -> Control
+  cursor_up(amount) -> ControlCursorUp(amount)
+
+  cursor_down : Nat -> Control
+  cursor_down(amount) -> ControlCursorDown(amount)
+
+  cursor_right : Nat -> Control
+  cursor_right(amount) -> ControlCursorRight(amount)
+
+  cursor_left : Nat -> Control
+  cursor_left(amount) -> ControlCursorLeft(amount)
+
+  cursor_next_row : Nat -> Control
+  cursor_next_row(amount) -> ControlCursorNextRow(amount)
+
+  cursor_previous_row : Nat -> Control
+  cursor_previous_row(amount) -> ControlCursorPreviousRow(amount)
+
+  cursor_to : (Nat, Nat) -> Control
+  cursor_to(row, column) -> ControlCursorTo(row, column)
+
+  cursor_column : Nat -> Control
+  cursor_column(column) -> ControlCursorColumn(column)
+
+  erase_display_to_end : Control
+  erase_display_to_end() -> ControlEraseDisplayToEnd
+
+  erase_display_to_start : Control
+  erase_display_to_start() -> ControlEraseDisplayToStart
+
+  erase_display : Control
+  erase_display() -> ControlEraseDisplayAll
+
+  erase_line_to_end : Control
+  erase_line_to_end() -> ControlEraseLineToEnd
+
+  erase_line_to_start : Control
+  erase_line_to_start() -> ControlEraseLineToStart
+
+  erase_line : Control
+  erase_line() -> ControlEraseLineAll
+
+  scroll_up : Nat -> Control
+  scroll_up(amount) -> ControlScrollUp(amount)
+
+  scroll_down : Nat -> Control
+  scroll_down(amount) -> ControlScrollDown(amount)
+)
+
+ansi_escape : Str
+ansi_escape() -> Str.from_utf8([27]).ok_or("")
+
+ansi_csi : Str -> Str
+ansi_csi(code) -> ansi_escape().concat("[").concat(code)
+
+ansi_reset_style : Str
+ansi_reset_style() -> ansi_csi("0m")
+
+ansi_style : (Str, List(Style), Str) -> Str
+ansi_style(text, [], output) -> output.concat(text)
+ansi_style(text, [style, *rest], output) ->
+  ansi_style(text, rest, output.concat(ansi_style_escape(style)))
+
+ansi_style_escape : Style -> Str
+ansi_style_escape(style) -> ansi_csi(ansi_style_code(style).concat("m"))
+
+ansi_style_code : Style -> Str
+ansi_style_code(StyleReset) -> "0"
+ansi_style_code(StyleBold(True)) -> "1"
+ansi_style_code(StyleBold(False)) -> "22"
+ansi_style_code(StyleFaint(True)) -> "2"
+ansi_style_code(StyleFaint(False)) -> "22"
+ansi_style_code(StyleItalic(True)) -> "3"
+ansi_style_code(StyleItalic(False)) -> "23"
+ansi_style_code(StyleUnderline(True)) -> "4"
+ansi_style_code(StyleUnderline(False)) -> "24"
+ansi_style_code(StyleStrikethrough(True)) -> "9"
+ansi_style_code(StyleStrikethrough(False)) -> "29"
+ansi_style_code(StyleInvert(True)) -> "7"
+ansi_style_code(StyleInvert(False)) -> "27"
+ansi_style_code(StyleForeground(color)) -> ansi_color_code(color, 30)
+ansi_style_code(StyleBackground(color)) -> ansi_color_code(color, 40)
+
+ansi_color_code : (Color, Nat) -> Str
+ansi_color_code(ColorDefault, offset) -> offset.add(9).to_str()
+ansi_color_code(ColorStandard(name), offset) ->
+  offset.add(ansi_color_name_code(name)).to_str()
+ansi_color_code(ColorBright(name), offset) ->
+  offset.add(60).add(ansi_color_name_code(name)).to_str()
+ansi_color_code(ColorIndexed(index), offset) -> offset.add(8).to_str()
+  .concat(";5;")
+  .concat(index.to_nat().to_str())
+ansi_color_code(ColorRgb(red, green, blue), offset) ->
+  ansi_rgb_code(red, green, blue, offset)
+ansi_color_code(ColorHex(value), offset) ->
+  (red, green, blue) = ansi_hex_channels(value)
+  ansi_rgb_code(red, green, blue, offset)
+
+ansi_rgb_code : (U8, U8, U8, Nat) -> Str
+ansi_rgb_code(red, green, blue, offset) -> offset.add(8).to_str()
+  .concat(";2;")
+  .concat(red.to_nat().to_str())
+  .concat(";")
+  .concat(green.to_nat().to_str())
+  .concat(";")
+  .concat(blue.to_nat().to_str())
+
+# `0x00RRGGBB` little-endian is `(BB GG RR 00)` — the channels are the
+# word's own bytes, read back to front, and the quartet destructures
+# irrefutably because its shape is its type.
+ansi_hex_channels : U32 -> (U8, U8, U8)
+ansi_hex_channels(hex) ->
+  (blue, green, red, _) = hex.min(0xffffff).le_bytes()
+  (red, green, blue)
+
+ansi_color_name_code : ColorName -> Nat
+ansi_color_name_code(ColorBlack) -> 0
+ansi_color_name_code(ColorRed) -> 1
+ansi_color_name_code(ColorGreen) -> 2
+ansi_color_name_code(ColorYellow) -> 3
+ansi_color_name_code(ColorBlue) -> 4
+ansi_color_name_code(ColorMagenta) -> 5
+ansi_color_name_code(ColorCyan) -> 6
+ansi_color_name_code(ColorWhite) -> 7
+
+ansi_control_code : Control -> Str
+ansi_control_code(ControlScreenSize) -> "18t"
+ansi_control_code(ControlCursorPosition) -> "6n"
+ansi_control_code(ControlCursorSave) -> "s"
+ansi_control_code(ControlCursorRestore) -> "u"
+ansi_control_code(ControlCursorShow) -> "?25h"
+ansi_control_code(ControlCursorHide) -> "?25l"
+ansi_control_code(ControlCursorUp(amount)) -> amount.to_str().concat("A")
+ansi_control_code(ControlCursorDown(amount)) -> amount.to_str().concat("B")
+ansi_control_code(ControlCursorRight(amount)) -> amount.to_str().concat("C")
+ansi_control_code(ControlCursorLeft(amount)) -> amount.to_str().concat("D")
+ansi_control_code(ControlCursorNextRow(amount)) ->
+  amount.to_str().concat("E")
+ansi_control_code(ControlCursorPreviousRow(amount)) ->
+  amount.to_str().concat("F")
+ansi_control_code(ControlCursorTo(row, column)) -> row.to_str()
+  .concat(";")
+  .concat(column.to_str())
+  .concat("H")
+ansi_control_code(ControlCursorColumn(column)) ->
+  column.to_str().concat("G")
+ansi_control_code(ControlEraseDisplayToEnd) -> "0J"
+ansi_control_code(ControlEraseDisplayToStart) -> "1J"
+ansi_control_code(ControlEraseDisplayAll) -> "2J"
+ansi_control_code(ControlEraseLineToEnd) -> "0K"
+ansi_control_code(ControlEraseLineToStart) -> "1K"
+ansi_control_code(ControlEraseLineAll) -> "2K"
+ansi_control_code(ControlScrollUp(amount)) -> amount.to_str().concat("S")
+ansi_control_code(ControlScrollDown(amount)) -> amount.to_str().concat("T")
+
+expect Ansi.escape(Control.cursor_up(3)).to_utf8() == [27, '[', '3', 'A']
+expect Ansi.escape(Control.cursor_to(12, 40)).to_utf8() == [
+  27, '[', '1', '2', ';', '4', '0', 'H'
+]
+expect Ansi.style("warning", [Style.bold(), Style.foreground(Color.yellow())])
+  .to_utf8() == [
+    27, '[', '1', 'm',
+    27, '[', '3', '3', 'm',
+    'w', 'a', 'r', 'n', 'i', 'n', 'g'
+  ]
+expect Ansi.color("ok", {fg: Color.rgb(1, 2, 3), bg: Color.indexed(17)})
+  .to_utf8() == [
+    27, '[', '3', '8', ';', '2', ';', '1', ';', '2', ';', '3', 'm',
+    27, '[', '4', '8', ';', '5', ';', '1', '7', 'm',
+    'o', 'k',
+    27, '[', '0', 'm'
+  ]
+expect Ansi.style("red", [Style.foreground(Color.hex(0xff0000))])
+  .to_utf8() == [27, '[', '3', '8', ';', '2', ';', '2', '5', '5', ';', '0', ';', '0', 'm', 'r', 'e', 'd']
+expect Ansi.reset_terminal().to_utf8() == [27, 'c']

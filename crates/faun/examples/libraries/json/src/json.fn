@@ -1,0 +1,601 @@
+# A total JSON codec with eager, statically typed decoding. JSON numbers are
+# intentionally restricted to arbitrary-precision integers: decimal fractions
+# and exponents are rejected rather than rounded. Object decoding uses
+# returned field claims, so record builders can reject duplicate declarations
+# and unknown input fields without storing decoder functions.
+
+package {}
+
+exports {
+  Json.*, ParseError.*, DecodeError.*, Decode.*, Field, Fields, Members
+}
+
+# The six shapes of the JSON spec, under the spec's own words. `Bool` the
+# constructor and `Bool` the type never collide: a capitalised word means
+# whatever its position's namespace says.
+Json : [
+  Null,
+  Bool(Bool),
+  Number(Int),
+  String(Str),
+  Array(List(Json)),
+  Object(List((Str, Json)))
+].(
+  # Reading and writing follow the stdlib's naming: `Json.from_str` parses
+  # like `Nat.from_str` does, and `to_str` renders like every `to_str` does.
+  from_str : Str -> Result(Json, ParseError)
+  from_str(text) ->
+    (value, rest) = parse_value(skip_space(text.to_utf8()))?
+    parsed_all(value, rest)
+
+  to_str : Json -> Str
+  to_str(Null) -> "null"
+  to_str(Bool(False)) -> "false"
+  to_str(Bool(True)) -> "true"
+  to_str(Number(n)) -> Int.to_str(n)
+  to_str(String(text)) -> render_string(text)
+  to_str(Array(values)) -> "[${render_values(values)}]"
+  to_str(Object(members)) -> "{${render_members(members)}}"
+
+  string : Json -> Decode(Str)
+  string(String(text)) -> Decoded(text, [])
+  string(_) -> Failed(Expected("string"))
+
+  boolean : Json -> Decode(Bool)
+  boolean(Bool(found)) -> Decoded(found, [])
+  boolean(_) -> Failed(Expected("boolean"))
+
+  int : Json -> Decode(Int)
+  int(Number(n)) -> Decoded(n, [])
+  int(_) -> Failed(Expected("integer"))
+
+  nat : Json -> Decode(Nat)
+  nat(Number(Pos(n))) -> Decoded(n, [])
+  nat(Number(NegSucc(_))) -> Failed(Expected("natural number"))
+  nat(_) -> Failed(Expected("integer"))
+
+  # The four widths, through each type's own `from_nat`: out of range reads
+  # as a type mismatch, since the wire held an integer the type refuses.
+  u8 : Json -> Decode(U8)
+  u8(Number(Pos(n))) -> fitted(U8.from_nat(n), "u8")
+  u8(_) -> Failed(Expected("u8"))
+
+  u16 : Json -> Decode(U16)
+  u16(Number(Pos(n))) -> fitted(U16.from_nat(n), "u16")
+  u16(_) -> Failed(Expected("u16"))
+
+  u32 : Json -> Decode(U32)
+  u32(Number(Pos(n))) -> fitted(U32.from_nat(n), "u32")
+  u32(_) -> Failed(Expected("u32"))
+
+  u64 : Json -> Decode(U64)
+  u64(Number(Pos(n))) -> fitted(U64.from_nat(n), "u64")
+  u64(_) -> Failed(Expected("u64"))
+
+  # A JSON string through any converter — a nullary tag's `from_str`, say.
+  # The converter is passed, invoked, and discarded, never stored, and its
+  # own refusal is the decode error verbatim.
+  string_as : (Json, Str -> Result(a, DecodeError)) -> Decode(a)
+  string_as(String(text), convert) -> accepted(convert(text))
+  string_as(_, _) -> Failed(Expected("string"))
+
+  array : (Json, Json -> Decode(a)) -> Decode(List(a))
+  array(Array(values), decode) -> decode_values(values, decode, 0)
+  array(_, _) -> Failed(Expected("array"))
+
+  equals : (Json, Json) -> Bool
+  equals(Null, Null) -> True
+  equals(Bool(a0), Bool(b0)) -> a0 == b0
+  equals(Number(a0), Number(b0)) -> a0 == b0
+  equals(String(a0), String(b0)) -> a0 == b0
+  equals(Array(a0), Array(b0)) -> a0 == b0
+  equals(Object(a0), Object(b0)) -> a0 == b0
+  equals(_, _) -> False
+)
+
+ParseError : [
+  UnexpectedEnd,
+  UnexpectedToken,
+  InvalidString,
+  InvalidEscape,
+  InvalidUnicode,
+  InvalidNumber,
+  UnsupportedNumber,
+  ExpectedColon,
+  ExpectedCommaOrEnd,
+  TrailingInput
+].(
+  to_str : ParseError -> Str
+  to_str(UnexpectedEnd) -> "UnexpectedEnd"
+  to_str(UnexpectedToken) -> "UnexpectedToken"
+  to_str(InvalidString) -> "InvalidString"
+  to_str(InvalidEscape) -> "InvalidEscape"
+  to_str(InvalidUnicode) -> "InvalidUnicode"
+  to_str(InvalidNumber) -> "InvalidNumber"
+  to_str(UnsupportedNumber) -> "UnsupportedNumber"
+  to_str(ExpectedColon) -> "ExpectedColon"
+  to_str(ExpectedCommaOrEnd) -> "ExpectedCommaOrEnd"
+  to_str(TrailingInput) -> "TrailingInput"
+  to_str(UnexpectedEnd) -> "unexpected end of JSON input"
+  to_str(UnexpectedToken) -> "unexpected JSON token"
+  to_str(InvalidString) -> "invalid JSON string"
+  to_str(InvalidEscape) -> "invalid JSON string escape"
+  to_str(InvalidUnicode) -> "invalid JSON Unicode escape"
+  to_str(InvalidNumber) -> "invalid JSON integer"
+  to_str(UnsupportedNumber) -> "JSON decimals and exponents are not supported"
+  to_str(ExpectedColon) -> "expected `:` after object key"
+  to_str(ExpectedCommaOrEnd) -> "expected a comma or closing delimiter"
+  to_str(TrailingInput) -> "unexpected input after JSON value"
+
+  equals : (ParseError, ParseError) -> Bool
+  equals(UnexpectedEnd, UnexpectedEnd) -> True
+  equals(UnexpectedToken, UnexpectedToken) -> True
+  equals(InvalidString, InvalidString) -> True
+  equals(InvalidEscape, InvalidEscape) -> True
+  equals(InvalidUnicode, InvalidUnicode) -> True
+  equals(InvalidNumber, InvalidNumber) -> True
+  equals(UnsupportedNumber, UnsupportedNumber) -> True
+  equals(ExpectedColon, ExpectedColon) -> True
+  equals(ExpectedCommaOrEnd, ExpectedCommaOrEnd) -> True
+  equals(TrailingInput, TrailingInput) -> True
+  equals(_, _) -> False
+)
+
+DecodeError : [
+  Expected(Str),
+  MissingField(Str),
+  DuplicateField(Str),
+  UnknownField(Str),
+  OverlappingFields,
+  AtField(Str, DecodeError),
+  AtIndex(Nat, DecodeError),
+  InvalidValue(Str)
+].(
+  to_str : DecodeError -> Str
+  to_str(Expected(a0)) -> "Expected(${a0})"
+  to_str(MissingField(a0)) -> "MissingField(${a0})"
+  to_str(DuplicateField(a0)) -> "DuplicateField(${a0})"
+  to_str(UnknownField(a0)) -> "UnknownField(${a0})"
+  to_str(OverlappingFields) -> "OverlappingFields"
+  to_str(AtField(a0, a1)) -> "AtField(${a0}, ${a1})"
+  to_str(AtIndex(a0, a1)) -> "AtIndex(${a0}, ${a1})"
+  to_str(InvalidValue(a0)) -> "InvalidValue(${a0})"
+  to_str(Expected(kind)) -> "expected ${kind}"
+  to_str(MissingField(name)) -> "missing JSON field `${name}`"
+  to_str(DuplicateField(name)) ->
+    "JSON field `${name}` appears more than once"
+  to_str(UnknownField(name)) -> "unknown JSON field `${name}`"
+  to_str(OverlappingFields) -> "two decoders claimed the same JSON field"
+  to_str(AtField(name, inner)) -> "at field `${name}`: ${to_str(inner)}"
+  to_str(AtIndex(index, inner)) -> "at array index ${index}: ${to_str(inner)}"
+  to_str(InvalidValue(message)) -> message
+
+  equals : (DecodeError, DecodeError) -> Bool
+  equals(Expected(a0), Expected(b0)) -> a0 == b0
+  equals(MissingField(a0), MissingField(b0)) -> a0 == b0
+  equals(DuplicateField(a0), DuplicateField(b0)) -> a0 == b0
+  equals(UnknownField(a0), UnknownField(b0)) -> a0 == b0
+  equals(OverlappingFields, OverlappingFields) -> True
+  equals(AtField(a0, a1), AtField(b0, b1)) -> a0 == b0 & a1 == b1
+  equals(AtIndex(a0, a1), AtIndex(b0, b1)) -> a0 == b0 & a1 == b1
+  equals(InvalidValue(a0), InvalidValue(b0)) -> a0 == b0
+  equals(_, _) -> False
+)
+
+# A decode carries the object member names it claimed. Claims from
+# independently scanned fields merge by name: a name claimed twice is an
+# overlap, and a strict object rejects any member no decoder claimed.
+Decode(a) : [Decoded(a, List(Str)), Failed(DecodeError)].(
+  sequence : (Decode(a), Decode(b), (a, b) -> c) -> Decode(c)
+  sequence(Failed(error), _, _) -> Failed(error)
+  sequence(_, Failed(error), _) -> Failed(error)
+  sequence(Decoded(_, used_a), Decoded(_, used_b), _)
+    if used_a.any(|name| used_b.contains(name)) ->
+    Failed(OverlappingFields)
+  sequence(Decoded(a, used_a), Decoded(b, used_b), combine) ->
+    Decoded(combine(a, b), used_a.extend(used_b))
+
+  map : (Decode(a), a -> b) -> Decode(b)
+  map(Failed(error), _) -> Failed(error)
+  map(Decoded(value, claims), convert) -> Decoded(convert(value), claims)
+
+  result : Decode(a) -> Result(a, DecodeError)
+  result(Failed(error)) -> Err(error)
+  result(Decoded(value, _)) -> Ok(value)
+
+  # The dependent step a tagged union needs: decode the discriminator, and
+  # let its value choose the payload decode. The context rides as an
+  # explicit argument — usually the fields view — so the chooser is a named
+  # function, not a closure; it is invoked immediately, never stored, and
+  # both stages' claims merge exactly as `sequence` merges siblings, so
+  # strict checking still covers every member across the dispatch.
+  and_then : (Decode(a), c, (a, c) -> Decode(b)) -> Decode(b)
+  and_then(Failed(error), _, _) -> Failed(error)
+  and_then(Decoded(value, used), ctx, choose) -> claimed(choose(value, ctx), used)
+)
+
+# One scanned field's outcome, judged by `arg`, `opt`, or `default` into a
+# Decode. Its `Failed` and `Missing` share their words with `Decode`'s
+# constructor and the structural row in `opt` — each position picks its own,
+# and crossing into `Decode` from inside this block is spelled qualified.
+Field(a) : [Missing(Str), Value(Str, a), Failed(DecodeError)].(
+  arg : Field(a) -> Decode(a)
+  arg(Missing(name)) -> Decode.Failed(MissingField(name))
+  arg(Value(name, value)) -> Decoded(value, [name])
+  arg(Failed(error)) -> Decode.Failed(error)
+
+  opt : Field(a) -> Decode(Result(a, [Missing]))
+  opt(Missing(_)) -> Decoded(Err(Missing), [])
+  opt(Value(name, value)) -> Decoded(Ok(value), [name])
+  opt(Failed(error)) -> Decode.Failed(error)
+
+  default : (Field(a), a) -> Decode(a)
+  default(Missing(_), fallback) -> Decoded(fallback, [])
+  default(Value(name, value), _) -> Decoded(value, [name])
+  default(Failed(error), _) -> Decode.Failed(error)
+)
+
+# The member view a decoder reads: bind it once with `Fields.of`, declare
+# typed fields off it, and `finish` with the sequenced decode to run the
+# claims check. A non-object binds too — it just carries its refusal into
+# every read — so nothing in the API takes a callback.
+Fields : Result(List((Str, Json)), DecodeError).(
+  of : Json -> Fields
+  of(Object(members)) -> Fields(Ok(members))
+  of(_) -> Fields(Err(Expected("object")))
+
+  # Strict: every member must be claimed by some field decoder. The loose
+  # form permits unclaimed members, for compatibility boundaries.
+  finish : (Fields, Decode(a)) -> Decode(a)
+  finish(Fields(Ok(members)), decoded) -> finish_object(members, decoded, True)
+  finish(Fields(Err(error)), _) -> Failed(error)
+
+  finish_loose : (Fields, Decode(a)) -> Decode(a)
+  finish_loose(Fields(Ok(members)), decoded) ->
+    finish_object(members, decoded, False)
+  finish_loose(Fields(Err(error)), _) -> Failed(error)
+
+  field : (Fields, Str, Json -> Decode(a)) -> Field(a)
+  field(Fields(Ok(members)), name, decode) -> scan_field(members, name, decode)
+  field(Fields(Err(error)), _, _) -> Failed(error)
+
+  string : (Fields, Str) -> Field(Str)
+  string(fields, name) -> field(fields, name, Json.string)
+
+  boolean : (Fields, Str) -> Field(Bool)
+  boolean(fields, name) -> field(fields, name, Json.boolean)
+
+  int : (Fields, Str) -> Field(Int)
+  int(fields, name) -> field(fields, name, Json.int)
+
+  nat : (Fields, Str) -> Field(Nat)
+  nat(fields, name) -> field(fields, name, Json.nat)
+
+  u8 : (Fields, Str) -> Field(U8)
+  u8(fields, name) -> field(fields, name, Json.u8)
+
+  u16 : (Fields, Str) -> Field(U16)
+  u16(fields, name) -> field(fields, name, Json.u16)
+
+  u32 : (Fields, Str) -> Field(U32)
+  u32(fields, name) -> field(fields, name, Json.u32)
+
+  u64 : (Fields, Str) -> Field(U64)
+  u64(fields, name) -> field(fields, name, Json.u64)
+)
+
+# Encoding mirrors typed decoding. Members retains the source value long
+# enough to invoke the record builder's generated combiner; no function is
+# stored.
+Members(a) : [Members(a, List((Str, Json)))].(
+  member : (Str, a, a -> Json) -> Members(a)
+  member(name, value, encode) -> Members(value, [(name, encode(value))])
+
+  json : (Str, Json) -> Members(Json)
+  json(name, value) -> Members(value, [(name, value)])
+
+  string : (Str, Str) -> Members(Str)
+  string(name, value) -> member(name, value, String)
+
+  boolean : (Str, Bool) -> Members(Bool)
+  boolean(name, value) -> member(name, value, Bool)
+
+  int : (Str, Int) -> Members(Int)
+  int(name, value) -> member(name, value, Number)
+
+  nat : (Str, Nat) -> Members(Nat)
+  nat(name, value) -> Members(value, [(name, Number(Int.of_nat(value)))])
+
+  sequence : (Members(a), Members(b), (a, b) -> c) -> Members(c)
+  sequence(Members(a, left), Members(b, right), combine) ->
+    Members(combine(a, b), left.extend(right))
+
+  object : Members(a) -> Json
+  object(Members(_, members)) -> Object(members)
+)
+
+# Parsing ------------------------------------------------------------------
+
+# The value, array, and object parsers form one mutual recursion cycle. Each
+# cycle consumes syntax from the input; the unconsumed remainder rides beside
+# the value inside `Ok`, and the checker's path summaries carry that suffix
+# relation through the sum and the tuple, so `?` is all the plumbing there is.
+parse_value : List(U8) -> Result((Json, List(U8)), ParseError)
+parse_value([]) -> Err(UnexpectedEnd)
+parse_value([x, *rest]) if is_space(x) -> parse_value(rest)
+parse_value(['n', 'u', 'l', 'l', *rest]) -> Ok(parsed_json(Null, rest))
+parse_value(['t', 'r', 'u', 'e', *rest]) -> Ok(parsed_json(Bool(True), rest))
+parse_value(['f', 'a', 'l', 's', 'e', *rest]) -> Ok(parsed_json(Bool(False), rest))
+parse_value(['"', *rest]) ->
+  (text, after) = parse_string(rest, [])?
+  Ok(parsed_json(String(text), after))
+parse_value(['[', *rest]) -> parse_array(rest, [])
+parse_value(['{', *rest]) -> parse_object(rest, [])
+parse_value([first, *rest]) if first.equals('-') | first.is_digit() ->
+  (n, after) = parse_integer([first, *rest])?
+  Ok(parsed_json(Number(n), after))
+parse_value([_, *]) -> Err(UnexpectedToken)
+
+# Whether anything but whitespace followed the one parsed value.
+parsed_all(value, rest) if is_blank(rest) -> Ok(value)
+parsed_all(_, _) -> Err(TrailingInput)
+
+parsed_json : (Json, List(U8)) -> (Json, List(U8))
+parsed_json(value, rest) -> (value, skip_space(rest))
+
+parse_array : (List(U8), List(Json)) -> Result((Json, List(U8)), ParseError)
+parse_array([], acc) -> Err(UnexpectedEnd)
+parse_array([x, *rest], acc) if is_space(x) -> parse_array(rest, acc)
+parse_array([']', *rest], acc) -> Ok(parsed_json(Array(acc.reverse()), rest))
+parse_array(bytes, acc) ->
+  (value, after) = parse_value(bytes)?
+  parse_array_after(after, acc, value)
+
+# The remainder after one element decides the array: a `]` closes it, a comma
+# demands another element, anything else is malformed. Computed, so it enters a
+# head rather than a `when`.
+parse_array_after : (List(U8), List(Json), Json) -> Result((Json, List(U8)), ParseError)
+parse_array_after([']', *rest], acc, value) -> Ok(parsed_json(Array(acc.prepend(value).reverse()), rest))
+parse_array_after([',', *rest], acc, value) -> parse_array_comma(skip_space(rest), acc, value)
+parse_array_after(_, acc, value) -> Err(ExpectedCommaOrEnd)
+
+# A comma promises another value: `[1,]` is not JSON.
+parse_array_comma : (List(U8), List(Json), Json) -> Result((Json, List(U8)), ParseError)
+parse_array_comma([']', *], acc, value) -> Err(UnexpectedToken)
+parse_array_comma(next, acc, value) -> parse_array(next, acc.prepend(value))
+
+parse_object : (List(U8), List((Str, Json))) -> Result((Json, List(U8)), ParseError)
+parse_object([], acc) -> Err(UnexpectedEnd)
+parse_object([x, *rest], acc) if is_space(x) -> parse_object(rest, acc)
+parse_object(['}', *rest], acc) -> Ok(parsed_json(Object(acc.reverse()), rest))
+parse_object(['"', *key_bytes], acc) ->
+  (key, after_key) = parse_string(key_bytes, [])?
+  parse_object_colon(skip_space(after_key), acc, key)
+parse_object([_, *], acc) -> Err(UnexpectedToken)
+
+# After the key, a colon must separate it from the value.
+parse_object_colon : (List(U8), List((Str, Json)), Str) -> Result((Json, List(U8)), ParseError)
+parse_object_colon([':', *value_bytes], acc, key) ->
+  (value, after) = parse_value(value_bytes)?
+  parse_object_after(after, acc, key, value)
+parse_object_colon(_, acc, key) -> Err(ExpectedColon)
+
+# The remainder after one member: `}` closes the object, a comma demands
+# another member, anything else is malformed.
+parse_object_after : (List(U8), List((Str, Json)), Str, Json) -> Result((Json, List(U8)), ParseError)
+parse_object_after(['}', *rest], acc, key, value) ->
+  Ok(parsed_json(Object(acc.prepend((key, value)).reverse()), rest))
+parse_object_after([',', *rest], acc, key, value) -> parse_object_comma(skip_space(rest), acc, key, value)
+parse_object_after(_, acc, key, value) -> Err(ExpectedCommaOrEnd)
+
+# A comma promises another member: `{"a":1,}` is not JSON.
+parse_object_comma : (List(U8), List((Str, Json)), Str, Json) -> Result((Json, List(U8)), ParseError)
+parse_object_comma(['}', *], acc, key, value) -> Err(UnexpectedToken)
+parse_object_comma(next, acc, key, value) -> parse_object(next, acc.prepend((key, value)))
+
+# The one definition of JSON whitespace. The parsers above test it as a
+# guard: whitespace is not a shape — four scattered scalars on a type that
+# withholds its constructors — so a predicate is all it can be.
+is_space : U8 -> Bool
+is_space(b) ->
+  b.equals(' ') | b.equals('\n') | b.equals('\r') | b.equals('\t')
+
+skip_space : List(U8) -> List(U8)
+skip_space([b, *rest]) if is_space(b) -> skip_space(rest)
+skip_space(bytes) -> bytes
+
+# True when nothing but whitespace remains.
+is_blank : List(U8) -> Bool
+is_blank(bytes) -> skip_space(bytes).is_empty()
+
+parse_string : (List(U8), List(U8)) -> Result((Str, List(U8)), ParseError)
+parse_string([], _) -> Err(InvalidString)
+parse_string(['"', *rest], acc) -> string_done(Str.from_utf8(acc.reverse()), rest)
+parse_string(['\\', '"', *rest], acc) -> parse_string(rest, acc.prepend('"'))
+parse_string(['\\', '\\', *rest], acc) -> parse_string(rest, acc.prepend('\\'))
+parse_string(['\\', '/', *rest], acc) -> parse_string(rest, acc.prepend('/'))
+parse_string(['\\', 'b', *rest], acc) -> parse_string(rest, acc.prepend(8))
+parse_string(['\\', 'f', *rest], acc) -> parse_string(rest, acc.prepend(12))
+parse_string(['\\', 'n', *rest], acc) -> parse_string(rest, acc.prepend('\n'))
+parse_string(['\\', 'r', *rest], acc) -> parse_string(rest, acc.prepend('\r'))
+parse_string(['\\', 't', *rest], acc) -> parse_string(rest, acc.prepend('\t'))
+parse_string(['\\', 'u', a, b, c, d, *rest], acc) ->
+  code = hex4(a, b, c, d)?
+  unicode_escape(code, rest, acc)
+parse_string(['\\', _, *], _) -> Err(InvalidEscape)
+parse_string([b, *rest], acc) if b.to_nat() < 32 -> Err(InvalidString)
+parse_string([b, *rest], acc) -> parse_string(rest, acc.prepend(b))
+
+string_done(Ok(text), rest) -> Ok((text, rest))
+string_done(Err(_), _) -> Err(InvalidUnicode)
+
+# One decoded `\uXXXX`. A scalar outside the surrogate range is a codepoint;
+# a high surrogate demands its low partner from the input; anything else —
+# a lone low surrogate, or a high one with no partner — is invalid.
+unicode_escape(code, rest, acc) if code < 0xd800 | 0xdfff < code ->
+  parse_string(rest, prepend_codepoint(acc, code))
+unicode_escape(code, ['\\', 'u', e, f, g, h, *after], acc) if code <= 0xdbff ->
+  low = hex4(e, f, g, h)?
+  pair_low(code, low, after, acc)
+unicode_escape(_, _, _) -> Err(InvalidUnicode)
+
+pair_low(high, low, after, acc) if 0xdc00 <= low & low <= 0xdfff ->
+  parse_string(after, prepend_codepoint(acc, surrogate(high, low)))
+pair_low(_, _, _, _) -> Err(InvalidUnicode)
+
+surrogate : (Nat, Nat) -> Nat
+surrogate(high, low) ->
+  0x10000.add(high.sub(0xd800).mul(0x400)).add(low.sub(0xdc00))
+
+prepend_codepoint : (List(U8), Nat) -> List(U8)
+prepend_codepoint(acc, code) if code <= 0x7f ->
+  acc.prepend(U8.of_nat(code))
+prepend_codepoint(acc, code) if code <= 0x7ff -> acc
+  .prepend(U8.of_nat(0xc0.add(code.div(0x40))))
+  .prepend(U8.of_nat(0x80.add(code.mod(0x40))))
+prepend_codepoint(acc, code) if code <= 0xffff -> acc
+  .prepend(U8.of_nat(0xe0.add(code.div(0x1000))))
+  .prepend(U8.of_nat(0x80.add(code.div(0x40).mod(0x40))))
+  .prepend(U8.of_nat(0x80.add(code.mod(0x40))))
+prepend_codepoint(acc, code) -> acc
+  .prepend(U8.of_nat(0xf0.add(code.div(0x40000))))
+  .prepend(U8.of_nat(0x80.add(code.div(0x1000).mod(0x40))))
+  .prepend(U8.of_nat(0x80.add(code.div(0x40).mod(0x40))))
+  .prepend(U8.of_nat(0x80.add(code.mod(0x40))))
+
+# A hex quartet fails as `InvalidUnicode` directly: the one place JSON uses
+# hex is a `\u` escape, so the error needs no translation at the call sites.
+hex4 : (U8, U8, U8, U8) -> Result(Nat, ParseError)
+hex4(a, b, c, d) ->
+  x = hex_digit(a)?
+  y = hex_digit(b)?
+  z = hex_digit(c)?
+  w = hex_digit(d)?
+  Ok(x.mul(0x1000).add(y.mul(0x100)).add(z.mul(0x10)).add(w))
+
+hex_digit : U8 -> Result(Nat, ParseError)
+hex_digit(b) if b >= '0' & b <= '9' -> Ok(b.to_nat().sub('0'))
+hex_digit(b) if b >= 'a' & b <= 'f' -> Ok(b.to_nat().sub('a').add(10))
+hex_digit(b) if b >= 'A' & b <= 'F' -> Ok(b.to_nat().sub('A').add(10))
+hex_digit(_) -> Err(InvalidUnicode)
+
+parse_integer : List(U8) -> Result((Int, List(U8)), ParseError)
+parse_integer(['-', *digits]) -> parse_natural(digits, |n| -Int.of_nat(n))
+parse_integer(digits) -> parse_natural(digits, Int.of_nat)
+
+# The magnitude after an optional sign: a lone leading zero, or digits with
+# no leading zero. `sign` turns the accumulated `Nat` into the signed `Int`.
+parse_natural : (List(U8), Nat -> Int) -> Result((Int, List(U8)), ParseError)
+parse_natural(['0', *rest], sign) -> finish_integer(sign(0), rest)
+parse_natural([first, *rest], sign) if nonzero_digit(first) ->
+  (n, after) = take_digits(rest, first.to_nat().sub('0'))
+  finish_integer(sign(n), after)
+parse_natural(_, _) -> Err(InvalidNumber)
+
+finish_integer : (Int, List(U8)) -> Result((Int, List(U8)), ParseError)
+finish_integer(_, ['.', *]) -> Err(UnsupportedNumber)
+finish_integer(_, ['e', *]) -> Err(UnsupportedNumber)
+finish_integer(_, ['E', *]) -> Err(UnsupportedNumber)
+finish_integer(_, [next, *]) if next.is_digit() -> Err(InvalidNumber)
+finish_integer(n, rest) -> Ok((n, rest))
+
+take_digits : (List(U8), Nat) -> (Nat, List(U8))
+take_digits([d, *rest], value) if d.is_digit() ->
+  take_digits(rest, value.mul(10).add(d.to_nat().sub('0')))
+take_digits(bytes, value) -> (value, bytes)
+
+nonzero_digit : U8 -> Bool
+nonzero_digit(b) -> b >= '1' & b <= '9'
+
+# Decoding ---------------------------------------------------------------
+
+# A width conversion's verdict, worded as the type the caller asked for.
+fitted : (Result(a, [TooBig]), Str) -> Decode(a)
+fitted(Ok(value), _) -> Decoded(value, [])
+fitted(Err(TooBig), kind) -> Failed(Expected(kind))
+
+# A converter's verdict: its refusal is already a `DecodeError`.
+accepted : Result(a, DecodeError) -> Decode(a)
+accepted(Ok(value)) -> Decoded(value, [])
+accepted(Err(error)) -> Failed(error)
+
+# The second stage of `and_then`, holding the first stage's claims.
+claimed : (Decode(b), List(Str)) -> Decode(b)
+claimed(Failed(error), _) -> Failed(error)
+claimed(Decoded(_, used_b), used_a)
+  if used_a.any(|name| used_b.contains(name)) ->
+  Failed(OverlappingFields)
+claimed(Decoded(value, used_b), used_a) -> Decoded(value, used_a.extend(used_b))
+
+# The wanted member, found at most once. A guard picks the matching name;
+# `found_field` then judges the rest of the scan beside the decoded value,
+# so a duplicate outranks whatever the decoder said.
+scan_field : (List((Str, Json)), Str, Json -> Decode(a)) -> Field(a)
+scan_field([], wanted, _) -> Missing(wanted)
+scan_field([(name, value), *rest], wanted, decode) if name.equals(wanted) ->
+  found_field(scan_field(rest, wanted, decode), wanted, decode(value))
+scan_field([_, *rest], wanted, decode) -> scan_field(rest, wanted, decode)
+
+found_field(Failed(error), _, _) -> Failed(error)
+found_field(Value(_, _), wanted, _) -> Failed(DuplicateField(wanted))
+found_field(Missing(_), wanted, Failed(error)) -> Failed(AtField(wanted, error))
+found_field(Missing(_), wanted, Decoded(found, _)) -> Value(wanted, found)
+
+finish_object : (List((Str, Json)), Decode(a), Bool) -> Decode(a)
+finish_object(_, Failed(error), _) -> Failed(error)
+finish_object(members, Decoded(value, used), True) ->
+  no_unknown(value, members.filter(|(name, _)| used.contains(name).not()))
+finish_object(_, Decoded(value, _), False) -> Decoded(value, [])
+
+no_unknown(value, []) -> Decoded(value, [])
+no_unknown(_, [(name, _), *]) -> Failed(UnknownField(name))
+
+decode_values : (List(Json), Json -> Decode(a), Nat) -> Decode(List(a))
+decode_values([], _, _) -> Decoded([], [])
+decode_values([value, *rest], decode, index) ->
+  decoded_head(decode(value), rest, decode, index)
+
+decoded_head(Failed(error), _, _, index) -> Failed(AtIndex(index, error))
+decoded_head(Decoded(found, _), rest, decode, index) ->
+  decoded_tail(found, decode_values(rest, decode, index.add(1)))
+
+decoded_tail(_, Failed(error)) -> Failed(error)
+decoded_tail(found, Decoded(values, _)) -> Decoded(values.prepend(found), [])
+
+# Rendering --------------------------------------------------------------
+
+render_string : Str -> Str
+render_string(text) ->
+  escaped = Str.from_utf8(text.to_utf8().flat_map(escape_byte)).ok_or("")
+  "\"${escaped}\""
+
+# The escape table, mirroring the one `parse_string` reads. Numeral arms on
+# a `U8` are equality tests, so the `_` arm is what makes this exhaustive.
+# Backspace and form feed are their scalars, 8 and 12: JSON has `\b` and
+# `\f` escapes, Ori does not. The `\u00XY` arm splits the byte into nibbles.
+escape_byte : U8 -> List(U8)
+escape_byte('"') -> ['\\', '"']
+escape_byte('\\') -> ['\\', '\\']
+escape_byte(8) -> ['\\', 'b']
+escape_byte(12) -> ['\\', 'f']
+escape_byte('\n') -> ['\\', 'n']
+escape_byte('\r') -> ['\\', 'r']
+escape_byte('\t') -> ['\\', 't']
+escape_byte(control) if control.to_nat() < 32 ->
+  high = hex_upper(control.to_nat().div(0x10))
+  low = hex_upper(control.to_nat().mod(0x10))
+  ['\\', 'u', '0', '0', high, low]
+escape_byte(other) -> [other]
+
+hex_upper : Nat -> U8
+hex_upper(v) if v < 10 -> U8.of_nat('0'.add(v))
+hex_upper(v) -> U8.of_nat('A'.add(v.sub(10)))
+
+render_values : List(Json) -> Str
+render_values(values) -> Str.join(values.map(|value| value.to_str()), ",")
+
+render_members : List((Str, Json)) -> Str
+render_members(members) -> Str.join(members.map(render_member), ",")
+
+render_member : ((Str, Json)) -> Str
+render_member((name, value)) -> "${render_string(name)}:${value.to_str()}"

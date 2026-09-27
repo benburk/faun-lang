@@ -1,0 +1,58 @@
+# Advent of Code 2015, day 5: Doesn't He Have Intern-Elves For This?
+# The rules operate on ASCII input, so strings are checked as UTF-8 bytes.
+
+doubled : List(U8) -> Bool
+doubled([a, b]) -> a == b
+doubled(_) -> False
+
+forbidden : List(U8) -> Bool
+forbidden(['a', 'b'] | ['c', 'd'] | ['p', 'q'] | ['x', 'y']) -> True
+forbidden(_) -> False
+
+is_vowel : U8 -> Bool
+is_vowel(byte) -> ['a', 'e', 'i', 'o', 'u'].contains(byte)
+
+is_nice : Str -> Bool
+is_nice(text) ->
+  bytes = text.to_utf8()
+  has_three_vowels = bytes.count(is_vowel) >= 3
+  has_three_vowels & bytes.windows(2).any(doubled)
+    & bytes.windows(2).any(forbidden).not()
+
+part1 : Str -> Nat
+part1(input) -> input.trim().lines().count(is_nice)
+
+sandwiched : List(U8) -> Bool
+sandwiched([first, _, third]) -> first == third
+sandwiched(_) -> False
+
+is_nice_v2 : Str -> Bool
+is_nice_v2(text) ->
+  bytes = text.to_utf8()
+  pairs = bytes.windows(2)
+  # The pair one position later overlaps; pairs from `index + 2` onward do not.
+  has_repeated_pair = pairs.enumerate().any(|(index, pair)| pairs.drop(index + 2).contains(pair))
+  has_repeated_pair & bytes.windows(3).any(sandwiched)
+
+part2 : Str -> Nat
+part2(input) -> input.trim().lines().count(is_nice_v2)
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) -> Ok("part1: ${part1(input.stdin)} part2: ${part2(input.stdin)}\n")
+
+expect is_nice("ugknbfddgicrmopn")
+expect is_nice("aaa")
+expect is_nice("jchzalrnumimnmhp").not()
+expect is_nice("haegwjzuvuyypxyu").not()
+expect is_nice("dvszwmarrgswjxmb").not()
+expect part1("ugknbfddgicrmopn\naaa\njchzalrnumimnmhp\n") == 2
+
+expect is_nice_v2("xyxy")
+expect is_nice_v2("aaa").not()
+expect is_nice_v2("qjhvhtzxzqqjkmpb")
+expect is_nice_v2("xxyxx")
+expect is_nice_v2("uurcxstgmygtbstg").not()
+expect is_nice_v2("ieodomkazucvgmuy").not()
+expect part2("qjhvhtzxzqqjkmpb\nxxyxx\nuurcxstgmygtbstg\nieodomkazucvgmuy\n") == 2
+
+main!(host) -> host.run_result_text!(app)

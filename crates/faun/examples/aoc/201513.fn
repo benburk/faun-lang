@@ -1,0 +1,180 @@
+# Advent of Code 2015, day 13: Knights of the Dinner Table.
+# Day 9's tour again, bent into a circle: every guest has two neighbours, and
+# the last one sits beside the first. Happiness is signed — `Int`, because the
+# elves lose as often as they gain — and a pair is felt from both sides, so
+# the two lines about a pair are summed as they are read and stored under
+# both orders. After that a seating is arithmetic: one lookup per neighbour,
+# no direction to keep straight.
+#
+# Rotating a round table does not change who sits beside whom, so the first
+# guest is nailed down and only the others are permuted: 7! seatings, not 8!.
+#
+# Part two seats you, who nobody minds and who minds nobody. Rather than
+# permute a ninth guest, note what seating you actually does: it breaks one
+# pair and pays nothing for it, and every seating of nine arises exactly once
+# that way. So part two is part one's ring minus its weakest pair, and both
+# answers come out of the same 5040 seatings.
+
+package {
+  combinatorics: "../libraries/combinatorics/src/combinatorics"
+}
+
+import combinatorics {permutations}
+
+Rule : [Rule(Str, Str, Int)]
+
+parse_rule : Str -> Result(Rule, [MalformedRule])
+parse_rule(line) -> ruled(line.split(" "))
+
+ruled : List(Str) -> Result(Rule, [MalformedRule])
+ruled([subject, "would", direction, amount, "happiness", "units", "by", "sitting", "next", "to", neighbour]) ->
+  Ok(Rule(subject, neighbour.drop_suffix("."),
+    change(direction, Nat.from_str(amount).err_as(MalformedRule)?)?))
+ruled(_) -> Err(MalformedRule)
+
+# The verb carries the sign the number does not.
+change : (Str, Nat) -> Result(Int, [MalformedRule])
+change("gain", magnitude) -> Ok(Int.of_nat(magnitude))
+change("lose", magnitude) -> Ok(-Int.of_nat(magnitude))
+change(_, _) -> Err(MalformedRule)
+
+parse_rules : Str -> Result(List(Rule), Str)
+parse_rules(input) -> input.trim().lines()
+  .try_map(parse_rule).err_as("malformed happiness line")
+
+# Anyone named on either side of a rule is at the table, including a guest
+# only ever spoken about: seating them is what makes their silence a gap.
+guests : List(Rule) -> List(Str)
+guests(rules) -> rules.fold(Set.empty(), add_guest).to_list()
+
+add_guest : (Set(Str), Rule) -> Set(Str)
+add_guest(seen, Rule(subject, neighbour, _)) -> seen.insert(subject).insert(neighbour)
+
+# What a pair is worth, summed across the two lines about it and filed under
+# both orders. Reading a rule adds to what the pair already holds, so the
+# second line finds the first waiting and the fold needs no second pass.
+regard : List(Rule) -> Map((Str, Str), Int)
+regard(rules) -> rules.fold(Map.empty(), add_regard)
+
+add_regard : (Map((Str, Str), Int), Rule) -> Map((Str, Str), Int)
+add_regard(table, Rule(subject, neighbour, feeling)) ->
+  worth = table.get((subject, neighbour)).ok_or(0) + feeling
+  table.insert((subject, neighbour), worth).insert((neighbour, subject), worth)
+
+# Summing the two sides into one number costs the table its memory of which
+# lines it was built from: a missing line leaves not a hole but a half-filled
+# entry, which scores as quietly wrong rather than failing. So the rules are
+# checked for completeness first — every guest speaking of every other —
+# and the seating loop below can then be arithmetic with no failure in it.
+unspoken : List(Rule) -> List((Str, Str))
+unspoken(rules) ->
+  stated = rules.fold(Set.empty(), add_stated)
+  everyone = guests(rules)
+  everyone.cross(everyone).filter(|pair| unheard(pair, stated))
+
+# A pair still owed a rule: two different guests, and no line saying how the
+# first feels about the second.
+unheard : ((Str, Str), Set((Str, Str))) -> Bool
+unheard((subject, neighbour), stated) -> (subject == neighbour).not()
+  & stated.contains((subject, neighbour)).not()
+
+opinions : List(Rule) -> Result(Map((Str, Str), Int), Str)
+opinions(rules) -> spoken(unspoken(rules), rules)
+
+spoken : (List((Str, Str)), List(Rule)) -> Result(Map((Str, Str), Int), Str)
+spoken([(subject, neighbour), *], _) -> Err("`${subject}` said nothing about `${neighbour}`")
+spoken([], rules) -> Ok(regard(rules))
+
+# The table is round, so the seating pairs with itself shifted by one.
+neighbours : List(a) -> List((a, a))
+neighbours(seating) -> seating.zip(seating.drop(1).extend(seating.take(1)))
+
+# Rotations are the same table, so the head stays put and the tail moves.
+seatings : List(Str) -> List(List(Str))
+seatings([]) -> []
+seatings([host, *others]) ->
+  permutations(others, others.len()).map(|tail| [host, *tail])
+
+# A seating's total, and the weakest pair in it — the one part two breaks.
+# The zero is unreachable for a real pair: `opinions` has already refused a
+# table with a gap in it. It stands for the lone guest sitting beside himself.
+# `min` folds from the first pair, so no 0 seed can call an all-positive ring
+# free to sit down in; no seating is empty, so its `Empty` cannot arise, and
+# the 0 it falls to there means nothing either.
+score : (List(Str), Map((Str, Str), Int)) -> (Int, Int)
+score(seating, table) ->
+  pairs = neighbours(seating).map(|pair| table.get(pair).ok_or(0))
+  (pairs.sum(), pairs.min().ok_or(0))
+
+# Every seating scored once. Both parts are one aggregation over this list:
+# the ring whole, and the ring cut at its weakest pair.
+rings : Str -> Result(List((Int, Int)), Str)
+rings(input) ->
+  rules = parse_rules(input)?
+  table = opinions(rules)?
+  Ok(seatings(guests(rules)).map(|seating| score(seating, table)))
+
+strongest : List(Int) -> Result(Int, Str)
+strongest(totals) -> totals.max().err_as("no guests to seat")
+
+part1 : Str -> Result(Int, Str)
+part1(input) -> strongest(rings(input)?.map(|(total, _)| total))
+
+add_stated : (Set((Str, Str)), Rule) -> Set((Str, Str))
+add_stated(said, Rule(subject, neighbour, _)) -> said.insert((subject, neighbour))
+
+net_score : ((Int, Int)) -> Int
+net_score((total, gap)) -> total - gap
+
+part2 : Str -> Result(Int, Str)
+part2(input) -> strongest(rings(input)?.map(net_score))
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  scored = rings(input.stdin)?
+  seated = strongest(scored.map(|(total, _)| total))?
+  yourself = strongest(scored.map(net_score))?
+  Ok("part1: ${seated} part2: ${yourself}\n")
+
+example : Str
+example() -> Str.join(["Alice would gain 54 happiness units by sitting next to Bob.",
+  "Alice would lose 79 happiness units by sitting next to Carol.",
+  "Alice would lose 2 happiness units by sitting next to David.",
+  "Bob would gain 83 happiness units by sitting next to Alice.",
+  "Bob would lose 7 happiness units by sitting next to Carol.",
+  "Bob would lose 63 happiness units by sitting next to David.",
+  "Carol would lose 62 happiness units by sitting next to Alice.",
+  "Carol would gain 60 happiness units by sitting next to Bob.",
+  "Carol would gain 55 happiness units by sitting next to David.",
+  "David would gain 46 happiness units by sitting next to Alice.",
+  "David would lose 7 happiness units by sitting next to Bob.",
+  "David would gain 41 happiness units by sitting next to Carol."], "\n")
+
+# The puzzle's arrangement, David beside Alice beside Bob beside Carol.
+expect part1(example()) == Ok(330)
+# Its four pairs are 137, 53, 96, and 44; you take the seat worth 44.
+expect part2(example()) == Ok(286)
+
+pair : Str
+pair() -> Str.join(["A would gain 3 happiness units by sitting next to B.",
+  "B would gain 4 happiness units by sitting next to A."], "\n")
+
+# Two guests at a round table are neighbours twice over, once on each side,
+# so their one pair is counted twice; seating yourself uncounts it once.
+expect part1(pair()) == Ok(14)
+expect part2(pair()) == Ok(7)
+
+# One side of a pair stated and not the other. The table cannot tell this
+# from a pair worth 3, which is exactly why the rules are checked first.
+expect part1("A would gain 3 happiness units by sitting next to B.").is_err()
+
+# A guest spoken about who never speaks is still seated, and still silent.
+expect part1(Str.join(["A would gain 3 happiness units by sitting next to B.",
+  "B would gain 4 happiness units by sitting next to C."], "\n")).is_err()
+
+expect part1("").is_err()
+expect parse_rule("Alice would shrug 54 happiness units by sitting next to Bob.").is_err()
+expect parse_rule("Alice would gain lots happiness units by sitting next to Bob.").is_err()
+expect parse_rule("Alice sat next to Bob.").is_err()
+
+main!(host) -> host.run_result_text!(app)

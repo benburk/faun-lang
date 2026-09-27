@@ -1,0 +1,205 @@
+# Byte-oriented parsing for second-class functions. `Input`/`Read` support
+# ordinary cursor parsers. Splitting first produces `Inputs`; `Reads` then
+# parses every chunk in lockstep while storing only accumulated values and
+# unconsumed input — never parser functions.
+
+package {}
+
+exports {
+  Input, Inputs, Reads, Read.*, ParserError.*, parse_all, split, to_nat
+}
+
+ParserError : [
+  ParserExpectedByte(U8),
+  ParserExpectedNat,
+  ParserTrailingInput
+].(
+  to_str : ParserError -> Str
+  to_str(ParserExpectedByte(byte)) -> "expected byte `${Str.from_utf8([byte]).ok_or("�")}`"
+  to_str(ParserExpectedNat) -> "expected a natural number"
+  to_str(ParserTrailingInput) -> "unexpected input after parsed value"
+
+  equals : (ParserError, ParserError) -> Bool
+  equals(ParserExpectedByte(a0), ParserExpectedByte(b0)) -> a0 == b0
+  equals(ParserExpectedNat, ParserExpectedNat) -> True
+  equals(ParserTrailingInput, ParserTrailingInput) -> True
+  equals(_, _) -> False
+)
+
+Input : List(U8).(
+  from : List(U8) -> Input
+  from(bytes) -> Input(bytes)
+
+  from_str : Str -> Input
+  from_str(text) -> Input(text.to_utf8())
+
+  # `split` preserves every chunk. `lines` drops one final empty chunk so a
+  # process input may conventionally end in a newline.
+  split : (Input, U8) -> Inputs
+  split(Input(bytes), separator) -> Inputs(parser_split(bytes, separator).map(Input))
+
+  lines : Input -> Inputs
+  lines(Input(bytes)) -> Inputs(parser_line_inputs(parser_split(bytes, '\n')))
+
+  # The expected byte must be present and equal; the guard proves it, and the
+  # empty and mismatched shapes fall through to the same refusal.
+  byte : (Input, U8) -> Result(Read(U8), ParserError)
+  byte(Input([]), expected) -> Err(ParserExpectedByte(expected))
+  byte(Input([found, *rest]), expected) if found.equals(expected) -> Ok(Read(found, Input(rest)))
+  byte(Input([found, *]), expected) -> Err(ParserExpectedByte(expected))
+
+  nat : Input -> Result(Read(Nat), ParserError)
+  nat(Input(bytes)) -> parser_read_nat(bytes, 0, False)
+)
+
+# Chunks before their first value has been parsed.
+Inputs : List(Input).(
+  read : (Inputs, Input -> Result(Read(a), ParserError)) -> Result(Reads(a), ParserError)
+  read(Inputs(inputs), parser) -> Ok(Reads(parser_inputs_read(inputs, parser)?))
+
+  nat : Inputs -> Result(Reads(Nat), ParserError)
+  nat(inputs) -> read(inputs, Input.nat)
+)
+
+# One accumulated value and one remainder per chunk. Parsing another value
+# appends it to a left-nested tuple: `a`, then `(a b)`, then `((a b) c)`.
+Reads(a) : List((a, Input)).(
+  read : (Reads(a), Input -> Result(Read(b), ParserError)) -> Result(Reads((a, b)), ParserError)
+  read(Reads(reads), parser) -> Ok(Reads(parser_reads_read(reads, parser)?))
+
+  skip : (Reads(a), Input -> Result(Read(b), ParserError)) -> Result(Reads(a), ParserError)
+  skip(Reads(reads), parser) -> Ok(Reads(parser_reads_skip(reads, parser)?))
+
+  nat : Reads(a) -> Result(Reads((a, Nat)), ParserError)
+  nat(reads) -> read(reads, Input.nat)
+
+  skip_byte : (Reads(a), U8) -> Result(Reads(a), ParserError)
+  skip_byte(reads, expected) -> skip(reads, |input| input.byte(expected))
+
+  map : (Reads(a), a -> b) -> Reads(b)
+  map(Reads(reads), convert) -> Reads(parser_map_reads(reads, convert))
+
+  # Every chunk must be exhausted before its accumulated value is released.
+  finish : Reads(a) -> Result(List(a), ParserError)
+  finish(Reads(reads)) -> parser_finish_reads(reads)
+)
+
+Read(a) : [Read(a, Input)].(
+  # Run a parser on this read's remainder and retain the value on the left.
+  skip : (Read(a), Input -> Result(Read(b), ParserError)) -> Result(Read(a), ParserError)
+  skip(Read(value, input), parser) ->
+    Read(_, remaining) = parser(input)?
+    Ok(Read(value, remaining))
+
+  skip_byte : (Read(a), U8) -> Result(Read(a), ParserError)
+  skip_byte(read, expected) -> skip(read, |input| input.byte(expected))
+)
+
+# The one value must consume its whole input. The remainder is computed, not a
+# parameter, so a helper takes it into its head to decide accept or reject.
+parse_all : (Str, Input -> Result(Read(a), ParserError)) -> Result(a, ParserError)
+parse_all(text, parser) ->
+  Read(value, Input(remaining)) = parser(Input(text.to_utf8()))?
+  parse_all_rest(value, remaining)
+
+parse_all_rest : (a, List(U8)) -> Result(a, ParserError)
+parse_all_rest(value, []) -> Ok(value)
+parse_all_rest(value, [_, *]) -> Err(ParserTrailingInput)
+
+# `seen` records whether any digit has been consumed, so the end-of-input and
+# non-digit shapes dispatch on it; a digit extends the value and marks it seen.
+parser_read_nat : (List(U8), Nat, Bool) -> Result(Read(Nat), ParserError)
+parser_read_nat([], value, True) -> Ok(Read(value, Input([])))
+parser_read_nat([], value, False) -> Err(ParserExpectedNat)
+parser_read_nat([byte, *rest], value, seen) if byte.is_digit() ->
+  parser_read_nat(rest, value.mul(10).add(byte.to_nat().sub('0')), True)
+parser_read_nat([byte, *rest], value, True) -> Ok(Read(value, Input([byte, *rest])))
+parser_read_nat([byte, *rest], value, False) -> Err(ParserExpectedNat)
+
+parser_line_inputs : List(List(U8)) -> List(Input)
+parser_line_inputs([]) -> []
+parser_line_inputs([[]]) -> []
+parser_line_inputs([chunk, *rest]) -> parser_line_inputs(rest).prepend(Input(chunk))
+
+parser_inputs_read : (List(Input), Input -> Result(Read(a), ParserError)) -> Result(List((a, Input)), ParserError)
+parser_inputs_read([], parser) -> Ok([])
+parser_inputs_read([input, *rest], parser) ->
+  Read(value, remaining) = parser(input)?
+  Ok(parser_inputs_read(rest, parser)?.prepend((value, remaining)))
+
+parser_reads_read : (List((a, Input)), Input -> Result(Read(b), ParserError)) -> Result(List(((a, b), Input)), ParserError)
+parser_reads_read([], parser) -> Ok([])
+parser_reads_read([(value, input), *rest], parser) ->
+  Read(next, remaining) = parser(input)?
+  Ok(parser_reads_read(rest, parser)?.prepend(((value, next), remaining)))
+
+parser_reads_skip : (List((a, Input)), Input -> Result(Read(b), ParserError)) -> Result(List((a, Input)), ParserError)
+parser_reads_skip([], parser) -> Ok([])
+parser_reads_skip([(value, input), *rest], parser) ->
+  Read(_, remaining) = parser(input)?
+  Ok(parser_reads_skip(rest, parser)?.prepend((value, remaining)))
+
+parser_map_reads : (List((a, Input)), a -> b) -> List((b, Input))
+parser_map_reads([], convert) -> []
+parser_map_reads([(value, input), *rest], convert) ->
+  parser_map_reads(rest, convert).prepend((convert(value), input))
+
+parser_finish_reads : List((a, Input)) -> Result(List(a), ParserError)
+parser_finish_reads([]) -> Ok([])
+parser_finish_reads([(value, Input([])), *rest]) -> Ok(parser_finish_reads(rest)?.prepend(value))
+parser_finish_reads(_) -> Err(ParserTrailingInput)
+
+# Plain conversion and splitting remain useful when a format is already
+# naturally chunk-oriented.
+split : (List(U8), U8) -> List(List(U8))
+split(bytes, separator) -> parser_split(bytes, separator)
+
+parser_split : (List(U8), U8) -> List(List(U8))
+parser_split(bytes, separator) -> split_go(bytes, separator, [], [])
+
+split_go : (List(U8), U8, List(U8), List(List(U8))) -> List(List(U8))
+split_go([], separator, current, done) -> done.prepend(current.reverse()).reverse()
+split_go([h, *t], separator, current, done) if h.equals(separator) ->
+  split_go(t, separator, [], done.prepend(current.reverse()))
+split_go([h, *t], separator, current, done) -> split_go(t, separator, current.prepend(h), done)
+
+to_nat : List(U8) -> Result(Nat, [NotADigit])
+to_nat(digits) -> to_nat_go(digits, 0, False)
+
+to_nat_go : (List(U8), Nat, Bool) -> Result(Nat, [NotADigit])
+to_nat_go([], value, True) -> Ok(value)
+to_nat_go([], value, False) -> Err(NotADigit)
+to_nat_go([h, *t], value, seen) if h.is_digit() ->
+  to_nat_go(t, value.mul(10).add(h.to_nat().sub('0')), True)
+to_nat_go([h, *t], value, seen) -> Err(NotADigit)
+
+parser_example_pair : Input -> Result(Read({left: Nat, right: Nat}), ParserError)
+parser_example_pair(input) ->
+  Read(left, input) = input.nat()?.skip(|remaining| remaining.byte('x'))?
+  Read(right, input) = input.nat()?
+  Ok(Read({left, right}, input))
+
+parser_example_rows : Str -> Result(List({left: Nat, middle: Nat, right: Nat}), ParserError)
+parser_example_rows(text) -> Input.from_str(text)
+  .lines()
+  .nat()?
+  .skip_byte('x')?
+  .nat()?
+  .skip_byte('x')?
+  .nat()?
+  .map(triple_row)
+  .finish()
+
+triple_row : (((Nat, Nat), Nat)) -> {left: Nat, middle: Nat, right: Nat}
+triple_row(((left, middle), right)) -> {left, middle, right}
+
+expect parse_all("3x14", parser_example_pair) == Ok({left: 3, right: 14})
+expect parser_example_rows("2x3x4\n1x1x10\n") == Ok([
+  {left: 2, middle: 3, right: 4},
+  {left: 1, middle: 1, right: 10}
+])
+expect parser_example_rows("2x3x").is_err()
+expect parser_example_rows("2x3x4oops").is_err()
+expect parse_all("3x", parser_example_pair).is_err()
+expect split(['a', ',', ',', 'b'], ',') == [['a'], [], ['b']]
+expect to_nat(['4', '2']).is_ok()

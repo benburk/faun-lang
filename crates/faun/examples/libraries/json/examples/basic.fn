@@ -1,0 +1,166 @@
+# Integer-only JSON parsing plus statically typed object decoding. The Ori field
+# `display_name` deliberately reads and writes the stable wire key `name`, so a
+# domain rename does not silently change the JSON format.
+
+package {
+  json_lib: "../src/json"
+}
+
+import json_lib {
+  Json, Array, Number,
+  ParseError, DecodeError, Decode, Decoded, Failed, Field, Fields, Members,
+  InvalidValue
+}
+
+User : {
+  display_name: Str, age: Nat, balance: Int, active: Bool, scores: List(Nat)
+}.(
+  from_json : Json -> Decode(User)
+  from_json(value) ->
+    fields = Fields.of(value)
+    fields.finish(Decode.sequence({
+      display_name: fields.string("name").arg(),
+      age: fields.nat("age").arg(),
+      balance: fields.int("balance").default(0),
+      active: fields.boolean("active").default(False),
+      scores: fields.field("scores", decode_nats).default([])
+    })).map(User)
+
+  to_json : User -> Json
+  to_json(User(user)) -> Members.sequence({
+    display_name: Members.string("name", user.display_name),
+    age: Members.nat("age", user.age),
+    balance: Members.int("balance", user.balance),
+    active: Members.boolean("active", user.active),
+    scores: Members.member("scores", user.scores, score_array)
+  }).object()
+
+  equals : (User, User) -> Bool
+  equals(User(a), User(b)) -> a == b
+)
+
+# Encode and decode the one shape the record builders do not cover directly:
+# a list of naturals as a JSON array of numbers.
+decode_nats : Json -> Decode(List(Nat))
+decode_nats(value) -> value.array(Json.nat)
+
+score_array : List(Nat) -> Json
+score_array(values) -> Array(values.map(nat_number))
+
+nat_number : Nat -> Json
+nat_number(v) -> Number(Int.of_nat(v))
+
+user_text : Str
+user_text() -> "{\"name\":\"Ada\",\"age\":37,\"balance\":-4,"
+  .concat("\"active\":true,\"scores\":[3,5]}")
+
+decode_user : Str -> Result(User, Str)
+decode_user(text) ->
+  value = Json.from_str(text).map_err(|error| error.to_str())?
+  User.from_json(value).result().map_err(|error| error.to_str())
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) -> decode_user(input.stdin).map_ok(|user| user.to_json().to_str())
+
+expect decode_user(user_text()) == Ok(User({
+  display_name: "Ada", age: 37, balance: -4, active: True, scores: [3, 5]
+}))
+# Decoding then re-encoding round-trips to the original text.
+expect decode_user(user_text()).map_ok(|user| user.to_json().to_str()) == Ok(user_text())
+
+# Missing defaulted fields are accepted.
+minimal_text : Str
+minimal_text() -> "{\"name\":\"A\",\"age\":1}"
+expect decode_user(minimal_text()) == Ok(User({
+  display_name: "A", age: 1, balance: 0, active: False, scores: []
+}))
+
+# Strict object decoding rejects unknown and duplicate members.
+unknown_text : Str
+unknown_text() -> "{\"name\":\"A\",\"age\":1,\"x\":0}"
+expect decode_user(unknown_text()).is_err()
+
+duplicate_text : Str
+duplicate_text() -> "{\"name\":\"A\",\"name\":\"B\",\"age\":1}"
+expect decode_user(duplicate_text()).is_err()
+
+# Integers are arbitrary precision; fractions and exponents are intentionally
+# outside this first library version.
+expect Json.from_str("-12345678901234567890").is_ok()
+expect Json.from_str("1.5").is_err()
+expect Json.from_str("1e3").is_err()
+
+# The grammar is JSON's, exactly: a comma promises another element.
+expect Json.from_str("[1,]").is_err()
+expect Json.from_str("{\"a\":1,}").is_err()
+
+# A tagged union rides an object with a discriminator. `and_then` decodes
+# the tag, and its value chooses the payload decode; the claims of both
+# stages merge, so strict checking still covers every member across the
+# dispatch. Widths check on the way in: 70000 does not fit a `u16`.
+Event : [Click(U16, U16), Scroll(Int), Quit].(
+  from_json : Json -> Decode(Event)
+  from_json(value) ->
+    fields = Fields.of(value)
+    fields.finish(fields.string("type").arg().and_then(fields, body))
+
+  body : (Str, Fields) -> Decode(Event)
+  body("click", fields) -> Decode.sequence({
+    x: fields.u16("x").arg(),
+    y: fields.u16("y").arg()
+  }).map(click_at)
+  body("scroll", fields) -> fields.int("amount").arg().map(Scroll)
+  body("quit", _) -> Decoded(Quit, [])
+  body(other, _) -> Failed(InvalidValue("unknown event `${other}`"))
+
+  equals : (Event, Event) -> Bool
+  equals(Click(a0, a1), Click(b0, b1)) -> a0 == b0 & a1 == b1
+  equals(Scroll(a0), Scroll(b0)) -> a0 == b0
+  equals(Quit, Quit) -> True
+  equals(_, _) -> False
+)
+
+# The decoded fields arrive as a record; `Click` takes them positionally.
+click_at : {x: U16, y: U16} -> Event
+click_at({x, y}) -> Click(x, y)
+
+event : Str -> Result(Event, DecodeError)
+event(text) ->
+  value = Json.from_str(text).err_as(InvalidValue("bad JSON"))?
+  Event.from_json(value).result()
+
+expect event("{\"type\":\"click\",\"x\":3,\"y\":9}") == Ok(Click(3, 9))
+expect event("{\"type\":\"scroll\",\"amount\":-2}").is_ok()
+expect event("{\"type\":\"quit\"}") == Ok(Quit)
+expect event("{\"type\":\"click\",\"x\":70000,\"y\":9}").is_err()
+expect event("{\"type\":\"quit\",\"extra\":1}").is_err()
+expect event("{\"type\":\"jump\"}").is_err()
+
+# A nullary enum is just a string on the wire: `string_as` runs the union's
+# own reader, and its refusal is the decode error verbatim.
+level_of : Str -> Result([Low, High], DecodeError)
+level_of("low") -> Ok(Low)
+level_of("high") -> Ok(High)
+level_of(other) -> Err(InvalidValue("unknown level `${other}`"))
+
+reads_high : Json -> Bool
+reads_high(v) -> decoded_high(v.string_as(level_of).result())
+
+decoded_high : Result([Low, High], DecodeError) -> Bool
+decoded_high(Ok(High)) -> True
+decoded_high(_) -> False
+
+rejects_level : Json -> Bool
+rejects_level(v) -> v.string_as(level_of).result().is_err()
+
+expect Json.from_str("\"high\"").map_ok(reads_high).ok_or(False)
+expect Json.from_str("\"warm\"").map_ok(rejects_level).ok_or(False)
+
+# UTF-16 escapes, including a surrogate pair, decode to UTF-8.
+unicode_text : Str
+unicode_text() -> "\"\\u0041\\uD83D\\uDE00\""
+decoded_smiley : Json
+decoded_smiley() -> Json.String(Str.from_utf8(['A', 0xf0, 0x9f, 0x98, 0x80]).ok_or(""))
+expect Json.from_str(unicode_text()) == Ok(decoded_smiley())
+
+main!(host) -> host.run_result_text!(app)

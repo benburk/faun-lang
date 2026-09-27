@@ -1,0 +1,14 @@
+# The four familiar ways to select two values from a small input.
+
+package {
+  combinatorics: "../src/combinatorics"
+}
+
+import combinatorics {
+  permutations, product, combinations, combinations_with_replacement
+}
+
+expect permutations([1, 2, 3], 2).len() == 6
+expect product([1, 2, 3], 2).len() == 9
+expect combinations([1, 2, 3], 2) == [[1, 2], [1, 3], [2, 3]]
+expect combinations_with_replacement([1, 2], 2) == [[1, 1], [1, 2], [2, 2]]

@@ -1,0 +1,220 @@
+# A small, pure command-line argument library.
+#
+# An option builder contains only first-order configuration: argv, a long
+# name, and an optional short-name policy. Its terminal — `flag`, `nat`,
+# `str`, or `parse` after `str` — runs the scan; `arg`, `opt`, or `default`
+# then chooses what absence means and yields a Match. Match.sequence assembles
+# the caller's record without imposing declaration order on the command line.
+#
+# Args.finish rejects unknown options and replaces the builder's `rest` field
+# with unclaimed values in order. `--help`/`-h` returns Help with
+# documentation generated from the declarations; `--` ends option recognition.
+
+package {}
+
+import parse {
+  ArgSpec,
+  FlagScan, ValueScan,
+  spec_long,
+  scan_flag_spec, scan_value_spec,
+  collect_rest
+}
+import help {
+  HelpValue, HelpMode, HelpItem,
+  spec_metavar, help_option, help_min, help_requested, render_help
+}
+
+exports {Args, Match, Opt, ParsedArg, ArgError}
+
+ArgError = [Help(Str), Invalid(Str)]
+
+# What one scanned option knows besides its value: the spec that found it, the
+# shape its help entry renders, and the argv positions it claimed.
+OptionDoc = {spec: ArgSpec, shape: HelpValue, claims: List(Nat)}
+
+Match(a) : [
+  Matched(a, List(Nat)),
+  Failed(Str),
+  Documented(Match(a), HelpItem)
+].(
+  # This signature is the record-builder shape. A call such as
+  # `Match.sequence({verbose: ... count: ...})` nests calls left-to-right and
+  # constructs the record written at the call site. Documentation wrappers
+  # preserve every declaration even when ordinary parsing has failed.
+  sequence : (Match(a), Match(b), (a, b) -> c) -> Match(c)
+  sequence(Documented(inner, item), right, combine) ->
+    Documented(sequence(inner, right, combine), item)
+  sequence(left, Documented(inner, item), combine) ->
+    Documented(sequence(left, inner, combine), item)
+  sequence(Failed(message), _, _) -> Failed(message)
+  sequence(_, Failed(message), _) -> Failed(message)
+  sequence(Matched(_, used_a), Matched(_, used_b), _)
+    if used_a.any(|index| used_b.contains(index)) ->
+    Failed("two option declarations claimed the same argument")
+  sequence(Matched(a, used_a), Matched(b, used_b), combine) ->
+    Matched(combine(a, b), used_a.extend(used_b))
+
+  # Require at least this many positional values. Intended for `args.rest()`:
+  # the requirement lives on the Rest declaration item — stated where help
+  # renders it, recovered where `finish` checks it.
+  min : (Match(List(Str)), Nat) -> Match(List(Str))
+  min(Documented(inner, item), n) ->
+    Documented(min(inner, n), help_min(item, n))
+  min(matched, _) -> matched
+)
+
+Args : List(Str).(
+  # The argument view: bind it once, declare options off it, and `finish` with
+  # the sequenced match to validate and receive one flat record.
+  of : List(Str) -> Args
+  of(argv) -> Args(argv)
+
+  # Help is an alternate successful process outcome, but cannot construct the
+  # requested record. Keep it distinct from invalid input in the Result error.
+  finish(Args(argv), matched)
+    if help_requested(argv) -> Err(Help(render_help(help_items(matched))))
+  finish(Args(argv), matched) ->
+    finish_match(argv, matched, rest_min(matched))
+
+  opt : (Args, Str) -> Opt
+  opt(Args(argv), long) -> Opt(ArgSpec.new(argv, long))
+
+  # A placeholder for the final record's positional arguments. Parsing fills
+  # this field after all option claims have been combined.
+  rest : Args -> Match(List(Str))
+  rest(Args(_)) -> Documented(Matched([], []), Rest(0))
+)
+
+# One builder for every option kind: configuration first, and the type choice
+# is the terminal, so declaring an option reads as a sentence — named,
+# shortened, documented, parsed as, defaulted to.
+Opt : ArgSpec.(
+  short : (Opt, Str) -> Opt
+  short(Opt(spec), name) -> Opt(spec.short(name))
+
+  auto : Opt -> Opt
+  auto(Opt(spec)) -> Opt(spec.auto())
+
+  help : (Opt, Str) -> Opt
+  help(Opt(spec), about) -> Opt(spec.help(about))
+
+  flag : Opt -> ParsedArg(Bool)
+  flag(Opt(spec)) -> read_flag(spec)
+
+  nat : Opt -> ParsedArg(Nat)
+  nat(Opt(spec)) -> parse_custom(read_str(spec), Nat.from_str, "NAT")
+
+  str : Opt -> ParsedArg(Str)
+  str(Opt(spec)) -> read_str(spec)
+
+  # Convert a supplied string immediately, retaining only first-order parsed
+  # data. The conversion function is a second-class parameter, never stored —
+  # and `nat` above is nothing more than this with a stock parser and metavar.
+  parse : (Opt, Str -> Result(a, e)) -> ParsedArg(a)
+  parse(Opt(spec), convert) ->
+    parse_custom(read_str(spec), convert, spec_metavar(spec))
+)
+
+# All option kinds converge on one first-order state before applying required,
+# optional, or defaulted cardinality. This keeps those three policies generic
+# rather than repeating them in every public builder.
+ParsedArg(a) : [
+  Absent(OptionDoc),
+  Value(a, OptionDoc),
+  Failed(Str, OptionDoc)
+].(
+  arg : ParsedArg(a) -> Match(a)
+  arg(Absent(doc)) -> lost(doc, Required, missing(doc))
+  arg(Value(found, doc)) -> won(doc, Required, found)
+  arg(Failed(message, doc)) -> lost(doc, Required, message)
+
+  opt : ParsedArg(a) -> Match(Result(a, [Missing]))
+  opt(Absent(doc)) -> won(doc, Optional, Err(Missing))
+  opt(Value(found, doc)) -> won(doc, Optional, Ok(found))
+  opt(Failed(message, doc)) -> lost(doc, Optional, message)
+
+  # The fallback is generic, and its help entry shows it — so defaulting an
+  # option obliges its type to say what the default looks like.
+  default : (ParsedArg(a), a) -> Match(a) where a.to_str : a -> Str
+  default(Absent(doc), fallback) ->
+    won(doc, Defaulted(fallback.to_str()), fallback)
+  default(Value(found, doc), fallback) ->
+    won(doc, Defaulted(fallback.to_str()), found)
+  default(Failed(message, doc), fallback) ->
+    lost(doc, Defaulted(fallback.to_str()), message)
+)
+
+# The two outcomes every cardinality judges: a value carrying the doc's
+# claims, or a failure — each documented under its mode.
+won(doc, mode, value) -> document(doc, mode, Matched(value, doc.claims))
+lost(doc, mode, message) -> document(doc, mode, Failed(message))
+
+document({spec, shape, *}, mode, matched) ->
+  Documented(matched, help_option(spec, shape, mode))
+
+read_flag(spec) ->
+  flag_parsed(scan_flag_spec(spec), {spec, shape: Flag, claims: []})
+
+flag_parsed(Absent, doc) -> Absent(doc)
+flag_parsed(Found(value, claims), doc) -> Value(value, {claims, *doc})
+flag_parsed(Repeated(name), doc) -> Failed(repeated(name), doc)
+flag_parsed(Conflict, doc) -> Failed(conflicting(doc.spec), doc)
+flag_parsed(BadSpec(message), doc) -> Failed(message, doc)
+
+read_str(spec) ->
+  str_parsed(scan_value_spec(spec), {spec, shape: Named("STR"), claims: []})
+
+str_parsed(Absent, doc) -> Absent(doc)
+str_parsed(Found(value, claims), doc) -> Value(value, {claims, *doc})
+str_parsed(Repeated(name), doc) -> Failed(repeated(name), doc)
+str_parsed(NeedsValue(name), doc) ->
+  Failed("option `${name}` needs a value", doc)
+str_parsed(BadSpec(message), doc) -> Failed(message, doc)
+
+parse_custom(Absent(doc), convert, metavar) ->
+  Absent(shaped(doc, metavar))
+parse_custom(Failed(message, doc), convert, metavar) ->
+  Failed(message, shaped(doc, metavar))
+parse_custom(Value(value, doc), convert, metavar) ->
+  custom_value(convert(value), value, shaped(doc, metavar), metavar)
+
+shaped(doc, metavar) -> {shape: Named(metavar), *doc}
+
+custom_value(Ok(found), _, doc, _) -> Value(found, doc)
+custom_value(Err(_), value, doc, metavar) ->
+  long = spec_long(doc.spec)
+  refusal = "option `--${long}` could not parse `${value}` as ${metavar}"
+  Failed(refusal, doc)
+
+repeated(name) -> "option `${name}` was supplied more than once"
+
+conflicting(spec) ->
+  long = spec_long(spec)
+  "options `--${long}` and `--no-${long}` cannot be used together"
+
+missing({spec, shape: Flag, *}) ->
+  long = spec_long(spec)
+  "missing required flag `--${long}` or `--no-${long}`"
+missing({spec, shape: Named(_), *}) ->
+  "missing required option `--${spec_long(spec)}`"
+
+finish_match(argv, Documented(inner, _), n) ->
+  finish_match(argv, inner, n)
+finish_match(_, Failed(message), _) -> Err(Invalid(message))
+finish_match(argv, Matched(value, claims), n) ->
+  rest = collect_rest(argv, claims).map_err(Invalid)?
+  with_rest(value, rest, n)
+
+with_rest(value, rest, n) if n <= rest.len() -> Ok({rest, *value})
+with_rest(_, rest, n) ->
+  got = rest.len()
+  Err(Invalid("expected at least ${n} positional values, got ${got}"))
+
+# The positional requirement, recovered from the one Rest item the
+# declarations carry — the strictest, if several were stated.
+rest_min(Documented(inner, Rest(n))) -> n.max(rest_min(inner))
+rest_min(Documented(inner, _)) -> rest_min(inner)
+rest_min(_) -> 0
+
+help_items(Documented(inner, item)) -> help_items(inner).prepend(item)
+help_items(_) -> []

@@ -1,0 +1,31 @@
+# One element out of many: the seed picks a winner from the words after it.
+#
+# The draw costs one generator advance and one bounds-checked read, whatever
+# the candidate count, so the work here is the argument list the host hands
+# over rather than anything the choice does with it. An empty candidate list
+# has no element to name, and that miss travels as `Empty` beside the parse
+# failure the seed can raise.
+#
+# argv[0] is the seed, argv[1..] the candidates.
+
+package {
+  random: "../src/random"
+}
+
+import random {Random}
+
+app : {args: List(Str)} -> Result(Str, [Empty, Malformed, OutOfBounds])
+app(input) ->
+  seed = Nat.from_str(input.args.get(0)?)?
+  (winner, after) = Random.seed(seed).choice(input.args.drop(1))?
+  Ok(winner)
+
+# The first word `next` yields from seed 42 reduces to index 2 of three.
+expect app({args: ["42", "rock", "paper", "scissors"]}) == Ok("scissors")
+expect app({args: ["42"]}) == Err(Empty)
+expect app({args: []}) == Err(OutOfBounds)
+
+main!(host) -> host.run_result_args!(cli)
+
+cli : {args: List(Str)} -> Result(Str, [Empty, Malformed, OutOfBounds])
+cli(input) -> app({args: input.args.drop(1)})

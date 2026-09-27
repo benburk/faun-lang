@@ -1,0 +1,123 @@
+# Advent of Code 2015, day 7: Some Assembly Required.
+# The circuit is a system of equations, so it is solved the way equations
+# are: by relaxation. A sweep walks the rules and settles every wire whose
+# operands are already known; after as many sweeps as there are rules, any
+# acyclic circuit has settled completely — each sweep settles at least the
+# next layer of the dependency graph — and a wire still missing then never
+# had a signal to receive: a cycle, a gap, or a gate that reads as nonsense.
+#
+# Nothing here recurses except two structural list walks. Evaluating a gate
+# is a lookup, not a descent, so there is no memo to thread and no fuel to
+# spend — the sweep count is the termination argument, and it is a length.
+# Signals are U32 values masked to the puzzle's 16 bits.
+
+Rules = List((Str, List(Str)))
+Signals = Map(Str, U32)
+
+mask : U32
+mask() -> 0xffff
+
+rules : Str -> Rules
+rules(input) -> input.trim().lines().map(|line| line.split(" -> ")).flat_map(ruled)
+
+ruled : List(Str) -> Rules
+ruled([definition, out]) -> [(out, definition.split(" "))]
+ruled(_) -> []
+
+# One pass: the first rule for a wire wins, and a rule whose operands are
+# not yet known simply waits for a later sweep.
+sweep : (Rules, Signals) -> Signals
+sweep([], signals) -> signals
+sweep([(out, tokens), *rest], signals) -> sweep(rest, settle(signals, out, tokens))
+
+settle : (Signals, Str, List(Str)) -> Signals
+settle(signals, out, _) if signals.contains(out) -> signals
+settle(signals, out, tokens) -> filled(value(tokens, signals), signals, out)
+
+filled : (Result(U32, e), Signals, Str) -> Signals
+filled(Ok(signal), signals, out) -> signals.insert(out, signal)
+filled(Err(_), signals, _) -> signals
+
+# A gate's worth, read straight off the tokens — no recursion, no gate
+# datatype: a lone operand connects, NOT inverts within the mask, and every
+# binary form shares one row.
+value : (List(Str), Signals) -> Result(U32, [Missing, Unreadable])
+value([a], signals) -> resolve(a, signals)
+value(["NOT", a], signals) -> Ok(resolve(a, signals)? ^ mask())
+value([a, op, b], signals) -> combine(op, resolve(a, signals)?, resolve(b, signals)?)
+value(_, _) -> Err(Unreadable)
+
+combine : (Str, U32, U32) -> Result(U32, [Unreadable])
+combine("AND", x, y) -> Ok(x & y)
+combine("OR", x, y) -> Ok(x | y)
+combine("LSHIFT", x, y) -> Ok(x.shift_left(y.to_nat()) & mask())
+combine("RSHIFT", x, y) -> Ok(x.shift_right(y.to_nat()))
+combine(_, _, _) -> Err(Unreadable)
+
+# An operand is a numeral or a wire, told apart when it is read. A wire not
+# yet settled is simply `Missing` from the table — the error rows union as
+# they flow, so nothing translates one tag into another on the way up.
+resolve : (Str, Signals) -> Result(U32, [Missing, Unreadable])
+resolve(token, signals) -> operand(Nat.from_str(token), token, signals)
+
+operand : (Result(Nat, e), Str, Signals) -> Result(U32, [Missing, Unreadable])
+operand(Ok(numeral), _, _) -> Ok(U32.of_nat(numeral) & mask())
+operand(Err(_), name, signals) -> signals.get(name)
+
+solved : (Rules, Str) -> Result(Nat, Str)
+solved(wiring, wire) -> wiring.len().times(Map.empty(), |signals| sweep(wiring, signals))
+  .get(wire)
+  .map_ok(|signal| signal.to_nat())
+  .err_as("wire `${wire}` never received a signal")
+
+signal_on : (Str, Str) -> Result(Nat, Str)
+signal_on(input, wire) -> solved(rules(input), wire)
+
+part1 : Str -> Result(Nat, Str)
+part1(input) -> signal_on(input, "a")
+
+# Part two reruns the circuit with part one's answer prepended as a rule for
+# `b`: the first rule for a wire wins, so the old `b` gate simply never fires.
+part2 : Str -> Result(Nat, Str)
+part2(input) ->
+  wiring = rules(input)
+  first = solved(wiring, "a")?
+  solved([("b", [first.to_str()]), *wiring], "a")
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  first = part1(input.stdin)?
+  second = part2(input.stdin)?
+  Ok("part1: ${first} part2: ${second}\n")
+
+example : Str
+example() -> "123 -> x\n456 -> y\nx AND y -> d\nx OR y -> e\nx LSHIFT 2 -> f\ny RSHIFT 2 -> g\nNOT x -> h\nNOT y -> i\n"
+
+expect signal_on(example(), "d") == Ok(72)
+expect signal_on(example(), "e") == Ok(507)
+expect signal_on(example(), "f") == Ok(492)
+expect signal_on(example(), "g") == Ok(114)
+expect signal_on(example(), "h") == Ok(65412)
+expect signal_on(example(), "i") == Ok(65079)
+expect signal_on(example(), "x") == Ok(123)
+expect signal_on(example(), "y") == Ok(456)
+
+# Rules may arrive in any order: a later sweep settles what an early one met
+# too soon.
+expect signal_on("x AND y -> a\n123 -> x\n456 -> y\n", "a") == Ok(72)
+# Part two feeds part one's signal back through `b`: a is 246, then b
+# becomes 246 and a doubles again.
+expect part2("123 -> b\nb LSHIFT 1 -> a\n") == Ok(492)
+# Without a `b` wire the override is a new rule nothing reads, and part two
+# equals part one.
+expect part2("123 -> x\nNOT x -> a\n") == Ok(65412)
+# A literal operand and an undriven wire.
+expect signal_on("1 AND x -> a\n5 -> x\n", "a") == Ok(1)
+expect signal_on("x AND y -> a\n123 -> x\n", "a").is_err()
+# Nonsense never settles.
+expect signal_on("banana split -> a", "a").is_err()
+expect signal_on("x MAYBE y -> a\n1 -> x\n2 -> y\n", "a").is_err()
+# A cycle waits out every sweep and is reported like any missing signal.
+expect signal_on("a -> b\nb -> a\n", "a").is_err()
+
+main!(host) -> host.run_result_text!(app)

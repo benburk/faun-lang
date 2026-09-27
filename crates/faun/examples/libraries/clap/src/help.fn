@@ -1,0 +1,85 @@
+# Documentation metadata and generated help rendering for clap.
+
+import parse {
+  ArgSpec, ResolvedShort,
+  spec_long, resolve_short
+}
+
+exports {
+  HelpValue, HelpMode, HelpItem,
+  spec_metavar, help_option, help_min,
+  help_requested, render_help
+}
+
+HelpValue = [Flag, Named(Str)]
+HelpMode = [Required, Optional, Defaulted(Str)]
+OptionInfo = {
+  long: Str, short: ResolvedShort, shape: HelpValue, mode: HelpMode, about: Str
+}
+
+HelpItem = [Option(OptionInfo), Rest(Nat)]
+
+# Custom parsers have no runtime type reflection, so derive their metavar from
+# the option name while preserving the type-based NAT and STR built-ins.
+spec_metavar : ArgSpec -> Str
+spec_metavar(spec) -> Str.from_utf8(
+  spec_long(spec).to_utf8().map(|byte| byte.to_ascii_upper())
+).ok_or("")
+
+# A spec whose short name fails to resolve documents itself long-only; the
+# scan reports the real error, so help never has to.
+help_option : (ArgSpec, HelpValue, HelpMode) -> HelpItem
+help_option(ArgSpec({long, short, about, *}), shape, mode) ->
+  resolved = resolve_short(long, short).ok_or(LongOnly)
+  Option({long, short: resolved, shape, mode, about})
+
+help_min : (HelpItem, Nat) -> HelpItem
+help_min(Rest(current), n) -> Rest(current.max(n))
+help_min(item, _) -> item
+
+help_requested : List(Str) -> Bool
+help_requested([]) -> False
+help_requested(["--", *]) -> False
+help_requested(["--help", *]) -> True
+help_requested(["-h", *]) -> True
+help_requested([_, *rest]) -> help_requested(rest)
+
+render_help : List(HelpItem) -> Str
+render_help(items) ->
+  "Options:\n${render_options(items)}  -h, --help  Print help\n"
+    .concat(render_arguments(items))
+
+render_options([]) -> ""
+render_options([Rest(_), *rest]) -> render_options(rest)
+render_options([Option(option), *rest]) ->
+  entry(option).concat(render_options(rest))
+
+entry({long, short, shape, mode, about}) ->
+  lead = "  ${render_names(long, short, shape)}${render_value(shape)}"
+  "${lead}${render_required(mode)}${render_about(about)}\n"
+
+render_names(long, LongOnly, shape) -> render_long(long, shape)
+render_names(long, Short(name), shape) ->
+  "-${name}, ${render_long(long, shape)}"
+
+render_long(long, Flag) -> "--[no-]${long}"
+render_long(long, Named(_)) -> "--${long}"
+
+render_value(Flag) -> ""
+render_value(Named(name)) -> " <${name}>"
+
+render_required(Required) -> "  (required)"
+render_required(Defaulted(value)) -> "  [default: ${value}]"
+render_required(_) -> ""
+
+render_about("") -> ""
+render_about(about) -> "  ${about}"
+
+render_arguments([]) -> ""
+render_arguments([Option(_), *rest]) -> render_arguments(rest)
+render_arguments([Rest(n), *rest]) ->
+  "\nArguments:\n  <REST>...${render_rest_min(n)}\n"
+    .concat(render_arguments(rest))
+
+render_rest_min(0) -> ""
+render_rest_min(n) -> "  At least ${n} required"

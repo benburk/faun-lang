@@ -1,0 +1,147 @@
+# Declarative command-line parsing with an unordered option phase and an
+# ordered positional phase. The library is first-order: option readers produce
+# values plus claims on argv positions, and Match.sequence assembles those
+# values through the record-builder syntax.
+
+package {
+  clap_lib: "../src/clap"
+}
+
+import clap_lib {Args, Match, ArgError}
+
+# User-defined types need no support baked into clap. A total conversion
+# function is passed into `.parse`, invoked immediately, and then discarded.
+Mode : [Fast, Slow].(
+  from_str : Str -> Result(Mode, [Malformed])
+  from_str("fast") -> Ok(Fast)
+  from_str("slow") -> Ok(Slow)
+  from_str(_) -> Err(Malformed)
+
+  equals : (Mode, Mode) -> Bool
+  equals(Fast, Fast) -> True
+  equals(Slow, Slow) -> True
+  equals(_, _) -> False
+  to_str : Mode -> Str
+  to_str(Fast) -> "Fast"
+  to_str(Slow) -> "Slow"
+)
+
+parse_args : List(Str) -> Result({verbose: Bool, count: Nat, output: Str,
+  mode: Mode, rest: List(Str)}, ArgError)
+parse_args(argv) ->
+  args = Args.of(argv)
+  args.finish(Match.sequence({
+    verbose: args.opt("verbose").short("v")
+      .help("Enable verbose output").flag().default(False),
+    count: args.opt("count").short("n")
+      .help("Number of times to run").nat().default(1),
+    output: args.opt("output").short("o")
+      .help("Output destination").str().default("<stdout>"),
+    mode: args.opt("mode").short("m")
+      .help("Execution mode: fast or slow")
+      .parse(Mode.from_str).default(Fast),
+    rest: args.rest().min(1)
+  }))
+
+# `arg()` makes absence fail the outer parse.
+required_args : List(Str) -> Result({count: Nat, output: Str, mode: Mode,
+  rest: List(Str)}, ArgError)
+required_args(argv) ->
+  args = Args.of(argv)
+  args.finish(Match.sequence({
+    count: args.opt("count").nat().arg(),
+    output: args.opt("output").str().arg(),
+    mode: args.opt("mode").parse(Mode.from_str).arg(),
+    rest: args.rest()
+  }))
+
+# `opt()` preserves absence as the named `Missing` error. `auto()` derives the
+# short spelling from the long name's first letter.
+optional_args : List(Str) -> Result({verbose: Result(Bool, [Missing]),
+  count: Result(Nat, [Missing]), output: Result(Str, [Missing]),
+  mode: Result(Mode, [Missing]), rest: List(Str)}, ArgError)
+optional_args(argv) ->
+  args = Args.of(argv)
+  args.finish(Match.sequence({
+    verbose: args.opt("verbose").auto().flag().opt(),
+    count: args.opt("count").auto().nat().opt(),
+    output: args.opt("output").auto().str().opt(),
+    mode: args.opt("mode").auto().parse(Mode.from_str).opt(),
+    rest: args.rest()
+  }))
+
+app : {args: List(Str)} -> Result(Str, Str)
+app(input) -> report(parse_args(input.args))
+
+report(Err(Help(text))) -> Ok(text)
+report(Err(Invalid(message))) -> Err(message)
+report(Ok(config)) ->
+  lead = "verbose=${config.verbose} count=${config.count}"
+  tail = "mode=${config.mode} files=${config.rest.len()}"
+  Ok("${lead} output=${config.output} ${tail}\n")
+
+# Options may appear in any order and may be interspersed with positionals.
+expect parse_args(["input.ori", "--count", "3", "--verbose", "--output", "out.c"]) == Ok({
+  verbose: True, count: 3, output: "out.c", mode: Fast, rest: ["input.ori"]
+})
+
+expect parse_args(["-o", "out.c", "input.ori", "-v", "-n", "3"]) == Ok({
+  verbose: True, count: 3, output: "out.c", mode: Fast, rest: ["input.ori"]
+})
+
+# The generated help, line for line — the byte-exact expectation below reads
+# far better assembled than inlined.
+help_text : Str
+help_text() -> "Options:\n"
+  .concat("  -v, --[no-]verbose  [default: False]  Enable verbose output\n")
+  .concat("  -n, --count <NAT>  [default: 1]  Number of times to run\n")
+  .concat("  -o, --output <STR>  [default: <stdout>]  Output destination\n")
+  .concat("  -m, --mode <MODE>  [default: Fast]")
+  .concat("  Execution mode: fast or slow\n")
+  .concat("  -h, --help  Print help\n\nArguments:\n")
+  .concat("  <REST>...  At least 1 required\n")
+
+# Help is generated from the same declarations and bypasses positional and
+# required-option validation.
+expect parse_args(["--help"]) == Err(Help(help_text()))
+expect parse_args(["-h"]) == Err(Help(help_text()))
+
+# Defaults and the end-of-options marker are explicit. After `--`, a value
+# beginning with a dash is positional rather than an unknown option.
+expect parse_args(["--", "--literal-file"]) == Ok({
+  verbose: False, count: 1, output: "<stdout>", mode: Fast, rest: ["--literal-file"]
+})
+expect parse_args(["--", "--help"]) == Ok({
+  verbose: False, count: 1, output: "<stdout>", mode: Fast, rest: ["--help"]
+})
+
+expect parse_args([]).is_err()
+expect parse_args(["--mystery"]).is_err()
+expect parse_args(["--count", "many"]).is_err()
+expect parse_args(["input.ori", "--mode", "unknown"]).is_err()
+expect parse_args(["input.ori", "--mode", "slow"]) == Ok({
+  verbose: False, count: 1, output: "<stdout>", mode: Slow, rest: ["input.ori"]
+})
+expect parse_args(["--verbose", "-v"]).is_err()
+expect parse_args(["--verbose", "--no-verbose"]).is_err()
+expect parse_args(["--no-verbose", "input.ori"]) == Ok({
+  verbose: False, count: 1, output: "<stdout>", mode: Fast, rest: ["input.ori"]
+})
+
+expect required_args([]).is_err()
+expect required_args(["--count", "2", "--output", "out.c", "--mode", "fast"]) == Ok({
+  count: 2, output: "out.c", mode: Fast, rest: []
+})
+
+expect optional_args([]) == Ok({
+  verbose: Err(Missing), count: Err(Missing), output: Err(Missing),
+  mode: Err(Missing), rest: []
+})
+expect optional_args(["--no-verbose", "-c", "2", "-o", "out.c", "-m", "slow"]) == Ok({
+  verbose: Ok(False), count: Ok(2), output: Ok("out.c"), mode: Ok(Slow), rest: []
+})
+
+main!(host) -> host.run_result_args!(cli)
+
+cli : {args: List(Str)} -> Result(Str, Str)
+cli(input) -> app({args: input.args.drop(1)})

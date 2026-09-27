@@ -1,0 +1,93 @@
+# Combinatoric generation in one engine. Every output tuple is built by
+# repeatedly selecting an element from `xs`: `length` says how many
+# selections, `repeats` whether the same element may be selected again, and
+# `inorder` whether selections must move left-to-right through `xs`. The
+# four classic functions are the four corners of those two switches:
+#
+#   permutations(xs k)                   repeats=False  inorder=False
+#   product(xs k)                        repeats=True   inorder=False
+#   combinations(xs k)                   repeats=False  inorder=True
+#   combinations_with_replacement(xs k)  repeats=True   inorder=True
+#
+# The twelvefold way generalises further — `missing` and `skip` switches
+# over the same engine — and can join as further choice modes when a
+# consumer arrives.
+#
+# Termination is structural on `length` alone, which is why no variant
+# needs fuel: the continuation list a choice hands back is opaque to the
+# totality checker, and never needs to be anything else.
+
+package {}
+
+exports {generate, permutations, product, combinations, combinations_with_replacement}
+
+# Each way to make one selection: the chosen element, and the list the
+# remaining selections continue from. The two switches pick the shape;
+# with replacement, every element's remaining pool is the entire input.
+choices : (List(a), Bool, Bool) -> List((a, List(a)))
+choices(xs, False, False) -> selections(xs)
+choices(xs, True, False) -> xs.map(|x| (x, xs))
+choices(xs, False, True) -> suffix_picks(xs)
+choices(xs, True, True) -> inclusive_picks(xs)
+
+# Pick any element once: the element and everything else. A deeper pick
+# rides past the head unchosen, so the head rejoins its rest.
+selections : List(a) -> List((a, List(a)))
+selections([]) -> []
+selections([h, *t]) -> selections(t)
+  .map(|(x, rest)| (x, rest.prepend(h)))
+  .prepend((h, t))
+
+# Pick left-to-right, never again: the element and what follows it.
+suffix_picks : List(a) -> List((a, List(a)))
+suffix_picks([]) -> []
+suffix_picks([h, *t]) -> suffix_picks(t).prepend((h, t))
+
+# Pick left-to-right, allowing the same element again: the element and the
+# suffix still headed by it.
+inclusive_picks : List(a) -> List((a, List(a)))
+inclusive_picks([]) -> []
+inclusive_picks([h, *t]) -> inclusive_picks(t).prepend((h, t.prepend(h)))
+
+generate : (List(a), Nat, Bool, Bool) -> List(List(a))
+generate(_, Zero, _, _) -> [[]]
+generate(xs, Succ(remaining), repeats, inorder) ->
+  walk(choices(xs, repeats, inorder), remaining, repeats, inorder)
+
+# One choice at a time, each extended by every shorter selection its
+# remainder generates. Direct recursion threads the switches flat, so the
+# checker sees the peeled `remaining` descend into `generate` unwrapped.
+walk : (List((a, List(a))), Nat, Bool, Bool) -> List(List(a))
+walk([], _, _, _) -> []
+walk([(x, continue_from), *rest], remaining, repeats, inorder) ->
+  generate(continue_from, remaining, repeats, inorder)
+    .map(|selection| selection.prepend(x))
+    .extend(walk(rest, remaining, repeats, inorder))
+
+permutations : (List(a), Nat) -> List(List(a))
+permutations(xs, length) -> generate(xs, length, False, False)
+
+product : (List(a), Nat) -> List(List(a))
+product(xs, length) -> generate(xs, length, True, False)
+
+combinations : (List(a), Nat) -> List(List(a))
+combinations(xs, length) -> generate(xs, length, False, True)
+
+combinations_with_replacement : (List(a), Nat) -> List(List(a))
+combinations_with_replacement(xs, length) -> generate(xs, length, True, True)
+
+# The four corners over [1 2 3], two at a time: 6, 9, 3, and 6 tuples, in
+# the deterministic order the choice lists impose.
+expect permutations([1, 2, 3], 2) == [[1, 2], [1, 3], [2, 1], [2, 3], [3, 1], [3, 2]]
+expect product([1, 2], 2) == [[1, 1], [1, 2], [2, 1], [2, 2]]
+expect combinations([1, 2, 3], 2) == [[1, 2], [1, 3], [2, 3]]
+expect combinations_with_replacement([1, 2], 2) == [[1, 1], [1, 2], [2, 2]]
+
+# Zero selections make exactly one empty tuple; selections past the supply
+# make none unless repeats refill it.
+expect permutations([1, 2], 0) == [[]]
+expect permutations([1, 2], 3).is_empty()
+expect product([1, 2], 3).len() == 8
+
+# Full-length permutations: all n! orderings.
+expect permutations([1, 2, 3], 3).len() == 6

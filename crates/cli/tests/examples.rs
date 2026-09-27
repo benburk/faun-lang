@@ -225,6 +225,30 @@ fn input_runners_hand_the_program_arguments_and_input() {
     assert_eq!(run(&completing, &[], ""), (Some(5), String::new()));
 }
 
+/// Ori's Advent of Code programs and example libraries, ported: every
+/// expectation each file's package holds.
+#[test]
+fn the_ported_programs_and_libraries_hold() {
+    let mut files = Vec::new();
+    let mut pending = vec![example("aoc"), example("libraries")];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "fn") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    assert!(files.len() >= 40, "{files:?}");
+    for file in files {
+        let (failed, _) = support::test_file(&file);
+        assert_eq!(failed, Vec::<String>::new(), "{}", file.display());
+    }
+}
+
 /// The grammar, construct by construct: every expectation of the syntax
 /// examples holds.
 #[test]

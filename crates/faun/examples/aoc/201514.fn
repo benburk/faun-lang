@@ -1,0 +1,133 @@
+# Advent of Code 2015, day 14: Reindeer Olympics.
+# A reindeer's flight is periodic, so part one needs no simulation at all:
+# the distance at any second is whole cycles of flying, plus however much of
+# the last, unfinished cycle was spent in the air. `div` and `mod` say it.
+#
+# Part two has no such formula. Santa awards a point every second to whoever
+# is in front, ties included, and the lead changes hands as reindeer stop to
+# rest, so this race really is run — one tick at a time, evaluating the same
+# closed form at each second rather than stepping a reindeer's state along.
+
+package {}
+
+# Speed, then seconds of flying, then seconds of resting. The name is read to
+# check the line's shape and then dropped: both answers are numbers, and no
+# reindeer is ever asked which one it is.
+Reindeer : [Reindeer(Nat, Nat, Nat)]
+
+parse_reindeer : Str -> Result(Reindeer, [MalformedReindeer])
+parse_reindeer(line) -> described(line.split(" "))
+
+described : List(Str) -> Result(Reindeer, [MalformedReindeer])
+described([_, "can", "fly", speed, "km/s", "for", flying, "seconds,", "but", "then", "must", "rest", "for", resting, "seconds."]) ->
+  Ok(Reindeer(count(speed)?, count(flying)?, count(resting)?))
+described(_) -> Err(MalformedReindeer)
+
+count : Str -> Result(Nat, [MalformedReindeer])
+count(text) -> Nat.from_str(text).err_as(MalformedReindeer)
+
+herd : Str -> Result(List(Reindeer), Str)
+herd(input) -> input.trim().lines()
+  .try_map(parse_reindeer).err_as("malformed reindeer line")
+
+# Whole cycles flown, then as much of the last one as the reindeer got
+# through: it flies the first `flying` seconds of every cycle and rests out
+# the remainder. A reindeer with no cycle at all divides by zero and is fine
+# for it — `div(a 0)` is 0 and `mod(a 0)` is a, so it simply never moves.
+distance : (Reindeer, Nat) -> Nat
+distance(Reindeer(speed, flying, resting), second) ->
+  cycle = flying + resting
+  flown = second / cycle * flying + Nat.min(second % cycle, flying)
+  speed * flown
+
+furthest : List(Nat) -> Result(Nat, Str)
+furthest(flown) -> flown.max().err_as("no reindeer in the race")
+
+# The seconds of the race, `1` through `duration`: a reindeer has flown
+# nothing at second zero, so the clock starts after the first tick.
+ticks : Nat -> List(Nat)
+ticks(duration) -> List.range(duration).map(|second| second + 1)
+
+lead : (List(Reindeer), Nat) -> Result(Nat, Str)
+lead(racers, second) -> furthest(racers.map(|racer| distance(racer, second)))
+
+# One tick at a time, carrying a score per reindeer alongside the herd.
+# Seeding the lead at 0 is safe in a way day 13's weakest pair was not: no
+# reindeer is ever behind the start line, so 0 really is `max`'s identity
+# over `Nat`, and an empty field is caught by `furthest` below.
+points : (List(Reindeer), Nat) -> Result(Nat, Str)
+points(racers, duration) -> furthest(ticks(duration)
+  .fold(List.repeat(0, racers.len()), |scores, second| compute_scores(racers, scores, second)))
+
+# Each second the field is measured once, and everyone level with the front
+# of it scores — ties included, so the points awarded can outnumber the
+# seconds raced.
+compute_scores : (List(Reindeer), List(Nat), Nat) -> List(Nat)
+compute_scores(racers, scores, second) ->
+  reached = racers.map(|racer| distance(racer, second))
+  front = reached.max().ok_or(0)
+  points = reached.map(|flown| (flown == front).to_nat())
+  scores.map2(points, Nat.add)
+
+race_length : Nat
+race_length() -> 2503
+
+part1 : (Str, Nat) -> Result(Nat, Str)
+part1(input, duration) -> lead(herd(input)?, duration)
+
+part2 : (Str, Nat) -> Result(Nat, Str)
+part2(input, duration) -> points(herd(input)?, duration)
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  racers = herd(input.stdin)?
+  Ok("part1: ${lead(racers, race_length())?} part2: ${points(racers, race_length())?}\n")
+
+comet : Reindeer
+comet() -> Reindeer(14, 10, 127)
+
+dancer : Reindeer
+dancer() -> Reindeer(16, 11, 162)
+
+# The puzzle's narration, second by second: both fly, then Comet stops on the
+# eleventh while Dancer carries on, then both rest until the 138th.
+expect distance(comet(), 1) == 14
+expect distance(dancer(), 1) == 16
+expect distance(comet(), 10) == 140
+expect distance(comet(), 11) == 140
+expect distance(dancer(), 11) == 176
+expect distance(comet(), 137) == 140
+expect distance(comet(), 138) == 154
+# Dancer's second flight starts on the 174th.
+expect distance(dancer(), 173) == 176
+expect distance(dancer(), 174) == 192
+
+# Zero speed, zero flight, zero cycle: no distance and no division by zero.
+expect distance(Reindeer(14, 0, 0), 1000) == 0
+expect distance(Reindeer(0, 10, 127), 1000) == 0
+
+example : Str
+example() -> Str.join(["Comet can fly 14 km/s for 10 seconds, but then must rest for 127 seconds.",
+  "Dancer can fly 16 km/s for 11 seconds, but then must rest for 162 seconds."], "\n")
+
+# Dancer leads early and Comet takes it back; the answer depends on when you
+# look, which is the whole of part two's complaint about part one's scoring.
+expect part1(example(), 1) == Ok(16)
+expect part1(example(), 11) == Ok(176)
+expect part2(example(), 1) == Ok(1)
+# Through the eleventh second Dancer has led every one of them.
+expect part2(example(), 11) == Ok(11)
+
+# The thousandth second, where the two scorings name different winners:
+# Comet is 64 km up the road, and Dancer has out-pointed him more than two to
+# one. Dancer's 689 and Comet's 312 come to 1001, one more than the seconds
+# raced, because for one second they were level and both were paid for it.
+expect part1(example(), 1000) == Ok(1120)
+expect part2(example(), 1000) == Ok(689)
+
+expect part1("", 1000).is_err()
+expect parse_reindeer("Comet can fly 14 km/s for 10 seconds, but then must rest for ages.").is_err()
+expect parse_reindeer("Comet can gallop 14 km/s for 10 seconds, but then must rest for 127 seconds.").is_err()
+expect parse_reindeer("Comet is fast.").is_err()
+
+main!(host) -> host.run_result_text!(app)

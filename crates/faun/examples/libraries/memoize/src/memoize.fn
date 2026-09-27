@@ -1,0 +1,31 @@
+# A persistent memo table for explicitly state-threaded recursion.
+#
+# `memoize` looks up `key`; on a miss it invokes the statically supplied
+# computation with the current table and an arbitrary context, then remembers
+# the returned value in the returned table. The computation is consumed by the
+# call rather than stored, preserving the language's second-class function rule.
+# Passing the table into and out of the computation lets recursive branches
+# share everything earlier branches learned without hidden mutation.
+
+package {}
+
+exports {Memo}
+
+Memo(k, v) : Map(k, v).(
+  empty : Memo(k, v)
+  empty() -> Memo(Map.empty())
+
+  memoize : (Memo(k, v), k, c, (Memo(k, v), c) -> (v, Memo(k, v))) -> (v, Memo(k, v)) where
+    k.hash_into : (k, Mixer) -> Mixer
+    k.equals : (k, k) -> Bool
+  memoize(Memo(entries), key, context, compute) ->
+    recalled(entries.get(key), Memo(entries), key, context, compute)
+)
+
+recalled : (Result(v, [Missing]), Memo(k, v), k, c, (Memo(k, v), c) -> (v, Memo(k, v))) -> (v, Memo(k, v)) where
+  k.hash_into : (k, Mixer) -> Mixer
+  k.equals : (k, k) -> Bool
+recalled(Ok(value), memo, _, _, _) -> (value, memo)
+recalled(Err(_), memo, key, context, compute) ->
+  (value, Memo(entries)) = compute(memo, context)
+  (value, Memo(entries.insert(key, value)))

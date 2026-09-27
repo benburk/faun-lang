@@ -1,0 +1,29 @@
+# Terminal styling through the ANSI library's qualified color, style, and
+# control builders.
+
+package {
+  ansi_lib: "../src/ansi"
+}
+
+import ansi_lib {Ansi, Color, Style, Control}
+
+banner : Str -> Str
+banner(text) -> Ansi.color(
+  Ansi.style(text, [Style.bold(), Style.underline()]),
+  {fg: Color.bright_cyan(), bg: Color.default()}
+)
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) -> Ok(banner(input.stdin).concat("\n"))
+
+expect Ansi.escape(Control.erase_line()).to_utf8() == [27, '[', '2', 'K']
+expect banner("Ori").to_utf8() == [
+  27, '[', '9', '6', 'm',
+  27, '[', '4', '9', 'm',
+  27, '[', '1', 'm',
+  27, '[', '4', 'm',
+  'O', 'r', 'i',
+  27, '[', '0', 'm'
+]
+
+main!(host) -> host.run_result_text!(app)

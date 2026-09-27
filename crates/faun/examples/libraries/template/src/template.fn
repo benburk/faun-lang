@@ -1,0 +1,456 @@
+# Compile small, type-checked text templates into ordinary Ori functions.
+# Templates are data at build time: a shell wrapper supplies the file on stdin,
+# this library emits Ori source, and the generated function is checked together
+# with the rest of the application.
+#
+# `{{ expression }}` turns an interpolated `Str` into escaped `Html`;
+# `{{{ expression }}}` inserts an existing `Html` value. `{% if expression %}`
+# and `{% for pattern in expression %}`
+# provide one-level conditional and list blocks. Expressions are intentionally
+# left as Ori source, so records, methods, and application types remain the
+# language's responsibility.
+
+package {}
+
+exports {TemplateError.*, compile_template}
+
+TemplateError : [
+  InvalidTemplateName,
+  EmptyInterpolation,
+  EmptyBlockExpression,
+  MalformedListHeader,
+  UnclosedInterpolation,
+  UnclosedRawInterpolation,
+  UnclosedConditional,
+  UnclosedList,
+  UnexpectedBlockTag,
+  UnsafeInterpolationContext,
+  UnsafeBlockContext,
+  UnclosedHtmlTag
+].(
+  to_str : TemplateError -> Str
+  to_str(InvalidTemplateName) -> "template name must be an Ori identifier"
+  to_str(EmptyInterpolation) -> "template interpolation cannot be empty"
+  to_str(EmptyBlockExpression) -> "template block expression cannot be empty"
+  to_str(MalformedListHeader) ->
+    "for block must be `{% for pattern in expression %}`"
+  to_str(UnclosedInterpolation) ->
+    "unclosed template interpolation; expected `}}`"
+  to_str(UnclosedRawInterpolation) ->
+    "unclosed raw template interpolation; expected `}}}`"
+  to_str(UnclosedConditional) ->
+    "unclosed conditional block; expected `{% endif %}`"
+  to_str(UnclosedList) -> "unclosed for block; expected `{% endfor %}`"
+  to_str(UnexpectedBlockTag) -> "unexpected template block tag"
+  to_str(UnsafeInterpolationContext) ->
+    "interpolation is only allowed in text or quoted attribute values; raw Html is only allowed in text"
+  to_str(UnsafeBlockContext) ->
+    "template control blocks are only allowed between HTML tags"
+  to_str(UnclosedHtmlTag) ->
+    "template ends inside an HTML tag or quoted attribute"
+
+  equals : (TemplateError, TemplateError) -> Bool
+  equals(InvalidTemplateName, InvalidTemplateName) -> True
+  equals(EmptyInterpolation, EmptyInterpolation) -> True
+  equals(EmptyBlockExpression, EmptyBlockExpression) -> True
+  equals(MalformedListHeader, MalformedListHeader) -> True
+  equals(UnclosedInterpolation, UnclosedInterpolation) -> True
+  equals(UnclosedRawInterpolation, UnclosedRawInterpolation) -> True
+  equals(UnclosedConditional, UnclosedConditional) -> True
+  equals(UnclosedList, UnclosedList) -> True
+  equals(UnexpectedBlockTag, UnexpectedBlockTag) -> True
+  equals(UnsafeInterpolationContext, UnsafeInterpolationContext) -> True
+  equals(UnsafeBlockContext, UnsafeBlockContext) -> True
+  equals(UnclosedHtmlTag, UnclosedHtmlTag) -> True
+  equals(_, _) -> False
+)
+
+TemplateNode : [
+  TemplateText(List(U8)),
+  TemplateInterpolation(List(U8)),
+  TemplateRawInterpolation(List(U8)),
+  TemplateConditional(List(U8), List(TemplateNode), List(TemplateNode)),
+  TemplateList(List(U8), List(U8), List(TemplateNode))
+].(
+  equals : (TemplateNode, TemplateNode) -> Bool
+  equals(TemplateText(a0), TemplateText(b0)) -> a0 == b0
+  equals(TemplateInterpolation(a0), TemplateInterpolation(b0)) -> a0 == b0
+  equals(TemplateRawInterpolation(a0), TemplateRawInterpolation(b0)) -> a0 == b0
+  equals(TemplateConditional(a0, a1, a2), TemplateConditional(b0, b1, b2)) -> a0 == b0 & a1 == b1 & a2 == b2
+  equals(TemplateList(a0, a1, a2), TemplateList(b0, b1, b2)) -> a0 == b0 & a1 == b1 & a2 == b2
+  equals(_, _) -> False
+)
+
+# The consumed text is wrapped as `Str`, leaving exactly one `List(U8)` field.
+# That lets the totality checker retain the returned suffix's size relation to
+# the input across the parser helper boundary.
+TemplateRead : [TemplateFound(Str, List(U8)), TemplateNotFound]
+TemplateListHeader : [TemplateListHeaderFound(List(U8), List(U8)), TemplateListHeaderInvalid]
+TemplateIfBody : [TemplateIfBody(List(U8), List(U8))]
+TemplateHtmlContext : [TemplateTextContext, TemplateTagContext, TemplateDoubleAttributeContext, TemplateSingleAttributeContext]
+
+# The name check is a computed condition, so a helper takes its result into its
+# head rather than an `if` in the body.
+compile_template : (Str, Str) -> Result(Str, TemplateError)
+compile_template(name, source) -> compile_template_checked(template_valid_name(name), name, source)
+
+compile_template_checked : (Bool, Str, Str) -> Result(Str, TemplateError)
+compile_template_checked(False, _, _) -> Err(InvalidTemplateName)
+compile_template_checked(True, name, source) ->
+  validated = template_validate_context(source.to_utf8(), TemplateTextContext)?
+  Ok(template_module(name, template_parse(source.to_utf8())?))
+
+# The current generator preserves literal markup rather than rebuilding every
+# tag. This context walk still prevents text escaping from being used where it
+# is not sufficient: tag names and unquoted attributes reject interpolation,
+# raw `Html` rejects every attribute context, and control blocks stay between
+# tags. Quoted attribute interpolation is safe because Html.text escapes both
+# quote characters as well as `&`, `<`, and `>`. Both the byte shape and the
+# context are arguments, so they dispatch together in the head; the reads that
+# skip an interpolation are computed, so `template_validate_read` takes them.
+template_validate_context : (List(U8), TemplateHtmlContext) -> Result(Bool, TemplateError)
+template_validate_context([], TemplateTextContext) -> Ok(True)
+template_validate_context([], _) -> Err(UnclosedHtmlTag)
+template_validate_context(['{', '{', '{', *rest], TemplateTextContext) ->
+  template_validate_read(template_read_until(rest, ['}', '}', '}'], []), TemplateTextContext, UnclosedRawInterpolation)
+template_validate_context(['{', '{', '{', *], _) -> Err(UnsafeInterpolationContext)
+template_validate_context(['{', '{', *], TemplateTagContext) -> Err(UnsafeInterpolationContext)
+template_validate_context(['{', '{', *rest], context) ->
+  template_validate_read(template_read_until(rest, ['}', '}'], []), context, UnclosedInterpolation)
+template_validate_context(['{', '%', *rest], TemplateTextContext) ->
+  template_validate_read(template_read_until(rest, ['%', '}'], []), TemplateTextContext, UnexpectedBlockTag)
+template_validate_context(['{', '%', *], _) -> Err(UnsafeBlockContext)
+template_validate_context(['<', *rest], TemplateTextContext) -> template_validate_context(rest, TemplateTagContext)
+template_validate_context(['<', *rest], context) -> template_validate_context(rest, context)
+template_validate_context(['>', *rest], TemplateTagContext) -> template_validate_context(rest, TemplateTextContext)
+template_validate_context(['>', *rest], context) -> template_validate_context(rest, context)
+template_validate_context(['\"', *rest], TemplateTagContext) -> template_validate_context(rest, TemplateDoubleAttributeContext)
+template_validate_context(['\"', *rest], TemplateDoubleAttributeContext) -> template_validate_context(rest, TemplateTagContext)
+template_validate_context(['\"', *rest], context) -> template_validate_context(rest, context)
+template_validate_context(['\'', *rest], TemplateTagContext) -> template_validate_context(rest, TemplateSingleAttributeContext)
+template_validate_context(['\'', *rest], TemplateSingleAttributeContext) -> template_validate_context(rest, TemplateTagContext)
+template_validate_context(['\'', *rest], context) -> template_validate_context(rest, context)
+template_validate_context([_, *rest], context) -> template_validate_context(rest, context)
+
+# A skipped interpolation either fails to close or resumes after its end.
+template_validate_read : (TemplateRead, TemplateHtmlContext, TemplateError) -> Result(Bool, TemplateError)
+template_validate_read(TemplateNotFound, _, error) -> Err(error)
+template_validate_read(TemplateFound(_, after), context, _) -> template_validate_context(after, context)
+
+# Blocks are deliberately one level deep in this version. Their bodies still
+# support escaped and raw interpolation. Keeping the block parser separate from
+# the inline parser makes totality structural without an artificial depth fuel;
+# nested block support needs a first-order parser stack rather than recursion
+# over a remainder hidden inside a parse result.
+#
+# The recursion rides a remainder pulled out of a computed `template_read_until`
+# and dispatched through head-matching helpers. The checker follows the descent
+# across those helper boundaries: the remainder's `≤` bound survives the call
+# and composes with the opening delimiter's peel into a strict decrease.
+template_parse : List(U8) -> Result(List(TemplateNode), TemplateError)
+template_parse([]) -> Ok([])
+template_parse(['{', '{', '{', *rest]) ->
+  template_block_raw(template_read_until(rest, ['}', '}', '}'], []))
+template_parse(['{', '{', *rest]) ->
+  template_block_interp(template_read_until(rest, ['}', '}'], []))
+template_parse(['{', '%', ' ', 'i', 'f', ' ', *rest]) ->
+  template_if_open(template_read_until(rest, "%}".to_utf8(), []))
+template_parse(['{', '%', ' ', 'f', 'o', 'r', ' ', *rest]) ->
+  template_for_open(template_read_until(rest, "%}".to_utf8(), []))
+template_parse(['{', '%', *]) -> Err(UnexpectedBlockTag)
+template_parse([byte, *rest]) -> Ok(template_prepend_text(byte, template_parse(rest)?))
+
+# Each block helper matches the read result in its head — the remainder rode
+# out of `read_until` below the opening delimiter, so recursing on it descends,
+# a relation the checker now carries across the helper boundary.
+template_block_raw : TemplateRead -> Result(List(TemplateNode), TemplateError)
+template_block_raw(TemplateNotFound) -> Err(UnclosedRawInterpolation)
+template_block_raw(TemplateFound(expression, after)) ->
+  trimmed = template_nonempty_trimmed(expression.to_utf8())?
+  Ok(template_parse(after)?.prepend(TemplateRawInterpolation(trimmed)))
+
+template_block_interp : TemplateRead -> Result(List(TemplateNode), TemplateError)
+template_block_interp(TemplateNotFound) -> Err(UnclosedInterpolation)
+template_block_interp(TemplateFound(expression, after)) ->
+  trimmed = template_nonempty_trimmed(expression.to_utf8())?
+  Ok(template_parse(after)?.prepend(TemplateInterpolation(trimmed)))
+
+# `{% if … %}`: read the condition, require it non-empty, read to `{% endif %}`,
+# then parse both arms and continue past the block.
+template_if_open : TemplateRead -> Result(List(TemplateNode), TemplateError)
+template_if_open(TemplateNotFound) -> Err(UnclosedConditional)
+template_if_open(TemplateFound(condition, after_open)) ->
+  template_if_expr(template_trim(condition.to_utf8()), after_open)
+
+template_if_expr : (List(U8), List(U8)) -> Result(List(TemplateNode), TemplateError)
+template_if_expr([], after_open) -> Err(EmptyBlockExpression)
+template_if_expr([first, *condition_rest], after_open) ->
+  template_if_end(
+    template_read_until(after_open, "{% endif %}".to_utf8(), []),
+    condition_rest.prepend(first)
+  )
+
+template_if_end : (TemplateRead, List(U8)) -> Result(List(TemplateNode), TemplateError)
+template_if_end(TemplateNotFound, condition) -> Err(UnclosedConditional)
+template_if_end(TemplateFound(body, after), condition) ->
+  TemplateIfBody(true_bytes, false_bytes) = template_if_body(body.to_utf8())
+  true_nodes = template_parse_inline(true_bytes)?
+  false_nodes = template_parse_inline(false_bytes)?
+  Ok(template_parse(after)?.prepend(TemplateConditional(condition, true_nodes, false_nodes)))
+
+# `{% for … %}`: read the header, split it into item and expression, read to
+# `{% endfor %}`, then parse the body and continue.
+template_for_open : TemplateRead -> Result(List(TemplateNode), TemplateError)
+template_for_open(TemplateNotFound) -> Err(UnclosedList)
+template_for_open(TemplateFound(header, after_open)) ->
+  template_for_header(template_list_header(header.to_utf8()), after_open)
+
+template_for_header : (TemplateListHeader, List(U8)) -> Result(List(TemplateNode), TemplateError)
+template_for_header(TemplateListHeaderInvalid, after_open) -> Err(MalformedListHeader)
+template_for_header(TemplateListHeaderFound(item, expression), after_open) ->
+  template_for_end(template_read_until(after_open, "{% endfor %}".to_utf8(), []), item, expression)
+
+template_for_end : (TemplateRead, List(U8), List(U8)) -> Result(List(TemplateNode), TemplateError)
+template_for_end(TemplateNotFound, item, expression) -> Err(UnclosedList)
+template_for_end(TemplateFound(body, after), item, expression) ->
+  body_nodes = template_parse_inline(body.to_utf8())?
+  Ok(template_parse(after)?.prepend(TemplateList(item, expression, body_nodes)))
+
+template_parse_inline : List(U8) -> Result(List(TemplateNode), TemplateError)
+template_parse_inline([]) -> Ok([])
+template_parse_inline(['{', '{', '{', *rest]) ->
+  template_inline_raw(template_read_until(rest, ['}', '}', '}'], []))
+template_parse_inline(['{', '{', *rest]) ->
+  template_inline_interp(template_read_until(rest, ['}', '}'], []))
+template_parse_inline(['{', '%', *]) -> Err(UnexpectedBlockTag)
+template_parse_inline([byte, *rest]) -> Ok(template_prepend_text(byte, template_parse_inline(rest)?))
+
+# The read result carries the remainder; matching it in a head lets the parse
+# continue past the interpolation. The remainder rode out of `read_until` two
+# constructors below `{{{`, so the recursion descends across the helper.
+template_inline_raw : TemplateRead -> Result(List(TemplateNode), TemplateError)
+template_inline_raw(TemplateNotFound) -> Err(UnclosedRawInterpolation)
+template_inline_raw(TemplateFound(expression, after)) ->
+  trimmed = template_nonempty_trimmed(expression.to_utf8())?
+  Ok(template_parse_inline(after)?.prepend(TemplateRawInterpolation(trimmed)))
+
+template_inline_interp : TemplateRead -> Result(List(TemplateNode), TemplateError)
+template_inline_interp(TemplateNotFound) -> Err(UnclosedInterpolation)
+template_inline_interp(TemplateFound(expression, after)) ->
+  trimmed = template_nonempty_trimmed(expression.to_utf8())?
+  Ok(template_parse_inline(after)?.prepend(TemplateInterpolation(trimmed)))
+
+# The body up to `{% else %}` and the rest; absent an else, the whole body is
+# the true arm. Not recursive — a computed read dispatched through a head.
+template_if_body : List(U8) -> TemplateIfBody
+template_if_body(bytes) -> template_if_body_split(template_read_until(bytes, "{% else %}".to_utf8(), []), bytes)
+
+template_if_body_split : (TemplateRead, List(U8)) -> TemplateIfBody
+template_if_body_split(TemplateNotFound, bytes) -> TemplateIfBody(bytes, [])
+template_if_body_split(TemplateFound(true_bytes, false_bytes), bytes) ->
+  TemplateIfBody(true_bytes.to_utf8(), false_bytes)
+
+# `item in expression`, both sides non-empty after trimming.
+template_list_header : List(U8) -> TemplateListHeader
+template_list_header(bytes) -> template_list_header_split(template_read_until(bytes, " in ".to_utf8(), []))
+
+template_list_header_split : TemplateRead -> TemplateListHeader
+template_list_header_split(TemplateNotFound) -> TemplateListHeaderInvalid
+template_list_header_split(TemplateFound(item, expression)) ->
+  template_list_header_parts(template_trim(item.to_utf8()), template_trim(expression))
+
+template_list_header_parts : (List(U8), List(U8)) -> TemplateListHeader
+template_list_header_parts([], _) -> TemplateListHeaderInvalid
+template_list_header_parts(_, []) -> TemplateListHeaderInvalid
+template_list_header_parts([item_first, *item_rest], [expression_first, *expression_rest]) ->
+  TemplateListHeaderFound(item_rest.prepend(item_first), expression_rest.prepend(expression_first))
+
+template_read_until : (List(U8), List(U8), List(U8)) -> TemplateRead
+template_read_until(bytes, delimiter, reversed)
+  if template_starts_with(bytes, delimiter) ->
+  TemplateFound(template_text(reversed.reverse()), bytes.drop(delimiter.len()))
+template_read_until([], _, _) -> TemplateNotFound
+template_read_until([byte, *rest], delimiter, reversed) ->
+  template_read_until(rest, delimiter, reversed.prepend(byte))
+
+template_starts_with : (List(U8), List(U8)) -> Bool
+template_starts_with(_, []) -> True
+template_starts_with([], _) -> False
+template_starts_with([found, *found_rest], [wanted, *wanted_rest])
+  if found.equals(wanted) ->
+  template_starts_with(found_rest, wanted_rest)
+template_starts_with(_, _) -> False
+
+template_prepend_text : (U8, List(TemplateNode)) -> List(TemplateNode)
+template_prepend_text(byte, [TemplateText(bytes), *rest]) ->
+  rest.prepend(TemplateText(bytes.prepend(byte)))
+template_prepend_text(byte, nodes) -> nodes.prepend(TemplateText([byte]))
+
+template_nonempty_trimmed : List(U8) -> Result(List(U8), TemplateError)
+template_nonempty_trimmed(bytes) -> template_nonempty(template_trim(bytes))
+
+template_nonempty : List(U8) -> Result(List(U8), TemplateError)
+template_nonempty([]) -> Err(EmptyInterpolation)
+template_nonempty([first, *rest]) -> Ok(rest.prepend(first))
+
+template_trim : List(U8) -> List(U8)
+template_trim(bytes) -> template_trim_left(template_trim_left(bytes).reverse()).reverse()
+
+template_trim_left : List(U8) -> List(U8)
+template_trim_left([byte, *rest]) if template_horizontal_space(byte) ->
+  template_trim_left(rest)
+template_trim_left(bytes) -> bytes
+
+template_horizontal_space : U8 -> Bool
+template_horizontal_space(byte) -> byte.equals(' ') | byte.equals('\t') | byte.equals('\n') | byte.equals(0x0d)
+
+# The identifier check is structural; reserved words are dispatched in the
+# helper's head.
+template_valid_name : Str -> Bool
+template_valid_name(name) -> template_valid_identifier(name.to_utf8()) & template_not_keyword(name)
+
+template_not_keyword : Str -> Bool
+template_not_keyword("if") -> False
+template_not_keyword("import") -> False
+template_not_keyword("exports") -> False
+template_not_keyword("where") -> False
+template_not_keyword("expect") -> False
+template_not_keyword(_) -> True
+
+template_valid_identifier : List(U8) -> Bool
+template_valid_identifier([]) -> False
+template_valid_identifier([first, *rest]) ->
+  template_identifier_start(first) & template_identifier_rest(rest)
+
+template_identifier_start : U8 -> Bool
+template_identifier_start(byte) -> byte.is_ascii_letter() | byte.equals('_')
+
+template_identifier_rest : List(U8) -> Bool
+template_identifier_rest([]) -> True
+template_identifier_rest([byte, *rest]) ->
+  (template_identifier_start(byte) | byte.is_digit())
+    & template_identifier_rest(rest)
+
+template_module : (Str, List(TemplateNode)) -> Str
+template_module(name, nodes) ->
+  rendered = template_render_nodes_at(nodes, 0)
+  "# Generated by Ori's template library; do not edit.\n"
+    .concat("import html {Html}\n\n")
+    .concat("exports {${name}}\n\n")
+    .concat("${name}(model) -> ")
+    .concat(rendered.text)
+    .concat("\n")
+    .concat(rendered.helpers)
+
+template_render_nodes : List(TemplateNode) -> Str
+template_render_nodes(nodes) -> template_render_nodes_at(nodes, 0).text
+
+template_render_nodes_at(nodes, next) ->
+  rendered = template_render_pieces(nodes, next)
+  {
+    text: "Html.fragment([".concat(Str.join(rendered.pieces, " ")).concat("])"),
+    helpers: rendered.helpers,
+    next: rendered.next
+  }
+
+template_render_pieces([], next) -> {pieces: [], helpers: "", next}
+template_render_pieces([node, *rest], next) ->
+  head = template_render_node_at(node, next)
+  tail = template_render_pieces(rest, head.next)
+  {pieces: tail.pieces.prepend(head.text), helpers: head.helpers.concat(tail.helpers), next: tail.next}
+
+template_render_node : TemplateNode -> Str
+template_render_node(node) -> template_render_node_at(node, 0).text
+
+template_render_node_at(TemplateText(bytes), next) -> {
+  text: "Html.dangerously_raw(\"".concat(template_text(template_quote(bytes))).concat("\")"),
+  helpers: "",
+  next
+}
+template_render_node_at(TemplateInterpolation(expression), next) -> {
+  text: "Html.text(".concat(template_text(expression)).concat(")"),
+  helpers: "",
+  next
+}
+template_render_node_at(TemplateRawInterpolation(expression), next) -> {
+  text: "(".concat(template_text(expression)).concat(")"),
+  helpers: "",
+  next
+}
+template_render_node_at(TemplateConditional(condition, true_nodes, false_nodes), next) ->
+  yes = template_render_nodes_at(true_nodes, next)
+  no = template_render_nodes_at(false_nodes, yes.next)
+  {
+    text: "(".concat(template_text(condition))
+      .concat(".select(").concat(yes.text).concat(" ").concat(no.text).concat("))"),
+    helpers: yes.helpers.concat(no.helpers),
+    next: no.next
+  }
+template_render_node_at(TemplateList(item, expression, body), next) ->
+  helper = "template_list_".concat(next.to_str())
+  rendered = template_render_nodes_at(body, next + 1)
+  {
+    text: "Html.fragment(List.map(".concat(template_text(expression)).concat(" ").concat(helper).concat("))"),
+    helpers: "\n\n".concat(helper).concat("(").concat(template_text(item)).concat(") -> ")
+      .concat(rendered.text).concat("\n").concat(rendered.helpers),
+    next: rendered.next
+  }
+
+template_text : List(U8) -> Str
+template_text(bytes) -> Str.from_utf8(bytes).ok_or("")
+
+template_quote : List(U8) -> List(U8)
+template_quote([]) -> []
+template_quote(['\\', *rest]) ->
+  template_quote(rest).prepend('\\').prepend('\\')
+template_quote(['\"', *rest]) ->
+  template_quote(rest).prepend('\"').prepend('\\')
+template_quote(['\n', *rest]) ->
+  template_quote(rest).prepend('n').prepend('\\')
+template_quote(['\t', *rest]) ->
+  template_quote(rest).prepend('t').prepend('\\')
+template_quote(['$', '{', *rest]) ->
+  template_quote(rest).prepend('{').prepend('$').prepend('\\')
+template_quote([byte, *rest]) -> template_quote(rest).prepend(byte)
+
+expect template_parse("Hello, {{ model.name }}! {{{model.footer}}}".to_utf8()) == Ok([
+  TemplateText("Hello, ".to_utf8()),
+  TemplateInterpolation("model.name".to_utf8()),
+  TemplateText("! ".to_utf8()),
+  TemplateRawInterpolation("model.footer".to_utf8())
+])
+expect template_text(template_quote("\"\\\n\${x}".to_utf8())) == "\\\"\\\\\\n\\\${x}"
+expect template_parse("{% if model.show %}Hi {{ model.name }}{% else %}Bye{% endif %}".to_utf8()) == Ok([
+  TemplateConditional(
+    "model.show".to_utf8(),
+    [TemplateText("Hi ".to_utf8()), TemplateInterpolation("model.name".to_utf8())],
+    [TemplateText("Bye".to_utf8())]
+  )
+])
+expect template_parse("<ul>{% for item in model.items %}<li>{{item}}</li>{% endfor %}</ul>".to_utf8()) == Ok([
+  TemplateText("<ul>".to_utf8()),
+  TemplateList(
+    "item".to_utf8(),
+    "model.items".to_utf8(),
+    [TemplateText("<li>".to_utf8()), TemplateInterpolation("item".to_utf8()), TemplateText("</li>".to_utf8())]
+  ),
+  TemplateText("</ul>".to_utf8())
+])
+expect template_render_node(
+  TemplateList("item".to_utf8(), "model.items".to_utf8(), [TemplateInterpolation("item".to_utf8())])
+).equals("Html.fragment(List.map(model.items template_list_0))")
+expect template_render_node(
+  TemplateConditional("model.ok".to_utf8(), [TemplateText("yes".to_utf8())], [TemplateText("no".to_utf8())])
+).equals("(model.ok.select(Html.fragment([Html.dangerously_raw(\"yes\")]) Html.fragment([Html.dangerously_raw(\"no\")])))")
+expect compile_template("page", "<p>{{ name }}</p>").is_ok()
+expect compile_template("page", "<a href=\"{{ url }}\">link</a>").is_ok()
+expect compile_template("page", "<a href={{ url }}>link</a>").is_err()
+expect compile_template("page", "<{{ tag }}>content</{{ tag }}>").is_err()
+expect compile_template("page", "<div class=\"{{{ classes }}}\"></div>").is_err()
+expect compile_template("page", "<div {% if active %}class=\"active\"{% endif %}></div>").is_err()
+expect compile_template("page", "<div class=\"unfinished").is_err()
+expect compile_template("page", "{% if ok %}{% if nested %}no{% endif %}{% endif %}").is_err()
+expect compile_template("9page", "hello").is_err()
+expect compile_template("when", "hello").is_ok()
+expect compile_template("page", "{{ }}").is_err()
+expect compile_template("page", "{{ name").is_err()

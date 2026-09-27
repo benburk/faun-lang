@@ -1,0 +1,34 @@
+# Safe HTML values built from escaped text, escaped attributes, and explicit
+# element constructors. `dangerously_raw` is the only unescaped boundary.
+
+package {
+  html_lib: "../src/html"
+}
+
+import html_lib {Html, Attribute}
+
+page : Str -> Html
+page(name) -> Html.html_with([Attribute.lang("en")], [
+  Html.head([
+    Html.meta_with([Attribute.charset("utf-8")]),
+    Html.title([Html.text("Ori HTML")])
+  ]),
+  Html.body([
+    Html.main_with([Attribute.classes(["page", "prose"])], [
+      Html.h1([Html.text("Hello, ${name}!")]),
+      Html.p([
+        Html.text("Visit "),
+        Html.a_with([Attribute.href("https://ori-lang.org/?from=html&safe=true")], [Html.text("Ori")]),
+        Html.text(".")
+      ]),
+      Html.input_with([Attribute.type("checkbox"), Attribute.checked()])
+    ])
+  ])
+])
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) -> Ok(page(input.stdin).render_document())
+
+expect page("<Ada>").render_document() == "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Ori HTML</title></head><body><main class=\"page prose\"><h1>Hello, &lt;Ada&gt;!</h1><p>Visit <a href=\"https://ori-lang.org/?from=html&amp;safe=true\">Ori</a>.</p><input type=\"checkbox\" checked></main></body></html>"
+
+main!(host) -> host.run_result_text!(app)

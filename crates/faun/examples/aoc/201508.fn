@@ -1,0 +1,56 @@
+# Advent of Code 2015, day 8: Matchsticks.
+# Both parts are counts over the raw bytes; nothing is decoded and nothing
+# is encoded. Part one trusts the input the way the puzzle states it —
+# every line a quoted literal using only the three escape forms — so the
+# code-minus-memory gap is 2 for the quotes plus 1 per simple escape and 3
+# per hex escape. The quotes themselves fall through the catch-all arm and
+# cost nothing; the constant carries them.
+
+decode_gap : List(U8) -> Nat
+decode_gap([]) -> 0
+decode_gap(['\\', '\\', *rest]) -> decode_gap(rest) + 1
+decode_gap(['\\', '"', *rest]) -> decode_gap(rest) + 1
+decode_gap(['\\', 'x', _, _, *rest]) -> decode_gap(rest) + 3
+decode_gap([_, *rest]) -> decode_gap(rest)
+
+part1 : Str -> Nat
+part1(input) -> input.trim().lines()
+  .map(|line| line.to_utf8())
+  .map(decode_gap)
+  .map(|gap| gap + 2)
+  .sum()
+
+# Encoding grows a line by a surrounding quote pair plus one backslash
+# before every quote or backslash the code already holds.
+encode_gap : Str -> Nat
+encode_gap(text) -> text.to_utf8().count(needs_escape) + 2
+
+needs_escape : U8 -> Bool
+needs_escape(byte) -> byte == '"' | byte == '\\'
+
+part2 : Str -> Nat
+part2(input) -> input.trim().lines().map(encode_gap).sum()
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) -> Ok("part1: ${part1(input.stdin)} part2: ${part2(input.stdin)}\n")
+
+example : Str
+example() -> "\"\"\n\"abc\"\n\"aaa\\\"aaa\"\n\"\\x27\"\n"
+
+# The four published examples: decode gaps 2, 2, 3, 5; encode gaps 4, 4, 6, 5.
+expect decode_gap("\"\"".to_utf8()) + 2 == 2
+expect decode_gap("\"abc\"".to_utf8()) + 2 == 2
+expect decode_gap("\"aaa\\\"aaa\"".to_utf8()) + 2 == 3
+expect decode_gap("\"\\x27\"".to_utf8()) + 2 == 5
+expect part1(example()) == 12
+expect encode_gap("\"aaa\\\"aaa\"") == 6
+expect part2(example()) == 19
+# A literal backslash before x stays literal: not a hex escape.
+expect decode_gap("\"\\\\x27\"".to_utf8()) + 2 == 3
+
+# Copy-paste fringe — blank lines and spaces around the whole input —
+# changes nothing; interior lines are trusted to be well formed.
+expect part1("\n\n\"\"\n\"abc\"\n\"aaa\\\"aaa\"\n\"\\x27\"\n\n  ") == 12
+expect part2("\n\n\"\"\n\"abc\"\n\"aaa\\\"aaa\"\n\"\\x27\"\n\n  ") == 19
+
+main!(host) -> host.run_result_text!(app)

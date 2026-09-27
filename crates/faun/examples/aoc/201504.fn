@@ -1,0 +1,57 @@
+# Advent of Code 2015, day 4: The Ideal Stocking Stuffer.
+# The search is fuel-bounded so the example remains total independently of the
+# puzzle's promise that an AdventCoin exists. The MD5 implementation is another
+# example library and is checked against RFC vectors there.
+
+package {
+  md5: "../libraries/md5/src/md5"
+}
+
+import md5 {md5_hash}
+
+candidate_digest : (List(U8), Nat) -> Result(List(U8), [IncompleteBlock])
+candidate_digest(key, candidate) -> md5_hash(
+  key.extend(candidate.to_str().to_utf8())
+)
+
+# Five leading zero hex digits are two zero bytes and a third byte below 16;
+# six are three complete zero bytes.
+five_zeroes : List(U8) -> Bool
+five_zeroes([0, 0, 0..15, *]) -> True
+five_zeroes(_) -> False
+
+six_zeroes : List(U8) -> Bool
+six_zeroes([0, 0, 0, *]) -> True
+six_zeroes(_) -> False
+
+mine : (List(U8), List(U8) -> Bool, Nat, Nat) -> Result(Nat, [Exhausted, IncompleteBlock])
+mine(_, _, _, 0) -> Err(Exhausted)
+mine(key, qualifies, candidate, Succ(rest)) ->
+  digest = candidate_digest(key, candidate)?
+  advance(qualifies(digest), key, qualifies, candidate, rest)
+
+# The verdict on one candidate, as its own rule set: a hit answers, a miss
+# goes around with the next candidate and the spent fuel.
+advance : (Bool, List(U8), List(U8) -> Bool, Nat, Nat) -> Result(Nat, [Exhausted, IncompleteBlock])
+advance(True, _, _, candidate, _) -> Ok(candidate)
+advance(False, key, qualifies, candidate, rest) -> mine(key, qualifies, candidate + 1, rest)
+
+part1 : List(U8) -> Nat
+part1(key) -> mine(key, five_zeroes, 1, 1000000).ok_or(0)
+
+part2 : List(U8) -> Nat
+part2(key) -> mine(key, six_zeroes, 1, 10000000).ok_or(0)
+
+app : {stdin: Str} -> Result(Str, Str)
+app(input) ->
+  key = input.stdin.trim().to_utf8()
+  Ok("part1: ${part1(key)} part2: ${part2(key)}\n")
+
+# The two published five-zero examples and a useful six-zero regression check
+# only their winning candidates; a full search is available with enough fuel.
+expect candidate_digest("abcdef".to_utf8(), 609043).map_ok(five_zeroes) == Ok(True)
+expect candidate_digest("pqrstuv".to_utf8(), 1048970).map_ok(five_zeroes) == Ok(True)
+expect candidate_digest("abcdef".to_utf8(), 6742839).map_ok(six_zeroes) == Ok(True)
+expect mine("abcdef".to_utf8(), five_zeroes, 1, 0).is_err()
+
+main!(host) -> host.run_result_text!(app)
