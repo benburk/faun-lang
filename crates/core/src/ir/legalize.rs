@@ -1236,6 +1236,7 @@ mod tests {
                 word_bits: 64,
                 heap_bytes: 256,
                 grows: false,
+                inline_small: true,
             }
             .layout(),
         )

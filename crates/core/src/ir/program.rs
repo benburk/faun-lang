@@ -56,13 +56,10 @@ impl Program {
         self.layout
     }
 
+    /// Whether legalizing wrote the natural runtime in, whose objects a
+    /// target must place where their addresses cannot be read as numbers.
     #[must_use]
-    pub(crate) const fn has_runtime_cells(&self) -> bool {
-        self.runtime_cells
-    }
-
-    #[must_use]
-    pub(crate) const fn has_runtime_naturals(&self) -> bool {
+    pub const fn has_runtime_naturals(&self) -> bool {
         self.runtime_naturals
     }
 

@@ -1,13 +1,14 @@
 //! Lowering the IR to 6502 code.
 //!
-//! Every value that is not a constant or an address lives in a two-byte
-//! frame slot, reached as `(FP),Y`, so a frame holds at most 128 of them.
+//! Every value that is not a constant or an address lives in a zero-page
+//! pair or a two-byte frame slot, reached as `(FP),Y`, or past the 256
+//! bytes that reaches as `(FQ),Y`, so a frame holds at most 255 of them.
 //! Two-operand forms read their operands into the scratch pairs and work
 //! there, which is unhurried and obviously correct.
 
 use super::asm::{Assembler, Cc, Half, Held};
 use super::{
-    ARG_COUNT, ARGC, ARGS, CSP, CSTACK_TOP, Code, FP, FRAMES_TOP, HEAP, HOME_COUNT, HOMES,
+    ARG_COUNT, ARGC, ARGS, CSP, CSTACK_TOP, Code, FP, FQ, FRAMES_TOP, HEAP, HOME_COUNT, HOMES,
     HOOK_ARGS, HOOK_CLOSE, HOOK_EXIT, HOOK_OPEN, HOOK_READ, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
 };
 use crate::WORD_BITS;
@@ -19,6 +20,10 @@ use faun_core::ir::{
 /// A word here is the width of an address.
 const WORD: i32 = 2;
 
+/// The most two-byte slots a frame holds: as many as `FP` and `FQ` reach
+/// between them with `Y`.
+const MOST_SLOTS: usize = 255;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FrameAction {
     Enter,
@@ -28,7 +33,7 @@ enum FrameAction {
 /// Where a function keeps what it holds.
 #[derive(Clone, Default)]
 struct Plan {
-    frame: u8,
+    frame: u16,
     homes: Vec<u8>,
 }
 
@@ -72,13 +77,15 @@ impl Spans {
         first <= last && self.calls.iter().any(|at| first < *at && *at < last)
     }
 
-    /// Everything touched inside a loop stays live for all of it, since the
-    /// body runs again.
+    /// What a loop reads that was worked out before it stays live for all
+    /// of it, since the body runs again and reads it again. What the body
+    /// works out itself is worked out again each time round, before
+    /// anything in that round reads it, so it is live only from there to
+    /// its last reader, as anywhere else.
     fn widen(&mut self, from: usize, to: usize) {
         for value in 0..self.first.len() {
             let (first, last) = (self.first[value], self.last[value]);
-            if first <= last && first <= to && last >= from {
-                self.first[value] = first.min(from);
+            if first <= last && first < from && last >= from {
                 self.last[value] = last.max(to);
             }
         }
@@ -92,7 +99,8 @@ enum Source {
     /// A zero-page pair. Only a value no call outlives gets one, so a
     /// callee taking the same pair can never be noticed.
     Home(u8),
-    Slot(u8),
+    /// A place in the frame, this many bytes on from `FP`.
+    Slot(u16),
 }
 
 /// Where an instruction can read a value without copying it anywhere first.
@@ -378,7 +386,7 @@ const ROUNDS: usize = 32;
 ///
 /// If the layout does not settle, which is this target disagreeing with
 /// itself rather than anything a program did.
-pub(crate) fn lower(program: &Program) -> Code {
+pub(crate) fn lower(program: &Program) -> Result<Code, String> {
     let mut heap = LOAD;
     // Nothing here knows yet whether the program calls anything, and one
     // that calls nothing needs no stack to call with. The first round asks
@@ -386,22 +394,23 @@ pub(crate) fn lower(program: &Program) -> Code {
     // a call away, never add one, so the question is asked once.
     let mut stack = true;
     for _ in 0..ROUNDS {
-        let code = assemble(program, heap, stack);
+        let code = assemble(program, heap, stack)?;
         if stack && !code.pushes {
             stack = false;
             continue;
         }
-        let end = code.reset + u16::try_from(code.bytes.len()).expect("an image within 64 KiB");
+        let end = usize::from(code.reset) + code.bytes.len();
+        let end = u16::try_from(end).map_err(|_| too_large(end))?;
         if end <= heap {
-            return code;
+            return Ok(code);
         }
         heap = end;
     }
     panic!("the layout did not settle in {ROUNDS} rounds")
 }
 
-/// Run the actual home/slot allocation, without emitting instructions. A
-/// frame's byte size must fit u8: at most 127 spilled pairs, not 128.
+/// Run the actual home/slot allocation, without emitting instructions: a
+/// frame holds what `FP` and `FQ` reach, at most 255 pairs at once.
 /// This does not prove recursion stack depth or image/stack separation.
 pub(crate) fn check_frames(program: &Program) -> Result<(), String> {
     let mut state = Lowering::new(program, Assembler::new(0), 0);
@@ -420,12 +429,16 @@ pub(crate) fn check_frames(program: &Program) -> Result<(), String> {
     Ok(())
 }
 
-fn assemble(program: &Program, heap: u16, stack: bool) -> Code {
+fn too_large(end: usize) -> String {
+    format!("mos6502-sim65 image ends at ${end:X}, past the 64 KiB the machine addresses")
+}
+
+fn assemble(program: &Program, heap: u16, stack: bool) -> Result<Code, String> {
     // The data sits at the front of the image and the code after it, so the
     // code's own addresses depend on how much data there is.
     let data = LOAD;
-    let blob = program.data().len() + program.globals().len();
-    let origin = data + u16::try_from(blob).expect("data within 64 KiB");
+    let blob = usize::from(data) + program.data().len() + program.globals().len();
+    let origin = u16::try_from(blob).map_err(|_| too_large(blob))?;
 
     let mut state = Lowering::new(program, Assembler::new(origin), data);
     state.starts = (0..program.functions().len())
@@ -458,11 +471,12 @@ fn assemble(program: &Program, heap: u16, stack: bool) -> Code {
     }
     state.emit_pool();
 
-    Code {
-        pushes: state.asm.pushes(),
-        bytes: state.asm.finish(),
+    let pushes = state.asm.pushes();
+    Ok(Code {
+        pushes,
+        bytes: state.asm.finish_within().map_err(too_large)?,
         reset: origin,
-    }
+    })
 }
 
 struct Lowering<'a> {
@@ -470,7 +484,7 @@ struct Lowering<'a> {
     asm: Assembler,
     data: u16,
     source: Vec<Source>,
-    frame: u8,
+    frame: u16,
     /// The zero-page pairs this function keeps values in.
     homes: Vec<u8>,
     /// Every function's plan, worked out before any code is emitted.
@@ -670,6 +684,7 @@ impl Lowering<'_> {
         let frame = self.frame;
         if frame > 0 {
             self.adjust_frame(frame, FrameAction::Enter);
+            self.reach_frame();
         }
 
         // Arguments arrive in fixed pairs, so a callee takes its own copies
@@ -688,23 +703,44 @@ impl Lowering<'_> {
     }
 
     /// `FP` down by the frame, or back up again.
-    fn adjust_frame(&mut self, frame: u8, action: FrameAction) {
+    fn adjust_frame(&mut self, frame: u16, action: FrameAction) {
+        let [low, high] = frame.to_le_bytes();
         self.asm.lda_zp(FP);
         if action == FrameAction::Enter {
             self.asm.sec();
-            self.asm.sbc_imm(frame);
+            self.asm.sbc_imm(low);
         } else {
             self.asm.clc();
-            self.asm.adc_imm(frame);
+            self.asm.adc_imm(low);
         }
         self.asm.sta_zp(FP);
         self.asm.lda_zp(FP + 1);
         if action == FrameAction::Enter {
-            self.asm.sbc_imm(0);
+            self.asm.sbc_imm(high);
         } else {
-            self.asm.adc_imm(0);
+            self.asm.adc_imm(high);
         }
         self.asm.sta_zp(FP + 1);
+    }
+
+    /// Point `FQ` 256 bytes past `FP`, where a frame that large has slots
+    /// `FP` cannot reach with `Y`.
+    fn reach_frame(&mut self) {
+        if self.frame <= 256 {
+            return;
+        }
+        self.asm.lda_zp(FP);
+        self.asm.sta_zp(FQ);
+        self.asm.lda_zp(FP + 1);
+        self.asm.clc();
+        self.asm.adc_imm(1);
+        self.asm.sta_zp(FQ + 1);
+    }
+
+    /// The pointer and index reaching the frame's byte `offset`.
+    const fn slot(offset: u16) -> (u8, u8) {
+        let [low, high] = offset.to_le_bytes();
+        (if high == 0 { FP } else { FQ }, low)
     }
 
     /// Give every value the function holds a place. The most used get a
@@ -790,11 +826,18 @@ impl Lowering<'_> {
                 self.source[value.index()] = Source::Home(pair);
                 continue;
             }
-            let at = free(&mut slots, span, 127)
-                .ok_or_else(|| "frame exceeds 254 bytes (127 spilled values)".to_owned())?;
-            let slot = u8::try_from(2 * at).expect("127 slots are 254 bytes");
+            let at = free(&mut slots, span, usize::MAX).expect("a slot with no limit");
+            let Ok(slot) = u16::try_from(2 * at) else {
+                continue;
+            };
             plan.frame = plan.frame.max(slot + 2);
             self.source[value.index()] = Source::Slot(slot);
+        }
+        if slots.len() > MOST_SLOTS {
+            return Err(format!(
+                "frame exceeds 510 bytes: {} values are held at once past the zero page, and {MOST_SLOTS} fit",
+                slots.len()
+            ));
         }
         Ok(plan)
     }
@@ -1296,12 +1339,15 @@ impl Lowering<'_> {
                 self.asm.carry(high, pair + 1);
             }
             Source::Slot(offset) => {
-                self.asm.ldy_imm(offset);
-                self.asm.lda_ind_y(FP);
+                // A slot is two bytes at an even offset, so both lie on the
+                // same side of 256.
+                let (base, index) = Self::slot(offset);
+                self.asm.ldy_imm(index);
+                self.asm.lda_ind_y(base);
                 self.asm.sta_zp(pair);
                 if self.wide(value) {
                     self.asm.iny();
-                    self.asm.lda_ind_y(FP);
+                    self.asm.lda_ind_y(base);
                 } else {
                     self.asm.lda_imm(0);
                 }
@@ -1433,13 +1479,14 @@ impl Lowering<'_> {
                 }
             }
             Source::Slot(offset) => {
-                self.asm.ldy_imm(offset);
+                let (base, index) = Self::slot(offset);
+                self.asm.ldy_imm(index);
                 self.load(from.byte(0));
-                self.asm.sta_ind_y(FP);
+                self.asm.sta_ind_y(base);
                 if wide {
                     self.asm.iny();
                     self.load(from.byte(1));
-                    self.asm.sta_ind_y(FP);
+                    self.asm.sta_ind_y(base);
                 }
             }
             Source::Const(_) | Source::Addr(_) => panic!("a computed value needs a place"),
@@ -1659,7 +1706,8 @@ impl Lowering<'_> {
     /// Whether two values are held in the very same place.
     fn same_place(&self, left: ValueId, right: ValueId) -> bool {
         match (self.source[left.index()], self.source[right.index()]) {
-            (Source::Home(a), Source::Home(b)) | (Source::Slot(a), Source::Slot(b)) => a == b,
+            (Source::Home(a), Source::Home(b)) => a == b,
+            (Source::Slot(a), Source::Slot(b)) => a == b,
             _ => false,
         }
     }
@@ -1862,6 +1910,7 @@ impl Lowering<'_> {
         }
         let target = self.starts[function.index()];
         self.asm.jsr(target);
+        self.reach_frame();
         if let Some(&result) = results.first() {
             self.commit(result, R0);
         }

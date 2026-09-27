@@ -53,6 +53,7 @@ fn cost(source: &barb::Program) -> Cost {
         word_bits: 64,
         heap_bytes: HEAP_BYTES,
         grows: false,
+        inline_small: true,
     };
     let scalar = legalize(&machine, config).unwrap();
     let result = evaluate::evaluate(
@@ -310,12 +311,14 @@ fn a_claim_read_last_by_a_branch_is_released_in_each_arm() {
         word_bits: 64,
         heap_bytes: 256,
         grows: false,
+        inline_small: true,
     };
     let scalar = legalize(&p, config).unwrap();
     let release = scalar
         .functions
         .iter_enumerated()
-        .find(|(_, function)| scalar.name(function.name) == "nat.release")
+        // A natural is given up through the routine that looks first.
+        .find(|(_, function)| scalar.name(function.name) == "nat.drop")
         .map(|(id, _)| id)
         .unwrap();
     let body = scalar.function(main).body().unwrap();
@@ -440,6 +443,7 @@ fn run_machine(machine: &Program) -> (Vec<BigUint>, Cost) {
         word_bits: 64,
         heap_bytes: HEAP_BYTES,
         grows: false,
+        inline_small: true,
     };
     let scalar = legalize(machine, config).unwrap();
     let result = evaluate::evaluate(

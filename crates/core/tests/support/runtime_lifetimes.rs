@@ -140,6 +140,7 @@ pub(super) fn check(target: &dyn Target, runner: Option<&str>, early_return: boo
             word_bits: target.word(),
             heap_bytes: HEAP_BYTES,
             grows: false,
+            inline_small: true,
         },
     )
     .expect("legalization with a target-matching tiny heap");

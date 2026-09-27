@@ -3,8 +3,9 @@
 //! A word is sixteen bits, the width of an address, and the registers are
 //! eight, so every word operation is two byte operations with a carry.
 //! Values live in a frame on a software stack, reached through a zero-page
-//! pointer; the hardware stack carries only return addresses, which bounds
-//! recursion at 128 deep until those move too.
+//! pointer, and a second one 256 bytes on for a frame past what an index
+//! register reaches; the hardware stack carries only return addresses,
+//! which bounds recursion at 128 deep until those move too.
 //!
 //! The image is a twelve-byte header, the data, and the code, loaded at
 //! `$0200`. The platform is the simulator's hooks, and `grow` is a bump
@@ -55,6 +56,11 @@ const HOME_COUNT: u8 = 16;
 
 /// Where the count of arguments is kept, read once at reset.
 const ARGC: u8 = HOMES + 2 * HOME_COUNT;
+
+/// Where a frame goes on past the 256 bytes `FP` reaches with `Y`: `FP`
+/// plus 256, set by a function whose frame is that large on the way in and
+/// again after each call, since a callee sets its own.
+const FQ: u8 = ARGC + 2;
 
 /// The simulator's hooks: a `jmp` or `jsr` to one is answered by the host.
 const HOOK_OPEN: u16 = 0xFFF4;
@@ -132,17 +138,44 @@ impl Target for Mos6502Sim65 {
                 region_limits(program, name, body)?;
             }
         }
-        lower::check_frames(program)
+        memory_limits(program)?;
+        lower::check_frames(program)?;
+        // Only laying the code out says how large it is.
+        lower::lower(program).map(|_| ())
     }
 
     fn emit(&self, program: &Program) -> Vec<u8> {
-        image::image(&lower::lower(program), program)
+        let code = lower::lower(program).expect("an accepted program fits the machine");
+        image::image(&code, program)
     }
 
     /// An image named `output.bin`, for `sim65` to run.
     fn write(&self, image: &[u8], output: &Path) -> io::Result<PathBuf> {
         write_image(output, ".bin", image, false)
     }
+}
+
+/// Where a natural's object must lie below: an address with the top bit set
+/// is read as a number held in the word itself.
+const NATURALS_BELOW: u32 = 0x8000;
+
+/// A program using the natural runtime has every object of it -- constants
+/// in the data, the heap in the globals -- before its code, from where the
+/// image loads; all of that lies below the half of memory an immediate's
+/// address would be in.
+fn memory_limits(program: &Program) -> Result<(), String> {
+    if !program.has_runtime_naturals() {
+        return Ok(());
+    }
+    let end = u32::from(LOAD)
+        + u32::try_from(program.data().len() + program.globals().len())
+            .map_err(|_| "mos6502-sim65 data does not fit memory".to_owned())?;
+    if end > NATURALS_BELOW {
+        return Err(format!(
+            "mos6502-sim65 data and heap end at ${end:04X}, past ${NATURALS_BELOW:04X}, below which a natural's objects must lie"
+        ));
+    }
+    Ok(())
 }
 
 /// Values a region edge carries: one per scratch pair.

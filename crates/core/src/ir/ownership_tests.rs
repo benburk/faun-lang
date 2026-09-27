@@ -77,6 +77,7 @@ fn nested_lifetimes_preserve_full_values_and_free_every_mortal_claim() {
                 word_bits: bits,
                 heap_bytes: fixture::HEAP_BYTES,
                 grows: false,
+                inline_small: true,
             };
             let scalar = legalize(&original, config).unwrap();
             for argc in [1, 3] {
@@ -144,6 +145,7 @@ fn one_global_mapping_preserves_sibling_and_cross_function_ownership() {
                 word_bits: bits,
                 heap_bytes: 256,
                 grows: false,
+                inline_small: true,
             };
             let scalar = legalize(&original, config).unwrap();
             let (before, _) = run(&original, bits, &[]);
@@ -201,6 +203,7 @@ fn narrower_loop_initial_values_do_not_narrow_rebuilt_carried_parameters() {
                 word_bits: bits,
                 heap_bytes: 64,
                 grows: false,
+                inline_small: true,
             };
             let scalar = legalize(&original, config).unwrap();
             let params = scalar.values(scalar.region(loop_body(&scalar)).params);
@@ -241,6 +244,7 @@ fn packed_boundaries_carry_managed_values_without_leaking_a_claim() {
                 word_bits: bits,
                 heap_bytes: 8192,
                 grows: false,
+                inline_small: true,
             };
             let scalar = legalize(&fitted, config).unwrap();
             for argc in [1, 3] {

@@ -83,10 +83,11 @@ pub trait Target: fmt::Debug {
 
     /// What [`Self::emit`] encodes for an already prepared program, in the
     /// target's own readable form, as each tier above renders itself: its
-    /// assembly, or the text of a target whose image is text. Empty where a
-    /// target has no rendering yet.
-    fn render(&self, _program: &Program) -> String {
-        String::new()
+    /// assembly, or the text of a target whose image is text. Where a target
+    /// has no form of its own yet, the machine IR it was prepared to, every
+    /// runtime routine and representation written out.
+    fn render(&self, program: &Program) -> String {
+        program.render()
     }
 
     /// Target-specific calling-convention, logical-entry, and representation limits.
@@ -129,8 +130,6 @@ pub trait Target: fmt::Debug {
     /// call `ir::legalize` with an explicit `ir::natural::Config`, then compile
     /// the scalar result. Its recorded layout must match this target; acceptance
     /// rejects mismatched word sizes and byte orders.
-    /// This cannot bypass the 16-bit runtime guard: acceptance also checks the
-    /// layout recorded on prelegalized input.
     ///
     /// # Errors
     /// Reports invalid IR or a representation this target cannot safely emit.
@@ -141,18 +140,6 @@ pub trait Target: fmt::Debug {
         let program = &crate::ir::split(program, self.word());
         crate::ir::validate(program).map_err(|error| format!("after splitting: {error}"))?;
         let program = &crate::ir::fit(program, self.budget());
-        // The 6502 backend has image/frame and hardware-stack limits not yet
-        // audited for generated runtime helpers. Do not enter its infallible
-        // emitter with a larger image and hope that address arithmetic fits.
-        let naturals = (0..program.values_count())
-            .any(|at| program.class(ValueId::at(at)) == Class::Natural)
-            || signature_classes(program).any(|&class| class == Class::Natural);
-        if self.word() == 16 && naturals {
-            return Err(format!(
-                "{} runtime naturals await checked image/frame limits",
-                self.name()
-            ));
-        }
         let prepared = crate::ir::legalize(
             program,
             crate::ir::natural::Config {
@@ -165,6 +152,9 @@ pub trait Target: fmt::Debug {
                 // A 16-bit target's `grow` is the memory above its image,
                 // which nothing checks against its stack.
                 grows: self.word() != 16,
+                // A 16-bit target runs short of room before it runs short of
+                // time, and a call is smaller than the case it saves.
+                inline_small: self.word() != 16,
             },
         )?;
         // What legalization wrote -- offsets from known sizes, steps by
@@ -262,20 +252,9 @@ fn accepts_externals<T: Target + ?Sized>(target: &T, program: &Program) -> Resul
 }
 
 fn accepts_layout(name: &str, layout: Layout, program: &Program) -> Result<(), String> {
-    program.check_layout(layout)?;
-    // Cell-only preparation uses the bounded 8 KiB heap and its generated
-    // release walk is exercised by the 6502 conformance suite. Arbitrary
-    // naturals still enter through the guard in `prepare`; prelegalized
-    // natural programs do not carry the cell-runtime marker.
-    if layout.word_bits == 16
-        && program.layout().is_some()
-        && (program.has_runtime_naturals() || !program.has_runtime_cells())
-    {
-        return Err(format!(
-            "{name} runtime naturals await checked image/frame limits"
-        ));
-    }
-    Ok(())
+    program
+        .check_layout(layout)
+        .map_err(|error| format!("{name}: {error}"))
 }
 
 fn signature_classes(program: &Program) -> impl Iterator<Item = &Class> {

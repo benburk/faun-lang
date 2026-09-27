@@ -30,6 +30,7 @@ fn nested_cells_are_legalized_to_managed_objects_and_released() {
         word_bits: 64,
         heap_bytes: 512,
         grows: false,
+        inline_small: true,
     };
     let legalized = legalize(&source, config).unwrap();
     assert!(legalized.ops.iter().all(|op| !matches!(
@@ -60,6 +61,7 @@ fn a_cell_holding_a_natural_retains_and_releases_that_field() {
         word_bits: 64,
         heap_bytes: 512,
         grows: false,
+        inline_small: true,
     };
     let legalized = legalize(&source, config).unwrap();
     let evaluation = run(&legalized, main, &[], 64);
@@ -192,6 +194,7 @@ fn arithmetic_across_the_immediate_boundary_matches_the_reference() {
                 word_bits: bits,
                 heap_bytes: 2048,
                 grows: false,
+                inline_small: true,
             };
             let scalar = legalize(&p, config).expect("legalized");
             for &x in &values {
@@ -256,6 +259,7 @@ fn exact_runtime_arithmetic_and_returned_ownership_at_each_word_size() {
                 word_bits: bits,
                 heap_bytes: 2048,
                 grows: false,
+                inline_small: true,
             };
             let scalar = legalize(&p, config).expect("legalized");
             assert!(
@@ -299,6 +303,7 @@ fn zero_division_and_monus_alias_paths_keep_returned_values_live() {
                         word_bits: bits,
                         heap_bytes: 256,
                         grows: false,
+                        inline_small: true,
                     },
                 )
                 .unwrap();
@@ -397,6 +402,7 @@ fn loops_rotate_aliases_reuse_tiny_heaps_and_clean_nested_early_returns() {
                 word_bits: bits,
                 heap_bytes: 512,
                 grows: false,
+                inline_small: true,
             };
             let scalar = legalize(&p, config).unwrap();
             for seed in [0u64, 3, 200] {
@@ -443,11 +449,7 @@ fn recursive_calls_borrow_parameters_and_transfer_owned_results() {
             let result = b.convert(Class::Word, value);
             b.ret(&[result]);
         });
-        let config = Config {
-            word_bits: bits,
-            heap_bytes: 1024,
-            grows: false,
-        };
+        let config = fixed_heap(bits, 1024);
         let scalar = legalize(&p, config).unwrap();
         let expected = run(&p, main, &[], bits);
         let actual = run(&scalar, main, &[], bits);
@@ -498,6 +500,7 @@ fn conversion_aliases_comparisons_and_odd_width_truncation() {
                 word_bits: bits,
                 heap_bytes: 256,
                 grows: false,
+                inline_small: true,
             };
             let scalar = legalize(&p, config).unwrap();
             for seed in [0u64, 255, 256, 65535, u64::MAX >> (64 - bits)] {
@@ -530,6 +533,7 @@ fn pools_effects_and_nonreturning_platform_boundaries_are_preserved() {
             word_bits: 64,
             heap_bytes: 256,
             grows: false,
+            inline_small: true,
         },
     )
     .unwrap();
@@ -559,6 +563,7 @@ const fn fixed_heap(word_bits: u16, heap_bytes: usize) -> Config {
         word_bits,
         heap_bytes,
         grows: false,
+        inline_small: true,
     }
 }
 
@@ -619,6 +624,7 @@ fn natural_host_signatures_do_not_become_address_signatures() {
             word_bits: 64,
             heap_bytes: 256,
             grows: false,
+            inline_small: true,
         },
     )
     .unwrap_err();
@@ -662,6 +668,7 @@ fn exhaustion_preserves_effect_order_and_exits_instead_of_returning_zero() {
                 word_bits: bits,
                 heap_bytes: usize::from(bits / 8) * 4,
                 grows: false,
+                inline_small: true,
             },
         )
         .unwrap();
@@ -736,6 +743,7 @@ fn scalar_fast_path_has_no_runtime_code_data_or_globals() {
             word_bits: 64,
             heap_bytes: 0,
             grows: false,
+            inline_small: true,
         },
     )
     .unwrap();
@@ -811,6 +819,7 @@ fn a_buffer_prepended_answers_the_reference_and_leaks_nothing() {
                     word_bits: bits,
                     heap_bytes: 4096,
                     grows: false,
+                    inline_small: true,
                 };
                 let scalar = legalize(&p, config).expect("legalized");
                 let args = [BigUint::from(5u8)];

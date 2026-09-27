@@ -800,13 +800,9 @@ const LISTED: &[(&str, &str, i32)] = &[
 ];
 
 /// Lists of lists reversed and flattened: elements holding a claim to a
-/// buffer of their own. What a list of lists holds is not bounded, so a
-/// target without runtime naturals has no place for it yet.
+/// buffer of their own, and a count of them no bound is known for.
 #[test]
 fn lists_of_lists_are_put_before_one_another() {
-    if TARGET.word() == 16 {
-        return;
-    }
     let program = read(LIST_OF_LISTS).expect("a program");
     let prepared = TARGET
         .prepare(&program)
@@ -960,21 +956,20 @@ fn it_greets_whom_it_is_handed() {
 
 /// Advent of Code 2015, day one, on an input far longer than a stack of
 /// frames goes: each step calls the next in tail position, which is a loop.
+/// A 16-bit machine's heap holds a shorter walk, still past its frames.
 #[test]
 fn a_long_walk_goes_round_rather_than_down() {
-    if TARGET.word() == 16 {
-        return;
-    }
+    let steps = if TARGET.word() == 16 { 300 } else { 20_000 };
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/aoc/201501.fn");
     let text = fs::read_to_string(&path).expect("the day one example");
     let program = read(&text).expect("the day one example compiles");
     let program = TARGET
         .prepare(&program)
         .expect("a program this machine holds");
-    let input = "(()".repeat(20_000);
+    let input = "(()".repeat(steps);
     assert_eq!(
         execute_with_input(&program, input.as_bytes()),
-        (0, "part1: 20000 part2: 0\n".to_owned())
+        (0, format!("part1: {steps} part2: 0\n"))
     );
 }
 
@@ -1220,6 +1215,68 @@ fn has_constant_only_multiply(program: &Program, instructions: &[(&Op, &[ValueId
             } if constants[left.index()] && constants[right.index()]
         )
     })
+}
+
+/// A number with no bound, worked out and written in decimal: past what any
+/// word holds, so every target reaches for its natural runtime.
+#[test]
+fn a_number_past_every_word_is_worked_out_and_written() {
+    let program = read(
+        "import std.host {Host}
+
+         fact : (Nat, Nat) -> Nat
+         fact(0, acc) -> acc
+         fact(Succ(n), acc) -> fact(n, acc * (n + 1))
+
+         main! : Host -> []
+         main!(host) ->
+           said = host.stdout.write_all!(\"${fact(host.args.len() + 29, 1)}\\n\".to_utf8())
+           host.exit!(0)",
+    )
+    .expect("a program with an unbounded number");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(
+        execute(&program),
+        (0, "265252859812191058636308480000000\n".to_owned())
+    );
+}
+
+/// A function holding more at once than an index register reaches in a
+/// small machine's frame: two hundred values, each the count times a
+/// number of its own, all wanted after a call, then added up.
+#[test]
+fn a_frame_holds_more_than_an_index_reaches() {
+    const HELD: u64 = 200;
+    let (mut program, main) = Program::new_with_params("main", &[("argc", Class::Word)]);
+    let echo = program.declare("echo", &[Class::Word], &[Class::Word]);
+    program.define(echo, |b, params| b.ret(&[params[0]]));
+    program.define(main, |b, params| {
+        let argc = params[0];
+        let held: Vec<_> = (1..=HELD)
+            .map(|at| {
+                let at = b.constant(Class::Word, at);
+                b.binary(Binary::Mul, argc, at)
+            })
+            .collect();
+        // A call, which each held value outlives, so none can sit anywhere
+        // a callee might write.
+        let echoed = b.call_one(echo, &[argc]);
+        let total = held
+            .iter()
+            .fold(echoed, |total, &value| b.binary(Binary::Add, total, value));
+        // A status wasmtime passes on is below 126.
+        let modulus = b.constant(Class::Word, 97);
+        let status = b.binary(Binary::Mod, total, modulus);
+        b.ret(&[status]);
+    });
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    // One argument: one, and one to two hundred, is 20101.
+    let expected = (1 + HELD * (HELD + 1) / 2) % 97;
+    assert_eq!(execute(&program).0, i32::try_from(expected).unwrap());
 }
 
 /// A number past what the word holds is held as words, and answers what it

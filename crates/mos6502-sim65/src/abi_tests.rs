@@ -68,15 +68,15 @@ fn frame(pairs: usize) -> Program {
 fn checks_actual_spill_plan_before_emission() {
     // Sixteen home pairs are not part of the byte-indexed software frame,
     // and a slot is held by one value at a time.
-    let fitting = frame(16 + 127);
+    let fitting = frame(16 + 255);
     validate(&fitting).unwrap();
     Mos6502Sim65.accepts(&fitting).unwrap();
     Mos6502Sim65.emit(&fitting);
-    let oversized = frame(16 + 128);
+    let oversized = frame(16 + 256);
     validate(&oversized).unwrap();
     let error = Mos6502Sim65.accepts(&oversized).unwrap_err();
     assert!(
-        error.contains("function `main`: frame exceeds 254 bytes"),
+        error.contains("function `main`: frame exceeds 510 bytes"),
         "{error}"
     );
 }

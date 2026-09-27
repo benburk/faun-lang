@@ -838,16 +838,28 @@ impl Assembler {
     /// # Panics
     ///
     /// If a label was never bound, or the image outgrew the machine.
-    pub(crate) fn finish(mut self) -> Vec<u8> {
+    #[cfg(test)]
+    pub(crate) fn finish(self) -> Vec<u8> {
+        self.finish_within()
+            .unwrap_or_else(|end| panic!("an image within 64 KiB, not ending at {end:#x}"))
+    }
+
+    /// The bytes, or where they would end where that is past the 64 KiB a
+    /// 6502 addresses.
+    pub(crate) fn finish_within(mut self) -> Result<Vec<u8>, usize> {
         self.drop_unread_stores();
         self.thread_jumps();
         self.drop_repeated_jumps();
         let (far, at) = self.settled();
+        let end = usize::from(self.origin) + at.last().copied().unwrap_or(0);
+        if end > 0x1_0000 {
+            return Err(end);
+        }
         let mut bytes = Vec::with_capacity(at.last().copied().unwrap_or(0));
         for (id, inst) in self.code.insts().iter().enumerate() {
             self.write(*inst, id, &far, &at, &mut bytes);
         }
-        bytes
+        Ok(bytes)
     }
 
     /// One instruction's bytes, now that every address is known.

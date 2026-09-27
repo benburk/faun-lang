@@ -60,6 +60,10 @@ pub struct Config {
     /// Whether the heap asks the target for more when it is full, rather
     /// than exiting. A target whose `grow` has nothing to bound it says no.
     pub grows: bool,
+    /// Whether the case of two immediates is written where a sum, a monus
+    /// or an order is asked, rather than left to the call it saves: faster
+    /// wherever a count goes round a loop, and larger at every site.
+    pub inline_small: bool,
 }
 
 /// One inventory for helper requests, generated handles and omission tests.
@@ -157,6 +161,13 @@ pub(super) enum Inline {
 pub(super) struct Library {
     pub retain: FunctionId,
     pub release: FunctionId,
+    /// Retain a natural where it is an object: one call wherever a natural
+    /// is kept, rather than the look written out at each.
+    keep: FunctionId,
+    /// Release a natural where it is an object.
+    drop: FunctionId,
+    /// Whether [`Self::inline`] writes the case of two immediates out.
+    inline_small: bool,
     /// Where immediates begin, as [`half`] says.
     pub half: u64,
     helpers: [Option<FunctionId>; Helper::ALL.len()],
@@ -176,13 +187,13 @@ impl Library {
 
     /// Take another claim to a natural, where it is an object.
     pub(super) fn retain_value(&self, b: &mut Builder<'_>, value: ValueId) -> ValueId {
-        self.unless_small(b, value, self.retain);
+        b.call(self.keep, &[value]);
         value
     }
 
     /// Give up a claim to a natural, where it is an object.
     pub(super) fn release_value(&self, b: &mut Builder<'_>, value: ValueId) {
-        self.unless_small(b, value, self.release);
+        b.call(self.drop, &[value]);
     }
 
     /// `a op c` for two naturals, with the case of two immediates whose
@@ -208,6 +219,9 @@ impl Library {
             Inline::Monus => self.require(Helper::Sub),
             Inline::Compare => self.require(Helper::Compare),
         };
+        if !self.inline_small {
+            return b.call_one(helper, &[a, c]);
+        }
         let result = match op {
             Inline::Add | Inline::Monus => A,
             Inline::Compare => W,
@@ -262,19 +276,6 @@ impl Library {
             },
             called,
         )[0]
-    }
-
-    fn unless_small(&self, b: &mut Builder<'_>, value: ValueId, count: FunctionId) {
-        let small = is_small(b, self.half, value);
-        b.if_(
-            small,
-            &[],
-            |b| b.yield_(&[]),
-            |b| {
-                b.call(count, &[value]);
-                b.yield_(&[]);
-            },
-        );
     }
 
     pub(super) const fn get(&self, helper: Helper) -> Option<FunctionId> {
@@ -462,6 +463,9 @@ pub(super) fn append(
     let mut library = Library {
         retain,
         release,
+        keep: unless_small(program, "nat.keep", retain, half),
+        drop: unless_small(program, "nat.drop", release, half),
+        inline_small: config.inline_small,
         half,
         helpers: [None; Helper::ALL.len()],
     };
@@ -549,6 +553,27 @@ fn unwrapped(b: &mut Builder<'_>, half: u64, value: ValueId) -> ValueId {
     let held = b.convert(W, value);
     let top = number(b, half);
     sub(b, held, top)
+}
+
+/// A routine calling `count` with a natural where it is an object, and
+/// doing nothing where it is an immediate, which holds no claim.
+fn unless_small(program: &mut Program, name: &str, count: FunctionId, half: u64) -> FunctionId {
+    let f = declare(program, name, &[A], &[]);
+    program.define(f, |b, args| {
+        let value = args[0];
+        let small = is_small(b, half, value);
+        b.if_(
+            small,
+            &[],
+            |b| b.yield_(&[]),
+            |b| {
+                b.call(count, &[value]);
+                b.yield_(&[]);
+            },
+        );
+        b.ret(&[]);
+    });
+    f
 }
 
 fn claims(program: &mut Program, max: u64) -> (FunctionId, FunctionId, FunctionId) {
@@ -2119,24 +2144,30 @@ fn first_estimate(
     word: usize,
 ) -> [ValueId; 3] {
     let below = lt(b, u2, v1);
+    // Two values cross the edge, which is all the narrowest target carries.
     let start = b.if_(
         below,
-        &[W, W, W],
+        &[W, W],
         |b| {
             let q = b.call_one(divide, &[u2, u1, v1]);
             let taken = b.binary(Binary::Mul, q, v1);
             let r = sub(b, u1, taken);
-            let zero = number(b, 0);
-            b.yield_(&[q, r, zero]);
+            b.yield_(&[q, r]);
         },
         |b| {
             let q = number(b, u64::MAX >> (64 - 8 * word));
             let r = add(b, u1, v1);
-            let over = lt(b, r, u1);
-            b.yield_(&[q, r, over]);
+            b.yield_(&[q, r]);
         },
     );
-    [start[0], start[1], start[2]]
+    let (q, r) = (start[0], start[1]);
+    // Only the largest estimate's remainder can pass a digit: `u1 + v1`
+    // wrapping, which leaves less than `u1`.
+    let wrapped = lt(b, r, u1);
+    let one = number(b, 1);
+    let largest = sub(b, one, below);
+    let over = b.binary(Binary::Mul, wrapped, largest);
+    [q, r, over]
 }
 
 /// The estimate, and `r` it leaves, as `start` holds them, brought down while its product with the

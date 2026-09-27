@@ -81,6 +81,7 @@ fn config(bits: u16) -> Config {
         word_bits: bits,
         heap_bytes: 4096,
         grows: false,
+        inline_small: true,
     }
 }
 
@@ -154,8 +155,8 @@ fn static_layout_configuration_and_pruning() {
         assert!(p.globals().is_empty(), "no allocation family requested");
         assert_eq!(
             p.functions().len(),
-            5,
-            "entry, exit declaration, failure, retain, release only"
+            7,
+            "entry, exit declaration, failure, retain, release, and keeping and dropping a natural only"
         );
         let magnitude = (BigUint::from(1u8) << 130usize) + BigUint::from(257u32);
         let datum = natural::constant(&mut p, conf, &magnitude).unwrap();
@@ -216,21 +217,25 @@ fn invalid_configurations_are_rejected() {
             word_bits: 8,
             heap_bytes: 64,
             grows: false,
+            inline_small: true,
         },
         Config {
             word_bits: 16,
             heap_bytes: 7,
             grows: false,
+            inline_small: true,
         },
         Config {
             word_bits: 16,
             heap_bytes: 65536,
             grows: false,
+            inline_small: true,
         },
         Config {
             word_bits: 32,
             heap_bytes: 17,
             grows: false,
+            inline_small: true,
         },
     ] {
         let (mut p, _) = Program::new("bad");
@@ -533,6 +538,7 @@ fn word_promotion_aliases_and_long_running_heap_reuse() {
             word_bits: bits,
             heap_bytes: 12 * word,
             grows: false,
+            inline_small: true,
         };
         let (mut p, lib, _) = program(
             conf,
@@ -581,6 +587,7 @@ fn freed_adjacent_blocks_coalesce_for_a_larger_allocation() {
             word_bits: bits,
             heap_bytes: 12 * word,
             grows: false,
+            inline_small: true,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Add]));
         let observer = observer(&mut p);
@@ -615,6 +622,7 @@ fn exhaustion_halts_without_corrupting_the_heap() {
             word_bits: bits,
             heap_bytes: 4 * word,
             grows: false,
+            inline_small: true,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::FromWord, Helper::Mul]));
         let observer = observer(&mut p);
@@ -651,6 +659,7 @@ fn oversized_results_halt_before_allocation() {
             word_bits: bits,
             heap_bytes: 4 * word,
             grows: false,
+            inline_small: true,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul]));
         let huge = natural::constant(&mut p, conf, &(BigUint::from(1u8) << (word * 16))).unwrap();
@@ -736,6 +745,7 @@ fn multiplication_clears_dirty_recycled_accumulators() {
             word_bits: bits,
             heap_bytes: 64,
             grows: false,
+            inline_small: true,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::Mul]));
         let observer = observer(&mut p);
@@ -770,6 +780,7 @@ fn smaller_mortal_remainder_survives_releasing_inputs_and_reallocation() {
             word_bits: bits,
             heap_bytes: 8 * word,
             grows: false,
+            inline_small: true,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::FromWord, Helper::Mod]));
         let observer = observer(&mut p);
@@ -828,6 +839,7 @@ fn coalescing_stops_at_live_blocks_and_later_reuses_the_joined_run() {
             word_bits: bits,
             heap_bytes: 16 * word,
             grows: false,
+            inline_small: true,
         };
         let magnitude = BigUint::from(1u8) << usize::from(bits);
         for remove_middle in [false, true] {
@@ -894,6 +906,7 @@ fn preexisting_and_unaligned_pools_keep_their_sentinels() {
             word_bits: bits,
             heap_bytes: 128,
             grows: false,
+            inline_small: true,
         };
         let (mut p, entry) = test_program();
         let sentinel = p.intern(&[0xa5]);
@@ -929,6 +942,7 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
             word_bits: bits,
             heap_bytes: 128,
             grows: false,
+            inline_small: true,
         };
         let (mut p, lib, entry) = program(conf, Needs::from([Helper::Add, Helper::Sub]));
         let observer = observer(&mut p);
@@ -984,6 +998,7 @@ fn quotient_and_remainder_normalize_after_dirty_scratch_recycling() {
             word_bits: bits,
             heap_bytes: 256,
             grows: false,
+            inline_small: true,
         };
         let (mut p, lib, _) = program(conf, Needs::from([Helper::Mul, Helper::Div, Helper::Mod]));
         let dense = (BigUint::from(1u8) << 128usize) - BigUint::from(1u8);
@@ -1026,6 +1041,7 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
         word_bits: bits,
         heap_bytes: 128,
         grows: false,
+        inline_small: true,
     };
     let (mut p, lib, entry) = program(conf, isolated_needs(op));
     let optional = Helper::ALL.map(|helper| lib.get(helper));

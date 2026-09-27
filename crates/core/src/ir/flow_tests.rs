@@ -209,6 +209,7 @@ fn an_earlier_branch_break_survives_a_terminal_tail_and_legalization() {
                     word_bits,
                     heap_bytes: 512,
                     grows: false,
+                    inline_small: true,
                 },
             )
             .unwrap();
