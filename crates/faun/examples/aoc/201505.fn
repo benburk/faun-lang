@@ -2,7 +2,7 @@
 # The rules operate on ASCII input, so strings are checked as UTF-8 bytes.
 
 doubled : List(U8) -> Bool
-doubled([a, b]) -> a == b
+doubled([a, a]) -> True
 doubled(_) -> False
 
 forbidden : List(U8) -> Bool
@@ -23,7 +23,7 @@ part1 : Str -> Nat
 part1(input) -> input.trim().lines().count(is_nice)
 
 sandwiched : List(U8) -> Bool
-sandwiched([first, _, third]) -> first == third
+sandwiched([outer, _, outer]) -> True
 sandwiched(_) -> False
 
 is_nice_v2 : Str -> Bool

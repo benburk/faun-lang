@@ -167,6 +167,27 @@ const RUNNING: &[(&str, &str, u32)] = &[
         96,
     ),
     (
+        "a name bound twice in a clause's head matches equal values",
+        "doubled : List(Nat) -> Bool
+         doubled([a, a]) -> True
+         doubled(_) -> False
+
+         same : (Nat, Nat) -> Nat
+         same(n, n) if n > 0 -> 4
+         same(_, _) -> 0
+
+         paired : List((Str, Nat)) -> Nat
+         paired([(key, v), (key, w), *_]) -> v + w
+         paired(_) -> 0
+
+         main! : Host -> []
+         main!(host) ->
+           n = host.args.len()
+           two = doubled([n, n]).select(1, 0) + doubled([n, n + 1]).select(10, 0)
+           host.exit!((two + same(n, n) + same(n, 2) + paired([(\"a\", n), (\"a\", 2)])) % 64)",
+        1 + 4 + 3,
+    ),
+    (
         "a guard's gap that closes shows a loop stops",
         "upto : (Nat, Nat) -> Nat
          upto(i, n) if i < n -> upto(Succ(i), n)
@@ -554,6 +575,27 @@ const RUNNING: &[(&str, &str, u32)] = &[
 
 /// Programs refused, and what the message says.
 const REFUSED: &[(&str, &str, &str)] = &[
+    (
+        "a clause whose head binds a name twice covers only equal values",
+        "same : (Nat, Nat) -> Nat
+         same(n, n) -> n",
+        "`same` does not cover every case",
+    ),
+    (
+        "a binding binds each name once, since it must always match",
+        "twice : Nat -> Nat
+         twice(n) ->
+           (a, a) = (n, n)
+           a",
+        "local `a` is bound more than once",
+    ),
+    (
+        "an `|` binds each name once in each alternative",
+        "either : List(Nat) -> Bool
+         either([a, a] | [a]) -> True
+         either(_) -> False",
+        "local `a` is bound more than once",
+    ),
     (
         "a parser answering what it was handed shows nothing stops",
         "same : List(Nat) -> Result((Nat, List(Nat)), [Bad])

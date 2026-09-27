@@ -325,7 +325,14 @@ would be. A binding's or a lambda's pattern must match whatever it is
 handed, and holds none: names, records, tuples, and the constructor of a
 type that has no other, as in `(value, Memo(entries)) = step(n)`. A binding may shadow a name already in scope, as in Ori: its value reads
 the name as it was, and every line after reads the nearest, so
-`v = v + 1` counts on. One pattern binds each name once.
+`v = v + 1` counts on. A binding's or a lambda's pattern binds each name once.
+
+A clause's head may bind a name twice, and then matches only where both are
+equal by their type's `equals`: `doubled([a, a]) -> True` is
+`doubled([a, b]) if a == b -> True`, the equality asked before any guard
+written. The clause covers only equal values, so another must cover the
+rest, and an alternative of `|` binds each name once, since the equality is
+asked of the whole clause.
 
 ```
 bucket : Nat -> Nat

@@ -1008,17 +1008,20 @@ fn resolve_clause(
         next_local: 0,
         alternative: None,
         shadowing: None,
+        repeated: Some(Vec::new()),
     };
     let patterns = clause
         .patterns
         .iter()
         .map(|pattern| resolver.pattern(pattern))
         .collect::<Result<_, _>>()?;
-    let guard = clause
+    let repeated = resolver.repeated.take().unwrap_or_default();
+    let written = clause
         .guard
         .as_ref()
         .map(|guard| resolver.expr(guard))
         .transpose()?;
+    let guard = matched_alike(repeated, written);
     let mut bindings = Vec::with_capacity(clause.body.bindings.len());
     for binding in &clause.body.bindings {
         let value = resolver.expr(&binding.value)?;
@@ -1043,6 +1046,42 @@ fn resolve_clause(
     })
 }
 
+/// A clause's guard with the equalities its head asks first: a name bound
+/// twice there matches only values equal by their type's `equals`, as
+/// `doubled([a, a])` reads.
+fn matched_alike(
+    repeated: Vec<(h::LocalId, h::LocalId, s::Span)>,
+    written: Option<h::Expr>,
+) -> Option<h::Expr> {
+    // Every expression is known by where it was written: the comparison is
+    // the name written again, and what it compares the empty spans at that
+    // name's ends, which no written expression has.
+    let alike = repeated.into_iter().map(|(first, again, span)| h::Expr {
+        span,
+        kind: h::ExprKind::Binary(
+            s::BinaryOp::Equal,
+            Box::new(h::Expr {
+                span: s::Span {
+                    start: span.start,
+                    end: span.start,
+                },
+                kind: h::ExprKind::Local(first),
+            }),
+            Box::new(h::Expr {
+                span: s::Span {
+                    start: span.end,
+                    end: span.end,
+                },
+                kind: h::ExprKind::Local(again),
+            }),
+        ),
+    });
+    alike.chain(written).reduce(|asked, next| h::Expr {
+        span: asked.span.through(next.span),
+        kind: h::ExprKind::Binary(s::BinaryOp::And, Box::new(asked), Box::new(next)),
+    })
+}
+
 struct ClauseResolver<'a> {
     module: ModuleId,
     source: &'a str,
@@ -1060,6 +1099,10 @@ struct ClauseResolver<'a> {
     /// far: a binding may shadow a name already in scope, though not one it
     /// binds itself.
     shadowing: Option<std::collections::HashSet<Symbol>>,
+    /// While a clause's head is resolved, outside any `|`, each name bound
+    /// again there: the local it was bound as, the one it is bound as now,
+    /// and where. Elsewhere, a pattern binds each name once.
+    repeated: Option<Vec<(h::LocalId, h::LocalId, s::Span)>>,
 }
 
 impl ClauseResolver<'_> {
@@ -1078,13 +1121,21 @@ impl ClauseResolver<'_> {
                 .map(|(&name, &local)| (name, local))
                 .collect()
         };
-        let first = self.pattern(&alternatives[0])?;
+        // A name bound twice asks an equality of the whole clause, which an
+        // alternative not binding it could not answer.
+        let repeating = self.repeated.take();
+        let first = self.pattern(&alternatives[0]);
+        self.repeated = repeating;
+        let first = first?;
         let bound = newly(&self.locals);
         let outer = self.alternative.replace(bound.clone());
         let mut resolved = vec![first];
         for alternative in &alternatives[1..] {
             let after_first = std::mem::replace(&mut self.locals, before.clone());
-            let pattern = self.pattern(alternative)?;
+            let repeating = self.repeated.take();
+            let pattern = self.pattern(alternative);
+            self.repeated = repeating;
+            let pattern = pattern?;
             let these = newly(&self.locals);
             if let Some(name) = bound
                 .keys()
@@ -1130,6 +1181,21 @@ impl ClauseResolver<'_> {
                     Some(bound) => !bound.insert(spelling),
                     None => self.locals.contains_key(&spelling),
                 };
+                // In a clause's head, a name bound again is a fresh local the
+                // guard asks equal to the first; what reads it reads the first.
+                if again_here
+                    && self.shadowing.is_none()
+                    && let Some(first) = self.locals.get(&spelling).copied()
+                    && let Some(repeated) = self.repeated.as_mut()
+                {
+                    let again = h::LocalId(self.next_local);
+                    self.next_local = self
+                        .next_local
+                        .checked_add(1)
+                        .expect("fewer than 2^32 locals");
+                    repeated.push((first, again, name.0));
+                    return Ok(h::Pattern::Bind(again));
+                }
                 if again_here {
                     return Err(error(
                         self.module,
