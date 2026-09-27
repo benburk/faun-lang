@@ -1,13 +1,18 @@
 //! Shared machine-IR natural arithmetic on digits a word wide.
 //!
 //! A natural is held in a word. One below half a word is an immediate: the
-//! word is twice the number and one, so its lowest bit is set, it is no
-//! object, and it holds no claim. Anything larger is an object, whose
-//! address is even, as every block and constant starts on a word, so an
-//! object may lie anywhere memory is. This is how OCaml holds an integer
-//! and V8 a small one. Every natural is held the one way its size says, so
-//! an immediate is always the smaller of an immediate and an object, and
-//! immediates are ordered as the words holding them are. Most numbers a program counts with are
+//! word is twice the number, so its lowest bit is clear, it is no object,
+//! and it holds no claim. Anything larger is an object, named by its
+//! address and one: every block and constant starts on a word, so its
+//! address is even and the handle naming it odd, and an object may lie
+//! anywhere memory is. Numbers are the common case and objects the rare
+//! one, so the tag falls where arithmetic needs no correction -- a sum of
+//! immediates is the immediate of the sum, and so is a remainder -- and the
+//! one taken off a handle is taken where a digit routine starts, which reads
+//! the object's digits a word at a time from there. Every natural is held
+//! the one way its size says, so an immediate is always the smaller of an
+//! immediate and an object, and immediates are ordered as the words holding
+//! them are. Most numbers a program counts with are
 //! small, so most arithmetic allocates nothing: each routine answers two
 //! immediates itself where the answer is one, and legalization writes that
 //! case where it calls one. Otherwise an immediate operand is boxed for as
@@ -190,6 +195,12 @@ impl Library {
         small_word(b, n)
     }
 
+    /// The handle naming a natural constant laid out as an object.
+    pub(super) fn constant_handle(b: &mut Builder<'_>, data: DataId) -> ValueId {
+        let at = b.address_of(data);
+        handle(b, at)
+    }
+
     /// Take another claim to a natural, where it is an object.
     pub(super) fn retain_value(&self, b: &mut Builder<'_>, value: ValueId) -> ValueId {
         b.call(self.keep, &[value]);
@@ -230,59 +241,48 @@ impl Library {
             Inline::Add | Inline::Monus => A,
             Inline::Compare => W,
         };
-        let small_a = is_small(b, a);
-        let small_c = is_small(b, c);
-        let both = b.binary(Binary::Mul, small_a, small_c);
+        let objects = either_object(b, a, c);
         let called = |b: &mut Builder<'_>| {
             let out = b.call_one(helper, &[a, c]);
             b.yield_(&[out]);
         };
-        b.if_(
-            both,
-            &[result],
-            |b| {
-                // Immediates are ordered as the words holding them are, and
-                // differ by what those words differ by.
-                let x = b.convert(W, a);
-                let y = b.convert(W, c);
-                match op {
-                    Inline::Add => {
-                        // `x` holds twice its number and one; adding twice
-                        // `c`'s number to it holds the sum the same way,
-                        // unless the sum reaches half a word, which is
-                        // exactly where adding goes past the word's top.
-                        let one = number(b, 1);
-                        let over = sub(b, y, one);
-                        let sum = add(b, x, over);
-                        let outside = lt(b, sum, x);
-                        let out = b.if_(outside, &[A], called, |b| {
-                            let held = b.convert(A, sum);
-                            b.yield_(&[held]);
-                        })[0];
-                        b.yield_(&[out]);
-                    }
-                    Inline::Monus => {
-                        // Twice the difference, or nought; one more holds it.
-                        let rest = b.binary(Binary::Monus, x, y);
-                        let one = number(b, 1);
-                        let held = add(b, rest, one);
-                        let held = b.convert(A, held);
+        b.if_(objects, &[result], called, |b| {
+            // Immediates are ordered as the words holding them are, and
+            // differ by what those words differ by.
+            let x = b.convert(W, a);
+            let y = b.convert(W, c);
+            match op {
+                Inline::Add => {
+                    // Each holds twice its number, so their sum holds
+                    // twice the sum, unless the sum reaches half a
+                    // word, which is exactly where adding goes past the
+                    // word's top.
+                    let sum = add(b, x, y);
+                    let outside = lt(b, sum, x);
+                    let out = b.if_(outside, &[A], called, |b| {
+                        let held = b.convert(A, sum);
                         b.yield_(&[held]);
-                    }
-                    Inline::Compare => {
-                        let less = lt(b, x, y);
-                        let same = eq(b, x, y);
-                        let one = number(b, 1);
-                        let apart = sub(b, one, same);
-                        let up = add(b, one, apart);
-                        let order = sub(b, up, less);
-                        let order = sub(b, order, less);
-                        b.yield_(&[order]);
-                    }
+                    })[0];
+                    b.yield_(&[out]);
                 }
-            },
-            called,
-        )[0]
+                Inline::Monus => {
+                    // Twice the difference, or nought: what holds it.
+                    let rest = b.binary(Binary::Monus, x, y);
+                    let held = b.convert(A, rest);
+                    b.yield_(&[held]);
+                }
+                Inline::Compare => {
+                    let less = lt(b, x, y);
+                    let same = eq(b, x, y);
+                    let one = number(b, 1);
+                    let apart = sub(b, one, same);
+                    let up = add(b, one, apart);
+                    let order = sub(b, up, less);
+                    let order = sub(b, order, less);
+                    b.yield_(&[order]);
+                }
+            }
+        })[0]
     }
 
     pub(super) const fn get(&self, helper: Helper) -> Option<FunctionId> {
@@ -529,30 +529,62 @@ pub(super) fn append(
 }
 
 /// Where immediates end: half a word. A number below it is held as twice
-/// itself and one; any other is an object.
+/// itself; any other is an object.
 pub(super) const fn half(word_bits: u16) -> u64 {
     1 << (word_bits - 1)
 }
 
 /// The immediate holding `n`, which must be below `half`.
 fn small(b: &mut Builder<'_>, n: u64) -> ValueId {
-    let held = number(b, 2 * n + 1);
+    let held = number(b, 2 * n);
     b.convert(A, held)
 }
 
 /// The immediate holding a word known to be below `half`.
 fn small_word(b: &mut Builder<'_>, n: ValueId) -> ValueId {
     let doubled = b.shift(W, Direction::Up, n, 1);
-    let one = number(b, 1);
-    let held = add(b, doubled, one);
-    b.convert(A, held)
+    b.convert(A, doubled)
 }
 
-/// One where `value` is an immediate, nought where it is an object: its
-/// lowest bit, which only an immediate's is.
+/// One where `value` is an immediate, nought where it names an object:
+/// where its lowest bit is clear, which only a handle's is not.
 fn is_small(b: &mut Builder<'_>, value: ValueId) -> ValueId {
     let held = b.convert(W, value);
+    let bit = b.convert(Class::fixed(1), held);
+    let zero = number(b, 0);
+    eq(b, bit, zero)
+}
+
+/// One where `value` names an object, nought where it is an immediate: its
+/// lowest bit, which a branch reads as it stands.
+fn is_object(b: &mut Builder<'_>, value: ValueId) -> ValueId {
+    let held = b.convert(W, value);
     b.convert(Class::fixed(1), held)
+}
+
+/// Nought where both `a` and `c` are immediates, and not where either names
+/// an object: what a branch to their fast case asks.
+fn either_object(b: &mut Builder<'_>, a: ValueId, c: ValueId) -> ValueId {
+    let named_a = is_object(b, a);
+    let named_c = is_object(b, c);
+    let named_a = b.convert(W, named_a);
+    add(b, named_a, named_c)
+}
+
+/// The object a handle names: its address, which is one less.
+fn object(b: &mut Builder<'_>, handle: ValueId) -> ValueId {
+    let held = b.convert(W, handle);
+    let one = number(b, 1);
+    let at = sub(b, held, one);
+    b.convert(A, at)
+}
+
+/// The handle naming the object at `address`: one more.
+fn handle(b: &mut Builder<'_>, address: ValueId) -> ValueId {
+    let held = b.convert(W, address);
+    let one = number(b, 1);
+    let named = add(b, held, one);
+    b.convert(A, named)
 }
 
 /// The number an immediate holds.
@@ -567,15 +599,16 @@ fn unless_small(program: &mut Program, name: &str, count: FunctionId) -> Functio
     let f = declare(program, name, &[A], &[]);
     program.define(f, |b, args| {
         let value = args[0];
-        let small = is_small(b, value);
+        let named = is_object(b, value);
         b.if_(
-            small,
+            named,
             &[],
-            |b| b.yield_(&[]),
             |b| {
-                b.call(count, &[value]);
+                let at = object(b, value);
+                b.call(count, &[at]);
                 b.yield_(&[]);
             },
+            |b| b.yield_(&[]),
         );
         b.ret(&[]);
     });
@@ -864,7 +897,8 @@ impl Storage {
                 |b| b.yield_(&[]),
             );
             let mode = number(b, mode);
-            let out = b.call_one(short, &[a, d, mode]);
+            let at = object(b, a);
+            let out = b.call_one(short, &[at, d, mode]);
             b.ret(&[out]);
         });
         f
@@ -883,31 +917,34 @@ impl Storage {
     ) -> ValueId {
         let (boxed, release) = (self.boxed, self.release);
         let held = [a, c].map(|value| {
-            let small = is_small(b, value);
+            let named = is_object(b, value);
             let object = b.if_(
-                small,
+                named,
                 &[A],
+                |b| {
+                    let at = object(b, value);
+                    b.yield_(&[at]);
+                },
                 |b| {
                     let n = unwrapped(b, value);
                     let object = b.call_one(boxed, &[n]);
                     b.yield_(&[object]);
                 },
-                |b| b.yield_(&[value]),
             )[0];
-            (small, object)
+            (named, object)
         });
         let mut args = vec![held[0].1, held[1].1];
         args.extend_from_slice(rest);
         let out = b.call_one(objects, &args);
-        for (small, object) in held {
+        for (named, object) in held {
             b.if_(
-                small,
+                named,
                 &[],
+                |b| b.yield_(&[]),
                 |b| {
                     b.call(release, &[object]);
                     b.yield_(&[]);
                 },
-                |b| b.yield_(&[]),
             );
         }
         out
@@ -930,7 +967,8 @@ fn by_nought_answer(
                 &[],
                 |b| b.yield_(&[]),
                 |b| {
-                    b.call(retain, &[a]);
+                    let at = object(b, a);
+                    b.call(retain, &[at]);
                     b.yield_(&[]);
                 },
             );
@@ -947,18 +985,16 @@ fn both_small(
     c: ValueId,
     then: impl FnOnce(&mut Builder<'_>, ValueId, ValueId),
 ) {
-    let small_a = is_small(b, a);
-    let small_c = is_small(b, c);
-    let both = b.binary(Binary::Mul, small_a, small_c);
+    let objects = either_object(b, a, c);
     b.if_(
-        both,
+        objects,
         &[],
+        |b| b.yield_(&[]),
         |b| {
             let x = unwrapped(b, a);
             let y = unwrapped(b, c);
             then(b, x, y);
         },
-        |b| b.yield_(&[]),
     );
 }
 
@@ -1014,7 +1050,8 @@ fn comparing(p: &mut Program, objects: FunctionId) -> FunctionId {
             },
             |b| b.yield_(&[]),
         );
-        let order = b.call_one(objects, &[a, c]);
+        let named = [a, c].map(|value| object(b, value));
+        let order = b.call_one(objects, &named);
         b.ret(&[order]);
     });
     f
@@ -1035,6 +1072,7 @@ fn lowering(p: &mut Program, objects: FunctionId) -> FunctionId {
             },
             |b| b.yield_(&[]),
         );
+        let a = object(b, a);
         let out = b.call_one(objects, &[a]);
         b.ret(&[out]);
     });
@@ -1650,7 +1688,15 @@ fn finishing(
         // Two digits is more than half a word holds.
         let one = number(b, 1);
         let wide = lt(b, one, len);
-        b.if_(wide, &[], |b| b.ret(&[a]), |b| b.yield_(&[]));
+        b.if_(
+            wide,
+            &[],
+            |b| {
+                let named = handle(b, a);
+                b.ret(&[named]);
+            },
+            |b| b.yield_(&[]),
+        );
         let value = b.call_one(narrow, &[a]);
         let top = number(b, half);
         let fits = lt(b, value, top);
@@ -1664,7 +1710,8 @@ fn finishing(
             },
             |b| b.yield_(&[]),
         );
-        b.ret(&[a]);
+        let named = handle(b, a);
+        b.ret(&[named]);
     });
     f
 }
@@ -2591,6 +2638,7 @@ fn division(
                         &[A],
                         |b| {
                             let kept = b.call_one(retain, &[a]);
+                            let kept = handle(b, kept);
                             b.yield_(&[kept]);
                         },
                         |b| {
@@ -2682,6 +2730,7 @@ fn promotion(p: &mut Program, storage: Storage) -> FunctionId {
             |b| b.yield_(&[]),
         );
         let out = b.call_one(boxed, &[value]);
+        let out = handle(b, out);
         b.ret(&[out]);
     });
     f

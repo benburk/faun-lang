@@ -30,11 +30,13 @@ impl Host for Observer {
             "exit!" => Ok(HostResult::Halt(args.to_vec())),
             "observe" => {
                 let address = args[0].to_u64_digits().first().copied().unwrap_or(0);
-                // An immediate is twice its number and one.
-                if address % 2 == 1 {
+                // An immediate is twice its number; a handle names its
+                // object one past it.
+                if address.is_multiple_of(2) {
                     self.seen.push(BigUint::from(address >> 1));
                     return Ok(HostResult::Return(vec![]));
                 }
+                let address = address - 1;
                 let header = memory.read(address, 3 * self.word)?;
                 let size = read_word(&header[..self.word]);
                 let refs = read_word(&header[self.word..2 * self.word]);
@@ -133,7 +135,8 @@ fn partition(globals: &[u8], word: usize) -> Vec<(usize, u64)> {
 }
 
 fn data_address(p: &Program, datum: DataId) -> BigUint {
-    BigUint::from(u64::from(p.datum(datum).start) + evaluate::DATA_BASE)
+    // The handle naming the object laid out there.
+    BigUint::from(u64::from(p.datum(datum).start) + evaluate::DATA_BASE + 1)
 }
 
 fn observe_and_release(
@@ -646,7 +649,7 @@ fn freed_adjacent_blocks_coalesce_for_a_larger_allocation() {
             let last = b.call_one(lib.require(Helper::FromWord), args);
             lib.release_value(b, first);
             lib.release_value(b, second);
-            let big = b.address_of(big);
+            let big = Library::constant_handle(b, big);
             let sum = b.call_one(lib.require(Helper::Add), &[big, big]);
             observe_and_release(b, &lib, observer, sum);
             observe_and_release(b, &lib, observer, last);
@@ -730,6 +733,7 @@ fn reference_count_exhaustion_does_not_create_an_immortal_object() {
         p.define(check, |b, _| {
             let one = b.constant(WORD, 1);
             let object = object(b, &lib, 1);
+            let object = address(b, object);
             // Test-only injection: no feasible test needs MAX-1 live aliases.
             let count = b.constant(WORD, max - 1);
             b.store(super::Width::Word, object, super::Offset::Words(1), count);
@@ -766,6 +770,14 @@ fn object(b: &mut Builder<'_>, lib: &Library, value: u64) -> super::ValueId {
     promote(b, lib, lib.half + value)
 }
 
+/// Where the object a natural's handle names lies: one before it.
+fn address(b: &mut Builder<'_>, handle: super::ValueId) -> super::ValueId {
+    let held = b.convert(WORD, handle);
+    let one = b.constant(WORD, 1);
+    let at = b.binary(Binary::Sub, held, one);
+    b.convert(ADDRESS, at)
+}
+
 /// What [`object`] holds.
 fn past_half(bits: u16, value: u64) -> BigUint {
     BigUint::from(natural::half(bits) + value)
@@ -778,8 +790,8 @@ fn observed_product(
     left: DataId,
     right: DataId,
 ) {
-    let left = b.address_of(left);
-    let right = b.address_of(right);
+    let left = Library::constant_handle(b, left);
+    let right = Library::constant_handle(b, right);
     let result = b.call_one(lib.require(Helper::Mul), &[left, right]);
     observe_and_release(b, lib, observer, result);
 }
@@ -861,7 +873,7 @@ fn fragmented_check(p: &mut Program, lib: &Library, big: DataId, remove_middle: 
         if remove_middle {
             lib.release_value(b, middle);
         }
-        let big = b.address_of(big);
+        let big = Library::constant_handle(b, big);
         let result = b.call_one(lib.require(Helper::Add), &[big, big]);
         // Keep the 6W result alive: this request must take the 6W remainder,
         // whose last two words are too few to split off.
@@ -997,8 +1009,8 @@ fn carry_and_borrow_cross_entire_zero_byte_runs() {
         let one = natural::constant(&mut p, conf, &BigUint::from(1u8)).unwrap();
         p.define(entry, |b, _| {
             repeat(b, 32, |b| {
-                let dense = b.address_of(dense_id);
-                let one = b.address_of(one);
+                let dense = Library::constant_handle(b, dense_id);
+                let one = Library::constant_handle(b, one);
                 let sum = b.call_one(lib.require(Helper::Add), &[dense, one]);
                 b.call(observer, &[sum]);
                 let difference = b.call_one(lib.require(Helper::Sub), &[sum, one]);
@@ -1099,8 +1111,8 @@ fn isolated_family(bits: u16, op: Option<Binary>) {
     let observer = observer(&mut p);
     p.define(entry, |b, _| {
         let value = if op.is_some() {
-            let left = b.address_of(left_id);
-            let right = b.address_of(right_id);
+            let left = Library::constant_handle(b, left_id);
+            let right = Library::constant_handle(b, right_id);
             b.call_one(function, &[left, right])
         } else {
             promote(b, &lib, 513)
@@ -1143,6 +1155,7 @@ fn retain_and_release_reject_zero_counts_without_resurrecting_storage() {
             let (mut p, lib, entry) = program(conf, Needs::from([Helper::FromWord]));
             p.define(entry, |b, _| {
                 let object = object(b, &lib, 1);
+                let object = address(b, object);
                 let zero = b.constant(WORD, 0);
                 b.store(super::Width::Word, object, super::Offset::Words(1), zero);
                 let function = if retaining { lib.retain } else { lib.release };

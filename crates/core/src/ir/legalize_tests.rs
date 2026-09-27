@@ -119,10 +119,12 @@ fn base() -> (Program, FunctionId) {
 
 fn decoded(p: &Program, evaluation: &Evaluation, bits: u16) -> BigUint {
     let address = word(&evaluation.returned().unwrap()[0].to_bytes_le());
-    // An immediate is twice its number and one.
-    if address % 2 == 1 {
+    // An immediate is twice its number; a handle names its object one past
+    // it.
+    if address.is_multiple_of(2) {
         return BigUint::from(address >> 1);
     }
+    let address = address - 1;
     let globals = usize::try_from(evaluate::globals_base(p).unwrap()).unwrap();
     let data = usize::try_from(evaluate::DATA_BASE).unwrap();
     let (bytes, start) = if address >= globals {

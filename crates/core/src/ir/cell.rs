@@ -67,8 +67,12 @@ impl Claims {
                     &[],
                     |b| b.yield_(&[]),
                     |b| {
-                        let value = b.convert(A, value);
-                        b.call(self.naturals, &[value]);
+                        // A handle names its object one past it.
+                        let held = b.convert(W, value);
+                        let one = number(b, 1);
+                        let at = b.binary(Binary::Sub, held, one);
+                        let at = b.convert(A, at);
+                        b.call(self.naturals, &[at]);
                         b.yield_(&[]);
                     },
                 );
@@ -131,18 +135,24 @@ impl Claims {
             &[],
             |b| b.yield_(&[]),
             |b| {
-                let held = b.convert(A, value);
-                b.call(self.retain, &[held]);
+                // A natural's handle names its object one past it; any
+                // other claim is the object's address itself.
+                let held = b.convert(W, value);
+                let at = b.binary(Binary::Sub, held, is_natural);
+                let at = b.convert(A, at);
+                b.call(self.retain, &[at]);
                 b.yield_(&[]);
             },
         );
     }
 
-    /// One where a word holds an immediate natural rather than an object:
-    /// its lowest bit, which no object's address has.
+    /// One where a word holds an immediate natural rather than a handle:
+    /// where its lowest bit is clear, which a handle's is not.
     fn small(b: &mut Builder<'_>, value: ValueId) -> ValueId {
         let held = b.convert(Class::Word, value);
-        b.convert(Class::fixed(1), held)
+        let bit = b.convert(Class::fixed(1), held);
+        let zero = number(b, 0);
+        b.compare(Relation::Equal, bit, zero)
     }
 
     /// Do `each` for every claim the descriptor at `descriptor` lists, of

@@ -939,7 +939,7 @@ impl Pass<'_> {
             {
                 match self.constants[&results[0]] {
                     Known::Small(n) => self.library.small(b, n).expect("a small constant"),
-                    Known::Object(data) => b.address_of(data),
+                    Known::Object(data) => Library::constant_handle(b, data),
                 }
             }
             Op::Constant { value } => b.constant(self.source.class(results[0]), value),
