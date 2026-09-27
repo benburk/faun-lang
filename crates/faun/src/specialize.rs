@@ -158,7 +158,9 @@ pub(crate) enum ExprKind {
     Project(Box<Expr>, Symbol),
     DirectCall(FunctionKey, Vec<Expr>),
     Invoke(Box<Expr>, Vec<Expr>),
-    Lambda(Vec<Pattern>, Box<Expr>),
+    /// The source occurrence is stable across specialization and identifies
+    /// this lambda independently of any other lambda at its diagnostic span.
+    Lambda(h::SiteId, Vec<Pattern>, Box<Expr>),
     /// The value as this expression's wider type: the same value, its tag
     /// rows holding the tags a caller added.
     Widen(Box<Expr>),
@@ -297,19 +299,19 @@ struct Specializer<'a> {
     /// The spellings a refusal names.
     symbols: &'a crate::Symbols,
     prelude: &'a PreludeIds,
-    expression_types: HashMap<(ModuleId, crate::ast::Span), &'a InferredType>,
-    clause_types: HashMap<(ModuleId, crate::ast::Span), &'a ClauseSite>,
+    expression_types: HashMap<h::SiteId, &'a InferredType>,
+    clause_types: HashMap<h::SiteId, &'a ClauseSite>,
     /// Calls through `where` bounds: the owner whose member each is.
-    bound_sites: HashMap<(ModuleId, crate::ast::Span), (&'a InferredType, Symbol)>,
+    bound_sites: HashMap<h::SiteId, (&'a InferredType, Symbol)>,
     /// Numerals of a generic type, elaborated at each specialization.
-    deferred_numerals: HashMap<(ModuleId, crate::ast::Span), &'a DeferredNumeral>,
+    deferred_numerals: HashMap<h::SiteId, &'a DeferredNumeral>,
     /// Each declared type's methods, by owner and spelling: what a bound's
     /// member is at a concrete type.
     members: HashMap<(Symbol, Symbol), Symbol>,
-    literal_sites: HashMap<(ModuleId, crate::ast::Span), &'a LiteralExpr>,
-    method_sites: HashMap<(ModuleId, crate::ast::Span), Symbol>,
-    projection_sites: HashMap<(ModuleId, crate::ast::Span), Symbol>,
-    widening_sites: HashMap<(ModuleId, crate::ast::Span), &'a InferredType>,
+    literal_sites: HashMap<h::SiteId, &'a LiteralExpr>,
+    method_sites: HashMap<h::SiteId, Symbol>,
+    projection_sites: HashMap<h::SiteId, Symbol>,
+    widening_sites: HashMap<h::SiteId, &'a InferredType>,
     definitions: HashMap<Symbol, Vec<(ModuleId, &'a h::Clause)>>,
     signatures: HashMap<Symbol, Symbol>,
     data: HashMap<Symbol, h::DataDecl>,
@@ -381,22 +383,22 @@ impl<'a> Specializer<'a> {
         let expression_types = checked
             .expressions
             .iter()
-            .map(|site| ((site.module, site.span), &site.ty))
+            .map(|site| (site.site, &site.ty))
             .collect();
         let clause_types = checked
             .clauses
             .iter()
-            .map(|site| ((site.module, site.span), site))
+            .map(|site| (site.site, site))
             .collect();
         let bound_sites = checked
             .bound_sites
             .iter()
-            .map(|site| ((site.module, site.span), (&site.owner, site.member)))
+            .map(|site| (site.site, (&site.owner, site.member)))
             .collect();
         let deferred_numerals = checked
             .deferred_numerals
             .iter()
-            .map(|numeral| ((numeral.module, numeral.span), numeral))
+            .map(|numeral| (numeral.site, numeral))
             .collect();
         let members = data
             .values()
@@ -415,22 +417,22 @@ impl<'a> Specializer<'a> {
         let literal_sites = checked
             .literals
             .iter()
-            .map(|site| ((site.module, site.span), &site.value))
+            .map(|site| (site.site, &site.value))
             .collect();
         let method_sites = checked
             .methods
             .iter()
-            .map(|site| ((site.module, site.span), site.target))
+            .map(|site| (site.site, site.target))
             .collect();
         let projection_sites = checked
             .projections
             .iter()
-            .map(|site| ((site.module, site.span), site.field))
+            .map(|site| (site.site, site.field))
             .collect();
         let widening_sites = checked
             .widenings
             .iter()
-            .map(|site| ((site.module, site.span), &site.ty))
+            .map(|site| (site.site, &site.ty))
             .collect();
         Ok(Self {
             checked,
@@ -514,8 +516,7 @@ impl<'a> Specializer<'a> {
                 .collect(),
             data: self.data,
         };
-        crate::second_class::check(&program)?;
-        crate::callbacks::specialize(program)
+        Ok(program)
     }
 
     fn request(&mut self, key: FunctionKey) {
@@ -573,7 +574,7 @@ impl<'a> Specializer<'a> {
         for (module, clause) in clauses {
             let site = *self
                 .clause_types
-                .get(&(module, clause.span))
+                .get(&clause.site)
                 .ok_or_else(|| error("checked clause type is missing"))?;
             let mut substitution = HashMap::new();
             match_type(&site.ty, &key.ty, &mut substitution)?;
@@ -1279,7 +1280,7 @@ impl<'a> Specializer<'a> {
         substitution: &HashMap<TypeVariable, Type>,
     ) -> Result<Expr, SpecializeError> {
         let written = self.written_expr(module, expression, substitution)?;
-        let Some(target) = self.widening_sites.get(&(module, expression.span)) else {
+        let Some(target) = self.widening_sites.get(&expression.site) else {
             return Ok(written);
         };
         let target = self.site_type(target, substitution)?;
@@ -1302,7 +1303,7 @@ impl<'a> Specializer<'a> {
     ) -> Result<Expr, SpecializeError> {
         let template = self
             .expression_types
-            .get(&(module, expression.span))
+            .get(&expression.site)
             .ok_or_else(|| error("checked expression type is missing"))?;
         let ty = self.site_type(template, substitution)?;
         let kind = match &expression.kind {
@@ -1347,10 +1348,10 @@ impl<'a> Specializer<'a> {
                 return self.interpolated(module, expression.span, parts, &ty, substitution);
             }
             h::ExprKind::Number(_) | h::ExprKind::Decimal(..) => {
-                return self.numeral(module, expression.span, &ty);
+                return self.numeral(module, expression, &ty);
             }
             h::ExprKind::String(_) => {
-                let literal = self.literal_site(module, expression.span)?;
+                let literal = self.literal_site(expression.site)?;
                 return self.literal(module, expression.span, &literal, &ty);
             }
             h::ExprKind::List(elements, rest) => {
@@ -1401,6 +1402,7 @@ impl<'a> Specializer<'a> {
                     .collect::<Result<_, _>>()?,
             ),
             h::ExprKind::Lambda(patterns, body) => ExprKind::Lambda(
+                expression.site,
                 patterns
                     .iter()
                     .map(|pattern| convert_pattern(pattern, &self.checked.readings))
@@ -1414,7 +1416,7 @@ impl<'a> Specializer<'a> {
                     .collect::<Result<Vec<_>, _>>()?;
                 match &head.kind {
                     h::ExprKind::Global(name) => {
-                        let head_ty = self.expression_type(module, head.span, substitution)?;
+                        let head_ty = self.expression_type(head.site, substitution)?;
                         let key = FunctionKey {
                             name: *name,
                             ty: head_ty,
@@ -1431,7 +1433,7 @@ impl<'a> Specializer<'a> {
                     }
                     // `a.zero()`: the member of whatever `a` is here.
                     h::ExprKind::Associated(..) => {
-                        let target = self.target(module, expression.span, substitution)?;
+                        let target = self.target(expression.site, substitution)?;
                         let parameters = arguments.iter().map(|argument| argument.ty.clone());
                         let key = FunctionKey {
                             name: target,
@@ -1449,17 +1451,17 @@ impl<'a> Specializer<'a> {
             }
             h::ExprKind::Member(receiver, _) => {
                 let receiver = self.expr(module, receiver, substitution)?;
-                if let Some(field) = self.projection_sites.get(&(module, expression.span)) {
+                if let Some(field) = self.projection_sites.get(&expression.site) {
                     ExprKind::Project(Box::new(receiver), *field)
                 } else {
-                    let target = self.target(module, expression.span, substitution)?;
+                    let target = self.target(expression.site, substitution)?;
                     let key = self.method_key(target, &receiver.ty, &[], &ty)?;
                     self.request(key.clone());
                     ExprKind::DirectCall(key, vec![receiver])
                 }
             }
             h::ExprKind::Method(receiver, _, arguments) => {
-                let target = self.target(module, expression.span, substitution)?;
+                let target = self.target(expression.site, substitution)?;
                 let receiver = self.expr(module, receiver, substitution)?;
                 let mut lowered = Vec::with_capacity(arguments.len() + 1);
                 lowered.push(receiver);
@@ -1483,17 +1485,17 @@ impl<'a> Specializer<'a> {
                     h::ExprKind::Number(_) | h::ExprKind::Decimal(..)
                 ) =>
             {
-                return self.numeral(module, expression.span, &ty);
+                return self.numeral(module, expression, &ty);
             }
             h::ExprKind::Unary(_, value) => {
-                let target = self.target(module, expression.span, substitution)?;
+                let target = self.target(expression.site, substitution)?;
                 let value = self.expr(module, value, substitution)?;
                 let key = self.method_key(target, &value.ty, &[], &ty)?;
                 self.request(key.clone());
                 ExprKind::DirectCall(key, vec![value])
             }
             h::ExprKind::Binary(operator, left, right) => {
-                let target = self.target(module, expression.span, substitution)?;
+                let target = self.target(expression.site, substitution)?;
                 let left = self.expr(module, left, substitution)?;
                 let right = self.expr(module, right, substitution)?;
                 let ordering = matches!(
@@ -1574,19 +1576,7 @@ impl<'a> Specializer<'a> {
                     let literal = crate::blessed::string(bytes, self.prelude);
                     self.literal(module, span, &literal, str_)?
                 }
-                h::StringPart::Splice(splice) => {
-                    let value = self.expr(module, splice, substitution)?;
-                    let site = crate::check::splice_site(splice.span);
-                    let target = self.target(module, site, substitution)?;
-                    let key = self.method_key(target, &value.ty, &[], str_)?;
-                    self.request_at(key.clone(), (module, splice.span));
-                    Expr {
-                        module,
-                        span: splice.span,
-                        ty: str_.clone(),
-                        kind: ExprKind::DirectCall(key, vec![value]),
-                    }
-                }
+                h::StringPart::Splice(splice) => self.expr(module, splice, substitution)?,
             });
         }
         let concat = self.method_key(
@@ -1608,13 +1598,12 @@ impl<'a> Specializer<'a> {
 
     fn expression_type(
         &self,
-        module: ModuleId,
-        span: crate::ast::Span,
+        site: h::SiteId,
         substitution: &HashMap<TypeVariable, Type>,
     ) -> Result<Type, SpecializeError> {
         let ty = self
             .expression_types
-            .get(&(module, span))
+            .get(&site)
             .ok_or_else(|| error("checked expression type is missing"))?;
         self.site_type(ty, substitution)
     }
@@ -1645,12 +1634,11 @@ impl<'a> Specializer<'a> {
     /// member of the concrete type the bound's owner is here.
     fn target(
         &self,
-        module: ModuleId,
-        span: crate::ast::Span,
+        site: h::SiteId,
         substitution: &HashMap<TypeVariable, Type>,
     ) -> Result<Symbol, SpecializeError> {
-        let Some((owner, member)) = self.bound_sites.get(&(module, span)).copied() else {
-            return self.method_site(module, span);
+        let Some((owner, member)) = self.bound_sites.get(&site).copied() else {
+            return self.method_site(site);
         };
         let owner = self.site_type(owner, substitution)?;
         self.implementation(&owner, member)
@@ -1745,16 +1733,17 @@ impl<'a> Specializer<'a> {
     fn numeral(
         &mut self,
         module: ModuleId,
-        span: crate::ast::Span,
+        expression: &h::Expr,
         ty: &Type,
     ) -> Result<Expr, SpecializeError> {
-        if let Some(literal) = self.literal_sites.get(&(module, span)) {
+        let span = expression.span;
+        if let Some(literal) = self.literal_sites.get(&expression.site) {
             let literal = (*literal).clone();
             return self.literal(module, span, &literal, ty);
         }
         let numeral = self
             .deferred_numerals
-            .get(&(module, span))
+            .get(&expression.site)
             .copied()
             .ok_or_else(|| error("elaborated literal is missing"))?;
         if let Some(scale) = numeral.scale {
@@ -1850,13 +1839,9 @@ impl<'a> Specializer<'a> {
         })
     }
 
-    fn method_site(
-        &self,
-        module: ModuleId,
-        span: crate::ast::Span,
-    ) -> Result<Symbol, SpecializeError> {
+    fn method_site(&self, site: h::SiteId) -> Result<Symbol, SpecializeError> {
         self.method_sites
-            .get(&(module, span))
+            .get(&site)
             .copied()
             .ok_or_else(|| error("resolved method target is missing"))
     }
@@ -1893,13 +1878,9 @@ impl<'a> Specializer<'a> {
         })
     }
 
-    fn literal_site(
-        &self,
-        module: ModuleId,
-        span: crate::ast::Span,
-    ) -> Result<LiteralExpr, SpecializeError> {
+    fn literal_site(&self, site: h::SiteId) -> Result<LiteralExpr, SpecializeError> {
         self.literal_sites
-            .get(&(module, span))
+            .get(&site)
             .map(|literal| (*literal).clone())
             .ok_or_else(|| error("elaborated literal is missing"))
     }

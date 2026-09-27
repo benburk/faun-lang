@@ -45,12 +45,12 @@ pub(crate) fn exhaustive(
     let clause_types: HashMap<_, _> = types
         .clauses
         .iter()
-        .map(|site| ((site.module, site.span), &site.ty))
+        .map(|site| (site.site, &site.ty))
         .collect();
     for module in &program.modules {
         for (name, clauses) in definitions(module) {
             let width = clauses[0].patterns.len();
-            let columns = match clause_types.get(&(module.source, clauses[0].span)) {
+            let columns = match clause_types.get(&clauses[0].site) {
                 Some(InferredType::Function(parameters, _)) if parameters.len() == width => {
                     parameters.iter().cloned().map(Some).collect()
                 }

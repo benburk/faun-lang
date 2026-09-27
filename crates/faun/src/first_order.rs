@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use num_bigint::BigUint;
 
 use crate::hir::{self as h, LocalId};
-use crate::specialize::{self, FunctionKey, Pattern, Type};
+use crate::specialize::{FunctionKey, Pattern, Type};
 use crate::{ModuleId, Symbol};
 
 /// A specialized program whose values are all data.
@@ -72,93 +72,8 @@ pub(crate) enum ExprKind {
     Project(Box<Expr>, Symbol),
     DirectCall(FunctionKey, Vec<Expr>),
     /// The value as this expression's wider type; see
-    /// [`specialize::ExprKind::Widen`].
+    /// [`crate::specialize::ExprKind::Widen`].
     Widen(Box<Expr>),
-    /// `value?`; see [`specialize::ExprKind::Try`].
+    /// `value?`; see [`crate::specialize::ExprKind::Try`].
     Try(Box<Expr>),
-}
-
-/// `program`, whose function values [`crate::callbacks`] has made into
-/// definitions, as the first-order program it is.
-///
-/// # Panics
-///
-/// If a function value is left, which callback specialization refuses.
-pub(crate) fn first_order(program: specialize::Program) -> Program {
-    Program {
-        entry: program.entry,
-        functions: program.functions.into_iter().map(function).collect(),
-        data: program.data,
-    }
-}
-
-fn function(function: specialize::Function) -> Function {
-    Function {
-        key: function.key,
-        clauses: function
-            .clauses
-            .into_iter()
-            .map(|clause| Clause {
-                patterns: clause.patterns,
-                guard: clause.guard.map(expr),
-                body: body(clause.body),
-            })
-            .collect(),
-        provider: function.provider,
-    }
-}
-
-fn body(body: specialize::Body) -> Body {
-    Body {
-        bindings: body
-            .bindings
-            .into_iter()
-            .map(|binding| Binding {
-                pattern: binding.pattern,
-                value: expr(binding.value),
-            })
-            .collect(),
-        result: expr(body.result),
-    }
-}
-
-fn exprs(expressions: Vec<specialize::Expr>) -> Vec<Expr> {
-    expressions.into_iter().map(expr).collect()
-}
-
-fn expr(expression: specialize::Expr) -> Expr {
-    use specialize::ExprKind as S;
-    let kind = match expression.kind {
-        S::Local(local) => ExprKind::Local(local),
-        S::Natural(magnitude) => ExprKind::Natural(magnitude),
-        S::Bytes(bytes) => ExprKind::Bytes(bytes),
-        S::Construct(constructor, fields) => ExprKind::Construct(constructor, exprs(fields)),
-        S::Record(fields) => ExprKind::Record(
-            fields
-                .into_iter()
-                .map(|(name, field)| (name, expr(field)))
-                .collect(),
-        ),
-        S::Update(base, fields) => ExprKind::Update(
-            Box::new(expr(*base)),
-            fields
-                .into_iter()
-                .map(|(name, field)| (name, expr(field)))
-                .collect(),
-        ),
-        S::Tuple(members) => ExprKind::Tuple(exprs(members)),
-        S::Project(receiver, field) => ExprKind::Project(Box::new(expr(*receiver)), field),
-        S::DirectCall(key, arguments) => ExprKind::DirectCall(key, exprs(arguments)),
-        S::Widen(value) => ExprKind::Widen(Box::new(expr(*value))),
-        S::Try(value) => ExprKind::Try(Box::new(expr(*value))),
-        S::Function(_) | S::ConstructorFunction(_) | S::Lambda(..) | S::Invoke(..) => {
-            unreachable!("callback specialization leaves no function value")
-        }
-    };
-    Expr {
-        module: expression.module,
-        span: expression.span,
-        ty: expression.ty,
-        kind,
-    }
 }

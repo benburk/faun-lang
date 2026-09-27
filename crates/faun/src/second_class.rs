@@ -55,7 +55,7 @@ fn value(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
                 .iter()
                 .try_for_each(|argument| value(argument, true))
         }
-        ExprKind::Lambda(_, result) => value(result, false),
+        ExprKind::Lambda(_, _, result) => value(result, false),
         ExprKind::Widen(inner) => value(inner, passed),
         ExprKind::Try(inner) => value(inner, false),
     }

@@ -35,6 +35,7 @@ use super::{ModuleId, Symbol, Symbols};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiteralSite {
+    pub site: h::SiteId,
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub ty: Symbol,
@@ -43,6 +44,7 @@ pub struct LiteralSite {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MethodSite {
+    pub site: h::SiteId,
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub target: Symbol,
@@ -50,6 +52,7 @@ pub struct MethodSite {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectionSite {
+    pub site: h::SiteId,
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub field: Symbol,
@@ -99,6 +102,7 @@ pub struct InferredBound {
 /// specialization says whose `member` it is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BoundSite {
+    pub site: h::SiteId,
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub owner: InferredType,
@@ -110,6 +114,7 @@ pub struct BoundSite {
 /// specialization.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeferredNumeral {
+    pub site: h::SiteId,
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub magnitude: num_bigint::BigUint,
@@ -120,6 +125,7 @@ pub struct DeferredNumeral {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExpressionSite {
+    pub site: h::SiteId,
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub ty: InferredType,
@@ -127,6 +133,7 @@ pub struct ExpressionSite {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClauseSite {
+    pub site: h::SiteId,
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub ty: InferredType,
@@ -197,8 +204,9 @@ impl std::error::Error for CheckError {}
 ///
 /// Type variables in signatures are universally quantified at each use.
 /// Unsigned recursive groups are inferred monomorphically and generalized only
-/// after the group closes. `where` constraints are rejected until bounded
-/// polymorphism has a representation in checked HIR.
+/// after the group closes. Record expression facts by HIR site ID; a span may
+/// locate several generated expressions. `where` bounds remain explicit until
+/// specialization selects their concrete implementations.
 ///
 /// # Errors
 ///
@@ -482,6 +490,8 @@ struct FieldImpl {
 
 #[derive(Clone, Debug)]
 struct PendingMethod {
+    /// A call to elaborate, or no site for a bound owed by another operation.
+    site: Option<h::SiteId>,
     module: ModuleId,
     span: super::ast::Span,
     name: Symbol,
@@ -490,9 +500,6 @@ struct PendingMethod {
     result: Ty,
     reach: Reach,
     resolved: bool,
-    /// A bound a use of a definition owes rather than a call written: it
-    /// must be met, and names nothing where it stands.
-    obligation: bool,
 }
 
 /// How a member is reached.
@@ -519,7 +526,7 @@ struct PendingTag {
     /// Where each field was written, for a word applied in an expression:
     /// a field is a value flowing into the constructor, which may be widened
     /// there. A pattern's fields flow out, and have none.
-    field_spans: Vec<super::ast::Span>,
+    field_sites: Vec<(h::SiteId, super::ast::Span)>,
     result: Ty,
     resolved: bool,
 }
@@ -556,6 +563,8 @@ struct Marks {
 
 #[derive(Clone, Debug)]
 struct PendingNumeral {
+    /// Record elaboration for an expression, but only validate a pattern numeral.
+    site: Option<h::SiteId>,
     module: ModuleId,
     span: super::ast::Span,
     magnitude: num_bigint::BigUint,
@@ -1050,15 +1059,15 @@ struct Checker<'a> {
     /// name, rigid as its body sees them.
     current: Vec<Bound>,
     current_names: HashMap<Symbol, Ty>,
-    bound_sites: Vec<(ModuleId, super::ast::Span, Ty, Symbol)>,
+    bound_sites: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty, Symbol)>,
     deferred_numerals: Vec<DeferredNumeral>,
     /// What the clause or lambda being checked answers, innermost last,
     /// which is what a `?` in it answers early with. A guard answers
     /// nothing.
     answers: Vec<Option<Ty>>,
-    expression_types: Vec<(ModuleId, super::ast::Span, Ty)>,
-    clause_types: Vec<(ModuleId, super::ast::Span, Ty, Vec<Bound>)>,
-    widenings: Vec<(ModuleId, super::ast::Span, Ty)>,
+    expression_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
+    clause_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty, Vec<Bound>)>,
+    widenings: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
     checked: Types,
 }
 
@@ -1663,13 +1672,13 @@ impl<'a> Checker<'a> {
                 })
                 .collect();
             for name in &component {
-                for (module, clause) in &definitions[name] {
+                for (_, clause) in &definitions[name] {
                     if let Some(site) = self
                         .clause_types
                         .iter_mut()
-                        .find(|(at, span, _, _)| at == module && *span == clause.span)
+                        .find(|(_, _, site, _, _)| *site == clause.site)
                     {
-                        site.3.clone_from(&bounds);
+                        site.4.clone_from(&bounds);
                     }
                 }
             }
@@ -1745,7 +1754,8 @@ impl<'a> Checker<'a> {
         self.checked.expressions = self
             .expression_types
             .iter()
-            .map(|(module, span, ty)| ExpressionSite {
+            .map(|(module, span, site, ty)| ExpressionSite {
+                site: *site,
                 module: *module,
                 span: *span,
                 ty: public_type(&self.infer.resolve(ty)),
@@ -1754,7 +1764,8 @@ impl<'a> Checker<'a> {
         self.checked.widenings = self
             .widenings
             .iter()
-            .map(|(module, span, ty)| ExpressionSite {
+            .map(|(module, span, site, ty)| ExpressionSite {
+                site: *site,
                 module: *module,
                 span: *span,
                 ty: public_type(&self.infer.resolve(ty)),
@@ -1763,7 +1774,8 @@ impl<'a> Checker<'a> {
         self.checked.clauses = self
             .clause_types
             .iter()
-            .map(|(module, span, ty, bounds)| ClauseSite {
+            .map(|(module, span, site, ty, bounds)| ClauseSite {
+                site: *site,
                 module: *module,
                 span: *span,
                 ty: public_type(&self.infer.resolve(ty)),
@@ -1776,7 +1788,8 @@ impl<'a> Checker<'a> {
         self.checked.bound_sites = self
             .bound_sites
             .iter()
-            .map(|(module, span, owner, member)| BoundSite {
+            .map(|(module, span, site, owner, member)| BoundSite {
+                site: *site,
                 module: *module,
                 span: *span,
                 owner: public_type(&self.infer.resolve(owner)),
@@ -1827,8 +1840,13 @@ impl<'a> Checker<'a> {
         clause: &h::Clause,
         function: &Ty,
     ) -> Result<(), CheckError> {
-        self.clause_types
-            .push((module, clause.span, function.clone(), self.current.clone()));
+        self.clause_types.push((
+            module,
+            clause.span,
+            clause.site,
+            function.clone(),
+            self.current.clone(),
+        ));
         let Ty::Function(parameters, result) = self.infer.resolve(function) else {
             return Err(failure(module, clause.span, "definition is not a function"));
         };
@@ -1922,7 +1940,8 @@ impl<'a> Checker<'a> {
             )
         })?;
         if widened {
-            self.widenings.push((module, span, (*result).clone()));
+            self.widenings
+                .push((module, span, clause.body.result.site, (*result).clone()));
         }
         Ok(())
     }
@@ -1990,7 +2009,7 @@ impl<'a> Checker<'a> {
                     span,
                     dual: dual.clone(),
                     fields: Some(field_types.clone()),
-                    field_spans: Vec::new(),
+                    field_sites: Vec::new(),
                     result: expected.clone(),
                     resolved: false,
                 });
@@ -2017,6 +2036,7 @@ impl<'a> Checker<'a> {
                 negative,
             } => {
                 self.pending_numerals.push(PendingNumeral {
+                    site: None,
                     module,
                     span,
                     magnitude: magnitude.clone(),
@@ -2030,6 +2050,7 @@ impl<'a> Checker<'a> {
             h::Pattern::Range(start, end) => {
                 for bound in start.iter().chain(end) {
                     self.pending_numerals.push(PendingNumeral {
+                        site: None,
                         module,
                         span,
                         magnitude: bound.magnitude.clone(),
@@ -2089,7 +2110,7 @@ impl<'a> Checker<'a> {
     ) -> Result<Ty, CheckError> {
         let ty = self.infer_expr(module, expression, locals)?;
         self.expression_types
-            .push((module, expression.span, ty.clone()));
+            .push((module, expression.span, expression.site, ty.clone()));
         Ok(ty)
     }
 
@@ -2135,7 +2156,13 @@ impl<'a> Checker<'a> {
             h::ExprKind::Call(head, arguments)
                 if matches!(head.kind, h::ExprKind::Associated(..)) =>
             {
-                self.associated_call(module, expression.span, head, arguments, locals)
+                self.associated_call(
+                    module,
+                    (expression.site, expression.span),
+                    head,
+                    arguments,
+                    locals,
+                )
             }
             h::ExprKind::Constructor(constructor) => {
                 let Some(scheme) = self.constructors.get(constructor).cloned() else {
@@ -2170,6 +2197,7 @@ impl<'a> Checker<'a> {
             h::ExprKind::Number(magnitude) => {
                 let ty = self.infer.fresh();
                 self.pending_numerals.push(PendingNumeral {
+                    site: Some(expression.site),
                     module,
                     span: expression.span,
                     magnitude: magnitude.clone(),
@@ -2183,6 +2211,7 @@ impl<'a> Checker<'a> {
             h::ExprKind::Decimal(digits, scale) => {
                 let ty = self.infer.fresh();
                 self.pending_numerals.push(PendingNumeral {
+                    site: Some(expression.site),
                     module,
                     span: expression.span,
                     magnitude: digits.clone(),
@@ -2198,17 +2227,8 @@ impl<'a> Checker<'a> {
                 for part in parts {
                     if let h::StringPart::Splice(splice) = part {
                         let value = self.expr(module, splice, locals)?;
-                        let to_str = self.method_symbol(module, splice.span, "to_str")?;
-                        let text = self.defer_method(
-                            module,
-                            splice_site(splice.span),
-                            value,
-                            to_str,
-                            Vec::new(),
-                            false,
-                        );
                         let str_ = Ty::Named(self.prelude.str_, Vec::new());
-                        self.unify_at(module, splice.span, &text, &str_)?;
+                        self.unify_at(module, splice.span, &value, &str_)?;
                     }
                 }
                 if parts
@@ -2224,6 +2244,7 @@ impl<'a> Checker<'a> {
                         .copied()
                         .collect::<Vec<_>>();
                     self.checked.literals.push(LiteralSite {
+                        site: expression.site,
                         module,
                         span: expression.span,
                         ty: self.prelude.str_,
@@ -2307,8 +2328,11 @@ impl<'a> Checker<'a> {
                 for argument in arguments {
                     fields.push(self.expr(module, argument, locals)?);
                 }
-                let spans = arguments.iter().map(|argument| argument.span).collect();
-                Ok(self.defer_tag(module, expression.span, dual, Some(fields), spans))
+                let sites = arguments
+                    .iter()
+                    .map(|argument| (argument.site, argument.span))
+                    .collect();
+                Ok(self.defer_tag(module, expression.span, dual, Some(fields), sites))
             }
             h::ExprKind::Call(head, arguments) if matches!(head.kind, h::ExprKind::Tag(_)) => {
                 let h::ExprKind::Tag(label) = head.kind else {
@@ -2333,11 +2357,18 @@ impl<'a> Checker<'a> {
             }
             h::ExprKind::Member(receiver, member) => {
                 let receiver = self.expr(module, receiver, locals)?;
-                Ok(self.defer_method(module, expression.span, receiver, *member, Vec::new(), true))
+                Ok(self.defer_method(
+                    module,
+                    (expression.site, expression.span),
+                    receiver,
+                    *member,
+                    Vec::new(),
+                    true,
+                ))
             }
             h::ExprKind::Method(receiver, method, arguments) => self.method(
                 module,
-                expression.span,
+                (expression.site, expression.span),
                 receiver,
                 *method,
                 arguments,
@@ -2356,6 +2387,7 @@ impl<'a> Checker<'a> {
                 };
                 let ty = self.infer.fresh();
                 self.pending_numerals.push(PendingNumeral {
+                    site: Some(expression.site),
                     module,
                     span: expression.span,
                     magnitude,
@@ -2372,7 +2404,14 @@ impl<'a> Checker<'a> {
                     super::ast::UnaryOp::Not => "not",
                 };
                 let method = self.method_symbol(module, expression.span, name)?;
-                self.method(module, expression.span, value, method, &[], locals)
+                self.method(
+                    module,
+                    (expression.site, expression.span),
+                    value,
+                    method,
+                    &[],
+                    locals,
+                )
             }
             h::ExprKind::Binary(operator, left, right) => {
                 let name = match operator {
@@ -2393,7 +2432,7 @@ impl<'a> Checker<'a> {
                 let method = self.method_symbol(module, expression.span, name)?;
                 let result = self.method(
                     module,
-                    expression.span,
+                    (expression.site, expression.span),
                     left,
                     method,
                     std::slice::from_ref(right),
@@ -2601,7 +2640,7 @@ impl<'a> Checker<'a> {
     fn associated_call(
         &mut self,
         module: ModuleId,
-        span: super::ast::Span,
+        (site, span): (h::SiteId, super::ast::Span),
         head: &h::Expr,
         arguments: &[h::Expr],
         locals: &mut Vec<Option<Scheme>>,
@@ -2657,7 +2696,7 @@ impl<'a> Checker<'a> {
             let given = self.expr(module, argument, locals)?;
             self.unify_at(module, argument.span, &given, parameter)?;
         }
-        self.bound_sites.push((module, span, owner, member));
+        self.bound_sites.push((module, span, site, owner, member));
         Ok(*result)
     }
 
@@ -2711,7 +2750,7 @@ impl<'a> Checker<'a> {
         span: super::ast::Span,
         dual: &h::Dual,
         fields: Option<Vec<Ty>>,
-        field_spans: Vec<super::ast::Span>,
+        field_sites: Vec<(h::SiteId, super::ast::Span)>,
     ) -> Ty {
         let result = self.infer.fresh();
         self.pending_tags.push(PendingTag {
@@ -2719,7 +2758,7 @@ impl<'a> Checker<'a> {
             span,
             dual: dual.clone(),
             fields,
-            field_spans,
+            field_sites,
             result: result.clone(),
             resolved: false,
         });
@@ -2736,7 +2775,7 @@ impl<'a> Checker<'a> {
         field: &Ty,
         wanted: &Ty,
     ) -> Result<(), CheckError> {
-        let Some(&span) = pending.field_spans.get(at) else {
+        let Some(&(site, span)) = pending.field_sites.get(at) else {
             return self.unify_at(pending.module, pending.span, field, wanted);
         };
         let widened = self.infer.subsume(field, wanted).map_err(|reason| {
@@ -2755,7 +2794,8 @@ impl<'a> Checker<'a> {
             )
         })?;
         if widened {
-            self.widenings.push((pending.module, span, wanted.clone()));
+            self.widenings
+                .push((pending.module, span, site, wanted.clone()));
         }
         Ok(())
     }
@@ -2769,7 +2809,7 @@ impl<'a> Checker<'a> {
     fn method(
         &mut self,
         module: ModuleId,
-        span: super::ast::Span,
+        (site, span): (h::SiteId, super::ast::Span),
         receiver: &h::Expr,
         name: Symbol,
         arguments: &[h::Expr],
@@ -2780,13 +2820,13 @@ impl<'a> Checker<'a> {
         for argument in arguments {
             argument_types.push(self.expr(module, argument, locals)?);
         }
-        Ok(self.defer_method(module, span, receiver, name, argument_types, false))
+        Ok(self.defer_method(module, (site, span), receiver, name, argument_types, false))
     }
 
     fn defer_method(
         &mut self,
         module: ModuleId,
-        span: super::ast::Span,
+        (site, span): (h::SiteId, super::ast::Span),
         receiver: Ty,
         name: Symbol,
         arguments: Vec<Ty>,
@@ -2794,6 +2834,7 @@ impl<'a> Checker<'a> {
     ) -> Ty {
         let result = self.infer.fresh();
         self.pending_methods.push(PendingMethod {
+            site: Some(site),
             module,
             span,
             name,
@@ -2802,7 +2843,6 @@ impl<'a> Checker<'a> {
             result: result.clone(),
             reach: if member { Reach::Bare } else { Reach::Called },
             resolved: false,
-            obligation: false,
         });
         result
     }
@@ -2826,6 +2866,7 @@ impl<'a> Checker<'a> {
             };
             let skipped = usize::from(!bound.associated);
             self.pending_methods.push(PendingMethod {
+                site: None,
                 module,
                 span,
                 name: bound.member,
@@ -2838,7 +2879,6 @@ impl<'a> Checker<'a> {
                     Reach::Called
                 },
                 resolved: false,
-                obligation: true,
             });
         }
     }
@@ -2959,17 +2999,20 @@ impl<'a> Checker<'a> {
         };
         match (numeral.scale, float) {
             (Some(scale), Some(float)) => {
-                self.checked.literals.push(LiteralSite {
-                    module: numeral.module,
-                    span: numeral.span,
-                    ty: float.ty,
-                    value: blessed::decimal(
-                        numeral.magnitude.clone(),
-                        scale,
-                        numeral.negative,
-                        float,
-                    ),
-                });
+                if let Some(site) = numeral.site {
+                    self.checked.literals.push(LiteralSite {
+                        site,
+                        module: numeral.module,
+                        span: numeral.span,
+                        ty: float.ty,
+                        value: blessed::decimal(
+                            numeral.magnitude.clone(),
+                            scale,
+                            numeral.negative,
+                            float,
+                        ),
+                    });
+                }
                 return Ok(());
             }
             (Some(_), None) => {
@@ -3033,12 +3076,15 @@ impl<'a> Checker<'a> {
             self.prelude,
         )
         .map_err(|error| failure(numeral.module, numeral.span, error.to_string()))?;
-        self.checked.literals.push(LiteralSite {
-            module: numeral.module,
-            span: numeral.span,
-            ty: symbol,
-            value,
-        });
+        if let Some(site) = numeral.site {
+            self.checked.literals.push(LiteralSite {
+                site,
+                module: numeral.module,
+                span: numeral.span,
+                ty: symbol,
+                value,
+            });
+        }
         Ok(())
     }
 
@@ -3169,6 +3215,7 @@ impl<'a> Checker<'a> {
             vec![nat]
         };
         self.pending_methods.push(PendingMethod {
+            site: None,
             module: numeral.module,
             span: numeral.span,
             name: builder,
@@ -3177,11 +3224,11 @@ impl<'a> Checker<'a> {
             result: numeral.ty.clone(),
             reach: Reach::Type,
             resolved: false,
-            obligation: true,
         });
         if numeral.negative {
             let neg = self.method_symbol(numeral.module, numeral.span, "neg")?;
             self.pending_methods.push(PendingMethod {
+                site: None,
                 module: numeral.module,
                 span: numeral.span,
                 name: neg,
@@ -3190,16 +3237,18 @@ impl<'a> Checker<'a> {
                 result: numeral.ty.clone(),
                 reach: Reach::Called,
                 resolved: false,
-                obligation: true,
             });
         }
-        self.deferred_numerals.push(DeferredNumeral {
-            module: numeral.module,
-            span: numeral.span,
-            magnitude: numeral.magnitude.clone(),
-            negative: numeral.negative,
-            scale: numeral.scale,
-        });
+        if let Some(site) = numeral.site {
+            self.deferred_numerals.push(DeferredNumeral {
+                site,
+                module: numeral.module,
+                span: numeral.span,
+                magnitude: numeral.magnitude.clone(),
+                negative: numeral.negative,
+                scale: numeral.scale,
+            });
+        }
         Ok(())
     }
 
@@ -3236,9 +3285,9 @@ impl<'a> Checker<'a> {
                     associated: pending.reach == Reach::Type,
                 }),
             }
-            if !pending.obligation {
+            if let Some(site) = pending.site {
                 self.bound_sites
-                    .push((pending.module, pending.span, owner, pending.name));
+                    .push((pending.module, pending.span, site, owner, pending.name));
             }
             self.pending_methods[index].resolved = true;
         }
@@ -3756,6 +3805,7 @@ impl<'a> Checker<'a> {
                 vec![component.clone()]
             };
             self.pending_methods.push(PendingMethod {
+                site: None,
                 module: pending.module,
                 span: pending.span,
                 name: pending.name,
@@ -3764,11 +3814,11 @@ impl<'a> Checker<'a> {
                 result: answer.clone(),
                 reach: Reach::Called,
                 resolved: false,
-                obligation: true,
             });
         }
-        if !pending.obligation {
+        if let Some(site) = pending.site {
             self.checked.methods.push(MethodSite {
+                site,
                 module: pending.module,
                 span: pending.span,
                 target: pending.name,
@@ -3835,6 +3885,7 @@ impl<'a> Checker<'a> {
         apply_signature(&mut self.infer, pending, scheme, self.symbols)
             .map_err(|message| failure(pending.module, pending.span, message))?;
         self.checked.projections.push(ProjectionSite {
+            site: pending.site.expect("a field is a written member"),
             module: pending.module,
             span: pending.span,
             field: pending.name,
@@ -3858,17 +3909,19 @@ impl<'a> Checker<'a> {
         // bound names its implementation only once it is specialized; a call
         // of an implementation owes that implementation's own bounds.
         if implementation.bound {
-            if !pending.obligation {
+            if let Some(site) = pending.site {
                 self.bound_sites.push((
                     pending.module,
                     pending.span,
+                    site,
                     pending.receiver.clone(),
                     pending.name,
                 ));
             }
         } else {
-            if !pending.obligation {
+            if let Some(site) = pending.site {
                 self.checked.methods.push(MethodSite {
+                    site,
                     module: pending.module,
                     span: pending.span,
                     target: implementation.target,
@@ -4594,16 +4647,6 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-    }
-}
-
-/// Where the `to_str` a splice is read through is recorded: before the
-/// splice, empty, which no expression's place is, so it cannot be taken
-/// for a method call written as the splice itself.
-pub(crate) const fn splice_site(splice: super::ast::Span) -> super::ast::Span {
-    super::ast::Span {
-        start: splice.start,
-        end: splice.start,
     }
 }
 

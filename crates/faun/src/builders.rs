@@ -18,7 +18,7 @@ use crate::hir as h;
 
 /// Rewrite every record builder in `modules`, whose signatures have had their
 /// aliases expanded.
-pub(crate) fn desugar(modules: &mut [h::Module]) {
+pub(crate) fn desugar(modules: &mut [h::Module], sites: &mut h::Sites) {
     let pairings = pairings(modules);
     if pairings.is_empty() {
         return;
@@ -26,11 +26,11 @@ pub(crate) fn desugar(modules: &mut [h::Module]) {
     for module in modules {
         for item in &mut module.items {
             match item {
-                h::Item::Clause(clause) => clause_builders(clause, &pairings),
+                h::Item::Clause(clause) => clause_builders(clause, &pairings, sites),
                 h::Item::Data(data) => {
                     for method in &mut data.methods {
                         if let h::MethodItem::Clause(clause) = method {
-                            clause_builders(clause, &pairings);
+                            clause_builders(clause, &pairings, sites);
                         }
                     }
                 }
@@ -98,9 +98,10 @@ fn pairs(signature: &h::SignatureDecl) -> bool {
         && **answer == h::Type::Variable(*c)
 }
 
-fn clause_builders(clause: &mut h::Clause, pairings: &HashSet<Symbol>) {
+fn clause_builders(clause: &mut h::Clause, pairings: &HashSet<Symbol>, sites: &mut h::Sites) {
     let mut builder = Builder {
         pairings,
+        sites,
         next: clause.locals,
     };
     if let Some(guard) = &mut clause.guard {
@@ -111,6 +112,7 @@ fn clause_builders(clause: &mut h::Clause, pairings: &HashSet<Symbol>) {
 }
 
 struct Builder<'a> {
+    sites: &'a mut h::Sites,
     pairings: &'a HashSet<Symbol>,
     /// The next local the clause has not used.
     next: u32,
@@ -214,28 +216,18 @@ impl Builder<'_> {
         if !self.pairings.contains(&function) || fields.len() < 2 {
             return None;
         }
-        // Every expression is known by where it was written, and these were
-        // written nowhere: each takes its own empty span inside the call,
-        // which no written expression has. A call too short to hold them
-        // all is left as written, and refused as it would have been.
-        let n = u32::try_from(fields.len()).ok()?;
-        let wanted = n.checked_mul(n)?.checked_mul(3)?;
-        if span.end.saturating_sub(span.start) < wanted {
-            return None;
-        }
-        let mut places = Places { next: span.start };
         let names: Vec<Symbol> = fields.iter().map(|(name, _)| *name).collect();
-        let first = self.first_pair(&mut places, &names[..2]);
+        let first = self.first_pair(span, &names[..2]);
         let mut built = h::ExprKind::Call(
-            Box::new(places.at(head.kind.clone())),
+            Box::new(self.sites.expr(span, head.kind.clone())),
             vec![fields[0].1.clone(), fields[1].1.clone(), first],
         );
         // Each further one pairs with the record so far, rebuilt with it.
         for count in 2..fields.len() {
-            let combine = self.next_pair(&mut places, &names[..count], names[count]);
-            let so_far = places.at(built);
+            let combine = self.next_pair(span, &names[..count], names[count]);
+            let so_far = self.sites.expr(span, built);
             built = h::ExprKind::Call(
-                Box::new(places.at(head.kind.clone())),
+                Box::new(self.sites.expr(span, head.kind.clone())),
                 vec![so_far, fields[count].1.clone(), combine],
             );
         }
@@ -243,49 +235,43 @@ impl Builder<'_> {
     }
 
     /// `|a, b| {x: a, y: b}`: the first two fields paired as they are.
-    fn first_pair(&mut self, places: &mut Places, names: &[Symbol]) -> h::Expr {
+    fn first_pair(&mut self, span: crate::ast::Span, names: &[Symbol]) -> h::Expr {
         let (first, second) = (self.fresh(), self.fresh());
         let record = h::ExprKind::Record(vec![
-            (names[0], places.at(h::ExprKind::Local(first))),
-            (names[1], places.at(h::ExprKind::Local(second))),
+            (names[0], self.sites.expr(span, h::ExprKind::Local(first))),
+            (names[1], self.sites.expr(span, h::ExprKind::Local(second))),
         ]);
-        let record = places.at(record);
-        places.at(h::ExprKind::Lambda(
-            vec![h::Pattern::Bind(first), h::Pattern::Bind(second)],
-            Box::new(record),
-        ))
+        let record = self.sites.expr(span, record);
+        self.sites.expr(
+            span,
+            h::ExprKind::Lambda(
+                vec![h::Pattern::Bind(first), h::Pattern::Bind(second)],
+                Box::new(record),
+            ),
+        )
     }
 
     /// `|r, z| {x: r.x, y: r.y, z: z}`: the record so far, rebuilt with the
     /// field `added`.
-    fn next_pair(&mut self, places: &mut Places, earlier: &[Symbol], added: Symbol) -> h::Expr {
+    fn next_pair(&mut self, span: crate::ast::Span, earlier: &[Symbol], added: Symbol) -> h::Expr {
         let (so_far, value) = (self.fresh(), self.fresh());
         let mut rebuilt = Vec::with_capacity(earlier.len() + 1);
         for &name in earlier {
-            let read = places.at(h::ExprKind::Local(so_far));
-            rebuilt.push((name, places.at(h::ExprKind::Member(Box::new(read), name))));
+            let read = self.sites.expr(span, h::ExprKind::Local(so_far));
+            rebuilt.push((
+                name,
+                self.sites
+                    .expr(span, h::ExprKind::Member(Box::new(read), name)),
+            ));
         }
-        rebuilt.push((added, places.at(h::ExprKind::Local(value))));
-        let record = places.at(h::ExprKind::Record(rebuilt));
-        places.at(h::ExprKind::Lambda(
-            vec![h::Pattern::Bind(so_far), h::Pattern::Bind(value)],
-            Box::new(record),
-        ))
-    }
-}
-
-/// The empty spans inside a call its builder's expressions take, one each.
-struct Places {
-    next: u32,
-}
-
-impl Places {
-    const fn at(&mut self, kind: h::ExprKind) -> h::Expr {
-        let span = crate::ast::Span {
-            start: self.next,
-            end: self.next,
-        };
-        self.next += 1;
-        h::Expr { span, kind }
+        rebuilt.push((added, self.sites.expr(span, h::ExprKind::Local(value))));
+        let record = self.sites.expr(span, h::ExprKind::Record(rebuilt));
+        self.sites.expr(
+            span,
+            h::ExprKind::Lambda(
+                vec![h::Pattern::Bind(so_far), h::Pattern::Bind(value)],
+                Box::new(record),
+            ),
+        )
     }
 }

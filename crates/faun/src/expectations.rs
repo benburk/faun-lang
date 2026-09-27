@@ -89,22 +89,31 @@ fn asked(resolved: &ResolvedProgram) -> (Vec<Symbol>, Vec<Location>) {
 /// The test entry's one clause, asking each of `asked`.
 fn entry(resolved: &mut ResolvedProgram, main: &Main, asked: &[Symbol]) -> h::Clause {
     let written = resolved.source(main.module).text().len();
-    let mut places = Places(written);
+    let span = Span::new(written, written);
+    let sites = &mut resolved.sites;
     let symbols = &mut resolved.symbols;
-    let (print, exit, select) = (
+    let (print, exit, select, to_str) = (
         symbols.intern("print!"),
         symbols.intern("exit!"),
         symbols.intern("select"),
+        symbols.intern("to_str"),
     );
-    let failures = failures(&mut places, asked, select);
-    let text = places.at(h::ExprKind::String(failures));
-    let receiver = places.at(h::ExprKind::Local(h::LocalId(0)));
-    let printed = places.at(h::ExprKind::Method(Box::new(receiver), print, vec![text]));
-    let status = places.at(h::ExprKind::Number(0u8.into()));
-    let receiver = places.at(h::ExprKind::Local(h::LocalId(0)));
-    let exited = places.at(h::ExprKind::Method(Box::new(receiver), exit, vec![status]));
+    let failures = failures(sites, span, asked, select, to_str);
+    let text = sites.expr(span, h::ExprKind::String(failures));
+    let receiver = sites.expr(span, h::ExprKind::Local(h::LocalId(0)));
+    let printed = sites.expr(
+        span,
+        h::ExprKind::Method(Box::new(receiver), print, vec![text]),
+    );
+    let status = sites.expr(span, h::ExprKind::Number(0u8.into()));
+    let receiver = sites.expr(span, h::ExprKind::Local(h::LocalId(0)));
+    let exited = sites.expr(
+        span,
+        h::ExprKind::Method(Box::new(receiver), exit, vec![status]),
+    );
     h::Clause {
-        span: Span::new(written, places.0 + 1),
+        site: sites.fresh(),
+        span,
         name: main.symbol,
         patterns: vec![h::Pattern::Bind(h::LocalId(0))],
         guard: None,
@@ -121,38 +130,33 @@ fn entry(resolved: &mut ResolvedProgram, main: &Main, asked: &[Symbol]) -> h::Cl
 
 /// A splice for each of `asked`, of nothing where it holds and of its
 /// number and a space where it does not.
-fn failures(places: &mut Places, asked: &[Symbol], select: Symbol) -> Vec<h::StringPart> {
+fn failures(
+    sites: &mut h::Sites,
+    span: Span,
+    asked: &[Symbol],
+    select: Symbol,
+    to_str: Symbol,
+) -> Vec<h::StringPart> {
     let mut failures = Vec::with_capacity(asked.len());
     for (number, &expectation) in asked.iter().enumerate() {
-        let called = places.at(h::ExprKind::Global(expectation));
-        let held = places.at(h::ExprKind::Call(Box::new(called), Vec::new()));
-        let nothing = places.at(h::ExprKind::String(Vec::new()));
-        let numbered = places.at(h::ExprKind::String(vec![h::StringPart::Text(
-            format!("{} ", number + 1).into_bytes(),
-        )]));
-        failures.push(h::StringPart::Splice(places.at(h::ExprKind::Method(
-            Box::new(held),
-            select,
-            vec![nothing, numbered],
-        ))));
+        let called = sites.expr(span, h::ExprKind::Global(expectation));
+        let held = sites.expr(span, h::ExprKind::Call(Box::new(called), Vec::new()));
+        let nothing = sites.expr(span, h::ExprKind::String(Vec::new()));
+        let numbered = sites.expr(
+            span,
+            h::ExprKind::String(vec![h::StringPart::Text(
+                format!("{} ", number + 1).into_bytes(),
+            )]),
+        );
+        let selected = sites.expr(
+            span,
+            h::ExprKind::Method(Box::new(held), select, vec![nothing, numbered]),
+        );
+        let text = sites.expr(
+            span,
+            h::ExprKind::Method(Box::new(selected), to_str, Vec::new()),
+        );
+        failures.push(h::StringPart::Splice(text));
     }
     failures
-}
-
-/// Where the next expression the test entry makes is placed.
-///
-/// Checking records what it learns of each expression by where it was
-/// written, so each is given a place of its own past the end of the entry's
-/// source, where nothing was written. Each is one byte wide: checking keeps
-/// the empty place where a splice starts for the `to_str` it calls.
-struct Places(usize);
-
-impl Places {
-    fn at(&mut self, kind: h::ExprKind) -> h::Expr {
-        self.0 += 1;
-        h::Expr {
-            span: Span::new(self.0, self.0 + 1),
-            kind,
-        }
-    }
 }

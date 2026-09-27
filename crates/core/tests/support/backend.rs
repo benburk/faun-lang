@@ -1230,6 +1230,35 @@ fn it_runs_a_packages_expectations() {
     assert_eq!(execute(&program), (0, "3 ".to_owned()));
 }
 
+/// Generated builder lambdas share a span but keep their own identities,
+/// including when their arguments contain callbacks capturing runtime data.
+#[test]
+fn generated_callbacks_keep_their_identities() {
+    let text = r#"both : (Result(a, e), Result(b, e), (a, b) -> c) -> Result(c, e)
+                  both(Ok(x), Ok(y), f) -> Ok(f(x, y))
+                  both(Err(e), _, _) -> Err(e)
+                  both(_, Err(e), _) -> Err(e)
+
+                  built : Nat -> Result({a: Nat, b: Nat, c: Bool}, [Malformed])
+                  built(n) -> both({a: Ok([n, 2].map(|x| x + n).sum()), b: Ok(n + 3), c: Ok(True)})
+
+                  show(x) -> "${x}"
+
+                  main!(host) ->
+                    n = host.args.len()
+                    r = built(n).ok_or({a: 0, b: 0, c: False})
+                    host.println!("${show(r.a)} ${r.b.to_str()} ${r.c}")
+                    host.exit!(0)"#;
+    let program = read(text).expect("generated callbacks lower to first-order IR");
+    let program = TARGET
+        .prepare(&program)
+        .expect("the target holds the program");
+    assert_eq!(
+        execute_counts(&program, &[1, 3]),
+        [(0, "5 4 True\n".to_owned()), (0, "11 6 True\n".to_owned())]
+    );
+}
+
 /// The standard library holds every expectation it has of itself, whatever
 /// the target.
 #[test]

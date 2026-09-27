@@ -25,17 +25,21 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-use crate::ast::Span;
-use crate::hir::LocalId;
+use crate::Symbol;
+use crate::first_order as d;
+use crate::hir::{LocalId, SiteId};
 use crate::specialize::{
-    Binding, Body, Clause, Expr, ExprKind, Function, FunctionKey, Instance, Pattern, Program,
+    Body, Clause, Expr, ExprKind, Function, FunctionKey, Instance, Pattern, Program,
     SpecializeError, Type,
 };
-use crate::{ModuleId, Symbol};
 
 /// Replace every function value in `program` with the callbacks it stands
 /// for, specializing each definition taking one for each set it is handed.
-pub(crate) fn specialize(program: Program) -> Result<Program, SpecializeError> {
+///
+/// Return first-order IR directly. The input must have passed
+/// [`crate::second_class::check`]; source sites identify lambdas even when
+/// generated lambdas share a diagnostic span. Failure exposes no partial output.
+pub(crate) fn lower(program: Program) -> Result<d::Program, SpecializeError> {
     let mut pass = Callbacks::new(&program);
     let mut functions = Vec::with_capacity(program.functions.len());
     for function in &program.functions {
@@ -48,7 +52,7 @@ pub(crate) fn specialize(program: Program) -> Result<Program, SpecializeError> {
     while let Some((source, callbacks, key)) = pass.queue.pop_front() {
         functions.push(pass.instance(&source, &callbacks, key)?);
     }
-    Ok(Program {
+    Ok(d::Program {
         entry: program.entry,
         functions,
         data: program.data,
@@ -69,7 +73,7 @@ enum Callback {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct LambdaCallback {
     owner: FunctionKey,
-    site: (ModuleId, Span),
+    site: SiteId,
     callbacks: Vec<Callback>,
 }
 
@@ -77,7 +81,7 @@ impl Callback {
     /// Whether the lambda written at `site` in `owner` is this callback or
     /// among the callbacks it holds, as a callback wrapping one it was
     /// handed is.
-    fn holds(&self, owner: &FunctionKey, site: (ModuleId, Span)) -> bool {
+    fn holds(&self, owner: &FunctionKey, site: SiteId) -> bool {
         let Self::Lambda(lambda) = self else {
             return false;
         };
@@ -90,7 +94,7 @@ impl Callback {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Source {
     Written(FunctionKey),
-    Lambda(FunctionKey, (ModuleId, Span)),
+    Lambda(FunctionKey, SiteId),
 }
 
 /// A lambda as written: its parameters, its body and its function type.
@@ -166,7 +170,7 @@ impl Frame {
 /// the arguments with what each carries in its place.
 struct Handed {
     callbacks: Vec<Callback>,
-    arguments: Vec<Expr>,
+    arguments: Vec<d::Expr>,
 }
 
 impl Handed {
@@ -175,7 +179,7 @@ impl Handed {
     }
 }
 
-type Lambdas<'a> = HashMap<(FunctionKey, (ModuleId, Span)), LambdaSite<'a>>;
+type Lambdas<'a> = HashMap<(FunctionKey, SiteId), LambdaSite<'a>>;
 
 struct Callbacks<'a> {
     functions: HashMap<&'a FunctionKey, &'a Function>,
@@ -191,9 +195,9 @@ impl<'a> Callbacks<'a> {
         for function in &program.functions {
             for clause in &function.clauses {
                 let mut found = |expression: &'a Expr| {
-                    if let ExprKind::Lambda(patterns, body) = &expression.kind {
+                    if let ExprKind::Lambda(site, patterns, body) = &expression.kind {
                         lambdas
-                            .entry((function.key.clone(), (expression.module, expression.span)))
+                            .entry((function.key.clone(), *site))
                             .or_insert(LambdaSite {
                                 patterns,
                                 body,
@@ -240,7 +244,7 @@ impl<'a> Callbacks<'a> {
         source: &Source,
         callbacks: &[Callback],
         key: FunctionKey,
-    ) -> Result<Function, SpecializeError> {
+    ) -> Result<d::Function, SpecializeError> {
         match source {
             Source::Written(written) => {
                 let function = self.functions[written];
@@ -259,7 +263,7 @@ impl<'a> Callbacks<'a> {
         function: &Function,
         frame: &Frame,
         callbacks: &[Callback],
-    ) -> Result<Function, SpecializeError> {
+    ) -> Result<d::Function, SpecializeError> {
         let parameters = function
             .key
             .ty
@@ -281,7 +285,7 @@ impl<'a> Callbacks<'a> {
                     patterns.push(pattern.clone());
                 }
             }
-            clauses.push(Clause {
+            clauses.push(d::Clause {
                 patterns,
                 guard: clause
                     .guard
@@ -291,7 +295,7 @@ impl<'a> Callbacks<'a> {
                 body: self.body(&mut frame, &clause.body)?,
             });
         }
-        Ok(Function {
+        Ok(d::Function {
             key,
             clauses,
             provider: function.provider,
@@ -305,9 +309,9 @@ impl<'a> Callbacks<'a> {
         &mut self,
         key: FunctionKey,
         owner: &FunctionKey,
-        site: (ModuleId, Span),
+        site: SiteId,
         callbacks: &[Callback],
-    ) -> Result<Function, SpecializeError> {
+    ) -> Result<d::Function, SpecializeError> {
         let lambda = &self.lambdas[&(owner.clone(), site)];
         let (patterns, body, ty) = (lambda.patterns, lambda.body, lambda.ty);
         let captures = captures(patterns, body);
@@ -354,12 +358,12 @@ impl<'a> Callbacks<'a> {
             }
         }
         let result = self.expr(&mut frame, body)?;
-        Ok(Function {
+        Ok(d::Function {
             key,
-            clauses: vec![Clause {
+            clauses: vec![d::Clause {
                 patterns: parameters,
                 guard: None,
-                body: Body {
+                body: d::Body {
                     bindings: Vec::new(),
                     result,
                 },
@@ -368,28 +372,28 @@ impl<'a> Callbacks<'a> {
         })
     }
 
-    fn body(&mut self, frame: &mut Frame, body: &Body) -> Result<Body, SpecializeError> {
+    fn body(&mut self, frame: &mut Frame, body: &Body) -> Result<d::Body, SpecializeError> {
         let bindings = body
             .bindings
             .iter()
             .map(|binding| {
-                Ok(Binding {
+                Ok(d::Binding {
                     pattern: binding.pattern.clone(),
                     value: self.expr(frame, &binding.value)?,
                 })
             })
             .collect::<Result<_, SpecializeError>>()?;
-        Ok(Body {
+        Ok(d::Body {
             bindings,
             result: self.expr(frame, &body.result)?,
         })
     }
 
-    fn exprs(&mut self, frame: &mut Frame, list: &[Expr]) -> Result<Vec<Expr>, SpecializeError> {
+    fn exprs(&mut self, frame: &mut Frame, list: &[Expr]) -> Result<Vec<d::Expr>, SpecializeError> {
         list.iter().map(|each| self.expr(frame, each)).collect()
     }
 
-    fn expr(&mut self, frame: &mut Frame, expression: &Expr) -> Result<Expr, SpecializeError> {
+    fn expr(&mut self, frame: &mut Frame, expression: &Expr) -> Result<d::Expr, SpecializeError> {
         let kind = match &expression.kind {
             ExprKind::Local(local) if frame.functions.contains_key(local) => {
                 return Err(located(
@@ -403,38 +407,38 @@ impl<'a> Callbacks<'a> {
                     "a function may only be passed straight into a call",
                 ));
             }
-            ExprKind::Local(local) => ExprKind::Local(*local),
-            ExprKind::Natural(magnitude) => ExprKind::Natural(magnitude.clone()),
-            ExprKind::Bytes(bytes) => ExprKind::Bytes(bytes.clone()),
+            ExprKind::Local(local) => d::ExprKind::Local(*local),
+            ExprKind::Natural(magnitude) => d::ExprKind::Natural(magnitude.clone()),
+            ExprKind::Bytes(bytes) => d::ExprKind::Bytes(bytes.clone()),
             ExprKind::Construct(constructor, fields) => {
-                ExprKind::Construct(*constructor, self.exprs(frame, fields)?)
+                d::ExprKind::Construct(*constructor, self.exprs(frame, fields)?)
             }
-            ExprKind::Record(fields) => ExprKind::Record(
+            ExprKind::Record(fields) => d::ExprKind::Record(
                 fields
                     .iter()
                     .map(|(name, field)| Ok((*name, self.expr(frame, field)?)))
                     .collect::<Result<_, SpecializeError>>()?,
             ),
-            ExprKind::Update(base, fields) => ExprKind::Update(
+            ExprKind::Update(base, fields) => d::ExprKind::Update(
                 Box::new(self.expr(frame, base)?),
                 fields
                     .iter()
                     .map(|(name, field)| Ok((*name, self.expr(frame, field)?)))
                     .collect::<Result<_, SpecializeError>>()?,
             ),
-            ExprKind::Tuple(members) => ExprKind::Tuple(self.exprs(frame, members)?),
+            ExprKind::Tuple(members) => d::ExprKind::Tuple(self.exprs(frame, members)?),
             ExprKind::Project(receiver, field) => {
-                ExprKind::Project(Box::new(self.expr(frame, receiver)?), *field)
+                d::ExprKind::Project(Box::new(self.expr(frame, receiver)?), *field)
             }
-            ExprKind::Widen(value) => ExprKind::Widen(Box::new(self.expr(frame, value)?)),
-            ExprKind::Try(value) => ExprKind::Try(Box::new(self.expr(frame, value)?)),
+            ExprKind::Widen(value) => d::ExprKind::Widen(Box::new(self.expr(frame, value)?)),
+            ExprKind::Try(value) => d::ExprKind::Try(Box::new(self.expr(frame, value)?)),
             ExprKind::DirectCall(key, arguments) => self.call(frame, key, arguments)?,
             ExprKind::Invoke(head, arguments) => {
                 let (callback, carried) = callback(frame, head)?;
                 self.invoke(frame, callback, carried, arguments, &expression.ty)?
             }
         };
-        Ok(Expr {
+        Ok(d::Expr {
             module: expression.module,
             span: expression.span,
             ty: expression.ty.clone(),
@@ -449,9 +453,9 @@ impl<'a> Callbacks<'a> {
         frame: &mut Frame,
         key: &FunctionKey,
         arguments: &[Expr],
-    ) -> Result<ExprKind, SpecializeError> {
+    ) -> Result<d::ExprKind, SpecializeError> {
         if !takes_function(key) {
-            return Ok(ExprKind::DirectCall(
+            return Ok(d::ExprKind::DirectCall(
                 key.clone(),
                 self.exprs(frame, arguments)?,
             ));
@@ -464,7 +468,7 @@ impl<'a> Callbacks<'a> {
             .ok_or_else(|| internal("a called definition of a function type"))?;
         let ty = Type::Function(handed.types(), Box::new(result));
         let made = self.request(Source::Written(key.clone()), handed.callbacks, ty);
-        Ok(ExprKind::DirectCall(made, handed.arguments))
+        Ok(d::ExprKind::DirectCall(made, handed.arguments))
     }
 
     /// Call `callback`, carrying `carried`, with `arguments`.
@@ -472,13 +476,13 @@ impl<'a> Callbacks<'a> {
         &mut self,
         frame: &mut Frame,
         callback: Callback,
-        carried: Vec<Expr>,
+        carried: Vec<d::Expr>,
         arguments: &[Expr],
         answer: &Type,
-    ) -> Result<ExprKind, SpecializeError> {
+    ) -> Result<d::ExprKind, SpecializeError> {
         match callback {
             Callback::Function(key) => self.call(frame, &key, arguments),
-            Callback::Constructor(constructor, _) => Ok(ExprKind::Construct(
+            Callback::Constructor(constructor, _) => Ok(d::ExprKind::Construct(
                 constructor,
                 self.exprs(frame, arguments)?,
             )),
@@ -492,7 +496,7 @@ impl<'a> Callbacks<'a> {
                 let made = self.request(Source::Lambda(lambda.owner, lambda.site), callbacks, ty);
                 let mut passed = carried;
                 passed.extend(handed.arguments);
-                Ok(ExprKind::DirectCall(made, passed))
+                Ok(d::ExprKind::DirectCall(made, passed))
             }
         }
     }
@@ -518,12 +522,12 @@ impl<'a> Callbacks<'a> {
 }
 
 /// The callback a function value is, and what it carries.
-fn callback(frame: &Frame, expression: &Expr) -> Result<(Callback, Vec<Expr>), SpecializeError> {
-    let local = |(local, ty): &(LocalId, Type)| Expr {
+fn callback(frame: &Frame, expression: &Expr) -> Result<(Callback, Vec<d::Expr>), SpecializeError> {
+    let local = |(local, ty): &(LocalId, Type)| d::Expr {
         module: expression.module,
         span: expression.span,
         ty: ty.clone(),
-        kind: ExprKind::Local(*local),
+        kind: d::ExprKind::Local(*local),
     };
     match &expression.kind {
         ExprKind::Function(key) => Ok((Callback::Function(key.clone()), Vec::new())),
@@ -538,8 +542,8 @@ fn callback(frame: &Frame, expression: &Expr) -> Result<(Callback, Vec<Expr>), S
                 .ok_or_else(|| located(expression, "a function value no callback is known for"))?;
             Ok((callback.clone(), carried.iter().map(local).collect()))
         }
-        ExprKind::Lambda(patterns, body) => {
-            let site = (expression.module, expression.span);
+        ExprKind::Lambda(site, patterns, body) => {
+            let site = *site;
             let mut callbacks = Vec::new();
             let mut carried = Vec::new();
             for (captured, ty) in captures(patterns, body) {
@@ -648,7 +652,7 @@ fn for_each<'a>(expression: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
                 for_each(each, visit);
             }
         }
-        ExprKind::Lambda(_, body) => for_each(body, visit),
+        ExprKind::Lambda(_, _, body) => for_each(body, visit),
     }
 }
 
@@ -682,7 +686,7 @@ fn expr_highest(expression: &Expr) -> u32 {
 fn expr_local_highest(expression: &Expr) -> u32 {
     match &expression.kind {
         ExprKind::Local(local) => local.0,
-        ExprKind::Lambda(patterns, _) => patterns.iter().map(pattern_highest).max().unwrap_or(0),
+        ExprKind::Lambda(_, patterns, _) => patterns.iter().map(pattern_highest).max().unwrap_or(0),
         _ => 0,
     }
 }
@@ -767,7 +771,7 @@ fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap
                 free_locals(argument, bound, found);
             }
         }
-        S::Lambda(patterns, body) => {
+        S::Lambda(_, patterns, body) => {
             let mut nested = bound.clone();
             for pattern in patterns {
                 pattern_locals(pattern, &mut nested);

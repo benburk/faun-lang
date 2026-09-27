@@ -63,6 +63,27 @@ fn a_record_literal_builds_through_a_pairing() {
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 2));
 }
 
+/// Generated expressions must not need spare bytes in their source span.
+#[test]
+fn record_builders_do_not_depend_on_whitespace() {
+    for (name, padding) in [("compact", String::new()), ("padded", " ".repeat(300))] {
+        let package = Package::new(
+            &format!("record-builder-{name}"),
+            &format!(
+                "both : (Result(a, e), Result(b, e), (a, b) -> c) -> Result(c, e)
+                 both(Ok(x), Ok(y), f) -> Ok(f(x, y))
+                 both(Err(e), _, _) -> Err(e)
+                 both(_, Err(e), _) -> Err(e)
+
+                 built : Result({{a: Nat, b: Bool, c: Nat, d: Nat, e: Nat, f: Nat, g: Nat, h: Nat, i: Nat, j: Nat}}, [Malformed])
+                 built() -> both({{a: Ok(1), b: Ok(True), c: Ok(3), d: Ok(4), e: Ok(5), f: Ok(6), g: Ok(7), h: Ok(8), i: Ok(9), j: Ok(10){padding}}})
+                 expect built() == Ok({{a: 1, b: True, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10}})"
+            ),
+        );
+        assert_eq!(support::test_file(&package.entry()), (Vec::new(), 1));
+    }
+}
+
 /// A method a type's block writes without a signature is called with a dot
 /// like any other, in its module and from another.
 #[test]

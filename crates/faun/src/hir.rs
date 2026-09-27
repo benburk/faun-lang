@@ -2,7 +2,8 @@
 //!
 //! Every global identity is an interned [`Symbol`], and each local is a compact
 //! index scoped to one clause. Source spellings and module visibility no longer
-//! need to be consulted after this boundary.
+//! need to be consulted after this boundary. [`SiteId`] identifies written and
+//! generated occurrences independently of their diagnostic spans.
 
 use num_bigint::BigUint;
 
@@ -104,6 +105,7 @@ pub enum Type {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Clause {
+    pub site: SiteId,
     pub span: Span,
     pub name: Symbol,
     pub patterns: Vec<Pattern>,
@@ -122,10 +124,33 @@ impl LocalId {
     }
 }
 
-/// Where a constructor word was written whose meaning its position decides,
-/// numbered across the program so checking can say which it chose.
+/// Identify an expression, clause, or ambiguous constructor occurrence within
+/// its resolved program.
+///
+/// Spans locate diagnostics; they do not identify nodes.
+/// Cloning an occurrence preserves its identity; new occurrences need fresh IDs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SiteId(pub u32);
+
+/// Allocate identities for written and generated HIR in one program.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Sites(u32);
+
+impl Sites {
+    pub(crate) const fn fresh(&mut self) -> SiteId {
+        let site = SiteId(self.0);
+        self.0 = self.0.checked_add(1).expect("fewer than 2^32 HIR sites");
+        site
+    }
+
+    pub(crate) const fn expr(&mut self, span: Span, kind: ExprKind) -> Expr {
+        Expr {
+            site: self.fresh(),
+            span,
+            kind,
+        }
+    }
+}
 
 /// A capitalised word some visible declaration claims. It may name any of
 /// `candidates`, or the structural tag it spells; which is its position's
@@ -292,6 +317,7 @@ pub struct Binding {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Expr {
+    pub site: SiteId,
     pub span: Span,
     pub kind: ExprKind,
 }
@@ -332,5 +358,6 @@ pub enum ExprKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StringPart {
     Text(Vec<u8>),
+    /// A string-valued expression, including the generated `to_str` call.
     Splice(Expr),
 }

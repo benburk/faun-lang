@@ -16,6 +16,7 @@ use super::{Source, SourceId, Sources, Symbol, Symbols};
 
 #[derive(Clone, Debug)]
 pub struct ResolvedProgram {
+    pub(crate) sites: h::Sites,
     pub sources: Sources,
     pub symbols: Symbols,
     pub program: h::Program,
@@ -81,7 +82,7 @@ impl std::error::Error for ResolveError {}
 pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagnostic> {
     let prelude = loaded.module(loaded.prelude).public.clone();
     let mut modules = Vec::with_capacity(loaded.modules.len());
-    let mut sites = 0;
+    let mut sites = h::Sites::default();
     let mut aliases = HashMap::new();
     let mut constraint_aliases = HashMap::new();
     for module in &loaded.modules {
@@ -107,8 +108,9 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
         &mut loaded.symbols,
     )
     .map_err(|error| located(&loaded, error))?;
-    crate::builders::desugar(&mut modules);
+    crate::builders::desugar(&mut modules, &mut sites);
     Ok(ResolvedProgram {
+        sites,
         module_sources: loaded.modules.iter().map(|module| module.source).collect(),
         package: loaded.package,
         sources: loaded.sources,
@@ -145,7 +147,7 @@ fn resolve_module(
     module: &LoadedModule,
     source: &str,
     scope: &Interface,
-    (symbols, sites): (&mut Symbols, &mut u32),
+    (symbols, sites): (&mut Symbols, &mut h::Sites),
     (aliases, constraint_aliases): (&mut Aliases, &mut ConstraintAliases),
 ) -> Result<h::Module, ResolveError> {
     let mut items = Vec::new();
@@ -744,7 +746,7 @@ fn resolve_data(
     source: &str,
     scope: &Interface,
     symbols: &mut Symbols,
-    sites: &mut u32,
+    sites: &mut h::Sites,
 ) -> Result<h::DataDecl, ResolveError> {
     let local = symbols
         .find(data.name.text(source))
@@ -995,7 +997,7 @@ fn resolve_clause(
     source: &str,
     scope: &Interface,
     methods: Option<&TypeBinding>,
-    (symbols, sites): (&mut Symbols, &mut u32),
+    (symbols, sites): (&mut Symbols, &mut h::Sites),
 ) -> Result<h::Clause, ResolveError> {
     let mut resolver = ClauseResolver {
         module,
@@ -1021,7 +1023,7 @@ fn resolve_clause(
         .as_ref()
         .map(|guard| resolver.expr(guard))
         .transpose()?;
-    let guard = matched_alike(repeated, written);
+    let guard = matched_alike(repeated, written, resolver.sites);
     let mut bindings = Vec::with_capacity(clause.body.bindings.len());
     for binding in &clause.body.bindings {
         let value = resolver.expr(&binding.value)?;
@@ -1037,6 +1039,7 @@ fn resolve_clause(
     }
     let result = resolver.expr(&clause.body.result)?;
     Ok(h::Clause {
+        site: resolver.sites.fresh(),
         span: clause.span,
         name,
         patterns,
@@ -1052,34 +1055,31 @@ fn resolve_clause(
 fn matched_alike(
     repeated: Vec<(h::LocalId, h::LocalId, s::Span)>,
     written: Option<h::Expr>,
+    sites: &mut h::Sites,
 ) -> Option<h::Expr> {
-    // Every expression is known by where it was written: the comparison is
-    // the name written again, and what it compares the empty spans at that
-    // name's ends, which no written expression has.
-    let alike = repeated.into_iter().map(|(first, again, span)| h::Expr {
-        span,
-        kind: h::ExprKind::Binary(
-            s::BinaryOp::Equal,
-            Box::new(h::Expr {
-                span: s::Span {
-                    start: span.start,
-                    end: span.start,
-                },
-                kind: h::ExprKind::Local(first),
-            }),
-            Box::new(h::Expr {
-                span: s::Span {
-                    start: span.end,
-                    end: span.end,
-                },
-                kind: h::ExprKind::Local(again),
-            }),
-        ),
-    });
-    alike.chain(written).reduce(|asked, next| h::Expr {
-        span: asked.span.through(next.span),
-        kind: h::ExprKind::Binary(s::BinaryOp::And, Box::new(asked), Box::new(next)),
-    })
+    let mut guard = None;
+    for (first, again, span) in repeated {
+        let first = sites.expr(span, h::ExprKind::Local(first));
+        let again = sites.expr(span, h::ExprKind::Local(again));
+        let equal = sites.expr(
+            span,
+            h::ExprKind::Binary(s::BinaryOp::Equal, Box::new(first), Box::new(again)),
+        );
+        guard = Some(match guard {
+            None => equal,
+            Some(asked) => sites.expr(
+                span,
+                h::ExprKind::Binary(s::BinaryOp::And, Box::new(asked), Box::new(equal)),
+            ),
+        });
+    }
+    match (guard, written) {
+        (Some(asked), Some(written)) => Some(sites.expr(
+            asked.span.through(written.span),
+            h::ExprKind::Binary(s::BinaryOp::And, Box::new(asked), Box::new(written)),
+        )),
+        (guard, None) | (None, guard) => guard,
+    }
 }
 
 struct ClauseResolver<'a> {
@@ -1088,8 +1088,8 @@ struct ClauseResolver<'a> {
     scope: &'a Interface,
     methods: Option<&'a TypeBinding>,
     symbols: &'a mut Symbols,
-    /// How many dual sites the program has numbered so far.
-    sites: &'a mut u32,
+    /// Identities for every HIR occurrence in the program.
+    sites: &'a mut h::Sites,
     locals: HashMap<Symbol, h::LocalId>,
     next_local: u32,
     /// Inside an alternative of an `|` after its first, the locals the first
@@ -1335,7 +1335,13 @@ impl ClauseResolver<'_> {
                                 .to_vec(),
                         )),
                         s::StringPart::Splice(expression) => {
-                            Ok(h::StringPart::Splice(self.expr(expression)?))
+                            let value = self.expr(expression)?;
+                            let to_str = self.symbols.intern("to_str");
+                            let text = self.sites.expr(
+                                expression.span,
+                                h::ExprKind::Method(Box::new(value), to_str, Vec::new()),
+                            );
+                            Ok(h::StringPart::Splice(text))
                         }
                     })
                     .collect::<Result<_, ResolveError>>()?,
@@ -1391,6 +1397,7 @@ impl ClauseResolver<'_> {
                 if let Some(found) = self.static_member(head, *member) {
                     h::ExprKind::Call(
                         Box::new(h::Expr {
+                            site: self.sites.fresh(),
                             span: head.span.through(member.0),
                             kind: found?,
                         }),
@@ -1400,6 +1407,7 @@ impl ClauseResolver<'_> {
                     // `a.zero()`: a member a `where` bound on `a` names.
                     h::ExprKind::Call(
                         Box::new(h::Expr {
+                            site: self.sites.fresh(),
                             span: head.span.through(member.0),
                             kind: h::ExprKind::Associated(
                                 variable,
@@ -1436,6 +1444,7 @@ impl ClauseResolver<'_> {
             ),
         };
         Ok(h::Expr {
+            site: self.sites.fresh(),
             span: expression.span,
             kind,
         })
@@ -1513,11 +1522,7 @@ impl ClauseResolver<'_> {
     /// A word some declaration claims, numbered so checking can say which
     /// reading its position chose.
     fn dual(&mut self, spelling: Symbol, candidates: &[Symbol]) -> h::Dual {
-        let site = h::SiteId(*self.sites);
-        *self.sites = self
-            .sites
-            .checked_add(1)
-            .expect("fewer than 2^32 dual sites");
+        let site = self.sites.fresh();
         h::Dual {
             site,
             spelling,

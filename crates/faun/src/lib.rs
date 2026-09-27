@@ -12,9 +12,12 @@
 //! source spans. Module loading and qualification then produce symbol-based
 //! HIR without merging raw ASTs. Checking performs Hindley–Milner inference,
 //! nominal receiver-directed method resolution, and contextual literal
-//! elaboration. The package's functions are then specialized, each taking a
-//! function once for every set of callbacks it is handed, and lowered to
-//! Barb. [`compile_barb_to_image`] hands that Barb to
+//! elaboration, recording facts by HIR site ID rather than source span.
+//! Monomorphization produces concrete functions with explicit function values.
+//! Second-class checking rejects stored or returned functions; callback lowering
+//! then emits first-order IR directly, making a definition for each set of
+//! callbacks. Resource checking precedes Barb emission. [`compile_barb_to_image`]
+//! hands that Barb to
 //! `faun_core` for the machine tier and to the target for its image.
 
 use std::path::{Path, PathBuf};
@@ -135,12 +138,13 @@ fn lower_resolved(
     if let Some(main) = main {
         check::check_application_abi(&checked, host, main)?;
     }
-    let specialized =
-        specialize::monomorphize_package(&checked, host, main).map_err(|e| match e.at {
-            Some((module, span)) => checked.resolved.diagnostic(module, span, e.message),
-            None => Diagnostic::new(e.message),
-        })?;
-    let first_order = first_order::first_order(specialized);
+    let located = |error: specialize::SpecializeError| match error.at {
+        Some((module, span)) => checked.resolved.diagnostic(module, span, error.message),
+        None => Diagnostic::new(error.message),
+    };
+    let specialized = specialize::monomorphize_package(&checked, host, main).map_err(located)?;
+    second_class::check(&specialized).map_err(located)?;
+    let first_order = callbacks::lower(specialized).map_err(located)?;
     let routines = target.routines();
     linearity::check(&first_order, &routines, &checked.resolved)?;
     barb_lower::lower_package_to_barb(&checked, first_order, &routines)

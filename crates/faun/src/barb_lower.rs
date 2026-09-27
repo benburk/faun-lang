@@ -49,7 +49,8 @@ impl From<specialize::SpecializeError> for LowerError {
 #[cfg(test)]
 fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, LowerError> {
     let specialized = specialize::monomorphize_from_entry(checked, entry)?;
-    let first_order = crate::first_order::first_order(specialized);
+    crate::second_class::check(&specialized)?;
+    let first_order = crate::callbacks::lower(specialized)?;
     Lowerer::new(checked, None, first_order)?.lower()
 }
 
@@ -1875,7 +1876,8 @@ mod tests {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
             let specialized =
                 specialize::monomorphize_package(&checked, &host, Some(&main)).unwrap();
-            let first_order = crate::first_order::first_order(specialized);
+            crate::second_class::check(&specialized).unwrap();
+            let first_order = crate::callbacks::lower(specialized).unwrap();
             let mut program = lower_package_to_barb(&checked, first_order, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
