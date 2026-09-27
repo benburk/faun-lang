@@ -97,7 +97,11 @@ import, and rows of tags join by unification where values meet, so
 the body, which may answer only those tags, and open to callers, which may
 join it with their own. A row in a parameter is what a definition handles
 and stays closed. Clauses that take a row apart with no catch-all close it,
-so a caller cannot hand them a tag no clause matches.
+so a caller cannot hand them a tag no clause matches. A closed row answered
+where a wider one is still being worked out joins it, as in Ori: a definition
+answering `Bad(message)` in one clause and another's closed
+`[Absent, Found(Nat)]` in the next answers all three, the closed value
+rebuilt in the wider row where it is answered.
 
 A word some visible declaration also claims is read as its position's type
 decides: a tag row takes the tag, a nominal type its constructor, and a
@@ -106,6 +110,8 @@ where several types declare the word. `Type.Ctor` names a constructor
 outright, in expressions and patterns. Inside a type's block, a bare word the
 type declares means its own constructor. `exports {T}` keeps `T`'s
 constructors private, and a same-spelled structural tag never becomes one.
+`exports {T.*}` makes them public, and an importer may then select one by
+itself, as Ori does: `import std.host {Read}` binds that constructor alone.
 
 Faun specializes from the types checking recorded rather than inferring each
 specialization again, so where a closed row is answered as a signature's
@@ -118,6 +124,12 @@ written as its name, and its fields after it by their own `to_str`,
 `Invalid(3)`. A row a caller may still add tags to has neither. `Result`
 writes its own `equals`, both sides by their types' own, so
 `Nat.from_str(text) == Ok(48)` asks it of a `Nat` and a row.
+
+A closed record and a tuple have `equals`, `to_str` and `hash_into` the same
+way, and a tuple `cmp` too. A record is written with its fields in the order
+of their names, `{x: 1, y: 2}` however it was written, and a tuple with its
+members in order, `(1, a)`. A record with `*` has none of them: its other
+fields are a caller's.
 
 `value?` is an `Ok`'s value, or its `Err` answered at once by the clause or
 lambda it is written in, which answers a `Result`. Each `?` adds its
@@ -170,11 +182,20 @@ differently is refused, as is an alias that applies itself.
 
 Records are structural and unordered. `{name: Str, *}` is a record with at
 least a `name`, and reading `.name` asks exactly that of whatever record it
-is given; `{x, *}` in a pattern names some fields and takes the rest;
+is given. On a receiver nothing has typed yet, `.name` without parentheses is
+such a read, as in Ori, and never a guess at a method of that name; `{x, *}` in a pattern names some fields and takes the rest;
 `{x: e, *r}` is `r` with `x` replaced, and adds or retypes nothing. A tuple
+A record literal handed alone to a function whose signature pairs two values of
+one shape, `(F(a, e), F(b, e), (a, b) -> c) -> F(c, e)`, is that function
+applied a field at a time, as Ori's record builders are: `both({x: rx, y: ry,
+z: rz})` pairs `rx` and `ry` into `{x, y}`, then that with `rz` into the whole
+record, each field evaluated once in the order written. The signature's shape
+asks for it, never the function's name.
+
 `(a, b)` is a positional product of two or more, built by its literal and
 taken apart by a pattern, and never unifies with a record. A binding may
-take a record or tuple apart, since that always matches. A closed record and a
+take a record or tuple apart, since that always matches, and a type's one
+constructor. A closed record and a
 tuple have `equals` without declaring it, as a tag row does, each component
 equal by its own type's `equals`, and a tuple has `cmp`, its positions in
 order with `Order.then`;
@@ -191,8 +212,8 @@ is nought. `Int` has no bitwise operations.
 `Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by
 defining one `cmp : (T, T) -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of
 its `Order`, so they cannot disagree; `Bool`, `Nat`, `Int` and `U8` define it. Natural subtraction is
-monus. Signed division truncates toward zero and its remainder has the dividend's
-sign. For every type, division by zero returns zero and `a % 0` returns `a`.
+monus. Signed division is Euclidean, as Ori's is: the remainder is never negative,
+so `-7 / 3` is `-3` and `-7 % 3` is `2`. For every type, division by zero returns zero and `a % 0` returns `a`.
 `U8` arithmetic uses unsigned representatives and wraps modulo 256; in particular,
 `0 - 1` is 255 rather than natural zero.
 
@@ -232,7 +253,9 @@ bytes, at most 64 KiB read at once (1 KiB on sim65), and answers how many; `read
 each bounded by fuel so it is seen to stop. The `Host`, `Stdin`, `Stdout`,
 `Stderr`, `Files` and `File` constructors remain private, so only the target
 makes one. A method of a value's own type is reached whether or not the type
-was imported, so `host.stdout.write_all!(bytes)` needs only `Host`.
+was imported, so `host.stdout.write_all!(bytes)` needs only `Host`. A method a
+type's block writes without a signature is one all the same, called with a dot
+from anywhere its type reaches; its type is inferred before its callers'.
 
 Every stream is what a descriptor names, the standard three first, and a
 target answers for four routines over descriptors: bytes written, bytes read,
@@ -299,7 +322,10 @@ begins a line of its own.
 alternative binds the same names at the same types. A clause holding one is
 a row for each choice of alternatives, checked and covered as those rows
 would be. A binding's or a lambda's pattern must match whatever it is
-handed, and holds none.
+handed, and holds none: names, records, tuples, and the constructor of a
+type that has no other, as in `(value, Memo(entries)) = step(n)`. A binding may shadow a name already in scope, as in Ori: its value reads
+the name as it was, and every line after reads the nearest, so
+`v = v + 1` counts on. One pattern binds each name once.
 
 ```
 bucket : Nat -> Nat
@@ -390,12 +416,13 @@ expectation was written; what the compiler settled while compiling, it
 settled before the program ran.
 
 `Host` also has Ori's runners, which finish the program for it: `run!`,
-`run_args!` and `run_text!` run a pure function of nothing, of
-`{args: List(Str)}` or of `{stdin: Str}` and print what it answers;
-`run_result!`, `run_result_args!` and `run_result_text!` do the same for one
-answering a `Result`, reporting an error on standard error as `error: ...`. Each finishes with status nought, or
-one where something went wrong, so `main!(host) -> host.run_text!(app)` is a
-whole program.
+`run_args!`, `run_text!` and `run_input!` run a pure function of nothing, of
+`{args: List(Str)}`, of `{stdin: Str}` or of both, and print what it answers;
+`run_result!`, `run_result_args!`, `run_result_text!` and `run_result_input!`
+do the same for one answering a `Result`, reporting an error on standard error
+as `error: ...`. Each finishes with status nought, or one where something went
+wrong, so `main!(host) -> host.run_text!(app)` is a whole program, and
+`complete!` finishes with a status a program worked out itself.
 
 A target answers for smaller primitives than these: moving a run of bytes that
 lie in memory, answering how many or `-errno`. Machine lowering builds each

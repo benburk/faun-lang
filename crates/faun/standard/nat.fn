@@ -82,6 +82,20 @@ Nat : [Zero, Succ(Nat)].(
   from_str(text) -> nat_digits(text.to_utf8(), 0, False)
 
   # `hasher` with `n` fed: its value.
+  # `Ok(n)` when `i` is the natural `n`; otherwise `Err(Negative)`: the
+  # fallible narrowing `Int.of_nat` widens from, where `Int.abs` drops the
+  # sign instead.
+  from_int : Int -> Result(Nat, [Negative])
+  from_int(Pos(n)) -> Ok(n)
+  from_int(NegSucc(_)) -> Err(Negative)
+
+  # `base` raised to the `exponent`-th power, modulo `modulus`, each
+  # product taken modulo as it is made, so no intermediate grows past it:
+  # `pow` then `%` would build `255 ^ 255`, a 2048-bit number, only to
+  # throw most of it away. By squaring, as `pow` goes.
+  pow_mod : (Nat, Nat, Nat) -> Nat
+  pow_mod(base, exponent, modulus) -> pow_mod_into(base % modulus, exponent, 1 % modulus, modulus)
+
   hash_into : (Nat, h) -> h where Hasher(h)
   hash_into(n, hasher) -> hasher.write_u64(U64.of_nat(n))
 
@@ -143,6 +157,13 @@ pow_into(base, exponent, built) ->
   kept = (exponent % 2 == 1).select(built * base, built)
   pow_into(base * base, exponent / 2, kept)
 
+# `built` times `base` to the `exponent`, modulo `modulus`.
+pow_mod_into : (Nat, Nat, Nat, Nat) -> Nat
+pow_mod_into(_, 0, built, _) -> built
+pow_mod_into(base, exponent, built, modulus) ->
+  kept = (exponent % 2 == 1).select(built * base % modulus, built)
+  pow_mod_into(base * base % modulus, exponent / 2, kept, modulus)
+
 nat_below : (Nat, Nat) -> Bool
 nat_below(_, 0) -> False
 nat_below(0, Succ(_)) -> True
@@ -169,3 +190,5 @@ expect (12 & 10) == 8 & (12 | 10) == 14 & (12 ^ 10) == 6
 expect (0 & 7) == 0 & (0 | 7) == 7 & (7 ^ 7) == 0 & (5 | 0) == 5
 expect (1267650600228229401496703205376 | 1) == 1267650600228229401496703205377
 expect 2.pow(0) == 1 & 2.pow(10) == 1024 & 3.pow(5) == 243 & 0.pow(0) == 1 & 0.pow(3) == 0
+expect (-3).pow(3) == -27 & Nat.pow_mod(3, 200, 1000) == 1 & Nat.pow_mod(5, 0, 1) == 0
+expect Nat.from_int(-2) == Err(Negative) & Nat.from_int(4) == Ok(4)

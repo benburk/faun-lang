@@ -170,6 +170,8 @@ struct Lowerer<'a> {
     constructor_ids: HashMap<(Symbol, Type), CtorId>,
     record_constructor_ids: HashMap<Type, CtorId>,
     record_wrappers: HashMap<Type, Type>,
+    /// The fields of each type with one constructor a binding takes apart.
+    sole_constructors: HashMap<Type, Vec<Type>>,
     function_ids: HashMap<FunctionKey, FnId>,
     /// Each pair of types a value is widened between, which one function
     /// rebuilding it answers for.
@@ -201,6 +203,7 @@ impl<'a> Lowerer<'a> {
             constructor_ids: HashMap::new(),
             record_constructor_ids: HashMap::new(),
             record_wrappers: HashMap::new(),
+            sole_constructors: HashMap::new(),
             function_ids: HashMap::new(),
             widenings: BTreeSet::new(),
             widen_ids: HashMap::new(),
@@ -324,13 +327,55 @@ impl<'a> Lowerer<'a> {
     fn collect_body(&mut self, body: &d::Body, answer: &Type) -> Result<(), LowerError> {
         for binding in &body.bindings {
             self.collect_expr(&binding.value, answer)?;
-            if !takes_apart(&binding.pattern) {
-                return Err(error(
-                    "a binding takes a value apart only as records and tuples, which always match",
-                ));
-            }
+            self.collect_taken_apart(&binding.pattern, &binding.value.ty)
+                .map_err(|mut refused| {
+                    refused.at = Some((binding.value.module, binding.value.span));
+                    refused
+                })?;
         }
         self.collect_expr(&body.result, answer)
+    }
+
+    /// Whether a binding's pattern always matches a value of `ty`, noting
+    /// the fields of each type it takes apart by its one constructor: names,
+    /// records and tuples always do, and so does the constructor of a type
+    /// that has no other.
+    fn collect_taken_apart(&mut self, pattern: &Pattern, ty: &Type) -> Result<(), LowerError> {
+        match (pattern, ty) {
+            (Pattern::Wild | Pattern::Bind(_), _) => Ok(()),
+            (Pattern::Record(named), Type::Record(fields)) => {
+                for (name, pattern) in named {
+                    let (_, field) = fields
+                        .iter()
+                        .find(|(found, _)| found == name)
+                        .ok_or_else(|| error("a record pattern names a field its type lacks"))?;
+                    self.collect_taken_apart(pattern, field)?;
+                }
+                Ok(())
+            }
+            (Pattern::Product(members), Type::Tuple(types)) => members
+                .iter()
+                .zip(types)
+                .try_for_each(|(pattern, ty)| self.collect_taken_apart(pattern, ty)),
+            (Pattern::Constructor(constructor, patterns), Type::Named(..)) => {
+                let constructors = self.constructors_of(ty)?;
+                let [(only, fields)] = constructors.as_slice() else {
+                    return Err(error(format!(
+                        "a binding takes apart only what always matches, and `{}` is one of several constructors",
+                        source_name(*constructor, &self.resolved.symbols)
+                    )));
+                };
+                debug_assert_eq!(only, constructor, "checking matched the constructor");
+                for (pattern, field) in patterns.iter().zip(fields) {
+                    self.collect_taken_apart(pattern, field)?;
+                }
+                self.sole_constructors.insert(ty.clone(), fields.clone());
+                Ok(())
+            }
+            _ => Err(error(
+                "a binding takes a value apart only as names, records, tuples and a type's one constructor, which always match",
+            )),
+        }
     }
 
     fn collect_expr(&mut self, expression: &Expr, answer: &Type) -> Result<(), LowerError> {
@@ -631,6 +676,7 @@ impl<'a> Lowerer<'a> {
                 constructor_ids: &self.constructor_ids,
                 record_constructor_ids: &self.record_constructor_ids,
                 record_wrappers: &self.record_wrappers,
+                sole_constructors: &self.sole_constructors,
                 function_ids: &self.function_ids,
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
@@ -720,6 +766,7 @@ impl<'a> Lowerer<'a> {
                 constructor_ids: &self.constructor_ids,
                 record_constructor_ids: &self.record_constructor_ids,
                 record_wrappers: &self.record_wrappers,
+                sole_constructors: &self.sole_constructors,
                 function_ids: &self.function_ids,
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
@@ -1144,6 +1191,7 @@ struct EmitContext<'a> {
     constructor_ids: &'a HashMap<(Symbol, Type), CtorId>,
     record_constructor_ids: &'a HashMap<Type, CtorId>,
     record_wrappers: &'a HashMap<Type, Type>,
+    sole_constructors: &'a HashMap<Type, Vec<Type>>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
     widen_ids: &'a HashMap<(Type, Type), FnId>,
     call_sites: &'a RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
@@ -1391,7 +1439,7 @@ fn emit_bindings(
     )
 }
 
-/// Take `value` apart as `pattern`, a record or tuple of names, then go on.
+/// Take `value` apart as `pattern`, which always matches, then go on.
 fn destructure(
     context: &EmitContext<'_>,
     builder: &mut Builder<'_>,
@@ -1419,10 +1467,15 @@ fn destructure(
         (Pattern::Product(members), Type::Tuple(types)) => {
             members.iter().cloned().zip(types.iter().cloned()).collect()
         }
-        _ => unreachable!("a binding takes apart only records and tuples"),
+        (Pattern::Constructor(_, members), Type::Named(..)) => members
+            .iter()
+            .cloned()
+            .zip(context.sole_constructors[ty].iter().cloned())
+            .collect(),
+        _ => unreachable!("collection took apart only what always matches"),
     };
     builder.match_(value, context.type_ids[ty], |builder, _, held| {
-        let held = held.to_vec();
+        let held = context.arm_fields(builder, ty, held);
         destructure_each(context, builder, &held, &parts, locals.clone(), then)
     })
 }
@@ -1448,17 +1501,6 @@ fn destructure_each(
         locals,
         &|builder, locals| destructure_each(context, builder, held, parts, locals, then),
     )
-}
-
-/// Whether a binding's pattern is one lowering takes a value apart with:
-/// names, and records and tuples of them, which always match.
-fn takes_apart(pattern: &Pattern) -> bool {
-    match pattern {
-        Pattern::Wild | Pattern::Bind(_) => true,
-        Pattern::Record(fields) => fields.iter().all(|(_, pattern)| takes_apart(pattern)),
-        Pattern::Product(members) => members.iter().all(takes_apart),
-        _ => false,
-    }
 }
 
 /// `body` with every `value?` in it bound on its own, in the order it is
@@ -1865,7 +1907,7 @@ mod tests {
     #[test]
     fn folds_standard_division_remainder_and_their_zero_cases() {
         let checked = checked_example("arithmetic.fn");
-        for (suffix, expected) in [("$$natural_arithmetic", 14), ("$$signed_arithmetic", 10)] {
+        for (suffix, expected) in [("$$natural_arithmetic", 14), ("$$signed_arithmetic", 8)] {
             let entry = named(&checked, suffix);
             let mut program = program(&checked, entry).unwrap();
             barb::optimize(&mut program);

@@ -107,6 +107,7 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
         &mut loaded.symbols,
     )
     .map_err(|error| located(&loaded, error))?;
+    crate::builders::desugar(&mut modules);
     Ok(ResolvedProgram {
         module_sources: loaded.modules.iter().map(|module| module.source).collect(),
         package: loaded.package,
@@ -380,6 +381,15 @@ fn expand_signature(
             constraint_aliases,
             symbols,
         )?;
+    }
+    // `f : Step`, where `Step` is a function type, declares the function
+    // `Step` is, as it would written out: its parameters are the function's.
+    if signature.parameters.is_empty()
+        && let h::Type::Function(parameters, result) = &signature.result
+    {
+        let (parameters, result) = (parameters.clone(), (**result).clone());
+        signature.parameters = parameters;
+        signature.result = result;
     }
     Ok(())
 }
@@ -997,6 +1007,7 @@ fn resolve_clause(
         locals: HashMap::new(),
         next_local: 0,
         alternative: None,
+        shadowing: None,
     };
     let patterns = clause
         .patterns
@@ -1011,8 +1022,15 @@ fn resolve_clause(
     let mut bindings = Vec::with_capacity(clause.body.bindings.len());
     for binding in &clause.body.bindings {
         let value = resolver.expr(&binding.value)?;
-        let pattern = resolver.total_pattern(&binding.pattern)?;
-        bindings.push(h::Binding { pattern, value });
+        // The value read the names as they were; what follows reads the
+        // ones this binds, a name it rebinds shadowing the one before.
+        resolver.shadowing = Some(std::collections::HashSet::new());
+        let pattern = resolver.total_pattern(&binding.pattern);
+        resolver.shadowing = None;
+        bindings.push(h::Binding {
+            pattern: pattern?,
+            value,
+        });
     }
     let result = resolver.expr(&clause.body.result)?;
     Ok(h::Clause {
@@ -1038,6 +1056,10 @@ struct ClauseResolver<'a> {
     /// Inside an alternative of an `|` after its first, the locals the first
     /// bound, which a name bound again here is, rather than a new one.
     alternative: Option<HashMap<Symbol, h::LocalId>>,
+    /// While a binding's pattern is resolved, the names it has bound so
+    /// far: a binding may shadow a name already in scope, though not one it
+    /// binds itself.
+    shadowing: Option<std::collections::HashSet<Symbol>>,
 }
 
 impl ClauseResolver<'_> {
@@ -1104,7 +1126,11 @@ impl ClauseResolver<'_> {
             s::Pattern::Wild(_) => Ok(h::Pattern::Wild),
             s::Pattern::Bind(name) => {
                 let spelling = self.symbols.intern(name.text(self.source));
-                if self.locals.contains_key(&spelling) {
+                let again_here = match &mut self.shadowing {
+                    Some(bound) => !bound.insert(spelling),
+                    None => self.locals.contains_key(&spelling),
+                };
+                if again_here {
                     return Err(error(
                         self.module,
                         name.0,

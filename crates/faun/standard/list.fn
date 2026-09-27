@@ -198,6 +198,22 @@ List(a) : [Nil, Cons(a, List(a))].(
   group_by(values, key) ->
     Map.map_values(fold(values, Map.empty(), |table, value| gathered(table, key(value), value)), reverse)
 
+  # `values` cut into a quotient and a remainder: `complete` holds every
+  # whole run of exactly `size` elements, in order, and `remainder` the short
+  # run left at the end. Nothing is lost: `complete.flatten()` followed by
+  # `remainder` is `values`. At nought there is no whole run, so everything
+  # remains, as `Nat`'s `x / 0` is 0 and `x % 0` is `x`.
+  blocks : (List(a), Nat) -> {complete: List(List(a)), remainder: List(a)}
+  blocks(values, 0) -> {complete: [], remainder: values}
+  blocks(values, Succ(width)) -> blocks_into(values, width, width, [], [])
+
+  # Each element mapped while a state goes left to right beside it: `f`
+  # takes the state and an element, and answers the next state and that
+  # element's result. The final state comes back with the results, so one
+  # pass can both rewrite a list and carry something out of it.
+  map_accum : (List(a), s, (s, a) -> (s, b)) -> (s, List(b))
+  map_accum(values, state, f) -> map_accum_into(values, state, f, [])
+
   partition : (List(a), a -> Bool) -> (List(a), List(a))
   partition(values, keep) -> partition_into(values, keep, [], [])
 
@@ -318,6 +334,21 @@ trail_into([head, *tail], state, f, built) ->
   next = f(state, head)
   trail_into(tail, next, f, [next, *built])
 
+# The runs of `blocks`: `left` more elements before the one closing the run
+# being built, `width` more than none in each.
+blocks_into : (List(a), Nat, Nat, List(a), List(List(a))) -> {complete: List(List(a)), remainder: List(a)}
+blocks_into([], _, _, block, done) -> {complete: reverse_into(done, []), remainder: reverse_into(block, [])}
+blocks_into([value, *rest], width, 0, block, done) ->
+  blocks_into(rest, width, width, [], [reverse_into(block, [value]), *done])
+blocks_into([value, *rest], width, Succ(left), block, done) ->
+  blocks_into(rest, width, left, [value, *block], done)
+
+map_accum_into : (List(a), s, (s, a) -> (s, b), List(b)) -> (s, List(b))
+map_accum_into([], state, _, built) -> (state, reverse_into(built, []))
+map_accum_into([value, *rest], state, f, built) ->
+  (next, result) = f(state, value)
+  map_accum_into(rest, next, f, [result, *built])
+
 # The first element, as `get` answers it.
 front : List(a) -> Result(a, [OutOfBounds])
 front([]) -> Err(OutOfBounds)
@@ -409,3 +440,7 @@ expect [1, 2, 3, 4, 5].partition(|n| n % 2 == 0) == ([2, 4], [1, 3, 5])
 expect [1, 2, 3].split_at(1) == ([1], [2, 3]) & [1].split_at(5) == ([1], [])
 expect [1, 2].cross([7, 8, 9]) == [(1, 7), (1, 8), (1, 9), (2, 7), (2, 8), (2, 9)] & [1].cross([0].drop(1)).is_empty()
 expect [1, 20, 3].to_str() == "[1, 20, 3]" & [0].drop(1).to_str() == "[]" & "${[[1], []]}" == "[[1], []]"
+expect [1, 2, 3, 4, 5].blocks(2) == {complete: [[1, 2], [3, 4]], remainder: [5]}
+expect [1, 2, 3, 4].blocks(2) == {complete: [[1, 2], [3, 4]], remainder: []}
+expect [1, 2].blocks(0) == {complete: [], remainder: [1, 2]}
+expect [1, 2, 3].map_accum(10, |sum, x| (sum + x, sum)) == (16, [10, 11, 13])

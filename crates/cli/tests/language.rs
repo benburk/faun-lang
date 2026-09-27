@@ -167,6 +167,164 @@ const RUNNING: &[(&str, &str, u32)] = &[
         96,
     ),
     (
+        "a guard's gap that closes shows a loop stops",
+        "upto : (Nat, Nat) -> Nat
+         upto(i, n) if i < n -> upto(Succ(i), n)
+         upto(i, _) -> i
+
+         countdown : (Nat, Nat) -> Nat
+         countdown(n, total) if n > 0 -> countdown(n - 1, total + 1)
+         countdown(_, total) -> total
+
+         bisect : (Nat, Nat, Nat) -> Nat
+         bisect(n, lo, hi) -> probe(n, lo, (lo + hi) / 2, hi)
+
+         probe : (Nat, Nat, Nat, Nat) -> Nat
+         probe(_, lo, mid, hi) if mid <= lo | hi <= mid -> lo
+         probe(n, lo, mid, hi) if mid * mid <= n -> bisect(n, mid, hi)
+         probe(n, lo, mid, _) -> bisect(n, lo, mid)
+
+         main! : Host -> []
+         main!(host) ->
+           n = host.args.len()
+           host.exit!((upto(n, 5) + countdown(n + 2, 0) + bisect(n + 15, 0, n + 16)) % 64)",
+        5 + 3 + 4,
+    ),
+    (
+        "a sift down closes the gap to its bound, once built",
+        "at : (List(Nat), Nat) -> Nat
+         at(xs, i) -> xs.get_or(i, 0)
+
+         larger : (List(Nat), Nat, Nat, Nat) -> Nat
+         larger(xs, a, b, n) if b < n & at(xs, a) < at(xs, b) -> b
+         larger(_, a, _, _) -> a
+
+         sift : (List(Nat), Nat, Nat) -> List(Nat)
+         sift(xs, i, n) -> settle(xs, i, larger(xs, larger(xs, i, 2 * i + 1, n), 2 * i + 2, n), n)
+
+         settle : (List(Nat), Nat, Nat, Nat) -> List(Nat)
+         settle(xs, i, top, n) if i < top & top < n -> sift(xs.exchange(i, top).ok_or(xs), top, n)
+         settle(xs, _, _, _) -> xs
+
+         main! : Host -> []
+         main!(host) ->
+           heap = sift([host.args.len(), 9, 4, 7, 8], 0, 5)
+           host.exit!((at(heap, 0) * 10 + at(heap, 1)) % 128)",
+        98,
+    ),
+    (
+        "a parser goes round on the rest it answers inside an `Ok`",
+        "Read : [Found(Nat, List(Nat)), NotFound]
+
+         until : (List(Nat), Nat, Nat) -> Read
+         until([], _, _) -> NotFound
+         until([x, *rest], stop, seen) if x == stop -> Found(seen, rest)
+         until([_, *rest], stop, seen) -> until(rest, stop, seen + 1)
+
+         value : List(Nat) -> Result((Nat, List(Nat)), [Bad])
+         value([]) -> Err(Bad)
+         value([0, *rest]) -> list(rest, 0)
+         value([x, *rest]) -> Ok((x, rest))
+
+         list : (List(Nat), Nat) -> Result((Nat, List(Nat)), [Bad])
+         list([], _) -> Err(Bad)
+         list([1, *rest], total) -> Ok((total, rest))
+         list(bytes, total) ->
+           (x, after) = value(bytes)?
+           list(after, total + x)
+
+         skipped : List(Nat) -> Nat
+         skipped([]) -> 0
+         skipped([5, *rest]) -> read(until(rest, 6, 0))
+         skipped([_, *rest]) -> skipped(rest) + 1
+
+         read : Read -> Nat
+         read(Found(seen, rest)) -> seen + skipped(rest)
+         read(NotFound) -> 0
+
+         main! : Host -> []
+         main!(host) ->
+           n = host.args.len()
+           (total, _) = value([0, 2, n, 3, 1]).ok_or((0, []))
+           host.exit!((total + skipped([n, 5, 7, 7, 6, n])) % 64)",
+        2 + (1 + 2 + 1),
+    ),
+    (
+        "a closed row joins a wider one where answers meet",
+        "merge(Absent) -> Found(1)
+         merge(Found(n)) -> Found(n + 1)
+
+         scan(0) -> Absent
+         scan(Succ(n)) -> merge(scan(n))
+
+         scanned(0) -> Bad(7)
+         scanned(n) -> scan(n)
+
+         value : [Absent, Found(Nat), Bad(Nat)] -> Nat
+         value(Absent) -> 0
+         value(Found(n)) -> n
+         value(Bad(n)) -> n
+
+         main! : Host -> []
+         main!(host) -> host.exit!(value(scanned(host.args.len() + 2)) % 64)",
+        3,
+    ),
+    (
+        "a bare word on a receiver not yet known reads a field",
+        "Args : Nat.(
+           rest : Args -> Nat
+           rest(Args(n)) -> n
+         )
+
+         count(config) -> config.rest.len() + config.size
+
+         main! : Host -> []
+         main!(host) -> host.exit!((count({rest: [1, 2], size: 4}) + Args(3).rest) % 64)",
+        9,
+    ),
+    (
+        "a signature may name a function type by its alias",
+        "Step = (Nat -> Nat)
+
+         twice : (Step, Nat) -> Nat
+         twice(step, n) -> step(step(n))
+
+         bump : Step
+         bump(n) -> n + 3
+
+         main! : Host -> []
+         main!(host) -> host.exit!(twice(bump, host.args.len()) % 64)",
+        7,
+    ),
+    (
+        "a binding shadows a name, and what follows reads the nearest",
+        "main! : Host -> []
+         main!(host) ->
+           n = host.args.len()
+           n = n + 1
+           (n, m) = (n * 10, n)
+           host.exit!((n + m) % 64)",
+        22,
+    ),
+    (
+        "a binding takes apart a type's one constructor",
+        "Memo : List(Nat)
+         Pair : [Pair(Nat, Nat)]
+         Box : {size: Nat, name: Str}
+
+         step : Nat -> (Nat, Memo)
+         step(n) -> (n + 1, Memo([n, n]))
+
+         main! : Host -> []
+         main!(host) ->
+           (value, Memo(entries)) = step(host.args.len())
+           Pair(left, right) = Pair(value, 10)
+           Box({size, *}) = Box({size: right, name: \"b\"})
+           Box(whole) = Box({size: left, name: \"bb\"})
+           host.exit!((value + entries.len() + size + whole.size + whole.name.len()) % 64)",
+        2 + 2 + 10 + 2 + 2,
+    ),
+    (
         "a numeral takes the word its position asks for",
         "byte : U8 -> U8
          byte(b) -> b + 250
@@ -396,6 +554,69 @@ const RUNNING: &[(&str, &str, u32)] = &[
 
 /// Programs refused, and what the message says.
 const REFUSED: &[(&str, &str, &str)] = &[
+    (
+        "a parser answering what it was handed shows nothing stops",
+        "same : List(Nat) -> Result((Nat, List(Nat)), [Bad])
+         same(xs) -> Ok((0, xs))
+
+         loops : List(Nat) -> Nat
+         loops([]) -> 0
+         loops(xs) -> again(same(xs))
+
+         again : Result((Nat, List(Nat)), [Bad]) -> Nat
+         again(Ok((_, rest))) -> loops(rest)
+         again(Err(_)) -> 0",
+        "nothing here shows `loops`, `again` stops",
+    ),
+    (
+        "a guard keeping a gap proves nothing where the gap stays",
+        "still : (Nat, Nat) -> Nat
+         still(i, n) if i < n -> still(i, n)
+         still(i, _) -> i",
+        "nothing here shows `still` stops",
+    ),
+    (
+        "a gap a loop widens proves nothing",
+        "grows : (Nat, Nat) -> Nat
+         grows(i, n) if i < n -> grows(i, Succ(n))
+         grows(i, _) -> i",
+        "nothing here shows `grows` stops",
+    ),
+    (
+        "a guard read the wrong way round proves nothing",
+        "wrong : (Nat, Nat) -> Nat
+         wrong(i, n) if i >= n -> wrong(Succ(i), n)
+         wrong(i, _) -> i",
+        "nothing here shows `wrong` stops",
+    ),
+    (
+        "a comparison that compares nothing says nothing",
+        "bogus_lt : (Nat, Nat) -> Bool
+         bogus_lt(_, _) -> True
+
+         bogus : (Nat, Nat) -> Nat
+         bogus(i, n) if bogus_lt(i, n) -> bogus(Succ(i), n)
+         bogus(i, _) -> i",
+        "nothing here shows `bogus` stops",
+    ),
+    (
+        "a pattern binds each name once",
+        "twice : Nat -> Nat
+         twice(n) ->
+           (a, a) = (n, n)
+           a",
+        "local `a` is bound more than once",
+    ),
+    (
+        "a binding takes apart only a constructor that always matches",
+        "Two : [One(Nat), Other]
+
+         first : Two -> Nat
+         first(t) ->
+           One(n) = t
+           n",
+        "a binding takes apart only what always matches, and `One` is one of several constructors",
+    ),
     (
         "a range runs up",
         "digit : U8 -> Bool

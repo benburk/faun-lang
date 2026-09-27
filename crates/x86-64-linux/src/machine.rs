@@ -445,6 +445,9 @@ impl AllocatedBuilder {
         self.push(Inst::Syscall);
     }
 
+    /// Drop a narrowing to a byte just before the exit, which keeps only
+    /// the status's low byte anyway. A narrower one takes more off than the
+    /// exit does, so it stays.
     pub(crate) fn omit_redundant_exit_narrow(&mut self) {
         let len = self.code.insts().len();
         match self.code.insts().get(len.saturating_sub(2)..) {
@@ -460,7 +463,7 @@ impl AllocatedBuilder {
                         width: RegisterWidth::Word,
                     },
                 ],
-            ) if narrowed == src && *bits <= 8 => {
+            ) if narrowed == src && *bits == 8 => {
                 self.code.remove(len - 2);
                 let Some(Inst::Move { width, .. }) = self.code.insts_mut().last_mut() else {
                     unreachable!("the matched exit transfer remains last");
@@ -471,7 +474,7 @@ impl AllocatedBuilder {
                 self.code.insts().last(),
                 Some(Inst::Narrow {
                     dst: Reg::Rdi,
-                    bits: 0..=8
+                    bits: 8
                 })
             ) =>
             {

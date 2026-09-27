@@ -181,13 +181,57 @@ fn argument_runners_hand_the_program_its_arguments() {
     assert_eq!(run(&second, &[]), (Some(1), String::new()));
 }
 
+/// The input runners hand the program its arguments and standard input
+/// together, and `complete!` finishes with the status it is handed.
+#[test]
+fn input_runners_hand_the_program_arguments_and_input() {
+    let run = |package: &support::Package, args: &[&str], input: &str| {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+            .arg("run")
+            .arg(package.entry())
+            .arg("--")
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(&mut child.stdin.take().unwrap(), input.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        (
+            output.status.code(),
+            String::from_utf8(output.stdout).unwrap(),
+        )
+    };
+    let both = support::Package::new(
+        "run-input",
+        "both : {args: List(Str), stdin: Str} -> Str
+         both({args, stdin}) -> \"${args.len()} ${stdin}\"
+
+         main!(host) -> host.run_input!(both)",
+    );
+    assert_eq!(run(&both, &["a"], "in"), (Some(0), "2 in".to_owned()));
+    let named = support::Package::new(
+        "run-result-input",
+        "named : {args: List(Str), stdin: Str} -> Result(Str, [OutOfBounds])
+         named({args, stdin}) ->
+           name = args.get(1)?
+           Ok(\"${name}: ${stdin}\")
+
+         main!(host) -> host.run_result_input!(named)",
+    );
+    assert_eq!(run(&named, &["x"], "y"), (Some(0), "x: y".to_owned()));
+    assert_eq!(run(&named, &[], "y"), (Some(1), String::new()));
+    let completing = support::Package::new("complete", "main!(host) -> host.complete!(5)");
+    assert_eq!(run(&completing, &[], ""), (Some(5), String::new()));
+}
+
 /// The grammar, construct by construct: every expectation of the syntax
 /// examples holds.
 #[test]
 fn the_syntax_examples_hold() {
     let (failed, count) = support::test_file(&example("syntax/main.fn"));
     assert_eq!(failed, Vec::<String>::new());
-    assert_eq!(count, 92);
+    assert_eq!(count, 93);
 }
 
 /// The n-body benchmark's energies, after nought, one and ten steps, are

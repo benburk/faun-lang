@@ -996,6 +996,30 @@ fn it_greets_whom_it_is_handed() {
     assert_eq!(execute_counts(&program, &counts), greeted);
 }
 
+/// The strings a program is handed are byte strings whatever else it holds:
+/// a list of numbers built beside them is not taken for their type.
+#[test]
+fn it_is_handed_strings_beside_a_list_of_numbers() {
+    let program = read(
+        "import std.host {Host}
+
+         main! : Host -> []
+         main!(host) ->
+           name = host.args.get_or(1, \"world\")
+           sizes = [name.len(), host.args.len()]
+           host.println!(\"Hello, ${name}!\")
+           host.exit!((sizes.len() + sizes.sum()) % 8)",
+    )
+    .expect("a program reading its arguments");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(
+        execute_counts(&program, &[2]),
+        [((2 + 5 + 2) % 8, "Hello, dummy!\n".to_owned())]
+    );
+}
+
 /// Advent of Code 2015, day one, on an input far longer than a stack of
 /// frames goes: each step calls the next in tail position, which is a loop.
 /// A 16-bit machine's heap holds a shorter walk, still past its frames.

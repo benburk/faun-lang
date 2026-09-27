@@ -79,6 +79,72 @@ U64 : Nat.(
   rotate_right(word, amount) -> rotate_left(word, 64 - amount % 64)
 
   # `hasher` with `a` fed: itself.
+  # `n` as a word when it fits, and a refusal when it does not: the
+  # checked narrowing, for values worked out at run time.
+  from_nat : Nat -> Result(U64, [TooBig])
+  from_nat(n) if n < 0x10000000000000000 -> Ok(of_nat(n))
+  from_nat(_) -> Err(TooBig)
+
+  # `base` raised to the `exponent`-th power, modulo 0x10000000000000000, by
+  # `Nat.pow_mod`, so no intermediate grows past the ring.
+  pow : (U64, Nat) -> U64
+  pow(U64(base), exponent) -> U64(base.pow_mod(exponent, 0x10000000000000000))
+
+  # The smaller of `a` and `b`.
+  min : (U64, U64) -> U64
+  min(U64(a), U64(b)) -> U64(a.min(b))
+
+  # The larger of `a` and `b`.
+  max : (U64, U64) -> U64
+  max(U64(a), U64(b)) -> U64(a.max(b))
+
+  # `word` as a `U64`; widening cannot wrap.
+  of_u8 : U8 -> U64
+  of_u8(word) -> U64(U8.to_nat(word))
+
+  # `word` as a `U64`; widening cannot wrap.
+  of_u16 : U16 -> U64
+  of_u16(word) -> U64(U16.to_nat(word))
+
+  # `word` as a `U64`; widening cannot wrap.
+  of_u32 : U32 -> U64
+  of_u32(word) -> U64(U32.to_nat(word))
+
+  # The word's 8 bytes, least significant first. The count is the
+  # contract, so the shape says it, and taking the tuple apart always matches.
+  le_bytes : U64 -> (U8, U8, U8, U8, U8, U8, U8, U8)
+  le_bytes(word) -> (
+    U8.of_nat(to_nat(word)),
+    U8.of_nat(to_nat(shift_right(word, 8))),
+    U8.of_nat(to_nat(shift_right(word, 16))),
+    U8.of_nat(to_nat(shift_right(word, 24))),
+    U8.of_nat(to_nat(shift_right(word, 32))),
+    U8.of_nat(to_nat(shift_right(word, 40))),
+    U8.of_nat(to_nat(shift_right(word, 48))),
+    U8.of_nat(to_nat(shift_right(word, 56))),
+  )
+
+  # The word whose little-endian bytes are these, least significant first.
+  # The arity makes the width static, so every input converts.
+  of_le_bytes : (U8, U8, U8, U8, U8, U8, U8, U8) -> U64
+  of_le_bytes(a, b, c, d, e, f, g, h) ->
+    of_u8(a) |
+    shift_left(of_u8(b), 8) |
+    shift_left(of_u8(c), 16) |
+    shift_left(of_u8(d), 24) |
+    shift_left(of_u8(e), 32) |
+    shift_left(of_u8(f), 40) |
+    shift_left(of_u8(g), 48) |
+    shift_left(of_u8(h), 56)
+
+  # The word's low 32 bits.
+  to_u32 : U64 -> U32
+  to_u32(U64(n)) -> U32.of_nat(n)
+
+  # The word's low 8 bits.
+  to_u8 : U64 -> U8
+  to_u8(U64(n)) -> U8.of_nat(n)
+
   hash_into : (U64, h) -> h where Hasher(h)
   hash_into(a, hasher) -> hasher.write_u64(a)
 
@@ -87,3 +153,6 @@ U64 : Nat.(
 )
 
 expect U64.of_nat(0).bit_not() == 0xffffffffffffffff
+expect U64.of_le_bytes(1, 0, 0, 0, 0, 0, 0, 0x80) == 0x8000000000000001
+expect U64.of_nat(0x1122334455667788).to_u32() == 0x55667788 & U64.of_nat(0x1ff).to_u8() == 0xff
+expect U32.of_nat(7).min(3) == 3 & U64.of_nat(7).max(9) == 9 & U64.of_u32(U32.of_nat(5)) == 5

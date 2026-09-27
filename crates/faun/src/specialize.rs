@@ -537,8 +537,8 @@ impl<'a> Specializer<'a> {
     }
 
     /// Whether `name` on these parameters is a closed record's or a
-    /// tuple's own `equals`, `cmp` or `hash_into`, or a tag row's own
-    /// `equals` or `to_str`.
+    /// tuple's own `equals`, `cmp`, `to_str` or `hash_into`, or a tag row's
+    /// own `equals` or `to_str`.
     fn is_structural(&self, name: Symbol, parameters: Option<&[Type]>) -> bool {
         let receiver = parameters.and_then(<[Type]>::first);
         let name = Some(name);
@@ -549,7 +549,11 @@ impl<'a> Specializer<'a> {
             ))
             || ((name == self.prelude.cmp || name == self.prelude.hash_into)
                 && matches!(receiver, Some(Type::Record(_) | Type::Tuple(_))))
-            || (name == self.prelude.to_str && matches!(receiver, Some(Type::Variants(_))))
+            || (name == self.prelude.to_str
+                && matches!(
+                    receiver,
+                    Some(Type::Record(_) | Type::Tuple(_) | Type::Variants(_))
+                ))
     }
 
     fn specialize_function(&mut self, key: &FunctionKey) -> Result<Function, SpecializeError> {
@@ -604,10 +608,33 @@ impl<'a> Specializer<'a> {
             .function()
             .ok_or_else(|| error("a structural member is not a function"))?;
         let (receiver, answer) = (parameters[0].clone(), answer.clone());
-        if let Type::Variants(tags) = &receiver
-            && Some(key.name) == self.prelude.to_str
-        {
-            return self.row_to_str(key, at, tags);
+        if Some(key.name) == self.prelude.to_str {
+            return match &receiver {
+                Type::Variants(tags) => self.row_to_str(key, at, tags),
+                Type::Tuple(members) => {
+                    let parts: Vec<_> = members.iter().map(|ty| (None, ty.clone())).collect();
+                    self.product_to_str(key, at, &parts, ("(", ")"), Pattern::Product)
+                }
+                Type::Record(fields) => {
+                    // In the order of their names, as Ori renders a record,
+                    // whatever order the record was written or held in.
+                    let mut order: Vec<_> = (0..fields.len()).collect();
+                    order.sort_by(|&a, &b| {
+                        self.symbols
+                            .text(fields[a].0)
+                            .cmp(self.symbols.text(fields[b].0))
+                    });
+                    let parts: Vec<_> = order
+                        .iter()
+                        .map(|&at| (Some(fields[at].0), fields[at].1.clone()))
+                        .collect();
+                    let shape = |binds: Vec<Pattern>| {
+                        Pattern::Record(order.iter().map(|&at| fields[at].0).zip(binds).collect())
+                    };
+                    self.product_to_str(key, at, &parts, ("{", "}"), shape)
+                }
+                _ => unreachable!("only records, tuples and rows have a structural `to_str`"),
+            };
         }
         let hashing = Some(key.name) == self.prelude.hash_into;
         let clauses = match &receiver {
@@ -740,6 +767,90 @@ impl<'a> Specializer<'a> {
         Ok(Function {
             key: key.clone(),
             clauses,
+            provider: None,
+        })
+    }
+
+    /// A record's or a tuple's `to_str`: `open`, each part's own `to_str`
+    /// after its name where it has one, separated by `, `, then `close`, so
+    /// `{x: 1, y: 2}` and `(1, "a")`.
+    fn product_to_str(
+        &mut self,
+        key: &FunctionKey,
+        (module, span): (ModuleId, crate::ast::Span),
+        parts: &[(Option<Symbol>, Type)],
+        (open, close): (&str, &str),
+        shape: impl Fn(Vec<Pattern>) -> Pattern,
+    ) -> Result<Function, SpecializeError> {
+        let str_ = Type::Named(self.prelude.str_, Vec::new());
+        let concat = self.method_key(
+            self.prelude.str_concat,
+            &str_,
+            std::slice::from_ref(&str_),
+            &str_,
+        )?;
+        let count =
+            u32::try_from(parts.len()).map_err(|_| error("a product has too many parts"))?;
+        let mut pieces = Vec::new();
+        let mut before = open.to_owned();
+        for (index, (name, ty)) in (0..count).zip(parts) {
+            if let Some(name) = name {
+                before.push_str(self.symbols.text(*name));
+                before.push_str(": ");
+            }
+            pieces.push(self.text(module, span, &before)?);
+            let target = self.implementation(ty, key.name)?;
+            let call = self.method_key(target, ty, &[], &str_)?;
+            self.request_at(call.clone(), (module, span));
+            pieces.push(Expr {
+                module,
+                span,
+                ty: str_.clone(),
+                kind: ExprKind::DirectCall(
+                    call,
+                    vec![Expr {
+                        module,
+                        span,
+                        ty: ty.clone(),
+                        kind: ExprKind::Local(h::LocalId(index)),
+                    }],
+                ),
+            });
+            ", ".clone_into(&mut before);
+        }
+        let closing = if parts.is_empty() {
+            format!("{open}{close}")
+        } else {
+            close.to_owned()
+        };
+        pieces.push(self.text(module, span, &closing)?);
+        let mut pieces = pieces.into_iter();
+        let mut result = pieces
+            .next()
+            .ok_or_else(|| error("a product renders something"))?;
+        for next in pieces {
+            self.request(concat.clone());
+            result = Expr {
+                module,
+                span,
+                ty: str_.clone(),
+                kind: ExprKind::DirectCall(concat.clone(), vec![result, next]),
+            };
+        }
+        Ok(Function {
+            key: key.clone(),
+            clauses: vec![Clause {
+                patterns: vec![shape(
+                    (0..count)
+                        .map(|index| Pattern::Bind(h::LocalId(index)))
+                        .collect(),
+                )],
+                guard: None,
+                body: Body {
+                    bindings: Vec::new(),
+                    result,
+                },
+            }],
             provider: None,
         })
     }

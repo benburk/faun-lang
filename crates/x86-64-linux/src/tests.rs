@@ -52,8 +52,8 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("leave", 128),
     ("bool", 157),
     ("nat", 381),
-    ("width", 145),
-    ("argc", 145),
+    ("width", 149),
+    ("argc", 149),
     ("expressions", 151),
     ("hello", 214),
 ];

@@ -42,6 +42,90 @@ fn a_test_build_asks_every_expectation_in_the_package() {
     assert_eq!(package.run(), 9);
 }
 
+/// A record literal handed alone to a function pairing two values of one
+/// shape is that function applied a field at a time, each step answering a
+/// record, as Ori's record builders are: the signature asks, not the name.
+#[test]
+fn a_record_literal_builds_through_a_pairing() {
+    let package = Package::new(
+        "record-builder",
+        "both : (Result(a, e), Result(b, e), (a, b) -> c) -> Result(c, e)
+         both(Ok(x), Ok(y), f) -> Ok(f(x, y))
+         both(Err(e), _, _) -> Err(e)
+         both(_, Err(e), _) -> Err(e)
+
+         dims : (Str, Str, Str) -> Result({width: Nat, height: Nat, depth: Nat}, [Malformed])
+         dims(w, h, d) -> both({width: Nat.from_str(w), height: Nat.from_str(h), depth: Nat.from_str(d)})
+
+         expect dims(\"3\", \"4\", \"5\") == Ok({width: 3, height: 4, depth: 5})
+         expect dims(\"3\", \"x\", \"5\") == Err(Malformed)",
+    );
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 2));
+}
+
+/// A method a type's block writes without a signature is called with a dot
+/// like any other, in its module and from another.
+#[test]
+fn a_method_without_a_signature_is_called_with_a_dot() {
+    let package = Package::new(
+        "unsigned-method",
+        "import boxes {Box}
+
+         expect Box.of(4).twice() == 8",
+    );
+    fs::write(
+        package.entry().with_file_name("boxes.fn"),
+        "exports {Box}\n\nBox : Nat.(\n  of : Nat -> Box\n  of(n) -> Box(n)\n\n  twice(Box(n)) -> n * 2\n)\n\nexpect Box.of(3).twice() == 6\n",
+    )
+    .unwrap();
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 2));
+}
+
+/// A closed record and a tuple say themselves as Ori writes them: a
+/// record's fields in the order of their names, whatever order they were
+/// written in, and a tuple's members in order, each by its own `to_str`.
+#[test]
+fn records_and_tuples_say_themselves() {
+    let package = Package::new(
+        "structural-to-str",
+        "expect {y: 2, x: 1}.to_str() == \"{x: 1, y: 2}\"
+         expect (1, \"a\").to_str() == \"(1, a)\" & {}.to_str() == \"{}\"
+         expect {name: \"n\", inner: {z: [1, 2], a: (True, -3)}}.to_str() == \"{inner: {a: (True, -3), z: [1, 2]}, name: n}\"",
+    );
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 3));
+}
+
+/// A constructor its module exports with its type's `.*` may be imported
+/// by itself, as Ori imports `Read` from the host; one exported only with
+/// its type, without `.*`, may not.
+#[test]
+fn a_constructor_is_imported_by_itself() {
+    let package = Package::new(
+        "constructor-import",
+        "import shapes {Circle, area}
+
+         expect area(Circle(3)) == 27",
+    );
+    fs::write(
+        package.entry().with_file_name("shapes.fn"),
+        "exports {Shape.*, Hidden, area}\n\nShape : [Circle(Nat), Square(Nat)]\nHidden : [Secret]\n\narea : Shape -> Nat\narea(Circle(r)) -> 3 * r * r\narea(Square(s)) -> s * s\n",
+    )
+    .unwrap();
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 1));
+    let refused = Package::new("constructor-import-refused", "import shapes {Secret}");
+    fs::write(
+        refused.entry().with_file_name("shapes.fn"),
+        "exports {Hidden}\n\nHidden : [Secret]\n",
+    )
+    .unwrap();
+    let error = faun::lower_to_barb(&refused.entry(), &X86_64Linux).unwrap_err();
+    assert!(
+        error.message.contains("`Secret` is not exported"),
+        "{}",
+        error.message
+    );
+}
+
 #[test]
 fn a_package_without_expectations_has_nothing_to_ask() {
     let package = Package::new("no-expectations", "main!(host) -> host.exit!(0)");
@@ -131,6 +215,31 @@ fn floats_read_add_divide_and_say_themselves() {
          expect F32.sqrt(2.0).to_bits() == 0x3fb504f3 & F32.nan() == F32.nan()",
     );
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 6));
+}
+
+/// A float read from what a program is handed, which nothing works out
+/// before it runs: the comparisons parsing a decimal answers with meet
+/// wherever they join.
+#[test]
+fn a_float_is_read_from_standard_input() {
+    let package = Package::new(
+        "float-input",
+        "main!(host) -> host.run_text!(app)
+
+         app : {stdin: Str} -> Str
+         app(input) -> read(F64.from_str(input.stdin.trim()))
+
+         read : Result(F64, [Malformed]) -> Str
+         read(Ok(x)) -> x.mul(2.0).to_str()
+         read(Err(Malformed)) -> \"err\"",
+    );
+    for (input, said) in [("1.25", "2.5"), ("x", "err")] {
+        assert_eq!(
+            support::run_file(&package.entry(), input.as_bytes()),
+            (0, said.to_owned()),
+            "{input}"
+        );
+    }
 }
 
 /// `F32` and `F64` keep the IEEE 754 contract Ori's floats state, rule by

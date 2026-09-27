@@ -29,6 +29,15 @@ Str : List(U8).(
   cmp(Str(left), Str(right)) -> bytes_cmp(left, right)
 
   # `hasher` with the string fed: its bytes, after their count.
+  # Whether every byte is ASCII, below 0x80.
+  is_ascii : List(U8) -> Bool
+  is_ascii(bytes) -> bytes.all(|byte| byte.to_nat() < 128)
+
+  # Whether `bytes` is well-formed UTF-8: `from_utf8`'s test without the
+  # wrapping.
+  is_utf8 : List(U8) -> Bool
+  is_utf8(bytes) -> utf8(bytes, 0, 128, 191)
+
   hash_into : (Str, h) -> h where Hasher(h)
   hash_into(Str(bytes), hasher) -> hasher.write_bytes(bytes)
 
@@ -179,3 +188,4 @@ expect "file.txt".ends_with(".txt") & "file.txt".drop_suffix(".txt") == "file"
 expect "--x".drop_prefix("-") == "-x" & "x".drop_prefix("-") == "x"
 expect "ab".repeat(3) == "ababab" & "ab".repeat(0) == ""
 expect ["pear", "fig", "apple"].sort() == ["apple", "fig", "pear"]
+expect Str.is_ascii("abc".to_utf8()) & !Str.is_ascii([0xc3, 0xa9]) & Str.is_utf8([0xc3, 0xa9]) & !Str.is_utf8([0xc3])

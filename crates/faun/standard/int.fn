@@ -40,17 +40,29 @@ Int : [Pos(Nat), NegSucc(Nat)].(
   mul(NegSucc(a), Pos(b)) -> neg(of_nat((a + 1) * b))
   mul(NegSucc(a), NegSucc(b)) -> Pos((a + 1) * (b + 1))
 
+  # `a` divided by `b`, Euclidean: the remainder is never negative, so
+  # `0 <= a % b < |b|` whatever the signs, and `a = (a / b) * b + a % b`
+  # holds throughout. That is the choice that makes `%` usable as an index;
+  # truncating division would give `-7 % 3 = -1`, which indexes nothing.
+  # A negative dividend rounds away from zero, since rounding toward it
+  # would leave a negative remainder. At a zero divisor, `a / 0` is 0 and
+  # `a % 0` is `a`, as for `Nat`, which keeps the identity there too.
   div : (Int, Int) -> Int
+  div(_, Pos(0)) -> Pos(0)
   div(Pos(a), Pos(b)) -> Pos(a / b)
   div(Pos(a), NegSucc(b)) -> neg(of_nat(a / (b + 1)))
-  div(NegSucc(a), Pos(b)) -> neg(of_nat((a + 1) / b))
-  div(NegSucc(a), NegSucc(b)) -> Pos((a + 1) / (b + 1))
+  div(NegSucc(a), Pos(b)) -> neg(of_nat(rounded_away((a + 1) / b, (a + 1) % b)))
+  div(NegSucc(a), NegSucc(b)) -> of_nat(rounded_away((a + 1) / (b + 1), (a + 1) % (b + 1)))
 
+  # `a` modulo `b`, Euclidean: the one `r` in `0 <= r < |b|` with
+  # `a = q * b + r`. The divisor's sign does not reach the remainder; a
+  # negative dividend's is folded up into `[0, |b|)`.
   mod : (Int, Int) -> Int
+  mod(a, Pos(0)) -> a
   mod(Pos(a), Pos(b)) -> Pos(a % b)
   mod(Pos(a), NegSucc(b)) -> Pos(a % (b + 1))
-  mod(NegSucc(a), Pos(b)) -> neg(of_nat((a + 1) % b))
-  mod(NegSucc(a), NegSucc(b)) -> neg(of_nat((a + 1) % (b + 1)))
+  mod(NegSucc(a), Pos(b)) -> folded_up((a + 1) % b, b)
+  mod(NegSucc(a), NegSucc(b)) -> folded_up((a + 1) % (b + 1), b + 1)
 
   # Every negative before every natural; among negatives, the larger
   # predecessor is further below.
@@ -76,6 +88,12 @@ Int : [Pos(Nat), NegSucc(Nat)].(
   from_str(text) -> signed(text.drop_prefix("-"), text)
 
   # `hasher` with `a` fed: its sign, then its magnitude.
+  # `base` raised to the `exponent`-th power. A negative exponent would
+  # need a rational answer, so it is not this operation's.
+  pow : (Int, Nat) -> Int
+  pow(_, 0) -> of_nat(1)
+  pow(base, Succ(rest)) -> base * pow(base, rest)
+
   hash_into : (Int, h) -> h where Hasher(h)
   hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(is_negative(a).to_nat())).write_u64(U64.of_nat(abs(a)))
 
@@ -96,6 +114,21 @@ difference(Succ(a), 0) -> Pos(Succ(a))
 difference(0, Succ(b)) -> NegSucc(b)
 difference(Succ(a), Succ(b)) -> difference(a, b)
 
+# A negative dividend's quotient, one further from zero where the division
+# left something over.
+rounded_away : (Nat, Nat) -> Nat
+rounded_away(quotient, 0) -> quotient
+rounded_away(quotient, _) -> quotient + 1
+
+# A negative dividend's remainder `r` against a divisor of `magnitude`,
+# folded up to the non-negative one.
+folded_up : (Nat, Nat) -> Int
+folded_up(0, _) -> Pos(0)
+folded_up(r, magnitude) -> Pos(magnitude - r)
+
 expect Int.from_str("-42").ok_or(0) == -42 & Int.from_str("17").ok_or(0) == 17
 expect Int.from_str("-").is_err() & Int.from_str("--1").is_err()
 expect (-2).min(1) == -2 & (-2).max(1) == 1
+expect -7 / 3 == -3 & -7 % 3 == 2 & 7 / -3 == -2 & 7 % -3 == 1
+expect -7 / -3 == 3 & -7 % -3 == 2 & -6 / 3 == -2 & -6 % 3 == 0
+expect 5 / 0 == 0 & -5 % 0 == -5 & -1 / 2 == -1 & -1 % 2 == 1

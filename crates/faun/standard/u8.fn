@@ -112,6 +112,17 @@ U8 : Nat.(
   rotate_right(word, amount) -> rotate_left(word, 8 - amount % 8)
 
   # `hasher` with `a` fed: widened to a word.
+  # `n` as a byte when it fits, and a refusal when it does not: the
+  # checked narrowing, for values worked out at run time.
+  from_nat : Nat -> Result(U8, [TooBig])
+  from_nat(n) if n < 0x100 -> Ok(of_nat(n))
+  from_nat(_) -> Err(TooBig)
+
+  # `base` raised to the `exponent`-th power, modulo 256, by
+  # `Nat.pow_mod`, so no intermediate grows past the ring.
+  pow : (U8, Nat) -> U8
+  pow(U8(base), exponent) -> U8(base.pow_mod(exponent, 256))
+
   hash_into : (U8, h) -> h where Hasher(h)
   hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(to_nat(a)))
 
@@ -127,3 +138,4 @@ expect U8.of_nat(0b10100101).bit_not() == 0b01011010
 expect U8.of_nat(0x81).shift_left(1) == 2 & U8.of_nat(0x81).shift_right(7) == 1
 expect U8.of_nat(0x81).rotate_left(1) == 3 & U8.of_nat(0x81).rotate_right(1) == 0xc0
 expect U8.of_nat(1).shift_left(8) == 0 & U8.of_nat(0x81).rotate_left(8) == 0x81
+expect U8.from_nat(255) == Ok(255) & U8.from_nat(256) == Err(TooBig)

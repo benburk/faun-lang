@@ -729,10 +729,9 @@ fn expose_import(
             found = true;
         }
         if let Some(binding) = face.types.get(&exported) {
-            let mut imported = binding.clone();
-            if !exposure.constructors {
-                imported.constructors.clear();
-            }
+            // The type keeps the constructors its module exports, which
+            // `Type.Ctor` names; only `.*` also makes their bare words visible.
+            let imported = binding.clone();
             if let Some(previous) = scope.types.get(&local)
                 && previous.canonical != imported.canonical
             {
@@ -747,6 +746,16 @@ fn expose_import(
                 }
             }
             scope.types.insert(local, imported);
+            found = true;
+        }
+        // A constructor exported with its type's `.*` may be selected by
+        // itself, without the type or its other constructors.
+        if !exposure.constructors
+            && let Some(claimants) = face.constructors.get(&exported)
+        {
+            for &canonical in claimants {
+                claim(&mut scope.constructors, local, canonical);
+            }
             found = true;
         }
         if !found {

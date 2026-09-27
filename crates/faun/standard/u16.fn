@@ -79,9 +79,50 @@ U16 : Nat.(
   rotate_right(word, amount) -> rotate_left(word, 16 - amount % 16)
 
   # `hasher` with `a` fed: widened to a word.
+  # `n` as a word when it fits, and a refusal when it does not: the
+  # checked narrowing, for values worked out at run time.
+  from_nat : Nat -> Result(U16, [TooBig])
+  from_nat(n) if n < 0x10000 -> Ok(of_nat(n))
+  from_nat(_) -> Err(TooBig)
+
+  # `base` raised to the `exponent`-th power, modulo 0x10000, by
+  # `Nat.pow_mod`, so no intermediate grows past the ring.
+  pow : (U16, Nat) -> U16
+  pow(U16(base), exponent) -> U16(base.pow_mod(exponent, 0x10000))
+
+  # The smaller of `a` and `b`.
+  min : (U16, U16) -> U16
+  min(U16(a), U16(b)) -> U16(a.min(b))
+
+  # The larger of `a` and `b`.
+  max : (U16, U16) -> U16
+  max(U16(a), U16(b)) -> U16(a.max(b))
+
+  # `word` as a `U16`; widening cannot wrap.
+  of_u8 : U8 -> U16
+  of_u8(word) -> U16(U8.to_nat(word))
+
+  # The word's 2 bytes, least significant first. The count is the
+  # contract, so the shape says it, and taking the tuple apart always matches.
+  le_bytes : U16 -> (U8, U8)
+  le_bytes(word) -> (
+    U8.of_nat(to_nat(word)),
+    U8.of_nat(to_nat(shift_right(word, 8))),
+  )
+
+  # The word whose little-endian bytes are these, least significant first.
+  # The arity makes the width static, so every input converts.
+  of_le_bytes : (U8, U8) -> U16
+  of_le_bytes(a, b) ->
+    of_u8(a) |
+    shift_left(of_u8(b), 8)
+
   hash_into : (U16, h) -> h where Hasher(h)
   hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(to_nat(a)))
 
   equals : (U16, U16) -> Bool
   equals(U16(a), U16(b)) -> a.equals(b)
 )
+
+expect U8.of_nat(3).pow(5) == 243 & U8.of_nat(3).pow(6) == 217 & U16.of_nat(2).pow(16) == 0
+expect U16.of_nat(0xabcd).le_bytes() == (0xcd, 0xab)

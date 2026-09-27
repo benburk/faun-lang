@@ -127,7 +127,7 @@ fn lower_with(
     let (mut machine, main) =
         Program::new_with_params(program.name(program.function(entry).name), &borrowed);
     let callees = declare(&demand, routines, &mut machine, (entry, main))?;
-    let bytes = any_byte_element(program, facts, &demand.carries);
+    let bytes = argument_bytes(program, facts, entry, &demand.carries);
 
     let lowering = Lowering {
         barb: program,
@@ -1516,13 +1516,38 @@ fn byte_element(
         .unwrap_or(Class::fixed(8))
 }
 
-/// The same, for the program's byte strings, which are of one type.
-fn any_byte_element(program: &barb::Program, facts: &barb::Facts, carries: &[Storage]) -> Class {
-    (0..program.types().len())
-        .map(barb::TypeId::at)
-        .find(|&id| carries[id.index()] == Storage::Seq && byte_shaped(program, id))
-        .map_or(Class::fixed(8), |id| {
-            byte_element(program, facts, carries, id)
+/// The class each byte of the strings the entry is handed as `args` is held
+/// at. They are the element of the sequence a field of that name holds,
+/// read through wrappers and records as the entry's parameters are named: a
+/// program may hold other sequences of numbers, so the strings are found by
+/// where they are handed, not by their shape. A byte, where it holds none.
+fn argument_bytes(
+    program: &barb::Program,
+    facts: &barb::Facts,
+    entry: barb::FnId,
+    carries: &[Storage],
+) -> Class {
+    fn within(program: &barb::Program, ty: barb::TypeId, name: &str) -> Option<barb::TypeId> {
+        let (ty, name) = unwrapped(program, ty, name);
+        match barb::type_shape(program, ty) {
+            barb::TypeShape::Sequence { element, .. } if name == "args" => Some(element),
+            barb::TypeShape::Product { constructor } => (0..program.fields(constructor).len())
+                .find_map(|at| {
+                    let field = program.field_name(constructor, at)?;
+                    within(program, program.fields(constructor)[at], field)
+                }),
+            _ => None,
+        }
+    }
+    program
+        .params(entry)
+        .iter()
+        .find_map(|&ty| within(program, ty, ""))
+        .filter(|&strings| {
+            peeled(program, strings).is_some_and(|held| carries[held.index()] == Storage::Seq)
+        })
+        .map_or(Class::fixed(8), |strings| {
+            byte_element(program, facts, carries, strings)
         })
 }
 
@@ -3087,10 +3112,12 @@ impl Lowering<'_> {
                     &[join],
                     |b| {
                         let value = b.constant(yes_class, yes);
+                        let value = met(b, value, join);
                         b.yield_(&[value]);
                     },
                     |b| {
                         let value = b.constant(no_class, no);
+                        let value = met(b, value, join);
                         b.yield_(&[value]);
                     },
                 )[0];

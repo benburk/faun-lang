@@ -13,7 +13,10 @@
 # A `File` is a resource: what opens one is the program's to close, once,
 # on every way it goes on, and nothing is asked of it afterwards.
 
-exports {Host, Stdin, Stdout, Stderr, Files, File, Mode.*, IoError.*}
+exports {Host, Stdin, Stdout, Stderr, Files, File, Bytes, Mode.*, IoError.*}
+
+# What a stream or a file moves.
+Bytes = List(U8)
 
 # The arguments the program was run with, its own name first.
 Host : {args: List(Str)}.(
@@ -89,6 +92,27 @@ Host : {args: List(Str)}.(
     input = host.stdin.read_to_str!()
     status = serve_result_text!(host.stdout, host.stderr, input, app)
     host.exit!(status)
+
+  # Run a program of the arguments and standard input as text together,
+  # printing what it answers; one the input cannot be read for is not run.
+  run_input! : (Host, {args: List(Str), stdin: Str} -> a) -> [] where a.to_str : a -> Str
+  run_input!(host, app) ->
+    input = host.stdin.read_to_str!()
+    status = serve_input!(host.stdout, host.stderr, input, host.args, app)
+    host.exit!(status)
+
+  run_result_input! : (Host, {args: List(Str), stdin: Str} -> Result(a, e)) -> [] where
+    a.to_str : a -> Str
+    e.to_str : e -> Str
+  run_result_input!(host, app) ->
+    input = host.stdin.read_to_str!()
+    status = serve_result_input!(host.stdout, host.stderr, input, host.args, app)
+    host.exit!(status)
+
+  # Finish with `status`, as a runner finishes: nought is done. An entry
+  # answers nothing, so it finishes here either way.
+  complete! : (Host, Nat) -> []
+  complete!(host, status) -> host.exit!(status)
 )
 
 # What reading or writing a stream can meet.
@@ -307,6 +331,17 @@ serve_result_text! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, I
   e.to_str : e -> Str
 serve_result_text!(_, errors, Err(error), _) -> unread!(errors, error)
 serve_result_text!(output, errors, Ok(input), app) -> finish_result!(output, errors, app({stdin: input}))
+
+serve_input! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), List(Str), {args: List(Str), stdin: Str} -> a) -> Nat where
+  a.to_str : a -> Str
+serve_input!(_, errors, Err(error), _, _) -> unread!(errors, error)
+serve_input!(output, _, Ok(input), args, app) -> finish!(output, app({args: args, stdin: input}))
+
+serve_result_input! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), List(Str), {args: List(Str), stdin: Str} -> Result(a, e)) -> Nat where
+  a.to_str : a -> Str
+  e.to_str : e -> Str
+serve_result_input!(_, errors, Err(error), _, _) -> unread!(errors, error)
+serve_result_input!(output, errors, Ok(input), args, app) -> finish_result!(output, errors, app({args: args, stdin: input}))
 
 # What the target answers: a number, or an error that far short of the top of
 # a word, as a kernel answers `-errno`. No error is more than 4095, so an

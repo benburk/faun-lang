@@ -421,6 +421,13 @@ struct Scheme {
     ty: Ty,
 }
 
+/// A method a type's block defines without a signature.
+#[derive(Clone, Copy, Debug)]
+struct UnsignedMethod {
+    name: Symbol,
+    owner: Symbol,
+}
+
 #[derive(Clone, Debug)]
 struct MethodImpl {
     owner: Symbol,
@@ -781,6 +788,19 @@ impl Infer {
                             && a.iter()
                                 .all(|(name, _)| b.iter().any(|(found, _)| found == name)) =>
                     {
+                        Ok(true)
+                    }
+                    // A closed row answered where the row is still being
+                    // worked out joins it, as Ori's rows join: the open
+                    // row takes the tags only this one holds, and this
+                    // value is rebuilt in it where it is answered.
+                    Err(_) if a_tail.is_none() && matches!(b_tail.as_deref(), Some(Ty::Var(_))) => {
+                        let open = self.fresh();
+                        self.unify_rows(
+                            Former::Tags,
+                            (&left, Some(&open)),
+                            (&right, b_tail.as_deref()),
+                        )?;
                         Ok(true)
                     }
                     Err(mismatch) => Err(mismatch),
@@ -1253,6 +1273,71 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// The methods a type's block defines without a signature, by the
+    /// spelling a dot calls them by.
+    fn unsigned_methods(
+        &self,
+        program: &h::Program,
+        unsigned: &HashSet<Symbol>,
+    ) -> HashMap<Symbol, Vec<UnsignedMethod>> {
+        let mut methods: HashMap<Symbol, Vec<UnsignedMethod>> = HashMap::new();
+        for module in &program.modules {
+            for item in &module.items {
+                let h::Item::Data(data) = item else { continue };
+                for method in &data.methods {
+                    let h::MethodItem::Clause(clause) = method else {
+                        continue;
+                    };
+                    if !unsigned.contains(&clause.name) {
+                        continue;
+                    }
+                    let canonical = self.symbols.text(clause.name);
+                    let Some(spelling) = canonical
+                        .rsplit_once('.')
+                        .and_then(|(_, spelled)| self.symbols.find(spelled))
+                    else {
+                        continue;
+                    };
+                    let entry = methods.entry(spelling).or_default();
+                    if !entry.iter().any(|known| known.name == clause.name) {
+                        entry.push(UnsignedMethod {
+                            name: clause.name,
+                            owner: data.name,
+                        });
+                    }
+                }
+            }
+        }
+        methods
+    }
+
+    /// `name`, where it is a method written without a signature, callable
+    /// with a dot at `scheme`: its type while its own component is being
+    /// worked out, and what that settled on after.
+    fn register_unsigned(
+        &mut self,
+        methods: &HashMap<Symbol, Vec<UnsignedMethod>>,
+        name: Symbol,
+        scheme: Scheme,
+    ) {
+        let Some((&spelling, method)) = methods.iter().find_map(|(spelling, methods)| {
+            methods
+                .iter()
+                .find(|method| method.name == name)
+                .map(|method| (spelling, method))
+        }) else {
+            return;
+        };
+        let implementations = self.methods.entry(spelling).or_default();
+        implementations.retain(|implementation| implementation.target != name);
+        implementations.push(MethodImpl {
+            owner: method.owner,
+            target: name,
+            scheme,
+            bound: false,
+        });
+    }
+
     /// A signature's `where` bounds, over its own type variables. A
     /// variable a bound alone mentions is quantified too: which type it is,
     /// the bound's implementation says at each specialization. A bound may
@@ -1486,8 +1571,9 @@ impl<'a> Checker<'a> {
             .filter(|name| !self.values.contains_key(name))
             .copied()
             .collect();
+        let methods = self.unsigned_methods(program, &unsigned);
 
-        for component in components(&definitions, &unsigned) {
+        for component in components(&definitions, &unsigned, &methods) {
             let marks = self.marks();
             let mut monotypes = HashMap::new();
             for name in &component {
@@ -1515,7 +1601,15 @@ impl<'a> Checker<'a> {
                         ty: ty.clone(),
                     },
                 );
-                monotypes.insert(*name, ty);
+                monotypes.insert(*name, ty.clone());
+                self.register_unsigned(
+                    &methods,
+                    *name,
+                    Scheme {
+                        variables: Vec::new(),
+                        ty,
+                    },
+                );
             }
             for name in &component {
                 for &(module, clause) in &definitions[name] {
@@ -1598,6 +1692,7 @@ impl<'a> Checker<'a> {
                     }
                 }
                 self.bounds.insert(name, bounds.clone());
+                self.register_unsigned(&methods, name, scheme.clone());
                 self.values.insert(name, scheme);
             }
         }
@@ -3379,10 +3474,14 @@ impl<'a> Checker<'a> {
         final_pass: bool,
         generic: &HashSet<u32>,
     ) -> Result<(), CheckError> {
+        let mut generic = generic.clone();
         let mut unresolved: Vec<_> = (start..self.pending_methods.len())
             .filter(|index| !self.pending_methods[*index].resolved)
             .collect();
         loop {
+            if final_pass {
+                self.spread_generic(start, &mut generic);
+            }
             let mut progress = false;
             let mut next = Vec::new();
             for index in unresolved {
@@ -3411,9 +3510,18 @@ impl<'a> Checker<'a> {
                     Some(false) => {}
                 }
                 let owned = self.owned_methods(&pending);
+                // A bare word with nothing handed it, on a receiver nothing
+                // has said anything of yet, is a field of whatever record it
+                // turns out to be, as Ori reads `.name` without parentheses:
+                // it waits for the receiver, and is no guess at a method.
+                let may_be_field = pending.reach == Reach::Bare
+                    && pending.arguments.is_empty()
+                    && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_));
                 // The one method the receiver has is applied whether or not
                 // it fits, which says why where it does not.
-                let candidates: Vec<_> = if let [only] = owned.as_slice() {
+                let candidates: Vec<_> = if may_be_field {
+                    Vec::new()
+                } else if let [only] = owned.as_slice() {
                     vec![only.clone()]
                 } else {
                     owned
@@ -3520,6 +3628,35 @@ impl<'a> Checker<'a> {
             .collect()
     }
 
+    /// Add to `generic` what a member of a receiver holding a generic
+    /// variable reads and answers: a field read off a generic record, or
+    /// what a generic value's member takes and answers, is as generic as
+    /// the value, and a bound on it will say so. Until nothing more joins.
+    fn spread_generic(&self, start: usize, generic: &mut HashSet<u32>) {
+        loop {
+            let before = generic.len();
+            // A generic variable since bound to a record holds what the
+            // record does.
+            let bound: Vec<u32> = generic
+                .iter()
+                .flat_map(|&variable| free_variables(&self.infer.resolve(&Ty::Var(variable))))
+                .collect();
+            generic.extend(bound);
+            for pending in &self.pending_methods[start..] {
+                let receiver = free_variables(&self.infer.resolve(&pending.receiver));
+                if receiver.iter().any(|variable| generic.contains(variable)) {
+                    generic.extend(receiver);
+                    for ty in pending.arguments.iter().chain([&pending.result]) {
+                        generic.extend(free_variables(&self.infer.resolve(ty)));
+                    }
+                }
+            }
+            if generic.len() == before {
+                return;
+            }
+        }
+    }
+
     /// Reading field `name` of a record: `{name: t, *} -> t`, which reads it
     /// from a record that has it and asks it of one that is open. Its two
     /// variables are the scheme's own, never linked, since a scheme is
@@ -3538,8 +3675,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `equals` on a closed record, a tuple or a tag row, `cmp` on a tuple,
-    /// and `to_str` on a tag row, which such values have with no
+    /// `equals` and `to_str` on a closed record, a tuple or a tag row, `cmp`
+    /// on a tuple, and `hash_into` on a record or a tuple, which such values have with no
     /// declaration: each asks the same of every component, position by
     /// position for a tuple and field by field of each tag for a row. A
     /// record and a row have no `cmp`, having no order of their fields or
@@ -3568,7 +3705,7 @@ impl<'a> Checker<'a> {
         let answer = match (spelled, &receiver) {
             ("equals", _) => Ty::Named(self.prelude.bool_, Vec::new()),
             ("cmp", Ty::Tuple(_)) => Ty::Named(self.prelude.order, Vec::new()),
-            ("to_str", Ty::Variants(..)) => Ty::Named(self.prelude.str_, Vec::new()),
+            ("to_str", _) => Ty::Named(self.prelude.str_, Vec::new()),
             _ if hashing => pending.arguments[0].clone(),
             _ => return Ok(Some(false)),
         };
@@ -3579,7 +3716,7 @@ impl<'a> Checker<'a> {
             return Err(failure(
                 pending.module,
                 pending.span,
-                "a record with `*` has no `equals`: its other fields are a caller's",
+                format!("a record with `*` has no `{spelled}`: its other fields are a caller's"),
             ));
         }
         // A row's rest nothing else fills closes to nothing, but may be
@@ -4202,6 +4339,7 @@ fn graph_gather(node: usize, edges: &[Vec<usize>], seen: &mut [bool], output: &m
 fn components(
     definitions: &HashMap<Symbol, Vec<(ModuleId, &h::Clause)>>,
     unsigned: &HashSet<Symbol>,
+    methods: &HashMap<Symbol, Vec<UnsignedMethod>>,
 ) -> Vec<Vec<Symbol>> {
     let names: Vec<_> = unsigned.iter().copied().collect();
     let index: HashMap<_, _> = names
@@ -4215,9 +4353,18 @@ fn components(
         for (_, clause) in &definitions[name] {
             clause_globals(clause, &mut dependencies);
         }
+        // A member spelled as an unsigned method may be it, which is
+        // settled before whatever calls it.
+        let spelled: Vec<Symbol> = dependencies
+            .iter()
+            .filter_map(|dependency| methods.get(dependency))
+            .flatten()
+            .map(|method| method.name)
+            .collect();
         edges[from].extend(
             dependencies
                 .into_iter()
+                .chain(spelled)
                 .filter_map(|dependency| index.get(&dependency).copied()),
         );
     }
@@ -4295,13 +4442,25 @@ fn expr_globals(expression: &h::Expr, output: &mut HashSet<Symbol>) {
         h::ExprKind::Lambda(_, body) | h::ExprKind::Unary(_, body) | h::ExprKind::Try(body) => {
             expr_globals(body, output);
         }
-        h::ExprKind::Call(head, arguments) | h::ExprKind::Method(head, _, arguments) => {
+        h::ExprKind::Call(head, arguments) => {
             expr_globals(head, output);
             for argument in arguments {
                 expr_globals(argument, output);
             }
         }
-        h::ExprKind::Member(head, _) => expr_globals(head, output),
+        // A member's spelling too, which names every method spelled so
+        // that a definition without a signature may be.
+        h::ExprKind::Method(head, member, arguments) => {
+            output.insert(*member);
+            expr_globals(head, output);
+            for argument in arguments {
+                expr_globals(argument, output);
+            }
+        }
+        h::ExprKind::Member(head, member) => {
+            output.insert(*member);
+            expr_globals(head, output);
+        }
         h::ExprKind::Binary(_, left, right) => {
             expr_globals(left, output);
             expr_globals(right, output);

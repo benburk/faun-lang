@@ -25,6 +25,7 @@ use faun_core::targets::Target;
 pub mod ast;
 mod barb_lower;
 pub mod blessed;
+mod builders;
 mod callbacks;
 pub mod check;
 pub mod diagnostic;

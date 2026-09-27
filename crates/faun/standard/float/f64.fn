@@ -11,6 +11,8 @@ import float.format {
   Unpacked.*,
 }
 
+import hasher {Hasher}
+
 exports {F64}
 
 F64 : U64.(
@@ -218,6 +220,12 @@ F64 : U64.(
   # Equality is `cmp`'s, and so is identity of values. `-0` and `+0`
   # differ; the NaN equals itself; `numeric_equals` is the hardware's
   # equality.
+  # `hasher` with the bit pattern of `x` fed: values that are `equals`
+  # under the total order hash alike, which is the only agreement a hash
+  # owes.
+  hash_into : (F64, h) -> h where Hasher(h)
+  hash_into(x, hasher) -> hasher.write_u64(to_bits(x))
+
   equals : (F64, F64) -> Bool
   equals(a, b) -> cmp(a, b).eq()
 

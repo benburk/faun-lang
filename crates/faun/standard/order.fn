@@ -26,9 +26,15 @@ Order : [Lt, Eq, Gt].(
   eq(Eq) -> True
   eq(_) -> False
 
+  ne : Order -> Bool
+  ne(Eq) -> False
+  ne(_) -> True
+
   # This order, or where it is `Eq`, the next: how a tuple is ordered
   # position by position.
   then : (Order, Order) -> Order
   then(Eq, next) -> next
   then(decided, _) -> decided
 )
+
+expect Lt.ne() & !Eq.ne()

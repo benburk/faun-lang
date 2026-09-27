@@ -69,6 +69,18 @@ x    ::= a parameter, a binding, or a field an arm bound
   reads from writes. Keep fields and construction machinery private or narrowly
   visible within the tier, and re-export the public API from `mod.rs`.
 - `validate.rs`, `stops.rs`: structural checks and size-change termination.
+  A round nothing else shows stops is asked again with a measure besides each
+  parameter, `a ∸ b` for each ordered pair of natural parameters: smaller
+  where the new pair lies within the old, one side moved, and a guard keeps
+  them apart. Where even that fails, what calls answer is read as well: each
+  definition's answer against its parameters, a greatest fixpoint, taken
+  apart by its shape, and each field of a parameter of a sum holding no
+  more of itself is a size of its own, so a parser going round on the rest
+  it answers, in an `Ok` or handed to a helper that takes it apart, is seen
+  to stop.
+- `relations.rs`: what a guard says of the sizes it compared, followed from
+  the comparisons recognized by their equations through the definitions
+  answering from them, as the facts each constructor of the answer carries.
   A `Refusal` names what it refuses by Barb's own ids -- the function, and for
   a definition that may not stop, the call beginning a way round with no
   descent -- never by source; a frontend maps them back through what

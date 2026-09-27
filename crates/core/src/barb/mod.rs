@@ -102,6 +102,7 @@ mod normalize;
 mod optimize;
 mod pretty;
 mod program;
+mod relations;
 mod sequence;
 mod specialize;
 mod stops;
