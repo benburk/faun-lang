@@ -7,6 +7,10 @@ exports {md5_hash}
 
 State = (U32, U32, U32, U32)
 
+# The MD5 digest of `message`: its 16 bytes, the four state words each
+# least significant byte first, as RFC 1321 writes them. `Str.hex` shows
+# them as the usual 32 hex digits. MD5 is broken for security; use it only
+# as a checksum.
 md5_hash : List(U8) -> List(U8)
 md5_hash(message) ->
   initial = (0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476)
