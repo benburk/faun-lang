@@ -207,12 +207,20 @@ mod tests {
             let answer = builder.constant(Class::Word, 3);
             builder.ret(&[answer]);
         });
+        // More values live across the call than a call leaves registers
+        // for, so some wait in memory.
         program.define(main, |builder, _| {
             let one = builder.constant(Class::Word, 1);
-            let two = builder.constant(Class::Word, 2);
-            let across = builder.binary(Binary::Add, one, two);
-            let answer = builder.call_one(helper, &[]);
-            let sum = builder.binary(Binary::Add, across, answer);
+            let across: Vec<_> = (0..8)
+                .map(|at| {
+                    let other = builder.constant(Class::Word, at);
+                    builder.binary(Binary::Add, one, other)
+                })
+                .collect();
+            let mut sum = builder.call_one(helper, &[]);
+            for value in across {
+                sum = builder.binary(Binary::Add, sum, value);
+            }
             builder.ret(&[sum]);
         });
         let selected = select(&program).unwrap();
@@ -221,5 +229,40 @@ mod tests {
             matches!(transition.from, Location::Register(_))
                 && matches!(transition.to, Location::Spill(_))
         }));
+    }
+
+    /// One value across a call waits in a register the call leaves alone,
+    /// and a function writing one of those puts it back before returning.
+    #[test]
+    fn a_value_across_a_call_waits_where_the_call_leaves_it() {
+        let (mut program, main) = Program::new("main");
+        let helper = program.declare("helper", &[Class::Word], &[Class::Word]);
+        let inner = program.declare("inner", &[], &[Class::Word]);
+        program.define(inner, |builder, _| {
+            let answer = builder.constant(Class::Word, 3);
+            builder.ret(&[answer]);
+        });
+        program.define(helper, |builder, args| {
+            let answer = builder.call_one(inner, &[]);
+            let sum = builder.binary(Binary::Add, args[0], answer);
+            builder.ret(&[sum]);
+        });
+        program.define(main, |builder, _| {
+            let one = builder.constant(Class::Word, 1);
+            let answer = builder.call_one(helper, &[one]);
+            builder.ret(&[answer]);
+        });
+        let allocated = crate::selected::select_and_allocate(&program).unwrap();
+        let instructions = allocated.instructions();
+        // In `helper`, its argument outlives the call to `inner` in a kept
+        // register, which it saves on entry and restores before `ret`.
+        assert!(!instructions.iter().any(|inst| matches!(
+            inst,
+            crate::machine::Inst::StoreFrame { src, .. } if !lower::CALLEE_SAVED.contains(src)
+        )));
+        assert!(instructions.iter().any(|inst| matches!(
+            inst,
+            crate::machine::Inst::StoreFrame { src, .. } if lower::CALLEE_SAVED.contains(src)
+        )));
     }
 }

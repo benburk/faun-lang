@@ -29,8 +29,8 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("two and two", 134),
     ("hello world", 158),
     ("a call", 143),
-    ("recursion", 181),
-    ("values across a call", 256),
+    ("recursion", 191),
+    ("values across a call", 265),
     ("the heap", 178),
     ("a byte", 208),
     ("a global", 244),
@@ -57,7 +57,7 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("expressions", 151),
     ("hello", 214),
 ];
-const ARITHMETIC_SIZES: [usize; 3] = [201, 212, 211];
+const ARITHMETIC_SIZES: [usize; 3] = [188, 199, 198];
 
 #[test]
 fn ladder_code_size_ratchets() {

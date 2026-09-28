@@ -209,11 +209,6 @@ impl Opcode {
                 Reg::R9,
                 Reg::R10,
                 Reg::R11,
-                Reg::R12,
-                Reg::R13,
-                Reg::R14,
-                Reg::R15,
-                Reg::Rbp,
             ]),
         };
         let effects = match self {
@@ -1662,12 +1657,20 @@ mod tests {
             let answer = builder.constant(Class::Word, 3);
             builder.ret(&[answer]);
         });
+        // More values live across the call than a call leaves registers
+        // for, so some wait in memory.
         program.define(main, |builder, _| {
             let one = builder.constant(Class::Word, 1);
-            let two = builder.constant(Class::Word, 2);
-            let across = builder.binary(Binary::Add, one, two);
-            let answer = builder.call_one(helper, &[]);
-            let sum = builder.binary(Binary::Add, across, answer);
+            let across: Vec<_> = (0..8)
+                .map(|at| {
+                    let other = builder.constant(Class::Word, at);
+                    builder.binary(Binary::Add, one, other)
+                })
+                .collect();
+            let mut sum = builder.call_one(helper, &[]);
+            for value in across {
+                sum = builder.binary(Binary::Add, sum, value);
+            }
             builder.ret(&[sum]);
         });
 

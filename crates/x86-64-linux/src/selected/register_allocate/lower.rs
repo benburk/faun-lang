@@ -32,6 +32,8 @@ const STDOUT: u64 = 1;
 const PROT_READ_WRITE: u64 = 0x3;
 const MAP_PRIVATE_ANONYMOUS: u64 = 0x22;
 const COPY_SCRATCH: Reg = Reg::R11;
+/// What a function keeps for whatever called it: a call leaves these alone.
+pub(crate) const CALLEE_SAVED: [Reg; 5] = [Reg::R12, Reg::R13, Reg::R14, Reg::R15, Reg::Rbp];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Known {
@@ -61,6 +63,9 @@ struct Lowering<'a> {
     exit_epilogue: Option<Label>,
     final_block: Option<BlockId>,
     uses: Uses,
+    /// The registers each function keeps for its caller: those a call
+    /// leaves alone that it writes, put back before it returns.
+    saved: Vec<Vec<Reg>>,
 }
 
 /// Where each value is defined and how often it is read, gathered once so
@@ -131,11 +136,13 @@ impl<'a> Lowering<'a> {
             exit_epilogue: None,
             final_block: None,
             uses: Uses::new(selected),
+            saved: Vec::new(),
         }
     }
 
     fn run(mut self, entry: FunctionId) -> Result<Allocated, String> {
         self.configure_program(entry);
+        self.saved = self.kept_for_callers(entry);
         for (at, layout) in self.liveness.blocks.iter().enumerate() {
             let block = self.selected.blocks[layout.block];
             let next = self.liveness.blocks.get(at + 1).map(|layout| layout.block);
@@ -149,10 +156,11 @@ impl<'a> Lowering<'a> {
                 .find(|function| function.entry == layout.block)
             {
                 self.enter_function(function.source, entry);
-                let spill_slots = self.spill_slots(function.source);
-                if spill_slots > 0 {
-                    self.asm.open_frame(spill_slots);
+                let frame = self.frame(function.source);
+                if frame > 0 {
+                    self.asm.open_frame(frame);
                 }
+                self.keep_for_caller(function.source, true);
             }
             for points in &layout.instructions {
                 self.emit_instruction_setup(points)?;
@@ -337,6 +345,45 @@ impl<'a> Lowering<'a> {
             matches!(block.terminator, Terminator::Branch { condition, .. } if condition == result);
         let uses = self.uses.operands[result.index()] + self.uses.branches[result.index()];
         is_last && is_condition && uses == 1
+    }
+
+    /// The slots `owner`'s frame holds: what it spills, then what it keeps
+    /// for its caller.
+    fn frame(&self, owner: FunctionId) -> u32 {
+        let saved = self.saved.get(owner.index()).map_or(0, Vec::len);
+        self.spill_slots(owner) + u32::try_from(saved).expect("a few registers")
+    }
+
+    /// Put what `owner` keeps for its caller in its frame, on entering, or
+    /// back, on leaving.
+    fn keep_for_caller(&mut self, owner: FunctionId, entering: bool) {
+        let first = self.spill_slots(owner);
+        let saved = self.saved.get(owner.index()).cloned().unwrap_or_default();
+        for (at, reg) in (first..).zip(saved) {
+            if entering {
+                self.asm.store_slot(reg, FrameSlot::at(at));
+            } else {
+                self.asm.load_slot(reg, FrameSlot::at(at));
+                self.forget(reg);
+            }
+        }
+    }
+
+    /// For each function but the entry, which never returns, the registers
+    /// a call leaves alone that its allocation puts anything in.
+    fn kept_for_callers(&self, entry: FunctionId) -> Vec<Vec<Reg>> {
+        let mut saved: Vec<Vec<Reg>> = vec![Vec::new(); self.allocation.spill_slots.len()];
+        for segment in &self.allocation.segments {
+            let Location::Register(reg) = segment.location else {
+                continue;
+            };
+            let owner = self.owner_at(segment.start);
+            if owner != entry && CALLEE_SAVED.contains(&reg) && !saved[owner.index()].contains(&reg)
+            {
+                saved[owner.index()].push(reg);
+            }
+        }
+        saved
     }
 
     fn spill_slots(&self, owner: FunctionId) -> u32 {
@@ -829,9 +876,10 @@ impl<'a> Lowering<'a> {
                         self.asm.syscall();
                     }
                 } else {
-                    let spill_slots = self.spill_slots(owner);
-                    if spill_slots > 0 {
-                        self.asm.close_frame(spill_slots);
+                    self.keep_for_caller(owner, false);
+                    let frame = self.frame(owner);
+                    if frame > 0 {
+                        self.asm.close_frame(frame);
                     }
                     self.asm.ret();
                 }
