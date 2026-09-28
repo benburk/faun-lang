@@ -697,7 +697,7 @@ impl<'a, R: Register> Allocator<'a, R> {
         let operand_locations =
             collect_instruction_data(self.operand_locations, "operand allocation")?;
         let operand_moves = collect_instruction_data(self.operand_moves, "operand move plan")?;
-        let spill_slots = function_spill_slots(
+        let mut spill_slots = function_spill_slots(
             self.code,
             self.liveness,
             &segments,
@@ -705,6 +705,7 @@ impl<'a, R: Register> Allocator<'a, R> {
             &operand_moves,
             &self.edge_moves,
         )?;
+        widen_for_stores(self.code, self.liveness, &stores, &mut spill_slots)?;
         Ok(Allocation {
             segments,
             transitions,
@@ -1908,6 +1909,27 @@ fn function_spill_slots<R: Register>(
         .collect()
 }
 
+/// Each function's frame widened to hold every slot a value is written to
+/// where it is made: one read back by nothing that names its slot is still
+/// written there, and must not land on what lies past the spills.
+fn widen_for_stores<R: Register>(
+    code: &Code<R>,
+    liveness: &Liveness,
+    stores: &[(Point, R, SpillSlot)],
+    spill_slots: &mut [u32],
+) -> Result<(), String> {
+    for &(point, _, SpillSlot(slot)) in stores {
+        let owner = owner_at(code, liveness, point)
+            .ok_or_else(|| "spill store has no owning function".to_owned())?;
+        let needed = slot
+            .checked_add(1)
+            .ok_or_else(|| "spill frame exceeds 4G slots".to_owned())?;
+        let held = &mut spill_slots[owner.index()];
+        *held = (*held).max(needed);
+    }
+    Ok(())
+}
+
 /// How many functions an index by function source needs room for.
 fn function_count<R>(code: &Code<R>) -> usize {
     code.functions
@@ -2161,6 +2183,17 @@ impl<R: Register> Allocation<R> {
                 {
                     return Err("allocation refers past its spill frame".to_owned());
                 }
+            }
+        }
+        for &(point, _, SpillSlot(slot)) in &self.stores {
+            let owner = owner_at(code, liveness, point)
+                .ok_or_else(|| "spill store has no owning function".to_owned())?;
+            if self
+                .spill_slots
+                .get(owner.index())
+                .is_none_or(|&slots| slot >= slots)
+            {
+                return Err("allocation stores past its spill frame".to_owned());
             }
         }
         if !self
