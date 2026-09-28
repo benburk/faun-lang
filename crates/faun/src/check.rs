@@ -4667,6 +4667,51 @@ mod tests {
     }
 
     #[test]
+    fn elaboration_preserves_unwrapped_expression_sites() {
+        let fixture = Fixture::new();
+        let (prelude, resolved) = fixture.load(
+            "Label : [Label].(to_str : Label -> Str\nto_str(_) -> \"label\")\n\
+             text : Label -> Str\ntext(value) -> \"${value}\"\n\
+             rest : List(Nat) -> List(Nat)\nrest(values) -> [*values]\n",
+        );
+        let resolved = n::normalize(resolved);
+        let expected: Vec<_> = resolved
+            .program
+            .functions
+            .iter()
+            .filter_map(|function| {
+                let expression = &function.clauses.first()?.body.result;
+                let inner = match &expression.kind {
+                    h::ExprKind::String(parts) => match parts.as_slice() {
+                        [h::StringPart::Splice(splice)] => splice,
+                        _ => return None,
+                    },
+                    h::ExprKind::List(elements, Some(rest)) if elements.is_empty() => rest,
+                    _ => return None,
+                };
+                Some((function.name, inner.site, inner.span))
+            })
+            .collect();
+        assert_eq!(expected.len(), 2);
+        let checked = type_check(resolved, prelude).unwrap();
+        for (name, site, span) in expected {
+            let function = checked
+                .resolved
+                .program
+                .functions
+                .iter()
+                .find(|function| function.name == name)
+                .unwrap();
+            let crate::typed::Definition::Body(clauses) = &function.definition else {
+                panic!("a written body")
+            };
+            let expression = &clauses[0].body.result;
+            assert_eq!(expression.site, site);
+            assert_eq!(expression.span, span);
+        }
+    }
+
+    #[test]
     fn typed_hir_carries_projections_widenings_and_generic_operations() {
         use crate::typed::{ExprKind, Target};
         let fixture = Fixture::new();

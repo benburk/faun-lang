@@ -175,12 +175,23 @@ impl Elaborator<'_> {
     }
 
     fn expr(&mut self, expression: h::Expr) -> t::Expr {
+        let (site, span) = (expression.site, expression.span);
+        let expression = self.written_expr(expression);
+        if let Some(target) = self.facts.widenings.get(&site) {
+            let target = target.clone();
+            self.generated(span, target, t::ExprKind::Widen(Box::new(expression)))
+        } else {
+            expression
+        }
+    }
+
+    fn written_expr(&mut self, expression: h::Expr) -> t::Expr {
         let h::Expr { site, span, kind } = expression;
         let ty = self
             .facts
             .expressions
             .get(&site)
-            .unwrap_or_else(|| panic!("missing type {site:?} {kind:?}"))
+            .expect("checking records each expression's type")
             .clone();
         let kind = if let Some(literal) = self.facts.literals.get(&site) {
             t::ExprKind::Literal(literal.clone())
@@ -230,7 +241,7 @@ impl Elaborator<'_> {
                             ),
                         );
                     }
-                    joined.kind
+                    return joined;
                 }
                 h::ExprKind::List(elements, rest) => {
                     let mut tail = match rest {
@@ -249,7 +260,7 @@ impl Elaborator<'_> {
                             t::ExprKind::Construct(self.prelude.list_cons, vec![head, tail]),
                         );
                     }
-                    tail.kind
+                    return tail;
                 }
                 h::ExprKind::Record(fields) => t::ExprKind::Record(
                     fields
@@ -329,17 +340,11 @@ impl Elaborator<'_> {
                 }
             }
         };
-        let expression = t::Expr {
+        t::Expr {
             site,
             span,
             ty,
             kind,
-        };
-        if let Some(target) = self.facts.widenings.get(&site) {
-            let target = target.clone();
-            self.generated(span, target, t::ExprKind::Widen(Box::new(expression)))
-        } else {
-            expression
         }
     }
 }
