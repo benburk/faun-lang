@@ -1,0 +1,6 @@
+import std.host {Host}
+
+Maybe : [Some(Nat), Nothing]
+
+get : Maybe -> Nat
+get(Maybe(n)) -> n

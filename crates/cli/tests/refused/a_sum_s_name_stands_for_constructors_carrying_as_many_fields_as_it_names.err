@@ -1,0 +1,7 @@
+error: `Nothing` carries 0 fields, so `Maybe` binding 1 cannot stand for it
+ --> a_sum_s_name_stands_for_constructors_carrying_as_many_fields_as_it_names.fn:6:5
+  |
+6 | get(Maybe(n)) -> n
+  |     ^^^^^^^^
+  |
+  = help: `Maybe(…)` covers every constructor only where each carries as many fields as it names; match the constructors instead

@@ -33,6 +33,11 @@ impl ModuleId {
 pub struct TypeBinding {
     pub canonical: Symbol,
     pub constructors: HashMap<Symbol, Symbol>,
+    /// A sum's constructors in the order declared, each with how many
+    /// fields it carries: what its name stands for as a constructor of its
+    /// own. Empty for anything but a sum, and wherever its constructors are
+    /// not visible.
+    pub variants: Vec<(Symbol, usize)>,
     pub methods: HashMap<Symbol, Symbol>,
     /// Whether the name is a transparent alias, which owns nothing.
     pub alias: bool,
@@ -608,6 +613,7 @@ fn declarations(
                     TypeBinding {
                         canonical,
                         constructors: HashMap::new(),
+                        variants: Vec::new(),
                         methods: HashMap::new(),
                         alias: true,
                     },
@@ -648,6 +654,7 @@ fn declare_data(
     let mut binding = TypeBinding {
         canonical,
         constructors: HashMap::new(),
+        variants: Vec::new(),
         methods: HashMap::new(),
         alias: false,
     };
@@ -671,6 +678,7 @@ fn declare_data(
                         .label("declared again here"));
                 }
                 claim(&mut own.constructors, spelling, canonical);
+                binding.variants.push((canonical, constructor.fields.len()));
             }
         }
         DataRepresentation::Wrapper(representation) => {
@@ -813,6 +821,7 @@ fn exports(
             let mut visible = binding.clone();
             if !export.constructors {
                 visible.constructors.clear();
+                visible.variants.clear();
             }
             public.types.insert(local, visible.clone());
             if export.constructors {

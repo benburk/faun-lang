@@ -1,0 +1,7 @@
+error: `Shape(…)` builds the constructor its clause took apart, and this clause takes none apart as `Shape`
+ --> a_sum_s_name_builds_only_the_constructor_its_clause_took_apart.fn:6:12
+  |
+6 | make(n) -> Shape(n)
+  |            ^^^^^
+  |
+  = help: name the constructor, or take the value apart as `Shape(…)` among the clause's parameters

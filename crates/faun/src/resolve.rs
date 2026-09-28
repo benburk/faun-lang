@@ -205,7 +205,7 @@ fn resolve_module(
             }
             s::Item::Clause(clause) => {
                 let name = global_value(module.id, clause.name, source, scope, symbols)?;
-                items.push(h::Item::Clause(resolve_clause(
+                let clauses = resolve_clauses(
                     module.id,
                     clause,
                     name,
@@ -213,7 +213,8 @@ fn resolve_module(
                     scope,
                     None,
                     (symbols, sites),
-                )?));
+                )?;
+                items.extend(clauses.into_iter().map(h::Item::Clause));
             }
             s::Item::Expect(clause) => {
                 let name = symbols.intern(&format!(
@@ -244,7 +245,7 @@ fn resolve_module(
                     name,
                     source,
                     scope,
-                    None,
+                    (None, None),
                     (symbols, sites),
                 )?));
                 expectations.push(name);
@@ -836,7 +837,7 @@ fn resolve_data(
             }
             s::MethodItem::Clause(clause) => {
                 let name = method_name(module, clause.name, source, binding, symbols)?;
-                methods.push(h::MethodItem::Clause(resolve_clause(
+                let clauses = resolve_clauses(
                     module,
                     clause,
                     name,
@@ -844,7 +845,8 @@ fn resolve_data(
                     scope,
                     Some(binding),
                     (symbols, sites),
-                )?));
+                )?;
+                methods.extend(clauses.into_iter().map(h::MethodItem::Clause));
             }
         }
     }
@@ -1065,7 +1067,14 @@ fn resolve_type(
     }
 }
 
-fn resolve_clause(
+/// A clause, or, where its head names a sum by its own name, `Bot(bot)`,
+/// one copy of it for each of that sum's constructors, in the order they are
+/// declared. That name stands for the constructor each copy matches, in its
+/// head and wherever its body or guard applies it, so `Bot(next)` puts back
+/// the constructor that was taken apart. Each copy is resolved, and so
+/// typed, apart: its payload has the one type its constructor carries, and
+/// no type for the union of them is ever needed.
+fn resolve_clauses(
     module: ModuleId,
     clause: &s::Clause,
     name: Symbol,
@@ -1073,12 +1082,158 @@ fn resolve_clause(
     scope: &Interface,
     methods: Option<&TypeBinding>,
     (symbols, sites): (&mut Symbols, &mut h::Sites),
+) -> Result<Vec<h::Clause>, ResolveError> {
+    let mut named = Vec::new();
+    for pattern in &clause.patterns {
+        standing_in(pattern, source, scope, symbols, &mut named);
+    }
+    let Some(&(spelling, bound, span)) = named.first() else {
+        let resolved = resolve_clause(
+            module,
+            clause,
+            name,
+            source,
+            scope,
+            (methods, None),
+            (symbols, sites),
+        )?;
+        return Ok(vec![resolved]);
+    };
+    let shown = symbols.text(spelling).to_owned();
+    if let Some(&(_, _, again)) = named.get(1) {
+        return Err(error(
+            module,
+            again,
+            format!(
+                "this clause names `{shown}`'s payload twice, so `{shown}(…)` in its body \
+                 would have no one constructor to put back"
+            ),
+        )
+        .help("match the constructors instead"));
+    }
+    let variants = &scope.types[&spelling].variants;
+    // Each copy binds as many fields as the clause names, so every
+    // constructor has to carry that many: one carrying fewer has nothing to
+    // bind somewhere, and one carrying more has a field the clause never
+    // named.
+    if let Some(&(constructor, carried)) = variants.iter().find(|(_, carried)| *carried != bound) {
+        let constructor = spelled(constructor, symbols);
+        return Err(error(
+            module,
+            span,
+            format!(
+                "`{constructor}` carries {carried} field{}, so `{shown}` binding {bound} cannot \
+                 stand for it",
+                if carried == 1 { "" } else { "s" }
+            ),
+        )
+        .help(format!(
+            "`{shown}(…)` covers every constructor only where each carries as many fields as \
+             it names; match the constructors instead"
+        )));
+    }
+    variants
+        .iter()
+        .map(|&(constructor, _)| {
+            resolve_clause(
+                module,
+                clause,
+                name,
+                source,
+                scope,
+                (methods, Some((spelling, constructor))),
+                (&mut *symbols, &mut *sites),
+            )
+        })
+        .collect()
+}
+
+/// The sum `spelling` names, where that word may stand for its
+/// constructors: a type with visible constructors, which no constructor in
+/// scope is also spelled as. A word naming a constructor means that
+/// constructor, as a wrapper's own name does.
+fn standing_sum(scope: &Interface, spelling: Symbol) -> Option<&TypeBinding> {
+    if scope.constructors.contains_key(&spelling) {
+        return None;
+    }
+    scope
+        .types
+        .get(&spelling)
+        .filter(|binding| !binding.variants.is_empty())
+}
+
+/// Every place in `pattern` a sum's name stands for its constructors, at
+/// any depth, with how many fields it binds there.
+fn standing_in(
+    pattern: &s::Pattern,
+    source: &str,
+    scope: &Interface,
+    symbols: &Symbols,
+    found: &mut Vec<(Symbol, usize, s::Span)>,
+) {
+    match pattern {
+        s::Pattern::Constructor {
+            span,
+            qualifier,
+            name,
+            fields,
+        } => {
+            if qualifier.is_none()
+                && !fields.is_empty()
+                && let Some(spelling) = symbols.find(name.text(source))
+                && standing_sum(scope, spelling).is_some()
+            {
+                found.push((spelling, fields.len(), *span));
+            }
+            for field in fields {
+                standing_in(field, source, scope, symbols, found);
+            }
+        }
+        s::Pattern::Tuple { members, .. } => {
+            for member in members {
+                standing_in(member, source, scope, symbols, found);
+            }
+        }
+        s::Pattern::Or { alternatives, .. } => {
+            for alternative in alternatives {
+                standing_in(alternative, source, scope, symbols, found);
+            }
+        }
+        s::Pattern::List { elements, rest, .. } => {
+            for element in elements.iter().chain(rest.as_deref()) {
+                standing_in(element, source, scope, symbols, found);
+            }
+        }
+        s::Pattern::Record { fields, .. } => {
+            for (_, field) in fields {
+                standing_in(field, source, scope, symbols, found);
+            }
+        }
+        s::Pattern::Wild(_)
+        | s::Pattern::Bind(_)
+        | s::Pattern::Number { .. }
+        | s::Pattern::Range { .. }
+        | s::Pattern::String { .. } => {}
+    }
+}
+
+/// One clause, where `standing` is the sum's name its head takes apart and
+/// the constructor that name stands for in this copy of it.
+fn resolve_clause(
+    module: ModuleId,
+    clause: &s::Clause,
+    name: Symbol,
+    source: &str,
+    scope: &Interface,
+    (methods, standing): (Option<&TypeBinding>, Option<(Symbol, Symbol)>),
+    (symbols, sites): (&mut Symbols, &mut h::Sites),
 ) -> Result<h::Clause, ResolveError> {
     let mut resolver = ClauseResolver {
         module,
         source,
         scope,
         methods,
+        standing,
         symbols,
         sites,
         locals: HashMap::new(),
@@ -1162,6 +1317,9 @@ struct ClauseResolver<'a> {
     source: &'a str,
     scope: &'a Interface,
     methods: Option<&'a TypeBinding>,
+    /// In one copy of a clause whose head takes a sum apart by its own name,
+    /// that name, and the constructor it stands for in this copy.
+    standing: Option<(Symbol, Symbol)>,
     symbols: &'a mut Symbols,
     /// Identities for every HIR occurrence in the program.
     sites: &'a mut h::Sites,
@@ -1308,6 +1466,25 @@ impl ClauseResolver<'_> {
                     let constructor = self.qualified(*qualifier, *name)?;
                     return Ok(h::Pattern::Constructor(constructor, fields));
                 }
+                if let Some((sum, constructor)) = self.standing
+                    && sum == spelling
+                {
+                    return Ok(h::Pattern::Constructor(constructor, fields));
+                }
+                // Anywhere else, a pattern must always match, and a sum's
+                // name matches one constructor at a time.
+                if !fields.is_empty() && standing_sum(self.scope, spelling).is_some() {
+                    let shown = name.text(self.source);
+                    return Err(error(
+                        self.module,
+                        *span,
+                        format!(
+                            "`{shown}(…)` stands for each of `{shown}`'s constructors only \
+                             among a clause's parameters"
+                        ),
+                    )
+                    .help("take the value apart in a clause of its own"));
+                }
                 // A word no visible declaration claims is a structural tag;
                 // one some declaration claims is its position's to decide.
                 Ok(match self.scope.constructors.get(&spelling) {
@@ -1448,7 +1625,7 @@ impl ClauseResolver<'_> {
                 h::ExprKind::Lambda(patterns, Box::new(body))
             }
             s::ExprKind::Call(head, arguments) => h::ExprKind::Call(
-                Box::new(self.expr(head)?),
+                Box::new(self.applied(head)?),
                 arguments
                     .iter()
                     .map(|argument| self.expr(argument))
@@ -1523,6 +1700,40 @@ impl ClauseResolver<'_> {
             span: expression.span,
             kind,
         })
+    }
+
+    /// What a call's head names. A sum's own name applied is the
+    /// constructor its clause's head took apart, in this copy of it.
+    fn applied(&mut self, head: &s::Expr) -> Result<h::Expr, ResolveError> {
+        let s::ExprKind::Name(name) = &head.kind else {
+            return self.expr(head);
+        };
+        let Some(spelling) = self.symbols.find(name.text(self.source)) else {
+            return self.expr(head);
+        };
+        if let Some((sum, constructor)) = self.standing
+            && sum == spelling
+        {
+            return Ok(self
+                .sites
+                .expr(head.span, h::ExprKind::Constructor(constructor)));
+        }
+        if standing_sum(self.scope, spelling).is_some() {
+            let shown = name.text(self.source);
+            return Err(error(
+                self.module,
+                head.span,
+                format!(
+                    "`{shown}(…)` builds the constructor its clause took apart, and this \
+                     clause takes none apart as `{shown}`"
+                ),
+            )
+            .help(format!(
+                "name the constructor, or take the value apart as `{shown}(…)` among the \
+                 clause's parameters"
+            )));
+        }
+        self.expr(head)
     }
 
     fn name(&mut self, name: s::Name) -> Result<h::ExprKind, ResolveError> {

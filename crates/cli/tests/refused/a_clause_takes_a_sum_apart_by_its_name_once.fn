@@ -1,0 +1,6 @@
+import std.host {Host}
+
+Shape : [Square(Nat), Circle(Nat)]
+
+add : (Shape, Shape) -> Nat
+add(Shape(a), Shape(b)) -> a + b

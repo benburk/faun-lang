@@ -115,6 +115,18 @@ constructors private, and a same-spelled structural tag never becomes one.
 `export {T.*}` makes them public, and an importer may then select one by
 itself, as Ori does: `import std.host {Read}` binds that constructor alone.
 
+A sum's own name is a constructor standing for all of its constructors, as
+in Ori. Among a clause's parameters, `Bot(bot)` matches whichever constructor
+holds the value and binds its payload, and `Bot(next)` in that clause's guard
+or body builds the constructor it matched. The clause is resolved once for
+each constructor, in declaration order, so each copy's payload has one
+concrete type. Every constructor must carry as many fields as the clause
+names, and a clause names the sum this way once. Elsewhere, whether in a
+binding, a lambda, or a clause that took nothing apart this way, the spelling
+is refused. A word that also names a constructor in scope means that
+constructor, and so does a wrapper's own name. A type exported without `.*`
+does not stand for its constructors in modules that import it.
+
 Faun specializes from the types checking recorded rather than inferring each
 specialization again, so where a closed row is answered as a signature's
 wider one, a caller's, the value is rebuilt in the wider row. Tag rows have

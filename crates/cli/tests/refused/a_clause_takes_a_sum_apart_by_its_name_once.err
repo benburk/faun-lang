@@ -1,0 +1,7 @@
+error: this clause names `Shape`'s payload twice, so `Shape(…)` in its body would have no one constructor to put back
+ --> a_clause_takes_a_sum_apart_by_its_name_once.fn:6:15
+  |
+6 | add(Shape(a), Shape(b)) -> a + b
+  |               ^^^^^^^^
+  |
+  = help: match the constructors instead

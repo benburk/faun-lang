@@ -1,0 +1,7 @@
+error: `Shape(…)` stands for each of `Shape`'s constructors only among a clause's parameters
+ --> a_sum_s_name_stands_for_its_constructors_only_among_a_clause_s_parameters.fn:7:3
+  |
+7 |   Shape(n) = shape
+  |   ^^^^^^^^
+  |
+  = help: take the value apart in a clause of its own

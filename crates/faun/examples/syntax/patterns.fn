@@ -162,3 +162,25 @@ pair_sum(pair) ->
 
 expect pair_sum((3, 4)) == 7
 expect [(1, 2), (3, 4)].map(|(a, b)| a * b) == [2, 12]
+
+# A sum's own name takes apart whichever constructor holds the value, where
+# every one carries as many fields as it names. The clause is one copy for
+# each constructor, so the payload has that constructor's type, and the
+# name applied in the body puts back the constructor that was taken apart.
+Reading : [Metres(Nat), Feet(Nat), Depth(Reading)].(
+  to_str : Reading -> Str
+  to_str(Reading(value)) -> "<${value}>"
+)
+
+expect Depth(Feet(3)).to_str() == "<<3>>"
+
+Nudge : [Up(Nat), Down(Nat)].(
+  to_str : Nudge -> Str
+  to_str(Up(n)) -> "up ${n}"
+  to_str(Down(n)) -> "down ${n}"
+)
+
+nudged : ((Nudge, Nat)) -> Nudge
+nudged((Nudge(by), extra)) -> Nudge(by + extra)
+
+expect nudged((Down(2), 1)).to_str() == "down 3"

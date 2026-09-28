@@ -1,0 +1,6 @@
+import std.host {Host}
+
+Shape : [Square(Nat), Circle(Nat)]
+
+make : Nat -> Shape
+make(n) -> Shape(n)
