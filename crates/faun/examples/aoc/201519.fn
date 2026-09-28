@@ -1,0 +1,231 @@
+# Advent of Code 2015, day 19: Medicine for Rudolph.
+# Try one replacement at one position in the original molecule, never in a
+# product of another replacement. Different rules and positions can produce
+# the same molecule, so collect byte lists in a set before counting them.
+# The full application currently exceeds sim65's 64 KiB code space.
+
+package {}
+
+Rule : [Rule(List(U8), List(U8))]
+
+# Keep the puzzle's ASCII letters and digits, without interpreting elements.
+molecule : Str -> Result(List(U8), Str)
+molecule(text) if text.is_empty() -> Err("empty molecule")
+molecule(text) if !text.to_utf8().all(|byte| byte.is_ascii_letter() | byte.is_digit()) ->
+  Err("malformed molecule")
+molecule(text) -> Ok(text.to_utf8())
+
+parse_rule : Str -> Result(Rule, Str)
+parse_rule(line) -> rule_parts(line.split(" => "))
+
+rule_parts : List(Str) -> Result(Rule, Str)
+rule_parts([from, to]) -> Ok(Rule(molecule(from)?, molecule(to)?))
+rule_parts(_) -> Err("malformed replacement rule")
+
+parse : Str -> Result({rules: List(Rule), medicine: List(U8)}, Str)
+parse(input) -> instructions(input.lines(), [])
+
+# A blank line separates the rules from exactly one medicine molecule.
+instructions : (List(Str), List(Rule)) -> Result({rules: List(Rule), medicine: List(U8)}, Str)
+instructions(["", _], []) -> Err("no replacement rules")
+instructions(["", medicine], rules) -> Ok({rules: rules.reverse(), medicine: molecule(medicine)?})
+instructions(["", *_], _) -> Err("expected one medicine molecule")
+instructions([], _) -> Err("missing medicine molecule or separator")
+instructions([line, *rest], rules) -> instructions(rest, [parse_rule(line)?, *rules])
+
+# Keep the prefix backwards while walking the original suffix. Advance only
+# one byte even after a match: AA occurs twice in AAA, at overlapping positions.
+# Matching is literal, not by element token: H also matches inside He or H2O.
+replace_each : (Rule, List(U8), List(U8), List(List(U8))) -> List(List(U8))
+replace_each(_, _, [], found) -> found
+replace_each(rule, before, [byte, *rest], found) ->
+  found = replace_here(rule, before, [byte, *rest], found)
+  replace_each(rule, [byte, *before], rest, found)
+
+replace_here : (Rule, List(U8), List(U8), List(List(U8))) -> List(List(U8))
+replace_here(Rule(from, to), before, after, found) if after.take(from.len()) == from ->
+  [before.reverse().extend(to).extend(after.drop(from.len())), *found]
+replace_here(_, _, _, found) -> found
+
+products : (List(Rule), List(U8)) -> Set(List(U8))
+products(rules, medicine) -> Set.of_list(rules.flat_map(|rule|
+  replace_each(rule, [], medicine, [])))
+
+part1 : Str -> Result(Nat, Str)
+part1(input) ->
+  {rules, medicine} = parse(input)?
+  Ok(products(rules, medicine).len())
+
+# Search backwards with A*: every edge undoes exactly one replacement.
+# A skew heap orders pending molecules by estimated total steps, then by
+# length to favour reductions among equal estimates. The map remembers the
+# cheapest visit, so identity rules and cycles cannot keep reopening a state.
+Work : [Empty, Queued(Nat, Nat, List(U8), Work, Work)]
+Search = {work: Work, seen: Map(List(U8), Nat)}
+Bounds = {bytes: Nat, weight: Nat, electron_only: Bool}
+
+merge_work : (Work, Work) -> Work
+merge_work(Empty, right) -> right
+merge_work(left, Empty) -> left
+merge_work(Queued(f, steps, text, left, right), Queued(g, other_steps, other, other_left, other_right))
+  if (f, text.len()) <= (g, other.len()) ->
+  Queued(f, steps, text, merge_work(right, Queued(g, other_steps, other, other_left, other_right)), left)
+merge_work(left, Queued(f, steps, text, before, after)) ->
+  Queued(f, steps, text, merge_work(left, after), before)
+
+# This additive byte weight gives ordinary elements weight one, Rn/Ar zero,
+# Y minus one, and e one in the puzzle's grammar. It is only a heuristic:
+# measuring each supplied rule's maximum increase makes the lower bound
+# sound even for different rules, digits, or matches inside element names.
+byte_weight : U8 -> Int
+byte_weight('Y' | 'n' | 'r') -> -1
+byte_weight('e') -> 1
+byte_weight(byte) -> Int.of_nat(byte.is_ascii_upper().to_nat())
+
+weight : List(U8) -> Int
+weight(text) -> text.fold(0, |total, byte| total + byte_weight(byte))
+
+bounds : List(Rule) -> Bounds
+bounds(rules) -> rules.fold({bytes: 0, weight: 0, electron_only: True}, |limits, Rule(from, to)|
+  {bytes: limits.bytes.max(to.len() - from.len()),
+   weight: limits.weight.max(Nat.from_int(weight(to) - weight(from)).ok_or(0)),
+   electron_only: limits.electron_only & !to.contains('e')})
+
+# No step can add more bytes or weight than the greatest increase of any
+# rule. Rounding each required increase up gives two independent lower bounds.
+remaining : (List(U8), Bounds) -> Nat
+remaining(text, limits) ->
+  bytes = (text.len() - 1 + limits.bytes - 1) / limits.bytes
+  weighted = (Nat.from_int(weight(text) - 1).ok_or(0) + limits.weight - 1) / limits.weight
+  bytes.max(weighted)
+
+offer : (List(U8), Nat, Bounds, Search) -> Search
+offer(text, steps, _, state) if state.seen.get_or(text, steps + 1) <= steps -> state
+offer(text, _, limits, state) if limits.bytes == 0 & text.len() > 1 -> state
+offer(text, _, limits, state) if limits.weight == 0 & weight(text) > 1 -> state
+# If no forward RHS contains e, the initial electron disappears on the first
+# step and can never occur inside a later molecule.
+offer(text, _, limits, state) if limits.electron_only & text != ['e'] & text.contains('e') -> state
+offer(text, steps, limits, state) ->
+  {work: merge_work(Queued(steps + remaining(text, limits), steps, text, Empty, Empty), state.work),
+   seen: state.seen.insert(text, steps)}
+
+expand : (List(Rule), Bounds, List(U8), Nat, Search) -> Search
+expand(_, _, text, steps, state) if state.seen.get_or(text, steps) < steps -> state
+expand(reverse_rules, limits, text, steps, state) ->
+  products(reverse_rules, text).to_list().fold(state, |next, made| offer(made, steps + 1, limits, next))
+
+search : (List(Rule), Bounds, Work, Map(List(U8), Nat), Nat) -> Result(Nat, Str)
+search(_, _, Empty, _, _) -> Err("medicine cannot be fabricated from e")
+search(_, _, Queued(_, steps, ['e'], _, _), _, _) -> Ok(steps)
+search(_, _, _, _, 0) -> Err("fabrication search limit exceeded")
+search(reverse_rules, limits, Queued(_, steps, text, left, right), seen, Succ(fuel)) ->
+  next = expand(reverse_rules, limits, text, steps, {work: merge_work(left, right), seen})
+  search(reverse_rules, limits, next.work, next.seen, fuel)
+
+# A resource limit makes even an unbounded, unreachable rewrite system total.
+# Exhausting it is an explicit error, never an approximate answer or a claim
+# of impossibility. Callers can raise the budget of non-goal queue removals.
+fabricate_with_limit : (List(Rule), List(U8), Nat) -> Result(Nat, Str)
+fabricate_with_limit(rules, medicine, limit) ->
+  limits = bounds(rules)
+  initial = offer(medicine, 0, limits, {work: Empty, seen: Map.empty()})
+  reversed = rules.map(|Rule(from, to)| Rule(to, from))
+  search(reversed, limits, initial.work, initial.seen, limit)
+
+fabricate : (List(Rule), List(U8)) -> Result(Nat, Str)
+fabricate(rules, medicine) -> fabricate_with_limit(rules, medicine, 100000)
+
+part2 : Str -> Result(Nat, Str)
+part2(input) ->
+  {rules, medicine} = parse(input)?
+  fabricate(rules, medicine)
+
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
+app(input) ->
+  {rules, medicine} = parse(input.stdin)?
+  Ok({part1: products(rules, medicine).len(), part2: fabricate(rules, medicine)?})
+
+example_rules : Str
+example_rules() -> "H => HO\nH => OH\nO => HH\n\n"
+
+expect part1(example_rules().concat("HOH\n")) == Ok(4)
+expect part1(example_rules().concat("HOHOHO")) == Ok(7)
+expect
+  {rules, medicine} = parse(example_rules().concat("HOH")).ok_or({rules: [], medicine: []})
+  products(rules, medicine) == Set.of_list(["HOOH", "HOHO", "OHOH", "HHHH"].map(|text| text.to_utf8()))
+
+# Literal matching, overlapping occurrences, and matches at either end.
+expect part1("H => OO\n\nH2O") == Ok(1)
+expect products([Rule("H".to_utf8(), "OO".to_utf8())], "H2O".to_utf8())
+  == Set.of_list(["OO2O".to_utf8()])
+expect part1("H => O\n\nHeH") == Ok(2)
+expect part1("AA => B\n\nAAA") == Ok(2)
+expect products([Rule("AA".to_utf8(), "B".to_utf8())], "AAA".to_utf8())
+  == Set.of_list(["AB".to_utf8(), "BA".to_utf8()])
+expect part1("HOH => O\n\nHOH") == Ok(1)
+expect part1("HOHO => O\n\nHOH") == Ok(0)
+expect part1("O => H\n\nHHH") == Ok(0)
+
+# Count products, not matching positions or rule lines. An identity rule still
+# performs a replacement; a product equal to the input is not discarded.
+expect part1("H => HH\nH => HH\n\nHH") == Ok(1)
+expect part1("H => H\n\nHH") == Ok(1)
+# Neither replace every occurrence at once nor chain two different rules.
+expect products([Rule("H".to_utf8(), "O".to_utf8())], "HH".to_utf8())
+  == Set.of_list(["OH".to_utf8(), "HO".to_utf8()])
+expect part1("H => O\nO => OO\n\nH") == Ok(1)
+expect part1("H => O\r\n\r\nH\r\n") == Ok(1)
+
+expect part1("").is_err()
+expect part1("\nH").is_err()
+expect part1("H => O\nH").is_err()
+expect part1("H => O\n\n").is_err()
+expect part1("H => O\n\nH\nO").is_err()
+expect part1("H -> O\n\nH").is_err()
+expect part1(" => O\n\nH").is_err()
+expect part1("H => \n\nH").is_err()
+expect part1("H => O => H\n\nH").is_err()
+expect part1("H => O\n\nH O").is_err()
+
+fabrication_rules : Str
+fabrication_rules() -> "e => H\ne => O\n".concat(example_rules())
+
+expect part2(fabrication_rules().concat("HOH")) == Ok(3)
+expect part2(fabrication_rules().concat("HOHOHO")) == Ok(6)
+expect part2(fabrication_rules().concat("e")) == Ok(0)
+expect part2(fabrication_rules().concat("H")) == Ok(1)
+
+# A first reduction can be a dead end or lead to a longer route. Neither
+# rule order nor a preference for short molecules proves an optimal answer.
+expect part2("e => H\nH => AB\nX => AB\n\nAB") == Ok(2)
+expect part2("X => AB\nH => AB\ne => H\n\nAB") == Ok(2)
+expect part2("e => A\ne => B\nA => C\nC => D\nB => D\n\nD") == Ok(2)
+expect part2("e => A\nA => B\nB => A\nB => C\nA => A\n\nC") == Ok(3)
+
+# Reverse search must sometimes grow, and replacements remain literal even
+# when they overlap or act on an e embedded in a larger molecule.
+expect part2("e => AB\nAB => C\n\nC") == Ok(2)
+expect part2("e => AAA\nAA => B\n\nAB") == Ok(2)
+expect part2("e => AAA\nAA => B\n\nBA") == Ok(2)
+expect part2("e => He\nH => O\n\nOe") == Ok(2)
+expect part2("e => H\ne => ee\n\nHH") == Ok(3)
+
+# The grammar-shaped weight accelerates the puzzle without assuming that a
+# molecule with the right weight is reachable. A complete path is required.
+expect part2("e => AB\nA => ARnBAr\n\nARnBArB") == Ok(2)
+expect part2("e => AB\nA => ARnBYBAr\n\nARnBYBArB") == Ok(2)
+expect part2("e => YY\n\nYY") == Ok(1)
+expect part2("e => HHH\nH => HHH\n\nHHHHH") == Ok(2)
+expect part2("e => AB\nA => ARnBAr\n\nCC") == Err("medicine cannot be fabricated from e")
+expect part2("e => A\nA => B\nB => A\n\nC") == Err("medicine cannot be fabricated from e")
+expect part2("H => O\n\nHO") == Err("medicine cannot be fabricated from e")
+expect
+  {rules, medicine} = parse("e => H\nH => HH\nAA => A\n\nA").ok_or({rules: [], medicine: []})
+  fabricate_with_limit(rules, medicine, 5) == Err("fabrication search limit exceeded")
+expect fabricate_with_limit([], ['e'], 0) == Ok(0)
+expect fabricate_with_limit([Rule(['e'], ['H'])], ['H'], 0) == Err("fabrication search limit exceeded")
+expect fabricate_with_limit([Rule(['e'], ['H'])], ['H'], 1) == Ok(1)
+expect part2("").is_err()
+
+main!(host) -> host.run_stdin!(app)

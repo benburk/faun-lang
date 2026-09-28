@@ -1039,6 +1039,172 @@ fn a_long_walk_goes_round_rather_than_down() {
     );
 }
 
+/// Exercise day 18's row kernel with runtime cells on every target. The
+/// complete application exceeds sim65's 64 KiB code space; the larger
+/// targets also run its expectations and both hundred-step stdin solvers.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one example's kernel, expectations and stdin cases, with a smaller fixture for sim65"
+)]
+fn the_animated_lights_run_on_each_target() {
+    let text = include_str!("../../../faun/examples/aoc/201518.fn");
+    let kernel = text.replace(
+        "main!(host) -> host.run_stdin!(app)",
+        "main!(host) ->
+           cell = U8.of_nat(host.args.len() % 2)
+           row = [cell, 1, cell]
+           next = row.map2(row_sums(row), |current, total| next_light(current, total - current))
+           ordinary = next.count(|light| light == 1)
+           stuck = corner_row(next, True).count(|light| light == 1)
+           host.exit!((ordinary * 10 + stuck) % 256)",
+    );
+    let program = read(&kernel).expect("the day 18 row kernel compiles");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(
+        execute_counts(&program, &[1, 2, 3, 4]),
+        [13, 2, 13, 2].map(|status| (status, String::new()))
+    );
+    if TARGET.word() == 16 {
+        return;
+    }
+
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/aoc/201518.fn");
+    let program = faun::expectations_at(&path, &TARGET).expect("the day 18 expectations compile");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(execute(&program), (0, String::new()));
+
+    let program = read(text).expect("the day 18 example compiles");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    for (input, expected) in [
+        ("##\n##\n", "Ok({part1: 4, part2: 4})\n"),
+        ("..\n..\n", "Ok({part1: 0, part2: 4})\n"),
+        ("#\n", "Ok({part1: 0, part2: 1})\n"),
+        ("..\n.\n", "Err(unequal light grid row widths)\n"),
+    ] {
+        assert_eq!(
+            execute_with_input(&program, input.as_bytes()),
+            (0, expected.to_owned()),
+            "{input:?}"
+        );
+    }
+}
+
+/// Exercise day 19's overlapping replacement walk on every target. The
+/// full parser and hash set exceed sim65's code space; the larger targets
+/// also run all expectations and both parts on input read from stdin.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one example's replacement kernel, expectations and stdin cases, scaled for sim65"
+)]
+fn the_medicine_replacements_run_on_each_target() {
+    let text = include_str!("../../../faun/examples/aoc/201519.fn");
+    let kernel = text.replace(
+        "main!(host) -> host.run_stdin!(app)",
+        "main!(host) ->
+           count = host.args.len()
+           rule = Rule(\"AA\".to_utf8(), \"B\".to_utf8())
+           made = replace_each(rule, [], List.repeat('A', count), [])
+           valid = made.all(|molecule| molecule.len() == count - 1 & molecule.count(|byte| byte == 'B') == 1)
+           host.exit!(valid.select(made.len(), 99) % 256)",
+    );
+    let program = read(&kernel).expect("the day 19 replacement kernel compiles");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(
+        execute_counts(&program, &[1, 2, 3, 4]),
+        [0, 1, 2, 3].map(|status| (status, String::new()))
+    );
+    if TARGET.word() == 16 {
+        return;
+    }
+
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/aoc/201519.fn");
+    let program = faun::expectations_at(&path, &TARGET).expect("the day 19 expectations compile");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(execute(&program), (0, String::new()));
+
+    let program = read(text).expect("the day 19 example compiles");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    for (input, expected) in [
+        (
+            "e => H\ne => O\nH => HO\nH => OH\nO => HH\n\nHOH\n",
+            "Ok({part1: 4, part2: 3})\n",
+        ),
+        (
+            "e => H\ne => O\nH => HO\nH => OH\nO => HH\n\nHOHOHO\n",
+            "Ok({part1: 7, part2: 6})\n",
+        ),
+        ("e => AAA\nAA => B\n\nAAA", "Ok({part1: 2, part2: 1})\n"),
+        (
+            "e => H\nH => HH\nH => HH\n\nHH",
+            "Ok({part1: 1, part2: 2})\n",
+        ),
+        ("e => AB\nAB => C\n\nC", "Ok({part1: 0, part2: 2})\n"),
+        (
+            "e => H\nH => AB\nX => AB\n\nAB",
+            "Ok({part1: 0, part2: 2})\n",
+        ),
+        (
+            "e => A\nA => B\nB => A\n\nC",
+            "Err(medicine cannot be fabricated from e)\n",
+        ),
+        ("H -> O\n\nH", "Err(malformed replacement rule)\n"),
+    ] {
+        assert_eq!(
+            execute_with_input(&program, input.as_bytes()),
+            (0, expected.to_owned()),
+            "{input:?}"
+        );
+    }
+    // Every rule raises the additive weight by one, and expanding the
+    // leading A forty times constructs this target: 41 is a proven minimum.
+    let input = format!("e => AB\nA => ARnBYBAr\n\nA{}B", "RnBYBAr".repeat(40));
+    assert_eq!(
+        execute_with_input(&program, input.as_bytes()),
+        (0, "Ok({part1: 41, part2: 41})\n".to_owned())
+    );
+}
+
+/// The fabrication search's priority queue orders runtime costs on all
+/// three targets, including sim65 where the complete search cannot fit.
+#[test]
+fn the_medicine_queue_orders_estimated_costs() {
+    let text = include_str!("../../../faun/examples/aoc/201519.fn").replace(
+        "main!(host) -> host.run_stdin!(app)",
+        "ordered : (Work, Nat, Nat) -> Bool
+         ordered(Empty, _, 0) -> True
+         ordered(Queued(cost, _, _, left, right), expected, Succ(fuel)) if cost == expected ->
+           ordered(merge_work(left, right), expected + 1, fuel)
+         ordered(_, _, _) -> False
+
+         main!(host) ->
+           queue = List.range(6).fold(Empty, |queue, at|
+             merge_work(Queued((at + host.args.len()) % 6, at, [], Empty, Empty), queue))
+           host.exit!(ordered(queue, 0, 6).select(0, 1))",
+    );
+    let program = read(&text).expect("the medicine queue compiles");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    assert_eq!(
+        execute_counts(&program, &[1, 2, 3, 4, 5, 6]),
+        std::array::from_fn::<_, 6, _>(|_| (0, String::new()))
+    );
+}
+
 /// A package's expectations, built as `faun test` builds them, say which
 /// do not hold, whatever the target: here the third.
 #[test]

@@ -1,0 +1,116 @@
+# Advent of Code 2015, day 18: Like a GIF For Your Yard.
+# Build each generation from the unchanged previous grid: no light can see
+# a neighbour's new state until the next step. Part two forces the corners
+# on before the first step as well as after every subsequent step.
+# Cells and nine-cell sums fit in U8; the final population is a Nat.
+# The full application currently exceeds sim65's 64 KiB code space.
+
+package {}
+
+parse_light : U8 -> Result(U8, Str)
+parse_light('#') -> Ok(1)
+parse_light('.') -> Ok(0)
+parse_light(_) -> Err("malformed light: expected # or .")
+
+parse_grid : Str -> Result(List(List(U8)), Str)
+parse_grid(input) -> rectangular(input.lines())
+
+rectangular : List(Str) -> Result(List(List(U8)), Str)
+rectangular([]) -> Err("empty light grid")
+rectangular([first, *_]) if first.is_empty() -> Err("empty light grid")
+rectangular([first, *rest]) if !rest.all(|row| row.len() == first.len()) ->
+  Err("unequal light grid row widths")
+rectangular(rows) -> rows.try_map(|row| row.to_utf8().try_map(parse_light))
+
+# Sum three adjacent cells, padding each end with darkness. The vertical
+# pass does the same for rows. These walks need no coordinate lookups and
+# work just as well for a single row or column as for the full puzzle grid.
+row_sums : List(U8) -> List(U8)
+row_sums(row) -> row.map2(row.prepend(0), U8.add)
+  .map2(row.drop(1).append(0), U8.add)
+
+add_rows : (List(U8), List(U8)) -> List(U8)
+add_rows(left, right) -> left.map2(right, U8.add)
+
+next_light : (U8, U8) -> U8
+next_light(_, 3) -> 1
+next_light(current, 2) -> current
+next_light(_, _) -> 0
+
+step : List(List(U8)) -> List(List(U8))
+step(rows) ->
+  dark = List.repeat(0, rows.first().ok_or([]).len())
+  sums = rows.map(row_sums)
+  counts = sums.map2(sums.prepend(dark), add_rows)
+    .map2(sums.drop(1).append(dark), add_rows)
+  # The nine-cell sum includes the current light; the rule counts only eight.
+  rows.map2(counts, |row, totals|
+    row.map2(totals, |current, total| next_light(current, total - current)))
+
+corners : (List(List(U8)), Bool) -> List(List(U8))
+corners(rows, False) -> rows
+corners(rows, True) ->
+  last = rows.len() - 1
+  rows.enumerate().map(|(at, row)| corner_row(row, at == 0 | at == last))
+
+corner_row : (List(U8), Bool) -> List(U8)
+corner_row(row, False) -> row
+corner_row(row, True) ->
+  last = row.len() - 1
+  row.enumerate().map(|(at, current)| (at == 0 | at == last).select(1, current))
+
+animate : (List(List(U8)), Nat, Bool) -> List(List(U8))
+animate(grid, 0, _) -> grid
+animate(grid, Succ(steps), stuck) -> animate(corners(step(grid), stuck), steps, stuck)
+
+solve : (List(List(U8)), Nat, Bool) -> Nat
+solve(grid, steps, stuck) -> animate(corners(grid, stuck), steps, stuck)
+  .map(|row| row.count(|cell| cell == 1)).sum()
+
+part1 : (Str, Nat) -> Result(Nat, Str)
+part1(input, steps) -> Ok(solve(parse_grid(input)?, steps, False))
+
+part2 : (Str, Nat) -> Result(Nat, Str)
+part2(input, steps) -> Ok(solve(parse_grid(input)?, steps, True))
+
+app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
+app(input) ->
+  grid = parse_grid(input.stdin)?
+  Ok({part1: solve(grid, 100, False), part2: solve(grid, 100, True)})
+
+example : Str
+example() -> ".#.#.#\n...##.\n#....#\n..#...\n#.#..#\n####..\n"
+
+expect part1(example(), 4) == Ok(4)
+expect part2(example(), 5) == Ok(17)
+expect part1(example(), 0) == Ok(15)
+expect part2(example(), 0) == Ok(17)
+
+# Compare whole generations, not just populations: updates are simultaneous.
+expect
+  grid = parse_grid(example()).ok_or([])
+  Ok(step(grid)) == parse_grid("..##..\n..##.#\n...##.\n......\n#.....\n#.##..\n")
+expect
+  grid = parse_grid(example()).ok_or([])
+  Ok(corners(step(corners(grid, True)), True)) ==
+    parse_grid("#.##.#\n####.#\n...##.\n......\n#...#.\n#.####\n")
+
+# All neighbour counts for both current states, including overpopulation.
+expect List.range(9).map(|n| next_light(0, U8.of_nat(n))) == [0, 0, 0, 1, 0, 0, 0, 0, 0]
+expect List.range(9).map(|n| next_light(1, U8.of_nat(n))) == [0, 0, 1, 1, 0, 0, 0, 0, 0]
+
+# Edges do not wrap, and coincident corners in a narrow grid count only once.
+expect part1("#", 1) == Ok(0)
+expect part2(".", 0) == Ok(1) & part2(".", 3) == Ok(1)
+expect part1("###", 1) == Ok(1) & part1("#\n#\n#", 1) == Ok(1)
+expect part1("##\n##", 100) == Ok(4)
+expect part2("...\n...", 0) == Ok(4)
+expect part1(".#.\r\n###\r\n", 0) == Ok(4)
+expect part1("", 1).is_err()
+expect part1("\n", 1).is_err()
+expect part1("..\n.\n", 1).is_err()
+expect part1("..\n\n..", 1).is_err()
+expect part1(".x", 1).is_err()
+expect part1(" #", 1).is_err()
+
+main!(host) -> host.run_stdin!(app)
