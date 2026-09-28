@@ -1,0 +1,19 @@
+# The stateless bot: whatever happened, Rock.
+
+export {AlwaysRock}
+
+import throw {Throw.*}
+
+AlwaysRock : [AlwaysRock].(
+  start : AlwaysRock
+  start() -> AlwaysRock
+
+  name : AlwaysRock -> Str
+  name(_) -> "always_rock"
+
+  init : AlwaysRock -> (Throw, AlwaysRock)
+  init(bot) -> (Rock, bot)
+
+  get_move : (AlwaysRock, Throw) -> (Throw, AlwaysRock)
+  get_move(bot, _) -> (Rock, bot)
+)

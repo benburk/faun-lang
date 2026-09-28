@@ -1,0 +1,33 @@
+# Counts the opponent's throws and answers the most frequent one with its
+# counter. Its state is the tally so far, so it is the one bot whose state
+# grows with the match; a tie goes to the earlier throw in Rock, Paper,
+# Scissors order, and the opener, with nothing counted yet, is Rock.
+
+export {Freq}
+
+import throw {Throw.*}
+
+Freq : {rock: Nat, paper: Nat, scissors: Nat}.(
+  start : Freq
+  start() -> Freq({rock: 0, paper: 0, scissors: 0})
+
+  name : Freq -> Str
+  name(_) -> "freq"
+
+  init : Freq -> (Throw, Freq)
+  init(bot) -> (Rock, bot)
+
+  get_move : (Freq, Throw) -> (Throw, Freq)
+  get_move(Freq(tally), last) ->
+    seen = count(tally, last)
+    answer = favourite(seen).counter()
+    (answer, Freq(seen))
+)
+
+count(tally, Rock) -> {rock: tally.rock + 1, *tally}
+count(tally, Paper) -> {paper: tally.paper + 1, *tally}
+count(tally, Scissors) -> {scissors: tally.scissors + 1, *tally}
+
+favourite(tally) if tally.rock >= tally.paper & tally.rock >= tally.scissors -> Rock
+favourite(tally) if tally.paper >= tally.scissors -> Paper
+favourite(_) -> Scissors

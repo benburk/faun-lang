@@ -1,0 +1,26 @@
+# A uniform-ish throw from a seeded PCG stream; the generator state is the
+# bot's state, so a match replays exactly from the same seed.
+
+export {RandomBot}
+
+import pcg {Random}
+import throw {Throw}
+
+RandomBot : Random.(
+  start : Nat -> RandomBot
+  start(seed) -> RandomBot(Random.seed(seed))
+
+  name : RandomBot -> Str
+  name(_) -> "random"
+
+  init : RandomBot -> (Throw, RandomBot)
+  init(bot) -> draw(bot)
+
+  get_move : (RandomBot, Throw) -> (Throw, RandomBot)
+  get_move(bot, _) -> draw(bot)
+)
+
+draw : RandomBot -> (Throw, RandomBot)
+draw(RandomBot(rng)) ->
+  (word, next) = rng.next()
+  (Throw.of_nat(word.to_nat()), RandomBot(next))

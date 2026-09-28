@@ -1,0 +1,20 @@
+# Throws whatever would have beaten the opponent's last throw, and opens
+# with Rock. The only bot whose opener differs from its answer.
+
+export {BeatLast}
+
+import throw {Throw.*}
+
+BeatLast : [BeatLast].(
+  start : BeatLast
+  start() -> BeatLast
+
+  name : BeatLast -> Str
+  name(_) -> "beat_last"
+
+  init : BeatLast -> (Throw, BeatLast)
+  init(bot) -> (Rock, bot)
+
+  get_move : (BeatLast, Throw) -> (Throw, BeatLast)
+  get_move(bot, last) -> (last.counter(), bot)
+)

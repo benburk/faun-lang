@@ -297,6 +297,35 @@ fn the_nbody_examples_hold() {
     }
 }
 
+/// Ori's rock-paper-scissors round robin, ported: its expectations hold,
+/// and seed 42 over a hundred rounds gives the standings Ori's README
+/// shows.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn the_rps_arena_plays_ori_s_tournament() {
+    let (failed, count) = support::test_file(&example("rps-arena/main.fn"));
+    assert_eq!(failed, Vec::<String>::new());
+    assert_eq!(count, 17);
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .arg("run")
+        .arg(example("rps-arena/main.fn"))
+        .args(["--", "42", "100"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "seed 42, 100 rounds per match\n\
+         bot            wins  draws losses\n\
+         beat_last       210    133     57\n\
+         freq            192     68    140\n\
+         random          125    135    140\n\
+         rotate           98    205     97\n\
+         always_rock      68     73    259\n"
+    );
+}
+
 /// What opening a file meets, as Linux says it: nothing there, something
 /// there already, and a name reaching above where the program runs. A
 /// write goes where the file was opened to write it.

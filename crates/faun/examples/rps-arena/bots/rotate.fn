@@ -1,0 +1,22 @@
+# Walks the cycle Rock, Paper, Scissors, Rock, ... regardless of the
+# opponent. Its state is the throw it makes next.
+
+export {Rotate}
+
+import throw {Throw.*}
+
+Rotate : Throw.(
+  start : Rotate
+  start() -> Rotate(Rock)
+
+  name : Rotate -> Str
+  name(_) -> "rotate"
+
+  init : Rotate -> (Throw, Rotate)
+  init(bot) -> step(bot)
+
+  get_move : (Rotate, Throw) -> (Throw, Rotate)
+  get_move(bot, _) -> step(bot)
+)
+
+step(Rotate(throw)) -> (throw, Rotate(throw.counter()))

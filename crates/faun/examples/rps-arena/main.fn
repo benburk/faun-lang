@@ -1,0 +1,125 @@
+# The composition root, and the one place that knows every bot. The arena is
+# generic over a player type, and a tournament needs a list, so the bots must
+# share one type: `Bot` is that type, a sum whose methods forward to each
+# bot's own. `Bot(bot)` matches whichever constructor holds the bot and binds
+# it; `Bot(next)` puts that same constructor back on the state it returned. So
+# each operation is one clause however many bots there are, and adding a bot
+# adds one constructor here and nothing else in the program moves.
+#
+# Usage: main SEED [ROUNDS]
+
+package {
+  pcg: "../libraries/random/src/random"
+}
+
+import std.host {Host}
+import throw {Throw}
+import arena {Score, play, tournament}
+import bots.always_rock {AlwaysRock}
+import bots.beat_last {BeatLast}
+import bots.rotate {Rotate}
+import bots.random {RandomBot}
+import bots.freq {Freq}
+
+Bot : [Rock(AlwaysRock), Beat(BeatLast), Cycle(Rotate), Rng(RandomBot), Count(Freq)].(
+  name : Bot -> Str
+  name(Bot(bot)) -> bot.name()
+
+  init : Bot -> (Throw, Bot)
+  init(Bot(bot)) ->
+    (throw, next) = bot.init()
+    (throw, Bot(next))
+
+  get_move : (Bot, Throw) -> (Throw, Bot)
+  get_move(Bot(bot), last) ->
+    (throw, next) = bot.get_move(last)
+    (throw, Bot(next))
+)
+
+lineup : Nat -> List(Bot)
+lineup(seed) -> [
+  Rock(AlwaysRock.start()),
+  Beat(BeatLast.start()),
+  Cycle(Rotate.start()),
+  Rng(RandomBot.start(seed)),
+  Count(Freq.start())
+]
+
+Settings = {seed: Nat, rounds: Nat}
+
+# The arguments after the program's own name.
+configure : List(Str) -> Result(Settings, Str)
+configure([_, seed]) -> settings(seed, "100")
+configure([_, seed, rounds]) -> settings(seed, rounds)
+configure(_) -> Err(usage())
+
+settings : (Str, Str) -> Result(Settings, Str)
+settings(seed, rounds) ->
+  seed_nat = Nat.from_str(seed).err_as(usage())?
+  rounds_nat = Nat.from_str(rounds).err_as(usage())?
+  Ok({seed: seed_nat, rounds: rounds_nat})
+
+usage : Str
+usage() -> "usage: rps-arena SEED [ROUNDS]"
+
+report : Settings -> Str
+report({seed, rounds}) ->
+  # Fewest non-wins first is most wins first, every bot having played the
+  # same number of rounds.
+  standings = tournament(lineup(seed), rounds)
+  table = standings.sort_on(|score| score.draws + score.losses)
+  heading = "seed ${seed}, ${rounds} rounds per match\n"
+  columns = "${pad_end("bot", 12)}${pad_start("wins", 7)}${pad_start("draws", 7)}${pad_start("losses", 7)}\n"
+  lines = table.map(line)
+  Str.join([heading, columns, *lines], "")
+
+# `text` followed by spaces to `width` bytes, for a table whose cells are
+# ASCII. Aligning text in general needs grapheme clusters and display widths
+# that a byte count cannot see, which is why the standard library offers no
+# padding.
+pad_end : (Str, Nat) -> Str
+pad_end(text, width) -> text.concat(" ".repeat(width - text.len()))
+
+# The same from the other end, for a column of numbers.
+pad_start : (Str, Nat) -> Str
+pad_start(text, width) -> " ".repeat(width - text.len()).concat(text)
+
+line : Score -> Str
+line(score) ->
+  "${pad_end(score.name, 12)}${pad_start(score.wins.to_str(), 7)}${pad_start(score.draws.to_str(), 7)}${pad_start(score.losses.to_str(), 7)}\n"
+
+# Two bots of different types meet without any union: beat_last opens with
+# Rock against a wall of Rock, draws once, then wins every round.
+expect play(AlwaysRock.start(), BeatLast.start(), 5) == {left: 0, right: 4, draws: 1}
+
+# Against the cycle, beat_last's answer to the previous throw is exactly the
+# cycle's next throw, so they draw forever.
+expect play(BeatLast.start(), Rotate.start(), 30) == {left: 0, right: 0, draws: 30}
+
+# The union plays the same game as the bare types.
+expect play(Rock(AlwaysRock.start()), Beat(BeatLast.start()), 5) == {left: 0, right: 4, draws: 1}
+
+# The counter reads a wall of Rock after one round and answers Paper from
+# then on.
+expect play(AlwaysRock.start(), Freq.start(), 5) == {left: 0, right: 4, draws: 1}
+
+# Against the cycle the tally keeps tying, so the counter keeps answering
+# Rock's counter and meets each throw of the cycle in turn.
+expect play(Freq.start(), Rotate.start(), 6) == {left: 1, right: 2, draws: 3}
+
+expect tournament(lineup(1), 3).map(|score| score.name) == ["always_rock", "beat_last", "rotate", "random", "freq"]
+
+# The table on standard output, or the usage on standard error and status
+# two. A write that fails leaves nothing more to say.
+main!(host) ->
+  said = configure(host.args).map_ok(report)
+  status = finish!(host, said)
+  host.exit!(status)
+
+finish! : (Host, Result(Str, Str)) -> U8
+finish!(host, Ok(table)) ->
+  printed = host.print!(table)
+  0
+finish!(host, Err(message)) ->
+  written = host.stderr.write_all!("${message}\n".to_utf8())
+  2

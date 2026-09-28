@@ -1,0 +1,49 @@
+# The three throws, and the one fact everything else derives from: `counter`
+# names the throw that beats its argument. `beats` reads it backwards, and
+# the rotating bot walks the same cycle forwards.
+
+export {Throw.*}
+
+Throw : [Rock, Paper, Scissors].(
+  equals : (Throw, Throw) -> Bool
+  equals(Rock, Rock) -> True
+  equals(Paper, Paper) -> True
+  equals(Scissors, Scissors) -> True
+  equals(_, _) -> False
+
+  to_str : Throw -> Str
+  to_str(Rock) -> "Rock"
+  to_str(Paper) -> "Paper"
+  to_str(Scissors) -> "Scissors"
+
+  counter : Throw -> Throw
+  counter(Rock) -> Paper
+  counter(Paper) -> Scissors
+  counter(Scissors) -> Rock
+
+  beats : (Throw, Throw) -> Bool
+  beats(a, b) -> a == counter(b)
+
+  # The throw `n` names, counting Rock, Paper, Scissors in the order
+  # `counter` cycles them and wrapping every third the way `U8.of_nat`
+  # wraps at 256. A drawn word converts as it arrives, reduced by nothing
+  # the caller has to know about.
+  of_nat : Nat -> Throw
+  of_nat(n) -> cycle_at(n % 3)
+)
+
+# The throw at position `i` of the cycle, for an `i` `of_nat` has already
+# brought below three.
+cycle_at(0) -> Rock
+cycle_at(1) -> Paper
+cycle_at(_) -> Scissors
+
+expect Paper.beats(Rock)
+expect Rock.beats(Scissors)
+expect Scissors.beats(Paper)
+expect Rock.beats(Rock).not()
+expect Rock.beats(Paper).not()
+expect Rock.counter().counter().counter() == Rock
+expect Throw.of_nat(0) == Rock
+expect Throw.of_nat(4) == Paper
+expect Throw.of_nat(0xffffffff) == Rock
