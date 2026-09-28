@@ -93,8 +93,15 @@ impl Diagnostic {
 
     /// The same, at `span` in `source`.
     #[must_use]
-    pub fn at(mut self, source: &Source, span: Span) -> Self {
-        self.location = Some(Box::new(Location::of(source, span)));
+    pub fn at(self, source: &Source, span: Span) -> Self {
+        let location = Location::of(source, span);
+        self.at_location(location)
+    }
+
+    /// The same, at a place already resolved.
+    #[must_use]
+    pub fn at_location(mut self, location: Location) -> Self {
+        self.location = Some(Box::new(location));
         self
     }
 

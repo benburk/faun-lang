@@ -153,6 +153,38 @@ fn a_package_without_expectations_has_nothing_to_ask() {
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 0));
 }
 
+/// `faun test` tells an expectation that does not hold as it tells any
+/// diagnostic, at the line it was written, and fails with how many did.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn a_failing_expectation_is_told_as_a_diagnostic() {
+    let package = Package::new(
+        "failing-expectation",
+        "expect 1 + 1 == 2
+
+         expect 1 + 1 == 3",
+    );
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .arg("test")
+        .arg(package.entry())
+        .output()
+        .unwrap();
+    let told = String::from_utf8(output.stderr).unwrap();
+    assert!(!output.status.success(), "{told}");
+    // The package's source starts after the host import and a blank line.
+    let expected = format!(
+        "faun: this expectation does not hold\n \
+         --> {}:5:1\n  \
+         |\n\
+         5 | expect 1 + 1 == 3\n  \
+         | ^^^^^^^^^^^^^^^^^\n\
+         \n\
+         faun: 1 of 2 expectations does not hold\n",
+        package.entry().display()
+    );
+    assert_eq!(told, expected);
+}
+
 /// An expectation is checked as any definition is, when the package is.
 #[test]
 fn an_expectation_is_checked_whether_or_not_it_is_asked() {

@@ -4,11 +4,15 @@
 //! This crate only parses arguments, knows which targets exist, and writes
 //! what the compiler makes. The compiler itself is the `faun` library.
 
+mod args;
+
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
 
-use bpaf::{OptionParser, Parser, choice, construct, long, positional, short};
+use args::{Command, Stage};
+use faun::diagnostic::{Diagnostic, Location};
 use faun_core::barb;
 use faun_core::targets::Target;
 use faun_mos6502_sim65::Mos6502Sim65;
@@ -25,193 +29,46 @@ const NATIVE: Option<&dyn Target> = if cfg!(all(target_arch = "x86_64", target_o
     None
 };
 
-#[derive(Clone, Debug)]
-enum Command {
-    Check {
-        target: &'static dyn Target,
-        source: PathBuf,
-    },
-    Build {
-        target: &'static dyn Target,
-        source: PathBuf,
-        output: PathBuf,
-    },
-    Run {
-        target: &'static dyn Target,
-        source: PathBuf,
-        /// What the program is run with, after its own name.
-        args: Vec<String>,
-    },
-    Test {
-        target: &'static dyn Target,
-        source: PathBuf,
-    },
-    Emit {
-        target: &'static dyn Target,
-        stage: Stage,
-        source: PathBuf,
-    },
-}
-
-/// An intermediate stage `emit` prints.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Stage {
-    Barb,
-    Machine,
-    /// The target's own rendering of what it encodes.
-    Target,
-}
-
 fn main() -> ExitCode {
-    let command = cli().run();
-    let outcome = dispatch(command);
+    let command = args::parse();
+    let outcome = match command {
+        Command::Check { target, source } => check(&source, target).map(|()| ExitCode::SUCCESS),
+        Command::Build {
+            target,
+            source,
+            output,
+        } => build(&source, target, &output).map(|()| ExitCode::SUCCESS),
+        Command::Run {
+            target,
+            source,
+            args,
+        } => run(&source, target, &args),
+        Command::Test { target, source } => test(&source, target).map(|()| ExitCode::SUCCESS),
+        Command::Emit {
+            target,
+            stage,
+            source,
+        } => emit(stage, &source, target).map(|()| ExitCode::SUCCESS),
+    };
     match outcome {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("faun: {error}");
+        Ok(exit) => exit,
+        Err(diagnostic) => {
+            eprintln!("faun: {diagnostic}");
             ExitCode::FAILURE
         }
     }
 }
 
-/// `--target`, defaulting to [`NATIVE`] and required where there is none.
-fn target_parser() -> impl Parser<&'static dyn Target> {
-    long("target")
-        .help("Machine to compile for")
-        .argument::<String>("TARGET")
-        .parse(|name| {
-            TARGETS
-                .into_iter()
-                .find(|target| target.name() == name)
-                .ok_or_else(|| unknown_target(&name))
-        })
-        .fallback_with(|| NATIVE.ok_or(NO_NATIVE))
-        .debug_fallback()
-}
-
-fn build_parser() -> impl Parser<Command> {
-    let target = target_parser();
-    let source = positional::<PathBuf>("PATH").help("The source file to compile");
-    let output = short('o')
-        .long("output")
-        .help("Where to write artifacts")
-        .argument::<PathBuf>("PATH")
-        .fallback(PathBuf::from("a.out"))
-        .debug_fallback();
-    construct!(Command::Build {
-        output,
-        target,
-        source,
-    })
-    .to_options()
-    .descr("Compile a Faun program")
-    .command("build")
-}
-
-fn emit_parser() -> impl Parser<Command> {
-    let target = target_parser();
-    let stage = positional::<String>("STAGE")
-        .help("The stage to print: barb, machine or target")
-        .parse(|stage| match stage.as_str() {
-            "barb" => Ok(Stage::Barb),
-            "machine" => Ok(Stage::Machine),
-            "target" => Ok(Stage::Target),
-            _ => Err("expected barb, machine or target"),
-        });
-    let source = positional::<PathBuf>("PATH").help("The source file to compile");
-    construct!(Command::Emit {
-        target,
-        stage,
-        source,
-    })
-    .to_options()
-    .descr("Print an intermediate stage of a Faun program")
-    .command("emit")
-}
-
-fn cli() -> OptionParser<Command> {
-    let target = target_parser();
-    let source = positional::<PathBuf>("PATH").help("The source file to check");
-    let check = construct!(Command::Check { target, source })
-        .to_options()
-        .descr("Check a Faun program against the selected machine's host")
-        .command("check");
-
-    let target = target_parser();
-    let source = positional::<PathBuf>("PATH").help("The source file to compile and run");
-    let args = positional::<String>("ARGS")
-        .help("What the program is run with; after `--`, even what looks like an option")
-        .many();
-    let run = construct!(Command::Run {
-        target,
-        source,
-        args
-    })
-    .to_options()
-    .descr("Compile a Faun program for the selected machine and run it")
-    .command("run");
-
-    let target = target_parser();
-    let source = positional::<PathBuf>("PATH").help("The source file whose package to test");
-    let test = construct!(Command::Test { target, source })
-        .to_options()
-        .descr("Run every `expect` in a Faun package on the selected machine")
-        .command("test");
-
-    choice([
-        check.boxed(),
-        build_parser().boxed(),
-        run.boxed(),
-        test.boxed(),
-        emit_parser().boxed(),
-    ])
-    .to_options()
-    .descr("The Faun compiler")
-    .version(env!("CARGO_PKG_VERSION"))
-}
-
-const NO_NATIVE: &str = "no target runs on this machine, so --target is required";
-
-fn unknown_target(name: &str) -> String {
-    let known = TARGETS
-        .iter()
-        .map(|target| target.name())
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("unknown target `{name}`, expected: {known}")
-}
-
-fn dispatch(command: Command) -> Result<(), String> {
-    match command {
-        Command::Check { source, target } => check(&source, target),
-        Command::Build {
-            source,
-            output,
-            target,
-        } => build(&source, target, &output),
-        Command::Run {
-            source,
-            target,
-            args,
-        } => run(&source, target, &args),
-        Command::Test { source, target } => test(&source, target),
-        Command::Emit {
-            target,
-            stage,
-            source,
-        } => emit(stage, &source, target),
-    }
-}
-
 /// Check a package against the target's host by lowering it as far as Barb.
-fn check(source: &Path, target: &dyn Target) -> Result<(), String> {
+fn check(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
     faun::lower_to_barb(source, target)?;
+    println!("checked {}", source.display());
     Ok(())
 }
 
 /// Compile an application and write its image to `output`. A library has
 /// nothing to build, so building one checks it.
-fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), String> {
+fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), Diagnostic> {
     let barb = faun::lower_to_barb(source, target)?;
     if barb.entry().is_none() {
         println!(
@@ -226,22 +83,21 @@ fn build(source: &Path, target: &dyn Target, output: &Path) -> Result<(), String
     Ok(())
 }
 
-/// Compile for the machine this runs on, run it, and exit as it did.
-fn run(source: &Path, target: &dyn Target, args: &[String]) -> Result<(), String> {
+/// Compile for the machine this runs on, run it, and answer how it exited:
+/// failure where a signal stopped it.
+fn run(source: &Path, target: &dyn Target, args: &[String]) -> Result<ExitCode, Diagnostic> {
     runs_here(target)?;
     let image = faun::compile_to_image(source, target)?;
-    let status = execute(target, &image, |program| {
-        Process::new(program)
-            .args(args)
-            .status()
-            .map_err(|error| format!("cannot run {}: {error}", program.display()))
-    })?;
-    std::process::exit(status.code().unwrap_or(1))
+    let status = execute(target, &image, |program| program.args(args).status())?;
+    let code = status.code();
+    let byte = code.and_then(|code| u8::try_from(code).ok());
+    let exit = byte.map_or(ExitCode::FAILURE, ExitCode::from);
+    Ok(exit)
 }
 
 /// Build a package's expectations for the machine this runs on, run them,
 /// and say where each one that does not hold was written.
-fn test(source: &Path, target: &dyn Target) -> Result<(), String> {
+fn test(source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
     runs_here(target)?;
     let tests = faun::lower_tests_to_barb(source, target)?;
     let count = tests.expectations.len();
@@ -250,59 +106,69 @@ fn test(source: &Path, target: &dyn Target) -> Result<(), String> {
         return Ok(());
     }
     let image = faun::compile_barb_to_image(tests.barb, target)?;
-    let output = execute(target, &image, |program| {
-        Process::new(program)
-            .output()
-            .map_err(|error| format!("cannot run {}: {error}", program.display()))
-    })?;
+    let output = execute(target, &image, Process::output)?;
     if !output.status.success() {
-        return Err(format!("the expectations stopped with {}", output.status));
+        let message = format!("the expectations stopped with {}", output.status);
+        return Err(Diagnostic::new(message));
     }
-    let failed = String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .map(|number| {
-            number
-                .parse::<usize>()
-                .ok()
-                .and_then(|number| tests.expectations.get(number.checked_sub(1)?))
-                .ok_or_else(|| format!("the expectations answered `{number}`"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let answered = String::from_utf8_lossy(&output.stdout);
+    let failed = failed(&answered, &tests.expectations)?;
     report(&failed, count)
 }
 
-/// Say where each expectation that failed was written, and how many of
-/// `count` held: an error where any failed.
-fn report(failed: &[&faun::diagnostic::Location], count: usize) -> Result<(), String> {
-    for location in failed {
-        println!(
-            "{}:{}: does not hold: {}",
-            location.path.display(),
-            location.line,
-            location.text.trim()
-        );
+/// Where each expectation the test build `answered` as failing was written.
+fn failed<'a>(
+    answered: &str,
+    expectations: &'a [Location],
+) -> Result<Vec<&'a Location>, Diagnostic> {
+    let mut failed = Vec::new();
+    for number in answered.split_whitespace() {
+        let parsed = number.parse::<usize>().ok();
+        let index = parsed.and_then(|parsed| parsed.checked_sub(1));
+        let location = index.and_then(|index| expectations.get(index));
+        let Some(location) = location else {
+            let message = format!("the expectations answered `{number}`");
+            return Err(Diagnostic::new(message));
+        };
+        failed.push(location);
+    }
+    Ok(failed)
+}
+
+/// Tell each expectation that failed, and how many of `count` held: an
+/// error where any failed.
+fn report(failed: &[&Location], count: usize) -> Result<(), Diagnostic> {
+    for &location in failed {
+        let diagnostic = Diagnostic::new("this expectation does not hold");
+        let diagnostic = diagnostic.at_location(location.clone());
+        eprintln!("faun: {diagnostic}");
+        eprintln!();
     }
     let counted = if count == 1 {
         "1 expectation".to_owned()
     } else {
         format!("{count} expectations")
     };
-    match failed.len() {
-        0 if count == 1 => println!("{counted} holds"),
-        0 => println!("{counted} hold"),
-        1 => return Err(format!("1 of {counted} does not hold")),
-        n => return Err(format!("{n} of {counted} do not hold")),
+    let failures = failed.len();
+    if failures == 0 {
+        let verb = if count == 1 { "holds" } else { "hold" };
+        println!("{counted} {verb}");
+        return Ok(());
     }
-    Ok(())
+    let verb = if failures == 1 { "does" } else { "do" };
+    let message = format!("{failures} of {counted} {verb} not hold");
+    Err(Diagnostic::new(message))
 }
 
 /// Refuse a target whose programs this machine cannot run.
-fn runs_here(target: &dyn Target) -> Result<(), String> {
-    if NATIVE.is_none_or(|native| native.name() != target.name()) {
-        return Err(format!(
-            "{} programs do not run on this machine",
-            target.name()
+fn runs_here(target: &dyn Target) -> Result<(), Diagnostic> {
+    let name = target.name();
+    if NATIVE.is_none_or(|native| native.name() != name) {
+        let diagnostic = Diagnostic::new(format!("{name} programs do not run on this machine"));
+        let diagnostic = diagnostic.help(format!(
+            "build one with `faun build --target {name}` instead"
         ));
+        return Err(diagnostic);
     }
     Ok(())
 }
@@ -312,28 +178,35 @@ fn runs_here(target: &dyn Target) -> Result<(), String> {
 fn execute<T>(
     target: &dyn Target,
     image: &[u8],
-    start: impl FnOnce(&Path) -> Result<T, String>,
-) -> Result<T, String> {
+    start: impl FnOnce(&mut Process) -> io::Result<T>,
+) -> Result<T, Diagnostic> {
     let directory = std::env::temp_dir().join(format!("faun-run-{}", std::process::id()));
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
-    let outcome =
-        write(target, image, &directory.join("program")).and_then(|program| start(&program));
-    fs::remove_dir_all(&directory)
-        .map_err(|error| format!("cannot remove {}: {error}", directory.display()))?;
+    fs::create_dir_all(&directory).map_err(|error| cannot("create", &directory, &error))?;
+    let outcome = write(target, image, &directory.join("program")).and_then(|program| {
+        let mut process = Process::new(&program);
+        start(&mut process).map_err(|error| cannot("run", &program, &error))
+    });
+    fs::remove_dir_all(&directory).map_err(|error| cannot("remove", &directory, &error))?;
     outcome
 }
 
 /// Print one stage of a program.
-fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), String> {
+fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), Diagnostic> {
     let mut barb = faun::lower_to_barb(source, target)?;
     barb::optimize(&mut barb);
+    let routines = target.routines();
     let text = match stage {
         Stage::Barb => barb.render(),
-        Stage::Machine => faun_core::lower_to_machine_ir(&mut barb, &target.routines())?.render(),
+        Stage::Machine => {
+            let machine =
+                faun_core::lower_to_machine_ir(&mut barb, &routines).map_err(Diagnostic::new)?;
+            machine.render()
+        }
         Stage::Target => {
-            let machine = faun_core::lower_to_machine_ir(&mut barb, &target.routines())?;
-            target.render(&target.prepare(&machine)?)
+            let machine =
+                faun_core::lower_to_machine_ir(&mut barb, &routines).map_err(Diagnostic::new)?;
+            let prepared = target.prepare(&machine).map_err(Diagnostic::new)?;
+            target.render(&prepared)
         }
     };
     print!("{text}");
@@ -341,8 +214,13 @@ fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), String> 
 }
 
 /// Write an image through its target, answering the path written.
-fn write(target: &dyn Target, image: &[u8], output: &Path) -> Result<PathBuf, String> {
+fn write(target: &dyn Target, image: &[u8], output: &Path) -> Result<PathBuf, Diagnostic> {
     target
         .write(image, output)
-        .map_err(|error| format!("cannot write {}: {error}", output.display()))
+        .map_err(|error| cannot("write", output, &error))
+}
+
+/// What the file system refused: to `act` on `path`.
+fn cannot(act: &str, path: &Path, error: &io::Error) -> Diagnostic {
+    Diagnostic::new(format!("cannot {act} {}: {error}", path.display()))
 }
