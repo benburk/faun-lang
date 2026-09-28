@@ -7,60 +7,70 @@ use crate::ast::{BinaryOp, Span};
 use crate::blessed::{self, PreludeIds};
 use crate::hir as h;
 use crate::typed as t;
-use crate::{ModuleId, Symbol};
 
 pub(super) fn finish(
-    program: h::Program,
+    program: crate::declarations::Program,
     facts: Facts,
     prelude: &PreludeIds,
     sites: &mut h::Sites,
 ) -> t::Program {
-    let mut output = t::Program {
-        functions: Vec::new(),
-        data: HashMap::new(),
-        members: HashMap::new(),
-    };
-    let mut indices = HashMap::new();
     let mut elaborator = Elaborator {
         facts,
         prelude,
         sites,
     };
-    for module in program.modules {
-        for item in module.items {
-            match item {
-                h::Item::Data(mut data) => {
-                    for method in std::mem::take(&mut data.methods) {
-                        let item = match method {
-                            h::MethodItem::Signature(signature) => {
-                                output
-                                    .members
-                                    .insert((data.name, signature.spelling), signature.name);
-                                h::Item::Signature(signature)
-                            }
-                            h::MethodItem::Clause(clause) => h::Item::Clause(clause),
-                        };
-                        elaborator.declaration(
-                            module.source,
-                            item,
-                            &mut output.functions,
-                            &mut indices,
-                        );
-                    }
-                    output.data.insert(data.name, data);
-                }
-                item => {
-                    elaborator.declaration(
-                        module.source,
-                        item,
-                        &mut output.functions,
-                        &mut indices,
-                    );
-                }
+    let mut members = HashMap::new();
+    let functions = program
+        .functions
+        .into_iter()
+        .map(|function| {
+            if let (Some(owner), Some(signature)) = (function.owner, &function.signature) {
+                members.insert((owner, signature.spelling), function.name);
             }
-        }
+            let span = function.clauses.first().map_or_else(
+                || {
+                    function
+                        .signature
+                        .as_ref()
+                        .expect("a bodyless declaration has a signature")
+                        .span
+                },
+                |clause| clause.span,
+            );
+            let definition = if function.clauses.is_empty() {
+                t::Definition::External(
+                    function
+                        .signature
+                        .expect("a bodyless declaration has a signature")
+                        .spelling,
+                )
+            } else {
+                t::Definition::Body(
+                    function
+                        .clauses
+                        .into_iter()
+                        .map(|clause| elaborator.clause(clause))
+                        .collect(),
+                )
+            };
+            t::Function {
+                module: function.module,
+                span,
+                name: function.name,
+                scheme: elaborator
+                    .facts
+                    .values
+                    .remove(&function.name)
+                    .expect("every definition has a scheme"),
+                definition,
+            }
+        })
+        .collect();
+    t::Program {
+        functions,
+        data: program.data,
+        members,
     }
-    output
 }
 
 struct Elaborator<'a> {
@@ -70,72 +80,31 @@ struct Elaborator<'a> {
 }
 
 impl Elaborator<'_> {
-    fn declaration(
-        &mut self,
-        module: ModuleId,
-        item: h::Item,
-        functions: &mut Vec<t::Function>,
-        indices: &mut HashMap<Symbol, usize>,
-    ) {
-        let (name, span, provider) = match &item {
-            h::Item::Signature(signature) => {
-                (signature.name, signature.span, Some(signature.spelling))
-            }
-            h::Item::Clause(clause) => (clause.name, clause.span, None),
-            h::Item::Data(_) => unreachable!("data's methods are visited separately"),
-        };
-        let index = *indices.entry(name).or_insert_with(|| {
-            let index = functions.len();
-            functions.push(t::Function {
-                module,
-                span,
-                name,
-                scheme: self
-                    .facts
-                    .values
-                    .remove(&name)
-                    .expect("every definition has a scheme"),
-                definition: provider
-                    .map_or_else(|| t::Definition::Body(Vec::new()), t::Definition::External),
-            });
-            index
-        });
-        if let h::Item::Clause(clause) = item {
-            let function = &mut functions[index];
-            if matches!(function.definition, t::Definition::External(_)) {
-                function.definition = t::Definition::Body(Vec::new());
-            }
-            let t::Definition::Body(clauses) = &mut function.definition else {
-                unreachable!()
-            };
-            if clauses.is_empty() {
-                function.span = clause.span;
-            }
-            let (signature, bounds) = self.facts.clauses[&clause.site].clone();
-            clauses.push(t::Clause {
-                span: clause.span,
-                signature,
-                bounds,
-                patterns: clause
-                    .patterns
+    fn clause(&mut self, clause: h::Clause) -> t::Clause {
+        let (signature, bounds) = self.facts.clauses[&clause.site].clone();
+        t::Clause {
+            span: clause.span,
+            signature,
+            bounds,
+            patterns: clause
+                .patterns
+                .into_iter()
+                .map(|p| self.pattern(p))
+                .collect(),
+            guard: clause.guard.map(|expr| self.expr(expr)),
+            body: t::Body {
+                bindings: clause
+                    .body
+                    .bindings
                     .into_iter()
-                    .map(|p| self.pattern(p))
+                    .map(|binding| t::Binding {
+                        pattern: self.pattern(binding.pattern),
+                        value: self.expr(binding.value),
+                    })
                     .collect(),
-                guard: clause.guard.map(|expr| self.expr(expr)),
-                body: t::Body {
-                    bindings: clause
-                        .body
-                        .bindings
-                        .into_iter()
-                        .map(|binding| t::Binding {
-                            pattern: self.pattern(binding.pattern),
-                            value: self.expr(binding.value),
-                        })
-                        .collect(),
-                    result: self.expr(clause.body.result),
-                },
-                locals: clause.locals,
-            });
+                result: self.expr(clause.body.result),
+            },
+            locals: clause.locals,
         }
     }
 

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use num_bigint::BigUint;
 
-use crate::hir::{self as h, LocalId};
+use crate::hir::LocalId;
 use crate::specialize::{FunctionKey, Pattern, Type};
 use crate::{ModuleId, Symbol};
 
@@ -21,7 +21,7 @@ pub(crate) struct Program {
     /// Where the program starts, when it is an application.
     pub(crate) entry: Option<FunctionKey>,
     pub(crate) functions: Vec<Function>,
-    pub(crate) data: HashMap<Symbol, h::DataDecl>,
+    pub(crate) data: HashMap<Symbol, crate::declarations::Data>,
 }
 
 #[derive(Clone, Debug)]

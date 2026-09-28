@@ -1812,7 +1812,7 @@ mod tests {
         let loaded = crate::modules::load_program(&entry, &root, &crate::test_host()).unwrap();
         let prelude = PreludeIds::find_in(&loaded).unwrap();
         let resolved = crate::resolve::resolve_names(loaded).unwrap();
-        crate::check::type_check(resolved, prelude).unwrap()
+        crate::check::type_check(crate::declarations::normalize(resolved), prelude).unwrap()
     }
 
     /// The example's own definition spelled `suffix`, not the standard
@@ -1850,7 +1850,8 @@ mod tests {
         let host = crate::host::HostIds::find_in(&loaded).unwrap();
         let main = crate::host::Main::find_in(&loaded).unwrap().unwrap();
         let resolved = crate::resolve::resolve_names(loaded).unwrap();
-        let checked = crate::check::type_check(resolved, prelude).unwrap();
+        let checked =
+            crate::check::type_check(crate::declarations::normalize(resolved), prelude).unwrap();
         crate::check::check_application_abi(&checked, &host, &main).unwrap();
         for bits in [16, 32, 64] {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);

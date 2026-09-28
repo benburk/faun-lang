@@ -10,7 +10,9 @@
 //!
 //! [`lower_to_barb`] runs the frontend passes in order. Parsing retains compact
 //! source spans. Module loading and qualification then produce symbol-based
-//! HIR without merging raw ASTs. Checking performs Hindley–Milner inference,
+//! HIR without merging raw ASTs. Declaration normalization groups each function's
+//! signature and clauses and lifts methods out of data declarations. Checking
+//! performs Hindley–Milner inference,
 //! nominal receiver-directed method resolution, and contextual literal
 //! elaboration, producing typed HIR with explicit calls, projections and
 //! widenings instead of syntax accompanied by inference tables.
@@ -32,6 +34,7 @@ pub mod blessed;
 mod builders;
 mod callbacks;
 pub mod check;
+pub mod declarations;
 pub mod diagnostic;
 #[cfg(test)]
 mod ebnf;
@@ -136,7 +139,8 @@ fn lower_resolved(
     main: Option<&host::Main>,
     target: &dyn Target,
 ) -> Result<barb::Program, Diagnostic> {
-    let checked = check::type_check(resolved, prelude)?;
+    let program = declarations::normalize(resolved);
+    let checked = check::type_check(program, prelude)?;
     if let Some(main) = main {
         check::check_application_abi(&checked, host, main)?;
     }

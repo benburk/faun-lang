@@ -88,7 +88,7 @@ pub(crate) struct Program {
     /// Where the program starts, when it is an application.
     pub(crate) entry: Option<FunctionKey>,
     pub(crate) functions: Vec<Function>,
-    pub(crate) data: HashMap<Symbol, h::DataDecl>,
+    pub(crate) data: HashMap<Symbol, crate::declarations::Data>,
 }
 
 #[derive(Clone, Debug)]
@@ -293,7 +293,7 @@ struct Specializer<'a> {
     prelude: &'a PreludeIds,
     members: &'a HashMap<(Symbol, Symbol), Symbol>,
     definitions: HashMap<Symbol, &'a t::Function>,
-    data: HashMap<Symbol, h::DataDecl>,
+    data: HashMap<Symbol, crate::declarations::Data>,
     constructors: HashMap<Symbol, Constructor>,
     requested: HashMap<FunctionKey, usize>,
     /// The `equals` and `cmp` of closed records and tuples, which nothing

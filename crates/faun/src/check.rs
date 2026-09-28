@@ -32,6 +32,7 @@ use super::diagnostic::Diagnostic;
 use super::hir as h;
 use super::resolve::ResolvedProgram;
 use super::{ModuleId, Symbol, Symbols};
+use crate::declarations as n;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TypeVariable {
@@ -138,7 +139,7 @@ impl std::error::Error for CheckError {}
 /// Reports type, arity, ambiguous-method, unsupported-constraint, and literal
 /// protocol failures, and clauses that leave a case unmatched.
 pub fn type_check(
-    resolved: ResolvedProgram,
+    resolved: ResolvedProgram<n::Program>,
     prelude: PreludeIds,
 ) -> Result<CheckedProgram, Diagnostic> {
     let facts = validate_effects(&resolved.program, &resolved.symbols)
@@ -961,7 +962,7 @@ struct Checker<'a> {
     constructors: HashMap<Symbol, Scheme>,
     methods: HashMap<Symbol, Vec<MethodImpl>>,
     fields: HashMap<Symbol, Vec<FieldImpl>>,
-    visible_methods: HashMap<ModuleId, HashSet<Symbol>>,
+    visible_methods: &'a HashMap<ModuleId, HashSet<Symbol>>,
     pending_methods: Vec<PendingMethod>,
     pending_numerals: Vec<PendingNumeral>,
     pending_tags: Vec<PendingTag>,
@@ -988,7 +989,7 @@ struct Checker<'a> {
 
 impl<'a> Checker<'a> {
     fn new(
-        program: &h::Program,
+        program: &'a n::Program,
         symbols: &'a Symbols,
         prelude: &'a PreludeIds,
     ) -> Result<Self, CheckError> {
@@ -1000,16 +1001,7 @@ impl<'a> Checker<'a> {
             constructors: HashMap::new(),
             methods: HashMap::new(),
             fields: HashMap::new(),
-            visible_methods: program
-                .modules
-                .iter()
-                .map(|module| {
-                    (
-                        module.source,
-                        module.visible_methods.iter().copied().collect(),
-                    )
-                })
-                .collect(),
+            visible_methods: &program.visible_methods,
             pending_methods: Vec::new(),
             pending_numerals: Vec::new(),
             pending_tags: Vec::new(),
@@ -1026,22 +1018,19 @@ impl<'a> Checker<'a> {
             widenings: Vec::new(),
             checked: Facts::default(),
         };
-        for module in &program.modules {
-            for item in &module.items {
-                match item {
-                    h::Item::Signature(signature) => {
-                        checker.add_signature(module.source, signature, None)?;
-                    }
-                    h::Item::Data(data) => checker.add_data(module.source, data)?,
-                    h::Item::Clause(_) => {}
-                }
+        for data in program.data.values() {
+            checker.add_data(data.module, data)?;
+        }
+        for function in &program.functions {
+            if let Some(signature) = &function.signature {
+                checker.add_signature(function.module, signature, function.owner)?;
             }
         }
         checker.validate_literal_protocols(program)?;
         Ok(checker)
     }
 
-    fn add_data(&mut self, module: ModuleId, data: &h::DataDecl) -> Result<(), CheckError> {
+    fn add_data(&mut self, module: ModuleId, data: &n::Data) -> Result<(), CheckError> {
         let written = data
             .constructors
             .iter()
@@ -1123,11 +1112,6 @@ impl<'a> Checker<'a> {
                 },
             );
         }
-        for method in &data.methods {
-            if let h::MethodItem::Signature(signature) = method {
-                self.add_signature(module, signature, Some(data.name))?;
-            }
-        }
         Ok(())
     }
 
@@ -1200,36 +1184,28 @@ impl<'a> Checker<'a> {
     /// spelling a dot calls them by.
     fn unsigned_methods(
         &self,
-        program: &h::Program,
+        program: &n::Program,
         unsigned: &HashSet<Symbol>,
     ) -> HashMap<Symbol, Vec<UnsignedMethod>> {
         let mut methods: HashMap<Symbol, Vec<UnsignedMethod>> = HashMap::new();
-        for module in &program.modules {
-            for item in &module.items {
-                let h::Item::Data(data) = item else { continue };
-                for method in &data.methods {
-                    let h::MethodItem::Clause(clause) = method else {
-                        continue;
-                    };
-                    if !unsigned.contains(&clause.name) {
-                        continue;
-                    }
-                    let canonical = self.symbols.text(clause.name);
-                    let Some(spelling) = canonical
-                        .rsplit_once('.')
-                        .and_then(|(_, spelled)| self.symbols.find(spelled))
-                    else {
-                        continue;
-                    };
-                    let entry = methods.entry(spelling).or_default();
-                    if !entry.iter().any(|known| known.name == clause.name) {
-                        entry.push(UnsignedMethod {
-                            name: clause.name,
-                            owner: data.name,
-                        });
-                    }
-                }
+        for function in &program.functions {
+            let Some(owner) = function.owner else {
+                continue;
+            };
+            if !unsigned.contains(&function.name) {
+                continue;
             }
+            let canonical = self.symbols.text(function.name);
+            let Some(spelling) = canonical
+                .rsplit_once('.')
+                .and_then(|(_, spelled)| self.symbols.find(spelled))
+            else {
+                continue;
+            };
+            methods.entry(spelling).or_default().push(UnsignedMethod {
+                name: function.name,
+                owner,
+            });
         }
         methods
     }
@@ -1444,8 +1420,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn validate_literal_protocols(&self, program: &h::Program) -> Result<(), CheckError> {
-        let Some(module) = program.modules.first().map(|module| module.source) else {
+    fn validate_literal_protocols(&self, program: &n::Program) -> Result<(), CheckError> {
+        let Some(module) = program.functions.first().map(|function| function.module) else {
             return Ok(());
         };
         for (function, parameters, result, written) in [
@@ -1487,8 +1463,13 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn check(mut self, program: &h::Program) -> Result<Facts, CheckError> {
-        let definitions = definitions(program);
+    fn check(mut self, program: &n::Program) -> Result<Facts, CheckError> {
+        let definitions: HashMap<_, _> = program
+            .functions
+            .iter()
+            .filter(|function| !function.clauses.is_empty())
+            .map(|function| (function.name, function))
+            .collect();
         let unsigned: HashSet<_> = definitions
             .keys()
             .filter(|name| !self.values.contains_key(name))
@@ -1500,15 +1481,11 @@ impl<'a> Checker<'a> {
             let marks = self.marks();
             let mut monotypes = HashMap::new();
             for name in &component {
-                let clauses = &definitions[name];
-                let arity = clauses
-                    .first()
-                    .map_or(0, |(_, clause)| clause.patterns.len());
-                if clauses
-                    .iter()
-                    .any(|(_, clause)| clause.patterns.len() != arity)
-                {
-                    let (module, clause) = clauses[0];
+                let function = definitions[name];
+                let clauses = &function.clauses;
+                let arity = clauses.first().map_or(0, |clause| clause.patterns.len());
+                if clauses.iter().any(|clause| clause.patterns.len() != arity) {
+                    let (module, clause) = (function.module, &clauses[0]);
                     return Err(failure(
                         module,
                         clause.span,
@@ -1535,8 +1512,8 @@ impl<'a> Checker<'a> {
                 );
             }
             for name in &component {
-                for &(module, clause) in &definitions[name] {
-                    self.check_clause(module, clause, &monotypes[name])?;
+                for clause in &definitions[name].clauses {
+                    self.check_clause(definitions[name].module, clause, &monotypes[name])?;
                 }
             }
             let types: Vec<Ty> = monotypes.values().cloned().collect();
@@ -1546,15 +1523,14 @@ impl<'a> Checker<'a> {
                 let Ty::Function(parameters, _) = self.infer.resolve(&monotypes[name]) else {
                     continue;
                 };
-                let clauses = &definitions[name];
+                let function = definitions[name];
+                let clauses = &function.clauses;
                 for (column, parameter) in parameters.iter().enumerate() {
                     let rows = clauses
                         .iter()
-                        .map(|(_, clause)| {
-                            (clause.patterns[column].clone(), clause.guard.is_some())
-                        })
+                        .map(|clause| (clause.patterns[column].clone(), clause.guard.is_some()))
                         .collect();
-                    let (module, clause) = clauses[0];
+                    let (module, clause) = (function.module, &clauses[0]);
                     self.close_rows(parameter, rows)
                         .map_err(|message| failure(module, clause.span, message))?;
                 }
@@ -1563,7 +1539,8 @@ impl<'a> Checker<'a> {
                 if let Ty::Function(_, result) = self.infer.resolve(&monotypes[name])
                     && matches!(*result, Ty::Function(..))
                 {
-                    let (module, clause) = definitions[name][0];
+                    let (module, clause) =
+                        (definitions[name].module, &definitions[name].clauses[0]);
                     return Err(failure(
                         module,
                         clause.span,
@@ -1586,7 +1563,7 @@ impl<'a> Checker<'a> {
                 })
                 .collect();
             for name in &component {
-                for (_, clause) in &definitions[name] {
+                for clause in &definitions[name].clauses {
                     if let Some(site) = self
                         .clause_types
                         .iter_mut()
@@ -1620,14 +1597,15 @@ impl<'a> Checker<'a> {
             }
         }
 
-        for (name, clauses) in &definitions {
+        for (name, function) in &definitions {
             let Some(scheme) = self.values.get(name).cloned() else {
                 continue;
             };
             if unsigned.contains(name) {
                 continue;
             }
-            for &(module, clause) in clauses {
+            let module = function.module;
+            for clause in &function.clauses {
                 let marks = self.marks();
                 let (ty, rigid) = self.infer.skolemize(&scheme);
                 // The body meets its bounds as written, at its own rigid
@@ -4026,20 +4004,10 @@ fn free_scheme(scheme: &Scheme) -> HashSet<u32> {
         .collect()
 }
 
-fn validate_effects(program: &h::Program, symbols: &Symbols) -> Result<(), CheckError> {
-    for module in &program.modules {
-        for item in &module.items {
-            match item {
-                h::Item::Clause(clause) => validate_effect_clause(module.source, clause, symbols)?,
-                h::Item::Data(data) => {
-                    for method in &data.methods {
-                        if let h::MethodItem::Clause(clause) = method {
-                            validate_effect_clause(module.source, clause, symbols)?;
-                        }
-                    }
-                }
-                h::Item::Signature(_) => {}
-            }
+fn validate_effects(program: &n::Program, symbols: &Symbols) -> Result<(), CheckError> {
+    for function in &program.functions {
+        for clause in &function.clauses {
+            validate_effect_clause(function.module, clause, symbols)?;
         }
     }
     Ok(())
@@ -4220,34 +4188,6 @@ fn source_name(symbols: &Symbols, symbol: Symbol) -> &str {
         .expect("split always has one item")
 }
 
-fn definitions(program: &h::Program) -> HashMap<Symbol, Vec<(ModuleId, &h::Clause)>> {
-    let mut definitions: HashMap<_, Vec<_>> = HashMap::new();
-    for module in &program.modules {
-        for item in &module.items {
-            match item {
-                h::Item::Clause(clause) => {
-                    definitions
-                        .entry(clause.name)
-                        .or_default()
-                        .push((module.source, clause));
-                }
-                h::Item::Data(data) => {
-                    for method in &data.methods {
-                        if let h::MethodItem::Clause(clause) = method {
-                            definitions
-                                .entry(clause.name)
-                                .or_default()
-                                .push((module.source, clause));
-                        }
-                    }
-                }
-                h::Item::Signature(_) => {}
-            }
-        }
-    }
-    definitions
-}
-
 fn graph_visit(node: usize, edges: &[Vec<usize>], seen: &mut [bool], order: &mut Vec<usize>) {
     if std::mem::replace(&mut seen[node], true) {
         return;
@@ -4269,7 +4209,7 @@ fn graph_gather(node: usize, edges: &[Vec<usize>], seen: &mut [bool], output: &m
 }
 
 fn components(
-    definitions: &HashMap<Symbol, Vec<(ModuleId, &h::Clause)>>,
+    definitions: &HashMap<Symbol, &n::Function>,
     unsigned: &HashSet<Symbol>,
     methods: &HashMap<Symbol, Vec<UnsignedMethod>>,
 ) -> Vec<Vec<Symbol>> {
@@ -4282,7 +4222,7 @@ fn components(
     let mut edges = vec![Vec::new(); names.len()];
     for (name, &from) in &index {
         let mut dependencies = HashSet::new();
-        for (_, clause) in &definitions[name] {
+        for clause in &definitions[name].clauses {
             clause_globals(clause, &mut dependencies);
         }
         // A member spelled as an unsigned method may be it, which is
@@ -4662,12 +4602,46 @@ mod tests {
     }
 
     #[test]
+    fn declarations_group_clauses_and_lift_unsigned_methods() {
+        let fixture = Fixture::new();
+        let (_, resolved) = fixture.load(
+            "pick : Nat -> Nat\npick(0) -> 1\npick(_) -> 2\n\
+             external : Nat -> Nat\n\
+             Switch : [Off, On].(flip(Off) -> On\nflip(On) -> Off)\n",
+        );
+        let resolved = n::normalize(resolved);
+        let named = |suffix| {
+            resolved
+                .program
+                .functions
+                .iter()
+                .find(|function| resolved.symbols.text(function.name).ends_with(suffix))
+                .unwrap()
+        };
+        let pick = named("$$pick");
+        assert!(pick.signature.is_some());
+        assert_eq!(pick.clauses.len(), 2);
+        for (clause, expected) in pick.clauses.iter().zip([1u32, 2]) {
+            assert_eq!(
+                clause.body.result.kind,
+                h::ExprKind::Number(expected.into())
+            );
+        }
+        assert!(named("$$external").clauses.is_empty());
+        assert!(named("$$external").signature.is_some());
+        let method = named("Switch.flip");
+        assert!(method.signature.is_none());
+        assert_eq!(method.clauses.len(), 2);
+        assert!(resolved.program.data.contains_key(&method.owner.unwrap()));
+    }
+
+    #[test]
     fn context_selects_nat_int_and_str_elaboration() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load(
             "natural : Nat\nnatural() -> 42\ninteger : Int\ninteger() -> -42\ntext : Str\ntext() -> \"é\"\n",
         );
-        let checked = type_check(resolved, prelude.clone()).unwrap();
+        let checked = type_check(n::normalize(resolved), prelude.clone()).unwrap();
         let entry = *checked.resolved.package.last().unwrap();
         let expressions: Vec<_> = checked
             .resolved
@@ -4702,7 +4676,7 @@ mod tests {
              Flip : [Off, On].(not : Flip -> Flip\nnot(Off) -> On\nnot(On) -> Off)\n\
              flip(x) -> x.not()\n",
         );
-        let checked = type_check(resolved, prelude).unwrap();
+        let checked = type_check(n::normalize(resolved), prelude).unwrap();
         let expressions = expressions(&checked);
         assert!(
             expressions
@@ -4726,7 +4700,7 @@ mod tests {
         let fixture = Fixture::new();
         let (prelude, resolved) =
             fixture.load("Outcome : [Never]\nvalue : Outcome\nvalue() -> Never\n");
-        type_check(resolved, prelude).unwrap();
+        type_check(n::normalize(resolved), prelude).unwrap();
     }
 
     #[test]
@@ -4750,7 +4724,7 @@ mod tests {
                 }
             })
             .unwrap();
-        let checked = type_check(resolved, prelude).unwrap();
+        let checked = type_check(n::normalize(resolved), prelude).unwrap();
         let scheme = &checked
             .resolved
             .program
@@ -4770,7 +4744,7 @@ mod tests {
     fn a_polymorphic_signature_cannot_be_implemented_by_one_concrete_type() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("constant : a -> a\nconstant(_) -> 1\n");
-        let failure = type_check(resolved, prelude).unwrap_err();
+        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(failure.message.contains("numeral") || failure.message.contains("mismatch"));
     }
 
@@ -4780,7 +4754,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "id(x) -> x\nnatural : Nat\nnatural() -> id(1)\ninteger : Int\ninteger() -> id(-1)\n",
         );
-        type_check(resolved, prelude).unwrap();
+        type_check(n::normalize(resolved), prelude).unwrap();
     }
 
     /// A function is passed into a call; bound to a name, it would be a
@@ -4790,7 +4764,7 @@ mod tests {
         let fixture = Fixture::new();
         let (prelude, resolved) =
             fixture.load("id : a -> a\nid(x) -> x\nlocal : Int\nlocal() ->\n  f = id\n  f(-1)\n");
-        let failure = type_check(resolved, prelude).unwrap_err();
+        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(
             failure.message.contains("cannot be bound"),
             "{}",
@@ -4804,7 +4778,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "increment : Nat -> Nat\nincrement(n) -> n.add(1)\ntruth : Bool -> Bool\ntruth(b) -> b.not()\n",
         );
-        let checked = type_check(resolved, prelude.clone()).unwrap();
+        let checked = type_check(n::normalize(resolved), prelude.clone()).unwrap();
         let targets = methods(&checked);
         assert!(targets.contains(&prelude.bool_not));
         assert!(
@@ -4825,7 +4799,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "Flip : [Off, On].(not : Flip -> Flip\nnot(Off) -> On\nnot(On) -> Off)\nflip(x) -> x.not()\n",
         );
-        let checked = type_check(resolved, prelude).unwrap();
+        let checked = type_check(n::normalize(resolved), prelude).unwrap();
         let resolved = &checked.resolved;
         let scheme = &resolved
             .program
@@ -4846,7 +4820,7 @@ mod tests {
             "exports {helper}\nSecret : [Hidden].(not : Secret -> Secret\nnot(Hidden) -> Hidden)\nhelper : Nat\nhelper() -> 0\n",
         );
         let (prelude, resolved) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
-        let checked = type_check(resolved, prelude.clone()).unwrap();
+        let checked = type_check(n::normalize(resolved), prelude.clone()).unwrap();
         assert!(methods(&checked).contains(&prelude.bool_not));
     }
 
@@ -4857,7 +4831,7 @@ mod tests {
         let loaded = modules::load_program(&entry, &root, &crate::test_host()).unwrap();
         let prelude = PreludeIds::find_in(&loaded).unwrap();
         let resolved = resolve::resolve_names(loaded).unwrap();
-        let checked = type_check(resolved, prelude).unwrap();
+        let checked = type_check(n::normalize(resolved), prelude).unwrap();
         assert!(!methods(&checked).is_empty());
     }
 
@@ -4877,7 +4851,7 @@ mod tests {
         let loaded = modules::load_program(&entry, &root, &crate::test_host()).unwrap();
         let prelude = PreludeIds::find_in(&loaded).unwrap();
         let resolved = resolve::resolve_names(loaded).unwrap();
-        let checked = type_check(resolved, prelude).unwrap();
+        let checked = type_check(n::normalize(resolved), prelude).unwrap();
         let methods: HashSet<_> = methods(&checked)
             .into_iter()
             .map(|target| checked.resolved.symbols.text(target))
@@ -4899,7 +4873,7 @@ mod tests {
         let fixture = Fixture::new();
         let (prelude, resolved) =
             fixture.load("stop! : Nat -> Nat\nbad : Nat\nbad() -> stop!(0)\n");
-        let failure = type_check(resolved, prelude).unwrap_err();
+        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(
             failure
                 .message
@@ -4909,7 +4883,7 @@ mod tests {
         let (prelude, resolved) = fixture.load(
             "stop! : Nat -> Nat\nid : Nat -> Nat\nid(n) -> n\nbad! : Nat\nbad!() -> id(stop!(0))\n",
         );
-        let failure = type_check(resolved, prelude).unwrap_err();
+        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(failure.message.contains("must stand on its own"));
     }
 
@@ -4919,7 +4893,7 @@ mod tests {
     fn a_constructor_where_another_type_is_wanted_says_both() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> Zero.add(True)\n");
-        let failure = type_check(resolved, prelude).unwrap_err();
+        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert_eq!(failure.message, "`True` builds Bool, where Nat is wanted");
     }
 
@@ -4927,7 +4901,7 @@ mod tests {
     fn a_negative_nat_is_rejected() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> -1\n");
-        let failure = type_check(resolved, prelude).unwrap_err();
+        let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(failure.message.contains("negative numeral"));
     }
 }

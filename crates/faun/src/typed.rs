@@ -16,7 +16,7 @@ use crate::{ModuleId, Symbol};
 #[derive(Clone, Debug)]
 pub struct Program {
     pub functions: Vec<Function>,
-    pub data: HashMap<Symbol, h::DataDecl>,
+    pub data: HashMap<Symbol, crate::declarations::Data>,
     pub members: HashMap<(Symbol, Symbol), Symbol>,
 }
 
