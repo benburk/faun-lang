@@ -6,12 +6,17 @@
 //! registers it clobbers or uses as scratch. What comes back says where each
 //! value is at each point, and the moves between.
 //!
-//! The allocator walks each block in order, keeps profitable live values in
-//! registers, spills under pressure, and splits at fixed operands, ties,
+//! The allocator walks each block in order, keeps live values in registers,
+//! and where they run out puts in memory the value read furthest ahead,
+//! loops counted; it splits at fixed operands, ties,
 //! scratch reservations, and clobbers. A block starts where a predecessor
 //! already allocated left its values, so an edge moves only what changed.
 
+mod distance;
+
 use std::collections::HashMap;
+
+use distance::Distances;
 
 use super::parallel_copy::{
     self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place, TransitionCost,
@@ -269,6 +274,11 @@ impl LiveSet {
 
     fn contains(&self, value: VReg) -> bool {
         self.0.binary_search(&value).is_ok()
+    }
+
+    /// Where `value` is among the members, if it is one.
+    fn position(&self, value: VReg) -> Option<usize> {
+        self.0.binary_search(&value).ok()
     }
 
     fn len(&self) -> usize {
@@ -609,6 +619,11 @@ struct Allocator<'a, R> {
     /// For each value, every register some instruction it lives across
     /// writes or needs: one outside these holds it without moving.
     hazards: Vec<RegSet>,
+    /// How far each value is from being read next: when registers run out,
+    /// the one read furthest ahead waits in memory.
+    distances: Distances,
+    /// The block and point being allocated.
+    now: (BlockId, Point),
 }
 
 impl<'a, R: Register> Allocator<'a, R> {
@@ -634,6 +649,8 @@ impl<'a, R: Register> Allocator<'a, R> {
             next_spill: vec![1; function_count(code)],
             busy: RegSet::EMPTY,
             hazards: hazards(code, liveness),
+            distances: Distances::new(code, liveness),
+            now: (BlockId::at(0), Point(0)),
         })
     }
 
@@ -766,6 +783,7 @@ impl<'a, R: Register> Allocator<'a, R> {
 
     fn allocate_entry(&mut self, layout: &BlockPoints) -> Result<(), String> {
         let block = self.code.blocks[layout.block];
+        self.now = (layout.block, layout.entry);
         self.expire_to(layout.entry);
         let params = &self.code.block_params[block.params.range()];
         let specs = &self.code.block_param_specs[block.params.range()];
@@ -797,6 +815,7 @@ impl<'a, R: Register> Allocator<'a, R> {
         // to be moved again.
         let requirements = inst;
         self.busy = RegSet(requirements.scratch.0 | requirements.clobbers.0);
+        self.now = (block, points.early);
         self.expire_to(points.early);
         self.fill_live(points.early, &[], inst.scratch)?;
         let operands = &self.code.operands[inst.operands.range()];
@@ -856,6 +875,7 @@ impl<'a, R: Register> Allocator<'a, R> {
         self.evict_reserved(inst.scratch, &protected)?;
         self.record(block, points.early);
 
+        self.now = (block, points.late);
         self.expire_to(points.late);
         let requirements = inst;
         let result = inst.result;
@@ -916,6 +936,7 @@ impl<'a, R: Register> Allocator<'a, R> {
 
     fn allocate_terminator(&mut self, layout: &BlockPoints) -> Result<(), String> {
         let block = self.code.blocks[layout.block];
+        self.now = (layout.block, layout.terminator);
         self.expire_to(layout.terminator);
         self.fill_live(layout.terminator, &[], RegSet::EMPTY)?;
         let mut protected = Vec::new();
@@ -945,10 +966,17 @@ impl<'a, R: Register> Allocator<'a, R> {
         protected: &[VReg],
         reserved: RegSet,
     ) -> Result<(), String> {
-        for value in self.liveness.at[point.index()].iter() {
-            if self.placement.get(value).is_none() {
-                self.put_anywhere(value, protected, reserved)?;
-            }
+        let live = &self.liveness.at[point.index()];
+        if live.iter().all(|value| self.placement.get(value).is_some()) {
+            return Ok(());
+        }
+        let mut unplaced: Vec<_> = live
+            .iter()
+            .filter(|&value| self.placement.get(value).is_none())
+            .collect();
+        unplaced.sort_by_cached_key(|&value| self.ahead(value));
+        for value in unplaced {
+            self.put_anywhere(value, protected, reserved)?;
         }
         Ok(())
     }
@@ -965,12 +993,44 @@ impl<'a, R: Register> Allocator<'a, R> {
         reserved: RegSet,
     ) -> Result<(), String> {
         if let Some(reg) = self.free_register_for(value, reserved) {
-            self.put_in_register(value, reg, protected)
-        } else {
-            let spilled = self.spill(value)?;
-            self.placement.set(value, spilled);
-            Ok(())
+            return self.put_in_register(value, reg, protected);
         }
+        // A register is worth taking from a value read further ahead.
+        if let Some(reg) = self.furthest(protected, reserved)
+            && self
+                .register_occupant(reg)
+                .is_some_and(|held| self.ahead(held) > self.ahead(value))
+        {
+            return self.put_in_register(value, reg, protected);
+        }
+        let spilled = self.spill(value)?;
+        self.placement.set(value, spilled);
+        Ok(())
+    }
+
+    /// How far from where allocation is `value` is next read.
+    fn ahead(&self, value: VReg) -> u32 {
+        let (block, point) = self.now;
+        self.distances.next(self.liveness, block, point, value)
+    }
+
+    /// Of the registers outside `reserved` holding none of `protected`, the
+    /// one whose value is read furthest ahead.
+    fn furthest(&self, protected: &[VReg], reserved: RegSet) -> Option<R> {
+        self.code
+            .registers
+            .iter()
+            .copied()
+            .filter(|&candidate| {
+                !reserved.contains(candidate)
+                    && self
+                        .register_occupant(candidate)
+                        .is_none_or(|held| !protected.contains(&held))
+            })
+            .max_by_key(|&candidate| {
+                self.register_occupant(candidate)
+                    .map_or(u32::MAX, |held| self.ahead(held))
+            })
     }
 
     fn put_in_some_register(
@@ -984,19 +1044,9 @@ impl<'a, R: Register> Allocator<'a, R> {
         {
             return Ok(reg);
         }
-        let reg = self.free_register_for(value, reserved).or_else(|| {
-            self.code
-                .registers
-                .iter()
-                .copied()
-                .rev()
-                .find(|&candidate| {
-                    !reserved.contains(candidate)
-                        && self
-                            .register_occupant(candidate)
-                            .is_none_or(|held| !protected.contains(&held))
-                })
-        });
+        let reg = self
+            .free_register_for(value, reserved)
+            .or_else(|| self.furthest(protected, reserved));
         let reg = reg.ok_or_else(|| "instruction needs more registers than exist".to_owned())?;
         self.put_in_register(value, reg, protected)?;
         Ok(reg)
@@ -1930,11 +1980,17 @@ mod tests {
 
     /// `count` values made, then each read once, last first, and nothing
     /// answered: more live at once than two registers hold.
+    fn pressed(count: usize) -> Code<Two> {
+        let reads: Vec<_> = (0..count).rev().collect();
+        made_then_read(count, &reads)
+    }
+
+    /// `count` values made, then each read once in the order `reads` gives.
     #[expect(
         clippy::too_many_lines,
         reason = "one straight-line function built by hand"
     )]
-    fn pressed(count: usize) -> Code<Two> {
+    fn made_then_read(count: usize, reads: &[usize]) -> Code<Two> {
         let mut code = Code {
             values: count,
             operands: Vec::new(),
@@ -1969,7 +2025,7 @@ mod tests {
         for at in 0..count {
             make(&mut code, &[], Some(VReg::at(at)));
         }
-        for at in (0..count).rev() {
+        for &at in reads {
             make(&mut code, &[VReg::at(at)], None);
         }
         code.blocks.push(Block {
@@ -1997,5 +2053,17 @@ mod tests {
                 .iter()
                 .all(|segment| matches!(segment.location, Location::Register(_)))
         );
+    }
+
+    #[test]
+    fn what_is_read_furthest_ahead_waits_in_memory() {
+        let (_, allocation) = allocate(&made_then_read(3, &[1, 2, 0])).unwrap();
+        let spilled = |value: usize| {
+            allocation.segments.iter().any(|segment| {
+                segment.value == VReg::at(value) && matches!(segment.location, Location::Spill(_))
+            })
+        };
+        assert!(spilled(0));
+        assert!(!spilled(1));
     }
 }
