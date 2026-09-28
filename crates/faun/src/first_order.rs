@@ -1,4 +1,4 @@
-//! The first-order program Barb lowering reads.
+//! The first-order program resource checking and pattern compilation read.
 //!
 //! [`crate::callbacks`] leaves no function value: every callback is made
 //! into the definition it is handed to, and every call of one is direct.

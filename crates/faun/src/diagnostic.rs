@@ -12,6 +12,22 @@ use std::path::PathBuf;
 use crate::ast::Span;
 use crate::source::Source;
 
+/// A lowering failure, located before source owners are released.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LowerError {
+    pub message: String,
+    /// Where in the source it is about, when that is known.
+    pub at: Option<(crate::ModuleId, Span)>,
+}
+
+impl fmt::Display for LowerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for LowerError {}
+
 /// A span resolved against its source: where it is, and the line it is on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Location {

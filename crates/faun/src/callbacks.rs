@@ -26,11 +26,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::Symbol;
+use crate::diagnostic::LowerError;
 use crate::first_order as d;
 use crate::hir::{LocalId, SiteId};
 use crate::specialize::{
     Body, Clause, Definition, Expr, ExprKind, Function, FunctionKey, Instance, Pattern, Program,
-    Signature, SpecializeError, Type,
+    Signature, Type,
 };
 
 /// Replace every function value in `program` with the callbacks it stands
@@ -39,7 +40,7 @@ use crate::specialize::{
 /// Return first-order IR directly. The input must have passed
 /// [`crate::second_class::check`]; source sites identify lambdas even when
 /// generated lambdas share a diagnostic span. Failure exposes no partial output.
-pub(crate) fn lower(program: Program) -> Result<d::Program, SpecializeError> {
+pub(crate) fn lower(program: Program) -> Result<d::Program, LowerError> {
     let mut pass = Callbacks::new(&program);
     let mut functions = Vec::with_capacity(program.functions.len());
     for function in &program.functions {
@@ -258,7 +259,7 @@ impl<'a> Callbacks<'a> {
         source: &Source,
         callbacks: &[Callback],
         key: FunctionKey,
-    ) -> Result<d::Function, SpecializeError> {
+    ) -> Result<d::Function, LowerError> {
         match source {
             Source::Written(written) => {
                 let function = self.functions[written];
@@ -277,7 +278,7 @@ impl<'a> Callbacks<'a> {
         function: &Function,
         frame: &Frame,
         callbacks: &[Callback],
-    ) -> Result<d::Function, SpecializeError> {
+    ) -> Result<d::Function, LowerError> {
         let written = match &function.definition {
             Definition::External(provider) => {
                 return Ok(d::Function {
@@ -328,7 +329,7 @@ impl<'a> Callbacks<'a> {
         owner: &FunctionKey,
         site: SiteId,
         callbacks: &[Callback],
-    ) -> Result<d::Function, SpecializeError> {
+    ) -> Result<d::Function, LowerError> {
         let lambda = &self.lambdas[&(owner.clone(), site)];
         let (patterns, body, ty) = (lambda.patterns, lambda.body, lambda.ty);
         let captures = captures(patterns, body);
@@ -388,7 +389,7 @@ impl<'a> Callbacks<'a> {
         })
     }
 
-    fn body(&mut self, frame: &mut Frame, body: &Body) -> Result<d::Body, SpecializeError> {
+    fn body(&mut self, frame: &mut Frame, body: &Body) -> Result<d::Body, LowerError> {
         let bindings = body
             .bindings
             .iter()
@@ -398,18 +399,18 @@ impl<'a> Callbacks<'a> {
                     value: self.expr(frame, &binding.value)?,
                 })
             })
-            .collect::<Result<_, SpecializeError>>()?;
+            .collect::<Result<_, LowerError>>()?;
         Ok(d::Body {
             bindings,
             result: self.expr(frame, &body.result)?,
         })
     }
 
-    fn exprs(&mut self, frame: &mut Frame, list: &[Expr]) -> Result<Vec<d::Expr>, SpecializeError> {
+    fn exprs(&mut self, frame: &mut Frame, list: &[Expr]) -> Result<Vec<d::Expr>, LowerError> {
         list.iter().map(|each| self.expr(frame, each)).collect()
     }
 
-    fn expr(&mut self, frame: &mut Frame, expression: &Expr) -> Result<d::Expr, SpecializeError> {
+    fn expr(&mut self, frame: &mut Frame, expression: &Expr) -> Result<d::Expr, LowerError> {
         let kind = match &expression.kind {
             ExprKind::Local(local) if frame.functions.contains_key(local) => {
                 return Err(located(
@@ -433,14 +434,14 @@ impl<'a> Callbacks<'a> {
                 fields
                     .iter()
                     .map(|(name, field)| Ok((*name, self.expr(frame, field)?)))
-                    .collect::<Result<_, SpecializeError>>()?,
+                    .collect::<Result<_, LowerError>>()?,
             ),
             ExprKind::Update(base, fields) => d::ExprKind::Update(
                 Box::new(self.expr(frame, base)?),
                 fields
                     .iter()
                     .map(|(name, field)| Ok((*name, self.expr(frame, field)?)))
-                    .collect::<Result<_, SpecializeError>>()?,
+                    .collect::<Result<_, LowerError>>()?,
             ),
             ExprKind::Tuple(members) => d::ExprKind::Tuple(self.exprs(frame, members)?),
             ExprKind::Project(receiver, field) => {
@@ -469,7 +470,7 @@ impl<'a> Callbacks<'a> {
         frame: &mut Frame,
         key: &FunctionKey,
         arguments: &[Expr],
-    ) -> Result<d::ExprKind, SpecializeError> {
+    ) -> Result<d::ExprKind, LowerError> {
         if !takes_function(key) {
             return Ok(d::ExprKind::DirectCall(
                 key.clone(),
@@ -493,7 +494,7 @@ impl<'a> Callbacks<'a> {
         carried: Vec<d::Expr>,
         arguments: &[Expr],
         answer: &Type,
-    ) -> Result<d::ExprKind, SpecializeError> {
+    ) -> Result<d::ExprKind, LowerError> {
         match callback {
             Callback::Function(key) => self.call(frame, &key, arguments),
             Callback::Constructor(constructor, _) => Ok(d::ExprKind::Construct(
@@ -524,7 +525,7 @@ impl<'a> Callbacks<'a> {
 
     /// `arguments` as a call hands them: each function among them as its
     /// callback, and what it carries in its place.
-    fn hand(&mut self, frame: &mut Frame, arguments: &[Expr]) -> Result<Handed, SpecializeError> {
+    fn hand(&mut self, frame: &mut Frame, arguments: &[Expr]) -> Result<Handed, LowerError> {
         let mut handed = Handed {
             callbacks: Vec::new(),
             arguments: Vec::with_capacity(arguments.len()),
@@ -543,7 +544,7 @@ impl<'a> Callbacks<'a> {
 }
 
 /// The callback a function value is, and what it carries.
-fn callback(frame: &Frame, expression: &Expr) -> Result<(Callback, Vec<d::Expr>), SpecializeError> {
+fn callback(frame: &Frame, expression: &Expr) -> Result<(Callback, Vec<d::Expr>), LowerError> {
     let local = |(local, ty): &(LocalId, Type)| d::Expr {
         module: expression.module,
         span: expression.span,
@@ -732,15 +733,15 @@ fn pattern_highest(pattern: &Pattern) -> u32 {
     }
 }
 
-fn located(expression: &Expr, message: &str) -> SpecializeError {
-    SpecializeError {
+fn located(expression: &Expr, message: &str) -> LowerError {
+    LowerError {
         message: message.to_owned(),
         at: Some((expression.module, expression.span)),
     }
 }
 
-fn internal(what: &str) -> SpecializeError {
-    SpecializeError {
+fn internal(what: &str) -> LowerError {
+    LowerError {
         message: format!("callback specialization expected {what}"),
         at: None,
     }

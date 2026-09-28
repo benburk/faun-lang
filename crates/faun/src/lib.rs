@@ -12,16 +12,16 @@
 //! source spans. Module loading and qualification then produce symbol-based
 //! HIR without merging raw ASTs. Declaration normalization groups each function's
 //! signature and clauses and lifts methods out of data declarations. Checking
-//! performs Hindley–Milner inference,
-//! nominal receiver-directed method resolution, and contextual literal
+//! performs Hindley–Milner inference, receiver-directed method resolution and literal
 //! elaboration, producing typed HIR with explicit calls, projections and
 //! widenings instead of syntax accompanied by inference tables.
 //! Monomorphization produces concrete functions with explicit function values.
 //! Second-class checking rejects stored or returned functions; callback lowering
 //! then emits first-order IR directly, making a definition for each set of
-//! callbacks. Resource checking precedes Barb emission. [`compile_barb_to_image`]
-//! hands that Barb to
-//! `faun_core` for the machine tier and to the target for its image.
+//! callbacks. Resource checking precedes pattern compilation, which turns clauses
+//! into decision trees and bindings into ordered unpacks. Barb emission reads
+//! those decisions. [`compile_barb_to_image`] hands Barb to `faun_core` for the
+//! machine tier and to the target for its image.
 
 use std::path::{Path, PathBuf};
 
@@ -50,6 +50,7 @@ mod lines;
 pub mod literal;
 pub mod modules;
 mod parse;
+mod pattern_compile;
 pub mod resolve;
 mod second_class;
 pub mod source;
@@ -144,16 +145,18 @@ fn lower_resolved(
     if let Some(main) = main {
         check::check_application_abi(&checked, host, main)?;
     }
-    let located = |error: specialize::SpecializeError| match error.at {
+    let located = |error: diagnostic::LowerError| match error.at {
         Some((module, span)) => checked.resolved.diagnostic(module, span, error.message),
         None => Diagnostic::new(error.message),
     };
-    let specialized = specialize::monomorphize_package(&checked, host, main).map_err(located)?;
-    second_class::check(&specialized).map_err(located)?;
-    let first_order = callbacks::lower(specialized).map_err(located)?;
+    let program = specialize::monomorphize_package(&checked, host, main).map_err(located)?;
+    second_class::check(&program).map_err(located)?;
+    let program = callbacks::lower(program).map_err(located)?;
     let routines = target.routines();
-    linearity::check(&first_order, &routines, &checked.resolved)?;
-    barb_lower::lower_package_to_barb(&checked, first_order, &routines)
+    linearity::check(&program, &routines, &checked.resolved)?;
+    let program = pattern_compile::compile(program, &checked.prelude, &checked.resolved.symbols)
+        .map_err(located)?;
+    barb_lower::lower_package_to_barb(&checked, program, &routines)
 }
 
 /// Compile the Faun application at `source` to `target`'s image.

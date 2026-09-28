@@ -10,13 +10,13 @@
 #![allow(clippy::too_many_lines)]
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt;
 
 use num_bigint::BigUint;
 
 use crate::blessed::NumeralType;
 use crate::blessed::{LiteralExpr, PreludeIds};
 use crate::check::{CheckedProgram, InferredBound, InferredScheme, InferredType, TypeVariable};
+use crate::diagnostic::LowerError;
 use crate::hir as h;
 use crate::typed as t;
 use crate::{ModuleId, Symbol};
@@ -47,10 +47,63 @@ impl Type {
     }
 
     /// Take the signature at a checked function boundary.
-    fn into_signature(self) -> Result<Signature, SpecializeError> {
+    fn into_signature(self) -> Result<Signature, LowerError> {
         match self {
             Self::Function(signature) => Ok(signature),
             _ => Err(error("a checked function has a non-function type")),
+        }
+    }
+
+    /// Instantiate each constructor's fields, or return a tag row's tags.
+    pub(crate) fn constructors(
+        &self,
+        data: &HashMap<Symbol, crate::declarations::Data>,
+    ) -> Result<Vec<(Symbol, Vec<Self>)>, LowerError> {
+        if let Self::Variants(tags) = self {
+            return Ok(tags.clone());
+        }
+        let Self::Named(name, arguments) = self else {
+            return Err(error("pattern matching requires a named data type"));
+        };
+        let data = data
+            .get(name)
+            .ok_or_else(|| error("named type has no data declaration"))?;
+        if data.parameters.len() != arguments.len() {
+            return Err(error("type specialization has the wrong argument count"));
+        }
+        let variables: HashMap<_, _> = data
+            .parameters
+            .iter()
+            .copied()
+            .zip(arguments.iter().cloned())
+            .collect();
+        let mut constructors = Vec::new();
+        for constructor in &data.constructors {
+            constructors.push((
+                constructor.name,
+                constructor
+                    .fields
+                    .iter()
+                    .map(|field| surface_type(field, &variables))
+                    .collect::<Result<_, LowerError>>()?,
+            ));
+        }
+        if let Some(wrapper) = &data.wrapper {
+            constructors.push((
+                wrapper.constructor,
+                vec![surface_type(&wrapper.field, &variables)?],
+            ));
+        }
+        Ok(constructors)
+    }
+
+    /// The types of a record's fields, in their order, or a tuple's members:
+    /// the columns a product is taken apart into.
+    pub(crate) fn members(&self) -> Option<Vec<Self>> {
+        match self {
+            Self::Record(fields) => Some(fields.iter().map(|(_, ty)| ty.clone()).collect()),
+            Self::Tuple(members) => Some(members.clone()),
+            _ => None,
         }
     }
 }
@@ -89,12 +142,6 @@ pub(crate) struct Program {
     pub(crate) entry: Option<FunctionKey>,
     pub(crate) functions: Vec<Function>,
     pub(crate) data: HashMap<Symbol, crate::declarations::Data>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct Constructor {
-    pub(crate) owner: Symbol,
-    pub(crate) fields: Vec<h::Type>,
 }
 
 #[derive(Clone, Debug)]
@@ -184,27 +231,12 @@ pub(crate) enum ExprKind {
     Try(Box<Expr>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SpecializeError {
-    pub message: String,
-    /// Where in the source it is about, when that is known.
-    pub at: Option<(ModuleId, crate::ast::Span)>,
-}
-
-impl fmt::Display for SpecializeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for SpecializeError {}
-
 /// Specialize what one parameterless `entry` reaches, and nothing else.
 #[cfg(test)]
 pub(crate) fn monomorphize_from_entry(
     checked: &CheckedProgram,
     entry: Symbol,
-) -> Result<Program, SpecializeError> {
+) -> Result<Program, LowerError> {
     let specializer = Specializer::new(checked);
     let entry = specializer.entry_key(entry, None)?;
     specializer.run(Some(entry), Vec::new())
@@ -224,7 +256,7 @@ pub(crate) fn monomorphize_package(
     checked: &CheckedProgram,
     host: &crate::host::HostIds,
     main: Option<&crate::host::Main>,
-) -> Result<Program, SpecializeError> {
+) -> Result<Program, LowerError> {
     let specializer = Specializer::new(checked);
     let entry = main
         .map(|main| specializer.entry_key(main.symbol, Some(host.host)))
@@ -234,7 +266,7 @@ pub(crate) fn monomorphize_package(
 
 /// The package's definitions that stand on their own, in the order written,
 /// each generic one at the empty type.
-fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, SpecializeError> {
+fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, LowerError> {
     let resolved = &checked.resolved;
     let mut roots = Vec::new();
     for function in &resolved.program.functions {
@@ -294,7 +326,7 @@ struct Specializer<'a> {
     members: &'a HashMap<(Symbol, Symbol), Symbol>,
     definitions: HashMap<Symbol, &'a t::Function>,
     data: HashMap<Symbol, crate::declarations::Data>,
-    constructors: HashMap<Symbol, Constructor>,
+    constructors: HashMap<Symbol, (Symbol, &'a [h::Type])>,
     requested: HashMap<FunctionKey, usize>,
     /// The `equals` and `cmp` of closed records and tuples, which nothing
     /// declares, each with the first place that asked for it.
@@ -306,27 +338,23 @@ struct Specializer<'a> {
 impl<'a> Specializer<'a> {
     fn new(checked: &'a CheckedProgram) -> Self {
         let program = &checked.resolved.program;
-        let mut constructors = HashMap::new();
-        for data in program.data.values() {
-            for constructor in &data.constructors {
-                constructors.insert(
-                    constructor.name,
-                    Constructor {
-                        owner: data.name,
-                        fields: constructor.fields.clone(),
-                    },
-                );
-            }
-            if let Some(wrapper) = &data.wrapper {
-                constructors.insert(
-                    wrapper.constructor,
-                    Constructor {
-                        owner: data.name,
-                        fields: vec![wrapper.field.clone()],
-                    },
-                );
-            }
-        }
+        let constructors = program
+            .data
+            .values()
+            .flat_map(|data| {
+                data.constructors
+                    .iter()
+                    .map(|constructor| {
+                        (constructor.name, (data.name, constructor.fields.as_slice()))
+                    })
+                    .chain(data.wrapper.iter().map(|wrapper| {
+                        (
+                            wrapper.constructor,
+                            (data.name, std::slice::from_ref(&wrapper.field)),
+                        )
+                    }))
+            })
+            .collect();
         Self {
             symbols: &checked.resolved.symbols,
             prelude: &checked.prelude,
@@ -351,7 +379,7 @@ impl<'a> Specializer<'a> {
         &self,
         entry: Symbol,
         application_host: Option<Symbol>,
-    ) -> Result<FunctionKey, SpecializeError> {
+    ) -> Result<FunctionKey, LowerError> {
         let scheme = self
             .definitions
             .get(&entry)
@@ -382,7 +410,7 @@ impl<'a> Specializer<'a> {
         mut self,
         entry: Option<FunctionKey>,
         roots: Vec<FunctionKey>,
-    ) -> Result<Program, SpecializeError> {
+    ) -> Result<Program, LowerError> {
         for key in entry.iter().cloned().chain(roots) {
             self.request(key);
             while let Some(key) = self.queue.pop_front() {
@@ -441,7 +469,7 @@ impl<'a> Specializer<'a> {
                 ))
     }
 
-    fn specialize_function(&mut self, key: &FunctionKey) -> Result<Function, SpecializeError> {
+    fn specialize_function(&mut self, key: &FunctionKey) -> Result<Function, LowerError> {
         if let Some(&at) = self.structural.get(key) {
             return self.structural_function(key, at);
         }
@@ -492,7 +520,7 @@ impl<'a> Specializer<'a> {
         &mut self,
         key: &FunctionKey,
         at: (ModuleId, crate::ast::Span),
-    ) -> Result<Function, SpecializeError> {
+    ) -> Result<Function, LowerError> {
         let receiver = key.signature.parameters[0].clone();
         let answer = key.signature.result.as_ref().clone();
         if Some(key.name) == self.prelude.to_str {
@@ -584,7 +612,7 @@ impl<'a> Specializer<'a> {
         key: &FunctionKey,
         (module, span): (ModuleId, crate::ast::Span),
         tags: &[(Symbol, Vec<Type>)],
-    ) -> Result<Function, SpecializeError> {
+    ) -> Result<Function, LowerError> {
         let str_ = Type::Named(self.prelude.str_, Vec::new());
         let concat = self.method_key(
             self.prelude.str_concat,
@@ -666,7 +694,7 @@ impl<'a> Specializer<'a> {
         parts: &[(Option<Symbol>, Type)],
         (open, close): (&str, &str),
         shape: impl Fn(Vec<Pattern>) -> Pattern,
-    ) -> Result<Function, SpecializeError> {
+    ) -> Result<Function, LowerError> {
         let str_ = Type::Named(self.prelude.str_, Vec::new());
         let concat = self.method_key(
             self.prelude.str_concat,
@@ -745,7 +773,7 @@ impl<'a> Specializer<'a> {
         module: ModuleId,
         span: crate::ast::Span,
         text: &str,
-    ) -> Result<Expr, SpecializeError> {
+    ) -> Result<Expr, LowerError> {
         let literal = crate::blessed::string(text.as_bytes(), self.prelude);
         let str_ = Type::Named(self.prelude.str_, Vec::new());
         self.literal(module, span, &literal, &str_)
@@ -761,7 +789,7 @@ impl<'a> Specializer<'a> {
         answer: &Type,
         components: &[Type],
         shape: impl Fn(Vec<Pattern>) -> Pattern,
-    ) -> Result<Clause, SpecializeError> {
+    ) -> Result<Clause, LowerError> {
         let count = u32::try_from(components.len())
             .map_err(|_| error("a product has too many components"))?;
         let side = |offset: u32| {
@@ -840,7 +868,7 @@ impl<'a> Specializer<'a> {
         hasher: &Type,
         components: &[Type],
         shape: impl Fn(Vec<Pattern>) -> Pattern,
-    ) -> Result<Clause, SpecializeError> {
+    ) -> Result<Clause, LowerError> {
         let count = u32::try_from(components.len())
             .map_err(|_| error("a product has too many components"))?;
         let patterns = vec![
@@ -887,7 +915,7 @@ impl<'a> Specializer<'a> {
         clause: &t::Clause,
         substitution: &HashMap<TypeVariable, Type>,
         parameters: &[Type],
-    ) -> Result<Vec<Clause>, SpecializeError> {
+    ) -> Result<Vec<Clause>, LowerError> {
         let guard = clause
             .guard
             .as_ref()
@@ -904,7 +932,7 @@ impl<'a> Specializer<'a> {
                         value: self.expr(module, &binding.value, substitution)?,
                     })
                 })
-                .collect::<Result<_, SpecializeError>>()?,
+                .collect::<Result<_, LowerError>>()?,
             result: self.expr(module, &clause.body.result, substitution)?,
         };
         let mut rows = t::Pattern::rows(&clause.patterns);
@@ -931,7 +959,7 @@ impl<'a> Specializer<'a> {
         row: &[t::Pattern],
         parameters: &[Type],
         (guard, body): (Option<Expr>, Body),
-    ) -> Result<Clause, SpecializeError> {
+    ) -> Result<Clause, LowerError> {
         let mut next = clause.locals;
         let mut tests = Vec::new();
         let patterns = row
@@ -961,7 +989,7 @@ impl<'a> Specializer<'a> {
         pattern: &t::Pattern,
         ty: &Type,
         (next, tests): (&mut u32, &mut Vec<Expr>),
-    ) -> Result<Pattern, SpecializeError> {
+    ) -> Result<Pattern, LowerError> {
         // A range binds nothing it shows: a fresh name, and each end it has
         // asked of that name, through the type's `cmp`.
         if let t::Pattern::Range(start, end) = pattern {
@@ -1097,7 +1125,7 @@ impl<'a> Specializer<'a> {
                             self.tested((module, span), field, &field_ty, (next, tests))?,
                         ))
                     })
-                    .collect::<Result<_, SpecializeError>>()?,
+                    .collect::<Result<_, LowerError>>()?,
             ),
             (t::Pattern::Tuple(members), Type::Tuple(types)) => Pattern::Product(
                 members
@@ -1118,7 +1146,7 @@ impl<'a> Specializer<'a> {
         span: crate::ast::Span,
         tests: Vec<Expr>,
         guard: Option<Expr>,
-    ) -> Result<Option<Expr>, SpecializeError> {
+    ) -> Result<Option<Expr>, LowerError> {
         let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
         let and = self.method_key(
             self.prelude.bool_and,
@@ -1148,7 +1176,7 @@ impl<'a> Specializer<'a> {
         module: ModuleId,
         expression: &t::Expr,
         substitution: &HashMap<TypeVariable, Type>,
-    ) -> Result<Expr, SpecializeError> {
+    ) -> Result<Expr, LowerError> {
         let ty = self.site_type(&expression.ty, substitution)?;
         let span = expression.span;
         let kind = match &expression.kind {
@@ -1182,14 +1210,14 @@ impl<'a> Specializer<'a> {
                 fields
                     .iter()
                     .map(|(name, value)| Ok((*name, self.expr(module, value, substitution)?)))
-                    .collect::<Result<_, SpecializeError>>()?,
+                    .collect::<Result<_, LowerError>>()?,
             ),
             t::ExprKind::Update(base, fields) => ExprKind::Update(
                 Box::new(self.expr(module, base, substitution)?),
                 fields
                     .iter()
                     .map(|(name, value)| Ok((*name, self.expr(module, value, substitution)?)))
-                    .collect::<Result<_, SpecializeError>>()?,
+                    .collect::<Result<_, LowerError>>()?,
             ),
             t::ExprKind::Tuple(members) => ExprKind::Tuple(
                 members
@@ -1276,7 +1304,7 @@ impl<'a> Specializer<'a> {
         &self,
         template: &InferredType,
         substitution: &HashMap<TypeVariable, Type>,
-    ) -> Result<Type, SpecializeError> {
+    ) -> Result<Type, LowerError> {
         let mut free = Vec::new();
         ordinary_variables(template, &mut free);
         free.retain(|variable| !substitution.contains_key(variable));
@@ -1291,7 +1319,7 @@ impl<'a> Specializer<'a> {
     }
 
     /// Which method of `owner` is its `member`.
-    fn implementation(&self, owner: &Type, member: Symbol) -> Result<Symbol, SpecializeError> {
+    fn implementation(&self, owner: &Type, member: Symbol) -> Result<Symbol, LowerError> {
         if self.is_structural(member, std::slice::from_ref(owner)) {
             return Ok(member);
         }
@@ -1382,7 +1410,7 @@ impl<'a> Specializer<'a> {
         span: crate::ast::Span,
         numeral: &t::Numeral,
         ty: &Type,
-    ) -> Result<Expr, SpecializeError> {
+    ) -> Result<Expr, LowerError> {
         if let Some(scale) = numeral.scale {
             let float = match ty {
                 Type::Named(name, arguments) if arguments.is_empty() => {
@@ -1413,7 +1441,7 @@ impl<'a> Specializer<'a> {
         magnitude: BigUint,
         negative: bool,
         ty: &Type,
-    ) -> Result<Expr, SpecializeError> {
+    ) -> Result<Expr, LowerError> {
         let kind = match ty {
             Type::Named(name, arguments) if arguments.is_empty() && *name == self.prelude.nat => {
                 Some(NumeralType::Nat)
@@ -1448,7 +1476,7 @@ impl<'a> Specializer<'a> {
         low: Expr,
         high: Expr,
         ty: &Type,
-    ) -> Result<Expr, SpecializeError> {
+    ) -> Result<Expr, LowerError> {
         let cmp = self
             .prelude
             .cmp
@@ -1482,7 +1510,7 @@ impl<'a> Specializer<'a> {
         receiver: &Type,
         arguments: &[Type],
         result: &Type,
-    ) -> Result<FunctionKey, SpecializeError> {
+    ) -> Result<FunctionKey, LowerError> {
         let mut parameters = Vec::with_capacity(arguments.len() + 1);
         parameters.push(receiver.clone());
         parameters.extend_from_slice(arguments);
@@ -1517,7 +1545,7 @@ impl<'a> Specializer<'a> {
         span: crate::ast::Span,
         literal: &LiteralExpr,
         expected: &Type,
-    ) -> Result<Expr, SpecializeError> {
+    ) -> Result<Expr, LowerError> {
         let kind = match literal {
             LiteralExpr::Natural(magnitude) => ExprKind::Natural(magnitude.clone()),
             LiteralExpr::Bytes(bytes) => ExprKind::Bytes(bytes.clone()),
@@ -1573,15 +1601,15 @@ impl<'a> Specializer<'a> {
         &self,
         constructor: Symbol,
         result: &Type,
-    ) -> Result<Vec<Type>, SpecializeError> {
-        let declaration = self
+    ) -> Result<Vec<Type>, LowerError> {
+        let (declared_owner, fields) = self
             .constructors
             .get(&constructor)
             .ok_or_else(|| error("constructor declaration is missing"))?;
         let Type::Named(owner, arguments) = result else {
             return Err(error("constructor result is not a named type"));
         };
-        if *owner != declaration.owner {
+        if owner != declared_owner {
             return Err(error("constructor result has the wrong owner"));
         }
         let data = &self.data[owner];
@@ -1594,8 +1622,7 @@ impl<'a> Specializer<'a> {
             .copied()
             .zip(arguments.iter().cloned())
             .collect();
-        declaration
-            .fields
+        fields
             .iter()
             .map(|field| surface_type(field, &variables))
             .collect()
@@ -1681,7 +1708,7 @@ fn ordinary_variables(ty: &InferredType, output: &mut Vec<TypeVariable>) {
     }
 }
 
-fn concrete_scheme(scheme: &InferredScheme) -> Result<Type, SpecializeError> {
+fn concrete_scheme(scheme: &InferredScheme) -> Result<Type, LowerError> {
     if !scheme.variables.is_empty() {
         return Err(error("entry has an ambiguous polymorphic type"));
     }
@@ -1753,7 +1780,7 @@ fn meet(
 fn substitute_type(
     ty: &InferredType,
     substitution: &HashMap<TypeVariable, Type>,
-) -> Result<Type, SpecializeError> {
+) -> Result<Type, LowerError> {
     match ty {
         InferredType::Variable(variable) => substitution
             .get(variable)
@@ -1785,7 +1812,7 @@ fn substitute_type(
                         .collect::<Result<_, _>>()?;
                     Ok((*label, fields))
                 })
-                .collect::<Result<Vec<_>, SpecializeError>>()?;
+                .collect::<Result<Vec<_>, LowerError>>()?;
             let rest = match tail.as_deref() {
                 None => Type::empty(),
                 Some(InferredType::Variable(variable)) => substitution
@@ -1805,7 +1832,7 @@ fn substitute_type(
             let mut record = fields
                 .iter()
                 .map(|(name, ty)| Ok((*name, substitute_type(ty, substitution)?)))
-                .collect::<Result<Vec<_>, SpecializeError>>()?;
+                .collect::<Result<Vec<_>, LowerError>>()?;
             let rest = match tail.as_deref() {
                 None => Type::Record(Vec::new()),
                 Some(InferredType::Variable(variable)) => substitution
@@ -1835,7 +1862,7 @@ fn match_signature(
     template: &InferredType,
     concrete: &Signature,
     substitution: &mut HashMap<TypeVariable, Type>,
-) -> Result<(), SpecializeError> {
+) -> Result<(), LowerError> {
     let InferredType::Function(parameters, result) = template else {
         return Err(error("a checked function has a non-function type"));
     };
@@ -1847,7 +1874,7 @@ fn match_parameters(
     result: &InferredType,
     concrete: &Signature,
     substitution: &mut HashMap<TypeVariable, Type>,
-) -> Result<(), SpecializeError> {
+) -> Result<(), LowerError> {
     if parameters.len() != concrete.parameters.len() {
         return Err(error("a concrete use does not match its inferred scheme"));
     }
@@ -1861,7 +1888,7 @@ fn match_type(
     template: &InferredType,
     concrete: &Type,
     substitution: &mut HashMap<TypeVariable, Type>,
-) -> Result<(), SpecializeError> {
+) -> Result<(), LowerError> {
     match (template, concrete) {
         (InferredType::Variable(variable), concrete) => {
             if let Some(previous) = substitution.get(variable) {
@@ -1935,7 +1962,7 @@ fn match_type(
     }
 }
 
-fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Signature, SpecializeError> {
+fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Signature, LowerError> {
     let InferredType::Function(_, template_result) = &scheme.ty else {
         return Err(error("literal helper is not a function"));
     };
@@ -1947,7 +1974,7 @@ fn scheme_result(scheme: &InferredScheme, result: &Type) -> Result<Signature, Sp
 pub(crate) fn surface_type(
     ty: &h::Type,
     variables: &HashMap<Symbol, Type>,
-) -> Result<Type, SpecializeError> {
+) -> Result<Type, LowerError> {
     match ty {
         h::Type::Named(name, arguments) => Ok(Type::Named(
             *name,
@@ -1978,13 +2005,13 @@ pub(crate) fn surface_type(
                         .collect::<Result<_, _>>()?;
                     Ok((constructor.name, fields))
                 })
-                .collect::<Result<_, SpecializeError>>()?,
+                .collect::<Result<_, LowerError>>()?,
         )),
         h::Type::Record(fields, _) => Ok(Type::Record(
             fields
                 .iter()
                 .map(|(name, ty)| Ok((*name, surface_type(ty, variables)?)))
-                .collect::<Result<_, SpecializeError>>()?,
+                .collect::<Result<_, LowerError>>()?,
         )),
         h::Type::Tuple(members) => Ok(Type::Tuple(
             members
@@ -1995,15 +2022,15 @@ pub(crate) fn surface_type(
     }
 }
 
-fn located(module: ModuleId, span: crate::ast::Span, message: &str) -> SpecializeError {
-    SpecializeError {
+fn located(module: ModuleId, span: crate::ast::Span, message: &str) -> LowerError {
+    LowerError {
         message: message.to_owned(),
         at: Some((module, span)),
     }
 }
 
-fn error(message: impl Into<String>) -> SpecializeError {
-    SpecializeError {
+fn error(message: impl Into<String>) -> LowerError {
+    LowerError {
         message: message.into(),
         at: None,
     }

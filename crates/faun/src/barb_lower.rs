@@ -1,47 +1,24 @@
-//! Emit a first-order program as Barb declarations and bodies, compiling
-//! each function's clauses to a decision tree of matches.
+//! Emit pattern-compiled decisions as Barb declarations and bodies.
+//!
+//! Source patterns and clause selection are gone before this pass. The emitter
+//! assigns Barb IDs, chooses constructor layouts and records diagnostic sites.
 
 #![allow(clippy::too_many_lines)]
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
-use std::fmt;
 
 use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
-use num_traits::ToPrimitive;
 
 use crate::blessed::PreludeIds;
 use crate::check::CheckedProgram;
-use crate::diagnostic::Diagnostic;
-use crate::first_order::{self as d, Expr, ExprKind};
+use crate::diagnostic::{Diagnostic, LowerError};
+use crate::first_order::{Expr, ExprKind};
 use crate::hir::LocalId;
+use crate::pattern_compile::{self as p, Decision, Unpack, Value};
 use crate::resolve::ResolvedProgram;
-use crate::specialize::{self, FunctionKey, Pattern, Type};
+use crate::specialize::{self, FunctionKey, Type};
 use crate::{ModuleId, Symbol};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LowerError {
-    pub message: String,
-    /// Where in the source it is about, when that is known.
-    pub at: Option<(ModuleId, crate::ast::Span)>,
-}
-
-impl fmt::Display for LowerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for LowerError {}
-
-impl From<specialize::SpecializeError> for LowerError {
-    fn from(error: specialize::SpecializeError) -> Self {
-        Self {
-            message: error.message,
-            at: error.at,
-        }
-    }
-}
 
 /// Specialize what `entry`, a monomorphic parameterless function, reaches
 /// and emit Barb, for a test to read one definition's lowering.
@@ -49,11 +26,12 @@ impl From<specialize::SpecializeError> for LowerError {
 fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, LowerError> {
     let specialized = specialize::monomorphize_from_entry(checked, entry)?;
     crate::second_class::check(&specialized)?;
-    let first_order = crate::callbacks::lower(specialized)?;
-    Lowerer::new(checked, None, first_order)?.lower()
+    let program = crate::callbacks::lower(specialized)?;
+    let program = p::compile(program, &checked.prelude, &checked.resolved.symbols)?;
+    Lowerer::new(checked, None, program)?.lower()
 }
 
-/// Emit a first-order package as Barb, starting at its `main! : Host -> []`
+/// Emit a pattern-compiled package as Barb, starting at its `main! : Host -> []`
 /// when it is an application.
 ///
 /// The Barb entry is `main!` as written. `Host` holds its fields itself, each
@@ -67,10 +45,10 @@ fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, Low
 /// Reports Barb construction failures and a target without `exit!`.
 pub(crate) fn lower_package_to_barb(
     checked: &CheckedProgram,
-    first_order: d::Program,
+    program: p::Program,
     routines: &faun_core::platform::Routines,
 ) -> Result<barb::Program, Diagnostic> {
-    Lowerer::new(checked, Some(routines), first_order)
+    Lowerer::new(checked, Some(routines), program)
         .and_then(Lowerer::lower)
         .map_err(|error| match error.at {
             Some((module, span)) => checked.resolved.diagnostic(module, span, error.message),
@@ -78,100 +56,20 @@ pub(crate) fn lower_package_to_barb(
         })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct Value(u32);
-
-/// How a widening rebuilds a value: each constructor of the narrower type,
-/// or none for a record, with each field's type there and in the wider one.
+/// How a widening rebuilds each constructor, or a product's fields.
 type Widening = Vec<(Option<Symbol>, Vec<(Type, Type)>)>;
-
-#[derive(Clone, Debug)]
-struct Subject {
-    value: Value,
-    ty: Type,
-}
-
-#[derive(Clone, Debug)]
-struct Row {
-    patterns: Vec<Pattern>,
-    guard: Option<Expr>,
-    body: d::Body,
-    locals: HashMap<LocalId, Value>,
-}
-
-#[derive(Clone, Debug)]
-enum Decision {
-    Body {
-        body: d::Body,
-        locals: HashMap<LocalId, Value>,
-    },
-    Match {
-        subject: Value,
-        owner: Type,
-        arms: Vec<DecisionArm>,
-    },
-    Record {
-        subject: Value,
-        owner: Type,
-        fields: Vec<Value>,
-        decision: Box<Self>,
-    },
-    Guard {
-        condition: Expr,
-        locals: HashMap<LocalId, Value>,
-        false_constructor: Symbol,
-        true_constructor: Symbol,
-        otherwise: Box<Self>,
-        answer: Box<Self>,
-    },
-    /// Whether a natural is a numeral: one test, where taking the numeral's
-    /// successors off one at a time would be as many matches as it counts.
-    Numeral {
-        subject: Value,
-        number: num_bigint::BigUint,
-        equal: Box<Self>,
-        otherwise: Box<Self>,
-    },
-}
-
-impl Decision {
-    fn tests_numerals(&self) -> bool {
-        match self {
-            Self::Body { .. } => false,
-            Self::Numeral { .. } => true,
-            Self::Match { arms, .. } => arms.iter().any(|arm| arm.decision.tests_numerals()),
-            Self::Record { decision, .. } => decision.tests_numerals(),
-            Self::Guard {
-                otherwise, answer, ..
-            } => otherwise.tests_numerals() || answer.tests_numerals(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct DecisionArm {
-    constructor: Symbol,
-    fields: Vec<Value>,
-    decision: Box<Decision>,
-}
-
-/// The largest numeral a column of naturals is taken apart for rather than
-/// tested against. See [`Lowerer::numeral_column`].
-const PEELED_NUMERALS: u8 = 8;
 
 struct Lowerer<'a> {
     resolved: &'a ResolvedProgram<crate::typed::Program>,
     prelude: &'a PreludeIds,
     /// The target's routines, present when lowering an application.
     routines: Option<&'a faun_core::platform::Routines>,
-    program: d::Program,
+    program: p::Program,
     types: BTreeSet<Type>,
     type_ids: HashMap<Type, TypeId>,
     constructor_ids: HashMap<(Symbol, Type), CtorId>,
     record_constructor_ids: HashMap<Type, CtorId>,
     record_wrappers: HashMap<Type, Type>,
-    /// The fields of each type with one constructor a binding takes apart.
-    sole_constructors: HashMap<Type, Vec<Type>>,
     function_ids: HashMap<FunctionKey, FnId>,
     /// Each pair of types a value is widened between, which one function
     /// rebuilding it answers for.
@@ -191,7 +89,7 @@ impl<'a> Lowerer<'a> {
     fn new(
         checked: &'a CheckedProgram,
         routines: Option<&'a faun_core::platform::Routines>,
-        program: d::Program,
+        program: p::Program,
     ) -> Result<Self, LowerError> {
         let mut lowerer = Self {
             resolved: &checked.resolved,
@@ -203,7 +101,6 @@ impl<'a> Lowerer<'a> {
             constructor_ids: HashMap::new(),
             record_constructor_ids: HashMap::new(),
             record_wrappers: HashMap::new(),
-            sole_constructors: HashMap::new(),
             function_ids: HashMap::new(),
             widenings: BTreeSet::new(),
             widen_ids: HashMap::new(),
@@ -219,7 +116,7 @@ impl<'a> Lowerer<'a> {
         self.declare_types();
         self.define_types()?;
         self.declare_functions();
-        self.define_functions()?;
+        self.define_functions();
         self.define_widenings()?;
         if let Some(routines) = self.routines
             && routines.get("exit!").is_none()
@@ -267,7 +164,7 @@ impl<'a> Lowerer<'a> {
         found
     }
 
-    fn discover_in(&mut self, functions: &[d::Function]) -> Result<(), LowerError> {
+    fn discover_in(&mut self, functions: &[p::Function]) -> Result<(), LowerError> {
         for function in functions {
             let parameters = &function.key.signature.parameters;
             let result = function.key.signature.result.as_ref();
@@ -275,18 +172,8 @@ impl<'a> Lowerer<'a> {
                 self.collect_type(parameter)?;
             }
             self.collect_type(result)?;
-            let d::Definition::Body(clauses) = &function.definition else {
-                continue;
-            };
-            for clause in clauses {
-                // A numeral is tested for, and a test answers a `Bool`.
-                if clause.patterns.iter().any(holds_numeral) {
-                    self.collect_type(&Type::Named(self.prelude.bool_, Vec::new()))?;
-                }
-                if let Some(guard) = &clause.guard {
-                    self.collect_expr(guard, result)?;
-                }
-                self.collect_body(&clause.body, result)?;
+            if let p::Definition::Body(decision) = &function.definition {
+                self.collect_decision(decision, result)?;
             }
         }
         loop {
@@ -294,7 +181,7 @@ impl<'a> Lowerer<'a> {
             let types: Vec<_> = self.types.iter().cloned().collect();
             for ty in types {
                 if let Type::Named(name, _) = &ty {
-                    let constructors = self.constructors_of(&ty)?;
+                    let constructors = ty.constructors(&self.program.data)?;
                     for (_, fields) in &constructors {
                         for field in fields {
                             self.collect_type(field)?;
@@ -314,60 +201,45 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Find what `body` holds, where its function or lambda answers
-    /// `answer`, which a `?` in it answers early with.
-    fn collect_body(&mut self, body: &d::Body, answer: &Type) -> Result<(), LowerError> {
-        for binding in &body.bindings {
-            self.collect_expr(&binding.value, answer)?;
-            self.collect_taken_apart(&binding.pattern, &binding.value.ty)
-                .map_err(|mut refused| {
-                    refused.at = Some((binding.value.module, binding.value.span));
-                    refused
-                })?;
-        }
-        self.collect_expr(&body.result, answer)
-    }
-
-    /// Whether a binding's pattern always matches a value of `ty`, noting
-    /// the fields of each type it takes apart by its one constructor: names,
-    /// records and tuples always do, and so does the constructor of a type
-    /// that has no other.
-    fn collect_taken_apart(&mut self, pattern: &Pattern, ty: &Type) -> Result<(), LowerError> {
-        match (pattern, ty) {
-            (Pattern::Wild | Pattern::Bind(_), _) => Ok(()),
-            (Pattern::Record(named), Type::Record(fields)) => {
-                for (name, pattern) in named {
-                    let (_, field) = fields
-                        .iter()
-                        .find(|(found, _)| found == name)
-                        .ok_or_else(|| error("a record pattern names a field its type lacks"))?;
-                    self.collect_taken_apart(pattern, field)?;
+    fn collect_decision(&mut self, decision: &Decision, answer: &Type) -> Result<(), LowerError> {
+        match decision {
+            Decision::Body { body, .. } => {
+                for binding in &body.bindings {
+                    self.collect_expr(&binding.value, answer)?;
                 }
-                Ok(())
+                self.collect_expr(&body.result, answer)?;
             }
-            (Pattern::Product(members), Type::Tuple(types)) => members
-                .iter()
-                .zip(types)
-                .try_for_each(|(pattern, ty)| self.collect_taken_apart(pattern, ty)),
-            (Pattern::Constructor(constructor, patterns), Type::Named(..)) => {
-                let constructors = self.constructors_of(ty)?;
-                let [(only, fields)] = constructors.as_slice() else {
-                    return Err(error(format!(
-                        "a binding takes apart only what always matches, and `{}` is one of several constructors",
-                        source_name(*constructor, &self.resolved.symbols)
-                    )));
-                };
-                debug_assert_eq!(only, constructor, "checking matched the constructor");
-                for (pattern, field) in patterns.iter().zip(fields) {
-                    self.collect_taken_apart(pattern, field)?;
+            Decision::Match { owner, arms, .. } => {
+                self.collect_type(owner)?;
+                for arm in arms {
+                    self.collect_decision(&arm.decision, answer)?;
                 }
-                self.sole_constructors.insert(ty.clone(), fields.clone());
-                Ok(())
             }
-            _ => Err(error(
-                "a binding takes a value apart only as names, records, tuples and a type's one constructor, which always match",
-            )),
+            Decision::Record {
+                owner, decision, ..
+            } => {
+                self.collect_type(owner)?;
+                self.collect_decision(decision, answer)?;
+            }
+            Decision::Guard {
+                condition,
+                otherwise,
+                answer: yes,
+                ..
+            } => {
+                self.collect_expr(condition, answer)?;
+                self.collect_decision(otherwise, answer)?;
+                self.collect_decision(yes, answer)?;
+            }
+            Decision::Numeral {
+                equal, otherwise, ..
+            } => {
+                self.collect_type(&Type::Named(self.prelude.bool_, Vec::new()))?;
+                self.collect_decision(equal, answer)?;
+                self.collect_decision(otherwise, answer)?;
+            }
         }
+        Ok(())
     }
 
     fn collect_expr(&mut self, expression: &Expr, answer: &Type) -> Result<(), LowerError> {
@@ -436,11 +308,11 @@ impl<'a> Lowerer<'a> {
     /// which holds every one of them. A record is one constructor, named
     /// by nothing.
     fn widening_fields(&self, from: &Type, to: &Type) -> Result<Widening, LowerError> {
-        if let (Some(source), Some(target)) = (members(from), members(to)) {
+        if let (Some(source), Some(target)) = (from.members(), to.members()) {
             return Ok(vec![(None, source.into_iter().zip(target).collect())]);
         }
-        let target = self.constructors_of(to)?;
-        self.constructors_of(from)?
+        let target = to.constructors(&self.program.data)?;
+        from.constructors(&self.program.data)?
             .into_iter()
             .map(|(constructor, fields)| {
                 let (_, widened) = target
@@ -515,7 +387,7 @@ impl<'a> Lowerer<'a> {
                     self.define_record_wrapper(&ty, id);
                 }
                 Type::Named(_, _) | Type::Variants(_) => {
-                    let constructors = self.constructors_of(&ty)?;
+                    let constructors = ty.constructors(&self.program.data)?;
                     let held: Vec<_> = constructors
                         .iter()
                         .map(|(name, fields)| {
@@ -635,7 +507,7 @@ impl<'a> Lowerer<'a> {
             let result = self.type_ids[result];
             let name = function_name(&function.key, &self.resolved.symbols);
             let id = self.output.declare_named(&name, &borrowed, result);
-            if let d::Definition::External(provider) = function.definition {
+            if let p::Definition::External(provider) = function.definition {
                 let provider = self.resolved.symbols.text(provider);
                 self.output.answered_by(id, provider);
             }
@@ -664,7 +536,6 @@ impl<'a> Lowerer<'a> {
                 constructor_ids: &self.constructor_ids,
                 record_constructor_ids: &self.record_constructor_ids,
                 record_wrappers: &self.record_wrappers,
-                sole_constructors: &self.sole_constructors,
                 function_ids: &self.function_ids,
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
@@ -709,32 +580,12 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    fn define_functions(&mut self) -> Result<(), LowerError> {
+    fn define_functions(&mut self) {
         let functions = std::mem::take(&mut self.program.functions);
         for function in functions {
-            let d::Definition::Body(clauses) = function.definition else {
+            let p::Definition::Body(decision) = function.definition else {
                 continue;
             };
-            let parameters = &function.key.signature.parameters;
-            let subjects: Vec<_> = parameters
-                .iter()
-                .enumerate()
-                .map(|(index, ty)| Subject {
-                    value: Value(u32::try_from(index).expect("a sane arity")),
-                    ty: ty.clone(),
-                })
-                .collect();
-            let rows: Vec<Row> = clauses
-                .into_iter()
-                .map(|clause| Row {
-                    patterns: clause.patterns,
-                    guard: clause.guard,
-                    body: clause.body,
-                    locals: HashMap::new(),
-                })
-                .collect();
-            let mut next = u32::try_from(subjects.len()).expect("a sane arity");
-            let decision = self.plan(&rows, &subjects, &mut next)?;
             if decision.tests_numerals() && self.numeral_equals.is_none() {
                 self.numeral_equals = Some(self.define_numeral_equals());
             }
@@ -745,7 +596,6 @@ impl<'a> Lowerer<'a> {
                 constructor_ids: &self.constructor_ids,
                 record_constructor_ids: &self.record_constructor_ids,
                 record_wrappers: &self.record_wrappers,
-                sole_constructors: &self.sole_constructors,
                 function_ids: &self.function_ids,
                 widen_ids: &self.widen_ids,
                 call_sites: &self.call_sites,
@@ -764,222 +614,6 @@ impl<'a> Lowerer<'a> {
                 emit_decision(&context, builder, &decision, &values)
             });
         }
-        Ok(())
-    }
-
-    fn plan(
-        &self,
-        rows: &[Row],
-        subjects: &[Subject],
-        next: &mut u32,
-    ) -> Result<Decision, LowerError> {
-        if rows.is_empty() {
-            return Err(error("function clauses are not exhaustive"));
-        }
-        let mut first = rows[0].clone();
-        if first.patterns.iter().all(irrefutable) {
-            for (pattern, subject) in first.patterns.iter().zip(subjects) {
-                if let Pattern::Bind(local) = pattern {
-                    first.locals.insert(*local, subject.value);
-                }
-            }
-            let answer = Decision::Body {
-                body: first.body,
-                locals: first.locals.clone(),
-            };
-            let Some(condition) = first.guard else {
-                return Ok(answer);
-            };
-            let booleans = self.constructors_of(&Type::Named(self.prelude.bool_, Vec::new()))?;
-            if booleans.len() != 2
-                || booleans.iter().any(|(_, fields)| !fields.is_empty())
-                || !booleans
-                    .iter()
-                    .any(|(name, _)| *name == self.prelude.bool_false)
-                || !booleans
-                    .iter()
-                    .any(|(name, _)| *name == self.prelude.bool_true)
-            {
-                return Err(error(
-                    "Bool must have fieldless False and True constructors",
-                ));
-            }
-            return Ok(Decision::Guard {
-                condition,
-                locals: first.locals,
-                false_constructor: self.prelude.bool_false,
-                true_constructor: self.prelude.bool_true,
-                otherwise: Box::new(self.plan(&rows[1..], subjects, next)?),
-                answer: Box::new(answer),
-            });
-        }
-        let column = rows
-            .iter()
-            .flat_map(|row| row.patterns.iter().enumerate())
-            .find(|(_, pattern)| !irrefutable(pattern))
-            .map(|(column, _)| column)
-            .expect("a refutable pattern exists");
-        let subject = &subjects[column];
-        if let Some(member_types) = members(&subject.ty) {
-            let fields: Vec<_> = member_types
-                .iter()
-                .map(|_| {
-                    let value = Value(*next);
-                    *next = next.checked_add(1).expect("fewer than 2^32 plan values");
-                    value
-                })
-                .collect();
-            let mut specialized = Vec::with_capacity(rows.len());
-            for mut row in rows.iter().cloned() {
-                let normalized =
-                    self.normalize_pattern(row.patterns[column].clone(), &subject.ty)?;
-                let replacement = match normalized {
-                    Pattern::Wild => vec![Pattern::Wild; fields.len()],
-                    Pattern::Bind(local) => {
-                        row.locals.insert(local, subject.value);
-                        vec![Pattern::Wild; fields.len()]
-                    }
-                    Pattern::Product(patterns) => patterns,
-                    _ => unreachable!("record and tuple patterns normalize to a product"),
-                };
-                if replacement.len() != fields.len() {
-                    return Err(error("a product pattern has the wrong field count"));
-                }
-                row.patterns.splice(column..=column, replacement);
-                specialized.push(row);
-            }
-            let mut nested_subjects = subjects.to_vec();
-            nested_subjects.splice(
-                column..=column,
-                fields
-                    .iter()
-                    .copied()
-                    .zip(member_types)
-                    .map(|(value, ty)| Subject { value, ty }),
-            );
-            return Ok(Decision::Record {
-                subject: subject.value,
-                owner: subject.ty.clone(),
-                fields,
-                decision: Box::new(self.plan(&specialized, &nested_subjects, next)?),
-            });
-        }
-        if let Some(number) = self.numeral_column(rows, column, &subject.ty) {
-            let mut equal = Vec::new();
-            let mut otherwise = Vec::new();
-            for row in rows {
-                match &row.patterns[column] {
-                    Pattern::Number { magnitude, .. } if *magnitude == number => {
-                        let mut row = row.clone();
-                        row.patterns[column] = Pattern::Wild;
-                        equal.push(row);
-                    }
-                    Pattern::Number { .. } => otherwise.push(row.clone()),
-                    _ => {
-                        equal.push(row.clone());
-                        otherwise.push(row.clone());
-                    }
-                }
-            }
-            return Ok(Decision::Numeral {
-                subject: subject.value,
-                number,
-                equal: Box::new(self.plan(&equal, subjects, next)?),
-                otherwise: Box::new(self.plan(&otherwise, subjects, next)?),
-            });
-        }
-        let constructors = self.constructors_of(&subject.ty)?;
-        let mut arms = Vec::with_capacity(constructors.len());
-        for (constructor, field_types) in constructors {
-            let fields: Vec<_> = field_types
-                .iter()
-                .map(|_| {
-                    let value = Value(*next);
-                    *next = next.checked_add(1).expect("fewer than 2^32 plan values");
-                    value
-                })
-                .collect();
-            let mut specialized = Vec::new();
-            for mut row in rows.iter().cloned() {
-                let normalized =
-                    self.normalize_pattern(row.patterns[column].clone(), &subject.ty)?;
-                let replacement = match normalized {
-                    Pattern::Wild => vec![Pattern::Wild; fields.len()],
-                    Pattern::Bind(local) => {
-                        row.locals.insert(local, subject.value);
-                        vec![Pattern::Wild; fields.len()]
-                    }
-                    Pattern::Constructor(found, patterns) if found == constructor => patterns,
-                    Pattern::Constructor(_, _) => continue,
-                    _ => unreachable!("patterns normalize to wildcard, bind, or constructor"),
-                };
-                if replacement.len() != fields.len() {
-                    return Err(error("constructor pattern has the wrong field count"));
-                }
-                row.patterns.splice(column..=column, replacement);
-                specialized.push(row);
-            }
-            let mut arm_subjects = subjects.to_vec();
-            arm_subjects.splice(
-                column..=column,
-                fields
-                    .iter()
-                    .copied()
-                    .zip(field_types)
-                    .map(|(value, ty)| Subject { value, ty }),
-            );
-            arms.push(DecisionArm {
-                constructor,
-                fields,
-                decision: Box::new(self.plan(&specialized, &arm_subjects, next)?),
-            });
-        }
-        Ok(Decision::Match {
-            subject: subject.value,
-            owner: subject.ty.clone(),
-            arms,
-        })
-    }
-
-    /// The numeral a column of naturals is first tested for, where every
-    /// pattern in it is a numeral or takes anything, and some numeral is
-    /// past [`PEELED_NUMERALS`]: then each is one test.
-    ///
-    /// A small numeral is taken apart instead, a successor at a time. That
-    /// is as few matches as tests, and what it says is more: past `0` a
-    /// number is a successor, which is how a definition counting down is
-    /// seen to stop. A column also taking successors apart is taken apart,
-    /// numerals and all, since a test says nothing about what a successor
-    /// holds.
-    fn numeral_column(
-        &self,
-        rows: &[Row],
-        column: usize,
-        ty: &Type,
-    ) -> Option<num_bigint::BigUint> {
-        if *ty != Type::Named(self.prelude.nat, Vec::new())
-            || !self
-                .type_ids
-                .contains_key(&Type::Named(self.prelude.bool_, Vec::new()))
-        {
-            return None;
-        }
-        let mut first = None;
-        let mut largest = num_bigint::BigUint::ZERO;
-        for row in rows {
-            match &row.patterns[column] {
-                Pattern::Number {
-                    magnitude,
-                    negative: false,
-                } => {
-                    first.get_or_insert_with(|| magnitude.clone());
-                    largest = largest.max(magnitude.clone());
-                }
-                Pattern::Wild | Pattern::Bind(_) => {}
-                _ => return None,
-            }
-        }
-        first.filter(|_| largest > num_bigint::BigUint::from(PEELED_NUMERALS))
     }
 
     /// Declare and write whether two naturals are equal: nought is nought,
@@ -1004,165 +638,6 @@ impl<'a> Lowerer<'a> {
         });
         id
     }
-
-    fn normalize_pattern(&self, pattern: Pattern, expected: &Type) -> Result<Pattern, LowerError> {
-        match pattern {
-            Pattern::Number {
-                magnitude,
-                negative,
-            } => self.number_pattern(magnitude, negative, expected),
-            Pattern::Range => Err(error(
-                "a range pattern is a test, which only a clause's guard makes",
-            )),
-            Pattern::String => Err(error(
-                "a string pattern is a test, which only a clause's guard makes",
-            )),
-            Pattern::List(elements, rest) => {
-                let mut tail = rest.map_or(
-                    Pattern::Constructor(self.prelude.list_nil, Vec::new()),
-                    |rest| *rest,
-                );
-                for element in elements.into_iter().rev() {
-                    tail = Pattern::Constructor(self.prelude.list_cons, vec![element, tail]);
-                }
-                Ok(tail)
-            }
-            // A field the pattern does not name is taken whatever it is.
-            Pattern::Record(mut fields) => {
-                let Type::Record(expected) = expected else {
-                    return Err(error("record pattern does not have a record type"));
-                };
-                if fields
-                    .iter()
-                    .any(|(found, _)| !expected.iter().any(|(wanted, _)| wanted == found))
-                {
-                    return Err(error("record pattern names a field its type lacks"));
-                }
-                Ok(Pattern::Product(
-                    expected
-                        .iter()
-                        .map(|(wanted, _)| {
-                            fields
-                                .iter()
-                                .position(|(found, _)| found == wanted)
-                                .map_or(Pattern::Wild, |at| fields.swap_remove(at).1)
-                        })
-                        .collect(),
-                ))
-            }
-            product @ Pattern::Product(_) => Ok(product),
-            other => Ok(other),
-        }
-    }
-
-    fn number_pattern(
-        &self,
-        magnitude: num_bigint::BigUint,
-        negative: bool,
-        expected: &Type,
-    ) -> Result<Pattern, LowerError> {
-        let Type::Named(name, arguments) = expected else {
-            return Err(error("numeric pattern does not have a named type"));
-        };
-        if !arguments.is_empty() {
-            return Err(error("numeric pattern type unexpectedly has arguments"));
-        }
-        if *name == self.prelude.nat {
-            if negative {
-                return Err(error("a negative pattern cannot match Nat"));
-            }
-            return self.natural_pattern(&magnitude);
-        }
-        if *name == self.prelude.int {
-            let constructors = &self.program.data[name].constructors;
-            if constructors.len() != 2 {
-                return Err(error("Int must have positive and negative constructors"));
-            }
-            // The natural inside is a numeral too, tested where it is taken
-            // apart rather than counted down here.
-            if negative && magnitude != num_bigint::BigUint::ZERO {
-                let predecessor = magnitude - 1u8;
-                return Ok(Pattern::Constructor(
-                    constructors[1].name,
-                    vec![Pattern::Number {
-                        magnitude: predecessor,
-                        negative: false,
-                    }],
-                ));
-            }
-            return Ok(Pattern::Constructor(
-                constructors[0].name,
-                vec![Pattern::Number {
-                    magnitude,
-                    negative: false,
-                }],
-            ));
-        }
-        Err(error("a numeric pattern must infer as Nat or Int"))
-    }
-
-    fn natural_pattern(&self, magnitude: &num_bigint::BigUint) -> Result<Pattern, LowerError> {
-        const MAX_PATTERN_MAGNITUDE: usize = 1_024;
-        let count = magnitude
-            .to_usize()
-            .filter(|count| *count <= MAX_PATTERN_MAGNITUDE)
-            .ok_or_else(|| error("numeric pattern is too large to lower structurally"))?;
-        let constructors = &self.program.data[&self.prelude.nat].constructors;
-        if constructors.len() != 2
-            || !constructors[0].fields.is_empty()
-            || constructors[1].fields.len() != 1
-        {
-            return Err(error("Nat does not have the required zero/successor shape"));
-        }
-        let mut pattern = Pattern::Constructor(constructors[0].name, Vec::new());
-        for _ in 0..count {
-            pattern = Pattern::Constructor(constructors[1].name, vec![pattern]);
-        }
-        Ok(pattern)
-    }
-
-    /// Each constructor of `ty` with its fields' types. A tag row's are its
-    /// tags, named by their spellings.
-    fn constructors_of(&self, ty: &Type) -> Result<Vec<(Symbol, Vec<Type>)>, LowerError> {
-        if let Type::Variants(tags) = ty {
-            return Ok(tags.clone());
-        }
-        let Type::Named(name, arguments) = ty else {
-            return Err(error("pattern matching requires a named data type"));
-        };
-        let data = self
-            .program
-            .data
-            .get(name)
-            .ok_or_else(|| error("named type has no data declaration"))?;
-        if data.parameters.len() != arguments.len() {
-            return Err(error("type specialization has the wrong argument count"));
-        }
-        let variables: HashMap<_, _> = data
-            .parameters
-            .iter()
-            .copied()
-            .zip(arguments.iter().cloned())
-            .collect();
-        let mut constructors = Vec::new();
-        for constructor in &data.constructors {
-            constructors.push((
-                constructor.name,
-                constructor
-                    .fields
-                    .iter()
-                    .map(|field| specialize::surface_type(field, &variables).map_err(Into::into))
-                    .collect::<Result<_, LowerError>>()?,
-            ));
-        }
-        if let Some(wrapper) = &data.wrapper {
-            constructors.push((
-                wrapper.constructor,
-                vec![specialize::surface_type(&wrapper.field, &variables)?],
-            ));
-        }
-        Ok(constructors)
-    }
 }
 
 struct EmitContext<'a> {
@@ -1170,7 +645,6 @@ struct EmitContext<'a> {
     constructor_ids: &'a HashMap<(Symbol, Type), CtorId>,
     record_constructor_ids: &'a HashMap<Type, CtorId>,
     record_wrappers: &'a HashMap<Type, Type>,
-    sole_constructors: &'a HashMap<Type, Vec<Type>>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
     widen_ids: &'a HashMap<(Type, Type), FnId>,
     call_sites: &'a RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
@@ -1349,10 +823,9 @@ fn emit_decision(
 fn emit_body(
     context: &EmitContext<'_>,
     builder: &mut Builder<'_>,
-    body: &d::Body,
+    body: &p::Body,
     locals: HashMap<LocalId, Atom>,
 ) -> Atom {
-    let body = hoisted(body);
     emit_bindings(context, builder, &body.bindings, &body.result, locals)
 }
 
@@ -1362,28 +835,28 @@ fn emit_body(
 fn emit_bindings(
     context: &EmitContext<'_>,
     builder: &mut Builder<'_>,
-    bindings: &[d::Binding],
+    bindings: &[p::Binding],
     result: &Expr,
     mut locals: HashMap<LocalId, Atom>,
 ) -> Atom {
     let Some((binding, rest)) = bindings.split_first() else {
         return emit_expr(context, builder, result, &locals);
     };
-    let bind = |locals: &mut HashMap<LocalId, Atom>, value| match binding.pattern {
-        Pattern::Wild => {}
-        Pattern::Bind(local) => {
+    let bind = |locals: &mut HashMap<LocalId, Atom>, value| match binding.unpack {
+        Unpack::Ignore => {}
+        Unpack::Bind(local) => {
             locals.insert(local, value);
         }
-        _ => unreachable!("a pattern taking a value apart is bound by `destructure`"),
+        Unpack::Fields { .. } => unreachable!("an unpack is emitted by `destructure`"),
     };
     let ExprKind::Try(taken) = &binding.value.kind else {
         let value = emit_expr(context, builder, &binding.value, &locals);
-        if !matches!(binding.pattern, Pattern::Wild | Pattern::Bind(_)) {
+        if !matches!(binding.unpack, Unpack::Ignore | Unpack::Bind(_)) {
             return destructure(
                 context,
                 builder,
-                (value, &binding.value.ty),
-                &binding.pattern,
+                value,
+                &binding.unpack,
                 locals,
                 &|builder, locals| emit_bindings(context, builder, rest, result, locals),
             );
@@ -1418,144 +891,50 @@ fn emit_bindings(
     )
 }
 
-/// Take `value` apart as `pattern`, which always matches, then go on.
+/// Execute an unpack already validated and ordered by pattern compilation.
 fn destructure(
     context: &EmitContext<'_>,
     builder: &mut Builder<'_>,
-    (value, ty): (Atom, &Type),
-    pattern: &Pattern,
+    value: Atom,
+    unpack: &Unpack,
     mut locals: HashMap<LocalId, Atom>,
     then: &dyn Fn(&mut Builder<'_>, HashMap<LocalId, Atom>) -> Atom,
 ) -> Atom {
-    let parts: Vec<(Pattern, Type)> = match (pattern, ty) {
-        (Pattern::Wild, _) => return then(builder, locals),
-        (Pattern::Bind(local), _) => {
+    match unpack {
+        Unpack::Ignore => then(builder, locals),
+        Unpack::Bind(local) => {
             locals.insert(*local, value);
-            return then(builder, locals);
+            then(builder, locals)
         }
-        (Pattern::Record(named), Type::Record(fields)) => fields
-            .iter()
-            .map(|(name, ty)| {
-                let part = named
-                    .iter()
-                    .find(|(found, _)| found == name)
-                    .map_or(Pattern::Wild, |(_, pattern)| pattern.clone());
-                (part, ty.clone())
+        Unpack::Fields { owner, fields } => {
+            builder.match_(value, context.type_ids[owner], |builder, _, held| {
+                let held = context.arm_fields(builder, owner, held);
+                destructure_each(context, builder, &held, fields, locals.clone(), then)
             })
-            .collect(),
-        (Pattern::Product(members), Type::Tuple(types)) => {
-            members.iter().cloned().zip(types.iter().cloned()).collect()
         }
-        (Pattern::Constructor(_, members), Type::Named(..)) => members
-            .iter()
-            .cloned()
-            .zip(context.sole_constructors[ty].iter().cloned())
-            .collect(),
-        _ => unreachable!("collection took apart only what always matches"),
-    };
-    builder.match_(value, context.type_ids[ty], |builder, _, held| {
-        let held = context.arm_fields(builder, ty, held);
-        destructure_each(context, builder, &held, &parts, locals.clone(), then)
-    })
+    }
 }
 
 fn destructure_each(
     context: &EmitContext<'_>,
     builder: &mut Builder<'_>,
     held: &[Atom],
-    parts: &[(Pattern, Type)],
+    fields: &[Unpack],
     locals: HashMap<LocalId, Atom>,
     then: &dyn Fn(&mut Builder<'_>, HashMap<LocalId, Atom>) -> Atom,
 ) -> Atom {
-    let (Some((&value, held)), Some(((pattern, ty), parts))) =
-        (held.split_first(), parts.split_first())
+    let (Some((&value, held)), Some((unpack, fields))) = (held.split_first(), fields.split_first())
     else {
         return then(builder, locals);
     };
     destructure(
         context,
         builder,
-        (value, ty),
-        pattern,
+        value,
+        unpack,
         locals,
-        &|builder, locals| destructure_each(context, builder, held, parts, locals, then),
+        &|builder, locals| destructure_each(context, builder, held, fields, locals, then),
     )
-}
-
-/// `body` with every `value?` in it bound on its own, in the order it is
-/// evaluated, and read back where it was written: what follows a `?` runs
-/// only on its `Ok`. Evaluation is pure but for effects, which stand on
-/// their own, so taking a `?` out ahead of the rest of its expression
-/// changes nothing a program can see.
-fn hoisted(body: &d::Body) -> d::Body {
-    let mut fresh = 0;
-    let mut bindings = Vec::with_capacity(body.bindings.len());
-    for binding in &body.bindings {
-        let value = lifted(&binding.value, &mut bindings, &mut fresh);
-        bindings.push(d::Binding {
-            pattern: binding.pattern.clone(),
-            value,
-        });
-    }
-    let result = lifted(&body.result, &mut bindings, &mut fresh);
-    d::Body { bindings, result }
-}
-
-/// `expression` with each `?` in it replaced by a local bound before it.
-fn lifted(expression: &Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> Expr {
-    let mut lift = |inner: &Expr| lifted(inner, bindings, fresh);
-    let kind = match &expression.kind {
-        ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {
-            return expression.clone();
-        }
-        ExprKind::Construct(constructor, fields) => {
-            ExprKind::Construct(*constructor, fields.iter().map(&mut lift).collect())
-        }
-        ExprKind::Record(fields) => ExprKind::Record(
-            fields
-                .iter()
-                .map(|(name, field)| (*name, lift(field)))
-                .collect(),
-        ),
-        ExprKind::Tuple(members) => ExprKind::Tuple(members.iter().map(&mut lift).collect()),
-        ExprKind::Update(base, fields) => {
-            let base = lift(base);
-            ExprKind::Update(
-                Box::new(base),
-                fields
-                    .iter()
-                    .map(|(name, field)| (*name, lift(field)))
-                    .collect(),
-            )
-        }
-        ExprKind::Project(receiver, field) => ExprKind::Project(Box::new(lift(receiver)), *field),
-        ExprKind::DirectCall(key, arguments) => {
-            ExprKind::DirectCall(key.clone(), arguments.iter().map(&mut lift).collect())
-        }
-        ExprKind::Widen(value) => ExprKind::Widen(Box::new(lift(value))),
-        ExprKind::Try(value) => {
-            let value = lift(value);
-            // Past any local a clause can have: they are numbered from nought.
-            let local = LocalId(u32::MAX - *fresh);
-            *fresh += 1;
-            bindings.push(d::Binding {
-                pattern: Pattern::Bind(local),
-                value: Expr {
-                    module: expression.module,
-                    span: expression.span,
-                    ty: expression.ty.clone(),
-                    kind: ExprKind::Try(Box::new(value)),
-                },
-            });
-            ExprKind::Local(local)
-        }
-    };
-    Expr {
-        module: expression.module,
-        span: expression.span,
-        ty: expression.ty.clone(),
-        kind,
-    }
 }
 
 fn emit_expr(
@@ -1679,33 +1058,6 @@ fn emit_projection(
     builder.match_(receiver, context.type_ids[receiver_ty], |_, _, values| {
         values[index]
     })
-}
-
-/// The types of a record's fields, in their order, or a tuple's members:
-/// the columns a product is taken apart into.
-fn members(ty: &Type) -> Option<Vec<Type>> {
-    match ty {
-        Type::Record(fields) => Some(fields.iter().map(|(_, ty)| ty.clone()).collect()),
-        Type::Tuple(members) => Some(members.clone()),
-        _ => None,
-    }
-}
-
-/// Whether a pattern matches a numeral anywhere in it.
-fn holds_numeral(pattern: &Pattern) -> bool {
-    match pattern {
-        Pattern::Number { .. } => true,
-        Pattern::Constructor(_, inner) | Pattern::Product(inner) => inner.iter().any(holds_numeral),
-        Pattern::List(inner, rest) => {
-            inner.iter().any(holds_numeral) || rest.as_deref().is_some_and(holds_numeral)
-        }
-        Pattern::Record(fields) => fields.iter().any(|(_, inner)| holds_numeral(inner)),
-        Pattern::Wild | Pattern::Bind(_) | Pattern::Range | Pattern::String => false,
-    }
-}
-
-const fn irrefutable(pattern: &Pattern) -> bool {
-    matches!(pattern, Pattern::Wild | Pattern::Bind(_))
 }
 
 fn source_name(symbol: Symbol, symbols: &crate::Symbols) -> &str {
@@ -1858,8 +1210,9 @@ mod tests {
             let specialized =
                 specialize::monomorphize_package(&checked, &host, Some(&main)).unwrap();
             crate::second_class::check(&specialized).unwrap();
-            let first_order = crate::callbacks::lower(specialized).unwrap();
-            let mut program = lower_package_to_barb(&checked, first_order, &routines).unwrap();
+            let program = crate::callbacks::lower(specialized).unwrap();
+            let program = p::compile(program, &checked.prelude, &checked.resolved.symbols).unwrap();
+            let mut program = lower_package_to_barb(&checked, program, &routines).unwrap();
             barb::optimize(&mut program);
             let rendered = program.render();
             // `Host` holds what its target hands the program; `main!` is the

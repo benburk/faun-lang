@@ -7,10 +7,11 @@
 //! variable a caller fills with a function is caught where the function
 //! would be held.
 
-use crate::specialize::{Body, Clause, Definition, Expr, ExprKind, Program, SpecializeError, Type};
+use crate::diagnostic::LowerError;
+use crate::specialize::{Body, Clause, Definition, Expr, ExprKind, Program, Type};
 
 /// Refuse the first function value held anywhere but a call's argument.
-pub(crate) fn check(program: &Program) -> Result<(), SpecializeError> {
+pub(crate) fn check(program: &Program) -> Result<(), LowerError> {
     for function in &program.functions {
         let Definition::Body(clauses) = &function.definition else {
             continue;
@@ -25,7 +26,7 @@ pub(crate) fn check(program: &Program) -> Result<(), SpecializeError> {
     Ok(())
 }
 
-fn body(body: &Body) -> Result<(), SpecializeError> {
+fn body(body: &Body) -> Result<(), LowerError> {
     for binding in &body.bindings {
         value(&binding.value, false)?;
     }
@@ -33,7 +34,7 @@ fn body(body: &Body) -> Result<(), SpecializeError> {
 }
 
 /// Check `expression`, which is a call's argument or head when `passed`.
-fn value(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
+fn value(expression: &Expr, passed: bool) -> Result<(), LowerError> {
     placed(expression, passed)?;
     match &expression.kind {
         ExprKind::Local(_)
@@ -66,7 +67,7 @@ fn value(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
 
 /// A function, which may only go straight into a call, and never one with
 /// no parameters, which is a value.
-fn placed(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
+fn placed(expression: &Expr, passed: bool) -> Result<(), LowerError> {
     let Type::Function(signature) = &expression.ty else {
         return Ok(());
     };
@@ -85,8 +86,8 @@ fn placed(expression: &Expr, passed: bool) -> Result<(), SpecializeError> {
     Ok(())
 }
 
-fn located(expression: &Expr, message: &str) -> SpecializeError {
-    SpecializeError {
+fn located(expression: &Expr, message: &str) -> LowerError {
+    LowerError {
         message: message.to_owned(),
         at: Some((expression.module, expression.span)),
     }
