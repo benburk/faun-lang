@@ -14,9 +14,10 @@ hits([n, *rest], cache, warm) ->
   (found, touched) = cache.get(n)
   hits(rest, touched.put(n, n), warm + found.is_ok().to_nat())
 
-app : {stdin: Str, *} -> Result(Str, Str)
+app : {stdin: List(U8), *} -> Result(Str, Str)
 app(input) ->
-  numbers = input.stdin.trim().split(" ").try_map(Nat.from_str)
+  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  numbers = stdin.trim().split(" ").try_map(Nat.from_str)
     .err_as("malformed number")?
   Ok("hits: ${hits(numbers, Lru.empty(4), 0)}")
 

@@ -61,11 +61,12 @@ Host : {args: List(Str)}.(
     host.exit!(status)
 
   # The same, having read standard input to its end first, handed to `app`
-  # as text beside the arguments. Input that cannot be read is reported on
+  # as bytes beside the arguments: an app wanting text asks
+  # `Str.from_utf8` itself. Input that cannot be read is reported on
   # standard error, and the app is not run.
-  run_stdin! : (Host, {args: List(Str), stdin: Str} -> a) -> [] where a.to_str : a -> Str
+  run_stdin! : (Host, {args: List(Str), stdin: List(U8)} -> a) -> [] where a.to_str : a -> Str
   run_stdin!(host, app) ->
-    input = host.stdin.read_to_str!()
+    input = host.stdin.read_to_end!()
     status = serve_stdin!(host.stdout, host.stderr, input, host.args, app)
     host.exit!(status)
 )
@@ -283,12 +284,11 @@ reported_status : Result(Nat, IoError) -> Nat
 reported_status(Ok(_)) -> 1
 reported_status(Err(_)) -> 2
 
-unread! : (Stderr, [Io(IoError), LimitExceeded, InvalidUtf8]) -> Nat
+unread! : (Stderr, [Io(IoError), LimitExceeded]) -> Nat
 unread!(errors, Io(error)) -> report!(errors, error.to_str())
 unread!(errors, LimitExceeded) -> report!(errors, "LimitExceeded")
-unread!(errors, InvalidUtf8) -> report!(errors, "InvalidUtf8")
 
-serve_stdin! : (Stdout, Stderr, Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]), List(Str), {args: List(Str), stdin: Str} -> a) -> Nat where
+serve_stdin! : (Stdout, Stderr, Result(List(U8), [Io(IoError), LimitExceeded]), List(Str), {args: List(Str), stdin: List(U8)} -> a) -> Nat where
   a.to_str : a -> Str
 serve_stdin!(_, errors, Err(error), _, _) -> unread!(errors, error)
 serve_stdin!(output, _, Ok(input), args, app) -> finish!(output, app({args: args, stdin: input}))

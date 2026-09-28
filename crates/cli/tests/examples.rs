@@ -100,7 +100,7 @@ fn runners_print_what_a_program_answers() {
         "run-stdin",
         "import std.host {Host}
 
-         check : {stdin: Str, *} -> Result(Nat, Str)
+         check : {stdin: List(U8), *} -> Result(Nat, Str)
          check({stdin, *}) if stdin.len() > 3 -> Err(\"too long\")
          check({stdin, *}) -> Ok(stdin.len())
 
@@ -210,18 +210,21 @@ fn the_stdin_runner_hands_the_program_arguments_and_input() {
     };
     let both = support::Package::new(
         "run-input",
-        "both : {args: List(Str), stdin: Str} -> Str
-         both({args, stdin}) -> \"${args.len()} ${stdin}\"
+        "both : {args: List(Str), stdin: List(U8)} -> Str
+         both({args, stdin}) ->
+           text = Str.from_utf8(stdin).ok_or(\"\")
+           \"${args.len()} ${text}\"
 
          main!(host) -> host.run_stdin!(both)",
     );
     assert_eq!(run(&both, &["a"], "in"), (Some(0), "2 in\n".to_owned()));
     let named = support::Package::new(
         "run-result-input",
-        "named : {args: List(Str), stdin: Str} -> Result(Str, [OutOfBounds])
+        "named : {args: List(Str), stdin: List(U8)} -> Result(Str, [OutOfBounds])
          named({args, stdin}) ->
            name = args.get(1)?
-           Ok(\"${name}: ${stdin}\")
+           text = Str.from_utf8(stdin).ok_or(\"\")
+           Ok(\"${name}: ${text}\")
 
          main!(host) -> host.run_stdin!(named)",
     );

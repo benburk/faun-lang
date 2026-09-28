@@ -42,9 +42,10 @@ part1(key) -> mine(key, five_zeroes, 1, 1000000).ok_or(0)
 part2 : List(U8) -> Nat
 part2(key) -> mine(key, six_zeroes, 1, 10000000).ok_or(0)
 
-app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
-  key = input.stdin.trim().to_utf8()
+  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  key = stdin.trim().to_utf8()
   Ok({part1: part1(key), part2: part2(key)})
 
 # The two published five-zero examples and a useful six-zero regression check

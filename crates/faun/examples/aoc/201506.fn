@@ -89,8 +89,10 @@ brightness_count(input, width, height) -> Ok(grid_sum(parse(input)?, width, heig
 part2 : Str -> Result(Nat, [MalformedInstruction])
 part2(input) -> brightness_count(input, 1000, 1000)
 
-app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
-app(input) -> run(parse(input.stdin))
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app(input) ->
+  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  run(parse(stdin))
 
 run : Result(List(Instruction), e) -> Result({part1: Nat, part2: Nat}, Str)
 run(Err(_)) -> Err("malformed lighting instruction")

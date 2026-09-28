@@ -84,10 +84,11 @@ part2(input) ->
   first = solved(wiring, "a")?
   solved([("b", [first.to_str()]), *wiring], "a")
 
-app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
-  first = part1(input.stdin)?
-  second = part2(input.stdin)?
+  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  first = part1(stdin)?
+  second = part2(stdin)?
   Ok({part1: first, part2: second})
 
 example : Str

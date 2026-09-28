@@ -162,8 +162,8 @@ fn taking_a_lists_first_elements_is_a_view_of_it() {
         "take-view",
         "main!(host) -> host.run_stdin!(app)
 
-         app : {stdin: Str, *} -> Str
-         app(input) -> answer(input.stdin.to_utf8().map(|b| b.to_nat() - 48))
+         app : {stdin: List(U8), *} -> Str
+         app(input) -> answer(input.stdin.map(|b| b.to_nat() - 48))
 
          answer : List(Nat) -> Str
          answer(xs) ->

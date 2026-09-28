@@ -33,9 +33,10 @@ red(_) -> False
 red_handed : List((Str, Json)) -> Bool
 red_handed(members) -> members.any(red)
 
-app : {stdin: Str, *} -> Result({part1: Int, part2: Int}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Int, part2: Int}, Str)
 app(input) ->
-  document = Json.from_str(input.stdin.trim()).err_as("invalid JSON")?
+  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  document = Json.from_str(stdin.trim()).err_as("invalid JSON")?
   Ok({part1: total(document, Gross), part2: total(document, Net)})
 
 adds_to : (Str, Int) -> Bool

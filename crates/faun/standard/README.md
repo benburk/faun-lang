@@ -424,9 +424,11 @@ settled before the program ran.
 
 `Host` also has two runners, the quick way to a whole program: `run!` hands
 a pure function `{args: List(Str)}`, and `run_stdin!` reads standard input to
-its end first and hands `{args: List(Str), stdin: Str}`. Each prints what the
-function answers by its `to_str` and a line's end, and finishes with status
-nought. A function declares the fields it reads, `{stdin: Str, *}` taking the
+its end first and hands `{args: List(Str), stdin: List(U8)}`: the bytes as
+they came, so a program hashing or decoding them pays for no text check, and
+one wanting text asks `Str.from_utf8` itself. Each prints what the function
+answers by its `to_str` and a line's end, and finishes with status nought. A
+function declares the fields it reads, `{stdin: List(U8), *}` taking the
 input and leaving the arguments; one answering a `Result` prints `Ok(...)` or
 `Err(...)`, which says which it was. So `main!(host) -> host.run_stdin!(app)`
 is a whole program, and one that must finish with another status writes its

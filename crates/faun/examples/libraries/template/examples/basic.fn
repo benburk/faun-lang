@@ -8,8 +8,10 @@ package {
 
 import template {compile_template}
 
-app : {stdin: Str, args: List(Str)} -> Result(Str, Str)
+app : {stdin: List(U8), args: List(Str)} -> Result(Str, Str)
 app({stdin: _, args: []}) -> Err("usage: template_builder <function-name> < template")
-app({stdin: text, args: [name, *]}) -> compile_template(name, text).map_err(|error| error.to_str())
+app({stdin: bytes, args: [name, *]}) ->
+  text = Str.from_utf8(bytes).err_as("standard input is not UTF-8")?
+  compile_template(name, text).map_err(|error| error.to_str())
 
 main!(host) -> host.run_stdin!(app)

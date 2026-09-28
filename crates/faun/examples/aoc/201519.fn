@@ -141,9 +141,10 @@ part2(input) ->
   {rules, medicine} = parse(input)?
   fabricate(rules, medicine)
 
-app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
-  {rules, medicine} = parse(input.stdin)?
+  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  {rules, medicine} = parse(stdin)?
   Ok({part1: products(rules, medicine).len(), part2: fabricate(rules, medicine)?})
 
 example_rules : Str

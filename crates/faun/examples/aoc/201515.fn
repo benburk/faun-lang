@@ -139,8 +139,10 @@ dietary : Best -> Result(Nat, Str)
 dietary(Best(_, diet, True)) -> Ok(diet)
 dietary(Best(_, _, False)) -> Err("no 500-calorie recipe")
 
-app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
-app(input) -> report(solve(input.stdin)?)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app(input) ->
+  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  report(solve(stdin)?)
 
 report : Best -> Result({part1: Nat, part2: Nat}, Str)
 report(Best(best, diet, True)) -> Ok({part1: best, part2: diet})

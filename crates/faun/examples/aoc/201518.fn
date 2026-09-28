@@ -73,9 +73,10 @@ part1(input, steps) -> Ok(solve(parse_grid(input)?, steps, False))
 part2 : (Str, Nat) -> Result(Nat, Str)
 part2(input, steps) -> Ok(solve(parse_grid(input)?, steps, True))
 
-app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
-  grid = parse_grid(input.stdin)?
+  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  grid = parse_grid(stdin)?
   Ok({part1: solve(grid, 100, False), part2: solve(grid, 100, True)})
 
 example : Str

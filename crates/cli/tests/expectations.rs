@@ -248,8 +248,10 @@ fn bitwise_and_powers_of_numbers_read_at_run_time() {
         "bitwise-input",
         "main!(host) -> host.run_stdin!(app)
 
-         app : {stdin: Str, *} -> Str
-         app(input) -> answer(input.stdin.trim().split(\" \").map(number))
+         app : {stdin: List(U8), *} -> Str
+         app(input) ->
+           text = Str.from_utf8(input.stdin).ok_or(\"\")
+           answer(text.trim().split(\" \").map(number))
 
          number : Str -> Nat
          number(word) -> Nat.from_str(word).ok_or(0)
@@ -296,8 +298,10 @@ fn a_float_is_read_from_standard_input() {
         "float-input",
         "main!(host) -> host.run_stdin!(app)
 
-         app : {stdin: Str, *} -> Str
-         app(input) -> read(F64.from_str(input.stdin.trim()))
+         app : {stdin: List(U8), *} -> Str
+         app(input) ->
+           text = Str.from_utf8(input.stdin).ok_or(\"\")
+           read(F64.from_str(text.trim()))
 
          read : Result(F64, [Malformed]) -> Str
          read(Ok(x)) -> x.mul(2.0).to_str()

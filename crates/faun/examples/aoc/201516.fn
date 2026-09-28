@@ -117,9 +117,10 @@ part1(input) -> identify(input, Exact)
 part2 : Str -> Result(Nat, Str)
 part2(input) -> identify(input, Ranged)
 
-app : {stdin: Str, *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
-  aunts = parse_sues(input.stdin)?
+  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  aunts = parse_sues(stdin)?
   exact = identify_sue(aunts, Exact)?
   ranged = identify_sue(aunts, Ranged)?
   Ok({part1: exact, part2: ranged})
