@@ -45,7 +45,7 @@ use crate::{ModuleId, Symbol};
 pub(crate) fn check(
     program: &d::Program,
     routines: &Routines,
-    resolved: &ResolvedProgram,
+    resolved: &ResolvedProgram<crate::typed::Program>,
 ) -> Result<(), Diagnostic> {
     let facts = Facts::of(program, routines, resolved);
     if facts.resources.is_empty() {
@@ -103,32 +103,28 @@ fn settle(facts: &Facts<'_>) -> Vec<Vec<Contract>> {
 /// Every type a routine uses up, as the program declares it, whether or not
 /// anything reaches the declaration: a resource is one wherever a program
 /// holds it, closed or not.
-fn resources(resolved: &ResolvedProgram, routines: &Routines) -> HashSet<Symbol> {
-    let items = || {
-        resolved
-            .program
-            .modules
-            .iter()
-            .flat_map(|module| &module.items)
-    };
-    let defined: HashSet<Symbol> = items()
-        .filter_map(|item| match item {
-            crate::hir::Item::Clause(clause) => Some(clause.name),
-            _ => None,
-        })
-        .collect();
-    items()
-        .filter_map(|item| match item {
-            crate::hir::Item::Signature(signature) if !defined.contains(&signature.name) => {
-                let routine = routines.get(resolved.symbols.text(signature.spelling))?;
-                match signature.parameters.first() {
-                    Some(crate::hir::Type::Named(resource, _)) if routine.consumes => {
-                        Some(*resource)
-                    }
-                    _ => None,
+fn resources(
+    resolved: &ResolvedProgram<crate::typed::Program>,
+    routines: &Routines,
+) -> HashSet<Symbol> {
+    resolved
+        .program
+        .functions
+        .iter()
+        .filter_map(|function| {
+            let crate::typed::Definition::External(provider) = function.definition else {
+                return None;
+            };
+            let routine = routines.get(resolved.symbols.text(provider))?;
+            let crate::check::InferredType::Function(parameters, _) = &function.scheme.ty else {
+                unreachable!("every definition has a function scheme")
+            };
+            match parameters.first() {
+                Some(crate::check::InferredType::Named(resource, _)) if routine.consumes => {
+                    Some(*resource)
                 }
+                _ => None,
             }
-            _ => None,
         })
         .collect()
 }
@@ -161,7 +157,7 @@ impl Contract {
 /// function is, and how to read the source back for a diagnostic.
 struct Facts<'a> {
     program: &'a d::Program,
-    resolved: &'a ResolvedProgram,
+    resolved: &'a ResolvedProgram<crate::typed::Program>,
     resources: HashSet<Symbol>,
     /// Which function each key is.
     functions: HashMap<&'a FunctionKey, usize>,
@@ -173,7 +169,11 @@ struct Facts<'a> {
 }
 
 impl<'a> Facts<'a> {
-    fn of(program: &'a d::Program, routines: &Routines, resolved: &'a ResolvedProgram) -> Self {
+    fn of(
+        program: &'a d::Program,
+        routines: &Routines,
+        resolved: &'a ResolvedProgram<crate::typed::Program>,
+    ) -> Self {
         let uses_up = program
             .functions
             .iter()

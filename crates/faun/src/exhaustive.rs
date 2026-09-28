@@ -27,8 +27,9 @@ use std::collections::HashMap;
 use num_bigint::BigUint;
 
 use crate::blessed::PreludeIds;
-use crate::check::{CheckError, InferredType, Reading, Types};
+use crate::check::{CheckError, InferredType};
 use crate::hir as h;
+use crate::typed as t;
 use crate::{Symbol, Symbols};
 
 /// A column's type, where checking knew one.
@@ -36,71 +37,42 @@ type Column = Option<InferredType>;
 
 /// Refuse the first definition whose clauses leave some value unmatched.
 pub(crate) fn exhaustive(
-    program: &h::Program,
+    program: &t::Program,
     symbols: &Symbols,
     prelude: &PreludeIds,
-    types: &Types,
 ) -> Result<(), CheckError> {
-    let checker = Coverage::new(program, prelude, &types.readings);
-    let clause_types: HashMap<_, _> = types
-        .clauses
-        .iter()
-        .map(|site| (site.site, &site.ty))
-        .collect();
-    for module in &program.modules {
-        for (name, clauses) in definitions(module) {
-            let width = clauses[0].patterns.len();
-            let columns = match clause_types.get(&clauses[0].site) {
-                Some(InferredType::Function(parameters, _)) if parameters.len() == width => {
-                    parameters.iter().cloned().map(Some).collect()
-                }
-                _ => vec![None; width],
-            };
-            let rows = clauses
-                .iter()
-                .filter(|clause| clause.guard.is_none())
-                .flat_map(|clause| h::Pattern::rows(&clause.patterns))
-                .map(|row| row.iter().map(|p| checker.pattern(p)).collect())
-                .collect();
-            if let Some(missing) = checker.missing(rows, &columns) {
-                let example = checker.render_all(&missing, symbols);
-                let spelled = spelling(symbols, name);
-                return Err(CheckError {
-                    module: module.source,
-                    span: clauses[0].span,
-                    message: format!(
-                        "`{spelled}` does not cover every case: no clause matches `{spelled}({example})`"
-                    ),
-                });
-            }
+    let checker = Coverage::new(program, prelude);
+    for function in &program.functions {
+        let t::Definition::Body(clauses) = &function.definition else {
+            continue;
+        };
+        let first = &clauses[0];
+        let columns: Vec<_> = first
+            .signature
+            .parameters
+            .iter()
+            .cloned()
+            .map(Some)
+            .collect();
+        let rows = clauses
+            .iter()
+            .filter(|clause| clause.guard.is_none())
+            .flat_map(|clause| t::Pattern::rows(&clause.patterns))
+            .map(|row| row.iter().map(|p| checker.pattern(p)).collect())
+            .collect();
+        if let Some(missing) = checker.missing(rows, &columns) {
+            let example = checker.render_all(&missing, symbols);
+            let spelled = spelling(symbols, function.name);
+            return Err(CheckError {
+                module: function.module,
+                span: first.span,
+                message: format!(
+                    "`{spelled}` does not cover every case: no clause matches `{spelled}({example})`"
+                ),
+            });
         }
     }
     Ok(())
-}
-
-/// Each definition's clauses in `module`, methods included, in the order
-/// written.
-fn definitions(module: &h::Module) -> Vec<(Symbol, Vec<&h::Clause>)> {
-    let mut found: Vec<(Symbol, Vec<&h::Clause>)> = Vec::new();
-    let clauses = module.items.iter().flat_map(|item| match item {
-        h::Item::Clause(clause) => vec![clause],
-        h::Item::Data(data) => data
-            .methods
-            .iter()
-            .filter_map(|method| match method {
-                h::MethodItem::Clause(clause) => Some(clause),
-                h::MethodItem::Signature(_) => None,
-            })
-            .collect(),
-        h::Item::Signature(_) => Vec::new(),
-    });
-    for clause in clauses {
-        match found.iter_mut().find(|(name, _)| *name == clause.name) {
-            Some((_, held)) => held.push(clause),
-            None => found.push((clause.name, vec![clause])),
-        }
-    }
-    found
 }
 
 /// A declared type's parameters, and each constructor's field types
@@ -135,27 +107,14 @@ struct Coverage<'a> {
     /// Each declared type's parameters, and each constructor's field types
     /// written over them.
     declarations: HashMap<Symbol, Declaration<'a>>,
-    /// Which reading each claimed word took.
-    readings: &'a HashMap<h::SiteId, Reading>,
 }
 
 impl<'a> Coverage<'a> {
-    fn new(
-        program: &'a h::Program,
-        prelude: &'a PreludeIds,
-        readings: &'a HashMap<h::SiteId, Reading>,
-    ) -> Self {
+    fn new(program: &'a t::Program, prelude: &'a PreludeIds) -> Self {
         let mut owners = HashMap::new();
         let mut constructors = HashMap::new();
         let mut declared = HashMap::new();
-        let declarations = program
-            .modules
-            .iter()
-            .flat_map(|module| &module.items)
-            .filter_map(|item| match item {
-                h::Item::Data(data) => Some(data),
-                _ => None,
-            });
+        let declarations = program.data.values();
         for data in declarations {
             let mut held: Vec<_> = data
                 .constructors
@@ -184,7 +143,6 @@ impl<'a> Coverage<'a> {
             owners,
             constructors,
             declarations: declared,
-            readings,
         }
     }
 
@@ -202,35 +160,26 @@ impl<'a> Coverage<'a> {
         found.unwrap_or_else(|| vec![None; arity])
     }
 
-    fn pattern(&self, pattern: &h::Pattern) -> Pattern {
+    fn pattern(&self, pattern: &t::Pattern) -> Pattern {
         match pattern {
-            h::Pattern::Wild | h::Pattern::Bind(_) => Pattern::Wild,
-            h::Pattern::Or(_) => unreachable!("clauses are read as rows, one per alternative"),
-            h::Pattern::Constructor(name, fields) => Pattern::Constructor(
+            t::Pattern::Wild | t::Pattern::Bind(_) => Pattern::Wild,
+            t::Pattern::Or(_) => unreachable!("clauses are read as rows, one per alternative"),
+            t::Pattern::Constructor(name, fields) => Pattern::Constructor(
                 *name,
                 fields.iter().map(|field| self.pattern(field)).collect(),
             ),
-            h::Pattern::Tag(label, fields) => Pattern::Tag(
+            t::Pattern::Tag(label, fields) => Pattern::Tag(
                 *label,
                 fields.iter().map(|field| self.pattern(field)).collect(),
             ),
-            h::Pattern::Dual(dual, fields) => {
-                let fields = fields.iter().map(|field| self.pattern(field)).collect();
-                match self.readings.get(&dual.site) {
-                    Some(Reading::Tag(label)) => Pattern::Tag(*label, fields),
-                    Some(Reading::Constructor(constructor)) => {
-                        Pattern::Constructor(*constructor, fields)
-                    }
-                    None => Pattern::Wild,
-                }
-            }
-            h::Pattern::Number {
+            t::Pattern::Dual(..) => unreachable!("typed patterns cannot be ambiguous"),
+            t::Pattern::Number {
                 magnitude,
                 negative,
             } => Pattern::Number(magnitude.clone(), *negative),
             // A range, or a string, which is a test, covers nothing.
-            h::Pattern::Range(_, _) | h::Pattern::String(_) => Pattern::Range,
-            h::Pattern::List(elements, rest) => {
+            t::Pattern::Range(_, _) | t::Pattern::String(_) => Pattern::Range,
+            t::Pattern::List(elements, rest) => {
                 let mut tail = rest.as_ref().map_or_else(
                     || Pattern::Constructor(self.prelude.list_nil, Vec::new()),
                     |rest| self.pattern(rest),
@@ -243,7 +192,7 @@ impl<'a> Coverage<'a> {
                 }
                 tail
             }
-            h::Pattern::Record(fields, _) => {
+            t::Pattern::Record(fields, _) => {
                 let mut fields: Vec<_> = fields
                     .iter()
                     .map(|(name, field)| (*name, self.pattern(field)))
@@ -251,7 +200,7 @@ impl<'a> Coverage<'a> {
                 fields.sort_by_key(|(name, _)| *name);
                 Pattern::Record(fields)
             }
-            h::Pattern::Tuple(members) => {
+            t::Pattern::Tuple(members) => {
                 Pattern::Tuple(members.iter().map(|member| self.pattern(member)).collect())
             }
         }

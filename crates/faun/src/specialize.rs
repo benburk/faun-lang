@@ -9,18 +9,16 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 use num_bigint::BigUint;
 
 use crate::blessed::NumeralType;
 use crate::blessed::{LiteralExpr, PreludeIds};
-use crate::check::{
-    CheckedProgram, ClauseSite, DeferredNumeral, InferredBound, InferredScheme, InferredType,
-    Reading, TypeVariable, Types,
-};
+use crate::check::{CheckedProgram, InferredBound, InferredScheme, InferredType, TypeVariable};
 use crate::hir as h;
+use crate::typed as t;
 use crate::{ModuleId, Symbol};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -207,7 +205,7 @@ pub(crate) fn monomorphize_from_entry(
     checked: &CheckedProgram,
     entry: Symbol,
 ) -> Result<Program, SpecializeError> {
-    let specializer = Specializer::new(checked)?;
+    let specializer = Specializer::new(checked);
     let entry = specializer.entry_key(entry, None)?;
     specializer.run(Some(entry), Vec::new())
 }
@@ -227,7 +225,7 @@ pub(crate) fn monomorphize_package(
     host: &crate::host::HostIds,
     main: Option<&crate::host::Main>,
 ) -> Result<Program, SpecializeError> {
-    let specializer = Specializer::new(checked)?;
+    let specializer = Specializer::new(checked);
     let entry = main
         .map(|main| specializer.entry_key(main.symbol, Some(host.host)))
         .transpose()?;
@@ -239,32 +237,13 @@ pub(crate) fn monomorphize_package(
 fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, SpecializeError> {
     let resolved = &checked.resolved;
     let mut roots = Vec::new();
-    let mut seen = HashSet::new();
-    let written = resolved
-        .program
-        .modules
-        .iter()
-        .filter(|module| resolved.package.contains(&module.source))
-        .flat_map(|module| &module.items)
-        .flat_map(|item| match item {
-            h::Item::Clause(clause) => vec![clause],
-            h::Item::Data(data) => data
-                .methods
-                .iter()
-                .filter_map(|method| match method {
-                    h::MethodItem::Clause(clause) => Some(clause),
-                    h::MethodItem::Signature(_) => None,
-                })
-                .collect(),
-            h::Item::Signature(_) => Vec::new(),
-        });
-    for clause in written {
-        if !seen.insert(clause.name) {
+    for function in &resolved.program.functions {
+        if !resolved.package.contains(&function.module)
+            || matches!(function.definition, t::Definition::External(_))
+        {
             continue;
         }
-        let Some(scheme) = checked.types.values.get(&clause.name) else {
-            continue;
-        };
+        let scheme = &function.scheme;
         // A bounded definition is judged where something meets its bounds.
         if !scheme.bounds.is_empty() && !scheme.variables.is_empty() {
             continue;
@@ -286,7 +265,7 @@ fn package_roots(checked: &CheckedProgram) -> Result<Vec<FunctionKey>, Specializ
             continue;
         }
         roots.push(FunctionKey {
-            name: clause.name,
+            name: function.name,
             signature,
             instance: Instance::Written,
         });
@@ -309,25 +288,11 @@ fn holds_function(ty: &Type) -> bool {
 }
 
 struct Specializer<'a> {
-    checked: &'a Types,
     /// The spellings a refusal names.
     symbols: &'a crate::Symbols,
     prelude: &'a PreludeIds,
-    expression_types: HashMap<h::SiteId, &'a InferredType>,
-    clause_types: HashMap<h::SiteId, &'a ClauseSite>,
-    /// Calls through `where` bounds: the owner whose member each is.
-    bound_sites: HashMap<h::SiteId, (&'a InferredType, Symbol)>,
-    /// Numerals of a generic type, elaborated at each specialization.
-    deferred_numerals: HashMap<h::SiteId, &'a DeferredNumeral>,
-    /// Each declared type's methods, by owner and spelling: what a bound's
-    /// member is at a concrete type.
-    members: HashMap<(Symbol, Symbol), Symbol>,
-    literal_sites: HashMap<h::SiteId, &'a LiteralExpr>,
-    method_sites: HashMap<h::SiteId, Symbol>,
-    projection_sites: HashMap<h::SiteId, Symbol>,
-    widening_sites: HashMap<h::SiteId, &'a InferredType>,
-    definitions: HashMap<Symbol, Vec<(ModuleId, &'a h::Clause)>>,
-    signatures: HashMap<Symbol, Symbol>,
+    members: &'a HashMap<(Symbol, Symbol), Symbol>,
+    definitions: HashMap<Symbol, &'a t::Function>,
     data: HashMap<Symbol, h::DataDecl>,
     constructors: HashMap<Symbol, Constructor>,
     requested: HashMap<FunctionKey, usize>,
@@ -339,137 +304,45 @@ struct Specializer<'a> {
 }
 
 impl<'a> Specializer<'a> {
-    fn new(checked: &'a CheckedProgram) -> Result<Self, SpecializeError> {
-        let (resolved, prelude) = (&checked.resolved, &checked.prelude);
-        let checked = &checked.types;
-        let mut definitions: HashMap<_, Vec<_>> = HashMap::new();
-        let mut signatures = HashMap::new();
-        let mut data = HashMap::new();
+    fn new(checked: &'a CheckedProgram) -> Self {
+        let program = &checked.resolved.program;
         let mut constructors = HashMap::new();
-        for module in &resolved.program.modules {
-            for item in &module.items {
-                match item {
-                    h::Item::Data(declaration) => {
-                        data.insert(declaration.name, declaration.clone());
-                        for constructor in &declaration.constructors {
-                            constructors.insert(
-                                constructor.name,
-                                Constructor {
-                                    owner: declaration.name,
-                                    fields: constructor.fields.clone(),
-                                },
-                            );
-                        }
-                        if let Some(wrapper) = &declaration.wrapper {
-                            constructors.insert(
-                                wrapper.constructor,
-                                Constructor {
-                                    owner: declaration.name,
-                                    fields: vec![wrapper.field.clone()],
-                                },
-                            );
-                        }
-                        for method in &declaration.methods {
-                            match method {
-                                h::MethodItem::Signature(signature) => {
-                                    signatures.insert(signature.name, signature.spelling);
-                                }
-                                h::MethodItem::Clause(clause) => definitions
-                                    .entry(clause.name)
-                                    .or_default()
-                                    .push((module.source, clause)),
-                            }
-                        }
-                    }
-                    h::Item::Clause(clause) => definitions
-                        .entry(clause.name)
-                        .or_default()
-                        .push((module.source, clause)),
-                    h::Item::Signature(signature) => {
-                        signatures.insert(signature.name, signature.spelling);
-                    }
-                }
+        for data in program.data.values() {
+            for constructor in &data.constructors {
+                constructors.insert(
+                    constructor.name,
+                    Constructor {
+                        owner: data.name,
+                        fields: constructor.fields.clone(),
+                    },
+                );
+            }
+            if let Some(wrapper) = &data.wrapper {
+                constructors.insert(
+                    wrapper.constructor,
+                    Constructor {
+                        owner: data.name,
+                        fields: vec![wrapper.field.clone()],
+                    },
+                );
             }
         }
-        if checked.expressions.is_empty() && !definitions.is_empty() {
-            return Err(error("checked HIR has no expression type annotations"));
-        }
-        let expression_types = checked
-            .expressions
-            .iter()
-            .map(|site| (site.site, &site.ty))
-            .collect();
-        let clause_types = checked
-            .clauses
-            .iter()
-            .map(|site| (site.site, site))
-            .collect();
-        let bound_sites = checked
-            .bound_sites
-            .iter()
-            .map(|site| (site.site, (&site.owner, site.member)))
-            .collect();
-        let deferred_numerals = checked
-            .deferred_numerals
-            .iter()
-            .map(|numeral| (numeral.site, numeral))
-            .collect();
-        let members = data
-            .values()
-            .flat_map(|declaration: &h::DataDecl| {
-                declaration
-                    .methods
-                    .iter()
-                    .filter_map(move |method| match method {
-                        h::MethodItem::Signature(signature) => {
-                            Some(((declaration.name, signature.spelling), signature.name))
-                        }
-                        h::MethodItem::Clause(_) => None,
-                    })
-            })
-            .collect();
-        let literal_sites = checked
-            .literals
-            .iter()
-            .map(|site| (site.site, &site.value))
-            .collect();
-        let method_sites = checked
-            .methods
-            .iter()
-            .map(|site| (site.site, site.target))
-            .collect();
-        let projection_sites = checked
-            .projections
-            .iter()
-            .map(|site| (site.site, site.field))
-            .collect();
-        let widening_sites = checked
-            .widenings
-            .iter()
-            .map(|site| (site.site, &site.ty))
-            .collect();
-        Ok(Self {
-            checked,
-            symbols: &resolved.symbols,
-            prelude,
-            expression_types,
-            clause_types,
-            bound_sites,
-            deferred_numerals,
-            members,
-            literal_sites,
-            method_sites,
-            projection_sites,
-            widening_sites,
-            definitions,
-            signatures,
-            data,
+        Self {
+            symbols: &checked.resolved.symbols,
+            prelude: &checked.prelude,
+            members: &program.members,
+            definitions: program
+                .functions
+                .iter()
+                .map(|function| (function.name, function))
+                .collect(),
+            data: program.data.clone(),
             constructors,
             requested: HashMap::new(),
             structural: HashMap::new(),
             queue: VecDeque::new(),
             functions: Vec::new(),
-        })
+        }
     }
 
     /// The key `entry` is specialized at, checking it takes what an entry
@@ -480,9 +353,9 @@ impl<'a> Specializer<'a> {
         application_host: Option<Symbol>,
     ) -> Result<FunctionKey, SpecializeError> {
         let scheme = self
-            .checked
-            .values
+            .definitions
             .get(&entry)
+            .map(|function| &function.scheme)
             .ok_or_else(|| error("entry has no inferred type"))?;
         let signature = concrete_scheme(scheme)?.into_signature()?;
         let valid_parameters = match (application_host, signature.parameters.as_slice()) {
@@ -572,26 +445,30 @@ impl<'a> Specializer<'a> {
         if let Some(&at) = self.structural.get(key) {
             return self.structural_function(key, at);
         }
-        let clauses = self.definitions.get(&key.name).cloned().unwrap_or_default();
-        if clauses.is_empty() {
-            let provider = *self
-                .signatures
-                .get(&key.name)
-                .ok_or_else(|| error("reachable function has neither a body nor a signature"))?;
-            return Ok(Function {
-                key: key.clone(),
-                definition: Definition::External(provider),
-            });
-        }
+        let function = *self
+            .definitions
+            .get(&key.name)
+            .ok_or_else(|| error("a called definition is missing"))?;
+        let clauses = match &function.definition {
+            t::Definition::External(provider) => {
+                return Ok(Function {
+                    key: key.clone(),
+                    definition: Definition::External(*provider),
+                });
+            }
+            t::Definition::Body(clauses) => clauses,
+        };
+        let module = function.module;
         let mut specialized = Vec::with_capacity(clauses.len());
-        for (module, clause) in clauses {
-            let site = *self
-                .clause_types
-                .get(&clause.site)
-                .ok_or_else(|| error("checked clause type is missing"))?;
+        for clause in clauses {
             let mut substitution = HashMap::new();
-            match_signature(&site.ty, &key.signature, &mut substitution)?;
-            self.discharge(&site.bounds, &mut substitution)
+            match_parameters(
+                &clause.signature.parameters,
+                &clause.signature.result,
+                &key.signature,
+                &mut substitution,
+            )?;
+            self.discharge(&clause.bounds, &mut substitution)
                 .map_err(|message| located(module, clause.span, &message))?;
             specialized.extend(self.clause(
                 module,
@@ -1007,7 +884,7 @@ impl<'a> Specializer<'a> {
     fn clause(
         &mut self,
         module: ModuleId,
-        clause: &h::Clause,
+        clause: &t::Clause,
         substitution: &HashMap<TypeVariable, Type>,
         parameters: &[Type],
     ) -> Result<Vec<Clause>, SpecializeError> {
@@ -1023,14 +900,14 @@ impl<'a> Specializer<'a> {
                 .iter()
                 .map(|binding| {
                     Ok(Binding {
-                        pattern: convert_pattern(&binding.pattern, &self.checked.readings),
+                        pattern: convert_pattern(&binding.pattern),
                         value: self.expr(module, &binding.value, substitution)?,
                     })
                 })
                 .collect::<Result<_, SpecializeError>>()?,
             result: self.expr(module, &clause.body.result, substitution)?,
         };
-        let mut rows = h::Pattern::rows(&clause.patterns);
+        let mut rows = t::Pattern::rows(&clause.patterns);
         let last = rows.pop().expect("a clause is at least one row");
         let mut clauses = Vec::with_capacity(rows.len() + 1);
         for row in rows {
@@ -1050,8 +927,8 @@ impl<'a> Specializer<'a> {
     fn row(
         &mut self,
         module: ModuleId,
-        clause: &h::Clause,
-        row: &[h::Pattern],
+        clause: &t::Clause,
+        row: &[t::Pattern],
         parameters: &[Type],
         (guard, body): (Option<Expr>, Body),
     ) -> Result<Clause, SpecializeError> {
@@ -1081,13 +958,13 @@ impl<'a> Specializer<'a> {
     fn tested(
         &mut self,
         (module, span): (ModuleId, crate::ast::Span),
-        pattern: &h::Pattern,
+        pattern: &t::Pattern,
         ty: &Type,
         (next, tests): (&mut u32, &mut Vec<Expr>),
     ) -> Result<Pattern, SpecializeError> {
         // A range binds nothing it shows: a fresh name, and each end it has
         // asked of that name, through the type's `cmp`.
-        if let h::Pattern::Range(start, end) = pattern {
+        if let t::Pattern::Range(start, end) = pattern {
             let local = h::LocalId(*next);
             *next = next.checked_add(1).expect("fewer than 2^32 locals");
             let held = Expr {
@@ -1113,13 +990,12 @@ impl<'a> Specializer<'a> {
             }
             return Ok(Pattern::Bind(local));
         }
-        let readings = &self.checked.readings;
         let literal = match pattern {
-            h::Pattern::String(bytes) => Some((
+            t::Pattern::String(bytes) => Some((
                 crate::blessed::string(bytes, self.prelude),
                 self.prelude.str_equals,
             )),
-            h::Pattern::Number {
+            t::Pattern::Number {
                 magnitude,
                 negative,
             } => match ty {
@@ -1164,25 +1040,13 @@ impl<'a> Specializer<'a> {
             });
             return Ok(Pattern::Bind(local));
         }
-        let fields: Option<(Symbol, Vec<(&h::Pattern, Type)>)> = match (pattern, ty) {
-            (h::Pattern::Constructor(constructor, fields), Type::Named(..)) => {
+        let fields: Option<(Symbol, Vec<(&t::Pattern, Type)>)> = match (pattern, ty) {
+            (t::Pattern::Constructor(constructor, fields), Type::Named(..)) => {
                 let types = self.constructor_fields(*constructor, ty)?;
                 Some((*constructor, fields.iter().zip(types).collect()))
             }
-            (h::Pattern::Dual(dual, fields), Type::Named(..)) => {
-                let constructor = read(dual, readings);
-                let types = self.constructor_fields(constructor, ty)?;
-                Some((constructor, fields.iter().zip(types).collect()))
-            }
             (
-                h::Pattern::Tag(label, fields)
-                | h::Pattern::Constructor(label, fields)
-                | h::Pattern::Dual(
-                    h::Dual {
-                        spelling: label, ..
-                    },
-                    fields,
-                ),
+                t::Pattern::Tag(label, fields) | t::Pattern::Constructor(label, fields),
                 Type::Variants(tags),
             ) => {
                 let types = tags
@@ -1202,7 +1066,7 @@ impl<'a> Specializer<'a> {
             return Ok(Pattern::Constructor(constructor, fields));
         }
         Ok(match (pattern, ty) {
-            (h::Pattern::List(elements, rest), Type::Named(_, arguments))
+            (t::Pattern::List(elements, rest), Type::Named(_, arguments))
                 if arguments.len() == 1 =>
             {
                 let element = arguments[0].clone();
@@ -1217,7 +1081,7 @@ impl<'a> Specializer<'a> {
                         .map(Box::new),
                 )
             }
-            (h::Pattern::Record(fields, _), Type::Record(types)) => Pattern::Record(
+            (t::Pattern::Record(fields, _), Type::Record(types)) => Pattern::Record(
                 fields
                     .iter()
                     .map(|(name, field)| {
@@ -1235,14 +1099,14 @@ impl<'a> Specializer<'a> {
                     })
                     .collect::<Result<_, SpecializeError>>()?,
             ),
-            (h::Pattern::Tuple(members), Type::Tuple(types)) => Pattern::Product(
+            (t::Pattern::Tuple(members), Type::Tuple(types)) => Pattern::Product(
                 members
                     .iter()
                     .zip(types)
                     .map(|(member, ty)| self.tested((module, span), member, ty, (next, tests)))
                     .collect::<Result<_, _>>()?,
             ),
-            _ => convert_pattern(pattern, readings),
+            _ => convert_pattern(pattern),
         })
     }
 
@@ -1282,39 +1146,14 @@ impl<'a> Specializer<'a> {
     fn expr(
         &mut self,
         module: ModuleId,
-        expression: &h::Expr,
+        expression: &t::Expr,
         substitution: &HashMap<TypeVariable, Type>,
     ) -> Result<Expr, SpecializeError> {
-        let written = self.written_expr(module, expression, substitution)?;
-        let Some(target) = self.widening_sites.get(&expression.site) else {
-            return Ok(written);
-        };
-        let target = self.site_type(target, substitution)?;
-        if target == written.ty {
-            return Ok(written);
-        }
-        Ok(Expr {
-            module,
-            span: expression.span,
-            ty: target,
-            kind: ExprKind::Widen(Box::new(written)),
-        })
-    }
-
-    fn written_expr(
-        &mut self,
-        module: ModuleId,
-        expression: &h::Expr,
-        substitution: &HashMap<TypeVariable, Type>,
-    ) -> Result<Expr, SpecializeError> {
-        let template = self
-            .expression_types
-            .get(&expression.site)
-            .ok_or_else(|| error("checked expression type is missing"))?;
-        let ty = self.site_type(template, substitution)?;
+        let ty = self.site_type(&expression.ty, substitution)?;
+        let span = expression.span;
         let kind = match &expression.kind {
-            h::ExprKind::Local(local) => ExprKind::Local(*local),
-            h::ExprKind::Global(name) => {
+            t::ExprKind::Local(local) => ExprKind::Local(*local),
+            t::ExprKind::Function(name) => {
                 let key = FunctionKey {
                     name: *name,
                     signature: ty.clone().into_signature()?,
@@ -1323,298 +1162,110 @@ impl<'a> Specializer<'a> {
                 self.request(key.clone());
                 ExprKind::Function(key)
             }
-            // A tag is built as the constructor of its row it names.
-            h::ExprKind::Tag(label) if matches!(ty, Type::Function(_)) => {
-                ExprKind::ConstructorFunction(*label)
-            }
-            h::ExprKind::Tag(label) => ExprKind::Construct(*label, Vec::new()),
-            h::ExprKind::Associated(..) => {
-                return Err(error("a member a bound gives is only ever called"));
-            }
-            h::ExprKind::Dual(dual) => {
-                let read = read(dual, &self.checked.readings);
+            t::ExprKind::Constructor(name) => {
                 if matches!(ty, Type::Function(_)) {
-                    ExprKind::ConstructorFunction(read)
+                    ExprKind::ConstructorFunction(*name)
                 } else {
-                    ExprKind::Construct(read, Vec::new())
+                    ExprKind::Construct(*name, Vec::new())
                 }
             }
-            h::ExprKind::Constructor(constructor) => {
-                if matches!(ty, Type::Function(_)) {
-                    ExprKind::ConstructorFunction(*constructor)
-                } else {
-                    ExprKind::Construct(*constructor, Vec::new())
-                }
-            }
-            h::ExprKind::String(parts)
-                if parts
+            t::ExprKind::Construct(name, fields) => ExprKind::Construct(
+                *name,
+                fields
                     .iter()
-                    .any(|part| matches!(part, h::StringPart::Splice(_))) =>
-            {
-                return self.interpolated(module, expression.span, parts, &ty, substitution);
-            }
-            h::ExprKind::Number(_) | h::ExprKind::Decimal(..) => {
-                return self.numeral(module, expression, &ty);
-            }
-            h::ExprKind::String(_) => {
-                let literal = self.literal_site(expression.site)?;
-                return self.literal(module, expression.span, &literal, &ty);
-            }
-            h::ExprKind::List(elements, rest) => {
-                let Type::Named(list, arguments) = &ty else {
-                    return Err(error("list syntax did not infer as a named type"));
-                };
-                if *list != self.prelude.list || arguments.len() != 1 {
-                    return Err(error("list syntax did not infer as List"));
-                }
-                let mut tail = if let Some(rest) = rest {
-                    self.expr(module, rest, substitution)?
-                } else {
-                    Expr {
-                        module,
-                        span: expression.span,
-                        ty: ty.clone(),
-                        kind: ExprKind::Construct(self.prelude.list_nil, Vec::new()),
-                    }
-                };
-                for element in elements.iter().rev() {
-                    let head = self.expr(module, element, substitution)?;
-                    tail = Expr {
-                        module,
-                        span: expression.span,
-                        ty: ty.clone(),
-                        kind: ExprKind::Construct(self.prelude.list_cons, vec![head, tail]),
-                    };
-                }
-                return Ok(tail);
-            }
-            h::ExprKind::Record(fields) => ExprKind::Record(
+                    .map(|e| self.expr(module, e, substitution))
+                    .collect::<Result<_, _>>()?,
+            ),
+            t::ExprKind::Literal(literal) => return self.literal(module, span, literal, &ty),
+            t::ExprKind::Numeral(numeral) => return self.numeral(module, span, numeral, &ty),
+            t::ExprKind::Record(fields) => ExprKind::Record(
                 fields
                     .iter()
                     .map(|(name, value)| Ok((*name, self.expr(module, value, substitution)?)))
                     .collect::<Result<_, SpecializeError>>()?,
             ),
-            h::ExprKind::Update(base, fields) => ExprKind::Update(
+            t::ExprKind::Update(base, fields) => ExprKind::Update(
                 Box::new(self.expr(module, base, substitution)?),
                 fields
                     .iter()
                     .map(|(name, value)| Ok((*name, self.expr(module, value, substitution)?)))
                     .collect::<Result<_, SpecializeError>>()?,
             ),
-            h::ExprKind::Tuple(members) => ExprKind::Tuple(
+            t::ExprKind::Tuple(members) => ExprKind::Tuple(
                 members
                     .iter()
-                    .map(|member| self.expr(module, member, substitution))
+                    .map(|e| self.expr(module, e, substitution))
                     .collect::<Result<_, _>>()?,
             ),
-            h::ExprKind::Lambda(patterns, body) => ExprKind::Lambda(
+            t::ExprKind::Lambda(patterns, body) => ExprKind::Lambda(
                 expression.site,
-                patterns
-                    .iter()
-                    .map(|pattern| convert_pattern(pattern, &self.checked.readings))
-                    .collect(),
+                patterns.iter().map(convert_pattern).collect(),
                 Box::new(self.expr(module, body, substitution)?),
             ),
-            h::ExprKind::Call(head, arguments) => {
+            t::ExprKind::Call(head, arguments) => {
                 let arguments = arguments
                     .iter()
-                    .map(|argument| self.expr(module, argument, substitution))
-                    .collect::<Result<Vec<_>, _>>()?;
-                match &head.kind {
-                    h::ExprKind::Global(name) => {
-                        let head_ty = self.expression_type(head.site, substitution)?;
-                        let key = FunctionKey {
-                            name: *name,
-                            signature: head_ty.into_signature()?,
-                            instance: Instance::Written,
-                        };
-                        self.request(key.clone());
-                        ExprKind::DirectCall(key, arguments)
+                    .map(|e| self.expr(module, e, substitution))
+                    .collect::<Result<_, _>>()?;
+                let head = self.expr(module, head, substitution)?;
+                match head.kind {
+                    ExprKind::Function(key) => ExprKind::DirectCall(key, arguments),
+                    ExprKind::ConstructorFunction(name) => ExprKind::Construct(name, arguments),
+                    // Nullary constructors may be written with `()`.
+                    ExprKind::Construct(name, fields) if fields.is_empty() => {
+                        ExprKind::Construct(name, arguments)
                     }
-                    h::ExprKind::Constructor(constructor) | h::ExprKind::Tag(constructor) => {
-                        ExprKind::Construct(*constructor, arguments)
-                    }
-                    h::ExprKind::Dual(dual) => {
-                        ExprKind::Construct(read(dual, &self.checked.readings), arguments)
-                    }
-                    // `a.zero()`: the member of whatever `a` is here.
-                    h::ExprKind::Associated(..) => {
-                        let target = self.target(expression.site, substitution)?;
-                        let parameters = arguments.iter().map(|argument| argument.ty.clone());
-                        let key = FunctionKey {
-                            name: target,
-                            signature: Signature {
-                                parameters: parameters.collect(),
-                                result: Box::new(ty.clone()),
-                            },
-                            instance: Instance::Written,
-                        };
-                        self.request(key.clone());
-                        ExprKind::DirectCall(key, arguments)
-                    }
-                    _ => ExprKind::Invoke(
-                        Box::new(self.expr(module, head, substitution)?),
-                        arguments,
-                    ),
+                    _ => ExprKind::Invoke(Box::new(head), arguments),
                 }
             }
-            h::ExprKind::Member(receiver, _) => {
-                let receiver = self.expr(module, receiver, substitution)?;
-                if let Some(field) = self.projection_sites.get(&expression.site) {
-                    ExprKind::Project(Box::new(receiver), *field)
-                } else {
-                    let target = self.target(expression.site, substitution)?;
-                    let key = self.method_key(target, &receiver.ty, &[], &ty)?;
-                    self.request(key.clone());
-                    ExprKind::DirectCall(key, vec![receiver])
-                }
-            }
-            h::ExprKind::Method(receiver, _, arguments) => {
-                let target = self.target(expression.site, substitution)?;
-                let receiver = self.expr(module, receiver, substitution)?;
-                let mut lowered = Vec::with_capacity(arguments.len() + 1);
-                lowered.push(receiver);
-                for argument in arguments {
-                    lowered.push(self.expr(module, argument, substitution)?);
-                }
-                let argument_types: Vec<_> = lowered[1..]
+            t::ExprKind::Method(target, arguments) => {
+                let name = match target {
+                    t::Target::Direct(name) => *name,
+                    t::Target::Bound { owner, member } => {
+                        let owner = self.site_type(owner, substitution)?;
+                        self.implementation(&owner, *member)?
+                    }
+                };
+                let arguments = arguments
                     .iter()
-                    .map(|argument| argument.ty.clone())
-                    .collect();
-                let key = self.method_key(target, &lowered[0].ty, &argument_types, &ty)?;
-                self.request_at(key.clone(), (module, expression.span));
-                ExprKind::DirectCall(key, lowered)
+                    .map(|e| self.expr(module, e, substitution))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let key = if let Some((receiver, rest)) = arguments.split_first() {
+                    let types: Vec<_> = rest.iter().map(|arg| arg.ty.clone()).collect();
+                    self.method_key(name, &receiver.ty, &types, &ty)?
+                } else {
+                    FunctionKey {
+                        name,
+                        signature: Signature {
+                            parameters: Vec::new(),
+                            result: Box::new(ty.clone()),
+                        },
+                        instance: Instance::Written,
+                    }
+                };
+                self.request_at(key.clone(), (module, span));
+                ExprKind::DirectCall(key, arguments)
             }
-            h::ExprKind::Try(value) => {
-                ExprKind::Try(Box::new(self.expr(module, value, substitution)?))
+            t::ExprKind::Project(receiver, field) => {
+                ExprKind::Project(Box::new(self.expr(module, receiver, substitution)?), *field)
             }
-            h::ExprKind::Unary(_, value)
-                if matches!(
-                    value.kind,
-                    h::ExprKind::Number(_) | h::ExprKind::Decimal(..)
-                ) =>
-            {
-                return self.numeral(module, expression, &ty);
-            }
-            h::ExprKind::Unary(_, value) => {
-                let target = self.target(expression.site, substitution)?;
+            t::ExprKind::Widen(value) => {
                 let value = self.expr(module, value, substitution)?;
-                let key = self.method_key(target, &value.ty, &[], &ty)?;
-                self.request(key.clone());
-                ExprKind::DirectCall(key, vec![value])
-            }
-            h::ExprKind::Binary(operator, left, right) => {
-                let target = self.target(expression.site, substitution)?;
-                let left = self.expr(module, left, substitution)?;
-                let right = self.expr(module, right, substitution)?;
-                let ordering = matches!(
-                    operator,
-                    crate::ast::BinaryOp::Less
-                        | crate::ast::BinaryOp::LessEqual
-                        | crate::ast::BinaryOp::Greater
-                        | crate::ast::BinaryOp::GreaterEqual
-                );
-                let answered = if ordering {
-                    Type::Named(self.prelude.order, Vec::new())
-                } else {
-                    ty.clone()
-                };
-                let key =
-                    self.method_key(target, &left.ty, std::slice::from_ref(&right.ty), &answered)?;
-                self.request_at(key.clone(), (module, expression.span));
-                let call = ExprKind::DirectCall(key, vec![left, right]);
-                let view = match operator {
-                    crate::ast::BinaryOp::Less => Some(self.prelude.order_lt),
-                    crate::ast::BinaryOp::LessEqual => Some(self.prelude.order_le),
-                    crate::ast::BinaryOp::Greater => Some(self.prelude.order_gt),
-                    crate::ast::BinaryOp::GreaterEqual => Some(self.prelude.order_ge),
-                    _ => None,
-                };
-                if let Some(view) = view {
-                    // The operator reads its view of what `cmp` answered.
-                    let order = Type::Named(self.prelude.order, Vec::new());
-                    let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
-                    let view = self.method_key(view, &order, &[], &bool_ty)?;
-                    self.request(view.clone());
-                    let compared = Expr {
-                        module,
-                        span: expression.span,
-                        ty: order,
-                        kind: call,
-                    };
-                    ExprKind::DirectCall(view, vec![compared])
-                } else if matches!(operator, crate::ast::BinaryOp::NotEqual) {
-                    let bool_ty = Type::Named(self.prelude.bool_, Vec::new());
-                    let not = self.method_key(self.prelude.bool_not, &bool_ty, &[], &bool_ty)?;
-                    self.request(not.clone());
-                    let argument = Expr {
-                        module,
-                        span: expression.span,
-                        ty: bool_ty,
-                        kind: call,
-                    };
-                    ExprKind::DirectCall(not, vec![argument])
-                } else {
-                    call
+                if value.ty == ty {
+                    return Ok(value);
                 }
+                ExprKind::Widen(Box::new(value))
+            }
+            t::ExprKind::Try(value) => {
+                ExprKind::Try(Box::new(self.expr(module, value, substitution)?))
             }
         };
         Ok(Expr {
             module,
-            span: expression.span,
+            span,
             ty,
             kind,
         })
-    }
-
-    /// `"a${x}b"` as `"a".concat(x.to_str()).concat("b")`, in the order
-    /// written, leaving out empty text.
-    fn interpolated(
-        &mut self,
-        module: ModuleId,
-        span: crate::ast::Span,
-        parts: &[h::StringPart],
-        str_: &Type,
-        substitution: &HashMap<TypeVariable, Type>,
-    ) -> Result<Expr, SpecializeError> {
-        let mut pieces = Vec::with_capacity(parts.len());
-        for part in parts {
-            pieces.push(match part {
-                h::StringPart::Text(bytes) if bytes.is_empty() => continue,
-                h::StringPart::Text(bytes) => {
-                    let literal = crate::blessed::string(bytes, self.prelude);
-                    self.literal(module, span, &literal, str_)?
-                }
-                h::StringPart::Splice(splice) => self.expr(module, splice, substitution)?,
-            });
-        }
-        let concat = self.method_key(
-            self.prelude.str_concat,
-            str_,
-            std::slice::from_ref(str_),
-            str_,
-        )?;
-        self.request(concat.clone());
-        let mut pieces = pieces.into_iter();
-        let first = pieces.next().expect("a string with a splice has a piece");
-        Ok(pieces.fold(first, |joined, piece| Expr {
-            module,
-            span,
-            ty: str_.clone(),
-            kind: ExprKind::DirectCall(concat.clone(), vec![joined, piece]),
-        }))
-    }
-
-    fn expression_type(
-        &self,
-        site: h::SiteId,
-        substitution: &HashMap<TypeVariable, Type>,
-    ) -> Result<Type, SpecializeError> {
-        let ty = self
-            .expression_types
-            .get(&site)
-            .ok_or_else(|| error("checked expression type is missing"))?;
-        self.site_type(ty, substitution)
     }
 
     /// A site's type at this specialization. A type variable nothing pinned
@@ -1637,20 +1288,6 @@ impl<'a> Specializer<'a> {
             defaulted.insert(variable, Type::Named(self.prelude.nat, Vec::new()));
         }
         substitute_type(template, &defaulted)
-    }
-
-    /// The method a call names: where it goes through a `where` bound, the
-    /// member of the concrete type the bound's owner is here.
-    fn target(
-        &self,
-        site: h::SiteId,
-        substitution: &HashMap<TypeVariable, Type>,
-    ) -> Result<Symbol, SpecializeError> {
-        let Some((owner, member)) = self.bound_sites.get(&site).copied() else {
-            return self.method_site(site);
-        };
-        let owner = self.site_type(owner, substitution)?;
-        self.implementation(&owner, member)
     }
 
     /// Which method of `owner` is its `member`.
@@ -1699,9 +1336,9 @@ impl<'a> Specializer<'a> {
                     continue;
                 }
                 let scheme = self
-                    .checked
-                    .values
+                    .definitions
                     .get(&target)
+                    .map(|function| &function.scheme)
                     .ok_or("a bound's implementation has no scheme")?;
                 let InferredType::Function(parameters, result) = &scheme.ty else {
                     continue;
@@ -1742,19 +1379,10 @@ impl<'a> Specializer<'a> {
     fn numeral(
         &mut self,
         module: ModuleId,
-        expression: &h::Expr,
+        span: crate::ast::Span,
+        numeral: &t::Numeral,
         ty: &Type,
     ) -> Result<Expr, SpecializeError> {
-        let span = expression.span;
-        if let Some(literal) = self.literal_sites.get(&expression.site) {
-            let literal = (*literal).clone();
-            return self.literal(module, span, &literal, ty);
-        }
-        let numeral = self
-            .deferred_numerals
-            .get(&expression.site)
-            .copied()
-            .ok_or_else(|| error("elaborated literal is missing"))?;
         if let Some(scale) = numeral.scale {
             let float = match ty {
                 Type::Named(name, arguments) if arguments.is_empty() => {
@@ -1848,13 +1476,6 @@ impl<'a> Specializer<'a> {
         })
     }
 
-    fn method_site(&self, site: h::SiteId) -> Result<Symbol, SpecializeError> {
-        self.method_sites
-            .get(&site)
-            .copied()
-            .ok_or_else(|| error("resolved method target is missing"))
-    }
-
     fn method_key(
         &self,
         name: Symbol,
@@ -1877,9 +1498,9 @@ impl<'a> Specializer<'a> {
             });
         }
         let scheme = self
-            .checked
-            .values
+            .definitions
             .get(&name)
+            .map(|function| &function.scheme)
             .ok_or_else(|| error("method target has no inferred scheme"))?;
         let mut substitution = HashMap::new();
         match_signature(&scheme.ty, &signature, &mut substitution)?;
@@ -1888,13 +1509,6 @@ impl<'a> Specializer<'a> {
             signature,
             instance: Instance::Written,
         })
-    }
-
-    fn literal_site(&self, site: h::SiteId) -> Result<LiteralExpr, SpecializeError> {
-        self.literal_sites
-            .get(&site)
-            .map(|literal| (*literal).clone())
-            .ok_or_else(|| error("elaborated literal is missing"))
     }
 
     fn literal(
@@ -1925,9 +1539,9 @@ impl<'a> Specializer<'a> {
             }
             LiteralExpr::Call(function, arguments) => {
                 let scheme = self
-                    .checked
-                    .values
+                    .definitions
                     .get(function)
+                    .map(|function| &function.scheme)
                     .ok_or_else(|| error("literal helper has no inferred scheme"))?;
                 let signature = scheme_result(scheme, expected)?;
                 if arguments.len() != signature.parameters.len() {
@@ -1990,48 +1604,37 @@ impl<'a> Specializer<'a> {
 
 /// A checked pattern as specialization reads it, each claimed word as the
 /// reading checking gave it.
-fn convert_pattern(pattern: &h::Pattern, readings: &HashMap<h::SiteId, Reading>) -> Pattern {
-    let convert = |pattern| convert_pattern(pattern, readings);
+fn convert_pattern(pattern: &t::Pattern) -> Pattern {
+    let convert = convert_pattern;
     match pattern {
-        h::Pattern::Dual(dual, fields) => {
-            Pattern::Constructor(read(dual, readings), fields.iter().map(convert).collect())
-        }
-        h::Pattern::Wild => Pattern::Wild,
-        h::Pattern::Or(_) => unreachable!("a clause is specialized a row at a time"),
-        h::Pattern::String(_) => Pattern::String,
-        h::Pattern::Bind(local) => Pattern::Bind(*local),
-        h::Pattern::Constructor(constructor, fields) | h::Pattern::Tag(constructor, fields) => {
+        t::Pattern::Dual(..) => unreachable!("typed patterns cannot be ambiguous"),
+        t::Pattern::Wild => Pattern::Wild,
+        t::Pattern::Or(_) => unreachable!("a clause is specialized a row at a time"),
+        t::Pattern::String(_) => Pattern::String,
+        t::Pattern::Bind(local) => Pattern::Bind(*local),
+        t::Pattern::Constructor(constructor, fields) | t::Pattern::Tag(constructor, fields) => {
             Pattern::Constructor(*constructor, fields.iter().map(convert).collect())
         }
-        h::Pattern::Number {
+        t::Pattern::Number {
             magnitude,
             negative,
         } => Pattern::Number {
             magnitude: magnitude.clone(),
             negative: *negative,
         },
-        h::Pattern::Range(..) => Pattern::Range,
-        h::Pattern::List(elements, rest) => Pattern::List(
+        t::Pattern::Range(..) => Pattern::Range,
+        t::Pattern::List(elements, rest) => Pattern::List(
             elements.iter().map(convert).collect(),
             rest.as_deref().map(convert).map(Box::new),
         ),
         // A field an open pattern leaves out is taken whatever it is.
-        h::Pattern::Record(fields, _) => Pattern::Record(
+        t::Pattern::Record(fields, _) => Pattern::Record(
             fields
                 .iter()
                 .map(|(name, pattern)| (*name, convert(pattern)))
                 .collect(),
         ),
-        h::Pattern::Tuple(members) => Pattern::Product(members.iter().map(convert).collect()),
-    }
-}
-
-/// What a claimed word was read as: the constructor or the tag checking
-/// chose for it. Checking reads every word before it answers.
-fn read(dual: &h::Dual, readings: &HashMap<h::SiteId, Reading>) -> Symbol {
-    match readings.get(&dual.site) {
-        Some(Reading::Constructor(symbol) | Reading::Tag(symbol)) => *symbol,
-        None => unreachable!("checking reads every claimed word"),
+        t::Pattern::Tuple(members) => Pattern::Product(members.iter().map(convert).collect()),
     }
 }
 
@@ -2236,6 +1839,15 @@ fn match_signature(
     let InferredType::Function(parameters, result) = template else {
         return Err(error("a checked function has a non-function type"));
     };
+    match_parameters(parameters, result, concrete, substitution)
+}
+
+fn match_parameters(
+    parameters: &[InferredType],
+    result: &InferredType,
+    concrete: &Signature,
+    substitution: &mut HashMap<TypeVariable, Type>,
+) -> Result<(), SpecializeError> {
     if parameters.len() != concrete.parameters.len() {
         return Err(error("a concrete use does not match its inferred scheme"));
     }

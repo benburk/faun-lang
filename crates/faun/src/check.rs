@@ -33,31 +33,6 @@ use super::hir as h;
 use super::resolve::ResolvedProgram;
 use super::{ModuleId, Symbol, Symbols};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LiteralSite {
-    pub site: h::SiteId,
-    pub module: ModuleId,
-    pub span: super::ast::Span,
-    pub ty: Symbol,
-    pub value: LiteralExpr,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MethodSite {
-    pub site: h::SiteId,
-    pub module: ModuleId,
-    pub span: super::ast::Span,
-    pub target: Symbol,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProjectionSite {
-    pub site: h::SiteId,
-    pub module: ModuleId,
-    pub span: super::ast::Span,
-    pub field: Symbol,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TypeVariable {
     index: u32,
@@ -98,61 +73,17 @@ pub struct InferredBound {
     pub associated: bool,
 }
 
-/// A call through a bound: the concrete type `owner` stands for at a
-/// specialization says whose `member` it is.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BoundSite {
-    pub site: h::SiteId,
-    pub module: ModuleId,
-    pub span: super::ast::Span,
-    pub owner: InferredType,
-    pub member: Symbol,
-}
-
-/// A numeral whose type a definition leaves generic, built through its
-/// type's `of_nat`, or for a decimal its `of_decimal`, at each
-/// specialization.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DeferredNumeral {
-    pub site: h::SiteId,
-    pub module: ModuleId,
-    pub span: super::ast::Span,
-    pub magnitude: num_bigint::BigUint,
-    pub negative: bool,
-    /// For a decimal, the power of ten `magnitude` is over.
-    pub scale: Option<u32>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExpressionSite {
-    pub site: h::SiteId,
-    pub module: ModuleId,
-    pub span: super::ast::Span,
-    pub ty: InferredType,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClauseSite {
-    pub site: h::SiteId,
-    pub module: ModuleId,
-    pub span: super::ast::Span,
-    pub ty: InferredType,
-    /// The bounds of the definition, over this clause's type variables.
-    pub bounds: Vec<InferredBound>,
-}
-
-/// A resolved program with what checking learned about it.
+/// Typed HIR and its source owners; inference's temporary tables are gone.
 #[derive(Clone, Debug)]
 pub struct CheckedProgram {
-    pub resolved: ResolvedProgram,
+    pub resolved: ResolvedProgram<crate::typed::Program>,
     /// The standard identities its literals and patterns were checked against.
     pub prelude: PreludeIds,
-    pub types: Types,
 }
 
 /// Which reading a word some declaration claims took, by its site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Reading {
+enum Reading {
     /// The declared constructor its position demanded, or its one declared
     /// reading, where nothing decided.
     Constructor(Symbol),
@@ -160,29 +91,23 @@ pub enum Reading {
     Tag(Symbol),
 }
 
-/// The types checking inferred for a program's HIR, by site.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Types {
-    /// Principal schemes for signed and inferred global values.
-    pub values: HashMap<Symbol, InferredScheme>,
-    /// Instantiated types for every expression occurrence.
-    pub expressions: Vec<ExpressionSite>,
-    /// The function type used while checking each clause.
-    pub clauses: Vec<ClauseSite>,
-    pub literals: Vec<LiteralSite>,
-    pub methods: Vec<MethodSite>,
-    pub projections: Vec<ProjectionSite>,
-    /// Expressions whose value a signed definition answers with, and the
-    /// wider type it is answered as: a closed tag row standing where the
-    /// signature's row is one a caller may widen.
-    pub widenings: Vec<ExpressionSite>,
-    /// Which reading each word a declaration claims took.
-    pub readings: HashMap<h::SiteId, Reading>,
-    /// Calls through `where` bounds.
-    pub bound_sites: Vec<BoundSite>,
-    /// Numerals of a generic type.
-    pub deferred_numerals: Vec<DeferredNumeral>,
+// Inference's temporary facts. Finishing checking consumes these into typed HIR;
+// no downstream pass joins syntax to side tables.
+#[derive(Default)]
+struct Facts {
+    values: HashMap<Symbol, InferredScheme>,
+    expressions: HashMap<h::SiteId, InferredType>,
+    clauses: HashMap<h::SiteId, (crate::typed::Signature, Vec<InferredBound>)>,
+    literals: HashMap<h::SiteId, LiteralExpr>,
+    methods: HashMap<h::SiteId, Symbol>,
+    projections: HashMap<h::SiteId, Symbol>,
+    widenings: HashMap<h::SiteId, InferredType>,
+    readings: HashMap<h::SiteId, Reading>,
+    bound_sites: HashMap<h::SiteId, (InferredType, Symbol)>,
+    deferred_numerals: HashMap<h::SiteId, crate::typed::Numeral>,
 }
+
+mod elaborate;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckError {
@@ -204,8 +129,8 @@ impl std::error::Error for CheckError {}
 ///
 /// Type variables in signatures are universally quantified at each use.
 /// Unsigned recursive groups are inferred monomorphically and generalized only
-/// after the group closes. Record expression facts by HIR site ID; a span may
-/// locate several generated expressions. `where` bounds remain explicit until
+/// after the group closes. Consume resolved syntax into typed HIR, with each
+/// elaboration decision on its expression. `where` calls remain explicit until
 /// specialization selects their concrete implementations.
 ///
 /// # Errors
@@ -216,20 +141,16 @@ pub fn type_check(
     resolved: ResolvedProgram,
     prelude: PreludeIds,
 ) -> Result<CheckedProgram, Diagnostic> {
-    let types = validate_effects(&resolved.program, &resolved.symbols).and_then(|()| {
-        let types = Checker::new(&resolved.program, &resolved.symbols, &prelude)?
-            .check(&resolved.program)?;
-        crate::exhaustive::exhaustive(&resolved.program, &resolved.symbols, &prelude, &types)?;
-        Ok(types)
-    });
-    match types {
-        Ok(types) => Ok(CheckedProgram {
-            resolved,
-            prelude,
-            types,
-        }),
-        Err(error) => Err(resolved.diagnostic(error.module, error.span, error.message)),
-    }
+    let facts = validate_effects(&resolved.program, &resolved.symbols)
+        .and_then(|()| {
+            Checker::new(&resolved.program, &resolved.symbols, &prelude)?.check(&resolved.program)
+        })
+        .map_err(|error| resolved.diagnostic(error.module, error.span, error.message))?;
+    let resolved =
+        resolved.map(|program, sites| elaborate::finish(program, facts, &prelude, sites));
+    crate::exhaustive::exhaustive(&resolved.program, &resolved.symbols, &prelude)
+        .map_err(|error| resolved.diagnostic(error.module, error.span, error.message))?;
+    Ok(CheckedProgram { resolved, prelude })
 }
 
 /// Validate the selected host ABI and the application's `main!` signature.
@@ -248,26 +169,16 @@ pub fn check_application_abi(
     let module = main.module;
     let span = resolved
         .program
-        .modules
+        .functions
         .iter()
-        .flat_map(|module| &module.items)
-        .find_map(|item| match item {
-            h::Item::Signature(signature) if signature.name == main.symbol => Some(signature.span),
-            h::Item::Clause(clause) if clause.name == main.symbol => Some(clause.span),
-            _ => None,
-        })
-        .unwrap_or_default();
-    // `Host` wraps the record of startup values its target produces. Which
-    // fields a target can produce is the target's to say, when lowering.
+        .find(|function| function.name == main.symbol)
+        .map_or_else(super::ast::Span::default, |function| function.span);
+    // `Host` wraps the record of startup values its target produces.
     let carries = resolved
         .program
-        .modules
-        .iter()
-        .flat_map(|module| &module.items)
-        .find_map(|item| match item {
-            h::Item::Data(data) if data.name == host.host => data.wrapper.as_ref(),
-            _ => None,
-        });
+        .data
+        .get(&host.host)
+        .and_then(|data| data.wrapper.as_ref());
     if !carries.is_some_and(|wrapper| matches!(wrapper.field, h::Type::Record(..))) {
         return Err(failure(
             module,
@@ -297,14 +208,19 @@ pub fn check_application_abi(
             "exit! : (Host, Nat) -> []",
         ),
     ] {
-        let Some(scheme) = checked.types.values.get(&name) else {
+        let Some(function) = resolved
+            .program
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+        else {
             return Err(failure(
                 module,
                 span,
                 &format!("the application ABI requires `{written}`"),
             ));
         };
-        if !scheme.variables.is_empty() || scheme.ty != expected {
+        if !function.scheme.variables.is_empty() || function.scheme.ty != expected {
             return Err(failure(
                 module,
                 span,
@@ -1060,7 +976,6 @@ struct Checker<'a> {
     current: Vec<Bound>,
     current_names: HashMap<Symbol, Ty>,
     bound_sites: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty, Symbol)>,
-    deferred_numerals: Vec<DeferredNumeral>,
     /// What the clause or lambda being checked answers, innermost last,
     /// which is what a `?` in it answers early with. A guard answers
     /// nothing.
@@ -1068,7 +983,7 @@ struct Checker<'a> {
     expression_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
     clause_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty, Vec<Bound>)>,
     widenings: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
-    checked: Types,
+    checked: Facts,
 }
 
 impl<'a> Checker<'a> {
@@ -1106,11 +1021,10 @@ impl<'a> Checker<'a> {
             current: Vec::new(),
             current_names: HashMap::new(),
             bound_sites: Vec::new(),
-            deferred_numerals: Vec::new(),
             expression_types: Vec::new(),
             clause_types: Vec::new(),
             widenings: Vec::new(),
-            checked: Types::default(),
+            checked: Facts::default(),
         };
         for module in &program.modules {
             for item in &module.items {
@@ -1573,7 +1487,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn check(mut self, program: &h::Program) -> Result<Types, CheckError> {
+    fn check(mut self, program: &h::Program) -> Result<Facts, CheckError> {
         let definitions = definitions(program);
         let unsigned: HashSet<_> = definitions
             .keys()
@@ -1754,49 +1668,44 @@ impl<'a> Checker<'a> {
         self.checked.expressions = self
             .expression_types
             .iter()
-            .map(|(module, span, site, ty)| ExpressionSite {
-                site: *site,
-                module: *module,
-                span: *span,
-                ty: public_type(&self.infer.resolve(ty)),
-            })
+            .map(|(_, _, site, ty)| (*site, public_type(&self.infer.resolve(ty))))
             .collect();
         self.checked.widenings = self
             .widenings
             .iter()
-            .map(|(module, span, site, ty)| ExpressionSite {
-                site: *site,
-                module: *module,
-                span: *span,
-                ty: public_type(&self.infer.resolve(ty)),
-            })
+            .map(|(_, _, site, ty)| (*site, public_type(&self.infer.resolve(ty))))
             .collect();
         self.checked.clauses = self
             .clause_types
             .iter()
-            .map(|(module, span, site, ty, bounds)| ClauseSite {
-                site: *site,
-                module: *module,
-                span: *span,
-                ty: public_type(&self.infer.resolve(ty)),
-                bounds: bounds
-                    .iter()
-                    .map(|bound| self.public_bound(bound))
-                    .collect(),
+            .map(|(_, _, site, ty, bounds)| {
+                let InferredType::Function(parameters, result) =
+                    public_type(&self.infer.resolve(ty))
+                else {
+                    unreachable!("a checked clause has a function type")
+                };
+                (
+                    *site,
+                    (
+                        crate::typed::Signature {
+                            parameters,
+                            result: *result,
+                        },
+                        bounds
+                            .iter()
+                            .map(|bound| self.public_bound(bound))
+                            .collect(),
+                    ),
+                )
             })
             .collect();
         self.checked.bound_sites = self
             .bound_sites
             .iter()
-            .map(|(module, span, site, owner, member)| BoundSite {
-                site: *site,
-                module: *module,
-                span: *span,
-                owner: public_type(&self.infer.resolve(owner)),
-                member: *member,
+            .map(|(_, _, site, owner, member)| {
+                (*site, (public_type(&self.infer.resolve(owner)), *member))
             })
             .collect();
-        self.checked.deferred_numerals = std::mem::take(&mut self.deferred_numerals);
         Ok(self.checked)
     }
 
@@ -2243,13 +2152,9 @@ impl<'a> Checker<'a> {
                         })
                         .copied()
                         .collect::<Vec<_>>();
-                    self.checked.literals.push(LiteralSite {
-                        site: expression.site,
-                        module,
-                        span: expression.span,
-                        ty: self.prelude.str_,
-                        value: blessed::string(&bytes, self.prelude),
-                    });
+                    self.checked
+                        .literals
+                        .insert(expression.site, blessed::string(&bytes, self.prelude));
                 }
                 Ok(Ty::Named(self.prelude.str_, Vec::new()))
             }
@@ -3000,18 +2905,10 @@ impl<'a> Checker<'a> {
         match (numeral.scale, float) {
             (Some(scale), Some(float)) => {
                 if let Some(site) = numeral.site {
-                    self.checked.literals.push(LiteralSite {
+                    self.checked.literals.insert(
                         site,
-                        module: numeral.module,
-                        span: numeral.span,
-                        ty: float.ty,
-                        value: blessed::decimal(
-                            numeral.magnitude.clone(),
-                            scale,
-                            numeral.negative,
-                            float,
-                        ),
-                    });
+                        blessed::decimal(numeral.magnitude.clone(), scale, numeral.negative, float),
+                    );
                 }
                 return Ok(());
             }
@@ -3037,12 +2934,12 @@ impl<'a> Checker<'a> {
             }
             (None, None) => {}
         }
-        let (kind, symbol) = match ty {
+        let kind = match ty {
             Ty::Named(name, ref arguments) if name == self.prelude.nat && arguments.is_empty() => {
-                (NumeralType::Nat, self.prelude.nat)
+                NumeralType::Nat
             }
             Ty::Named(name, ref arguments) if name == self.prelude.int && arguments.is_empty() => {
-                (NumeralType::Int, self.prelude.int)
+                NumeralType::Int
             }
             Ty::Named(name, ref arguments)
                 if arguments.is_empty()
@@ -3054,7 +2951,7 @@ impl<'a> Checker<'a> {
                     .iter()
                     .find(|word| word.ty == name)
                     .expect("guarded");
-                (NumeralType::Word(word), name)
+                NumeralType::Word(word)
             }
             // Only the prelude's integers are numerals, and no conversion
             // is inserted to make one fit anything else.
@@ -3077,13 +2974,7 @@ impl<'a> Checker<'a> {
         )
         .map_err(|error| failure(numeral.module, numeral.span, error.to_string()))?;
         if let Some(site) = numeral.site {
-            self.checked.literals.push(LiteralSite {
-                site,
-                module: numeral.module,
-                span: numeral.span,
-                ty: symbol,
-                value,
-            });
+            self.checked.literals.insert(site, value);
         }
         Ok(())
     }
@@ -3240,14 +3131,14 @@ impl<'a> Checker<'a> {
             });
         }
         if let Some(site) = numeral.site {
-            self.deferred_numerals.push(DeferredNumeral {
+            self.checked.deferred_numerals.insert(
                 site,
-                module: numeral.module,
-                span: numeral.span,
-                magnitude: numeral.magnitude.clone(),
-                negative: numeral.negative,
-                scale: numeral.scale,
-            });
+                crate::typed::Numeral {
+                    magnitude: numeral.magnitude.clone(),
+                    negative: numeral.negative,
+                    scale: numeral.scale,
+                },
+            );
         }
         Ok(())
     }
@@ -3817,12 +3708,7 @@ impl<'a> Checker<'a> {
             });
         }
         if let Some(site) = pending.site {
-            self.checked.methods.push(MethodSite {
-                site,
-                module: pending.module,
-                span: pending.span,
-                target: pending.name,
-            });
+            self.checked.methods.insert(site, pending.name);
         }
         Ok(Some(true))
     }
@@ -3884,12 +3770,10 @@ impl<'a> Checker<'a> {
     fn apply_field(&mut self, pending: &PendingMethod, scheme: &Scheme) -> Result<(), CheckError> {
         apply_signature(&mut self.infer, pending, scheme, self.symbols)
             .map_err(|message| failure(pending.module, pending.span, message))?;
-        self.checked.projections.push(ProjectionSite {
-            site: pending.site.expect("a field is a written member"),
-            module: pending.module,
-            span: pending.span,
-            field: pending.name,
-        });
+        self.checked.projections.insert(
+            pending.site.expect("a field is a written member"),
+            pending.name,
+        );
         Ok(())
     }
 
@@ -3920,12 +3804,7 @@ impl<'a> Checker<'a> {
             }
         } else {
             if let Some(site) = pending.site {
-                self.checked.methods.push(MethodSite {
-                    site,
-                    module: pending.module,
-                    span: pending.span,
-                    target: implementation.target,
-                });
+                self.checked.methods.insert(site, implementation.target);
             }
             self.oblige(
                 pending.module,
@@ -4728,6 +4607,60 @@ mod tests {
         }
     }
 
+    fn expressions(checked: &CheckedProgram) -> Vec<&crate::typed::Expr> {
+        use crate::typed::{Definition, ExprKind};
+        let mut waiting = Vec::new();
+        for function in &checked.resolved.program.functions {
+            if let Definition::Body(clauses) = &function.definition {
+                for clause in clauses {
+                    waiting.extend(clause.guard.iter());
+                    waiting.extend(clause.body.bindings.iter().map(|b| &b.value));
+                    waiting.push(&clause.body.result);
+                }
+            }
+        }
+        let mut expressions = Vec::new();
+        while let Some(expr) = waiting.pop() {
+            expressions.push(expr);
+            match &expr.kind {
+                ExprKind::Construct(_, fields)
+                | ExprKind::Tuple(fields)
+                | ExprKind::Method(_, fields) => waiting.extend(fields),
+                ExprKind::Record(fields) => waiting.extend(fields.iter().map(|(_, e)| e)),
+                ExprKind::Update(base, fields) => {
+                    waiting.push(base);
+                    waiting.extend(fields.iter().map(|(_, e)| e));
+                }
+                ExprKind::Call(head, args) => {
+                    waiting.push(head);
+                    waiting.extend(args);
+                }
+                ExprKind::Lambda(_, value)
+                | ExprKind::Project(value, _)
+                | ExprKind::Widen(value)
+                | ExprKind::Try(value) => waiting.push(value),
+                ExprKind::Local(_)
+                | ExprKind::Function(_)
+                | ExprKind::Constructor(_)
+                | ExprKind::Literal(_)
+                | ExprKind::Numeral(_) => {}
+            }
+        }
+        expressions
+    }
+
+    fn methods(checked: &CheckedProgram) -> Vec<Symbol> {
+        expressions(checked)
+            .into_iter()
+            .filter_map(|expr| match expr.kind {
+                crate::typed::ExprKind::Method(crate::typed::Target::Direct(target), _) => {
+                    Some(target)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn context_selects_nat_int_and_str_elaboration() {
         let fixture = Fixture::new();
@@ -4735,17 +4668,57 @@ mod tests {
             "natural : Nat\nnatural() -> 42\ninteger : Int\ninteger() -> -42\ntext : Str\ntext() -> \"é\"\n",
         );
         let checked = type_check(resolved, prelude.clone()).unwrap();
-        let entry = checked.resolved.program.modules.last().unwrap().source;
-        let entry_sites: Vec<_> = checked
-            .types
-            .literals
+        let entry = *checked.resolved.package.last().unwrap();
+        let expressions: Vec<_> = checked
+            .resolved
+            .program
+            .functions
             .iter()
-            .filter(|site| site.module == entry)
+            .filter(|function| function.module == entry)
+            .flat_map(|function| match &function.definition {
+                crate::typed::Definition::Body(clauses) => clauses.as_slice(),
+                crate::typed::Definition::External(_) => &[],
+            })
+            .map(|clause| &clause.body.result)
             .collect();
-        assert_eq!(entry_sites.len(), 3);
-        assert!(entry_sites.iter().any(|site| site.ty == prelude.str_));
-        assert!(entry_sites.iter().any(|site| site.ty == prelude.nat));
-        assert!(entry_sites.iter().any(|site| site.ty == prelude.int));
+        assert_eq!(expressions.len(), 3);
+        for ty in [prelude.str_, prelude.nat, prelude.int] {
+            assert!(
+                expressions
+                    .iter()
+                    .any(|expr| expr.ty == InferredType::Named(ty, Vec::new())
+                        && matches!(expr.kind, crate::typed::ExprKind::Literal(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn typed_hir_carries_projections_widenings_and_generic_operations() {
+        use crate::typed::{ExprKind, Target};
+        let fixture = Fixture::new();
+        let (prelude, resolved) = fixture.load(
+            "field : {value: Nat} -> Nat\nfield(record) -> record.value\n\
+             wide : [A] -> [A, B]\nwide(x) -> x\n\
+             Flip : [Off, On].(not : Flip -> Flip\nnot(Off) -> On\nnot(On) -> Off)\n\
+             flip(x) -> x.not()\n",
+        );
+        let checked = type_check(resolved, prelude).unwrap();
+        let expressions = expressions(&checked);
+        assert!(
+            expressions
+                .iter()
+                .any(|expr| matches!(expr.kind, ExprKind::Project(..)))
+        );
+        assert!(
+            expressions
+                .iter()
+                .any(|expr| matches!(expr.kind, ExprKind::Widen(_)))
+        );
+        assert!(
+            expressions
+                .iter()
+                .any(|expr| matches!(expr.kind, ExprKind::Method(Target::Bound { .. }, _)))
+        );
     }
 
     #[test]
@@ -4778,7 +4751,14 @@ mod tests {
             })
             .unwrap();
         let checked = type_check(resolved, prelude).unwrap();
-        let scheme = &checked.types.values[&id];
+        let scheme = &checked
+            .resolved
+            .program
+            .functions
+            .iter()
+            .find(|function| function.name == id)
+            .unwrap()
+            .scheme;
         assert_eq!(scheme.variables.len(), 1);
         let InferredType::Function(parameters, result) = &scheme.ty else {
             panic!("id function type")
@@ -4825,12 +4805,7 @@ mod tests {
             "increment : Nat -> Nat\nincrement(n) -> n.add(1)\ntruth : Bool -> Bool\ntruth(b) -> b.not()\n",
         );
         let checked = type_check(resolved, prelude.clone()).unwrap();
-        let targets: Vec<_> = checked
-            .types
-            .methods
-            .iter()
-            .map(|site| site.target)
-            .collect();
+        let targets = methods(&checked);
         assert!(targets.contains(&prelude.bool_not));
         assert!(
             targets.iter().any(|target| checked
@@ -4852,13 +4827,13 @@ mod tests {
         );
         let checked = type_check(resolved, prelude).unwrap();
         let resolved = &checked.resolved;
-        let scheme = checked
-            .types
-            .values
+        let scheme = &resolved
+            .program
+            .functions
             .iter()
-            .find(|(name, _)| resolved.symbols.text(**name).ends_with("$$flip"))
-            .map(|(_, scheme)| scheme)
-            .unwrap();
+            .find(|function| resolved.symbols.text(function.name).ends_with("$$flip"))
+            .unwrap()
+            .scheme;
         assert_eq!(scheme.bounds.len(), 1);
         assert_eq!(resolved.symbols.text(scheme.bounds[0].member), "not");
     }
@@ -4872,13 +4847,7 @@ mod tests {
         );
         let (prelude, resolved) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
         let checked = type_check(resolved, prelude.clone()).unwrap();
-        assert!(
-            checked
-                .types
-                .methods
-                .iter()
-                .any(|site| site.target == prelude.bool_not)
-        );
+        assert!(methods(&checked).contains(&prelude.bool_not));
     }
 
     #[test]
@@ -4889,7 +4858,7 @@ mod tests {
         let prelude = PreludeIds::find_in(&loaded).unwrap();
         let resolved = resolve::resolve_names(loaded).unwrap();
         let checked = type_check(resolved, prelude).unwrap();
-        assert!(!checked.types.methods.is_empty());
+        assert!(!methods(&checked).is_empty());
     }
 
     #[test]
@@ -4909,11 +4878,9 @@ mod tests {
         let prelude = PreludeIds::find_in(&loaded).unwrap();
         let resolved = resolve::resolve_names(loaded).unwrap();
         let checked = type_check(resolved, prelude).unwrap();
-        let methods: HashSet<_> = checked
-            .types
-            .methods
-            .iter()
-            .map(|site| checked.resolved.symbols.text(site.target))
+        let methods: HashSet<_> = methods(&checked)
+            .into_iter()
+            .map(|target| checked.resolved.symbols.text(target))
             .collect();
         for ty in ["Nat", "Int", "U8"] {
             for operation in ["add", "sub", "mul", "div", "mod"] {

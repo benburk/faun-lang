@@ -173,7 +173,7 @@ pub struct Bound {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Pattern {
+pub enum Pattern<D = Dual> {
     Wild,
     Bind(LocalId),
     Constructor(Symbol, Vec<Self>),
@@ -182,7 +182,7 @@ pub enum Pattern {
     Tag(Symbol, Vec<Self>),
     /// A word a declaration claims, whose reading the scrutinee's type
     /// decides.
-    Dual(Dual, Vec<Self>),
+    Dual(D, Vec<Self>),
     Number {
         magnitude: BigUint,
         negative: bool,
@@ -200,7 +200,7 @@ pub enum Pattern {
     Or(Vec<Self>),
 }
 
-impl Pattern {
+impl<D: Clone> Pattern<D> {
     /// The rows `patterns` stand for: one for each way of choosing an
     /// alternative of every `|` in them, in the order written. Without one,
     /// that is `patterns` alone.
@@ -272,8 +272,8 @@ impl Pattern {
 
 /// [`Pattern::choices`] of a list pattern: its elements' rows, each with each
 /// choice of its rest.
-fn list_choices(elements: &[Pattern], rest: Option<&Pattern>) -> Vec<Pattern> {
-    let rests: Vec<Option<Pattern>> = rest.map_or_else(
+fn list_choices<D: Clone>(elements: &[Pattern<D>], rest: Option<&Pattern<D>>) -> Vec<Pattern<D>> {
+    let rests: Vec<Option<Pattern<D>>> = rest.map_or_else(
         || vec![None],
         |rest| rest.choices().into_iter().map(Some).collect(),
     );
@@ -289,7 +289,7 @@ fn list_choices(elements: &[Pattern], rest: Option<&Pattern>) -> Vec<Pattern> {
 
 /// Every row taking one choice from each column, the first column varying
 /// slowest.
-fn product(columns: Vec<Vec<Pattern>>) -> Vec<Vec<Pattern>> {
+fn product<D: Clone>(columns: Vec<Vec<Pattern<D>>>) -> Vec<Vec<Pattern<D>>> {
     columns.into_iter().fold(vec![Vec::new()], |rows, column| {
         rows.iter()
             .flat_map(|row| {

@@ -12,7 +12,8 @@
 //! source spans. Module loading and qualification then produce symbol-based
 //! HIR without merging raw ASTs. Checking performs Hindley–Milner inference,
 //! nominal receiver-directed method resolution, and contextual literal
-//! elaboration, recording facts by HIR site ID rather than source span.
+//! elaboration, producing typed HIR with explicit calls, projections and
+//! widenings instead of syntax accompanied by inference tables.
 //! Monomorphization produces concrete functions with explicit function values.
 //! Second-class checking rejects stored or returned functions; callback lowering
 //! then emits first-order IR directly, making a definition for each set of
@@ -51,6 +52,7 @@ mod second_class;
 pub mod source;
 mod specialize;
 pub mod symbol;
+pub mod typed;
 
 pub use diagnostic::Diagnostic;
 pub use modules::ModuleId;

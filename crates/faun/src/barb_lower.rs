@@ -14,7 +14,6 @@ use crate::blessed::PreludeIds;
 use crate::check::CheckedProgram;
 use crate::diagnostic::Diagnostic;
 use crate::first_order::{self as d, Expr, ExprKind};
-use crate::hir as h;
 use crate::hir::LocalId;
 use crate::resolve::ResolvedProgram;
 use crate::specialize::{self, FunctionKey, Pattern, Type};
@@ -161,7 +160,7 @@ struct DecisionArm {
 const PEELED_NUMERALS: u8 = 8;
 
 struct Lowerer<'a> {
-    resolved: &'a ResolvedProgram,
+    resolved: &'a ResolvedProgram<crate::typed::Program>,
     prelude: &'a PreludeIds,
     /// The target's routines, present when lowering an application.
     routines: Option<&'a faun_core::platform::Routines>,
@@ -252,20 +251,12 @@ impl<'a> Lowerer<'a> {
 
     /// Where the first clause defining `name` is written.
     fn definition_site(&self, name: Symbol) -> Option<(ModuleId, crate::ast::Span)> {
-        self.resolved.program.modules.iter().find_map(|module| {
-            module.items.iter().find_map(|item| match item {
-                h::Item::Clause(clause) if clause.name == name => {
-                    Some((module.source, clause.span))
-                }
-                h::Item::Data(data) => data.methods.iter().find_map(|method| match method {
-                    h::MethodItem::Clause(clause) if clause.name == name => {
-                        Some((module.source, clause.span))
-                    }
-                    _ => None,
-                }),
-                _ => None,
-            })
-        })
+        self.resolved
+            .program
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .map(|function| (function.module, function.span))
     }
 
     /// Find every type the program holds, each of which Barb declares.
@@ -1828,10 +1819,11 @@ mod tests {
     /// library's.
     fn named(checked: &CheckedProgram, suffix: &str) -> Symbol {
         checked
-            .types
-            .values
-            .keys()
-            .copied()
+            .resolved
+            .program
+            .functions
+            .iter()
+            .map(|function| function.name)
             .find(|symbol| {
                 let text = checked.resolved.symbols.text(*symbol);
                 text.ends_with(suffix) && !text.starts_with("Mstd_")

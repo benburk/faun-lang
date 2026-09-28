@@ -15,11 +15,11 @@ use super::modules::{Interface, LoadedModule, LoadedProgram, ModuleId, TypeBindi
 use super::{Source, SourceId, Sources, Symbol, Symbols};
 
 #[derive(Clone, Debug)]
-pub struct ResolvedProgram {
+pub struct ResolvedProgram<P = h::Program> {
     pub(crate) sites: h::Sites,
     pub sources: Sources,
     pub symbols: Symbols,
-    pub program: h::Program,
+    pub program: P,
     /// The entry's package, whose every definition is compiled, rather than
     /// only what reaches into it.
     pub package: Vec<ModuleId>,
@@ -27,7 +27,19 @@ pub struct ResolvedProgram {
     module_sources: Vec<SourceId>,
 }
 
-impl ResolvedProgram {
+impl<P> ResolvedProgram<P> {
+    /// Replace the representation while retaining its source and symbol owners.
+    pub(crate) fn map<Q>(mut self, pass: impl FnOnce(P, &mut h::Sites) -> Q) -> ResolvedProgram<Q> {
+        ResolvedProgram {
+            program: pass(self.program, &mut self.sites),
+            sites: self.sites,
+            sources: self.sources,
+            symbols: self.symbols,
+            package: self.package,
+            module_sources: self.module_sources,
+        }
+    }
+
     /// A diagnostic at `span` in `module`.
     ///
     /// # Panics
