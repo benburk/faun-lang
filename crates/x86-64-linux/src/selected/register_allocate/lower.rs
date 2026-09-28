@@ -12,6 +12,7 @@ use crate::parallel_copy::{self, Copy as ParallelCopy, CopySource, Move as CopyM
 use crate::selected::{
     BlockId, Immediate, InstId, Opcode, Requirements, Selected, Terminator, VReg,
 };
+use faun_core::codegen::registers::SpillSlot;
 use faun_core::ir::{DataId, FunctionId, Offset, Width};
 
 const SYS_READ: u64 = 0;
@@ -162,11 +163,13 @@ impl<'a> Lowering<'a> {
                 }
                 self.keep_for_caller(function.source, true);
             }
+            self.emit_stores(layout.entry);
             for points in &layout.instructions {
                 self.emit_instruction_setup(points)?;
                 self.emit_late_transitions(points, true)?;
                 self.emit_instruction(points)?;
                 self.emit_late_transitions(points, false)?;
+                self.emit_stores(points.late);
             }
             self.emit_transitions(layout.terminator)?;
             self.emit_terminator(layout, block.terminator, next, entry)?;
@@ -394,10 +397,27 @@ impl<'a> Lowering<'a> {
         (self.spill_slots(owner) > 0).then(|| Place::Frame(FrameSlot::at(0)))
     }
 
+    /// Write each value made at `point` that ever waits in memory there.
+    fn emit_stores(&mut self, point: Point) {
+        let stores: Vec<_> = self.allocation.stores_at(point).collect();
+        for (reg, SpillSlot(slot)) in stores {
+            self.asm.store_slot(reg, FrameSlot::at(slot));
+        }
+    }
+
     fn emit_moves(&mut self, moves: &[CopyMove]) {
+        self.emit_moves_keeping(moves, &[]);
+    }
+
+    /// The moves, but for those into memory a value was written to where it
+    /// was made, which already hold it -- other than into `defining`, the
+    /// slots of the parameters an edge hands values to.
+    fn emit_moves_keeping(&mut self, moves: &[CopyMove], defining: &[FrameSlot]) {
         for movement in moves {
             let CopySource::Place(source) = movement.source();
             match (source, movement.destination()) {
+                (Place::Register(_), Place::Frame(dst))
+                    if Allocation::elides(dst) && !defining.contains(&dst) => {}
                 (Place::Register(src), Place::Register(dst)) if src != dst => {
                     self.mov_reg(dst, src, RegisterWidth::Word);
                 }
@@ -907,7 +927,16 @@ impl<'a> Lowering<'a> {
 
     fn emit_edge(&mut self, from: BlockId, target: BlockId) -> Result<(), String> {
         let moves = self.edge_moves(from, target)?.to_vec();
-        self.emit_moves(&moves);
+        let entry = self.liveness.blocks[target.index()].entry;
+        let block = self.selected.blocks[target];
+        let defining: Vec<_> = self.selected.block_params[block.params.range()]
+            .iter()
+            .filter_map(|&param| match self.location(entry, param) {
+                Ok(Location::Spill(SpillSlot(slot))) => Some(FrameSlot::at(slot)),
+                _ => None,
+            })
+            .collect();
+        self.emit_moves_keeping(&moves, &defining);
         Ok(())
     }
 

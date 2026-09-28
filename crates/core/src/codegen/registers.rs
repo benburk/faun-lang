@@ -215,6 +215,11 @@ pub struct Allocation<R> {
     pub edge_cost: TransitionCost,
     pub edges: u32,
     pub spill_slots: Vec<u32>,
+    /// Where each value that ever waits in memory is written there: at the
+    /// point it is made, from the register it is made in, by point. A value
+    /// never changes, so its slot holds it from there on, and no other move
+    /// of it into memory needs writing: see [`Self::elides`].
+    pub stores: Vec<(Point, R, SpillSlot)>,
 }
 
 #[derive(Debug)]
@@ -641,6 +646,7 @@ impl<'a, R: Register> Allocator<'a, R> {
         }
         self.plan_edges()?;
         self.verify_states()?;
+        let stores = self.stores();
         let (segments, transitions) = build_segments(&self.states, self.code.values)?;
         let operand_locations =
             collect_instruction_data(self.operand_locations, "operand allocation")?;
@@ -662,7 +668,36 @@ impl<'a, R: Register> Allocator<'a, R> {
             edge_cost: self.edge_cost,
             edges: self.edges,
             spill_slots,
+            stores,
         })
+    }
+
+    /// Each value that ever waits in memory, written there where it is
+    /// made, where it is made in a register: an instruction's result after
+    /// the instruction, and a block's parameter on entering it. One handed
+    /// to a block already in memory was written there by the edge.
+    fn stores(&self) -> Vec<(Point, R, SpillSlot)> {
+        let mut stores = Vec::new();
+        let mut made = |point: Point, value: VReg| {
+            if let Some(slot) = self.value_spills[value.index()]
+                && let Ok(Location::Register(reg)) = self.location(point, value)
+            {
+                stores.push((point, reg, slot));
+            }
+        };
+        for layout in &self.liveness.blocks {
+            let block = self.code.blocks[layout.block];
+            for &param in &self.code.block_params[block.params.range()] {
+                made(layout.entry, param);
+            }
+            for points in &layout.instructions {
+                if let Some(result) = self.code.instructions[points.instruction].result {
+                    made(points.late, result);
+                }
+            }
+        }
+        stores.sort_by_key(|&(point, ..)| point.0);
+        stores
     }
 
     /// Start a block where a predecessor already allocated left what it
@@ -1746,6 +1781,24 @@ fn build_segments<R: Register>(
 }
 
 impl<R: Register> Allocation<R> {
+    /// The values written to memory where they are made at `point`, each
+    /// from its register.
+    pub fn stores_at(&self, point: Point) -> impl Iterator<Item = (R, SpillSlot)> + '_ {
+        let start = self.stores.partition_point(|&(at, ..)| at.0 < point.0);
+        self.stores[start..]
+            .iter()
+            .take_while(move |&&(at, ..)| at == point)
+            .map(|&(_, reg, slot)| (reg, slot))
+    }
+
+    /// Whether a move into `slot` writes nothing new: every slot but the
+    /// one breaking a cycle of moves is a value's, written where the value
+    /// was made. A move defining a block's parameter is not such a move.
+    #[must_use]
+    pub const fn elides(slot: FrameSlot) -> bool {
+        slot.number() != 0
+    }
+
     /// The transitions made at `point`.
     #[must_use]
     pub fn transitions_at(&self, point: Point) -> &[Transition<R>] {
