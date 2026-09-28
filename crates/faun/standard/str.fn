@@ -73,24 +73,15 @@ Str : List(U8).(
   repeat : (Str, Nat) -> Str
   repeat(text, count) -> join(List.repeat(text, count), "")
 
-  # The text with spaces after it, before it, or either side to fill
-  # `width` characters, as `${value:<12}`, `${value:>7}` and `${value:^9}`
-  # write. Text already that wide is left as it is. A character is a Unicode
-  # scalar: one a terminal shows two columns wide, or one joining its
-  # neighbour, still counts once.
+  # The text with spaces after or before it to fill `width` characters,
+  # as `${value:<12}` and `${value:>7}` write. Text already that wide is
+  # left as it is. A character is a Unicode scalar: one a terminal shows
+  # two columns wide, or one joining its neighbour, still counts once.
   pad_end : (Str, Nat) -> Str
   pad_end(text, width) -> text.concat(" ".repeat(width - scalars(text)))
 
   pad_start : (Str, Nat) -> Str
   pad_start(text, width) -> " ".repeat(width - scalars(text)).concat(text)
-
-  # An odd space left over goes after.
-  center : (Str, Nat) -> Str
-  center(text, width) ->
-    free = width - scalars(text)
-    before = " ".repeat(free / 2)
-    after = " ".repeat(free - free / 2)
-    join([before, text, after], "")
 
   # Cutting and matching below go byte by byte, and are sound for text
   # anyway: no byte continuing a character equals a byte beginning one, so
@@ -221,7 +212,6 @@ expect "file.txt".ends_with(".txt") & "file.txt".drop_suffix(".txt") == "file"
 expect "--x".drop_prefix("-") == "-x" & "x".drop_prefix("-") == "x"
 expect "ab".repeat(3) == "ababab" & "ab".repeat(0) == ""
 expect "ab".pad_end(4) == "ab  " & "ab".pad_start(4) == "  ab" & "abcde".pad_start(3) == "abcde"
-expect "ab".center(5) == " ab  " & "ab".center(6) == "  ab  " & "".center(1) == " "
 expect "é".pad_start(3) == "  é" & "🦌".pad_end(2) == "🦌 "
 expect ["pear", "fig", "apple"].sort() == ["apple", "fig", "pear"]
 expect Str.is_ascii("abc".to_utf8()) & !Str.is_ascii([0xc3, 0xa9]) & Str.is_utf8([0xc3, 0xa9]) & !Str.is_utf8([0xc3])

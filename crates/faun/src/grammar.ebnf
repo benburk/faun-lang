@@ -109,4 +109,4 @@ rest              = "*" [ expr ] [ "," ] ;
 (* A range's end may be negated, or `_` to leave that side open. Its start
    is negated as an operand is, `-3..5`, and the parser holds the `-` to it. *)
 range-end         = NUMBER | CHAR | "_" | "-" ( NUMBER | CHAR ) ;
-width             = ":" ( "<" | ">" | "^" ) NUMBER ;
+width             = ":" ( "<" | ">" ) NUMBER ;

@@ -879,9 +879,8 @@ impl Parser<'_> {
         let align = match self.peek() {
             Kind::Lt => Align::Left,
             Kind::Gt => Align::Right,
-            Kind::Caret => Align::Center,
             _ => {
-                for what in ["`<`", "`>`", "`^`"] {
+                for what in ["`<`", "`>`"] {
                     self.note(what);
                 }
                 return Err(self.fail());

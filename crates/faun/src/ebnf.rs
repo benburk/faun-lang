@@ -595,12 +595,13 @@ fn the_grammar_reads_and_refuses_commas_as_the_parser_does() {
 )]
 fn the_grammar_reads_and_refuses_a_splice_s_width_as_the_parser_does() {
     let grammar = Grammar::read(GRAMMAR);
-    let read = "f(x) -> \"${x:<12}${x + 1:>7}${\"a\":^0x10}${{a: x}}\"\n";
+    let read = "f(x) -> \"${x:<12}${x + 1:>7}${\"a\":>0x10}${{a: x}}\"\n";
     assert!(agree(&grammar, read, read), "{read} is read");
     for refused in [
         "f(x) -> \"${x:12}\"\n",
         "f(x) -> \"${x:>w}\"\n",
         "f(x) -> \"${x:>}\"\n",
+        "f(x) -> \"${x:^9}\"\n",
         "f(x) -> \"${x:>'a'}\"\n",
     ] {
         assert!(!agree(&grammar, refused, refused), "{refused} is refused");

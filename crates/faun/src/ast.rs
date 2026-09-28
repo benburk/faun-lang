@@ -446,7 +446,7 @@ pub enum StringPart {
     Splice(Expr, Option<Width>),
 }
 
-/// A splice's `:<12`, `:>7` or `:^9`: its text padded with spaces to at
+/// A splice's `:<12` or `:>7`: its text padded with spaces to at
 /// least `columns` characters, on the side `align` leaves free.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Width {
@@ -458,7 +458,6 @@ pub struct Width {
 pub enum Align {
     Left,
     Right,
-    Center,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

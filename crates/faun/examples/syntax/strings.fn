@@ -15,11 +15,10 @@ expect "${1 + 2} and ${[1, 2]}" == "3 and [1, 2]"
 expect "${"inner ${name()}"}" == "inner Faun"
 expect "${True}${False}" == "TrueFalse"
 
-# A width pads the splice's text with spaces: `<` keeps it left, `>` right,
-# and `^` centred. Text wider than that is left whole.
+# A width pads the splice's text with spaces: `<` keeps it left and `>`
+# right. Text wider than that is left whole.
 expect "[${"ab":<4}]" == "[ab  ]"
 expect "[${42:>5}]" == "[   42]"
-expect "[${"ab":^5}]" == "[ ab  ]"
 expect "[${"toolong":>3}]" == "[toolong]"
 expect "${1 + 2:>3}|${[1]:<4}|" == "  3|[1] |"
 

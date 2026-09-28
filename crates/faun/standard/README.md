@@ -65,14 +65,14 @@ shown.
 `Bool`, the integers and `Str` say themselves with `to_str`, and a splice
 `${value}` in a string is its value's `to_str`, the pieces joined with
 `concat`. A width pads that text with spaces: `${value:<12}` is
-`value.to_str().pad_end(12)`, `${value:>7}` is `pad_start(7)`, and
-`${value:^9}` is `center(9)`, the odd space after. The width is a numeral,
-counted in Unicode scalars, and text already that wide is left whole. A string or character literal writes `\n`, `\r`, `\t`, `\0`,
+`value.to_str().pad_end(12)` and `${value:>7}` is `pad_start(7)`. The
+width is a numeral, counted in Unicode scalars, and text already that wide
+is left whole. A string or character literal writes `\n`, `\r`, `\t`, `\0`,
 `\\`, `\"`, `\'` and `\$` for themselves, and `\u{...}` for any scalar by
 its one to six hexadecimal digits, as Rust does. For reading text there are `is_empty`, `split` at a separator,
 `lines` at `\n` or `\r\n`, `trim` of ASCII white space, `starts_with`,
 `ends_with`, `drop_prefix` and `drop_suffix`; for writing it,
-`Str.join(pieces, separator)`, `repeat`, `pad_start`, `pad_end` and `center`. Matching and cutting go byte by
+`Str.join(pieces, separator)`, `repeat`, `pad_start` and `pad_end`. Matching and cutting go byte by
 byte, which no character boundary can fall inside. There is no slicing by
 position. A numeral pattern of a word and a string pattern are each a test
 of equality, asked before the clause's guard.

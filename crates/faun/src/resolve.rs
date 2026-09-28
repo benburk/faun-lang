@@ -1600,7 +1600,6 @@ impl ClauseResolver<'_> {
                             let pad = self.symbols.intern(match width.align {
                                 s::Align::Left => "pad_end",
                                 s::Align::Right => "pad_start",
-                                s::Align::Center => "center",
                             });
                             let columns = self.sites.expr(
                                 width.columns.span,
