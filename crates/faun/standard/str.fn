@@ -50,6 +50,11 @@ Str : List(U8).(
   from_ascii(bytes) if bytes.all(|byte| byte.to_nat() < 128) -> Ok(Str(bytes))
   from_ascii(_) -> Err(NotAscii)
 
+  # The bytes written as hexadecimal, two lowercase digits each, as a
+  # digest is shown: `Str.hex([0x0f, 0xa0])` is `"0fa0"`.
+  hex : List(U8) -> Str
+  hex(bytes) -> Str(bytes.flat_map(|byte| [hex_digit(byte / 16), hex_digit(byte % 16)]))
+
   # `Ok` of the bytes as a string where they are well-formed UTF-8.
   from_utf8 : List(U8) -> Result(Str, [InvalidUtf8])
   from_utf8(bytes) if utf8(bytes, 0, 128, 191) -> Ok(Str(bytes))
@@ -159,6 +164,9 @@ lines_into(['\r', '\n', *rest], line, lines) -> lines_into(rest, [], [Str(line.r
 lines_into(['\n', *rest], line, lines) -> lines_into(rest, [], [Str(line.reverse()), *lines])
 lines_into([byte, *rest], line, lines) -> lines_into(rest, [byte, *line], lines)
 
+hex_digit : U8 -> U8
+hex_digit(digit) -> "0123456789abcdef".to_utf8().get_or(digit.to_nat(), 0)
+
 space : U8 -> Bool
 space(' ' | '\t' | '\n' | '\r' | 11 | 12) -> True
 space(_) -> False
@@ -189,3 +197,4 @@ expect "--x".drop_prefix("-") == "-x" & "x".drop_prefix("-") == "x"
 expect "ab".repeat(3) == "ababab" & "ab".repeat(0) == ""
 expect ["pear", "fig", "apple"].sort() == ["apple", "fig", "pear"]
 expect Str.is_ascii("abc".to_utf8()) & !Str.is_ascii([0xc3, 0xa9]) & Str.is_utf8([0xc3, 0xa9]) & !Str.is_utf8([0xc3])
+expect Str.hex([0x0f, 0xa0, 0x00, 0xff]) == "0fa000ff" & Str.hex([]) == ""

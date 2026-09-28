@@ -59,7 +59,9 @@ have `min` and `max`, and `U8` the ASCII tests `is_digit`, `is_ascii_lower`,
 `to_ascii_upper`.
 
 `Str` is UTF-8 bytes behind a private wrapper, with `len`, `concat`, `cmp` in
-byte order and `equals` from it, `from_ascii`, `from_utf8` and `to_utf8`.
+byte order and `equals` from it, `from_ascii`, `from_utf8` and `to_utf8`,
+and `Str.hex(bytes)`, the bytes as lowercase hexadecimal, as a digest is
+shown.
 `Bool`, the integers and `Str` say themselves with `to_str`, and a splice
 `${value}` in a string is its value's `to_str`, the pieces joined with
 `concat`. A string or character literal writes `\n`, `\r`, `\t`, `\0`,

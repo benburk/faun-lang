@@ -4,11 +4,11 @@ package {
   md5: "../src/md5"
 }
 
-import md5 {md5_hash, to_hex}
+import md5 {md5_hash}
 
 app : {stdin: List(U8), *} -> Str
-app(input) -> to_hex(md5_hash(input.stdin))
+app(input) -> Str.hex(md5_hash(input.stdin))
 
-expect to_hex(md5_hash("abc".to_utf8())) == "900150983cd24fb0d6963f7d28e17f72"
+expect Str.hex(md5_hash("abc".to_utf8())) == "900150983cd24fb0d6963f7d28e17f72"
 
 main!(host) -> host.run_stdin!(app)

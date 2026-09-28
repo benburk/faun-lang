@@ -1,9 +1,9 @@
 # MD5 (RFC 1321) over the standard modular `U32`, a 64-byte block at a
-# time. Callers see only byte lists and hex text.
+# time.
 
 package {}
 
-exports {md5_hash, to_hex}
+exports {md5_hash}
 
 State = (U32, U32, U32, U32)
 
@@ -78,15 +78,9 @@ steps() -> [
   (0xf7537e82, 6), (0xbd3af235, 10), (0x2ad7d2bb, 15), (0xeb86d391, 21),
 ]
 
-to_hex : List(U8) -> Str
-to_hex(bytes) -> Str.from_ascii(bytes.flat_map(|byte| [hex(byte / 16), hex(byte % 16)])).ok_or("")
-
-hex : U8 -> U8
-hex(digit) -> "0123456789abcdef".to_utf8().get_or(digit.to_nat(), 0)
-
 # RFC 1321 vectors, including a message that crosses the 56-byte padding
 # boundary and so takes two blocks.
-expect to_hex(md5_hash("".to_utf8())) == "d41d8cd98f00b204e9800998ecf8427e"
-expect to_hex(md5_hash("abc".to_utf8())) == "900150983cd24fb0d6963f7d28e17f72"
-expect to_hex(md5_hash("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".to_utf8()))
+expect Str.hex(md5_hash("".to_utf8())) == "d41d8cd98f00b204e9800998ecf8427e"
+expect Str.hex(md5_hash("abc".to_utf8())) == "900150983cd24fb0d6963f7d28e17f72"
+expect Str.hex(md5_hash("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".to_utf8()))
   == "d174ab98d277d9f5a5611c2c9f419d9f"
