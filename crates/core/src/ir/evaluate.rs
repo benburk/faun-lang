@@ -25,6 +25,9 @@ use super::{
     RegionId, Relation, Returns, ValueId, Width,
 };
 use num_bigint::BigUint;
+use number::Number;
+
+mod number;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
@@ -215,7 +218,9 @@ impl Memory<'_> {
 }
 
 // A continuation stack is shared by all calls; each call owns a separate value
-// frame so recursion cannot overwrite the caller's SSA definitions.
+// frame so recursion cannot overwrite the caller's SSA definitions. A frame
+// holds only its own function's values, numbered when it is first called:
+// sized to the whole program, every call would cost every value.
 enum Task {
     Region {
         id: RegionId,
@@ -234,22 +239,45 @@ enum Task {
     },
 }
 
+/// What an external call answers, in the interpreter's own numbers when
+/// the program goes on to read them.
+enum Answer {
+    Halt(Vec<BigUint>),
+    Return(Vec<Number>),
+}
+
 #[derive(Clone, Debug)]
 struct CellValue {
     tag: u32,
-    fields: Vec<BigUint>,
+    fields: Vec<Number>,
 }
 
 /// A buffer's elements, first to last, each as its leaves. A sequence
 /// holding `len` of them holds the last `len`.
-type BufferValue = Vec<Vec<BigUint>>;
+type BufferValue = Vec<Vec<Number>>;
+
+/// Where a live call's values begin in [`Machine::slots`], and whose they are.
+#[derive(Clone, Copy)]
+struct Frame {
+    function: FunctionId,
+    base: usize,
+}
 
 struct Machine<'a, H> {
     program: &'a Program,
     config: Config,
     host: &'a mut H,
     memory: Memory<'a>,
-    frames: Vec<Vec<Option<BigUint>>>,
+    /// Every live call's values, end to end, the innermost last.
+    slots: Vec<Option<Number>>,
+    frames: Vec<Frame>,
+    /// Each value's function and place in that function's frame, once the
+    /// function has been called.
+    places: Vec<Option<(FunctionId, u32)>>,
+    /// Each function's frame size, once it has been called.
+    sizes: Vec<Option<u32>>,
+    /// The function each region belongs to, once numbered.
+    regions: Vec<Option<FunctionId>>,
     cells: Vec<CellValue>,
     buffers: Vec<BufferValue>,
     tasks: Vec<Task>,
@@ -285,7 +313,11 @@ pub fn evaluate(
         config,
         host,
         memory: memory(program, config)?,
+        slots: Vec::new(),
         frames: Vec::new(),
+        places: vec![None; program.classes.len()],
+        sizes: vec![None; program.functions.len()],
+        regions: vec![None; program.regions.len()],
         cells: Vec::new(),
         buffers: Vec::new(),
         tasks: Vec::new(),
@@ -294,7 +326,8 @@ pub fn evaluate(
             ..Counts::default()
         },
     };
-    if let Some(outcome) = machine.call(function, args, None)? {
+    let args: Vec<Number> = args.iter().map(Number::from).collect();
+    if let Some(outcome) = machine.call(function, &args, None)? {
         return Ok(machine.finish(outcome));
     }
     machine.run()
@@ -337,6 +370,28 @@ const fn invalid(what: &'static str) -> Error {
     Error::InvalidProgram(what)
 }
 
+/// Give each of `ids` the next place in `function`'s frame, which has
+/// `size` so far; a value already placed there keeps its place.
+fn place(
+    places: &mut [Option<(FunctionId, u32)>],
+    function: FunctionId,
+    size: &mut u32,
+    ids: &[ValueId],
+) -> Result<(), Error> {
+    for &id in ids {
+        match places.get_mut(id.index()) {
+            Some(Some((owner, _))) if *owner == function => {}
+            Some(Some(_)) => return Err(invalid("value defined in two functions")),
+            Some(slot @ None) => {
+                *slot = Some((function, *size));
+                *size += 1;
+            }
+            None => return Err(invalid("value id")),
+        }
+    }
+    Ok(())
+}
+
 impl<H: Host> Machine<'_, H> {
     fn ids(&self, range: Range) -> Result<&[ValueId], Error> {
         self.program
@@ -366,7 +421,7 @@ impl<H: Host> Machine<'_, H> {
         }
     }
 
-    fn fit(&self, class: Class, value: &BigUint) -> Result<(), Error> {
+    fn fit(&self, class: Class, value: &Number) -> Result<(), Error> {
         match self.width(class)? {
             Some(bits) if value.bits() > u64::from(bits) => Err(Error::DoesNotFit(class)),
             None if value.bits() > self.config.max_natural_bits => Err(Error::SizeLimit),
@@ -374,9 +429,9 @@ impl<H: Host> Machine<'_, H> {
         }
     }
 
-    fn convert(&self, class: Class, value: BigUint) -> Result<BigUint, Error> {
+    fn convert(&self, class: Class, value: Number) -> Result<Number, Error> {
         let value = if let Some(bits) = self.width(class)? {
-            value % (BigUint::from(1u8) << usize::from(bits))
+            value.low(bits)
         } else {
             value
         };
@@ -384,40 +439,89 @@ impl<H: Host> Machine<'_, H> {
         Ok(value)
     }
 
-    fn value(&self, id: ValueId) -> Result<BigUint, Error> {
-        self.frames
-            .last()
-            .and_then(|f| f.get(id.index()))
+    /// Where `id` lives in the innermost frame.
+    fn slot(&self, id: ValueId) -> Option<usize> {
+        let frame = self.frames.last()?;
+        match *self.places.get(id.index())? {
+            Some((function, at)) if function == frame.function => {
+                Some(frame.base + usize::try_from(at).ok()?)
+            }
+            _ => None,
+        }
+    }
+
+    fn value(&self, id: ValueId) -> Result<Number, Error> {
+        self.slot(id)
+            .and_then(|at| self.slots.get(at))
             .and_then(Option::as_ref)
             .cloned()
             .ok_or_else(|| invalid("undefined value"))
     }
 
-    fn values(&self, range: Range) -> Result<Vec<BigUint>, Error> {
+    /// Number the values `function`'s body defines, once: its frame size.
+    fn size(&mut self, function: FunctionId, body: RegionId) -> Result<usize, Error> {
+        if let Some(size) = self.sizes[function.index()] {
+            return usize::try_from(size).map_err(|_| invalid("frame size"));
+        }
+        let program = self.program;
+        let ids = |range: Range| {
+            program
+                .operands
+                .get(range.range())
+                .ok_or_else(|| invalid("operand range"))
+        };
+        let mut size = 0u32;
+        let mut pending = vec![body];
+        while let Some(id) = pending.pop() {
+            match self.regions.get_mut(id.index()) {
+                Some(owner @ None) => *owner = Some(function),
+                Some(Some(_)) => return Err(invalid("region entered twice")),
+                None => return Err(invalid("region id")),
+            }
+            let region = program.regions[id];
+            place(&mut self.places, function, &mut size, ids(region.params)?)?;
+            for index in region.ops.range() {
+                let (op, results) = self.instruction(index)?;
+                place(&mut self.places, function, &mut size, ids(results)?)?;
+                match op {
+                    Op::If {
+                        then_region,
+                        else_region,
+                        ..
+                    } => pending.extend([then_region, else_region]),
+                    Op::Loop { body, .. } => pending.push(body),
+                    _ => {}
+                }
+            }
+        }
+        self.sizes[function.index()] = Some(size);
+        usize::try_from(size).map_err(|_| invalid("frame size"))
+    }
+
+    fn values(&self, range: Range) -> Result<Vec<Number>, Error> {
         self.ids(range)?.iter().map(|&id| self.value(id)).collect()
     }
 
-    fn bind(&mut self, range: Range, values: &[BigUint]) -> Result<(), Error> {
-        let ids = self.ids(range)?.to_vec();
+    fn bind(&mut self, range: Range, values: &[Number]) -> Result<(), Error> {
+        let program = self.program;
+        let ids = program
+            .operands
+            .get(range.range())
+            .ok_or_else(|| invalid("operand range"))?;
         if ids.len() != values.len() {
             return Err(invalid("result arity"));
         }
         for (&id, value) in ids.iter().zip(values) {
             self.fit(self.class(id)?, value)?;
         }
-        let frame = self
-            .frames
-            .last_mut()
-            .ok_or_else(|| invalid("missing frame"))?;
-        for (id, value) in ids.into_iter().zip(values) {
-            *frame
-                .get_mut(id.index())
-                .ok_or_else(|| invalid("value id"))? = Some(value.clone());
+        for (&id, value) in ids.iter().zip(values) {
+            let at = self.slot(id).ok_or_else(|| invalid("value id"))?;
+            self.slots[at] = Some(value.clone());
         }
         Ok(())
     }
 
-    fn signature(&self, range: Range, values: &[BigUint]) -> Result<(), Error> {
+    fn signature(&self, range: Range, values: &[Number]) -> Result<(), Error> {
         let classes = self
             .program
             .signature
@@ -432,7 +536,7 @@ impl<H: Host> Machine<'_, H> {
         Ok(())
     }
 
-    fn region(&mut self, id: RegionId, args: &[BigUint]) -> Result<(), Error> {
+    fn region(&mut self, id: RegionId, args: &[Number]) -> Result<(), Error> {
         let region = self
             .program
             .regions
@@ -446,7 +550,7 @@ impl<H: Host> Machine<'_, H> {
     fn call(
         &mut self,
         id: FunctionId,
-        args: &[BigUint],
+        args: &[Number],
         results: Option<Range>,
     ) -> Result<Option<Outcome>, Error> {
         let function = self
@@ -459,7 +563,10 @@ impl<H: Host> Machine<'_, H> {
         match function.definition {
             Definition::Declared(_) => Err(invalid("function has not been defined")),
             Definition::Body(body) => {
-                self.frames.push(vec![None; self.program.classes.len()]);
+                let base = self.slots.len();
+                let size = self.size(id, body)?;
+                self.slots.resize(base + size, None);
+                self.frames.push(Frame { function: id, base });
                 self.tasks.push(Task::Call {
                     results,
                     returns: function.returns,
@@ -475,18 +582,28 @@ impl<H: Host> Machine<'_, H> {
                         .checked_sub(1)
                         .ok_or(Error::FuelExhausted)?;
                 }
-                match self.external(function.name, function.returns, args)? {
-                    HostResult::Halt(values) => Ok(Some(Outcome::Halted(values))),
-                    HostResult::Return(values) => {
-                        if let Some(results) = results {
-                            self.bind(results, &values)?;
-                            Ok(None)
-                        } else {
-                            Ok(Some(Outcome::Returned(values)))
-                        }
-                    }
-                }
+                let answer = self.external(function.name, function.returns, args)?;
+                self.answered(answer, results)
             }
+        }
+    }
+
+    /// Bind what an external call answered to `results`, or, where nothing
+    /// called it, finish with it.
+    fn answered(
+        &mut self,
+        answer: Answer,
+        results: Option<Range>,
+    ) -> Result<Option<Outcome>, Error> {
+        match (answer, results) {
+            (Answer::Halt(values), _) => Ok(Some(Outcome::Halted(values))),
+            (Answer::Return(values), Some(results)) => {
+                self.bind(results, &values)?;
+                Ok(None)
+            }
+            (Answer::Return(values), None) => Ok(Some(Outcome::Returned(
+                values.iter().map(Number::to_big).collect(),
+            ))),
         }
     }
 
@@ -520,6 +637,7 @@ impl<H: Host> Machine<'_, H> {
                     .ok_or_else(|| invalid("missing region terminator"))?;
                 let values = self.values(terminator.values)?;
                 if let Some(values) = self.leave(terminator.exit, values)? {
+                    let values = values.iter().map(Number::to_big).collect();
                     return Ok(self.finish(Outcome::Returned(values)));
                 }
                 continue;
@@ -552,7 +670,7 @@ impl<H: Host> Machine<'_, H> {
         Ok((*op, *results))
     }
 
-    fn leave(&mut self, exit: Exit, values: Vec<BigUint>) -> Result<Option<Vec<BigUint>>, Error> {
+    fn leave(&mut self, exit: Exit, values: Vec<Number>) -> Result<Option<Vec<Number>>, Error> {
         while let Some(task) = self.tasks.pop() {
             match (task, exit) {
                 (Task::If { results }, Exit::Yield) | (Task::Loop { results, .. }, Exit::Break) => {
@@ -572,7 +690,9 @@ impl<H: Host> Machine<'_, H> {
                         return Err(invalid("non-returning function returned"));
                     };
                     self.signature(returns, &values)?;
-                    self.frames.pop();
+                    if let Some(frame) = self.frames.pop() {
+                        self.slots.truncate(frame.base);
+                    }
                     if let Some(results) = results {
                         self.bind(results, &values)?;
                         return Ok(None);
@@ -588,7 +708,7 @@ impl<H: Host> Machine<'_, H> {
     fn address(&self, id: ValueId, offset: Offset) -> Result<u64, Error> {
         let value = self.value(id)?;
         self.fit(Class::Address, &value)?;
-        let base = u64::try_from(value).map_err(|_| Error::InvalidMemory)?;
+        let base = value.small().ok_or(Error::InvalidMemory)?;
         let offset = match offset {
             Offset::Bytes(n) => i64::from(n),
             Offset::Words(n) => i64::from(n) * i64::from(self.config.word_bits / 8),
@@ -613,38 +733,40 @@ impl<H: Host> Machine<'_, H> {
         &self,
         op: Binary,
         class: Class,
-        left: BigUint,
-        right: BigUint,
-    ) -> Result<BigUint, Error> {
+        left: Number,
+        right: &Number,
+    ) -> Result<Number, Error> {
         // A monus answers at a class its operands need not fit; they were
         // checked where they were made.
         if op != Binary::Monus {
             self.fit(class, &left)?;
-            self.fit(class, &right)?;
+            self.fit(class, right)?;
         }
         let value = match op {
-            Binary::Add => left + right,
-            Binary::Mul => self.multiply(class, left, right)?,
+            Binary::Add => left.add(right),
+            Binary::Mul => self.multiply(class, &left, right)?,
             Binary::Div => {
-                if right == BigUint::default() {
-                    BigUint::default()
+                if right.is_zero() {
+                    Number::ZERO
                 } else {
-                    left / right
+                    left.div(right)
                 }
             }
             Binary::Mod => {
-                if right == BigUint::default() {
+                if right.is_zero() {
                     left
                 } else {
-                    left % right
+                    left.rem(right)
                 }
             }
-            Binary::Sub | Binary::Monus if left >= right => left - right,
-            Binary::Sub if class == Class::Natural => BigUint::default(),
-            Binary::Monus => BigUint::default(),
-            Binary::Sub if class == Class::Word => {
-                (BigUint::from(1u8) << usize::from(self.config.word_bits)) + left - right
-            }
+            Binary::Sub | Binary::Monus if left >= *right => left.sub(right),
+            Binary::Sub if class == Class::Natural => Number::ZERO,
+            Binary::Monus => Number::ZERO,
+            // Both fit the word, so the difference wraps within one.
+            Binary::Sub if class == Class::Word => match (left.small(), right.small()) {
+                (Some(left), Some(right)) => Number::from(left.wrapping_sub(right)),
+                _ => return Err(Error::DoesNotFit(class)),
+            },
             Binary::Sub => return Err(Error::DoesNotFit(class)),
         };
         if class == Class::Word {
@@ -661,13 +783,13 @@ impl<H: Host> Machine<'_, H> {
         &self,
         direction: Direction,
         class: Class,
-        value: BigUint,
+        value: &Number,
         by: u16,
-    ) -> Result<BigUint, Error> {
-        self.fit(class, &value)?;
+    ) -> Result<Number, Error> {
+        self.fit(class, value)?;
         let held = match direction {
-            Direction::Up => value << usize::from(by),
-            Direction::Down => value >> usize::from(by),
+            Direction::Up => value.shl(by),
+            Direction::Down => value.shr(by),
         };
         if class == Class::Word {
             self.convert(class, held)
@@ -677,13 +799,13 @@ impl<H: Host> Machine<'_, H> {
         }
     }
 
-    fn multiply(&self, class: Class, left: BigUint, right: BigUint) -> Result<BigUint, Error> {
+    fn multiply(&self, class: Class, left: &Number, right: &Number) -> Result<Number, Error> {
         // A nonzero product needs m+n-1 or m+n bits. Reject obviously oversized
         // products before allocating them, without rejecting any fitting value.
         // The ambiguous boundary allocates at most cap+1 result bits; binary's
         // exact fit check then decides it. Zero products need no allocation.
-        if left == BigUint::default() || right == BigUint::default() {
-            return Ok(BigUint::default());
+        if left.is_zero() || right.is_zero() {
+            return Ok(Number::ZERO);
         }
         if class == Class::Natural
             && left
@@ -694,11 +816,11 @@ impl<H: Host> Machine<'_, H> {
         {
             return Err(Error::SizeLimit);
         }
-        Ok(left * right)
+        Ok(left.mul(right))
     }
 
-    fn constant(&self, class: Class, value: u64) -> Result<BigUint, Error> {
-        let value = BigUint::from(value);
+    fn constant(&self, class: Class, value: u64) -> Result<Number, Error> {
+        let value = Number::from(value);
         self.fit(class, &value)?;
         Ok(value)
     }
@@ -712,7 +834,7 @@ impl<H: Host> Machine<'_, H> {
                 then_region,
                 else_region,
             } => {
-                let region = if self.value(condition)? == BigUint::default() {
+                let region = if self.value(condition)? == Number::ZERO {
                     else_region
                 } else {
                     then_region
@@ -730,22 +852,16 @@ impl<H: Host> Machine<'_, H> {
                 return self.call(function, &args, Some(results));
             }
             _ => {
-                let values = self.scalar(op, results)?;
-                self.bind(results, &values)?;
+                self.scalar(op, results)?;
             }
         }
         Ok(None)
     }
 
     /// Which of two a comparison says, as the nought or one it answers.
-    fn compared(
-        &self,
-        relation: Relation,
-        left: ValueId,
-        right: ValueId,
-    ) -> Result<BigUint, Error> {
+    fn compared(&self, relation: Relation, left: ValueId, right: ValueId) -> Result<Number, Error> {
         let (left, right) = (self.value(left)?, self.value(right)?);
-        Ok(BigUint::from(u8::from(match relation {
+        Ok(Number::from(u8::from(match relation {
             Relation::Equal => left == right,
             Relation::Less => left < right,
         })))
@@ -755,20 +871,22 @@ impl<H: Host> Machine<'_, H> {
         clippy::too_many_lines,
         reason = "one arm per instruction; the length is the patterns"
     )]
-    fn scalar(&mut self, op: Op, results: Range) -> Result<Vec<BigUint>, Error> {
+    /// Run an instruction that neither branches nor calls, binding what it
+    /// answers to `results`.
+    fn scalar(&mut self, op: Op, results: Range) -> Result<(), Error> {
         let value = match op {
             Op::Constant { value } => self.constant(self.result_class(results)?, value)?,
             Op::NaturalConstant(id) => self.natural(id)?,
-            Op::AddressOf(id) => BigUint::from(self.datum_address(id)?),
+            Op::AddressOf(id) => Number::from(self.datum_address(id)?),
             Op::Cell { tag, fields, .. } => {
                 let fields = self.values(fields)?;
                 self.cells.push(CellValue { tag, fields });
-                BigUint::from(self.cells.len())
+                Number::from(self.cells.len())
             }
-            Op::CellTag { cell } => BigUint::from(self.cell(cell)?.tag),
+            Op::CellTag { cell } => Number::from(self.cell(cell)?.tag),
             Op::BufferEmpty { .. } | Op::BufferRoom { .. } => {
                 self.buffers.push(Vec::new());
-                BigUint::from(self.buffers.len())
+                Number::from(self.buffers.len())
             }
             // Nothing outside reads a buffer this tier has not laid out.
             Op::BufferKnown { elements, .. } => {
@@ -776,13 +894,13 @@ impl<H: Host> Machine<'_, H> {
                     .program
                     .datum_bytes(elements)
                     .iter()
-                    .map(|&byte| vec![BigUint::from(byte)])
+                    .map(|&byte| vec![Number::from(byte)])
                     .collect();
                 self.buffers.push(elements);
-                BigUint::from(self.buffers.len())
+                Number::from(self.buffers.len())
             }
             Op::BufferAt { .. } => return Err(invalid("a buffer's address before layout")),
-            Op::Keep { .. } => return Ok(Vec::new()),
+            Op::Keep { .. } => return self.bind(results, &[]),
             // A sequence built here is a buffer of its own, starting at its
             // first element.
             Op::BufferPush { operands, .. } => {
@@ -797,7 +915,8 @@ impl<H: Host> Machine<'_, H> {
                 elements.push(first);
                 elements.extend_from_slice(rest);
                 self.buffers.push(elements);
-                return Ok(vec![BigUint::from(self.buffers.len()), BigUint::ZERO]);
+                let sequence = [Number::from(self.buffers.len()), Number::ZERO];
+                return self.bind(results, &sequence);
             }
             Op::BufferReplace { operands, .. } => {
                 let operands = self.ids(operands)?.to_vec();
@@ -810,13 +929,14 @@ impl<H: Host> Machine<'_, H> {
                 let mut elements = self
                     .elements((sequence[0], sequence[1], sequence[2]))?
                     .to_vec();
-                let slot = usize::try_from(&index)
-                    .ok()
+                let slot = index
+                    .index()
                     .and_then(|index| elements.get_mut(index))
                     .ok_or_else(|| invalid("a replacement past its sequence"))?;
                 *slot = written;
                 self.buffers.push(elements);
-                return Ok(vec![BigUint::from(self.buffers.len()), BigUint::ZERO]);
+                let sequence = [Number::from(self.buffers.len()), Number::ZERO];
+                return self.bind(results, &sequence);
             }
             Op::BufferPrepend { operands, .. } | Op::BufferExtend { operands, .. } => {
                 let operands = self.ids(operands)?.to_vec();
@@ -833,7 +953,8 @@ impl<H: Host> Machine<'_, H> {
                 }
                 elements.extend_from_slice(self.elements(then)?);
                 self.buffers.push(elements);
-                return Ok(vec![BigUint::from(self.buffers.len()), BigUint::ZERO]);
+                let sequence = [Number::from(self.buffers.len()), Number::ZERO];
+                return self.bind(results, &sequence);
             }
             Op::BufferField {
                 buffer,
@@ -855,7 +976,7 @@ impl<H: Host> Machine<'_, H> {
                 op,
                 self.result_class(results)?,
                 self.value(left)?,
-                self.value(right)?,
+                &self.value(right)?,
             )?,
             Op::Shift {
                 direction,
@@ -864,7 +985,7 @@ impl<H: Host> Machine<'_, H> {
             } => self.shifted(
                 direction,
                 self.result_class(results)?,
-                self.value(value)?,
+                &self.value(value)?,
                 by,
             )?,
             Op::Compare {
@@ -879,9 +1000,9 @@ impl<H: Host> Machine<'_, H> {
                 let patterns = self
                     .values(operands)?
                     .iter()
-                    .map(|pattern| u64::try_from(pattern).map_err(|_| invalid("a float's operand")))
+                    .map(|pattern| pattern.small().ok_or_else(|| invalid("a float's operand")))
                     .collect::<Result<Vec<_>, _>>()?;
-                BigUint::from(float.calculate(&patterns))
+                Number::from(float.calculate(&patterns))
             }
             Op::Load {
                 width,
@@ -895,21 +1016,27 @@ impl<H: Host> Machine<'_, H> {
                 value,
             } => {
                 self.store(width, address, offset, value)?;
-                return Ok(Vec::new());
+                return self.bind(results, &[]);
             }
             _ => return Err(invalid("expected scalar instruction")),
         };
-        Ok(vec![value])
+        self.bind(results, std::slice::from_ref(&value))
     }
 
     /// The `len` elements of a buffer from `start`: what a sequence holds.
     fn elements(
         &self,
         (buffer, start, len): (ValueId, ValueId, ValueId),
-    ) -> Result<&[Vec<BigUint>], Error> {
+    ) -> Result<&[Vec<Number>], Error> {
         let elements = self.buffer(buffer)?;
-        let start = usize::try_from(self.value(start)?).map_err(|_| invalid("buffer start"))?;
-        let len = usize::try_from(self.value(len)?).map_err(|_| invalid("buffer length"))?;
+        let start = self
+            .value(start)?
+            .index()
+            .ok_or_else(|| invalid("buffer start"))?;
+        let len = self
+            .value(len)?
+            .index()
+            .ok_or_else(|| invalid("buffer length"))?;
         start
             .checked_add(len)
             .and_then(|end| elements.get(start..end))
@@ -917,17 +1044,23 @@ impl<H: Host> Machine<'_, H> {
     }
 
     /// Element `start` of a buffer.
-    fn element(&self, buffer: ValueId, start: ValueId) -> Result<&[BigUint], Error> {
+    fn element(&self, buffer: ValueId, start: ValueId) -> Result<&[Number], Error> {
         let elements = self.buffer(buffer)?;
-        let start = usize::try_from(self.value(start)?).map_err(|_| invalid("buffer start"))?;
+        let start = self
+            .value(start)?
+            .index()
+            .ok_or_else(|| invalid("buffer start"))?;
         elements
             .get(start)
             .map(Vec::as_slice)
             .ok_or_else(|| invalid("buffer start"))
     }
 
-    fn buffer(&self, buffer: ValueId) -> Result<&[Vec<BigUint>], Error> {
-        let handle = usize::try_from(self.value(buffer)?).map_err(|_| invalid("buffer handle"))?;
+    fn buffer(&self, buffer: ValueId) -> Result<&[Vec<Number>], Error> {
+        let handle = self
+            .value(buffer)?
+            .index()
+            .ok_or_else(|| invalid("buffer handle"))?;
         handle
             .checked_sub(1)
             .and_then(|at| self.buffers.get(at))
@@ -936,14 +1069,17 @@ impl<H: Host> Machine<'_, H> {
     }
 
     fn cell(&self, id: ValueId) -> Result<&CellValue, Error> {
-        let handle = usize::try_from(self.value(id)?).map_err(|_| invalid("cell handle"))?;
+        let handle = self
+            .value(id)?
+            .index()
+            .ok_or_else(|| invalid("cell handle"))?;
         let index = handle
             .checked_sub(1)
             .ok_or_else(|| invalid("cell handle"))?;
         self.cells.get(index).ok_or_else(|| invalid("cell handle"))
     }
 
-    fn natural(&self, id: super::DataId) -> Result<BigUint, Error> {
+    fn natural(&self, id: super::DataId) -> Result<Number, Error> {
         let span = self
             .program
             .spans
@@ -954,7 +1090,7 @@ impl<H: Host> Machine<'_, H> {
         }
         let address = self.datum_address(id)?;
         let len = usize::try_from(span.len).map_err(|_| Error::InvalidMemory)?;
-        let value = BigUint::from_bytes_le(self.memory.read(address, len)?);
+        let value = Number::from_bytes_le(self.memory.read(address, len)?);
         self.fit(Class::Natural, &value)?;
         Ok(value)
     }
@@ -980,11 +1116,11 @@ impl<H: Host> Machine<'_, H> {
         Ok(address)
     }
 
-    fn load(&self, width: Width, address: ValueId, offset: Offset) -> Result<BigUint, Error> {
+    fn load(&self, width: Width, address: ValueId, offset: Offset) -> Result<Number, Error> {
         let bytes = self
             .memory
             .read(self.address(address, offset)?, self.bytes(width))?;
-        Ok(BigUint::from_bytes_le(bytes))
+        Ok(Number::from_bytes_le(bytes))
     }
 
     fn bytes(&self, width: Width) -> usize {
@@ -1012,8 +1148,8 @@ impl<H: Host> Machine<'_, H> {
         &mut self,
         symbol: super::model::Symbol,
         returns: Returns<Range>,
-        args: &[BigUint],
-    ) -> Result<HostResult, Error> {
+        args: &[Number],
+    ) -> Result<Answer, Error> {
         let symbol = self
             .program
             .symbols
@@ -1031,17 +1167,19 @@ impl<H: Host> Machine<'_, H> {
             let [bytes] = args else {
                 return Err(invalid("grow takes one size"));
             };
-            let bytes = usize::try_from(bytes).map_err(|_| Error::InvalidMemory)?;
-            HostResult::Return(vec![BigUint::from(self.memory.grow(bytes)?)])
+            let bytes = bytes.index().ok_or(Error::InvalidMemory)?;
+            vec![Number::from(self.memory.grow(bytes)?)]
         } else {
-            self.host.call(name, args, &mut self.memory)?
+            let args: Vec<BigUint> = args.iter().map(Number::to_big).collect();
+            match self.host.call(name, &args, &mut self.memory)? {
+                HostResult::Halt(values) => return Ok(Answer::Halt(values)),
+                HostResult::Return(values) => values.iter().map(Number::from).collect(),
+            }
         };
-        if let HostResult::Return(values) = &result {
-            let Returns::Values(classes) = returns else {
-                return Err(invalid("non-returning host returned"));
-            };
-            self.signature(classes, values)?;
-        }
-        Ok(result)
+        let Returns::Values(classes) = returns else {
+            return Err(invalid("non-returning host returned"));
+        };
+        self.signature(classes, &result)?;
+        Ok(Answer::Return(result))
     }
 }

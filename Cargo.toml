@@ -35,3 +35,12 @@ unimplemented = "warn"
 # what `unreachable_pub` refuses -- rightly, since nothing outside can reach
 # it. Of the two, the one naming what a thing is visible to is the true one.
 redundant_pub_crate = "allow"
+
+# The tests run programs on the reference interpreter, which at opt-level 0
+# is about ten times slower; dependencies such as num-bigint never change,
+# so they build once at full speed.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

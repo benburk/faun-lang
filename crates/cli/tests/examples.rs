@@ -250,10 +250,20 @@ fn the_ported_programs_and_libraries_hold() {
     }
     files.sort();
     assert!(files.len() >= 40, "{files:?}");
-    for file in files {
-        let (failed, _) = support::test_file(&file);
-        assert_eq!(failed, Vec::<String>::new(), "{}", file.display());
-    }
+    // Each file is its own program, and together they are most of the
+    // suite's time: run on one thread, the slowest waits on all the rest.
+    std::thread::scope(|scope| {
+        let runs: Vec<_> = files
+            .iter()
+            .map(|file| (file, scope.spawn(|| support::test_file(file))))
+            .collect();
+        for (file, run) in runs {
+            let (failed, _) = run
+                .join()
+                .unwrap_or_else(|_| panic!("{} panicked", file.display()));
+            assert_eq!(failed, Vec::<String>::new(), "{}", file.display());
+        }
+    });
 }
 
 /// The grammar, construct by construct: every expectation of the syntax
