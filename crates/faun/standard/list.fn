@@ -276,7 +276,7 @@ List(a) : [Nil, Cons(a, List(a))].(
 
   # The elements in order of `key`, stable as `sort` is.
   sort_on : (List(a), a -> k) -> List(a) where k.cmp : (k, k) -> Order
-  sort_on(values, key) -> merge_sort(values, key, len(values))
+  sort_on(values, key) -> merge_sort(values, key)
 )
 
 reverse_into : (List(a), List(a)) -> List(a)
@@ -392,15 +392,14 @@ windowed : (Bool, List(a), List(a), (Nat, List(List(a)))) -> List(List(a))
 windowed(True, window, tail, (size, built)) -> windows_into(tail, size, [window, *built])
 windowed(False, _, _, (_, built)) -> reverse_into(built, [])
 
-# Sort each half and merge them. A list halves at every level, so its length
-# is always fuel enough; the fuel is what shows the sort stops.
-merge_sort : (List(a), a -> k, Nat) -> List(a) where k.cmp : (k, k) -> Order
-merge_sort([], _, _) -> []
-merge_sort([only], _, _) -> [only]
-merge_sort(values, key, Succ(fuel)) ->
+# Sort each half and merge them. Past the first two clauses a list holds two
+# or more, so each half is shorter than it.
+merge_sort : (List(a), a -> k) -> List(a) where k.cmp : (k, k) -> Order
+merge_sort([], _) -> []
+merge_sort([only], _) -> [only]
+merge_sort(values, key) ->
   (front, back) = List.split_at(values, List.len(values) / 2)
-  merge_into(merge_sort(front, key, fuel), merge_sort(back, key, fuel), key, [])
-merge_sort(values, _, 0) -> values
+  merge_into(merge_sort(front, key), merge_sort(back, key), key, [])
 
 # Two sorted lists as one, the smaller key first and the left one on a tie,
 # which is what keeps the sort stable.

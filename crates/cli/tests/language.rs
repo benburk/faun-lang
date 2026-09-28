@@ -269,6 +269,40 @@ const RUNNING: &[(&str, &str, u32)] = &[
         24 + 11 + 3 + 4,
     ),
     (
+        "a walk goes round on a list cut shorter than one it knows the length of",
+        "merge : (List(Nat), List(Nat)) -> List(Nat)
+         merge([], right) -> right
+         merge(left, []) -> left
+         merge([x, *xs], [y, *ys]) if x <= y -> [x, *merge(xs, [y, *ys])]
+         merge(left, [y, *ys]) -> [y, *merge(left, ys)]
+
+         sort : List(Nat) -> List(Nat)
+         sort([]) -> []
+         sort([x]) -> [x]
+         sort(values) ->
+           (front, back) = values.split_at(values.len() / 2)
+           merge(sort(front), sort(back))
+
+         tails : List(Nat) -> Nat
+         tails([]) -> 0
+         tails(values) -> 1 + tails(values.drop(1))
+
+         fronts : List(Nat) -> Nat
+         fronts([]) -> 0
+         fronts(values) -> 1 + fronts(values.take(values.len() - 1))
+
+         halvings : Nat -> Nat
+         halvings(0) -> 0
+         halvings(n) -> 1 + halvings(n / 2)
+
+         main! : Host -> []
+         main!(host) ->
+           xs = [5, host.args.len(), 4, 2, 3]
+           sorted = sort(xs)
+           host.exit!(U8.of_nat(sorted.get_or(0, 9) * 10 + tails(xs) + fronts(xs) + halvings(sorted.len())))",
+        10 + 5 + 5 + 3,
+    ),
+    (
         "a parser goes round on the rest it answers inside an `Ok`",
         "Read : [Found(Nat, List(Nat)), NotFound]
 

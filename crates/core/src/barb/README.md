@@ -82,7 +82,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   constant: a cons is one longer than its rest whatever its element, and a
   walk onto an accumulator answers the sum. So a walk going round on what
   `map`, `filter`, `map_accum` or `reverse` answered of its rest is seen to
-  stop.
+  stop. A natural's value is its length on the same scale, with what
+  recognized arithmetic and the recognized `Length`, `Take` and `Drop` mean
+  there, and a list's least length follows the constructors it was matched
+  as, so a merge sort halving by `split_at(len / 2)` past its one-element
+  clause is seen to stop without fuel. A small definition going round
+  nowhere is read in place at a call, with what its arguments are there.
 - `relations.rs`: what a guard says of the sizes it compared, followed from
   the comparisons recognized by their equations through the definitions
   answering from them, as the facts each constructor of the answer carries.

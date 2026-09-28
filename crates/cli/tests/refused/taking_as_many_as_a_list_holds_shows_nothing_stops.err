@@ -1,0 +1,7 @@
+error: nothing here shows `walk` stops
+ --> taking_as_many_as_a_list_holds_shows_nothing_stops.fn:5:17
+  |
+5 | walk(values) -> walk(values.take(values.len()))
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ goes round on what it was handed, not on a part of it
+  |
+  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

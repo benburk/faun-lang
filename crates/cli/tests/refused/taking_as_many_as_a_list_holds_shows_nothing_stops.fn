@@ -1,0 +1,5 @@
+import std.host {Host}
+
+walk : List(Nat) -> List(Nat)
+walk([]) -> []
+walk(values) -> walk(values.take(values.len()))

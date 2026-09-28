@@ -41,6 +41,18 @@
 //! with every set of lists as small as anything and each is weakened until
 //! it holds, so the sum survives where neither list alone does.
 //!
+//! A natural is on the same scale, its value its length, so a count and a
+//! list compare: `len(xs)` is as long as `xs`, `take(xs, n)` no longer than
+//! either, and `drop(xs, n)` shorter than `xs` where `n` is at least one and
+//! `xs` is not empty. Division, subtraction and a remainder say what they
+//! say of numbers there too. How long a list at least is comes from the
+//! constructors it was matched as, a match on its rest included, so past
+//! `sort([])` and `sort([x])` a list holds two, its half by `len / 2` is at
+//! least one, and both halves `split_at` answers are shorter than it. A
+//! call of a small definition going round nowhere, as `split_at` does, is
+//! read in place with what its arguments are there, rather than by what it
+//! answers for anything.
+//!
 //! Closure can be much larger than the source call graph. Barb keeps matrices
 //! flat and indexes graphs by both endpoints, so a new graph is composed only
 //! with graphs that can actually precede or follow it. A failing idempotent is
@@ -52,7 +64,7 @@ use std::rc::Rc;
 use super::model::{Atom, Body, Expr, ExprId, FnId};
 use super::program::Program;
 use super::relations::{self, EQUAL, Facts, GREATER, LESS, Value, Verdict};
-use super::{ConstantView, Operation, Refusal};
+use super::{ConstantView, Operation, Refusal, SequenceOperation};
 
 /// What a value is, against a parameter it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -79,7 +91,8 @@ enum Bound {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LocalFacts {
     bounds: Vec<Bound>,
-    /// A proven lower bound for a natural, capped at two.
+    /// A proven lower bound on its size, capped at two: a natural's value,
+    /// or how many elements a list has.
     minimum: u8,
     /// No shallower than each parameter plus this distance, where known:
     /// the other side of `bounds`, which a measure closing from below needs.
@@ -95,6 +108,11 @@ struct LocalFacts {
     /// nothing is known, and otherwise one entry per key, each already the
     /// least any smaller key says.
     lengths: Vec<Option<i64>>,
+    /// The natural it is, where it is known outright.
+    exact: Option<u64>,
+    /// The local whose rest this is, where an arm took one apart: what is
+    /// learned of this one's length is learned of that one's.
+    rest_of: Option<usize>,
 }
 
 /// What a value is taken apart as: for each constructor it may be, what its
@@ -150,8 +168,10 @@ const MOST_OFFSET: i64 = 4;
 const SHAPE_DEPTH: usize = 3;
 
 /// The lists a definition takes, whose lengths what it holds is read
-/// against: each parameter whose type is a spine but not a number, which
-/// the gaps between naturals already measure.
+/// against: each parameter whose type is a spine. A natural is one too, its
+/// length its value, so a count and a list are read on one scale: what
+/// `len` answers is as long as its list, and `take(xs, n)` no longer than
+/// `n`.
 ///
 /// A length is at most one of them, or two together, plus a constant: a
 /// walk building onto what it was handed answers both, so that is as far as
@@ -162,6 +182,67 @@ struct Spines {
     params: Vec<usize>,
     /// Which of `params` each key holds, as bits, the empty key first.
     keys: Vec<u32>,
+}
+
+/// What reading lengths takes: each definition's lists, which definitions
+/// are a sequence operation, answered by what it means rather than by its
+/// body, and which call nothing going round and are small enough to read
+/// in place at a call.
+struct Lengths {
+    spines: Vec<Spines>,
+    sequences: Vec<Option<SequenceOperation>>,
+    simple: Vec<bool>,
+}
+
+/// How many terms a definition read in place at a call may have, and how
+/// deep such reading goes.
+const MOST_READ_IN_PLACE: usize = 48;
+const DEEPEST_IN_PLACE: usize = 3;
+
+impl Lengths {
+    fn of(program: &Program, operations: &[Option<Operation>]) -> Self {
+        let count = program.functions().len();
+        let spines = (0..count)
+            .map(|at| Spines::of(program, FnId::at(at)))
+            .collect();
+        let sequences = super::arithmetic::recognise_sequences(program, operations);
+        let calls = graph(program);
+        let mut simple = vec![false; count];
+        for round in rounds(&calls) {
+            let &[id] = round.as_slice() else {
+                continue;
+            };
+            let Some(body) = program.function(id).body() else {
+                continue;
+            };
+            simple[id.index()] =
+                !calls[id.index()].contains(&id) && terms(program, body) <= MOST_READ_IN_PLACE;
+        }
+        Self {
+            spines,
+            sequences,
+            simple,
+        }
+    }
+}
+
+/// How many terms a body holds, its arms' included.
+fn terms(program: &Program, body: Body) -> usize {
+    let bindings = program.bindings(body.bindings);
+    bindings
+        .iter()
+        .chain([&body.tail])
+        .map(|&expr| match program.expr(expr) {
+            Expr::Match(_, arms) => {
+                1 + program
+                    .arms(arms)
+                    .iter()
+                    .map(|arm| terms(program, arm.body))
+                    .sum::<usize>()
+            }
+            Expr::Atom(_) | Expr::Con(..) | Expr::Static(_) | Expr::Call(..) => 1,
+        })
+        .sum()
 }
 
 /// Where lengths are not read: no lists, and no keys.
@@ -179,10 +260,7 @@ impl Spines {
             .params(id)
             .iter()
             .enumerate()
-            .filter(|(_, ty)| {
-                matches!(super::shape(program, **ty), super::Shape::Spine { .. })
-                    && super::arithmetic::natural(program, **ty).is_none()
-            })
+            .filter(|(_, ty)| matches!(super::shape(program, **ty), super::Shape::Spine { .. }))
             .map(|(at, _)| at)
             .take(MOST_SPINES)
             .collect();
@@ -256,6 +334,23 @@ impl Spines {
     }
 }
 
+/// Both bounds on one length: the lesser of each key's, where either says.
+fn met_lengths(a: &[Option<i64>], b: &[Option<i64>]) -> Vec<Option<i64>> {
+    if a.is_empty() {
+        return b.to_vec();
+    }
+    if b.is_empty() {
+        return a.to_vec();
+    }
+    a.iter()
+        .zip(b)
+        .map(|pair| match pair {
+            (Some(a), Some(b)) => Some((*a).min(*b)),
+            (held, None) | (None, held) => *held,
+        })
+        .collect()
+}
+
 /// A length bound kept to the range a summary holds.
 fn clamped(bound: Option<i64>) -> Option<i64> {
     bound
@@ -302,6 +397,8 @@ impl LocalFacts {
             verdict: None,
             shape: Shape::Unknown,
             lengths: Vec::new(),
+            exact: None,
+            rest_of: None,
         }
     }
 
@@ -338,6 +435,8 @@ impl LocalFacts {
             same: None,
             verdict: None,
             shape: self.shape.join(&other.shape),
+            exact: self.exact.filter(|_| self.exact == other.exact),
+            rest_of: None,
             // Each key's bound is the least that key says, so the larger of
             // two holds of either.
             lengths: if self.lengths.is_empty() || other.lengths.is_empty() {
@@ -388,6 +487,8 @@ impl LocalFacts {
                 held => held.clone(),
             },
             lengths: self.lengths.iter().map(|bound| clamped(*bound)).collect(),
+            exact: None,
+            rest_of: None,
         }
     }
 
@@ -477,16 +578,8 @@ impl LocalFacts {
             };
         }
         met.minimum = met.minimum.max(other.minimum);
-        if met.lengths.is_empty() {
-            met.lengths.clone_from(&other.lengths);
-        } else if !other.lengths.is_empty() {
-            for (bound, other) in met.lengths.iter_mut().zip(&other.lengths) {
-                *bound = match (*bound, *other) {
-                    (Some(a), Some(b)) => Some(a.min(b)),
-                    (held, None) | (None, held) => held,
-                };
-            }
-        }
+        met.lengths = met_lengths(&met.lengths, &other.lengths);
+        met.exact = met.exact.or(other.exact);
         if met.shape == Shape::Unknown {
             met.shape = other.shape.clone();
         }
@@ -612,18 +705,16 @@ pub(super) fn stops(program: &Program) -> Result<(), Refusal> {
         {
             continue;
         }
-        let (spines, summaries) = summaries.get_or_insert_with(|| {
-            let spines: Vec<Spines> = (0..program.functions().len())
-                .map(|at| Spines::of(program, FnId::at(at)))
-                .collect();
-            let summaries = summaries_of(program, &operations, &spines);
-            (spines, summaries)
+        let (lengths, summaries) = summaries.get_or_insert_with(|| {
+            let lengths = Lengths::of(program, &operations);
+            let summaries = summaries_of(program, &operations, &lengths);
+            (lengths, summaries)
         });
         descends(
             program,
             &round,
             &operations,
-            Tier::answered(summaries, spines),
+            Tier::answered(summaries, lengths),
         )?;
     }
     Ok(())
@@ -638,7 +729,7 @@ pub(super) fn stops(program: &Program) -> Result<(), Refusal> {
 fn summaries_of(
     program: &Program,
     operations: &[Option<Operation>],
-    spines: &[Spines],
+    lengths: &Lengths,
 ) -> HashMap<FnId, LocalFacts> {
     let calls = graph(program);
     let mut summaries = HashMap::new();
@@ -648,7 +739,7 @@ fn summaries_of(
             .filter(|id| program.function(*id).body().is_some())
             .collect();
         for &id in &bodied {
-            summaries.insert(id, spines[id.index()].least(program, id));
+            summaries.insert(id, lengths.spines[id.index()].least(program, id));
         }
         let mut settled = false;
         for _ in 0..64 {
@@ -658,7 +749,7 @@ fn summaries_of(
                     program,
                     id,
                     operations,
-                    Tier::summarised(&summaries, spines),
+                    Tier::summarised(&summaries, lengths),
                 );
                 if summaries.get(&id) != Some(&answered) {
                     summaries.insert(id, answered);
@@ -806,8 +897,8 @@ struct Tier<'a> {
     measured: bool,
     pathed: bool,
     summaries: &'a HashMap<FnId, LocalFacts>,
-    /// Each definition's lists, where lengths are read.
-    spines: Option<&'a [Spines]>,
+    /// What lengths are read with, where they are.
+    lengths: Option<&'a Lengths>,
 }
 
 impl<'a> Tier<'a> {
@@ -816,7 +907,7 @@ impl<'a> Tier<'a> {
             measured: false,
             pathed: false,
             summaries,
-            spines: None,
+            lengths: None,
         }
     }
 
@@ -825,25 +916,25 @@ impl<'a> Tier<'a> {
             measured: true,
             pathed: false,
             summaries,
-            spines: None,
+            lengths: None,
         }
     }
 
-    const fn summarised(summaries: &'a HashMap<FnId, LocalFacts>, spines: &'a [Spines]) -> Self {
+    const fn summarised(summaries: &'a HashMap<FnId, LocalFacts>, lengths: &'a Lengths) -> Self {
         Self {
             measured: true,
             pathed: false,
             summaries,
-            spines: Some(spines),
+            lengths: Some(lengths),
         }
     }
 
-    const fn answered(summaries: &'a HashMap<FnId, LocalFacts>, spines: &'a [Spines]) -> Self {
+    const fn answered(summaries: &'a HashMap<FnId, LocalFacts>, lengths: &'a Lengths) -> Self {
         Self {
             measured: true,
             pathed: true,
             summaries,
-            spines: Some(spines),
+            lengths: Some(lengths),
         }
     }
 }
@@ -1114,11 +1205,14 @@ struct Reader<'a> {
     rows: usize,
     /// Whether any definition's fields are read so.
     pathed: bool,
-    /// Every definition's lists, where lengths are read, and this one's.
-    /// Where a matrix is built, each of its lists has a row of its own
-    /// after the fields, its length.
-    spines: Option<&'a [Spines]>,
+    /// What lengths are read with, where they are, and this definition's
+    /// lists. Where a matrix is built, each of its lists has a row of its
+    /// own after the fields, its length.
+    lengths: Option<&'a Lengths>,
     own: &'a Spines,
+    /// How many calls deep in others this body is read, where a call of a
+    /// definition going round nowhere is read in place.
+    depth: usize,
     locals: Vec<LocalFacts>,
     held: Vec<(Graph, ExprId)>,
     /// What the guards around the part being read say.
@@ -1136,8 +1230,8 @@ impl<'a> Reader<'a> {
         let params = program.params(from).len();
         let paths = paths(program, from, tier.pathed);
         let own = tier
-            .spines
-            .map_or(&NO_SPINES, |spines| &spines[from.index()]);
+            .lengths
+            .map_or(&NO_SPINES, |lengths| &lengths.spines[from.index()]);
         let lists = if tier.pathed { own.params.len() } else { 0 };
         let rows = params + paths.len() + lists;
         // A parameter starts at distance zero from itself. Distances are
@@ -1164,8 +1258,9 @@ impl<'a> Reader<'a> {
             paths,
             rows,
             pathed: tier.pathed,
-            spines: tier.spines,
+            lengths: tier.lengths,
             own,
+            depth: 0,
             locals,
             held: Vec::new(),
             facts: Vec::new(),
@@ -1234,14 +1329,25 @@ impl Reader<'_> {
     fn constant(&self, value: super::ConstId) -> LocalFacts {
         let ctor = self.program.constant(value).constructor();
         let fields = self.program.fields(ctor).len();
-        let lengths = match self.program.constant(value).view() {
-            ConstantView::Spine(spine) => i64::try_from(spine.length())
-                .map_or_else(|_| Vec::new(), |length| self.own.exactly(length)),
-            _ => self.built_length(ctor, &[]),
+        let (length, exact) = match self.program.constant(value).view() {
+            ConstantView::Spine(spine) => (i64::try_from(spine.length()).ok(), None),
+            ConstantView::Natural(natural) => {
+                let exact = natural.try_u64().ok();
+                (exact.and_then(|exact| i64::try_from(exact).ok()), exact)
+            }
+            ConstantView::Constructor(_) => (None, None),
         };
+        let lengths = length.map_or_else(
+            || self.built_length(ctor, &[]),
+            |length| self.own.exactly(length),
+        );
+        let minimum = length.map_or(0, |length| {
+            u8::try_from(length.clamp(0, 2)).expect("at most two")
+        });
         LocalFacts {
-            minimum: natural_minimum(self.program, value),
+            minimum,
             lengths,
+            exact,
             shape: Shape::Known(Rc::new(vec![(
                 ctor,
                 vec![LocalFacts::unknown(self.rows); fields],
@@ -1257,15 +1363,11 @@ impl Reader<'_> {
             let graph = self.matrix(to, args);
             self.held.push((graph, id));
         }
-        let unknown = LocalFacts::unknown(self.rows);
-        let mut result = match self.operations[to.index()] {
-            Some(operation) => self.arithmetic(operation, args, unknown),
-            None => self.summaries.get(&to).map_or(unknown, |summary| {
-                let args: Vec<&LocalFacts> =
-                    args.iter().map(|arg| &self.locals[arg.0.index()]).collect();
-                let theirs = self.spines.map_or(&NO_SPINES, |spines| &spines[to.index()]);
-                summary.instantiated(&args, self.rows, self.own, theirs)
-            }),
+        let mut result = if let Some(operation) = self.operations[to.index()] {
+            let unknown = LocalFacts::unknown(self.rows);
+            self.arithmetic(operation, args, unknown)
+        } else {
+            self.answered(to, args)
         };
         if self.measured {
             let values = self.values(args);
@@ -1276,6 +1378,131 @@ impl Reader<'_> {
             }
         }
         result
+    }
+
+    /// What a call answers: what its summary says with what was handed,
+    /// and besides that what a sequence operation means, or what its body
+    /// says read in place.
+    fn answered(&self, to: FnId, args: &[Atom]) -> LocalFacts {
+        let unknown = LocalFacts::unknown(self.rows);
+        let summarised = self.summaries.get(&to).map_or(unknown, |summary| {
+            let args: Vec<&LocalFacts> =
+                args.iter().map(|arg| &self.locals[arg.0.index()]).collect();
+            let theirs = self
+                .lengths
+                .map_or(&NO_SPINES, |lengths| &lengths.spines[to.index()]);
+            summary.instantiated(&args, self.rows, self.own, theirs)
+        });
+        let read = self
+            .sequence(to, args)
+            .or_else(|| self.read_in_place(to, args));
+        match read {
+            Some(read) => read.meet(&summarised),
+            None => summarised,
+        }
+    }
+
+    /// What a sequence operation answers, by what it means: how many a
+    /// list holds is as long as it, its first `n` are no longer than it or
+    /// than `n`, and it without some of its first, where there are some to
+    /// take, is shorter than it.
+    fn sequence(&self, to: FnId, args: &[Atom]) -> Option<LocalFacts> {
+        let operation = (*self.lengths?.sequences.get(to.index())?)?;
+        let list = &self.locals[args.first()?.0.index()];
+        let unknown = LocalFacts::unknown(self.rows);
+        match operation {
+            SequenceOperation::Length => Some(LocalFacts {
+                bounds: list.bounds.clone(),
+                minimum: list.minimum,
+                lengths: list.lengths.clone(),
+                ..unknown
+            }),
+            SequenceOperation::Take => {
+                let count = &self.locals[args.get(1)?.0.index()];
+                Some(LocalFacts {
+                    bounds: list.bounds.clone(),
+                    minimum: list.minimum.min(self.minimum(args[1].0.index())),
+                    lengths: met_lengths(&list.lengths, &count.lengths),
+                    ..unknown
+                })
+            }
+            SequenceOperation::Drop => Some(self.dropped(list, args.get(1)?.0.index())),
+            SequenceOperation::ReverseOnto
+            | SequenceOperation::Prepend
+            | SequenceOperation::Append
+            | SequenceOperation::Replace => None,
+        }
+    }
+
+    /// A list without its first `count`: a part of it, and a strict one
+    /// where there are some to take and it takes at least one.
+    fn dropped(&self, list: &LocalFacts, count: usize) -> LocalFacts {
+        let strict = self.minimum(count) >= 1 && list.minimum >= 1;
+        let by = i64::from(strict);
+        let dropped = self.locals[count].exact.map_or(2, |exact| exact.min(2));
+        LocalFacts {
+            bounds: list
+                .bounds
+                .iter()
+                .map(|bound| match bound {
+                    Bound::Offset(offset) => Bound::Offset(offset - by),
+                    Bound::Unknown => Bound::Unknown,
+                })
+                .collect(),
+            minimum: list
+                .minimum
+                .saturating_sub(u8::try_from(dropped).expect("at most two")),
+            lengths: shifted(&list.lengths, -by),
+            ..LocalFacts::unknown(self.rows)
+        }
+    }
+
+    /// What a call of a definition going round nowhere answers, its body
+    /// read here with what its arguments are here: what it answers for
+    /// these, rather than what it answers for anything.
+    fn read_in_place(&self, to: FnId, args: &[Atom]) -> Option<LocalFacts> {
+        let lengths = self.lengths?;
+        // Only where stopping is being shown: working out what every
+        // definition answers, round after round, would read each callee
+        // again every time.
+        if !self.pathed && self.depth == 0
+            || self.depth >= DEEPEST_IN_PLACE
+            || !lengths.simple.get(to.index()).copied().unwrap_or(false)
+            || self.within.contains(&to)
+        {
+            return None;
+        }
+        let body = self.program.function(to).body()?;
+        let locals = args
+            .iter()
+            .enumerate()
+            .map(|(at, arg)| LocalFacts {
+                same: Some(at),
+                rest_of: None,
+                ..self.locals[arg.0.index()].clone()
+            })
+            .collect();
+        let mut inner = Reader {
+            program: self.program,
+            from: to,
+            within: self.within,
+            operations: self.operations,
+            measured: self.measured,
+            summaries: self.summaries,
+            params: args.len(),
+            paths: Vec::new(),
+            rows: self.rows,
+            pathed: false,
+            lengths: self.lengths,
+            own: self.own,
+            depth: self.depth + 1,
+            locals,
+            held: Vec::new(),
+            facts: Vec::new(),
+        };
+        let answer = inner.read(body);
+        debug_assert!(inner.held.is_empty(), "nothing read in place goes round");
+        Some(answer)
     }
 
     /// What a match answers, which is a verdict where its arms answer them.
@@ -1305,13 +1532,15 @@ impl Reader<'_> {
                 continue;
             };
             let (level, facts) = (self.locals.len(), self.facts.len());
-            let previous_minimum = self.locals[at].minimum;
+            let minimums = self.minimums(at);
             self.bind_fields(at, arm.ctor, shaped.as_deref());
             self.facts.extend(given);
             let arm_answer = self.read(arm.body);
             self.facts.truncate(facts);
             self.locals.truncate(level);
-            self.locals[at].minimum = previous_minimum;
+            for (held, minimum) in minimums {
+                self.locals[held].minimum = minimum;
+            }
             answered = Some(match answered {
                 None => arm_answer,
                 Some(before) => before.join(&arm_answer),
@@ -1354,15 +1583,24 @@ impl Reader<'_> {
     fn bind_fields(&mut self, at: usize, ctor: super::CtorId, shaped: Option<&[LocalFacts]>) {
         let level = self.locals.len();
         let successor = natural_successor(self.program, ctor);
-        if successor {
-            self.locals[at].minimum = self.locals[at].minimum.max(1);
+        let pushed = pushed_rest(self.program, ctor);
+        if pushed.is_some() {
+            self.lengthen(at, 1);
         }
         let field = taken(&self.locals[at], successor);
         self.locals
             .resize(level + self.program.fields(ctor).len(), field);
-        // The rest of a list is one shorter than it.
-        if let Some(rest) = self.rest(ctor) {
-            self.locals[level + rest].lengths = shifted(&self.locals[at].lengths, -1);
+        // The rest of a list is one shorter than it, and what is learned of
+        // how long it is is learned of the list too.
+        if let Some(rest) = pushed {
+            let minimum = self.locals[at].minimum.saturating_sub(1);
+            let lengths = shifted(&self.locals[at].lengths, -1);
+            let local = &mut self.locals[level + rest];
+            local.minimum = minimum;
+            local.rest_of = Some(at);
+            if !self.own.keys.is_empty() {
+                local.lengths = lengths;
+            }
         }
         let param = self.locals[at].same.filter(|&same| same < self.params);
         for (offset, local) in self.locals[level..].iter_mut().enumerate() {
@@ -1380,18 +1618,31 @@ impl Reader<'_> {
         }
     }
 
-    /// Which field of `ctor` is the rest of a list, where it builds one
-    /// whose length is read.
-    fn rest(&self, ctor: super::CtorId) -> Option<usize> {
-        if self.own.keys.is_empty() {
-            return None;
+    /// Local `at` known at least `least` long, and each list it is the
+    /// rest of one longer than that.
+    fn lengthen(&mut self, at: usize, least: u8) {
+        let mut at = at;
+        let mut least = least.min(2);
+        while self.locals[at].minimum < least {
+            self.locals[at].minimum = least;
+            let Some(whole) = self.locals[at].rest_of else {
+                break;
+            };
+            at = whole;
+            least = least.saturating_add(1).min(2);
         }
-        match super::shape(self.program, self.program.ctor(ctor).owner) {
-            super::Shape::Spine {
-                cons, recursive, ..
-            } if cons == ctor => Some(recursive),
-            _ => None,
+    }
+
+    /// The least length of `at` and of each list it is the rest of, to be
+    /// put back when an arm that learned more is left.
+    fn minimums(&self, at: usize) -> Vec<(usize, u8)> {
+        let mut held = vec![(at, self.locals[at].minimum)];
+        let mut at = at;
+        while let Some(whole) = self.locals[at].rest_of {
+            held.push((whole, self.locals[whole].minimum));
+            at = whole;
         }
+        held
     }
 
     /// How long a list `ctor` builds is: nothing at all, or one more than
@@ -1453,7 +1704,13 @@ impl Reader<'_> {
             Operation::Div => &[(argument(0), minimum(0) > 0 && minimum(1) >= 2)],
             Operation::Mod => &[(argument(0), false), (argument(1), minimum(1) > 0)],
             Operation::And => &[(argument(0), false), (argument(1), false)],
-            Operation::Add | Operation::Mul => {
+            Operation::Add => {
+                result.lower = self.grown(operation, args);
+                result.lengths = self.summed(&argument(0).lengths, &argument(1).lengths);
+                result.minimum = minimum(0).saturating_add(minimum(1)).min(2);
+                return result;
+            }
+            Operation::Mul => {
                 result.lower = self.grown(operation, args);
                 return result;
             }
@@ -1473,7 +1730,45 @@ impl Reader<'_> {
                 .min()
                 .map_or(Bound::Unknown, Bound::Offset);
         }
+        self.sized(operation, args, candidates, &mut result);
         result
+    }
+
+    /// What recognized arithmetic says on the length scale: no larger than
+    /// a candidate, and smaller where it is strictly so; and halving by a
+    /// known number keeps a least value.
+    fn sized(
+        &self,
+        operation: Operation,
+        args: &[Atom],
+        candidates: &[(&LocalFacts, bool)],
+        result: &mut LocalFacts,
+    ) {
+        for (argument, strict) in candidates {
+            let bounded = shifted(&argument.lengths, -i64::from(*strict));
+            result.lengths = met_lengths(&result.lengths, &bounded);
+        }
+        if operation == Operation::Div
+            && let Some(divisor) = self.locals[args[1].0.index()]
+                .exact
+                .filter(|&divisor| divisor > 0)
+        {
+            let least = u64::from(self.minimum(args[0].0.index())) / divisor;
+            result.minimum = u8::try_from(least).unwrap_or(0);
+        }
+    }
+
+    /// A bound on the sum of two lengths: each way of picking one bound of
+    /// each, kept where the two keys share no list.
+    fn summed(&self, left: &[Option<i64>], right: &[Option<i64>]) -> Vec<Option<i64>> {
+        let (left, right) = (tightest(self.own, left), tightest(self.own, right));
+        let sums = left.iter().flat_map(|&(a, first)| {
+            right
+                .iter()
+                .filter(move |(b, _)| a & b == 0)
+                .map(move |&(b, second)| (a | b, first + second))
+        });
+        self.own.gathered(sums)
     }
 
     /// How far a sum or a product is above each parameter: a sum is at
@@ -1503,8 +1798,8 @@ impl Reader<'_> {
         let ours = measures(self.program, self.from, self.measured);
         let theirs = measures(self.program, to, self.measured);
         let their_paths = paths(self.program, to, self.pathed);
-        let their_lists: &[usize] = match self.spines {
-            Some(spines) if self.pathed => &spines[to.index()].params,
+        let their_lists: &[usize] = match self.lengths {
+            Some(lengths) if self.pathed => &lengths.spines[to.index()].params,
             _ => &[],
         };
         let rows = self.rows + ours.len();
@@ -1710,6 +2005,8 @@ fn taken(value: &LocalFacts, predecessor: bool) -> LocalFacts {
         verdict: None,
         shape: Shape::Unknown,
         lengths: Vec::new(),
+        exact: None,
+        rest_of: None,
     }
 }
 
@@ -1743,9 +2040,16 @@ fn constructed(
             result.bounds[row] = Bound::Offset(deepest + 1);
         }
     }
+    if let super::Shape::Spine {
+        cons, recursive, ..
+    } = super::shape(program, program.ctor(ctor).owner)
+        && cons == ctor
+    {
+        let rest = &locals[args[recursive].0.index()];
+        result.minimum = rest.minimum.saturating_add(1).min(2);
+    }
     if natural_successor(program, ctor) {
         let taken = &locals[args[0].0.index()];
-        result.minimum = taken.minimum.saturating_add(1).min(2);
         result.lower = taken
             .lower
             .iter()
@@ -1755,18 +2059,19 @@ fn constructed(
     result
 }
 
+/// Which field of `ctor` is the rest of a spine, where it pushes one.
+fn pushed_rest(program: &Program, ctor: super::CtorId) -> Option<usize> {
+    match super::shape(program, program.ctor(ctor).owner) {
+        super::Shape::Spine {
+            cons, recursive, ..
+        } if cons == ctor => Some(recursive),
+        _ => None,
+    }
+}
+
 fn natural_successor(program: &Program, ctor: super::CtorId) -> bool {
     super::arithmetic::natural(program, program.ctor(ctor).owner)
         .is_some_and(|(_, successor)| successor == ctor)
-}
-
-fn natural_minimum(program: &Program, value: super::ConstId) -> u8 {
-    let ConstantView::Natural(value) = program.constant(value).view() else {
-        return 0;
-    };
-    value.try_u64().map_or(2, |value| {
-        u8::try_from(value.min(2)).expect("a value capped at two")
-    })
 }
 
 /// Which definitions each one calls.

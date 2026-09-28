@@ -1,0 +1,7 @@
+error: nothing here shows `sort` stops
+ --> a_halving_that_may_hand_on_a_list_of_one_shows_nothing_stops.fn:8:22
+  |
+8 |   sort(front).extend(sort(back))
+  |                      ^^^^^^^^^^ goes round on what it was handed, not on a part of it
+  |
+  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops
