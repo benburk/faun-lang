@@ -1,0 +1,5 @@
+error: mismatched types
+  --> a_signature_s_record_is_not_a_declared_type.fn:14:42
+   |
+14 | main!(host) -> host.exit!(U8.of_nat(x_of(Point.of(1, 2))))
+   |                                          ^^^^^^^^^^^^^^ expected `{x: Nat, *}`, found `Point`

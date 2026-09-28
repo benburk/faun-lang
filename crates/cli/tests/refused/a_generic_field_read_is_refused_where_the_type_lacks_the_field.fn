@@ -1,0 +1,10 @@
+import std.host {Host}
+
+Box : {item: Nat}.(
+  of(item) -> Box({item})
+)
+
+x_of(v) -> v.x
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(x_of(Box.of(1))))

@@ -1,0 +1,14 @@
+import std.host {Host}
+
+# A signature writes a record, which a declared type is not, though the same
+# read without the signature is met by one: a signature has no way yet to
+# ask for a field alone.
+Point : {x: Nat, y: Nat}.(
+  of(x, y) -> Point({x, y})
+)
+
+x_of : {x: Nat, *} -> Nat
+x_of(v) -> v.x
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(x_of(Point.of(1, 2))))

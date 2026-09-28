@@ -1,0 +1,12 @@
+import std.host {Host}
+
+# Reading a declared type's field is open to anyone, but building one is its
+# constructor's: an update would make a `Point` without it.
+Point : {x: Nat, y: Nat}.(
+  of(x, y) -> Point({x, y})
+)
+
+bumped(r) -> {x: r.x + 1, *r}
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(bumped(Point.of(1, 2)).x))

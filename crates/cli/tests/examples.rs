@@ -280,18 +280,21 @@ fn the_syntax_examples_hold() {
 
 /// The n-body benchmark's energies, after nought, one and ten steps, are
 /// the ones the benchmarks game gives: built and run on this machine as
-/// `faun test` does, since its floats are the machine's own.
+/// `faun test` does, since its floats are the machine's own. The unsigned
+/// copy infers every type the signed one writes, and gives the same.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 #[test]
-fn the_nbody_example_holds() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
-        .arg("test")
-        .arg(example("nbody/main.fn"))
-        .output()
-        .unwrap();
-    let said = String::from_utf8(output.stdout).unwrap();
-    assert!(output.status.success(), "{said}");
-    assert_eq!(said, "3 expectations hold\n");
+fn the_nbody_examples_hold() {
+    for path in ["nbody/main.fn", "nbody-untyped/main.fn"] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+            .arg("test")
+            .arg(example(path))
+            .output()
+            .unwrap();
+        let said = String::from_utf8(output.stdout).unwrap();
+        assert!(output.status.success(), "{path}: {said}");
+        assert_eq!(said, "3 expectations hold\n", "{path}");
+    }
 }
 
 /// What opening a file meets, as Linux says it: nothing there, something

@@ -1246,10 +1246,28 @@ impl<'a> Specializer<'a> {
                     _ => ExprKind::Invoke(Box::new(head), arguments),
                 }
             }
+            // A bare read through a bound is the owner's field where it has one.
+            t::ExprKind::Method(
+                t::Target::Bound {
+                    owner,
+                    member,
+                    bare: true,
+                },
+                arguments,
+            ) if self
+                .field_type(&self.site_type(owner, substitution)?, *member)?
+                .is_some() =>
+            {
+                let [receiver] = arguments.as_slice() else {
+                    return Err(error("a field is read off one value"));
+                };
+                let receiver = self.expr(module, receiver, substitution)?;
+                ExprKind::Project(Box::new(receiver), *member)
+            }
             t::ExprKind::Method(target, arguments) => {
                 let name = match target {
                     t::Target::Direct(name) => *name,
-                    t::Target::Bound { owner, member } => {
+                    t::Target::Bound { owner, member, .. } => {
                         let owner = self.site_type(owner, substitution)?;
                         self.implementation(&owner, *member)?
                     }
@@ -1318,6 +1336,37 @@ impl<'a> Specializer<'a> {
         substitute_type(template, &defaulted)
     }
 
+    /// The type of `owner`'s field `name`, where it is a record having it
+    /// or a declared type whose record does.
+    fn field_type(&self, owner: &Type, name: Symbol) -> Result<Option<Type>, LowerError> {
+        let fields = match owner {
+            Type::Record(fields) => fields.clone(),
+            Type::Named(owner, arguments) => {
+                let Some(wrapper) = self.data.get(owner).and_then(|data| data.wrapper.as_ref())
+                else {
+                    return Ok(None);
+                };
+                let data = &self.data[owner];
+                let variables: HashMap<_, _> = data
+                    .parameters
+                    .iter()
+                    .copied()
+                    .zip(arguments.iter().cloned())
+                    .collect();
+                let Type::Record(fields) = surface_type(&wrapper.field, &variables)? else {
+                    return Ok(None);
+                };
+                fields
+            }
+            _ => return Ok(None),
+        };
+        let field = fields
+            .into_iter()
+            .find(|(field, _)| *field == name)
+            .map(|(_, ty)| ty);
+        Ok(field)
+    }
+
     /// Which method of `owner` is its `member`.
     fn implementation(&self, owner: &Type, member: Symbol) -> Result<Symbol, LowerError> {
         if self.is_structural(member, std::slice::from_ref(owner)) {
@@ -1355,6 +1404,20 @@ impl<'a> Specializer<'a> {
                     waiting.push(bound);
                     continue;
                 };
+                // A field read: what the owner's field is, the bound answers.
+                let field = if bound.bare {
+                    self.field_type(&owner, bound.member)
+                        .map_err(|failure| failure.message)?
+                } else {
+                    None
+                };
+                if let Some(field) = field {
+                    let InferredType::Function(_, result) = &bound.ty else {
+                        return Err("a field bound reads a value".to_owned());
+                    };
+                    match_type(result, &field, substitution).map_err(|failure| failure.message)?;
+                    continue;
+                }
                 let target = self
                     .implementation(&owner, bound.member)
                     .map_err(|failure| failure.message)?;

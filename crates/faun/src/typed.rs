@@ -77,7 +77,14 @@ pub struct Expr {
 #[derive(Clone, Debug)]
 pub enum Target {
     Direct(Symbol),
-    Bound { owner: InferredType, member: Symbol },
+    /// Through a `where` bound, met at each specialization by `owner`'s
+    /// member. A `bare` one, named with no call, is `owner`'s field where it
+    /// has one.
+    Bound {
+        owner: InferredType,
+        member: Symbol,
+        bare: bool,
+    },
 }
 
 #[derive(Clone, Debug)]

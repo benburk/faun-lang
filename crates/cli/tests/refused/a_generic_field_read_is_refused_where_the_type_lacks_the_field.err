@@ -1,0 +1,5 @@
+error: `Box` has no field or method `x`
+  --> a_generic_field_read_is_refused_where_the_type_lacks_the_field.fn:10:37
+   |
+10 | main!(host) -> host.exit!(U8.of_nat(x_of(Box.of(1))))
+   |                                     ^^^^

@@ -1,0 +1,10 @@
+import std.host {Host}
+
+Count : Nat.(
+  of(n) -> Count(n)
+)
+
+x_of(v) -> v.x
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(x_of(Count.of(1))))

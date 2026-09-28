@@ -19,8 +19,9 @@
 //! its rigid variables; a use of a bounded definition owes its bounds, met
 //! where the use's types are known or owed in turn. An unsigned component's
 //! methods still open on a variable it generalizes become its bounds, as do
-//! its numerals of a generic type, through `of_nat`. Specialization calls
-//! each concrete type's own member.
+//! its field reads off one, met by a record or a declared type having the
+//! field, and its numerals of a generic type, through `of_nat`.
+//! Specialization calls each concrete type's own member, or reads its field.
 
 #![allow(clippy::too_many_lines)]
 
@@ -74,6 +75,10 @@ pub struct InferredBound {
     pub ty: InferredType,
     /// Reached through the type rather than as a method of a value.
     pub associated: bool,
+    /// Named on a value with no call, `x.name`: met by a field of that
+    /// name where the owner has one, and otherwise by a method taking
+    /// nothing else.
+    pub bare: bool,
 }
 
 /// Typed HIR and its source owners; inference's temporary tables are gone.
@@ -108,6 +113,9 @@ struct Facts {
     readings: HashMap<h::SiteId, Reading>,
     bound_sites: HashMap<h::SiteId, (InferredType, Symbol)>,
     deferred_numerals: HashMap<h::SiteId, crate::typed::Numeral>,
+    /// Each method written without a signature, by its owner and spelling,
+    /// as a signature names a signed one's.
+    unsigned_members: HashMap<(Symbol, Symbol), Symbol>,
 }
 
 mod elaborate;
@@ -457,6 +465,9 @@ struct Bound {
     /// `a.of_nat(n)`, rather than as a method of a value of it, which is
     /// its type's first parameter.
     associated: bool,
+    /// Whether the member is named on a value with no call, `x.name`: a
+    /// field, or a method taking nothing else.
+    bare: bool,
 }
 
 impl Bound {
@@ -466,6 +477,7 @@ impl Bound {
             member: self.member,
             ty: substitute(&self.ty, replacements),
             associated: self.associated,
+            bare: self.bare,
         }
     }
 }
@@ -1451,6 +1463,7 @@ impl<'a> Checker<'a> {
                     member,
                     ty,
                     associated,
+                    bare: false,
                 });
                 progress = true;
             }
@@ -1652,7 +1665,7 @@ impl<'a> Checker<'a> {
             .collect();
         let methods = self.unsigned_methods(program, &unsigned);
 
-        for component in components(&definitions, &unsigned, &methods) {
+        for component in components(&definitions, &unsigned, &methods, self.symbols) {
             let marks = self.marks();
             let mut monotypes = HashMap::new();
             for name in &component {
@@ -1863,6 +1876,14 @@ impl<'a> Checker<'a> {
                 (*site, (public_type(&self.infer.resolve(owner)), *member))
             })
             .collect();
+        self.checked.unsigned_members = methods
+            .iter()
+            .flat_map(|(spelling, methods)| {
+                methods
+                    .iter()
+                    .map(|method| ((method.owner, *spelling), method.name))
+            })
+            .collect();
         Ok(self.checked)
     }
 
@@ -1872,6 +1893,7 @@ impl<'a> Checker<'a> {
             member: bound.member,
             ty: public_type(&self.infer.resolve(&bound.ty)),
             associated: bound.associated,
+            bare: bound.bare,
         }
     }
 
@@ -2481,10 +2503,7 @@ impl<'a> Checker<'a> {
                 Ok(ty)
             }
             h::ExprKind::Unary(operator, value) => {
-                let name = match operator {
-                    super::ast::UnaryOp::Negate => "neg",
-                    super::ast::UnaryOp::Not => "not",
-                };
+                let name = unary_member(*operator);
                 let method = self.method_symbol(module, expression.span, name)?;
                 self.method(
                     module,
@@ -2496,21 +2515,7 @@ impl<'a> Checker<'a> {
                 )
             }
             h::ExprKind::Binary(operator, left, right) => {
-                let name = match operator {
-                    super::ast::BinaryOp::Or => "or",
-                    super::ast::BinaryOp::Xor => "xor",
-                    super::ast::BinaryOp::And => "and",
-                    super::ast::BinaryOp::Equal | super::ast::BinaryOp::NotEqual => "equals",
-                    super::ast::BinaryOp::Less
-                    | super::ast::BinaryOp::LessEqual
-                    | super::ast::BinaryOp::Greater
-                    | super::ast::BinaryOp::GreaterEqual => "cmp",
-                    super::ast::BinaryOp::Add => "add",
-                    super::ast::BinaryOp::Subtract => "sub",
-                    super::ast::BinaryOp::Multiply => "mul",
-                    super::ast::BinaryOp::Divide => "div",
-                    super::ast::BinaryOp::Remainder => "mod",
-                };
+                let name = binary_member(*operator);
                 let method = self.method_symbol(module, expression.span, name)?;
                 let result = self.method(
                     module,
@@ -2949,6 +2954,8 @@ impl<'a> Checker<'a> {
                 result: Rc::unwrap_or_clone(result),
                 reach: if bound.associated {
                     Reach::Type
+                } else if bound.bare {
+                    Reach::Bare
                 } else {
                     Reach::Called
                 },
@@ -3331,6 +3338,7 @@ impl<'a> Checker<'a> {
             match bounds.iter().find(|bound| {
                 bound.member == pending.name
                     && bound.associated == (pending.reach == Reach::Type)
+                    && bound.bare == (pending.reach == Reach::Bare)
                     && self.infer.resolve(&bound.owner) == owner
             }) {
                 Some(existing) => {
@@ -3342,6 +3350,7 @@ impl<'a> Checker<'a> {
                     member: pending.name,
                     ty,
                     associated: pending.reach == Reach::Type,
+                    bare: pending.reach == Reach::Bare,
                 }),
             }
             if let Some(site) = pending.site {
@@ -3618,9 +3627,9 @@ impl<'a> Checker<'a> {
                 }
                 let owned = self.owned_methods(&pending);
                 // A bare word with nothing handed it, on a receiver nothing
-                // has said anything of yet, is a field of whatever record it
-                // turns out to be, as Ori reads `.name` without parentheses:
-                // it waits for the receiver, and is no guess at a method.
+                // has said anything of yet, is a field of whatever it turns
+                // out to be, as Ori reads `.name` without parentheses: it
+                // waits for the receiver, and is no guess at a method.
                 let may_be_field = pending.reach == Reach::Bare
                     && pending.arguments.is_empty()
                     && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_));
@@ -3639,12 +3648,18 @@ impl<'a> Checker<'a> {
                 };
                 match candidates.as_slice() {
                     // A field of a receiver nothing else says anything of is
-                    // a field of whatever record it turns out to be.
+                    // a field of whatever record it turns out to be, unless
+                    // the receiver is generic: then it is a bound, met by
+                    // any record or declared type having the field.
                     [] if pending.reach == Reach::Bare
                         && pending.arguments.is_empty()
                         && matches!(self.infer.resolve(&pending.receiver), Ty::Var(_)) =>
                     {
-                        if final_pass {
+                        let generic_receiver = matches!(
+                            self.infer.resolve(&pending.receiver),
+                            Ty::Var(variable) if generic.contains(&variable)
+                        );
+                        if final_pass && !generic_receiver {
                             let projection = Self::projection(pending.name);
                             self.apply_field(&pending, &projection)?;
                             self.pending_methods[index].resolved = true;
@@ -3958,10 +3973,10 @@ impl<'a> Checker<'a> {
     fn apply_field(&mut self, pending: &PendingMethod, scheme: &Scheme) -> Result<(), CheckError> {
         apply_signature(&mut self.infer, pending, scheme, self.symbols)
             .map_err(|message| failure(pending.module, pending.span, message))?;
-        self.checked.projections.insert(
-            pending.site.expect("a field is a written member"),
-            pending.name,
-        );
+        // A bound a use owes, met by a field, names nothing where it stands.
+        if let Some(site) = pending.site {
+            self.checked.projections.insert(site, pending.name);
+        }
         Ok(())
     }
 
@@ -4461,6 +4476,7 @@ fn components(
     definitions: &HashMap<Symbol, &n::Function>,
     unsigned: &HashSet<Symbol>,
     methods: &HashMap<Symbol, Vec<UnsignedMethod>>,
+    symbols: &Symbols,
 ) -> Vec<Vec<Symbol>> {
     let names: Vec<_> = unsigned.iter().copied().collect();
     let index: HashMap<_, _> = names
@@ -4472,7 +4488,7 @@ fn components(
     for (name, &from) in &index {
         let mut dependencies = HashSet::new();
         for clause in &definitions[name].clauses {
-            clause_globals(clause, &mut dependencies);
+            clause_globals(clause, symbols, &mut dependencies);
         }
         // A member spelled as an unsigned method may be it, which is
         // settled before whatever calls it.
@@ -4514,17 +4530,43 @@ fn components(
     result
 }
 
-fn clause_globals(clause: &h::Clause, output: &mut HashSet<Symbol>) {
-    if let Some(guard) = &clause.guard {
-        expr_globals(guard, output);
+/// The member an operator is spelled as, called on its left operand.
+const fn binary_member(operator: super::ast::BinaryOp) -> &'static str {
+    match operator {
+        super::ast::BinaryOp::Or => "or",
+        super::ast::BinaryOp::Xor => "xor",
+        super::ast::BinaryOp::And => "and",
+        super::ast::BinaryOp::Equal | super::ast::BinaryOp::NotEqual => "equals",
+        super::ast::BinaryOp::Less
+        | super::ast::BinaryOp::LessEqual
+        | super::ast::BinaryOp::Greater
+        | super::ast::BinaryOp::GreaterEqual => "cmp",
+        super::ast::BinaryOp::Add => "add",
+        super::ast::BinaryOp::Subtract => "sub",
+        super::ast::BinaryOp::Multiply => "mul",
+        super::ast::BinaryOp::Divide => "div",
+        super::ast::BinaryOp::Remainder => "mod",
     }
-    for binding in &clause.body.bindings {
-        expr_globals(&binding.value, output);
-    }
-    expr_globals(&clause.body.result, output);
 }
 
-fn expr_globals(expression: &h::Expr, output: &mut HashSet<Symbol>) {
+const fn unary_member(operator: super::ast::UnaryOp) -> &'static str {
+    match operator {
+        super::ast::UnaryOp::Negate => "neg",
+        super::ast::UnaryOp::Not => "not",
+    }
+}
+
+fn clause_globals(clause: &h::Clause, symbols: &Symbols, output: &mut HashSet<Symbol>) {
+    if let Some(guard) = &clause.guard {
+        expr_globals(guard, symbols, output);
+    }
+    for binding in &clause.body.bindings {
+        expr_globals(&binding.value, symbols, output);
+    }
+    expr_globals(&clause.body.result, symbols, output);
+}
+
+fn expr_globals(expression: &h::Expr, symbols: &Symbols, output: &mut HashSet<Symbol>) {
     match &expression.kind {
         h::ExprKind::Global(global) => {
             output.insert(*global);
@@ -4532,59 +4574,65 @@ fn expr_globals(expression: &h::Expr, output: &mut HashSet<Symbol>) {
         h::ExprKind::String(parts) => {
             for part in parts {
                 if let h::StringPart::Splice(expression) = part {
-                    expr_globals(expression, output);
+                    expr_globals(expression, symbols, output);
                 }
             }
         }
         h::ExprKind::List(elements, rest) => {
             for expression in elements {
-                expr_globals(expression, output);
+                expr_globals(expression, symbols, output);
             }
             if let Some(rest) = rest {
-                expr_globals(rest, output);
+                expr_globals(rest, symbols, output);
             }
         }
         h::ExprKind::Record(fields) => {
             for (_, value) in fields {
-                expr_globals(value, output);
+                expr_globals(value, symbols, output);
             }
         }
         h::ExprKind::Update(base, fields) => {
-            expr_globals(base, output);
+            expr_globals(base, symbols, output);
             for (_, value) in fields {
-                expr_globals(value, output);
+                expr_globals(value, symbols, output);
             }
         }
         h::ExprKind::Tuple(members) => {
             for member in members {
-                expr_globals(member, output);
+                expr_globals(member, symbols, output);
             }
         }
-        h::ExprKind::Lambda(_, body) | h::ExprKind::Unary(_, body) | h::ExprKind::Try(body) => {
-            expr_globals(body, output);
+        h::ExprKind::Lambda(_, body) | h::ExprKind::Try(body) => {
+            expr_globals(body, symbols, output);
+        }
+        // An operator is its member's spelling, as a dot call is.
+        h::ExprKind::Unary(operator, value) => {
+            output.extend(symbols.find(unary_member(*operator)));
+            expr_globals(value, symbols, output);
         }
         h::ExprKind::Call(head, arguments) => {
-            expr_globals(head, output);
+            expr_globals(head, symbols, output);
             for argument in arguments {
-                expr_globals(argument, output);
+                expr_globals(argument, symbols, output);
             }
         }
         // A member's spelling too, which names every method spelled so
         // that a definition without a signature may be.
         h::ExprKind::Method(head, member, arguments) => {
             output.insert(*member);
-            expr_globals(head, output);
+            expr_globals(head, symbols, output);
             for argument in arguments {
-                expr_globals(argument, output);
+                expr_globals(argument, symbols, output);
             }
         }
         h::ExprKind::Member(head, member) => {
             output.insert(*member);
-            expr_globals(head, output);
+            expr_globals(head, symbols, output);
         }
-        h::ExprKind::Binary(_, left, right) => {
-            expr_globals(left, output);
-            expr_globals(right, output);
+        h::ExprKind::Binary(operator, left, right) => {
+            output.extend(symbols.find(binary_member(*operator)));
+            expr_globals(left, symbols, output);
+            expr_globals(right, symbols, output);
         }
         h::ExprKind::Local(_)
         | h::ExprKind::Constructor(_)

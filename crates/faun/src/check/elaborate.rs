@@ -1,7 +1,5 @@
 //! Consume inference facts into typed HIR before releasing the resolved syntax.
 
-use std::collections::HashMap;
-
 use super::{Facts, InferredType, Reading};
 use crate::ast::{BinaryOp, Span};
 use crate::blessed::{self, PreludeIds};
@@ -10,16 +8,16 @@ use crate::typed as t;
 
 pub(super) fn finish(
     program: crate::declarations::Program,
-    facts: Facts,
+    mut facts: Facts,
     prelude: &PreludeIds,
     sites: &mut h::Sites,
 ) -> t::Program {
+    let mut members = std::mem::take(&mut facts.unsigned_members);
     let mut elaborator = Elaborator {
         facts,
         prelude,
         sites,
     };
-    let mut members = HashMap::new();
     let functions = program
         .functions
         .into_iter()
@@ -154,11 +152,14 @@ impl Elaborator<'_> {
         }
     }
 
-    fn target(&self, site: h::SiteId) -> t::Target {
+    /// What the member at `site` calls; `bare` where it is named with no
+    /// call, `x.name`.
+    fn target(&self, site: h::SiteId, bare: bool) -> t::Target {
         if let Some((owner, member)) = self.facts.bound_sites.get(&site) {
             t::Target::Bound {
                 owner: owner.clone(),
                 member: *member,
+                bare,
             }
         } else {
             t::Target::Direct(self.facts.methods[&site])
@@ -286,7 +287,7 @@ impl Elaborator<'_> {
                     let arguments = arguments.into_iter().map(|e| self.expr(e)).collect();
                     match &head.kind {
                         h::ExprKind::Associated(..) => {
-                            t::ExprKind::Method(self.target(site), arguments)
+                            t::ExprKind::Method(self.target(site, false), arguments)
                         }
                         h::ExprKind::Constructor(name) | h::ExprKind::Tag(name) => {
                             t::ExprKind::Construct(*name, arguments)
@@ -303,11 +304,11 @@ impl Elaborator<'_> {
                     let receiver = self.expr(*receiver);
                     match self.facts.projections.get(&site) {
                         Some(field) => t::ExprKind::Project(Box::new(receiver), *field),
-                        None => t::ExprKind::Method(self.target(site), vec![receiver]),
+                        None => t::ExprKind::Method(self.target(site, true), vec![receiver]),
                     }
                 }
                 h::ExprKind::Method(receiver, _, arguments) => {
-                    let target = self.target(site);
+                    let target = self.target(site, false);
                     let arguments = std::iter::once(*receiver)
                         .chain(arguments)
                         .map(|e| self.expr(e))
@@ -316,10 +317,10 @@ impl Elaborator<'_> {
                 }
                 h::ExprKind::Try(value) => t::ExprKind::Try(Box::new(self.expr(*value))),
                 h::ExprKind::Unary(_, value) => {
-                    t::ExprKind::Method(self.target(site), vec![self.expr(*value)])
+                    t::ExprKind::Method(self.target(site, false), vec![self.expr(*value)])
                 }
                 h::ExprKind::Binary(operator, left, right) => {
-                    let target = self.target(site);
+                    let target = self.target(site, false);
                     let arguments = vec![self.expr(*left), self.expr(*right)];
                     let call = t::ExprKind::Method(target, arguments);
                     let view = match operator {

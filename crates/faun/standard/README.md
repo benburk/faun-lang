@@ -182,6 +182,17 @@ is whatever `r`'s `fold` hands over, which `r`'s implementation says at each
 specialization. A bound on a variable neither the signature nor such a bound
 reaches is refused, and one whose types no implementation determines is refused
 where it is used rather than guessed.
+
+A field read an unsigned definition makes off a value it takes generically,
+`x_of(v) -> v.x`, is such a bound too, met by anything having the field: a
+record, whatever else it holds, or a declared type whose record has it, at
+that type's arguments. A read with no call is the field where a type has a
+field and a method of one name, and a method taking nothing else where it
+has only the method. Reading is all it opens: an update, `{x: 1, *v}`, asks
+for a record, since it would build a declared type without its constructor,
+and a signature writing a record, `{x: Nat, *}`, asks for a record too, having
+no way yet to ask for a field alone.
+
 `Name(a) = where ...` names requirements that a `where` clause applies
 together as `Name(a)`. An alias is no type and has no implementation: it
 expands where it is applied, and composes, exports and imports as a type name

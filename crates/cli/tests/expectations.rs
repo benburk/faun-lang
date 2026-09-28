@@ -101,6 +101,115 @@ fn a_method_without_a_signature_is_called_with_a_dot() {
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 2));
 }
 
+/// An operator spelled as a method written without a signature is settled
+/// before whatever uses it, as a dot call to it is, inside a lambda too; a
+/// generic definition's bound on it is met by it.
+#[test]
+fn an_operator_reaches_a_method_without_a_signature() {
+    let package = Package::new(
+        "unsigned-operator",
+        "Pair : {a: Nat, b: Nat}.(
+           of(a, b) -> Pair({a, b})
+           add(Pair({a, b}), Pair({a: c, b: d})) -> of(a + c, b + d)
+           neg(Pair({a, b})) -> of(b, a)
+         )
+
+         doubled() -> [Pair.of(1, 2)].fold(Pair.of(1, 2), |sum, pair| sum + pair)
+         total(pairs) -> pairs.fold(Pair.of(0, 0), |sum, pair| sum + pair)
+         swapped(pairs) -> pairs.map(|pair| -pair)
+
+         expect doubled().b == 4
+         expect total([Pair.of(1, 2), Pair.of(3, 4)]).a == 4
+         expect swapped([Pair.of(1, 2)]).map(|pair| pair.a) == [2]",
+    );
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 3));
+}
+
+/// A field read in a definition without a signature, off a value it takes
+/// generically, is a `where` bound: met by a record having the field,
+/// whatever else it holds, and by a declared type whose record has it, at
+/// the declared type's own arguments. The bound passes to a caller that
+/// takes the value generically in turn, and is met inside a lambda and off
+/// what an operator answers.
+#[test]
+fn a_generic_field_read_is_met_by_any_type_having_the_field() {
+    let package = Package::new(
+        "generic-field",
+        "Point : {x: Nat, y: Nat}.(
+           of(x, y) -> Point({x, y})
+           sub(Point({x, y}), Point({x: u, y: v})) -> of(x - u, y - v)
+         )
+         Box(a) : {item: a}.(
+           of(item) -> Box({item})
+         )
+
+         x_of(v) -> v.x
+         sum(p) -> p.x + p.y
+         item_of(b) -> b.item
+         next_x(v) -> x_of(v) + 1
+         deep(r) -> r.at.x
+         xs(ps) -> ps.map(|p| p.x)
+         apart(a, b) -> (a.at - b.at).x
+
+         expect x_of(Point.of(1, 2)) == 1
+         expect x_of({x: 3, name: \"r\"}) == 3
+         expect sum(Point.of(1, 2)) == 3 & sum({x: 10, y: 20, z: True}) == 30
+         expect item_of(Box.of(4)) == 4 & item_of(Box.of(\"s\")) == \"s\"
+         expect next_x(Point.of(5, 0)) == 6
+         expect deep({at: Point.of(6, 0)}) == 6
+         expect xs([Point.of(1, 0), Point.of(2, 0)]) == [1, 2]
+         expect apart({at: Point.of(9, 1)}, {at: Point.of(2, 1)}) == 7",
+    );
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 8));
+}
+
+/// A generic field read written in one module is met by a declared type
+/// from another, and by one its caller declares.
+#[test]
+fn a_generic_field_read_reaches_across_modules() {
+    let package = Package::new(
+        "generic-field-modules",
+        "import shapes {Point, x_of}
+
+         Mark : {x: Nat}.(
+           of(x) -> Mark({x})
+         )
+
+         expect x_of(Point.of(3, 4)) == 3
+         expect x_of(Mark.of(5)) == 5",
+    );
+    fs::write(
+        package.entry().with_file_name("shapes.fn"),
+        "export {Point, x_of}\n\nPoint : {x: Nat, y: Nat}.(\n  of(x, y) -> Point({x, y})\n)\n\nx_of(v) -> v.x\n",
+    )
+    .unwrap();
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 2));
+}
+
+/// A name read with no call is the field where a declared type has a field
+/// and a method of that name, generically as where the type is known, and
+/// the method where it has only the method; called, it is the method.
+#[test]
+fn a_bare_read_is_the_field_before_the_method() {
+    let package = Package::new(
+        "bare-read",
+        "Both : {a: Nat}.(
+           of(a) -> Both({a})
+           a(Both({a})) -> a * 100
+           twice(Both({a})) -> a * 2
+         )
+
+         read(v) -> v.a
+         called(v) -> v.a()
+         doubled(v) -> v.twice
+
+         expect Both.of(2).a == 2 & read(Both.of(2)) == 2
+         expect called(Both.of(2)) == 200
+         expect doubled(Both.of(4)) == 8",
+    );
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 3));
+}
+
 /// A closed record and a tuple say themselves as Ori writes them: a
 /// record's fields in the order of their names, whatever order they were
 /// written in, and a tuple's members in order, each by its own `to_str`.

@@ -1,0 +1,6 @@
+import std.host {Host}
+
+x_of(v) -> v.x
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(x_of((1, 2))))
