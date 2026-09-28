@@ -49,12 +49,17 @@ impl Reg {
             2 => Some(Self::Rdx),
             3 => Some(Self::Rbx),
             4 => Some(Self::Rsp),
+            5 => Some(Self::Rbp),
             6 => Some(Self::Rsi),
             7 => Some(Self::Rdi),
             8 => Some(Self::R8),
             9 => Some(Self::R9),
             10 => Some(Self::R10),
             11 => Some(Self::R11),
+            12 => Some(Self::R12),
+            13 => Some(Self::R13),
+            14 => Some(Self::R14),
+            15 => Some(Self::R15),
             _ => None,
         }
     }
@@ -109,26 +114,31 @@ pub(crate) enum ShiftDirection {
 
 pub(crate) use faun_core::targets::code::Label;
 
-/// A function-local eight-byte frame slot. Its byte offset is assigned only
-/// when the instruction is encoded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FrameSlot(u32);
+/// A function-local frame slot, eight bytes here. Its byte offset is
+/// assigned only when the instruction is encoded.
+pub(crate) use faun_core::codegen::FrameSlot;
 
-impl FrameSlot {
-    pub(crate) const fn at(index: u32) -> Self {
-        Self(index)
-    }
+/// Where a frame slot lies, eight bytes a slot.
+pub(crate) trait SlotOffset {
+    fn checked_offset(self) -> Option<u32>;
 
-    pub(crate) const fn number(self) -> u32 {
-        self.0
-    }
-
-    const fn checked_offset(self) -> Option<u32> {
-        self.0.checked_mul(8)
-    }
-
-    pub(super) const fn offset(self) -> u32 {
+    fn offset(self) -> u32
+    where
+        Self: Sized,
+    {
         self.checked_offset().expect("a verified x86 frame slot")
+    }
+}
+
+impl SlotOffset for FrameSlot {
+    fn checked_offset(self) -> Option<u32> {
+        self.number().checked_mul(8)
+    }
+}
+
+impl faun_core::codegen::Register for Reg {
+    fn number(self) -> u8 {
+        u8::from(self)
     }
 }
 

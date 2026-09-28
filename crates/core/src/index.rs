@@ -75,6 +75,17 @@ impl<I, T> Default for Pool<I, T> {
     }
 }
 
+/// Each entry at the slot its position says, in order.
+impl<I: Id, T> FromIterator<T> for Pool<I, T> {
+    fn from_iter<V: IntoIterator<Item = T>>(values: V) -> Self {
+        let mut pool = Self::default();
+        for value in values {
+            pool.push(value);
+        }
+        pool
+    }
+}
+
 impl<I: Id, T> Pool<I, T> {
     /// Check representability before changing storage, then return the slot
     /// actually inserted. This does not make surrounding construction atomic.

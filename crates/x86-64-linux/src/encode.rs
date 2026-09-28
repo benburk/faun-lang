@@ -4,7 +4,7 @@
 //! frame slots, and data references become bytes only here.
 
 use super::machine::{
-    Allocated, Alu, Condition, Inst, MemoryWidth, Reg, RegisterWidth, ShiftDirection,
+    Allocated, Alu, Condition, Inst, MemoryWidth, Reg, RegisterWidth, ShiftDirection, SlotOffset,
 };
 use super::{Code, Reloc};
 use faun_core::index::Range;

@@ -6,6 +6,7 @@
 //! A target is a separate crate implementing [`targets::Target`].
 
 pub mod barb;
+pub mod codegen;
 pub mod facts;
 pub mod float;
 pub mod index;

@@ -9,44 +9,21 @@ mod register_allocate;
 
 use super::machine::Reg;
 use crate::WORD_BITS;
-use faun_core::index::{Pool, Range, index};
+use faun_core::index::{Pool, Range};
 use faun_core::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op as SourceOp, Program, RegionId, Relation,
     Terminator as SourceTerminator, ValueId, Width,
 };
 
-index!(pub(crate) VReg, BlockId, InstId);
+pub(crate) use faun_core::codegen::registers::{BlockId, InstId, Role, Timing, VReg};
 
-impl VReg {
-    fn from_value(value: ValueId) -> Self {
-        Self::at(value.index())
-    }
-}
+/// Where an operand of one of these instructions must be.
+pub(crate) type Constraint = faun_core::codegen::registers::Constraint<Reg>;
+pub(crate) type OperandSpec = faun_core::codegen::registers::OperandSpec<Reg>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Constraint {
-    Any,
-    Fixed(Reg),
-    Tied(u8),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Role {
-    Def,
-    Use,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Timing {
-    Early,
-    Late,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OperandSpec {
-    pub role: Role,
-    pub timing: Timing,
-    pub constraint: Constraint,
+/// A value's virtual register is its number.
+fn vreg(value: ValueId) -> VReg {
+    VReg::at(value.index())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1315,7 +1292,7 @@ impl Selector<'_> {
     fn block(&mut self, owner: FunctionId, params: &[ValueId]) -> BlockId {
         self.blocks.push(BlockDraft {
             owner,
-            params: params.iter().copied().map(VReg::from_value).collect(),
+            params: params.iter().copied().map(vreg).collect(),
             param_specs: vec![
                 OperandSpec {
                     role: Role::Def,
@@ -1341,11 +1318,11 @@ impl Selector<'_> {
         operands: &[ValueId],
         immediate: Immediate,
     ) {
-        let operands: Vec<_> = operands.iter().copied().map(VReg::from_value).collect();
+        let operands: Vec<_> = operands.iter().copied().map(vreg).collect();
         let operands = append(&mut self.operands, &operands);
         let id = self.instructions.push(Inst {
             opcode,
-            result: result.map(VReg::from_value),
+            result: result.map(vreg),
             operands,
             immediate,
         });
@@ -1359,7 +1336,7 @@ impl Selector<'_> {
     }
 
     fn edge_args(&mut self, values: &[ValueId]) -> Range {
-        let values: Vec<_> = values.iter().copied().map(VReg::from_value).collect();
+        let values: Vec<_> = values.iter().copied().map(vreg).collect();
         append(&mut self.operands, &values)
     }
 
@@ -1566,7 +1543,7 @@ impl Selector<'_> {
                     self.terminate(
                         block,
                         Terminator::Branch {
-                            condition: VReg::from_value(condition),
+                            condition: vreg(condition),
                             then_target,
                             then_args: Range::EMPTY,
                             else_target,
