@@ -29,6 +29,8 @@ pub(super) fn recognise(program: &Program, length: &[bool]) -> Vec<Option<Sequen
                 Some(SequenceOperation::Prepend)
             } else if drops(program, id) {
                 Some(SequenceOperation::Drop)
+            } else if takes(program, id, &reversals) {
+                Some(SequenceOperation::Take)
             } else if replaces(program, id) {
                 Some(SequenceOperation::Replace)
             } else {
@@ -245,6 +247,124 @@ fn drops(program: &Program, id: FnId) -> bool {
                 && again(step.body, 2 + recursive, 4)
         }
         _ => false,
+    }
+}
+
+/// Whether `id` walks a count of a sequence's first elements onto nothing,
+/// which is those elements: see [`taken_onto`].
+///
+/// ```text
+/// t(list, n) = w(list, n, empty)
+/// ```
+fn takes(program: &Program, id: FnId, reversals: &[bool]) -> bool {
+    let (Some(body), &[list, count]) = (program.function(id).body(), program.params(id)) else {
+        return false;
+    };
+    let Some((empty, _, _)) = sequence(program, list) else {
+        return false;
+    };
+    let Expr::Call(walk, args) = program.expr(body.tail) else {
+        return false;
+    };
+    program.function(id).result == list
+        && matches!(program.atoms(args), &[Atom(a), Atom(b), Atom(c)]
+            if a.index() == 0 && b.index() == 1 && c.index() == 2)
+        && program.bindings(body.bindings).len() == 1
+        && bound(program, body, 2, 2).is_some_and(|expr| is_empty(program, expr, empty))
+        && program.params(walk) == [list, count, list]
+        && taken_onto(program, walk, reversals)
+}
+
+/// Whether `id` pushes a sequence's first elements onto another while a
+/// count lasts, and answers that one reversed onto nothing when either runs
+/// out: the elements it took, last first, after those it was handed.
+///
+/// ```text
+/// w(list, n, built) = match list
+///   empty => r(built, empty)
+///   push(x, rest) => match n
+///     zero => r(built, empty)
+///     step(m) => w(rest, m, push(x, built))
+/// ```
+#[expect(
+    clippy::too_many_lines,
+    reason = "each condition of the walk's shape is one early return, read in order"
+)]
+fn taken_onto(program: &Program, id: FnId, reversals: &[bool]) -> bool {
+    let Some(body) = program.function(id).body() else {
+        return false;
+    };
+    let (list, count) = (program.params(id)[0], program.params(id)[1]);
+    let (
+        Some((empty, push, recursive)),
+        TypeShape::Natural {
+            empty: zero,
+            push: succ,
+            ..
+        },
+    ) = (sequence(program, list), type_shape(program, count))
+    else {
+        return false;
+    };
+    let Some((0, arms)) = top_match(program, body) else {
+        return false;
+    };
+    let Some([nil, cons]) = split_arms(program, arms, empty, push) else {
+        return false;
+    };
+    // The answer reversed onto nothing, where the body's first binding
+    // takes level `base`.
+    let finished = |body: Body, base: usize| {
+        let Expr::Call(reversal, args) = program.expr(body.tail) else {
+            return false;
+        };
+        reversals[reversal.index()]
+            && program.bindings(body.bindings).len() == 1
+            && bound(program, body, base, base).is_some_and(|expr| is_empty(program, expr, empty))
+            && program.atoms(args) == [Atom(Local::at(2)), Atom(Local::at(base))]
+    };
+    // The push binds its fields at 3 and 4, and the step the count less
+    // one at 5.
+    let (head, rest) = (3 + (1 - recursive), 3 + recursive);
+    let Expr::Match(Atom(matched), arms) = program.expr(cons.body.tail) else {
+        return false;
+    };
+    let Some([done, step]) = split_arms(program, arms, zero, succ) else {
+        return false;
+    };
+    // The step's one binding, at 6, is the element pushed onto what was
+    // taken so far.
+    let pushed = match program.bindings(step.body.bindings) {
+        &[pushed] => match program.expr(pushed) {
+            Expr::Con(ctor, fields) => {
+                let mut expected = [Atom(Local::at(head)), Atom(Local::at(2))];
+                if recursive == 0 {
+                    expected.reverse();
+                }
+                ctor == push && program.atoms(fields) == expected
+            }
+            _ => false,
+        },
+        _ => false,
+    };
+    let again = matches!(program.expr(step.body.tail), Expr::Call(callee, args)
+        if callee == id
+            && program.atoms(args)
+                == [Atom(Local::at(rest)), Atom(Local::at(5)), Atom(Local::at(6))]);
+    cons.body.bindings.is_empty()
+        && matched.index() == 1
+        && finished(nil.body, 3)
+        && finished(done.body, 5)
+        && pushed
+        && again
+}
+
+/// Whether `expr` is the empty sequence, built or known.
+fn is_empty(program: &Program, expr: ExprId, empty: CtorId) -> bool {
+    match program.expr(expr) {
+        Expr::Con(ctor, _) => ctor == empty,
+        Expr::Static(value) => program.constant(value).constructor() == empty,
+        Expr::Atom(_) | Expr::Call(..) | Expr::Match(..) => false,
     }
 }
 

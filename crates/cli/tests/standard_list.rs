@@ -5,6 +5,8 @@
 
 mod support;
 
+use faun_core::targets::Target;
+use faun_x86_64_linux::X86_64Linux;
 use support::Package;
 
 /// Each case: what it exercises, the status it exits with, and what it
@@ -148,4 +150,46 @@ fn every_list_function_answers_what_ori_says() {
         );
         assert_eq!(package.run(), *expected, "`{name}`: {answer}");
     }
+}
+
+/// A list's first elements are the same buffer holding fewer, so taking
+/// them, splitting a list, and cutting one into blocks copy nothing: the
+/// standard library's walk for `take` is answered as a view, and no walk of
+/// it is left to run. What each answers is what the walk would have.
+#[test]
+fn taking_a_lists_first_elements_is_a_view_of_it() {
+    let package = Package::new(
+        "take-view",
+        "main!(host) -> host.run_stdin!(app)
+
+         app : {stdin: Str, *} -> Str
+         app(input) -> answer(input.stdin.to_utf8().map(|b| b.to_nat() - 48))
+
+         answer : List(Nat) -> Str
+         answer(xs) ->
+           cut = xs.blocks(3)
+           (front, back) = xs.split_at(2)
+           Str.join([
+             xs.take(4).fold(0, |s, x| s * 10 + x),
+             xs.take(99).len(),
+             front.len() * 10 + back.len(),
+             cut.complete.map(|b| b.fold(0, |s, x| s * 10 + x)).fold(0, |s, x| s + x),
+             cut.remainder.fold(0, |s, x| s * 10 + x),
+           ].map(|n| n.to_str()), \",\")",
+    );
+    for (input, said) in [
+        ("12345678", "1234,8,26,579,78"),
+        ("", "0,0,0,0,0"),
+        ("123456", "1234,6,24,579,0"),
+    ] {
+        assert_eq!(
+            support::run_file(&package.entry(), input.as_bytes()),
+            (0, format!("{said}\n")),
+            "{input}"
+        );
+    }
+    let mut barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
+    faun_core::barb::optimize(&mut barb);
+    let machine = faun_core::lower_to_machine_ir(&mut barb, &X86_64Linux.routines()).unwrap();
+    assert!(!machine.render().contains("take_into"));
 }

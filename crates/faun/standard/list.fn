@@ -205,7 +205,7 @@ List(a) : [Nil, Cons(a, List(a))].(
   # remains, as `Nat`'s `x / 0` is 0 and `x % 0` is `x`.
   blocks : (List(a), Nat) -> {complete: List(List(a)), remainder: List(a)}
   blocks(values, 0) -> {complete: [], remainder: values}
-  blocks(values, Succ(width)) -> blocks_into(values, width, width, [], [])
+  blocks(values, Succ(width)) -> blocks_into(values, values, (Succ(width), width), [])
 
   # Each element mapped while a state goes left to right beside it: `f`
   # takes the state and an element, and answers the next state and that
@@ -334,14 +334,16 @@ trail_into([head, *tail], state, f, built) ->
   next = f(state, head)
   trail_into(tail, next, f, [next, *built])
 
-# The runs of `blocks`: `left` more elements before the one closing the run
-# being built, `width` more than none in each.
-blocks_into : (List(a), Nat, Nat, List(a), List(List(a))) -> {complete: List(List(a)), remainder: List(a)}
-blocks_into([], _, _, block, done) -> {complete: reverse_into(done, []), remainder: reverse_into(block, [])}
-blocks_into([value, *rest], width, 0, block, done) ->
-  blocks_into(rest, width, width, [], [reverse_into(block, [value]), *done])
-blocks_into([value, *rest], width, Succ(left), block, done) ->
-  blocks_into(rest, width, left, [value, *block], done)
+# The runs of `blocks`: `start` is where the run being walked began, and
+# `left` how many of its elements come after the one at the front of
+# `values`. A run is the first `width` of `start`, which takes nothing apart
+# and copies nothing.
+blocks_into : (List(a), List(a), (Nat, Nat), List(List(a))) -> {complete: List(List(a)), remainder: List(a)}
+blocks_into([], start, _, done) -> {complete: reverse_into(done, []), remainder: start}
+blocks_into([_, *rest], start, (width, 0), done) ->
+  blocks_into(rest, rest, (width, width - 1), [List.take(start, width), *done])
+blocks_into([_, *rest], start, (width, Succ(left)), done) ->
+  blocks_into(rest, start, (width, left), done)
 
 map_accum_into : (List(a), s, (s, a) -> (s, b), List(b)) -> (s, List(b))
 map_accum_into([], state, _, built) -> (state, reverse_into(built, []))

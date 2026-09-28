@@ -110,6 +110,9 @@ pub enum SequenceOperation {
     /// The first parameter without as many of its first elements as the
     /// second counts, or without all of them where it counts more.
     Drop,
+    /// As many of the first parameter's first elements as the second
+    /// counts, or all of them where it counts more.
+    Take,
     /// The first parameter with the element the second counts to replaced
     /// by the third, or unchanged where it counts past the last.
     Replace,

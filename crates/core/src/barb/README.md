@@ -155,6 +155,11 @@ x    ::= a parameter, a binding, or a field an arm bound
   count less one otherwise, matching either first -- is
   `SequenceOperation::Drop`, answered as the same buffer holding fewer, and
   known bytes less some of their front as the same bytes further on. A
+  definition starting, from the empty sequence, a walk that pushes a
+  sequence's elements onto what it has taken while a count lasts and
+  answers that reversed onto nothing when either runs out is
+  `SequenceOperation::Take`: the same buffer from the same start, holding
+  fewer, so a prefix, a split or a block copies nothing. A
   definition rebuilding a sequence's front with the element a count reaches
   replaced by a value -- the empty sequence or itself for an empty one, the
   value pushed before the rest at nought, and the element pushed before

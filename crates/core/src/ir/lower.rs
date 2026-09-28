@@ -2554,6 +2554,9 @@ impl Lowering<'_> {
             Callee::Sequence(barb::SequenceOperation::Drop) => {
                 return Answer::Value(self.dropped(b, arguments, locals));
             }
+            Callee::Sequence(barb::SequenceOperation::Take) => {
+                return Answer::Value(self.taken(b, arguments, locals));
+            }
             Callee::Sequence(barb::SequenceOperation::Replace) => {
                 return Answer::Value(self.replaced(b, (function, arguments), locals));
             }
@@ -2670,6 +2673,24 @@ impl Lowering<'_> {
         Held::Flat {
             leaves: sequence_run(),
             values: [buffer, later, rest].as_slice().into(),
+        }
+    }
+
+    /// A sequence's first elements: the same buffer from the same start,
+    /// holding fewer, so nothing is copied.
+    fn taken(&self, b: &mut super::Builder, arguments: barb::Range, locals: &Locals) -> Held {
+        let &[sequence, count] = self.barb.atoms(arguments) else {
+            unreachable!("a take is of a sequence and a count");
+        };
+        let values = locals[sequence.0.index()]
+            .as_ref()
+            .expect("a taken sequence is carried")
+            .values();
+        let (buffer, first, len) = (values[0], values[1], values[2]);
+        let kept = Self::skipped(b, Self::scalar(locals, count), (len, None));
+        Held::Flat {
+            leaves: sequence_run(),
+            values: [buffer, first, kept].as_slice().into(),
         }
     }
 
