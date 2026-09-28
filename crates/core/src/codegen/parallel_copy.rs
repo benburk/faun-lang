@@ -32,6 +32,15 @@ impl<R: Register> Copy<R> {
             destination,
         }
     }
+
+    /// Whether it copies from memory to memory, through a register.
+    #[must_use]
+    pub const fn is_in_memory(self) -> bool {
+        matches!(
+            (self.source, self.destination),
+            (CopySource::Place(Place::Frame(_)), Place::Frame(_))
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,6 +218,16 @@ pub fn plan<R: Register>(
     Ok(MovePlan { moves, cost })
 }
 
+/// Where a cycle among `copies` is broken: `register`, the one copies
+/// between memory pass through, where none of those needs it, and
+/// otherwise slot nought.
+pub fn temporary<R: Register>(copies: &[Copy<R>], register: Option<R>) -> Place<R> {
+    match register {
+        Some(reg) if !copies.iter().any(|copy| copy.is_in_memory()) => Place::Register(reg),
+        _ => Place::Frame(FrameSlot::at(0)),
+    }
+}
+
 fn validate<R: Register>(copies: &[Copy<R>]) -> Result<(), PlanError<R>> {
     if copies.len() > usize::try_from(u32::MAX).expect("u32 fits usize") {
         return Err(PlanError::TooManyCopies);
@@ -343,6 +362,15 @@ mod tests {
         assert_eq!(plan.moves().len(), 2);
         assert_eq!(plan.cost().instructions, 2);
         assert_eq!(plan.cost().memory_accesses, 2);
+    }
+
+    #[test]
+    fn a_cycle_is_broken_in_the_copying_register_unless_memory_needs_it() {
+        let swap = [Copy::between(RAX, RCX), Copy::between(RCX, RAX)];
+        assert_eq!(temporary(&swap, Some(Reg::Rdi)), Place::Register(Reg::Rdi));
+        let through = [Copy::between(RAX, RCX), Copy::between(frame(1), frame(2))];
+        assert_eq!(temporary(&through, Some(Reg::Rdi)), frame(0));
+        assert_eq!(temporary(&swap, None), frame(0));
     }
 
     #[test]

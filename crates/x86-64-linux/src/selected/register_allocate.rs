@@ -10,6 +10,7 @@ use faun_core::codegen;
 use faun_core::codegen::registers::{self, Code};
 use faun_core::index::Range;
 use faun_core::ir::FunctionId;
+use lower::COPY_SCRATCH;
 
 pub(super) use registers::{BlockPoints, InstPoints, Liveness, Point, place};
 
@@ -86,6 +87,7 @@ impl Selected {
             blocks,
             functions,
             registers: REGISTERS.to_vec(),
+            copies: Some(COPY_SCRATCH),
         }
     }
 }

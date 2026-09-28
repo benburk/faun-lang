@@ -113,9 +113,19 @@ pub struct Code<R> {
     pub functions: Vec<Function>,
     /// The registers a value may be held in.
     pub registers: Vec<R>,
+    /// A register no value is held in, which moves between memory pass
+    /// through, and which otherwise breaks a cycle of moves.
+    pub copies: Option<R>,
 }
 
 impl<R: Register> Code<R> {
+    /// Where a cycle among `copies` is broken: the copying register where
+    /// no copy between memory needs it, and otherwise slot nought.
+    #[must_use]
+    pub fn temporary(&self, copies: &[ParallelCopy<R>]) -> Place<R> {
+        parallel_copy::temporary(copies, self.copies)
+    }
+
     /// Where the operand at `at` of `inst` must be: its result first.
     #[must_use]
     pub fn spec(&self, inst: &Inst, at: usize) -> Option<OperandSpec<R>> {
@@ -596,10 +606,6 @@ struct Allocator<'a, R> {
     /// What the instruction being allocated reads, writes or uses as
     /// scratch: a value put out of its register may wait in any other.
     busy: RegSet,
-    /// Once its operands are read, the registers the instruction clobbers:
-    /// a value moves out of one of those before the instruction runs, but
-    /// out of any other only after, when the instruction has written it.
-    late: Option<RegSet>,
     /// For each value, every register some instruction it lives across
     /// writes or needs: one outside these holds it without moving.
     hazards: Vec<RegSet>,
@@ -627,7 +633,6 @@ impl<'a, R: Register> Allocator<'a, R> {
             // Slot zero is reserved for breaking parallel-copy cycles.
             next_spill: vec![1; function_count(code)],
             busy: RegSet::EMPTY,
-            late: None,
             hazards: hazards(code, liveness),
         })
     }
@@ -866,7 +871,6 @@ impl<'a, R: Register> Allocator<'a, R> {
                 | answered.map_or(0, |reg| RegSet::of(&[reg]).0),
         );
         self.busy = written;
-        self.late = Some(RegSet(requirements.clobbers.0 | requirements.scratch.0));
         for &reg in &self.code.registers {
             if requirements.clobbers.contains(reg) || requirements.scratch.contains(reg) {
                 self.evacuate(reg, result)?;
@@ -907,7 +911,6 @@ impl<'a, R: Register> Allocator<'a, R> {
         )?;
         self.record(block, points.late);
         self.busy = RegSet::EMPTY;
-        self.late = None;
         Ok(())
     }
 
@@ -1011,7 +1014,7 @@ impl<'a, R: Register> Allocator<'a, R> {
             // Where `value` is going is taken, so the other cannot wait there.
             let busy = self.busy;
             self.busy = RegSet(busy.0 | RegSet::of(&[reg]).0);
-            self.displace(held, reg)?;
+            self.displace(held)?;
             self.busy = busy;
         }
         self.placement.set(value, Location::Register(reg));
@@ -1039,17 +1042,16 @@ impl<'a, R: Register> Allocator<'a, R> {
         if let Some(value) = self.register_occupant(reg)
             && Some(value) != except
         {
-            self.displace(value, reg)?;
+            self.displace(value)?;
         }
         Ok(())
     }
 
-    /// Put `value` out of `reg`: into one the instruction being allocated
-    /// leaves alone where one is free and a move can be made in time, and
-    /// otherwise to memory.
-    fn displace(&mut self, value: VReg, reg: R) -> Result<(), String> {
-        let in_time = self.late.is_none_or(|clobbered| clobbered.contains(reg));
-        let moved = match self.free_register_for(value, self.busy).filter(|_| in_time) {
+    /// Put `value` out of its register: into one the instruction being
+    /// allocated leaves alone where one is free, and otherwise to memory.
+    /// Either way it moves before the instruction writes the one it left.
+    fn displace(&mut self, value: VReg) -> Result<(), String> {
+        let moved = match self.free_register_for(value, self.busy) {
             Some(free) => Location::Register(free),
             None => self.spill(value)?,
         };
@@ -1125,8 +1127,7 @@ impl<'a, R: Register> Allocator<'a, R> {
                 copies.push(copy);
             }
         }
-        let temporary = Place::Frame(FrameSlot::at(0));
-        let plan = parallel_copy::plan(&copies, Some(temporary))?;
+        let plan = parallel_copy::plan(&copies, Some(self.code.temporary(&copies)))?;
         self.operand_moves[instruction.index()] = Some(plan.moves().to_vec());
         Ok(())
     }
@@ -1136,7 +1137,6 @@ impl<'a, R: Register> Allocator<'a, R> {
         reason = "parameter and live-through transfers form one edge copy set"
     )]
     fn plan_edges(&mut self) -> Result<(), String> {
-        let temporary = Place::Frame(FrameSlot::at(0));
         for layout in &self.liveness.blocks {
             let terminator = self.code.blocks[layout.block].terminator;
             for (target, args) in edges(terminator) {
@@ -1174,7 +1174,7 @@ impl<'a, R: Register> Allocator<'a, R> {
                         copies.push(copy);
                     }
                 }
-                let plan = parallel_copy::plan(&copies, Some(temporary))?;
+                let plan = parallel_copy::plan(&copies, Some(self.code.temporary(&copies)))?;
                 self.edge_moves.push(EdgeMoves {
                     from: layout.block,
                     target,
@@ -1565,12 +1565,11 @@ fn function_spill_slots<R: Register>(
             .ok_or_else(|| "spill segment has no owning function".to_owned())?;
         frame_note(&mut frame, owner, place(segment.location));
     }
-    // The transitions at each point are planned as the moves made there,
-    // with slot nought to break a cycle.
+    // The transitions at each point are planned as the moves made there.
     for (point, copies) in &copies_at_points(transitions) {
         let owner =
             owner_at(*point).ok_or_else(|| "transition has no owning function".to_owned())?;
-        let plan = parallel_copy::plan(copies, Some(Place::Frame(FrameSlot::at(0))))
+        let plan = parallel_copy::plan(copies, Some(code.temporary(copies)))
             .expect("allocation transition copies were already planned");
         note_moves(&mut frame, owner, plan.moves());
     }
@@ -1950,6 +1949,7 @@ mod tests {
                 entry: BlockId::at(0),
             }],
             registers: vec![Two::A, Two::B],
+            copies: None,
         };
         let make = |code: &mut Code<Two>, operands: &[VReg], result: Option<VReg>| {
             let start = code.operands.len();

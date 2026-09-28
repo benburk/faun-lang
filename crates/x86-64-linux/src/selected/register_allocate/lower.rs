@@ -9,9 +9,7 @@ use crate::machine::{
     ShiftDirection,
 };
 use crate::parallel_copy::{self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place};
-use crate::selected::{
-    BlockId, Immediate, InstId, Opcode, Requirements, Selected, Terminator, VReg,
-};
+use crate::selected::{BlockId, Immediate, InstId, Opcode, Selected, Terminator, VReg};
 use faun_core::codegen::registers::SpillSlot;
 use faun_core::ir::{DataId, FunctionId, Offset, Width};
 
@@ -32,7 +30,7 @@ const STDIN: u64 = 0;
 const STDOUT: u64 = 1;
 const PROT_READ_WRITE: u64 = 0x3;
 const MAP_PRIVATE_ANONYMOUS: u64 = 0x22;
-const COPY_SCRATCH: Reg = Reg::R11;
+pub(super) const COPY_SCRATCH: Reg = Reg::R11;
 /// What a function keeps for whatever called it: a call leaves these alone.
 pub(crate) const CALLEE_SAVED: [Reg; 5] = [Reg::R12, Reg::R13, Reg::R14, Reg::R15, Reg::Rbp];
 
@@ -240,26 +238,21 @@ impl<'a> Lowering<'a> {
             }
         }
         let owner = self.owner_at(points.early);
-        let plan = parallel_copy::plan(&copies, self.copy_temporary(owner))?;
+        let plan = parallel_copy::plan(&copies, self.copy_temporary(owner, &copies))?;
         self.emit_moves(plan.moves());
         Ok(())
     }
 
     fn emit_late_transitions(&mut self, points: &InstPoints, before: bool) -> Result<(), String> {
-        let requirements = self.selected.instructions[points.instruction]
-            .opcode
-            .requirements();
         let copies: Vec<_> = self
             .allocation
             .transitions_at(points.late)
             .iter()
-            .filter(|transition| {
-                transition_before_instruction(**transition, requirements) == before
-            })
+            .filter(|transition| transition_before_instruction(**transition) == before)
             .map(|transition| ParallelCopy::between(place(transition.from), place(transition.to)))
             .collect();
         let owner = self.owner_at(points.late);
-        let plan = parallel_copy::plan(&copies, self.copy_temporary(owner))?;
+        let plan = parallel_copy::plan(&copies, self.copy_temporary(owner, &copies))?;
         self.emit_moves(plan.moves());
         Ok(())
     }
@@ -272,7 +265,7 @@ impl<'a> Lowering<'a> {
             .map(|transition| ParallelCopy::between(place(transition.from), place(transition.to)))
             .collect();
         let owner = self.owner_at(point);
-        let plan = parallel_copy::plan(&copies, self.copy_temporary(owner))?;
+        let plan = parallel_copy::plan(&copies, self.copy_temporary(owner, &copies))?;
         self.emit_moves(plan.moves());
         Ok(())
     }
@@ -393,8 +386,13 @@ impl<'a> Lowering<'a> {
         self.allocation.spill_slots[owner.index()]
     }
 
-    fn copy_temporary(&self, owner: FunctionId) -> Option<Place> {
-        (self.spill_slots(owner) > 0).then(|| Place::Frame(FrameSlot::at(0)))
+    /// Where the allocation breaks a cycle among `copies`: see
+    /// [`parallel_copy::temporary`].
+    fn copy_temporary(&self, owner: FunctionId, copies: &[ParallelCopy]) -> Option<Place> {
+        match parallel_copy::temporary(copies, Some(COPY_SCRATCH)) {
+            Place::Frame(_) if self.spill_slots(owner) == 0 => None,
+            temporary => Some(temporary),
+        }
     }
 
     /// Write each value made at `point` that ever waits in memory there.
@@ -956,14 +954,11 @@ const fn inverse(condition: Condition) -> Condition {
     }
 }
 
-const fn transition_before_instruction(transition: Transition, requirements: Requirements) -> bool {
-    match (transition.from, transition.to) {
-        (_, Location::Spill(_)) => true,
-        (Location::Spill(_), Location::Register(_)) => false,
-        (Location::Register(source), Location::Register(_)) => {
-            requirements.effects.clobbers.contains(source) || requirements.scratch.contains(source)
-        }
-    }
+/// A value leaves a register before the instruction may write it, into
+/// memory or a register the instruction leaves alone; one comes back from
+/// memory only after.
+const fn transition_before_instruction(transition: Transition) -> bool {
+    matches!(transition.from, Location::Register(_))
 }
 
 fn materialize(asm: &mut AllocatedBuilder, dst: Reg, value: u64) {
