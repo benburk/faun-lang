@@ -657,6 +657,33 @@ impl Split {
                 let (split, _) = split(b, shape)?;
                 vec![b.buffer_empty(split)]
             }
+            // Each wide leaf of each element laid out as its words, a word's
+            // bytes a leaf.
+            Op::BufferKnown {
+                elements,
+                shape,
+                bytes,
+            } => {
+                let (split, _) = split(b, shape)?;
+                let classes = source.shaped(shape);
+                let word = self.word_bits() / 8;
+                let leaves: Vec<_> =
+                    super::model::known_leaves(source.datum_bytes(elements), bytes).collect();
+                let mut laid = Vec::new();
+                for element in leaves.chunks(classes.len()) {
+                    for (&class, &value) in classes.iter().zip(element) {
+                        for at in 0..self.widths.words(class) {
+                            let shift =
+                                u32::from(self.word_bits()) * u32::try_from(at).expect("few");
+                            let piece = value.checked_shr(shift).unwrap_or(0);
+                            laid.extend_from_slice(&piece.to_le_bytes()[..usize::from(word)]);
+                        }
+                    }
+                }
+                let data = b.data(&laid);
+                let bytes = u8::try_from(word).expect("a word of at most eight bytes");
+                vec![b.buffer_known(data, split, bytes)]
+            }
             Op::BufferPrepend { operands, shape } | Op::BufferExtend { operands, shape } => {
                 let (split, _) = split(b, shape)?;
                 let o = rebuild.args(operands);

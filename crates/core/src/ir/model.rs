@@ -165,6 +165,16 @@ pub enum Offset {
     Words(i32),
 }
 
+/// The leaves `bytes` apart in a known buffer's elements, each read least
+/// significant byte first.
+pub(super) fn known_leaves(elements: &[u8], bytes: u8) -> impl Iterator<Item = u64> + '_ {
+    elements.chunks(usize::from(bytes.max(1))).map(|leaf| {
+        let mut word = [0; 8];
+        word[..leaf.len()].copy_from_slice(leaf);
+        u64::from_le_bytes(word)
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
     /// A number known before the program runs. What it is held at is the
@@ -205,13 +215,15 @@ pub enum Op {
         shape: ShapeId,
     },
     /// A buffer known before the program runs, laid out in the image and
-    /// never freed: one element per byte of `elements`, each the value of
-    /// the one scalar leaf `shape` has. A known string is one of these, so
-    /// however long it is, it costs its bytes and nothing is copied to
-    /// build it.
+    /// never freed. `elements` holds each element's scalar leaves in the
+    /// order `shape` names them, each `bytes` bytes, least significant
+    /// first. A known string is one of these, a byte a leaf, so however long
+    /// it is, it costs its bytes and nothing is copied to build it; a known
+    /// table of numbers is too, and nothing builds it each time it is read.
     BufferKnown {
         elements: DataId,
         shape: ShapeId,
+        bytes: u8,
     },
     /// The sequence whose elements are `fields`, one value per leaf of a new
     /// first element, followed by the sequence `operands` begins with: a

@@ -162,11 +162,25 @@ impl References<'_> {
         match op {
             Op::Constant { .. } => {}
             Op::BufferEmpty { shape } => reference(&p.shapes, shape, "shape")?,
-            Op::BufferKnown { elements, shape } => {
+            Op::BufferKnown {
+                elements,
+                shape,
+                bytes,
+            } => {
                 reference(&p.shapes, shape, "shape")?;
                 self.datum(elements)?;
-                if !matches!(p.shaped(shape), [Class::Held(_)]) {
-                    return Err("a known buffer's element is not one scalar".into());
+                let len = p.datum_bytes(elements).len();
+                let leaves = p.shaped(shape);
+                if leaves.is_empty()
+                    || !leaves
+                        .iter()
+                        .all(|class| matches!(class, Class::Held(_) | Class::Word | Class::Natural))
+                {
+                    return Err("a known buffer's elements are not scalars".into());
+                }
+                let element = leaves.len() * usize::from(bytes);
+                if !(1..=8).contains(&bytes) || !len.is_multiple_of(element) {
+                    return Err("a known buffer's bytes are not whole elements".into());
                 }
             }
             Op::NaturalConstant(id) => self.natural_datum(id)?,

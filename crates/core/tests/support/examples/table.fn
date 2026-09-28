@@ -1,0 +1,16 @@
+# A known table of words wider than some machines' and small counts, read
+# at a row nothing knows before the program runs: laid out in the image,
+# not built each time it is read.
+
+import std.host {Host}
+
+table : List((U32, Nat))
+table() -> [(0x12345678, 4), (0xdeadbeef, 1), (70000, 9)]
+
+row : Nat -> Nat
+row(at) ->
+  (word, count) = table().get(at).ok_or((0, 0))
+  word.to_nat() % 4 + count
+
+main! : Host -> []
+main!(host) -> host.exit!(row(host.args.len() - 1))

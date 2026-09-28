@@ -119,8 +119,28 @@ impl Builder<'_> {
 
     /// A buffer holding one element per byte of `elements`, each the value
     /// of `shape`'s one scalar leaf, laid out before the program runs.
-    pub fn buffer_known(&mut self, elements: DataId, shape: ShapeId) -> ValueId {
-        self.push_one(Op::BufferKnown { elements, shape }, Class::Buffer)
+    pub fn buffer_known(&mut self, elements: DataId, shape: ShapeId, bytes: u8) -> ValueId {
+        self.push_one(
+            Op::BufferKnown {
+                elements,
+                shape,
+                bytes,
+            },
+            Class::Buffer,
+        )
+    }
+
+    /// The number a constant of this region wrote `value` as, where one did.
+    #[must_use]
+    pub fn known_number(&self, value: ValueId) -> Option<u64> {
+        let at = self
+            .results
+            .iter()
+            .rposition(|&results| self.program.values(results).contains(&value))?;
+        match self.ops[at] {
+            Op::Constant { value } => Some(value),
+            _ => None,
+        }
     }
 
     /// Put one element, as its leaves, before the sequence of `len` elements

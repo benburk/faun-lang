@@ -126,34 +126,38 @@ fn skeleton(source: &Program) -> Program {
 /// immortal count, room for nothing, claims for nothing, and its stride. It
 /// names no descriptor, since it holds nothing a descriptor would describe.
 fn empty(packed: &Packed, word_bits: u16) -> Vec<u8> {
-    known(packed, &[], word_bits)
+    known(packed, (&[], 1), word_bits)
 }
 
 /// A buffer laid out before the program runs, holding one element per byte
 /// of `elements`, each that value in the element's one leaf: immortal, so
 /// nothing writes it or frees it, as [`sequence`] lays out any buffer.
-fn known(packed: &Packed, elements: &[u8], word_bits: u16) -> Vec<u8> {
+fn known(packed: &Packed, (elements, leaf_bytes): (&[u8], u8), word_bits: u16) -> Vec<u8> {
     let word = usize::from(word_bits / 8);
     let immortal = u64::MAX >> (64 - word_bits);
-    let count = u64::try_from(elements.len()).expect("a count fits 64 bits");
+    let leaves: Vec<_> = super::model::known_leaves(elements, leaf_bytes).collect();
+    // Only an empty buffer's element may carry nothing.
+    let per = packed.leaves.len().max(1);
+    let count = u64::try_from(leaves.len() / per).expect("a count fits 64 bits");
     let mut bytes: Vec<u8> = [0, immortal, count, 0, count, packed.size, 0]
         .iter()
         .flat_map(|value: &u64| value.to_le_bytes()[..word].to_vec())
         .collect();
     let stride = usize::try_from(packed.size).expect("a stride fits the host");
-    let leaf = packed.leaves[..].first();
-    for &element in elements {
+    for element in leaves.chunks(per) {
         let mut laid = vec![0; stride];
-        if let Some(&super::packing::Leaf {
-            offset,
-            width: Some(width),
-            ..
-        }) = leaf
-        {
-            let offset = usize::try_from(offset).expect("an offset fits the host");
-            let width = usize::from(width.bytes(word_bits));
-            laid[offset..offset + width]
-                .copy_from_slice(&u64::from(element).to_le_bytes()[..width]);
+        for (leaf, &value) in packed.leaves.iter().zip(element) {
+            // A natural small enough to be held in place is twice itself.
+            let value = if leaf.kind == cell::NATURAL {
+                value * 2
+            } else {
+                value
+            };
+            if let Some(width) = leaf.width {
+                let offset = usize::try_from(leaf.offset).expect("an offset fits the host");
+                let width = usize::from(width.bytes(word_bits));
+                laid[offset..offset + width].copy_from_slice(&value.to_le_bytes()[..width]);
+            }
         }
         bytes.extend_from_slice(&laid);
     }
@@ -223,14 +227,18 @@ fn laid_out(
         })
         .collect();
     let knowns = shapes_of(source, |op| match op {
-        Op::BufferKnown { elements, shape } => Some((elements, shape)),
+        Op::BufferKnown {
+            elements,
+            shape,
+            bytes,
+        } => Some((elements, shape, bytes)),
         _ => None,
     })
     .into_iter()
-    .map(|(elements, shape)| {
+    .map(|(elements, shape, bytes)| {
         let laid = known(
             &packed[shape.index()],
-            source.datum_bytes(elements),
+            (source.datum_bytes(elements), bytes),
             word_bits,
         );
         ((elements, shape), output.intern(&laid))
@@ -945,7 +953,9 @@ impl Pass<'_> {
                 self.cell_field(b, results[0], cell, (shape, index))
             }
             Op::BufferEmpty { shape } => self.shapes.empty(b, shape),
-            Op::BufferKnown { elements, shape } => self.shapes.known(b, elements, shape),
+            Op::BufferKnown {
+                elements, shape, ..
+            } => self.shapes.known(b, elements, shape),
             Op::BufferRoom { count, shape } => {
                 let library = self.cells.expect("cell helpers were requested");
                 let stride = b.constant(Class::Word, self.shapes.packed(shape).size);

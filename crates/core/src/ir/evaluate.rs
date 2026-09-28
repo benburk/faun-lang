@@ -892,12 +892,18 @@ impl<H: Host> Machine<'_, H> {
                 Number::from(self.buffers.len())
             }
             // Nothing outside reads a buffer this tier has not laid out.
-            Op::BufferKnown { elements, .. } => {
-                let elements = self
-                    .program
-                    .datum_bytes(elements)
-                    .iter()
-                    .map(|&byte| vec![Number::from(byte)])
+            Op::BufferKnown {
+                elements,
+                shape,
+                bytes,
+            } => {
+                let leaves: Vec<_> =
+                    super::model::known_leaves(self.program.datum_bytes(elements), bytes)
+                        .map(Number::from)
+                        .collect();
+                let elements = leaves
+                    .chunks(self.program.shaped(shape).len())
+                    .map(<[Number]>::to_vec)
                     .collect();
                 self.buffers.push(elements);
                 Number::from(self.buffers.len())

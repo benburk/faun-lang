@@ -2375,7 +2375,7 @@ impl Lowering<'_> {
                 Class::Word,
                 u64::try_from(bytes.len()).expect("a length fits 64 bits"),
             );
-            return [b.buffer_known(data, shape), start, len];
+            return [b.buffer_known(data, shape, 1), start, len];
         }
         Self::unrolled_bytes(b, &bytes, element)
     }
@@ -2399,26 +2399,82 @@ impl Lowering<'_> {
             .elements(&mut budget)
             .expect("validated constants can be revisited");
         let shape = self.element_shape(b, push, usize::from(recursive == 0));
+        let built: Vec<Vec<ValueId>> = elements
+            .iter()
+            .map(|fields| self.static_element(b, fields, (push, recursive)))
+            .collect();
+        let len = u64::try_from(elements.len()).expect("a length fits 64 bits");
+        if let Some(known) = Self::laid_out(b, shape, &built) {
+            let start = b.constant(Class::Word, 0);
+            return [known, start, b.constant(Class::Word, len)];
+        }
         let mut buffer = b.buffer_empty(shape);
         let mut first = b.constant(Class::Word, 0);
-        for (len, fields) in elements.iter().rev().enumerate() {
+        for (len, values) in built.iter().rev().enumerate() {
             let len = b.constant(
                 Class::Word,
                 u64::try_from(len).expect("a length fits 64 bits"),
             );
-            let mut values = Vec::new();
-            for (at, &field) in fields.iter().enumerate() {
-                let at = if at >= recursive { at + 1 } else { at };
-                match self.field_carried(push, at) {
-                    Some(Carried::One(class)) => values.push(self.static_value(b, class, field)),
-                    Some(Carried::Flat(_)) => self.static_leaves(b, field, &mut values),
-                    None => {}
-                }
-            }
-            [buffer, first] = b.buffer_push((buffer, first, len), shape, &values);
+            [buffer, first] = b.buffer_push((buffer, first, len), shape, values);
         }
-        let len = u64::try_from(elements.len()).expect("a length fits 64 bits");
         [buffer, first, b.constant(Class::Word, len)]
+    }
+
+    /// One known element's fields, each as the values it is held in.
+    fn static_element(
+        &self,
+        b: &mut super::Builder,
+        fields: &[barb::Constant<'_>],
+        (push, recursive): (barb::CtorId, usize),
+    ) -> Vec<ValueId> {
+        let mut values = Vec::new();
+        for (at, &field) in fields.iter().enumerate() {
+            let at = if at >= recursive { at + 1 } else { at };
+            match self.field_carried(push, at) {
+                Some(Carried::One(class)) => values.push(self.static_value(b, class, field)),
+                Some(Carried::Flat(_)) => self.static_leaves(b, field, &mut values),
+                None => {}
+            }
+        }
+        values
+    }
+
+    /// Known elements whose every leaf is a number known outright, laid out
+    /// before the program runs, each leaf in as few bytes as the widest
+    /// takes: nothing builds them, and reading one reads the image. A
+    /// natural leaf is laid out only where it is small enough to be held in
+    /// place on every target, since then it holds no claim. The constants
+    /// the elements were first written as are left for pruning.
+    fn laid_out(
+        b: &mut super::Builder,
+        shape: ShapeId,
+        elements: &[Vec<ValueId>],
+    ) -> Option<ValueId> {
+        let first = elements.first()?;
+        if first.is_empty()
+            || !first
+                .iter()
+                .all(|&v| matches!(b.class(v), Class::Held(_) | Class::Natural))
+        {
+            return None;
+        }
+        let numbers = elements
+            .iter()
+            .flatten()
+            .map(|&value| {
+                let n = b.known_number(value)?;
+                (b.class(value) != Class::Natural || n < super::natural::half(16)).then_some(n)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let widest = numbers.iter().copied().max().unwrap_or(0);
+        let bytes = u8::try_from((u64::BITS - widest.leading_zeros()).div_ceil(8).max(1))
+            .expect("a number of at most eight bytes");
+        let data: Vec<u8> = numbers
+            .iter()
+            .flat_map(|n| n.to_le_bytes()[..usize::from(bytes)].to_vec())
+            .collect();
+        let data = b.data(&data);
+        Some(b.buffer_known(data, shape, bytes))
     }
 
     /// Known bytes pushed one at a time, from the last, each as `element`

@@ -225,8 +225,13 @@ So pushes onto a buffer nothing else holds are amortized constant, including
 building on the way out as `map` does, since each step pushes onto the buffer
 the rest of the walk just answered. A buffer records its capacity, the lowest
 element it holds claims for, its stride and one kind per leaf; `seq.release`
-releases every held element when the last claim goes. Known byte strings are
-built by pushing their bytes from the end. The reference interpreter keeps
+releases every held element when the last claim goes. A known sequence whose
+elements are all numbers -- a string, or a table of words and small counts --
+is `BufferKnown`: its leaves in the data, legalized into a static buffer in
+the image that nothing writes or frees, and width splitting lays a wide leaf
+out as its words. A natural leaf is laid out only below `2^15`, where it is
+held in place on every target and holds no claim. Any other known sequence is
+built by pushing its elements from the end. The reference interpreter keeps
 each buffer as a list of elements and gives a push a fresh one, so its answers
 do not depend on writing in place.
 
