@@ -762,6 +762,7 @@ impl<H: Host> Machine<'_, H> {
             Binary::And => left.bits_with(right, |a, b| a & b, |a, b| a & b),
             Binary::Or => left.bits_with(right, |a, b| a | b, |a, b| a | b),
             Binary::Xor => left.bits_with(right, |a, b| a ^ b, |a, b| a ^ b),
+            Binary::ShiftUp | Binary::ShiftDown => moved(op, class, &left, right)?,
             Binary::Sub | Binary::Monus if left >= *right => left.sub(right),
             Binary::Sub if class == Class::Natural => Number::ZERO,
             Binary::Monus => Number::ZERO,
@@ -1191,4 +1192,17 @@ impl<H: Host> Machine<'_, H> {
         self.signature(classes, &result)?;
         Ok(Answer::Return(result))
     }
+}
+
+/// `left` with its bits moved `right` places, up or down as `op` says: a
+/// distance a word does not hold moves every bit out.
+fn moved(op: Binary, class: Class, left: &Number, right: &Number) -> Result<Number, Error> {
+    let by = right.small().and_then(|by| u16::try_from(by).ok());
+    Ok(match (op, by) {
+        (Binary::ShiftUp, Some(by)) => left.shl(by),
+        (_, Some(by)) => left.shr(by),
+        (Binary::ShiftUp, None) if left.is_zero() => Number::ZERO,
+        (Binary::ShiftUp, None) => return Err(Error::DoesNotFit(class)),
+        (_, None) => Number::ZERO,
+    })
 }

@@ -571,6 +571,15 @@ impl Checker<'_> {
                 left,
                 right,
             } => self.monus(left, right, results)?,
+            Op::Binary {
+                op: Binary::ShiftUp | Binary::ShiftDown,
+                ..
+            } if results
+                .iter()
+                .any(|&result| self.program.class(result) == Class::Natural) =>
+            {
+                return Err("a shift is of a machine value, not a natural".into());
+            }
             Op::Binary { left, right, .. } => self.binary(left, right, results)?,
             Op::Shift { value, by, .. } => self.shift(value, by, results)?,
             Op::Float { float, operands } => self.float(float, operands, results)?,

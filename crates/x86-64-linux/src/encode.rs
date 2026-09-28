@@ -63,6 +63,7 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 by,
                 bits,
             } => asm.shift(direction, dst, by, bits),
+            Inst::ShiftByCount { direction, dst } => asm.shift_by_count(direction, dst),
             Inst::Multiply => asm.multiply(),
             Inst::Float {
                 float,
@@ -511,6 +512,18 @@ impl RawEncoder {
         } else {
             self.emit(&[0xC1, operand, by]);
         }
+    }
+
+    /// `dst` moved by `cl` places, at a word's width, so a distance up to
+    /// the word's is the distance itself.
+    fn shift_by_count(&mut self, direction: ShiftDirection, dst: Reg) {
+        self.step();
+        let extension = match direction {
+            ShiftDirection::Left => 4,
+            ShiftDirection::Right => 5,
+        };
+        self.rex(true, None, dst);
+        self.emit(&[0xD3, 0xC0 | (extension << 3) | dst.low()]);
     }
 
     /// Unsigned RDX:RAX = RAX * RCX; both result registers are clobbered.

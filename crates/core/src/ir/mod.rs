@@ -78,6 +78,7 @@ mod program;
 mod prune;
 mod rewrite;
 mod sequence;
+mod shifts;
 mod simplify;
 mod split;
 mod validate;
@@ -93,6 +94,7 @@ pub use model::{
 };
 pub use optimize::optimize;
 pub use program::Program;
+pub use shifts::expand_shifts;
 pub use split::split;
 pub use validate::validate;
 

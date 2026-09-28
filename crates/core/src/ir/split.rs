@@ -330,6 +330,9 @@ impl Split {
                 let x = self.words(rebuild, b, left, all);
                 self.divided(rebuild, b, (op, &x, right), (own, all))
             }
+            Binary::ShiftUp | Binary::ShiftDown => {
+                unreachable!("a shift wider than a word is expanded before splitting")
+            }
             // Each word of the answer is the same words' answer.
             Binary::And | Binary::Or | Binary::Xor => {
                 let x = self.words(rebuild, b, left, n);

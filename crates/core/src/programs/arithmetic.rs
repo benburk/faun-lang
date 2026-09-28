@@ -69,6 +69,8 @@ pub fn cases(bits: u16, op: Binary, pairs: &[(u64, u64)]) -> Program {
                 Binary::And => left & right,
                 Binary::Or => left | right,
                 Binary::Xor => left ^ right,
+                Binary::ShiftUp => left << right,
+                Binary::ShiftDown => left.checked_shr(u32::try_from(right).unwrap()).unwrap_or(0),
             };
             let args = [left, right, expected].map(|value| b.constant(class, value));
             let result = b.call_one(check, &args);

@@ -539,6 +539,7 @@ fn model(op: Binary, a: &BigUint, c: &BigUint) -> BigUint {
         Binary::And => a & c,
         Binary::Or => a | c,
         Binary::Xor => a ^ c,
+        Binary::ShiftUp | Binary::ShiftDown => unreachable!("a shift is never of a natural"),
     }
 }
 

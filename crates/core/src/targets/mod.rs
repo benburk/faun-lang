@@ -114,6 +114,13 @@ pub trait Target: fmt::Debug {
         Budget::UNLIMITED
     }
 
+    /// Whether it shifts a word by a distance held in a register, in one
+    /// instruction. Where it does not, preparation writes such a shift as a
+    /// loop of shifts by one place.
+    fn shifts_by_register(&self) -> bool {
+        false
+    }
+
     /// Prepare once, then accept and emit that same scalar program.
     ///
     /// # Errors
@@ -135,6 +142,7 @@ pub trait Target: fmt::Debug {
     /// Reports invalid IR or a representation this target cannot safely emit.
     fn prepare(&self, program: &Program) -> Result<Program, String> {
         crate::ir::validate(program)?;
+        let program = &crate::ir::expand_shifts(program, self.word(), self.shifts_by_register());
         // A number wider than the word becomes words first, which may make
         // more cross a boundary than fits; fitting then packs the rest.
         let program = &crate::ir::split(program, self.word());
@@ -190,6 +198,16 @@ pub trait Target: fmt::Debug {
             .filter_map(crate::ir::Function::body)
             .flat_map(|body| program.walk_within(body))
         {
+            // A shift by a register is one instruction or nothing: see
+            // `ir::expand_shifts`, which preparation runs.
+            if let Op::Binary {
+                op: crate::ir::Binary::ShiftUp | crate::ir::Binary::ShiftDown,
+                ..
+            } = *op
+                && !self.shifts_by_register()
+            {
+                return Err(format!("{name} shifts by a known distance only"));
+            }
             // Encoded constants must fit; narrowing is explicit.
             if let Op::Constant { value } = *op {
                 let bits = program.class(results[0]).bits(word);

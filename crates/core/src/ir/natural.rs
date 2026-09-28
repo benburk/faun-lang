@@ -135,6 +135,7 @@ impl Helper {
             Binary::And => Self::And,
             Binary::Or => Self::Or,
             Binary::Xor => Self::Xor,
+            Binary::ShiftUp | Binary::ShiftDown => panic!("a shift is never of a natural"),
         }
     }
 }

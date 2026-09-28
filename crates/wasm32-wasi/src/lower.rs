@@ -560,6 +560,9 @@ impl Lowering<'_> {
                     Binary::And => I32_AND,
                     Binary::Or => I32_OR,
                     Binary::Xor => I32_XOR,
+                    // Preparation hands over only distances below the word.
+                    Binary::ShiftUp => I32_SHL,
+                    Binary::ShiftDown => I32_SHR_U,
                     Binary::Monus => {
                         self.monus(*left, *right, results[0]);
                         return;

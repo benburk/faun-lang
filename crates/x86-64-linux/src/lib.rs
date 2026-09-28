@@ -67,6 +67,10 @@ impl Target for X86_64Linux {
         ]
     }
 
+    fn shifts_by_register(&self) -> bool {
+        true
+    }
+
     fn budget(&self) -> Budget {
         Budget::new(ARG_COUNT, 1, usize::MAX)
     }

@@ -33,6 +33,10 @@ impl Target for Wasm32Wasi {
         "wasm32-wasi"
     }
 
+    fn shifts_by_register(&self) -> bool {
+        true
+    }
+
     fn word(&self) -> u16 {
         WORD_BITS
     }

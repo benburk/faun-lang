@@ -183,6 +183,11 @@ pub(crate) enum Inst {
         by: u8,
         bits: u16,
     },
+    /// `dst` moved by the distance in `cl`, at a word's width.
+    ShiftByCount {
+        direction: ShiftDirection,
+        dst: Reg,
+    },
     Multiply,
     Divide,
     /// `dst` = `float` of the patterns in `left` and, for a binary one,
@@ -424,6 +429,10 @@ impl AllocatedBuilder {
             by,
             bits,
         });
+    }
+
+    pub(crate) fn shift_by_count(&mut self, direction: ShiftDirection, dst: Reg) {
+        self.push(Inst::ShiftByCount { direction, dst });
     }
 
     pub(crate) fn multiply(&mut self) {

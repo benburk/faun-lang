@@ -1711,6 +1711,36 @@ fn runtime_arithmetic_boundaries_and_odd_widths() {
     assert_eq!(status(&programs::arithmetic::preserves_host_count()), 0);
 }
 
+/// Shifts by a distance the program is handed: one instruction where a
+/// target has one and the distance is known to be below its word, and a
+/// loop of one-place shifts otherwise, wider than a word among them.
+#[test]
+fn runtime_shifts_by_a_distance() {
+    for bits in [1, 2, 7, 8, 9, 15, 16, 31, 32, 33, 63, 64] {
+        if bits > TARGET.word() {
+            continue;
+        }
+        let max = u64::MAX >> (64 - bits);
+        let top = u64::from(bits - 1);
+        for op in [Binary::ShiftUp, Binary::ShiftDown] {
+            let mut pairs = vec![(0, 0), (max, 0), (1, top), (0, top), (max, top)];
+            if op == Binary::ShiftUp {
+                pairs.retain(|&(value, by)| {
+                    value
+                        .checked_shl(u32::try_from(by).unwrap())
+                        .is_some_and(|moved| moved <= max && moved >> by == value)
+                });
+                pairs.push((max >> top, top));
+            }
+            let program = programs::arithmetic::cases(bits, op, &pairs);
+            let prepared = TARGET
+                .prepare(&program)
+                .expect("a program this machine holds");
+            assert_eq!(status(&prepared), 0, "{bits} {op:?}");
+        }
+    }
+}
+
 #[test]
 fn runtime_monus_across_byte_boundaries() {
     for bits in [8, 9, 16, 32, 64] {

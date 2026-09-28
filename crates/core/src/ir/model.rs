@@ -112,6 +112,12 @@ pub enum Binary {
     Or,
     /// A bit wherever exactly one has one.
     Xor,
+    /// `left` times two to the power of `right`: its bits moved up `right`
+    /// places. A fit requirement, as a product is.
+    ShiftUp,
+    /// `left` divided by two to the power of `right`: its bits moved down
+    /// `right` places, and nought where that is all of them.
+    ShiftDown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

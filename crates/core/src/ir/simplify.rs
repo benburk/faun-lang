@@ -132,16 +132,21 @@ impl rewrite::Pass for Simplify {
                 op: Binary::Mul,
                 left,
                 right,
-            } => self
-                .places(right)
-                .is_some_and(|by| shifting(rebuild, b, Direction::Up, left, by, results[0])),
+            } => {
+                self.places(right)
+                    .is_some_and(|by| shifting(rebuild, b, Direction::Up, left, by, results[0]))
+                    || self.moved(rebuild, b, (Binary::ShiftUp, left, right), results[0])
+                    || self.moved(rebuild, b, (Binary::ShiftUp, right, left), results[0])
+            }
             Op::Binary {
                 op: Binary::Div,
                 left,
                 right,
-            } => self
-                .places(right)
-                .is_some_and(|by| shifting(rebuild, b, Direction::Down, left, by, results[0])),
+            } => {
+                self.places(right)
+                    .is_some_and(|by| shifting(rebuild, b, Direction::Down, left, by, results[0]))
+                    || self.moved(rebuild, b, (Binary::ShiftDown, left, right), results[0])
+            }
             Op::Binary {
                 op: Binary::Mod,
                 left,
@@ -361,6 +366,7 @@ impl Simplify {
                     Binary::And => x & y,
                     Binary::Or => x | y,
                     Binary::Xor => x ^ y,
+                    Binary::ShiftUp | Binary::ShiftDown => return None,
                 };
                 return Some(if bits >= 64 {
                     answer
@@ -378,9 +384,44 @@ impl Simplify {
                 Binary::And => x & y,
                 Binary::Or => x | y,
                 Binary::Xor => x ^ y,
+                Binary::ShiftUp => x
+                    .checked_shl(u32::try_from(y).ok()?)
+                    .filter(|m| m >> y == x)?,
+                Binary::ShiftDown => x.checked_shr(u32::try_from(y).ok()?).unwrap_or(0),
             },
         };
         (wrap(class, answer) == answer).then_some(answer)
+    }
+
+    /// A product or quotient by one moved up some places, which is its
+    /// value moved that many places: where `power` was written as one
+    /// moved up, `value` moved up or down by as many.
+    fn moved(
+        &self,
+        rebuild: &rewrite::Rebuild<'_>,
+        b: &mut Builder,
+        (op, value, power): (Binary, ValueId, ValueId),
+        result: ValueId,
+    ) -> bool {
+        let Some((
+            Op::Binary {
+                op: Binary::ShiftUp,
+                left,
+                right,
+            },
+            ..,
+        )) = self.wrote.0[power.index()]
+        else {
+            return false;
+        };
+        let class = rebuild.source().class(result);
+        let by = rebuild.value(right);
+        if self.number(left) != Some(1) || !b.class(by).fits(class) {
+            return false;
+        }
+        let moved = b.binary_at(class, op, rebuild.value(value), by);
+        rebuild.stands_for(result, moved);
+        true
     }
 
     /// A remainder by a power of two is the bits below it, which is what

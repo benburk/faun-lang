@@ -440,6 +440,14 @@ impl<'a> Lowering<'a> {
                 self.asm.xor_self(result()?);
                 self.asm.bind(kept);
             }
+            (Opcode::ShiftUp | Opcode::ShiftDown, Immediate::Bits(_)) => {
+                let direction = if inst.opcode == Opcode::ShiftUp {
+                    ShiftDirection::Left
+                } else {
+                    ShiftDirection::Right
+                };
+                self.asm.shift_by_count(direction, result()?);
+            }
             (Opcode::Multiply, Immediate::Bits(_)) => {
                 self.asm.multiply();
                 self.forget(Reg::Rdx);

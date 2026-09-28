@@ -69,7 +69,8 @@ pub(super) fn lower(
         return monus(b, result, left, right);
     }
     if op == Operation::Pow {
-        return power(b, result, left, right);
+        return shifted_one(b, result, left, right)
+            .unwrap_or_else(|| power(b, result, left, right));
     }
     // Where the answer lives, if there is room there for what either side
     // brings: then nothing is converted afterwards and the answer says what
@@ -124,6 +125,24 @@ fn monus(b: &mut Builder, result: Class, left: ValueId, right: ValueId) -> Value
     }
     let answer = b.binary_at(class, Binary::Monus, left, right);
     at(b, answer, result)
+}
+
+/// Two to a power, at a class a machine holds, is one moved up that many
+/// places.
+fn shifted_one(
+    b: &mut Builder,
+    result: Class,
+    base: ValueId,
+    exponent: ValueId,
+) -> Option<ValueId> {
+    if b.known_number(base) != Some(2)
+        || !matches!(result, Class::Held(_) | Class::Word)
+        || !b.class(exponent).fits(result)
+    {
+        return None;
+    }
+    let one = b.constant(result, 1);
+    Some(b.binary_at(result, Binary::ShiftUp, one, exponent))
 }
 
 /// `base` to the power of `exponent`, by squaring: a bit of the exponent a

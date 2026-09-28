@@ -260,8 +260,17 @@ the 6502. On `Natural` operands, runtime legalization calls `nat.and`,
 `nat.or` or `nat.xor`, which answer two immediates from their numbers and
 otherwise work a digit at a time.
 
-Barb's `Pow` has no instruction. Lowering writes a loop squaring the base as
-the exponent halves, at the class range analysis proved the answer fits.
+Barb's `Pow` has no instruction of its own. Two to a power, at a class a
+word holds, is `ShiftUp(1, k)`, and simplification makes a product or
+quotient by one of those `ShiftUp` or `ShiftDown` by `k`: a shift by a
+distance worked out while the program runs. x86-64 and wasm32 say they shift
+by a register (`Target::shifts_by_register`); preparation writes every other
+such shift as a loop of one-place shifts (`ir::expand_shifts`), as it does
+one wider than the word, which splitting then carries across words, and one
+down whose distance may reach the word, which an instruction would take
+modulo the word. Acceptance refuses one a target cannot do. Any other power
+is a loop squaring the base as the exponent halves, at the class range
+analysis proved the answer fits.
 Every intermediate fits there too: what has been multiplied in is the base to
 the exponent's low bits, and the base is squared only while bits remain above.
 

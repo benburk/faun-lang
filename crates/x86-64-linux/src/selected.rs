@@ -131,6 +131,9 @@ pub(crate) enum Opcode {
     And,
     Or,
     Xor,
+    /// Moved up or down by the distance in `rcx`, below the word.
+    ShiftUp,
+    ShiftDown,
     Equal,
     Below,
     Load,
@@ -160,6 +163,24 @@ pub(crate) enum Opcode {
 }
 
 impl Opcode {
+    /// Whether it is worked out where its first operand was, whichever
+    /// register that is.
+    const fn in_place(self) -> bool {
+        matches!(
+            self,
+            Self::Add
+                | Self::Subtract
+                | Self::And
+                | Self::Or
+                | Self::Xor
+                | Self::ShiftUp
+                | Self::ShiftDown
+                | Self::Monus
+                | Self::Convert
+                | Self::Shift
+        )
+    }
+
     /// Which register each operand is handed in, for a call the kernel
     /// answers, where the operand is read there.
     const fn syscall_operand(self, at: usize) -> Option<Reg> {
@@ -241,6 +262,8 @@ impl Opcode {
             | Self::And
             | Self::Or
             | Self::Xor
+            | Self::ShiftUp
+            | Self::ShiftDown
             | Self::Shift => arithmetic,
             Self::ArgumentVector => Effects {
                 clobbers: RegSet::of(&[Reg::Rcx]),
@@ -354,20 +377,8 @@ impl Inst {
         }
         let use_at = at.checked_sub(def)?;
         let constraint = match self.opcode {
-            // Worked out where the first operand was, whichever register
-            // that is.
-            Opcode::Add
-            | Opcode::Subtract
-            | Opcode::And
-            | Opcode::Or
-            | Opcode::Xor
-            | Opcode::Monus
-            | Opcode::Convert
-            | Opcode::Shift
-                if use_at == 0 =>
-            {
-                Constraint::Tied(0)
-            }
+            op if op.in_place() && use_at == 0 => Constraint::Tied(0),
+            Opcode::ShiftUp | Opcode::ShiftDown if use_at == 1 => Constraint::Fixed(Reg::Rcx),
             Opcode::Multiply | Opcode::Divide | Opcode::Modulo if use_at == 0 => {
                 Constraint::Fixed(Reg::Rax)
             }
@@ -660,6 +671,8 @@ impl Selected {
             | Opcode::And
             | Opcode::Or
             | Opcode::Xor
+            | Opcode::ShiftUp
+            | Opcode::ShiftDown
             | Opcode::Monus
             | Opcode::Multiply
             | Opcode::Divide
@@ -732,16 +745,11 @@ impl Selected {
                 .get(inst.operands.range().start)
                 .map(|&value| self.width(value))
                 .transpose()?,
-            Opcode::Add
-            | Opcode::Subtract
-            | Opcode::And
-            | Opcode::Or
-            | Opcode::Xor
-            | Opcode::Multiply
-            | Opcode::Divide
-            | Opcode::Modulo
-            | Opcode::Convert
-            | Opcode::Shift => inst.result.map(|value| self.width(value)).transpose()?,
+            op if op.in_place()
+                || matches!(op, Opcode::Multiply | Opcode::Divide | Opcode::Modulo) =>
+            {
+                inst.result.map(|value| self.width(value)).transpose()?
+            }
             _ => None,
         };
         if let (Some(declared), Some(represented)) = (declared, represented)
@@ -1080,6 +1088,8 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             | Opcode::And
             | Opcode::Or
             | Opcode::Xor
+            | Opcode::ShiftUp
+            | Opcode::ShiftDown
             | Opcode::Monus
             | Opcode::Multiply
             | Opcode::Divide
@@ -1118,6 +1128,8 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
                     | Opcode::And
                     | Opcode::Or
                     | Opcode::Xor
+                    | Opcode::ShiftUp
+                    | Opcode::ShiftDown
                     | Opcode::Monus
                     | Opcode::Multiply
                     | Opcode::Divide
@@ -1419,6 +1431,8 @@ impl Selector<'_> {
                         Binary::And => Opcode::And,
                         Binary::Or => Opcode::Or,
                         Binary::Xor => Opcode::Xor,
+                        Binary::ShiftUp => Opcode::ShiftUp,
+                        Binary::ShiftDown => Opcode::ShiftDown,
                     };
                     // A monus answers no more than its left operand, and is
                     // worked out as wide as that is.
