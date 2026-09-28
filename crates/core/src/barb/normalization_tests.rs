@@ -210,3 +210,50 @@ fn a_match_on_a_type_with_no_constructors_is_not_a_program() {
         "{refused}"
     );
 }
+
+/// `a < b` written through an order, as the standard library writes it:
+/// a truth, turned into an order, turned back into a truth, then asked.
+/// Composed, the question asked is the comparison's own truth, which is
+/// what range analysis reads a branch on.
+#[test]
+fn a_truth_turned_into_tags_and_back_is_the_truth_itself() {
+    let library = super::fixture::Library::new();
+    let (nat, bool_, less_than) = (library.nat, library.bool_, library.less_than);
+    let (false_, true_) = (library.false_, library.true_);
+    let mut program = library.program;
+    let order = program.declare_type("Order");
+    program.define_type(order, &[("Lt", &[]), ("Eq", &[]), ("Gt", &[])]);
+    let [lt, eq, gt] = [0, 1, 2].map(|at| program.ctor_at(order, at));
+    let main = program.declare("main", &[nat, nat], nat);
+    program.define(main, |b, args| {
+        let below = b.call(less_than, &args[..2]);
+        let same = b.call(library.equals, &args[..2]);
+        let ordered = b.match_(below, bool_, |b, ctor, _| {
+            if ctor == true_ {
+                return b.con(lt, &[]);
+            }
+            b.match_(same, bool_, |b, ctor, _| {
+                b.con(if ctor == true_ { eq } else { gt }, &[])
+            })
+        });
+        let truth = b.match_(ordered, order, |b, ctor, _| {
+            b.con(if ctor == lt { true_ } else { false_ }, &[])
+        });
+        b.match_(
+            truth,
+            bool_,
+            |_, ctor, _| if ctor == true_ { args[0] } else { args[1] },
+        )
+    });
+    program.set_entry(main);
+    validate(&program).unwrap();
+    structural(&mut program);
+    validate(&program).unwrap();
+    let body = program.function(main).body().unwrap();
+    // The comparison is the third binding, at level 2, and the answer asks it.
+    assert!(
+        matches!(program.expr(body.tail), Expr::Match(Atom(on), _) if on.index() == 2),
+        "{}",
+        program.render()
+    );
+}

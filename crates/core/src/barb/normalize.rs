@@ -142,6 +142,63 @@ fn rewrite(program: &mut Program, inlining: Option<Inlining>, algebra_limits: Op
     rewrite.program.replace_bodies(bodies);
 }
 
+/// The most answers a question of tags is composed through.
+const TAG_TREE_LEAVES: usize = 16;
+
+/// Questions about tags, answered with tags.
+enum Tags {
+    Leaf(super::CtorId),
+    /// The local asked about, where the answers are what was asked.
+    Same(Atom),
+    Split(Atom, Vec<(super::CtorId, Self)>),
+}
+
+impl Tags {
+    /// Each answer turned into another, or nothing where one is not turned.
+    fn mapped(&self, to: &dyn Fn(super::CtorId) -> Option<super::CtorId>) -> Option<Self> {
+        Some(match self {
+            Self::Leaf(tag) => Self::Leaf(to(*tag)?),
+            Self::Same(atom) => Self::Same(*atom),
+            Self::Split(on, branches) => Self::Split(
+                *on,
+                branches
+                    .iter()
+                    .map(|(ctor, tree)| Some((*ctor, tree.mapped(to)?)))
+                    .collect::<Option<_>>()?,
+            ),
+        })
+    }
+
+    /// Without questions whose answers agree, or that answer with the tag
+    /// asked about.
+    fn collapsed(self) -> Self {
+        let Self::Split(on, branches) = self else {
+            return self;
+        };
+        let branches: Vec<_> = branches
+            .into_iter()
+            .map(|(ctor, tree)| (ctor, tree.collapsed()))
+            .collect();
+        let leaf = |tree: &Self| match tree {
+            Self::Leaf(tag) => Some(*tag),
+            _ => None,
+        };
+        let tags: Option<Vec<_>> = branches.iter().map(|(_, tree)| leaf(tree)).collect();
+        if let Some(tags) = tags {
+            if tags.iter().all(|&tag| tag == tags[0]) {
+                return Self::Leaf(tags[0]);
+            }
+            if branches
+                .iter()
+                .all(|&(ctor, ref tree)| leaf(tree) == Some(ctor))
+            {
+                return Self::Same(on);
+            }
+        }
+        Self::Split(on, branches)
+    }
+}
+
 struct Rewrite<'a> {
     program: &'a mut Program,
     /// Recognised definitions keep their bodies and are called, not
@@ -354,6 +411,9 @@ impl Rewrite<'_> {
                 if let Some(answer) = self.selected(scrutinee, arms, locals, scope) {
                     return answer;
                 }
+                if let Some(answer) = self.composed(scrutinee, arms, scope) {
+                    return answer;
+                }
                 match self.matching(value, arms, locals, scope) {
                     Matched::Rebuilt(held) => held,
                     Matched::Same(body) => return self.spliced(body, scope),
@@ -390,6 +450,93 @@ impl Rewrite<'_> {
         let mut inner = locals.to_vec();
         inner.extend(fields);
         Some(self.into(arm.body, inner, scope))
+    }
+
+    /// A match turning tags into tags, on a local another match wrote out of
+    /// tags alone, is one match: the first's questions, each answered with
+    /// the tag the second turns its answer into. So `a < b`, which asks an
+    /// order and turns it into a truth, asks the comparison itself, and
+    /// what a branch on it says of `a` and `b` is seen by range analysis.
+    /// Nothing is copied but tags, and a question whose answers agree, or
+    /// that answers with what it asked about, is not asked at all.
+    fn composed(&mut self, scrutinee: Atom, arms: Range, scope: &mut Scope) -> Option<Atom> {
+        let wrote = (*self.written.get(scrutinee.0.index())?)?;
+        let inner = self.tag_tree(wrote, TAG_TREE_LEAVES)?;
+        let outer = self
+            .program
+            .arms(arms)
+            .iter()
+            .map(|arm| {
+                let tag = arm
+                    .body
+                    .bindings
+                    .is_empty()
+                    .then(|| self.tag(arm.body.tail))??;
+                Some((arm.ctor, tag))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let mapped = inner.mapped(&|tag| {
+            outer
+                .iter()
+                .find(|&&(ctor, _)| ctor == tag)
+                .map(|&(_, answer)| answer)
+        })?;
+        Some(self.emit_tags(mapped.collapsed(), scope))
+    }
+
+    /// The nullary constructor `expr` builds or knows, where it is one.
+    fn tag(&self, expr: ExprId) -> Option<super::CtorId> {
+        let ctor = match self.program.expr(expr) {
+            Expr::Con(ctor, fields) if fields.is_empty() => ctor,
+            Expr::Static(value) => self.program.constant(value).constructor(),
+            _ => return None,
+        };
+        self.program.fields(ctor).is_empty().then_some(ctor)
+    }
+
+    /// `expr` as questions about tags answered with tags, of at most
+    /// `leaves` answers.
+    fn tag_tree(&self, expr: ExprId, leaves: usize) -> Option<Tags> {
+        if let Some(tag) = self.tag(expr) {
+            return Some(Tags::Leaf(tag));
+        }
+        let Expr::Match(on, arms) = self.program.expr(expr) else {
+            return None;
+        };
+        let arms = self.program.arms(arms);
+        if arms.len() > leaves {
+            return None;
+        }
+        let branches = arms
+            .iter()
+            .map(|arm| {
+                let bare = arm.body.bindings.is_empty() && self.program.fields(arm.ctor).is_empty();
+                let tree = bare.then(|| self.tag_tree(arm.body.tail, leaves / arms.len()))??;
+                Some((arm.ctor, tree))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Tags::Split(on, branches))
+    }
+
+    fn emit_tags(&mut self, tags: Tags, scope: &mut Scope) -> Atom {
+        match tags {
+            Tags::Leaf(tag) => self.push(Expr::Con(tag, Range::default()), scope),
+            Tags::Same(atom) => atom,
+            Tags::Split(on, branches) => {
+                let arms: Vec<_> = branches
+                    .into_iter()
+                    .map(|(ctor, tree)| Arm {
+                        ctor,
+                        body: self.body_with(scope.level, |rewrite, inner| {
+                            rewrite.emit_tags(tree, inner)
+                        }),
+                    })
+                    .collect();
+                self.written.truncate(scope.level);
+                let arms = self.program.terms.hold_arms(&arms);
+                self.push(Expr::Match(on, arms), scope)
+            }
+        }
     }
 
     /// The length of a sequence written as a known value, which is a number

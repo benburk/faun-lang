@@ -183,6 +183,10 @@ x    ::= a parameter, a binding, or a field an arm bound
   walk also takes the arm a match on a local written as a constructor or a
   known value selects, with its fields what built it, and replaces a match
   whose arms bind nothing and are term-for-term the same with that arm.
+  A match turning tags into tags, on a local another match wrote out of tags
+  alone, becomes one match asking the first's questions -- so `a < b`, which
+  becomes an `Order` and then a `Bool`, branches on the comparison itself,
+  and range analysis sees what the branch says of `a` and `b`.
 - `invariant.rs`: a parameter every call from outside hands the same known
   value, and every call from inside passes on as it came, is that value:
   the definition binds it first and reads it there, so what reads it inside

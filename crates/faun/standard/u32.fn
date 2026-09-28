@@ -73,8 +73,9 @@ U32 : Nat.(
   # bottom. The width round is no change.
   rotate_left : (U32, Nat) -> U32
   rotate_left(U32(a), amount) ->
-    shift = amount % 32
-    of_nat(a * 2.pow(shift) + a / 2.pow(32 - shift))
+    # The bits moved up, below the width, and those past it, above.
+    moved = a * 2.pow(amount % 32)
+    U32(moved % 4294967296 + moved / 4294967296)
 
   rotate_right : (U32, Nat) -> U32
   rotate_right(word, amount) -> rotate_left(word, 32 - amount % 32)
