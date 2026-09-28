@@ -86,8 +86,8 @@ x    ::= a parameter, a binding, or a field an arm bound
   digit walk past `n < 10`, and a walk scaling by ten past a bound are seen
   to stop. Recognized arithmetic and the recognized `Length`, `Take` and
   `Drop` answer by what they mean; a list's least length follows the
-  constructors it was matched as; a guard keeping a number at or above
-  another gives it that one's least value; a recognized operation worked
+  constructors it was matched as; a guard becomes bounds on entering an
+  arm, one side at most what the other is at most; a recognized operation worked
   out again on the same operands is the same value; and a small definition
   going round nowhere is read in place at a call.
 - `relations.rs`: what a guard says of the sizes it compared, followed from

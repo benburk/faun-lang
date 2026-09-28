@@ -88,19 +88,6 @@ fn join(a: &[Fact], b: &[Fact]) -> Facts {
         .collect()
 }
 
-/// Whether `facts` place `left` against `right` only in ways `within`
-/// allows.
-pub(super) fn holds(facts: &[Fact], left: usize, right: usize, within: Rel) -> bool {
-    let (rel, left, right) = if left <= right {
-        (within, left, right)
-    } else {
-        (flip(within), right, left)
-    };
-    facts
-        .iter()
-        .any(|fact| fact.left == left && fact.right == right && fact.rel & !rel == 0)
-}
-
 /// For each constructor of an enumeration, by tag, what holds when a value
 /// is it, or nothing where it cannot be.
 #[derive(Clone, Debug, PartialEq, Eq)]

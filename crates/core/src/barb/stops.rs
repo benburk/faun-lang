@@ -35,8 +35,12 @@
 //! moving `lo` toward `hi`. The matrices then carry, besides the measures,
 //! `a ∸ b` for each ordered pair of naturals, smaller where the new pair
 //! lies within the old, one side has moved, and a guard keeps them apart.
-//! What guards say is read in [`super::relations`]; a guard keeping a
-//! number at or above another gives it that one's least value, and a
+//! What guards say is read in [`super::relations`] and becomes bounds on
+//! entering an arm: past `x < y`, `x` is at most what `y` is at most, less
+//! one, and `y` at least what `x` is at least, and one. How much larger one
+//! value can be than another is then the least, over every key, of the
+//! first's upper bound less the second's lower, and a gap closes where the
+//! pair handed on is no further apart and either pair is apart at all. A
 //! recognized operation worked out again on the same operands is the same
 //! value, so what a guard said of `tenths * 10` holds of the product handed
 //! on.
@@ -1059,8 +1063,9 @@ struct Reader<'a> {
     depth: usize,
     locals: Vec<Local>,
     held: Vec<(Graph, ExprId)>,
-    /// What the guards around the part being read say.
-    facts: Facts,
+    /// Each local an arm learned more of, as it was before, so leaving the
+    /// arm puts it back.
+    journal: Vec<(usize, Local)>,
     /// Each recognized operation already worked out in scope, by what it
     /// was handed, and the local holding it: working one out again is the
     /// same value, so what a guard said of the first holds of the second.
@@ -1101,7 +1106,7 @@ impl<'a> Reader<'a> {
             depth: 0,
             locals,
             held: Vec::new(),
-            facts: Vec::new(),
+            journal: Vec::new(),
             computed: Vec::new(),
         }
     }
@@ -1227,9 +1232,14 @@ impl<'a> Reader<'a> {
             self.held.push((graph, id));
         }
         let mut result = match self.operations[to.index()] {
-            Some(operation) => Local {
-                same: self.recomputed(to, args),
-                ..self.arithmetic(operation, args)
+            // Worked out again, it is what was worked out before, and what
+            // a guard learned of that holds of it.
+            Some(operation) => match self.recomputed(to, args) {
+                Some(before) => Local {
+                    same: Some(before),
+                    ..self.arithmetic(operation, args).meet(&self.locals[before])
+                },
+                None => self.arithmetic(operation, args),
             },
             None => self.answered(to, args),
         };
@@ -1405,12 +1415,18 @@ impl<'a> Reader<'a> {
             depth: self.depth + 1,
             locals,
             held: Vec::new(),
-            facts: Vec::new(),
+            journal: Vec::new(),
             computed: Vec::new(),
         };
         let answer = inner.read(body);
         debug_assert!(inner.held.is_empty(), "nothing read in place goes round");
-        Some(answer)
+        // Whose value it is, and what its verdict says, are of locals there.
+        Some(Local {
+            same: None,
+            verdict: None,
+            rest_of: None,
+            ..answer
+        })
     }
 
     /// What a match answers, which is a verdict where its arms answer them.
@@ -1432,16 +1448,17 @@ impl<'a> Reader<'a> {
             let Some((shaped, given)) = self.reached(at, arm.ctor) else {
                 continue;
             };
-            let (level, facts) = (self.locals.len(), self.facts.len());
-            let held = self.lists(at);
+            let (level, mark) = (self.locals.len(), self.journal.len());
             self.bind_fields(at, arm.ctor, shaped.as_deref());
-            self.facts.extend(given);
+            self.assume(&given);
             let arm_answer = self.read(arm.body);
-            self.facts.truncate(facts);
             self.locals.truncate(level);
             self.computed.retain(|&(_, _, at)| at < level);
-            for (at, least) in held {
-                self.locals[at].least = least;
+            while self.journal.len() > mark {
+                let (at, before) = self.journal.pop().expect("a change to put back");
+                if at < level {
+                    self.locals[at] = before;
+                }
             }
             answered = Some(match answered {
                 None => arm_answer,
@@ -1519,21 +1536,25 @@ impl<'a> Reader<'a> {
         self.locals.extend(fields);
     }
 
+    /// Local `at`, noted in the journal so the arm learning something of it
+    /// puts it back.
+    fn change(&mut self, at: usize) -> &mut Local {
+        self.journal.push((at, self.locals[at].clone()));
+        &mut self.locals[at]
+    }
+
     /// Local `at` known at least `least` long, and each list it is the
     /// rest of one longer than that.
     fn lengthen(&mut self, at: usize, least: i64) {
         let mut at = at;
         let mut least = least;
-        loop {
-            let local = &mut self.locals[at];
-            if local.least.first().copied().flatten() >= Some(least) {
-                return;
-            }
+        while self.locals[at].least.first().copied().flatten() < Some(least) {
+            let keys = self.frame.keys.len();
+            let local = self.change(at);
             if local.least.is_empty() {
-                local.least = self.frame.least(least);
-            } else {
-                local.least[0] = Some(least);
+                local.least = vec![None; keys];
             }
+            local.least[0] = Some(least);
             let Some(whole) = local.rest_of else {
                 return;
             };
@@ -1542,19 +1563,55 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// What is known of how long `at` is, and each list it is the rest of,
-    /// to be put back when an arm that learned more is left.
-    fn lists(&self, at: usize) -> Vec<(usize, Bounds)> {
-        let mut held = vec![(at, self.locals[at].least.clone())];
-        let mut at = at;
-        while let Some(whole) = self.locals[at].rest_of {
-            held.push((whole, self.locals[whole].least.clone()));
-            at = whole;
+    /// What a guard says, as bounds: where one side is at most the other,
+    /// it is no larger than the other's upper bounds, and the other no
+    /// smaller than its lower bounds; one more apart where it is less.
+    fn assume(&mut self, facts: &[relations::Fact]) {
+        // A verdict may speak of what a match it came out of bound inside,
+        // which is out of scope here.
+        let known = self.locals.len();
+        for fact in facts
+            .iter()
+            .filter(|fact| fact.left < known && fact.right < known)
+        {
+            let strict = i64::from(fact.rel & EQUAL == 0);
+            if fact.rel & GREATER == 0 {
+                self.at_most(fact.left, fact.right, strict);
+            }
+            if fact.rel & LESS == 0 {
+                self.at_most(fact.right, fact.left, strict);
+            }
         }
-        held
     }
 
-    /// Whose value a local is.
+    /// Whatever is `x` at most whatever is `y`, less `by`.
+    fn at_most(&mut self, x: usize, y: usize, by: i64) {
+        let ceiling = shifted(&self.locals[y].value(), -by);
+        let floor = shifted(&self.floor(x), by);
+        for at in 0..self.locals.len() {
+            let same = self.same(at);
+            if same == x {
+                let local = self.change(at);
+                local.long = both(&local.long, &ceiling, true);
+            }
+            if same == y {
+                let local = self.change(at);
+                local.least = both(&local.least, &floor, false);
+            }
+        }
+    }
+
+    /// The lower bounds of a local, none of which is below nought.
+    fn floor(&self, at: usize) -> Bounds {
+        let mut least = self.locals[at].least.clone();
+        if least.is_empty() {
+            least = vec![None; self.frame.keys.len()];
+        }
+        least[0] = Some(self.minimum(at));
+        least
+    }
+
+    /// Whose value a local is.    /// Whose value a local is.
     fn same(&self, at: usize) -> usize {
         self.locals[at].same.unwrap_or(at)
     }
@@ -1578,34 +1635,15 @@ impl<'a> Reader<'a> {
         (most == least).then(|| u64::try_from(most).ok()).flatten()
     }
 
-    /// The least a local is: what built it says, or a guard placing it at
-    /// or above something known to be at least so much.
+    /// The least a local is, and never below nought.
     fn minimum(&self, at: usize) -> i64 {
-        let least = |at: usize| {
-            self.locals
-                .get(at)
-                .and_then(|local| local.least.first().copied().flatten())
-        };
-        let same = self.same(at);
-        let mut most = least(at).unwrap_or(0).max(0);
-        for fact in &self.facts {
-            // How this stands to the other side, as the guard left it.
-            let (other, rel) = if fact.left == same {
-                (fact.right, fact.rel)
-            } else if fact.right == same {
-                let flipped = (fact.rel & EQUAL)
-                    | if fact.rel & LESS == 0 { 0 } else { GREATER }
-                    | if fact.rel & GREATER == 0 { 0 } else { LESS };
-                (fact.left, flipped)
-            } else {
-                continue;
-            };
-            if rel & LESS == 0 {
-                let strict = i64::from(rel & EQUAL == 0);
-                most = most.max(least(other).unwrap_or(0).max(0).saturating_add(strict));
-            }
-        }
-        most
+        self.locals[at]
+            .least
+            .first()
+            .copied()
+            .flatten()
+            .unwrap_or(0)
+            .max(0)
     }
 
     /// What recognized natural arithmetic answers, by what its equations
@@ -1670,21 +1708,13 @@ impl<'a> Reader<'a> {
     /// one whose other is at least two.
     fn grown(&self, operation: Operation, args: &[Atom]) -> Bounds {
         let (left, right) = (args[0].0.index(), args[1].0.index());
-        let floor = |at: usize| -> Bounds {
-            let mut least = self.locals[at].least.clone();
-            if least.is_empty() {
-                least = vec![None; self.frame.keys.len()];
-            }
-            least[0] = Some(self.minimum(at));
-            least
-        };
         let from = |side: usize, other: usize| -> Bounds {
             let by = match operation {
                 Operation::Add => Some(self.minimum(other)),
                 _ if self.minimum(other) >= 2 && self.minimum(side) >= 1 => Some(1),
                 _ => (self.minimum(other) >= 1).then_some(0),
             };
-            let floor = floor(side);
+            let floor = self.floor(side);
             match by {
                 Some(by) if operation == Operation::Add => shifted(&floor, by),
                 Some(by) => {
@@ -1736,100 +1766,59 @@ impl<'a> Reader<'a> {
     }
 
     /// What the gap `upper ∸ lower` handed on is against this definition's
-    /// gap `top ∸ bottom`: no wider where `upper` is at most `top` and
-    /// `lower` at least `bottom`, and narrower besides where one of them
-    /// moved and a guard keeps the pair apart, so the old gap was not nought.
-    /// A handed `upper` is a local here where it is a parameter's argument,
-    /// and a number where it is the callee's own.
+    /// gap `top ∸ bottom`: no wider where the handed pair lies within the
+    /// old, narrower where besides it moved in and either pair is apart, so
+    /// the old gap was not nought. A handed top is a local here where it is
+    /// a parameter's argument, and a number where it is the callee's own.
     fn closes(&self, (top, bottom): (Top, usize), (upper, lower): (Top, usize)) -> Step {
-        let lower_same = self.same(lower);
-        let upper_same = self.holding(upper);
-        let top_local = match top {
-            Top::Parameter(at) => at,
-            Top::Number { local, .. } => local,
-        };
-        let below = self.below(top, upper, upper_same);
-        let built = match self.locals[lower]
-            .least
-            .get(self.frame.single(bottom))
-            .copied()
-            .flatten()
-        {
-            Some(offset) if offset >= 1 => Some(true),
-            Some(0) => Some(false),
-            _ => None,
-        };
-        let above = stronger(built, self.placed(bottom, lower_same));
-        let (Some(below), Some(above)) = (below, above) else {
+        let (top, upper) = (self.top(top), self.top(upper));
+        let (bottom, lower) = (&self.locals[bottom], &self.locals[lower]);
+        let (Some(raised), Some(dropped)) = (excess(&upper, &top), excess(bottom, lower)) else {
             return Step::Unknown;
         };
-        let apart = upper_same
-            .is_some_and(|upper| relations::holds(&self.facts, lower_same, upper, LESS))
-            || relations::holds(&self.facts, bottom, top_local, LESS);
-        if (below || above) && apart {
+        let apart = |below: &Local, above: &Local| excess(below, above).is_some_and(|by| by < 0);
+        let widened = raised.saturating_add(dropped);
+        if widened < 0 && (apart(bottom, &top) || apart(lower, &upper)) {
             Step::Smaller
-        } else {
+        } else if widened <= 0 {
             Step::Same
-        }
-    }
-
-    /// The local here holding what a handed gap's top is: the argument, or
-    /// a number this body binds too.
-    fn holding(&self, upper: Top) -> Option<usize> {
-        match upper {
-            Top::Parameter(local) => Some(self.same(local)),
-            Top::Number { value, .. } => self.frame.gaps.iter().find_map(|(held, _)| match held {
-                Top::Number { value: here, local } if *here == value => Some(*local),
-                _ => None,
-            }),
-        }
-    }
-
-    /// Whether a handed top is no more than this gap's top, and if so
-    /// whether it is less.
-    fn below(&self, top: Top, upper: Top, upper_same: Option<usize>) -> Option<bool> {
-        match (top, upper) {
-            (Top::Parameter(a), Top::Parameter(local)) => {
-                let built = match self.locals[local]
-                    .value()
-                    .get(self.frame.single(a))
-                    .copied()
-                    .flatten()
-                {
-                    Some(offset) if offset < 0 => Some(true),
-                    Some(0) => Some(false),
-                    _ => None,
-                };
-                stronger(built, upper_same.and_then(|upper| self.placed(upper, a)))
-            }
-            (Top::Number { value, .. }, Top::Number { value: handed, .. }) => {
-                (handed <= value).then_some(handed < value)
-            }
-            (Top::Number { local, .. }, Top::Parameter(_)) => self.placed(upper_same?, local),
-            (Top::Parameter(_), Top::Number { .. }) => None,
-        }
-    }
-
-    /// Whether the guards place `left` at most `right`, and if so whether
-    /// below it.
-    fn placed(&self, left: usize, right: usize) -> Option<bool> {
-        if relations::holds(&self.facts, left, right, LESS) {
-            Some(true)
-        } else if relations::holds(&self.facts, left, right, LESS | EQUAL) {
-            Some(false)
         } else {
-            None
+            Step::Unknown
+        }
+    }
+
+    /// What a gap's top is: a local here, a number bound here, which is
+    /// what guards learned of, or else a number alone.
+    fn top(&self, top: Top) -> Local {
+        let value = match top {
+            Top::Parameter(at) => return self.locals[at].clone(),
+            Top::Number { value, .. } => value,
+        };
+        let bound = self.frame.gaps.iter().find_map(|&(held, _)| match held {
+            Top::Number { value: here, local } if here == value => Some(local),
+            _ => None,
+        });
+        if let Some(local) = bound {
+            return self.locals[local].clone();
+        }
+        let value = i64::try_from(value).unwrap_or(i64::MAX);
+        Local {
+            deep: self.frame.most(value),
+            long: self.frame.most(value),
+            least: self.frame.least(value),
+            ..Local::unknown()
         }
     }
 }
 
-/// Of two ways of placing one value against another, each "no more"
-/// or "less" where it places it at all, the one saying more.
-const fn stronger(a: Option<bool>, b: Option<bool>) -> Option<bool> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(a || b),
-        (held, None) | (None, held) => held,
-    }
+/// How much larger `x` can be than `y`, at most: the least, over every
+/// key both speak of, of `x`'s upper bound less `y`'s lower.
+fn excess(x: &Local, y: &Local) -> Option<i64> {
+    x.value()
+        .iter()
+        .zip(&y.least)
+        .filter_map(|(most, least)| Some(most.as_ref()?.saturating_sub(*least.as_ref()?)))
+        .min()
 }
 
 /// Close the call matrices of a round, read in one tier, and require every

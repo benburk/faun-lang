@@ -313,6 +313,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
          below(tenths, unit, j) if tenths * 10 < unit -> below(tenths * 10, unit, j + 1)
          below(_, _, j) -> j
 
+         hundreds : (Nat, Nat, Nat) -> Nat
+         hundreds(0, _, j) -> j
+         hundreds(tenths, unit, j) if tenths * 10 < unit -> hundreds(tenths * 100, unit, j + 1)
+         hundreds(_, _, j) -> j
+
          narrow : (Nat, Nat, Nat) -> Nat
          narrow(n, low, high) if high > low + 1 -> halved(n, low, (low + high) / 2, high)
          narrow(_, _, high) -> high
@@ -325,8 +330,8 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main! : Host -> []
          main!(host) ->
            n = host.args.len()
-           host.exit!(U8.of_nat(digits(12345 * n, 0) + below(n, 1000, 1) + narrow(50 * n, 0, 64)))",
-        5 + 3 + 8,
+           host.exit!(U8.of_nat(digits(12345 * n, 0) + below(n, 1000, 1) + hundreds(n, 1000, 1) + narrow(50 * n, 0, 64)))",
+        5 + 3 + 2 + 8,
     ),
     (
         "a parser goes round on the rest it answers inside an `Ok`",
