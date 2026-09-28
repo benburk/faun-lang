@@ -1,0 +1,5 @@
+error: alias `Chain` names itself; a recursive type is declared with `:`
+ --> an_alias_does_not_name_itself.fn:3:1
+  |
+3 | Chain = List(Chain)
+  | ^^^^^^^^^^^^^^^^^^^

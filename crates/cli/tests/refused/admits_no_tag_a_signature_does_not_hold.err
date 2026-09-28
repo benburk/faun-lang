@@ -1,0 +1,5 @@
+error: `Blah` is not among the tags of `[NotFound]`, which admits no others
+ --> admits_no_tag_a_signature_does_not_hold.fn:8:14
+  |
+8 | bar(n) -> Ok(dog(n)?)
+  |              ^^^^^^^

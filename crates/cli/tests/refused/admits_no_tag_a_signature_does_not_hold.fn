@@ -1,0 +1,8 @@
+import std.host {Host}
+
+dog : Nat -> Result(Nat, [Blah, NotFound])
+dog(0) -> Err(Blah)
+dog(n) -> Ok(n)
+
+bar : Nat -> Result(Nat, [NotFound])
+bar(n) -> Ok(dog(n)?)

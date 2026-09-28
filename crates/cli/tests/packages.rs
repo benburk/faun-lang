@@ -47,26 +47,6 @@ fn a_library_lowers_to_barb_with_no_entry_and_does_not_build() {
 }
 
 #[test]
-fn a_definition_nothing_calls_must_still_stop() {
-    let spin = "spin : Nat -> Nat\nspin(n) -> spin(n)\n";
-    let library = Package::new("spinning-library", spin);
-    let application = Package::new(
-        "spinning-application",
-        &format!(
-            "import std.host {{Host}}\n\n{spin}\nmain! : Host -> []\nmain!(host) -> host.exit!(0)\n"
-        ),
-    );
-    for package in [library, application] {
-        let refused = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap_err();
-        assert!(
-            refused.message.contains("`spin` stops"),
-            "{}",
-            refused.message
-        );
-    }
-}
-
-#[test]
 fn an_application_builds_only_what_main_reaches() {
     let package = Package::new(
         "unused",
@@ -149,45 +129,10 @@ fn a_definition_taking_a_function_is_compiled_where_it_is_called() {
     assert!(!barb.render().contains("twice"));
 }
 
+/// Clauses that cover every case between them are accepted, however they
+/// split them; those leaving one unmatched are in `refused/`.
 #[test]
-fn a_definition_that_may_not_stop_is_refused_at_its_looping_call() {
-    let package = Package::new(
-        "mutual",
-        "step : Nat -> Nat\nstep(Succ(n)) -> hop(n)\nstep(Zero) -> 0\n\n\
-         hop : Nat -> Nat\nhop(m) -> step(Succ(Succ(m)))\n",
-    );
-    let refused = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap_err();
-    assert!(refused.message.contains("`step`, `hop` stops"), "{refused}");
-    let at = refused.location.expect("the looping call");
-    assert_eq!(
-        (at.line, at.column, at.text.as_str()),
-        (2, 18, "step(Succ(n)) -> hop(n)")
-    );
-}
-
-#[test]
-fn clauses_that_leave_a_case_unmatched_are_refused_even_when_generic() {
-    for (name, source, missing) in [
-        (
-            "first",
-            "first : List(a) -> a\nfirst([x, *rest]) -> x\n",
-            "first([])",
-        ),
-        (
-            "pick",
-            "pick : (Bool, Bool) -> Nat\npick(True, _) -> 0\npick(_, True) -> 1\n",
-            "pick(False, False)",
-        ),
-    ] {
-        let package = Package::new(name, source);
-        let refused = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap_err();
-        assert!(
-            refused
-                .message
-                .contains(&format!("no clause matches `{missing}`")),
-            "{refused}"
-        );
-    }
+fn clauses_that_cover_every_case_are_accepted() {
     let covered = Package::new(
         "covered",
         "sign : Int -> Nat\nsign(0) -> 0\nsign(Pos(Succ(_))) -> 1\nsign(NegSucc(_)) -> 2\n",
@@ -203,12 +148,6 @@ fn a_generic_definition_nothing_calls_is_judged_at_the_empty_type() {
     );
     let barb = faun::lower_to_barb(&total.entry(), &X86_64Linux).unwrap();
     assert!(barb.render().contains("length(v0: List<[]>) -> Nat ="));
-    let looping = Package::new(
-        "loop",
-        "loop : List(a) -> Nat\nloop([]) -> 0\nloop(xs) -> loop(xs)\n",
-    );
-    let refused = faun::lower_to_barb(&looping.entry(), &X86_64Linux).unwrap_err();
-    assert!(refused.message.contains("`loop` stops"), "{refused}");
 }
 
 /// A package with a library it depends on beside it, under `vendor/`.
@@ -241,58 +180,4 @@ fn a_package_imports_the_root_of_one_it_depends_on() {
     faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     let tests = faun::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();
     assert_eq!(tests.expectations.len(), 1);
-}
-
-#[test]
-fn a_dependency_is_reached_only_at_its_root() {
-    let refused = |name: &str, entry: &str| {
-        let package = with_dependency(name, entry);
-        faun::lower_to_barb(&package.entry(), &X86_64Linux)
-            .unwrap_err()
-            .message
-    };
-    let inner = refused(
-        "dependency-inner",
-        "package {shapes: \"vendor/shapes/shapes\"}\n\nimport shapes.area {square}\n",
-    );
-    assert!(inner.contains("whose modules are its own"), "{inner}");
-    let missing = refused(
-        "dependency-missing",
-        "package {shapes: \"vendor/shapes/nowhere\"}\n",
-    );
-    assert!(
-        missing.contains("dependency `shapes` finds neither"),
-        "{missing}"
-    );
-    let twice = refused(
-        "dependency-twice",
-        "package {\n  shapes: \"vendor/shapes/shapes\",\n  shapes: \"vendor/shapes/shapes\",\n}\n",
-    );
-    assert!(
-        twice.contains("depends on `shapes` more than once"),
-        "{twice}"
-    );
-}
-
-/// A module inside a package inherits its root, and names no dependencies
-/// of its own.
-#[test]
-fn only_a_package_root_has_a_header() {
-    let package = Package::new(
-        "inner-header",
-        "import helper {one}\n\ntwo : Nat\ntwo() -> one() + one()\n",
-    );
-    fs::write(
-        package.0.join("helper.fn"),
-        "package {}\n\nexport {one}\n\none : Nat\none() -> 1\n",
-    )
-    .unwrap();
-    let refused = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap_err();
-    assert!(
-        refused
-            .message
-            .contains("only a package's root module has a `package` header"),
-        "{}",
-        refused.message
-    );
 }

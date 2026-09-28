@@ -1,0 +1,5 @@
+error: no type-compatible field or method `not` is in scope
+ --> a_signed_body_has_only_the_members_its_bounds_give.fn:4:12
+  |
+4 | flip(x) -> x.not()
+  |            ^^^^^^^

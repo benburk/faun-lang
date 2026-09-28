@@ -1,0 +1,5 @@
+error: `n` is bound by some alternatives of this `|` and not others
+ --> every_alternative_of_an_or_pattern_binds_the_same_names.fn:6:6
+  |
+6 | size(Circle(n) | Dot) -> n
+  |      ^^^^^^^^^^^^^^^

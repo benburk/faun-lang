@@ -1,0 +1,8 @@
+import std.host {Host}
+
+bogus_lt : (Nat, Nat) -> Bool
+bogus_lt(_, _) -> True
+
+bogus : (Nat, Nat) -> Nat
+bogus(i, n) if bogus_lt(i, n) -> bogus(Succ(i), n)
+bogus(i, _) -> i

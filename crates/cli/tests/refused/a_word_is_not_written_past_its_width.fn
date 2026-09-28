@@ -1,0 +1,7 @@
+import std.host {Host}
+
+byte : U8 -> U8
+byte(b) -> b
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(byte(300).to_nat()))

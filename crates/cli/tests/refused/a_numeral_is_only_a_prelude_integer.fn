@@ -1,0 +1,7 @@
+import std.host {Host}
+
+flag : Bool -> Nat
+flag(_) -> 0
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(flag(1)))

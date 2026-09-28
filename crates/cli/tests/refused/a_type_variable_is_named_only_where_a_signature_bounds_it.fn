@@ -1,0 +1,3 @@
+import std.host {Host}
+
+nought(_) -> a.zero()

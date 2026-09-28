@@ -1,0 +1,5 @@
+error: local `a` is bound more than once
+ --> an_binds_each_name_once_in_each_alternative.fn:4:12
+  |
+4 | either([a, a] | [a]) -> True
+  |            ^

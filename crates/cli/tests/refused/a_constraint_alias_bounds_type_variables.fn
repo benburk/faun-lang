@@ -1,0 +1,7 @@
+import std.host {Host}
+
+Nought(a) = where
+  a.zero : a
+
+pick : Nat -> Nat where Nought(Nat)
+pick(x) -> x

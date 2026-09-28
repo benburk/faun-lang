@@ -1,0 +1,4 @@
+import std.host {Host}
+
+shown : a -> _ where a.to_str : a -> Str
+shown(x) -> x.to_str()

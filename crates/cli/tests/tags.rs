@@ -3,7 +3,7 @@
 //! meet; a signature's row is closed for its body and open to its callers;
 //! a word a declaration also claims is read as its position's type decides.
 //! Each case is a Faun package, lowered for x86-64 and run on the reference
-//! interpreter, or refused with the message it names.
+//! interpreter; those refused are in `refused/`.
 
 mod support;
 
@@ -207,103 +207,10 @@ const RUNNING: &[(&str, &str, u32)] = &[
     ),
 ];
 
-/// Programs refused, and what the message says.
-const REFUSED: &[(&str, &str, &str)] = &[
-    (
-        "a body answers a tag its signature does not hold",
-        "first : List(a) -> Result(a, [Empty])
-         first([]) -> Err(Nope)
-         first([h, *_]) -> Ok(h)",
-        "`Nope` is not among the tags of `[Empty]`",
-    ),
-    (
-        "clauses naming every tag close their row to callers",
-        "f(A) -> 1
-         f(B) -> 2
-
-         main! : Host -> []
-         main!(host) -> host.exit!(U8.of_nat(f(C)))",
-        "`C` is not among the tags of `[A, B]`",
-    ),
-    (
-        "a signature's row must be covered",
-        "g : [A, B, C] -> Nat
-         g(A) -> 1
-         g(B) -> 2",
-        "no clause matches `g(C)`",
-    ),
-    (
-        "a tag inside a constructor must be covered",
-        "describe : Result(Nat, [Missing, Invalid(Nat)]) -> Nat
-         describe(Ok(n)) -> n
-         describe(Err(Missing)) -> 1",
-        "no clause matches `describe(Err(Invalid(_)))`",
-    ),
-    (
-        "a word two types claim with nothing to decide is ambiguous",
-        "Match : [Failed(Nat), Matched]
-         Parse : [Failed(Nat), Parsed]
-
-         orphan(m) -> Failed(m)",
-        "nothing decides between `Match.Failed` and `Parse.Failed`",
-    ),
-    (
-        "inside a block, the block's word is its own constructor",
-        "Parse : [Failed(Nat), Parsed]
-         Match : [Failed(Nat), Matched].(
-           wrong : Nat -> Parse
-           wrong(n) -> Failed(n)
-         )",
-        "inside `Match`'s block, the bare `Failed` reads as `Match`'s own constructor",
-    ),
-    (
-        "a structural tag cannot forge a sealed type",
-        "import sealed {Failure, accept}
-
-         main! : Host -> []
-         main!(host) -> host.exit!(U8.of_nat(accept(NotFound)))",
-        "Failure and [NotFound, *]",
-    ),
-    (
-        "a sealed constructor is not reached by qualifying it",
-        "import sealed {Failure}
-
-         leak : Failure
-         leak() -> Failure.NotFound",
-        "type `Failure` has no constructor `NotFound` visible here",
-    ),
-    (
-        "what a signature with `_` writes still holds",
-        "count : Nat -> Result(Str, _)
-         count(n) -> Ok(n)",
-        "Nat and Str",
-    ),
-    (
-        "`_` stands for a type only in a function's signature",
-        "Box : [Box(_)]",
-        "`_` stands for a type only in a function's signature",
-    ),
-    (
-        "a signature with `_` takes no `where` bounds",
-        "shown : a -> _ where a.to_str : a -> Str
-         shown(x) -> x.to_str()",
-        "it takes no `where` bounds",
-    ),
-];
-
 #[test]
 fn tag_programs_answer_what_they_say() {
     for (name, source, expected) in RUNNING {
         let package = Package::new(name, source);
         assert_eq!(package.run(), *expected, "{name}");
-    }
-}
-
-#[test]
-fn tag_programs_are_refused_with_what_is_wrong() {
-    for (name, source, expected) in REFUSED {
-        let package = Package::new(name, source);
-        let refused = package.refusal();
-        assert!(refused.contains(expected), "{name}: {refused}");
     }
 }

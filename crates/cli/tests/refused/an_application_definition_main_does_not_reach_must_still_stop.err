@@ -1,0 +1,5 @@
+error: nothing here shows `spin` stops: it goes round on what it was handed rather than on a part of it
+ --> an_application_definition_main_does_not_reach_must_still_stop.fn:4:12
+  |
+4 | spin(n) -> spin(n)
+  |            ^^^^^^^

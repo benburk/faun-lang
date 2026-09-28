@@ -1,0 +1,7 @@
+error: `use!` uses up the `File` its parameter 1 holds on one way it goes on and not on another
+  --> a_file_a_function_is_handed_held_where_its_leaves_is_its_fault_and_not_its_caller_s.fn:19:12
+   |
+19 |   closed = file.close!()?
+   |            ^^^^
+  = note: it is still held where this `?` leaves, at line 18
+  = help: use it up on every way the function goes on, or on none, where the caller does

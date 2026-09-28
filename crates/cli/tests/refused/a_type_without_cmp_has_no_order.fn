@@ -1,0 +1,6 @@
+import std.host {Host}
+
+Size : [Small, Large]
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat((Small < Large).to_nat()))

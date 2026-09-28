@@ -1,0 +1,5 @@
+error: `pick` does not cover every case: no clause matches `pick(False, False)`
+ --> clauses_that_leave_a_pair_of_cases_unmatched.fn:2:1
+  |
+2 | pick(True, _) -> 0
+  | ^^^^^^^^^^^^^^^^^^

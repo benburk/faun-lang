@@ -1,0 +1,4 @@
+import std.host {Host}
+
+same : ({x: Nat, *}, {x: Nat, *}) -> Bool
+same(a, b) -> a == b

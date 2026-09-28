@@ -1,0 +1,5 @@
+error: no type-compatible field or method `cmp` is in scope
+ --> a_type_without_cmp_has_no_order.fn:6:37
+  |
+6 | main!(host) -> host.exit!(U8.of_nat((Small < Large).to_nat()))
+  |                                     ^^^^^^^^^^^^^^^

@@ -1,0 +1,4 @@
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat({extra: 1, *{age: 3}}.age))

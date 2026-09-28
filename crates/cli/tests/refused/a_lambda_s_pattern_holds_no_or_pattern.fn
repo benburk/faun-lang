@@ -1,0 +1,4 @@
+import std.host {Host}
+
+total : List(Nat) -> Nat
+total(values) -> values.fold(0, |sum, (1 | 2)| sum)

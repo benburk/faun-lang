@@ -1,0 +1,7 @@
+import std.host {Host}
+
+spin : Nat -> Nat
+spin(n) -> spin(n)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

@@ -1,0 +1,5 @@
+import std.host {Host}
+
+either : List(Nat) -> Bool
+either([a, a] | [a]) -> True
+either(_) -> False

@@ -1,0 +1,6 @@
+import std.host {Host}
+
+Shape : [Circle(Nat), Dot]
+
+size : Shape -> Nat
+size(Circle(n) | Dot) -> n

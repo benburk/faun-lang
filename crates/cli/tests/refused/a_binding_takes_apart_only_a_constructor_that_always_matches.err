@@ -1,0 +1,5 @@
+error: a binding takes apart only what always matches, and `One` is one of several constructors
+ --> a_binding_takes_apart_only_a_constructor_that_always_matches.fn:7:12
+  |
+7 |   One(n) = t
+  |            ^

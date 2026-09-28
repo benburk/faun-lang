@@ -1,0 +1,4 @@
+import std.host {Host}
+
+pick : a -> a where b.zero : b
+pick(x) -> x

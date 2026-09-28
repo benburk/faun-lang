@@ -1,0 +1,6 @@
+error: a guard only looks, and this uses up a resource
+  --> a_file_taken_by_a_guard.fn:20:22
+   |
+20 | asked!(file) if held(file).is_empty() -> 0
+   |                      ^^^^
+  = help: use it up in the clause's body

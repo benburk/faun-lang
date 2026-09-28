@@ -1,0 +1,6 @@
+import std.host {Host}
+
+spin : Nat -> Nat
+spin(n) -> spin(n)
+
+expect spin(1) == 1

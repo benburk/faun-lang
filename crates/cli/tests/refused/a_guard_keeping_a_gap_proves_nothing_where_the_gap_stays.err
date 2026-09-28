@@ -1,0 +1,5 @@
+error: nothing here shows `still` stops: it goes round on what it was handed rather than on a part of it
+ --> a_guard_keeping_a_gap_proves_nothing_where_the_gap_stays.fn:4:25
+  |
+4 | still(i, n) if i < n -> still(i, n)
+  |                         ^^^^^^^^^^^

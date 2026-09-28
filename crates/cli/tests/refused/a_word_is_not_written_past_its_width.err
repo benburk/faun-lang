@@ -1,0 +1,5 @@
+error: `300` is not a `U8`: it takes numerals below 256
+ --> a_word_is_not_written_past_its_width.fn:7:42
+  |
+7 | main!(host) -> host.exit!(U8.of_nat(byte(300).to_nat()))
+  |                                          ^^^

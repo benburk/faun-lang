@@ -1,0 +1,5 @@
+error: `Nought` is a constraint alias, which is applied in a `where` clause and is no type
+ --> a_constraint_alias_is_applied_only_in_a_where_clause.fn:6:1
+  |
+6 | pick : Nought -> Nat
+  | ^^^^^^^^^^^^^^^^^^^^

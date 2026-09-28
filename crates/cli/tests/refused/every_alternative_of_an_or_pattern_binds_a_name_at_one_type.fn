@@ -1,0 +1,4 @@
+import std.host {Host}
+
+size : [Count(Nat), Name(Str)] -> Nat
+size(Count(n) | Name(n)) -> 0

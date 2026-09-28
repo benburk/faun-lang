@@ -73,14 +73,6 @@ impl Package {
         self.0.join("main.fn")
     }
 
-    /// Why checking or lowering refuses the package.
-    pub(crate) fn refusal(&self) -> String {
-        faun::lower_to_barb(&self.entry(), &X86_64Linux).map_or_else(
-            |error| error.message,
-            |_| "nothing: the package was accepted".to_owned(),
-        )
-    }
-
     /// The status the program exits with, handed an `argc` of one.
     pub(crate) fn run(&self) -> u32 {
         run_file(&self.entry(), &[]).0

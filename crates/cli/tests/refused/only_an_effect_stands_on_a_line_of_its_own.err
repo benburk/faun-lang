@@ -1,0 +1,5 @@
+error: this value is worked out and then thrown away; remove the line, or bind the value to a name if you need it
+ --> only_an_effect_stands_on_a_line_of_its_own.fn:5:3
+  |
+5 |   [1, 2].len()
+  |   ^^^^^^^^^^^^

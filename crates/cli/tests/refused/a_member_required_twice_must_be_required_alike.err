@@ -1,0 +1,5 @@
+error: `a.zero` is required twice, at two different types
+ --> a_member_required_twice_must_be_required_alike.fn:6:1
+  |
+6 | pick : a -> a where Nought(a), a.zero : Nat
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,6 @@
+error: this `File` has already been used up
+  --> a_file_closed_twice_in_one_call.fn:13:24
+   |
+13 |   closed = both!(file, file)
+   |                        ^^^^
+  = note: it was used up, at line 13

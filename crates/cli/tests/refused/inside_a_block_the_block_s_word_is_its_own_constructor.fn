@@ -1,0 +1,7 @@
+import std.host {Host}
+
+Parse : [Failed(Nat), Parsed]
+Match : [Failed(Nat), Matched].(
+  wrong : Nat -> Parse
+  wrong(n) -> Failed(n)
+)

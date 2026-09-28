@@ -1,0 +1,7 @@
+import std.host {Host}
+
+twice : Nat -> Nat
+twice(n) -> n * 2
+
+pick : Bool -> (Nat -> Nat)
+pick(_) -> twice

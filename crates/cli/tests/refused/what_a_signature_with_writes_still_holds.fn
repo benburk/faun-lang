@@ -1,0 +1,4 @@
+import std.host {Host}
+
+count : Nat -> Result(Str, _)
+count(n) -> Ok(n)

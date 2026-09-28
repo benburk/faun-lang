@@ -1,0 +1,5 @@
+error: this value is worked out and then thrown away; remove the line, or bind the value to a name if you need it
+ --> a_line_of_its_own_is_not_a_way_to_throw_a_value_away.fn:5:3
+  |
+5 |   host.args.len() + 1
+  |   ^^^^^^^^^^^^^^^^^^^

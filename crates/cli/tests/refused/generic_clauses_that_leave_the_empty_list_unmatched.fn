@@ -1,0 +1,2 @@
+first : List(a) -> a
+first([x, *rest]) -> x

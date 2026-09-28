@@ -1,0 +1,4 @@
+import std.host {Host}
+
+Forever(a) = where
+Forever(a)

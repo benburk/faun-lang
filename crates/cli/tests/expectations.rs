@@ -5,7 +5,6 @@ mod support;
 
 use std::fs;
 
-use faun_x86_64_linux::X86_64Linux;
 use support::Package;
 
 /// Every expectation in the package is asked, the entry's and those of the
@@ -117,8 +116,8 @@ fn records_and_tuples_say_themselves() {
 }
 
 /// A constructor its module exports with its type's `.*` may be imported
-/// by itself, as Ori imports `Read` from the host; one exported only with
-/// its type, without `.*`, may not.
+/// by itself, as Ori imports `Read` from the host. One exported only with
+/// its type, without `.*`, may not: see `refused/`.
 #[test]
 fn a_constructor_is_imported_by_itself() {
     let package = Package::new(
@@ -133,18 +132,6 @@ fn a_constructor_is_imported_by_itself() {
     )
     .unwrap();
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 1));
-    let refused = Package::new("constructor-import-refused", "import shapes {Secret}");
-    fs::write(
-        refused.entry().with_file_name("shapes.fn"),
-        "export {Hidden}\n\nHidden : [Secret]\n",
-    )
-    .unwrap();
-    let error = faun::lower_to_barb(&refused.entry(), &X86_64Linux).unwrap_err();
-    assert!(
-        error.message.contains("`Secret` is not exported"),
-        "{}",
-        error.message
-    );
 }
 
 #[test]
@@ -173,32 +160,16 @@ fn a_failing_expectation_is_told_as_a_diagnostic() {
     assert!(!output.status.success(), "{told}");
     // The package's source starts after the host import and a blank line.
     let expected = format!(
-        "faun: this expectation does not hold\n \
+        "error: this expectation does not hold\n \
          --> {}:5:1\n  \
          |\n\
          5 | expect 1 + 1 == 3\n  \
          | ^^^^^^^^^^^^^^^^^\n\
          \n\
-         faun: 1 of 2 expectations does not hold\n",
+         error: 1 of 2 expectations does not hold\n",
         package.entry().display()
     );
     assert_eq!(told, expected);
-}
-
-/// An expectation is checked as any definition is, when the package is.
-#[test]
-fn an_expectation_is_checked_whether_or_not_it_is_asked() {
-    for (source, refused) in [
-        ("expect 3", "a numeral cannot be a `Bool`"),
-        (
-            "spin : Nat -> Nat\nspin(n) -> spin(n)\n\nexpect spin(1) == 1",
-            "nothing here shows `spin` stops",
-        ),
-    ] {
-        let package = Package::new("refused-expectation", source);
-        let error = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap_err();
-        assert!(error.message.contains(refused), "{}", error.message);
-    }
 }
 
 /// The standard library is a package like any other, and holds what it

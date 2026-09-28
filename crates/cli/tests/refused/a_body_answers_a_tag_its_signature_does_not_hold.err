@@ -1,0 +1,5 @@
+error: `Nope` is not among the tags of `[Empty]`, which admits no others
+ --> a_body_answers_a_tag_its_signature_does_not_hold.fn:4:18
+  |
+4 | first([]) -> Err(Nope)
+  |                  ^^^^

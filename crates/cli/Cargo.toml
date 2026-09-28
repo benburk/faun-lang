@@ -20,7 +20,13 @@ faun-wasm32-wasi.workspace = true
 faun-x86-64-linux.workspace = true
 
 [dev-dependencies]
+libtest-mimic = "0.8"
 num-bigint = "0.4.8"
+
+# Each refused program is its own test, which libtest cannot list.
+[[test]]
+name = "refused"
+harness = false
 
 [lints]
 workspace = true

@@ -1,0 +1,4 @@
+import std.host {Host}
+
+verb : Str -> Nat
+verb("get") -> 1

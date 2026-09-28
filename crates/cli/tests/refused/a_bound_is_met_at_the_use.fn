@@ -1,0 +1,6 @@
+import std.host {Host}
+
+double(x) -> x.mul(2)
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(double(True).to_nat()))

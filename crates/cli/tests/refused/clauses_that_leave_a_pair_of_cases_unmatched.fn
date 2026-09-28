@@ -1,0 +1,3 @@
+pick : (Bool, Bool) -> Nat
+pick(True, _) -> 0
+pick(_, True) -> 1

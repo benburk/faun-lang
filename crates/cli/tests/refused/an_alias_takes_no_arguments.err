@@ -1,0 +1,5 @@
+error: `Numbers` is an alias and takes no arguments
+ --> an_alias_takes_no_arguments.fn:5:1
+  |
+5 | total : Numbers(Nat) -> Nat
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^

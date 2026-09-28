@@ -1,0 +1,6 @@
+import std.host {Host}
+
+import sealed {Failure}
+
+leak : Failure
+leak() -> Failure.NotFound

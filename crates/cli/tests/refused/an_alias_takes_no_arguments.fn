@@ -1,0 +1,6 @@
+import std.host {Host}
+
+Numbers = List(Nat)
+
+total : Numbers(Nat) -> Nat
+total(_) -> 0

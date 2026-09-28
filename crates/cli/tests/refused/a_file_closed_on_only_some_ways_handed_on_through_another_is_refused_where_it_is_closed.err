@@ -1,0 +1,7 @@
+error: `maybe!` uses up the `File` its parameter 1 holds on one way it goes on and not on another
+  --> a_file_closed_on_only_some_ways_handed_on_through_another_is_refused_where_it_is_closed.fn:22:12
+   |
+22 |   closed = file.close!()
+   |            ^^^^
+  = note: it is still held where `maybe!` answers, at line 20
+  = help: use it up on every way the function goes on, or on none, where the caller does

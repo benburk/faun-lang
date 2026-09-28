@@ -1,0 +1,4 @@
+import std.host {Host}
+
+flip : a -> a
+flip(x) -> x.not()

@@ -1,0 +1,5 @@
+error: type `Failure` has no constructor `NotFound` visible here
+ --> a_sealed_constructor_is_not_reached_by_qualifying_it/main.fn:6:19
+  |
+6 | leak() -> Failure.NotFound
+  |                   ^^^^^^^^

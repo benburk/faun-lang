@@ -1,0 +1,5 @@
+error: dependency `shapes` finds neither `vendor/shapes/nowhere.fn` nor `vendor/shapes/nowhere/nowhere.fn`
+ --> a_dependency_must_be_found/main.fn:1:10
+  |
+1 | package {shapes: "vendor/shapes/nowhere"}
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

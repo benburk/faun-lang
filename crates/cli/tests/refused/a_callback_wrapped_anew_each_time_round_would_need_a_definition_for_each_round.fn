@@ -1,0 +1,8 @@
+import std.host {Host}
+
+nest : (Nat, Nat -> Nat) -> Nat
+nest(0, f) -> f(0)
+nest(Succ(n), f) -> nest(n, |x| f(x) + 1)
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(nest(3, |x| x)))

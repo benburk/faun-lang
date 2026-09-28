@@ -1,0 +1,5 @@
+error: local `a` is bound more than once
+ --> a_binding_binds_each_name_once_since_it_must_always_match.fn:5:7
+  |
+5 |   (a, a) = (n, n)
+  |       ^

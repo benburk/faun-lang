@@ -1,0 +1,8 @@
+import std.host {Host}
+
+count : r -> Nat where
+  r.fold : (r, c, (c, Nat) -> c) -> c
+count(_) -> 0
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(count([1, 2])))

@@ -1,0 +1,3 @@
+package {shapes: "vendor/shapes/shapes"}
+
+import shapes.area {square}

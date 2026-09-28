@@ -4465,7 +4465,9 @@ fn spelled(name: Symbol, symbols: &Symbols) -> &str {
 
 fn show(ty: &Ty, symbols: &Symbols) -> String {
     match ty {
-        Ty::Var(variable) => format!("?{variable}"),
+        // A type not yet known is shown as a signature writes one to be
+        // inferred: its number is the checker's, and says nothing.
+        Ty::Var(_) => "_".to_owned(),
         Ty::Rigid(variable) => format!("'a{variable}"),
         Ty::Named(name, arguments) if arguments.is_empty() => spelled(*name, symbols).to_owned(),
         Ty::Named(name, arguments) => format!(

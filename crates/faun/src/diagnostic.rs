@@ -4,10 +4,11 @@
 //! understand or fix it. Places are resolved when the diagnostic is made,
 //! while the source is at hand, so a diagnostic renders on its own: as
 //! `path:line:column`, the line itself, and a caret under the span. One made
-//! where no source is known renders as its message.
+//! where no source is known renders as its message. Either way it starts
+//! `error: `, as each diagnostic found with it does.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::ast::Span;
 use crate::source::Source;
@@ -105,6 +106,23 @@ impl Diagnostic {
         self
     }
 
+    /// The same, each place in it shown from `base` where it lies beneath:
+    /// as a command shows paths from where it was run.
+    #[must_use]
+    pub fn relative_to(mut self, base: &Path) -> Self {
+        if let Some(location) = &mut self.location
+            && let Ok(relative) = location.path.strip_prefix(base)
+        {
+            location.path = relative.to_path_buf();
+        }
+        let also = std::mem::take(&mut self.also);
+        self.also = also
+            .into_iter()
+            .map(|also| also.relative_to(base))
+            .collect();
+        self
+    }
+
     #[must_use]
     pub fn note(mut self, note: impl Into<String>) -> Self {
         self.notes.push(note.into());
@@ -120,7 +138,7 @@ impl Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)?;
+        write!(f, "error: {}", self.message)?;
         if let Some(at) = &self.location {
             let number = at.line.to_string();
             let gutter = " ".repeat(number.len());
@@ -177,7 +195,7 @@ mod tests {
             .help("exit with a number");
         assert_eq!(
             diagnostic.to_string(),
-            "expected a Nat, found a Bool\n \
+            "error: expected a Nat, found a Bool\n \
              --> main.fn:3:14\n  \
              |\n\
              3 |   host.exit!(True)\n  \
@@ -188,6 +206,6 @@ mod tests {
 
     #[test]
     fn an_unplaced_diagnostic_is_its_message() {
-        assert_eq!(Diagnostic::new("no entry").to_string(), "no entry");
+        assert_eq!(Diagnostic::new("no entry").to_string(), "error: no entry");
     }
 }

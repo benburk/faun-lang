@@ -1,0 +1,5 @@
+error: `pick` holds a function other than as a parameter; a function is passed into a call, never answered or stored
+ --> a_function_is_not_answered.fn:6:1
+  |
+6 | pick : Bool -> (Nat -> Nat)
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^

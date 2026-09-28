@@ -1,0 +1,4 @@
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat([1, 2].map(|0..9| 1).len()))

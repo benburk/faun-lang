@@ -1,0 +1,5 @@
+error: inside `Match`'s block, the bare `Failed` reads as `Match`'s own constructor; this one is `Parse.Failed`, which is written qualified
+ --> inside_a_block_the_block_s_word_is_its_own_constructor.fn:6:15
+  |
+6 |   wrong(n) -> Failed(n)
+  |               ^^^^^^^^^

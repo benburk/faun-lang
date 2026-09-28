@@ -1,0 +1,7 @@
+import std.host {Host}
+
+small : Nat -> Nat
+small(0..9) -> 1
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(small(3)))

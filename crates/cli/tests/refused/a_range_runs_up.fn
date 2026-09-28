@@ -1,0 +1,5 @@
+import std.host {Host}
+
+digit : U8 -> Bool
+digit('9'..'0') -> True
+digit(_) -> False

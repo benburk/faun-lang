@@ -1,0 +1,8 @@
+import std.host {Host}
+
+byte : U8 -> Bool
+byte(0..300) -> True
+byte(_) -> False
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

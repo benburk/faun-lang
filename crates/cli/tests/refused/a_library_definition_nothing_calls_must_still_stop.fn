@@ -1,0 +1,2 @@
+spin : Nat -> Nat
+spin(n) -> spin(n)

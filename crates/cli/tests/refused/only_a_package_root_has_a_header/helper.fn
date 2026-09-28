@@ -1,0 +1,6 @@
+package {}
+
+export {one}
+
+one : Nat
+one() -> 1

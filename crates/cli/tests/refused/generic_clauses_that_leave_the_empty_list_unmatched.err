@@ -1,0 +1,5 @@
+error: `first` does not cover every case: no clause matches `first([])`
+ --> generic_clauses_that_leave_the_empty_list_unmatched.fn:2:1
+  |
+2 | first([x, *rest]) -> x
+  | ^^^^^^^^^^^^^^^^^^^^^^

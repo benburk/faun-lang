@@ -1,0 +1,10 @@
+import std.host {Host}
+
+twice : Nat -> Nat
+twice(n) -> n * 2
+
+half : Nat -> Nat
+half(n) -> n / 2
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(True.select(twice, half)(3)))

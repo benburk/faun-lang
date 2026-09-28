@@ -1,0 +1,5 @@
+import std.host {Host}
+
+describe : Result(Nat, [Missing, Invalid(Nat)]) -> Nat
+describe(Ok(n)) -> n
+describe(Err(Missing)) -> 1

@@ -1,0 +1,5 @@
+error: a numeral cannot be a `Bool`: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`; convert a value with `of_nat`
+ --> a_numeral_is_only_a_prelude_integer.fn:7:42
+  |
+7 | main!(host) -> host.exit!(U8.of_nat(flag(1)))
+  |                                          ^

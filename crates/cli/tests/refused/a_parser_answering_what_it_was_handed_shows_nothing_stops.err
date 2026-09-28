@@ -1,0 +1,5 @@
+error: nothing here shows `loops`, `again` stops: it goes round on what it was handed rather than on a part of it
+ --> a_parser_answering_what_it_was_handed_shows_nothing_stops.fn:8:14
+  |
+8 | loops(xs) -> again(same(xs))
+  |              ^^^^^^^^^^^^^^^

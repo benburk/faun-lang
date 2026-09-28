@@ -272,7 +272,8 @@ impl Loader {
         }
         let text = fs::read_to_string(&path)
             .map_err(|error| Diagnostic::new(format!("cannot read {}: {error}", path.display())))?;
-        let source = self.sources.add(path.clone(), text.clone());
+        let name = self.shown(&path);
+        let source = self.sources.add(name, text.clone());
         let syntax = parse_in(&text, source).map_err(|error| {
             let text = self.sources.get(source).expect("the source just added");
             let told = |error: &ParseError| {
@@ -403,7 +404,7 @@ impl Loader {
                         })
                         .collect::<Result<_, _>>()
                         .map_err(|message| Diagnostic::new(message).at(text, dependency.span))?;
-                    let module = module_base(&directory.join(&written)).map_err(|error| {
+                    let module = module_base(directory, &directory.join(&written)).map_err(|error| {
                         Diagnostic::new(format!("dependency `{name}` {}", error.message))
                             .at(text, dependency.span)
                     })?;
@@ -417,6 +418,18 @@ impl Loader {
                 Ok(root)
             }
         }
+    }
+
+    /// How a diagnostic names the module at `path`: the standard library's
+    /// as `std/`, wherever it is installed, as it is imported; any other by
+    /// where it is.
+    fn shown(&self, path: &Path) -> PathBuf {
+        if let Some(root) = &self.standard_root
+            && let Ok(relative) = path.strip_prefix(root)
+        {
+            return Path::new("std").join(relative);
+        }
+        path.to_path_buf()
     }
 
     fn namespace(&self, path: &Path, id: ModuleId) -> String {
@@ -443,29 +456,35 @@ fn module_path(root: &Path, parts: &[String]) -> Result<PathBuf, Diagnostic> {
     let joined = parts
         .iter()
         .fold(root.to_path_buf(), |path, part| path.join(part));
-    module_base(&joined)
+    module_base(root, &joined)
         .map_err(|error| Diagnostic::new(format!("import `{}` {}", parts.join("."), error.message)))
 }
 
 /// The module at the base `joined`: `joined.fn`, or `name.fn` in the
-/// directory `joined`, where `name` is its last part, and not both.
-fn module_base(joined: &Path) -> Result<PathBuf, Diagnostic> {
+/// directory `joined`, where `name` is its last part, and not both. Where
+/// neither or both are there, they are named from `from`, the directory
+/// the base was written relative to.
+fn module_base(from: &Path, joined: &Path) -> Result<PathBuf, Diagnostic> {
     let flat = joined.with_extension("fn");
     let nested = joined
         .join(joined.file_name().unwrap_or_default())
         .with_extension("fn");
+    let shown = |path: &Path| {
+        let relative = path.strip_prefix(from).unwrap_or(path);
+        format!("`{}`", relative.display())
+    };
     match (flat.is_file(), nested.is_file()) {
         (true, false) => Ok(flat),
         (false, true) => Ok(nested),
         (true, true) => Err(Diagnostic::new(format!(
             "is ambiguous between {} and {}",
-            flat.display(),
-            nested.display()
+            shown(&flat),
+            shown(&nested)
         ))),
         (false, false) => Err(Diagnostic::new(format!(
             "finds neither {} nor {}",
-            flat.display(),
-            nested.display()
+            shown(&flat),
+            shown(&nested)
         ))),
     }
 }

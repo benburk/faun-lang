@@ -1,0 +1,5 @@
+error: `_` stands for a type only in a function's signature, whose clauses say what it is
+ --> stands_for_a_type_only_in_a_function_s_signature.fn:3:12
+  |
+3 | Box : [Box(_)]
+  |            ^

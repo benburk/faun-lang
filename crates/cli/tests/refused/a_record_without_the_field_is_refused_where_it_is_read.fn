@@ -1,0 +1,7 @@
+import std.host {Host}
+
+get_name : {name: Nat, *} -> Nat
+get_name(r) -> r.name
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(get_name({age: 3})))

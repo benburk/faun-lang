@@ -1,0 +1,5 @@
+import std.host {Host}
+
+g : [A, B, C] -> Nat
+g(A) -> 1
+g(B) -> 2

@@ -1,0 +1,7 @@
+error: the `File` `Files.open!` answers is neither used up nor answered on every way `program!` goes on
+  --> a_file_opened_and_never_closed.fn:12:10
+   |
+12 |   file = files.open!("a.txt", Read)?
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: it is still held where `program!` answers, at line 13
+  = help: use it up, as `close!` does, or answer it

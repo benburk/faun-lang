@@ -32,6 +32,10 @@ test:
     cargo nextest run --workspace
     cargo test --workspace --doc
 
+# Write every refused program's .err from what the compiler says now; read the diff
+bless:
+    FAUN_BLESS=1 cargo nextest run -p faun-cli --test refused
+
 # Build release binary
 build:
     cargo build --release

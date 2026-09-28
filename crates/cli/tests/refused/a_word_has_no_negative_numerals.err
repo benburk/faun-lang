@@ -1,0 +1,5 @@
+error: a `U8` has no negative numerals
+ --> a_word_has_no_negative_numerals.fn:7:42
+  |
+7 | main!(host) -> host.exit!(U8.of_nat(byte(-1).to_nat()))
+  |                                          ^^

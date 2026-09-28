@@ -1,0 +1,5 @@
+import std.host {Host}
+
+byte : U8 -> Nat
+byte(300) -> 1
+byte(_) -> 0

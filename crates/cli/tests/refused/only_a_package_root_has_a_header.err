@@ -1,0 +1,5 @@
+error: only a package's root module has a `package` header; this module is inside its package
+ --> only_a_package_root_has_a_header/helper.fn:1:1
+  |
+1 | package {}
+  | ^^^^^^^^^^

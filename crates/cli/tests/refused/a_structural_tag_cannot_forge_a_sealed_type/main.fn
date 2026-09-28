@@ -1,0 +1,6 @@
+import std.host {Host}
+
+import sealed {Failure, accept}
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(accept(NotFound)))

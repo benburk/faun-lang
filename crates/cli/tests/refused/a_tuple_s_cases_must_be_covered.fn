@@ -1,0 +1,5 @@
+import std.host {Host}
+
+both : ((Bool, Bool)) -> Nat
+both((True, True)) -> 1
+both((False, _)) -> 0

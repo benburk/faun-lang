@@ -1,0 +1,4 @@
+export {square}
+
+square : Nat -> Nat
+square(n) -> n * n

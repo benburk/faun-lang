@@ -1,0 +1,5 @@
+error: an `|` pattern may stand only among a clause's parameters
+ --> a_lambda_s_pattern_holds_no_or_pattern.fn:4:39
+  |
+4 | total(values) -> values.fold(0, |sum, (1 | 2)| sum)
+  |                                       ^^^^^^^

@@ -1,0 +1,6 @@
+error: this `File` has already been used up
+  --> a_file_read_after_it_is_closed.fn:14:11
+   |
+14 |   bytes = file.read!(4)
+   |           ^^^^
+  = note: it was used up, at line 13

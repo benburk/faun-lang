@@ -1,0 +1,7 @@
+import std.host {Host}
+
+dog : Nat -> Result(Nat, [Blah])
+dog(n) -> Ok(n)
+
+bar : Nat -> Nat
+bar(n) -> dog(n)?

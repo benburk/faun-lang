@@ -1,0 +1,8 @@
+import std.host {Host}
+
+Two : [One(Nat), Other]
+
+first : Two -> Nat
+first(t) ->
+  One(n) = t
+  n

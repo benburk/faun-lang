@@ -1,0 +1,5 @@
+error: the package depends on `shapes` more than once
+ --> a_package_depends_on_a_name_once/main.fn:3:3
+  |
+3 |   shapes: "vendor/shapes/shapes",
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

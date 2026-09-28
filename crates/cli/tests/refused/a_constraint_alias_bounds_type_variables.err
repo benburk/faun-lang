@@ -1,0 +1,5 @@
+error: constraint alias `Nought` bounds `a`, which is given a type rather than a type variable
+ --> a_constraint_alias_bounds_type_variables.fn:6:1
+  |
+6 | pick : Nat -> Nat where Nought(Nat)
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

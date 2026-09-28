@@ -1,0 +1,4 @@
+import helper {one}
+
+two : Nat
+two() -> one() + one()

@@ -1,0 +1,5 @@
+error: `300` is not a `U8`: it takes numerals below 256
+ --> a_word_s_pattern_is_written_below_its_width.fn:4:1
+  |
+4 | byte(300) -> 1
+  | ^^^^^^^^^^^^^^

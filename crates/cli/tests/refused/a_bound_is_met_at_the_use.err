@@ -1,0 +1,5 @@
+error: no type-compatible field or method `mul` is in scope
+ --> a_bound_is_met_at_the_use.fn:6:37
+  |
+6 | main!(host) -> host.exit!(U8.of_nat(double(True).to_nat()))
+  |                                     ^^^^^^

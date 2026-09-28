@@ -1,0 +1,5 @@
+error: a record with `*` has no `equals`: its other fields are a caller's
+ --> an_open_record_s_other_fields_are_a_caller_s.fn:4:15
+  |
+4 | same(a, b) -> a == b
+  |               ^^^^^^

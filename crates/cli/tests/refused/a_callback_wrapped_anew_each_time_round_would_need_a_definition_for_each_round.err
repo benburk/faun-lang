@@ -1,0 +1,5 @@
+error: this lambda wraps the callback it was handed and hands itself on, so each round asks for another definition: recurse on data that says what to call instead
+ --> a_callback_wrapped_anew_each_time_round_would_need_a_definition_for_each_round.fn:5:29
+  |
+5 | nest(Succ(n), f) -> nest(n, |x| f(x) + 1)
+  |                             ^^^^^^^^^^^^

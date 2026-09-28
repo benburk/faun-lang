@@ -1,0 +1,5 @@
+error: a function may only be passed straight into a call; it cannot be bound, answered, or stored
+  --> std/bool.fn:27:27
+   |
+27 |   select(True, yes, _) -> yes
+   |                           ^^^

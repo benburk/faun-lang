@@ -1,0 +1,5 @@
+error: type mismatch: Nat and Str (incompatible types)
+ --> every_alternative_of_an_or_pattern_binds_a_name_at_one_type.fn:4:1
+  |
+4 | size(Count(n) | Name(n)) -> 0
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: type mismatch: {x: Nat} -> Nat and ((_, _)) -> _ (incompatible types)
+ --> a_tuple_is_not_a_record.fn:9:37
+  |
+9 | main!(host) -> host.exit!(U8.of_nat(bad(pair())))
+  |                                     ^^^^^^^^^^^

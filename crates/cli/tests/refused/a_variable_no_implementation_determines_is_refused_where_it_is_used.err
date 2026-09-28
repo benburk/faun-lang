@@ -1,0 +1,5 @@
+error: nothing determines the types a `where` bound's member `fold` takes here
+ --> a_variable_no_implementation_determines_is_refused_where_it_is_used.fn:5:1
+  |
+5 | count(_) -> 0
+  | ^^^^^^^^^^^^^

@@ -53,10 +53,21 @@ fn main() -> ExitCode {
     match outcome {
         Ok(exit) => exit,
         Err(diagnostic) => {
-            eprintln!("faun: {diagnostic}");
+            tell(diagnostic);
             ExitCode::FAILURE
         }
     }
+}
+
+/// Write a diagnostic to standard error, its paths shown from where this
+/// runs, as they were given.
+fn tell(diagnostic: Diagnostic) {
+    let here = std::env::current_dir().and_then(fs::canonicalize);
+    let diagnostic = match here {
+        Ok(here) => diagnostic.relative_to(&here),
+        Err(_) => diagnostic,
+    };
+    eprintln!("{diagnostic}");
 }
 
 /// Check a package against the target's host by lowering it as far as Barb.
@@ -141,7 +152,7 @@ fn report(failed: &[&Location], count: usize) -> Result<(), Diagnostic> {
     for &location in failed {
         let diagnostic = Diagnostic::new("this expectation does not hold");
         let diagnostic = diagnostic.at_location(location.clone());
-        eprintln!("faun: {diagnostic}");
+        tell(diagnostic);
         eprintln!();
     }
     let counted = if count == 1 {

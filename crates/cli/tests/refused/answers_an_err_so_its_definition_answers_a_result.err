@@ -1,0 +1,5 @@
+error: `?` answers an `Err` early, but this answers Nat
+ --> answers_an_err_so_its_definition_answers_a_result.fn:7:11
+  |
+7 | bar(n) -> dog(n)?
+  |           ^^^^^^^

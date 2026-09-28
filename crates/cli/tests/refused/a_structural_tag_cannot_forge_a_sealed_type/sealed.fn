@@ -1,0 +1,10 @@
+export {Failure, accept, Sized}
+
+Failure : [NotFound, SomethingElse]
+
+Sized(a) = where
+  a.size : a -> Nat
+
+accept : Failure -> Nat
+accept(NotFound) -> 1
+accept(SomethingElse) -> 2

@@ -1,0 +1,9 @@
+import std.host {Host}
+
+pair() -> (1, 2)
+
+bad : {x: Nat} -> Nat
+bad(_) -> 0
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(bad(pair())))

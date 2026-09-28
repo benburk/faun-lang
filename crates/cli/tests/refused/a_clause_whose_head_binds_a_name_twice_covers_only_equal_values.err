@@ -1,0 +1,5 @@
+error: `same` does not cover every case: no clause matches `same(_, _)`
+ --> a_clause_whose_head_binds_a_name_twice_covers_only_equal_values.fn:4:1
+  |
+4 | same(n, n) -> n
+  | ^^^^^^^^^^^^^^^

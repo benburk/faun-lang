@@ -1,0 +1,5 @@
+error: `shown` writes `_`, so its type is worked out from its clauses; it takes no `where` bounds
+ --> a_signature_with_takes_no_where_bounds.fn:3:1
+  |
+3 | shown : a -> _ where a.to_str : a -> Str
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

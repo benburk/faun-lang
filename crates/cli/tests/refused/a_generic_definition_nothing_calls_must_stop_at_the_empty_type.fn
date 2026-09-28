@@ -1,0 +1,3 @@
+loop : List(a) -> Nat
+loop([]) -> 0
+loop(xs) -> loop(xs)

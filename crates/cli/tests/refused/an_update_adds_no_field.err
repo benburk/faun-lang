@@ -1,0 +1,5 @@
+error: the record `{age: _}` has no field `extra`
+ --> an_update_adds_no_field.fn:4:37
+  |
+4 | main!(host) -> host.exit!(U8.of_nat({extra: 1, *{age: 3}}.age))
+  |                                     ^^^^^^^^^^^^^^^^^^^^^

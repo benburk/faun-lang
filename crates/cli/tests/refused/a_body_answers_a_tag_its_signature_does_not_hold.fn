@@ -1,0 +1,5 @@
+import std.host {Host}
+
+first : List(a) -> Result(a, [Empty])
+first([]) -> Err(Nope)
+first([h, *_]) -> Ok(h)
