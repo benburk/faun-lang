@@ -703,6 +703,11 @@ impl<'a> Lowering<'a> {
             Reg::R9,
             Reg::R10,
             Reg::R11,
+            Reg::R12,
+            Reg::R13,
+            Reg::R14,
+            Reg::R15,
+            Reg::Rbp,
         ] {
             self.forget(reg);
         }

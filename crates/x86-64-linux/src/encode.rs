@@ -435,6 +435,11 @@ impl RawEncoder {
     fn addressed(&mut self, opcode: &[u8], reg: Reg, base: Reg, disp: i32) {
         self.emit(opcode);
         self.emit(&[0x80 | (reg.low() << 3) | base.low()]);
+        // A base whose low bits are those of `rsp` -- `r12` -- is said
+        // through a scale-index byte naming no index.
+        if base.low() == 4 {
+            self.emit(&[0x24]);
+        }
         self.emit(&disp.to_le_bytes());
     }
 

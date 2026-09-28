@@ -2,7 +2,9 @@
 //!
 //! The allocator walks each CFG block in target instruction order, keeps
 //! profitable live values in registers, spills under pressure, and splits at
-//! fixed operands, ties, scratch reservations, and implicit clobbers. Its
+//! fixed operands, ties, scratch reservations, and implicit clobbers. A block
+//! starts where a predecessor already allocated left its values, so an edge
+//! moves only what changed rather than everything live across it. Its
 //! verified output is the symbolic instruction sequence consumed by encoding.
 
 mod lower;
@@ -17,7 +19,10 @@ use crate::parallel_copy::{
 use faun_core::index::{BitSet, Range, index};
 use faun_core::ir::FunctionId;
 
-const REGISTERS: [Reg; 8] = [
+/// Every register a value may be held in. Nothing outside the program
+/// calls into it, so none needs keeping for a caller: a call clobbers all
+/// of them, and `rbx`, `r11` and `rsp` keep their own jobs.
+const REGISTERS: [Reg; 13] = [
     Reg::Rax,
     Reg::Rcx,
     Reg::Rdx,
@@ -26,6 +31,11 @@ const REGISTERS: [Reg; 8] = [
     Reg::R8,
     Reg::R9,
     Reg::R10,
+    Reg::R12,
+    Reg::R13,
+    Reg::R14,
+    Reg::R15,
+    Reg::Rbp,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -516,9 +526,11 @@ impl<'a> Allocator<'a> {
     }
 
     fn run(mut self) -> Result<Allocation, String> {
+        let predecessors = predecessors(self.selected, self.liveness);
         for layout in &self.liveness.blocks {
             self.owner = self.selected.blocks[layout.block].owner;
             self.placement.keep(|_| false);
+            self.inherit(layout, &predecessors[layout.block.index()]);
             self.allocate_entry(layout)?;
             for points in &layout.instructions {
                 self.allocate_instruction(layout.block, points)?;
@@ -549,6 +561,65 @@ impl<'a> Allocator<'a> {
             edges: self.edges,
             spill_slots,
         })
+    }
+
+    /// Start a block where a predecessor already allocated left what it
+    /// hands on: each value live through the edge where it was, and each
+    /// parameter in the register its argument was in. A block started
+    /// afresh would put everything in whichever order it met it, and every
+    /// edge into it would move everything back.
+    fn inherit(&mut self, layout: &BlockPoints, predecessors: &[(BlockId, Range)]) {
+        for (value, location) in self.handed(layout, predecessors) {
+            let free = match location {
+                Location::Register(reg) => self.placement.occupant(reg).is_none(),
+                Location::Spill(_) => true,
+            };
+            if free && self.placement.get(value).is_none() {
+                self.placement.set(value, location);
+            }
+        }
+    }
+
+    /// Where the first predecessor already allocated leaves each value the
+    /// block starts with: see [`Self::inherit`].
+    fn handed(
+        &self,
+        layout: &BlockPoints,
+        predecessors: &[(BlockId, Range)],
+    ) -> Vec<(VReg, Location)> {
+        let Some((state, args)) = predecessors.iter().find_map(|&(from, args)| {
+            let exit = self.liveness.blocks[from.index()].terminator;
+            self.states[exit.index()]
+                .as_ref()
+                .map(|state| (state, args))
+        }) else {
+            return Vec::new();
+        };
+        let held = |value: VReg| {
+            state
+                .values
+                .iter()
+                .find(|&&(held, _)| held == value)
+                .map(|&(_, location)| location)
+        };
+        let block = self.selected.blocks[layout.block];
+        let params = &self.selected.block_params[block.params.range()];
+        let mut handed: Vec<_> = self.liveness.at[layout.entry.index()]
+            .iter()
+            .filter(|value| !params.contains(value))
+            .filter_map(|value| Some((value, held(value)?)))
+            .collect();
+        let specs = &self.selected.block_param_specs[block.params.range()];
+        for ((&param, &arg), spec) in params
+            .iter()
+            .zip(&self.selected.operands[args.range()])
+            .zip(specs)
+        {
+            if let (Some(Location::Register(reg)), Constraint::Any) = (held(arg), spec.constraint) {
+                handed.push((param, Location::Register(reg)));
+            }
+        }
+        handed
     }
 
     fn allocate_entry(&mut self, layout: &BlockPoints) -> Result<(), String> {
@@ -1500,6 +1571,17 @@ fn verify_constraint(
     }
 }
 
+/// Each block's predecessors, with the arguments each hands it.
+fn predecessors(selected: &Selected, liveness: &Liveness) -> Vec<Vec<(BlockId, Range)>> {
+    let mut found = vec![Vec::new(); selected.blocks.len()];
+    for layout in &liveness.blocks {
+        for (target, args) in edges(selected.blocks[layout.block].terminator) {
+            found[target.index()].push((layout.block, args));
+        }
+    }
+    found
+}
+
 fn edges(terminator: Terminator) -> Vec<(BlockId, Range)> {
     match terminator {
         Terminator::Jump { target, args } => vec![(target, args)],
@@ -1725,7 +1807,8 @@ mod tests {
     fn register_pressure_creates_spilled_segments() {
         let (mut program, main) = Program::new("main");
         program.define(main, |builder, _| {
-            let mut values: Vec<_> = (0..12)
+            // More live at once than there are registers.
+            let mut values: Vec<_> = (0..u64::try_from(REGISTERS.len() + 4).unwrap())
                 .map(|value| builder.constant(Class::Word, value))
                 .collect();
             while values.len() > 1 {

@@ -29,7 +29,7 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("two and two", 134),
     ("hello world", 158),
     ("a call", 143),
-    ("recursion", 189),
+    ("recursion", 181),
     ("values across a call", 256),
     ("the heap", 178),
     ("a byte", 208),
@@ -41,8 +41,8 @@ const CORPUS_SIZES: &[(&str, usize)] = &[
     ("two worked out", 169),
     ("a flag", 219),
     ("a countdown", 166),
-    ("a carried total", 154),
-    ("a step first", 191),
+    ("a carried total", 156),
+    ("a step first", 193),
     ("a long arm", 264),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
@@ -51,7 +51,7 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("double", 128),
     ("leave", 128),
     ("bool", 157),
-    ("nat", 381),
+    ("nat", 285),
     ("width", 149),
     ("argc", 149),
     ("expressions", 151),

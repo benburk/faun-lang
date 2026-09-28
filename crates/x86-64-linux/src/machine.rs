@@ -17,12 +17,17 @@ pub(crate) enum Reg {
     Rbx = 3,
     /// Named for target adapters that use temporary stack storage.
     Rsp = 4,
+    Rbp = 5,
     Rsi = 6,
     Rdi = 7,
     R8 = 8,
     R9 = 9,
     R10 = 10,
     R11 = 11,
+    R12 = 12,
+    R13 = 13,
+    R14 = 14,
+    R15 = 15,
 }
 
 impl From<Reg> for u8 {

@@ -808,6 +808,70 @@ fn a_remainder_of_a_widened_count_stays_below_its_divisor() {
     assert_eq!(facts.takes(sink), [below]);
 }
 
+/// A field that grows round a loop, kept below a width by a remainder, and
+/// copied into itself round another loop. Widening it to no bound would be
+/// for good: narrowing cannot take back what a field copied into itself
+/// holds. Widened to the next machine width instead, it stays bounded.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "two loops over one field, written as their equations"
+)]
+fn a_field_kept_below_a_width_is_widened_to_that_width() {
+    let mut library = fixture::Library::new();
+    let (nat, zero) = (library.nat, library.zero);
+    let (nought, one, modulus) = (library.number(0), library.number(1), library.number(4096));
+    let program = &mut library.program;
+    let boxed = program.declare_type("Box");
+    program.define_type(boxed, &[("Box", &[nat, nat])]);
+    let make = program.ctor_at(boxed, 0);
+    // spin(n, Box(v, w)) steps v modulo 4096, n times.
+    let spin = program.declare("spin", &[nat, boxed], boxed);
+    program.define(spin, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                return args[1];
+            }
+            b.match_(args[1], boxed, |b, _, held| {
+                let one = b.known(one);
+                let modulus = b.known(modulus);
+                let next = b.call(library.add, &[held[0], one]);
+                let next = b.call(library.modulo, &[next, modulus]);
+                let stepped = b.con(make, &[next, held[1]]);
+                b.call(spin, &[fields[0], stepped])
+            })
+        })
+    });
+    // copy(n, Box(v, w)) builds the same box again, n times.
+    let copy = program.declare("copy", &[nat, boxed], boxed);
+    program.define(copy, |b, args| {
+        b.match_(args[0], nat, |b, ctor, fields| {
+            if ctor == zero {
+                return args[1];
+            }
+            b.match_(args[1], boxed, |b, _, held| {
+                let again = b.con(make, &[held[0], held[1]]);
+                b.call(copy, &[fields[0], again])
+            })
+        })
+    });
+    let main = program.declare("main", &[nat], boxed);
+    program.define(main, |b, args| {
+        let nought = b.known(nought);
+        let start = b.con(make, &[nought, nought]);
+        let stepped = b.call(spin, &[args[0], start]);
+        b.call(copy, &[args[0], stepped])
+    });
+    program.set_entry(main);
+    let facts = analyzed(program);
+    let held = facts.field(program, make, 0);
+    assert!(
+        held.high
+            .is_some_and(|high| (4095..=u64::from(u16::MAX)).contains(&high)),
+        "{held:?}"
+    );
+}
+
 /// How a step of a list is counted, for [`counted`].
 #[derive(Clone, Copy, Debug)]
 enum Step {

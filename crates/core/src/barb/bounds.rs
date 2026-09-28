@@ -55,7 +55,7 @@ const WIDEN: usize = 8;
 
 /// And how many times it goes round at all. Past widening a bound only ever
 /// settles, so this is the room that takes rather than a guess.
-const ROUNDS: usize = 24;
+const ROUNDS: usize = 32;
 
 /// How many times the walk goes round afterwards to take back what widening
 /// gave up. Each round carries a narrower bound one call further.
@@ -488,10 +488,11 @@ fn walk(
 }
 
 /// Widen `held` by `found`, answering whether that changed it. Past the
-/// rounds worth being exact for, a bound that grows is given no bound in the
-/// direction it grew: a definition counting up without a last step, or down
-/// from a large constant, would otherwise be walked once for every number
-/// it can reach.
+/// rounds worth being exact for, a bound that grows is widened in the
+/// direction it grew -- up to the next machine width, and past the widest
+/// to no bound at all: a definition counting up without a last step, or
+/// down from a large constant, would otherwise be walked once for every
+/// number it can reach.
 fn settle(held: &mut Option<Bounds>, found: Bounds, round: usize) -> bool {
     let Some(before) = *held else {
         *held = Some(found);
@@ -516,11 +517,27 @@ fn settle(held: &mut Option<Bounds>, found: Bounds, round: usize) -> bool {
             high: if after.high == before.high {
                 before.high
             } else {
-                None
+                after.high.and_then(threshold)
             },
         }
     });
     *held != Some(before)
+}
+
+/// Where a growing greatest is widened to: the next width a machine holds
+/// a number in, and no bound past the widest. A value kept below one by a
+/// remainder settles there rather than losing its bound -- and with it
+/// every bound it is copied into, which narrowing cannot take back where a
+/// field is copied into itself.
+fn threshold(high: u64) -> Option<u64> {
+    [
+        u64::from(u8::MAX),
+        u64::from(u16::MAX),
+        u64::from(u32::MAX),
+        u64::MAX,
+    ]
+    .into_iter()
+    .find(|&width| width >= high)
 }
 
 /// The most elements of a constant sequence read one by one for what its
