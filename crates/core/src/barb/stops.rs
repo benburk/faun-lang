@@ -53,6 +53,13 @@
 //! read in place with what its arguments are there, rather than by what it
 //! answers for anything.
 //!
+//! A number a guard keeps at or above another is at least as large as that
+//! one is known to be, so past `n < 10` a tenth of `n` is smaller. A product
+//! of something at least one by something at least two is more than it,
+//! and a recognized operation worked out again on the same operands is the
+//! same value, so what a guard said of `tenths * 10` holds of the product
+//! handed on.
+//!
 //! Closure can be much larger than the source call graph. Barb keeps matrices
 //! flat and indexes graphs by both endpoints, so a new graph is composed only
 //! with graphs that can actually precede or follow it. A failing idempotent is
@@ -1217,6 +1224,18 @@ struct Reader<'a> {
     held: Vec<(Graph, ExprId)>,
     /// What the guards around the part being read say.
     facts: Facts,
+    /// Each recognized operation already worked out in scope, by what it
+    /// was handed, and the local holding it: working one out again is the
+    /// same value, so what a guard said of the first holds of the second.
+    computed: Vec<(FnId, Vec<Operand>, usize)>,
+}
+
+/// An operand of a recognized operation, as far as telling two alike goes:
+/// whose value it is, or the number it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Operand {
+    Local(usize),
+    Number(u64),
 }
 
 impl<'a> Reader<'a> {
@@ -1264,6 +1283,7 @@ impl<'a> Reader<'a> {
             locals,
             held: Vec::new(),
             facts: Vec::new(),
+            computed: Vec::new(),
         }
     }
 
@@ -1365,7 +1385,9 @@ impl Reader<'_> {
         }
         let mut result = if let Some(operation) = self.operations[to.index()] {
             let unknown = LocalFacts::unknown(self.rows);
-            self.arithmetic(operation, args, unknown)
+            let mut result = self.arithmetic(operation, args, unknown);
+            result.same = self.recomputed(to, args);
+            result
         } else {
             self.answered(to, args)
         };
@@ -1378,6 +1400,30 @@ impl Reader<'_> {
             }
         }
         result
+    }
+
+    /// The local already holding what a recognized operation works out of
+    /// these operands, where one does; otherwise this one is noted as the
+    /// next local, which it becomes where it is bound.
+    fn recomputed(&mut self, to: FnId, args: &[Atom]) -> Option<usize> {
+        let operands: Vec<Operand> = args
+            .iter()
+            .map(|arg| {
+                let at = arg.0.index();
+                self.locals[at]
+                    .exact
+                    .map_or_else(|| Operand::Local(self.same(at)), Operand::Number)
+            })
+            .collect();
+        let found = self
+            .computed
+            .iter()
+            .find(|(callee, handed, _)| *callee == to && *handed == operands)
+            .map(|&(_, _, at)| at);
+        if found.is_none() {
+            self.computed.push((to, operands, self.locals.len()));
+        }
+        found
     }
 
     /// What a call answers: what its summary says with what was handed,
@@ -1499,6 +1545,7 @@ impl Reader<'_> {
             locals,
             held: Vec::new(),
             facts: Vec::new(),
+            computed: Vec::new(),
         };
         let answer = inner.read(body);
         debug_assert!(inner.held.is_empty(), "nothing read in place goes round");
@@ -1538,6 +1585,7 @@ impl Reader<'_> {
             let arm_answer = self.read(arm.body);
             self.facts.truncate(facts);
             self.locals.truncate(level);
+            self.computed.retain(|&(_, _, at)| at < level);
             for (held, minimum) in minimums {
                 self.locals[held].minimum = minimum;
             }
@@ -1682,10 +1730,28 @@ impl Reader<'_> {
     /// above something, since no size is below nought.
     fn minimum(&self, at: usize) -> u8 {
         let same = self.same(at);
-        let above = self.facts.iter().any(|fact| {
-            (fact.left == same && fact.rel == GREATER) || (fact.right == same && fact.rel == LESS)
-        });
-        self.locals[at].minimum.max(u8::from(above))
+        let mut least = self.locals[at].minimum;
+        for fact in &self.facts {
+            // How this stands to the other side, as the guard left it.
+            let (other, rel) = if fact.left == same {
+                (fact.right, fact.rel)
+            } else if fact.right == same {
+                let flipped = (fact.rel & EQUAL)
+                    | if fact.rel & LESS == 0 { 0 } else { GREATER }
+                    | if fact.rel & GREATER == 0 { 0 } else { LESS };
+                (fact.left, flipped)
+            } else {
+                continue;
+            };
+            // At least what it is no less than, and one more where it is
+            // more.
+            if rel & LESS == 0 {
+                let base = self.locals.get(other).map_or(0, |other| other.minimum);
+                let strict = u8::from(rel & EQUAL == 0);
+                least = least.max(base.saturating_add(strict).min(2));
+            }
+        }
+        least
     }
 
     /// Bounds guaranteed by structurally recognized natural arithmetic.
@@ -1780,6 +1846,9 @@ impl Reader<'_> {
             let lower = self.locals[side].lower[row]?;
             match operation {
                 Operation::Add => Some(lower + i64::from(self.minimum(other))),
+                // A product of a side at least one by at least two is more
+                // than the side.
+                _ if self.minimum(other) >= 2 && self.minimum(side) >= 1 => Some(lower + 1),
                 _ => (self.minimum(other) >= 1).then_some(lower),
             }
         };

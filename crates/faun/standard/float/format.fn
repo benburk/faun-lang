@@ -328,44 +328,45 @@ overflow(fmt, negative, kept, field) -> pack(fmt, negative, field, kept - fmt.hi
 
 # The number of bits in `n`: zero for zero, and otherwise the `w` with
 # `2^(w-1) <= n < 2^w`. A number the machine holds in one word is walked one
-# bit per step, the number its own fuel as in `Nat`'s bit walks, which costs
-# nothing on a word. A wider one is found by doubling a bound past it and
-# then halving the interval, one power of two and one comparison a step, so
-# it costs its logarithm in bignum operations rather than one per bit; the
-# fuel bounds the doubling at 2^70 bits and the halving at as many steps.
+# bit per step, halving until nothing is left, which costs nothing on a
+# word. A wider one is found by doubling a bound past it and then halving
+# the interval, one power of two and one comparison a step, so it costs its
+# logarithm in bignum operations rather than one per bit; the doubling stops
+# at 2^70 bits.
 bit_length : Nat -> Nat
-bit_length(n) if n < 0x20000000000000 -> bits(n, n)
-bit_length(n) -> narrow(n, 0, widen(n, 1, 70), 70)
+bit_length(n) if n < 0x20000000000000 -> bits(n)
+bit_length(n) -> narrow(n, 0, widen(n, 1, 70))
 
-bits : (Nat, Nat) -> Nat
-bits(0, _) -> 0
-bits(n, Succ(rest)) -> 1 + bits(n / 2, rest)
-bits(_, _) -> 0
+bits : Nat -> Nat
+bits(0) -> 0
+bits(n) -> 1 + bits(n / 2)
 
 widen : (Nat, Nat, Nat) -> Nat
 widen(n, high, Succ(fuel)) if n >= 2.pow(high) -> widen(n, high * 2, fuel)
 widen(_, high, _) -> high
 
-# `2^low <= n < 2^high`, closed in on until the bounds are neighbours.
-narrow : (Nat, Nat, Nat, Nat) -> Nat
-narrow(n, low, high, Succ(fuel)) if high > low + 1 ->
-  middle = (low + high) / 2
-  (n >= 2.pow(middle)).select(narrow(n, middle, high, fuel), narrow(n, low, middle, fuel))
-narrow(_, _, high, _) -> high
+# `2^low <= n < 2^high`, closed in on until the bounds are neighbours. The
+# middle lies strictly between them, which `halved` says, so each step
+# narrows the gap.
+narrow : (Nat, Nat, Nat) -> Nat
+narrow(n, low, high) if high > low + 1 -> halved(n, low, (low + high) / 2, high)
+narrow(_, _, high) -> high
+
+halved : (Nat, Nat, Nat, Nat) -> Nat
+halved(_, low, middle, high) if middle <= low | high <= middle -> high
+halved(n, _, middle, high) if n >= 2.pow(middle) -> narrow(n, middle, high)
+halved(n, low, middle, _) -> narrow(n, low, middle)
 
 # The integer square root of `n`: the largest `r` with `r * r <= n`. The
-# root of `n` is twice the root of `n / 4`, or one more. Each step drops two
-# bits, so the bit count bounds the depth and serves as fuel; the surplus
-# steps answer zero.
+# root of `n` is twice the root of `n / 4`, or one more.
 isqrt : Nat -> Nat
-isqrt(n) -> root(n, bit_length(n))
+isqrt(n) -> root(n)
 
-root : (Nat, Nat) -> Nat
-root(0, _) -> 0
-root(n, Succ(rest)) ->
-  r = 2 * root(n / 4, rest)
+root : Nat -> Nat
+root(0) -> 0
+root(n) ->
+  r = 2 * root(n / 4)
   ((r + 1) * (r + 1) <= n).select(r + 1, r)
-root(_, _) -> 0
 
 # --- Integers ---
 
@@ -468,18 +469,19 @@ lower(r, s, mp, mm, k, closed, _, digits) -> (generate(r, s, mp, mm, closed, dig
 
 # One digit at a time. The digit is the next tenth; `low` says the digits so
 # far already lie inside the interval, `high` that one more would, and when
-# both do the closer wins.
+# both do the closer wins. No more than `left` more digits are made, the
+# precision's worth.
 generate : (Nat, Nat, Nat, Nat, Bool, Nat) -> List(Nat)
 generate(_, _, _, _, _, 0) -> []
-generate(r, s, mp, mm, closed, Succ(fuel)) ->
+generate(r, s, mp, mm, closed, Succ(left)) ->
   digit = r * 10 / s
   rest = r * 10 % s
   low = within(rest, mm * 10, closed)
   high = reaches(rest + mp * 10, s, closed)
-  step(digit, rest, s, mp * 10, mm * 10, closed, fuel, low, high)
+  step(digit, rest, s, mp * 10, mm * 10, closed, left, low, high)
 
 step : (Nat, Nat, Nat, Nat, Nat, Bool, Nat, Bool, Bool) -> List(Nat)
-step(digit, rest, s, mp, mm, closed, fuel, False, False) -> [digit, *generate(rest, s, mp, mm, closed, fuel)]
+step(digit, rest, s, mp, mm, closed, left, False, False) -> [digit, *generate(rest, s, mp, mm, closed, left)]
 step(digit, _, _, _, _, _, _, False, True) -> [digit + 1]
 step(digit, _, _, _, _, _, _, True, False) -> [digit]
 step(digit, rest, s, _, _, _, _, True, True) -> (rest * 2 < s).select([digit], [digit + 1])
@@ -582,19 +584,21 @@ carried(n, k, count) -> (digits_of(n, count), k)
 
 # The leading digit's decimal exponent, offset by 1001: the digit count of
 # the integer part when there is one, and otherwise how many tenths it
-# takes to reach one. The exponent field bounds the search.
+# takes to reach one. `significant` asks only of a mantissa of one or more,
+# which ten times over comes to `unit`.
 leading : (Format, Nat, Nat) -> Nat
 leading(fmt, mantissa, field) ->
   unit = 2.pow(fmt.offset - field)
-  lead_from(mantissa * 2.pow(field - fmt.offset) / unit, mantissa, unit, fmt.field_max)
+  lead_from(mantissa * 2.pow(field - fmt.offset) / unit, mantissa, unit)
 
-lead_from : (Nat, Nat, Nat, Nat) -> Nat
-lead_from(0, mantissa, unit, fuel) -> 1001 - below(mantissa, unit, 1, fuel)
-lead_from(whole, _, _, _) -> 1000 + Nat.to_str(whole).len()
+lead_from : (Nat, Nat, Nat) -> Nat
+lead_from(0, mantissa, unit) -> 1001 - below(mantissa, unit, 1)
+lead_from(whole, _, _) -> 1000 + Nat.to_str(whole).len()
 
-below : (Nat, Nat, Nat, Nat) -> Nat
-below(tenths, unit, j, Succ(fuel)) if tenths * 10 < unit -> below(tenths * 10, unit, j + 1, fuel)
-below(_, _, j, _) -> j
+below : (Nat, Nat, Nat) -> Nat
+below(0, _, j) -> j
+below(tenths, unit, j) if tenths * 10 < unit -> below(tenths * 10, unit, j + 1)
+below(_, _, j) -> j
 
 # `digits` with the point after the integer part, which `k` locates.
 plain : (List(U8), Nat) -> List(U8)

@@ -1,0 +1,7 @@
+error: nothing here shows `below` stops
+ --> multiplying_by_one_grows_nothing.fn:5:48
+  |
+5 | below(tenths, unit, j) if tenths * 1 < unit -> below(tenths * 1, unit, j + 1)
+  |                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ goes round on what it was handed, not on a part of it
+  |
+  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

@@ -88,6 +88,10 @@ x    ::= a parameter, a binding, or a field an arm bound
   as, so a merge sort halving by `split_at(len / 2)` past its one-element
   clause is seen to stop without fuel. A small definition going round
   nowhere is read in place at a call, with what its arguments are there.
+  A guard keeping a number at or above another gives it that one's least
+  value, a product of at least one by at least two grows, and a recognized
+  operation worked out again on the same operands is the same value, so a
+  walk scaling by ten past a bound, or a digit walk past `n < 10`, stops.
 - `relations.rs`: what a guard says of the sizes it compared, followed from
   the comparisons recognized by their equations through the definitions
   answering from them, as the facts each constructor of the answer carries.

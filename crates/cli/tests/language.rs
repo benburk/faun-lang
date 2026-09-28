@@ -303,6 +303,32 @@ const RUNNING: &[(&str, &str, u32)] = &[
         10 + 5 + 5 + 3,
     ),
     (
+        "a number a guard keeps at least ten, or one grown past a bound, shows a walk stops",
+        "digits : (Nat, Nat) -> Nat
+         digits(n, count) if n < 10 -> count + 1
+         digits(n, count) -> digits(n / 10, count + 1)
+
+         below : (Nat, Nat, Nat) -> Nat
+         below(0, _, j) -> j
+         below(tenths, unit, j) if tenths * 10 < unit -> below(tenths * 10, unit, j + 1)
+         below(_, _, j) -> j
+
+         narrow : (Nat, Nat, Nat) -> Nat
+         narrow(n, low, high) if high > low + 1 -> halved(n, low, (low + high) / 2, high)
+         narrow(_, _, high) -> high
+
+         halved : (Nat, Nat, Nat, Nat) -> Nat
+         halved(_, low, middle, high) if middle <= low | high <= middle -> high
+         halved(n, _, middle, high) if n >= middle * middle -> narrow(n, middle, high)
+         halved(n, low, middle, _) -> narrow(n, low, middle)
+
+         main! : Host -> []
+         main!(host) ->
+           n = host.args.len()
+           host.exit!(U8.of_nat(digits(12345 * n, 0) + below(n, 1000, 1) + narrow(50 * n, 0, 64)))",
+        5 + 3 + 8,
+    ),
+    (
         "a parser goes round on the rest it answers inside an `Ok`",
         "Read : [Found(Nat, List(Nat)), NotFound]
 

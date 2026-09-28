@@ -99,7 +99,7 @@ Str : List(U8).(
   # more piece than separators. An empty separator leaves the text whole.
   split : (Str, Str) -> List(Str)
   split(text, Str([])) -> [text]
-  split(Str(bytes), Str(separator)) -> split_into(bytes, separator, [], [], bytes.len())
+  split(Str(bytes), Str([first, *more])) -> split_into(bytes, (first, more), [], [])
 
   # The lines, each without its end, which is `\n` or `\r\n`. A final line
   # end ends the last line rather than beginning an empty one, and a `\r`
@@ -137,23 +137,24 @@ strip_prefix(bytes, []) -> Ok(bytes)
 strip_prefix([byte, *rest], [wanted, *prefix]) if byte == wanted -> strip_prefix(rest, prefix)
 strip_prefix(_, _) -> Err(Mismatch)
 
-# The pieces of `bytes` between each `separator`, which is not empty, where
+# The pieces of `bytes` between each separator, `first` then `more`, where
 # the piece so far is `piece` and those finished are `pieces`, both
-# backwards. Each step takes a byte or more, so `fuel`, counting down one a
-# step from the length, never runs out; it is what shows the walk stops.
-split_into : (List(U8), List(U8), List(U8), List(Str), Nat) -> List(Str)
-split_into([byte, *rest], separator, piece, pieces, Succ(fuel)) ->
-  found = strip_prefix([byte, *rest], separator)
-  split_step(found, fuel, byte, rest, (separator, piece, pieces))
-split_into(bytes, _, piece, pieces, _) -> [Str(piece.reverse().extend(bytes)), *pieces].reverse()
+# backwards. A separator is looked for past a byte equal to its first, so
+# what follows one is no longer than the rest after that byte.
+split_into : (List(U8), (U8, List(U8)), List(U8), List(Str)) -> List(Str)
+split_into([byte, *rest], (first, more), piece, pieces) if byte == first ->
+  found = strip_prefix(rest, more)
+  split_step(found, byte, rest, ((first, more), piece, pieces))
+split_into([byte, *rest], separator, piece, pieces) -> split_into(rest, separator, [byte, *piece], pieces)
+split_into([], _, piece, pieces) -> [Str(piece.reverse()), *pieces].reverse()
 
 # A separator where the bytes go on, and a fresh piece after it; or else
 # the byte kept in the piece.
-split_step : (Result(List(U8), [Mismatch]), Nat, U8, List(U8), (List(U8), List(U8), List(Str))) -> List(Str)
-split_step(Ok(after), fuel, _, _, (separator, piece, pieces)) ->
-  split_into(after, separator, [], [Str(piece.reverse()), *pieces], fuel)
-split_step(Err(_), fuel, byte, rest, (separator, piece, pieces)) ->
-  split_into(rest, separator, [byte, *piece], pieces, fuel)
+split_step : (Result(List(U8), [Mismatch]), U8, List(U8), ((U8, List(U8)), List(U8), List(Str))) -> List(Str)
+split_step(Ok(after), _, _, (separator, piece, pieces)) ->
+  split_into(after, separator, [], [Str(piece.reverse()), *pieces])
+split_step(Err(_), byte, rest, (separator, piece, pieces)) ->
+  split_into(rest, separator, [byte, *piece], pieces)
 
 # The lines of `bytes`, the line so far `line` and those finished `lines`,
 # both backwards.

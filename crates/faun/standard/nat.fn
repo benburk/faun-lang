@@ -77,7 +77,7 @@ Nat : [Zero, Succ(Nat)].(
 
   # The decimal text.
   to_str : Nat -> Str
-  to_str(n) -> Str.from_ascii(nat_decimal(n, n)).ok_or("")
+  to_str(n) -> Str.from_ascii(nat_decimal(n)).ok_or("")
 
   # `Ok` of the number `text` writes in decimal: one digit or more, and
   # nothing else, no sign and no space.
@@ -109,20 +109,17 @@ Nat : [Zero, Succ(Nat)].(
   equals(Succ(a), Succ(b)) -> equals(a, b)
 )
 
-# The decimal digits of `n`, most significant first. The second argument
-# only counts down, which says the walk stops: `n` has fewer digits than
-# it is large.
-nat_decimal : (Nat, Nat) -> List(U8)
-nat_decimal(n, fuel) -> nat_decimal_onto(n, fuel, [])
+# The decimal digits of `n`, most significant first.
+nat_decimal : Nat -> List(U8)
+nat_decimal(n) -> nat_decimal_onto(n, [])
 
 # The decimal digits of `n` before `written`, the least significant taken
 # first and put in front, so the walk is a loop holding one number at a
-# time however many digits it has.
-nat_decimal_onto : (Nat, Nat, List(U8)) -> List(U8)
-nat_decimal_onto(n, _, written) if n < 10 -> [U8.of_nat(n + '0'), *written]
-nat_decimal_onto(_, 0, written) -> written
-nat_decimal_onto(n, Succ(rest), written) ->
-  nat_decimal_onto(n / 10, rest, [U8.of_nat(n % 10 + '0'), *written])
+# time however many digits it has. Past a single digit `n` is at least ten,
+# so a tenth of it is less.
+nat_decimal_onto : (Nat, List(U8)) -> List(U8)
+nat_decimal_onto(n, written) if n < 10 -> [U8.of_nat(n + '0'), *written]
+nat_decimal_onto(n, written) -> nat_decimal_onto(n / 10, [U8.of_nat(n % 10 + '0'), *written])
 
 # The number `bytes` go on to write, having written `value` so far, and
 # whether a digit was seen yet.
