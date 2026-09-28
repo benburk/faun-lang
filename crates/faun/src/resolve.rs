@@ -127,7 +127,10 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
             .expect("loaded module has source")
             .text();
         let mut scope = prelude.clone();
-        scope.merge(&module.scope, &loaded.symbols, "module scope")?;
+        scope.merge(&module.scope).map_err(|clash| {
+            let name = loaded.symbols.text(clash.name);
+            Diagnostic::new(format!("module scope binds {} `{name}` twice", clash.kind))
+        })?;
         let resolved = resolve_module(
             module,
             source,

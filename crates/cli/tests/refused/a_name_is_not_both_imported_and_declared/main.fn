@@ -1,0 +1,4 @@
+import helpers {double}
+
+double : Nat -> Nat
+double(n) -> n * 2

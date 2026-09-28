@@ -1,0 +1,4 @@
+Hasher : [H]
+
+f : Hasher -> Nat
+f(H) -> 0

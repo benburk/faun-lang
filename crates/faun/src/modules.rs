@@ -50,13 +50,10 @@ pub struct Interface {
 }
 
 impl Interface {
-    pub(crate) fn merge(
-        &mut self,
-        other: &Self,
-        symbols: &Symbols,
-        context: &str,
-    ) -> Result<(), Diagnostic> {
-        merge_map(&mut self.values, &other.values, symbols, context, "value")?;
+    /// Take in what `other` binds, refusing a name it binds to something
+    /// this already binds it to.
+    pub(crate) fn merge(&mut self, other: &Self) -> Result<(), Clash> {
+        merge_map(&mut self.values, &other.values, "value")?;
         for (&word, claimants) in &other.constructors {
             for &canonical in claimants {
                 claim(&mut self.constructors, word, canonical);
@@ -66,15 +63,23 @@ impl Interface {
             if let Some(previous) = self.types.get(&local)
                 && previous.canonical != binding.canonical
             {
-                return Err(Diagnostic::new(format!(
-                    "{context} binds type `{}` more than once",
-                    symbols.text(local)
-                )));
+                return Err(Clash {
+                    kind: "type",
+                    name: local,
+                });
             }
             self.types.insert(local, binding.clone());
         }
         Ok(())
     }
+}
+
+/// A name two interfaces bind to different things.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Clash {
+    /// `type` or `value`.
+    pub kind: &'static str,
+    pub name: Symbol,
 }
 
 #[derive(Clone, Debug)]
@@ -383,7 +388,9 @@ impl Loader {
             let face = self.pending[dependency.index()].public.clone();
             expose_import(&mut scope, &face, import, &file, &mut self.symbols)?;
         }
-        scope.merge(&own, &self.symbols, &format!("module `{}`", path.display()))?;
+        scope
+            .merge(&own)
+            .map_err(|clash| self.clash(clash, &file, &self.pending[id.index()].syntax))?;
         let public = exports(
             &self.pending[id.index()].syntax,
             &file,
@@ -397,6 +404,54 @@ impl Loader {
         module.public = public;
         self.loaded.insert(path, id);
         Ok(id)
+    }
+
+    /// A module declaring a name its scope already has from the prelude or
+    /// an import, told at the declaration.
+    fn clash(&self, clash: Clash, file: &Source, syntax: &Module) -> Diagnostic {
+        let name = self.symbols.text(clash.name);
+        let kind = clash.kind;
+        let source = file.text();
+        let declared = syntax.items.iter().find_map(|item| {
+            let declared = match (kind, item) {
+                ("type", Item::Data(data)) => data.name,
+                (
+                    "type",
+                    Item::Alias(AliasDecl { name, .. })
+                    | Item::Constraints(ConstraintAliasDecl { name, .. }),
+                ) => *name,
+                ("value", Item::Signature(signature)) => signature.name,
+                ("value", Item::Clause(clause)) => clause.name,
+                _ => return None,
+            };
+            (declared.text(source) == name).then_some(declared.0)
+        });
+        let imported = syntax.items.iter().find_map(|item| match item {
+            Item::Import(import) => import
+                .exposures
+                .iter()
+                .find(|exposure| exposure.local.text(source) == name)
+                .map(|exposure| exposure.local.0),
+            _ => None,
+        });
+        let diagnostic = match imported {
+            Some(_) => Diagnostic::new(format!("{kind} `{name}` is both imported and declared")),
+            None => Diagnostic::new(format!("the prelude already has a {kind} `{name}`")),
+        };
+        let Some(declared) = declared else {
+            return diagnostic;
+        };
+        let diagnostic = diagnostic.at(file, declared).label("declared here");
+        match imported {
+            Some(imported) => diagnostic
+                .secondary(file, imported, "imported here")
+                .help(format!(
+                    "import it under another name, as `{{{name}: Other}}`"
+                )),
+            None => diagnostic
+                .note("every module sees the prelude's types and values")
+                .help("name it something else"),
+        }
     }
 
     /// The root a module resolves its imports from: its package's, with the
@@ -743,7 +798,8 @@ fn exports(
                 canonical,
                 symbols,
                 "exported value",
-            )?;
+            )
+            .map_err(|diagnostic| diagnostic.at(file, export.name.0))?;
         }
         if let Some(binding) = scope.types.get(&local) {
             if binding.alias && export.constructors {
@@ -795,7 +851,8 @@ fn expose_import(
                 canonical,
                 symbols,
                 "imported value",
-            )?;
+            )
+            .map_err(|diagnostic| diagnostic.at(file, exposure.local.0))?;
             found = true;
         }
         if let Some(binding) = face.types.get(&exported) {
@@ -851,18 +908,13 @@ fn expose_import(
 fn merge_map(
     into: &mut HashMap<Symbol, Symbol>,
     from: &HashMap<Symbol, Symbol>,
-    symbols: &Symbols,
-    context: &str,
-    kind: &str,
-) -> Result<(), Diagnostic> {
+    kind: &'static str,
+) -> Result<(), Clash> {
     for (&local, &canonical) in from {
         if let Some(previous) = into.get(&local)
             && *previous != canonical
         {
-            return Err(Diagnostic::new(format!(
-                "{context} binds {kind} `{}` more than once",
-                symbols.text(local)
-            )));
+            return Err(Clash { kind, name: local });
         }
         into.insert(local, canonical);
     }

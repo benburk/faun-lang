@@ -1,0 +1,4 @@
+export {double}
+
+double : Nat -> Nat
+double(n) -> n + n

@@ -1,0 +1,8 @@
+error: the prelude already has a type `Hasher`
+ --> a_module_does_not_redeclare_a_prelude_type.fn:1:1
+  |
+1 | Hasher : [H]
+  | ^^^^^^ declared here
+  |
+  = note: every module sees the prelude's types and values
+  = help: name it something else
