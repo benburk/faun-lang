@@ -5008,9 +5008,9 @@ mod tests {
 
     #[test]
     fn repository_bootstrap_checks_polymorphic_utilities() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
+        let root = crate::standard_path();
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/utilities.fn");
-        let loaded = modules::load_program(&entry, &root, &crate::test_host()).unwrap();
+        let loaded = modules::load_program(&entry, root, &crate::test_host()).unwrap();
         let prelude = PreludeIds::find_in(&loaded).unwrap();
         let resolved = resolve::resolve_names(loaded).unwrap();
         let checked = type_check(n::normalize(resolved), prelude).unwrap();
@@ -5029,8 +5029,8 @@ mod tests {
              u8_ops : (U8, U8) -> U8\n\
              u8_ops(a, b) -> ((((a + b) - b) * b) / b) % b\n",
         );
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-        let loaded = modules::load_program(&entry, &root, &crate::test_host()).unwrap();
+        let root = crate::standard_path();
+        let loaded = modules::load_program(&entry, root, &crate::test_host()).unwrap();
         let prelude = PreludeIds::find_in(&loaded).unwrap();
         let resolved = resolve::resolve_names(loaded).unwrap();
         let checked = type_check(n::normalize(resolved), prelude).unwrap();

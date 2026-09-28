@@ -205,8 +205,8 @@ mod tests {
         fn load(&self, host: &str, entry: &str) -> LoadedProgram {
             let host = self.write("host.fn", host);
             let entry = self.write("main.fn", entry);
-            let standard = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
-            modules::load_program(&entry, &standard, &host).unwrap()
+            let standard = crate::standard_path();
+            modules::load_program(&entry, standard, &host).unwrap()
         }
     }
 

@@ -55,6 +55,7 @@ pub mod resolve;
 mod second_class;
 pub mod source;
 mod specialize;
+mod standard;
 pub mod symbol;
 pub mod typed;
 
@@ -64,10 +65,11 @@ pub use parse::{ParseError, parse, parse_in};
 pub use source::{Source, SourceId, Sources};
 pub use symbol::{Symbol, Symbols};
 
-/// Return the primary standard package bundled with this frontend crate.
+/// The primary standard package's root module: built into the compiler,
+/// or read from the directory `FAUN_STD` names where it is set.
 #[must_use]
 pub fn standard_path() -> &'static Path {
-    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/standard/standard.fn"))
+    standard::root_module()
 }
 
 /// Check the Faun package at `source` against `target`'s host and lower it
@@ -193,7 +195,7 @@ fn test_host() -> PathBuf {
 /// The host module mounted at `std.host` for `target`.
 fn host_path(target: &dyn Target) -> Result<PathBuf, Diagnostic> {
     let path = standard_path().with_file_name(format!("hosts/{}.fn", target.name()));
-    if !path.is_file() {
+    if !standard::is_module(&path) {
         return Err(Diagnostic::new(format!(
             "no Faun host module for target `{}`",
             target.name()

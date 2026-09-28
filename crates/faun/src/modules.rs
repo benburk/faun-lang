@@ -255,9 +255,14 @@ impl Loader {
         loading: Loading<'_>,
         standard_root: bool,
     ) -> Result<ModuleId, Diagnostic> {
-        let path = written.canonicalize().map_err(|error| {
-            Diagnostic::new(format!("cannot read {}: {error}", written.display()))
-        })?;
+        // A built-in module's name is already the one it is known by.
+        let built_in = crate::standard::built_in(written);
+        let path = match built_in {
+            Some(_) => written.to_path_buf(),
+            None => written.canonicalize().map_err(|error| {
+                Diagnostic::new(format!("cannot read {}: {error}", written.display()))
+            })?,
+        };
         if let Some(&id) = self.loaded.get(&path) {
             return Ok(id);
         }
@@ -270,8 +275,12 @@ impl Loader {
         if standard_root {
             self.standard_root = path.parent().map(Path::to_path_buf);
         }
-        let text = fs::read_to_string(&path)
-            .map_err(|error| Diagnostic::new(format!("cannot read {}: {error}", path.display())))?;
+        let text = match built_in {
+            Some(text) => text.to_owned(),
+            None => fs::read_to_string(&path).map_err(|error| {
+                Diagnostic::new(format!("cannot read {}: {error}", path.display()))
+            })?,
+        };
         let name = self.shown(&path);
         let source = self.sources.add(name, text.clone());
         let syntax = parse_in(&text, source).map_err(|error| {
@@ -495,7 +504,10 @@ fn module_base(from: &Path, joined: &Path) -> Result<PathBuf, Diagnostic> {
         let relative = path.strip_prefix(from).unwrap_or(path);
         format!("`{}`", relative.display())
     };
-    match (flat.is_file(), nested.is_file()) {
+    match (
+        crate::standard::is_module(&flat),
+        crate::standard::is_module(&nested),
+    ) {
         (true, false) => Ok(flat),
         (false, true) => Ok(nested),
         (true, true) => Err(Diagnostic::new(format!(

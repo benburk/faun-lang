@@ -1155,11 +1155,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn checked_example(name: &str) -> CheckedProgram {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
+        let root = crate::standard_path();
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("examples")
             .join(name);
-        let loaded = crate::modules::load_program(&entry, &root, &crate::test_host()).unwrap();
+        let loaded = crate::modules::load_program(&entry, root, &crate::test_host()).unwrap();
         let prelude = PreludeIds::find_in(&loaded).unwrap();
         let resolved = crate::resolve::resolve_names(loaded).unwrap();
         crate::check::type_check(crate::declarations::normalize(resolved), prelude).unwrap()
@@ -1193,9 +1193,9 @@ mod tests {
 
     #[test]
     fn lowers_the_host_entry_through_the_machine_boundary() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("standard/standard.fn");
+        let root = crate::standard_path();
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/main.fn");
-        let loaded = crate::modules::load_program(&entry, &root, &crate::test_host()).unwrap();
+        let loaded = crate::modules::load_program(&entry, root, &crate::test_host()).unwrap();
         let prelude = PreludeIds::find_in(&loaded).unwrap();
         let host = crate::host::HostIds::find_in(&loaded).unwrap();
         let main = crate::host::Main::find_in(&loaded).unwrap().unwrap();

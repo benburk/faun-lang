@@ -455,8 +455,10 @@ builds the package at `PATH` with an entry of its own in place of any `main!`,
 which is checked all the same: the entry asks every expectation of every module in the package, those of the
 standard library and of packages it depends on aside, and prints the number
 of each that does not hold.
-The standard library is a package too, and holds expectations of its own:
-`faun test crates/faun/standard/standard.fn` asks them.
+The standard library is a package too, and holds expectations of its own.
+It is built into the compiler; `FAUN_STD` names a directory to read it from
+instead, so the copy being edited is the one asked:
+`FAUN_STD=crates/faun/standard faun test crates/faun/standard/standard.fn`.
 `faun test` runs that for the machine it is on and says where each failing
 expectation was written; what the compiler settled while compiling, it
 settled before the program ran.
