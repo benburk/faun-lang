@@ -1,0 +1,5 @@
+error: `equals` without a body is derived, and is derived only as `(Point, Point) -> Bool`
+ --> a_member_without_a_body_is_derived_only_over_its_own_type.fn:2:3
+  |
+2 |   equals : (Point, Nat) -> Bool
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

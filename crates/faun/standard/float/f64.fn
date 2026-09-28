@@ -213,21 +213,17 @@ F64 : U64.(
   # ordering operators derive from it. It parts from the hardware comparison
   # only where that one is partial: `-0 < +0` here, and the NaN sits at the
   # end rather than beside nothing. `partial_cmp` is the hardware's.
+  # `equals` is its `Eq`, and so is identity of values: `-0` and `+0`
+  # differ, and the NaN equals itself; `numeric_equals` is the hardware's.
   cmp : (F64, F64) -> Order
   cmp(F64(a), F64(b)) ->
     Nat.cmp(rank(binary64(), U64.to_nat(a)), rank(binary64(), U64.to_nat(b)))
 
-  # Equality is `cmp`'s, and so is identity of values. `-0` and `+0`
-  # differ; the NaN equals itself; `numeric_equals` is the hardware's
-  # equality.
   # `hasher` with the bit pattern of `x` fed: values that are `equals`
   # under the total order hash alike, which is the only agreement a hash
   # owes.
   hash_into : (F64, h) -> h where Hasher(h)
   hash_into(x, hasher) -> hasher.write_u64(to_bits(x))
-
-  equals : (F64, F64) -> Bool
-  equals(a, b) -> cmp(a, b).eq()
 
   # The IEEE comparison: `Err(Unordered)` when either is NaN, `Ok(Eq)` for
   # the two zeros, and otherwise the total order, with which it agrees on

@@ -6,15 +6,8 @@ export {Throw.*}
 
 Throw : [Rock, Paper, Scissors].(
   equals : (Throw, Throw) -> Bool
-  equals(Rock, Rock) -> True
-  equals(Paper, Paper) -> True
-  equals(Scissors, Scissors) -> True
-  equals(_, _) -> False
 
   to_str : Throw -> Str
-  to_str(Rock) -> "Rock"
-  to_str(Paper) -> "Paper"
-  to_str(Scissors) -> "Scissors"
 
   counter : Throw -> Throw
   counter(Rock) -> Paper

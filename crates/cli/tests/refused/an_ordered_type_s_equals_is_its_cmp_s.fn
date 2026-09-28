@@ -1,0 +1,6 @@
+Size : [Small, Large].(
+  cmp : (Size, Size) -> Order
+
+  equals : (Size, Size) -> Bool
+  equals(a, b) -> cmp(a, b).eq()
+)

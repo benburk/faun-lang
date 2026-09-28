@@ -37,7 +37,6 @@ U8 : Nat.(
   mod(U8(a), U8(b)) -> U8(a % b)
 
   cmp : (U8, U8) -> Order
-  cmp(U8(a), U8(b)) -> a.cmp(b)
 
   min : (U8, U8) -> U8
   min(a, b) -> (a <= b).select(a, b)
@@ -46,7 +45,6 @@ U8 : Nat.(
   max(a, b) -> (a <= b).select(b, a)
 
   to_str : U8 -> Str
-  to_str(U8(value)) -> value.to_str()
 
   # Whether the byte is an ASCII digit, `'0'` to `'9'`.
   is_digit : U8 -> Bool
@@ -127,9 +125,6 @@ U8 : Nat.(
 
   hash_into : (U8, h) -> h where Hasher(h)
   hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(to_nat(a)))
-
-  equals : (U8, U8) -> Bool
-  equals(U8(a), U8(b)) -> a.equals(b)
 )
 
 expect '7'.is_digit() & !'x'.is_digit() & !'/'.is_digit() & !':'.is_digit()

@@ -1,0 +1,5 @@
+error: `hash_into` without a body is derived, and is derived only as `(Point, h) -> h`
+ --> a_derived_hash_into_feeds_any_hasher.fn:2:3
+  |
+2 |   hash_into : (Point, U64) -> U64
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

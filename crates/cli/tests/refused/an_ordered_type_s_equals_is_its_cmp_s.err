@@ -1,0 +1,7 @@
+error: `Size` declares both `equals` and `cmp`
+ --> an_ordered_type_s_equals_is_its_cmp_s.fn:4:3
+  |
+4 |   equals : (Size, Size) -> Bool
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: leave `equals` out: an ordered type's `equals` is its `cmp`'s `Eq`

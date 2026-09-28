@@ -16,14 +16,10 @@ export {Map}
 # One entry's place in insertion order: filled, or removed and left in place
 # so the entries after it keep their positions.
 Slot(k, v) : [Filled(k, v), Removed].(
-  # One tag, with equal fields.
+  # One constructor, with equal fields.
   equals : (Slot(k, v), Slot(k, v)) -> Bool where
     k.equals : (k, k) -> Bool
     v.equals : (v, v) -> Bool
-  equals(Filled(key, value), Filled(other_key, other_value)) ->
-    key == other_key & value == other_value
-  equals(Removed, Removed) -> True
-  equals(_, _) -> False
 )
 
 # A persistent map keyed by hash. Entries live in a list in insertion order

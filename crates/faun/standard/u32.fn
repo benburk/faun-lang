@@ -36,10 +36,8 @@ U32 : Nat.(
   mod(U32(a), U32(b)) -> U32(a % b)
 
   cmp : (U32, U32) -> Order
-  cmp(U32(a), U32(b)) -> a.cmp(b)
 
   to_str : U32 -> Str
-  to_str(U32(value)) -> value.to_str()
 
   # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`. Two words' bits
   # make a word, so the remainder changes nothing and costs nothing; it
@@ -129,9 +127,6 @@ U32 : Nat.(
 
   hash_into : (U32, h) -> h where Hasher(h)
   hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(to_nat(a)))
-
-  equals : (U32, U32) -> Bool
-  equals(U32(a), U32(b)) -> a.equals(b)
 )
 
 expect U32.from_nat(4294967296).is_err() & U64.from_nat(18446744073709551615).is_ok()

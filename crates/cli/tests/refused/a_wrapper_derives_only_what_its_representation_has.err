@@ -1,0 +1,5 @@
+error: `{x: Nat, y: Nat}` has no field or method `cmp`
+ --> a_wrapper_derives_only_what_its_representation_has.fn:2:3
+  |
+2 |   cmp : (Point, Point) -> Order
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

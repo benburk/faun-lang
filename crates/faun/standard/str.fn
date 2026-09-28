@@ -41,9 +41,6 @@ Str : List(U8).(
   hash_into : (Str, h) -> h where Hasher(h)
   hash_into(Str(bytes), hasher) -> hasher.write_bytes(bytes)
 
-  equals : (Str, Str) -> Bool
-  equals(left, right) -> cmp(left, right).eq()
-
   # `Ok` of the bytes as a string where every one is ASCII, which is always
   # valid UTF-8.
   from_ascii : List(U8) -> Result(Str, [NotAscii])

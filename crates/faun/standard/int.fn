@@ -96,11 +96,6 @@ Int : [Pos(Nat), NegSucc(Nat)].(
 
   hash_into : (Int, h) -> h where Hasher(h)
   hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(is_negative(a).to_nat())).write_u64(U64.of_nat(abs(a)))
-
-  equals : (Int, Int) -> Bool
-  equals(Pos(a), Pos(b)) -> a.equals(b)
-  equals(NegSucc(a), NegSucc(b)) -> a.equals(b)
-  equals(_, _) -> False
 )
 
 # The number `text` writes, where `bare` is it without a leading `-`.

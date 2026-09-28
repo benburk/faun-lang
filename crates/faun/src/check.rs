@@ -4,7 +4,8 @@
 //! Algorithm W over call-graph components, keeping recursive groups
 //! monomorphic until the whole group has been checked. Method calls are held
 //! until ordinary unification (and numeral defaulting) identifies a receiver.
-//! Bodyless-method derivation is deliberately outside this pass.
+//! A bodyless `equals`, `cmp` or `to_str` in a type's block has its clauses
+//! written first (`derive`), and is checked as a written body is.
 //!
 //! Tag rows unify as Rémy's rows: shared tags unify their fields and an open
 //! side's tail takes what only the other holds. A signature's result rows get
@@ -164,9 +165,10 @@ impl std::error::Error for CheckError {}
 /// Reports type, arity, ambiguous-method, unsupported-constraint, and literal
 /// protocol failures, and clauses that leave a case unmatched.
 pub fn type_check(
-    resolved: ResolvedProgram<n::Program>,
+    mut resolved: ResolvedProgram<n::Program>,
     prelude: PreludeIds,
 ) -> Result<CheckedProgram, Diagnostic> {
+    crate::derive::requested(&mut resolved, &prelude)?;
     let facts = validate_effects(&resolved.program, &resolved.symbols)
         .and_then(|()| {
             Checker::new(&resolved.program, &resolved.symbols, &prelude)?.check(&resolved.program)
@@ -4847,7 +4849,7 @@ mod tests {
             );
             self.write(
             "order.fn",
-            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
+            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\neq : Order -> Bool\neq(Eq) -> True\neq(_) -> False\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
         );
             let standard = self.write(
                 "standard.fn",

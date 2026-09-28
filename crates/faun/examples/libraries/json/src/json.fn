@@ -84,13 +84,6 @@ Json : [
   array(_, _) -> Failed(Expected("array"))
 
   equals : (Json, Json) -> Bool
-  equals(Null, Null) -> True
-  equals(Bool(a0), Bool(b0)) -> a0 == b0
-  equals(Number(a0), Number(b0)) -> a0 == b0
-  equals(String(a0), String(b0)) -> a0 == b0
-  equals(Array(a0), Array(b0)) -> a0 == b0
-  equals(Object(a0), Object(b0)) -> a0 == b0
-  equals(_, _) -> False
 )
 
 ParseError : [
@@ -106,16 +99,6 @@ ParseError : [
   TrailingInput
 ].(
   to_str : ParseError -> Str
-  to_str(UnexpectedEnd) -> "UnexpectedEnd"
-  to_str(UnexpectedToken) -> "UnexpectedToken"
-  to_str(InvalidString) -> "InvalidString"
-  to_str(InvalidEscape) -> "InvalidEscape"
-  to_str(InvalidUnicode) -> "InvalidUnicode"
-  to_str(InvalidNumber) -> "InvalidNumber"
-  to_str(UnsupportedNumber) -> "UnsupportedNumber"
-  to_str(ExpectedColon) -> "ExpectedColon"
-  to_str(ExpectedCommaOrEnd) -> "ExpectedCommaOrEnd"
-  to_str(TrailingInput) -> "TrailingInput"
   to_str(UnexpectedEnd) -> "unexpected end of JSON input"
   to_str(UnexpectedToken) -> "unexpected JSON token"
   to_str(InvalidString) -> "invalid JSON string"
@@ -128,17 +111,6 @@ ParseError : [
   to_str(TrailingInput) -> "unexpected input after JSON value"
 
   equals : (ParseError, ParseError) -> Bool
-  equals(UnexpectedEnd, UnexpectedEnd) -> True
-  equals(UnexpectedToken, UnexpectedToken) -> True
-  equals(InvalidString, InvalidString) -> True
-  equals(InvalidEscape, InvalidEscape) -> True
-  equals(InvalidUnicode, InvalidUnicode) -> True
-  equals(InvalidNumber, InvalidNumber) -> True
-  equals(UnsupportedNumber, UnsupportedNumber) -> True
-  equals(ExpectedColon, ExpectedColon) -> True
-  equals(ExpectedCommaOrEnd, ExpectedCommaOrEnd) -> True
-  equals(TrailingInput, TrailingInput) -> True
-  equals(_, _) -> False
 )
 
 DecodeError : [
@@ -152,14 +124,6 @@ DecodeError : [
   InvalidValue(Str)
 ].(
   to_str : DecodeError -> Str
-  to_str(Expected(a0)) -> "Expected(${a0})"
-  to_str(MissingField(a0)) -> "MissingField(${a0})"
-  to_str(DuplicateField(a0)) -> "DuplicateField(${a0})"
-  to_str(UnknownField(a0)) -> "UnknownField(${a0})"
-  to_str(OverlappingFields) -> "OverlappingFields"
-  to_str(AtField(a0, a1)) -> "AtField(${a0}, ${a1})"
-  to_str(AtIndex(a0, a1)) -> "AtIndex(${a0}, ${a1})"
-  to_str(InvalidValue(a0)) -> "InvalidValue(${a0})"
   to_str(Expected(kind)) -> "expected ${kind}"
   to_str(MissingField(name)) -> "missing JSON field `${name}`"
   to_str(DuplicateField(name)) ->
@@ -171,15 +135,6 @@ DecodeError : [
   to_str(InvalidValue(message)) -> message
 
   equals : (DecodeError, DecodeError) -> Bool
-  equals(Expected(a0), Expected(b0)) -> a0 == b0
-  equals(MissingField(a0), MissingField(b0)) -> a0 == b0
-  equals(DuplicateField(a0), DuplicateField(b0)) -> a0 == b0
-  equals(UnknownField(a0), UnknownField(b0)) -> a0 == b0
-  equals(OverlappingFields, OverlappingFields) -> True
-  equals(AtField(a0, a1), AtField(b0, b1)) -> a0 == b0 & a1 == b1
-  equals(AtIndex(a0, a1), AtIndex(b0, b1)) -> a0 == b0 & a1 == b1
-  equals(InvalidValue(a0), InvalidValue(b0)) -> a0 == b0
-  equals(_, _) -> False
 )
 
 # A decode carries the object member names it claimed. Claims from

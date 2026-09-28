@@ -36,10 +36,8 @@ U16 : Nat.(
   mod(U16(a), U16(b)) -> U16(a % b)
 
   cmp : (U16, U16) -> Order
-  cmp(U16(a), U16(b)) -> a.cmp(b)
 
   to_str : U16 -> Str
-  to_str(U16(value)) -> value.to_str()
 
   # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`. Two words' bits
   # make a word, so the remainder changes nothing and costs nothing; it
@@ -121,9 +119,6 @@ U16 : Nat.(
 
   hash_into : (U16, h) -> h where Hasher(h)
   hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(to_nat(a)))
-
-  equals : (U16, U16) -> Bool
-  equals(U16(a), U16(b)) -> a.equals(b)
 )
 
 expect U8.of_nat(3).pow(5) == 243 & U8.of_nat(3).pow(6) == 217 & U16.of_nat(2).pow(16) == 0

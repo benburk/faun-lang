@@ -33,20 +33,9 @@ Bool : [False, True].(
 
   # False before True.
   cmp : (Bool, Bool) -> Order
-  cmp(False, True) -> Lt
-  cmp(True, False) -> Gt
-  cmp(_, _) -> Eq
 
   to_str : Bool -> Str
-  to_str(False) -> "False"
-  to_str(True) -> "True"
 
-  # `hasher` with `a` fed: as 0 or 1.
+  # `hasher` with `a` fed: as 0 or 1, its place.
   hash_into : (Bool, h) -> h where Hasher(h)
-  hash_into(a, hasher) -> hasher.write_u64(U64.of_nat(to_nat(a)))
-
-  equals : (Bool, Bool) -> Bool
-  equals(False, False) -> True
-  equals(True, True) -> True
-  equals(_, _) -> False
 )

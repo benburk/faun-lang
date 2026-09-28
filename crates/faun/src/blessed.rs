@@ -47,12 +47,20 @@ pub struct PreludeIds {
     /// How a tuple's `cmp` goes on past an equal position.
     pub order_then: Symbol,
     pub order_eq: Symbol,
+    /// The other two answers, which a derived `cmp` gives between two
+    /// constructors.
+    pub order_less: Symbol,
+    pub order_greater: Symbol,
+    /// Whether an order is `Eq`: an ordered type's `equals`.
+    pub order_is_eq: Symbol,
     /// The spellings of the members a closed record, a tuple or a tag row
     /// has without declaring them, where anything spells them.
     pub equals: Option<Symbol>,
     pub cmp: Option<Symbol>,
     pub to_str: Option<Symbol>,
     pub hash_into: Option<Symbol>,
+    /// How a derived `hash_into` feeds which constructor it took apart.
+    pub write_u64: Option<Symbol>,
     /// What `?` takes apart and answers with.
     pub result: Symbol,
     pub result_ok: Symbol,
@@ -186,10 +194,14 @@ impl PreludeIds {
             order_ge: method(program, &order, "Order", "ge")?,
             order_then: method(program, &order, "Order", "then")?,
             order_eq: constructor(program, &order, "Order", "Eq")?,
+            order_less: constructor(program, &order, "Order", "Lt")?,
+            order_greater: constructor(program, &order, "Order", "Gt")?,
+            order_is_eq: method(program, &order, "Order", "eq")?,
             equals: program.symbols.find("equals"),
             cmp: program.symbols.find("cmp"),
             to_str: program.symbols.find("to_str"),
             hash_into: program.symbols.find("hash_into"),
+            write_u64: program.symbols.find("write_u64"),
             result: result.canonical,
             result_ok: constructor(program, &result, "Result", "Ok")?,
             result_err: constructor(program, &result, "Result", "Err")?,
@@ -499,7 +511,7 @@ mod tests {
         );
         fixture.write(
             "order.fn",
-            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
+            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\neq : Order -> Bool\neq(Eq) -> True\neq(_) -> False\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
         );
         let root = fixture.write(
             "standard.fn",

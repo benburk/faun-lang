@@ -139,8 +139,8 @@ A closed row has `equals` and `to_str` without declaring them, as in Ori:
 two values are equal where they are one tag with equal fields, and a tag is
 written as its name, and its fields after it by their own `to_str`,
 `Invalid(3)`. A row a caller may still add tags to has neither. `Result`
-writes its own `equals`, both sides by their types' own, so
-`Nat.from_str(text) == Ok(48)` asks it of a `Nat` and a row.
+asks for its `equals` by its signature alone, both sides by their types'
+own, so `Nat.from_str(text) == Ok(48)` asks it of a `Nat` and a row.
 
 A closed record and a tuple have `equals`, `to_str` and `hash_into` the same
 way, and a tuple `cmp` too. A record is written with its fields in the order
@@ -179,8 +179,24 @@ is exported. `SortedMap` and `SortedSet` are AVL trees ordered by the key's
 `cmp`, for keys that must come back in order. `List.group_by` gathers into a
 `Map`.
 
-The package has no bodyless derivation: a declared type's `equals`, `cmp`
-or `hash_into` is written out, as `Map`'s `Slot` writes its `equals`.
+A type's block asks for `equals`, `cmp`, `to_str` or `hash_into` by writing
+its signature with no clauses, as in Ori, and has the structural member of
+what the type holds. A sum's values are equal where they are one constructor
+with equal fields, ordered by which constructor the type declares first and
+then by their fields in turn, written as a tag is, `Filled(1, x)`, and fed to
+a hasher as the constructor's place among several, `write_u64`, then each
+field. A wrapper's are what it wraps: `Point : {x: Nat, y: Nat}` is equal
+where its records are and written as its record is, `{x: 1, y: 2}`, and has
+no `cmp`, since a record has none. A field whose type is a variable is asked
+through a `where` bound the signature writes, as it would for a written body:
+`equals : (Slot(k, v), Slot(k, v)) -> Bool` with `k.equals` and `v.equals`
+is `Map`'s `Slot`'s. A signature other than `(T, T) -> Bool`,
+`(T, T) -> Order`, `T -> Str` or `(T, h) -> h` over its own type is refused.
+
+A type with `cmp`, written or asked for, has `equals` from it, `Eq` and
+nothing else, with `cmp`'s bounds, so the two cannot disagree; it declares
+no `equals` of its own, and one that does is refused. Barb answers
+`cmp(a, b).eq()` of the numbers as the one comparison `equals` was.
 
 Generic code that uses a method has a `where` bound, as in Ori: structural,
 met by any type having the member, with no trait and no runtime dictionary.
@@ -235,7 +251,8 @@ tuple have `equals` without declaring it, as a tag row does, each component
 equal by its own type's `equals`, and a tuple has `cmp`, its positions in
 order with `Order.then`;
 a record has no order of its fields, and an open record no `equals`, its other
-fields being a caller's. A declared type writes its own.
+fields being a caller's. A declared type writes its own, or asks for the
+structural one by its signature alone.
 
 `&`, `|` and `^` are `and`, `or` and `xor`, as in Ori: logical on `Bool` and
 bitwise on `Nat` and the words, and looser than a comparison, so
@@ -248,7 +265,7 @@ is nought. `Int` has no bitwise operations.
 
 `Nat`, `Int`, and `U8` define `+`, `-`, `*`, `/`, and `%`. A type is ordered by
 defining one `cmp : (T, T) -> Order`, and `<`, `<=`, `>` and `>=` are fixed views of
-its `Order`, so they cannot disagree; `Bool`, `Nat`, `Int` and `U8` define it. Natural subtraction is
+its `Order`, as `equals` is, so they cannot disagree; `Bool`, `Nat`, `Int` and `U8` define it. Natural subtraction is
 monus. Signed division is Euclidean, as Ori's is: the remainder is never negative,
 so `-7 / 3` is `-3` and `-7 % 3` is `2`. For every type, division by zero returns zero and `a % 0` returns `a`.
 `U8` arithmetic uses unsigned representatives and wraps modulo 256; in particular,

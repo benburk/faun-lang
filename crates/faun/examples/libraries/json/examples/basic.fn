@@ -36,7 +36,6 @@ User : {
   }).object()
 
   equals : (User, User) -> Bool
-  equals(User(a), User(b)) -> a == b
 )
 
 # Encode and decode the one shape the record builders do not cover directly:
@@ -116,10 +115,6 @@ Event : [Click(U16, U16), Scroll(Int), Quit].(
   body(other, _) -> Failed(InvalidValue("unknown event `${other}`"))
 
   equals : (Event, Event) -> Bool
-  equals(Click(a0, a1), Click(b0, b1)) -> a0 == b0 & a1 == b1
-  equals(Scroll(a0), Scroll(b0)) -> a0 == b0
-  equals(Quit, Quit) -> True
-  equals(_, _) -> False
 )
 
 # The decoded fields arrive as a record; `Click` takes them positionally.

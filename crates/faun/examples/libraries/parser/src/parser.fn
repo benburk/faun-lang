@@ -20,10 +20,6 @@ ParserError : [
   to_str(ParserTrailingInput) -> "unexpected input after parsed value"
 
   equals : (ParserError, ParserError) -> Bool
-  equals(ParserExpectedByte(a0), ParserExpectedByte(b0)) -> a0 == b0
-  equals(ParserExpectedNat, ParserExpectedNat) -> True
-  equals(ParserTrailingInput, ParserTrailingInput) -> True
-  equals(_, _) -> False
 )
 
 Input : List(U8).(

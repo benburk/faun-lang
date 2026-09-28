@@ -714,6 +714,13 @@ fn declare_data(
         }
         binding.methods.insert(spelling, canonical);
     }
+    // An ordered type's `equals` is its `cmp`'s `Eq`, declared or not.
+    let cmp = symbols.intern("cmp");
+    let equals = symbols.intern("equals");
+    if binding.methods.contains_key(&cmp) && !binding.methods.contains_key(&equals) {
+        let canonical = symbols.intern(&format!("{namespace}$${}.equals", data.name.text(source)));
+        binding.methods.insert(equals, canonical);
+    }
     own.types.insert(local, binding);
     Ok(())
 }

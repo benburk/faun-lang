@@ -32,14 +32,14 @@ Nat : [Zero, Succ(Nat)].(
   div(0, Succ(_)) -> 0
   div(Succ(a), Succ(b)) ->
     quotient = div(a, Succ(b))
-    div_step(equals(mod(a, Succ(b)), b), quotient)
+    div_step(nat_same(mod(a, Succ(b)), b), quotient)
 
   mod : (Nat, Nat) -> Nat
   mod(a, 0) -> a
   mod(0, Succ(_)) -> 0
   mod(Succ(a), Succ(b)) ->
     remainder = mod(a, Succ(b))
-    mod_step(equals(remainder, b), remainder)
+    mod_step(nat_same(remainder, b), remainder)
 
   # `base` to the `exponent`, squaring the base as the exponent halves: as
   # many steps as the exponent has bits, each going round again. The
@@ -52,9 +52,10 @@ Nat : [Zero, Succ(Nat)].(
   times(Succ(count), value, f) -> times(count, f(value), f)
 
   # One comparison each way, which the compiler recognizes as instructions,
-  # rather than a walk down both counts.
+  # rather than a walk down both counts. `equals` is its `Eq`, which the
+  # compiler answers as the one comparison again.
   cmp : (Nat, Nat) -> Order
-  cmp(a, b) -> nat_order(nat_below(a, b), a.equals(b))
+  cmp(a, b) -> nat_order(nat_below(a, b), nat_same(a, b))
 
   min : (Nat, Nat) -> Nat
   min(a, b) -> (a <= b).select(a, b)
@@ -102,11 +103,6 @@ Nat : [Zero, Succ(Nat)].(
   hash_into : (Nat, h) -> h where Hasher(h)
   hash_into(n, hasher) -> hasher.write_u64(U64.of_nat(n))
 
-  equals : (Nat, Nat) -> Bool
-  equals(0, 0) -> True
-  equals(0, Succ(_)) -> False
-  equals(Succ(_), 0) -> False
-  equals(Succ(a), Succ(b)) -> equals(a, b)
 )
 
 # The decimal digits of `n`, most significant first.
@@ -163,6 +159,14 @@ pow_mod_into(_, 0, built, _) -> built
 pow_mod_into(base, exponent, built, modulus) ->
   kept = (exponent % 2 == 1).select(built * base % modulus, built)
   pow_mod_into(base * base % modulus, exponent / 2, kept, modulus)
+
+# Whether `a` and `b` are one number: a walk down both, which the compiler
+# recognizes as one comparison.
+nat_same : (Nat, Nat) -> Bool
+nat_same(0, 0) -> True
+nat_same(0, Succ(_)) -> False
+nat_same(Succ(_), 0) -> False
+nat_same(Succ(a), Succ(b)) -> nat_same(a, b)
 
 nat_below : (Nat, Nat) -> Bool
 nat_below(_, 0) -> False

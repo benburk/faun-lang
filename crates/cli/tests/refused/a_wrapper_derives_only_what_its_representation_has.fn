@@ -1,0 +1,3 @@
+Point : {x: Nat, y: Nat}.(
+  cmp : (Point, Point) -> Order
+)

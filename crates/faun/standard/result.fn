@@ -44,17 +44,12 @@ Result(a, e) : [Ok(a), Err(e)].(
   to_str : Result(a, e) -> Str where
     a.to_str : a -> Str
     e.to_str : e -> Str
-  to_str(Ok(value)) -> "Ok(${value})"
-  to_str(Err(error)) -> "Err(${error})"
 
   # Both `Ok` with equal values, or both `Err` with equal errors, each by
   # its own type's `equals`. A tag row's is structural.
   equals : (Result(a, e), Result(a, e)) -> Bool where
     a.equals : (a, a) -> Bool
     e.equals : (e, e) -> Bool
-  equals(Ok(left), Ok(right)) -> left == right
-  equals(Err(left), Err(right)) -> left == right
-  equals(_, _) -> False
 )
 
 expect Ok(1).err_as(Missing) == Ok(1) & Ok(1).err_as(Missing) != Ok(2)

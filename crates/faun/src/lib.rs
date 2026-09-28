@@ -35,6 +35,7 @@ mod builders;
 mod callbacks;
 pub mod check;
 pub mod declarations;
+mod derive;
 pub mod diagnostic;
 #[cfg(test)]
 mod ebnf;

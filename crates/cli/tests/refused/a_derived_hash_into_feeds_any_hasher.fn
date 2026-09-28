@@ -1,0 +1,3 @@
+Point : (Nat, Nat).(
+  hash_into : (Point, U64) -> U64
+)
