@@ -304,6 +304,98 @@ impl<I: Id> BitSet<I> {
     }
 }
 
+/// A set of IDs below a bound that costs what it holds, not what the bound
+/// allows.
+///
+/// Insertion, removal, clearing and iteration each take time in its
+/// members alone: for a set kept small while the IDs it may hold are many,
+/// as what is live at one point of a large function. Its members come in
+/// no order.
+#[derive(Clone, Debug)]
+pub struct SparseSet<I> {
+    /// The members.
+    dense: Vec<I>,
+    /// Where each ID is in `dense`, where it is there; stale otherwise.
+    sparse: Vec<u32>,
+}
+
+impl<I: Id> SparseSet<I> {
+    /// The empty set of IDs below `bound`.
+    #[must_use]
+    pub fn new(bound: usize) -> Self {
+        Self {
+            dense: Vec::new(),
+            sparse: vec![0; bound],
+        }
+    }
+
+    /// Add `id`.
+    ///
+    /// # Panics
+    ///
+    /// If `id` is at or past the bound the set was built for, or the set
+    /// would hold four billion.
+    pub fn insert(&mut self, id: I) {
+        if !self.contains(id) {
+            self.sparse[id.index()] =
+                u32::try_from(self.dense.len()).expect("fewer than 2^32 members");
+            self.dense.push(id);
+        }
+    }
+
+    /// Remove `id`, moving the last member into its place.
+    ///
+    /// # Panics
+    ///
+    /// If `id` is at or past the bound the set was built for.
+    pub fn remove(&mut self, id: I) {
+        if !self.contains(id) {
+            return;
+        }
+        let at = usize::try_from(self.sparse[id.index()]).expect("u32 fits usize");
+        let last = self.dense.pop().expect("a member is there");
+        if last.index() != id.index() {
+            self.dense[at] = last;
+            self.sparse[last.index()] = self.sparse[id.index()];
+        }
+    }
+
+    /// Whether `id` is a member.
+    ///
+    /// # Panics
+    ///
+    /// If `id` is at or past the bound the set was built for.
+    #[must_use]
+    pub fn contains(&self, id: I) -> bool {
+        let at = usize::try_from(self.sparse[id.index()]).expect("u32 fits usize");
+        self.dense
+            .get(at)
+            .is_some_and(|held| held.index() == id.index())
+    }
+
+    /// Hold nothing.
+    pub fn clear(&mut self) {
+        self.dense.clear();
+    }
+
+    /// Add each of `ids`.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::insert`] does.
+    pub fn extend(&mut self, ids: impl IntoIterator<Item = I>) {
+        for id in ids {
+            self.insert(id);
+        }
+    }
+
+    /// The members, in no order.
+    #[must_use]
+    pub fn members(&self) -> &[I] {
+        &self.dense
+    }
+}
+
 /// Append a slice and return its run, checking the encoded start and length
 /// before extending storage. Empty runs retain the current end position.
 /// This neither caps the total pool at `u32::MAX` nor makes a panicking `Clone`

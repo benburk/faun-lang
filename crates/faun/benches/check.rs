@@ -49,7 +49,7 @@ type Build = fn(usize) -> String;
 /// the time is linear, four times quadratic.
 fn cases() -> Vec<(String, String)> {
     let mut cases = vec![("standard library".to_owned(), String::new())];
-    let scaled: [(&str, Build, usize); 10] = [
+    let scaled: [(&str, Build, usize); 11] = [
         ("signed definitions", signed_definitions, 2_000),
         ("unsigned definitions", unsigned_definitions, 1_000),
         ("recursive group", recursive_group, 300),
@@ -60,6 +60,7 @@ fn cases() -> Vec<(String, String)> {
         ("wide tags", wide_tags, 300),
         ("method chain", method_chain, 500),
         ("list literal", list_literal, 2_500),
+        ("print statements", print_statements, 5_000),
     ];
     for (name, build, size) in scaled {
         // A type that doubles at each step doubles again with one more.
@@ -173,6 +174,16 @@ fn method_chain(count: usize) -> String {
 fn list_literal(count: usize) -> String {
     let items: Vec<String> = (0..count).map(|i| i.to_string()).collect();
     format!("numbers : List(U32)\nnumbers() -> [{}]\n", items.join(", "))
+}
+
+/// An application writing one line `count` times, each its own statement.
+fn print_statements(count: usize) -> String {
+    let mut source = String::from("import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n");
+    for _ in 0..count {
+        source.push_str("  host.println!(\"hello\")\n");
+    }
+    source.push_str("  host.exit!(0)\n");
+    source
 }
 
 /// Time each phase at its best of several runs, and print them.

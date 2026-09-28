@@ -1,6 +1,8 @@
 //! The constant module owns storage and every insertion path. Only Program
 //! pairs these operations with its declaration metadata; the pool is not public.
 
+use std::collections::HashMap;
+
 use num_bigint::BigUint;
 
 use super::{
@@ -21,6 +23,10 @@ struct Entry {
 pub(in crate::barb) struct ConstantPool {
     entries: Pool<ConstId, Entry>,
     bytes: Vec<u8>,
+    /// Each constant held, by its type and encoding: one written again is
+    /// the one already held, so a value is one constant however many times
+    /// a program writes it.
+    held: HashMap<(TypeId, Box<[u8]>), ConstId>,
 }
 
 impl ConstantPool {
@@ -85,10 +91,17 @@ impl ConstantPool {
     fn hold(&mut self, owner: TypeId, write: impl FnOnce(&mut Vec<u8>)) -> ConstId {
         let start = self.bytes.len();
         write(&mut self.bytes);
-        self.entries.push(Entry {
+        let key = (owner, Box::from(&self.bytes[start..]));
+        if let Some(&id) = self.held.get(&key) {
+            self.bytes.truncate(start);
+            return id;
+        }
+        let id = self.entries.push(Entry {
             owner,
             bytes: Range::of(start, self.bytes.len() - start),
-        })
+        });
+        self.held.insert(key, id);
+        id
     }
 }
 

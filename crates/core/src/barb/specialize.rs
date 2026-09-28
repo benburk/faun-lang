@@ -22,6 +22,8 @@
 //! Only parameters every call of the definition by itself passes on as they
 //! came are followed, and constants are compared by identity, as there.
 
+use std::collections::HashSet;
+
 use super::copy::{self, Scope};
 use super::{Atom, Body, ConstId, Expr, ExprId, FnId, Local, Program};
 
@@ -40,10 +42,12 @@ pub(crate) fn specialize(program: &mut Program) {
             continue;
         };
         let passed = &sites.passed[at];
+        // Each distinct key, in the order its first call hands it.
         let mut keys: Vec<Key> = Vec::new();
+        let mut seen: HashSet<Key> = HashSet::new();
         for call in calls {
             let key = call.key(passed);
-            if !keys.contains(&key) {
+            if seen.insert(key.clone()) {
                 keys.push(key);
             }
         }
@@ -70,7 +74,7 @@ pub(crate) fn specialize(program: &mut Program) {
 }
 
 /// The known values a call hands the parameters a definition passes on.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct Key(Vec<Option<ConstId>>);
 
 impl Key {

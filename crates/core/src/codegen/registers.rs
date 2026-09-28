@@ -22,7 +22,7 @@ use super::parallel_copy::{
     self, Copy as ParallelCopy, CopySource, Move as CopyMove, Place, TransitionCost,
 };
 use super::{FrameSlot, RegSet, Register};
-use crate::index::{BitSet, Pool, Range, index};
+use crate::index::{BitSet, Pool, Range, SparseSet, index};
 use crate::ir::FunctionId;
 
 index!(pub VReg, BlockId, InstId);
@@ -326,14 +326,23 @@ impl Liveness {
     ) {
         let values = numbering.number(code, blocks);
         let number = |value: VReg| numbering.local[value.index()].expect("a value of its function");
-        let mut live_out = live_out(code, blocks, values.len(), numbering);
-        let members = |live: &BitSet<Local>| {
-            LiveSet(live.iter().map(|local| values[local.index()]).collect())
+        let live_out = live_out(code, blocks, values.len(), numbering);
+        // What is live is walked back through each block in a set that
+        // costs what it holds, as most of a large function's values are
+        // dead at any one point; each point takes it in the order of the
+        // values' numbers.
+        let mut live = SparseSet::new(values.len());
+        let members = |live: &SparseSet<Local>| {
+            let mut locals = live.members().to_vec();
+            locals.sort_unstable();
+            LiveSet(locals.iter().map(|local| values[local.index()]).collect())
         };
         for (at, &id) in blocks.iter().enumerate() {
             let layout = &self.blocks[id.index()];
             let block = code.blocks[id];
-            let live = &mut live_out[at];
+            live.clear();
+            live.extend(live_out[at].iter());
+            let live = &mut live;
             visit_terminator_values(code, block.terminator, |value| {
                 live.insert(number(value));
             });
