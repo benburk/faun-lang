@@ -42,7 +42,8 @@ Nat : [Zero, Succ(Nat)].(
     mod_step(equals(remainder, b), remainder)
 
   # `base` to the `exponent`, squaring the base as the exponent halves: as
-  # many steps as the exponent has bits, each going round again.
+  # many steps as the exponent has bits, each going round again. The
+  # compiler recognizes the walk, and answers a power as one operation.
   pow : (Nat, Nat) -> Nat
   pow(base, exponent) -> pow_into(base, exponent, 1)
 
@@ -63,6 +64,8 @@ Nat : [Zero, Succ(Nat)].(
 
   # Bitwise, a bit of the answer for each place either has one: `a & b`,
   # `a | b` and `a ^ b`. Each walk goes on only while both have bits left.
+  # The compiler recognizes these walks, and answers each as one
+  # instruction on a word, or a digit at a time past one.
   and : (Nat, Nat) -> Nat
   and(a, b) -> and_bits(a, b, 1, 0)
 

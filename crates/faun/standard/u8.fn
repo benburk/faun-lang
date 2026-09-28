@@ -75,8 +75,9 @@ U8 : Nat.(
   to_ascii_upper(byte) -> byte
 
   # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`. Two words' bits
-  # make a word, so the remainder changes nothing; it is what shows
-  # the answer is one, which nothing recognizes of `Nat`'s bitwise walk.
+  # make a word, so the remainder changes nothing and costs nothing; it
+  # says the answer is one even where a word's range is still being
+  # worked out round a loop.
   and : (U8, U8) -> U8
   and(U8(a), U8(b)) -> U8((a & b) % 256)
 

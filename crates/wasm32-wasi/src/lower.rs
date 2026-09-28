@@ -53,6 +53,8 @@ const I32_STORE16: u8 = 0x3B;
 const LOADS: [u8; 3] = [I32_LOAD8_U, I32_LOAD16_U, I32_LOAD];
 const STORES: [u8; 3] = [I32_STORE8, I32_STORE16, I32_STORE];
 const I32_AND: u8 = 0x71;
+const I32_OR: u8 = 0x72;
+const I32_XOR: u8 = 0x73;
 const I32_SHL: u8 = 0x74;
 const I32_SHR_U: u8 = 0x76;
 const I64_EXTEND_I32_U: u8 = 0xAD;
@@ -555,6 +557,9 @@ impl Lowering<'_> {
                 let opcode = match op {
                     Binary::Add => I32_ADD,
                     Binary::Sub => I32_SUB,
+                    Binary::And => I32_AND,
+                    Binary::Or => I32_OR,
+                    Binary::Xor => I32_XOR,
                     Binary::Monus => {
                         self.monus(*left, *right, results[0]);
                         return;

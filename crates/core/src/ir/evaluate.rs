@@ -759,6 +759,9 @@ impl<H: Host> Machine<'_, H> {
                     left.rem(right)
                 }
             }
+            Binary::And => left.bits_with(right, |a, b| a & b, |a, b| a & b),
+            Binary::Or => left.bits_with(right, |a, b| a | b, |a, b| a | b),
+            Binary::Xor => left.bits_with(right, |a, b| a ^ b, |a, b| a ^ b),
             Binary::Sub | Binary::Monus if left >= *right => left.sub(right),
             Binary::Sub if class == Class::Natural => Number::ZERO,
             Binary::Monus => Number::ZERO,

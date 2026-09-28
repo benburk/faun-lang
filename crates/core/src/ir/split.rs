@@ -330,6 +330,15 @@ impl Split {
                 let x = self.words(rebuild, b, left, all);
                 self.divided(rebuild, b, (op, &x, right), (own, all))
             }
+            // Each word of the answer is the same words' answer.
+            Binary::And | Binary::Or | Binary::Xor => {
+                let x = self.words(rebuild, b, left, n);
+                let y = self.words(rebuild, b, right, n);
+                x.iter()
+                    .zip(&y)
+                    .map(|(&x, &y)| b.binary(op, x, y))
+                    .collect()
+            }
         };
         self.result(b, &words, class)
     }

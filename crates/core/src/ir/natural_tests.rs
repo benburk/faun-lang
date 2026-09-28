@@ -344,16 +344,7 @@ fn samples(bits: u16) -> Vec<(BigUint, BigUint)> {
 fn all_arithmetic_matches_biguint_at_every_word_width() {
     for bits in [16, 32, 64] {
         let conf = config(bits);
-        let (mut p, lib, _) = program(
-            conf,
-            Needs::from([
-                Helper::Add,
-                Helper::Sub,
-                Helper::Mul,
-                Helper::Div,
-                Helper::Mod,
-            ]),
-        );
+        let (mut p, lib, _) = program(conf, Needs::from(ARITHMETIC));
         let checks = arithmetic_checks(&mut p, &lib);
         let pairs: Vec<_> = samples(bits)
             .into_iter()
@@ -469,16 +460,7 @@ fn a_heap_grown_a_run_at_a_time_answers_the_same() {
             grows: true,
             inline_small: true,
         };
-        let (mut p, lib, _) = program(
-            conf,
-            Needs::from([
-                Helper::Add,
-                Helper::Sub,
-                Helper::Mul,
-                Helper::Div,
-                Helper::Mod,
-            ]),
-        );
+        let (mut p, lib, _) = program(conf, Needs::from(ARITHMETIC));
         let checks = arithmetic_checks(&mut p, &lib);
         let pairs: Vec<_> = samples(bits)
             .into_iter()
@@ -503,6 +485,18 @@ fn a_heap_grown_a_run_at_a_time_answers_the_same() {
     }
 }
 
+/// Every binary operation the runtime answers for naturals.
+const ARITHMETIC: [Helper; 8] = [
+    Helper::Add,
+    Helper::Sub,
+    Helper::Mul,
+    Helper::Div,
+    Helper::Mod,
+    Helper::And,
+    Helper::Or,
+    Helper::Xor,
+];
+
 fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)> {
     let observer = observer(p);
     [
@@ -511,6 +505,9 @@ fn arithmetic_checks(p: &mut Program, lib: &Library) -> Vec<(Binary, FunctionId)
         (Binary::Mul, lib.get(Helper::Mul)),
         (Binary::Div, lib.get(Helper::Div)),
         (Binary::Mod, lib.get(Helper::Mod)),
+        (Binary::And, lib.get(Helper::And)),
+        (Binary::Or, lib.get(Helper::Or)),
+        (Binary::Xor, lib.get(Helper::Xor)),
     ]
     .into_iter()
     .map(|(op, function)| {
@@ -539,6 +536,9 @@ fn model(op: Binary, a: &BigUint, c: &BigUint) -> BigUint {
         Binary::Div => a / c,
         Binary::Mod if c == &BigUint::default() => a.clone(),
         Binary::Mod => a % c,
+        Binary::And => a & c,
+        Binary::Or => a | c,
+        Binary::Xor => a ^ c,
     }
 }
 

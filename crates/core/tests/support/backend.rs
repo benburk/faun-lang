@@ -1677,7 +1677,15 @@ fn runtime_arithmetic_boundaries_and_odd_widths() {
         if bits > TARGET.word() {
             continue;
         }
-        for op in [Binary::Monus, Binary::Mul, Binary::Div, Binary::Mod] {
+        for op in [
+            Binary::Monus,
+            Binary::Mul,
+            Binary::Div,
+            Binary::Mod,
+            Binary::And,
+            Binary::Or,
+            Binary::Xor,
+        ] {
             assert_eq!(
                 status(&programs::arithmetic::boundaries(bits, op)),
                 0,
@@ -1752,7 +1760,14 @@ fn runtime_arithmetic_varied_inputs() {
             (left, u64::from(seed))
         })
         .collect();
-    for op in [Binary::Mul, Binary::Div, Binary::Mod] {
+    for op in [
+        Binary::Mul,
+        Binary::Div,
+        Binary::Mod,
+        Binary::And,
+        Binary::Or,
+        Binary::Xor,
+    ] {
         let inputs: Vec<_> = pairs
             .iter()
             .map(|&(a, b)| {

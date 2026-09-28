@@ -461,6 +461,10 @@ fn range_propagation_observes_earlier_answers_in_the_same_round() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "every operation's bounds against every small answer, in one table"
+)]
 fn arithmetic_interval_bounds_contain_every_small_answer() {
     for a0 in 0..5 {
         for a1 in a0..6 {
@@ -480,6 +484,10 @@ fn arithmetic_interval_bounds_contain_every_small_answer() {
                         (Operation::Mul, a.times(b)),
                         (Operation::Div, a.quotient(b)),
                         (Operation::Mod, a.remainder(b)),
+                        (Operation::And, a.masked(b)),
+                        (Operation::Or, a.merged(b, true)),
+                        (Operation::Xor, a.merged(b, false)),
+                        (Operation::Pow, a.power(b)),
                     ] {
                         for x in a0..=a1 {
                             for y in b0..=b1 {
@@ -500,6 +508,14 @@ fn arithmetic_interval_bounds_contain_every_small_answer() {
     assert_eq!(Bounds::ANY.times(Bounds::at(0)), Bounds::at(0));
     assert_eq!(Bounds::ANY.remainder(Bounds::at(0)), Bounds::ANY);
     assert_eq!(Bounds::ANY.quotient(Bounds::at(0)), Bounds::at(0));
+    assert_eq!(Bounds::at(0).merged(Bounds::at(0), true), Bounds::at(0));
+    assert_eq!(
+        Bounds::at(u64::MAX).merged(Bounds::at(1), true).high,
+        Some(u64::MAX)
+    );
+    assert_eq!(Bounds::at(2).power(Bounds::at(64)).high, None);
+    assert_eq!(Bounds::ANY.power(Bounds::at(0)).high, None);
+    assert_eq!(Bounds::at(1).power(Bounds::ANY), Bounds::at(1));
 }
 
 /// A sum taken modulo a power of two is worked out modulo that power of two

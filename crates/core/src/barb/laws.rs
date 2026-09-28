@@ -106,12 +106,20 @@ fn identity(
     let value = |a: Atom| small[a.0.index()];
     let (x, y) = (value(a), value(b));
     Some(match op {
-        Operation::Add if x == Some(0) => Expr::Atom(b),
-        Operation::Add | Operation::Monus | Operation::Mod if y == Some(0) => Expr::Atom(a),
+        Operation::Add | Operation::Or | Operation::Xor if x == Some(0) => Expr::Atom(b),
+        Operation::Add | Operation::Monus | Operation::Mod | Operation::Or | Operation::Xor
+            if y == Some(0) =>
+        {
+            Expr::Atom(a)
+        }
         Operation::Mul if x == Some(1) => Expr::Atom(b),
-        Operation::Mul | Operation::Div if y == Some(1) => Expr::Atom(a),
-        Operation::Monus if x == Some(0) || a == b => zero(program, called),
-        Operation::Mul | Operation::Div if x == Some(0) || y == Some(0) => zero(program, called),
+        Operation::Mul | Operation::Div | Operation::Pow if y == Some(1) => Expr::Atom(a),
+        Operation::And | Operation::Or if a == b => Expr::Atom(a),
+        Operation::Monus if x == Some(0) => zero(program, called),
+        Operation::Monus | Operation::Xor if a == b => zero(program, called),
+        Operation::Mul | Operation::Div | Operation::And if x == Some(0) || y == Some(0) => {
+            zero(program, called)
+        }
         Operation::Mod if x == Some(0) || y == Some(1) || a == b => zero(program, called),
         Operation::Equals { yes, .. } if a == b => Expr::Con(yes, super::Range::default()),
         Operation::LessThan { no, .. } if a == b => Expr::Con(no, super::Range::default()),

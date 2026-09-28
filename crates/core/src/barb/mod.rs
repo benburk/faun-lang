@@ -153,6 +153,8 @@ use constant::decode;
 #[cfg(test)]
 mod arithmetic_tests;
 #[cfg(test)]
+mod bitwise_tests;
+#[cfg(test)]
 mod constant_tests;
 #[cfg(test)]
 mod library_tests;

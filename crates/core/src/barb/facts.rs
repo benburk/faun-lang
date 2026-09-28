@@ -20,6 +20,15 @@ pub enum Operation {
     Div,
     /// The remainder is the dividend when the divisor is zero.
     Mod,
+    /// A bit wherever both have one.
+    And,
+    /// A bit wherever either has one.
+    Or,
+    /// A bit wherever exactly one has one.
+    Xor,
+    /// The first to the power of the second, where nought to the nought is
+    /// one.
+    Pow,
     /// Constructor identity matters: a Bool's declaration order is arbitrary.
     Equals {
         yes: CtorId,
@@ -30,6 +39,9 @@ pub enum Operation {
         no: CtorId,
     },
 }
+
+/// The widest power [`Operation::calculate`] works out.
+const MOST_POWER_BITS: u64 = 1 << 20;
 
 impl Operation {
     pub(super) fn calculate(self, a: &BigUint, b: &BigUint) -> Option<BigUint> {
@@ -56,6 +68,18 @@ impl Operation {
                 } else {
                     a % b
                 }
+            }
+            Self::And => a & b,
+            Self::Or => a | b,
+            Self::Xor => a ^ b,
+            // Too large a power is refused rather than worked out; the
+            // evaluator's budget refuses it before asking.
+            Self::Pow => {
+                let exponent = u32::try_from(b).ok()?;
+                if a.bits().saturating_mul(u64::from(exponent)) > MOST_POWER_BITS {
+                    return None;
+                }
+                a.pow(exponent)
             }
             Self::Equals { .. } | Self::LessThan { .. } => return None,
         })

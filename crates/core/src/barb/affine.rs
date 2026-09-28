@@ -158,6 +158,10 @@ impl Analysis<'_> {
             Operation::Monus
             | Operation::Div
             | Operation::Mod
+            | Operation::And
+            | Operation::Or
+            | Operation::Xor
+            | Operation::Pow
             | Operation::Equals { .. }
             | Operation::LessThan { .. } => None,
         }

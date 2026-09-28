@@ -128,6 +128,9 @@ pub(crate) enum Opcode {
     Multiply,
     Divide,
     Modulo,
+    And,
+    Or,
+    Xor,
     Equal,
     Below,
     Load,
@@ -227,7 +230,13 @@ impl Opcode {
             | Self::Below
             // SSE arithmetic leaves the flags as they were.
             | Self::Float => Effects::PURE,
-            Self::Add | Self::Subtract | Self::Monus | Self::Shift => arithmetic,
+            Self::Add
+            | Self::Subtract
+            | Self::Monus
+            | Self::And
+            | Self::Or
+            | Self::Xor
+            | Self::Shift => arithmetic,
             Self::ArgumentVector => Effects {
                 clobbers: RegSet::of(&[Reg::Rcx]),
                 ..arithmetic
@@ -342,7 +351,14 @@ impl Inst {
         let constraint = match self.opcode {
             // Worked out where the first operand was, whichever register
             // that is.
-            Opcode::Add | Opcode::Subtract | Opcode::Monus | Opcode::Convert | Opcode::Shift
+            Opcode::Add
+            | Opcode::Subtract
+            | Opcode::And
+            | Opcode::Or
+            | Opcode::Xor
+            | Opcode::Monus
+            | Opcode::Convert
+            | Opcode::Shift
                 if use_at == 0 =>
             {
                 Constraint::Tied(0)
@@ -636,6 +652,9 @@ impl Selected {
             },
             Opcode::Add
             | Opcode::Subtract
+            | Opcode::And
+            | Opcode::Or
+            | Opcode::Xor
             | Opcode::Monus
             | Opcode::Multiply
             | Opcode::Divide
@@ -710,6 +729,9 @@ impl Selected {
                 .transpose()?,
             Opcode::Add
             | Opcode::Subtract
+            | Opcode::And
+            | Opcode::Or
+            | Opcode::Xor
             | Opcode::Multiply
             | Opcode::Divide
             | Opcode::Modulo
@@ -1050,6 +1072,9 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             }
             Opcode::Add
             | Opcode::Subtract
+            | Opcode::And
+            | Opcode::Or
+            | Opcode::Xor
             | Opcode::Monus
             | Opcode::Multiply
             | Opcode::Divide
@@ -1085,6 +1110,9 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
             | (
                 Opcode::Add
                     | Opcode::Subtract
+                    | Opcode::And
+                    | Opcode::Or
+                    | Opcode::Xor
                     | Opcode::Monus
                     | Opcode::Multiply
                     | Opcode::Divide
@@ -1383,6 +1411,9 @@ impl Selector<'_> {
                         Binary::Mul => Opcode::Multiply,
                         Binary::Div => Opcode::Divide,
                         Binary::Mod => Opcode::Modulo,
+                        Binary::And => Opcode::And,
+                        Binary::Or => Opcode::Or,
+                        Binary::Xor => Opcode::Xor,
                     };
                     // A monus answers no more than its left operand, and is
                     // worked out as wide as that is.

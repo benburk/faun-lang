@@ -136,6 +136,9 @@ const fn alu_opcode(op: Alu) -> u8 {
     match op {
         Alu::Add => 0x01,
         Alu::Subtract => 0x29,
+        Alu::And => 0x21,
+        Alu::Or => 0x09,
+        Alu::Xor => 0x31,
         Alu::Compare => 0x39,
         Alu::Test => 0x85,
     }
@@ -631,6 +634,9 @@ impl RawEncoder {
         let extension = match op {
             Alu::Add => 0,
             Alu::Subtract => 5,
+            Alu::And => 4,
+            Alu::Or => 1,
+            Alu::Xor => 6,
             Alu::Compare => 7,
             Alu::Test => panic!("no immediate form requested for {op:?}"),
         };

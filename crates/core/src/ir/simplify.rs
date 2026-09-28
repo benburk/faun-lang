@@ -322,9 +322,11 @@ impl Simplify {
         }
         // What was there already, where it fits where it is read.
         let same = match (op, x, y) {
-            (Binary::Add | Binary::Sub | Binary::Monus, _, Some(0))
+            (Binary::Add | Binary::Sub | Binary::Monus | Binary::Or | Binary::Xor, _, Some(0))
             | (Binary::Mul | Binary::Div, _, Some(1)) => Some(left),
-            (Binary::Add, Some(0), _) | (Binary::Mul, Some(1), _) => Some(right),
+            (Binary::Add | Binary::Or | Binary::Xor, Some(0), _) | (Binary::Mul, Some(1), _) => {
+                Some(right)
+            }
             _ => None,
         };
         if let Some(same) = same {
@@ -334,7 +336,7 @@ impl Simplify {
                 return true;
             }
         }
-        if matches!(op, Binary::Mul) && (x == Some(0) || y == Some(0)) {
+        if matches!(op, Binary::Mul | Binary::And) && (x == Some(0) || y == Some(0)) {
             self.folded[result.index()] = Some(0);
             rebuild.stands_for(result, b.constant(class, 0));
             return true;
@@ -356,6 +358,9 @@ impl Simplify {
                     Binary::Mul => x.wrapping_mul(y),
                     Binary::Div => x.checked_div(y).unwrap_or(0),
                     Binary::Mod => x.checked_rem(y).unwrap_or(x),
+                    Binary::And => x & y,
+                    Binary::Or => x | y,
+                    Binary::Xor => x ^ y,
                 };
                 return Some(if bits >= 64 {
                     answer
@@ -370,6 +375,9 @@ impl Simplify {
                 Binary::Mul => x.checked_mul(y)?,
                 Binary::Div => x.checked_div(y).unwrap_or(0),
                 Binary::Mod => x.checked_rem(y).unwrap_or(x),
+                Binary::And => x & y,
+                Binary::Or => x | y,
+                Binary::Xor => x ^ y,
             },
         };
         (wrap(class, answer) == answer).then_some(answer)

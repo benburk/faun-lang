@@ -88,6 +88,19 @@ impl Number {
         }
     }
 
+    /// A bitwise operation, `small` on two words and `big` otherwise.
+    pub(super) fn bits_with(
+        &self,
+        other: &Self,
+        small: fn(u64, u64) -> u64,
+        big: fn(&BigUint, &BigUint) -> BigUint,
+    ) -> Self {
+        match (self, other) {
+            (Self::Small(a), Self::Small(b)) => Self::Small(small(*a, *b)),
+            _ => Self::big(big(&self.to_big(), &other.to_big())),
+        }
+    }
+
     pub(super) fn shl(&self, by: u16) -> Self {
         match self {
             Self::Small(n) if *n == 0 || u32::from(by) < n.leading_zeros() => Self::Small(n << by),

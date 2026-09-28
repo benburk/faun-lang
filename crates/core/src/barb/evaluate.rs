@@ -141,12 +141,17 @@ impl Evaluator<'_> {
         let output = match op {
             Operation::Add => bits.saturating_add(1),
             Operation::Mul => a.bits().saturating_add(b.bits()),
+            Operation::Pow => a
+                .bits()
+                .saturating_mul(u64::try_from(&b).unwrap_or(u64::MAX))
+                .max(1),
             _ => bits,
         };
         budget.bytes(natural_size(output)?)?;
         let words = |bits: u64| bits.div_ceil(64).max(1);
         let work = match op {
             Operation::Mul => words(a.bits()).saturating_mul(words(b.bits())),
+            Operation::Pow => words(output).saturating_mul(words(output)),
             Operation::Div | Operation::Mod => words(bits).saturating_mul(words(bits)),
             _ => words(bits),
         };
@@ -154,11 +159,10 @@ impl Evaluator<'_> {
         if let Some(n) = op.calculate(&a, &b) {
             return Ok(Held::number(self.program.type_info(), result, &n));
         }
-        self.construct(
-            op.compare(&a, &b).expect("a comparison operation"),
-            &[],
-            budget,
-        )
+        let Some(ctor) = op.compare(&a, &b) else {
+            return Err(LimitExceeded::ValueSize.into());
+        };
+        self.construct(ctor, &[], budget)
     }
 
     pub(super) fn body(

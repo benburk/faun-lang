@@ -106,6 +106,12 @@ pub enum Binary {
     Div,
     /// Unsigned remainder, with `Mod(x, 0) = x`.
     Mod,
+    /// A bit wherever both have one.
+    And,
+    /// A bit wherever either has one.
+    Or,
+    /// A bit wherever exactly one has one.
+    Xor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -66,6 +66,9 @@ pub fn cases(bits: u16, op: Binary, pairs: &[(u64, u64)]) -> Program {
                 Binary::Add => left.checked_add(right).expect("a fitting sum"),
                 Binary::Sub => left.checked_sub(right).expect("a guarded subtraction"),
                 Binary::Monus => left.saturating_sub(right),
+                Binary::And => left & right,
+                Binary::Or => left | right,
+                Binary::Xor => left ^ right,
             };
             let args = [left, right, expected].map(|value| b.constant(class, value));
             let result = b.call_one(check, &args);

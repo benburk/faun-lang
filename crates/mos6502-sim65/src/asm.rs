@@ -70,6 +70,7 @@ pub(crate) enum Mnemonic {
     Ror,
     And,
     Ora,
+    Eor,
     Txs,
     Clc,
     Sec,
@@ -394,7 +395,11 @@ const fn opcode(mnemonic: Mnemonic, operand: Operand) -> u8 {
         (M::Ror, O::Implied) => 0x6A,
         (M::Ror, O::Zero(_)) => 0x66,
         (M::And, O::Imm(_)) => 0x29,
+        (M::And, O::Zero(_)) => 0x25,
+        (M::Ora, O::Imm(_)) => 0x09,
         (M::Ora, O::Zero(_)) => 0x05,
+        (M::Eor, O::Imm(_)) => 0x49,
+        (M::Eor, O::Zero(_)) => 0x45,
         (M::Txs, O::Implied) => 0x9A,
         (M::Clc, O::Implied) => 0x18,
         (M::Sec, O::Implied) => 0x38,
@@ -599,7 +604,7 @@ impl Assembler {
     const fn nz_from(&self, mnemonic: Mnemonic, operand: Operand) -> Option<Reg> {
         use Mnemonic as M;
         match (mnemonic, operand) {
-            (M::Lda | M::Adc | M::Sbc | M::And | M::Ora, _)
+            (M::Lda | M::Adc | M::Sbc | M::And | M::Ora | M::Eor, _)
             | (M::Asl | M::Rol | M::Lsr | M::Ror, Operand::Implied) => Some(Reg::A),
             (M::Ldx | M::Dex | M::Inx, _) => Some(Reg::X),
             (M::Sta | M::Stx | M::Clc | M::Sec | M::Txs | M::Jmp | M::Rts, _) => {
@@ -665,7 +670,7 @@ impl Assembler {
             },
             M::Cmp => self.after_compare(before.acc, operand),
             M::Cpx => self.after_compare(before.x, operand),
-            M::And | M::Ora => self.after_logic(mnemonic, operand),
+            M::And | M::Ora | M::Eor => self.after_logic(mnemonic, operand),
             M::Adc | M::Sbc => self.after_arithmetic(mnemonic, operand),
             M::Asl | M::Rol | M::Lsr | M::Ror => self.after_shift(mnemonic, operand),
             // These alter a memory byte and N/Z, but not A, X, C or V.
@@ -740,6 +745,7 @@ impl Assembler {
             .map(|(left, right)| match mnemonic {
                 Mnemonic::And => left & right,
                 Mnemonic::Ora => left | right,
+                Mnemonic::Eor => left ^ right,
                 _ => unreachable!("a logical instruction"),
             });
         MachineState {
@@ -1257,6 +1263,19 @@ impl Assembler {
 
     pub(crate) fn ora_zp(&mut self, at: u8) {
         self.op(Mnemonic::Ora, Operand::Zero(at));
+    }
+
+    /// A bitwise and, or, or exclusive or of the accumulator with a byte.
+    pub(crate) fn logic(&mut self, mnemonic: Mnemonic, byte: Held) {
+        debug_assert!(matches!(
+            mnemonic,
+            Mnemonic::And | Mnemonic::Ora | Mnemonic::Eor
+        ));
+        let operand = match byte {
+            Held::Imm(value) => Operand::Imm(value),
+            Held::Zero(at) => Operand::Zero(at),
+        };
+        self.op(mnemonic, operand);
     }
 
     // Control flow.

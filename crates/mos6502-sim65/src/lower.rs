@@ -6,7 +6,7 @@
 //! Two-operand forms read their operands into the scratch pairs and work
 //! there, which is unhurried and obviously correct.
 
-use super::asm::{Assembler, Cc, Half, Held};
+use super::asm::{Assembler, Cc, Half, Held, Mnemonic};
 use super::{
     ARG_COUNT, ARGC, ARGS, CSP, CSTACK_TOP, Code, FP, FQ, FRAMES_TOP, HEAP, HOME_COUNT, HOMES,
     HOOK_ARGS, HOOK_CLOSE, HOOK_EXIT, HOOK_OPEN, HOOK_READ, HOOK_WRITE, LOAD, PTR, R0, T0, T1,
@@ -2044,6 +2044,7 @@ impl Lowering<'_> {
         // A step of one over a pair the result already occupies is an
         // increment, which carries into the high byte only on a wrap.
         if let (Operand::Zp { at, .. }, Operand::Imm(1), Width::Word) = (left, right, width)
+            && matches!(op, Binary::Add | Binary::Sub)
             && at == dest
         {
             self.step(op, dest);
@@ -2153,6 +2154,8 @@ impl Lowering<'_> {
                 self.asm.sec();
                 right
             }
+            // No carry goes between the bytes of a bitwise operation.
+            (Binary::And | Binary::Or | Binary::Xor, ..) => right,
             _ => unreachable!("multiply/divide use bitwise legalization"),
         }
     }
@@ -2398,6 +2401,9 @@ impl Lowering<'_> {
             (Binary::Add, Held::Zero(at)) => self.asm.adc_zp(at),
             (Binary::Sub, Held::Imm(value)) => self.asm.sbc_imm(value),
             (Binary::Sub, Held::Zero(at)) => self.asm.sbc_zp(at),
+            (Binary::And, byte) => self.asm.logic(Mnemonic::And, byte),
+            (Binary::Or, byte) => self.asm.logic(Mnemonic::Ora, byte),
+            (Binary::Xor, byte) => self.asm.logic(Mnemonic::Eor, byte),
             _ => unreachable!("multiply/divide use bitwise legalization"),
         }
     }

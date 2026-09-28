@@ -42,8 +42,9 @@ U16 : Nat.(
   to_str(U16(value)) -> value.to_str()
 
   # Bitwise, as `Nat`'s: `a & b`, `a | b` and `a ^ b`. Two words' bits
-  # make a word, so the remainder changes nothing; it is what shows
-  # the answer is one, which nothing recognizes of `Nat`'s bitwise walk.
+  # make a word, so the remainder changes nothing and costs nothing; it
+  # says the answer is one even where a word's range is still being
+  # worked out round a loop.
   and : (U16, U16) -> U16
   and(U16(a), U16(b)) -> U16((a & b) % 65536)
 

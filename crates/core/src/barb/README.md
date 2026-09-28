@@ -109,6 +109,15 @@ x    ::= a parameter, a binding, or a field an arm bound
   `SequenceOperation::Length`, a separate table from the binary `Operation`s.
   A recognized definition of either kind keeps its body: passes neither rewrite
   nor inline it, and cleanup treats its calls as inert.
+  Bitwise `And`, `Or` and `Xor` and `Pow` are walks with more arguments than
+  their operation: `f(a, b, place, built)` is `built + place * (a op b)`,
+  halving both sides a step, and `f(base, e, built)` is `built * base ^ e`,
+  squaring the base as the exponent halves. Halving is what makes each an
+  induction, so the equations are checked symbolically, with a step's bit --
+  which may read only `a % 2` and `b % 2`, or `e % 2` -- worked out for each
+  way it can be. Only a two-argument definition calling a walk from its
+  identity, a place of one and nothing built or one built, is the operation;
+  the walk itself is not.
 - `bounds.rs`: interval arithmetic and interprocedural range propagation.
   Each constructor field holds the join of every value built into it, by
   construction or in a constant; reading one back answers no more. Fields of
@@ -127,6 +136,9 @@ x    ::= a parameter, a binding, or a field an arm bound
   walk every definition afresh from the settled state, without widening, and
   take back what nothing reaches -- a remainder of a widened count is still
   below its divisor, and so is whatever it is handed to.
+  A bitwise and is no more than either operand, an or or exclusive or is no
+  wider than the wider, and a power is at most the greatest base to the
+  greatest exponent where that fits a word.
   `Propagation` is the evolving state; `Ranges` is the conservative final result.
 - `sequence.rs`: recognize a definition reversing one sequence onto
   another -- the other for the empty one, itself on the rest onto the element

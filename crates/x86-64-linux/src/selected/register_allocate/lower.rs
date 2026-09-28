@@ -401,11 +401,16 @@ impl<'a> Lowering<'a> {
             (Opcode::DataAddress, Immediate::Data(data)) => {
                 self.load_data_address(result()?, data);
             }
-            (Opcode::Add | Opcode::Subtract, Immediate::Bits(bits)) => {
-                let op = if inst.opcode == Opcode::Add {
-                    Alu::Add
-                } else {
-                    Alu::Subtract
+            (
+                Opcode::Add | Opcode::Subtract | Opcode::And | Opcode::Or | Opcode::Xor,
+                Immediate::Bits(bits),
+            ) => {
+                let op = match inst.opcode {
+                    Opcode::Add => Alu::Add,
+                    Opcode::Subtract => Alu::Subtract,
+                    Opcode::And => Alu::And,
+                    Opcode::Or => Alu::Or,
+                    _ => Alu::Xor,
                 };
                 let source = self.selected.operands[inst.operands.range()][1];
                 let source_reg = reg(1)?;

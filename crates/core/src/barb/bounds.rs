@@ -941,6 +941,10 @@ fn operation(program: &Program, op: super::Operation, a: Bounds, b: Bounds) -> B
         Operation::Mul => return a.times(b),
         Operation::Div => return a.quotient(b),
         Operation::Mod => return a.remainder(b),
+        Operation::And => return a.masked(b),
+        Operation::Or => return a.merged(b, true),
+        Operation::Xor => return a.merged(b, false),
+        Operation::Pow => return a.power(b),
         Operation::Equals { yes, no } => (
             yes,
             no,

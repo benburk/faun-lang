@@ -242,6 +242,24 @@ compute it at the operands' width, where the borrow is, and choose the answer
 from that borrow: a conditional clear on x86-64, `select` on wasm32, and a carry
 branch on the 6502. `Sub` keeps its fit requirement on fixed classes.
 
+## Bitwise operations and powers
+
+`Binary::And`, `Or` and `Xor` answer a bit wherever both, either or exactly
+one operand has one. They follow `Add`'s rule for operands, except that an or
+or exclusive or is worked out at a class with every bit below the wider
+operand's top one, since it may set bits neither operand's greatest has. No
+bit crosses between words, so width splitting answers each word from the same
+words of its operands, and targets use their own instructions: `and`, `or`
+and `xor` on x86-64 and wasm32, and `AND`, `ORA` and `EOR` a byte at a time on
+the 6502. On `Natural` operands, runtime legalization calls `nat.and`,
+`nat.or` or `nat.xor`, which answer two immediates from their numbers and
+otherwise work a digit at a time.
+
+Barb's `Pow` has no instruction. Lowering writes a loop squaring the base as
+the exponent halves, at the class range analysis proved the answer fits.
+Every intermediate fits there too: what has been multiplied in is the base to
+the exponent's low bits, and the base is squared only while bits remain above.
+
 ## Passes
 
 `ir::optimize(program)` runs a small fixed schedule after validation, in this

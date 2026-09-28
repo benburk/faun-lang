@@ -178,6 +178,63 @@ impl Facts {
         Self { low: 0, high }
     }
 
+    /// What a bitwise and of the two can be: no bit either lacks, so no
+    /// more than the smaller.
+    #[must_use]
+    pub fn masked(self, other: Self) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        Self {
+            low: 0,
+            high: match (self.high, other.high) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+        }
+    }
+
+    /// What a bitwise or, or exclusive or, of the two can be: no bit above
+    /// the wider's highest. `at_least` is whether the answer is at least
+    /// each operand, as an or's is and an exclusive or's is not.
+    #[must_use]
+    pub fn merged(self, other: Self, at_least: bool) -> Self {
+        if self.is_nothing() || other.is_nothing() {
+            return Self::NOTHING;
+        }
+        let high = self.high.zip(other.high).map(|(a, b)| {
+            let widest = a.max(b);
+            u64::MAX.checked_shr(widest.leading_zeros()).unwrap_or(0)
+        });
+        Self {
+            low: if at_least { self.low.max(other.low) } else { 0 },
+            high,
+        }
+    }
+
+    /// What the first to the power of the second can be: at least one
+    /// where the base is, and no more than the greatest base to the
+    /// greatest exponent.
+    #[must_use]
+    pub fn power(self, exponent: Self) -> Self {
+        if self.is_nothing() || exponent.is_nothing() {
+            return Self::NOTHING;
+        }
+        let high = match self.high {
+            // Nought to the nought is one, and to anything else nought.
+            Some(0 | 1) => Some(1),
+            Some(base) => exponent
+                .high
+                .and_then(|exponent| u32::try_from(exponent).ok())
+                .and_then(|exponent| base.checked_pow(exponent)),
+            None => None,
+        };
+        Self {
+            low: u64::from(self.low > 0),
+            high,
+        }
+    }
+
     /// How many bits hold every number this could be, where anything does.
     #[must_use]
     pub fn width(self) -> Option<u16> {

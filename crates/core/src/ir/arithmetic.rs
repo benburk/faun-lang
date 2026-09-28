@@ -68,11 +68,22 @@ pub(super) fn lower(
     if op == Operation::Monus {
         return monus(b, result, left, right);
     }
+    if op == Operation::Pow {
+        return power(b, result, left, right);
+    }
     // Where the answer lives, if there is room there for what either side
     // brings: then nothing is converted afterwards and the answer says what
     // the tier above proved it can be, rather than what it needed room for.
     // Otherwise somewhere with the room, and narrowed after.
     let brought = room(b.class(left), b.class(right));
+    // A bitwise or can set bits neither side's greatest has, but none
+    // above the wider's top bit.
+    let brought = match (op, brought) {
+        (Operation::Or | Operation::Xor, Class::Held(held)) => {
+            Class::Held(held.merged(crate::facts::Facts::at(0), false))
+        }
+        _ => brought,
+    };
     let class = if brought.fits(result) {
         result
     } else {
@@ -88,7 +99,10 @@ pub(super) fn lower(
         Operation::Mul => b.binary_at(class, Binary::Mul, left, right),
         Operation::Div => b.binary_at(class, Binary::Div, left, right),
         Operation::Mod => b.binary_at(class, Binary::Mod, left, right),
-        Operation::Monus => unreachable!("monus lowered above"),
+        Operation::And => b.binary_at(class, Binary::And, left, right),
+        Operation::Or => b.binary_at(class, Binary::Or, left, right),
+        Operation::Xor => b.binary_at(class, Binary::Xor, left, right),
+        Operation::Monus | Operation::Pow => unreachable!("lowered above"),
         Operation::Equals { .. } | Operation::LessThan { .. } => {
             unreachable!("comparison lowered separately")
         }
@@ -110,4 +124,56 @@ fn monus(b: &mut Builder, result: Class, left: ValueId, right: ValueId) -> Value
     }
     let answer = b.binary_at(class, Binary::Monus, left, right);
     at(b, answer, result)
+}
+
+/// `base` to the power of `exponent`, by squaring: a bit of the exponent a
+/// step, from the bottom, multiplying in the base's power for each bit
+/// that is set.
+///
+/// Everything is worked out at the answer's class, which the tier above
+/// proved it fits. That holds for every step as well: what has been
+/// multiplied in is the base to the power of the exponent's low bits, and
+/// the base is squared only while bits are left above, so neither is ever
+/// more than the answer.
+fn power(b: &mut Builder, result: Class, base: ValueId, exponent: ValueId) -> ValueId {
+    // Loop state is held at one class throughout, which is the answer's
+    // even where the base alone is narrower.
+    let base = if b.class(base) == result {
+        base
+    } else {
+        b.convert(result, base)
+    };
+    let one = b.constant(result, 1);
+    let bit = Class::fixed(1);
+    let counted = b.class(exponent);
+    b.loop_(&[one, base, exponent], &[result], |b, state| {
+        let [built, base, exponent] = [state[0], state[1], state[2]];
+        let zero = b.constant(counted, 0);
+        let done = compare(b, Relation::Equal, exponent, zero);
+        b.if_(done, &[], |b| b.break_(&[built]), |b| b.yield_(&[]));
+        let two = b.constant(Class::fixed(2), 2);
+        let low = lower(b, Operation::Mod, bit, exponent, two);
+        let built = b.if_(
+            low,
+            &[result],
+            |b| {
+                let product = b.binary_at(result, Binary::Mul, built, base);
+                b.yield_(&[product]);
+            },
+            |b| b.yield_(&[built]),
+        )[0];
+        let rest = lower(b, Operation::Div, counted, exponent, two);
+        let zero = b.constant(counted, 0);
+        let last = compare(b, Relation::Equal, rest, zero);
+        let base = b.if_(
+            last,
+            &[result],
+            |b| b.yield_(&[base]),
+            |b| {
+                let square = b.binary_at(result, Binary::Mul, base, base);
+                b.yield_(&[square]);
+            },
+        )[0];
+        b.continue_(&[built, base, rest]);
+    })[0]
 }

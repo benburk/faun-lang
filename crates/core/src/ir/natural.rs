@@ -93,10 +93,13 @@ pub(super) enum Helper {
     Compare,
     FromWord,
     ToWord,
+    And,
+    Or,
+    Xor,
 }
 
 impl Helper {
-    pub(super) const ALL: [Self; 11] = [
+    pub(super) const ALL: [Self; 14] = [
         Self::Allocate,
         Self::Add,
         Self::Sub,
@@ -108,6 +111,9 @@ impl Helper {
         Self::Compare,
         Self::FromWord,
         Self::ToWord,
+        Self::And,
+        Self::Or,
+        Self::Xor,
     ];
 
     #[expect(
@@ -126,6 +132,9 @@ impl Helper {
             Binary::Mul => Self::Mul,
             Binary::Div => Self::Div,
             Binary::Mod => Self::Mod,
+            Binary::And => Self::And,
+            Binary::Or => Self::Or,
+            Binary::Xor => Self::Xor,
         }
     }
 }
@@ -524,6 +533,7 @@ pub(super) fn append(
             release,
         };
         storage.append(program, needs, compare, &mut library);
+        storage.append_bitwise(program, needs, &mut library);
     }
     Ok(library)
 }
@@ -691,6 +701,24 @@ impl Storage {
         }
     }
 
+    fn append_bitwise(self, p: &mut Program, needs: Needs, lib: &mut Library) {
+        let bitwise = [
+            (Helper::And, Binary::And, "and"),
+            (Helper::Or, Binary::Or, "or"),
+            (Helper::Xor, Binary::Xor, "xor"),
+        ];
+        if !bitwise.iter().any(|&(helper, ..)| needs.contains(helper)) {
+            return;
+        }
+        let digit = digit_reader(p, self.word);
+        for (helper, op, name) in bitwise {
+            if needs.contains(helper) {
+                let objects = bitwise_digits(p, self, digit, (op, name));
+                lib.insert(helper, self.bitwise(p, objects, (op, name)));
+            }
+        }
+    }
+
     fn append_subdivision(
         self,
         p: &mut Program,
@@ -747,6 +775,28 @@ impl Storage {
                     |b| b.yield_(&[]),
                 );
                 b.yield_(&[]);
+            });
+            let out = self.through_digits(b, objects, a, c, &[]);
+            b.ret(&[out]);
+        });
+        f
+    }
+
+    /// A bitwise operation: of two immediates, the immediate of their
+    /// numbers', which is below half a word as both are.
+    fn bitwise(
+        self,
+        p: &mut Program,
+        objects: FunctionId,
+        (op, name): (Binary, &str),
+    ) -> FunctionId {
+        let f = declare(p, &format!("nat.{name}"), &[A, A], &[A]);
+        p.define(f, |b, args| {
+            let (a, c) = (args[0], args[1]);
+            both_small(b, a, c, |b, x, y| {
+                let answer = b.binary(op, x, y);
+                let held = small_word(b, answer);
+                b.ret(&[held]);
             });
             let out = self.through_digits(b, objects, a, c, &[]);
             b.ret(&[out]);
@@ -1840,6 +1890,55 @@ fn addition(p: &mut Program, storage: Storage, digit: FunctionId) -> FunctionId 
             b.continue_(&[next, carry]);
         })[0];
         write_digit(b, out, len, carry, word);
+        let result = b.call_one(finish, &[out]);
+        b.ret(&[result]);
+    });
+    f
+}
+
+/// A bitwise operation on two objects, a digit of each at a time: as many
+/// digits as the longer has, since a digit past the shorter's last is
+/// nought, and trimmed after, since an and or an exclusive or may clear the
+/// top ones.
+fn bitwise_digits(
+    p: &mut Program,
+    storage: Storage,
+    digit: FunctionId,
+    (op, name): (Binary, &str),
+) -> FunctionId {
+    let Storage {
+        alloc,
+        finish,
+        word,
+        ..
+    } = storage;
+    let f = declare(p, &format!("nat.{name}_digits"), &[A, A], &[A]);
+    p.define(f, |b, args| {
+        let a = args[0];
+        let c = args[1];
+        let la = length(b, a);
+        let lc = length(b, c);
+        let less = lt(b, la, lc);
+        let len = b.if_(less, &[W], |b| b.yield_(&[lc]), |b| b.yield_(&[la]))[0];
+        let one = number(b, 1);
+        let zero = number(b, 0);
+        // A digit more than the answer needs, nought, as a sum's carry
+        // is: an operand may be a nought with no digits, and no request
+        // is for none.
+        let cap = add(b, len, one);
+        let out = b.call_one(alloc, &[cap]);
+        b.loop_(&[zero], &[], |b, state| {
+            let i = state[0];
+            let done = eq(b, i, len);
+            b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+            let x = b.call_one(digit, &[a, i]);
+            let y = b.call_one(digit, &[c, i]);
+            let answer = b.binary(op, x, y);
+            write_digit(b, out, i, answer, word);
+            let next = add(b, i, one);
+            b.continue_(&[next]);
+        });
+        write_digit(b, out, len, zero, word);
         let result = b.call_one(finish, &[out]);
         b.ret(&[result]);
     });

@@ -1121,11 +1121,16 @@ impl Reader<'_> {
             Operation::Monus => &[(argument(0), minimum(0) > 0 && minimum(1) > 0)],
             Operation::Div => &[(argument(0), minimum(0) > 0 && minimum(1) >= 2)],
             Operation::Mod => &[(argument(0), false), (argument(1), minimum(1) > 0)],
+            Operation::And => &[(argument(0), false), (argument(1), false)],
             Operation::Add | Operation::Mul => {
                 result.lower = self.grown(operation, args);
                 return result;
             }
-            Operation::Equals { .. } | Operation::LessThan { .. } => return result,
+            Operation::Or
+            | Operation::Xor
+            | Operation::Pow
+            | Operation::Equals { .. }
+            | Operation::LessThan { .. } => return result,
         };
         for row in 0..result.bounds.len() {
             result.bounds[row] = candidates

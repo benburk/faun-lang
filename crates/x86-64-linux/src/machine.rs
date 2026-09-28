@@ -67,6 +67,9 @@ impl Reg {
 pub(crate) enum Alu {
     Add,
     Subtract,
+    And,
+    Or,
+    Xor,
     Compare,
     Test,
 }

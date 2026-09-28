@@ -238,6 +238,55 @@ fn floats_read_add_divide_and_say_themselves() {
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 6));
 }
 
+/// Bitwise operations and powers of numbers read from what a program is
+/// handed, which nothing works out before it runs: each is recognized and
+/// answered as one operation, at a word where its operands' ranges say
+/// one holds it and on the natural runtime past that.
+#[test]
+fn bitwise_and_powers_of_numbers_read_at_run_time() {
+    let package = Package::new(
+        "bitwise-input",
+        "main!(host) -> host.run_stdin!(app)
+
+         app : {stdin: Str, *} -> Str
+         app(input) -> answer(input.stdin.trim().split(\" \").map(number))
+
+         number : Str -> Nat
+         number(word) -> Nat.from_str(word).ok_or(0)
+
+         answer : List(Nat) -> Str
+         answer([a, b, *_]) -> Str.join([
+           a.and(b), a.or(b), a.xor(b), a.pow(b % 3), (b % 3).pow(a % 5),
+           U32.of_nat(a).rotate_left(b).to_nat(), U32.of_nat(a).shift_right(b % 40).to_nat(),
+           U8.of_nat(a).and(U8.of_nat(b)).to_nat(),
+         ].map(|n| n.to_str()), \" \")
+         answer(_) -> \"\"",
+    );
+    let cases = [
+        ("12 10", "8 14 6 12 1 12288 0 8"),
+        ("0 0", "0 0 0 1 1 0 0 0"),
+        (
+            "340282366920938463463374607431768211457 18446744073709551617",
+            "1 340282366920938463481821351505477763073 \
+             340282366920938463481821351505477763072 \
+             115792089237316195423570985008687907853950549399482440966384333222776666062849 \
+             4 2 0 1",
+        ),
+        (
+            "4294967295 65",
+            "65 4294967295 4294967230 18446744065119617025 1 4294967295 127 65",
+        ),
+    ];
+    for (input, said) in cases {
+        let said: String = said.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            support::run_file(&package.entry(), input.as_bytes()),
+            (0, format!("{said}\n")),
+            "{input}"
+        );
+    }
+}
+
 /// A float read from what a program is handed, which nothing works out
 /// before it runs: the comparisons parsing a decimal answers with meet
 /// wherever they join.
