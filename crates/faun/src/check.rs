@@ -988,6 +988,11 @@ struct Checker<'a> {
     prelude: &'a PreludeIds,
     infer: Infer,
     values: HashMap<Symbol, Scheme>,
+    /// The names in `values` whose schemes hold a free variable: all that a
+    /// generalization must keep clear of. A closed scheme stays closed, as
+    /// its variables are renamed wherever it is used, so the rest need no
+    /// looking at.
+    open: HashSet<Symbol>,
     constructors: HashMap<Symbol, Scheme>,
     methods: HashMap<Symbol, Vec<MethodImpl>>,
     fields: HashMap<Symbol, Vec<FieldImpl>>,
@@ -1031,6 +1036,7 @@ impl<'a> Checker<'a> {
             prelude,
             infer: Infer::default(),
             values: HashMap::new(),
+            open: HashSet::new(),
             constructors: HashMap::new(),
             methods: HashMap::new(),
             fields: HashMap::new(),
@@ -1195,7 +1201,7 @@ impl<'a> Checker<'a> {
             variables: quantified,
             ty,
         };
-        self.values.insert(signature.name, scheme.clone());
+        self.set_value(signature.name, scheme.clone());
         self.bounds.insert(signature.name, bounds);
         self.variable_names.insert(
             signature.name,
@@ -1567,7 +1573,7 @@ impl<'a> Checker<'a> {
                     let parameters = (0..arity).map(|_| self.infer.fresh()).collect();
                     Ty::Function(parameters, Box::new(self.infer.fresh()))
                 };
-                self.values.insert(
+                self.set_value(
                     *name,
                     Scheme {
                         variables: Vec::new(),
@@ -1641,19 +1647,14 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            let fixed = self.fixed(&names);
             for name in component {
                 let ty = self.infer.resolve(&monotypes[&name]);
-                let mut scheme = self.generalize(&ty, Some(&names));
+                let mut scheme = self.generalize(&ty, &fixed);
                 // A variable only a bound mentions is quantified too.
                 let mentioned = bounds
                     .iter()
                     .flat_map(|bound| free_variables(&self.infer.resolve(&bound.ty)));
-                let fixed: HashSet<u32> = self
-                    .values
-                    .iter()
-                    .filter(|(held, _)| !names.contains(held))
-                    .flat_map(|(_, scheme)| free_scheme(scheme))
-                    .collect();
                 for variable in mentioned {
                     if !fixed.contains(&variable) && !scheme.variables.contains(&variable) {
                         scheme.variables.push(variable);
@@ -1661,7 +1662,7 @@ impl<'a> Checker<'a> {
                 }
                 self.bounds.insert(name, bounds.clone());
                 self.register_unsigned(&methods, name, scheme.clone());
-                self.values.insert(name, scheme);
+                self.set_value(name, scheme);
             }
         }
 
@@ -3059,13 +3060,8 @@ impl<'a> Checker<'a> {
             .iter()
             .flat_map(|ty| free_variables(&self.infer.resolve(ty)))
             .collect();
-        for (name, scheme) in &self.values {
-            if !names.contains(name) {
-                for variable in free_scheme(scheme) {
-                    generic.remove(&variable);
-                }
-            }
-        }
+        let fixed = self.fixed(names);
+        generic.retain(|variable| !fixed.contains(variable));
         generic
     }
 
@@ -3781,7 +3777,10 @@ impl<'a> Checker<'a> {
 
     /// The visible methods named at `pending` that its receiver could have.
     fn owned_methods(&self, pending: &PendingMethod) -> Vec<MethodImpl> {
-        let implementations = self.methods.get(&pending.name).cloned().unwrap_or_default();
+        let implementations = self
+            .methods
+            .get(&pending.name)
+            .map_or(&[][..], Vec::as_slice);
         let receiver = self.infer.resolve(&pending.receiver);
         // A rigid receiver is a signed body's own variable: what it has is
         // what its bounds say. One not yet known may be such a variable too,
@@ -3948,19 +3947,33 @@ impl<'a> Checker<'a> {
         Ty::Named(self.prelude.list, vec![element])
     }
 
-    fn generalize(&self, ty: &Ty, excluded: Option<&HashSet<Symbol>>) -> Scheme {
+    /// `ty`'s scheme, quantifying every variable in it but those `fixed`.
+    fn generalize(&self, ty: &Ty, fixed: &HashSet<u32>) -> Scheme {
         let ty = self.infer.resolve(ty);
-        let mut variables: HashSet<_> = free_variables(&ty).into_iter().collect();
-        for (name, scheme) in &self.values {
-            if excluded.is_some_and(|excluded| excluded.contains(name)) {
-                continue;
-            }
-            variables.retain(|variable| !free_scheme(scheme).contains(variable));
+        let mut variables = free_variables(&ty);
+        variables.retain(|variable| !fixed.contains(variable));
+        Scheme { variables, ty }
+    }
+
+    /// Bind `name` to `scheme`, keeping `open` to the names whose schemes
+    /// hold a free variable.
+    fn set_value(&mut self, name: Symbol, scheme: Scheme) {
+        if free_scheme(&scheme).is_empty() {
+            self.open.remove(&name);
+        } else {
+            self.open.insert(name);
         }
-        Scheme {
-            variables: variables.into_iter().collect(),
-            ty,
-        }
+        self.values.insert(name, scheme);
+    }
+
+    /// The variables free in the schemes of names other than `excluded`,
+    /// which generalizing a definition of those names must leave free.
+    fn fixed(&self, excluded: &HashSet<Symbol>) -> HashSet<u32> {
+        self.open
+            .iter()
+            .filter(|name| !excluded.contains(name))
+            .flat_map(|name| free_scheme(&self.values[name]))
+            .collect()
     }
 }
 

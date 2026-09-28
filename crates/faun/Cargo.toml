@@ -8,6 +8,10 @@ description = "The primary Faun source frontend"
 name = "frontend"
 harness = false
 
+[[bench]]
+name = "check"
+harness = false
+
 [dependencies]
 faun-core.workspace = true
 num-bigint = "0.4.8"
