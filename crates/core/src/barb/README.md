@@ -140,6 +140,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   walk every definition afresh from the settled state, without widening, and
   take back what nothing reaches -- a remainder of a widened count is still
   below its divisor, and so is whatever it is handed to.
+  A sequence is bounded by how many elements it holds, as a number is by
+  its value: the empty one is nought, a push one more than the rest, and a
+  known one its length. A count a definition steps by one on every call to
+  itself, beside another parameter it hands the rest of itself, is no more
+  than the most the two sum to where a call from outside hands them in
+  (`counters.rs`): a loop's index is bounded by what it walks.
   A bitwise and is no more than either operand, an or or exclusive or is no
   wider than the wider, and a power is at most the greatest base to the
   greatest exponent where that fits a word.
@@ -187,6 +193,9 @@ x    ::= a parameter, a binding, or a field an arm bound
   alone, becomes one match asking the first's questions -- so `a < b`, which
   becomes an `Order` and then a `Bool`, branches on the comparison itself,
   and range analysis sees what the branch says of `a` and `b`.
+- `counters.rs`: which parameters of a definition are counts kept beside a
+  walk -- one more on every call it makes to itself, beside another handed
+  the rest of itself -- for range analysis to bound by what they walk.
 - `invariant.rs`: a parameter every call from outside hands the same known
   value, and every call from inside passes on as it came, is that value:
   the definition binds it first and reads it there, so what reads it inside

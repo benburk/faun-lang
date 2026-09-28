@@ -962,3 +962,51 @@ fn a_near_miss_of_a_count_is_not_a_length() {
         );
     }
 }
+
+/// `walk(list, total, index)` over a known list: the total plus each
+/// element times where it is, stepping the index by `step` each time round.
+fn counted_walk(step: u64) -> (Program, FnId) {
+    let mut library = fixture::Library::new();
+    let (nat, add, mul) = (library.nat, library.add, library.mul);
+    let (nought, stepped) = (library.number(0), library.number(step));
+    let program = &mut library.program;
+    let list = program.declare_type("List");
+    program.define_type(list, &[("Nil", &[]), ("Cons", &[nat, list])]);
+    let nil = program.ctor_at(list, 0);
+    let walk = program.declare("walk", &[list, nat, nat], nat);
+    program.define(walk, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == nil {
+                return args[1];
+            }
+            let scaled = b.call(mul, &[fields[0], args[2]]);
+            let total = b.call(add, &[args[1], scaled]);
+            let by = b.known(stepped);
+            let next = b.call(add, &[args[2], by]);
+            b.call(walk, &[fields[1], total, next])
+        })
+    });
+    let known = program.intern_byte_spine(list, &[3, 1, 4, 1, 5]).unwrap();
+    let main = program.declare("main", &[nat], nat);
+    program.define(main, |b, args| {
+        let known = b.known(known);
+        let nought = b.known(nought);
+        b.call(walk, &[known, args[0], nought])
+    });
+    program.set_entry(main);
+    validate(program).unwrap();
+    (library.program, walk)
+}
+
+/// An index stepped by one beside a walk down a known list of five is
+/// never more than five, whatever widening makes of a count going round.
+#[test]
+fn a_count_beside_a_walk_is_bounded_by_what_it_walks() {
+    let (program, walk) = counted_walk(1);
+    let facts = analyzed(&program);
+    assert_eq!(facts.takes(walk)[2].high, Some(5));
+    // Stepped by two, the sum is not kept, and nothing bounds it.
+    let (program, walk) = counted_walk(2);
+    let facts = analyzed(&program);
+    assert_ne!(facts.takes(walk)[2].high, Some(5));
+}

@@ -25,6 +25,7 @@
 //! without a last step, an argument from outside -- it says so and the
 //! tiers below hold what they must.
 
+use super::counters::Counter;
 use super::facts::{Recognised, SequenceOperation};
 use super::model::{Body, CtorId, Expr, ExprId, FnId, Range, TypeId};
 use super::program::Program;
@@ -77,7 +78,8 @@ pub(super) struct Ranges {
 
 pub(super) fn analyze(program: &Program, recognised: &Recognised, assumed: &Assumed) -> Ranges {
     let count = program.functions().len();
-    let mut held = Propagation::start(program, assumed);
+    let counters = super::counters::counters(program, &recognised.operations);
+    let mut held = Propagation::start(program, assumed, &counters);
 
     let mut settled = false;
     for round in 0..ROUNDS {
@@ -219,6 +221,16 @@ fn unknown(program: &Program, assumed: &Assumed, roots: &[TypeId], fields: &mut 
 fn finish(program: &Program, assumed: &Assumed, held: Propagation) -> Ranges {
     // A spine's rest is read as a step of its count, not as what was built
     // there, so nothing is said of that field.
+    let takes = held
+        .params
+        .iter()
+        .enumerate()
+        .map(|(at, params)| {
+            let mut takes: Vec<_> = params.iter().copied().map(anything).collect();
+            held.counted(FnId::at(at), &mut takes);
+            takes
+        })
+        .collect();
     let mut fields: Vec<_> = held.fields.into_iter().map(anything).collect();
     for ty in 0..program.types().len() {
         if let Shape::Spine {
@@ -246,11 +258,7 @@ fn finish(program: &Program, assumed: &Assumed, held: Propagation) -> Ranges {
             .into_iter()
             .map(|held| anything(Some(held)))
             .collect(),
-        takes: held
-            .params
-            .into_iter()
-            .map(|held| held.into_iter().map(anything).collect())
-            .collect(),
+        takes,
         answers: held.results.into_iter().map(anything).collect(),
         fields,
     }
@@ -272,6 +280,9 @@ const fn anything(held: Option<Bounds>) -> Bounds {
 #[derive(PartialEq, Eq)]
 struct Propagation {
     params: Vec<Vec<Option<Bounds>>>,
+    /// Each definition's counters, and the most each count and what it
+    /// walks sum to where they come in from outside: see [`counters`].
+    counters: Vec<Vec<(Counter, Sum)>>,
     results: Vec<Option<Bounds>>,
     terms: Vec<Bounds>,
     matched: Vec<Bounds>,
@@ -279,30 +290,44 @@ struct Propagation {
     fields: Vec<Option<Bounds>>,
 }
 
+/// What each definition is handed before anything is walked: what the tier
+/// above assumes of the entry's parameters, and nothing of anyone else's.
+fn handed(program: &Program, assumed: &Assumed) -> Vec<Vec<Option<Bounds>>> {
+    let (count, entry) = (program.functions().len(), program.entry());
+    (0..count)
+        .map(|at| {
+            let id = FnId::at(at);
+            if entry == Some(id) {
+                program
+                    .params(id)
+                    .iter()
+                    .enumerate()
+                    .map(|(at, &ty)| Some(assumed.parameter(at).and(assumed.value(program, ty))))
+                    .collect()
+            } else {
+                vec![None; program.params(id).len()]
+            }
+        })
+        .collect()
+}
+
 impl Propagation {
     /// Where the walk starts: nothing known of anything reached from inside,
     /// and anything at all in the fields of what comes in from outside.
-    fn start(program: &Program, assumed: &Assumed) -> Self {
+    fn start(program: &Program, assumed: &Assumed, counters: &[Vec<Counter>]) -> Self {
         let count = program.functions().len();
         let entry = program.entry();
         // A parameter nothing has handed anything to yet is a parameter nothing
         // is known of, which is not the same as one anything could be handed.
         let mut held = Self {
-            params: (0..count)
-                .map(|at| {
-                    let id = FnId::at(at);
-                    if entry == Some(id) {
-                        program
-                            .params(id)
-                            .iter()
-                            .enumerate()
-                            .map(|(at, &ty)| {
-                                Some(assumed.parameter(at).and(assumed.value(program, ty)))
-                            })
-                            .collect()
-                    } else {
-                        vec![None; program.params(id).len()]
-                    }
+            params: handed(program, assumed),
+            counters: counters
+                .iter()
+                .map(|found| {
+                    found
+                        .iter()
+                        .map(|&counter| (counter, Sum::Unseen))
+                        .collect()
                 })
                 .collect(),
             results: vec![None; count],
@@ -337,7 +362,13 @@ impl Propagation {
 
     /// Take in what one walk found it built and called, answering whether
     /// any of it was more than was known.
-    fn learn(&mut self, program: &Program, assumed: &Assumed, found: Found, round: usize) -> bool {
+    fn learn(
+        &mut self,
+        program: &Program,
+        assumed: &Assumed,
+        (found, caller): (Found, FnId),
+        round: usize,
+    ) -> bool {
         let mut again = false;
         for (place, bounds) in found.built {
             again |= settle(&mut self.fields[place], bounds, round);
@@ -348,11 +379,60 @@ impl Propagation {
             again |= self.fields != before;
         }
         for (called, args) in found.calls {
+            if called != caller {
+                again |= self.summed(called, &args);
+            }
             for (at, bounds) in args.into_iter().enumerate() {
                 again |= settle(&mut self.params[called.index()][at], bounds, round);
             }
         }
         again
+    }
+}
+
+/// The most a count and what it walks sum to where calls from outside hand
+/// them in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sum {
+    /// No call from outside has been seen.
+    Unseen,
+    Most(u64),
+    /// Some call hands one of them no greatest.
+    Unbounded,
+}
+
+impl Propagation {
+    /// Take in the sum a call from outside hands each of `called`'s
+    /// counters and what it walks, answering whether any grew.
+    fn summed(&mut self, called: FnId, args: &[Bounds]) -> bool {
+        let mut again = false;
+        for (counter, most) in &mut self.counters[called.index()] {
+            let sum = args[counter.counter]
+                .high
+                .zip(args[counter.measure].high)
+                .and_then(|(count, walked)| count.checked_add(walked));
+            let joined = match (*most, sum) {
+                (Sum::Unseen, Some(sum)) => Sum::Most(sum),
+                (Sum::Most(before), Some(sum)) => Sum::Most(before.max(sum)),
+                _ => Sum::Unbounded,
+            };
+            again |= joined != *most;
+            *most = joined;
+        }
+        again
+    }
+
+    /// What `id`'s parameters are, each count no more than what it and
+    /// what it walks sum to where they come in.
+    fn counted(&self, id: FnId, params: &mut [Bounds]) {
+        for &(counter, most) in &self.counters[id.index()] {
+            if let Sum::Most(most) = most {
+                params[counter.counter] = params[counter.counter].and(Bounds {
+                    low: 0,
+                    high: Some(most),
+                });
+            }
+        }
     }
 }
 
@@ -400,7 +480,7 @@ fn once(
         return false;
     };
     let again = settle(&mut held.results[id.index()], answer, round);
-    held.learn(program, assumed, found, round) || again
+    held.learn(program, assumed, (found, id), round) || again
 }
 
 /// Every definition once more, reading only what `held` knows and building
@@ -413,7 +493,12 @@ fn narrowed(
     assumed: &Assumed,
     held: &Propagation,
 ) -> Propagation {
-    let mut next = Propagation::start(program, assumed);
+    let counters: Vec<Vec<Counter>> = held
+        .counters
+        .iter()
+        .map(|found| found.iter().map(|&(counter, _)| counter).collect())
+        .collect();
+    let mut next = Propagation::start(program, assumed, &counters);
     for at in 0..program.functions().len() {
         let Some((answer, found)) = walk(
             (program, recognised, assumed),
@@ -424,7 +509,7 @@ fn narrowed(
             continue;
         };
         next.results[at] = Some(answer);
-        next.learn(program, assumed, found, 0);
+        next.learn(program, assumed, (found, FnId::at(at)), 0);
     }
     next
 }
@@ -438,10 +523,11 @@ fn walk(
     id: FnId,
     (terms, matched): (&mut [Bounds], &mut [Bounds]),
 ) -> Option<(Bounds, Found)> {
-    let params: Vec<Bounds> = held.params[id.index()]
+    let mut params: Vec<Bounds> = held.params[id.index()]
         .iter()
         .copied()
         .collect::<Option<_>>()?;
+    held.counted(id, &mut params);
     let Some(body) = program.function(id).body() else {
         // Something outside answers, and nothing about a declaration can be
         // read, so what comes back from one is what the tier above said.
@@ -802,18 +888,17 @@ impl FunctionWalk<'_> {
                 .map_or(Bounds::ANY, |atom| self.scope[atom.0.index()])
                 .and(promised);
         }
-        let Shape::Spine { nil, cons, .. } = shape(self.program, owner) else {
+        let Shape::Spine { nil, recursive, .. } = shape(self.program, owner) else {
             return Bounds::at(u64::from(self.program.tag(ctor)));
         };
-        if self.program.fields(cons).len() != 1 {
-            return Bounds::ANY;
-        }
         if ctor == nil {
             return Bounds::at(0);
         }
+        // A number, or how many elements a sequence holds: one more than
+        // the rest.
         self.program
             .atoms(args)
-            .first()
+            .get(recursive)
             .map_or(Bounds::ANY, |atom| self.scope[atom.0.index()].up())
     }
 
@@ -943,7 +1028,10 @@ fn constant_bounds(program: &Program, value: super::Constant<'_>) -> Bounds {
         {
             Bounds::at(u64::from(program.tag(ctor.constructor())))
         }
-        super::ConstantView::Constructor(_) | super::ConstantView::Spine(_) => Bounds::ANY,
+        super::ConstantView::Spine(spine) => {
+            u64::try_from(spine.length()).map_or(Bounds::ANY, Bounds::at)
+        }
+        super::ConstantView::Constructor(_) => Bounds::ANY,
     }
 }
 

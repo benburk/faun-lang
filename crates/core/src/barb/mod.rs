@@ -87,6 +87,7 @@ mod claim;
 mod cleanup;
 mod constant;
 mod copy;
+mod counters;
 mod descent;
 mod evaluate;
 mod facts;
