@@ -6,10 +6,9 @@ package {
 
 import md5 {md5_hash, to_hex}
 
-app : {stdin: List(U8), *} -> Result(Str, _)
-app(input) -> md5_hash(input.stdin)
-  .map_ok(to_hex).err_as("incomplete MD5 block")
+app : {stdin: List(U8), *} -> Str
+app(input) -> to_hex(md5_hash(input.stdin))
 
-expect md5_hash("abc".to_utf8()).map_ok(to_hex) == Ok("900150983cd24fb0d6963f7d28e17f72")
+expect to_hex(md5_hash("abc".to_utf8())) == "900150983cd24fb0d6963f7d28e17f72"
 
 main!(host) -> host.run_stdin!(app)

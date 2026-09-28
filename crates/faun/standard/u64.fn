@@ -55,8 +55,8 @@ U64 : Nat.(
   xor(U64(a), U64(b)) -> U64((a ^ b) % 18446744073709551616)
 
   # Every bit flipped.
-  bit_not : U64 -> U64
-  bit_not(U64(a)) -> U64(18446744073709551615 - a)
+  not : U64 -> U64
+  not(U64(a)) -> U64(18446744073709551615 - a)
 
   # The bits moved up by `amount`, those past the top lost: nought where
   # `amount` is the width or more.
@@ -153,7 +153,7 @@ U64 : Nat.(
   equals(U64(a), U64(b)) -> a.equals(b)
 )
 
-expect U64.of_nat(0).bit_not() == 0xffffffffffffffff
+expect !U64.of_nat(0) == 0xffffffffffffffff
 expect U64.of_le_bytes(1, 0, 0, 0, 0, 0, 0, 0x80) == 0x8000000000000001
 expect U64.of_nat(0x1122334455667788).to_u32() == 0x55667788 & U64.of_nat(0x1ff).to_u8() == 0xff
 expect U32.of_nat(7).min(3) == 3 & U64.of_nat(7).max(9) == 9 & U64.of_u32(U32.of_nat(5)) == 5

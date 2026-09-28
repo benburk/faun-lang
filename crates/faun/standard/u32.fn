@@ -55,8 +55,8 @@ U32 : Nat.(
   xor(U32(a), U32(b)) -> U32((a ^ b) % 4294967296)
 
   # Every bit flipped.
-  bit_not : U32 -> U32
-  bit_not(U32(a)) -> U32(4294967295 - a)
+  not : U32 -> U32
+  not(U32(a)) -> U32(4294967295 - a)
 
   # The bits moved up by `amount`, those past the top lost: nought where
   # `amount` is the width or more.

@@ -211,8 +211,10 @@ fields being a caller's. A declared type writes its own.
 
 `&`, `|` and `^` are `and`, `or` and `xor`, as in Ori: logical on `Bool` and
 bitwise on `Nat` and the words, and looser than a comparison, so
-`x == 3 & y == 5` needs no parentheses and `(a & b) == 8` does. The words
-also have `zero`, and `bit_not`, `shift_left`, `shift_right`, `rotate_left` and
+`x == 3 & y == 5` needs no parentheses and `(a & b) == 8` does. `!` is
+`not`: logical on `Bool` and every bit flipped on the words, so
+`b & c | !b & d` reads as it would in C. The words also have `zero`, and
+`shift_left`, `shift_right`, `rotate_left` and
 `rotate_right`, each by a `Nat` count of bits; a shift by the width or more
 is nought. `Int` has no bitwise operations.
 
