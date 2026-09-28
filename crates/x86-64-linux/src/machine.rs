@@ -28,6 +28,22 @@ pub(crate) enum Reg {
     R13 = 13,
     R14 = 14,
     R15 = 15,
+    Xmm0 = 16,
+    Xmm1 = 17,
+    Xmm2 = 18,
+    Xmm3 = 19,
+    Xmm4 = 20,
+    Xmm5 = 21,
+    Xmm6 = 22,
+    Xmm7 = 23,
+    Xmm8 = 24,
+    Xmm9 = 25,
+    Xmm10 = 26,
+    Xmm11 = 27,
+    Xmm12 = 28,
+    Xmm13 = 29,
+    Xmm14 = 30,
+    Xmm15 = 31,
 }
 
 impl From<Reg> for u8 {
@@ -60,8 +76,28 @@ impl Reg {
             13 => Some(Self::R13),
             14 => Some(Self::R14),
             15 => Some(Self::R15),
+            16 => Some(Self::Xmm0),
+            17 => Some(Self::Xmm1),
+            18 => Some(Self::Xmm2),
+            19 => Some(Self::Xmm3),
+            20 => Some(Self::Xmm4),
+            21 => Some(Self::Xmm5),
+            22 => Some(Self::Xmm6),
+            23 => Some(Self::Xmm7),
+            24 => Some(Self::Xmm8),
+            25 => Some(Self::Xmm9),
+            26 => Some(Self::Xmm10),
+            27 => Some(Self::Xmm11),
+            28 => Some(Self::Xmm12),
+            29 => Some(Self::Xmm13),
+            30 => Some(Self::Xmm14),
+            31 => Some(Self::Xmm15),
             _ => None,
         }
+    }
+
+    pub(crate) fn is_xmm(self) -> bool {
+        u8::from(self) >= 16
     }
 
     pub(super) fn low(self) -> u8 {
@@ -69,7 +105,7 @@ impl Reg {
     }
 
     pub(super) fn extended(self) -> bool {
-        u8::from(self) >= 8
+        u8::from(self) & 8 != 0
     }
 }
 
@@ -198,10 +234,15 @@ pub(crate) enum Inst {
         direction: ShiftDirection,
         dst: Reg,
     },
-    Multiply,
+    /// The low word of a product; signed and unsigned multiplication agree
+    /// on these bits, and no instruction reads a high half.
+    Multiply {
+        dst: Reg,
+        src: Reg,
+    },
     Divide,
-    /// `dst` = `float` of the patterns in `left` and, for a binary one,
-    /// `right`, through `xmm0` and `xmm1`.
+    /// Scalar SSE2 over allocated XMM registers. Binary operations tie
+    /// their result to the left input; sqrt has independent operands.
     Float {
         float: faun_core::float::Float,
         dst: Reg,
@@ -262,6 +303,71 @@ pub(crate) enum Inst {
     },
 }
 
+impl Inst {
+    /// Reject a wrong-bank operand before its encoding could silently name
+    /// an unrelated physical register with the same instruction bit fields.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive bank contract for the physical instruction vocabulary"
+    )]
+    fn valid_banks(self) -> bool {
+        match self {
+            Self::Float {
+                float,
+                dst,
+                left,
+                right,
+            } => {
+                dst.is_xmm()
+                    && left.is_xmm()
+                    && right.is_none_or(Reg::is_xmm)
+                    && (float.operation.arity() == 2) == right.is_some()
+                    && (right.is_none() || dst == left)
+            }
+            Self::Load {
+                width, dst, base, ..
+            } => {
+                !base.is_xmm()
+                    && (!dst.is_xmm() || matches!(width, MemoryWidth::Bits32 | MemoryWidth::Word))
+            }
+            Self::Store {
+                width, src, base, ..
+            } => {
+                !base.is_xmm()
+                    && (!src.is_xmm() || matches!(width, MemoryWidth::Bits32 | MemoryWidth::Word))
+            }
+            Self::XorSelf { dst }
+            | Self::Pop { dst }
+            | Self::MoveImmediate32 { dst, .. }
+            | Self::MoveSignExtendedImmediate32 { dst, .. }
+            | Self::MoveImmediate64 { dst, .. }
+            | Self::Narrow { dst, .. }
+            | Self::Shift { dst, .. }
+            | Self::ShiftByCount { dst, .. }
+            | Self::LoadStackNarrow { dst, .. }
+            | Self::AluImmediate { dst, .. }
+            | Self::SetIf { dst, .. }
+            | Self::LoadDataAddress { dst, .. } => !dst.is_xmm(),
+            Self::PushRegister { src } => !src.is_xmm(),
+            Self::Multiply { dst, src } | Self::Alu { dst, src, .. } => {
+                !dst.is_xmm() && !src.is_xmm()
+            }
+            Self::Move { .. }
+            | Self::LoadStack { .. }
+            | Self::LoadFrame { .. }
+            | Self::StoreFrame { .. }
+            | Self::OpenFrame { .. }
+            | Self::CloseFrame { .. }
+            | Self::PushImmediate(_)
+            | Self::Divide
+            | Self::Syscall
+            | Self::Call { .. }
+            | Self::Return
+            | Self::Jump { .. } => true,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Allocated {
     /// Every label bound, which finishing the builder checked.
@@ -285,6 +391,9 @@ impl Allocated {
     )]
     fn verify(&self) -> Result<(), String> {
         for (at, inst) in self.instructions().iter().enumerate() {
+            if !inst.valid_banks() {
+                return Err(format!("x86 instruction {at} has invalid register banks"));
+            }
             match *inst {
                 Inst::Call { target } | Inst::Jump { target, .. }
                     if target.index() >= self.code.labels().len() =>
@@ -445,8 +554,8 @@ impl AllocatedBuilder {
         self.push(Inst::ShiftByCount { direction, dst });
     }
 
-    pub(crate) fn multiply(&mut self) {
-        self.push(Inst::Multiply);
+    pub(crate) fn multiply(&mut self, dst: Reg, src: Reg) {
+        self.push(Inst::Multiply { dst, src });
     }
 
     pub(crate) fn divide(&mut self) {

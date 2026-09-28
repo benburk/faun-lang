@@ -62,7 +62,7 @@ struct Lowering<'a> {
     asm: AllocatedBuilder,
     block_labels: Vec<Label>,
     function_labels: Vec<Option<Label>>,
-    known: [Option<Known>; 16],
+    known: [Option<Known>; 32],
     argument_count_in_rbx: bool,
     pending_condition: Option<(VReg, Condition)>,
     exit_epilogue: Option<Label>,
@@ -71,6 +71,16 @@ struct Lowering<'a> {
     /// The registers each function keeps for its caller: those a call
     /// leaves alone that it writes, put back before it returns.
     saved: Vec<Vec<Reg>>,
+    frames: Vec<Frame>,
+}
+
+/// The outgoing call area starts at rsp, followed by allocator spill slots
+/// and saved registers. Incoming values lie above this frame and the return
+/// address. No call area overlaps a live spill or its caller's incoming area.
+#[derive(Clone, Copy, Default)]
+struct Frame {
+    outgoing: u32,
+    words: u32,
 }
 
 /// Where each value is defined and how often it is read, gathered once so
@@ -135,19 +145,25 @@ impl<'a> Lowering<'a> {
             asm,
             block_labels,
             function_labels,
-            known: [None; 16],
+            known: [None; 32],
             argument_count_in_rbx: false,
             pending_condition: None,
             exit_epilogue: None,
             final_block: None,
             uses: Uses::new(selected),
             saved: Vec::new(),
+            frames: Vec::new(),
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one ordered lowering walk over allocated blocks"
+    )]
     fn run(mut self, entry: FunctionId) -> Result<Allocated, String> {
         self.configure_program(entry);
         self.saved = self.kept_for_callers(entry);
+        self.frames = self.layout_frames()?;
         self.ignore_broken_pipes();
         for (at, layout) in self.liveness.blocks.iter().enumerate() {
             let block = self.selected.blocks[layout.block];
@@ -288,7 +304,7 @@ impl<'a> Lowering<'a> {
         }
         let owner = self.owner_at(points.early);
         let plan = parallel_copy::plan(&copies, self.copy_temporary(owner, &copies))?;
-        self.emit_moves(plan.moves());
+        self.emit_moves(plan.moves(), owner);
         Ok(())
     }
 
@@ -302,7 +318,7 @@ impl<'a> Lowering<'a> {
             .collect();
         let owner = self.owner_at(points.late);
         let plan = parallel_copy::plan(&copies, self.copy_temporary(owner, &copies))?;
-        self.emit_moves(plan.moves());
+        self.emit_moves(plan.moves(), owner);
         Ok(())
     }
 
@@ -315,7 +331,7 @@ impl<'a> Lowering<'a> {
             .collect();
         let owner = self.owner_at(point);
         let plan = parallel_copy::plan(&copies, self.copy_temporary(owner, &copies))?;
-        self.emit_moves(plan.moves());
+        self.emit_moves(plan.moves(), owner);
         Ok(())
     }
 
@@ -392,11 +408,51 @@ impl<'a> Lowering<'a> {
         is_last && is_condition && uses == 1
     }
 
-    /// The slots `owner`'s frame holds: what it spills, then what it keeps
-    /// for its caller.
+    /// Lay out each function once, checking every frame-relative access
+    /// before emitting anything. A caller reuses one outgoing area for all
+    /// its calls; recursion gets a separate area in each activation.
+    fn layout_frames(&self) -> Result<Vec<Frame>, String> {
+        let mut frames = vec![Frame::default(); self.allocation.spill_slots.len()];
+        let mut incoming = vec![0u32; frames.len()];
+        for block in &self.selected.blocks {
+            for &id in &self.selected.order[block.instructions.range()] {
+                let inst = self.selected.instructions[id];
+                let Immediate::Slot(slot) = inst.immediate else {
+                    continue;
+                };
+                let count = slot.checked_add(1).ok_or("x86 call area is too large")?;
+                let area = match inst.opcode {
+                    Opcode::LoadOutgoing | Opcode::StoreOutgoing => {
+                        &mut frames[block.owner.index()].outgoing
+                    }
+                    Opcode::LoadIncoming | Opcode::StoreIncoming => {
+                        &mut incoming[block.owner.index()]
+                    }
+                    _ => unreachable!("a verified stack access"),
+                };
+                *area = (*area).max(count);
+            }
+        }
+        for (owner, frame) in frames.iter_mut().enumerate() {
+            let words = u64::from(frame.outgoing)
+                + u64::from(self.allocation.spill_slots[owner])
+                + u64::try_from(self.saved[owner].len()).expect("a few registers");
+            // The return address is one word above the local frame. Check
+            // the incoming area too, not just the sub rsp immediate.
+            if (words + 1 + u64::from(incoming[owner])) * 8 > i32::MAX.cast_unsigned().into() {
+                return Err("x86 stack frame is too large".to_owned());
+            }
+            frame.words = u32::try_from(words).expect("a checked frame");
+        }
+        Ok(frames)
+    }
+
     fn frame(&self, owner: FunctionId) -> u32 {
-        let saved = self.saved.get(owner.index()).map_or(0, Vec::len);
-        self.spill_slots(owner) + u32::try_from(saved).expect("a few registers")
+        self.frames[owner.index()].words
+    }
+
+    fn local_slot(&self, owner: FunctionId, slot: FrameSlot) -> FrameSlot {
+        FrameSlot::at(self.frames[owner.index()].outgoing + slot.number())
     }
 
     /// Put what `owner` keeps for its caller in its frame, on entering, or
@@ -406,9 +462,11 @@ impl<'a> Lowering<'a> {
         let saved = self.saved.get(owner.index()).cloned().unwrap_or_default();
         for (at, reg) in (first..).zip(saved) {
             if entering {
-                self.asm.store_slot(reg, FrameSlot::at(at));
+                self.asm
+                    .store_slot(reg, self.local_slot(owner, FrameSlot::at(at)));
             } else {
-                self.asm.load_slot(reg, FrameSlot::at(at));
+                self.asm
+                    .load_slot(reg, self.local_slot(owner, FrameSlot::at(at)));
                 self.forget(reg);
             }
         }
@@ -446,20 +504,27 @@ impl<'a> Lowering<'a> {
 
     /// Write each value made at `point` that ever waits in memory there.
     fn emit_stores(&mut self, point: Point) {
+        let owner = self.owner_at(point);
         let stores: Vec<_> = self.allocation.stores_at(point).collect();
         for (reg, SpillSlot(slot)) in stores {
-            self.asm.store_slot(reg, FrameSlot::at(slot));
+            self.asm
+                .store_slot(reg, self.local_slot(owner, FrameSlot::at(slot)));
         }
     }
 
-    fn emit_moves(&mut self, moves: &[CopyMove]) {
-        self.emit_moves_keeping(moves, &[]);
+    fn emit_moves(&mut self, moves: &[CopyMove], owner: FunctionId) {
+        self.emit_moves_keeping(moves, &[], owner);
     }
 
     /// The moves, but for those into memory a value was written to where it
     /// was made, which already hold it -- other than into `defining`, the
     /// slots of the parameters an edge hands values to.
-    fn emit_moves_keeping(&mut self, moves: &[CopyMove], defining: &[FrameSlot]) {
+    fn emit_moves_keeping(
+        &mut self,
+        moves: &[CopyMove],
+        defining: &[FrameSlot],
+        owner: FunctionId,
+    ) {
         for movement in moves {
             let CopySource::Place(source) = movement.source();
             match (source, movement.destination()) {
@@ -469,14 +534,18 @@ impl<'a> Lowering<'a> {
                     self.mov_reg(dst, src, RegisterWidth::Word);
                 }
                 (Place::Frame(src), Place::Register(dst)) => {
-                    self.asm.load_slot(dst, src);
+                    self.asm.load_slot(dst, self.local_slot(owner, src));
                     self.forget(dst);
                 }
-                (Place::Register(src), Place::Frame(dst)) => self.asm.store_slot(src, dst),
+                (Place::Register(src), Place::Frame(dst)) => {
+                    self.asm.store_slot(src, self.local_slot(owner, dst));
+                }
                 (Place::Frame(src), Place::Frame(dst)) if src != dst => {
-                    self.asm.load_slot(COPY_SCRATCH, src);
+                    self.asm
+                        .load_slot(COPY_SCRATCH, self.local_slot(owner, src));
                     self.forget(COPY_SCRATCH);
-                    self.asm.store_slot(COPY_SCRATCH, dst);
+                    self.asm
+                        .store_slot(COPY_SCRATCH, self.local_slot(owner, dst));
                 }
                 _ => {}
             }
@@ -563,8 +632,7 @@ impl<'a> Lowering<'a> {
                 self.asm.shift_by_count(direction, result()?);
             }
             (Opcode::Multiply, Immediate::Bits(_)) => {
-                self.asm.multiply();
-                self.forget(Reg::Rdx);
+                self.asm.multiply(result()?, reg(1)?);
             }
             (Opcode::Float, Immediate::Float(float)) => {
                 let right = if float.operation.arity() == 2 {
@@ -613,6 +681,22 @@ impl<'a> Lowering<'a> {
             (Opcode::Store, Immediate::Memory { width, offset }) => {
                 self.asm
                     .store(memory_width(width), reg(1)?, reg(0)?, displacement(offset)?);
+            }
+            (
+                Opcode::LoadIncoming
+                | Opcode::LoadOutgoing
+                | Opcode::StoreIncoming
+                | Opcode::StoreOutgoing,
+                Immediate::Slot(slot),
+            ) => {
+                let owner = self.owner_at(points.late);
+                let incoming = matches!(inst.opcode, Opcode::LoadIncoming | Opcode::StoreIncoming);
+                let slot = FrameSlot::at(slot + if incoming { self.frame(owner) + 1 } else { 0 });
+                if matches!(inst.opcode, Opcode::LoadIncoming | Opcode::LoadOutgoing) {
+                    self.asm.load_slot(result()?, slot);
+                } else {
+                    self.asm.store_slot(reg(0)?, slot);
+                }
             }
             (Opcode::Convert, Immediate::Bits(bits)) => {
                 let input = self.selected.operands[inst.operands.range()][0];
@@ -711,7 +795,7 @@ impl<'a> Lowering<'a> {
                 } else {
                     let owner = self.owner_at(points.late);
                     let displacement = self
-                        .spill_slots(owner)
+                        .frame(owner)
                         .checked_mul(8)
                         .ok_or_else(|| "x86 entry frame displacement overflows".to_owned())?;
                     self.asm.load_stack(dst, displacement);
@@ -724,7 +808,7 @@ impl<'a> Lowering<'a> {
                 let dst = result()?;
                 let owner = self.owner_at(points.late);
                 let displacement = self
-                    .spill_slots(owner)
+                    .frame(owner)
                     .checked_mul(8)
                     .and_then(|bytes| bytes.checked_add(8))
                     .ok_or_else(|| "x86 entry frame displacement overflows".to_owned())?;
@@ -815,24 +899,7 @@ impl<'a> Lowering<'a> {
     }
 
     fn forget_call_clobbers(&mut self) {
-        for reg in [
-            Reg::Rax,
-            Reg::Rcx,
-            Reg::Rdx,
-            Reg::Rsi,
-            Reg::Rdi,
-            Reg::R8,
-            Reg::R9,
-            Reg::R10,
-            Reg::R11,
-            Reg::R12,
-            Reg::R13,
-            Reg::R14,
-            Reg::R15,
-            Reg::Rbp,
-        ] {
-            self.forget(reg);
-        }
+        self.known.fill(None);
     }
 
     fn emit_division(&mut self, modulo: bool) {
@@ -983,7 +1050,7 @@ impl<'a> Lowering<'a> {
                 _ => None,
             })
             .collect();
-        self.emit_moves_keeping(&moves, &defining);
+        self.emit_moves_keeping(&moves, &defining, self.selected.blocks[from].owner);
         Ok(())
     }
 

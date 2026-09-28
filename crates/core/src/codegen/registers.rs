@@ -1,17 +1,20 @@
 //! Register allocation for a machine with a file of registers.
 //!
 //! A target hands over its code as [`Code`]: blocks of instructions over
-//! virtual registers, each operand saying whether it must be in one register,
-//! may be in any, or must be where the result goes, and each instruction the
-//! registers it clobbers or uses as scratch. What comes back says where each
+//! virtual registers, each operand naming its allowed register set and any
+//! fixed or tied location, and each instruction the registers it clobbers or
+//! uses as scratch. Sets can describe banks without teaching this module
+//! target-specific register classes, aliases, encodings or ABI rules. What comes back says where each
 //! value is at each point, and the moves between.
 //!
 //! The allocator walks each block in order, keeps live values in registers,
 //! and where they run out puts in memory the value read furthest ahead,
 //! loops counted; it splits at fixed operands, ties,
-//! scratch reservations, and clobbers. A block starts where a predecessor
+//! register-set requirements, scratch reservations, and clobbers. A block starts where a predecessor
 //! already allocated left its values, so an edge moves only what changed.
 
+#[cfg(test)]
+mod banks_tests;
 mod distance;
 
 use std::collections::HashMap;
@@ -30,6 +33,7 @@ index!(pub VReg, BlockId, InstId);
 /// Where an operand must be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Constraint<R> {
+    /// Any register permitted by the operand's allowed set.
     Any,
     Fixed(R),
     /// Where the operand at this position is: only the first, here.
@@ -53,6 +57,9 @@ pub struct OperandSpec<R> {
     pub role: Role,
     pub timing: Timing,
     pub constraint: Constraint<R>,
+    /// Registers this operand may occupy, intersected with the target's
+    /// register file. Independent of fixed and tied location constraints.
+    pub allowed: RegSet,
 }
 
 /// One instruction: what it reads, what it answers, where each must be --
@@ -75,6 +82,7 @@ pub enum Terminator<R> {
     },
     Branch {
         condition: VReg,
+        allowed: RegSet,
         then_target: BlockId,
         then_args: Range,
         else_target: BlockId,
@@ -118,8 +126,10 @@ pub struct Code<R> {
     pub functions: Vec<Function>,
     /// The registers a value may be held in.
     pub registers: Vec<R>,
-    /// A register no value is held in, which moves between memory pass
-    /// through, and which otherwise breaks a cycle of moves.
+    /// A register outside `registers`, which moves between memory pass
+    /// through, and which otherwise breaks a cycle of moves. The target's
+    /// lowering must transfer a complete scalar bit pattern between any
+    /// allocatable register, this scratch register, and a frame slot.
     pub copies: Option<R>,
 }
 
@@ -146,6 +156,7 @@ impl<R: Register> Code<R> {
 /// Where the code asks more of the registers than there are, or the
 /// allocation it came to does not hold.
 pub fn allocate<R: Register>(code: &Code<R>) -> Result<(Liveness, Allocation<R>), String> {
+    verify_register_sets(code)?;
     let liveness = Liveness::build(code)?;
     let allocation = Allocator::new(code, &liveness)?.run()?;
     allocation.verify(code, &liveness)?;
@@ -611,6 +622,9 @@ struct Allocator<'a, R> {
     /// The register each value is best defined in, where every fixed use of
     /// it agrees on one.
     preferred: Vec<Option<R>>,
+    /// Preferred bank for otherwise unconstrained placement. Definitions
+    /// bound it; agreeing uses narrow it. Uses can still request another bank.
+    homes: Vec<RegSet>,
     operand_locations: Vec<Option<Vec<Location<R>>>>,
     operand_moves: Vec<Option<Vec<CopyMove<R>>>>,
     edge_moves: Vec<EdgeMoves<R>>,
@@ -646,6 +660,7 @@ impl<'a, R: Register> Allocator<'a, R> {
             states: (0..liveness.at.len()).map(|_| None).collect(),
             placement: Placement::new(code.values),
             preferred: preferred_registers(code),
+            homes: preferred_sets(code),
             operand_locations: vec![None; code.instructions.len()],
             operand_moves: vec![None; code.instructions.len()],
             edge_moves: Vec::new(),
@@ -783,7 +798,9 @@ impl<'a, R: Register> Allocator<'a, R> {
             .zip(&self.code.operands[args.range()])
             .zip(specs)
         {
-            if let (Some(Location::Register(reg)), Constraint::Any) = (held(arg), spec.constraint) {
+            if let (Some(Location::Register(reg)), Constraint::Any) = (held(arg), spec.constraint)
+                && spec.allowed.contains(reg)
+            {
                 handed.push((param, Location::Register(reg)));
             }
         }
@@ -803,9 +820,9 @@ impl<'a, R: Register> Allocator<'a, R> {
                 protected.push(value);
             }
         }
-        for &value in params {
+        for (&value, spec) in params.iter().zip(specs) {
             if self.placement.get(value).is_none() {
-                self.put_anywhere(value, &protected, RegSet::EMPTY)?;
+                self.put_anywhere(value, &protected, RegSet(!spec.allowed.0))?;
                 protected.push(value);
             }
         }
@@ -841,10 +858,16 @@ impl<'a, R: Register> Allocator<'a, R> {
             let spec = self
                 .code
                 .spec(&inst, def_offset + at)
-                .ok_or_else(|| "selected use has no allocation constraint".to_owned())?;
+                .expect("verified operand");
             if let Constraint::Fixed(reg) = spec.constraint {
+                if assigned.iter().zip(operands).any(|(&location, &other)| {
+                    location == Some(Location::Register(reg)) && other != value
+                }) {
+                    return Err("fixed register holds two simultaneous operands".to_owned());
+                }
                 self.put_in_register(value, reg, &protected)?;
                 assigned[at] = Some(Location::Register(reg));
+                self.busy.0 |= RegSet::of(&[reg]).0;
                 protected.push(value);
             }
         }
@@ -853,23 +876,72 @@ impl<'a, R: Register> Allocator<'a, R> {
                 .code
                 .spec(&inst, def_offset + at)
                 .expect("verified operand");
+            if matches!(spec.constraint, Constraint::Fixed(_)) {
+                continue;
+            }
+            let mut allowed = spec.allowed;
+            let mut fixed = None;
             match spec.constraint {
                 Constraint::Tied(0) => {
-                    let reg = self.put_in_some_register(value, &protected, inst.scratch)?;
-                    tied = Some(reg);
-                    assigned[at] = Some(Location::Register(reg));
-                    protected.push(value);
+                    let def = self.code.spec(&inst, 0).expect("verified tied result");
+                    allowed.0 &= def.allowed.0;
+                    if let Constraint::Fixed(reg) = def.constraint {
+                        fixed = Some(reg);
+                    }
                 }
-                Constraint::Any => {
-                    let reg = self.put_in_some_register(value, &protected, inst.scratch)?;
-                    assigned[at] = Some(Location::Register(reg));
-                    protected.push(value);
-                }
-                Constraint::Fixed(_) => {}
+                Constraint::Any => {}
                 Constraint::Tied(other) => {
                     return Err(format!("allocator does not support tie to operand {other}"));
                 }
+                Constraint::Fixed(_) => unreachable!(),
             }
+            let reserved = assigned
+                .iter()
+                .flatten()
+                .fold(inst.scratch.0, |set, location| {
+                    if let Location::Register(reg) = location {
+                        set | RegSet::of(&[*reg]).0
+                    } else {
+                        set
+                    }
+                });
+            self.busy.0 |= reserved;
+            // Repeated operands may need several physical copies, even in
+            // different banks. Never reuse an earlier copy for another value.
+            let reused = assigned
+                .iter()
+                .zip(operands)
+                .find_map(|(&location, &other)| {
+                    if other == value
+                        && let Some(Location::Register(reg)) = location
+                        && allowed.contains(reg)
+                        && fixed.is_none_or(|fixed| fixed == reg)
+                    {
+                        Some(reg)
+                    } else {
+                        None
+                    }
+                });
+            let reg = if let Some(reg) = reused {
+                reg
+            } else if let Some(reg) = fixed {
+                if reserved & RegSet::of(&[reg]).0 != 0 {
+                    return Err("tied result conflicts with an assigned operand".to_owned());
+                }
+                self.put_in_register(value, reg, &protected)?;
+                reg
+            } else {
+                self.put_in_some_register(value, &protected, RegSet(reserved | !allowed.0))?
+            };
+            if spec.constraint == Constraint::Tied(0) {
+                if tied.is_some_and(|before| before != reg) {
+                    return Err("tied operands require different registers".to_owned());
+                }
+                tied = Some(reg);
+            }
+            assigned[at] = Some(Location::Register(reg));
+            self.busy.0 |= RegSet::of(&[reg]).0;
+            protected.push(value);
         }
         let assigned = assigned
             .into_iter()
@@ -920,11 +992,16 @@ impl<'a, R: Register> Allocator<'a, R> {
                         // free, not worth putting something else out for.
                         if let Some(reg) = self.preferred[value.index()]
                             && !requirements.scratch.contains(reg)
+                            && spec.allowed.contains(reg)
                             && self.register_occupant(reg).is_none()
                         {
                             self.put_in_register(value, reg, &[])?;
                         } else {
-                            self.put_in_some_register(value, &[], requirements.scratch)?;
+                            self.put_in_some_register(
+                                value,
+                                &[],
+                                RegSet(requirements.scratch.0 | !spec.allowed.0),
+                            )?;
                         }
                     }
                     Constraint::Tied(other) => {
@@ -950,8 +1027,10 @@ impl<'a, R: Register> Allocator<'a, R> {
         self.fill_live(layout.terminator, &[], RegSet::EMPTY)?;
         let mut protected = Vec::new();
         match block.terminator {
-            Terminator::Branch { condition, .. } => {
-                self.put_in_some_register(condition, &protected, RegSet::EMPTY)?;
+            Terminator::Branch {
+                condition, allowed, ..
+            } => {
+                self.put_in_some_register(condition, &protected, RegSet(!allowed.0))?;
                 protected.push(condition);
             }
             Terminator::Return {
@@ -1001,6 +1080,7 @@ impl<'a, R: Register> Allocator<'a, R> {
         protected: &[VReg],
         reserved: RegSet,
     ) -> Result<(), String> {
+        let reserved = RegSet(reserved.0 | !self.homes[value.index()].0);
         if let Some(reg) = self.free_register_for(value, reserved) {
             return self.put_in_register(value, reg, protected);
         }
@@ -1110,7 +1190,9 @@ impl<'a, R: Register> Allocator<'a, R> {
     /// allocated leaves alone where one is free, and otherwise to memory.
     /// Either way it moves before the instruction writes the one it left.
     fn displace(&mut self, value: VReg) -> Result<(), String> {
-        let moved = match self.free_register_for(value, self.busy) {
+        let moved = match self
+            .free_register_for(value, RegSet(self.busy.0 | !self.homes[value.index()].0))
+        {
             Some(free) => Location::Register(free),
             None => self.spill(value)?,
         };
@@ -1150,8 +1232,10 @@ impl<'a, R: Register> Allocator<'a, R> {
     /// A free register for `value`: one nothing it lives across disturbs
     /// where there is one, and otherwise any.
     fn free_register_for(&self, value: VReg, reserved: RegSet) -> Option<R> {
-        let undisturbed = RegSet(reserved.0 | self.hazards[value.index()].0);
+        let home = RegSet(reserved.0 | !self.homes[value.index()].0);
+        let undisturbed = RegSet(home.0 | self.hazards[value.index()].0);
         self.free_register(undisturbed)
+            .or_else(|| self.free_register(home))
             .or_else(|| self.free_register(reserved))
     }
 
@@ -1289,6 +1373,11 @@ impl<'a, R: Register> Allocator<'a, R> {
                 .iter()
                 .zip(&self.code.block_param_specs[block.params.range()])
             {
+                if let Location::Register(reg) = self.location(layout.entry, param)?
+                    && !spec.allowed.contains(reg)
+                {
+                    return Err("block parameter is in a disallowed register".to_owned());
+                }
                 match spec.constraint {
                     Constraint::Fixed(reg) => verify_constraint(
                         self.location(layout.entry, param)?,
@@ -1313,11 +1402,12 @@ impl<'a, R: Register> Allocator<'a, R> {
                 }
                 let mut tied = None;
                 for (at, &location) in allocated.iter().enumerate() {
-                    let constraint = self
+                    let spec = self
                         .code
                         .spec(&inst, def_offset + at)
-                        .expect("selected instruction was verified")
-                        .constraint;
+                        .expect("verified operand");
+                    let constraint = spec.constraint;
+                    verify_allowed(location, spec.allowed)?;
                     verify_constraint(location, constraint, tied)?;
                     if constraint == Constraint::Tied(0) {
                         tied = Some(location);
@@ -1348,6 +1438,9 @@ impl<'a, R: Register> Allocator<'a, R> {
                 }
                 if let Some(result) = inst.result {
                     let location = self.location(points.late, result)?;
+                    let spec = self.code.spec(&inst, 0).expect("verified result");
+                    verify_allowed(location, spec.allowed)?;
+                    verify_constraint(location, spec.constraint, None)?;
                     if let Some(tied) = tied {
                         if location != tied {
                             return Err("tied input and result have different locations".to_owned());
@@ -1377,11 +1470,11 @@ impl<'a, R: Register> Allocator<'a, R> {
                 }
             }
             match block.terminator {
-                Terminator::Branch { condition, .. } => verify_constraint(
-                    self.location(layout.terminator, condition)?,
-                    Constraint::Any,
-                    None,
-                )?,
+                Terminator::Branch {
+                    condition, allowed, ..
+                } => {
+                    verify_allowed(self.location(layout.terminator, condition)?, allowed)?;
+                }
                 Terminator::Return {
                     values,
                     register: result_reg,
@@ -1411,6 +1504,163 @@ impl<'a, R: Register> Allocator<'a, R> {
             })
             .ok_or_else(|| format!("v{} has no location at p{}", value.index(), point.index()))
     }
+}
+
+/// Check masks before allocation, including intersections imposed by ties.
+#[expect(
+    clippy::too_many_lines,
+    reason = "validate register sets, fixed locations and ties together"
+)]
+fn verify_register_sets<R: Register>(code: &Code<R>) -> Result<(), String> {
+    let mut file = RegSet::EMPTY;
+    for &reg in &code.registers {
+        if reg.number() >= 64 || file.contains(reg) {
+            return Err("register file has duplicate or out-of-range numbers".to_owned());
+        }
+        file.0 |= RegSet::of(&[reg]).0;
+    }
+    if let Some(reg) = code.copies
+        && (reg.number() >= 64 || file.contains(reg))
+    {
+        return Err("copy scratch must be outside the allocatable register file".to_owned());
+    }
+    let check = |spec: OperandSpec<R>| -> Result<(), String> {
+        if spec.allowed.0 & file.0 == 0 {
+            return Err("operand has no allowed allocatable register".to_owned());
+        }
+        if let Constraint::Fixed(reg) = spec.constraint
+            && (reg.number() >= 64 || !file.contains(reg) || !spec.allowed.contains(reg))
+        {
+            return Err("fixed register is outside its allowed register set".to_owned());
+        }
+        Ok(())
+    };
+    for &spec in code.specs.iter().chain(&code.block_param_specs) {
+        check(spec)?;
+    }
+    if code.block_param_specs.len() != code.block_params.len() {
+        return Err("block parameters have the wrong specification count".to_owned());
+    }
+    for inst in &code.instructions {
+        if code.specs.get(inst.specs.range()).is_none()
+            || inst.specs.len() != inst.operands.len() + usize::from(inst.result.is_some())
+        {
+            return Err("instruction has the wrong specification count".to_owned());
+        }
+        for at in usize::from(inst.result.is_some())..inst.specs.len() {
+            let spec = code.spec(inst, at).expect("operand spec");
+            if let Constraint::Tied(_) = spec.constraint {
+                let def = code.spec(inst, 0).ok_or("tie has no result")?;
+                if inst.result.is_none() || spec.allowed.0 & def.allowed.0 & file.0 == 0 {
+                    return Err("tied operand and result have no common register".to_owned());
+                }
+                if let Constraint::Fixed(reg) = def.constraint
+                    && !spec.allowed.contains(reg)
+                {
+                    return Err("tied operand excludes the fixed result register".to_owned());
+                }
+            }
+        }
+    }
+    for block in &code.blocks {
+        if let Terminator::Branch { allowed, .. } = block.terminator
+            && allowed.0 & file.0 == 0
+        {
+            return Err("branch has no allowed condition register".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn verify_allowed<R: Register>(location: Location<R>, allowed: RegSet) -> Result<(), String> {
+    if matches!(location, Location::Register(reg) if allowed.contains(reg)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "allocation location {location:?} is outside {allowed:?}"
+        ))
+    }
+}
+
+/// Prefer a definition's bank, narrowed by uses when they agree. Conflicting
+/// uses require transfers; they do not make a value impossible to allocate.
+#[expect(
+    clippy::too_many_lines,
+    reason = "derive and coalesce bank preferences in one monotonic analysis"
+)]
+fn preferred_sets<R: Register>(code: &Code<R>) -> Vec<RegSet> {
+    let file = RegSet::of(&code.registers);
+    let mut definitions = vec![file; code.values];
+    let mut uses = vec![file; code.values];
+    for (&value, spec) in code.block_params.iter().zip(&code.block_param_specs) {
+        definitions[value.index()].0 &= spec.allowed.0;
+    }
+    for inst in &code.instructions {
+        let offset = usize::from(inst.result.is_some());
+        if let Some(value) = inst.result {
+            definitions[value.index()].0 &= code.spec(inst, 0).expect("result spec").allowed.0;
+        }
+        for (at, &value) in code.operands[inst.operands.range()].iter().enumerate() {
+            uses[value.index()].0 &= code.spec(inst, offset + at).expect("use spec").allowed.0;
+        }
+    }
+    for block in &code.blocks {
+        if let Terminator::Branch {
+            condition, allowed, ..
+        } = block.terminator
+        {
+            uses[condition.index()].0 &= allowed.0;
+        }
+    }
+    // A return names an exact register, not a bank. Keep that preference
+    // in preferred_registers: narrowing a home to it would prevent a live
+    // value from waiting in a callee-saved register across a call.
+    let mut homes: Vec<_> = definitions
+        .into_iter()
+        .zip(uses)
+        .map(|(definition, uses)| {
+            let common = definition.0 & uses.0;
+            if common == 0 {
+                definition
+            } else {
+                RegSet(common)
+            }
+        })
+        .collect();
+    let mut reads = vec![0u8; code.values];
+    for &value in &code.operands {
+        reads[value.index()] = reads[value.index()].saturating_add(1);
+    }
+    for block in &code.blocks {
+        if let Terminator::Branch { condition, .. } = block.terminator {
+            reads[condition.index()] = reads[condition.index()].saturating_add(1);
+        }
+    }
+    // Coalesce a single-use tied input into its consumer's preferred bank.
+    // This includes representation-only copies; otherwise a word load before
+    // a float bitcast would choose a GPR simply because its copy allows both.
+    loop {
+        let mut changed = false;
+        for inst in code.instructions.iter().rev() {
+            let Some(result) = inst.result else { continue };
+            for (at, &input) in code.operands[inst.operands.range()].iter().enumerate() {
+                if reads[input.index()] != 1
+                    || code.spec(inst, at + 1).expect("use spec").constraint != Constraint::Tied(0)
+                {
+                    continue;
+                }
+                let common = homes[input.index()].0 & homes[result.index()].0;
+                if common != 0 && common != homes[input.index()].0 {
+                    homes[input.index()].0 = common;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    homes
 }
 
 /// The register each value is best defined in: the one every fixed use of
@@ -1985,6 +2235,7 @@ mod tests {
         role: Role::Use,
         timing: Timing::Early,
         constraint: Constraint::Any,
+        allowed: RegSet(u64::MAX),
     };
 
     /// `count` values made, then each read once, last first, and nothing

@@ -689,3 +689,127 @@ fn remainder(by: u64, value: u64) -> Program {
     });
     p
 }
+
+#[test]
+fn projecting_a_temporary_wide_product_does_not_allocate_it() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        // An explicitly boxed pair of n-body records has fourteen leaves.
+        // Forwarding does not depend on the source-level flattening budget.
+        let shape = b.shape(&[Class::Word; 14]);
+        let fields: Vec<_> = (0..14).map(|n| b.constant(Class::Word, n)).collect();
+        let pair = b.cell(0, shape, &fields);
+        let first = b.cell_field((Class::Word, shape), pair, 0);
+        let last = b.cell_field((Class::Word, shape), pair, 13);
+        let answer = b.binary(Binary::Add, first, last);
+        b.ret(&[answer]);
+    });
+    let held = settled(&p);
+    assert_eq!(returns(&held), BigUint::from(13u8));
+    assert_eq!(
+        count(&held, |op| matches!(
+            op,
+            Op::Cell { .. } | Op::CellField { .. }
+        )),
+        0
+    );
+}
+
+#[test]
+fn a_constructed_cells_tag_is_known() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let shape = b.shape(&[]);
+        let cell = b.cell(7, shape, &[]);
+        let tag = b.cell_tag(cell);
+        b.ret(&[tag]);
+    });
+    let held = settled(&p);
+    assert_eq!(returns(&held), BigUint::from(7u8));
+    assert_eq!(
+        count(&held, |op| matches!(
+            op,
+            Op::Cell { .. } | Op::CellTag { .. }
+        )),
+        0
+    );
+}
+
+#[test]
+fn forwarding_a_managed_field_keeps_its_value() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let shape = b.shape(&[Class::Natural]);
+        let number = b.natural(&(BigUint::from(1u8) << 128usize));
+        let cell = b.cell(0, shape, &[number]);
+        let field = b.cell_field((Class::Natural, shape), cell, 0);
+        let difference = b.binary(Binary::Monus, field, number);
+        let answer = b.convert(Class::Word, difference);
+        b.ret(&[answer]);
+    });
+    let held = settled(&p);
+    assert_eq!(
+        count(&held, |op| matches!(
+            op,
+            Op::Cell { .. } | Op::CellField { .. }
+        )),
+        0
+    );
+}
+
+#[test]
+fn forwarding_one_field_preserves_eager_calls_in_all_fields() {
+    struct Recording(Vec<BigUint>);
+    impl evaluate::Host for Recording {
+        fn call(
+            &mut self,
+            _: &str,
+            args: &[BigUint],
+            _: &mut evaluate::Memory<'_>,
+        ) -> Result<evaluate::HostResult, evaluate::Error> {
+            self.0.extend_from_slice(args);
+            Ok(evaluate::HostResult::Return(args.to_vec()))
+        }
+    }
+
+    let (mut p, main) = Program::new("main");
+    let record = p.external("record", &[Class::Word], Returns::Values(&[Class::Word]));
+    p.define(main, |b, _| {
+        let shape = b.shape(&[Class::Word; 2]);
+        let one = b.constant(Class::Word, 1);
+        let two = b.constant(Class::Word, 2);
+        let first = b.call_one(record, &[one]);
+        let second = b.call_one(record, &[two]);
+        let cell = b.cell(0, shape, &[first, second]);
+        let field = b.cell_field((Class::Word, shape), cell, 0);
+        b.ret(&[field]);
+    });
+    let held = optimize(&p);
+    assert_eq!(count(&held, |op| matches!(op, Op::Cell { .. })), 0);
+    for program in [&p, &held] {
+        validate(program).unwrap();
+        let mut host = Recording(Vec::new());
+        let result =
+            evaluate::evaluate(program, main, &[], evaluate::Config::default(), &mut host).unwrap();
+        assert_eq!(result.returned().unwrap(), &[BigUint::from(1u8)]);
+        assert_eq!(host.0, [BigUint::from(1u8), BigUint::from(2u8)]);
+    }
+}
+
+#[test]
+fn a_projection_through_a_call_still_reads_the_returned_cell() {
+    let (mut p, main) = Program::new("main");
+    let identity = p.declare("identity", &[Class::Cell], &[Class::Cell]);
+    p.define(identity, |b, args| b.ret(&[args[0]]));
+    p.define(main, |b, _| {
+        let shape = b.shape(&[Class::Word]);
+        let number = b.constant(Class::Word, 42);
+        let cell = b.cell(0, shape, &[number]);
+        let returned = b.call_one(identity, &[cell]);
+        let field = b.cell_field((Class::Word, shape), returned, 0);
+        b.ret(&[field]);
+    });
+    let held = settled(&p);
+    assert_eq!(count(&held, |op| matches!(op, Op::Cell { .. })), 1);
+    assert_eq!(count(&held, |op| matches!(op, Op::CellField { .. })), 1);
+}

@@ -21,7 +21,7 @@ type Transition = registers::Transition<Reg>;
 /// Every register a value may be held in. Nothing outside the program
 /// calls into it, so none needs keeping for a caller: a call clobbers all
 /// of them, and `rbx`, `r11` and `rsp` keep their own jobs.
-const REGISTERS: [Reg; 13] = [
+const REGISTERS: [Reg; 29] = [
     Reg::Rax,
     Reg::Rcx,
     Reg::Rdx,
@@ -35,6 +35,22 @@ const REGISTERS: [Reg; 13] = [
     Reg::R14,
     Reg::R15,
     Reg::Rbp,
+    Reg::Xmm0,
+    Reg::Xmm1,
+    Reg::Xmm2,
+    Reg::Xmm3,
+    Reg::Xmm4,
+    Reg::Xmm5,
+    Reg::Xmm6,
+    Reg::Xmm7,
+    Reg::Xmm8,
+    Reg::Xmm9,
+    Reg::Xmm10,
+    Reg::Xmm11,
+    Reg::Xmm12,
+    Reg::Xmm13,
+    Reg::Xmm14,
+    Reg::Xmm15,
 ];
 
 pub(super) fn allocate(selected: &Selected, entry: FunctionId) -> Result<Allocated, String> {
@@ -124,6 +140,7 @@ const fn terminator(terminator: Terminator, exits: bool) -> registers::Terminato
             else_args,
         } => registers::Terminator::Branch {
             condition,
+            allowed: super::GPRS,
             then_target,
             then_args,
             else_target,
@@ -159,21 +176,21 @@ mod tests {
             let one = builder.constant(Class::Word, 1);
             let two = builder.constant(Class::Word, 2);
             let value = builder.binary(Binary::Add, one, two);
-            let product = builder.binary(Binary::Mul, value, value);
-            builder.ret(&[product]);
+            let quotient = builder.binary(Binary::Div, value, value);
+            builder.ret(&[quotient]);
         });
         let selected = select(&program).unwrap();
-        let multiply = selected
+        let divide = selected
             .instructions
             .iter()
-            .position(|inst| inst.opcode == super::super::Opcode::Multiply)
+            .position(|inst| inst.opcode == super::super::Opcode::Divide)
             .unwrap();
         let (_, allocation) = registers::allocate(&selected.code(program.entry())).unwrap();
         assert_eq!(
-            allocation.operand_locations[multiply],
+            allocation.operand_locations[divide],
             [Location::Register(Reg::Rax), Location::Register(Reg::Rcx)]
         );
-        assert!(!allocation.operand_moves[multiply].is_empty());
+        assert!(!allocation.operand_moves[divide].is_empty());
     }
 
     #[test]
@@ -181,7 +198,7 @@ mod tests {
         let (mut program, main) = Program::new("main");
         program.define(main, |builder, _| {
             // More live at once than there are registers.
-            let mut values: Vec<_> = (0..u64::try_from(REGISTERS.len() + 4).unwrap())
+            let mut values: Vec<_> = (0..u64::try_from(13 + 4).unwrap())
                 .map(|value| builder.constant(Class::Word, value))
                 .collect();
             while values.len() > 1 {

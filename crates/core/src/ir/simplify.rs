@@ -113,6 +113,42 @@ impl rewrite::Pass for Simplify {
             return true;
         }
         match op {
+            Op::CellField { cell, index, shape } => {
+                let Some((
+                    Op::Cell {
+                        fields,
+                        shape: made,
+                        ..
+                    },
+                    _,
+                    _,
+                )) = self.wrote.0[cell.index()]
+                else {
+                    return false;
+                };
+                if shape != made {
+                    return false;
+                }
+                let index = usize::try_from(index).expect("a validated field index");
+                let field = rebuild.source().values(fields)[index];
+                let held = rebuild.value(field);
+                if !b.class(held).fits(rebuild.source().class(results[0])) {
+                    return false;
+                }
+                // The field is already evaluated, even if constructing the
+                // temporary cell was its only other use. Pruning the cell
+                // must not prune an effect that produced one of its fields.
+                rebuild.stands_for(results[0], held);
+                true
+            }
+            Op::CellTag { cell } => {
+                let Some((Op::Cell { tag, .. }, _, _)) = self.wrote.0[cell.index()] else {
+                    return false;
+                };
+                let held = b.constant(Class::Word, u64::from(tag));
+                rebuild.stands_for(results[0], held);
+                true
+            }
             Op::Convert { value } => {
                 let class = rebuild.source().class(results[0]);
                 self.widened(rebuild, b, class, value, results[0])

@@ -30,7 +30,7 @@ pub struct Span {
     pub len: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Class {
     /// An immutable algebraic value. Ownership is tracked for this class;
     /// its object address and layout remain private to legalization.
@@ -88,7 +88,7 @@ impl Class {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Binary {
     Add,
     /// Word subtraction; on `Natural`, truncated subtraction (monus).
@@ -120,7 +120,7 @@ pub enum Binary {
     ShiftDown,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Relation {
     Equal,
     /// Unsigned, like every comparison on a word.
@@ -128,7 +128,7 @@ pub enum Relation {
 }
 
 /// Which way a shift moves the bits it keeps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Direction {
     /// Toward the high bits: a product by two to the power of the distance.
     Up,

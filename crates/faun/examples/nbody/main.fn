@@ -3,9 +3,9 @@
 # writes it.
 #
 # This is the floating-point benchmark: a small fixed set of records of `F64`
-# stepped many times, with nothing allocated per step but the records
-# themselves. It measures `F64` arithmetic and `sqrt`, record rebuilding, and
-# the small folds over a five-element list.
+# stepped many times. It measures `F64` arithmetic and `sqrt`, list rebuilding,
+# and the small folds over a five-element list. Runtime allocation also depends
+# on how the compiler represents tuples and passes records across calls.
 #
 # The first argument is the number of steps. The two lines printed are the
 # system's energy before and after stepping, to nine decimal places; the game

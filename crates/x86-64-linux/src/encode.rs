@@ -64,7 +64,7 @@ pub(crate) fn encode(program: &Allocated) -> Code {
                 bits,
             } => asm.shift(direction, dst, by, bits),
             Inst::ShiftByCount { direction, dst } => asm.shift_by_count(direction, dst),
-            Inst::Multiply => asm.multiply(),
+            Inst::Multiply { dst, src } => asm.multiply(dst, src),
             Inst::Float {
                 float,
                 dst,
@@ -328,8 +328,36 @@ impl RawEncoder {
 
     fn mov_reg(&mut self, dst: Reg, src: Reg, wide: bool) {
         self.step();
-        self.rex(wide, Some(src), dst);
-        self.emit(&[0x89, modrm(src, dst)]);
+        match (dst.is_xmm(), src.is_xmm()) {
+            (false, false) => {
+                self.rex(wide, Some(src), dst);
+                self.emit(&[0x89, modrm(src, dst)]);
+            }
+            (true, false) => {
+                self.emit(&[0x66]);
+                self.rex(wide, Some(dst), src);
+                self.emit(&[0x0F, 0x6E, modrm(dst, src)]);
+            }
+            (false, true) => {
+                self.emit(&[0x66]);
+                self.rex(wide, Some(src), dst);
+                self.emit(&[0x0F, 0x7E, modrm(src, dst)]);
+            }
+            (true, true) => {
+                if src != dst {
+                    self.rex(false, Some(dst), src);
+                    self.emit(&[0x0F, 0x28, modrm(dst, src)]);
+                }
+                if !wide {
+                    // Truncate without a GPR scratch, including self copies.
+                    for extension in [6, 2] {
+                        self.emit(&[0x66]);
+                        self.rex(false, None, dst);
+                        self.emit(&[0x0F, 0x73, 0xC0 | (extension << 3) | dst.low(), 32]);
+                    }
+                }
+            }
+        }
     }
 
     /// Sign-extends to a full 64-bit stack slot.
@@ -379,12 +407,22 @@ impl RawEncoder {
     /// this way, and nothing here asks to be.
     fn load_word(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.step();
-        self.at(&[0x8B], dst, base, disp);
+        if dst.is_xmm() {
+            self.emit(&[0xF3]);
+            self.at_narrow(&[0x0F, 0x7E], dst, base, disp);
+        } else {
+            self.at(&[0x8B], dst, base, disp);
+        }
     }
 
     fn store_word(&mut self, src: Reg, base: Reg, disp: i32) {
         self.step();
-        self.at(&[0x89], src, base, disp);
+        if src.is_xmm() {
+            self.emit(&[0x66]);
+            self.at_narrow(&[0x0F, 0xD6], src, base, disp);
+        } else {
+            self.at(&[0x89], src, base, disp);
+        }
     }
 
     /// The low byte, zero-extended on the way in.
@@ -414,12 +452,22 @@ impl RawEncoder {
     /// Four bytes: a 32-bit move zero-extends what it writes.
     fn load_bits32(&mut self, dst: Reg, base: Reg, disp: i32) {
         self.step();
-        self.at_narrow(&[0x8B], dst, base, disp);
+        if dst.is_xmm() {
+            self.emit(&[0x66]);
+            self.at_narrow(&[0x0F, 0x6E], dst, base, disp);
+        } else {
+            self.at_narrow(&[0x8B], dst, base, disp);
+        }
     }
 
     fn store_bits32(&mut self, src: Reg, base: Reg, disp: i32) {
         self.step();
-        self.at_narrow(&[0x89], src, base, disp);
+        if src.is_xmm() {
+            self.emit(&[0x66]);
+            self.at_narrow(&[0x0F, 0x7E], src, base, disp);
+        } else {
+            self.at_narrow(&[0x89], src, base, disp);
+        }
     }
 
     fn at(&mut self, opcode: &[u8], reg: Reg, base: Reg, disp: i32) {
@@ -526,40 +574,37 @@ impl RawEncoder {
         self.emit(&[0xD3, 0xC0 | (extension << 3) | dst.low()]);
     }
 
-    /// Unsigned RDX:RAX = RAX * RCX; both result registers are clobbered.
-    fn multiply(&mut self) {
+    /// The low 64 bits of `dst * src`, leaving every other register alone.
+    fn multiply(&mut self, dst: Reg, src: Reg) {
         self.step();
-        self.emit(&[0x48, 0xF7, 0xE1]);
+        self.rex(true, Some(dst), src);
+        self.emit(&[0x0F, 0xAF, 0xC0 | (dst.low() << 3) | src.low()]);
     }
 
-    /// `dst` = `float` of `left` and `right`: each pattern moved into an
-    /// `xmm` register, one scalar SSE instruction, and the answer moved
-    /// back. A binary32 pattern moves as a doubleword, which clears the
-    /// upper half of `dst`.
+    /// Compute a scalar result in its allocated XMM register. Every value
+    /// has a canonical low 64-bit word, including zero above binary32 bits.
     fn float(&mut self, float: faun_core::float::Float, dst: Reg, left: Reg, right: Option<Reg>) {
         use faun_core::float::{Format, Operation};
-        let wide = float.format == Format::Binary64;
         self.step();
-        // movq/movd xmm0, left; movq/movd xmm1, right
-        for (xmm, gpr) in [(0u8, Some(left)), (1, right)] {
-            let Some(gpr) = gpr else { continue };
+        let wide = float.format == Format::Binary64;
+        if !wide && float.operation == Operation::Sqrt && dst != left {
+            // sqrtss leaves destination bits 32..127 untouched. They must
+            // not leak into a later word spill or integer bit observation.
             self.emit(&[0x66]);
-            self.rex(wide, None, gpr);
-            self.emit(&[0x0F, 0x6E, 0xC0 | (xmm << 3) | gpr.low()]);
+            self.rex(false, Some(dst), dst);
+            self.emit(&[0x0F, 0xEF, modrm(dst, dst)]);
         }
-        let prefix = if wide { 0xF2 } else { 0xF3 };
-        let (opcode, source) = match float.operation {
-            Operation::Add => (0x58, 1),
-            Operation::Mul => (0x59, 1),
-            Operation::Sub => (0x5C, 1),
-            Operation::Div => (0x5E, 1),
-            Operation::Sqrt => (0x51, 0),
+        let opcode = match float.operation {
+            Operation::Add => 0x58,
+            Operation::Mul => 0x59,
+            Operation::Sub => 0x5C,
+            Operation::Div => 0x5E,
+            Operation::Sqrt => 0x51,
         };
-        self.emit(&[prefix, 0x0F, opcode, 0xC0 | source]);
-        // movq/movd dst, xmm0
-        self.emit(&[0x66]);
-        self.rex(wide, None, dst);
-        self.emit(&[0x0F, 0x7E, 0xC0 | dst.low()]);
+        let source = right.unwrap_or(left);
+        self.emit(&[if wide { 0xF2 } else { 0xF3 }]);
+        self.rex(false, Some(dst), source);
+        self.emit(&[0x0F, opcode, modrm(dst, source)]);
     }
 
     /// Unsigned RAX = RDX:RAX / RCX, RDX = remainder. The caller guards zero.
@@ -614,7 +659,13 @@ impl RawEncoder {
             1..=0x7F => 0x40,
             _ => 0x80,
         };
-        self.emit(&[0x48 | (u8::from(reg.extended()) << 2), opcode]);
+        if reg.is_xmm() {
+            self.emit(&[if opcode == 0x8B { 0xF3 } else { 0x66 }]);
+            self.rex(false, Some(reg), Reg::Rsp);
+            self.emit(&[0x0F, if opcode == 0x8B { 0x7E } else { 0xD6 }]);
+        } else {
+            self.emit(&[0x48 | (u8::from(reg.extended()) << 2), opcode]);
+        }
         self.emit(&[mode | (reg.low() << 3) | 4, 0x24]);
         match mode {
             0x00 => {}
@@ -807,7 +858,14 @@ mod tests {
         assert_eq!(encoded(|a| a.xor_self(Reg::Rdi)), [0x31, 0xFF]);
         assert_eq!(encoded(|a| a.pop(Reg::Rdx)), [0x5A]);
         assert_eq!(encoded(|a| a.push_imm8(-5)), [0x6A, 0xFB]);
-        assert_eq!(encoded(AllocatedBuilder::multiply), [0x48, 0xF7, 0xE1]);
+        assert_eq!(
+            encoded(|a| a.multiply(Reg::Rax, Reg::Rcx)),
+            [0x48, 0x0F, 0xAF, 0xC1]
+        );
+        assert_eq!(
+            encoded(|a| a.multiply(Reg::R12, Reg::R9)),
+            [0x4D, 0x0F, 0xAF, 0xE1]
+        );
         assert_eq!(encoded(AllocatedBuilder::divide), [0x48, 0xF7, 0xF1]);
         assert_eq!(encoded(|a| a.narrow(Reg::Rax, 0)), [0x31, 0xC0]);
         assert_eq!(encoded(|a| a.narrow(Reg::Rdi, 7)), [0x83, 0xE7, 0x7F]);
@@ -832,6 +890,30 @@ mod tests {
         #[rustfmt::skip]
         assert_eq!(encoded(|a| a.mov_imm64(Reg::Rdx, 0x7FFF_FFFF_FFFF_FFFF)),
             [0x48, 0xBA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]);
+    }
+
+    #[test]
+    fn scalar_sse_operands_encode_at_both_widths() {
+        use faun_core::float::{Float, Format, Operation};
+        let add = Float {
+            format: Format::Binary64,
+            operation: Operation::Add,
+        };
+        assert_eq!(
+            encoded(|a| a.float(add, Reg::Xmm12, Reg::Xmm12, Some(Reg::Xmm9))),
+            [0xF2, 0x45, 0x0F, 0x58, 0xE1]
+        );
+        let sqrt = Float {
+            format: Format::Binary32,
+            operation: Operation::Sqrt,
+        };
+        assert_eq!(
+            encoded(|a| a.float(sqrt, Reg::Xmm8, Reg::Xmm9, None)),
+            [
+                0x66, 0x45, 0x0F, 0xEF, 0xC0, // pxor xmm8, xmm8
+                0xF3, 0x45, 0x0F, 0x51, 0xC1, // sqrtss xmm8, xmm9
+            ]
+        );
     }
 
     #[test]

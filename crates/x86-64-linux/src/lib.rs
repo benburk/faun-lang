@@ -1,12 +1,12 @@
 //! `selected` flattens machine-IR regions into a verified target-local SSA
 //! CFG. Its allocator computes segmented liveness, splits around constraints
 //! and clobbers, plans transfers through `parallel_copy`, and lowers a fully
-//! verified symbolic `machine::Allocated` sequence. `encode` alone lays that
-//! sequence out as bytes. Data addresses remain `Reloc`s until `elf` chooses
+//! verified symbolic `machine::Allocated` sequence. Allowed-register sets
+//! separate integer and scalar XMM operands; copies and spills preserve their
+//! low-word bit patterns across banks. `encode` alone lays that sequence out
+//! as bytes. Data addresses remain `Reloc`s until `elf` chooses
 //! the image layout and fills them in.
 
-#[cfg(test)]
-mod abi_tests;
 mod elf;
 mod encode;
 mod jumps;
@@ -19,7 +19,7 @@ mod tests;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use faun_core::ir::{Budget, DataId, Program};
+use faun_core::ir::{DataId, Program};
 use faun_core::targets::{Target, write_image};
 
 /// How wide this machine's own word is, which is the widest value it holds
@@ -71,10 +71,6 @@ impl Target for X86_64Linux {
         true
     }
 
-    fn budget(&self) -> Budget {
-        Budget::new(ARG_COUNT, 1, usize::MAX)
-    }
-
     fn limits(&self, program: &Program) -> Result<(), String> {
         let entry = program.entry();
         // Each entry parameter is a startup value: the count, then where the
@@ -86,21 +82,6 @@ impl Target for X86_64Linux {
             {
                 return Err(format!(
                     "x86-64-linux cannot supply entry parameter {at} `{name}`"
-                ));
-            }
-        }
-        for function in program.functions() {
-            let name = program.name(function.name);
-            if function.params.len() > ARG_COUNT {
-                return Err(format!(
-                    "x86-64-linux function `{name}` has {} parameters; at most {ARG_COUNT} are supported",
-                    function.params.len()
-                ));
-            }
-            if function.returns.classes().len() > 1 {
-                return Err(format!(
-                    "x86-64-linux function `{name}` has {} results; at most 1 is supported",
-                    function.returns.classes().len()
                 ));
             }
         }

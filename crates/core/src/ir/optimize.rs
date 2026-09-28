@@ -13,11 +13,10 @@
 //! written the runtime: its offsets are arithmetic on sizes known before the
 //! program runs, which only then is at a width the program says.
 
-use super::{Program, prune, simplify};
+use super::{Program, common, prune, simplify};
 
-/// Rewrite a validated program: recognise the shapes lowering leaves
-/// behind, then drop what nothing reads, including what that stopped
-/// reading.
+/// Rewrite a validated program: simplify lowering's shapes, share repeated
+/// scalar calculations within each region, then drop what nothing reads.
 ///
 /// Validation must precede this: a pass reads a program as structurally
 /// sound and says nothing useful about one that is not. Values, instructions
@@ -25,5 +24,5 @@ use super::{Program, prune, simplify};
 /// same thing afterwards. Data, globals, names and function IDs do.
 #[must_use]
 pub fn optimize(program: &Program) -> Program {
-    prune::prune(&simplify::simplify(program))
+    prune::prune(&common::common(&simplify::simplify(program)))
 }

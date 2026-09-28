@@ -287,6 +287,51 @@ fn target_runs_managed_products_across_calls_and_matches() {
     assert_eq!(status(&prepared), 42);
 }
 
+/// Removing a temporary product must leave both uses of its managed field
+/// alive. The two calls still share one inner cell after forwarding.
+#[test]
+fn forwarded_managed_fields_survive_both_calls() {
+    let (mut machine, main) = Program::new_with_params("main", &[("argc", Class::Word)]);
+    let read = machine.declare("read", &[Class::Cell], &[Class::Word]);
+    machine.define(read, |b, args| {
+        let shape = b.shape(&[Class::Word]);
+        let value = b.cell_field((Class::Word, shape), args[0], 0);
+        b.ret(&[value]);
+    });
+    machine.define(main, |b, args| {
+        let word = b.shape(&[Class::Word]);
+        let cells = b.shape(&[Class::Cell; 2]);
+        let inner = b.cell(7, word, &[args[0]]);
+        let outer = b.cell(0, cells, &[inner, inner]);
+        let left = b.cell_field((Class::Cell, cells), outer, 0);
+        let right = b.cell_field((Class::Cell, cells), outer, 1);
+        let first = b.call_one(read, &[left]);
+        let second = b.call_one(read, &[right]);
+        let answer = b.binary(Binary::Add, first, second);
+        b.ret(&[answer]);
+    });
+    faun_core::ir::validate(&machine).unwrap();
+    let optimized = faun_core::ir::optimize(&machine);
+    let body = optimized.function(main).body().unwrap();
+    assert_eq!(
+        optimized
+            .every(body)
+            .filter(|op| matches!(op, Op::Cell { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        !optimized
+            .every(body)
+            .any(|op| matches!(op, Op::CellField { .. }))
+    );
+    let prepared = TARGET.prepare(&optimized).unwrap();
+    assert_eq!(
+        execute_counts(&prepared, &[1, 2]),
+        [(2, String::new()), (4, String::new())]
+    );
+}
+
 /// Products held flat cross calls as arguments and results, meet at a join,
 /// and ride inside a sum's cell as their fields. The 6502 answers one value
 /// and joins two, so there the same program also runs packed.
@@ -468,6 +513,28 @@ fn prepared_programs_carry_more_across_a_boundary_than_a_target_passes() {
             .expect("a program any target holds");
         assert_eq!(status(&prepared), 0);
     }
+}
+
+/// Excess arguments and multiple results may be packed or stack-passed,
+/// but every occurrence of the same managed value still owns its claim.
+#[test]
+fn managed_aliases_survive_wide_calls_and_multiple_results() {
+    let (mut program, main) = Program::new("main");
+    let wide = program.declare("wide", &[Class::Cell; 8], &[Class::Cell; 4]);
+    program.define(wide, |b, args| b.ret(&[args[7], args[0], args[6], args[1]]));
+    program.define(main, |b, _| {
+        let word = b.shape(&[Class::Word]);
+        let value = b.constant(Class::Word, 21);
+        let cell = b.cell(0, word, &[value]);
+        let first = b.call(wide, &[cell; 8]);
+        let second = b.call(wide, &[first[3]; 8]);
+        let left = b.cell_field((Class::Word, word), first[0], 0);
+        let right = b.cell_field((Class::Word, word), second[3], 0);
+        let sum = b.binary(Binary::Add, left, right);
+        b.ret(&[sum]);
+    });
+    let prepared = TARGET.prepare(&program).unwrap();
+    assert_eq!(status(&prepared), 42);
 }
 
 #[test]

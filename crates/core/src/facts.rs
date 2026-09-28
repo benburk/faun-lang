@@ -14,7 +14,7 @@
 
 /// The least and greatest a number can be. No greatest is a number counting
 /// up without a last step, which is every `Nat` until something says less.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Facts {
     pub low: u64,
     pub high: Option<u64>,

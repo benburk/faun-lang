@@ -62,6 +62,7 @@
 mod arithmetic;
 mod builder;
 mod cell;
+mod common;
 mod digits;
 pub mod evaluate;
 mod fit;
@@ -100,6 +101,8 @@ pub use validate::validate;
 
 #[cfg(test)]
 mod arithmetic_tests;
+#[cfg(test)]
+mod common_tests;
 #[cfg(test)]
 mod cost_tests;
 #[cfg(test)]

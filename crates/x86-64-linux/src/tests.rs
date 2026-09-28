@@ -4,6 +4,13 @@ use faun_core::targets::Target;
 use crate::X86_64Linux;
 use shared::{narrow, wide};
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "float_tests.rs"]
+mod float_tests;
+
+#[path = "abi_tests.rs"]
+mod abi_tests;
+
 #[path = "../../core/tests/support/backend.rs"]
 mod shared;
 
@@ -11,6 +18,9 @@ const TARGET: X86_64Linux = X86_64Linux;
 const RUNNER: Option<&str> = None;
 
 // Lower baselines when emission improves; explain any increase.
+// Two-operand IMUL is one byte longer than implicit MUL in the shared
+// intermediate rung, but no longer reserves/clobbers RAX/RCX/RDX. It removes
+// register transfers in the runtime multiply and natural-number examples.
 //
 // A program that writes ignores `SIGPIPE` before anything else, so a write
 // to a closed pipe answers `BrokenPipe` as it does on every other target:
@@ -28,7 +38,7 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("the low bits of a sum", 131),
     ("the count under a guard", 147),
     ("the count and more", 150),
-    ("a shared intermediate", 156),
+    ("a shared intermediate", 157),
     ("a greeting", 182),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
@@ -58,13 +68,13 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("double", 128),
     ("leave", 128),
     ("bool", 160),
-    ("nat", 258),
+    ("nat", 248),
     ("width", 156),
     ("argc", 169),
     ("expressions", 168),
     ("hello", 239),
 ];
-const ARITHMETIC_SIZES: [usize; 3] = [188, 199, 198];
+const ARITHMETIC_SIZES: [usize; 3] = [165, 199, 198];
 
 #[test]
 fn ladder_code_size_ratchets() {
@@ -91,7 +101,7 @@ fn ladder_code_size_ratchets() {
             ("the low bits of a sum", 11),
             ("the count under a guard", 27),
             ("the count and more", 30),
-            ("a shared intermediate", 36),
+            ("a shared intermediate", 37),
             ("a greeting", 49),
         ]
     );
@@ -108,4 +118,26 @@ fn it_holds_what_a_program_holds() {
     assert!(TARGET.accepts(&wide(70_000)).is_ok());
     assert!(TARGET.accepts(&wide(4)).is_ok());
     assert!(TARGET.accepts(&narrow(32)).is_ok());
+}
+
+#[test]
+fn low_word_multiplication_preserves_unsigned_high_bits() {
+    use faun_core::ir::{Binary, Class, Program, Relation};
+    for (left, right) in [
+        (u64::MAX, u64::MAX),
+        (1 << 63, 3),
+        (u64::from(u32::MAX), u64::from(u32::MAX)),
+        (0, u64::MAX),
+    ] {
+        let (mut p, main) = Program::new("main");
+        p.define(main, |b, _| {
+            let a = b.constant(Class::Word, left);
+            let c = b.constant(Class::Word, right);
+            let product = b.binary(Binary::Mul, a, c);
+            let expected = b.constant(Class::Word, left.wrapping_mul(right));
+            let equal = b.compare(Relation::Equal, product, expected);
+            b.ret(&[equal]);
+        });
+        assert_eq!(shared::status(&p), 1, "{left} * {right}");
+    }
 }

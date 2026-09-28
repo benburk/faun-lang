@@ -8,7 +8,7 @@
 mod register_allocate;
 
 use super::machine::Reg;
-use crate::WORD_BITS;
+use crate::{ARG_COUNT, WORD_BITS};
 use faun_core::index::{Pool, Range};
 use faun_core::ir::{
     Binary, Class, DataId, Exit, FunctionId, Offset, Op as SourceOp, Program, RegionId, Relation,
@@ -36,7 +36,7 @@ pub(crate) enum Access {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct RegSet(u16);
+pub(crate) struct RegSet(u32);
 
 impl RegSet {
     #[expect(
@@ -118,6 +118,14 @@ pub(crate) enum Opcode {
     Convert,
     Shift,
     Call,
+    /// Read a stack argument from the caller's outgoing area.
+    LoadIncoming,
+    /// Write a stack result to the caller's outgoing area.
+    StoreIncoming,
+    /// Read a stack result after a call.
+    LoadOutgoing,
+    /// Write a stack argument before a call.
+    StoreOutgoing,
     Write,
     /// Bytes where they lie to what a descriptor names, or from it to where
     /// they are to lie: how many moved, or `-errno`.
@@ -134,8 +142,7 @@ pub(crate) enum Opcode {
     /// Where the arguments' addresses lie: just past the count.
     ArgumentVector,
     ReadByte,
-    /// IEEE 754 arithmetic on patterns held in general registers, moved
-    /// through `xmm0` and `xmm1`, which nothing else holds anything in.
+    /// IEEE 754 arithmetic on scalar patterns allocated to XMM registers.
     Float,
 }
 
@@ -146,6 +153,7 @@ impl Opcode {
         matches!(
             self,
             Self::Add
+                | Self::Multiply
                 | Self::Subtract
                 | Self::And
                 | Self::Or
@@ -172,8 +180,7 @@ impl Opcode {
     /// Where what it answers is left.
     const fn answered_in(self) -> Constraint {
         match self {
-            Self::Multiply
-            | Self::Divide
+            Self::Divide
             | Self::Modulo
             | Self::Call
             | Self::WriteFd
@@ -209,6 +216,22 @@ impl Opcode {
                 Reg::R9,
                 Reg::R10,
                 Reg::R11,
+                Reg::Xmm0,
+                Reg::Xmm1,
+                Reg::Xmm2,
+                Reg::Xmm3,
+                Reg::Xmm4,
+                Reg::Xmm5,
+                Reg::Xmm6,
+                Reg::Xmm7,
+                Reg::Xmm8,
+                Reg::Xmm9,
+                Reg::Xmm10,
+                Reg::Xmm11,
+                Reg::Xmm12,
+                Reg::Xmm13,
+                Reg::Xmm14,
+                Reg::Xmm15,
             ]),
         };
         let effects = match self {
@@ -229,6 +252,7 @@ impl Opcode {
             // SSE arithmetic leaves the flags as they were.
             | Self::Float => Effects::PURE,
             Self::Add
+            | Self::Multiply
             | Self::Subtract
             | Self::Monus
             | Self::And
@@ -241,15 +265,15 @@ impl Opcode {
                 clobbers: RegSet::of(&[Reg::Rcx]),
                 ..arithmetic
             },
-            Self::Multiply | Self::Divide | Self::Modulo => Effects {
+            Self::Divide | Self::Modulo => Effects {
                 clobbers: RegSet::of(&[Reg::Rdx]),
                 ..arithmetic
             },
-            Self::Load => Effects {
+            Self::Load | Self::LoadIncoming | Self::LoadOutgoing => Effects {
                 memory: Access::Read,
                 ..Effects::PURE
             },
-            Self::Store => Effects {
+            Self::Store | Self::StoreIncoming | Self::StoreOutgoing => Effects {
                 memory: Access::Write,
                 ..Effects::PURE
             },
@@ -300,7 +324,7 @@ impl Opcode {
             _ => Expansion::Single,
         };
         let scratch = match self {
-            Self::Multiply | Self::Divide | Self::Modulo => RegSet::of(&[Reg::Rdx]),
+            Self::Divide | Self::Modulo => RegSet::of(&[Reg::Rdx]),
             Self::Write => RegSet::of(&[Reg::Rax, Reg::Rdi]),
             Self::OpenAt => RegSet::of(&[Reg::Rdi, Reg::Rdx, Reg::R10]),
             Self::Exit => RegSet::of(&[Reg::Rax]),
@@ -323,10 +347,19 @@ enum Immediate {
     Integer(u64),
     Data(DataId),
     Bits(u16),
-    Memory { width: Width, offset: Offset },
-    Shift { up: bool, by: u8, bits: u16 },
+    Memory {
+        width: Width,
+        offset: Offset,
+    },
+    Shift {
+        up: bool,
+        by: u8,
+        bits: u16,
+    },
     Function(FunctionId),
     Float(faun_core::float::Float),
+    /// A word slot in a call's area: overflow arguments, then overflow results.
+    Slot(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -337,6 +370,10 @@ struct Inst {
     immediate: Immediate,
 }
 
+const GPRS: faun_core::codegen::RegSet = faun_core::codegen::RegSet(0xFFFF);
+const XMMS: faun_core::codegen::RegSet = faun_core::codegen::RegSet(0xFFFF_0000);
+const SCALARS: faun_core::codegen::RegSet = faun_core::codegen::RegSet(0xFFFF_FFFF);
+
 impl Inst {
     fn operand_spec(self, at: usize) -> Option<OperandSpec> {
         let def = usize::from(self.result.is_some());
@@ -345,16 +382,22 @@ impl Inst {
                 role: Role::Def,
                 timing: Timing::Late,
                 constraint: self.opcode.answered_in(),
+                allowed: self.allowed(true, 0),
             });
         }
         let use_at = at.checked_sub(def)?;
         let constraint = match self.opcode {
-            op if op.in_place() && use_at == 0 => Constraint::Tied(0),
-            Opcode::ShiftUp | Opcode::ShiftDown if use_at == 1 => Constraint::Fixed(Reg::Rcx),
-            Opcode::Multiply | Opcode::Divide | Opcode::Modulo if use_at == 0 => {
-                Constraint::Fixed(Reg::Rax)
+            Opcode::Float
+                if use_at == 0
+                    && matches!(self.immediate, Immediate::Float(float) if float.operation.arity() == 2) =>
+            {
+                Constraint::Tied(0)
             }
-            Opcode::Multiply | Opcode::Divide | Opcode::Modulo if use_at == 1 => {
+            op if op.in_place() && use_at == 0 => Constraint::Tied(0),
+            Opcode::Divide | Opcode::Modulo if use_at == 0 => Constraint::Fixed(Reg::Rax),
+            Opcode::ShiftUp | Opcode::ShiftDown | Opcode::Divide | Opcode::Modulo
+                if use_at == 1 =>
+            {
                 Constraint::Fixed(Reg::Rcx)
             }
             Opcode::Call => abi_register(use_at).map(Constraint::Fixed)?,
@@ -367,7 +410,48 @@ impl Inst {
             role: Role::Use,
             timing: Timing::Early,
             constraint,
+            allowed: self.allowed(false, use_at),
         })
+    }
+
+    fn allowed(self, result: bool, use_at: usize) -> faun_core::codegen::RegSet {
+        match self.opcode {
+            Opcode::Float => XMMS,
+            // Every scalar already fits a word: this conversion emits no
+            // instruction and must not force an otherwise floating chain
+            // through the integer bank.
+            Opcode::Convert if self.immediate == Immediate::Bits(64) => SCALARS,
+            Opcode::Load
+                if result
+                    && matches!(
+                        self.immediate,
+                        Immediate::Memory {
+                            width: Width::Word | Width::Bits32,
+                            ..
+                        }
+                    ) =>
+            {
+                SCALARS
+            }
+            Opcode::Store
+                if !result
+                    && use_at == 1
+                    && matches!(
+                        self.immediate,
+                        Immediate::Memory {
+                            width: Width::Word | Width::Bits32,
+                            ..
+                        }
+                    ) =>
+            {
+                SCALARS
+            }
+            Opcode::LoadIncoming
+            | Opcode::LoadOutgoing
+            | Opcode::StoreIncoming
+            | Opcode::StoreOutgoing => SCALARS,
+            _ => GPRS,
+        }
     }
 }
 
@@ -409,6 +493,7 @@ impl Terminator {
                 role: Role::Use,
                 timing: Timing::Early,
                 constraint: Constraint::Fixed(Reg::Rax),
+                allowed: GPRS,
             }),
             _ => None,
         }
@@ -427,6 +512,8 @@ struct Block {
 struct Function {
     source: FunctionId,
     entry: BlockId,
+    stack_params: usize,
+    stack_results: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -577,9 +664,105 @@ impl Selected {
             }
             self.verify_inst_shape(*inst, InstId::at(at))?;
         }
+        self.verify_stack_calls()?;
         let dominators = self.dominators()?;
         for (id, block) in self.blocks.iter_enumerated() {
             self.verify_uses(block.owner, block.terminator, &definitions, id, &dominators)?;
+        }
+        Ok(())
+    }
+
+    /// Verify each call's contiguous stores/call/loads sequence, and the
+    /// entry loads and return stores against the owning function's layout.
+    /// Slot bounds alone would admit missing, overlapping or unwritten values.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one walk verifies both sides of each stack call"
+    )]
+    fn verify_stack_calls(&self) -> Result<(), String> {
+        for (id, block) in self.blocks.iter_enumerated() {
+            let owner = self
+                .functions
+                .iter()
+                .find(|f| f.source == block.owner)
+                .expect("a verified block owner");
+            let (mut arguments, mut returns) = (0usize, 0usize);
+            let mut results = 0..0;
+            let incoming = if id == owner.entry {
+                owner.stack_params
+            } else {
+                0
+            };
+            let instructions = &self.order[block.instructions.range()];
+            if instructions.len() < incoming {
+                return Err("x86 stack parameters are missing".to_owned());
+            }
+            for (at, &instruction) in instructions.iter().enumerate() {
+                let inst = self.instructions[instruction];
+                if at < incoming {
+                    if inst.opcode != Opcode::LoadIncoming || inst.immediate != stack_slot(at)? {
+                        return Err("x86 stack parameter has the wrong slot".to_owned());
+                    }
+                    continue;
+                }
+                if let Some(slot) = results.next() {
+                    if inst.opcode != Opcode::LoadOutgoing || inst.immediate != stack_slot(slot)? {
+                        return Err("x86 stack call result has the wrong slot".to_owned());
+                    }
+                    continue;
+                }
+                if arguments > 0 && !matches!(inst.opcode, Opcode::StoreOutgoing | Opcode::Call) {
+                    return Err("x86 stack arguments are not followed by their call".to_owned());
+                }
+                if returns > 0 && inst.opcode != Opcode::StoreIncoming {
+                    return Err("x86 stack results are not followed by their return".to_owned());
+                }
+                match (inst.opcode, inst.immediate) {
+                    (Opcode::StoreOutgoing, slot) if slot == stack_slot(arguments)? => {
+                        arguments += 1;
+                    }
+                    (Opcode::StoreIncoming, slot)
+                        if slot == stack_slot(owner.stack_params + returns)? =>
+                    {
+                        returns += 1;
+                    }
+                    (Opcode::Call, Immediate::Function(function)) => {
+                        let callee = self
+                            .functions
+                            .iter()
+                            .find(|f| f.source == function)
+                            .ok_or("x86 stack call has no callee")?;
+                        if function == self.functions[0].source {
+                            return Err("x86 cannot call the logical entry".to_owned());
+                        }
+                        if arguments != callee.stack_params {
+                            return Err(
+                                "x86 stack call has the wrong number of arguments".to_owned()
+                            );
+                        }
+                        results = arguments..arguments + callee.stack_results;
+                        arguments = 0;
+                    }
+                    (
+                        Opcode::LoadIncoming
+                        | Opcode::LoadOutgoing
+                        | Opcode::StoreIncoming
+                        | Opcode::StoreOutgoing,
+                        _,
+                    ) => {
+                        return Err("x86 stack access is outside its call sequence".to_owned());
+                    }
+                    _ => {}
+                }
+            }
+            let expected = if matches!(block.terminator, Terminator::Return { .. }) {
+                owner.stack_results
+            } else {
+                0
+            };
+            if arguments != 0 || !results.is_empty() || returns != expected {
+                return Err("x86 stack call or return is incomplete".to_owned());
+            }
         }
         Ok(())
     }
@@ -627,13 +810,17 @@ impl Selected {
             | Opcode::DataAddress
             | Opcode::ArgumentCount
             | Opcode::ArgumentVector
-            | Opcode::ReadByte => 0,
+            | Opcode::ReadByte
+            | Opcode::LoadIncoming
+            | Opcode::LoadOutgoing => 0,
             Opcode::Load
             | Opcode::Convert
             | Opcode::Shift
             | Opcode::Exit
             | Opcode::Grow
-            | Opcode::CloseFd => 1,
+            | Opcode::CloseFd
+            | Opcode::StoreIncoming
+            | Opcode::StoreOutgoing => 1,
             Opcode::Float => match inst.immediate {
                 Immediate::Float(float) => float.operation.arity(),
                 _ => usize::MAX,
@@ -664,7 +851,11 @@ impl Selected {
             ));
         }
         let result_is_valid = match inst.opcode {
-            Opcode::Store | Opcode::Write | Opcode::Exit => inst.result.is_none(),
+            Opcode::Store
+            | Opcode::Write
+            | Opcode::Exit
+            | Opcode::StoreIncoming
+            | Opcode::StoreOutgoing => inst.result.is_none(),
             Opcode::Call => true,
             _ => inst.result.is_some(),
         };
@@ -1039,8 +1230,12 @@ fn verify_effects(opcode: Opcode, id: InstId) -> Result<(), String> {
             Opcode::Constant => {
                 requirements.expansion == Expansion::Sequence && effects.memory == Access::ReadWrite
             }
-            Opcode::Load => effects.memory == Access::Read,
-            Opcode::Store => effects.memory == Access::Write,
+            Opcode::Load | Opcode::LoadIncoming | Opcode::LoadOutgoing => {
+                effects.memory == Access::Read
+            }
+            Opcode::Store | Opcode::StoreIncoming | Opcode::StoreOutgoing => {
+                effects.memory == Access::Write
+            }
             Opcode::Call
             | Opcode::Write
             | Opcode::WriteFd
@@ -1115,6 +1310,13 @@ fn verify_immediate(inst: Inst, id: InstId) -> Result<(), String> {
             | (Opcode::Shift, Immediate::Shift { .. })
             | (Opcode::Call, Immediate::Function(_))
             | (Opcode::Float, Immediate::Float(_))
+            | (
+                Opcode::LoadIncoming
+                    | Opcode::LoadOutgoing
+                    | Opcode::StoreIncoming
+                    | Opcode::StoreOutgoing,
+                Immediate::Slot(_)
+            )
             | (
                 Opcode::Write
                     | Opcode::WriteFd
@@ -1204,6 +1406,8 @@ pub(crate) fn select(source: &Program) -> Result<Selected, String> {
         selector.functions.push(Function {
             source: source_id,
             entry,
+            stack_params: params.len().saturating_sub(ARG_COUNT),
+            stack_results: function.returns.classes().len().saturating_sub(1),
         });
         selector.region(
             source_id,
@@ -1237,12 +1441,22 @@ impl Selector<'_> {
             }
             return Ok(block);
         }
-        let block = self.block(owner, params);
+        let registers = params.len().min(ARG_COUNT);
+        let block = self.block(owner, &params[..registers]);
         for (at, spec) in self.blocks[block].param_specs.iter_mut().enumerate() {
             spec.constraint =
                 Constraint::Fixed(abi_register(at).ok_or_else(|| {
                     "x86 function has more than six selected parameters".to_owned()
                 })?);
+        }
+        for (slot, &value) in params[registers..].iter().enumerate() {
+            self.emit(
+                block,
+                Opcode::LoadIncoming,
+                Some(value),
+                &[],
+                stack_slot(slot)?,
+            );
         }
         Ok(block)
     }
@@ -1293,6 +1507,7 @@ impl Selector<'_> {
                     role: Role::Def,
                     timing: Timing::Late,
                     constraint: Constraint::Any,
+                    allowed: SCALARS,
                 };
                 params.len()
             ],
@@ -1510,17 +1725,44 @@ impl Selector<'_> {
                     } else {
                         Opcode::Call
                     };
-                    self.emit(
-                        block,
-                        opcode,
-                        results.first().copied(),
-                        source.values(args),
-                        if opcode == Opcode::Call {
-                            Immediate::Function(function)
-                        } else {
-                            Immediate::None
-                        },
-                    );
+                    let args = source.values(args);
+                    if opcode == Opcode::Call {
+                        let registers = args.len().min(ARG_COUNT);
+                        for (slot, &value) in args[registers..].iter().enumerate() {
+                            self.emit(
+                                block,
+                                Opcode::StoreOutgoing,
+                                None,
+                                &[value],
+                                stack_slot(slot)?,
+                            );
+                        }
+                        self.emit(
+                            block,
+                            opcode,
+                            results.first().copied(),
+                            &args[..registers],
+                            Immediate::Function(function),
+                        );
+                        for (at, &value) in results.iter().skip(1).enumerate() {
+                            let slot = args.len() - registers + at;
+                            self.emit(
+                                block,
+                                Opcode::LoadOutgoing,
+                                Some(value),
+                                &[],
+                                stack_slot(slot)?,
+                            );
+                        }
+                    } else {
+                        self.emit(
+                            block,
+                            opcode,
+                            results.first().copied(),
+                            args,
+                            Immediate::None,
+                        );
+                    }
                 }
                 SourceOp::If {
                     condition,
@@ -1592,6 +1834,10 @@ impl Selector<'_> {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive selection of region transfers and stack results"
+    )]
     fn source_terminator(
         &mut self,
         block: BlockId,
@@ -1622,12 +1868,38 @@ impl Selector<'_> {
                 self.terminate(block, Terminator::Jump { target, args });
             }
             Exit::Return => {
-                let values = self.edge_args(values);
+                let owner = self.blocks[block].owner;
+                let arguments = self
+                    .source
+                    .function(owner)
+                    .params
+                    .len()
+                    .saturating_sub(ARG_COUNT);
+                for (at, &value) in values.iter().skip(1).enumerate() {
+                    self.emit(
+                        block,
+                        Opcode::StoreIncoming,
+                        None,
+                        &[value],
+                        stack_slot(arguments + at)?,
+                    );
+                }
+                let values = self.edge_args(&values[..values.len().min(1)]);
                 self.terminate(block, Terminator::Return { values });
             }
         }
         Ok(())
     }
+}
+
+/// Keep call areas within a signed x86 stack displacement. Frame layout
+/// checks the combined outgoing area, spills and saved registers later.
+fn stack_slot(slot: usize) -> Result<Immediate, String> {
+    let slot = u32::try_from(slot).map_err(|_| "x86 call area is too large")?;
+    if slot >= i32::MAX.cast_unsigned() / 8 {
+        return Err("x86 call area is too large".to_owned());
+    }
+    Ok(Immediate::Slot(slot))
 }
 
 fn append<T: Clone>(pool: &mut Vec<T>, values: &[T]) -> Range {
@@ -1781,5 +2053,71 @@ mod tests {
         assert_eq!(requirements.expansion, Expansion::Sequence);
         assert!(requirements.scratch.contains(Reg::Rdx));
         assert!(requirements.effects.clobbers.contains(Reg::Rdx));
+    }
+
+    #[test]
+    fn verifier_rejects_wrong_stack_slots_on_both_sides_of_a_call() {
+        for opcode in [
+            Opcode::LoadIncoming,
+            Opcode::StoreIncoming,
+            Opcode::LoadOutgoing,
+            Opcode::StoreOutgoing,
+        ] {
+            let mut selected = select(&faun_core::programs::abi::function(8, 3)).unwrap();
+            let inst = selected
+                .instructions
+                .iter_mut()
+                .find(|inst| inst.opcode == opcode)
+                .unwrap();
+            inst.immediate = Immediate::Slot(99);
+            let error = selected.verify().unwrap_err();
+            assert!(error.contains("stack"), "{opcode:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn verifier_rejects_incomplete_stack_call_sequences() {
+        for results in [false, true] {
+            let mut selected = select(&faun_core::programs::abi::function(8, 3)).unwrap();
+            let function = &mut selected.functions[1];
+            if results {
+                function.stack_results += 1;
+            } else {
+                function.stack_params += 1;
+            }
+            assert!(selected.verify().unwrap_err().contains("stack"));
+        }
+    }
+
+    #[test]
+    fn verifier_rejects_calls_to_the_logical_entry() {
+        let mut selected = select(&faun_core::programs::abi::function(0, 1)).unwrap();
+        let entry = selected.functions[0].source;
+        let call = selected
+            .instructions
+            .iter_mut()
+            .find(|inst| inst.opcode == Opcode::Call)
+            .unwrap();
+        call.immediate = Immediate::Function(entry);
+        assert!(selected.verify().unwrap_err().contains("logical entry"));
+    }
+
+    #[test]
+    fn multiplication_needs_no_fixed_registers_or_high_half_scratch() {
+        let inst = Inst {
+            opcode: Opcode::Multiply,
+            result: Some(VReg::at(2)),
+            operands: Range::of(0, 2),
+            immediate: Immediate::Bits(64),
+        };
+        assert_eq!(inst.operand_spec(0).unwrap().constraint, Constraint::Any);
+        assert_eq!(
+            inst.operand_spec(1).unwrap().constraint,
+            Constraint::Tied(0)
+        );
+        assert_eq!(inst.operand_spec(2).unwrap().constraint, Constraint::Any);
+        let requirements = inst.opcode.requirements();
+        assert_eq!(requirements.scratch, RegSet::default());
+        assert_eq!(requirements.effects.clobbers, RegSet::default());
     }
 }

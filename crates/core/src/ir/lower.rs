@@ -487,9 +487,10 @@ fn provided(wanted: &Routine, handed: &[Handed], returns: &[Class]) -> Result<()
     Ok(())
 }
 
-/// The most leaves a product is held flat in. Past this a product is a
-/// cell: copying it at every call would cost more than sharing it.
-const FLAT_LEAVES: usize = 8;
+/// The most leaves a product or scalar-tagged sum holds flat. Wider
+/// aggregates remain cells to bound copying and register pressure; targets
+/// with smaller calling conventions pack the leaves at their boundaries.
+const FLAT_LEAVES: usize = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Storage {

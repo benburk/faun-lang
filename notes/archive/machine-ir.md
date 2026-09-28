@@ -144,7 +144,7 @@ built into it anywhere in the program, so a number only ever built small is a
 small fixed width, and one grown round a recursion is a `Natural`. A tag with
 no better bound is a `Word`, and a sum or sequence is a `Cell`. Cell fields
 take their classes the same way. Two kinds of product
-remain cells: one with more than eight leaves, which is cheaper shared than
+remain cells: one with more than sixteen leaves, which is cheaper shared than
 copied, and one reaching itself through products alone, which has no values.
 Host routines read scalars and byte strings, so a product handed to one is
 refused.
@@ -154,19 +154,58 @@ refused.
 The IR lets a function take and answer any number of values and a region carry
 any number across an edge; flat products rely on that. A target declares what
 its convention carries with `Target::budget` -- the 6502 passes four parameters,
-answers one result and carries two values across a region edge, and x86-64
-passes six and answers one. `Target::prepare` runs `ir::fit` before
+answers one result and carries two values across a region edge. x86-64 and
+wasm carry arbitrary arities. `Target::prepare` runs `ir::fit` before
 legalization: where more values cross a boundary than the budget allows, the
 last place holds one cell carrying the rest, tag zero, and the other side reads
 them back with `CellField`. The logical entry and external declarations keep
 their signatures. Values that fit stay where they are, so `fit` changes nothing
-on a program within its budget, and wasm, which carries multiple values
-natively, declares no limit.
+on a program within its budget. Wasm carries multiple values natively; x86-64
+uses registers and a stack call area. Both declare no arity limit.
 
 A pack is an ordinary cell, so ownership placement and release treat it like
 any other: a packed natural or cell is retained when packed and released with
 the pack. `Target::limits` still checks the prepared program against the same
 numbers; raw emission of an unfitted program is refused as before.
+
+The x86-64 internal convention passes the first six values in the System V
+integer argument registers and returns the first in `rax`. The caller reserves
+an area at the bottom of its frame for overflow arguments followed by overflow
+results. The callee reads and writes that area above its own frame and return
+address. Each activation has a separate area, reused across its calls and kept
+apart from spills and saved registers. Frame layout checks the combined stack
+displacements before emission. Wider calls use more native stack space rather
+than heap-allocated packs; this is a private convention, not a C multivalue ABI.
+External providers keep their declared interfaces. Selection verifies the
+contiguous argument-store/call/result-load sequences, incoming parameter slots
+and return slots before register allocation.
+
+## Native float registers
+
+IEEE operations still consume and answer integer bit patterns in machine IR.
+The shared allocator accepts an allowed-register set on each operand and
+branch condition, independently of fixed and tied constraints. It validates
+nonempty sets and compatible ties, chooses preferred banks from definitions
+and uses, and propagates preferences through single-use tied copies. Fixed
+return-register preferences stay separate so values can wait in callee-saved
+registers across calls. Register aliases, instructions, frame widths and ABI
+rules remain the target's responsibility.
+
+x86-64 allocates scalar floats in XMM0–15 alongside its 13 allocatable GPRs.
+Binary float operations tie their result to the left input; sqrt can use a
+separate destination. Word and 32-bit memory accesses, spills and stack call
+slots support either bank. Word-sized representation conversions impose no
+GPR requirement. Integer operations and the first six call arguments still
+use GPRs, as does the first return value. Internal calls clobber all XMM
+registers; Linux syscalls preserve them.
+
+Cross-bank copies preserve bits rather than converting numbers. Only the low
+64 bits of an XMM register represent a scalar; binary32 values have zero in
+bits 32–63, including after sqrt into a previously dirty destination. Parallel
+copies can break mixed-bank cycles through the reserved GPR or frame slot.
+The allocated-instruction verifier rejects wrong-bank operands before encoding.
+No arithmetic is contracted, reordered or approximated. This replaces the
+former local XMM cache and unused-GPR-writeback pass.
 
 ## Managed cells
 
@@ -286,8 +325,25 @@ order, each stage once:
    being converted to it. A run of additions of known numbers, all at one
    width, is one addition. Barb normalizes calls it recognizes as arithmetic;
    this lower-tier rule also covers constructor steps introduced by lowering
-   and programs built directly in machine IR.
-2. `prune`: drop instructions nothing reads. A call may do something while
+   and programs built directly in machine IR. Reading a field of a directly
+   constructed cell forwards the value used to construct it, provided the
+   shapes agree and the value fits the read's class. Reading its tag becomes
+   a constant. Pruning then removes a cell whose fields were its only readers,
+   including temporary products too wide to lower flat. Calls that computed
+   unread fields remain eager; a cell that still escapes remains allocated.
+   This does not forward projections through calls or control-flow joins.
+2. `common`: share identical scalar calculations within one region, including
+   the element-address arithmetic legalization repeats for each field. Keys
+   include the result class, operation and operands; floating-point operands
+   keep their order. Loads, calls and allocations are not candidates. Equal
+   constants identify equal expressions but remain separate instructions so
+   targets can use immediates instead of extending constant register lifetimes.
+   The pass clears its expression table when the traversal changes regions,
+   so it never substitutes a sibling arm's or loop body's local into another
+   region. The expression and constant tables each hold at most 1024 entries;
+   reaching that limit clears the table without changing semantics. Two compact
+   value-indexed tables record source regions and canonical operand identities.
+3. `prune`: drop instructions nothing reads. A call may do something while
    answering and a store does nothing else, so neither is dropped, and an `if`
    holding either stays for what it holds rather than for what it answers.
    A loop stays either way: this does not decide whether one comes back.

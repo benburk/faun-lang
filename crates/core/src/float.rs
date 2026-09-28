@@ -4,7 +4,7 @@
 //! A float here is its bit pattern, a number of 32 or 64 bits, and never a
 //! value of its own kind: Barb holds the pattern in whatever the frontend
 //! wrapped it in, machine IR holds it as a number of that many bits, and a
-//! target moves it into a float register only for the instruction. What
+//! target may compute and retain patterns in native float registers. What
 //! these operations answer is the one IEEE 754-2019 specifies under
 //! round-to-nearest-even and default exception handling, which is what the
 //! host's own `f32` and `f64` compute, and what SSE2 computes with its
