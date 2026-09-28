@@ -1586,14 +1586,34 @@ impl ClauseResolver<'_> {
                                 .as_bytes()
                                 .to_vec(),
                         )),
-                        s::StringPart::Splice(expression) => {
+                        s::StringPart::Splice(expression, width) => {
                             let value = self.expr(expression)?;
                             let to_str = self.symbols.intern("to_str");
                             let text = self.sites.expr(
                                 expression.span,
                                 h::ExprKind::Method(Box::new(value), to_str, Vec::new()),
                             );
-                            Ok(h::StringPart::Splice(text))
+                            let Some(width) = width else {
+                                return Ok(h::StringPart::Splice(text));
+                            };
+                            // `${value:>7}` is `value.to_str().pad_start(7)`.
+                            let pad = self.symbols.intern(match width.align {
+                                s::Align::Left => "pad_end",
+                                s::Align::Right => "pad_start",
+                                s::Align::Center => "center",
+                            });
+                            let columns = self.sites.expr(
+                                width.columns.span,
+                                h::ExprKind::Number(
+                                    literal::magnitude(width.columns, self.source)
+                                        .expect("literals were validated while parsing"),
+                                ),
+                            );
+                            let padded = self.sites.expr(
+                                expression.span,
+                                h::ExprKind::Method(Box::new(text), pad, vec![columns]),
+                            );
+                            Ok(h::StringPart::Splice(padded))
                         }
                     })
                     .collect::<Result<_, ResolveError>>()?,

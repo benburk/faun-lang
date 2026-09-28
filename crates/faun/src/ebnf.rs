@@ -589,6 +589,25 @@ fn the_grammar_reads_and_refuses_commas_as_the_parser_does() {
 }
 
 #[test]
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "the strings are Faun's splices, not Rust's"
+)]
+fn the_grammar_reads_and_refuses_a_splice_s_width_as_the_parser_does() {
+    let grammar = Grammar::read(GRAMMAR);
+    let read = "f(x) -> \"${x:<12}${x + 1:>7}${\"a\":^0x10}${{a: x}}\"\n";
+    assert!(agree(&grammar, read, read), "{read} is read");
+    for refused in [
+        "f(x) -> \"${x:12}\"\n",
+        "f(x) -> \"${x:>w}\"\n",
+        "f(x) -> \"${x:>}\"\n",
+        "f(x) -> \"${x:>'a'}\"\n",
+    ] {
+        assert!(!agree(&grammar, refused, refused), "{refused} is refused");
+    }
+}
+
+#[test]
 fn the_grammar_reads_and_refuses_a_range_s_ends_as_the_parser_does() {
     let grammar = Grammar::read(GRAMMAR);
     let read = "f(_..-1, -3..5, 'a'.._, -2..-1, [0x80..0xbf, *r]) -> 1\n";

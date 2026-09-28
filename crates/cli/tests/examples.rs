@@ -275,7 +275,7 @@ fn the_ported_programs_and_libraries_hold() {
 fn the_syntax_examples_hold() {
     let (failed, count) = support::test_file(&example("syntax/main.fn"));
     assert_eq!(failed, Vec::<String>::new());
-    assert_eq!(count, 95);
+    assert_eq!(count, 100);
 }
 
 /// The n-body benchmark's energies, after nought, one and ten steps, are

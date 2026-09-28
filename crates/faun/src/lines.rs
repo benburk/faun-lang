@@ -646,7 +646,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
                 .into_iter()
                 .map(|part| match part {
                     StringPart::Text(text) => Ok(text),
-                    StringPart::Splice(splice) => Err(error(
+                    StringPart::Splice(splice, _) => Err(error(
                         splice.span,
                         "a string pattern is text alone, with no `${...}`",
                     )),
@@ -748,7 +748,7 @@ fn expression(expr: &Expr) -> Result<(), Error> {
         ExprKind::Name(_) | ExprKind::Number(_) => Ok(()),
         ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
             StringPart::Text(_) => Ok(()),
-            StringPart::Splice(splice) => expression(splice),
+            StringPart::Splice(splice, _) => expression(splice),
         }),
         ExprKind::List(elements, rest) => {
             if let Some(rest) = rest

@@ -72,43 +72,20 @@ usage() -> "usage: rps-arena SEED [ROUNDS]"
 
 report : Settings -> Str
 report({seed, rounds}) ->
-  # Most wins first; the sort is stable, so ties keep lineup order.
   standings = tournament(lineup(seed), rounds)
-  table = standings.sort_on(|score| -Int.of_nat(score.wins))
+  fewest_first = standings.sort_on(|score| score.wins)
+  table = fewest_first.reverse()
   heading = "seed ${seed}, ${rounds} rounds per match\n"
   columns = row("bot", "wins", "draws", "losses")
   lines = table.map(line)
   Str.join([heading, columns, *lines], "")
 
-# `text` followed by spaces to `width` bytes, for a table whose cells are
-# ASCII. Aligning text in general needs grapheme clusters and display widths
-# that a byte count cannot see, which is why the standard library offers no
-# padding.
-pad_end : (Str, Nat) -> Str
-pad_end(text, width) -> text.concat(" ".repeat(width - text.len()))
-
-# The same from the other end, for a column of numbers.
-pad_start : (Str, Nat) -> Str
-pad_start(text, width) -> " ".repeat(width - text.len()).concat(text)
-
 line : Score -> Str
-line(score) ->
-  wins = score.wins.to_str()
-  draws = score.draws.to_str()
-  losses = score.losses.to_str()
-  row(score.name, wins, draws, losses)
+line(score) -> row(score.name, score.wins, score.draws, score.losses)
 
-# One line of the table: the name left-aligned, then three counts right-aligned.
-row : (Str, Str, Str, Str) -> Str
-row(name, wins, draws, losses) ->
-  cells = [
-    pad_end(name, 12),
-    pad_start(wins, 7),
-    pad_start(draws, 7),
-    pad_start(losses, 7),
-    "\n"
-  ]
-  Str.join(cells, "")
+# One line of the table, the heading's or a bot's: the name left-aligned,
+# then three counts right-aligned.
+row(name, wins, draws, losses) -> "${name:<12}${wins:>7}${draws:>7}${losses:>7}\n"
 
 # Two bots of different types meet without any union: beat_last opens with
 # Rock against a wall of Rock, draws once, then wins every round.

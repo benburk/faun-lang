@@ -442,7 +442,23 @@ pub enum StringPart {
     /// Raw source text, including any written escapes. Decoding is explicit so
     /// parsing a large source does not allocate a second copy of every string.
     Text(Span),
-    Splice(Expr),
+    /// `${value}`, or `${value:>7}` with its text padded to a width.
+    Splice(Expr, Option<Width>),
+}
+
+/// A splice's `:<12`, `:>7` or `:^9`: its text padded with spaces to at
+/// least `columns` characters, on the side `align` leaves free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Width {
+    pub align: Align,
+    pub columns: Numeral,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Right,
+    Center,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

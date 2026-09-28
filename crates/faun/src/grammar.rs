@@ -12,9 +12,9 @@
 //! line, so one file's errors are all found at once.
 
 use super::ast::{
-    BinaryOp, Bound, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl, Exposure, Expr,
-    ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span, StringPart,
-    Type, UnaryOp,
+    Align, BinaryOp, Bound, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl, Exposure,
+    Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span,
+    StringPart, Type, UnaryOp, Width,
 };
 use super::lex::{Kind, Token};
 use super::lines::{self, Equals, Line, Statement, Trailer, Typed};
@@ -856,7 +856,12 @@ impl Parser<'_> {
                 Kind::StrText => parts.push(StringPart::Text(self.bump().span())),
                 Kind::SpliceStart => {
                     self.bump();
-                    parts.push(StringPart::Splice(self.expr()?));
+                    let value = self.expr()?;
+                    let width = match self.eat(Kind::Colon) {
+                        Some(_) => Some(self.width()?),
+                        None => None,
+                    };
+                    parts.push(StringPart::Splice(value, width));
                     self.expect(Kind::SpliceEnd, "`}`")?;
                 }
                 _ => break,
@@ -866,6 +871,27 @@ impl Parser<'_> {
         Ok(Expr {
             span: open.span().through(close.span()),
             kind: ExprKind::String(parts),
+        })
+    }
+
+    /// A splice's width after its `:`: an alignment, then a count.
+    fn width(&mut self) -> Parsed<Width> {
+        let align = match self.peek() {
+            Kind::Lt => Align::Left,
+            Kind::Gt => Align::Right,
+            Kind::Caret => Align::Center,
+            _ => {
+                for what in ["`<`", "`>`", "`^`"] {
+                    self.note(what);
+                }
+                return Err(self.fail());
+            }
+        };
+        self.bump();
+        let columns = self.expect(Kind::Number, "a numeral for the width")?;
+        Ok(Width {
+            align,
+            columns: numeral(columns),
         })
     }
 
