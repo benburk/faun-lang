@@ -11,6 +11,13 @@ const TARGET: X86_64Linux = X86_64Linux;
 const RUNNER: Option<&str> = None;
 
 // Lower baselines when emission improves; explain any increase.
+//
+// A program that writes ignores `SIGPIPE` before anything else, so a write
+// to a closed pipe answers `BrokenPipe` as it does on every other target:
+// 25 bytes on every such program.
+// An exit status is a `U8`, so an example whose status is worked out from a
+// `Nat` takes it modulo 256; where the arm that bounds it is not seen to,
+// that is real work.
 /// The ladder of simplest programs, from Barb. Lower these when the
 /// compiler improves; a rise is the compiler getting worse at the one
 /// thing small enough to read.
@@ -22,27 +29,27 @@ const LADDER_SIZES: &[(&str, usize)] = &[
     ("the count under a guard", 147),
     ("the count and more", 150),
     ("a shared intermediate", 156),
-    ("a greeting", 157),
+    ("a greeting", 182),
 ];
 const CORPUS_SIZES: &[(&str, usize)] = &[
     ("exit zero", 127),
     ("two and two", 134),
-    ("hello world", 158),
+    ("hello world", 183),
     ("a call", 143),
     ("recursion", 182),
     ("values across a call", 252),
     ("the heap", 178),
     ("a byte", 208),
     ("a global", 244),
-    ("writing the heap", 196),
-    ("a computed length", 200),
+    ("writing the heap", 221),
+    ("a computed length", 225),
     ("eight bits", 133),
     ("less", 140),
     ("two worked out", 151),
     ("a flag", 219),
-    ("a countdown", 166),
+    ("a countdown", 191),
     ("a carried total", 156),
-    ("a step first", 184),
+    ("a step first", 209),
     ("a long arm", 264),
 ];
 const EXAMPLE_SIZES: &[(&str, usize)] = &[
@@ -50,12 +57,12 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("two-and-two", 128),
     ("double", 128),
     ("leave", 128),
-    ("bool", 157),
-    ("nat", 255),
-    ("width", 149),
-    ("argc", 149),
-    ("expressions", 151),
-    ("hello", 214),
+    ("bool", 160),
+    ("nat", 258),
+    ("width", 156),
+    ("argc", 169),
+    ("expressions", 168),
+    ("hello", 239),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [188, 199, 198];
 
@@ -85,13 +92,14 @@ fn ladder_code_size_ratchets() {
             ("the count under a guard", 27),
             ("the count and more", 30),
             ("a shared intermediate", 36),
-            ("a greeting", 24),
+            ("a greeting", 49),
         ]
     );
     assert_eq!(code[0].1, [0x31, 0xFF, 0x6A, 0x3C, 0x58, 0x0F, 0x05]);
+    // The count's low byte, read straight from where the kernel left it.
     assert_eq!(
         code[1].1,
-        [0x48, 0x8B, 0x3C, 0x24, 0x6A, 0x3C, 0x58, 0x0F, 0x05]
+        [0x0F, 0xB6, 0x3C, 0x24, 0x6A, 0x3C, 0x58, 0x0F, 0x05]
     );
 }
 

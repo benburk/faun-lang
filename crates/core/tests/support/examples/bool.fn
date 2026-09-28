@@ -15,4 +15,4 @@ main! : Host -> []
 main!(host) ->
   n = host.args.len()
   held = False.not().and(False.or(is_zero(down(n))))
-  host.exit!(held.select(4, 0))
+  host.exit!(U8.of_nat(held.select(4, 0)))

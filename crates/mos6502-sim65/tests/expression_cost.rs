@@ -22,10 +22,12 @@ use expressions::{CASES, COUNTS, Case};
 // guard now branches with the count itself rather than answering a narrowed
 // copy, and lowering still adds at the count's word width inside the arm
 // that proves it small. Narrowing a refined local in its arm would win this
-// back.
+// back. Shared rose from 53 bytes and 44 cycles when an exit status became
+// a `U8`: its sum is taken modulo 256 where the same arm is not seen to
+// bound it, which the same narrowing would also win back.
 const BASELINES: &[(Case, usize, u64)] = &[
     (Case::Chain, 48, 36),
-    (Case::Shared, 53, 44),
+    (Case::Shared, 62, 56),
     (Case::ConstantLeft, 48, 36),
     (Case::Carry, 94, 93),
     (Case::Monus, 59, 43),

@@ -12,12 +12,16 @@ const TARGET: Wasm32Wasi = Wasm32Wasi;
 const RUNNER: Option<&str> = Some("wasmtime");
 
 // Lower baselines when emission improves; explain any increase.
+//
+// An exit status is a `U8`, so an example whose status is worked out from a
+// `Nat` takes it modulo 256; where the arm that bounds it is not seen to,
+// that is real work.
 /// The ladder of simplest programs, from Barb. Lower these when the
 /// compiler improves; a rise is the compiler getting worse at the one
 /// thing small enough to read.
 const LADDER_SIZES: &[(&str, usize)] = &[
     ("a constant", 36),
-    ("the count", 158),
+    ("the count", 166),
     ("the count and a constant", 181),
     ("the low bits of a sum", 181),
     ("the count under a guard", 184),
@@ -51,11 +55,11 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("two-and-two", 96),
     ("double", 96),
     ("leave", 96),
-    ("bool", 207),
-    ("nat", 354),
-    ("width", 188),
-    ("argc", 188),
-    ("expressions", 196),
+    ("bool", 218),
+    ("nat", 365),
+    ("width", 217),
+    ("argc", 232),
+    ("expressions", 233),
     ("hello", 301),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [156, 164, 162];

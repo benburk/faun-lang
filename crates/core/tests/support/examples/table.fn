@@ -13,4 +13,4 @@ row(at) ->
   word.to_nat() % 4 + count
 
 main! : Host -> []
-main!(host) -> host.exit!(row(host.args.len() - 1))
+main!(host) -> host.exit!(U8.of_nat(row(host.args.len() - 1)))

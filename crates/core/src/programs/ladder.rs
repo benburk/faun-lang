@@ -82,10 +82,14 @@ pub fn exits_with_a_constant(status: u64) -> Program {
     program
 }
 
-/// Leave with what the world handed the program.
+/// Leave with what the world handed the program, as a status says it: its
+/// low byte, since a status is a byte.
 ///
 /// The count is the one thing every machine can be asked, and in a program
 /// this small it is the only number not known before it runs.
+///
+/// # Panics
+/// If the modulus does not fit the declared natural shape.
 #[must_use]
 pub fn exits_with_the_count() -> Program {
     let Ground {
@@ -96,8 +100,20 @@ pub fn exits_with_the_count() -> Program {
         exit,
         ..
     } = ground();
+    let truth = program.declare_type("Bool");
+    program.define_type(truth, &[("False", &[]), ("True", &[])]);
+    let adding = adds(&mut program, nat);
+    let remainder = remainders(&mut program, nat, truth, adding);
+    let modulus = program
+        .intern_number(nat, 256)
+        .expect("the declared natural shape");
     let main = counted_main(&mut program, (host, nat, never));
-    program.define(main, |b, args| b.call(exit, &[args[0], args[1]]));
+    program.define(main, |b, args| {
+        let (host, count) = (args[0], args[1]);
+        let modulus = b.known(modulus);
+        let low = b.call(remainder, &[count, modulus]);
+        b.call(exit, &[host, low])
+    });
     program.set_entry(main);
     program
 }

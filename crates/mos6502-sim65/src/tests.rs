@@ -11,6 +11,10 @@ const TARGET: Mos6502Sim65 = Mos6502Sim65;
 const RUNNER: Option<&str> = Some("sim65");
 
 // Lower baselines when emission improves; explain any increase.
+//
+// An exit status is a `U8`, so an example whose status is worked out from a
+// `Nat` takes it modulo 256; where the arm that bounds it is not seen to,
+// that is real work.
 /// The ladder of simplest programs, from Barb. Lower these when the
 /// compiler improves; a rise is the compiler getting worse at the one
 /// thing small enough to read.
@@ -53,11 +57,11 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("two-and-two", 17),
     ("double", 17),
     ("leave", 17),
-    ("bool", 79),
-    ("nat", 187),
-    ("width", 48),
-    ("argc", 48),
-    ("expressions", 50),
+    ("bool", 81),
+    ("nat", 189),
+    ("width", 52),
+    ("argc", 63),
+    ("expressions", 62),
     ("hello", 216),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [209, 247, 245];

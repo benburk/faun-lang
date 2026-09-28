@@ -21,15 +21,15 @@ const RUNGS: [(&str, &str); 5] = [
     ),
     (
         "the count",
-        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!(count)\n",
+        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!(U8.of_nat(count))\n",
     ),
     (
         "the count and a constant",
-        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!((count + 4) % 256)\n",
+        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!(U8.of_nat(count + 4))\n",
     ),
     (
         "the low bits of a sum",
-        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!((count + count) % 256)\n",
+        "import std.host {Host}\n\nmain! : Host -> []\nmain!(host) ->\n  count = host.args.len()\n  host.exit!(U8.of_nat(count + count))\n",
     ),
     (
         "a greeting",
@@ -39,9 +39,9 @@ const RUNGS: [(&str, &str); 5] = [
 
 /// Each target, what it appends to an output name, and each rung's size.
 const SIZES: [(&dyn Target, &str, [u64; 5]); 3] = [
-    (&X86_64Linux, "", [127, 129, 132, 131, 157]),
+    (&X86_64Linux, "", [127, 129, 132, 131, 182]),
     (&Mos6502Sim65, ".bin", [17, 31, 34, 32, 51]),
-    (&Wasm32Wasi, ".wasm", [36, 158, 181, 181, 164]),
+    (&Wasm32Wasi, ".wasm", [36, 166, 181, 181, 164]),
 ];
 
 #[test]

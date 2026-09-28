@@ -34,7 +34,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          code(Err(Blah)) -> 102
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(pick(False, 1)) + code(pick(True, 0)) - 200)",
+         main!(host) -> host.exit!(U8.of_nat(code(pick(False, 1)) + code(pick(True, 0)) - 200))",
         2,
     ),
     (
@@ -44,7 +44,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          f(_) -> 7
 
          main! : Host -> []
-         main!(host) -> host.exit!(f(C) + f(B(3)) + f(A))",
+         main!(host) -> host.exit!(U8.of_nat(f(C) + f(B(3)) + f(A)))",
         11,
     ),
     (
@@ -67,7 +67,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main! : Host -> []
          main!(host) ->
            listed = kept([A, B]).map(|x| code(x)).fold(0, |s, x| s + x)
-           host.exit!(code(pick(True)) * 10 + code(pick(False)) + listed * 50)",
+           host.exit!(U8.of_nat(code(pick(True)) * 10 + code(pick(False)) + listed * 50))",
         173,
     ),
     (
@@ -80,13 +80,13 @@ const RUNNING: &[(&str, &str, u32)] = &[
          unwrap(Ok(n)) -> n
 
          main! : Host -> []
-         main!(host) -> host.exit!(unwrap(wrap([7].take(0).first())) + unwrap(wrap([7].first())))",
+         main!(host) -> host.exit!(U8.of_nat(unwrap(wrap([7].take(0).first())) + unwrap(wrap([7].first()))))",
         12,
     ),
     (
         "a lambda matches the tag a library answers",
         "main! : Host -> []
-         main!(host) -> host.exit!([1, 2].get(5).map_err(|OutOfBounds| 9).err_or(0))",
+         main!(host) -> host.exit!(U8.of_nat([1, 2].get(5).map_err(|OutOfBounds| 9).err_or(0)))",
         9,
     ),
     (
@@ -102,7 +102,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          lift(Found(_)) -> High
 
          main! : Host -> []
-         main!(host) -> host.exit!(lift(Low).brightness() + lift(Found(3)).brightness() * 2)",
+         main!(host) -> host.exit!(U8.of_nat(lift(Low).brightness() + lift(Found(3)).brightness() * 2))",
         21,
     ),
     (
@@ -119,7 +119,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          code(Parsed) -> 0
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(blame(Failed(4))))",
+         main!(host) -> host.exit!(U8.of_nat(code(blame(Failed(4)))))",
         5,
     ),
     (
@@ -133,7 +133,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          code(Parse.Parsed) -> 0
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(pick(9)))",
+         main!(host) -> host.exit!(U8.of_nat(code(pick(9))))",
         9,
     ),
     (
@@ -145,7 +145,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          code(Other) -> 4
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(NotFound))",
+         main!(host) -> host.exit!(U8.of_nat(code(NotFound)))",
         3,
     ),
     (
@@ -159,7 +159,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          code(Err(CatFailure(NotFound))) -> 7
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(cat(0).map_err(CatFailure)) + code(cat(3).map_err(CatFailure)) + [1, 2].map(Boxed).len())",
+         main!(host) -> host.exit!(U8.of_nat(code(cat(0).map_err(CatFailure)) + code(cat(3).map_err(CatFailure)) + [1, 2].map(Boxed).len()))",
         12,
     ),
     (
@@ -180,7 +180,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          code(Err(B)) -> 60
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(wide(host.args.len() - 1)) + code(wide(7)))",
+         main!(host) -> host.exit!(U8.of_nat(code(wide(host.args.len() - 1)) + code(wide(7))))",
         57,
     ),
     (
@@ -202,7 +202,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          code(Err(Big)) -> 20
 
          main! : Host -> []
-         main!(host) -> host.exit!(code(both(8)) + code(both(3)) + code(both(40)))",
+         main!(host) -> host.exit!(U8.of_nat(code(both(8)) + code(both(3)) + code(both(40))))",
         34,
     ),
 ];
@@ -222,7 +222,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
          f(B) -> 2
 
          main! : Host -> []
-         main!(host) -> host.exit!(f(C))",
+         main!(host) -> host.exit!(U8.of_nat(f(C)))",
         "`C` is not among the tags of `[A, B]`",
     ),
     (
@@ -261,7 +261,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
         "import sealed {Failure, accept}
 
          main! : Host -> []
-         main!(host) -> host.exit!(accept(NotFound))",
+         main!(host) -> host.exit!(U8.of_nat(accept(NotFound)))",
         "Failure and [NotFound, *]",
     ),
     (

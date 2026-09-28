@@ -25,6 +25,12 @@ const RESOLVE_BENEATH: i8 = 0x08;
 /// How many bytes `openat2`'s `how` is: three words.
 const OPEN_HOW_BYTES: u64 = 24;
 const SYS_MMAP: u64 = 9;
+const SYS_RT_SIGACTION: u64 = 13;
+/// Writing to a pipe nobody reads raises it, which ends the program unless
+/// it is ignored.
+const SIGPIPE: u64 = 13;
+/// What `rt_sigaction` reads the signal set's size as: one word.
+const SIGSET_BYTES: u64 = 8;
 const SYS_EXIT: u64 = 60;
 const STDIN: u64 = 0;
 const STDOUT: u64 = 1;
@@ -142,6 +148,7 @@ impl<'a> Lowering<'a> {
     fn run(mut self, entry: FunctionId) -> Result<Allocated, String> {
         self.configure_program(entry);
         self.saved = self.kept_for_callers(entry);
+        self.ignore_broken_pipes();
         for (at, layout) in self.liveness.blocks.iter().enumerate() {
             let block = self.selected.blocks[layout.block];
             let next = self.liveness.blocks.get(at + 1).map(|layout| layout.block);
@@ -179,6 +186,48 @@ impl<'a> Lowering<'a> {
             self.asm.syscall();
         }
         self.asm.finish()
+    }
+
+    /// Whether the program writes to a descriptor, which may be a pipe.
+    fn writes(&self) -> bool {
+        self.liveness.blocks.iter().any(|layout| {
+            layout.instructions.iter().any(|points| {
+                matches!(
+                    self.selected.instructions[points.instruction].opcode,
+                    Opcode::Write | Opcode::WriteFd
+                )
+            })
+        })
+    }
+
+    /// Before anything else runs in a program that writes, ignore `SIGPIPE`,
+    /// so a write to a pipe nobody reads answers `EPIPE` as a value, as it
+    /// does on every other target, rather than ending the program from
+    /// inside the write. A program that never writes pays nothing.
+    /// `rt_sigaction` reads the kernel's `struct sigaction` from the stack:
+    /// the handler, `SIG_IGN`, then flags, restorer and mask, all nought.
+    /// Nothing is live yet, and the stack is as the kernel left it once the
+    /// four words are popped. A program that starts another must restore the
+    /// default in the child, which inherits the disposition.
+    fn ignore_broken_pipes(&mut self) {
+        if !self.writes() {
+            return;
+        }
+        // Nought is also where no old action is to be written.
+        self.materialize(Reg::Rdx, 0);
+        for _ in 0..3 {
+            self.asm.push_reg(Reg::Rdx);
+        }
+        self.asm.push_imm8(1);
+        self.asm.mov_reg(Reg::Rsi, Reg::Rsp, RegisterWidth::Word);
+        self.materialize(Reg::Rdi, SIGPIPE);
+        self.materialize(Reg::R10, SIGSET_BYTES);
+        self.materialize(Reg::Rax, SYS_RT_SIGACTION);
+        self.asm.syscall();
+        for _ in 0..4 {
+            self.asm.pop(Reg::Rcx);
+        }
+        self.known.fill(None);
     }
 
     fn enter_function(&mut self, function: FunctionId, entry: FunctionId) {

@@ -39,13 +39,13 @@ main!(host) ->
   status = first!(opened, host.files)
   host.exit!(status)
 
-first! : (Result(File, IoError), Files) -> Nat
+first! : (Result(File, IoError), Files) -> U8
 first!(Err(_), _) -> 1
 first!(Ok(a), files) ->
   opened = files.open!("b.tmp", Overwrite)
   second!(opened, a)
 
-second! : (Result(File, IoError), File) -> Nat
+second! : (Result(File, IoError), File) -> U8
 second!(Err(_), a) ->
   closed = a.close!()
   1
@@ -55,4 +55,4 @@ second!(Ok(b), a) ->
   length = remaining.len()
   inspected = inspect_all!(remaining)
   closed = close_all!(remaining)
-  (closed - length) % 256
+  U8.of_nat(closed - length)

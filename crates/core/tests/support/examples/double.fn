@@ -8,4 +8,4 @@ double(n) ->
   m
 
 main! : Host -> []
-main!(host) -> host.exit!(double(2))
+main!(host) -> host.exit!(U8.of_nat(double(2)))

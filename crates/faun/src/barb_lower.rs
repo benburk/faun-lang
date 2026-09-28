@@ -1223,8 +1223,8 @@ mod tests {
                 "{rendered}"
             );
             assert!(rendered.contains("main!(v0: Host) -> [] ="), "{rendered}");
-            assert!(rendered.contains("Host.exit!(v0: Host, v1: Nat) -> [] = <elsewhere>"));
-            assert!(rendered.contains("Host.exit!(v0, v2)"), "{rendered}");
+            assert!(rendered.contains("Host.exit!(v0: Host, v1: U8) -> [] = <elsewhere>"));
+            assert!(rendered.contains("Host.exit!(v0, v5)"), "{rendered}");
             assert!(!rendered.contains("start"));
             assert!(!rendered.contains('$'));
             let machine = faun_core::lower_to_machine_ir(&mut program.clone(), &routines).unwrap();
@@ -1235,8 +1235,11 @@ mod tests {
             let body = machine.function(entry).body().unwrap();
             let argc = machine.values(machine.region(body).params)[0];
             assert_eq!(machine.class(argc), faun_core::ir::Class::fixed(bits));
+            // A status is a byte, so the count is taken modulo 256 where the
+            // program says so, rather than by whatever the target keeps.
             let rendered = machine.render();
-            assert!(rendered.contains("call exit!(v0)"), "{rendered}");
+            assert!(rendered.contains("= convert v0 to 0..255"), "{rendered}");
+            assert!(rendered.contains("call exit!(v1)"), "{rendered}");
         }
     }
 

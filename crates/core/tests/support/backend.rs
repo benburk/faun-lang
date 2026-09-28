@@ -329,7 +329,7 @@ const PRODUCTS: &str = "import std.host {Host}
                           flag = is_one(count)
                           start = T(swap(P(False, flag)), True)
                           kept = unwrap(Just(start))
-                          host.exit!(status(choose(flag, kept)))";
+                          host.exit!(U8.of_nat(status(choose(flag, kept))))";
 
 #[test]
 fn products_cross_calls_joins_and_cells_as_their_fields() {
@@ -366,7 +366,7 @@ const NUMBER_PAIR: &str = "import std.host {Host}
                            main!(host) ->
                              count = host.args.len()
                              p = swap(P(small(count), 2))
-                             host.exit!(both(p))";
+                             host.exit!(U8.of_nat(both(p)))";
 
 #[test]
 fn a_pair_of_small_numbers_is_two_small_words() {
@@ -408,7 +408,7 @@ const LIST: &str = "import std.host {Host}
                       c = host.args.len()
                       n = small(c)
                       counted = count(4 + n, [])
-                      host.exit!(head(turn(counted, [])))";
+                      host.exit!(U8.of_nat(head(turn(counted, []))))";
 
 #[test]
 fn a_list_built_at_run_time_is_a_buffer() {
@@ -437,7 +437,7 @@ const LENGTH: &str = "import std.host {Host}
                       count(Succ(k), acc) -> count(k, [k, *acc])
 
                       main! : Host -> []
-                      main!(host) -> host.exit!(count(4 + small(host.args.len()), []).len())";
+                      main!(host) -> host.exit!(U8.of_nat(count(4 + small(host.args.len()), []).len()))";
 
 #[test]
 fn a_list_is_counted_by_the_length_it_holds() {
@@ -495,7 +495,7 @@ fn an_unread_startup_value_is_never_produced() {
     let reads = read(
         "import std.host {Host}
          main! : Host -> []
-         main!(host) -> host.exit!(host.args.len())",
+         main!(host) -> host.exit!(U8.of_nat(host.args.len()))",
     )
     .expect("a program reading argc");
     assert_eq!(
@@ -590,7 +590,7 @@ const WRITTEN: &[(&str, &str, i32)] = &[
         "a name that leaves",
         "import std.host {Host}
          die! : (Host, Nat) -> []
-         die!(host, n) -> host.exit!(n)
+         die!(host, n) -> host.exit!(U8.of_nat(n))
          main! : Host -> []
          main!(host) -> die!(host, 2)",
         2,
@@ -599,7 +599,7 @@ const WRITTEN: &[(&str, &str, i32)] = &[
         "a tag from a count",
         "import std.host {Host}
          main! : Host -> []
-         main!(host) -> host.exit!(True.to_nat())",
+         main!(host) -> host.exit!(U8.of_nat(True.to_nat()))",
         1,
     ),
     (
@@ -610,7 +610,7 @@ const WRITTEN: &[(&str, &str, i32)] = &[
          below(0, Succ(_)) -> True
          below(Succ(a), Succ(b)) -> below(a, b)
          finish! : (Host, Bool, Nat) -> []
-         finish!(host, True, n) -> host.exit!(n + n)
+         finish!(host, True, n) -> host.exit!(U8.of_nat(n + n))
          finish!(host, False, _) -> host.exit!(0)
          main! : Host -> []
          main!(host) ->
@@ -626,7 +626,7 @@ const WRITTEN: &[(&str, &str, i32)] = &[
          below(0, Succ(_)) -> True
          below(Succ(a), Succ(b)) -> below(a, b)
          finish! : (Host, Bool, Nat) -> []
-         finish!(host, True, n) -> host.exit!(n)
+         finish!(host, True, n) -> host.exit!(U8.of_nat(n))
          finish!(host, False, _) -> host.exit!(7)
          main! : Host -> []
          main!(host) ->
@@ -668,9 +668,9 @@ macro_rules! ordering {
              pick(0) -> First
              pick(Succ(_)) -> Third
              main! : Host -> []
-             main!(host) -> host.exit!(rank(pick(",
+             main!(host) -> host.exit!(U8.of_nat(rank(pick(",
             $which,
-            ")))"
+            "))))"
         )
     };
 }
@@ -697,9 +697,9 @@ macro_rules! columns {
              rank(Eq) -> 1
              rank(Gt) -> 2
              main! : Host -> []
-             main!(host) -> host.exit!(",
+             main!(host) -> host.exit!(U8.of_nat(",
             $answer,
-            ")"
+            "))"
         )
     };
 }
@@ -725,9 +725,9 @@ macro_rules! arithmetic {
                a = n + 8
                b = n + 1
                z = n - n
-               host.exit!(",
+               host.exit!(U8.of_nat(",
             $answer,
-            ")
+            "))
              main! : Host -> []
              main!(host) ->
                count = host.args.len()
@@ -761,9 +761,9 @@ macro_rules! listed {
              main!(host) ->
                n = 4 + small(host.args.len())
                xs = [0, 1, 2, 3, n - 1]
-               host.exit!(",
+               host.exit!(U8.of_nat(",
             $answer,
-            ")"
+            "))"
         )
     };
 }
@@ -878,7 +878,7 @@ fn lists_of_every_element_hold_what_they_were_given() {
              main! : Host -> []
              main!(host) ->
                n = host.args.len() % 4
-               host.exit!(held({first}(n)) + held({second}(n)) * 2)
+               host.exit!(U8.of_nat(held({first}(n)) + held({second}(n)) * 2))
 
              {KINDS}"
         );
@@ -901,7 +901,7 @@ fn a_list_set_where_nothing_else_holds_it_is_written_in_place() {
          main! : Host -> []
          main!(host) ->
            n = host.args.len() % 4
-           host.exit!(held(threaded(n)) + held(shared(n)) * 2 + held(strings(n)) * 4 + held(past(n)) * 8)
+           host.exit!(U8.of_nat(held(threaded(n)) + held(shared(n)) * 2 + held(strings(n)) * 4 + held(past(n)) * 8))
 
          held : Bool -> Nat
          held(True) -> 1
@@ -981,7 +981,7 @@ fn it_greets_whom_it_is_handed() {
          main!(host) ->
            name = host.args.get_or(1, \"world\")
            host.println!(\"Hello, ${name}!\")
-           host.exit!(host.args.len())",
+           host.exit!(U8.of_nat(host.args.len()))",
     )
     .expect("a program reading its arguments");
     let program = TARGET
@@ -1008,7 +1008,7 @@ fn it_is_handed_strings_beside_a_list_of_numbers() {
            name = host.args.get_or(1, \"world\")
            sizes = [name.len(), host.args.len()]
            host.println!(\"Hello, ${name}!\")
-           host.exit!((sizes.len() + sizes.sum()) % 8)",
+           host.exit!(U8.of_nat((sizes.len() + sizes.sum()) % 8))",
     )
     .expect("a program reading its arguments");
     let program = TARGET
@@ -1057,7 +1057,7 @@ fn the_animated_lights_run_on_each_target() {
            next = row.map2(row_sums(row), |current, total| next_light(current, total - current))
            ordinary = next.count(|light| light == 1)
            stuck = corner_row(next, True).count(|light| light == 1)
-           host.exit!((ordinary * 10 + stuck) % 256)",
+           host.exit!(U8.of_nat(ordinary * 10 + stuck))",
     );
     let program = read(&kernel).expect("the day 18 row kernel compiles");
     let program = TARGET
@@ -1113,7 +1113,7 @@ fn the_medicine_replacements_run_on_each_target() {
            rule = Rule(\"AA\".to_utf8(), \"B\".to_utf8())
            made = replace_each(rule, [], List.repeat('A', count), [])
            valid = made.all(|molecule| molecule.len() == count - 1 & molecule.count(|byte| byte == 'B') == 1)
-           host.exit!(valid.select(made.len(), 99) % 256)",
+           host.exit!(U8.of_nat(valid.select(made.len(), 99) % 256))",
     );
     let program = read(&kernel).expect("the day 19 replacement kernel compiles");
     let program = TARGET
@@ -1190,7 +1190,7 @@ fn the_medicine_queue_orders_estimated_costs() {
          main!(host) ->
            queue = List.range(6).fold(Empty, |queue, at|
              merge_work(Queued((at + host.args.len()) % 6, at, [], Empty, Empty), queue))
-           host.exit!(ordered(queue, 0, 6).select(0, 1))",
+           host.exit!(U8.of_nat(ordered(queue, 0, 6).select(0, 1)))",
     );
     let program = read(&text).expect("the medicine queue compiles");
     let program = TARGET
@@ -1352,7 +1352,7 @@ fn it_sees_nothing_of_what_was_worked_out() {
          main! : Host -> []
          main!(host) ->
            two = 2
-           host.exit!(two * two)",
+           host.exit!(U8.of_nat(two * two))",
     )
     .expect("a program");
     let four = read(
@@ -1374,7 +1374,7 @@ fn it_lays_out_nothing_that_is_not_reached() {
                    double(n) -> n + n
 
                    main! : Host -> []
-                   main!(host) -> host.exit!(double(2))";
+                   main!(host) -> host.exit!(U8.of_nat(double(2)))";
     let spare = format!(
         "{reached}
 
@@ -1394,7 +1394,7 @@ fn it_lays_out_nothing_that_is_not_reached() {
 fn it_lays_out_a_chain_as_the_number_it_builds() {
     let chain = |held: usize| {
         let text = format!(
-            "import std.host {{Host}}\n\nmain! : Host -> []\nmain!(host) -> host.exit!({}0{})",
+            "import std.host {{Host}}\n\nmain! : Host -> []\nmain!(host) -> host.exit!(U8.of_nat({}0{}))",
             "Succ(".repeat(held),
             ")".repeat(held)
         );
@@ -1556,7 +1556,7 @@ fn a_number_wider_than_the_word_is_held_as_words() {
            p = n * 3
            d = p - n
            q = p / 7
-           host.exit!(above(m, 140001) + 2 * above(p, 210002) + 4 * above(d, 140001) + 8 * above(q, 30000) + 16 * above(m, 140002))",
+           host.exit!(U8.of_nat(above(m, 140001) + 2 * above(p, 210002) + 4 * above(d, 140001) + 8 * above(q, 30000) + 16 * above(m, 140002)))",
     )
     .expect("a program with numbers wider than a small word");
     let program = TARGET
@@ -1583,7 +1583,7 @@ fn a_long_known_string_is_laid_out_once() {
              main! : Host -> []
              main!(host) ->
                bytes = \"{}b\".to_utf8()
-               host.exit!(found(bytes.contains(98)) * 100 + bytes.len() % 100)",
+               host.exit!(U8.of_nat(found(bytes.contains(98)) * 100 + bytes.len() % 100))",
             "a".repeat(length)
         );
         let program = read(&source).expect("a program holding a long string");
@@ -1635,7 +1635,7 @@ const ZERO_WIDTH: &str = "import std.host {Host}
                             count = host.args.len()
                             first = count.equals(1)
                             z = select_zero!(host, first)
-                            host.exit!(zero_or_one(first, z))";
+                            host.exit!(U8.of_nat(zero_or_one(first, z)))";
 
 #[test]
 fn source_zero_width_scalars_cross_calls_and_joins() {

@@ -38,3 +38,5 @@ main!(host) -> ...
 - Native libraries should be wrapped behind Faun-native host APIs rather than exposing arbitrary C declarations directly.
 - Trusted target/native-extension implementations may call dylibs and deal with pointers, ABI layouts, callbacks, etc., but the API exposed to user code should only contain ordinary values, opaque types, resources, borrow/consume contracts, and explicit effects.
 - This lets Metal, Vulkan, Win32, proprietary dylibs, etc. be supported without importing C's pointer/aliasing/lifetime model into user code.
+
+Concrete host modules and their APIs are brainstormed in [effects/](effects/README.md).

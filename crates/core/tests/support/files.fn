@@ -5,20 +5,21 @@
 # Each file opened is the program's to close, and is closed. Nothing to read
 # is status two.
 
-import std.host {Files, File, IoError.*, Host, Mode.*}
+import std.host {Files, File, Chunk, IoError, Host, Mode.*}
 
 main! : Host -> []
 main!(host) ->
   copied = copy!(host.files)
-  host.exit!(copied.ok_or(2))
+  host.exit!(U8.of_nat(copied.ok_or(2)))
 
 copy! : Files -> Result(Nat, IoError)
 copy!(files) ->
   source = files.open!("input.txt", Read)?
   reading = source.read!(64)
   closing = source.close!()
-  bytes = reading?
+  chunk = reading?
   closed = closing?
+  bytes = held(chunk)
   target = files.open!("output.txt", Overwrite)?
   wrote = write_and_close!(target, bytes)?
   after = files.open!("output.txt", Append)?
@@ -29,6 +30,11 @@ copy!(files) ->
   above = files.open!("../outside.txt", Read)
   long = files.open!(twice(twice(twice(twice("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))), Read)
   refused!(again, above, long)
+
+# What a read held: nothing, once the file has ended.
+held : Chunk -> List(U8)
+held(Data(bytes)) -> bytes
+held(End) -> []
 
 # Twice as long, for a name longer than a literal is.
 twice : Str -> Str

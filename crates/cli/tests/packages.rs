@@ -94,7 +94,7 @@ fn what_a_loop_asks_of_a_value_every_caller_hands_it_is_folded() {
          seek(_, 0) -> 0\n\
          seek(name, Succ(fuel)) -> seek(name, fuel)\n\n\
          main! : Host -> []\n\
-         main!(host) -> host.exit!(seek(\"a.txt\".to_utf8(), host.args.len()))\n",
+         main!(host) -> host.exit!(U8.of_nat(seek(\"a.txt\".to_utf8(), host.args.len())))\n",
     );
     let mut barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     assert!(barb.render().contains("List.any"));
@@ -122,8 +122,8 @@ fn a_loop_handed_different_strings_is_copied_for_each_where_that_decides_somethi
              main! : Host -> []\n\
              main!(host) ->\n  \
                n = host.args.len()\n  \
-               host.exit!(seek(\"a.txt\".to_utf8(), n) + seek(\"b.txt\".to_utf8(), n) \
-               + count(\"a\".to_utf8(), n) + count(\"bb\".to_utf8(), n))\n"
+               host.exit!(U8.of_nat(seek(\"a.txt\".to_utf8(), n) + seek(\"b.txt\".to_utf8(), n) \
+               + count(\"a\".to_utf8(), n) + count(\"bb\".to_utf8(), n)))\n"
         ),
     );
     let mut barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();

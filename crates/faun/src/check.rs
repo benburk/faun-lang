@@ -159,7 +159,7 @@ pub fn type_check(
 /// # Errors
 ///
 /// Rejects host declarations or an entry whose checked type differs from the
-/// canonical `Host` and `Nat` identities or the structural empty variant type.
+/// canonical `Host` and `U8` identities or the structural empty variant type.
 pub fn check_application_abi(
     checked: &CheckedProgram,
     host: &crate::host::HostIds,
@@ -202,11 +202,11 @@ pub fn check_application_abi(
             InferredType::Function(
                 vec![
                     InferredType::Named(host.host, Vec::new()),
-                    InferredType::Named(checked.prelude.nat, Vec::new()),
+                    InferredType::Named(checked.prelude.u8_, Vec::new()),
                 ],
                 Box::new(InferredType::Variants(Vec::new(), None)),
             ),
-            "exit! : (Host, Nat) -> []",
+            "exit! : (Host, U8) -> []",
         ),
     ] {
         let Some(function) = resolved

@@ -5,4 +5,4 @@ import std.host {Host}
 main! : Host -> []
 main!(host) ->
   two = 2
-  host.exit!(two + two)
+  host.exit!(U8.of_nat(two + two))

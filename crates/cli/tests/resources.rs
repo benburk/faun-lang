@@ -52,13 +52,13 @@ fn a_lent_file_may_be_held_where_a_function_leaves() {
 fn a_name_holding_a_nought_byte_is_refused() {
     let package = Package::new(
         "nought-name",
-        "import std.host {Host, File, IoError, IoError.*, Mode.*}
+        "import std.host {Host, File, IoError, Mode.*}
 
          main! : Host -> []
          main!(host) ->
            opened = host.files.open!(\"bad\\0name\", Overwrite)
            status = shut!(opened)
-           host.exit!(status)
+           host.exit!(U8.of_nat(status))
 
          shut! : Result(File, IoError) -> Nat
          shut!(Ok(file)) ->

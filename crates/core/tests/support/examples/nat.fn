@@ -26,7 +26,7 @@ finish!(host, True, n) ->
   two = n + n
   four = two * two
   eight = two * four
-  host.exit!(min(four, eight - two))
+  host.exit!(U8.of_nat(min(four, eight - two)))
 finish!(host, False, _) -> host.exit!(0)
 
 main! : Host -> []

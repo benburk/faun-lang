@@ -9,4 +9,4 @@ main!(host) ->
   input = read.ok_or([])
   echoed = host.stdout.write_all!(input)
   told = host.stderr.write_all!(input)
-  host.exit!((input.len() + 4) % 256)
+  host.exit!(U8.of_nat(input.len() + 4))

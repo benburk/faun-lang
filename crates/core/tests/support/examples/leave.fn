@@ -3,7 +3,7 @@
 import std.host {Host}
 
 leave! : (Host, Nat) -> []
-leave!(host, n) -> host.exit!(n)
+leave!(host, n) -> host.exit!(U8.of_nat(n))
 
 main! : Host -> []
 main!(host) -> leave!(host, 2 + 2)

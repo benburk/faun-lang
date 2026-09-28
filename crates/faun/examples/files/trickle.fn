@@ -4,7 +4,7 @@
 # while they hold them; the one that opened them closes both, on every way
 # it goes on, before it asks `?` of anything.
 
-import std.host {Host, Files, File, Stdout, IoError, Mode.*}
+import std.host {Host, Files, File, Stdout, Chunk, IoError, Mode.*}
 
 trickle! : (File, File, Nat) -> Result(Nat, IoError)
 trickle!(_, _, 0) -> Ok(0)
@@ -12,10 +12,10 @@ trickle!(source, target, Succ(fuel)) ->
   chunk = source.read!(2)?
   more!(chunk, source, target, fuel)
 
-more! : (List(U8), File, File, Nat) -> Result(Nat, IoError)
-more!([], _, _, _) -> Ok(0)
-more!(chunk, source, target, fuel) ->
-  wrote = target.write_all!(chunk)?
+more! : (Chunk, File, File, Nat) -> Result(Nat, IoError)
+more!(End, _, _, _) -> Ok(0)
+more!(Data(bytes), source, target, fuel) ->
+  wrote = target.write_all!(bytes)?
   trickle!(source, target, fuel)
 
 copy! : (Files, Stdout) -> Result(Nat, IoError)
@@ -41,4 +41,4 @@ made!(Ok(target), source, output) ->
 main! : Host -> []
 main!(host) ->
   copied = copy!(host.files, host.stdout)
-  host.exit!(copied.ok_or(1))
+  host.exit!(U8.of_nat(copied.ok_or(1)))

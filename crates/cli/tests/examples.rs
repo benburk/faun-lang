@@ -42,14 +42,14 @@ fn minimal_hello_says_hello() {
 fn streams_answer_what_they_moved_or_what_they_met() {
     let package = support::Package::new(
         "streams",
-        "import std.host {Host, IoError.*}
+        "import std.host {Host, IoError}
 
          main! : Host -> []
          main!(host) ->
            read = host.stdin.read_to_str!()
            text = read.ok_or(\"unreadable\")
            wrote = host.stdout.write_all!(text.to_utf8())
-           host.exit!(status(wrote))
+           host.exit!(U8.of_nat(status(wrote)))
 
          status : Result(Nat, IoError) -> Nat
          status(Ok(n)) -> n % 100
@@ -301,12 +301,12 @@ fn the_nbody_example_holds() {
 fn files_answer_what_opening_one_met() {
     let package = support::Package::new(
         "files",
-        "import std.host {Files, File, IoError.*, Mode.*}
+        "import std.host {Files, File, IoError, Mode.*}
 
          main! : Host -> []
          main!(host) ->
            status = met!(host.files)
-           host.exit!(status)
+           host.exit!(U8.of_nat(status))
 
          met! : Files -> Nat
          met!(files) ->
@@ -354,7 +354,7 @@ fn appends_are_linear_work() {
          main! : Host -> []
          main!(host) ->
            values = built(20000, [])
-           host.exit!(values.len() % 256 + values.get_or(19999, 9))",
+           host.exit!(U8.of_nat(values.len() % 256 + values.get_or(19999, 9)))",
     );
     assert_eq!(package.run(), 20000 % 256);
 }

@@ -8,7 +8,7 @@ below(0, Succ(_)) -> True
 below(Succ(a), Succ(b)) -> below(a, b)
 
 finish! : (Host, Bool, Nat) -> []
-finish!(host, True, n) -> host.exit!(n + n + n + n)
+finish!(host, True, n) -> host.exit!(U8.of_nat(n + n + n + n))
 finish!(host, False, _) -> host.exit!(0)
 
 main! : Host -> []

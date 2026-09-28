@@ -25,13 +25,13 @@ pub(super) const CASES: [Case; 5] = [
 impl Case {
     pub(super) fn source(self) -> String {
         let expression = match self {
-            Self::Chain => "host.exit!(n + three + five)",
+            Self::Chain => "host.exit!(U8.of_nat(n + three + five))",
             Self::Shared => {
                 "a = n + three
                    b = a + n
-                   host.exit!(a + b)"
+                   host.exit!(U8.of_nat(a + b))"
             }
-            Self::ConstantLeft => "host.exit!(five + (n + three))",
+            Self::ConstantLeft => "host.exit!(U8.of_nat(five + (n + three)))",
             // n + 250 crosses 255 at n = 6. Subtracting 255 makes its high
             // byte observable even though an exit status only carries eight
             // bits: a wrongly wrapped sum would yield monus zero instead.
@@ -40,9 +40,9 @@ impl Case {
                    base = five * (five * ten)
                    boundary = base + five
                    sum = n + base
-                   host.exit!(sum - boundary)"
+                   host.exit!(U8.of_nat(sum - boundary))"
             }
-            Self::Monus => "host.exit!(n - five)",
+            Self::Monus => "host.exit!(U8.of_nat(n - five))",
         };
         format!(
             "import std.host {{Host}}
@@ -55,7 +55,7 @@ impl Case {
              finish! : (Host, Bool, Nat) -> []
              finish!(host, False, _) ->
                five = 5
-               host.exit!(five * five * 4)
+               host.exit!(U8.of_nat(five * five * 4))
              finish!(host, True, n) ->
                two = 2
                three = two + 1

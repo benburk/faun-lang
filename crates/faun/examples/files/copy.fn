@@ -5,15 +5,16 @@
 # before `?` is asked of what reading or writing it answered, so no way out
 # leaves one open.
 
-import std.host {Host, Files, Stdout, IoError.*, Mode.*}
+import std.host {Host, Files, Stdout, Chunk, IoError, Mode.*}
 
 copy! : (Files, Stdout) -> Result(Nat, IoError)
 copy!(files, output) ->
   source = files.open!("input.txt", Read)?
   reading = source.read!(4096)
   closing_source = source.close!()
-  contents = reading?
+  chunk = reading?
   closed_source = closing_source?
+  contents = bytes(chunk)
 
   target = files.open!("output.txt", Overwrite)?
   writing = target.write_all!(contents)
@@ -29,8 +30,13 @@ main!(host) ->
   copied = copy!(host.files, host.stdout)
   host.exit!(status(copied))
 
+# What a read held: nothing, once the file has ended.
+bytes : Chunk -> List(U8)
+bytes(Data(read)) -> read
+bytes(End) -> []
+
 # Nought where it copied; otherwise what went wrong, as a status.
-status : Result(Nat, IoError) -> Nat
+status : Result(Nat, IoError) -> U8
 status(Ok(_)) -> 0
 status(Err(NotFound)) -> 2
 status(Err(Escapes)) -> 3

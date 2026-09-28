@@ -4,25 +4,28 @@
 # methods are the effects the program may ask of the target.
 #
 # Standard input, output and error are Ori's streams, and so is a file: a
-# read or write moves some bytes and answers how many, or the error it met;
+# read moves some bytes or says the stream has ended, a write moves some
+# bytes and answers how many, and either may answer the error it met;
 # `read_to_end!` and `write_all!` go on until the stream is done. Each loop
 # is bounded by fuel, so it is seen to stop, and a stream that never ends
 # runs out of it: as many reads as a word counts. Each stream is what a
 # descriptor names, and the three standard ones are the first three.
 #
+# What every target shares is in `common.fn`; what is here is WASI's: its
+# descriptors, its `path_open` flags and rights, and its error numbers.
+#
 # A `File` is a resource: what opens one is the program's to close, once,
 # on every way it goes on, and nothing is asked of it afterwards.
 
-exports {Host, Stdin, Stdout, Stderr, Files, File, Bytes, Mode.*, IoError.*}
+import hosts.common {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, write_everything!, finish!, serve_stdin!}
 
-# What a stream or a file moves.
-Bytes = List(U8)
+exports {Host, Stdin, Stdout, Stderr, Files, File, Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError}
 
 # The arguments the program was run with, its own name first.
 Host : {args: List(Str)}.(
   # Finish with `status`: nought is done, and anything else says what went
-  # wrong.
-  exit! : (Host, Nat) -> []
+  # wrong. A status is a byte, which is all of one every target keeps.
+  exit! : (Host, U8) -> []
 
   stdin : Host -> Stdin
   stdin(_) -> Stdin
@@ -38,14 +41,14 @@ Host : {args: List(Str)}.(
   files(_) -> Files
 
   # `text` on standard output, all of it.
-  print! : (Host, Str) -> Result({}, IoError)
+  print! : (Host, Str) -> Result({}, WriteError)
   print!(host, text) ->
     wrote = host.stdout.write_all!(text.to_utf8())
     went = wrote?
     Ok({})
 
   # `text` and a line's end on standard output.
-  println! : (Host, Str) -> Result({}, IoError)
+  println! : (Host, Str) -> Result({}, WriteError)
   println!(host, text) -> host.print!("${text}\n")
 
   # Run `app` on the arguments the program was run with, its own name
@@ -71,65 +74,39 @@ Host : {args: List(Str)}.(
     host.exit!(status)
 )
 
-# What reading or writing a stream can meet.
-IoError : [NotFound, Denied, AlreadyExists, NotADirectory, IsADirectory, NotEmpty,
-           Escapes, BrokenPipe, NoSpace, Unsupported, Other(Nat)].(
-  to_str : IoError -> Str
-  to_str(NotFound) -> "NotFound"
-  to_str(Denied) -> "Denied"
-  to_str(AlreadyExists) -> "AlreadyExists"
-  to_str(NotADirectory) -> "NotADirectory"
-  to_str(IsADirectory) -> "IsADirectory"
-  to_str(NotEmpty) -> "NotEmpty"
-  to_str(Escapes) -> "Escapes"
-  to_str(BrokenPipe) -> "BrokenPipe"
-  to_str(NoSpace) -> "NoSpace"
-  to_str(Unsupported) -> "Unsupported"
-  to_str(Other(code)) -> "Other(${code})"
-)
-
 Stdin : [Stdin].(
-  # Up to `count` bytes, fewer where fewer are ready, and none at the end.
-  read! : (Stdin, Nat) -> Result(List(U8), IoError)
-  read!(_, count) -> read_from!(0, count)
+  # Up to `count` bytes, fewer where fewer are ready, or `End` where none
+  # are left. Asked for none, it answers none and asks the target nothing.
+  read! : (Stdin, Nat) -> Result(Chunk, ReadError)
+  read!(_, count) -> read_from!(Fd(0), count)
 
   # Every byte to the end.
-  read_to_end! : Stdin -> Result(List(U8), [Io(IoError), LimitExceeded])
+  read_to_end! : Stdin -> Result(List(U8), [Io(ReadError), LimitExceeded])
   read_to_end!(input) -> read_chunks!(input, 4294967295, [])
 
   # Every byte to the end, as text.
-  read_to_str! : Stdin -> Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8])
-  read_to_str!(input) -> read_text!(input)
+  read_to_str! : Stdin -> Result(Str, [Io(ReadError), LimitExceeded, InvalidUtf8])
+  read_to_str!(input) -> read_text!(input, 4294967295)
 )
 
 Stdout : [Stdout].(
   # Some of `bytes`, from the first: how many went.
-  write! : (Stdout, List(U8)) -> Result(Nat, IoError)
-  write!(_, bytes) ->
-    went = fd_put!(1, bytes)
-    outcome(went)
+  write! : (Stdout, List(U8)) -> Result(Nat, WriteError)
+  write!(_, bytes) -> put!(Fd(1), bytes)
 
   # All of `bytes`: how many that is.
-  write_all! : (Stdout, List(U8)) -> Result(Nat, IoError)
-  write_all!(output, bytes) ->
-    wrote = write_rest!(output, bytes, bytes.len(), bytes.len())
-    done = wrote?
-    Ok(bytes.len())
+  write_all! : (Stdout, List(U8)) -> Result(Nat, WriteError)
+  write_all!(output, bytes) -> write_everything!(output, bytes)
 )
 
 Stderr : [Stderr].(
   # Some of `bytes`, from the first: how many went.
-  write! : (Stderr, List(U8)) -> Result(Nat, IoError)
-  write!(_, bytes) ->
-    went = fd_put!(2, bytes)
-    outcome(went)
+  write! : (Stderr, List(U8)) -> Result(Nat, WriteError)
+  write!(_, bytes) -> put!(Fd(2), bytes)
 
   # All of `bytes`: how many that is.
-  write_all! : (Stderr, List(U8)) -> Result(Nat, IoError)
-  write_all!(output, bytes) ->
-    wrote = write_rest!(output, bytes, bytes.len(), bytes.len())
-    done = wrote?
-    Ok(bytes.len())
+  write_all! : (Stderr, List(U8)) -> Result(Nat, WriteError)
+  write_all!(output, bytes) -> write_everything!(output, bytes)
 )
 
 # Where a program opens files: beneath where it runs, and nowhere else.
@@ -137,63 +114,57 @@ Files : [Files].(
   # What `name` names, opened as `mode` says. A name reaching above where
   # the program runs, by `..` or from the root or through a link, is refused
   # as `Escapes`.
-  open! : (Files, Str, Mode) -> Result(File, IoError)
+  open! : (Files, Str, Mode) -> Result(File, OpenError)
   open!(files, name, mode) -> named!(files, name.to_utf8(), (flags(mode), made(mode)))
 )
 
-# How a file is opened: to read it as it is; to write it from nothing, made
-# if it is not there; to write after what it holds, made if it is not there;
-# to write it made new, refused as `AlreadyExists` if it is there; to read
-# and write it as it is; and to read and write it, made if it is not there.
-Mode : [Read, Overwrite, Append, CreateNew, Edit, Load]
-
 # An open file: what `Files.open!` answers, and the program's to close.
-File : [File(Nat)].(
-  # Up to `count` bytes, fewer where fewer are ready, and none at the end.
-  read! : (File, Nat) -> Result(List(U8), IoError)
+File : [File(Fd)].(
+  # Up to `count` bytes, fewer where fewer are ready, or `End` where none
+  # are left. Asked for none, it answers none and asks the target nothing.
+  read! : (File, Nat) -> Result(Chunk, ReadError)
   read!(File(fd), count) -> read_from!(fd, count)
 
   # Some of `bytes`, from the first: how many went.
-  write! : (File, List(U8)) -> Result(Nat, IoError)
-  write!(File(fd), bytes) ->
-    went = fd_put!(fd, bytes)
-    outcome(went)
+  write! : (File, List(U8)) -> Result(Nat, WriteError)
+  write!(File(fd), bytes) -> put!(fd, bytes)
 
   # Done with it, whether or not what was written got where it was going:
-  # nought, or the error closing it met. Nothing may be asked of it after.
-  close! : File -> Result(Nat, IoError)
+  # the error closing it met, if any. Nothing may be asked of it after.
+  close! : File -> Result({}, CloseError)
   close!(file) ->
     closed = fd_close!(file)
-    outcome(closed)
+    outcome(closed).map_ok(|_| {}).map_err(close_error)
 
   # Every byte to the end.
-  read_to_end! : File -> Result(List(U8), [Io(IoError), LimitExceeded])
+  read_to_end! : File -> Result(List(U8), [Io(ReadError), LimitExceeded])
   read_to_end!(file) -> read_chunks!(file, 4294967295, [])
 
   # Every byte to the end, as text.
-  read_to_str! : File -> Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8])
-  read_to_str!(file) -> read_text!(file)
+  read_to_str! : File -> Result(Str, [Io(ReadError), LimitExceeded, InvalidUtf8])
+  read_to_str!(file) -> read_text!(file, 4294967295)
 
   # All of `bytes`: how many that is.
-  write_all! : (File, List(U8)) -> Result(Nat, IoError)
-  write_all!(file, bytes) ->
-    wrote = write_rest!(file, bytes, bytes.len(), bytes.len())
-    done = wrote?
-    Ok(bytes.len())
+  write_all! : (File, List(U8)) -> Result(Nat, WriteError)
+  write_all!(file, bytes) -> write_everything!(file, bytes)
 )
+
+# What WASI names an open stream by. Only this module makes one, so no
+# number a program worked out can be handed to a routine as one.
+Fd : [Fd(U32)]
 
 # What the target answers for: how many bytes moved, or the descriptor
 # opened, or the error met, as `outcome` reads it. Bytes are handed where
 # they lie, and a read fills a list of its own, answered beside what the
 # target said. A name is handed with its length, so one holding a nought
 # byte is not handed, since the target would read it as ending there.
-fd_put! : (Nat, List(U8)) -> Nat
-fd_read! : (Nat, Nat) -> (List(U8), Nat)
+fd_put! : (Fd, List(U8)) -> Nat
+fd_read! : (Fd, Nat) -> (List(U8), Nat)
 fd_open! : (Files, List(U8), Nat, Nat) -> Nat
 fd_close! : File -> Nat
 
 # WASI's `path_open` flags for each mode, with its descriptor flags above
-# the low byte.
+# the low byte. WASI starts no programs, so nothing need be kept from one.
 flags : Mode -> Nat
 flags(Read) -> 0
 flags(Overwrite) -> 9
@@ -213,124 +184,71 @@ made(_) -> 6291831
 
 # Open `name`, which WASI reads to its length, so none of it may be a
 # nought byte, which a host would read as ending it.
-named! : (Files, List(U8), (Nat, Nat)) -> Result(File, IoError)
+named! : (Files, List(U8), (Nat, Nat)) -> Result(File, OpenError)
 named!(_, name, _) if name.contains(0) -> Err(Other(28))
 named!(files, name, how) -> opening!(files, name, how, 8)
 
 # Open `name`, asking again, up to `fuel` times, where the kernel was
 # interrupted or found the name moving under it.
-opening! : (Files, List(U8), (Nat, Nat), Nat) -> Result(File, IoError)
+opening! : (Files, List(U8), (Nat, Nat), Nat) -> Result(File, OpenError)
 opening!(files, name, (how, made), fuel) ->
   answer = fd_open!(files, name, how, made)
   opened!(files, name, (how, made), fuel, outcome(answer))
 
-opened! : (Files, List(U8), (Nat, Nat), Nat, Result(Nat, IoError)) -> Result(File, IoError)
-opened!(_, _, _, _, Ok(fd)) -> Ok(File(fd))
-opened!(files, name, how, Succ(fuel), Err(Other(27))) -> opening!(files, name, how, fuel)
-opened!(files, name, how, Succ(fuel), Err(Other(6))) -> opening!(files, name, how, fuel)
-opened!(_, _, _, _, Err(error)) -> Err(error)
+opened! : (Files, List(U8), (Nat, Nat), Nat, Result(Nat, Nat)) -> Result(File, OpenError)
+opened!(_, _, _, _, Ok(fd)) -> Ok(File(Fd(U32.of_nat(fd))))
+opened!(files, name, how, Succ(fuel), Err(27)) -> opening!(files, name, how, fuel)
+opened!(files, name, how, Succ(fuel), Err(6)) -> opening!(files, name, how, fuel)
+opened!(_, _, _, _, Err(code)) -> Err(open_error(code))
 
 # Up to `count` bytes from what `fd` names, and no more than 65536.
-read_from! : (Nat, Nat) -> Result(List(U8), IoError)
+read_from! : (Fd, Nat) -> Result(Chunk, ReadError)
+read_from!(_, 0) -> Ok(Data([]))
 read_from!(fd, count) ->
   (bytes, answer) = fd_read!(fd, 65536 - (65536 - count))
-  filled(bytes, outcome(answer))
+  filled(bytes, outcome(answer).map_err(read_error))
 
-filled : (List(U8), Result(Nat, IoError)) -> Result(List(U8), IoError)
-filled(bytes, Ok(_)) -> Ok(bytes)
-filled(_, Err(error)) -> Err(error)
+# Some of `bytes` to what `fd` names: how many went.
+put! : (Fd, List(U8)) -> Result(Nat, WriteError)
+put!(fd, bytes) ->
+  went = fd_put!(fd, bytes)
+  outcome(went).map_err(write_error)
 
-# Every byte to the end of what `input` reads, as text.
-read_text! : r -> Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8]) where
-  r.read! : (r, Nat) -> Result(List(U8), IoError)
-read_text!(input) ->
-  read = read_chunks!(input, 4294967295, [])
-  bytes = read?
-  text = Str.from_utf8(bytes)?
-  Ok(text)
-
-# What a runner finishes with: nought where what it printed was written.
-# `value` said on standard output, and a line's end after it.
-finish! : (Stdout, a) -> Nat where a.to_str : a -> Str
-finish!(output, value) ->
-  wrote = output.write_all!("${value}\n".to_utf8())
-  written_status(wrote)
-
-written_status : Result(Nat, IoError) -> Nat
-written_status(Ok(_)) -> 0
-written_status(Err(_)) -> 1
-
-# `error: ` and what went wrong, on standard error: one, or two where even
-# that could not be written.
-report! : (Stderr, Str) -> Nat
-report!(errors, text) ->
-  wrote = errors.write_all!("error: ${text}\n".to_utf8())
-  reported_status(wrote)
-
-reported_status : Result(Nat, IoError) -> Nat
-reported_status(Ok(_)) -> 1
-reported_status(Err(_)) -> 2
-
-unread! : (Stderr, [Io(IoError), LimitExceeded]) -> Nat
-unread!(errors, Io(error)) -> report!(errors, error.to_str())
-unread!(errors, LimitExceeded) -> report!(errors, "LimitExceeded")
-
-serve_stdin! : (Stdout, Stderr, Result(List(U8), [Io(IoError), LimitExceeded]), List(Str), {args: List(Str), stdin: List(U8)} -> a) -> Nat where
-  a.to_str : a -> Str
-serve_stdin!(_, errors, Err(error), _, _) -> unread!(errors, error)
-serve_stdin!(output, _, Ok(input), args, app) -> finish!(output, app({args: args, stdin: input}))
-
-# What the target answers: a number, or an error that far short of the top of
-# a word, as a kernel answers `-errno`. No error is more than 4095, so an
-# answer that far from the top or nearer is one.
-outcome : Nat -> Result(Nat, IoError)
+# What the target answers: a number, or an error number that far short of
+# the top of a word, as a kernel answers `-errno`. No error is more than
+# 4095, so an answer that far from the top or nearer is one.
+outcome : Nat -> Result(Nat, Nat)
 outcome(answer) -> answered(answer, answer - 4294963200)
 
-answered : (Nat, Nat) -> Result(Nat, IoError)
+answered : (Nat, Nat) -> Result(Nat, Nat)
 answered(answer, 0) -> Ok(answer)
-answered(answer, Succ(_)) -> Err(io_error(4294967295 - (answer - 1)))
+answered(answer, Succ(_)) -> Err(4294967295 - (answer - 1))
 
-# Every byte to the end, after `read`; each read takes one fuel. Each chunk
-# goes on the end of what came before, in place where there is room.
-read_chunks! : (r, Nat, List(U8)) -> Result(List(U8), [Io(IoError), LimitExceeded]) where
-  r.read! : (r, Nat) -> Result(List(U8), IoError)
-read_chunks!(_, 0, _) -> Err(LimitExceeded)
-read_chunks!(input, Succ(fuel), read) ->
-  got = input.read!(65536)
-  chunk = got.map_err(Io)?
-  read_on!(input, fuel, read, chunk)
+# What an error number of WASI's is, to what met it.
+open_error : Nat -> OpenError
+open_error(2) -> Denied
+open_error(19) -> NoSpace
+open_error(20) -> AlreadyExists
+open_error(31) -> IsADirectory
+open_error(44) -> NotFound
+open_error(51) -> NoSpace
+open_error(54) -> NotADirectory
+open_error(58) -> Unsupported
+open_error(63) -> Denied
+open_error(76) -> Escapes
+open_error(code) -> Other(code)
 
-read_on! : (r, Nat, List(U8), List(U8)) -> Result(List(U8), [Io(IoError), LimitExceeded]) where
-  r.read! : (r, Nat) -> Result(List(U8), IoError)
-read_on!(_, _, read, []) -> Ok(read)
-read_on!(input, fuel, read, chunk) -> read_chunks!(input, fuel, read.extend(chunk))
+read_error : Nat -> ReadError
+read_error(31) -> IsADirectory
+read_error(code) -> Other(code)
 
-# Write the last `left` of `bytes` until none are left, one fuel a byte: a
-# stream that keeps taking none runs out of it. Nothing is counted, since a
-# total would be a number the host's answers add up to, wider than any word
-# a target picks: once it ends well, every byte went. The bytes go round
-# unchanged, so bytes known before the program runs are still known on every
-# round, and what is left only falls, so it is never more than there were.
-write_rest! : (w, List(U8), Nat, Nat) -> Result({}, IoError) where
-  w.write! : (w, List(U8)) -> Result(Nat, IoError)
-write_rest!(_, _, 0, _) -> Ok({})
-write_rest!(_, _, _, 0) -> Err(Other(5))
-write_rest!(output, bytes, left, Succ(fuel)) ->
-  wrote = output.write!(bytes.drop(bytes.len() - left))
-  went = wrote?
-  write_rest!(output, bytes, left - went, fuel)
+write_error : Nat -> WriteError
+write_error(19) -> NoSpace
+write_error(51) -> NoSpace
+write_error(64) -> BrokenPipe
+write_error(code) -> Other(code)
 
-# What an error number of WASI's is.
-io_error : Nat -> IoError
-io_error(2) -> Denied
-io_error(20) -> AlreadyExists
-io_error(31) -> IsADirectory
-io_error(44) -> NotFound
-io_error(51) -> NoSpace
-io_error(54) -> NotADirectory
-io_error(55) -> NotEmpty
-io_error(58) -> Unsupported
-io_error(63) -> Denied
-io_error(64) -> BrokenPipe
-io_error(76) -> Escapes
-io_error(code) -> Other(code)
+close_error : Nat -> CloseError
+close_error(19) -> NoSpace
+close_error(51) -> NoSpace
+close_error(code) -> Other(code)

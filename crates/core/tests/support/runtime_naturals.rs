@@ -150,7 +150,7 @@ const SQUARES: &str = "import std.host {Host}
                          count = host.args.len()
                          product = huge * count
                          quotient = product / huge
-                         host.exit!(quotient.equals(1).to_nat())";
+                         host.exit!(U8.of_nat(quotient.equals(1).to_nat()))";
 
 fn source_check(target: &dyn Target, runner: Option<&str>) {
     let p = faun::lower(SQUARES, target).expect("bounded effect after runtime arithmetic");

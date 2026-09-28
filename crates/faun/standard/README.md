@@ -231,36 +231,61 @@ so `-7 / 3` is `-3` and `-7 % 3` is `2`. For every type, division by zero return
 The structural empty variant type `[]` is the uninhabited result used by
 applications; it needs no blessed standard-library name. `Never` remains an
 ordinary available constructor spelling. Each target has its own host module,
-`hosts/<target>.fn`, mounted at `std.host`. They start out identical and will
-diverge as targets offer different capabilities. Each declares Ori's host
-streams:
+`hosts/<target>.fn`, mounted at `std.host`, and what every target shares is
+`hosts/common.fn`, which each imports as `hosts.common`: the rows, `Mode`,
+and the loops that go on until a stream is done. What a host module keeps
+for itself is its target's: its descriptors, its flags and its error
+numbers. Each declares Ori's host streams:
 
 ```
 Host : {args: List(Str)}.(
-  exit! : (Host, Nat) -> []
+  exit! : (Host, U8) -> []
   stdin : Host -> Stdin
   stdout : Host -> Stdout
   stderr : Host -> Stderr
   files : Host -> Files
 )
 
-Stdin    read! : (Stdin, Nat) -> Result(List(U8), IoError)
-         read_to_end! : Stdin -> Result(List(U8), [Io(IoError), LimitExceeded])
-         read_to_str! : Stdin -> Result(Str, [Io(IoError), LimitExceeded, InvalidUtf8])
-Stdout   write!, write_all! : (Stdout, List(U8)) -> Result(Nat, IoError)
-Stderr   write!, write_all! : (Stderr, List(U8)) -> Result(Nat, IoError)
-Files    open! : (Files, Str, Mode) -> Result(File, IoError)
+Stdin    read! : (Stdin, Nat) -> Result(Chunk, ReadError)
+         read_to_end! : Stdin -> Result(List(U8), [Io(ReadError), LimitExceeded])
+         read_to_str! : Stdin -> Result(Str, [Io(ReadError), LimitExceeded, InvalidUtf8])
+Stdout   write!, write_all! : (Stdout, List(U8)) -> Result(Nat, WriteError)
+Stderr   write!, write_all! : (Stderr, List(U8)) -> Result(Nat, WriteError)
+Files    open! : (Files, Str, Mode) -> Result(File, OpenError)
 File     read!, read_to_end!, read_to_str!, write!, write_all!, as the streams
-         close! : File -> Result(Nat, IoError)
+         close! : File -> Result({}, CloseError)
 Mode     [Read, Overwrite, Append, CreateNew, Edit, Load]
+Chunk    = [Data(List(U8)), End]
 ```
 
-with `IoError` the tags `NotFound`, `Denied`, `AlreadyExists`, `NotADirectory`,
-`IsADirectory`, `NotEmpty`, `Escapes`, `BrokenPipe`, `NoSpace`, `Unsupported`
-and `Other(Nat)`, each
-host reading its own error numbers into them. A `read!` or `write!` moves some
-bytes, at most 64 KiB read at once (1 KiB on sim65), and answers how many; `read_to_end!` and
-`write_all!` are Faun in the host module, going on until the stream is done,
+A status is a `U8`, since a byte is all of one every target keeps, so a
+status worked out from a `Nat` says how it is cut down, `U8.of_nat(n)`,
+rather than a target wrapping it or not as it happens to.
+
+Each error is a row of tags of its own, holding only what that operation can
+meet, and `?` joins them where they meet:
+
+```
+OpenError   [NotFound, Denied, AlreadyExists, NotADirectory, IsADirectory,
+             Escapes, NoSpace, Unsupported, Other(Nat)]
+ReadError   [IsADirectory, Other(Nat)]
+WriteError  [BrokenPipe, NoSpace, Other(Nat)]
+CloseError  [NoSpace, Other(Nat)]
+IoError     all of them, and NotEmpty, for a program's own signatures
+```
+
+each host reading its own error numbers into them, and keeping the number
+in `Other` where no tag says it. The rows are structural, so a program
+imports `IoError` and names the tags without importing them. A write to a
+pipe nobody reads answers `BrokenPipe` on every target. The Linux target
+ignores `SIGPIPE` before anything else runs in a program that writes, so the
+write answers rather than the signal ending the program from inside it; a
+runner that meets it finishes quietly with status one.
+
+A `read!` moves some bytes, at most 64 KiB at once (1 KiB on sim65), or
+answers `End` where the stream has ended; asked for none, it answers none
+without asking the target. A `write!` moves some bytes and answers how many.
+`read_to_end!` and `write_all!` are Faun, going on until the stream is done,
 each bounded by fuel so it is seen to stop. The `Host`, `Stdin`, `Stdout`,
 `Stderr`, `Files` and `File` constructors remain private, so only the target
 makes one. A method of a value's own type is reached whether or not the type
@@ -268,7 +293,9 @@ was imported, so `host.stdout.write_all!(bytes)` needs only `Host`. A method a
 type's block writes without a signature is one all the same, called with a dot
 from anywhere its type reaches; its type is inferred before its callers'.
 
-Every stream is what a descriptor names, the standard three first, and a
+Every stream is what a descriptor names, the standard three first, held in
+a private `Fd` as wide as the target's descriptors are (`U32`, and `U16` on
+sim65), so no number a program worked out is handed a routine as one. A
 target answers for four routines over descriptors: bytes written, bytes read,
 a name opened, and a descriptor closed. Bytes cross where they lie: a write
 hands the target the list's own bytes, and a read fills a new list the target
@@ -280,7 +307,8 @@ nothing is kept between one call and the next.
 name reaching above it, by `..`, from the root or through a link, is refused as
 `Escapes` where the target can tell, and as `Denied` under WASI. sim65 opens
 whatever it is handed, so its host module refuses a name from the root or
-holding a `..` itself, and cannot see a link. A name holds no nought byte; where the kernel reads a
+holding a `..` itself, and cannot see a link. Linux opens each file so that
+a program it starts is not handed it. A name holds no nought byte; where the kernel reads a
 name up to one, the host module appends one, in place where the name's buffer
 has room and nothing else holds it. How long a name may be is the target's to
 say: Linux and a WASI host refuse one too long themselves, and sim65, which
@@ -295,7 +323,7 @@ file is closed before `?` is asked of what reading or writing it answered:
 
 ```
 source = files.open!("input.txt", Read)?
-reading = source.read!(4096)
+reading = source.read_to_end!()
 closing = source.close!()
 contents = reading?
 closed = closing?
@@ -307,11 +335,11 @@ and its caller still holds it; one that closes or answers it on every way it
 goes on takes it. A function that does one on some ways and the other on
 others is refused. What makes a type a resource is a routine the target
 declares as using up what it is handed, here closing a descriptor; a type
-holding a resource, such as `List(File)` or `Result(File, IoError)`, holds one
+holding a resource, such as `List(File)` or `Result(File, OpenError)`, holds one
 too.
 
 `host.print!(text)` and `host.println!(text)` write a text to standard output,
-the second with a line's end, and answer `Result({}, IoError)`. An effect whose
+the second with a line's end, and answer `Result({}, WriteError)`. An effect whose
 answer nothing needs is written on a line of its own, which binds it to `_`.
 Only an effect, a call of a name ending `!`, may stand so; anything else is
 bound to a name:

@@ -145,7 +145,7 @@ fn every_list_function_answers_what_ori_says() {
                  main!(host) ->
                    n = 4 + small(host.args.len())
                    xs = [0, 1, 2, 3, n - 1]
-                   host.exit!(({answer}) % 256)"
+                   host.exit!(U8.of_nat({answer}))"
             ),
         );
         assert_eq!(package.run(), *expected, "`{name}`: {answer}");
