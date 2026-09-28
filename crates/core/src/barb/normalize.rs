@@ -153,7 +153,29 @@ enum Tags {
     Split(Atom, Vec<(super::CtorId, Self)>),
 }
 
+/// What `map` turns `tag` into, where it turns it.
+fn turned(map: &[(super::CtorId, super::CtorId)], tag: super::CtorId) -> Option<super::CtorId> {
+    map.iter()
+        .find(|&&(ctor, _)| ctor == tag)
+        .map(|&(_, answer)| answer)
+}
+
 impl Tags {
+    /// The same questions, of the locals `locals` gives for each level.
+    fn renamed(&self, locals: &[Atom]) -> Self {
+        match self {
+            Self::Leaf(tag) => Self::Leaf(*tag),
+            Self::Same(atom) => Self::Same(locals[atom.0.index()]),
+            Self::Split(on, branches) => Self::Split(
+                locals[on.0.index()],
+                branches
+                    .iter()
+                    .map(|(ctor, tree)| (*ctor, tree.renamed(locals)))
+                    .collect(),
+            ),
+        }
+    }
+
     /// Each answer turned into another, or nothing where one is not turned.
     fn mapped(&self, to: &dyn Fn(super::CtorId) -> Option<super::CtorId>) -> Option<Self> {
         Some(match self {
@@ -266,20 +288,103 @@ impl Rewrite<'_> {
         };
         self.program.terms.hold_body(&scope.bindings, tail)
     }
-    fn into(&mut self, body: Body, mut locals: Vec<Atom>, scope: &mut Scope) -> Atom {
-        let cased = self.cased(body, locals.len());
+    fn into(&mut self, body: Body, locals: Vec<Atom>, scope: &mut Scope) -> Atom {
+        let from = body.bindings.range().start;
+        self.rest_of(body, from, locals, scope)
+    }
+
+    /// The rest of `body`, from its binding at `from`, where `locals` has
+    /// what each binding before it came to.
+    fn rest_of(
+        &mut self,
+        body: Body,
+        from: usize,
+        mut locals: Vec<Atom>,
+        scope: &mut Scope,
+    ) -> Atom {
+        let first = locals.len() - (from - body.bindings.range().start);
+        let cased = self.cased(body, first);
         let last = body.bindings.range().end;
-        for at in body.bindings.range() {
+        for at in from..last {
             if let Some((scrutinee, first, second)) = cased
                 && at + 1 == last
             {
                 return self.merged(scrutinee, first, second, &locals, scope);
             }
             let binding = self.program.terms.binding(at);
+            if let Some(arm) = self.floats(binding, &locals) {
+                return self.floated(body, at, arm, locals, scope);
+            }
             let value = self.expr(binding, &locals, scope);
             locals.push(value);
         }
         self.expr(body.tail, &locals, scope)
+    }
+
+    /// The one arm of a match a binding is, where it takes apart what no
+    /// match has yet: see [`Self::floated`].
+    fn floats(&self, binding: ExprId, locals: &[Atom]) -> Option<Arm> {
+        let Expr::Match(value, arms) = self.program.expr(binding) else {
+            return None;
+        };
+        let &[arm] = self.program.arms(arms) else {
+            return None;
+        };
+        let scrutinee = locals[value.0.index()];
+        let known = self
+            .written
+            .get(scrutinee.0.index())
+            .copied()
+            .flatten()
+            .is_some_and(|wrote| {
+                matches!(self.program.expr(wrote), Expr::Con(..) | Expr::Static(..))
+            });
+        (!known).then_some(arm)
+    }
+
+    /// A match of one arm, which cannot but take it, taking apart a value
+    /// the rest of the body may take apart again: the rest goes on in that
+    /// arm, where what it took apart is known, and every match on it again
+    /// takes the same arm rather than asking.
+    ///
+    /// ```text
+    /// x = match s                  match s
+    ///   U8(n) => .. a                U8(n) =>
+    /// y = match s          =>          .. a      (x)
+    ///   U8(m) => .. b                  .. b      (y, with m as n)
+    /// ```
+    fn floated(
+        &mut self,
+        body: Body,
+        at: usize,
+        arm: Arm,
+        mut locals: Vec<Atom>,
+        scope: &mut Scope,
+    ) -> Atom {
+        let Expr::Match(value, _) = self.program.expr(self.program.terms.binding(at)) else {
+            unreachable!("a floated binding is a match");
+        };
+        let scrutinee = locals[value.0.index()];
+        let fields = self.program.fields(arm.ctor).len();
+        let taken: Vec<_> = (0..fields)
+            .map(|at| Atom(Local::at(scope.level + at)))
+            .collect();
+        self.written.truncate(scope.level);
+        let rest = self.known_as(scrutinee, arm.ctor, &taken, |rewrite| {
+            rewrite.body_with(scope.level + fields, |rewrite, arm_scope| {
+                let mut inner = locals.clone();
+                inner.extend(&taken);
+                let value = rewrite.into(arm.body, inner, arm_scope);
+                locals.push(value);
+                rewrite.rest_of(body, at + 1, locals, arm_scope)
+            })
+        });
+        self.written.truncate(scope.level);
+        let arms = self.program.terms.hold_arms(&[Arm {
+            ctor: arm.ctor,
+            body: rest,
+        }]);
+        self.push(Expr::Match(scrutinee, arms), scope)
     }
 
     /// Where a body ends by taking apart, and only taking apart, a match
@@ -414,6 +519,9 @@ impl Rewrite<'_> {
                 if let Some(answer) = self.composed(scrutinee, arms, scope) {
                     return answer;
                 }
+                if let Some(answer) = self.composed_within(scrutinee, arms, scope) {
+                    return answer;
+                }
                 match self.matching(value, arms, locals, scope) {
                     Matched::Rebuilt(held) => held,
                     Matched::Same(body) => return self.spliced(body, scope),
@@ -462,8 +570,149 @@ impl Rewrite<'_> {
     fn composed(&mut self, scrutinee: Atom, arms: Range, scope: &mut Scope) -> Option<Atom> {
         let wrote = (*self.written.get(scrutinee.0.index())?)?;
         let inner = self.tag_tree(wrote, TAG_TREE_LEAVES)?;
-        let outer = self
-            .program
+        let outer = self.tag_map(arms)?;
+        let mapped = inner.mapped(&|tag| turned(&outer, tag))?;
+        Some(self.emit_tags(mapped.collapsed(), scope))
+    }
+
+    /// The same, where the other match works something out in an arm
+    /// before it answers with tags, as taking a number apart to compare it
+    /// does: that match again, each arm working out what it did and
+    /// answering with the tags this one turns its answer into. The first
+    /// match is left for cleanup, nothing reading it any more.
+    fn composed_within(&mut self, scrutinee: Atom, arms: Range, scope: &mut Scope) -> Option<Atom> {
+        let level = scrutinee.0.index();
+        let wrote = (*self.written.get(level)?)?;
+        let Expr::Match(on, inner) = self.program.expr(wrote) else {
+            return None;
+        };
+        let outer = self.tag_map(arms)?;
+        let inner = self.program.arms(inner).to_vec();
+        let leaves = TAG_TREE_LEAVES / inner.len().max(1);
+        let trees = inner
+            .iter()
+            .map(|arm| {
+                let tree = self.tag_tree(arm.body.tail, leaves)?;
+                tree.mapped(&|tag| turned(&outer, tag))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let mut found = vec![];
+        for (arm, tree) in inner.iter().zip(trees) {
+            let fields = self.program.fields(arm.ctor).len();
+            // What the arm read from outside it is where it was, and it
+            // began at the level its match was written at.
+            let mut locals: Vec<_> = (0..level).map(|at| Atom(Local::at(at))).collect();
+            locals.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
+            self.written.truncate(scope.level);
+            let body = self.body_with(scope.level + fields, |rewrite, arm_scope| {
+                for at in arm.body.bindings.range() {
+                    let binding = rewrite.program.terms.binding(at);
+                    let value = rewrite.expr(binding, &locals, arm_scope);
+                    locals.push(value);
+                }
+                rewrite.emit_tags(tree.renamed(&locals).collapsed(), arm_scope)
+            });
+            found.push(Arm {
+                ctor: arm.ctor,
+                body,
+            });
+        }
+        self.written.truncate(scope.level);
+        let arms = self.program.terms.hold_arms(&found);
+        Some(self.push(Expr::Match(on, arms), scope))
+    }
+
+    /// Whether `a` is below `b`, and if not whether it is `b`, is three
+    /// answers, one each for below, equal and above. Where two of them
+    /// agree it is one question: below or equal is not above, and above or
+    /// below is not equal.
+    fn ordered(&mut self, tags: Tags, scope: &mut Scope) -> Tags {
+        let Tags::Split(on, ref branches) = tags else {
+            return tags;
+        };
+        let Some((less, a, b)) = self.asked(on) else {
+            return tags;
+        };
+        let Operation::LessThan {
+            yes: lt_yes,
+            no: lt_no,
+        } = less
+        else {
+            return tags;
+        };
+        let branch = |ctor| {
+            branches
+                .iter()
+                .find(|&&(tag, _)| tag == ctor)
+                .map(|(_, tree)| tree)
+        };
+        let (Some(Tags::Leaf(below)), Some(rest)) = (branch(lt_yes), branch(lt_no)) else {
+            return tags;
+        };
+        let Some((asked, equal, above)) = self.equality(rest, a, b) else {
+            return tags;
+        };
+        let below = *below;
+        if below == above {
+            return Tags::Same(asked);
+        }
+        if below == equal {
+            let called = self.called(on).expect("asked is a call");
+            let args = self.program.terms.hold_atoms([b, a].into_iter());
+            let swapped = self.push(Expr::Call(called, args), scope);
+            // The arms in the order the type declares its tags.
+            let branches = branches
+                .iter()
+                .map(|&(tag, _)| (tag, Tags::Leaf(if tag == lt_yes { above } else { below })))
+                .collect();
+            return Tags::Split(swapped, branches);
+        }
+        tags
+    }
+
+    /// Where `tree` answers whether `a` equals `b`: what asks it, and its
+    /// answers for equal and not.
+    fn equality(
+        &self,
+        tree: &Tags,
+        a: Atom,
+        b: Atom,
+    ) -> Option<(Atom, super::CtorId, super::CtorId)> {
+        let &Tags::Same(asked) = tree else {
+            return None;
+        };
+        let (Operation::Equals { yes, no }, x, y) = self.asked(asked)? else {
+            return None;
+        };
+        ((x, y) == (a, b) || (x, y) == (b, a)).then_some((asked, yes, no))
+    }
+
+    /// The operation a local was written as a call of, with its two
+    /// operands.
+    fn asked(&self, atom: Atom) -> Option<(Operation, Atom, Atom)> {
+        let wrote = (*self.written.get(atom.0.index())?)?;
+        let Expr::Call(called, args) = self.program.expr(wrote) else {
+            return None;
+        };
+        let operation = self.recognised.operations[called.index()]?;
+        let &[a, b] = self.program.atoms(args) else {
+            return None;
+        };
+        Some((operation, a, b))
+    }
+
+    fn called(&self, atom: Atom) -> Option<FnId> {
+        let wrote = (*self.written.get(atom.0.index())?)?;
+        match self.program.expr(wrote) {
+            Expr::Call(called, _) => Some(called),
+            _ => None,
+        }
+    }
+
+    /// The tag each arm of a match answers with, by the tag it takes, where
+    /// every arm only answers with one.
+    fn tag_map(&self, arms: Range) -> Option<Vec<(super::CtorId, super::CtorId)>> {
+        self.program
             .arms(arms)
             .iter()
             .map(|arm| {
@@ -474,14 +723,7 @@ impl Rewrite<'_> {
                     .then(|| self.tag(arm.body.tail))??;
                 Some((arm.ctor, tag))
             })
-            .collect::<Option<Vec<_>>>()?;
-        let mapped = inner.mapped(&|tag| {
-            outer
-                .iter()
-                .find(|&&(ctor, _)| ctor == tag)
-                .map(|&(_, answer)| answer)
-        })?;
-        Some(self.emit_tags(mapped.collapsed(), scope))
+            .collect()
     }
 
     /// The nullary constructor `expr` builds or knows, where it is one.
@@ -519,6 +761,7 @@ impl Rewrite<'_> {
     }
 
     fn emit_tags(&mut self, tags: Tags, scope: &mut Scope) -> Atom {
+        let tags = self.ordered(tags, scope);
         match tags {
             Tags::Leaf(tag) => self.push(Expr::Con(tag, Range::default()), scope),
             Tags::Same(atom) => atom,
@@ -618,22 +861,53 @@ impl Rewrite<'_> {
             tail => self.push(tail, scope),
         }
     }
+    /// `write`, where `atom` is known to be `ctor` of `fields`: in an arm,
+    /// what its match took apart is what the arm took it apart into, and a
+    /// match on it again takes that arm.
+    fn known_as<T>(
+        &mut self,
+        atom: Atom,
+        ctor: super::CtorId,
+        fields: &[Atom],
+        write: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let level = atom.0.index();
+        let Some(&before) = self.written.get(level) else {
+            return write(self);
+        };
+        let fields = self.program.terms.hold_atoms(fields.iter().copied());
+        let known = self.program.terms.push(Expr::Con(ctor, fields));
+        self.written[level] = Some(known);
+        let written = write(self);
+        if let Some(entry) = self.written.get_mut(level) {
+            *entry = before;
+        }
+        written
+    }
+
     /// Rebuild a match's arms: as a match, as the one arm every arm is, or
     /// as its scrutinee where every arm puts back the constructor it took
     /// apart.
     fn matching(&mut self, value: Atom, arms: Range, locals: &[Atom], scope: &Scope) -> Matched {
         let mut found = vec![];
+        let scrutinee = locals[value.0.index()];
         for at in arms.range() {
             let arm = self.program.terms.arm(at);
             let fields = self.program.fields(arm.ctor).len();
+            let taken: Vec<_> = (0..fields)
+                .map(|at| Atom(Local::at(scope.level + at)))
+                .collect();
             let mut inner = locals.to_vec();
-            inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
+            inner.extend(&taken);
             // A sibling arm's bindings may have taken this arm's fields'
             // levels, and what wrote them is not what this arm binds.
             self.written.truncate(scope.level);
+            let body = self.known_as(scrutinee, arm.ctor, &taken, |rewrite| {
+                rewrite.body(arm.body, inner, scope.level + fields)
+            });
             found.push(Arm {
                 ctor: arm.ctor,
-                body: self.body(arm.body, inner, scope.level + fields),
+                body,
             });
         }
         self.written.truncate(scope.level);

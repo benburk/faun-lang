@@ -257,3 +257,64 @@ fn a_truth_turned_into_tags_and_back_is_the_truth_itself() {
         program.render()
     );
 }
+
+/// Whether a byte is at most `k`, as a range pattern asks it: the byte
+/// taken apart, then compared by an order of below, equal and above, then
+/// that order asked whether it is not above. Below or equal is not above,
+/// so one comparison is asked, the other way round, and nothing asks
+/// whether the two are equal.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the byte, the order and the question are each built by hand"
+)]
+fn at_most_is_one_comparison_the_other_way_round() {
+    let library = super::fixture::Library::new();
+    let (nat, bool_, less_than, equals) = (
+        library.nat,
+        library.bool_,
+        library.less_than,
+        library.equals,
+    );
+    let (false_, true_) = (library.false_, library.true_);
+    let mut program = library.program;
+    let byte = program.declare_type("Byte");
+    program.define_type(byte, &[("Byte", &[nat])]);
+    let order = program.declare_type("Order");
+    program.define_type(order, &[("Lt", &[]), ("Eq", &[]), ("Gt", &[])]);
+    let [lt, eq, gt] = [0, 1, 2].map(|at| program.ctor_at(order, at));
+    let main = program.declare("main", &[byte, nat, nat, nat], nat);
+    program.define(main, |b, args| {
+        let ordered = b.match_(args[0], byte, |b, _, fields| {
+            let below = b.call(less_than, &[fields[0], args[1]]);
+            let same = b.call(equals, &[fields[0], args[1]]);
+            b.match_(below, bool_, |b, ctor, _| {
+                if ctor == true_ {
+                    return b.con(lt, &[]);
+                }
+                b.match_(same, bool_, |b, ctor, _| {
+                    b.con(if ctor == true_ { eq } else { gt }, &[])
+                })
+            })
+        });
+        let truth = b.match_(ordered, order, |b, ctor, _| {
+            b.con(if ctor == gt { false_ } else { true_ }, &[])
+        });
+        b.match_(
+            truth,
+            bool_,
+            |_, ctor, _| if ctor == true_ { args[2] } else { args[3] },
+        )
+    });
+    program.set_entry(main);
+    validate(&program).unwrap();
+    super::optimize(&mut program);
+    validate(&program).unwrap();
+    let rendered = program.render();
+    let body = rendered
+        .split("\n\n")
+        .find(|definition| definition.starts_with("main"))
+        .unwrap();
+    assert_eq!(body.matches("less_than(v1, v4)").count(), 1, "{rendered}");
+    assert!(!body.contains("equals"), "{rendered}");
+}

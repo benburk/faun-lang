@@ -192,7 +192,14 @@ x    ::= a parameter, a binding, or a field an arm bound
   A match turning tags into tags, on a local another match wrote out of tags
   alone, becomes one match asking the first's questions -- so `a < b`, which
   becomes an `Order` and then a `Bool`, branches on the comparison itself,
-  and range analysis sees what the branch says of `a` and `b`.
+  and range analysis sees what the branch says of `a` and `b`. The first
+  match may work something out in an arm before answering with tags, as
+  taking a byte apart to compare it does; that match is written again with
+  each arm answering with the composed tags. Asking whether `a` is below `b`
+  and then whether it equals `b` is one comparison where two of the three
+  answers agree. Inside an arm, what its match took apart is known to be
+  that constructor of those fields, and a match of one arm floats over the
+  rest of its body, so taking the same value apart again takes that arm.
 - `counters.rs`: which parameters of a definition are counts kept beside a
   walk -- one more on every call it makes to itself, beside another handed
   the rest of itself -- for range analysis to bound by what they walk.
@@ -289,7 +296,8 @@ two types -- so nothing infers a provider or an effect from the display name.
 10. Sweep: where there is an entry, drop every definition it does not reach,
     renumbering function IDs in order. Types, constructors and constants stay.
 11. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
-    pure arithmetic or lengths; retain calls of unknown meaning and matches.
+    pure arithmetic or lengths, and matches whose arms are all inert; retain calls
+    of unknown meaning.
 
 Every normalizing stage (1, 3 and 9) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
@@ -340,9 +348,10 @@ equations are structurally recognized.
 
 Cleanup walks bindings backward, accounting for captures in nested match arms, then
 renames retained locals. Dead constructor chains disappear in this single traversal;
-there is no fixed-point loop. Matches and calls of unknown meaning are conservatively
+there is no fixed-point loop. Calls of unknown meaning are conservatively
 retained even when their results are unused. Calls structurally recognized as pure,
-total arithmetic or lengths are inert and may go. In particular, dropping a constructor does
+total arithmetic or lengths are inert and may go, and so may a match every
+arm of which is inert: it answers whichever arm it takes. In particular, dropping a constructor does
 not drop opaque eager calls that computed its fields. Folded, now-unused product
 constants no longer demand runtime representations; live products lower to
 their fields' machine values and payload-carrying sums to machine cells.
