@@ -266,12 +266,12 @@ fn a_float_is_read_from_standard_input() {
 /// `F32` and `F64` keep the IEEE 754 contract Ori's floats state, rule by
 /// rule, each expectation the host FPU's answer, built and run on this
 /// machine as `faun test` does, and asked again of the standard's own
-/// definitions on the reference interpreter. The definitions take the
-/// release build minutes, so they are asked with
-/// `cargo test --release -p faun-cli --test expectations -- --ignored`.
+/// definitions on the reference interpreter. The definitions take several
+/// times the rest of the suite, so they are asked with
+/// `cargo nextest run -p faun-cli --test expectations --run-ignored only`.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 #[test]
-#[ignore = "minutes even in a release build; run with --release -- --ignored"]
+#[ignore = "longer than the rest of the suite; run with --run-ignored only"]
 fn floats_keep_the_ieee_contract() {
     let floats =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../faun/examples/floats");

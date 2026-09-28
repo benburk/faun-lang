@@ -8,4 +8,4 @@ Read the relevant contracts: [Barb](crates/core/src/barb/README.md),
 Migrate callers and docs together; preserve useful coverage across all three backends.
 
 Validate with `nix develop --command just check` and
-`nix develop --command cargo test --workspace`.
+`nix develop --command just test`.

@@ -27,9 +27,10 @@ check:
     fd -e nix -X nixfmt --check
     ! rg -l '[^\n]\z' --multiline .
 
-# Run the test suite
+# Run the test suite: every test at once, then the doc tests nextest skips
 test:
-    cargo test --workspace
+    cargo nextest run --workspace
+    cargo test --workspace --doc
 
 # Build release binary
 build:
