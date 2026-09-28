@@ -24,8 +24,10 @@
 
 #![allow(clippy::too_many_lines)]
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::rc::Rc;
 
 use super::blessed::{self, LiteralExpr, NumeralType, PreludeIds};
 use super::diagnostic::{Advice, Advised, Diagnostic};
@@ -247,27 +249,93 @@ pub fn check_application_abi(
     Ok(())
 }
 
+/// A type as inference holds it. Its parts are shared, not owned: cloning
+/// one is a count, not a copy, and resolving one rebuilds only the parts a
+/// binding changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Ty {
     Var(u32),
     Rigid(u32),
-    Named(Symbol, Vec<Self>),
-    Function(Vec<Self>, Box<Self>),
+    Named(Symbol, Rc<[Self]>),
+    Function(Rc<[Self]>, Rc<Self>),
     /// A tag row: the tags it holds, and where it is open, a tail standing
     /// for the rest. A tail is a variable, which unification may widen, or
     /// rigid: a signed definition's own result row, which its body may not
     /// widen and each caller may.
-    Variants(Vec<(Symbol, Vec<Self>)>, Option<Box<Self>>),
+    Variants(Rc<[(Symbol, Rc<[Self]>)]>, Option<Rc<Self>>),
     /// A record's fields, in one order, and where it is open, a tail
     /// standing for the fields a caller's record has besides.
-    Record(Vec<(Symbol, Self)>, Option<Box<Self>>),
+    Record(Rc<[(Symbol, Self)]>, Option<Rc<Self>>),
     /// A positional product of two or more, which never unifies with a
     /// record.
-    Tuple(Vec<Self>),
+    Tuple(Rc<[Self]>),
 }
 
+/// Something a type holds a list of: a type, or a named field or tag.
+trait Entry {
+    type Part;
+    fn part(&self) -> &Self::Part;
+    #[must_use]
+    fn with(&self, part: Self::Part) -> Self;
+}
+
+impl Entry for Ty {
+    type Part = Self;
+    fn part(&self) -> &Self {
+        self
+    }
+    fn with(&self, part: Self) -> Self {
+        part
+    }
+}
+
+impl<P> Entry for (Symbol, P) {
+    type Part = P;
+    fn part(&self) -> &P {
+        &self.1
+    }
+    fn with(&self, part: P) -> Self {
+        (self.0, part)
+    }
+}
+
+/// Each entry of `entries` with what `part` resolves it to, or nothing
+/// where it resolves none: the ones before the first it does are
+/// cloned only once one does.
+fn resolved_entries<T: Clone + Entry>(
+    entries: &[T],
+    part: impl Fn(&T::Part) -> Option<T::Part>,
+) -> Option<Vec<T>> {
+    let mut resolved: Option<Vec<T>> = None;
+    for (at, entry) in entries.iter().enumerate() {
+        match part(entry.part()) {
+            Some(new) => resolved
+                .get_or_insert_with(|| entries[..at].to_vec())
+                .push(entry.with(new)),
+            None => {
+                if let Some(resolved) = &mut resolved {
+                    resolved.push(entry.clone());
+                }
+            }
+        }
+    }
+    resolved
+}
+
+/// A row's own tail, where it has one.
+fn ty_tail(ty: &Ty) -> Option<Rc<Ty>> {
+    match ty {
+        Ty::Variants(_, tail) | Ty::Record(_, tail) => tail.clone(),
+        _ => None,
+    }
+}
+
+/// A tag of a row, with its fields; or a record's field, as a one-type
+/// tag, where a row unification treats both alike.
+type Tag = (Symbol, Rc<[Ty]>);
+
 /// The tags of a row, each with its fields.
-type Tags = Vec<(Symbol, Vec<Ty>)>;
+type Tags = Vec<Tag>;
 
 /// Which kind of row a row unification builds: a tag row, whose entries
 /// are tags and their fields, or a record, whose entries are fields each
@@ -279,13 +347,13 @@ enum Former {
 }
 
 impl Former {
-    fn build(self, entries: Tags, tail: Option<Box<Ty>>) -> Ty {
+    fn build(self, entries: Tags, tail: Option<Rc<Ty>>) -> Ty {
         match self {
-            Self::Tags => Ty::Variants(entries, tail),
+            Self::Tags => Ty::Variants(entries.into(), tail),
             Self::Fields => Ty::Record(
                 entries
                     .into_iter()
-                    .map(|(name, mut held)| (name, held.remove(0)))
+                    .map(|(name, held)| (name, held[0].clone()))
                     .collect(),
                 tail,
             ),
@@ -297,7 +365,7 @@ impl Former {
 fn entries(fields: &[(Symbol, Ty)]) -> Tags {
     fields
         .iter()
-        .map(|(name, ty)| (*name, vec![ty.clone()]))
+        .map(|(name, ty)| (*name, Rc::from([ty.clone()])))
         .collect()
 }
 
@@ -510,7 +578,10 @@ struct PendingNumeral {
 
 #[derive(Debug, Default)]
 struct Infer {
-    links: Vec<Option<Ty>>,
+    /// What each variable is bound to. Resolving one stores back what it
+    /// resolved to, so a chain of variables is walked once: interior, as
+    /// resolving only reads what inference holds.
+    links: RefCell<Vec<Option<Ty>>>,
     next_rigid: u32,
     /// The variables bound since the outermost open probe began, which it
     /// unbinds when it ends.
@@ -522,13 +593,14 @@ impl Infer {
     /// What `trial` answers, with every variable it made or bound undone:
     /// a probe costs what it does, not what inference holds.
     fn probe<T>(&mut self, trial: impl FnOnce(&mut Self) -> T) -> T {
-        let (variables, bound, outer) = (self.links.len(), self.trail.len(), self.probing);
+        let variables = self.links.get_mut().len();
+        let (bound, outer) = (self.trail.len(), self.probing);
         self.probing = true;
         let answer = trial(self);
         for id in self.trail.drain(bound..) {
-            self.links[usize::try_from(id).expect("u32 fits usize")] = None;
+            self.links.get_mut()[usize::try_from(id).expect("u32 fits usize")] = None;
         }
-        self.links.truncate(variables);
+        self.links.get_mut().truncate(variables);
         self.probing = outer;
         answer
     }
@@ -537,63 +609,97 @@ impl Infer {
         if self.probing {
             self.trail.push(id);
         }
-        self.links[usize::try_from(id).expect("u32 fits usize")] = Some(ty);
+        self.links.get_mut()[usize::try_from(id).expect("u32 fits usize")] = Some(ty);
     }
 
     fn fresh(&mut self) -> Ty {
-        let id = u32::try_from(self.links.len()).expect("fewer than 2^32 inference variables");
-        self.links.push(None);
+        let links = self.links.get_mut();
+        let id = u32::try_from(links.len()).expect("fewer than 2^32 inference variables");
+        links.push(None);
         Ty::Var(id)
     }
 
+    /// `ty` with every bound variable in it replaced by what it is bound
+    /// to, rows flattened and records' fields in order. The parts no
+    /// binding reaches are `ty`'s own, shared rather than rebuilt.
     fn resolve(&self, ty: &Ty) -> Ty {
+        self.resolved(ty).unwrap_or_else(|| ty.clone())
+    }
+
+    /// `ty` resolved, or nothing where it already is.
+    fn resolved(&self, ty: &Ty) -> Option<Ty> {
         match ty {
-            Ty::Var(id) => self.links[usize::try_from(*id).expect("u32 fits usize")]
-                .as_ref()
-                .map_or_else(|| ty.clone(), |link| self.resolve(link)),
-            Ty::Rigid(_) => ty.clone(),
-            Ty::Named(name, arguments) => {
-                Ty::Named(*name, arguments.iter().map(|ty| self.resolve(ty)).collect())
+            Ty::Var(id) => {
+                let at = usize::try_from(*id).expect("u32 fits usize");
+                let link = self.links.borrow()[at].clone()?;
+                let resolved = self.resolve(&link);
+                // A probe's bindings are undone, so what it resolves is
+                // not kept.
+                if !self.probing {
+                    self.links.borrow_mut()[at] = Some(resolved.clone());
+                }
+                Some(resolved)
             }
-            Ty::Function(parameters, result) => Ty::Function(
-                parameters.iter().map(|ty| self.resolve(ty)).collect(),
-                Box::new(self.resolve(result)),
-            ),
+            Ty::Rigid(_) => None,
+            Ty::Named(name, arguments) => {
+                let arguments = self.resolved_all(arguments)?;
+                Some(Ty::Named(*name, arguments))
+            }
+            Ty::Function(parameters, result) => {
+                let resolved_parameters = self.resolved_all(parameters);
+                let resolved_result = self.resolved(result);
+                if resolved_parameters.is_none() && resolved_result.is_none() {
+                    return None;
+                }
+                let parameters = resolved_parameters.unwrap_or_else(|| parameters.clone());
+                let result = resolved_result.map_or_else(|| result.clone(), Rc::new);
+                Some(Ty::Function(parameters, result))
+            }
             // A row is resolved flat: a tail bound to a row gives up its
             // tags, so what comes back ends in an unbound tail or none.
             Ty::Variants(tags, tail) => {
-                let mut tags: Tags = tags
-                    .iter()
-                    .map(|(name, fields)| {
-                        (*name, fields.iter().map(|ty| self.resolve(ty)).collect())
-                    })
-                    .collect();
-                let tail = match tail.as_deref().map(|tail| self.resolve(tail)) {
+                let fields = resolved_entries(tags, |fields| self.resolved_all(fields));
+                let tail = tail.as_deref().and_then(|tail| self.resolved(tail));
+                if fields.is_none() && tail.is_none() {
+                    return None;
+                }
+                let mut tags = fields.unwrap_or_else(|| tags.to_vec());
+                let tail = match tail {
                     Some(Ty::Variants(more, rest)) => {
-                        tags.extend(more);
+                        tags.extend(more.iter().cloned());
                         rest
                     }
-                    other => other.map(Box::new),
+                    Some(other) => Some(Rc::new(other)),
+                    None => ty_tail(ty),
                 };
-                Ty::Variants(tags, tail)
+                Some(Ty::Variants(tags.into(), tail))
             }
             Ty::Record(fields, tail) => {
-                let mut fields: Vec<_> = fields
-                    .iter()
-                    .map(|(name, ty)| (*name, self.resolve(ty)))
-                    .collect();
-                let tail = match tail.as_deref().map(|tail| self.resolve(tail)) {
+                let resolved = resolved_entries(fields, |field| self.resolved(field));
+                let tail = tail.as_deref().and_then(|tail| self.resolved(tail));
+                let sorted = fields.is_sorted_by_key(|(name, _)| *name);
+                if resolved.is_none() && tail.is_none() && sorted {
+                    return None;
+                }
+                let mut fields = resolved.unwrap_or_else(|| fields.to_vec());
+                let tail = match tail {
                     Some(Ty::Record(more, rest)) => {
-                        fields.extend(more);
+                        fields.extend(more.iter().cloned());
                         rest
                     }
-                    other => other.map(Box::new),
+                    Some(other) => Some(Rc::new(other)),
+                    None => ty_tail(ty),
                 };
                 fields.sort_by_key(|(name, _)| *name);
-                Ty::Record(fields, tail)
+                Some(Ty::Record(fields.into(), tail))
             }
-            Ty::Tuple(members) => Ty::Tuple(members.iter().map(|ty| self.resolve(ty)).collect()),
+            Ty::Tuple(members) => Some(Ty::Tuple(self.resolved_all(members)?)),
         }
+    }
+
+    /// `types` resolved, or nothing where each already is.
+    fn resolved_all(&self, types: &Rc<[Ty]>) -> Option<Rc<[Ty]>> {
+        resolved_entries(types, |ty| self.resolved(ty)).map(Rc::from)
     }
 
     fn unify(&mut self, left: &Ty, right: &Ty) -> Result<(), Mismatch> {
@@ -611,13 +717,13 @@ impl Infer {
                 }
             }
             (Ty::Named(a, aa), Ty::Named(b, ba)) if a == b && aa.len() == ba.len() => {
-                for (a, b) in aa.iter().zip(ba) {
+                for (a, b) in aa.iter().zip(ba.iter()) {
                     self.unify(a, b)?;
                 }
                 Ok(())
             }
             (Ty::Function(ap, ar), Ty::Function(bp, br)) if ap.len() == bp.len() => {
-                for (a, b) in ap.iter().zip(bp) {
+                for (a, b) in ap.iter().zip(bp.iter()) {
                     self.unify(a, b)?;
                 }
                 self.unify(ar, br)
@@ -631,7 +737,7 @@ impl Infer {
                 (&entries(b), bt.as_deref()),
             ),
             (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
-                for (a, b) in a.iter().zip(b) {
+                for (a, b) in a.iter().zip(b.iter()) {
                     self.unify(a, b)?;
                 }
                 Ok(())
@@ -653,21 +759,21 @@ impl Infer {
         match (&actual, &expected) {
             (Ty::Named(a, aa), Ty::Named(b, ba)) if a == b && aa.len() == ba.len() => {
                 let mut widened = false;
-                for (a, b) in aa.iter().zip(ba) {
+                for (a, b) in aa.iter().zip(ba.iter()) {
                     widened |= self.subsume(a, b)?;
                 }
                 Ok(widened)
             }
             (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
                 let mut widened = false;
-                for (a, b) in a.iter().zip(b) {
+                for (a, b) in a.iter().zip(b.iter()) {
                     widened |= self.subsume(a, b)?;
                 }
                 Ok(widened)
             }
             (Ty::Record(a, a_tail), Ty::Record(b, b_tail)) => {
                 let mut widened = false;
-                for (name, field) in a {
+                for (name, field) in a.iter() {
                     if let Some((_, other)) = b.iter().find(|(found, _)| found == name) {
                         widened |= self.subsume(field, other)?;
                     }
@@ -680,10 +786,8 @@ impl Infer {
                         .iter()
                         .map(|(name, ty)| {
                             let shared = other.iter().find(|(found, _)| found == name);
-                            (
-                                *name,
-                                vec![shared.map_or_else(|| ty.clone(), |(_, ty)| ty.clone())],
-                            )
+                            let ty = shared.map_or_else(|| ty.clone(), |(_, ty)| ty.clone());
+                            (*name, Rc::from([ty]))
                         })
                         .collect()
                 };
@@ -696,23 +800,30 @@ impl Infer {
             }
             (Ty::Variants(a, a_tail), Ty::Variants(b, b_tail)) => {
                 let mut widened = false;
-                for (name, fields) in a {
+                for (name, fields) in a.iter() {
                     if let Some((_, other)) = b.iter().find(|(found, _)| found == name) {
                         if fields.len() != other.len() {
                             return Err(Mismatch::Fields(fields.len(), other.len()));
                         }
-                        for (field, other) in fields.iter().zip(other) {
+                        for (field, other) in fields.iter().zip(other.iter()) {
                             widened |= self.subsume(field, other)?;
                         }
                     }
                 }
                 // The shared tags' fields are settled; what remains is which
                 // tags each row holds.
-                let settled = |tags: &[(Symbol, Vec<Ty>)], other: &[(Symbol, Vec<Ty>)]| -> Tags {
+                let settled = |tags: &[Tag], other: &[Tag]| -> Tags {
                     tags.iter()
                         .map(|(name, fields)| {
                             let shared = other.iter().any(|(found, _)| found == name);
-                            (*name, if shared { Vec::new() } else { fields.clone() })
+                            (
+                                *name,
+                                if shared {
+                                    Rc::default()
+                                } else {
+                                    fields.clone()
+                                },
+                            )
                         })
                         .collect()
                 };
@@ -759,31 +870,30 @@ impl Infer {
     fn unify_rows(
         &mut self,
         former: Former,
-        (left, left_tail): (&[(Symbol, Vec<Ty>)], Option<&Ty>),
-        (right, right_tail): (&[(Symbol, Vec<Ty>)], Option<&Ty>),
+        (left, left_tail): (&[Tag], Option<&Ty>),
+        (right, right_tail): (&[Tag], Option<&Ty>),
     ) -> Result<(), Mismatch> {
         for (name, fields) in left {
             if let Some((_, other)) = right.iter().find(|(found, _)| found == name) {
                 if fields.len() != other.len() {
                     return Err(Mismatch::Fields(fields.len(), other.len()));
                 }
-                for (a, b) in fields.iter().zip(other) {
+                for (a, b) in fields.iter().zip(other.iter()) {
                     self.unify(a, b)?;
                 }
             }
         }
-        let only = |from: &[(Symbol, Vec<Ty>)], other: &[(Symbol, Vec<Ty>)]| -> Tags {
+        let only = |from: &[Tag], other: &[Tag]| -> Tags {
             from.iter()
                 .filter(|(name, _)| !other.iter().any(|(found, _)| found == name))
                 .cloned()
                 .collect()
         };
         let (only_left, only_right) = (only(left, right), only(right, left));
-        let not_among =
-            |extra: &Tags, tags: &[(Symbol, Vec<Ty>)], tail: Option<&Ty>| Mismatch::NotAmong {
-                tags: extra.iter().map(|(name, _)| *name).collect(),
-                row: former.build(tags.to_vec(), tail.cloned().map(Box::new)),
-            };
+        let not_among = |extra: &Tags, tags: &[Tag], tail: Option<&Ty>| Mismatch::NotAmong {
+            tags: extra.iter().map(|(name, _)| *name).collect(),
+            row: former.build(tags.to_vec(), tail.cloned().map(Rc::new)),
+        };
         match (left_tail, right_tail) {
             (None, None) if only_left.is_empty() && only_right.is_empty() => Ok(()),
             (None, None) if only_left.is_empty() => Err(not_among(&only_right, left, None)),
@@ -810,7 +920,7 @@ impl Infer {
                         ))
                     };
                 }
-                let rest = Box::new(self.fresh());
+                let rest = Rc::new(self.fresh());
                 self.unify(&Ty::Var(*v), &former.build(only_right, Some(rest.clone())))?;
                 self.unify(&Ty::Var(*w), &former.build(only_left, Some(rest)))
             }
@@ -820,7 +930,7 @@ impl Infer {
                 }
                 self.unify(
                     &Ty::Var(*v),
-                    &former.build(only_right, Some(Box::new(rigid.clone()))),
+                    &former.build(only_right, Some(Rc::new(rigid.clone()))),
                 )
             }
             (Some(rigid @ Ty::Rigid(_)), Some(Ty::Var(v))) => {
@@ -829,7 +939,7 @@ impl Infer {
                 }
                 self.unify(
                     &Ty::Var(*v),
-                    &former.build(only_left, Some(Box::new(rigid.clone()))),
+                    &former.build(only_left, Some(Rc::new(rigid.clone()))),
                 )
             }
             (Some(Ty::Rigid(a)), Some(Ty::Rigid(b)))
@@ -921,7 +1031,7 @@ fn contains(ty: &Ty, variable: u32) -> bool {
         }
         Ty::Variants(tags, tail) => {
             tags.iter()
-                .flat_map(|(_, fields)| fields)
+                .flat_map(|(_, fields)| fields.iter())
                 .any(|ty| contains(ty, variable))
                 || tail.as_deref().is_some_and(|tail| contains(tail, variable))
         }
@@ -949,7 +1059,7 @@ fn substitute(ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
                 .iter()
                 .map(|ty| substitute(ty, replacements))
                 .collect(),
-            Box::new(substitute(result, replacements)),
+            Rc::new(substitute(result, replacements)),
         ),
         Ty::Variants(tags, tail) => Ty::Variants(
             tags.iter()
@@ -964,7 +1074,7 @@ fn substitute(ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
                 })
                 .collect(),
             tail.as_deref()
-                .map(|tail| Box::new(substitute(tail, replacements))),
+                .map(|tail| Rc::new(substitute(tail, replacements))),
         ),
         Ty::Record(fields, tail) => Ty::Record(
             fields
@@ -972,7 +1082,7 @@ fn substitute(ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
                 .map(|(name, ty)| (*name, substitute(ty, replacements)))
                 .collect(),
             tail.as_deref()
-                .map(|tail| Box::new(substitute(tail, replacements))),
+                .map(|tail| Rc::new(substitute(tail, replacements))),
         ),
         Ty::Tuple(members) => Ty::Tuple(
             members
@@ -1100,7 +1210,7 @@ impl<'a> Checker<'a> {
             .iter()
             .map(|parameter| variables[parameter].clone())
             .collect();
-        let result = Ty::Named(data.name, arguments);
+        let result = Ty::Named(data.name, arguments.into());
         for constructor in &data.constructors {
             let fields: Vec<_> = constructor
                 .fields
@@ -1110,7 +1220,7 @@ impl<'a> Checker<'a> {
             let ty = if fields.is_empty() {
                 result.clone()
             } else {
-                Ty::Function(fields, Box::new(result.clone()))
+                Ty::Function(fields.into(), Rc::new(result.clone()))
             };
             self.constructors.insert(
                 constructor.name,
@@ -1129,8 +1239,8 @@ impl<'a> Checker<'a> {
                 );
             }
             if let Ty::Record(fields, _) = &field {
-                for (name, field_ty) in fields {
-                    let ty = Ty::Function(vec![result.clone()], Box::new(field_ty.clone()));
+                for (name, field_ty) in fields.iter() {
+                    let ty = Ty::Function(Rc::from([result.clone()]), Rc::new(field_ty.clone()));
                     self.fields.entry(*name).or_default().push(FieldImpl {
                         owner: data.name,
                         scheme: Scheme {
@@ -1140,7 +1250,7 @@ impl<'a> Checker<'a> {
                     });
                 }
             }
-            let ty = Ty::Function(vec![field], Box::new(result));
+            let ty = Ty::Function(Rc::from([field]), Rc::new(result));
             self.constructors.insert(
                 wrapper.constructor,
                 Scheme {
@@ -1239,7 +1349,7 @@ impl<'a> Checker<'a> {
             .map(|ty| self.surface_type(ty, variables))
             .collect();
         let result = self.surface_type(&signature.result, variables);
-        Ty::Function(parameters, Box::new(result))
+        Ty::Function(parameters, Rc::new(result))
     }
 
     /// The methods a type's block defines without a signature, by the
@@ -1392,7 +1502,7 @@ impl<'a> Checker<'a> {
                     .iter()
                     .map(|ty| self.open_result_rows(ty, !positive))
                     .collect(),
-                Box::new(self.open_result_rows(result, positive)),
+                Rc::new(self.open_result_rows(result, positive)),
             ),
             Ty::Variants(tags, tail) => {
                 let tags: Tags = tags
@@ -1406,10 +1516,10 @@ impl<'a> Checker<'a> {
                     })
                     .collect();
                 let tail = match tail {
-                    None if positive && !tags.is_empty() => Some(Box::new(self.infer.fresh())),
+                    None if positive && !tags.is_empty() => Some(Rc::new(self.infer.fresh())),
                     other => other.clone(),
                 };
-                Ty::Variants(tags, tail)
+                Ty::Variants(tags.into(), tail)
             }
             Ty::Record(fields, tail) => Ty::Record(
                 fields
@@ -1448,7 +1558,7 @@ impl<'a> Checker<'a> {
                     .iter()
                     .map(|ty| self.surface_type(ty, variables))
                     .collect(),
-                Box::new(self.surface_type(result, variables)),
+                Rc::new(self.surface_type(result, variables)),
             ),
             // A written row is closed: it is exactly these tags.
             h::Type::Variants(constructors) => Ty::Variants(
@@ -1474,7 +1584,7 @@ impl<'a> Checker<'a> {
                     .iter()
                     .map(|(name, ty)| (*name, self.surface_type(ty, variables)))
                     .collect(),
-                open.then(|| Box::new(self.infer.fresh())),
+                open.then(|| Rc::new(self.infer.fresh())),
             ),
             h::Type::Tuple(members) => Ty::Tuple(
                 members
@@ -1513,9 +1623,9 @@ impl<'a> Checker<'a> {
             let expected = Ty::Function(
                 parameters
                     .into_iter()
-                    .map(|name| Ty::Named(name, Vec::new()))
+                    .map(|name| Ty::Named(name, Rc::default()))
                     .collect(),
-                Box::new(Ty::Named(result, Vec::new())),
+                Rc::new(Ty::Named(result, Rc::default())),
             );
             if scheme.ty != expected {
                 return Err(failure(
@@ -1571,7 +1681,7 @@ impl<'a> Checker<'a> {
                     self.signed_type(&signature, &mut HashMap::new())
                 } else {
                     let parameters = (0..arity).map(|_| self.infer.fresh()).collect();
-                    Ty::Function(parameters, Box::new(self.infer.fresh()))
+                    Ty::Function(parameters, Rc::new(self.infer.fresh()))
                 };
                 self.set_value(
                     *name,
@@ -1818,8 +1928,8 @@ impl<'a> Checker<'a> {
             ));
         }
         let mut locals = vec![None; usize::try_from(clause.locals).expect("u32 fits usize")];
-        for (pattern, parameter) in clause.patterns.iter().zip(parameters) {
-            self.pattern(module, pattern, &parameter, &mut locals, clause.span)?;
+        for (pattern, parameter) in clause.patterns.iter().zip(parameters.iter()) {
+            self.pattern(module, pattern, parameter, &mut locals, clause.span)?;
         }
         if let Some(guard) = &clause.guard {
             self.answers.push(None);
@@ -1902,7 +2012,7 @@ impl<'a> Checker<'a> {
         match pattern {
             h::Pattern::Wild => Ok(()),
             h::Pattern::String(_) => {
-                let str_ = Ty::Named(self.prelude.str_, Vec::new());
+                let str_ = Ty::Named(self.prelude.str_, Rc::default());
                 self.unify_pattern_at(module, span, expected, &str_)
             }
             // Every alternative of an `|` binds the same local, at one type.
@@ -1936,8 +2046,8 @@ impl<'a> Checker<'a> {
                 };
                 let ty = self.infer.instantiate(&scheme);
                 let (parameters, result) = match ty {
-                    Ty::Function(parameters, result) => (parameters, *result),
-                    result => (Vec::new(), result),
+                    Ty::Function(parameters, result) => (parameters, Rc::unwrap_or_clone(result)),
+                    result => (Rc::default(), result),
                 };
                 if fields.len() != parameters.len() {
                     return Err(failure(
@@ -1947,8 +2057,8 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 self.unify_pattern_at(module, span, expected, &result)?;
-                for (field, parameter) in fields.iter().zip(parameters) {
-                    self.pattern(module, field, &parameter, locals, span)?;
+                for (field, parameter) in fields.iter().zip(parameters.iter()) {
+                    self.pattern(module, field, parameter, locals, span)?;
                 }
                 Ok(())
             }
@@ -1973,8 +2083,8 @@ impl<'a> Checker<'a> {
             h::Pattern::Tag(label, fields) => {
                 let field_types: Vec<_> = fields.iter().map(|_| self.infer.fresh()).collect();
                 let row = Ty::Variants(
-                    vec![(*label, field_types.clone())],
-                    Some(Box::new(self.infer.fresh())),
+                    Rc::from([(*label, field_types.clone().into())]),
+                    Some(Rc::new(self.infer.fresh())),
                 );
                 self.unify_pattern_at(module, span, expected, &row)?;
                 for (field, ty) in fields.iter().zip(&field_types) {
@@ -2030,12 +2140,12 @@ impl<'a> Checker<'a> {
                     .iter()
                     .map(|(name, _)| (*name, self.infer.fresh()))
                     .collect();
-                let rest = open.then(|| Box::new(self.infer.fresh()));
+                let rest = open.then(|| Rc::new(self.infer.fresh()));
                 self.unify_pattern_at(
                     module,
                     span,
                     expected,
-                    &Ty::Record(field_types.clone(), rest),
+                    &Ty::Record(field_types.clone().into(), rest),
                 )?;
                 for ((_, pattern), (_, ty)) in fields.iter().zip(field_types) {
                     self.pattern(module, pattern, &ty, locals, span)?;
@@ -2044,7 +2154,12 @@ impl<'a> Checker<'a> {
             }
             h::Pattern::Tuple(members) => {
                 let member_types: Vec<_> = members.iter().map(|_| self.infer.fresh()).collect();
-                self.unify_pattern_at(module, span, expected, &Ty::Tuple(member_types.clone()))?;
+                self.unify_pattern_at(
+                    module,
+                    span,
+                    expected,
+                    &Ty::Tuple(member_types.clone().into()),
+                )?;
                 for (member, ty) in members.iter().zip(&member_types) {
                     self.pattern(module, member, ty, locals, span)?;
                 }
@@ -2178,7 +2293,7 @@ impl<'a> Checker<'a> {
                 for part in parts {
                     if let h::StringPart::Splice(splice) = part {
                         let value = self.expr(module, splice, locals)?;
-                        let str_ = Ty::Named(self.prelude.str_, Vec::new());
+                        let str_ = Ty::Named(self.prelude.str_, Rc::default());
                         self.unify_at(module, splice.span, &value, &str_)?;
                     }
                 }
@@ -2198,7 +2313,7 @@ impl<'a> Checker<'a> {
                         .literals
                         .insert(expression.site, blessed::string(&bytes, self.prelude));
                 }
-                Ok(Ty::Named(self.prelude.str_, Vec::new()))
+                Ok(Ty::Named(self.prelude.str_, Rc::default()))
             }
             h::ExprKind::List(elements, rest) => {
                 let element = self.infer.fresh();
@@ -2219,14 +2334,14 @@ impl<'a> Checker<'a> {
                     inferred.push((*name, self.expr(module, value, locals)?));
                 }
                 inferred.sort_by_key(|(name, _)| *name);
-                Ok(Ty::Record(inferred, None))
+                Ok(Ty::Record(inferred.into(), None))
             }
             h::ExprKind::Tuple(members) => {
                 let mut inferred = Vec::with_capacity(members.len());
                 for member in members {
                     inferred.push(self.expr(module, member, locals)?);
                 }
-                Ok(Ty::Tuple(inferred))
+                Ok(Ty::Tuple(inferred.into()))
             }
             // An update replaces values; it adds no field and retypes none, so
             // the record must have each field named, at the value's type.
@@ -2237,7 +2352,7 @@ impl<'a> Checker<'a> {
                     named.push((*name, self.expr(module, value, locals)?));
                 }
                 named.sort_by_key(|(name, _)| *name);
-                let shape = Ty::Record(named, Some(Box::new(self.infer.fresh())));
+                let shape = Ty::Record(named.into(), Some(Rc::new(self.infer.fresh())));
                 self.unify_at(module, expression.span, &updated, &shape)?;
                 Ok(updated)
             }
@@ -2274,7 +2389,7 @@ impl<'a> Checker<'a> {
                 for local in bound {
                     locals[local.index()] = None;
                 }
-                Ok(Ty::Function(parameters, Box::new(result)))
+                Ok(Ty::Function(parameters.into(), Rc::new(result)))
             }
             h::ExprKind::Call(head, arguments) if matches!(head.kind, h::ExprKind::Dual(_)) => {
                 let h::ExprKind::Dual(dual) = &head.kind else {
@@ -2298,7 +2413,7 @@ impl<'a> Checker<'a> {
                 for argument in arguments {
                     fields.push(self.expr(module, argument, locals)?);
                 }
-                Ok(self.tag(label, fields))
+                Ok(self.tag(label, fields.into()))
             }
             h::ExprKind::Call(head, arguments) => {
                 let head_type = self.expr(module, head, locals)?;
@@ -2312,13 +2427,13 @@ impl<'a> Checker<'a> {
                     && parameters.len() == arguments.len()
                 {
                     let given = arguments.iter().zip(&argument_types);
-                    for ((argument, ty), parameter) in given.zip(&parameters) {
+                    for ((argument, ty), parameter) in given.zip(parameters.iter()) {
                         self.unify_at(module, argument.span, ty, parameter)?;
                     }
-                    return Ok(*result);
+                    return Ok(Rc::unwrap_or_clone(result));
                 }
                 let result = self.infer.fresh();
-                let function = Ty::Function(argument_types, Box::new(result.clone()));
+                let function = Ty::Function(argument_types.into(), Rc::new(result.clone()));
                 self.unify_at(module, expression.span, &function, &head_type)?;
                 Ok(result)
             }
@@ -2420,7 +2535,7 @@ impl<'a> Checker<'a> {
                         | super::ast::BinaryOp::GreaterEqual
                 ) {
                     // Each ordering operator is a fixed view of one `cmp`.
-                    let order = Ty::Named(self.prelude.order, Vec::new());
+                    let order = Ty::Named(self.prelude.order, Rc::default());
                     self.unify_at(module, expression.span, &result, &order)?;
                     Ok(self.bool_type())
                 } else {
@@ -2478,17 +2593,17 @@ impl<'a> Checker<'a> {
                     }
                     _ => {}
                 }
-                for (label, fields) in tags {
+                for (label, fields) in tags.iter() {
                     let taken: Vec<_> = rows
                         .iter()
                         .filter_map(|(pattern, guarded)| match pattern {
-                            h::Pattern::Tag(found, subs) if *found == label => {
+                            h::Pattern::Tag(found, subs) if found == label => {
                                 Some((subs.clone(), *guarded))
                             }
                             _ => None,
                         })
                         .collect();
-                    self.close_fields(&fields, &taken)?;
+                    self.close_fields(fields, &taken)?;
                 }
             }
             Ty::Named(..) => {
@@ -2505,8 +2620,8 @@ impl<'a> Checker<'a> {
                         continue;
                     };
                     let (fields, result) = match self.infer.instantiate(&scheme) {
-                        Ty::Function(fields, result) => (fields, *result),
-                        result => (Vec::new(), result),
+                        Ty::Function(fields, result) => (fields, Rc::unwrap_or_clone(result)),
+                        result => (Rc::default(), result),
                     };
                     self.infer
                         .unify(ty, &result)
@@ -2524,21 +2639,21 @@ impl<'a> Checker<'a> {
                 }
             }
             Ty::Record(fields, _) => {
-                for (name, field) in fields {
+                for (name, field) in fields.iter() {
                     // A record pattern not naming the field takes any.
                     let column = rows
                         .iter()
                         .filter_map(|(pattern, guarded)| match pattern {
                             h::Pattern::Record(held, _) => Some((
                                 held.iter()
-                                    .find(|(found, _)| *found == name)
+                                    .find(|(found, _)| found == name)
                                     .map_or(h::Pattern::Wild, |(_, pattern)| pattern.clone()),
                                 *guarded,
                             )),
                             _ => None,
                         })
                         .collect();
-                    self.close_rows(&field, column)?;
+                    self.close_rows(field, column)?;
                 }
             }
             Ty::Tuple(members) => {
@@ -2659,12 +2774,12 @@ impl<'a> Checker<'a> {
                 ),
             ));
         }
-        for (argument, parameter) in arguments.iter().zip(&parameters) {
+        for (argument, parameter) in arguments.iter().zip(parameters.iter()) {
             let given = self.expr(module, argument, locals)?;
             self.unify_at(module, argument.span, &given, parameter)?;
         }
         self.bound_sites.push((module, span, site, owner, member));
-        Ok(*result)
+        Ok(Rc::unwrap_or_clone(result))
     }
 
     /// `value?`: what an `Ok` holds, where the clause or lambda it is written
@@ -2680,7 +2795,7 @@ impl<'a> Checker<'a> {
     ) -> Result<Ty, CheckError> {
         let taken = self.expr(module, value, locals)?;
         let (ok, error) = (self.infer.fresh(), self.infer.fresh());
-        let result = Ty::Named(self.prelude.result, vec![ok.clone(), error.clone()]);
+        let result = Ty::Named(self.prelude.result, Rc::from([ok.clone(), error.clone()]));
         self.unify_at(module, value.span, &taken, &result)?;
         let Some(Some(answer)) = self.answers.last().cloned() else {
             return Err(failure(
@@ -2692,7 +2807,7 @@ impl<'a> Checker<'a> {
         let answered_error = self.infer.fresh();
         let answered = Ty::Named(
             self.prelude.result,
-            vec![self.infer.fresh(), answered_error.clone()],
+            Rc::from([self.infer.fresh(), answered_error.clone()]),
         );
         self.infer.unify(&answer, &answered).map_err(|_| {
             failure(
@@ -2758,8 +2873,11 @@ impl<'a> Checker<'a> {
 
     /// A value of any row holding `label` with these fields: open, so it
     /// flows to whatever handles more.
-    fn tag(&mut self, label: Symbol, fields: Vec<Ty>) -> Ty {
-        Ty::Variants(vec![(label, fields)], Some(Box::new(self.infer.fresh())))
+    fn tag(&mut self, label: Symbol, fields: Rc<[Ty]>) -> Ty {
+        Ty::Variants(
+            Rc::from([(label, fields)]),
+            Some(Rc::new(self.infer.fresh())),
+        )
     }
 
     fn method(
@@ -2827,8 +2945,8 @@ impl<'a> Checker<'a> {
                 span,
                 name: bound.member,
                 receiver: bound.owner,
-                arguments: parameters.into_iter().skip(skipped).collect(),
-                result: *result,
+                arguments: parameters.iter().skip(skipped).cloned().collect(),
+                result: Rc::unwrap_or_clone(result),
                 reach: if bound.associated {
                     Reach::Type
                 } else {
@@ -2905,7 +3023,7 @@ impl<'a> Checker<'a> {
             };
             let numeral = self.pending_numerals[index].clone();
             let default = match (numeral.scale, self.prelude.floats.first()) {
-                (Some(_), Some(float)) => Ty::Named(float.ty, Vec::new()),
+                (Some(_), Some(float)) => Ty::Named(float.ty, Rc::default()),
                 (Some(_), None) => {
                     return Err(failure(
                         numeral.module,
@@ -2913,8 +3031,8 @@ impl<'a> Checker<'a> {
                         "a decimal numeral is a float, and no float is in the prelude",
                     ));
                 }
-                (None, _) if numeral.negative => Ty::Named(self.prelude.int, Vec::new()),
-                (None, _) => Ty::Named(self.prelude.nat, Vec::new()),
+                (None, _) if numeral.negative => Ty::Named(self.prelude.int, Rc::default()),
+                (None, _) => Ty::Named(self.prelude.nat, Rc::default()),
             };
             self.unify_at(numeral.module, numeral.span, &numeral.ty, &default)?;
             self.settle(marks)?;
@@ -3149,7 +3267,7 @@ impl<'a> Checker<'a> {
             "of_nat"
         };
         let builder = self.method_symbol(numeral.module, numeral.span, builder)?;
-        let nat = Ty::Named(self.prelude.nat, Vec::new());
+        let nat = Ty::Named(self.prelude.nat, Rc::default());
         let arguments = if numeral.scale.is_some() {
             vec![nat.clone(), nat]
         } else {
@@ -3209,7 +3327,7 @@ impl<'a> Checker<'a> {
             if pending.reach != Reach::Type {
                 parameters.insert(0, owner.clone());
             }
-            let ty = Ty::Function(parameters, Box::new(pending.result.clone()));
+            let ty = Ty::Function(parameters.into(), Rc::new(pending.result.clone()));
             match bounds.iter().find(|bound| {
                 bound.member == pending.name
                     && bound.associated == (pending.reach == Reach::Type)
@@ -3268,12 +3386,14 @@ impl<'a> Checker<'a> {
                         .find(|(label, _)| *label == pending.dual.spelling)
                     {
                         Some((_, wanted)) if wanted.len() == fields.len() => {
-                            for (at, (field, wanted)) in fields.iter().zip(wanted).enumerate() {
+                            for (at, (field, wanted)) in
+                                fields.iter().zip(wanted.iter()).enumerate()
+                            {
                                 self.field_flows(&pending, at, field, wanted)?;
                             }
                             wanted.clone()
                         }
-                        _ => fields,
+                        _ => fields.into(),
                     };
                     let row = self.tag(pending.dual.spelling, fields);
                     self.unify_at(pending.module, pending.span, &row, &pending.result)?;
@@ -3304,9 +3424,9 @@ impl<'a> Checker<'a> {
                 Ty::Var(_) if !default => continue,
                 Ty::Function(parameters, _) => {
                     let row = self.tag(pending.label, parameters.clone());
-                    Ty::Function(parameters, Box::new(row))
+                    Ty::Function(parameters, Rc::new(row))
                 }
-                _ => self.tag(pending.label, Vec::new()),
+                _ => self.tag(pending.label, Rc::default()),
             };
             // The position wants its type; the tag is what is there.
             self.unify_at(pending.module, pending.span, &wanted, &pending.ty)?;
@@ -3393,8 +3513,8 @@ impl<'a> Checker<'a> {
             None => builds(self, &ty)?,
             Some(fields) => {
                 let (parameters, result) = match ty {
-                    Ty::Function(parameters, result) => (parameters, *result),
-                    result => (Vec::new(), result),
+                    Ty::Function(parameters, result) => (parameters, Rc::unwrap_or_clone(result)),
+                    result => (Rc::default(), result),
                 };
                 if parameters.len() != fields.len() {
                     return Err(failure(
@@ -3409,7 +3529,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 builds(self, &result)?;
-                for (at, (field, parameter)) in fields.iter().zip(&parameters).enumerate() {
+                for (at, (field, parameter)) in fields.iter().zip(parameters.iter()).enumerate() {
                     self.field_flows(pending, at, field, parameter)?;
                 }
             }
@@ -3668,11 +3788,11 @@ impl<'a> Checker<'a> {
         Scheme {
             variables: vec![field, rest],
             ty: Ty::Function(
-                vec![Ty::Record(
-                    vec![(name, Ty::Var(field))],
-                    Some(Box::new(Ty::Var(rest))),
-                )],
-                Box::new(Ty::Var(field)),
+                Rc::from([Ty::Record(
+                    Rc::from([(name, Ty::Var(field))]),
+                    Some(Rc::new(Ty::Var(rest))),
+                )]),
+                Rc::new(Ty::Var(field)),
             ),
         }
     }
@@ -3695,7 +3815,10 @@ impl<'a> Checker<'a> {
         let components = match &receiver {
             Ty::Tuple(members) => members.clone(),
             Ty::Record(fields, _) => fields.iter().map(|(_, ty)| ty.clone()).collect(),
-            Ty::Variants(tags, _) => tags.iter().flat_map(|(_, fields)| fields.clone()).collect(),
+            Ty::Variants(tags, _) => tags
+                .iter()
+                .flat_map(|(_, fields)| fields.iter().cloned())
+                .collect(),
             _ => return Ok(Some(false)),
         };
         let spelled = self.symbols.text(pending.name);
@@ -3705,9 +3828,9 @@ impl<'a> Checker<'a> {
             && matches!(receiver, Ty::Tuple(_) | Ty::Record(..))
             && pending.arguments.len() == 1;
         let answer = match (spelled, &receiver) {
-            ("equals", _) => Ty::Named(self.prelude.bool_, Vec::new()),
-            ("cmp", Ty::Tuple(_)) => Ty::Named(self.prelude.order, Vec::new()),
-            ("to_str", _) => Ty::Named(self.prelude.str_, Vec::new()),
+            ("equals", _) => Ty::Named(self.prelude.bool_, Rc::default()),
+            ("cmp", Ty::Tuple(_)) => Ty::Named(self.prelude.order, Rc::default()),
+            ("to_str", _) => Ty::Named(self.prelude.str_, Rc::default()),
             _ if hashing => pending.arguments[0].clone(),
             _ => return Ok(Some(false)),
         };
@@ -3749,7 +3872,7 @@ impl<'a> Checker<'a> {
             _ => return Ok(Some(false)),
         }
         self.unify_at(pending.module, pending.span, &answer, &pending.result)?;
-        for component in components {
+        for component in components.iter() {
             let arguments = if unary {
                 Vec::new()
             } else if hashing {
@@ -3939,12 +4062,12 @@ impl<'a> Checker<'a> {
         }
     }
 
-    const fn bool_type(&self) -> Ty {
-        Ty::Named(self.prelude.bool_, Vec::new())
+    fn bool_type(&self) -> Ty {
+        Ty::Named(self.prelude.bool_, Rc::default())
     }
 
     fn list_type(&self, element: Ty) -> Ty {
-        Ty::Named(self.prelude.list, vec![element])
+        Ty::Named(self.prelude.list, Rc::from([element]))
     }
 
     /// `ty`'s scheme, quantifying every variable in it but those `fixed`.
@@ -4008,7 +4131,7 @@ fn apply_signature(
             .chain(&pending.arguments)
             .collect()
     };
-    for (at, (argument, parameter)) in given.into_iter().zip(&parameters).enumerate() {
+    for (at, (argument, parameter)) in given.into_iter().zip(parameters.iter()).enumerate() {
         let at = at + usize::from(through_type);
         infer.unify(argument, parameter).map_err(|_| {
             let which = if at == 0 {
@@ -4083,19 +4206,19 @@ fn free_variables(ty: &Ty) -> Vec<u32> {
             }
             Ty::Rigid(_) => {}
             Ty::Named(_, arguments) => {
-                for ty in arguments {
+                for ty in arguments.iter() {
                     collect(ty, output);
                 }
             }
             Ty::Function(parameters, result) => {
-                for ty in parameters {
+                for ty in parameters.iter() {
                     collect(ty, output);
                 }
                 collect(result, output);
             }
             Ty::Variants(tags, tail) => {
-                for (_, fields) in tags {
-                    for ty in fields {
+                for (_, fields) in tags.iter() {
+                    for ty in fields.iter() {
                         collect(ty, output);
                     }
                 }
@@ -4104,7 +4227,7 @@ fn free_variables(ty: &Ty) -> Vec<u32> {
                 }
             }
             Ty::Record(fields, tail) => {
-                for (_, ty) in fields {
+                for (_, ty) in fields.iter() {
                     collect(ty, output);
                 }
                 if let Some(tail) = tail {
@@ -4112,7 +4235,7 @@ fn free_variables(ty: &Ty) -> Vec<u32> {
                 }
             }
             Ty::Tuple(members) => {
-                for ty in members {
+                for ty in members.iter() {
                     collect(ty, output);
                 }
             }
@@ -4559,7 +4682,7 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
         ),
         // One parameter needs no parentheses, unless it is a tuple or a
         // function, whose own would be read as the list's.
-        Ty::Function(parameters, result) => match parameters.as_slice() {
+        Ty::Function(parameters, result) => match &**parameters {
             [one] if !matches!(one, Ty::Tuple(_) | Ty::Function(..)) => {
                 format!("{} -> {}", show(one, symbols), show(result, symbols))
             }
