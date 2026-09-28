@@ -9,28 +9,28 @@ package {}
 Rule : [Rule(List(U8), List(U8))]
 
 # Keep the puzzle's ASCII letters and digits, without interpreting elements.
-molecule : Str -> Result(List(U8), Str)
-molecule(text) if text.is_empty() -> Err("empty molecule")
+molecule : Str -> Result(List(U8), [EmptyMolecule, MalformedMolecule])
+molecule(text) if text.is_empty() -> Err(EmptyMolecule)
 molecule(text) if !text.to_utf8().all(|byte| byte.is_ascii_letter() | byte.is_digit()) ->
-  Err("malformed molecule")
+  Err(MalformedMolecule)
 molecule(text) -> Ok(text.to_utf8())
 
-parse_rule : Str -> Result(Rule, Str)
+parse_rule : Str -> Result(Rule, _)
 parse_rule(line) -> rule_parts(line.split(" => "))
 
-rule_parts : List(Str) -> Result(Rule, Str)
+rule_parts : List(Str) -> Result(Rule, _)
 rule_parts([from, to]) -> Ok(Rule(molecule(from)?, molecule(to)?))
-rule_parts(_) -> Err("malformed replacement rule")
+rule_parts(_) -> Err(MalformedRule)
 
-parse : Str -> Result({rules: List(Rule), medicine: List(U8)}, Str)
+parse : Str -> Result({rules: List(Rule), medicine: List(U8)}, _)
 parse(input) -> instructions(input.lines(), [])
 
 # A blank line separates the rules from exactly one medicine molecule.
-instructions : (List(Str), List(Rule)) -> Result({rules: List(Rule), medicine: List(U8)}, Str)
-instructions(["", _], []) -> Err("no replacement rules")
+instructions : (List(Str), List(Rule)) -> Result({rules: List(Rule), medicine: List(U8)}, _)
+instructions(["", _], []) -> Err(NoRules)
 instructions(["", medicine], rules) -> Ok({rules: rules.reverse(), medicine: molecule(medicine)?})
-instructions(["", *_], _) -> Err("expected one medicine molecule")
-instructions([], _) -> Err("missing medicine molecule or separator")
+instructions(["", *_], _) -> Err(ManyMedicines)
+instructions([], _) -> Err(NoMedicine)
 instructions([line, *rest], rules) -> instructions(rest, [parse_rule(line)?, *rules])
 
 # Keep the prefix backwards while walking the original suffix. Advance only
@@ -51,7 +51,7 @@ products : (List(Rule), List(U8)) -> Set(List(U8))
 products(rules, medicine) -> Set.of_list(rules.flat_map(|rule|
   replace_each(rule, [], medicine, [])))
 
-part1 : Str -> Result(Nat, Str)
+part1 : Str -> Result(Nat, _)
 part1(input) ->
   {rules, medicine} = parse(input)?
   Ok(products(rules, medicine).len())
@@ -115,10 +115,10 @@ expand(_, _, text, steps, state) if state.seen.get_or(text, steps) < steps -> st
 expand(reverse_rules, limits, text, steps, state) ->
   products(reverse_rules, text).to_list().fold(state, |next, made| offer(made, steps + 1, limits, next))
 
-search : (List(Rule), Bounds, Work, Map(List(U8), Nat), Nat) -> Result(Nat, Str)
-search(_, _, Empty, _, _) -> Err("medicine cannot be fabricated from e")
+search : (List(Rule), Bounds, Work, Map(List(U8), Nat), Nat) -> Result(Nat, [Unfabricable, SearchLimit])
+search(_, _, Empty, _, _) -> Err(Unfabricable)
 search(_, _, Queued(_, steps, ['e'], _, _), _, _) -> Ok(steps)
-search(_, _, _, _, 0) -> Err("fabrication search limit exceeded")
+search(_, _, _, _, 0) -> Err(SearchLimit)
 search(reverse_rules, limits, Queued(_, steps, text, left, right), seen, Succ(fuel)) ->
   next = expand(reverse_rules, limits, text, steps, {work: merge_work(left, right), seen})
   search(reverse_rules, limits, next.work, next.seen, fuel)
@@ -126,24 +126,24 @@ search(reverse_rules, limits, Queued(_, steps, text, left, right), seen, Succ(fu
 # A resource limit makes even an unbounded, unreachable rewrite system total.
 # Exhausting it is an explicit error, never an approximate answer or a claim
 # of impossibility. Callers can raise the budget of non-goal queue removals.
-fabricate_with_limit : (List(Rule), List(U8), Nat) -> Result(Nat, Str)
+fabricate_with_limit : (List(Rule), List(U8), Nat) -> Result(Nat, [Unfabricable, SearchLimit])
 fabricate_with_limit(rules, medicine, limit) ->
   limits = bounds(rules)
   initial = offer(medicine, 0, limits, {work: Empty, seen: Map.empty()})
   reversed = rules.map(|Rule(from, to)| Rule(to, from))
   search(reversed, limits, initial.work, initial.seen, limit)
 
-fabricate : (List(Rule), List(U8)) -> Result(Nat, Str)
+fabricate : (List(Rule), List(U8)) -> Result(Nat, [Unfabricable, SearchLimit])
 fabricate(rules, medicine) -> fabricate_with_limit(rules, medicine, 100000)
 
-part2 : Str -> Result(Nat, Str)
+part2 : Str -> Result(Nat, _)
 part2(input) ->
   {rules, medicine} = parse(input)?
   fabricate(rules, medicine)
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   {rules, medicine} = parse(stdin)?
   Ok({part1: products(rules, medicine).len(), part2: fabricate(rules, medicine)?})
 
@@ -218,14 +218,14 @@ expect part2("e => AB\nA => ARnBAr\n\nARnBArB") == Ok(2)
 expect part2("e => AB\nA => ARnBYBAr\n\nARnBYBArB") == Ok(2)
 expect part2("e => YY\n\nYY") == Ok(1)
 expect part2("e => HHH\nH => HHH\n\nHHHHH") == Ok(2)
-expect part2("e => AB\nA => ARnBAr\n\nCC") == Err("medicine cannot be fabricated from e")
-expect part2("e => A\nA => B\nB => A\n\nC") == Err("medicine cannot be fabricated from e")
-expect part2("H => O\n\nHO") == Err("medicine cannot be fabricated from e")
+expect part2("e => AB\nA => ARnBAr\n\nCC") == Err(Unfabricable)
+expect part2("e => A\nA => B\nB => A\n\nC") == Err(Unfabricable)
+expect part2("H => O\n\nHO") == Err(Unfabricable)
 expect
   {rules, medicine} = parse("e => H\nH => HH\nAA => A\n\nA").ok_or({rules: [], medicine: []})
-  fabricate_with_limit(rules, medicine, 5) == Err("fabrication search limit exceeded")
+  fabricate_with_limit(rules, medicine, 5) == Err(SearchLimit)
 expect fabricate_with_limit([], ['e'], 0) == Ok(0)
-expect fabricate_with_limit([Rule(['e'], ['H'])], ['H'], 0) == Err("fabrication search limit exceeded")
+expect fabricate_with_limit([Rule(['e'], ['H'])], ['H'], 0) == Err(SearchLimit)
 expect fabricate_with_limit([Rule(['e'], ['H'])], ['H'], 1) == Ok(1)
 expect part2("").is_err()
 

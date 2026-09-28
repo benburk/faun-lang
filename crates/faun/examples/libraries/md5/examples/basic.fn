@@ -6,7 +6,7 @@ package {
 
 import md5 {md5_hash, to_hex}
 
-app : {stdin: List(U8), *} -> Result(Str, Str)
+app : {stdin: List(U8), *} -> Result(Str, _)
 app(input) -> md5_hash(input.stdin)
   .map_ok(to_hex).err_as("incomplete MD5 block")
 

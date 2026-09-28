@@ -19,9 +19,9 @@ part2(input) -> parse(input)
   .map_ok(|index| index + 1)
   .ok_or(0)
 
-app : {stdin: List(U8), *} -> Result({part1: Int, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Int, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   Ok({part1: part1(stdin), part2: part2(stdin)})
 
 main!(host) -> host.run_stdin!(app)

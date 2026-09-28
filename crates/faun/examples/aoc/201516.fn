@@ -71,9 +71,8 @@ sued(["Sue", _]) -> Err(MalformedSue)
 sued(["Sue", identity, *facts]) -> Ok(Sue(number(identity)?, memories(facts)?))
 sued(_) -> Err(MalformedSue)
 
-parse_sues : Str -> Result(List(Sue), Str)
+parse_sues : Str -> Result(List(Sue), [MalformedSue])
 parse_sues(input) -> input.trim().lines().try_map(parse_sue)
-  .err_as("malformed Aunt Sue line")
 
 reading : Compound -> Nat
 reading(Children) -> 3
@@ -100,26 +99,26 @@ possible(Sue(_, remembered), analysis) -> remembered.all(|clue| agrees(clue, ana
 # The machine is useful only if the evidence identifies exactly one aunt.
 # Reporting ambiguity explicitly also catches duplicate Sue numbers without
 # pretending the first line was more trustworthy than the second.
-identify_sue : (List(Sue), Analysis) -> Result(Nat, Str)
+identify_sue : (List(Sue), Analysis) -> Result(Nat, [NoSue, ManySues])
 identify_sue(aunts, analysis) -> unique(aunts.filter(|aunt| possible(aunt, analysis)))
 
-unique : List(Sue) -> Result(Nat, Str)
+unique : List(Sue) -> Result(Nat, [NoSue, ManySues])
 unique([Sue(identity, _)]) -> Ok(identity)
-unique([]) -> Err("no Aunt Sue matches the evidence")
-unique(_) -> Err("more than one Aunt Sue matches the evidence")
+unique([]) -> Err(NoSue)
+unique(_) -> Err(ManySues)
 
-identify : (Str, Analysis) -> Result(Nat, Str)
+identify : (Str, Analysis) -> Result(Nat, _)
 identify(input, analysis) -> identify_sue(parse_sues(input)?, analysis)
 
-part1 : Str -> Result(Nat, Str)
+part1 : Str -> Result(Nat, _)
 part1(input) -> identify(input, Exact)
 
-part2 : Str -> Result(Nat, Str)
+part2 : Str -> Result(Nat, _)
 part2(input) -> identify(input, Ranged)
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   aunts = parse_sues(stdin)?
   exact = identify_sue(aunts, Exact)?
   ranged = identify_sue(aunts, Ranged)?

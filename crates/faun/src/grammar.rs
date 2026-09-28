@@ -98,7 +98,7 @@ const fn begins_expr(kind: Kind) -> bool {
 const fn begins_type(kind: Kind) -> bool {
     matches!(
         kind,
-        Kind::TypeIdent | Kind::Ident | Kind::LParen | Kind::LBracket | Kind::LBrace
+        Kind::TypeIdent | Kind::Ident | Kind::Wild | Kind::LParen | Kind::LBracket | Kind::LBrace
     )
 }
 
@@ -136,7 +136,7 @@ impl Parser<'_> {
 
     /// Note that a type was looked for at the current token.
     fn note_type_starts(&mut self) {
-        for what in ["a type name", "a name", "`(`", "`[`", "`{`"] {
+        for what in ["a type name", "a name", "`_`", "`(`", "`[`", "`{`"] {
             self.note(what);
         }
     }
@@ -549,6 +549,9 @@ impl Parser<'_> {
                 let variable = self.bump();
                 named_type(variable, Vec::new(), variable.span())
             }
+            Kind::Wild => Type::Hole {
+                span: self.bump().span(),
+            },
             Kind::LParen => {
                 let open = self.bump();
                 let (members, trailing) = self.separated(true, begins_type, "a type", Self::ty)?;
@@ -1016,6 +1019,7 @@ const fn type_span(ty: &Type) -> Span {
         | Type::Function { span, .. }
         | Type::Variants { span, .. }
         | Type::Record { span, .. }
-        | Type::Tuple { span, .. } => *span,
+        | Type::Tuple { span, .. }
+        | Type::Hole { span } => *span,
     }
 }

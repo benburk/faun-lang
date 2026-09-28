@@ -224,7 +224,7 @@ fn resolve_module(
             s::Item::Alias(alias) => {
                 let local = symbols.intern(alias.name.text(source));
                 let canonical = scope.types[&local].canonical;
-                let ty = resolve_type(module.id, &alias.ty, source, scope, symbols)?;
+                let ty = written_type(module.id, &alias.ty, source, scope, symbols)?;
                 if has_variable(&ty) {
                     return Err(error(
                         module.id,
@@ -298,6 +298,7 @@ fn has_variable(ty: &h::Type) -> bool {
         h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).any(has_variable),
         h::Type::Record(fields, _) => fields.iter().any(|(_, field)| has_variable(field)),
         h::Type::Tuple(members) => members.iter().any(has_variable),
+        h::Type::Hole => false,
     }
 }
 
@@ -419,7 +420,7 @@ fn typed(
         match ty {
             h::Type::Named(name, _) if constraint_aliases.contains_key(name) => Some(*name),
             h::Type::Named(_, arguments) | h::Type::Tuple(arguments) => each(arguments),
-            h::Type::Variable(_) => None,
+            h::Type::Variable(_) | h::Type::Hole => None,
             h::Type::Function(parameters, result) => {
                 each(parameters).or_else(|| named(result, constraint_aliases))
             }
@@ -635,6 +636,7 @@ fn type_variables(ty: &h::Type, out: &mut Vec<Symbol>) {
                 type_variables(field, out);
             }
         }
+        h::Type::Hole => {}
     }
 }
 
@@ -651,6 +653,7 @@ fn substitute(ty: &h::Type, substitution: &HashMap<Symbol, h::Type>) -> h::Type 
             .get(variable)
             .cloned()
             .unwrap_or_else(|| ty.clone()),
+        h::Type::Hole => h::Type::Hole,
         h::Type::Named(name, arguments) => h::Type::Named(*name, each(arguments)),
         h::Type::Tuple(members) => h::Type::Tuple(each(members)),
         h::Type::Function(parameters, result) => {
@@ -714,7 +717,7 @@ fn expand(
                 .map(|argument| expand(argument, aliases, symbols, expanding))
                 .collect::<Result<_, _>>()?,
         ),
-        h::Type::Variable(_) => ty.clone(),
+        h::Type::Variable(_) | h::Type::Hole => ty.clone(),
         h::Type::Function(parameters, result) => h::Type::Function(
             parameters
                 .iter()
@@ -785,7 +788,7 @@ fn resolve_data(
                     let fields = constructor
                         .fields
                         .iter()
-                        .map(|field| resolve_type(module, field, source, scope, symbols))
+                        .map(|field| written_type(module, field, source, scope, symbols))
                         .collect::<Result<_, _>>()?;
                     Ok(h::ConstructorDecl { name, fields })
                 })
@@ -796,7 +799,7 @@ fn resolve_data(
             Vec::new(),
             Some(h::WrapperDecl {
                 constructor: binding.constructors[&local],
-                field: resolve_type(module, representation, source, scope, symbols)?,
+                field: written_type(module, representation, source, scope, symbols)?,
             }),
         ),
     };
@@ -879,9 +882,9 @@ fn resolve_constraint(
             ty: h::Type::Function(
                 parameters
                     .iter()
-                    .map(|ty| resolve_type(module, ty, source, scope, symbols))
+                    .map(|ty| written_type(module, ty, source, scope, symbols))
                     .collect::<Result<_, _>>()?,
-                Box::new(resolve_type(module, result, source, scope, symbols)?),
+                Box::new(written_type(module, result, source, scope, symbols)?),
             ),
         },
         s::Constraint::Alias {
@@ -901,11 +904,48 @@ fn resolve_constraint(
                 name: binding.canonical,
                 arguments: arguments
                     .iter()
-                    .map(|ty| resolve_type(module, ty, source, scope, symbols))
+                    .map(|ty| written_type(module, ty, source, scope, symbols))
                     .collect::<Result<_, _>>()?,
             }
         }
     })
+}
+
+/// A type written anywhere but a function's own signature, which says
+/// what it is in full: `_` leaves a signature's rest to its clauses, and
+/// nothing else has clauses to leave it to.
+fn written_type(
+    module: ModuleId,
+    ty: &s::Type,
+    source: &str,
+    scope: &Interface,
+    symbols: &mut Symbols,
+) -> Result<h::Type, ResolveError> {
+    if let Some(span) = hole(ty) {
+        return Err(error(
+            module,
+            span,
+            "`_` stands for a type only in a function's signature, whose clauses say what it is",
+        ));
+    }
+    resolve_type(module, ty, source, scope, symbols)
+}
+
+/// Where `ty` writes `_`, if it does.
+fn hole(ty: &s::Type) -> Option<crate::ast::Span> {
+    let each = |types: &[s::Type]| types.iter().find_map(hole);
+    match ty {
+        s::Type::Hole { span } => Some(*span),
+        s::Type::Named { arguments, .. } => each(arguments),
+        s::Type::Tuple { members, .. } => each(members),
+        s::Type::Function {
+            parameters, result, ..
+        } => each(parameters).or_else(|| hole(result)),
+        s::Type::Variants { constructors, .. } => constructors
+            .iter()
+            .find_map(|constructor| each(&constructor.fields)),
+        s::Type::Record { fields, .. } => fields.iter().find_map(|(_, field)| hole(field)),
+    }
 }
 
 fn resolve_type(
@@ -999,6 +1039,7 @@ fn resolve_type(
             }
             Ok(h::Type::Record(resolved, *open))
         }
+        s::Type::Hole { .. } => Ok(h::Type::Hole),
     }
 }
 

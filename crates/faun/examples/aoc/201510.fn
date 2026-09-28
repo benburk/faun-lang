@@ -29,9 +29,9 @@ part2(input) -> play(input.trim().to_utf8(), 50).len()
 
 # Part two is ten more readings of part one's sequence, so main plays the
 # first forty rounds once and both answers share them.
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   forty = play(stdin.trim().to_utf8(), 40)
   Ok({part1: forty.len(), part2: play(forty, 10).len()})
 

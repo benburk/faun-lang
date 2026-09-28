@@ -64,29 +64,29 @@ operand : (Result(Nat, e), Str, Signals) -> Result(U32, [Missing, Unreadable])
 operand(Ok(numeral), _, _) -> Ok(U32.of_nat(numeral) & mask())
 operand(Err(_), name, signals) -> signals.get(name)
 
-solved : (Rules, Str) -> Result(Nat, Str)
+solved : (Rules, Str) -> Result(Nat, _)
 solved(wiring, wire) -> wiring.len().times(Map.empty(), |signals| sweep(wiring, signals))
   .get(wire)
   .map_ok(|signal| signal.to_nat())
-  .err_as("wire `${wire}` never received a signal")
+  .err_as(NoSignal(wire))
 
-signal_on : (Str, Str) -> Result(Nat, Str)
+signal_on : (Str, Str) -> Result(Nat, _)
 signal_on(input, wire) -> solved(rules(input), wire)
 
-part1 : Str -> Result(Nat, Str)
+part1 : Str -> Result(Nat, _)
 part1(input) -> signal_on(input, "a")
 
 # Part two reruns the circuit with part one's answer prepended as a rule for
 # `b`: the first rule for a wire wins, so the old `b` gate simply never fires.
-part2 : Str -> Result(Nat, Str)
+part2 : Str -> Result(Nat, _)
 part2(input) ->
   wiring = rules(input)
   first = solved(wiring, "a")?
   solved([("b", [first.to_str()]), *wiring], "a")
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   first = part1(stdin)?
   second = part2(stdin)?
   Ok({part1: first, part2: second})

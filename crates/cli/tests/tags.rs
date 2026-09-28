@@ -183,6 +183,28 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> host.exit!(code(wide(host.args.len() - 1)) + code(wide(7)))",
         57,
     ),
+    (
+        "a signature's `_` is the row its clauses fail with",
+        "half : Nat -> Result(Nat, [Odd])
+         half(n) if n % 2 == 0 -> Ok(n / 2)
+         half(_) -> Err(Odd)
+
+         small : Nat -> Result(Nat, [Big])
+         small(n) if n < 10 -> Ok(n)
+         small(_) -> Err(Big)
+
+         both : Nat -> Result(Nat, _)
+         both(n) -> small(half(n)?)
+
+         code : Result(Nat, [Odd, Big]) -> Nat
+         code(Ok(n)) -> n
+         code(Err(Odd)) -> 10
+         code(Err(Big)) -> 20
+
+         main! : Host -> []
+         main!(host) -> host.exit!(code(both(8)) + code(both(3)) + code(both(40)))",
+        34,
+    ),
 ];
 
 /// Programs refused, and what the message says.
@@ -249,6 +271,23 @@ const REFUSED: &[(&str, &str, &str)] = &[
          leak : Failure
          leak() -> Failure.NotFound",
         "type `Failure` has no constructor `NotFound` visible here",
+    ),
+    (
+        "what a signature with `_` writes still holds",
+        "count : Nat -> Result(Str, _)
+         count(n) -> Ok(n)",
+        "Nat and Str",
+    ),
+    (
+        "`_` stands for a type only in a function's signature",
+        "Box : [Box(_)]",
+        "`_` stands for a type only in a function's signature",
+    ),
+    (
+        "a signature with `_` takes no `where` bounds",
+        "shown : a -> _ where a.to_str : a -> Str
+         shown(x) -> x.to_str()",
+        "it takes no `where` bounds",
     ),
 ];
 

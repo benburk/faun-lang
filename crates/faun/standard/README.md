@@ -137,6 +137,13 @@ producer's failure tags to that answer's row, so failures from several
 producers join without an umbrella type, and a signature's row admits only
 its own.
 
+A signature may write `_` for any part of a type it leaves to the clauses:
+`app : {stdin: List(U8), *} -> Result(Nat, _)` holds what it writes, and its
+failure row is whatever its `?`s join, reported by the row's own `to_str`.
+Such a definition is worked out as an unsigned one is, from the type written
+rather than from nothing, so it takes no `where` bounds. `_` stands for a
+type nowhere else: a data declaration or an alias says its type in full.
+
 ```sh
 cargo run -- check crates/faun/examples/utilities.fn
 cargo run -- emit --target x86_64-linux barb crates/faun/examples/main.fn

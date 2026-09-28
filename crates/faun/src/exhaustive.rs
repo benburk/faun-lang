@@ -501,6 +501,7 @@ fn written(ty: &h::Type, bound: &HashMap<Symbol, &InferredType>) -> Column {
                 .collect::<Option<_>>()?,
         ),
         h::Type::Variable(variable) => (*bound.get(variable)?).clone(),
+        h::Type::Hole => return None,
         h::Type::Function(parameters, result) => InferredType::Function(
             parameters
                 .iter()

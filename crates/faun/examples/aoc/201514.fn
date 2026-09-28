@@ -26,9 +26,8 @@ described(_) -> Err(MalformedReindeer)
 count : Str -> Result(Nat, [MalformedReindeer])
 count(text) -> Nat.from_str(text).err_as(MalformedReindeer)
 
-herd : Str -> Result(List(Reindeer), Str)
-herd(input) -> input.trim().lines()
-  .try_map(parse_reindeer).err_as("malformed reindeer line")
+herd : Str -> Result(List(Reindeer), [MalformedReindeer])
+herd(input) -> input.trim().lines().try_map(parse_reindeer)
 
 # Whole cycles flown, then as much of the last one as the reindeer got
 # through: it flies the first `flying` seconds of every cycle and rests out
@@ -40,22 +39,22 @@ distance(Reindeer(speed, flying, resting), second) ->
   flown = second / cycle * flying + Nat.min(second % cycle, flying)
   speed * flown
 
-furthest : List(Nat) -> Result(Nat, Str)
-furthest(flown) -> flown.max().err_as("no reindeer in the race")
+furthest : List(Nat) -> Result(Nat, [Empty])
+furthest(flown) -> flown.max()
 
 # The seconds of the race, `1` through `duration`: a reindeer has flown
 # nothing at second zero, so the clock starts after the first tick.
 ticks : Nat -> List(Nat)
 ticks(duration) -> List.range(duration).map(|second| second + 1)
 
-lead : (List(Reindeer), Nat) -> Result(Nat, Str)
+lead : (List(Reindeer), Nat) -> Result(Nat, [Empty])
 lead(racers, second) -> furthest(racers.map(|racer| distance(racer, second)))
 
 # One tick at a time, carrying a score per reindeer alongside the herd.
 # Seeding the lead at 0 is safe in a way day 13's weakest pair was not: no
 # reindeer is ever behind the start line, so 0 really is `max`'s identity
 # over `Nat`, and an empty field is caught by `furthest` below.
-points : (List(Reindeer), Nat) -> Result(Nat, Str)
+points : (List(Reindeer), Nat) -> Result(Nat, [Empty])
 points(racers, duration) -> furthest(ticks(duration)
   .fold(List.repeat(0, racers.len()), |scores, second| compute_scores(racers, scores, second)))
 
@@ -72,15 +71,15 @@ compute_scores(racers, scores, second) ->
 race_length : Nat
 race_length() -> 2503
 
-part1 : (Str, Nat) -> Result(Nat, Str)
+part1 : (Str, Nat) -> Result(Nat, _)
 part1(input, duration) -> lead(herd(input)?, duration)
 
-part2 : (Str, Nat) -> Result(Nat, Str)
+part2 : (Str, Nat) -> Result(Nat, _)
 part2(input, duration) -> points(herd(input)?, duration)
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   racers = herd(stdin)?
   Ok({part1: lead(racers, race_length())?, part2: points(racers, race_length())?})
 

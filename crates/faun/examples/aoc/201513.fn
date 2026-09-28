@@ -38,9 +38,8 @@ change("gain", magnitude) -> Ok(Int.of_nat(magnitude))
 change("lose", magnitude) -> Ok(-Int.of_nat(magnitude))
 change(_, _) -> Err(MalformedRule)
 
-parse_rules : Str -> Result(List(Rule), Str)
-parse_rules(input) -> input.trim().lines()
-  .try_map(parse_rule).err_as("malformed happiness line")
+parse_rules : Str -> Result(List(Rule), [MalformedRule])
+parse_rules(input) -> input.trim().lines().try_map(parse_rule)
 
 # Anyone named on either side of a rule is at the table, including a guest
 # only ever spoken about: seating them is what makes their silence a gap.
@@ -78,11 +77,11 @@ unheard : ((Str, Str), Set((Str, Str))) -> Bool
 unheard((subject, neighbour), stated) -> subject != neighbour
   & !stated.contains((subject, neighbour))
 
-opinions : List(Rule) -> Result(Map((Str, Str), Int), Str)
+opinions : List(Rule) -> Result(Map((Str, Str), Int), [Unspoken(Str, Str)])
 opinions(rules) -> spoken(unspoken(rules), rules)
 
-spoken : (List((Str, Str)), List(Rule)) -> Result(Map((Str, Str), Int), Str)
-spoken([(subject, neighbour), *], _) -> Err("`${subject}` said nothing about `${neighbour}`")
+spoken : (List((Str, Str)), List(Rule)) -> Result(Map((Str, Str), Int), [Unspoken(Str, Str)])
+spoken([(subject, neighbour), *], _) -> Err(Unspoken(subject, neighbour))
 spoken([], rules) -> Ok(regard(rules))
 
 # The table is round, so the seating pairs with itself shifted by one.
@@ -108,16 +107,16 @@ score(seating, table) ->
 
 # Every seating scored once. Both parts are one aggregation over this list:
 # the ring whole, and the ring cut at its weakest pair.
-rings : Str -> Result(List((Int, Int)), Str)
+rings : Str -> Result(List((Int, Int)), _)
 rings(input) ->
   rules = parse_rules(input)?
   table = opinions(rules)?
   Ok(seatings(guests(rules)).map(|seating| score(seating, table)))
 
-strongest : List(Int) -> Result(Int, Str)
-strongest(totals) -> totals.max().err_as("no guests to seat")
+strongest : List(Int) -> Result(Int, [Empty])
+strongest(totals) -> totals.max()
 
-part1 : Str -> Result(Int, Str)
+part1 : Str -> Result(Int, _)
 part1(input) -> strongest(rings(input)?.map(|(total, _)| total))
 
 add_stated : (Set((Str, Str)), Rule) -> Set((Str, Str))
@@ -126,12 +125,12 @@ add_stated(said, Rule(subject, neighbour, _)) -> said.insert((subject, neighbour
 net_score : ((Int, Int)) -> Int
 net_score((total, gap)) -> total - gap
 
-part2 : Str -> Result(Int, Str)
+part2 : Str -> Result(Int, _)
 part2(input) -> strongest(rings(input)?.map(net_score))
 
-app : {stdin: List(U8), *} -> Result({part1: Int, part2: Int}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Int, part2: Int}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   scored = rings(stdin)?
   seated = strongest(scored.map(|(total, _)| total))?
   yourself = strongest(scored.map(net_score))?

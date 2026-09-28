@@ -45,9 +45,8 @@ labelled([label, "capacity", capacity, "durability", durability, "flavor", flavo
 ))
 labelled(_) -> Err(MalformedIngredient)
 
-ingredients : Str -> Result(List(Ingredient), Str)
+ingredients : Str -> Result(List(Ingredient), [MalformedIngredient])
 ingredients(input) -> input.trim().lines().try_map(parse_ingredient)
-  .err_as("malformed ingredient line")
 
 Totals : [Totals(Int, Int, Int, Int, Int)]
 Best : [Best(Nat, Nat, Bool)]
@@ -120,33 +119,33 @@ spoonfuls(Succ(n), ingredient, rest, remaining, totals) ->
     search(rest, remaining - amount, mix(totals, ingredient, amount))
   )
 
-solve : Str -> Result(Best, Str)
+solve : Str -> Result(Best, _)
 solve(input) -> kitchen(ingredients(input)?)
 
-kitchen : List(Ingredient) -> Result(Best, Str)
-kitchen([]) -> Err("no ingredients in the kitchen")
+kitchen : List(Ingredient) -> Result(Best, [NoIngredients])
+kitchen([]) -> Err(NoIngredients)
 kitchen(pantry) -> Ok(search(pantry, 100, empty_totals()))
 
-part1 : Str -> Result(Nat, Str)
+part1 : Str -> Result(Nat, _)
 part1(input) ->
   Best(best, _, _) = solve(input)?
   Ok(best)
 
-part2 : Str -> Result(Nat, Str)
+part2 : Str -> Result(Nat, _)
 part2(input) -> dietary(solve(input)?)
 
-dietary : Best -> Result(Nat, Str)
+dietary : Best -> Result(Nat, [NoDietaryRecipe])
 dietary(Best(_, diet, True)) -> Ok(diet)
-dietary(Best(_, _, False)) -> Err("no 500-calorie recipe")
+dietary(Best(_, _, False)) -> Err(NoDietaryRecipe)
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   report(solve(stdin)?)
 
-report : Best -> Result({part1: Nat, part2: Nat}, Str)
+report : Best -> Result({part1: Nat, part2: Nat}, [NoDietaryRecipe])
 report(Best(best, diet, True)) -> Ok({part1: best, part2: diet})
-report(Best(_, _, False)) -> Err("no 500-calorie recipe")
+report(Best(_, _, False)) -> Err(NoDietaryRecipe)
 
 example : Str
 example() -> Str.join([

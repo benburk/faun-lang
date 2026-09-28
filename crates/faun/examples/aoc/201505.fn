@@ -37,9 +37,9 @@ is_nice_v2(text) ->
 part2 : Str -> Nat
 part2(input) -> input.trim().lines().count(is_nice_v2)
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   Ok({part1: part1(stdin), part2: part2(stdin)})
 
 expect is_nice("ugknbfddgicrmopn")

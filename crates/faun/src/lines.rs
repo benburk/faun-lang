@@ -545,7 +545,8 @@ const fn type_span(ty: &Type) -> Span {
         | Type::Function { span, .. }
         | Type::Variants { span, .. }
         | Type::Record { span, .. }
-        | Type::Tuple { span, .. } => *span,
+        | Type::Tuple { span, .. }
+        | Type::Hole { span } => *span,
     }
 }
 

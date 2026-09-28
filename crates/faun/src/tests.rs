@@ -13,7 +13,7 @@ fn an_unfinished_type_lists_what_could_come_next() {
     let error = parse("main! : Host -> \n").unwrap_err();
     assert_eq!(
         error.message,
-        "expected one of `(`, `[`, `{`, a name, a type name before the end of the file"
+        "expected one of `(`, `[`, `_`, `{`, a name, a type name before the end of the file"
     );
 }
 

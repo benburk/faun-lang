@@ -7,19 +7,19 @@
 
 package {}
 
-parse_light : U8 -> Result(U8, Str)
+parse_light : U8 -> Result(U8, [MalformedLight])
 parse_light('#') -> Ok(1)
 parse_light('.') -> Ok(0)
-parse_light(_) -> Err("malformed light: expected # or .")
+parse_light(_) -> Err(MalformedLight)
 
-parse_grid : Str -> Result(List(List(U8)), Str)
+parse_grid : Str -> Result(List(List(U8)), _)
 parse_grid(input) -> rectangular(input.lines())
 
-rectangular : List(Str) -> Result(List(List(U8)), Str)
-rectangular([]) -> Err("empty light grid")
-rectangular([first, *_]) if first.is_empty() -> Err("empty light grid")
+rectangular : List(Str) -> Result(List(List(U8)), [EmptyGrid, UnequalRows, MalformedLight])
+rectangular([]) -> Err(EmptyGrid)
+rectangular([first, *_]) if first.is_empty() -> Err(EmptyGrid)
 rectangular([first, *rest]) if !rest.all(|row| row.len() == first.len()) ->
-  Err("unequal light grid row widths")
+  Err(UnequalRows)
 rectangular(rows) -> rows.try_map(|row| row.to_utf8().try_map(parse_light))
 
 # Sum three adjacent cells, padding each end with darkness. The vertical
@@ -67,15 +67,15 @@ solve : (List(List(U8)), Nat, Bool) -> Nat
 solve(grid, steps, stuck) -> animate(corners(grid, stuck), steps, stuck)
   .map(|row| row.count(|cell| cell == 1)).sum()
 
-part1 : (Str, Nat) -> Result(Nat, Str)
+part1 : (Str, Nat) -> Result(Nat, _)
 part1(input, steps) -> Ok(solve(parse_grid(input)?, steps, False))
 
-part2 : (Str, Nat) -> Result(Nat, Str)
+part2 : (Str, Nat) -> Result(Nat, _)
 part2(input, steps) -> Ok(solve(parse_grid(input)?, steps, True))
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   grid = parse_grid(stdin)?
   Ok({part1: solve(grid, 100, False), part2: solve(grid, 100, True)})
 

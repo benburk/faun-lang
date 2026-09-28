@@ -19,13 +19,12 @@ counted(Ok(0)) -> Err(MalformedContainer)
 counted(Ok(liters)) -> Ok(liters)
 counted(Err(_)) -> Err(MalformedContainer)
 
-inventory : Str -> Result(List(Nat), Str)
-inventory(input) -> stocked(input.trim().lines().try_map(capacity))
+inventory : Str -> Result(List(Nat), _)
+inventory(input) -> stocked(input.trim().lines().try_map(capacity)?)
 
-stocked : Result(List(Nat), e) -> Result(List(Nat), Str)
-stocked(Err(_)) -> Err("malformed container capacity")
-stocked(Ok([])) -> Err("no containers available")
-stocked(Ok(containers)) -> Ok(containers)
+stocked : List(Nat) -> Result(List(Nat), [NoContainers])
+stocked([]) -> Err(NoContainers)
+stocked(containers) -> Ok(containers)
 
 # Search by physical container rather than capacity value. Peeling the list is
 # both the combinatorial step and the termination argument. The two recursive
@@ -39,26 +38,26 @@ container_counts([size, *rest], remaining, used) if size <= remaining ->
     .extend(container_counts(rest, remaining, used))
 container_counts([_, *rest], remaining, used) -> container_counts(rest, remaining, used)
 
-solve : (Str, Nat) -> Result(List(Nat), Str)
+solve : (Str, Nat) -> Result(List(Nat), _)
 solve(input, liters) -> Ok(container_counts(inventory(input)?, liters, 0))
 
-fewest_ways : List(Nat) -> Result(Nat, Str)
+fewest_ways : List(Nat) -> Result(Nat, [Empty])
 fewest_ways(counts) ->
-  fewest = counts.min().err_as("no combination holds the requested volume")?
+  fewest = counts.min()?
   Ok(counts.count(|used| used == fewest))
 
-part1 : (Str, Nat) -> Result(Nat, Str)
+part1 : (Str, Nat) -> Result(Nat, _)
 part1(input, liters) -> Ok(solve(input, liters)?.len())
 
-part2 : (Str, Nat) -> Result(Nat, Str)
+part2 : (Str, Nat) -> Result(Nat, _)
 part2(input, liters) -> fewest_ways(solve(input, liters)?)
 
 target : Nat
 target() -> 150
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   counts = solve(stdin, target())?
   Ok({part1: counts.len(), part2: fewest_ways(counts)?})
 

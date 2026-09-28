@@ -33,10 +33,10 @@ part1(input) -> Ok(parse_boxes(input)?.map(paper).sum())
 part2 : Str -> Result(Nat, [MalformedBox])
 part2(input) -> Ok(parse_boxes(input)?.map(ribbon).sum())
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
-  boxes = parse_boxes(stdin).err_as("malformed box dimensions")?
+  stdin = Str.from_ascii(input.stdin)?
+  boxes = parse_boxes(stdin)?
   paper_total = boxes.map(paper).sum()
   ribbon_total = boxes.map(ribbon).sum()
   Ok({part1: paper_total, part2: ribbon_total})

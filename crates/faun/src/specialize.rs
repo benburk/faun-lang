@@ -1987,6 +1987,9 @@ pub(crate) fn surface_type(
             .get(variable)
             .cloned()
             .ok_or_else(|| error("data field contains an unbound type variable")),
+        h::Type::Hole => Err(error(
+            "`_` stands for a type only in a function's signature",
+        )),
         h::Type::Function(parameters, result) => Ok(Type::Function(Signature {
             parameters: parameters
                 .iter()

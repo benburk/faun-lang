@@ -89,17 +89,16 @@ brightness_count(input, width, height) -> Ok(grid_sum(parse(input)?, width, heig
 part2 : Str -> Result(Nat, [MalformedInstruction])
 part2(input) -> brightness_count(input, 1000, 1000)
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
-  run(parse(stdin))
+  stdin = Str.from_ascii(input.stdin)?
+  Ok(run(parse(stdin)?))
 
-run : Result(List(Instruction), e) -> Result({part1: Nat, part2: Nat}, Str)
-run(Err(_)) -> Err("malformed lighting instruction")
-run(Ok(instructions)) ->
+run : List(Instruction) -> {part1: Nat, part2: Nat}
+run(instructions) ->
   lights = grid_sum(instructions, 1000, 1000, lit_cell)
   brightness = grid_sum(instructions, 1000, 1000, brightness_cell)
-  Ok({part1: lights, part2: brightness})
+  {part1: lights, part2: brightness}
 
 expect lit_count("turn on 0,0 through 2,2\n", 3, 3) == Ok(9)
 expect lit_count(

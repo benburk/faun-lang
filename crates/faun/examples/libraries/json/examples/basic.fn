@@ -54,14 +54,14 @@ user_text : Str
 user_text() -> "{\"name\":\"Ada\",\"age\":37,\"balance\":-4,"
   .concat("\"active\":true,\"scores\":[3,5]}")
 
-decode_user : Str -> Result(User, Str)
+decode_user : Str -> Result(User, _)
 decode_user(text) ->
-  value = Json.from_str(text).map_err(|error| error.to_str())?
-  User.from_json(value).result().map_err(|error| error.to_str())
+  value = Json.from_str(text).map_err(InvalidJson)?
+  User.from_json(value).result().map_err(Undecodable)
 
-app : {stdin: List(U8), *} -> Result(Str, Str)
+app : {stdin: List(U8), *} -> Result(Str, _)
 app(input) ->
-  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  stdin = Str.from_utf8(input.stdin)?
   decode_user(stdin).map_ok(|user| user.to_json().to_str())
 
 expect decode_user(user_text()) == Ok(User({

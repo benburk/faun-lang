@@ -79,11 +79,11 @@ next_password(password) ->
 
 # Part two is the same search started from part one's answer: the password
 # expired again, so it increments again.
-app : {stdin: List(U8), *} -> Result({part1: Str, part2: Str}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Str, part2: Str}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
-  first = next_password(stdin.trim()).err_as("no next password")?
-  second = next_password(first).err_as("no next password")?
+  stdin = Str.from_ascii(input.stdin)?
+  first = next_password(stdin.trim())?
+  second = next_password(first)?
   Ok({part1: first, part2: second})
 
 # The Security-Elf's three examples: a straight spoiled by confusing

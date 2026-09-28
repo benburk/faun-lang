@@ -36,33 +36,33 @@ add_places : (Set(Str), Edge) -> Set(Str)
 add_places(seen, Edge(from, to, _)) -> seen.insert(from).insert(to)
 
 # A route's length is the sum of its consecutive legs.
-route_length : (List(Str), Map((Str, Str), Nat)) -> Result(Nat, Str)
+route_length : (List(Str), Map((Str, Str), Nat)) -> Result(Nat, _)
 route_length(route, table) ->
   legs = route.zip(route.drop(1)).try_map(|(from, to)|
-    table.get((from, to)).err_as("no distance between `${from}` and `${to}`"))
+    table.get((from, to)).err_as(NoDistance(from, to)))
   Ok(legs?.sum())
 
 # Every tour's length, computed once: both parts are one aggregation over
 # this list, the short way round and the scenic one.
-tour_lengths : Str -> Result(List(Nat), Str)
+tour_lengths : Str -> Result(List(Nat), _)
 tour_lengths(input) ->
-  edges = input.trim().lines().try_map(parse_edge).err_as("malformed distance line")?
+  edges = input.trim().lines().try_map(parse_edge)?
   table = distances(edges)
   stops = places(edges)
   permutations(stops, stops.len()).try_map(|route| route_length(route, table))
 
-part1 : Str -> Result(Nat, Str)
-part1(input) -> tour_lengths(input)?.min().err_as("no places to visit")
+part1 : Str -> Result(Nat, _)
+part1(input) -> tour_lengths(input)?.min()
 
-part2 : Str -> Result(Nat, Str)
-part2(input) -> tour_lengths(input)?.max().err_as("no places to visit")
+part2 : Str -> Result(Nat, _)
+part2(input) -> tour_lengths(input)?.max()
 
-app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
+app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) ->
-  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
+  stdin = Str.from_ascii(input.stdin)?
   lengths = tour_lengths(stdin)?
-  shortest = lengths.min().err_as("no places to visit")?
-  longest = lengths.max().err_as("no places to visit")?
+  shortest = lengths.min()?
+  longest = lengths.max()?
   Ok({part1: shortest, part2: longest})
 
 example : Str

@@ -60,6 +60,7 @@ member-constraint = NAME "." ( NAME | EFFECT ) ":" type ;
 type              = type-operand [ "->" type-operand ] ;
 type-operand      = TYPE [ CALL_PAREN types ")" ]
                   | NAME
+                  | "_"
                   | "(" types ")"
                   | "[" [ variants ] "]"
                   | "{" [ field-types ] "}" ;

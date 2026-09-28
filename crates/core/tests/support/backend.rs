@@ -1086,7 +1086,7 @@ fn the_animated_lights_run_on_each_target() {
         ("##\n##\n", "Ok({part1: 4, part2: 4})\n"),
         ("..\n..\n", "Ok({part1: 0, part2: 4})\n"),
         ("#\n", "Ok({part1: 0, part2: 1})\n"),
-        ("..\n.\n", "Err(unequal light grid row widths)\n"),
+        ("..\n.\n", "Err(UnequalRows)\n"),
     ] {
         assert_eq!(
             execute_with_input(&program, input.as_bytes()),
@@ -1157,11 +1157,8 @@ fn the_medicine_replacements_run_on_each_target() {
             "e => H\nH => AB\nX => AB\n\nAB",
             "Ok({part1: 0, part2: 2})\n",
         ),
-        (
-            "e => A\nA => B\nB => A\n\nC",
-            "Err(medicine cannot be fabricated from e)\n",
-        ),
-        ("H -> O\n\nH", "Err(malformed replacement rule)\n"),
+        ("e => A\nA => B\nB => A\n\nC", "Err(Unfabricable)\n"),
+        ("H -> O\n\nH", "Err(MalformedRule)\n"),
     ] {
         assert_eq!(
             execute_with_input(&program, input.as_bytes()),

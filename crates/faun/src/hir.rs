@@ -101,6 +101,8 @@ pub enum Type {
     Record(Vec<(Symbol, Self)>, bool),
     /// A positional product of two or more, which never passes for a record.
     Tuple(Vec<Self>),
+    /// Whatever the clauses of the signed function make it.
+    Hole,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

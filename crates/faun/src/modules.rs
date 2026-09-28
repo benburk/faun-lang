@@ -625,6 +625,7 @@ fn intern_record_fields(ty: &super::ast::Type, source: &str, symbols: &mut Symbo
                 intern_record_fields(field, source, symbols);
             }
         }
+        super::ast::Type::Hole { .. } => {}
     }
 }
 

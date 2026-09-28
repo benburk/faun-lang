@@ -256,6 +256,8 @@ pub enum Type {
     },
     /// `(A, B)`: a positional product of two or more.
     Tuple { span: Span, members: Vec<Self> },
+    /// `_`: in a function's signature, whatever its clauses make it.
+    Hole { span: Span },
 }
 
 /// One `name(patterns) if guard -> body` row. Consecutive rows are grouped later.

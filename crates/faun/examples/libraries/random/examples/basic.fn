@@ -15,12 +15,10 @@ draw(state, Succ(rest)) ->
   (value, next_state) = state.next()
   draw(next_state, rest).prepend(value)
 
-app : {stdin: List(U8), *} -> Result(Str, Str)
+app : {stdin: List(U8), *} -> Result(Str, _)
 app(input) ->
-  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
-  Nat.from_str(stdin.trim())
-    .map_ok(report_draws)
-    .err_as("expected a decimal seed on stdin")
+  stdin = Str.from_utf8(input.stdin)?
+  Nat.from_str(stdin.trim()).map_ok(report_draws)
 
 report_draws : Nat -> Str
 report_draws(seed) -> Str.join(draw(Random.seed(seed), 6).map(U32.to_str), "\n")

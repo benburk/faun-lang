@@ -863,11 +863,25 @@ impl Infer {
 fn first_order(ty: &h::Type) -> bool {
     match ty {
         h::Type::Function(..) => false,
-        h::Type::Variable(_) => true,
+        h::Type::Variable(_) | h::Type::Hole => true,
         h::Type::Named(_, arguments) => arguments.iter().all(first_order),
         h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).all(first_order),
         h::Type::Record(fields, _) => fields.iter().all(|(_, field)| first_order(field)),
         h::Type::Tuple(members) => members.iter().all(first_order),
+    }
+}
+
+/// Whether a written type leaves some part of itself to be worked out.
+fn has_hole(ty: &h::Type) -> bool {
+    match ty {
+        h::Type::Hole => true,
+        h::Type::Variable(_) => false,
+        h::Type::Named(_, types) | h::Type::Tuple(types) => types.iter().any(has_hole),
+        h::Type::Function(parameters, result) => {
+            parameters.iter().any(has_hole) || has_hole(result)
+        }
+        h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).any(has_hole),
+        h::Type::Record(fields, _) => fields.iter().any(|(_, field)| has_hole(field)),
     }
 }
 
@@ -972,6 +986,10 @@ struct Checker<'a> {
     bounds: HashMap<Symbol, Vec<Bound>>,
     /// Each signed definition's type variables, by the names it writes them.
     variable_names: HashMap<Symbol, HashMap<Symbol, u32>>,
+    /// The signatures that write `_` somewhere: each definition is worked
+    /// out as an unsigned one is, from the type written rather than from
+    /// nothing, so what it writes holds and what it leaves is inferred.
+    partial: HashMap<Symbol, h::SignatureDecl>,
     /// The bounds of the signed body being checked, and its variables by
     /// name, rigid as its body sees them.
     current: Vec<Bound>,
@@ -1010,6 +1028,7 @@ impl<'a> Checker<'a> {
             answers: Vec::new(),
             bounds: HashMap::new(),
             variable_names: HashMap::new(),
+            partial: HashMap::new(),
             current: Vec::new(),
             current_names: HashMap::new(),
             bound_sites: Vec::new(),
@@ -1133,14 +1152,28 @@ impl<'a> Checker<'a> {
                 ),
             ));
         }
-        let mut variables = HashMap::new();
-        let parameters = signature
+        if signature
             .parameters
             .iter()
-            .map(|ty| self.surface_type(ty, &mut variables))
-            .collect();
-        let result = self.surface_type(&signature.result, &mut variables);
-        let ty = self.open_result_rows(&Ty::Function(parameters, Box::new(result)), true);
+            .chain([&signature.result])
+            .any(has_hole)
+        {
+            if !signature.constraints.is_empty() {
+                return Err(failure(
+                    module,
+                    signature.span,
+                    format!(
+                        "`{}` writes `_`, so its type is worked out from its clauses; it takes no `where` bounds",
+                        self.symbols.text(signature.spelling)
+                    ),
+                ));
+            }
+            self.partial.insert(signature.name, signature.clone());
+            return Ok(());
+        }
+        let mut variables = HashMap::new();
+        let ty = self.signed_type(signature, &mut variables);
+        let ty = self.open_result_rows(&ty, true);
         let bounds = self.written_bounds(module, signature, &mut variables)?;
         let mut quantified = free_variables(&ty);
         for bound in &bounds {
@@ -1178,6 +1211,21 @@ impl<'a> Checker<'a> {
                 });
         }
         Ok(())
+    }
+
+    /// The function type `signature` writes, over `variables`.
+    fn signed_type(
+        &mut self,
+        signature: &h::SignatureDecl,
+        variables: &mut HashMap<Symbol, Ty>,
+    ) -> Ty {
+        let parameters = signature
+            .parameters
+            .iter()
+            .map(|ty| self.surface_type(ty, variables))
+            .collect();
+        let result = self.surface_type(&signature.result, variables);
+        Ty::Function(parameters, Box::new(result))
     }
 
     /// The methods a type's block defines without a signature, by the
@@ -1378,6 +1426,9 @@ impl<'a> Checker<'a> {
                 .entry(*name)
                 .or_insert_with(|| self.infer.fresh())
                 .clone(),
+            // Whatever the clauses make it: a variable no scheme quantifies
+            // until they have.
+            h::Type::Hole => self.infer.fresh(),
             h::Type::Function(parameters, result) => Ty::Function(
                 parameters
                     .iter()
@@ -1492,8 +1543,22 @@ impl<'a> Checker<'a> {
                         "clauses of one function have different arities",
                     ));
                 }
-                let parameters = (0..arity).map(|_| self.infer.fresh()).collect();
-                let ty = Ty::Function(parameters, Box::new(self.infer.fresh()));
+                let ty = if let Some(signature) = self.partial.get(name).cloned() {
+                    if signature.parameters.len() != arity {
+                        return Err(failure(
+                            function.module,
+                            clauses[0].span,
+                            format!(
+                                "clause takes {arity} patterns but its signature takes {} parameters",
+                                signature.parameters.len()
+                            ),
+                        ));
+                    }
+                    self.signed_type(&signature, &mut HashMap::new())
+                } else {
+                    let parameters = (0..arity).map(|_| self.infer.fresh()).collect();
+                    Ty::Function(parameters, Box::new(self.infer.fresh()))
+                };
                 self.values.insert(
                     *name,
                     Scheme {
