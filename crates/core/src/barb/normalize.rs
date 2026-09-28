@@ -33,7 +33,7 @@
 use super::budget::{Budget, FoldLimits};
 use super::evaluate::Evaluator;
 use super::facts::Recognised;
-use super::inline::{InlineLimits, Inlining, Unrolling};
+use super::inline::{InlineLimits, Inlining};
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Operation, Program, Range};
 
 /// Remove local aliases without expanding calls or dropping eager bindings.
@@ -49,14 +49,6 @@ pub(crate) fn structural(program: &mut Program) {
 /// knowing about cannot be seen until that power is folded.
 pub(super) fn algebra(program: &mut Program, limits: FoldLimits) {
     rewrite(program, None, Some(limits));
-}
-
-/// Lay out loops over values known before the program runs a step at a
-/// time: see [`Unrolling`]. Answers the definitions something was laid out
-/// in, which have new constants to fold.
-pub(crate) fn unroll(program: &mut Program) -> Vec<FnId> {
-    let unrolling = Unrolling::new(program);
-    rewrite_with(program, None, None, Some(unrolling))
 }
 
 /// Normalize aliases and inline nonrecursive helpers within the supplied limits.
@@ -117,27 +109,15 @@ fn reads(program: &Program, body: Body, level: usize) -> bool {
 }
 
 fn rewrite(program: &mut Program, inlining: Option<Inlining>, algebra_limits: Option<FoldLimits>) {
-    rewrite_with(program, inlining, algebra_limits, None);
-}
-
-fn rewrite_with(
-    program: &mut Program,
-    inlining: Option<Inlining>,
-    algebra_limits: Option<FoldLimits>,
-    unrolling: Option<Unrolling>,
-) -> Vec<FnId> {
     let recognised = program.recognised().clone();
     let mut rewrite = Rewrite {
         program,
         recognised,
         inlining,
         algebra: algebra_limits.map(Budget::new),
-        unrolling,
-        unrolled: false,
         inline_depth: 0,
         written: Vec::new(),
     };
-    let mut changed = Vec::new();
     // Reads name existing entries; writes only append. Keep all function roots
     // unchanged until the end, so later callers still inline original bodies
     // using the costs and depth limits computed for those bodies.
@@ -153,25 +133,14 @@ fn rewrite_with(
         if let Some(inlining) = &mut rewrite.inlining {
             inlining.begin_function();
         }
-        if let Some(unrolling) = &mut rewrite.unrolling {
-            unrolling.begin_function();
-        }
-        rewrite.unrolled = false;
         let count = rewrite.program.params(id).len();
         let locals: Vec<_> = (0..count).map(|at| Atom(Local::at(at))).collect();
         rewrite.written.clear();
         let body = rewrite.body(body, locals, count);
-        if rewrite.unrolled {
-            changed.push(id);
-        }
         bodies.push((id, body));
     }
     rewrite.program.replace_bodies(bodies);
-    changed
 }
-
-/// The longest known sequence a match takes apart where it stands.
-const OPENED: u32 = 4096;
 
 struct Rewrite<'a> {
     program: &'a mut Program,
@@ -182,10 +151,6 @@ struct Rewrite<'a> {
     /// One shared resource budget for this algebra pass. Its absence means a
     /// structural or inlining walk that must not perform algebraic rewrites.
     algebra: Option<Budget>,
-    /// Present for the walk laying out loops over known values.
-    unrolling: Option<Unrolling>,
-    /// Whether the definition being rebuilt had a loop laid out in it.
-    unrolled: bool,
     inline_depth: usize,
     /// What wrote each local of the body being rebuilt, by level, where a
     /// binding of it did: a parameter or a field an arm took apart says
@@ -371,17 +336,6 @@ impl Rewrite<'_> {
                     self.inline_depth -= 1;
                     return answer;
                 }
-                if let Some(held) = self.known_arithmetic(called, &args, scope) {
-                    return held;
-                }
-                if let Some(body) = self.unrollable(called, &args) {
-                    self.unrolled = true;
-                    let answer = self.into(body, args, scope);
-                    if let Some(unrolling) = &mut self.unrolling {
-                        unrolling.finish();
-                    }
-                    return answer;
-                }
                 if self.algebra.is_some() {
                     if let Some(held) = self.chained(called, &args, scope) {
                         return held;
@@ -493,16 +447,6 @@ impl Rewrite<'_> {
                     let before = number - 1u8;
                     vec![self.program.intern_natural(owner, &before).ok()?]
                 }
-            }
-            // A known sequence's first element and the rest, where it is
-            // short enough that copying the rest is cheap.
-            super::ConstantView::Spine(spine) if spine.length() <= OPENED.into() => {
-                let mut budget = Budget::new(FoldLimits::default());
-                let (_, fields) = constant.parts(&mut budget).ok()?;
-                fields
-                    .iter()
-                    .map(|held| self.program.intern_held(held))
-                    .collect()
             }
             super::ConstantView::Spine(_) => return None,
         };
@@ -891,53 +835,6 @@ impl Rewrite<'_> {
         self.inlining
             .as_mut()?
             .callee(self.program, called, self.inline_depth)
-    }
-
-    /// Arithmetic on numbers known outright, worked out while a loop is laid
-    /// out: each step's count is then known as the step is written, so
-    /// what the step asks of it is decided there, and the steps after it
-    /// are not written inside the arms of a question nobody has answered.
-    fn known_arithmetic(&mut self, called: FnId, args: &[Atom], scope: &mut Scope) -> Option<Atom> {
-        self.unrolling.as_ref()?;
-        let op = self.recognised.operations[called.index()]?;
-        let mut budget = Budget::new(FoldLimits::default());
-        let mut fields = Vec::with_capacity(args.len());
-        for &arg in args {
-            let wrote = (*self.written.get(arg.0.index())?)?;
-            let Expr::Static(value) = self.program.expr(wrote) else {
-                return None;
-            };
-            fields.push(self.program.constant(value).to_owned(&mut budget).ok()?);
-        }
-        let value = Evaluator {
-            program: self.program,
-            operations: &self.recognised.operations,
-        }
-        .arithmetic(
-            op,
-            self.program.function(called).result,
-            &fields,
-            &mut budget,
-        )
-        .ok()?;
-        let value = self.program.intern_held(&value);
-        Some(self.push(Expr::Static(value), scope))
-    }
-
-    /// The body of `called` to lay out here, where it takes apart first a
-    /// parameter this call hands a known value.
-    fn unrollable(&mut self, called: FnId, args: &[Atom]) -> Option<Body> {
-        if self.recognised.answered(called) {
-            return None;
-        }
-        let unrolling = self.unrolling.as_mut()?;
-        let opened = args[unrolling.opens(called)?];
-        let wrote = (*self.written.get(opened.0.index())?)?;
-        let Expr::Static(value) = self.program.expr(wrote) else {
-            return None;
-        };
-        let size = self.program.constant(value).encoded().len();
-        unrolling.begin(self.program, called, size)
     }
 
     fn args(&self, args: Range, locals: &[Atom]) -> Vec<Atom> {

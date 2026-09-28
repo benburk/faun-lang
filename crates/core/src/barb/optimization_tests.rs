@@ -43,9 +43,6 @@ fn schedules() -> Vec<(&'static str, Stages)> {
                 fold::refold(p, &[id]);
             }
         }),
-        ("unrolling", |p| {
-            super::normalize::unroll(p);
-        }),
         ("algebra", |p| {
             super::normalize::algebra(p, FoldLimits::default());
         }),
@@ -1481,83 +1478,4 @@ fn a_list_reversed_twice_is_prepended() {
             "{left:?} {right:?}"
         );
     }
-}
-
-/// `walk(list, total)`: the total plus every element of a list of
-/// numbers, taking the list apart first, and `main(n)` walking a list known
-/// outright from `n`. Answers the program, the walk and `main`.
-fn known_walk(elements: &[u8]) -> (Program, FnId, FnId) {
-    let library = super::fixture::Library::new();
-    let (nat, add) = (library.nat, library.add);
-    let mut p = library.program;
-    let list = p.declare_type("List");
-    p.define_type(list, &[("Nil", &[]), ("Cons", &[nat, list])]);
-    let nil = p.ctor_at(list, 0);
-    let walk = p.declare("walk", &[list, nat], nat);
-    p.define(walk, |b, args| {
-        b.match_(args[0], list, |b, ctor, fields| {
-            if ctor == nil {
-                args[1]
-            } else {
-                let total = b.call(add, &[args[1], fields[0]]);
-                b.call(walk, &[fields[1], total])
-            }
-        })
-    });
-    let known = p.intern_byte_spine(list, elements).unwrap();
-    let main = p.declare("main", &[nat], nat);
-    p.define(main, |b, args| {
-        let known = b.known(known);
-        b.call(walk, &[known, args[0]])
-    });
-    p.set_entry(main);
-    validate(&p).unwrap();
-    (p, walk, main)
-}
-
-#[test]
-fn a_loop_over_a_known_list_is_laid_out_and_its_constants_combined() {
-    let (mut program, _, _) = known_walk(&[1, 2, 3, 4]);
-    optimize(&mut program);
-    // The walk is laid out in `main`, and nothing else calls it, so it goes.
-    assert!(
-        program
-            .functions()
-            .iter()
-            .all(|f| program.name(f.name) != "walk"),
-        "{}",
-        program.render()
-    );
-    let main = named(&program, "main");
-    let nat = program.function(main).result;
-    let answer = run(
-        &program,
-        main,
-        vec![super::tests::nat(&program, nat, 5)],
-        &mut Vec::new(),
-    );
-    assert_eq!(answer, super::tests::nat(&program, nat, 15));
-    // A sum of known numbers onto the total is one addition.
-    let body = program.function(main).body().unwrap();
-    assert!(
-        program.bindings(body.bindings).len() <= 2,
-        "{}",
-        program.render()
-    );
-}
-
-#[test]
-fn a_loop_over_a_list_too_long_to_lay_out_still_answers_the_same() {
-    let elements = [1; 300];
-    let (mut program, _, _) = known_walk(&elements);
-    optimize(&mut program);
-    let main = named(&program, "main");
-    let nat = program.function(main).result;
-    let answer = run(
-        &program,
-        main,
-        vec![super::tests::nat(&program, nat, 7)],
-        &mut Vec::new(),
-    );
-    assert_eq!(answer, super::tests::nat(&program, nat, 307));
 }

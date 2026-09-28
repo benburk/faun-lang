@@ -8,8 +8,8 @@ use super::{FoldLimits, InlineLimits, Program};
 /// Each stage runs once, in this order: structural normalization, descent,
 /// helper inlining, fusion, arithmetic laws, constant folding, copies of a
 /// loop for the known values its callers hand it, invariant arguments and
-/// folding again where they bound something, loops over known values laid
-/// out and folded again, algebraic normalization, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
+/// folding again where they bound something, algebraic
+/// normalization, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
 /// aliases and unused inert bindings, never calls or matches whose
 /// evaluation may have effects. Inlining and folding stop at their fixed
 /// budgets, which bound work rather than choose what is done.
@@ -27,10 +27,6 @@ pub fn optimize(program: &mut Program) {
     // What a definition now holds itself may fold what reads it.
     let held = super::invariant::invariant(program);
     super::fold::refold(program, &held);
-    // A loop over a value now known is laid out, and what each step reads
-    // of it folds.
-    let unrolled = super::normalize::unroll(program);
-    super::fold::refold(program, &unrolled);
     super::normalize::algebra(program, FoldLimits::default());
     super::sweep::sweep(program);
     super::cleanup::cleanup(program);

@@ -176,16 +176,8 @@ x    ::= a parameter, a binding, or a field an arm bound
   eligibility, copy costs and budgets. Structural-only normalization does not
   construct an inlining plan or compute its recursion/copy-cost tables. Every
   walk also takes the arm a match on a local written as a constructor or a
-  known value selects, with its fields what built it -- a known sequence of
-  up to 4096 elements its first element and the rest -- and replaces a match
+  known value selects, with its fields what built it, and replaces a match
   whose arms bind nothing and are term-for-term the same with that arm.
-  `Unrolling` lays out a call of a definition calling itself where it is
-  handed a known value for the parameter it takes apart first: the walk
-  takes the arm that value selects, works out recognized arithmetic on
-  numbers known outright, and the call on what is left is laid out again.
-  Each expansion inside one of the same definition must be handed a smaller
-  value, and a definition takes at most so many copies and nestings, so a
-  loop over more is left calling itself on the rest.
 - `invariant.rs`: a parameter every call from outside hands the same known
   value, and every call from inside passes on as it came, is that value:
   the definition binds it first and reads it there, so what reads it inside
@@ -273,18 +265,15 @@ two types -- so nothing infers a provider or an effect from the display name.
    known sequence's length as a number. Each definition given a value is then
    folded again, with a budget of its own, so what it asks of that value is
    answered too.
-9. Unrolling: a loop over a value now known -- a table of constants, a
-   count -- is laid out a step at a time, and each definition it was laid
-   out in is folded again, so what each step reads of the value is known.
-10. Bounded algebraic normalization: combine constants across recognized associative
-    operations and directional monus/division chains, then push power-of-two moduli
-    through sums and products.
-11. Sweep: where there is an entry, drop every definition it does not reach,
+9. Bounded algebraic normalization: combine constants across recognized associative
+   operations and directional monus/division chains, then push power-of-two moduli
+   through sums and products.
+10. Sweep: where there is an entry, drop every definition it does not reach,
     renumbering function IDs in order. Types, constructors and constants stay.
-12. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+11. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
     pure arithmetic or lengths; retain calls of unknown meaning and matches.
 
-Every normalizing stage (1, 3, 9 and 10) also decides what is already decided: a
+Every normalizing stage (1, 3 and 9) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
 number, and a match whose arms agree is that
 arm. A match that is the last binding of a body answering a match on it, and
