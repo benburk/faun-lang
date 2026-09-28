@@ -38,6 +38,11 @@ fn schedules() -> Vec<(&'static str, Stages)> {
         ("fusion", super::fuse::fuse),
         ("laws", super::laws::laws),
         ("folding", fold),
+        ("refolding each definition", |p| {
+            for id in super::stops::callees_first(p) {
+                fold::refold(p, &[id]);
+            }
+        }),
         ("algebra", |p| {
             super::normalize::algebra(p, FoldLimits::default());
         }),
@@ -443,6 +448,76 @@ fn unknown_nonreturning_bindings_are_not_folded_away() {
         program.expr(program.function(test).body().unwrap().tail),
         Expr::Call(..)
     ));
+}
+
+#[test]
+fn refolding_only_rewrites_selected_functions() {
+    let mut program = library();
+    let mul = named(&program, "mul");
+    let ty = program.params(mul)[0];
+    let effect = program.declare("effect", &[], ty);
+    let first = program.declare("first", &[], ty);
+    let second = program.declare("second", &[], ty);
+    let three = program.intern_number(ty, 3).unwrap();
+    for id in [first, second] {
+        program.define(id, |b, _| {
+            b.call(effect, &[]);
+            let three = b.known(three);
+            b.call(mul, &[three, three])
+        });
+    }
+    validate(&program).unwrap();
+    let original = program.clone();
+    fold::refold(&mut program, &[]);
+    assert_eq!(program, original);
+    fold::refold(&mut program, &[first]);
+    assert!(matches!(
+        program.expr(program.function(first).body().unwrap().tail),
+        Expr::Static(..)
+    ));
+    assert_eq!(
+        expressions(&program, second),
+        expressions(&original, second)
+    );
+    let mut trace = vec![];
+    assert_eq!(
+        run(&program, first, vec![], &mut trace),
+        super::tests::nat(&program, ty, 9)
+    );
+    assert_eq!(trace, [effect]);
+
+    // Recognition and external declarations remain untouched on the local path.
+    let folded = program.clone();
+    fold::refold(&mut program, &[mul]);
+    fold::refold(&mut program, &[effect]);
+    assert_eq!(program, folded);
+}
+
+#[test]
+fn refolding_several_definitions_still_orders_callees_first() {
+    let (mut program, ty, _, _) = super::tests::types();
+    let zero = program.intern_number(ty, 0).unwrap();
+    // Evaluating this chain at once exceeds the depth limit. Folding its
+    // callees first makes every call just one step, even in caller-first input.
+    let ids: Vec<_> = (0..=FoldLimits::default().max_depth)
+        .map(|at| program.declare(&format!("step_{at}"), &[], ty))
+        .collect();
+    for (at, &id) in ids.iter().enumerate() {
+        program.define(id, |b, _| {
+            if let Some(&next) = ids.get(at + 1) {
+                b.call(next, &[])
+            } else {
+                b.known(zero)
+            }
+        });
+    }
+    fold::refold(&mut program, &ids);
+    for id in ids {
+        assert!(matches!(
+            program.expr(program.function(id).body().unwrap().tail),
+            Expr::Static(..)
+        ));
+    }
 }
 
 #[test]

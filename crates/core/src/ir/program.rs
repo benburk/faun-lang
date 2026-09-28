@@ -167,6 +167,71 @@ impl Program {
         &self.operands[operands.range()]
     }
 
+    /// Iterate over an instruction's immediate value operands in order,
+    /// including repeated uses, without allocating. Nested regions and their
+    /// terminators are not visited; operand ranges must belong to this program.
+    ///
+    /// # Panics
+    /// If an operand range is out of bounds.
+    #[expect(clippy::too_many_lines, reason = "one exhaustive arm per operation")]
+    pub fn operands<'a>(&'a self, op: &'a Op) -> impl Iterator<Item = ValueId> + 'a {
+        let (first, rest): (Option<ValueId>, &[ValueId]) = match op {
+            Op::Constant { .. }
+            | Op::NaturalConstant(_)
+            | Op::AddressOf(_)
+            | Op::BufferEmpty { .. }
+            | Op::BufferKnown { .. } => (None, &[]),
+            Op::Cell { fields, .. }
+            | Op::BufferPush {
+                operands: fields, ..
+            }
+            | Op::BufferReplace {
+                operands: fields, ..
+            }
+            | Op::BufferPrepend {
+                operands: fields, ..
+            }
+            | Op::BufferExtend {
+                operands: fields, ..
+            }
+            | Op::Call { args: fields, .. }
+            | Op::Float {
+                operands: fields, ..
+            }
+            | Op::Loop {
+                initial: fields, ..
+            } => (None, self.values(*fields)),
+            Op::CellTag { cell: value }
+            | Op::CellField { cell: value, .. }
+            | Op::BufferRoom { count: value, .. }
+            | Op::Keep { value }
+            | Op::Load { address: value, .. }
+            | Op::Convert { value }
+            | Op::Shift { value, .. }
+            | Op::If {
+                condition: value, ..
+            } => (None, std::slice::from_ref(value)),
+            Op::Binary { left, right, .. }
+            | Op::Compare { left, right, .. }
+            | Op::BufferField {
+                buffer: left,
+                start: right,
+                ..
+            }
+            | Op::BufferAt {
+                buffer: left,
+                start: right,
+                ..
+            }
+            | Op::Store {
+                address: left,
+                value: right,
+                ..
+            } => (Some(*left), std::slice::from_ref(right)),
+        };
+        first.into_iter().chain(rest.iter().copied())
+    }
+
     #[must_use]
     pub fn ops(&self, region: RegionId) -> &[Op] {
         let ops = self.regions[region].ops;

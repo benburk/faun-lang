@@ -275,6 +275,11 @@ thing afterwards.
 `read` runs this schedule, so `--emit ir` shows the optimized program. The
 corpus in `faun_core::programs` is written directly in machine IR and does not.
 
+`Program::operands(op)` iterates over immediate value operands without allocating,
+in order and with repeated uses preserved. It does not descend into nested regions
+or include their terminators. Pruning, ownership analysis, width splitting and the
+6502 backend share this query; each owns its region traversal.
+
 Source lowering may bypass a tree of recognized natural additions with Barb's
 bounded affine summary. The summary remains a fact rather than a sixth Barb term:
 lowering writes machine `Mul` and `Add` operations against the original leaf values,
@@ -369,8 +374,10 @@ program.
 
 ## Representation rebuilding
 
-Legalization copies preserved metadata and maps signature classes in place in
-the new signature pool. Declaration and symbol IDs, signature ranges, data and
-globals are preserved; bodies receive newly minted parameter values and rebuilt
-regions. Old value IDs are not retained. See [runtime naturals](runtime-naturals.md)
-for the distinction between the global SSA mapping and path-local ownership.
+Legalization maps signature classes in the new declaration pool, then uses
+`ir::rewrite`'s shared skeleton construction to copy preserved metadata and mint
+root parameters. Its ownership-aware body traversal remains separate. Declaration
+and symbol IDs, signature ranges, data and globals are preserved; bodies receive
+newly minted parameter values and rebuilt regions. Old value IDs are not retained.
+See [runtime naturals](runtime-naturals.md) for the distinction between the global
+SSA mapping and path-local ownership.

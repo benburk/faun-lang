@@ -31,11 +31,9 @@ const COPIES: usize = 4;
 const LARGEST: usize = 4096;
 
 /// Copy each such definition for the values its callers hand it, and send
-/// each call handing them to its copy: the copies kept, each already
-/// folded.
-pub(crate) fn specialize(program: &mut Program) -> Vec<FnId> {
+/// each call handing them to its folded copy.
+pub(crate) fn specialize(program: &mut Program) {
     let sites = Sites::of(program);
-    let mut kept = Vec::new();
     for (at, calls) in sites.calls.iter().enumerate() {
         let id = FnId::at(at);
         let Some(body) = program.function(id).body() else {
@@ -67,10 +65,8 @@ pub(crate) fn specialize(program: &mut Program) -> Vec<FnId> {
                 };
                 program.write(call.expr, Expr::Call(copied, args));
             }
-            kept.push(copied);
         }
     }
-    kept
 }
 
 /// The known values a call hands the parameters a definition passes on.

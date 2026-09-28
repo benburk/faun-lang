@@ -119,7 +119,7 @@ pub(super) fn rebuild_declared<P: Pass>(
 
 /// The same program with its bodies emptied: every pool a rebuild keeps,
 /// and none of the arenas it writes again.
-fn skeleton(source: &Program, declared: Declarations) -> Program {
+pub(super) fn skeleton(source: &Program, declared: Declarations) -> Program {
     let mut output = Program {
         layout: source.layout,
         runtime_cells: source.runtime_cells,

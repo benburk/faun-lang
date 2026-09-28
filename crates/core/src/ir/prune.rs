@@ -435,7 +435,7 @@ impl Read {
                     };
                     self.region(source, function, body, body_handing);
                 }
-                _ => self.reads(&operands(source, &op)),
+                _ => source.operands(&op).for_each(|value| self.reads(&[value])),
             }
         }
     }
@@ -568,7 +568,7 @@ impl Unread {
                     self.reads(source.values(initial));
                     self.uses(source, body, kept);
                 }
-                _ => self.reads(&operands(source, op)),
+                _ => source.operands(op).for_each(|value| self.reads(&[value])),
             }
         }
     }
@@ -627,47 +627,4 @@ fn returns(source: &Program, region: RegionId) -> bool {
         Op::Loop { body, .. } => returns(source, body),
         _ => false,
     })
-}
-
-/// What an instruction reads, for the ones that read a fixed few values.
-/// Containers are handled where their regions are.
-pub(super) fn operands(source: &Program, op: &Op) -> Vec<ValueId> {
-    match *op {
-        Op::Constant { .. }
-        | Op::NaturalConstant(_)
-        | Op::AddressOf(_)
-        | Op::BufferEmpty { .. }
-        | Op::BufferKnown { .. } => Vec::new(),
-        Op::Cell { fields, .. }
-        | Op::BufferPush {
-            operands: fields, ..
-        }
-        | Op::BufferReplace {
-            operands: fields, ..
-        }
-        | Op::BufferPrepend {
-            operands: fields, ..
-        }
-        | Op::BufferExtend {
-            operands: fields, ..
-        } => source.values(fields).to_vec(),
-        Op::CellTag { cell } | Op::CellField { cell, .. } => vec![cell],
-        Op::Binary { left, right, .. }
-        | Op::Compare { left, right, .. }
-        | Op::BufferField {
-            buffer: left,
-            start: right,
-            ..
-        } => vec![left, right],
-        Op::Load { address, .. } => vec![address],
-        Op::Store { address, value, .. } => vec![address, value],
-        Op::Convert { value, .. }
-        | Op::Shift { value, .. }
-        | Op::Keep { value }
-        | Op::BufferRoom { count: value, .. } => vec![value],
-        Op::BufferAt { buffer, start, .. } => vec![buffer, start],
-        Op::Call { args, .. } | Op::Float { operands: args, .. } => source.values(args).to_vec(),
-        Op::If { condition, .. } => vec![condition],
-        Op::Loop { initial, .. } => source.values(initial).to_vec(),
-    }
 }

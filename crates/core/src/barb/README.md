@@ -241,7 +241,8 @@ two types -- so nothing infers a provider or an effect from the display name.
    for each value, at most four, folded with that value bound. A copy is kept,
    and takes the calls handing its value, only where that decides a match
    between two or more arms, so a loop is not copied for values it only
-   carries.
+   carries. Refolding one copy skips call-graph construction and ordering;
+   refolding several definitions retains callee-first order and the same budgets.
 8. Invariant arguments: a parameter every caller the entry reaches hands one
    known value is bound to that value in its definition. After folding, so
    what they hand is known, and before algebraic normalization, which reads a

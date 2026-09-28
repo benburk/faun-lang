@@ -168,9 +168,7 @@ fn written_in(program: &Program, region: RegionId, value: ValueId) -> bool {
 }
 
 fn op_reads(program: &Program, op: &Op, value: ValueId) -> bool {
-    let mut found = false;
-    for_each_operand(op, program, |read| found |= read == value);
-    found
+    program.operands(op).any(|read| read == value)
         || match *op {
             Op::If {
                 then_region,
@@ -285,7 +283,7 @@ fn reads(program: &Program) -> Vec<u16> {
                 needs[at] = needs[at].max(kept);
                 continue;
             }
-            for_each_operand(op, program, |value| {
+            program.operands(op).for_each(|value| {
                 let at = value.index();
                 needs[at] = needs[at].max(bits(program.class(value)));
             });
@@ -314,64 +312,6 @@ fn exit_status(program: &Program, op: &Op) -> Option<ValueId> {
         .is_some_and(|symbol| program.name(symbol) == "exit!")
         .then(|| program.values(args).first().copied())
         .flatten()
-}
-
-#[expect(clippy::too_many_lines, reason = "one exhaustive arm per operation")]
-fn for_each_operand(op: &Op, program: &Program, mut each: impl FnMut(ValueId)) {
-    match op {
-        Op::Constant { .. }
-        | Op::NaturalConstant(_)
-        | Op::AddressOf(_)
-        | Op::BufferEmpty { .. }
-        | Op::BufferKnown { .. } => {}
-        Op::Cell { fields, .. }
-        | Op::BufferPush {
-            operands: fields, ..
-        }
-        | Op::BufferReplace {
-            operands: fields, ..
-        }
-        | Op::BufferPrepend {
-            operands: fields, ..
-        }
-        | Op::BufferExtend {
-            operands: fields, ..
-        } => {
-            program.values(*fields).iter().copied().for_each(&mut each);
-        }
-        Op::CellTag { cell: value }
-        | Op::CellField { cell: value, .. }
-        | Op::BufferRoom { count: value, .. }
-        | Op::Keep { value }
-        | Op::Load { address: value, .. }
-        | Op::Convert { value, .. }
-        | Op::Shift { value, .. } => each(*value),
-        Op::Binary { left, right, .. }
-        | Op::Compare { left, right, .. }
-        | Op::BufferField {
-            buffer: left,
-            start: right,
-            ..
-        }
-        | Op::BufferAt {
-            buffer: left,
-            start: right,
-            ..
-        }
-        | Op::Store {
-            address: left,
-            value: right,
-            ..
-        } => {
-            each(*left);
-            each(*right);
-        }
-        Op::Call { args, .. } | Op::Float { operands: args, .. } => {
-            program.values(*args).iter().copied().for_each(each);
-        }
-        Op::If { condition, .. } => each(*condition),
-        Op::Loop { initial, .. } => program.values(*initial).iter().copied().for_each(each),
-    }
 }
 
 /// What a round may learn and never unlearn: that the heap has to start
@@ -929,7 +869,7 @@ impl Lowering<'_> {
                     weight[result.index()] += each;
                 }
             }
-            for_each_operand(op, program, |value| {
+            program.operands(op).for_each(|value| {
                 weight[value.index()] += each;
                 uses[value.index()] += 1;
             });
@@ -994,7 +934,9 @@ impl Lowering<'_> {
             for &result in results {
                 spans.touch(result, *at);
             }
-            for_each_operand(op, program, |value| spans.touch(value, *at));
+            program
+                .operands(op)
+                .for_each(|value| spans.touch(value, *at));
             match *op {
                 Op::Call { function, .. } if program.function(function).body().is_some() => {
                     spans.calls.push(*at);

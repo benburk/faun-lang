@@ -835,10 +835,7 @@ impl rewrite::Pass for Split {
             }
             Op::Load { .. } | Op::Store { .. } | Op::Float { .. } => {
                 assert!(
-                    !wide_result
-                        && !super::prune::operands(source, &op)
-                            .iter()
-                            .any(|&v| self.wide(rebuild, v)),
+                    !wide_result && !source.operands(&op).any(|v| self.wide(rebuild, v)),
                     "nothing wider than a word is loaded, stored or computed as a float"
                 );
                 return false;

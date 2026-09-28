@@ -303,3 +303,98 @@ fn an_instruction_cannot_be_reordered_before_an_explicit_transfer() {
         b.constant(Class::Word, 1);
     });
 }
+
+#[test]
+#[expect(clippy::too_many_lines, reason = "table of immediate operand shapes")]
+fn immediate_operands_preserve_order_and_repeated_uses() {
+    let (mut p, main) = Program::new("main");
+    let a = p.mint_one(Class::Word).0;
+    let b = p.mint_one(Class::Word).0;
+    let args = p.hold(&[b, a, b]);
+    let cases: &[(Op, &[ValueId])] = &[
+        (Op::Constant { value: 7 }, &[]),
+        (Op::Convert { value: a }, &[a]),
+        (Op::Keep { value: b }, &[b]),
+        (
+            Op::Binary {
+                op: Binary::Add,
+                left: b,
+                right: a,
+            },
+            &[b, a],
+        ),
+        (
+            Op::Binary {
+                op: Binary::Add,
+                left: a,
+                right: a,
+            },
+            &[a, a],
+        ),
+        (
+            Op::Store {
+                width: Width::Word,
+                address: a,
+                offset: Offset::Bytes(0),
+                value: b,
+            },
+            &[a, b],
+        ),
+        (
+            Op::Call {
+                function: main,
+                args,
+            },
+            &[b, a, b],
+        ),
+        (
+            Op::Call {
+                function: main,
+                args: Range::EMPTY,
+            },
+            &[],
+        ),
+    ];
+    for (op, expected) in cases {
+        assert_eq!(p.operands(op).collect::<Vec<_>>(), *expected, "{op:?}");
+    }
+}
+
+#[test]
+fn immediate_operands_leave_nested_regions_and_exits_to_the_caller() {
+    let (mut p, main) = Program::new("main");
+    p.define(main, |b, _| {
+        let zero = b.constant(Class::Word, 0);
+        let one = b.constant(Class::Word, 1);
+        b.if_(
+            one,
+            &[Class::Word],
+            |b| {
+                b.keep(zero);
+                b.yield_(&[zero]);
+            },
+            |b| b.yield_(&[zero]),
+        );
+        b.loop_(&[zero, one, zero], &[Class::Word], |b, _| {
+            b.keep(one);
+            b.break_(&[zero]);
+        });
+        b.ret(&[zero]);
+    });
+    validate(&p).unwrap();
+    let body = p.function(main).body().unwrap();
+    let zero = p.outgoing(body)[0];
+    let one = p.walk(body).nth(1).unwrap().1[0];
+    let branch = &p.ops(body)[2];
+    assert_eq!(p.operands(branch).collect::<Vec<_>>(), [one]);
+    let mut uses = Vec::new();
+    ownership::deep_uses(&p, branch, &mut uses);
+    assert_eq!(uses, [one, zero, zero, zero]);
+    let loop_ = &p.ops(body)[3];
+    assert_eq!(p.operands(loop_).collect::<Vec<_>>(), [zero, one, zero]);
+    uses.clear();
+    ownership::deep_uses(&p, loop_, &mut uses);
+    assert_eq!(uses, [zero, one, zero, one, zero]);
+    let live = ownership::Liveness::of(&p, body);
+    assert!(!live.only_last(one, 3), "the loop reads one twice");
+}

@@ -15,16 +15,25 @@ pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
 }
 
 /// Fold again only `changed`, which a later stage handed something new to
-/// read, with a budget of its own.
+/// read, with a budget of its own. A single definition needs no call-graph
+/// ordering; several are folded after their callees.
 pub(crate) fn refold(program: &mut Program, changed: &[FnId]) {
-    let order = super::stops::callees_first(program)
-        .into_iter()
-        .filter(|id| changed.contains(id))
-        .collect();
-    fold_in(program, order, FoldLimits::default());
+    let limits = FoldLimits::default();
+    match changed {
+        [] => {}
+        &[id] => fold_in(program, [id], limits),
+        _ => {
+            let order = super::stops::callees_first(program);
+            fold_in(
+                program,
+                order.into_iter().filter(|id| changed.contains(id)),
+                limits,
+            );
+        }
+    }
 }
 
-fn fold_in(program: &mut Program, order: Vec<FnId>, limits: FoldLimits) {
+fn fold_in(program: &mut Program, order: impl IntoIterator<Item = FnId>, limits: FoldLimits) {
     let recognised = program.recognised().clone();
     let operations = recognised.operations.as_slice();
     let mut remaining = limits.work;

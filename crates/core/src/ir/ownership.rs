@@ -25,7 +25,7 @@ pub(super) const fn managed(class: Class) -> bool {
 /// Every value an instruction reads, including everything read inside the
 /// regions it holds and what they leave with, once per reading.
 pub(super) fn deep_uses(source: &Program, op: &Op, out: &mut Vec<ValueId>) {
-    out.extend(super::prune::operands(source, op));
+    out.extend(source.operands(op));
     match *op {
         Op::If {
             then_region,

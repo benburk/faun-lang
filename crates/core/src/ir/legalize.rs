@@ -9,7 +9,6 @@
 //! an `if` hands its claim to both arms, and each releases it at its own last
 //! use. An exit releases whatever the scopes it leaves still hold.
 
-use crate::index::Pool;
 use std::{cell::Cell, collections::BTreeMap};
 
 use num_bigint::BigUint;
@@ -20,8 +19,8 @@ use super::ownership::{self, Liveness, managed};
 use super::packing::Packed;
 use super::sequence::{self, Growth, Library as SequenceLibrary};
 use super::{
-    Binary, Builder, Class, DataId, Definition, Exit, Offset, Op, Origin, Program, Range, RegionId,
-    Relation, ShapeId, Terminator, ValueId, Width, validate,
+    Binary, Builder, Class, DataId, Exit, Offset, Op, Origin, Program, RegionId, Relation, ShapeId,
+    Terminator, ValueId, Width, validate,
 };
 
 /// Rebuild a validated program with naturals represented by immutable objects.
@@ -116,45 +115,11 @@ fn holds(source: &Program, class: Class) -> bool {
 }
 
 fn skeleton(source: &Program) -> Program {
-    // Copy only preserved pools. Value/instruction/region arenas are rebuilt,
-    // so neither their contents nor their old capacity belongs in the skeleton.
-    let mut output = Program {
-        layout: source.layout,
-        runtime_cells: source.runtime_cells,
-        runtime_naturals: source.runtime_naturals,
-        data: source.data.clone(),
-        globals: source.globals.clone(),
-        spans: source.spans.clone(),
-        functions: source.functions.clone(),
-        classes: Pool::default(),
-        signature: source
-            .signature
-            .iter()
-            .copied()
-            .map(representation)
-            .collect(),
-        parameters: source.parameters.clone(),
-        ops: Vec::new(),
-        results: Vec::new(),
-        operands: Vec::new(),
-        regions: Pool::default(),
-        names: source.names.clone(),
-        symbols: source.symbols.clone(),
-        shapes: source.shapes.clone(),
-        shaped: source.shaped.clone(),
-    };
-    for id in output.functions.ids() {
-        if output.functions[id].body().is_some() {
-            let params = output.mint_from(output.functions[id].params);
-            let body = output.regions.push(super::Region {
-                params,
-                ops: Range::EMPTY,
-                terminator: None,
-            });
-            output.functions[id].definition = Definition::Declared(body);
-        }
+    let mut declared = super::rewrite::Declarations::of(source);
+    for class in &mut declared.signature {
+        *class = representation(*class);
     }
-    output
+    super::rewrite::skeleton(source, declared)
 }
 
 /// An empty buffer of elements of `packed`, as the data holds it: an
