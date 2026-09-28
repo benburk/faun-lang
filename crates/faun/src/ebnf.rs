@@ -84,7 +84,7 @@ fn terminal(spelling: &str) -> Kind {
         "\"_\"" => Kind::Wild,
         "\"package\"" => Kind::KwPackage,
         "\"import\"" => Kind::KwImport,
-        "\"exports\"" => Kind::KwExports,
+        "\"export\"" => Kind::KwExport,
         "\"expect\"" => Kind::KwExpect,
         "\"where\"" => Kind::KwWhere,
         "\"if\"" => Kind::KwIf,
@@ -534,7 +534,7 @@ fn the_grammar_reads_every_program_in_the_repository_as_the_parser_does() {
 fn the_grammar_reads_and_refuses_what_the_parser_does() {
     let grammar = Grammar::read(GRAMMAR);
     let read = [
-        "import std.host {Host, List.*, x: y}\nexports {f, Host.*}\npackage {md5: \"../md5\"}\n",
+        "import std.host {Host, List.*, x: y}\nexport {f, Host.*}\npackage {md5: \"../md5\"}\n",
         "f : (List(a), a -> b) -> {x: a, *} where Show(a), Eq(a), a.show : a -> Str\n",
         "sum : List(a) -> a where\n  a.zero : a\n  a.add : (a, a) -> a\n",
         "Maybe(a) : [None, Some(a)].(\n  map : (Maybe(a), a -> b) -> Maybe(b)\n  map(None, _) -> None\n  map(Some(x), f) -> Some(f(x))\n)\n",

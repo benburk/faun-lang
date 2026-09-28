@@ -470,37 +470,37 @@ mod tests {
 
     fn loaded() -> LoadedProgram {
         let fixture = Fixture::new();
-        fixture.write("bool.fn", "exports {Bool.*}\nBool : [False, True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : (Bool, Bool) -> Bool\nand(True, True) -> True\nand(_, _) -> False)\n");
-        fixture.write("nat.fn", "exports {Nat.*}\nNat : [Zero, Succ(Nat)]\n");
+        fixture.write("bool.fn", "export {Bool.*}\nBool : [False, True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : (Bool, Bool) -> Bool\nand(True, True) -> True\nand(_, _) -> False)\n");
+        fixture.write("nat.fn", "export {Nat.*}\nNat : [Zero, Succ(Nat)]\n");
         fixture.write(
             "int.fn",
-            "exports {Int.*}\nInt : [Pos(Nat), NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
+            "export {Int.*}\nInt : [Pos(Nat), NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
         );
-        fixture.write("u8.fn", "exports {U8}\nU8 : Nat\n");
+        fixture.write("u8.fn", "export {U8}\nU8 : Nat\n");
         fixture.write(
             "list.fn",
-            "exports {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
+            "export {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
         );
         fixture.write(
             "str.fn",
-            "exports {Str}\nStr : List(U8).(concat : (Str, Str) -> Str\nconcat(left, _) -> left\nequals : (Str, Str) -> Bool\nequals(_, _) -> False)\n",
+            "export {Str}\nStr : List(U8).(concat : (Str, Str) -> Str\nconcat(left, _) -> left\nequals : (Str, Str) -> Bool\nequals(_, _) -> False)\n",
         );
         fixture.write(
             "result.fn",
-            "exports {Result.*}\nResult(a, e) : [Ok(a), Err(e)]\n",
+            "export {Result.*}\nResult(a, e) : [Ok(a), Err(e)]\n",
         );
         fixture.write(
             "order.fn",
-            "exports {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
+            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
         );
         let root = fixture.write(
             "standard.fn",
-            "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport result {Result.*}\nimport str {Str}\nexports {Bool.*, Order.*, Nat.*, Int.*, U8, List.*, Result.*, Str}\n",
+            "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport result {Result.*}\nimport str {Str}\nexport {Bool.*, Order.*, Nat.*, Int.*, U8, List.*, Result.*, Str}\n",
         );
         let entry = fixture.write("main.fn", "id(x) -> x\n");
         // The loader owns all source text, so removing the fixture afterwards
         // does not invalidate the program.
-        let host = fixture.write("host.fn", "exports {Host}\nHost : {argc: Nat}\n");
+        let host = fixture.write("host.fn", "export {Host}\nHost : {argc: Nat}\n");
         modules::load_program(&entry, &root, &host).unwrap()
     }
 

@@ -1,7 +1,7 @@
-# A module: what `exports` names is all another module may import. `.*`
+# A module: what `export` names is all another module may import. `.*`
 # exports a type with its constructors and methods.
 
-exports {Shape.*, unit_square}
+export {Shape.*, unit_square}
 
 Shape : [Square(Nat), Oblong(Nat, Nat)].(
   area : Shape -> Nat

@@ -133,7 +133,7 @@ pub struct ImportDecl {
     pub exposures: Vec<Exposure>,
 }
 
-/// `exports {Name, Other.*}`.
+/// `export {Name, Other.*}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportsDecl {
     pub span: Span,

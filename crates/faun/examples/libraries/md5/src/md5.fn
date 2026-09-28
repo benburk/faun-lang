@@ -3,7 +3,7 @@
 
 package {}
 
-exports {md5_hash}
+export {md5_hash}
 
 State = (U32, U32, U32, U32)
 

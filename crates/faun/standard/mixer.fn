@@ -6,7 +6,7 @@
 # the write methods and nothing else, and how it mixes, and the digest it
 # yields, are free to change without changing any program.
 
-exports {Mixer, mixer_seeded, mixer_finish}
+export {Mixer, mixer_seeded, mixer_finish}
 
 # A multiply-and-xor over each word fed.
 Mixer : U64.(

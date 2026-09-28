@@ -218,7 +218,7 @@ mod tests {
 
     const ENTRY: &str =
         "import std.host {Host}\nmain! : Host -> []\nmain!(host) -> host.exit!(host.argc)\n";
-    const HOST: &str = "exports {Host}\nHost : {argc: Nat}.(\n  exit! : (Host, Nat) -> []\n)\n";
+    const HOST: &str = "export {Host}\nHost : {argc: Nat}.(\n  exit! : (Host, Nat) -> []\n)\n";
 
     #[test]
     fn application_entry_requires_a_clause() {
@@ -240,14 +240,14 @@ mod tests {
     fn host_authority_cannot_be_constructed_or_implemented_by_source() {
         let fixture = Fixture::new();
         let exported = HostIds::find_in(&fixture.load(
-            "exports {Host.*}\nHost : {argc: Nat}.(\n  exit! : (Host, Nat) -> []\n)\n",
+            "export {Host.*}\nHost : {argc: Nat}.(\n  exit! : (Host, Nat) -> []\n)\n",
             ENTRY,
         ))
         .unwrap_err();
         assert!(exported.message.contains("must not be publicly exposed"));
 
         let bodyful = HostIds::find_in(&fixture.load(
-                "exports {Host}\nHost : {argc: Nat}.(\n  exit! : (Host, Nat) -> []\n  exit!(host, code) -> host.exit!(code)\n)\n",
+                "export {Host}\nHost : {argc: Nat}.(\n  exit! : (Host, Nat) -> []\n  exit!(host, code) -> host.exit!(code)\n)\n",
                 ENTRY,
             ))
             .unwrap_err();

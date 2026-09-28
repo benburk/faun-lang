@@ -6,7 +6,7 @@
 
 import hasher {Hasher}
 
-exports {U8}
+export {U8}
 
 numerals_below : Nat
 numerals_below() -> 256

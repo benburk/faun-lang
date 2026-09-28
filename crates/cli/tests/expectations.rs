@@ -31,7 +31,7 @@ fn a_test_build_asks_every_expectation_in_the_package() {
     );
     fs::write(
         package.entry().with_file_name("halves.fn"),
-        "exports {half}\n\nhalf : Nat -> Nat\nhalf(n) -> n / 2\n\nexpect half(7) == 3\nexpect half(1) == 1\n",
+        "export {half}\n\nhalf : Nat -> Nat\nhalf(n) -> n / 2\n\nexpect half(7) == 3\nexpect half(1) == 1\n",
     )
     .unwrap();
 
@@ -96,7 +96,7 @@ fn a_method_without_a_signature_is_called_with_a_dot() {
     );
     fs::write(
         package.entry().with_file_name("boxes.fn"),
-        "exports {Box}\n\nBox : Nat.(\n  of : Nat -> Box\n  of(n) -> Box(n)\n\n  twice(Box(n)) -> n * 2\n)\n\nexpect Box.of(3).twice() == 6\n",
+        "export {Box}\n\nBox : Nat.(\n  of : Nat -> Box\n  of(n) -> Box(n)\n\n  twice(Box(n)) -> n * 2\n)\n\nexpect Box.of(3).twice() == 6\n",
     )
     .unwrap();
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 2));
@@ -129,14 +129,14 @@ fn a_constructor_is_imported_by_itself() {
     );
     fs::write(
         package.entry().with_file_name("shapes.fn"),
-        "exports {Shape.*, Hidden, area}\n\nShape : [Circle(Nat), Square(Nat)]\nHidden : [Secret]\n\narea : Shape -> Nat\narea(Circle(r)) -> 3 * r * r\narea(Square(s)) -> s * s\n",
+        "export {Shape.*, Hidden, area}\n\nShape : [Circle(Nat), Square(Nat)]\nHidden : [Secret]\n\narea : Shape -> Nat\narea(Circle(r)) -> 3 * r * r\narea(Square(s)) -> s * s\n",
     )
     .unwrap();
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 1));
     let refused = Package::new("constructor-import-refused", "import shapes {Secret}");
     fs::write(
         refused.entry().with_file_name("shapes.fn"),
-        "exports {Hidden}\n\nHidden : [Secret]\n",
+        "export {Hidden}\n\nHidden : [Secret]\n",
     )
     .unwrap();
     let error = faun::lower_to_barb(&refused.entry(), &X86_64Linux).unwrap_err();
@@ -211,7 +211,7 @@ fn a_dependency_is_called_and_its_expectations_are_its_own() {
     fs::create_dir_all(&vendor).unwrap();
     fs::write(
         vendor.join("shapes.fn"),
-        "package {}\n\nexports {double_square}\n\ndouble_square : Nat -> Nat\ndouble_square(n) -> n * n * 2\n\nexpect double_square(0) == 1\n",
+        "package {}\n\nexport {double_square}\n\ndouble_square : Nat -> Nat\ndouble_square(n) -> n * n * 2\n\nexpect double_square(0) == 1\n",
     )
     .unwrap();
     let (failed, count) = support::test_file(&package.entry());

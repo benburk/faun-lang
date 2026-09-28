@@ -1,6 +1,6 @@
 # Result utilities.
 
-exports {Result.*}
+export {Result.*}
 
 Result(a, e) : [Ok(a), Err(e)].(
   map_ok : (Result(a, e), a -> b) -> Result(b, e)

@@ -799,7 +799,7 @@ const REFUSED: &[(&str, &str, &str)] = &[
     ),
     (
         "an alias owns no constructors to export",
-        "exports {Numbers.*}
+        "export {Numbers.*}
 
          Numbers = List(Nat)",
         "owns no constructors",

@@ -218,12 +218,12 @@ fn with_dependency(name: &str, entry: &str) -> Package {
     fs::create_dir_all(&vendor).unwrap();
     fs::write(
         vendor.join("shapes.fn"),
-        "package {}\n\nimport area {square}\n\nexports {double_square}\n\ndouble_square : Nat -> Nat\ndouble_square(n) -> square(n) * 2\n\nexpect double_square(3) == 18\n",
+        "package {}\n\nimport area {square}\n\nexport {double_square}\n\ndouble_square : Nat -> Nat\ndouble_square(n) -> square(n) * 2\n\nexpect double_square(3) == 18\n",
     )
     .unwrap();
     fs::write(
         vendor.join("area.fn"),
-        "exports {square}\n\nsquare : Nat -> Nat\nsquare(n) -> n * n\n",
+        "export {square}\n\nsquare : Nat -> Nat\nsquare(n) -> n * n\n",
     )
     .unwrap();
     package
@@ -284,7 +284,7 @@ fn only_a_package_root_has_a_header() {
     );
     fs::write(
         package.0.join("helper.fn"),
-        "package {}\n\nexports {one}\n\none : Nat\none() -> 1\n",
+        "package {}\n\nexport {one}\n\none : Nat\none() -> 1\n",
     )
     .unwrap();
     let refused = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap_err();

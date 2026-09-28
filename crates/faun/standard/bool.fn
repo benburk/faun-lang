@@ -3,7 +3,7 @@
 
 import hasher {Hasher}
 
-exports {Bool.*}
+export {Bool.*}
 
 Bool : [False, True].(
   not : Bool -> Bool

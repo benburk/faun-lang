@@ -20,7 +20,7 @@ package {
 
 import random {Random}
 
-exports {Verdict, gen_nat, gen_list, shrink_nat, shrink_list}
+export {Verdict, gen_nat, gen_list, shrink_nat, shrink_list}
 
 Verdict(a) : [Passed, Falsified(a, a)].(
   # Run `prop` against `trials` drawn values. The first failure is shrunk

@@ -5,7 +5,7 @@
 
 import hasher {Hasher}
 
-exports {U64}
+export {U64}
 
 numerals_below : Nat
 numerals_below() -> 18446744073709551616

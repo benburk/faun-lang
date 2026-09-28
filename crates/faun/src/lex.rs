@@ -90,7 +90,7 @@ pub enum Kind {
     KwIf,
     KwPackage,
     KwImport,
-    KwExports,
+    KwExport,
     KwWhere,
     KwExpect,
     /// A character no token starts with, or a literal left unfinished. The
@@ -536,7 +536,7 @@ impl Lexer<'_> {
             "if" => Kind::KwIf,
             "package" => Kind::KwPackage,
             "import" => Kind::KwImport,
-            "exports" => Kind::KwExports,
+            "export" => Kind::KwExport,
             "where" => Kind::KwWhere,
             "expect" => Kind::KwExpect,
             _ => Kind::Ident,

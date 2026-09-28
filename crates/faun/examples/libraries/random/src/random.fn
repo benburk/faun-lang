@@ -7,7 +7,7 @@
 
 package {}
 
-exports {Random}
+export {Random}
 
 Random : U64.(
   # One advance of `increment + value`: advancing from zero is `0·m + i = i`,

@@ -6,7 +6,7 @@
 import map {Map}
 import mixer {Mixer}
 
-exports {Set}
+export {Set}
 
 # A set of keys: a map whose values say nothing. Its members come back in
 # insertion order.

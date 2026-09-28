@@ -24,4 +24,4 @@ import set {Set}
 import sorted_map {SortedMap}
 import sorted_set {SortedSet}
 
-exports {Bool.*, Order.*, Nat.*, Int.*, U8, U16, U32, U64, List.*, Result.*, Str, F32, F64, Hasher, Map, Mixer, Set, SortedMap, SortedSet}
+export {Bool.*, Order.*, Nat.*, Int.*, U8, U16, U32, U64, List.*, Result.*, Str, F32, F64, Hasher, Map, Mixer, Set, SortedMap, SortedSet}

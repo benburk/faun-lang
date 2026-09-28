@@ -110,9 +110,9 @@ decides: a tag row takes the tag, a nominal type its constructor, and a
 position nothing decides the one declared reading, or an ambiguity error
 where several types declare the word. `Type.Ctor` names a constructor
 outright, in expressions and patterns. Inside a type's block, a bare word the
-type declares means its own constructor. `exports {T}` keeps `T`'s
+type declares means its own constructor. `export {T}` keeps `T`'s
 constructors private, and a same-spelled structural tag never becomes one.
-`exports {T.*}` makes them public, and an importer may then select one by
+`export {T.*}` makes them public, and an importer may then select one by
 itself, as Ori does: `import std.host {Read}` binds that constructor alone.
 
 Faun specializes from the types checking recorded rather than inferring each

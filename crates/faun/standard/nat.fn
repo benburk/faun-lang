@@ -3,7 +3,7 @@
 
 import hasher {Hasher}
 
-exports {Nat.*}
+export {Nat.*}
 
 Nat : [Zero, Succ(Nat)].(
   zero : Nat

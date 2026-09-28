@@ -39,7 +39,7 @@ statement         = expr [ "=" expr ] ;
 
 directive         = "package" "{" [ dependencies ] "}"
                   | "import" NAME { "." NAME } "{" [ exposures ] "}"
-                  | "exports" "{" [ exported ] "}" ;
+                  | "export" "{" [ exported ] "}" ;
 dependencies      = NAME ":" STR_START { STR_TEXT } STR_END [ "," [ dependencies ] ] ;
 exposures         = any-name [ ".*" ] [ ":" any-name ] [ "," [ exposures ] ] ;
 exported          = any-name [ ".*" ] [ "," [ exported ] ] ;

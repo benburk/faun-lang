@@ -9,7 +9,7 @@
 
 package {}
 
-exports {Memo}
+export {Memo}
 
 Memo(k, v) : Map(k, v).(
   empty : Memo(k, v)

@@ -846,12 +846,12 @@ mod tests {
         /// A standard library that exports nothing, beside the fixture's own
         /// package so it does not claim the fixture's namespaces.
         fn empty_prelude(&self) -> PathBuf {
-            self.write("prelude/standard.fn", "package {}\nexports {}\n")
+            self.write("prelude/standard.fn", "package {}\nexport {}\n")
         }
 
         /// A host exporting `Host`, beside the fixture's own package.
         fn host(&self) -> PathBuf {
-            self.write("host/host.fn", "exports {Host}\nHost : {argc: Nat}\n")
+            self.write("host/host.fn", "export {Host}\nHost : {argc: Nat}\n")
         }
 
         fn write(&self, name: &str, source: &str) -> PathBuf {
@@ -875,7 +875,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "numbers.fn",
-            "exports {Nat.*}\nNat : [Zero, Succ(Nat)]\nsecret() -> Zero\n",
+            "export {Nat.*}\nNat : [Zero, Succ(Nat)]\nsecret() -> Zero\n",
         );
         let entry = fixture.write("main.fn", "import numbers {Nat.*}\nid(x) -> Succ(x)\n");
         let loaded = load_program(&entry, &fixture.empty_prelude(), &fixture.host()).unwrap();
@@ -907,7 +907,7 @@ mod tests {
     #[test]
     fn std_host_is_a_compiler_selected_virtual_module() {
         let fixture = Fixture::new();
-        let host = fixture.write("target/host.fn", "exports {Host}\nHost : {argc: Nat}\n");
+        let host = fixture.write("target/host.fn", "export {Host}\nHost : {argc: Nat}\n");
         let entry = fixture.write(
             "main.fn",
             "import std.host {Host}\nid : Host -> Host\nid(h) -> h\n",
@@ -918,7 +918,7 @@ mod tests {
 
         let circular = fixture.write(
             "target/circular.fn",
-            "import std.host {Host}\nexports {Host}\n",
+            "import std.host {Host}\nexport {Host}\n",
         );
         let error = load_program(&entry, crate::standard_path(), &circular).unwrap_err();
         assert!(error.message.contains("cannot import `std.host`"));
@@ -927,10 +927,10 @@ mod tests {
     #[test]
     fn standard_namespaces_are_path_stable() {
         let fixture = Fixture::new();
-        fixture.write("nat.fn", "exports {Nat.*}\nNat : [Zero, Succ(Nat)]\n");
+        fixture.write("nat.fn", "export {Nat.*}\nNat : [Zero, Succ(Nat)]\n");
         let root = fixture.write(
             "standard.fn",
-            "package {}\nimport nat {Nat.*}\nexports {Nat.*}\n",
+            "package {}\nimport nat {Nat.*}\nexport {Nat.*}\n",
         );
         let entry = fixture.write("main.fn", "id(x) -> x\n");
         let loaded = load_program(&entry, &root, &fixture.host()).unwrap();

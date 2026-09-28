@@ -4,7 +4,7 @@
 # names. Nothing here reaches a target's routines: each loop is generic over
 # the stream it is handed, so it is written once and is the same everywhere.
 
-exports {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, write_everything!, finish!, serve_stdin!}
+export {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, write_everything!, finish!, serve_stdin!}
 
 # What a stream or a file moves.
 Bytes = List(U8)

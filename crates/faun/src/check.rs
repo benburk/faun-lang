@@ -4570,35 +4570,35 @@ mod tests {
         }
 
         fn load(&self, entry_source: &str) -> (PreludeIds, ResolvedProgram) {
-            self.write("bool.fn", "exports {Bool.*}\nBool : [False, True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : (Bool, Bool) -> Bool\nand(True, True) -> True\nand(_, _) -> False)\n");
-            self.write("nat.fn", "exports {Nat.*}\nNat : [Zero, Succ(Nat)].(add : (Nat, Nat) -> Nat\nadd(0, y) -> y\nadd(Succ(n), y) -> Succ(n.add(y)))\n");
+            self.write("bool.fn", "export {Bool.*}\nBool : [False, True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : (Bool, Bool) -> Bool\nand(True, True) -> True\nand(_, _) -> False)\n");
+            self.write("nat.fn", "export {Nat.*}\nNat : [Zero, Succ(Nat)].(add : (Nat, Nat) -> Nat\nadd(0, y) -> y\nadd(Succ(n), y) -> Succ(n.add(y)))\n");
             self.write(
                 "int.fn",
-                "exports {Int.*}\nInt : [Pos(Nat), NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
+                "export {Int.*}\nInt : [Pos(Nat), NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
             );
-            self.write("u8.fn", "exports {U8}\nU8 : Nat\n");
+            self.write("u8.fn", "export {U8}\nU8 : Nat\n");
             self.write(
                 "list.fn",
-                "exports {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
+                "export {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
             );
             self.write(
                 "str.fn",
-                "exports {Str}\nStr : List(U8).(concat : (Str, Str) -> Str\nconcat(left, _) -> left\nequals : (Str, Str) -> Bool\nequals(_, _) -> False)\n",
+                "export {Str}\nStr : List(U8).(concat : (Str, Str) -> Str\nconcat(left, _) -> left\nequals : (Str, Str) -> Bool\nequals(_, _) -> False)\n",
             );
             self.write(
                 "result.fn",
-                "exports {Result.*}\nResult(a, e) : [Ok(a), Err(e)]\n",
+                "export {Result.*}\nResult(a, e) : [Ok(a), Err(e)]\n",
             );
             self.write(
             "order.fn",
-            "exports {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
+            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
         );
             let standard = self.write(
                 "standard.fn",
-                "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport result {Result.*}\nimport str {Str}\nexports {Bool.*, Order.*, Nat.*, Int.*, U8, List.*, Result.*, Str}\n",
+                "package {}\nimport bool {Bool.*}\nimport order {Order.*}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8}\nimport list {List.*}\nimport result {Result.*}\nimport str {Str}\nexport {Bool.*, Order.*, Nat.*, Int.*, U8, List.*, Result.*, Str}\n",
             );
             let entry = self.write("main.fn", entry_source);
-            let host = self.write("host.fn", "exports {Host}\nHost : {argc: Nat}\n");
+            let host = self.write("host.fn", "export {Host}\nHost : {argc: Nat}\n");
             let loaded = modules::load_program(&entry, &standard, &host).unwrap();
             let prelude = PreludeIds::find_in(&loaded).unwrap();
             let resolved = resolve::resolve_names(loaded).unwrap();
@@ -4927,7 +4927,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "hidden.fn",
-            "exports {helper}\nSecret : [Hidden].(not : Secret -> Secret\nnot(Hidden) -> Hidden)\nhelper : Nat\nhelper() -> 0\n",
+            "export {helper}\nSecret : [Hidden].(not : Secret -> Secret\nnot(Hidden) -> Hidden)\nhelper : Nat\nhelper() -> 0\n",
         );
         let (prelude, resolved) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
         let checked = type_check(n::normalize(resolved), prelude.clone()).unwrap();

@@ -1741,27 +1741,27 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "nat.fn",
-            "exports {Nat.*}\nNat : [Zero, Succ(Nat)].(of_nat : Nat -> Nat\nof_nat(n) -> n)\n",
+            "export {Nat.*}\nNat : [Zero, Succ(Nat)].(of_nat : Nat -> Nat\nof_nat(n) -> n)\n",
         );
         fixture.write(
             "int.fn",
-            "exports {Int.*}\nInt : [Pos(Nat), NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
+            "export {Int.*}\nInt : [Pos(Nat), NegSucc(Nat)].(of_nat : Nat -> Int\nof_nat(n) -> Pos(n)\nneg : Int -> Int\nneg(i) -> i)\n",
         );
-        fixture.write("u8.fn", "exports {U8.*}\nU8 : Nat\n");
+        fixture.write("u8.fn", "export {U8.*}\nU8 : Nat\n");
         fixture.write(
             "list.fn",
-            "exports {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
+            "export {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
         );
-        fixture.write("str.fn", "exports {Str}\nStr : List(U8)\n");
+        fixture.write("str.fn", "export {Str}\nStr : List(U8)\n");
         let standard = fixture.write(
             "standard.fn",
-            "package {}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8.*}\nimport list {List.*}\nimport str {Str}\nexports {Nat.*, Int.*, U8.*, List.*, Str}\n",
+            "package {}\nimport nat {Nat.*}\nimport int {Int.*}\nimport u8 {U8.*}\nimport list {List.*}\nimport str {Str}\nexport {Nat.*, Int.*, U8.*, List.*, Str}\n",
         );
         let entry = fixture.write(
             "main.fn",
             "number : Int\nnumber() -> Int.of_nat(42)\ntext : Str\ntext() -> \"é\"\n",
         );
-        let host = fixture.write("host.fn", "exports {Host}\nHost : {argc: Nat}\n");
+        let host = fixture.write("host.fn", "export {Host}\nHost : {argc: Nat}\n");
         let loaded = modules::load_program(&entry, &standard, &host).unwrap();
         let resolved = resolve_names(loaded).unwrap();
         let entry = &resolved.program.modules.last().unwrap().items;
@@ -1785,9 +1785,9 @@ mod tests {
     #[test]
     fn rejects_an_unresolved_name_at_its_span() {
         let fixture = Fixture::new();
-        let prelude = fixture.write("standard.fn", "package {}\nexports {}\n");
+        let prelude = fixture.write("standard.fn", "package {}\nexport {}\n");
         let entry = fixture.write("main.fn", "f() -> missing\n");
-        let host = fixture.write("host.fn", "exports {Host}\nHost : {}\n");
+        let host = fixture.write("host.fn", "export {Host}\nHost : {}\n");
         let loaded = modules::load_program(&entry, &prelude, &host).unwrap();
         let failure = resolve_names(loaded).unwrap_err();
         let at = failure.location.expect("a place in the source");

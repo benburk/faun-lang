@@ -13,7 +13,7 @@ import float.format {
 
 import hasher {Hasher}
 
-exports {F32}
+export {F32}
 
 F32 : U32.(
   # The value whose bit pattern is `word`; a NaN pattern of any sign or

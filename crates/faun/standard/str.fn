@@ -4,7 +4,7 @@
 
 import hasher {Hasher}
 
-exports {Str}
+export {Str}
 
 Str : List(U8).(
   # The number of bytes, which for text beyond ASCII is more than the

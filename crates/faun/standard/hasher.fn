@@ -6,7 +6,7 @@
 # which every `hash_into` then feeds alike. A record's or a tuple's own
 # `hash_into` feeds its members in order.
 
-exports {Hasher}
+export {Hasher}
 
 Hasher(h) = where
   h.write_u64 : (h, U64) -> h

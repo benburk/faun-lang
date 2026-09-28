@@ -5,7 +5,7 @@ import parse {
   spec_long, resolve_short
 }
 
-exports {
+export {
   HelpValue, HelpMode, HelpItem,
   spec_metavar, help_option, help_min,
   help_requested, render_help

@@ -5,7 +5,7 @@
 
 package {}
 
-exports {Ansi, Color, Style, Control}
+export {Ansi, Color, Style, Control}
 
 Ansi : [AnsiNamespace].(
   # Render one CSI control sequence.

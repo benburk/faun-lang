@@ -6,7 +6,7 @@
 
 package {}
 
-exports {
+export {
   Json.*, ParseError.*, DecodeError.*, Decode.*, Field, Fields, Members
 }
 

@@ -24,7 +24,7 @@ import help {
   spec_metavar, help_option, help_min, help_requested, render_help
 }
 
-exports {Args, Match, Opt, ParsedArg, ArgError}
+export {Args, Match, Opt, ParsedArg, ArgError}
 
 ArgError = [Help(Str), Invalid(Str)]
 

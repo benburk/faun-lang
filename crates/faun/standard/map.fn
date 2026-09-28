@@ -11,7 +11,7 @@
 
 import mixer {Mixer, mixer_seeded, mixer_finish}
 
-exports {Map}
+export {Map}
 
 # One entry's place in insertion order: filled, or removed and left in place
 # so the entries after it keep their positions.

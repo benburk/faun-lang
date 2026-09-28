@@ -1,6 +1,6 @@
 # First-order argv scanning and claim tracking for clap.
 
-exports {
+export {
   ShortMode, ResolvedShort, ArgSpec.*,
   FlagScan, ValueScan,
   spec_long, resolve_short,

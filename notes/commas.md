@@ -29,23 +29,23 @@ unusual syntax and makes spacing matter even more.
 Every sequence the grammar writes as `{ x }` between delimiters
 (`crates/faun/src/grammar.ebnf`):
 
-| Form                           | Today              | With commas          |
-| ------------------------------ | ------------------ | -------------------- |
-| Call, constructor arguments    | `f(a b)`           | `f(a, b)`            |
-| Clause-head patterns           | `f([x *xt] ys) ->` | `f([x, *xt], ys) ->` |
-| Lambda parameters              | `\|acc x\|`        | `\|acc, x\|`         |
-| Tuples, tuple patterns         | `(a b)`            | `(a, b)`             |
-| Lists, list patterns           | `[a b *rest]`      | `[a, b, *rest]`      |
-| Records, record patterns       | `{x: 1 y: 2}`      | `{x: 1, y: 2}`       |
-| Record punning                 | `{left top}`       | `{left, top}`        |
-| Type arguments                 | `Result(Nat Str)`  | `Result(Nat, Str)`   |
-| Signature parameters           | `Nat Nat -> Nat`   | `(Nat, Nat) -> Nat`  |
-| Function types                 | `(a b -> c)`       | `((a, b) -> c)`      |
-| Tuple types                    | `(Nat Nat)`        | `(Nat, Nat)`         |
-| Record types                   | `{x: Nat y: Nat}`  | `{x: Nat, y: Nat}`   |
-| Tag rows                       | `[Missing Bad]`    | `[Missing, Bad]`     |
-| Alias constraints              | `where Name(a b)`  | `where Name(a, b)`   |
-| `import`, `exports`, `package` | `{List Str.*}`     | `{List, Str.*}`      |
+| Form                          | Today              | With commas          |
+| ----------------------------- | ------------------ | -------------------- |
+| Call, constructor arguments   | `f(a b)`           | `f(a, b)`            |
+| Clause-head patterns          | `f([x *xt] ys) ->` | `f([x, *xt], ys) ->` |
+| Lambda parameters             | `\|acc x\|`        | `\|acc, x\|`         |
+| Tuples, tuple patterns        | `(a b)`            | `(a, b)`             |
+| Lists, list patterns          | `[a b *rest]`      | `[a, b, *rest]`      |
+| Records, record patterns      | `{x: 1 y: 2}`      | `{x: 1, y: 2}`       |
+| Record punning                | `{left top}`       | `{left, top}`        |
+| Type arguments                | `Result(Nat Str)`  | `Result(Nat, Str)`   |
+| Signature parameters          | `Nat Nat -> Nat`   | `(Nat, Nat) -> Nat`  |
+| Function types                | `(a b -> c)`       | `((a, b) -> c)`      |
+| Tuple types                   | `(Nat Nat)`        | `(Nat, Nat)`         |
+| Record types                  | `{x: Nat y: Nat}`  | `{x: Nat, y: Nat}`   |
+| Tag rows                      | `[Missing Bad]`    | `[Missing, Bad]`     |
+| Alias constraints             | `where Name(a b)`  | `where Name(a, b)`   |
+| `import`, `export`, `package` | `{List Str.*}`     | `{List, Str.*}`      |
 
 Unaffected: method blocks `.( … )` (one item per line), bindings, method chains,
 operators, and string splices.
@@ -284,7 +284,7 @@ One program assembled from the excerpts above (`patterns.ori`, `format.fn`,
 ### A. Whitespace (today)
 
 ```ruby
-exports {Area merge lower}
+export {Area merge lower}
 
 Area = {left: Nat top: Nat right: Nat bottom: Nat}
 
@@ -326,7 +326,7 @@ expect lower(1 2 3 4 -1 0) == ([] -1)
 ### B. Commas
 
 ```ruby
-exports {Area, merge, lower}
+export {Area, merge, lower}
 
 Area = {left: Nat, top: Nat, right: Nat, bottom: Nat}
 
@@ -369,7 +369,7 @@ expect lower(1, 2, 3, 4, -1, 0) == ([], -1)
 ### C. Whitespace, atomic elements
 
 ```ruby
-exports {Area merge lower}
+export {Area merge lower}
 
 Area = {left: Nat top: Nat right: Nat bottom: Nat}
 

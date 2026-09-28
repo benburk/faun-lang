@@ -3,7 +3,7 @@
 
 import hasher {Hasher}
 
-exports {Int.*}
+export {Int.*}
 
 Int : [Pos(Nat), NegSucc(Nat)].(
   zero : Int

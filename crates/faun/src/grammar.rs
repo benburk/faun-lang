@@ -267,7 +267,7 @@ impl Parser<'_> {
         match self.peek() {
             Kind::KwPackage => self.package().map(Line::Header),
             Kind::KwImport => self.import().map(Line::Import),
-            Kind::KwExports => self.exports().map(Line::Exports),
+            Kind::KwExport => self.exports().map(Line::Exports),
             Kind::KwExpect => {
                 let keyword = self.bump();
                 Ok(Line::Expect(keyword.span(), self.statement()?))

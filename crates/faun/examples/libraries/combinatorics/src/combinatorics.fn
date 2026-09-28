@@ -19,7 +19,7 @@
 
 package {}
 
-exports {generate, permutations, product, combinations, combinations_with_replacement}
+export {generate, permutations, product, combinations, combinations_with_replacement}
 
 # Each way to make one selection: the chosen element, and the list the
 # remaining selections continue from. The two switches pick the shape;

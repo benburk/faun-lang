@@ -19,7 +19,7 @@
 
 import hosts.common {Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError, filled, read_chunks!, read_text!, write_everything!, finish!, serve_stdin!}
 
-exports {Host, Stdin, Stdout, Stderr, Files, File, Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError}
+export {Host, Stdin, Stdout, Stderr, Files, File, Bytes, Chunk, Mode.*, IoError, OpenError, ReadError, WriteError, CloseError}
 
 # The arguments the program was run with, its own name first.
 Host : {args: List(Str)}.(

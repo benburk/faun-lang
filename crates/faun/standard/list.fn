@@ -14,7 +14,7 @@ import hasher {Hasher}
 import map {Map}
 import mixer {Mixer}
 
-exports {List.*}
+export {List.*}
 
 List(a) : [Nil, Cons(a, List(a))].(
   len : List(a) -> Nat

@@ -12,7 +12,7 @@
 # different shapes (insertion order decides), so structural equality would be
 # wrong. Compare maps by `to_list` when the need arises.
 
-exports {SortedMap}
+export {SortedMap}
 
 SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   # The empty map.

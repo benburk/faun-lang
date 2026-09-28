@@ -14,7 +14,7 @@
 
 package {}
 
-exports {Lru}
+export {Lru}
 
 Lru(k, v) : {recent: List((k, v)), room: Nat}.(
   # An empty cache that will hold at most `room` entries.

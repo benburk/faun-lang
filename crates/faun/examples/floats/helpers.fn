@@ -1,4 +1,4 @@
-exports {f, f64, is_unordered, is_eq}
+export {f, f64, is_unordered, is_eq}
 
 f : U32 -> F32
 f(bits) -> F32.of_bits(bits)

@@ -6,7 +6,7 @@
 
 import sorted_map {SortedMap}
 
-exports {SortedSet}
+export {SortedSet}
 
 SortedSet(k) : SortedMap(k, Bool).(
   # The empty set.

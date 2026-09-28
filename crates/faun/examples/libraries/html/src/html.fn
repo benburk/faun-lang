@@ -8,7 +8,7 @@
 
 package {}
 
-exports {Html, Attribute}
+export {Html, Attribute}
 
 Attribute : [
   HtmlAttribute(Str, Str),

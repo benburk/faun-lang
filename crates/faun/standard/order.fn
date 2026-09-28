@@ -3,7 +3,7 @@
 # answer, so they cannot disagree about it: exactly one of `Lt`, `Eq`, `Gt`
 # holds for any pair.
 
-exports {Order.*}
+export {Order.*}
 
 Order : [Lt, Eq, Gt].(
   lt : Order -> Bool
