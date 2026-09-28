@@ -27,7 +27,8 @@ use std::collections::HashMap;
 use num_bigint::BigUint;
 
 use crate::blessed::PreludeIds;
-use crate::check::{CheckError, InferredType};
+use crate::check::{CheckError, InferredType, failure};
+use crate::diagnostic::Advised;
 use crate::hir as h;
 use crate::typed as t;
 use crate::{Symbol, Symbols};
@@ -63,13 +64,11 @@ pub(crate) fn exhaustive(
         if let Some(missing) = checker.missing(rows, &columns) {
             let example = checker.render_all(&missing, symbols);
             let spelled = spelling(symbols, function.name);
-            return Err(CheckError {
-                module: function.module,
-                span: first.span,
-                message: format!(
-                    "`{spelled}` does not cover every case: no clause matches `{spelled}({example})`"
-                ),
-            });
+            let missing = format!("`{spelled}({example})`");
+            let message = format!("`{spelled}` does not cover every case");
+            return Err(failure(function.module, first.span, message)
+                .label(format!("no clause matches {missing}"))
+                .help(format!("add a clause matching {missing}")));
         }
     }
     Ok(())

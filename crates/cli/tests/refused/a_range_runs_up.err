@@ -1,5 +1,7 @@
-error: a range runs up, and `'9'..'0'` is reversed: it matches nothing
+error: the range `'9'..'0'` is reversed
  --> a_range_runs_up.fn:4:7
   |
 4 | digit('9'..'0') -> True
-  |       ^^^^^^^^
+  |       ^^^^^^^^ matches nothing
+  |
+  = note: a range runs up, from its start to its end

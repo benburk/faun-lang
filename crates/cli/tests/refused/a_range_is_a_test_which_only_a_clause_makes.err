@@ -1,1 +1,8 @@
-error: a range pattern is a test, which only a clause's guard makes
+error: a lambda's parameter cannot test a range
+ --> a_range_is_a_test_which_only_a_clause_makes.fn:4:48
+  |
+4 | main!(host) -> host.exit!(U8.of_nat([1, 2].map(|0..9| 1).len()))
+  |                                                ^^^^^^^^
+  |
+  = note: a range pattern is a test, which only a clause makes
+  = help: test it in a clause of a named definition

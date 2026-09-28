@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::Symbol;
-use crate::diagnostic::LowerError;
+use crate::diagnostic::{Advised, LowerError};
 use crate::first_order as d;
 use crate::hir::{LocalId, SiteId};
 use crate::specialize::{
@@ -581,10 +581,10 @@ fn callback(frame: &Frame, expression: &Expr) -> Result<(Callback, Vec<d::Expr>)
                 .iter()
                 .any(|callback| callback.holds(&frame.owner, site))
             {
-                return Err(located(
-                    expression,
-                    "this lambda wraps the callback it was handed and hands itself on, so each round asks for another definition: recurse on data that says what to call instead",
-                ));
+                let message = "this lambda wraps the callback it was handed and hands itself on";
+                return Err(located(expression, message)
+                    .note("each round would ask for another definition, without end")
+                    .help("recurse on data that says what to call instead"));
             }
             let lambda = LambdaCallback {
                 owner: frame.owner.clone(),
@@ -734,17 +734,11 @@ fn pattern_highest(pattern: &Pattern) -> u32 {
 }
 
 fn located(expression: &Expr, message: &str) -> LowerError {
-    LowerError {
-        message: message.to_owned(),
-        at: Some((expression.module, expression.span)),
-    }
+    LowerError::new(message, Some((expression.module, expression.span)))
 }
 
 fn internal(what: &str) -> LowerError {
-    LowerError {
-        message: format!("callback specialization expected {what}"),
-        at: None,
-    }
+    LowerError::new(format!("callback specialization expected {what}"), None)
 }
 
 /// The locals a lambda's body reads that its parameters do not bind.

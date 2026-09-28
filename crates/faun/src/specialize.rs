@@ -2026,15 +2026,9 @@ pub(crate) fn surface_type(
 }
 
 fn located(module: ModuleId, span: crate::ast::Span, message: &str) -> LowerError {
-    LowerError {
-        message: message.to_owned(),
-        at: Some((module, span)),
-    }
+    LowerError::new(message, Some((module, span)))
 }
 
 fn error(message: impl Into<String>) -> LowerError {
-    LowerError {
-        message: message.into(),
-        at: None,
-    }
+    LowerError::new(message.into(), None)
 }

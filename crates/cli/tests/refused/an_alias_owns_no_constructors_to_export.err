@@ -1,1 +1,7 @@
-error: `Numbers` is an alias, which owns no constructors for `.*` to export
+error: `Numbers` is an alias, which owns no constructors
+ --> an_alias_owns_no_constructors_to_export.fn:3:9
+  |
+3 | export {Numbers.*}
+  |         ^^^^^^^ `.*` exports a type's constructors
+  |
+  = help: export `Numbers` without `.*`

@@ -1,5 +1,5 @@
-error: type mismatch: Nat and Str (incompatible types)
+error: mismatched types
  --> what_a_signature_with_writes_still_holds.fn:4:16
   |
 4 | count(n) -> Ok(n)
-  |                ^
+  |                ^ expected `Str`, found `Nat`

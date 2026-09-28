@@ -1,5 +1,11 @@
-error: a function may only be passed straight into a call; it cannot be bound, answered, or stored
-  --> std/bool.fn:27:27
+error: a function may only be passed straight into a call
+  --> a_function_is_not_answered_through_a_type_variable.fn:10:37
+   |
+10 | main!(host) -> host.exit!(U8.of_nat(True.select(twice, half)(3)))
+   |                                     ^^^^^^^^^^^^^^^^^^^^^^^^ this call hands on a function that would be held
+  ::: std/bool.fn:27:27
    |
 27 |   select(True, yes, _) -> yes
-   |                           ^^^
+   |                           --- held here
+   |
+   = note: a function cannot be bound, answered, or stored

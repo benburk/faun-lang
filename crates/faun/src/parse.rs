@@ -2,6 +2,7 @@ use std::fmt;
 
 use super::ast::Module;
 use super::ast::Span;
+use super::diagnostic::{Advice, Advised};
 use super::grammar;
 use super::lex;
 use super::lines;
@@ -18,9 +19,18 @@ pub struct ParseError {
     pub line: usize,
     pub column: usize,
     pub message: String,
+    /// Boxed, as it is rarely more than empty, so a `Result` carrying the
+    /// error stays small on the path that succeeds.
+    pub advice: Box<Advice>,
     /// The errors after this one in the same source, for a parse that went
     /// on past it: each line that could not be read is one.
     pub also: Vec<Self>,
+}
+
+impl Advised for ParseError {
+    fn advice(&mut self) -> &mut Advice {
+        &mut self.advice
+    }
 }
 
 impl fmt::Display for ParseError {
@@ -68,8 +78,11 @@ pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError>
         first.also = errors.collect();
         return Err(first);
     }
-    let items =
-        lines::items(lines, source).map_err(|error| spanned(source, error.span, error.message))?;
+    let items = lines::items(lines, source).map_err(|error| {
+        let mut spanned = spanned(source, error.span, error.message);
+        spanned.advice = Box::new(error.advice);
+        spanned
+    })?;
     literal::validate(&tokens, source)
         .map_err(|error| spanned(source, error.span, error.message))?;
     Ok(Module {
@@ -100,6 +113,7 @@ fn error_at(source: &str, offset: usize, message: String) -> ParseError {
         line,
         column,
         message,
+        advice: Box::default(),
         also: Vec::new(),
     }
 }

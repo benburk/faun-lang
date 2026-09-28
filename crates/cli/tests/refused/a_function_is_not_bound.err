@@ -1,5 +1,7 @@
-error: a function may only be passed straight into a call; it cannot be bound, answered, or stored
+error: a function may only be passed straight into a call
  --> a_function_is_not_bound.fn:7:7
   |
 7 |   f = twice
-  |       ^^^^^
+  |       ^^^^^ bound here
+  |
+  = note: a function cannot be bound, answered, or stored

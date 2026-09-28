@@ -319,17 +319,23 @@ impl<'a> Facts<'a> {
             .parameters
             .get(parameter)
             .and_then(|ty| self.resource_in(ty));
+        let resource = self.called(resource, "resource");
+        let label = if taken.is_some() {
+            "used up here".to_owned()
+        } else {
+            "held here".to_owned()
+        };
         Refusal {
             at: taken.or_else(|| kept.map(|(at, _)| at)),
             message: format!(
-                "`{name}` uses up the {} its parameter {} holds on one way it goes on and not on another",
-                self.called(resource, "resource"),
-                parameter + 1
+                "`{name}` uses up the {resource} in its {} parameter on some ways it goes on and not others",
+                ordinal(parameter)
             ),
+            label,
             also: kept.filter(|_| taken.is_some()).map(|(at, leaving)| {
                 let still = match leaving {
-                    Leaving::Asking => "it is still held where this `?` leaves".to_owned(),
-                    Leaving::Answering => format!("it is still held where `{name}` answers"),
+                    Leaving::Asking => "still held where this `?` leaves".to_owned(),
+                    Leaving::Answering => format!("still held where `{name}` answers"),
                 };
                 (at, still)
             }),
@@ -474,9 +480,10 @@ impl<'a> Facts<'a> {
             Some((module, span)) => self.resolved.diagnostic(module, span, refusal.message),
             None => Diagnostic::new(refusal.message),
         };
-        if let Some(((module, span), note)) = refusal.also {
+        diagnostic = diagnostic.label(refusal.label);
+        if let Some(((module, span), text)) = refusal.also {
             let location = self.resolved.location(module, span);
-            diagnostic = diagnostic.note(format!("{note}, at line {}", location.line));
+            diagnostic = diagnostic.secondary_at(location, text);
         }
         if let Some(help) = refusal.help {
             diagnostic = diagnostic.help(help);
@@ -557,6 +564,9 @@ impl Path {
 struct Refusal {
     at: Option<Place>,
     message: String,
+    /// What is at `at`.
+    label: String,
+    /// Another place explaining it, and what is there.
     also: Option<(Place, String)>,
     help: Option<String>,
 }
@@ -800,7 +810,8 @@ impl Walk<'_, '_> {
         if self.guarded {
             self.refused.push(Refusal {
                 at: Some(at),
-                message: "a guard only looks, and this uses up a resource".to_owned(),
+                message: "a guard uses up a resource".to_owned(),
+                label: "used up here".to_owned(),
                 also: None,
                 help: Some("use it up in the clause's body".to_owned()),
             });
@@ -869,8 +880,9 @@ impl Walk<'_, '_> {
             .called(self.facts.resource_in(&expr.ty), "resource");
         Refusal {
             at: Some(place(expr)),
-            message: format!("this {resource} has already been used up"),
-            also: Some((gone, "it was used up".to_owned())),
+            message: format!("this {resource} is used after it was used up"),
+            label: "used again here".to_owned(),
+            also: Some((gone, "used up here".to_owned())),
             help: None,
         }
     }
@@ -922,16 +934,16 @@ impl Walk<'_, '_> {
         let resource = self.facts.called(made.resource, "resource");
         let what = made.by.map_or_else(
             || format!("the {resource} built here"),
-            |by| format!("the {resource} `{}` answers", self.facts.spelled(by)),
+            |by| format!("the {resource} from `{}`", self.facts.spelled(by)),
         );
         let (still, help) = match leaving {
             Leaving::Asking => (
-                "it is still held where this `?` leaves".to_owned(),
+                "still held where this `?` leaves".to_owned(),
                 "use it up before asking `?` of anything: keep what a step answers, use it up, \
                  then ask `?` of what was kept",
             ),
             Leaving::Answering => (
-                format!("it is still held where `{name}` answers"),
+                format!("still held where `{name}` answers"),
                 "use it up, as `close!` does, or answer it",
             ),
         };
@@ -940,10 +952,22 @@ impl Walk<'_, '_> {
             message: format!(
                 "{what} is neither used up nor answered on every way `{name}` goes on"
             ),
+            label: format!("this {resource} is made here"),
             also: (end != at).then_some((end, still)),
             help: Some(help.to_owned()),
         }
     }
+}
+
+/// A parameter's position as a word: `first` for nought.
+fn ordinal(index: usize) -> String {
+    const WORDS: [&str; 10] = [
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
+        "tenth",
+    ];
+    WORDS
+        .get(index)
+        .map_or_else(|| format!("{}th", index + 1), |word| (*word).to_owned())
 }
 
 const fn is_local(expr: &d::Expr) -> bool {

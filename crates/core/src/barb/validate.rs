@@ -28,6 +28,10 @@ pub struct Refusal {
     /// For a definition that may not stop, the call in `function` that
     /// begins a way round on which nothing gets smaller.
     pub call: Option<ExprId>,
+    /// What is at the call, where it names one.
+    pub label: Option<String>,
+    /// What would fix it.
+    pub help: Option<String>,
 }
 
 impl Refusal {
@@ -36,6 +40,19 @@ impl Refusal {
             message,
             function: None,
             call: None,
+            label: None,
+            help: None,
+        }
+    }
+
+    /// A definition's fault, with nothing more to say than `message`.
+    const fn of_function(message: String, function: FnId) -> Self {
+        Self {
+            message,
+            function: Some(function),
+            call: None,
+            label: None,
+            help: None,
         }
     }
 }
@@ -75,21 +92,13 @@ pub fn validate(program: &Program) -> Result<(), Refusal> {
     }
     for at in 0..program.functions().len() {
         let id = FnId::at(at);
-        super::claim::check(program, id).map_err(|message| Refusal {
-            message,
-            function: Some(id),
-            call: None,
-        })?;
+        super::claim::check(program, id).map_err(|message| Refusal::of_function(message, id))?;
         let Some(body) = program.function(id).body() else {
             continue;
         };
         let name = program.name(program.function(id).name);
         let level = u32::try_from(program.params(id).len()).expect("a sane arity");
-        shaped(program, name, body, level).map_err(|message| Refusal {
-            message,
-            function: Some(id),
-            call: None,
-        })?;
+        shaped(program, name, body, level).map_err(|message| Refusal::of_function(message, id))?;
     }
     super::stops::stops(program)
 }

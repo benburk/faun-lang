@@ -686,10 +686,7 @@ fn source_name(symbol: Symbol, symbols: &Symbols) -> &str {
 }
 
 fn error(message: impl Into<String>) -> LowerError {
-    LowerError {
-        message: message.into(),
-        at: None,
-    }
+    LowerError::new(message.into(), None)
 }
 
 #[cfg(test)]

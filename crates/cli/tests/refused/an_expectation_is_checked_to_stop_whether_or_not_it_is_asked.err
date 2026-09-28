@@ -1,5 +1,7 @@
-error: nothing here shows `spin` stops: it goes round on what it was handed rather than on a part of it
+error: nothing here shows `spin` stops
  --> an_expectation_is_checked_to_stop_whether_or_not_it_is_asked.fn:4:12
   |
 4 | spin(n) -> spin(n)
-  |            ^^^^^^^
+  |            ^^^^^^^ goes round on what it was handed, not on a part of it
+  |
+  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

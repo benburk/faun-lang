@@ -296,16 +296,24 @@ pub enum LiteralElaborationError {
 impl fmt::Display for LiteralElaborationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NegativeNat => f.write_str("a negative numeral cannot be a Nat"),
+            Self::NegativeNat => f.write_str("a negative numeral cannot be a `Nat`"),
             Self::Negative(name) => write!(f, "a `{name}` has no negative numerals"),
-            Self::TooLarge {
-                written,
-                name,
-                below,
-            } => write!(
-                f,
-                "`{written}` is not a `{name}`: it takes numerals below {below}"
-            ),
+            Self::TooLarge { written, name, .. } => {
+                write!(f, "`{written}` is out of range for `{name}`")
+            }
+        }
+    }
+}
+
+impl LiteralElaborationError {
+    /// What explains it, beyond what it says.
+    #[must_use]
+    pub fn note(&self) -> Option<String> {
+        match self {
+            Self::TooLarge { name, below, .. } => {
+                Some(format!("a `{name}` takes numerals below {below}"))
+            }
+            Self::NegativeNat | Self::Negative(_) => None,
         }
     }
 }

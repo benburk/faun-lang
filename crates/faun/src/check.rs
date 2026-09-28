@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use super::blessed::{self, LiteralExpr, NumeralType, PreludeIds};
-use super::diagnostic::Diagnostic;
+use super::diagnostic::{Advice, Advised, Diagnostic};
 use super::hir as h;
 use super::resolve::ResolvedProgram;
 use super::{ModuleId, Symbol, Symbols};
@@ -115,6 +115,21 @@ pub struct CheckError {
     pub module: ModuleId,
     pub span: super::ast::Span,
     pub message: String,
+    pub advice: Advice,
+}
+
+impl Advised for CheckError {
+    fn advice(&mut self) -> &mut Advice {
+        &mut self.advice
+    }
+}
+
+impl CheckError {
+    /// Told as a diagnostic, at its place in `resolved`'s sources.
+    pub(crate) fn told<P>(self, resolved: &ResolvedProgram<P>) -> Diagnostic {
+        let diagnostic = resolved.diagnostic(self.module, self.span, self.message);
+        diagnostic.advised(self.advice)
+    }
 }
 
 impl fmt::Display for CheckError {
@@ -146,11 +161,11 @@ pub fn type_check(
         .and_then(|()| {
             Checker::new(&resolved.program, &resolved.symbols, &prelude)?.check(&resolved.program)
         })
-        .map_err(|error| resolved.diagnostic(error.module, error.span, error.message))?;
+        .map_err(|error| error.told(&resolved))?;
     let resolved =
         resolved.map(|program, sites| elaborate::finish(program, facts, &prelude, sites));
     crate::exhaustive::exhaustive(&resolved.program, &resolved.symbols, &prelude)
-        .map_err(|error| resolved.diagnostic(error.module, error.span, error.message))?;
+        .map_err(|error| error.told(&resolved))?;
     Ok(CheckedProgram { resolved, prelude })
 }
 
@@ -1061,14 +1076,12 @@ impl<'a> Checker<'a> {
             );
         for (constructor, fields) in written {
             if !fields.iter().all(first_order) {
-                return Err(failure(
-                    module,
-                    data.span,
-                    format!(
-                        "constructor `{}` holds a function; data may not store functions",
-                        spelled(constructor, self.symbols)
-                    ),
-                ));
+                let message = format!(
+                    "constructor `{}` holds a function",
+                    spelled(constructor, self.symbols)
+                );
+                return Err(failure(module, data.span, message)
+                    .note("data may not store functions; a function is passed into a call"));
             }
         }
         let mut variables = HashMap::new();
@@ -1104,11 +1117,10 @@ impl<'a> Checker<'a> {
         if let Some(wrapper) = &data.wrapper {
             let field = self.surface_type(&wrapper.field, &mut variables);
             if matches!(&field, Ty::Record(_, Some(_))) {
-                return Err(failure(
-                    module,
-                    data.span,
-                    "a declared type's record is closed; a record with `*` is written where it is taken",
-                ));
+                return Err(
+                    failure(module, data.span, "a declared type's record is closed")
+                        .help("write a record with `*` where it is taken, in a signature"),
+                );
             }
             if let Ty::Record(fields, _) = &field {
                 for (name, field_ty) in fields {
@@ -1143,14 +1155,12 @@ impl<'a> Checker<'a> {
         // A function is passed into a call, so it is a parameter's type,
         // never an answer's or data's.
         if !first_order(&signature.result) || !signature.parameters.iter().all(passable) {
-            return Err(failure(
-                module,
-                signature.span,
-                format!(
-                    "`{}` holds a function other than as a parameter; a function is passed into a call, never answered or stored",
-                    self.symbols.text(signature.spelling)
-                ),
-            ));
+            let message = format!(
+                "`{}` holds a function other than as a parameter",
+                self.symbols.text(signature.spelling)
+            );
+            return Err(failure(module, signature.span, message)
+                .note("a function is passed into a call, never answered or stored"));
         }
         if signature
             .parameters
@@ -1159,14 +1169,12 @@ impl<'a> Checker<'a> {
             .any(has_hole)
         {
             if !signature.constraints.is_empty() {
-                return Err(failure(
-                    module,
-                    signature.span,
-                    format!(
-                        "`{}` writes `_`, so its type is worked out from its clauses; it takes no `where` bounds",
-                        self.symbols.text(signature.spelling)
-                    ),
-                ));
+                let note = format!(
+                    "`{}` writes `_`, so its type is worked out from its clauses",
+                    self.symbols.text(signature.spelling)
+                );
+                let message = "a signature that writes `_` takes no `where` bounds";
+                return Err(failure(module, signature.span, message).note(note));
             }
             self.partial.insert(signature.name, signature.clone());
             return Ok(());
@@ -1606,14 +1614,9 @@ impl<'a> Checker<'a> {
                 {
                     let (module, clause) =
                         (definitions[name].module, &definitions[name].clauses[0]);
-                    return Err(failure(
-                        module,
-                        clause.span,
-                        format!(
-                            "`{}` answers a function; a function is passed into a call, never answered",
-                            spelled(*name, self.symbols)
-                        ),
-                    ));
+                    let message = format!("`{}` answers a function", spelled(*name, self.symbols));
+                    return Err(failure(module, clause.span, message)
+                        .note("a function is passed into a call, never answered"));
                 }
             }
             // Resolved, so that instantiating a scheme renames every
@@ -1853,11 +1856,10 @@ impl<'a> Checker<'a> {
             });
             self.finish_pending(marks, Finish::Binding)?;
             if matches!(self.infer.resolve(&value), Ty::Function(..)) {
-                return Err(failure(
-                    module,
-                    binding.value.span,
-                    "a function may only be passed straight into a call; it cannot be bound, answered, or stored",
-                ));
+                let message = "a function may only be passed straight into a call";
+                return Err(failure(module, binding.value.span, message)
+                    .label("bound here")
+                    .note("a function cannot be bound, answered, or stored"));
             }
             for local in bound {
                 let ty = locals[local.index()]
@@ -1876,21 +1878,10 @@ impl<'a> Checker<'a> {
         }
         let actual = self.expr(module, &clause.body.result, locals)?;
         let span = clause.body.result.span;
-        let widened = self.infer.subsume(&actual, result).map_err(|reason| {
-            failure(
-                module,
-                span,
-                match reason {
-                    Mismatch::NotAmong { .. } => reason.describe(self.symbols),
-                    _ => format!(
-                        "type mismatch: {} and {} ({})",
-                        show(&self.infer.resolve(&actual), self.symbols),
-                        show(&self.infer.resolve(result), self.symbols),
-                        reason.describe(self.symbols)
-                    ),
-                },
-            )
-        })?;
+        let widened = self
+            .infer
+            .subsume(&actual, result)
+            .map_err(|reason| self.mismatch(module, span, &actual, result, &reason))?;
         if widened {
             self.widenings
                 .push((module, span, clause.body.result.site, (*result).clone()));
@@ -1911,13 +1902,20 @@ impl<'a> Checker<'a> {
             h::Pattern::Wild => Ok(()),
             h::Pattern::String(_) => {
                 let str_ = Ty::Named(self.prelude.str_, Vec::new());
-                self.unify_at(module, span, expected, &str_)
+                self.unify_pattern_at(module, span, expected, &str_)
             }
             // Every alternative of an `|` binds the same local, at one type.
             h::Pattern::Bind(local) => {
                 if let Some(bound) = &locals[local.index()] {
                     let bound = bound.ty.clone();
-                    return self.unify_at(module, span, &bound, expected);
+                    return self.infer.unify(expected, &bound).map_err(|_| {
+                        let first = show(&self.infer.resolve(&bound), self.symbols);
+                        let other = show(&self.infer.resolve(expected), self.symbols);
+                        let message = "the alternatives of this `|` bind a name at different types";
+                        failure(module, span, message).label(format!(
+                            "bound as `{first}` by one alternative and as `{other}` by another"
+                        ))
+                    });
                 }
                 locals[local.index()] = Some(Scheme {
                     variables: Vec::new(),
@@ -1947,7 +1945,7 @@ impl<'a> Checker<'a> {
                         "constructor pattern has the wrong number of fields",
                     ));
                 }
-                self.unify_at(module, span, expected, &result)?;
+                self.unify_pattern_at(module, span, expected, &result)?;
                 for (field, parameter) in fields.iter().zip(parameters) {
                     self.pattern(module, field, &parameter, locals, span)?;
                 }
@@ -1977,7 +1975,7 @@ impl<'a> Checker<'a> {
                     vec![(*label, field_types.clone())],
                     Some(Box::new(self.infer.fresh())),
                 );
-                self.unify_at(module, span, expected, &row)?;
+                self.unify_pattern_at(module, span, expected, &row)?;
                 for (field, ty) in fields.iter().zip(&field_types) {
                     self.pattern(module, field, ty, locals, span)?;
                 }
@@ -2016,7 +2014,7 @@ impl<'a> Checker<'a> {
             }
             h::Pattern::List(elements, rest) => {
                 let element = self.infer.fresh();
-                self.unify_at(module, span, expected, &self.list_type(element.clone()))?;
+                self.unify_pattern_at(module, span, expected, &self.list_type(element.clone()))?;
                 for pattern in elements {
                     self.pattern(module, pattern, &element, locals, span)?;
                 }
@@ -2032,7 +2030,7 @@ impl<'a> Checker<'a> {
                     .map(|(name, _)| (*name, self.infer.fresh()))
                     .collect();
                 let rest = open.then(|| Box::new(self.infer.fresh()));
-                self.unify_at(
+                self.unify_pattern_at(
                     module,
                     span,
                     expected,
@@ -2045,7 +2043,7 @@ impl<'a> Checker<'a> {
             }
             h::Pattern::Tuple(members) => {
                 let member_types: Vec<_> = members.iter().map(|_| self.infer.fresh()).collect();
-                self.unify_at(module, span, expected, &Ty::Tuple(member_types.clone()))?;
+                self.unify_pattern_at(module, span, expected, &Ty::Tuple(member_types.clone()))?;
                 for (member, ty) in members.iter().zip(&member_types) {
                     self.pattern(module, member, ty, locals, span)?;
                 }
@@ -2243,6 +2241,15 @@ impl<'a> Checker<'a> {
                 Ok(updated)
             }
             h::ExprKind::Lambda(patterns, body) => {
+                // A lambda has one clause and no guard to make a test with.
+                if let Some(test) = patterns.iter().find_map(test_in) {
+                    let message = format!("a lambda's parameter cannot test a {test}");
+                    return Err(failure(module, expression.span, message)
+                        .note(format!(
+                            "a {test} pattern is a test, which only a clause makes"
+                        ))
+                        .help("test it in a clause of a named definition"));
+                }
                 let parameters: Vec<_> = patterns.iter().map(|_| self.infer.fresh()).collect();
                 let mut bound = Vec::new();
                 for (pattern, parameter) in patterns.iter().zip(&parameters) {
@@ -2298,9 +2305,20 @@ impl<'a> Checker<'a> {
                 for argument in arguments {
                     argument_types.push(self.expr(module, argument, locals)?);
                 }
+                // A known function is held to its arguments one at a time,
+                // so what does not fit is told where it is written.
+                if let Ty::Function(parameters, result) = self.infer.resolve(&head_type)
+                    && parameters.len() == arguments.len()
+                {
+                    let given = arguments.iter().zip(&argument_types);
+                    for ((argument, ty), parameter) in given.zip(&parameters) {
+                        self.unify_at(module, argument.span, ty, parameter)?;
+                    }
+                    return Ok(*result);
+                }
                 let result = self.infer.fresh();
                 let function = Ty::Function(argument_types, Box::new(result.clone()));
-                self.unify_at(module, expression.span, &head_type, &function)?;
+                self.unify_at(module, expression.span, &function, &head_type)?;
                 Ok(result)
             }
             h::ExprKind::Member(receiver, member) => {
@@ -2680,7 +2698,7 @@ impl<'a> Checker<'a> {
                 module,
                 span,
                 format!(
-                    "`?` answers an `Err` early, but this answers {}",
+                    "`?` answers an `Err` early, but this answers `{}`",
                     show(&self.infer.resolve(&answer), self.symbols)
                 ),
             )
@@ -2726,21 +2744,10 @@ impl<'a> Checker<'a> {
         let Some(&(site, span)) = pending.field_sites.get(at) else {
             return self.unify_at(pending.module, pending.span, field, wanted);
         };
-        let widened = self.infer.subsume(field, wanted).map_err(|reason| {
-            failure(
-                pending.module,
-                span,
-                match reason {
-                    Mismatch::NotAmong { .. } => reason.describe(self.symbols),
-                    _ => format!(
-                        "type mismatch: {} and {} ({})",
-                        show(&self.infer.resolve(field), self.symbols),
-                        show(&self.infer.resolve(wanted), self.symbols),
-                        reason.describe(self.symbols)
-                    ),
-                },
-            )
-        })?;
+        let widened = self
+            .infer
+            .subsume(field, wanted)
+            .map_err(|reason| self.mismatch(pending.module, span, field, wanted, &reason))?;
         if widened {
             self.widenings
                 .push((pending.module, span, site, wanted.clone()));
@@ -2999,14 +3006,12 @@ impl<'a> Checker<'a> {
             // Only the prelude's integers are numerals, and no conversion
             // is inserted to make one fit anything else.
             other => {
-                return Err(failure(
-                    numeral.module,
-                    numeral.span,
-                    format!(
-                        "a numeral cannot be a `{}`: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`; convert a value with `of_nat`",
-                        show(&other, self.symbols)
-                    ),
-                ));
+                let shown = show(&other, self.symbols);
+                let message = format!("a numeral cannot be a `{shown}`");
+                return Err(failure(numeral.module, numeral.span, message)
+                    .label(format!("expected `{shown}`, found a numeral"))
+                    .note("a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`")
+                    .help("convert a value with `of_nat`"));
             }
         };
         let value = blessed::numeral(
@@ -3015,7 +3020,13 @@ impl<'a> Checker<'a> {
             kind,
             self.prelude,
         )
-        .map_err(|error| failure(numeral.module, numeral.span, error.to_string()))?;
+        .map_err(|error| {
+            let refused = failure(numeral.module, numeral.span, error.to_string());
+            match error.note() {
+                Some(note) => refused.note(note),
+                None => refused,
+            }
+        })?;
         if let Some(site) = numeral.site {
             self.checked.literals.insert(site, value);
         }
@@ -3269,7 +3280,7 @@ impl<'a> Checker<'a> {
                         _ => fields,
                     };
                     let row = self.tag(pending.dual.spelling, fields);
-                    self.unify_at(pending.module, pending.span, &pending.result, &row)?;
+                    self.unify_at(pending.module, pending.span, &row, &pending.result)?;
                     self.checked
                         .readings
                         .insert(pending.dual.site, Reading::Tag(pending.dual.spelling));
@@ -3301,7 +3312,8 @@ impl<'a> Checker<'a> {
                 }
                 _ => self.tag(pending.label, Vec::new()),
             };
-            self.unify_at(pending.module, pending.span, &pending.ty, &wanted)?;
+            // The position wants its type; the tag is what is there.
+            self.unify_at(pending.module, pending.span, &wanted, &pending.ty)?;
             self.pending_bare[index].resolved = true;
             progress = true;
         }
@@ -3351,13 +3363,12 @@ impl<'a> Checker<'a> {
                 .constructor_owner(chosen)
                 .map_or("", |owner| spelled(owner, self.symbols));
             let word = self.symbols.text(pending.dual.spelling);
-            return Err(failure(
-                pending.module,
-                pending.span,
-                format!(
-                    "inside `{owner}`'s block, the bare `{word}` reads as `{owner}`'s own constructor; this one is `{other}.{word}`, which is written qualified"
-                ),
-            ));
+            let message = format!("the bare `{word}` reads as `{owner}.{word}` here");
+            return Err(failure(pending.module, pending.span, message)
+                .note(format!(
+                    "inside `{owner}`'s block, a bare constructor is `{owner}`'s own"
+                ))
+                .help(format!("write `{other}.{word}` for `{other}`'s")));
         }
         let scheme = self.constructors.get(&chosen).cloned().ok_or_else(|| {
             failure(
@@ -3372,16 +3383,14 @@ impl<'a> Checker<'a> {
         let builds = |checker: &mut Self, built: &Ty| {
             let wanted = checker.infer.resolve(&pending.result);
             checker.infer.unify(&pending.result, built).map_err(|_| {
-                failure(
-                    pending.module,
-                    pending.span,
-                    format!(
-                        "`{}` builds {}, where {} is wanted",
-                        checker.symbols.text(pending.dual.spelling),
-                        show(&checker.infer.resolve(built), checker.symbols),
-                        show(&wanted, checker.symbols)
-                    ),
-                )
+                let built = show(&checker.infer.resolve(built), checker.symbols);
+                let wanted = show(&wanted, checker.symbols);
+                failure(pending.module, pending.span, "mismatched types")
+                    .label(format!("expected `{wanted}`, found `{built}`"))
+                    .note(format!(
+                        "`{}` builds `{built}`",
+                        checker.symbols.text(pending.dual.spelling)
+                    ))
             })
         };
         match &pending.fields {
@@ -3439,14 +3448,13 @@ impl<'a> Checker<'a> {
             .filter_map(|candidate| self.constructor_owner(*candidate))
             .map(|owner| format!("`{}.{word}`", spelled(owner, self.symbols)))
             .collect();
-        failure(
-            pending.module,
-            pending.span,
-            format!(
-                "constructor `{word}` is ambiguous here: nothing decides between {}; qualify it, or let a signature decide",
+        let message = format!("constructor `{word}` is ambiguous here");
+        failure(pending.module, pending.span, message)
+            .note(format!(
+                "nothing decides between {}",
                 readings.join(" and ")
-            ),
-        )
+            ))
+            .help("qualify it, or let a signature decide")
     }
 
     /// Resolve pending methods. On the final pass one still ambiguous is an
@@ -3539,14 +3547,29 @@ impl<'a> Checker<'a> {
                         next.push(index);
                     }
                     [] => {
-                        return Err(failure(
-                            pending.module,
-                            pending.span,
-                            format!(
-                                "no type-compatible field or method `{}` is in scope",
-                                self.symbols.text(pending.name)
-                            ),
-                        ));
+                        let name = self.symbols.text(pending.name);
+                        let refused = match self.infer.resolve(&pending.receiver) {
+                            Ty::Var(_) => {
+                                let message = format!("no field or method `{name}` is in scope");
+                                failure(pending.module, pending.span, message)
+                            }
+                            // A signature's variable has only what its bounds give.
+                            Ty::Rigid(_) => {
+                                let message =
+                                    format!("a type variable has no field or method `{name}`");
+                                failure(pending.module, pending.span, message).help(format!(
+                                    "give it `{name}` with a `where` bound in the signature"
+                                ))
+                            }
+                            receiver => {
+                                let message = format!(
+                                    "`{}` has no field or method `{name}`",
+                                    show(&receiver, self.symbols)
+                                );
+                                failure(pending.module, pending.span, message)
+                            }
+                        };
+                        return Err(refused);
                     }
                     [candidate] => {
                         self.apply_method(&pending, candidate)?;
@@ -3729,7 +3752,7 @@ impl<'a> Checker<'a> {
             [other] if !unary => self.unify_at(pending.module, pending.span, other, &receiver)?,
             _ => return Ok(Some(false)),
         }
-        self.unify_at(pending.module, pending.span, &pending.result, &answer)?;
+        self.unify_at(pending.module, pending.span, &answer, &pending.result)?;
         for component in components {
             let arguments = if unary {
                 Vec::new()
@@ -3877,19 +3900,44 @@ impl<'a> Checker<'a> {
         actual: &Ty,
         expected: &Ty,
     ) -> Result<(), CheckError> {
-        self.infer.unify(actual, expected).map_err(|reason| {
-            let message = match reason {
-                // Which tag does not fit is the whole of it.
-                Mismatch::NotAmong { .. } => reason.describe(self.symbols),
-                _ => format!(
-                    "type mismatch: {} and {} ({})",
-                    show(&self.infer.resolve(actual), self.symbols),
-                    show(&self.infer.resolve(expected), self.symbols),
-                    reason.describe(self.symbols)
-                ),
-            };
-            failure(module, span, message)
-        })
+        self.infer
+            .unify(actual, expected)
+            .map_err(|reason| self.mismatch(module, span, actual, expected, &reason))
+    }
+
+    /// A pattern at `span` whose shape is `pattern` matching a value of
+    /// type `matched`: the value's type is the one expected.
+    fn unify_pattern_at(
+        &mut self,
+        module: ModuleId,
+        span: super::ast::Span,
+        matched: &Ty,
+        pattern: &Ty,
+    ) -> Result<(), CheckError> {
+        self.unify_at(module, span, pattern, matched)
+    }
+
+    /// Why a value of type `actual` at `span` is not the `expected` one.
+    fn mismatch(
+        &self,
+        module: ModuleId,
+        span: super::ast::Span,
+        actual: &Ty,
+        expected: &Ty,
+        reason: &Mismatch,
+    ) -> CheckError {
+        // Which tag or field does not fit is the whole of it.
+        if let Mismatch::NotAmong { .. } = reason {
+            return failure(module, span, reason.describe(self.symbols));
+        }
+        let expected = show(&self.infer.resolve(expected), self.symbols);
+        let actual = show(&self.infer.resolve(actual), self.symbols);
+        let error = failure(module, span, "mismatched types");
+        let error = error.label(format!("expected `{expected}`, found `{actual}`"));
+        match reason {
+            Mismatch::Reason("incompatible types") => error,
+            _ => error.note(reason.describe(self.symbols)),
+        }
     }
 
     const fn bool_type(&self) -> Ty {
@@ -4450,6 +4498,23 @@ fn collect_pattern_locals(pattern: &h::Pattern, output: &mut Vec<h::LocalId>) {
     }
 }
 
+/// The test a pattern makes that only a clause can, `range` or `string`,
+/// wherever in it one is.
+fn test_in(pattern: &h::Pattern) -> Option<&'static str> {
+    match pattern {
+        h::Pattern::Range(..) => Some("range"),
+        h::Pattern::String(_) => Some("string"),
+        h::Pattern::Constructor(_, fields)
+        | h::Pattern::Tag(_, fields)
+        | h::Pattern::Dual(_, fields)
+        | h::Pattern::Tuple(fields)
+        | h::Pattern::Or(fields) => fields.iter().find_map(test_in),
+        h::Pattern::List(fields, rest) => fields.iter().chain(rest.as_deref()).find_map(test_in),
+        h::Pattern::Record(fields, _) => fields.iter().find_map(|(_, field)| test_in(field)),
+        h::Pattern::Wild | h::Pattern::Bind(_) | h::Pattern::Number { .. } => None,
+    }
+}
+
 fn component_name_set(monotypes: &HashMap<Symbol, Ty>) -> HashSet<Symbol> {
     monotypes.keys().copied().collect()
 }
@@ -4536,11 +4601,16 @@ fn show(ty: &Ty, symbols: &Symbols) -> String {
     }
 }
 
-fn failure(module: ModuleId, span: super::ast::Span, message: impl Into<String>) -> CheckError {
+pub(crate) fn failure(
+    module: ModuleId,
+    span: super::ast::Span,
+    message: impl Into<String>,
+) -> CheckError {
     CheckError {
         module,
         span,
         message: message.into(),
+        advice: Advice::default(),
     }
 }
 
@@ -4878,7 +4948,7 @@ mod tests {
             fixture.load("id : a -> a\nid(x) -> x\nlocal : Int\nlocal() ->\n  f = id\n  f(-1)\n");
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(
-            failure.message.contains("cannot be bound"),
+            failure.message.contains("passed straight into a call"),
             "{}",
             failure.message
         );
@@ -5006,7 +5076,8 @@ mod tests {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> Zero.add(True)\n");
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
-        assert_eq!(failure.message, "`True` builds Bool, where Nat is wanted");
+        assert_eq!(failure.message, "mismatched types");
+        assert_eq!(failure.labels[0].text, "expected `Nat`, found `Bool`");
     }
 
     #[test]

@@ -1,5 +1,7 @@
-error: nothing here shows `bogus` stops: it goes round on what it was handed rather than on a part of it
+error: nothing here shows `bogus` stops
  --> a_comparison_that_compares_nothing_says_nothing.fn:7:34
   |
 7 | bogus(i, n) if bogus_lt(i, n) -> bogus(Succ(i), n)
-  |                                  ^^^^^^^^^^^^^^^^^
+  |                                  ^^^^^^^^^^^^^^^^^ goes round on what it was handed, not on a part of it
+  |
+  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

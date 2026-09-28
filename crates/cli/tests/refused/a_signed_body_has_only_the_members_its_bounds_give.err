@@ -1,5 +1,7 @@
-error: no type-compatible field or method `not` is in scope
+error: a type variable has no field or method `not`
  --> a_signed_body_has_only_the_members_its_bounds_give.fn:4:12
   |
 4 | flip(x) -> x.not()
   |            ^^^^^^^
+  |
+  = help: give it `not` with a `where` bound in the signature

@@ -1,5 +1,7 @@
-error: `both` does not cover every case: no clause matches `both((True, False))`
+error: `both` does not cover every case
  --> a_tuple_s_cases_must_be_covered.fn:4:1
   |
 4 | both((True, True)) -> 1
-  | ^^^^^^^^^^^^^^^^^^^^^^^
+  | ^^^^^^^^^^^^^^^^^^^^^^^ no clause matches `both((True, False))`
+  |
+  = help: add a clause matching `both((True, False))`

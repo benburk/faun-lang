@@ -1,4 +1,4 @@
-error: a negative numeral cannot be a Nat
+error: a negative numeral cannot be a `Nat`
  --> a_range_s_ends_are_numerals_its_type_takes_negative_or_not.fn:4:1
   |
 4 | small(_..-1) -> True

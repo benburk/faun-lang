@@ -1,5 +1,7 @@
-error: `verb` does not cover every case: no clause matches `verb(_)`
+error: `verb` does not cover every case
  --> a_literal_pattern_never_covers_its_type.fn:4:1
   |
 4 | verb("get") -> 1
-  | ^^^^^^^^^^^^^^^^
+  | ^^^^^^^^^^^^^^^^ no clause matches `verb(_)`
+  |
+  = help: add a clause matching `verb(_)`

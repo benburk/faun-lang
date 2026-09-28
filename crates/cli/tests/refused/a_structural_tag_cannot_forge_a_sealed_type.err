@@ -1,5 +1,5 @@
-error: type mismatch: Failure and [NotFound, *] (incompatible types)
+error: mismatched types
  --> a_structural_tag_cannot_forge_a_sealed_type/main.fn:6:44
   |
 6 | main!(host) -> host.exit!(U8.of_nat(accept(NotFound)))
-  |                                            ^^^^^^^^
+  |                                            ^^^^^^^^ expected `Failure`, found `[NotFound, *]`

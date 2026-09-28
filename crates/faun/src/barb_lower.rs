@@ -12,7 +12,7 @@ use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
 
 use crate::blessed::PreludeIds;
 use crate::check::CheckedProgram;
-use crate::diagnostic::{Diagnostic, LowerError};
+use crate::diagnostic::{Advised, Diagnostic, LowerError};
 use crate::first_order::{Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::pattern_compile::{self as p, Decision, Unpack, Value};
@@ -25,7 +25,7 @@ use crate::{ModuleId, Symbol};
 #[cfg(test)]
 fn program(checked: &CheckedProgram, entry: Symbol) -> Result<barb::Program, LowerError> {
     let specialized = specialize::monomorphize_from_entry(checked, entry)?;
-    crate::second_class::check(&specialized)?;
+    crate::second_class::check(&specialized, &checked.resolved.package)?;
     let program = crate::callbacks::lower(specialized)?;
     let program = p::compile(program, &checked.prelude, &checked.resolved.symbols)?;
     Lowerer::new(checked, None, program)?.lower()
@@ -50,10 +50,7 @@ pub(crate) fn lower_package_to_barb(
 ) -> Result<barb::Program, Diagnostic> {
     Lowerer::new(checked, Some(routines), program)
         .and_then(Lowerer::lower)
-        .map_err(|error| match error.at {
-            Some((module, span)) => checked.resolved.diagnostic(module, span, error.message),
-            None => Diagnostic::new(error.message),
-        })
+        .map_err(|error| checked.resolved.told(error))
 }
 
 /// How a widening rebuilds each constructor, or a product's fields.
@@ -140,10 +137,14 @@ impl<'a> Lowerer<'a> {
             let (key, _) = self.function_ids.iter().find(|(_, id)| **id == function)?;
             self.definition_site(key.name)
         };
-        LowerError {
-            at: call.or_else(definition),
-            message: refusal.message,
+        let mut error = LowerError::new(refusal.message, call.or_else(definition));
+        if let Some(label) = refusal.label.filter(|_| call.is_some()) {
+            error = error.label(label);
         }
+        if let Some(help) = refusal.help {
+            error = error.help(help);
+        }
+        error
     }
 
     /// Where the first clause defining `name` is written.
@@ -1145,10 +1146,7 @@ fn function_name(key: &FunctionKey, symbols: &crate::Symbols) -> String {
 }
 
 fn error(message: impl Into<String>) -> LowerError {
-    LowerError {
-        message: message.into(),
-        at: None,
-    }
+    LowerError::new(message.into(), None)
 }
 
 #[cfg(test)]
@@ -1209,7 +1207,7 @@ mod tests {
             let routines = faun_core::platform::Routines::builtin().with_word(bits);
             let specialized =
                 specialize::monomorphize_package(&checked, &host, Some(&main)).unwrap();
-            crate::second_class::check(&specialized).unwrap();
+            crate::second_class::check(&specialized, &checked.resolved.package).unwrap();
             let program = crate::callbacks::lower(specialized).unwrap();
             let program = p::compile(program, &checked.prelude, &checked.resolved.symbols).unwrap();
             let mut program = lower_package_to_barb(&checked, program, &routines).unwrap();

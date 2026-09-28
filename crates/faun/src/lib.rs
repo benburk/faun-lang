@@ -145,12 +145,9 @@ fn lower_resolved(
     if let Some(main) = main {
         check::check_application_abi(&checked, host, main)?;
     }
-    let located = |error: diagnostic::LowerError| match error.at {
-        Some((module, span)) => checked.resolved.diagnostic(module, span, error.message),
-        None => Diagnostic::new(error.message),
-    };
+    let located = |error| checked.resolved.told(error);
     let program = specialize::monomorphize_package(&checked, host, main).map_err(located)?;
-    second_class::check(&program).map_err(located)?;
+    second_class::check(&program, &checked.resolved.package).map_err(located)?;
     let program = callbacks::lower(program).map_err(located)?;
     let routines = target.routines();
     linearity::check(&program, &routines, &checked.resolved)?;

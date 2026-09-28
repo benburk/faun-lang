@@ -18,6 +18,7 @@ use super::ast::{
     DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item, MethodItem,
     Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
 };
+use super::diagnostic::{Advice, Advised};
 
 /// One line of a file or of a method block, as the grammar reads it.
 #[derive(Debug)]
@@ -116,12 +117,20 @@ impl Line {
 pub(crate) struct Error {
     pub(crate) span: Span,
     pub(crate) message: String,
+    pub(crate) advice: Advice,
+}
+
+impl Advised for Error {
+    fn advice(&mut self) -> &mut Advice {
+        &mut self.advice
+    }
 }
 
 fn error(span: Span, message: impl Into<String>) -> Error {
     Error {
         span,
         message: message.into(),
+        advice: Advice::default(),
     }
 }
 
@@ -511,10 +520,9 @@ fn body(mut lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
                     _ => false,
                 };
                 if !effect {
-                    return Err(error(
-                        value.span,
-                        "this value is worked out and then thrown away; remove the line, or bind the value to a name if you need it",
-                    ));
+                    return Err(error(value.span, "this value is worked out and then thrown away")
+                        .label("unused")
+                        .help("remove the line, or bind the value to a name if you need it"));
                 }
                 Ok(Binding {
                     pattern: Pattern::Wild(value.span),
@@ -625,13 +633,10 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
                     .zip(bound_value(end, source))
                     .is_some_and(|(start, end)| start > end)
             }) {
-                return Err(error(
-                    span,
-                    format!(
-                        "a range runs up, and `{}` is reversed: it matches nothing",
-                        span.text(source)
-                    ),
-                ));
+                let message = format!("the range `{}` is reversed", span.text(source));
+                return Err(error(span, message)
+                    .label("matches nothing")
+                    .note("a range runs up, from its start to its end"));
             }
             Ok(Pattern::Range { span, start, end })
         }

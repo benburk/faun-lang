@@ -1,5 +1,5 @@
-error: type mismatch: {x: Nat} -> Nat and ((_, _)) -> _ (incompatible types)
- --> a_tuple_is_not_a_record.fn:9:37
+error: mismatched types
+ --> a_tuple_is_not_a_record.fn:9:41
   |
 9 | main!(host) -> host.exit!(U8.of_nat(bad(pair())))
-  |                                     ^^^^^^^^^^^
+  |                                         ^^^^^^ expected `{x: Nat}`, found `(_, _)`

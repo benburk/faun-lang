@@ -17,7 +17,7 @@ use super::ast::{
     Name, Span,
 };
 use super::diagnostic::Diagnostic;
-use super::{ParseError, SourceId, Sources, Symbol, Symbols, parse_in};
+use super::{ParseError, Source, SourceId, Sources, Symbol, Symbols, parse_in};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleId(u32);
@@ -277,18 +277,25 @@ impl Loader {
         let syntax = parse_in(&text, source).map_err(|error| {
             let text = self.sources.get(source).expect("the source just added");
             let told = |error: &ParseError| {
-                Diagnostic::new(error.message.clone()).at(text, Span::new(error.offset, error.end))
+                Diagnostic::new(error.message.clone())
+                    .at(text, Span::new(error.offset, error.end))
+                    .advised((*error.advice).clone())
             };
             let mut diagnostic = told(&error);
             diagnostic.also = error.also.iter().map(told).collect();
             diagnostic
         })?;
+        let file = self
+            .sources
+            .get(source)
+            .expect("the source just added")
+            .clone();
         let root = self.root(loading, &syntax, &path, source)?;
         let id =
             ModuleId(u32::try_from(self.pending.len()).expect("fewer than 2^32 loaded modules"));
         let namespace_text = self.namespace(&path, id);
         let namespace = self.symbols.intern(&namespace_text);
-        let own = declarations(&syntax, &text, namespace, &mut self.symbols)?;
+        let own = declarations(&syntax, &file, namespace, &mut self.symbols)?;
 
         // Reserve the slot before descending so module IDs remain stable and a
         // cycle can name the module being visited.
@@ -305,7 +312,7 @@ impl Loader {
         });
         self.visiting.push(path.clone());
 
-        let imports: Vec<(usize, Vec<String>)> = self.pending[id.index()]
+        let imports: Vec<(usize, Span, Vec<String>)> = self.pending[id.index()]
             .syntax
             .items
             .iter()
@@ -313,6 +320,7 @@ impl Loader {
             .filter_map(|(index, item)| match item {
                 Item::Import(import) => Some((
                     index,
+                    import.span,
                     import
                         .path
                         .iter()
@@ -323,23 +331,35 @@ impl Loader {
             })
             .collect();
         let mut linked_imports = Vec::with_capacity(imports.len());
-        for (index, path_parts) in imports {
+        for (index, span, path_parts) in imports {
             let dependency = if path_parts == ["std", "host"] {
                 self.host.ok_or_else(|| {
                     Diagnostic::new("the host module cannot import `std.host`, which is itself")
+                        .at(&file, span)
                 })?
             } else if let Some(dependency) = root.dependencies.get(&path_parts[0]) {
                 if path_parts.len() > 1 {
-                    return Err(Diagnostic::new(format!(
-                        "`{}` is a package this one depends on, whose modules are its own: import `{}` itself",
-                        path_parts[0], path_parts[0]
-                    )));
+                    let package = &path_parts[0];
+                    let message = format!(
+                        "`{}` is inside the package `{package}`",
+                        path_parts.join(".")
+                    );
+                    return Err(Diagnostic::new(message)
+                        .at(&file, span)
+                        .note("a package this one depends on keeps its modules its own")
+                        .help(format!("import `{package}` itself")));
                 }
                 let dependency = dependency.clone();
                 let package = self.package_at(&dependency);
                 self.load_module(&dependency, Loading::Package(package), false)?
             } else {
-                let module = module_path(&root.directory, &path_parts)?;
+                let module = module_path(&root.directory, &path_parts).map_err(|diagnostic| {
+                    if diagnostic.location().is_some() {
+                        diagnostic
+                    } else {
+                        diagnostic.at(&file, span)
+                    }
+                })?;
                 self.load_module(&module, Loading::Within(&root), false)?
             };
             linked_imports.push((index, dependency));
@@ -352,12 +372,12 @@ impl Loader {
                 unreachable!("recorded imports remain imports")
             };
             let face = self.pending[dependency.index()].public.clone();
-            expose_import(&mut scope, &face, import, &text, &mut self.symbols)?;
+            expose_import(&mut scope, &face, import, &file, &mut self.symbols)?;
         }
         scope.merge(&own, &self.symbols, &format!("module `{}`", path.display()))?;
         let public = exports(
             &self.pending[id.index()].syntax,
-            &text,
+            &file,
             &scope,
             &mut self.symbols,
         )?;
@@ -388,9 +408,10 @@ impl Loader {
             (Loading::Within(root), None) => Ok(root.clone()),
             (Loading::Package(root), None) => Ok(root),
             (Loading::Within(_), Some(header)) => Err(Diagnostic::new(
-                "only a package's root module has a `package` header; this module is inside its package",
+                "only a package's root module has a `package` header",
             )
-            .at(text, header.span)),
+            .at(text, header.span)
+            .label("this module is inside its package")),
             (Loading::Package(mut root), Some(header)) => {
                 let directory = path.parent().unwrap_or_else(|| Path::new("."));
                 for dependency in &header.dependencies {
@@ -404,10 +425,11 @@ impl Loader {
                         })
                         .collect::<Result<_, _>>()
                         .map_err(|message| Diagnostic::new(message).at(text, dependency.span))?;
-                    let module = module_base(directory, &directory.join(&written)).map_err(|error| {
-                        Diagnostic::new(format!("dependency `{name}` {}", error.message))
-                            .at(text, dependency.span)
-                    })?;
+                    let module =
+                        module_base(directory, &directory.join(&written)).map_err(|error| {
+                            Diagnostic::new(format!("dependency `{name}` {}", error.message))
+                                .at(text, dependency.span)
+                        })?;
                     if root.dependencies.insert(name.clone(), module).is_some() {
                         return Err(Diagnostic::new(format!(
                             "the package depends on `{name}` more than once"
@@ -491,25 +513,27 @@ fn module_base(from: &Path, joined: &Path) -> Result<PathBuf, Diagnostic> {
 
 fn declarations(
     module: &Module,
-    source: &str,
+    file: &Source,
     namespace: Symbol,
     symbols: &mut Symbols,
 ) -> Result<Interface, Diagnostic> {
+    let source = file.text();
     let namespace = symbols.text(namespace).to_string();
     let mut own = Interface::default();
     for item in &module.items {
         match item {
-            Item::Data(data) => declare_data(&mut own, data, source, &namespace, symbols)?,
+            Item::Data(data) => declare_data(&mut own, data, file, &namespace, symbols)?,
             // A constraint alias shares the types' namespace, so that it is
             // exported and imported as one is, and owns as little as an alias.
             Item::Alias(AliasDecl { name, .. })
             | Item::Constraints(ConstraintAliasDecl { name, .. }) => {
                 let local = symbols.intern(name.text(source));
                 if own.types.contains_key(&local) {
-                    return Err(Diagnostic::new(format!(
-                        "type `{}` is declared more than once",
-                        name.text(source)
-                    )));
+                    let message =
+                        format!("type `{}` is declared more than once", name.text(source));
+                    return Err(Diagnostic::new(message)
+                        .at(file, name.0)
+                        .label("declared again here"));
                 }
                 let canonical = symbols.intern(&format!("{namespace}$${}", name.text(source)));
                 own.types.insert(
@@ -523,10 +547,10 @@ fn declarations(
                 );
             }
             Item::Signature(signature) => {
-                declare_value(&mut own, signature.name, source, &namespace, symbols)?;
+                declare_value(&mut own, signature.name, file, &namespace, symbols)?;
             }
             Item::Clause(clause) => {
-                declare_value(&mut own, clause.name, source, &namespace, symbols)?;
+                declare_value(&mut own, clause.name, file, &namespace, symbols)?;
             }
             // An expectation is named by nothing a program can write.
             Item::Header(_) | Item::Import(_) | Item::Exports(_) | Item::Expect(_) => {}
@@ -538,16 +562,20 @@ fn declarations(
 fn declare_data(
     own: &mut Interface,
     data: &DataDecl,
-    source: &str,
+    file: &Source,
     namespace: &str,
     symbols: &mut Symbols,
 ) -> Result<(), Diagnostic> {
+    let source = file.text();
     let local = symbols.intern(data.name.text(source));
     if own.types.contains_key(&local) {
-        return Err(Diagnostic::new(format!(
+        let message = format!(
             "type `{}` is declared more than once",
             data.name.text(source)
-        )));
+        );
+        return Err(Diagnostic::new(message)
+            .at(file, data.name.0)
+            .label("declared again here"));
     }
     let canonical = symbols.intern(&format!("{namespace}$${}", data.name.text(source)));
     let mut binding = TypeBinding {
@@ -566,11 +594,14 @@ fn declare_data(
                     constructor.name.text(source)
                 ));
                 if binding.constructors.insert(spelling, canonical).is_some() {
-                    return Err(Diagnostic::new(format!(
+                    let message = format!(
                         "type `{}` declares constructor `{}` more than once",
                         data.name.text(source),
                         constructor.name.text(source)
-                    )));
+                    );
+                    return Err(Diagnostic::new(message)
+                        .at(file, constructor.name.0)
+                        .label("declared again here"));
                 }
                 claim(&mut own.constructors, spelling, canonical);
             }
@@ -600,10 +631,11 @@ fn declare_data(
         if let Some(previous) = binding.methods.get(&spelling)
             && *previous != canonical
         {
-            return Err(Diagnostic::new(format!(
+            let message = format!(
                 "method `{}` is declared by conflicting definitions",
                 method_name.text(source)
-            )));
+            );
+            return Err(Diagnostic::new(message).at(file, method_name.0));
         }
         binding.methods.insert(spelling, canonical);
     }
@@ -651,19 +683,20 @@ fn intern_record_fields(ty: &super::ast::Type, source: &str, symbols: &mut Symbo
 fn declare_value(
     own: &mut Interface,
     name: Name,
-    source: &str,
+    file: &Source,
     namespace: &str,
     symbols: &mut Symbols,
 ) -> Result<(), Diagnostic> {
+    let source = file.text();
     let local = symbols.intern(name.text(source));
     let canonical = symbols.intern(&format!("{namespace}$${}", name.text(source)));
     if let Some(previous) = own.values.get(&local)
         && *previous != canonical
     {
-        return Err(Diagnostic::new(format!(
-            "value `{}` is declared more than once",
-            name.text(source)
-        )));
+        let message = format!("value `{}` is declared more than once", name.text(source));
+        return Err(Diagnostic::new(message)
+            .at(file, name.0)
+            .label("declared again here"));
     }
     own.values.insert(local, canonical);
     Ok(())
@@ -671,10 +704,11 @@ fn declare_value(
 
 fn exports(
     module: &Module,
-    source: &str,
+    file: &Source,
     scope: &Interface,
     symbols: &mut Symbols,
 ) -> Result<Interface, Diagnostic> {
+    let source = file.text();
     let declarations: Vec<&Export> = module
         .items
         .iter()
@@ -701,10 +735,12 @@ fn exports(
         }
         if let Some(binding) = scope.types.get(&local) {
             if binding.alias && export.constructors {
-                return Err(Diagnostic::new(format!(
-                    "`{}` is an alias, which owns no constructors for `.*` to export",
-                    export.name.text(source)
-                )));
+                let name = export.name.text(source);
+                let message = format!("`{name}` is an alias, which owns no constructors");
+                return Err(Diagnostic::new(message)
+                    .at(file, export.name.0)
+                    .label("`.*` exports a type's constructors")
+                    .help(format!("export `{name}` without `.*`")));
             }
             let mut visible = binding.clone();
             if !export.constructors {
@@ -718,10 +754,11 @@ fn exports(
             }
         }
         if !scope.values.contains_key(&local) && !scope.types.contains_key(&local) {
-            return Err(Diagnostic::new(format!(
+            let message = format!(
                 "`{}` is not visible and cannot be exported",
                 export.name.text(source)
-            )));
+            );
+            return Err(Diagnostic::new(message).at(file, export.name.0));
         }
     }
     Ok(public)
@@ -731,9 +768,10 @@ fn expose_import(
     scope: &mut Interface,
     face: &Interface,
     import: &super::ast::ImportDecl,
-    source: &str,
+    file: &Source,
     symbols: &mut Symbols,
 ) -> Result<(), Diagnostic> {
+    let source = file.text();
     for exposure in &import.exposures {
         let exported = symbols.intern(exposure.exported.text(source));
         let local = symbols.intern(exposure.local.text(source));
@@ -755,10 +793,11 @@ fn expose_import(
             if let Some(previous) = scope.types.get(&local)
                 && previous.canonical != imported.canonical
             {
-                return Err(Diagnostic::new(format!(
+                let message = format!(
                     "imported type `{}` conflicts with an existing type",
                     symbols.text(local)
-                )));
+                );
+                return Err(Diagnostic::new(message).at(file, exposure.local.0));
             }
             if exposure.constructors {
                 for (&name, &canonical) in &imported.constructors {
@@ -779,16 +818,19 @@ fn expose_import(
             found = true;
         }
         if !found {
-            return Err(Diagnostic::new(format!(
-                "`{}` is not exported by import `{}`",
-                exposure.exported.text(source),
-                import
-                    .path
-                    .iter()
-                    .map(|part| part.text(source))
-                    .collect::<Vec<_>>()
-                    .join(".")
-            )));
+            let module = import
+                .path
+                .iter()
+                .map(|part| part.text(source))
+                .collect::<Vec<_>>()
+                .join(".");
+            let message = format!(
+                "`{}` is not exported by `{module}`",
+                exposure.exported.text(source)
+            );
+            return Err(Diagnostic::new(message)
+                .at(file, exposure.exported.0)
+                .label(format!("`{module}` does not export this")));
         }
     }
     Ok(())

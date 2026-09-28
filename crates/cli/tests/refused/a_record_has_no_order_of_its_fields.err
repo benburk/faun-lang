@@ -1,4 +1,4 @@
-error: no type-compatible field or method `cmp` is in scope
+error: `{x: Nat}` has no field or method `cmp`
  --> a_record_has_no_order_of_its_fields.fn:4:15
   |
 4 | less(a, b) -> a < b

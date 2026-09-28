@@ -603,12 +603,15 @@ fn descends(
         .map(|id| program.name(program.function(*id).name))
         .collect();
     Err(Refusal {
-        message: format!(
-            "nothing here shows `{}` stops: it goes round on what it was handed rather than on a part of it",
-            named.join("`, `")
-        ),
+        message: format!("nothing here shows `{}` stops", named.join("`, `")),
         function: Some(function),
         call: Some(call),
+        label: Some("goes round on what it was handed, not on a part of it".to_owned()),
+        help: Some(
+            "hand each round a part of what it was handed, such as a list's rest, so it gets \
+             smaller until it stops"
+                .to_owned(),
+        ),
     })
 }
 

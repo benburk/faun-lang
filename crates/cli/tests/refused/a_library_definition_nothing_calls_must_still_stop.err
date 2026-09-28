@@ -1,5 +1,7 @@
-error: nothing here shows `spin` stops: it goes round on what it was handed rather than on a part of it
+error: nothing here shows `spin` stops
  --> a_library_definition_nothing_calls_must_still_stop.fn:2:12
   |
 2 | spin(n) -> spin(n)
-  |            ^^^^^^^
+  |            ^^^^^^^ goes round on what it was handed, not on a part of it
+  |
+  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

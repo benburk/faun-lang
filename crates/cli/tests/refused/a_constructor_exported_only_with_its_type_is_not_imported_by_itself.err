@@ -1,1 +1,5 @@
-error: `Secret` is not exported by import `shapes`
+error: `Secret` is not exported by `shapes`
+ --> a_constructor_exported_only_with_its_type_is_not_imported_by_itself/main.fn:3:16
+  |
+3 | import shapes {Secret}
+  |                ^^^^^^ `shapes` does not export this

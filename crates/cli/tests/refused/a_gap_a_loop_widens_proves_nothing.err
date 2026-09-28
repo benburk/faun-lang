@@ -1,5 +1,7 @@
-error: nothing here shows `grows` stops: it goes round on what it was handed rather than on a part of it
+error: nothing here shows `grows` stops
  --> a_gap_a_loop_widens_proves_nothing.fn:4:25
   |
 4 | grows(i, n) if i < n -> grows(i, Succ(n))
-  |                         ^^^^^^^^^^^^^^^^^
+  |                         ^^^^^^^^^^^^^^^^^ goes round on what it was handed, not on a part of it
+  |
+  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

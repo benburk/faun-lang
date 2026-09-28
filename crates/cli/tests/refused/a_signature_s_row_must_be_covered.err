@@ -1,5 +1,7 @@
-error: `g` does not cover every case: no clause matches `g(C)`
+error: `g` does not cover every case
  --> a_signature_s_row_must_be_covered.fn:4:1
   |
 4 | g(A) -> 1
-  | ^^^^^^^^^
+  | ^^^^^^^^^ no clause matches `g(C)`
+  |
+  = help: add a clause matching `g(C)`

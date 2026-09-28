@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use super::ast as s;
-use super::diagnostic::{Diagnostic, Location};
+use super::diagnostic::{Advice, Advised, Diagnostic, Location, LowerError, Unplaced};
 use super::hir as h;
 use super::literal;
 use super::modules::{Interface, LoadedModule, LoadedProgram, ModuleId, TypeBinding};
@@ -49,6 +49,22 @@ impl<P> ResolvedProgram<P> {
         Diagnostic::new(message).at(self.source(module), span)
     }
 
+    /// A lowering failure as a diagnostic, at its place where it names one.
+    ///
+    /// # Panics
+    /// If it names a module not one of this program's.
+    pub(crate) fn told(&self, error: LowerError) -> Diagnostic {
+        let diagnostic = match error.at {
+            Some((module, span)) => self.diagnostic(module, span, error.message),
+            None => Diagnostic::new(error.message),
+        };
+        let mut diagnostic = diagnostic.advised(*error.advice);
+        for ((module, span), text) in error.secondary {
+            diagnostic = diagnostic.secondary(self.source(module), span, text);
+        }
+        diagnostic
+    }
+
     /// Where `span` is in `module`.
     ///
     /// # Panics
@@ -70,6 +86,13 @@ pub struct ResolveError {
     pub module: ModuleId,
     pub span: s::Span,
     pub message: String,
+    pub advice: Advice,
+}
+
+impl Advised for ResolveError {
+    fn advice(&mut self) -> &mut Advice {
+        &mut self.advice
+    }
 }
 
 impl fmt::Display for ResolveError {
@@ -138,7 +161,9 @@ fn located(loaded: &LoadedProgram, error: ResolveError) -> Diagnostic {
         .sources
         .get(module.source)
         .expect("loaded module has source");
-    Diagnostic::new(error.message).at(source, error.span)
+    Diagnostic::new(error.message)
+        .at(source, error.span)
+        .advised(error.advice)
 }
 
 /// Each alias's definition, resolved in the module that wrote it.
@@ -226,11 +251,9 @@ fn resolve_module(
                 let canonical = scope.types[&local].canonical;
                 let ty = written_type(module.id, &alias.ty, source, scope, symbols)?;
                 if has_variable(&ty) {
-                    return Err(error(
-                        module.id,
-                        alias.span,
-                        "an alias names one type and has no type variables; a type with parameters is declared with `:`",
-                    ));
+                    let message = "an alias names one type and has no type variables";
+                    return Err(error(module.id, alias.span, message)
+                        .help("declare a type with parameters with `:`"));
                 }
                 aliases.insert(canonical, (ty, module.id, alias.span));
             }
@@ -349,7 +372,7 @@ fn expand_aliases(
                         .chain(data.wrapper.iter_mut().map(|wrapper| &mut wrapper.field));
                     for field in fields {
                         *field = expand(field, &expanded, symbols, &mut Vec::new())
-                            .and_then(|field| typed(field, constraint_aliases, symbols))
+                            .and_then(|field| Ok(typed(field, constraint_aliases, symbols)?))
                             .map_err(|message| error(id, span, message))?;
                     }
                     for method in &mut data.methods {
@@ -374,7 +397,7 @@ fn expand_signature(
     signature: &mut h::SignatureDecl,
     (aliases, constraint_aliases): (&Aliases, &ConstraintAliases),
     symbols: &mut Symbols,
-) -> Result<(), String> {
+) -> Result<(), Unplaced> {
     signature.constraints =
         expand_constraints(&signature.constraints, constraint_aliases, symbols)?;
     let written = signature
@@ -684,7 +707,7 @@ fn expand(
     aliases: &Aliases,
     symbols: &Symbols,
     expanding: &mut Vec<Symbol>,
-) -> Result<h::Type, String> {
+) -> Result<h::Type, Unplaced> {
     let spelled = |name: Symbol| {
         let text = symbols.text(name);
         text.rsplit_once("$$")
@@ -694,16 +717,12 @@ fn expand(
     Ok(match ty {
         h::Type::Named(name, arguments) if aliases.contains_key(name) => {
             if !arguments.is_empty() {
-                return Err(format!(
-                    "`{}` is an alias and takes no arguments",
-                    spelled(*name)
-                ));
+                let message = format!("`{}` is an alias and takes no arguments", spelled(*name));
+                return Err(Unplaced::from(message));
             }
             if expanding.contains(name) {
-                return Err(format!(
-                    "alias `{}` names itself; a recursive type is declared with `:`",
-                    spelled(*name)
-                ));
+                let message = format!("alias `{}` names itself", spelled(*name));
+                return Err(Unplaced::from(message).help("declare a recursive type with `:`"));
             }
             expanding.push(*name);
             let definition = expand(&aliases[name].0, aliases, symbols, expanding)?;
@@ -734,23 +753,23 @@ fn expand(
                             .fields
                             .iter()
                             .map(|field| expand(field, aliases, symbols, expanding))
-                            .collect::<Result<_, String>>()?,
+                            .collect::<Result<_, Unplaced>>()?,
                     })
                 })
-                .collect::<Result<_, String>>()?,
+                .collect::<Result<_, Unplaced>>()?,
         ),
         h::Type::Record(fields, open) => h::Type::Record(
             fields
                 .iter()
                 .map(|(name, field)| Ok((*name, expand(field, aliases, symbols, expanding)?)))
-                .collect::<Result<_, String>>()?,
+                .collect::<Result<_, Unplaced>>()?,
             *open,
         ),
         h::Type::Tuple(members) => h::Type::Tuple(
             members
                 .iter()
                 .map(|member| expand(member, aliases, symbols, expanding))
-                .collect::<Result<_, String>>()?,
+                .collect::<Result<_, Unplaced>>()?,
         ),
     })
 }
@@ -1694,11 +1713,13 @@ fn method_name(
     })
 }
 
-fn error(module: ModuleId, span: s::Span, message: impl Into<String>) -> ResolveError {
+fn error(module: ModuleId, span: s::Span, said: impl Into<Unplaced>) -> ResolveError {
+    let said = said.into();
     ResolveError {
         module,
         span,
-        message: message.into(),
+        message: said.message,
+        advice: said.advice,
     }
 }
 
@@ -1790,7 +1811,7 @@ mod tests {
         let host = fixture.write("host.fn", "export {Host}\nHost : {}\n");
         let loaded = modules::load_program(&entry, &prelude, &host).unwrap();
         let failure = resolve_names(loaded).unwrap_err();
-        let at = failure.location.expect("a place in the source");
+        let at = failure.location().expect("a place in the source");
         assert_eq!((at.line, at.column, at.width), (1, 8, 7));
     }
 }

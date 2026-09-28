@@ -1,5 +1,7 @@
-error: `300` is not a `U8`: it takes numerals below 256
+error: `300` is out of range for `U8`
  --> a_word_s_pattern_is_written_below_its_width.fn:4:1
   |
 4 | byte(300) -> 1
   | ^^^^^^^^^^^^^^
+  |
+  = note: a `U8` takes numerals below 256

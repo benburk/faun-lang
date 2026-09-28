@@ -1,1 +1,8 @@
-error: `shapes` is a package this one depends on, whose modules are its own: import `shapes` itself
+error: `shapes.area` is inside the package `shapes`
+ --> a_dependency_is_not_reached_past_its_root/main.fn:3:1
+  |
+3 | import shapes.area {square}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: a package this one depends on keeps its modules its own
+  = help: import `shapes` itself

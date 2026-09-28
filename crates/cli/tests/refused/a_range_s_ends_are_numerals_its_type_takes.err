@@ -1,5 +1,7 @@
-error: `300` is not a `U8`: it takes numerals below 256
+error: `300` is out of range for `U8`
  --> a_range_s_ends_are_numerals_its_type_takes.fn:4:1
   |
 4 | byte(0..300) -> True
   | ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: a `U8` takes numerals below 256

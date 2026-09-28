@@ -1,5 +1,8 @@
-error: constructor `Failed` is ambiguous here: nothing decides between `Match.Failed` and `Parse.Failed`; qualify it, or let a signature decide
+error: constructor `Failed` is ambiguous here
  --> a_word_two_types_claim_with_nothing_to_decide_is_ambiguous.fn:6:14
   |
 6 | orphan(m) -> Failed(m)
   |              ^^^^^^^^^
+  |
+  = note: nothing decides between `Match.Failed` and `Parse.Failed`
+  = help: qualify it, or let a signature decide

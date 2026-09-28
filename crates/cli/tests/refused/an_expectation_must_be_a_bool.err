@@ -1,5 +1,8 @@
-error: a numeral cannot be a `Bool`: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`; convert a value with `of_nat`
+error: a numeral cannot be a `Bool`
  --> an_expectation_must_be_a_bool.fn:3:8
   |
 3 | expect 3
-  |        ^
+  |        ^ expected `Bool`, found a numeral
+  |
+  = note: a numeral is a `Nat`, `Int`, `U8`, `U16`, `U32`, or `U64`
+  = help: convert a value with `of_nat`
