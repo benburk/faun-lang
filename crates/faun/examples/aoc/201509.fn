@@ -59,7 +59,7 @@ part2(input) -> tour_lengths(input)?.max().err_as("no places to visit")
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
-  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
   lengths = tour_lengths(stdin)?
   shortest = lengths.min().err_as("no places to visit")?
   longest = lengths.max().err_as("no places to visit")?

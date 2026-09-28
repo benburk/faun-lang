@@ -131,7 +131,7 @@ part2(input) -> strongest(rings(input)?.map(net_score))
 
 app : {stdin: List(U8), *} -> Result({part1: Int, part2: Int}, Str)
 app(input) ->
-  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
   scored = rings(stdin)?
   seated = strongest(scored.map(|(total, _)| total))?
   yourself = strongest(scored.map(net_score))?

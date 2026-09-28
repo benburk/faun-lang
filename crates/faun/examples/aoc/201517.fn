@@ -58,7 +58,7 @@ target() -> 150
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
-  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
   counts = solve(stdin, target())?
   Ok({part1: counts.len(), part2: fewest_ways(counts)?})
 

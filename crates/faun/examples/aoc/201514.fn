@@ -80,7 +80,7 @@ part2(input, duration) -> points(herd(input)?, duration)
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, Str)
 app(input) ->
-  stdin = Str.from_utf8(input.stdin).err_as("standard input is not UTF-8")?
+  stdin = Str.from_ascii(input.stdin).err_as("standard input is not ASCII")?
   racers = herd(stdin)?
   Ok({part1: lead(racers, race_length())?, part2: points(racers, race_length())?})
 
