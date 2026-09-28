@@ -185,6 +185,9 @@ impl Program {
             | Op::BufferPush {
                 operands: fields, ..
             }
+            | Op::BufferAppend {
+                operands: fields, ..
+            }
             | Op::BufferReplace {
                 operands: fields, ..
             }

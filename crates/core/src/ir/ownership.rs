@@ -127,11 +127,12 @@ pub(super) fn owned_parameters(source: &Program) -> Vec<Vec<bool>> {
 
 /// What an instruction building a sequence from `operands` takes a claim
 /// to. A push takes its buffer and its fields, past the start and length,
-/// and a replacement past its index too; a prepend, the buffer it puts
-/// elements before; and a join both, either of which may become the result.
+/// and a replacement past its index too; and a prepend or a join both
+/// buffers, either of which may become the result: a prepend onto nothing
+/// of a buffer nothing else holds turns it round where it lies.
 fn sequence_taken(op: &Op, operands: &[ValueId], out: &mut Vec<ValueId>) {
     match op {
-        Op::BufferPush { .. } => {
+        Op::BufferPush { .. } | Op::BufferAppend { .. } => {
             out.push(operands[0]);
             out.extend_from_slice(&operands[3..]);
         }
@@ -139,8 +140,9 @@ fn sequence_taken(op: &Op, operands: &[ValueId], out: &mut Vec<ValueId>) {
             out.push(operands[0]);
             out.extend_from_slice(&operands[4..]);
         }
-        Op::BufferPrepend { .. } => out.push(operands[0]),
-        Op::BufferExtend { .. } => out.extend([operands[0], operands[3]]),
+        Op::BufferPrepend { .. } | Op::BufferExtend { .. } => {
+            out.extend([operands[0], operands[3]]);
+        }
         _ => unreachable!("only a sequence's instructions build one from operands"),
     }
 }
@@ -151,6 +153,7 @@ fn consumed_in(source: &Program, region: RegionId, owned: &[Vec<bool>], out: &mu
         match *op {
             Op::Cell { fields, .. } => out.extend_from_slice(source.values(fields)),
             Op::BufferPush { operands, .. }
+            | Op::BufferAppend { operands, .. }
             | Op::BufferReplace { operands, .. }
             | Op::BufferPrepend { operands, .. }
             | Op::BufferExtend { operands, .. } => {

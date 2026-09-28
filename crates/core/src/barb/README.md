@@ -77,7 +77,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   apart by its shape, and each field of a parameter of a sum holding no
   more of itself is a size of its own, so a parser going round on the rest
   it answers, in an `Ok` or handed to a helper that takes it apart, is seen
-  to stop.
+  to stop. Each list parameter's length is a row of its own there, and what a
+  body holds is bounded by one list's length or two together, plus a
+  constant: a cons is one longer than its rest whatever its element, and a
+  walk onto an accumulator answers the sum. So a walk going round on what
+  `map`, `filter`, `map_accum` or `reverse` answered of its rest is seen to
+  stop.
 - `relations.rs`: what a guard says of the sizes it compared, followed from
   the comparisons recognized by their equations through the definitions
   answering from them, as the facts each constructor of the answer carries.
@@ -155,7 +160,12 @@ x    ::= a parameter, a binding, or a field an arm bound
   pushed for a step -- as `SequenceOperation::ReverseOnto`, and one that is a
   reversal onto nothing reversed again onto its second argument as
   `SequenceOperation::Prepend`. Both keep their bodies and are answered by
-  machine lowering as one buffer operation: room made once, then a copy. A
+  machine lowering as one buffer operation: room made once, then a copy;
+  reversed onto nothing, a buffer nothing else holds is turned round where
+  it lies. A prepend of a sequence onto one element alone is
+  `SequenceOperation::Append`, written after the last element where nothing
+  else holds the buffer and it has room, so appending one at a time copies
+  each element a bounded number of times. A
   definition taking a count of elements off the front -- the sequence for
   nought, the empty one for an empty sequence, itself on the rest and the
   count less one otherwise, matching either first -- is
@@ -217,8 +227,17 @@ x    ::= a parameter, a binding, or a field an arm bound
   those base cases applied to `a monus b` and `b monus a`, so it calls itself
   no more and may be inlined. The monus is the definition recognized as one
   over that type, or one declared in the shape recognition reads.
+- `forward.rs`: a walk building its list on the way out, each element put
+  in front of what it answers for the rest, in the list it answers or in one
+  field of a product it answers, is written again carrying what it has built:
+  each element appended, a call answering its own answer outright handing on
+  what was built, and a clause calling nothing answering what was built
+  followed by what it answers. Its calls of itself are then all tail calls,
+  so a direct `map` is a loop building its buffer front to back. The append
+  and prepend it calls are recognized definitions, found or written here.
 - `fuse.rs`: a producer walks a list, pushes one element onto an accumulator
-  per step and answers it reversed; a consumer takes a list apart from the
+  per step and answers it reversed, or appends each and answers it prepended
+  onto nothing, as `forward.rs` writes a walk; a consumer takes a list apart from the
   front, reading its rest only as the argument of tail calls to itself. A
   producer's call onto an empty accumulator read once, by a consumer's call
   later in the same body, becomes a call of a new definition doing both steps
@@ -264,42 +283,45 @@ two types -- so nothing infers a provider or an effect from the display name.
 `optimize(program)` runs a small fixed schedule after validation:
 
 1. Structural normalization: substitute local aliases, without expanding calls.
-2. Descent: rewrite definitions taking two numbers down together as their
+2. Building forward: a walk answering `[f(x), *walk(rest)]`, or its list so
+   beside a state, carries what it has built and appends each element, so it
+   calls itself only in tail position.
+3. Descent: rewrite definitions taking two numbers down together as their
    base cases on the two differences, so they no longer recurse.
-3. Helper inlining: non-arithmetic helpers other than loop breakers. In each
+4. Helper inlining: non-arithmetic helpers other than loop breakers. In each
    recursive component, a definition calling itself is a breaker, and so are
    enough of the rest that no cycle is left among the others; each other one may
    be copied into its caller, so definitions calling each other become one
    calling itself, which machine lowering makes a loop where the call is a tail.
-4. Fusion: a list built by one walk and read once by another is never built.
-5. Arithmetic identities justified by structurally recognized `Operation` facts.
-6. Constant folding, each definition after what it calls, so that a caller
+5. Fusion: a list built by one walk and read once by another is never built.
+6. Arithmetic identities justified by structurally recognized `Operation` facts.
+7. Constant folding, each definition after what it calls, so that a caller
    meets its callees' answers as constants; each definition draws at most a
    per-definition allowance from the pass's budget, so a costly answer
    declined in one leaves the rest something to fold with.
-7. Specialization: a parameter a definition passes on to itself as it came,
+8. Specialization: a parameter a definition passes on to itself as it came,
    which callers hand different known values, gets a copy of the definition
    for each value, at most four, folded with that value bound. A copy is kept,
    and takes the calls handing its value, only where that decides a match
    between two or more arms, so a loop is not copied for values it only
    carries. Refolding one copy skips call-graph construction and ordering;
    refolding several definitions retains callee-first order and the same budgets.
-8. Invariant arguments: a parameter every caller the entry reaches hands one
+9. Invariant arguments: a parameter every caller the entry reaches hands one
    known value is bound to that value in its definition. After folding, so
    what they hand is known, and before algebraic normalization, which reads a
    known sequence's length as a number. Each definition given a value is then
    folded again, with a budget of its own, so what it asks of that value is
    answered too.
-9. Bounded algebraic normalization: combine constants across recognized associative
-   operations and directional monus/division chains, then push power-of-two moduli
-   through sums and products.
-10. Sweep: where there is an entry, drop every definition it does not reach,
+10. Bounded algebraic normalization: combine constants across recognized associative
+    operations and directional monus/division chains, then push power-of-two moduli
+    through sums and products.
+11. Sweep: where there is an entry, drop every definition it does not reach,
     renumbering function IDs in order. Types, constructors and constants stay.
-11. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+12. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
     pure arithmetic or lengths, and matches whose arms are all inert; retain calls
     of unknown meaning.
 
-Every normalizing stage (1, 3 and 9) also decides what is already decided: a
+Every normalizing stage (1, 4 and 10) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
 number, and a match whose arms agree is that
 arm. A match that is the last binding of a body answering a match on it, and

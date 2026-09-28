@@ -166,7 +166,9 @@ impl Fusion<'_> {
     ///   push(x, rest) => ...; next = push(e, acc); p(.. rest .. next ..)
     /// ```
     ///
-    /// where `acc` is read nowhere else, and `reverse` is a reversal.
+    /// where `acc` is read nowhere else, and `reverse` is a reversal; or the
+    /// same building front to back, as [`super::forward`] writes a walk,
+    /// `append(acc, e)` for the push and `prepend(acc, <empty>)` at the end.
     fn producer(&mut self, id: FnId) -> Option<Producer> {
         if let Some(&known) = self.producers.get(&id) {
             return known;
@@ -198,7 +200,10 @@ impl Fusion<'_> {
             return None;
         };
         let acc = acc.index();
-        if acc >= arity || acc == list || !super::sequence::reverses(self.program, reverse) {
+        let ends = super::sequence::reverses(self.program, reverse)
+            || self.recognised.sequences.get(reverse.index())
+                == Some(&Some(SequenceOperation::Prepend));
+        if acc >= arity || acc == list || !ends {
             return None;
         }
         // What it builds is a list too, but not necessarily of what it walks.
@@ -221,18 +226,37 @@ impl Fusion<'_> {
             return None;
         }
         let pushed = self.bound(push_body, arity + 2, args[acc].0.index())?;
-        let Expr::Con(ctor, fields) = self.program.expr(pushed) else {
-            return None;
-        };
-        let fields = self.program.atoms(fields);
-        if ctor != built_push || fields[built_recursive].0.index() != acc {
-            return None;
-        }
+        self.pushed_element(pushed, acc, (built_push, built_recursive))?;
         // Nothing else reads the accumulator, or the list it pushed onto.
         let next = args[acc].0.index();
         let reads = self.reads(push_body, acc) + self.reads(nil_arm.body, acc);
         (reads == 2 && self.reads_after(push_body, arity + 2, next) == 1)
             .then_some(Producer { list, acc })
+    }
+
+    /// The element `expr` puts onto the accumulator at level `acc`: a push
+    /// in front of it, or an append after it.
+    fn pushed_element(
+        &self,
+        expr: ExprId,
+        acc: usize,
+        (push, recursive): (super::CtorId, usize),
+    ) -> Option<Atom> {
+        match self.program.expr(expr) {
+            Expr::Con(ctor, fields) => {
+                let fields = self.program.atoms(fields);
+                (ctor == push && fields[recursive].0.index() == acc).then(|| fields[1 - recursive])
+            }
+            Expr::Call(callee, args) => {
+                let &[onto, element] = self.program.atoms(args) else {
+                    return None;
+                };
+                let appends = self.recognised.sequences.get(callee.index())
+                    == Some(&Some(SequenceOperation::Append));
+                (appends && onto.0.index() == acc).then_some(element)
+            }
+            Expr::Atom(_) | Expr::Static(_) | Expr::Match(..) => None,
+        }
     }
 
     /// Whether a definition may be fused at all: it reaches no bodyless
@@ -527,10 +551,13 @@ impl Fusion<'_> {
             };
             locals.push(value);
         }
-        let Expr::Con(_, fields) = self.program.expr(bindings[pushed]) else {
-            unreachable!("a producer pushes")
+        // What it pushed in front, or appended after.
+        let element = match self.program.expr(bindings[pushed]) {
+            Expr::Con(_, fields) => self.program.atoms(fields)[1 - recursive],
+            Expr::Call(_, args) => self.program.atoms(args)[1],
+            _ => unreachable!("a producer pushes or appends"),
         };
-        let element = locals[self.program.atoms(fields)[1 - recursive].0.index()];
+        let element = locals[element.0.index()];
         // What the producer goes on with, but for the list it is building:
         // that is what the consumer is handed instead.
         let going_on: Vec<_> = again

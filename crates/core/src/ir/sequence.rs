@@ -99,6 +99,7 @@ pub(super) struct Library {
 struct Copies {
     copy: FunctionId,
     copy_reversed: FunctionId,
+    reverse: FunctionId,
 }
 
 /// Where a grown buffer puts the sequence it copies: at its end, with room
@@ -208,8 +209,11 @@ impl Library {
     }
 
     /// The `count` elements from `from_start` of `from`, last first, put
-    /// before the sequence of `len` from `start` of `buffer`, whose claim
-    /// this takes: the buffer and where the joined sequence starts.
+    /// before the sequence of `len` from `start` of `buffer`, the claims to
+    /// both of which this takes: the buffer and where the joined sequence
+    /// starts. Put before nothing, a `from` nothing else holds is turned
+    /// round where it lies, so a walk building its answer backwards and
+    /// turning it round at the end builds one buffer, not two.
     ///
     /// # Panics
     /// If the layout was not said to be prepended to.
@@ -220,17 +224,37 @@ impl Library {
         (buffer, start, len): (ValueId, ValueId, ValueId),
         (from, from_start, count): (ValueId, ValueId, ValueId),
     ) -> [ValueId; 2] {
-        let routine = self.routines[&(Growth::Prepend, key(element))];
         let copies = self.copies.expect("growing by a sequence copies one");
-        let room = b.call_one(routine, &[buffer, start, len, count]);
-        let front = started(b, (buffer, room), (start, len), count);
-        let into = self.element(b, room, element.size, front);
+        let zero = number(b, 0);
         let one = number(b, 1);
-        let past = b.binary(Binary::Add, from_start, count);
-        let last = b.binary(Binary::Sub, past, one);
-        let last = self.element(b, from, element.size, last);
-        b.call(copies.copy_reversed, &[last, into, count, room]);
-        [room, front]
+        let nothing = b.compare(Relation::Equal, len, zero);
+        let refs = b.load(Width::Word, from, Offset::Words(1));
+        let alone = b.compare(Relation::Equal, refs, one);
+        let turned = b.binary(Binary::Mul, nothing, alone);
+        let joined = b.if_(
+            turned,
+            &[A, W],
+            |b| {
+                let first = self.element(b, from, element.size, from_start);
+                b.call(copies.reverse, &[first, count, from]);
+                b.call(self.release, &[buffer]);
+                b.yield_(&[from, from_start]);
+            },
+            |b| {
+                let routine = self.routines[&(Growth::Prepend, key(element))];
+                let room = b.call_one(routine, &[buffer, start, len, count]);
+                let front = started(b, (buffer, room), (start, len), count);
+                let into = self.element(b, room, element.size, front);
+                let one = number(b, 1);
+                let past = b.binary(Binary::Add, from_start, count);
+                let last = b.binary(Binary::Sub, past, one);
+                let last = self.element(b, from, element.size, last);
+                b.call(copies.copy_reversed, &[last, into, count, room]);
+                b.call(self.release, &[from]);
+                b.yield_(&[room, front]);
+            },
+        );
+        [joined[0], joined[1]]
     }
 
     /// The sequence `first` followed by `then`, each a buffer, a start and
@@ -282,6 +306,55 @@ impl Library {
         [joined[0], joined[1]]
     }
 
+    /// Room for one element of `element` after the sequence of `len` from
+    /// `start` of `buffer`, whose claim this takes: a buffer nothing else
+    /// holds, where the longer sequence starts in it, and the element to be
+    /// written. One nothing else holds with room after is written in place;
+    /// otherwise the sequence is copied to the start of one with room.
+    ///
+    /// # Panics
+    /// If the layout was not said to be extended.
+    pub(super) fn after(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
+        (buffer, start, len): (ValueId, ValueId, ValueId),
+    ) -> [ValueId; 3] {
+        let after = self.routines[&(Growth::Extend, key(element))];
+        let one = number(b, 1);
+        let [room, front] = if element.managed().next().is_some() {
+            let room = b.call_one(after, &[buffer, start, len, one]);
+            [room, kept_start(b, (buffer, room), start)]
+        } else {
+            // Where no leaf holds a claim, a buffer nothing else holds with
+            // room after is written here rather than called for, as
+            // [`Library::room`] does before; where the routine is called,
+            // the sequence was copied to the start of a new buffer.
+            let refs = b.load(Width::Word, buffer, Offset::Words(1));
+            let alone = b.compare(Relation::Equal, refs, one);
+            let capacity = b.load(Width::Word, buffer, Offset::Words(CAPACITY));
+            let end = b.binary(Binary::Add, start, len);
+            let past = b.binary(Binary::Add, end, one);
+            let short = b.compare(Relation::Less, capacity, past);
+            let fits = b.binary(Binary::Sub, one, short);
+            let both = b.binary(Binary::Mul, alone, fits);
+            let answer = b.if_(
+                both,
+                &[A, W],
+                |b| b.yield_(&[buffer, start]),
+                |b| {
+                    let room = b.call_one(after, &[buffer, start, len, one]);
+                    let zero = number(b, 0);
+                    b.yield_(&[room, zero]);
+                },
+            );
+            [answer[0], answer[1]]
+        };
+        let end = b.binary(Binary::Add, front, len);
+        let into = self.element(b, room, element.size, end);
+        [room, front, into]
+    }
+
     /// Two sequences neither of which is empty, joined as
     /// [`Library::extend`] joins them.
     fn joined(
@@ -294,18 +367,7 @@ impl Library {
         let after = self.routines[&(Growth::Extend, key(element))];
         let copies = self.copies.expect("growing by a sequence copies one");
         let room = b.call_one(after, &[first, first_start, first_len, then_len]);
-        let was = b.convert(W, first);
-        let is = b.convert(W, room);
-        let same = b.compare(Relation::Equal, was, is);
-        let start = b.if_(
-            same,
-            &[W],
-            |b| b.yield_(&[first_start]),
-            |b| {
-                let zero = number(b, 0);
-                b.yield_(&[zero]);
-            },
-        )[0];
+        let start = kept_start(b, (first, room), first_start);
         let end = b.binary(Binary::Add, start, first_len);
         let into = self.element(b, room, element.size, end);
         let from = self.element(b, then, element.size, then_start);
@@ -325,6 +387,24 @@ impl Library {
         let stride = number(b, stride);
         element_at(b, buffer, (stride, index), self.word_bits)
     }
+}
+
+/// Where a sequence of `start` in `buffer` starts once room after it is
+/// made in `room`: where it did, in the same buffer, and at the start of a
+/// new one it was copied to.
+fn kept_start(b: &mut Builder<'_>, (buffer, room): (ValueId, ValueId), start: ValueId) -> ValueId {
+    let was = b.convert(W, buffer);
+    let is = b.convert(W, room);
+    let same = b.compare(Relation::Equal, was, is);
+    b.if_(
+        same,
+        &[W],
+        |b| b.yield_(&[start]),
+        |b| {
+            let zero = number(b, 0);
+            b.yield_(&[zero]);
+        },
+    )[0]
 }
 
 /// Where a sequence of `len` from `start` starts once `added` elements are
@@ -724,9 +804,12 @@ fn define_copies(program: &mut Program, runtime: Runtime) -> Copies {
     define_copy(program, copy, runtime);
     let copy_reversed = program.declare("seq.copy_reversed", &[A, A, W, A], &[]);
     define_copy_reversed(program, copy_reversed, runtime);
+    let reverse = program.declare("seq.reverse", &[A, W, A], &[]);
+    define_reverse(program, reverse, runtime.word_bits());
     Copies {
         copy,
         copy_reversed,
+        reverse,
     }
 }
 
@@ -898,6 +981,66 @@ fn define_copy_reversed(program: &mut Program, id: FunctionId, runtime: Runtime)
         });
         claim_run(b, runtime, (dest, count), (stride, described));
         b.ret(&[]);
+    });
+}
+
+/// `seq.reverse(first, count, like)`: turn round, where they lie, the
+/// `count` elements of `like`'s layout from `first`: the first and last
+/// exchanged, then the second and the one before the last, until they meet.
+/// Nothing is claimed or given up, since every element is still held once.
+fn define_reverse(program: &mut Program, id: FunctionId, word_bits: u16) {
+    let word = u64::from(word_bits / 8);
+    program.define(id, |b, args| {
+        let (first, count, like) = (args[0], args[1], args[2]);
+        let stride = b.load(Width::Word, like, Offset::Words(STRIDE));
+        let zero = number(b, 0);
+        let empty = b.compare(Relation::Equal, count, zero);
+        b.if_(empty, &[], |b| b.ret(&[]), |b| b.yield_(&[]));
+        let one = number(b, 1);
+        let before = b.binary(Binary::Sub, count, one);
+        let distance = b.binary(Binary::Mul, before, stride);
+        let last = byte_offset(b, first, distance);
+        let whole = number(b, word);
+        let tail = b.binary(Binary::Mod, stride, whole);
+        let words = b.binary(Binary::Sub, stride, tail);
+        b.loop_(&[first, last], &[], |b, state| {
+            let (low, high) = (state[0], state[1]);
+            let (low_at, high_at) = (b.convert(W, low), b.convert(W, high));
+            let met = b.compare(Relation::Less, low_at, high_at);
+            b.if_(met, &[], |b| b.yield_(&[]), |b| b.break_(&[]));
+            exchange(b, (low, high), (zero, words), (Width::Word, word));
+            exchange(b, (low, high), (words, stride), (Width::Byte, 1));
+            let low_next = b.binary(Binary::Add, low_at, stride);
+            let high_next = b.binary(Binary::Sub, high_at, stride);
+            let low_next = b.convert(A, low_next);
+            let high_next = b.convert(A, high_next);
+            b.continue_(&[low_next, high_next]);
+        });
+        b.ret(&[]);
+    });
+}
+
+/// Exchange the bytes from `from` to `to` of the elements at `low` and
+/// `high`, `step` bytes of `width` at a time.
+fn exchange(
+    b: &mut Builder<'_>,
+    (low, high): (ValueId, ValueId),
+    (from, to): (ValueId, ValueId),
+    (width, step): (Width, u64),
+) {
+    b.loop_(&[from], &[], |b, state| {
+        let at = state[0];
+        let done = b.compare(Relation::Equal, at, to);
+        b.if_(done, &[], |b| b.break_(&[]), |b| b.yield_(&[]));
+        let left = byte_offset(b, low, at);
+        let right = byte_offset(b, high, at);
+        let held = b.load(width, left, Offset::Words(0));
+        let other = b.load(width, right, Offset::Words(0));
+        b.store(width, left, Offset::Words(0), other);
+        b.store(width, right, Offset::Words(0), held);
+        let step = number(b, step);
+        let next = b.binary(Binary::Add, at, step);
+        b.continue_(&[next]);
     });
 }
 

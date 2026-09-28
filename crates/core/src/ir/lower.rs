@@ -2561,6 +2561,9 @@ impl Lowering<'_> {
             Callee::Sequence(barb::SequenceOperation::Replace) => {
                 return Answer::Value(self.replaced(b, (function, arguments), locals));
             }
+            Callee::Sequence(barb::SequenceOperation::Append) => {
+                return Answer::Value(self.appended(b, (function, arguments), locals));
+            }
             Callee::Sequence(
                 operation @ (barb::SequenceOperation::ReverseOnto
                 | barb::SequenceOperation::Prepend),
@@ -2692,6 +2695,42 @@ impl Lowering<'_> {
         Held::Flat {
             leaves: sequence_run(),
             values: [buffer, first, kept].as_slice().into(),
+        }
+    }
+
+    /// A sequence followed by one more element: written after its last,
+    /// where nothing else holds its buffer and there is room.
+    fn appended(
+        &self,
+        b: &mut super::Builder,
+        (function, arguments): (barb::FnId, barb::Range),
+        locals: &Locals,
+    ) -> Held {
+        let &[sequence, value] = self.barb.atoms(arguments) else {
+            unreachable!("an append is of a sequence and an element");
+        };
+        let barb::TypeShape::Sequence {
+            push, recursive, ..
+        } = barb::type_shape(self.barb, self.barb.params(function)[0])
+        else {
+            unreachable!("an append is to a sequence");
+        };
+        let &[buffer, first, len] = locals[sequence.0.index()]
+            .as_ref()
+            .expect("an appended sequence is carried")
+            .values()
+        else {
+            unreachable!("a sequence is held as its buffer, start and length");
+        };
+        let element = usize::from(recursive == 0);
+        let fields = self.element_leaves(b, (push, element), value, locals);
+        let shape = self.element_shape(b, push, element);
+        let [written, start] = b.buffer_append((buffer, first, len), shape, &fields);
+        let one = b.constant(Class::Word, 1);
+        let longer = b.binary_at(Class::Word, Binary::Add, len, one);
+        Held::Flat {
+            leaves: sequence_run(),
+            values: [written, start, longer].as_slice().into(),
         }
     }
 

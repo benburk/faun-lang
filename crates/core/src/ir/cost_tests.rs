@@ -140,8 +140,8 @@ fn round_trip(n: u64) -> barb::Program {
     source
 }
 
-/// Build a list of `n` counts, then copy it the way `map` does: each step
-/// puts its element in front of what the rest of the walk answered.
+/// Build a list of `n` counts, then copy it the way `map` is written: each
+/// step puts its element in front of what the rest of the walk answered.
 fn copied_on_the_way_out(n: u64) -> barb::Program {
     let mut source = round_trip(n);
     let nat = barb::TypeId::at(0);
@@ -180,9 +180,9 @@ fn copied_on_the_way_out(n: u64) -> barb::Program {
     source
 }
 
-/// Building on the way out, as `map` does, pushes onto a buffer the walk
-/// just answered and nothing else holds, so it writes in place: linear, not
-/// a copy of the rest at every step.
+/// Building on the way out, as `map` is written, is built front to back,
+/// each element appended to a buffer nothing else holds, so it writes in
+/// place: linear, not a copy of the rest at every step.
 #[test]
 fn a_list_copied_on_the_way_out_costs_linear_work() {
     let small = cost(&copied_on_the_way_out(100));
@@ -215,10 +215,10 @@ fn a_list_round_trip_costs_what_is_recorded() {
     assert_eq!(
         cost(&round_trip(100)),
         Cost {
-            allocations: 6,
+            allocations: 5,
             retains: 0,
-            releases: 8,
-            stored_bytes: 1046,
+            releases: 7,
+            stored_bytes: 918,
         }
     );
 }

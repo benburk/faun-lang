@@ -643,6 +643,18 @@ impl Split {
                 )
                 .to_vec()
             }
+            Op::BufferAppend { operands, shape } => {
+                let (split, _) = split(b, shape)?;
+                let operands = source.values(operands);
+                let (sequence, fields) = operands.split_at(3);
+                let fields = self.fields(rebuild, b, fields, shape);
+                b.buffer_append(
+                    (v(sequence[0]), v(sequence[1]), v(sequence[2])),
+                    split,
+                    &fields,
+                )
+                .to_vec()
+            }
             Op::BufferReplace { operands, shape } => {
                 let (split, _) = split(b, shape)?;
                 let operands = source.values(operands);

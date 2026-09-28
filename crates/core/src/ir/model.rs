@@ -242,6 +242,15 @@ pub enum Op {
         shape: ShapeId,
     },
     /// The sequence `operands` begins with -- a buffer, a start and a
+    /// length -- followed by one more element, whose leaves are the rest,
+    /// `fields`. Answers a buffer and where in it the longer sequence
+    /// starts. Takes a claim to the buffer and to each field, so a buffer
+    /// nothing else holds with room after is written in place.
+    BufferAppend {
+        operands: Range,
+        shape: ShapeId,
+    },
+    /// The sequence `operands` begins with -- a buffer, a start and a
     /// length -- with its element at the index that follows, which must be
     /// below the length, replaced by the one whose leaves are the rest,
     /// `fields`. Answers a buffer and where in it the sequence starts. Takes
@@ -255,10 +264,11 @@ pub enum Op {
     /// The sequence of the elements of one, last first, followed by those of
     /// another: `operands` are the other's buffer, start and length, then the
     /// one's. Answers a buffer and where in it the joined sequence starts.
-    /// Takes a claim to the other's buffer, so one nothing else holds with
-    /// room in front is written in place; the one's is borrowed, and each
-    /// element copied out of it is claimed again. Both hold elements of
-    /// `shape`.
+    /// Takes a claim to both buffers: where the other is empty and nothing
+    /// else holds the one's, it is turned round where it lies; otherwise
+    /// the other's, where nothing else holds it and it has room in front,
+    /// is written in place, and each element copied out of the one's is
+    /// claimed again. Both hold elements of `shape`.
     BufferPrepend {
         operands: Range,
         shape: ShapeId,

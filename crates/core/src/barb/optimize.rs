@@ -5,7 +5,8 @@ use super::{FoldLimits, InlineLimits, Program};
 /// Optimize a validated program. Validation/totality must precede this: laws
 /// and evaluation must not hide a malformed or nonterminating definition.
 ///
-/// Each stage runs once, in this order: structural normalization, descent,
+/// Each stage runs once, in this order: structural normalization, building
+/// lists front to back, descent,
 /// helper inlining, fusion, arithmetic laws, constant folding, copies of a
 /// loop for the known values its callers hand it, invariant arguments and
 /// folding again where they bound something, algebraic
@@ -18,6 +19,7 @@ use super::{FoldLimits, InlineLimits, Program};
 /// range handles. Declaration and constant IDs are preserved.
 pub fn optimize(program: &mut Program) {
     super::structural(program);
+    super::forward::forward(program);
     super::descent::descend(program);
     super::normalize_with_limits(program, InlineLimits::default());
     super::fuse::fuse(program);

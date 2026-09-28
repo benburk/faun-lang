@@ -94,6 +94,7 @@ mod facts;
 #[cfg(test)]
 pub(crate) mod fixture;
 mod fold;
+mod forward;
 mod fuse;
 mod inline;
 mod invariant;

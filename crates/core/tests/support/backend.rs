@@ -1106,6 +1106,53 @@ fn a_long_walk_goes_round_rather_than_down() {
     );
 }
 
+/// Walks building a list on the way out, `[f(x), *walk(rest)]`, on a list
+/// far longer than a stack of frames goes: each is built front to back in a
+/// loop, a filter skipping elements and a walk answering its list beside a
+/// state as well.
+#[test]
+fn a_list_built_on_the_way_out_goes_round_rather_than_down() {
+    let length: u64 = if TARGET.word() == 16 { 300 } else { 200_000 };
+    let text = format!(
+        "import std.host {{Host}}
+
+         doubled : List(Nat) -> List(Nat)
+         doubled([]) -> []
+         doubled([x, *rest]) -> [x + x, *doubled(rest)]
+
+         odd : List(Nat) -> List(Nat)
+         odd([]) -> []
+         odd([x, *rest]) if x % 2 == 1 -> [x, *odd(rest)]
+         odd([_, *rest]) -> odd(rest)
+
+         running : (List(Nat), Nat) -> (Nat, List(Nat))
+         running([], total) -> (total, [])
+         running([x, *rest], total) ->
+           (last, totals) = running(rest, total + x)
+           (last, [total, *totals])
+
+         main! : Host -> []
+         main!(host) ->
+           xs = List.range({length} + host.args.len() - 1)
+           (last, totals) = running(odd(xs), 0)
+           both = doubled(xs).len() + totals.len()
+           host.exit!(U8.of_nat((both + last) % 100))"
+    );
+    let program = read(&text).expect("the walks compile");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    // Every element doubled, the odd half, and the odd ones summed, kept
+    // below the statuses WASI refuses.
+    let half = length / 2;
+    let odd_sum = half.pow(2);
+    let status = (length + half + odd_sum) % 100;
+    assert_eq!(
+        execute(&program),
+        (i32::try_from(status).expect("a byte"), String::new())
+    );
+}
+
 /// Exercise day 18's row kernel with runtime cells on every target. The
 /// complete application exceeds sim65's 64 KiB code space; the larger
 /// targets also run its expectations and both hundred-step stdin solvers.

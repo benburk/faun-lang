@@ -234,6 +234,41 @@ const RUNNING: &[(&str, &str, u32)] = &[
         98,
     ),
     (
+        "a walk goes round on a list a call answers no longer than a part",
+        "pull : (Nat, List(Nat)) -> (Nat, List(Nat))
+         pull(held, []) -> (held, [])
+         pull(held, [x, *rest]) ->
+           (last, others) = pull(held + x, rest)
+           (last, [x + held, *others])
+
+         walk : List(Nat) -> List(Nat)
+         walk([x, *rest]) ->
+           (pulled, others) = pull(x, rest)
+           [pulled, *walk(others)]
+         walk(xs) -> xs
+
+         shifted : List(Nat) -> Nat
+         shifted([x, *rest]) -> x + shifted(rest.map(|y| y + x))
+         shifted([]) -> 0
+
+         carried : List(Nat) -> Nat
+         carried([x, *rest]) ->
+           (_, moved) = rest.map_accum(x, |s, y| (s + y, s))
+           x + carried(moved)
+         carried([]) -> 0
+
+         kept : List(Nat) -> Nat
+         kept([x, *rest]) -> x + kept(rest.filter(|y| y > x).reverse())
+         kept([]) -> 0
+
+         main! : Host -> []
+         main!(host) ->
+           xs = [host.args.len(), 2, 3]
+           walked = walk(xs).fold(0, |sum, x| sum + x)
+           host.exit!(U8.of_nat(walked + shifted(xs) + carried(xs) + kept(xs)))",
+        24 + 11 + 3 + 4,
+    ),
+    (
         "a parser goes round on the rest it answers inside an `Ok`",
         "Read : [Found(Nat, List(Nat)), NotFound]
 

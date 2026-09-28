@@ -232,6 +232,7 @@ impl References<'_> {
                 self.values(args)?;
             }
             Op::BufferPush { operands, shape }
+            | Op::BufferAppend { operands, shape }
             | Op::BufferReplace { operands, shape }
             | Op::BufferPrepend { operands, shape }
             | Op::BufferExtend { operands, shape } => {
@@ -498,7 +499,7 @@ impl Checker<'_> {
             Op::BufferEmpty { .. } | Op::BufferKnown { .. } => {
                 self.results(results, &[Class::Buffer])?;
             }
-            Op::BufferPush { operands, shape } => {
+            Op::BufferPush { operands, shape } | Op::BufferAppend { operands, shape } => {
                 let operands = self.program.values(operands);
                 let Some((sequence, fields)) = operands.split_first_chunk::<3>() else {
                     return Err("a push names no sequence".into());

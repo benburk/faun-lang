@@ -157,6 +157,21 @@ impl Builder<'_> {
         self.two(Op::BufferPush { operands, shape })
     }
 
+    /// The sequence `(buffer, start, len)`, its elements of `shape`,
+    /// followed by the element whose leaves are `fields`: the buffer and
+    /// start of the longer one.
+    pub fn buffer_append(
+        &mut self,
+        (buffer, start, len): (ValueId, ValueId, ValueId),
+        shape: ShapeId,
+        fields: &[ValueId],
+    ) -> [ValueId; 2] {
+        let mut operands = vec![buffer, start, len];
+        operands.extend_from_slice(fields);
+        let operands = self.program.hold(&operands);
+        self.two(Op::BufferAppend { operands, shape })
+    }
+
     /// The sequence `(buffer, start, len)`, its elements of `shape`, with
     /// the element at `index`, below `len`, replaced by the one whose leaves
     /// are `fields`: the buffer and start of the sequence written.

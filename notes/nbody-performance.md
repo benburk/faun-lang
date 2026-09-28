@@ -4,6 +4,18 @@ The unchanged list-based benchmark is now **4.66× faster** on x86-64, not yet
 10×. Shared register-set constraints and native XMM allocation improve the
 previous local-cache version by **1.14×**. Scalar C remains **5.7× faster**.
 
+The measurements below predate `kick` pairing bodies through `map_accum`
+rather than a hand-written `pull` counted down by `fuel`. `map_accum` once
+built its answer backwards and turned it round, which allocated and copied a
+second buffer: 1.39 s against 1.02 s for the hand-written walk, at 5,000,000
+steps pinned to CPU 10. `map` and `map_accum` are now written directly, and
+the compiler builds such a walk front to back in a loop, appending where
+nothing else holds the buffer; a reversal onto nothing of a buffer nothing
+else holds turns it round where it lies. The same 5,000,000 steps now take
+**0.85 s** at best of five, as fast as a walk never turning its answer round
+(0.82 s), on a machine then loaded by other work. The energies are
+unchanged.
+
 ## Comparison with C
 
 [`reference.c`](../crates/faun/examples/nbody/reference.c) uses a five-element
@@ -289,7 +301,7 @@ The dominant cost has moved from allocation toward the pair-update code.
    broader uniqueness-aware reuse or fixed-length sequence specialization.
    Buffer prepends already reuse uniquely held spare capacity; the remaining
    question is how to avoid repeated walks and intermediate sequences. Every step
-   still rebuilds lists in `pull` and `kicked`, then maps the position update.
+   still rebuilds lists in `kick`'s `map_accum`, then maps the position update.
    Preserve pair order and keep the general list benchmark as a control.
 3. **Use address-generation instructions.** Common expressions now remove
    duplicate calculations; selection can still use better addressing modes

@@ -107,6 +107,8 @@ pub enum SequenceOperation {
     ReverseOnto,
     /// The first parameter's elements put before the second's, in order.
     Prepend,
+    /// The first parameter followed by the second, one more element.
+    Append,
     /// The first parameter without as many of its first elements as the
     /// second counts, or without all of them where it counts more.
     Drop,

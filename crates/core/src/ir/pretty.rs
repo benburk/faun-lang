@@ -160,6 +160,11 @@ impl Program {
                 arguments(self.values(operands)),
                 shape.index()
             ),
+            Op::BufferAppend { operands, shape } => format!(
+                "buffer_append {} of s{}",
+                arguments(self.values(operands)),
+                shape.index()
+            ),
             Op::BufferReplace { operands, shape } => format!(
                 "buffer_replace {} of s{}",
                 arguments(self.values(operands)),

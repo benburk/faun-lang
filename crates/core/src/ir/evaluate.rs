@@ -928,6 +928,21 @@ impl<H: Host> Machine<'_, H> {
                 let sequence = [Number::from(self.buffers.len()), Number::ZERO];
                 return self.bind(results, &sequence);
             }
+            Op::BufferAppend { operands, .. } => {
+                let operands = self.ids(operands)?.to_vec();
+                let (sequence, fields) = operands.split_at(3);
+                let last = fields
+                    .iter()
+                    .map(|&id| self.value(id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut elements = self
+                    .elements((sequence[0], sequence[1], sequence[2]))?
+                    .to_vec();
+                elements.push(last);
+                self.buffers.push(elements);
+                let sequence = [Number::from(self.buffers.len()), Number::ZERO];
+                return self.bind(results, &sequence);
+            }
             Op::BufferReplace { operands, .. } => {
                 let operands = self.ids(operands)?.to_vec();
                 let (sequence, fields) = operands.split_at(4);

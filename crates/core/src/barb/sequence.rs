@@ -18,6 +18,9 @@ pub(super) fn recognise(program: &Program, length: &[bool]) -> Vec<Option<Sequen
     let reversals: Vec<_> = (0..count)
         .map(|at| reverses(program, FnId::at(at)))
         .collect();
+    let prepended: Vec<_> = (0..count)
+        .map(|at| prepends(program, FnId::at(at), &reversals))
+        .collect();
     (0..count)
         .map(|at| {
             let id = FnId::at(at);
@@ -25,8 +28,10 @@ pub(super) fn recognise(program: &Program, length: &[bool]) -> Vec<Option<Sequen
                 Some(SequenceOperation::Length)
             } else if reversals[at] {
                 Some(SequenceOperation::ReverseOnto)
-            } else if prepends(program, id, &reversals) {
+            } else if prepended[at] {
                 Some(SequenceOperation::Prepend)
+            } else if appends(program, id, &prepended) {
+                Some(SequenceOperation::Append)
             } else if drops(program, id) {
                 Some(SequenceOperation::Drop)
             } else if takes(program, id, &reversals) {
@@ -149,6 +154,46 @@ fn prepends(program: &Program, id: FnId, reversals: &[bool]) -> bool {
         && second.index() == 1
         && is_empty
         && program.bindings(body.bindings).len() == 2
+}
+
+/// Whether `id` puts one element after a sequence's last: the sequence of
+/// that one element alone put after it, in order.
+///
+/// ```text
+/// a(list, x) = p(list, push(x, empty))
+/// ```
+fn appends(program: &Program, id: FnId, prepended: &[bool]) -> bool {
+    let params = program.params(id);
+    let (Some(body), &[list, _]) = (program.function(id).body(), params) else {
+        return false;
+    };
+    let Some((empty, push, recursive)) = sequence(program, list) else {
+        return false;
+    };
+    if program.function(id).result != list || program.bindings(body.bindings).len() != 2 {
+        return false;
+    }
+    let Expr::Call(callee, args) = program.expr(body.tail) else {
+        return false;
+    };
+    let &[Atom(first), Atom(single)] = program.atoms(args) else {
+        return false;
+    };
+    let Some(Expr::Con(ctor, fields)) =
+        bound(program, body, 2, single.index()).map(|expr| program.expr(expr))
+    else {
+        return false;
+    };
+    let &[a, b] = program.atoms(fields) else {
+        return false;
+    };
+    let (element, rest) = if recursive == 0 { (b, a) } else { (a, b) };
+    prepended[callee.index()]
+        && ctor == push
+        && first.index() == 0
+        && element.0.index() == 1
+        && bound(program, body, 2, rest.0.index())
+            .is_some_and(|expr| is_empty(program, expr, empty))
 }
 
 /// Whether `id` takes a count of elements off the front of a sequence,

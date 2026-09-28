@@ -305,6 +305,12 @@ impl<'a> Rebuild<'a> {
                 b.buffer_push((sequence[0], sequence[1], sequence[2]), shape, fields)
                     .to_vec()
             }
+            Op::BufferAppend { operands, shape } => {
+                let operands = self.args(operands);
+                let (sequence, fields) = operands.split_at(3);
+                b.buffer_append((sequence[0], sequence[1], sequence[2]), shape, fields)
+                    .to_vec()
+            }
             Op::BufferReplace { operands, shape } => {
                 let operands = self.args(operands);
                 let (sequence, fields) = operands.split_at(4);

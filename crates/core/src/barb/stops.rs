@@ -27,6 +27,20 @@
 //! field of a parameter is then a size of its own, so an answer handed to a
 //! definition that takes it apart carries what its fields are.
 //!
+//! A list's depth counts what it holds, so a list rebuilt around elements a
+//! call made says nothing of how deep it is. Its length is read beside it:
+//! each list a definition takes is a row of its own, and what a body holds
+//! is bounded by one of those lengths, or two together, plus a constant. A
+//! rest is one shorter and a cons one longer, whatever the element, and a
+//! call answers its summary with each list in it replaced by what was
+//! handed for it, so `[f(x), *map(rest)]` is no longer than what `map` took.
+//! Two together is what a walk building onto an accumulator answers,
+//! `reverse_into(xs, built)`, which is how `reverse` and the walks turning
+//! what they built round at the end are seen to answer no more than they
+//! took. A summary starts
+//! with every set of lists as small as anything and each is weakened until
+//! it holds, so the sum survives where neither list alone does.
+//!
 //! Closure can be much larger than the source call graph. Barb keeps matrices
 //! flat and indexes graphs by both endpoints, so a new graph is composed only
 //! with graphs that can actually precede or follow it. A failing idempotent is
@@ -76,6 +90,11 @@ struct LocalFacts {
     verdict: Option<Verdict>,
     /// What it is taken apart as, where something says.
     shape: Shape,
+    /// How long it is, where it is a list: at most the lengths of each
+    /// [`Spines`] key's parameters together, plus this. Empty where
+    /// nothing is known, and otherwise one entry per key, each already the
+    /// least any smaller key says.
+    lengths: Vec<Option<i64>>,
 }
 
 /// What a value is taken apart as: for each constructor it may be, what its
@@ -130,6 +149,149 @@ const LEAST_OFFSET: i64 = -2;
 const MOST_OFFSET: i64 = 4;
 const SHAPE_DEPTH: usize = 3;
 
+/// The lists a definition takes, whose lengths what it holds is read
+/// against: each parameter whose type is a spine but not a number, which
+/// the gaps between naturals already measure.
+///
+/// A length is at most one of them, or two together, plus a constant: a
+/// walk building onto what it was handed answers both, so that is as far as
+/// `reverse_into` needs a key to reach. Each key is a set of them, in one
+/// order, and a local holds one bound per key.
+#[derive(Debug)]
+struct Spines {
+    params: Vec<usize>,
+    /// Which of `params` each key holds, as bits, the empty key first.
+    keys: Vec<u32>,
+}
+
+/// Where lengths are not read: no lists, and no keys.
+static NO_SPINES: Spines = Spines {
+    params: Vec::new(),
+    keys: Vec::new(),
+};
+
+/// How many of a definition's lists its keys are made of.
+const MOST_SPINES: usize = 8;
+
+impl Spines {
+    fn of(program: &Program, id: FnId) -> Self {
+        let params: Vec<usize> = program
+            .params(id)
+            .iter()
+            .enumerate()
+            .filter(|(_, ty)| {
+                matches!(super::shape(program, **ty), super::Shape::Spine { .. })
+                    && super::arithmetic::natural(program, **ty).is_none()
+            })
+            .map(|(at, _)| at)
+            .take(MOST_SPINES)
+            .collect();
+        let mut keys = vec![0];
+        for one in 0..params.len() {
+            keys.push(1 << one);
+            for other in one + 1..params.len() {
+                keys.push((1 << one) | (1 << other));
+            }
+        }
+        keys.sort_unstable();
+        Self { params, keys }
+    }
+
+    fn key(&self, bits: u32) -> Option<usize> {
+        self.keys.binary_search(&bits).ok()
+    }
+
+    /// Each key's bound the least any key within it says: a list at most
+    /// `a` long is at most `a` and `b` together long.
+    fn close(&self, lengths: &mut [Option<i64>]) {
+        if lengths.is_empty() {
+            return;
+        }
+        for (at, &bits) in self.keys.iter().enumerate() {
+            let within = self.keys[..at]
+                .iter()
+                .zip(lengths.iter())
+                .filter(|(inner, _)| *inner & bits == **inner)
+                .filter_map(|(_, bound)| *bound)
+                .min();
+            lengths[at] = match (lengths[at], within) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (held, None) | (None, held) => held,
+            };
+        }
+    }
+
+    /// Each key's bound, where it was built from bounds on the keys it was
+    /// handed: the least each says, closed.
+    fn gathered(&self, found: impl IntoIterator<Item = (u32, i64)>) -> Vec<Option<i64>> {
+        let mut lengths = vec![None; self.keys.len()];
+        for (bits, bound) in found {
+            if let Some(at) = self.key(bits) {
+                lengths[at] = Some(lengths[at].map_or(bound, |held: i64| held.min(bound)));
+            }
+        }
+        self.close(&mut lengths);
+        if lengths.iter().all(Option::is_none) {
+            return Vec::new();
+        }
+        lengths
+    }
+
+    /// A parameter, as long as itself.
+    fn parameter(&self, param: usize) -> Vec<Option<i64>> {
+        self.params
+            .iter()
+            .position(|&held| held == param)
+            .map_or_else(Vec::new, |at| self.gathered([(1 << at, 0)]))
+    }
+
+    /// What a summary of `id` not yet worked out assumes.
+    fn least(&self, program: &Program, id: FnId) -> LocalFacts {
+        LocalFacts::least(program.params(id).len(), self.keys.len())
+    }
+
+    /// A list exactly this long.
+    fn exactly(&self, length: i64) -> Vec<Option<i64>> {
+        self.gathered([(0, length)])
+    }
+}
+
+/// A length bound kept to the range a summary holds.
+fn clamped(bound: Option<i64>) -> Option<i64> {
+    bound
+        .filter(|bound| *bound <= MOST_OFFSET)
+        .map(|bound| bound.max(LEAST_OFFSET))
+}
+
+/// Each bound moved by `by`.
+fn shifted(lengths: &[Option<i64>], by: i64) -> Vec<Option<i64>> {
+    lengths
+        .iter()
+        .map(|bound| bound.map(|bound| bound + by))
+        .collect()
+}
+
+/// The keys a list's bounds say something new at: those no smaller key
+/// already says as much at, which are all instantiating needs.
+fn tightest(spines: &Spines, lengths: &[Option<i64>]) -> Vec<(u32, i64)> {
+    spines
+        .keys
+        .iter()
+        .zip(lengths)
+        .enumerate()
+        .filter_map(|(at, (&bits, &bound))| {
+            let bound = bound?;
+            let implied = spines.keys[..at]
+                .iter()
+                .zip(lengths)
+                .any(|(&inner, &held)| {
+                    inner & bits == inner && held.is_some_and(|held| held <= bound)
+                });
+            (!implied).then_some((bits, bound))
+        })
+        .collect()
+}
+
 impl LocalFacts {
     fn unknown(params: usize) -> Self {
         Self {
@@ -139,14 +301,17 @@ impl LocalFacts {
             same: None,
             verdict: None,
             shape: Shape::Unknown,
+            lengths: Vec::new(),
         }
     }
 
-    /// What a summary not yet worked out assumes: as small as anything.
-    fn least(params: usize) -> Self {
+    /// What a summary not yet worked out assumes: as small as anything,
+    /// under each of `keys`.
+    fn least(params: usize, keys: usize) -> Self {
         Self {
             bounds: vec![Bound::Offset(LEAST_OFFSET); params],
             shape: Shape::Least,
+            lengths: vec![Some(LEAST_OFFSET); keys],
             ..Self::unknown(params)
         }
     }
@@ -173,6 +338,17 @@ impl LocalFacts {
             same: None,
             verdict: None,
             shape: self.shape.join(&other.shape),
+            // Each key's bound is the least that key says, so the larger of
+            // two holds of either.
+            lengths: if self.lengths.is_empty() || other.lengths.is_empty() {
+                Vec::new()
+            } else {
+                self.lengths
+                    .iter()
+                    .zip(&other.lengths)
+                    .map(|(a, b)| a.zip(*b).map(|(a, b)| a.max(b)))
+                    .collect()
+            },
         }
     }
 
@@ -211,12 +387,15 @@ impl LocalFacts {
                 )),
                 held => held.clone(),
             },
+            lengths: self.lengths.iter().map(|bound| clamped(*bound)).collect(),
         }
     }
 
     /// A summary over a callee's parameters, read at a call: what is no
-    /// deeper than a parameter there is no deeper than its argument here.
-    fn instantiated(&self, args: &[&Self], params: usize) -> Self {
+    /// deeper than a parameter there is no deeper than its argument here,
+    /// and a list no longer than some of its lists together is no longer
+    /// than what was handed for them.
+    fn instantiated(&self, args: &[&Self], params: usize, ours: &Spines, theirs: &Spines) -> Self {
         let bounds = (0..params)
             .map(|row| {
                 self.bounds
@@ -240,7 +419,7 @@ impl LocalFacts {
                         .map(|(ctor, fields)| {
                             let fields = fields
                                 .iter()
-                                .map(|field| field.instantiated(args, params))
+                                .map(|field| field.instantiated(args, params, ours, theirs))
                                 .collect();
                             (*ctor, fields)
                         })
@@ -248,8 +427,44 @@ impl LocalFacts {
                 )),
                 held => held.clone(),
             },
+            lengths: self.handed_lengths(args, ours, theirs),
             ..Self::unknown(params)
         }
+    }
+
+    /// Each key of the callee's bound, with each list in it replaced by
+    /// what its argument's bounds say: one sum for each way of picking a
+    /// bound for each, kept where it is a key here. Every key the callee
+    /// says anything at is read, not only the tightest: `a + 0` says less
+    /// than `0` there, and more here where `a` was handed a list's rest.
+    fn handed_lengths(&self, args: &[&Self], ours: &Spines, theirs: &Spines) -> Vec<Option<i64>> {
+        let mut found = Vec::new();
+        let said = theirs
+            .keys
+            .iter()
+            .zip(&self.lengths)
+            .filter_map(|(&bits, &bound)| Some((bits, bound?)));
+        for (bits, bound) in said {
+            let mut sums = vec![(0_u32, bound)];
+            for (at, &param) in theirs.params.iter().enumerate() {
+                if bits & (1 << at) == 0 {
+                    continue;
+                }
+                let handed = tightest(ours, &args[param].lengths);
+                sums = sums
+                    .iter()
+                    .flat_map(|&(held, sum)| {
+                        handed
+                            .iter()
+                            // One list twice is not a key.
+                            .filter(move |(bits, _)| held & bits == 0)
+                            .map(move |&(bits, bound)| (held | bits, sum + bound))
+                    })
+                    .collect();
+            }
+            found.extend(sums);
+        }
+        ours.gathered(found)
     }
 
     /// Whichever says more of each row: both hold.
@@ -262,6 +477,16 @@ impl LocalFacts {
             };
         }
         met.minimum = met.minimum.max(other.minimum);
+        if met.lengths.is_empty() {
+            met.lengths.clone_from(&other.lengths);
+        } else if !other.lengths.is_empty() {
+            for (bound, other) in met.lengths.iter_mut().zip(&other.lengths) {
+                *bound = match (*bound, *other) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (held, None) | (None, held) => held,
+                };
+            }
+        }
         if met.shape == Shape::Unknown {
             met.shape = other.shape.clone();
         }
@@ -387,8 +612,19 @@ pub(super) fn stops(program: &Program) -> Result<(), Refusal> {
         {
             continue;
         }
-        let summaries = summaries.get_or_insert_with(|| summaries_of(program, &operations));
-        descends(program, &round, &operations, Tier::answered(summaries))?;
+        let (spines, summaries) = summaries.get_or_insert_with(|| {
+            let spines: Vec<Spines> = (0..program.functions().len())
+                .map(|at| Spines::of(program, FnId::at(at)))
+                .collect();
+            let summaries = summaries_of(program, &operations, &spines);
+            (spines, summaries)
+        });
+        descends(
+            program,
+            &round,
+            &operations,
+            Tier::answered(summaries, spines),
+        )?;
     }
     Ok(())
 }
@@ -399,26 +635,31 @@ pub(super) fn stops(program: &Program) -> Result<(), Refusal> {
 /// assumption is what was assumed. What a call answers is only said of a
 /// call that answers, which is all a proof of stopping reads it for: the
 /// facts of one step round, where the rest has already come back.
-fn summaries_of(program: &Program, operations: &[Option<Operation>]) -> HashMap<FnId, LocalFacts> {
+fn summaries_of(
+    program: &Program,
+    operations: &[Option<Operation>],
+    spines: &[Spines],
+) -> HashMap<FnId, LocalFacts> {
     let calls = graph(program);
     let mut summaries = HashMap::new();
-    let within = HashSet::new();
     for round in rounds(&calls) {
         let bodied: Vec<FnId> = round
             .into_iter()
             .filter(|id| program.function(*id).body().is_some())
             .collect();
         for &id in &bodied {
-            summaries.insert(id, LocalFacts::least(program.params(id).len()));
+            summaries.insert(id, spines[id.index()].least(program, id));
         }
         let mut settled = false;
         for _ in 0..64 {
             let mut changed = false;
             for &id in &bodied {
-                let answered =
-                    Reader::new(program, id, &within, operations, Tier::measured(&summaries))
-                        .answer()
-                        .clamped(SHAPE_DEPTH);
+                let answered = summarised(
+                    program,
+                    id,
+                    operations,
+                    Tier::summarised(&summaries, spines),
+                );
                 if summaries.get(&id) != Some(&answered) {
                     summaries.insert(id, answered);
                     changed = true;
@@ -437,6 +678,18 @@ fn summaries_of(program: &Program, operations: &[Option<Operation>]) -> HashMap<
         }
     }
     summaries
+}
+
+/// What `id` answers under what a tier assumes of every definition.
+fn summarised(
+    program: &Program,
+    id: FnId,
+    operations: &[Option<Operation>],
+    tier: Tier<'_>,
+) -> LocalFacts {
+    Reader::new(program, id, &HashSet::new(), operations, tier)
+        .answer()
+        .clamped(SHAPE_DEPTH)
 }
 
 /// Every definition, each after everything it calls, but for those calling
@@ -546,12 +799,15 @@ impl Rounds<'_> {
 /// Close the call matrices and require every repeatable path to descend.
 /// How much a round is read for: plainly; with the gaps between its
 /// parameters measured and its guards read; and besides that with what its
-/// calls answer, taken apart where their answers are handed on.
+/// calls answer, taken apart where their answers are handed on, and how
+/// long the lists they answer are, which a summary is worked out with too.
 #[derive(Clone, Copy)]
 struct Tier<'a> {
     measured: bool,
     pathed: bool,
     summaries: &'a HashMap<FnId, LocalFacts>,
+    /// Each definition's lists, where lengths are read.
+    spines: Option<&'a [Spines]>,
 }
 
 impl<'a> Tier<'a> {
@@ -560,6 +816,7 @@ impl<'a> Tier<'a> {
             measured: false,
             pathed: false,
             summaries,
+            spines: None,
         }
     }
 
@@ -568,14 +825,25 @@ impl<'a> Tier<'a> {
             measured: true,
             pathed: false,
             summaries,
+            spines: None,
         }
     }
 
-    const fn answered(summaries: &'a HashMap<FnId, LocalFacts>) -> Self {
+    const fn summarised(summaries: &'a HashMap<FnId, LocalFacts>, spines: &'a [Spines]) -> Self {
+        Self {
+            measured: true,
+            pathed: false,
+            summaries,
+            spines: Some(spines),
+        }
+    }
+
+    const fn answered(summaries: &'a HashMap<FnId, LocalFacts>, spines: &'a [Spines]) -> Self {
         Self {
             measured: true,
             pathed: true,
             summaries,
+            spines: Some(spines),
         }
     }
 }
@@ -846,6 +1114,11 @@ struct Reader<'a> {
     rows: usize,
     /// Whether any definition's fields are read so.
     pathed: bool,
+    /// Every definition's lists, where lengths are read, and this one's.
+    /// Where a matrix is built, each of its lists has a row of its own
+    /// after the fields, its length.
+    spines: Option<&'a [Spines]>,
+    own: &'a Spines,
     locals: Vec<LocalFacts>,
     held: Vec<(Graph, ExprId)>,
     /// What the guards around the part being read say.
@@ -862,7 +1135,11 @@ impl<'a> Reader<'a> {
     ) -> Self {
         let params = program.params(from).len();
         let paths = paths(program, from, tier.pathed);
-        let rows = params + paths.len();
+        let own = tier
+            .spines
+            .map_or(&NO_SPINES, |spines| &spines[from.index()]);
+        let lists = if tier.pathed { own.params.len() } else { 0 };
+        let rows = params + paths.len() + lists;
         // A parameter starts at distance zero from itself. Distances are
         // kept through local construction and become the three-valued
         // matrix only at an in-round call.
@@ -872,6 +1149,7 @@ impl<'a> Reader<'a> {
                 facts.bounds[at] = Bound::Offset(0);
                 facts.lower[at] = Some(0);
                 facts.same = Some(at);
+                facts.lengths = own.parameter(at);
                 facts
             })
             .collect();
@@ -886,6 +1164,8 @@ impl<'a> Reader<'a> {
             paths,
             rows,
             pathed: tier.pathed,
+            spines: tier.spines,
+            own,
             locals,
             held: Vec::new(),
             facts: Vec::new(),
@@ -921,23 +1201,11 @@ impl Reader<'_> {
         let unknown = LocalFacts::unknown(self.rows);
         match self.program.expr(id) {
             Expr::Atom(atom) => self.locals.get(atom.0.index()).cloned().unwrap_or(unknown),
-            Expr::Static(value) => {
-                // A value known outright is its constructor, whatever its
-                // fields are.
-                let ctor = self.program.constant(value).constructor();
-                let fields = self.program.fields(ctor).len();
-                LocalFacts {
-                    minimum: natural_minimum(self.program, value),
-                    shape: Shape::Known(Rc::new(vec![(
-                        ctor,
-                        vec![LocalFacts::unknown(self.rows); fields],
-                    )])),
-                    ..unknown
-                }
-            }
+            Expr::Static(value) => self.constant(value),
             Expr::Con(ctor, args) => {
                 let args = self.program.atoms(args);
                 let mut built = constructed(self.program, ctor, args, &self.locals, unknown);
+                built.lengths = self.built_length(ctor, args);
                 // A constructor of nothing is as small as a value is, so no
                 // bigger than any parameter.
                 if self.measured && args.is_empty() {
@@ -961,6 +1229,27 @@ impl Reader<'_> {
         }
     }
 
+    /// A value known outright is its constructor, whatever its fields are,
+    /// and a list known outright is as long as it is.
+    fn constant(&self, value: super::ConstId) -> LocalFacts {
+        let ctor = self.program.constant(value).constructor();
+        let fields = self.program.fields(ctor).len();
+        let lengths = match self.program.constant(value).view() {
+            ConstantView::Spine(spine) => i64::try_from(spine.length())
+                .map_or_else(|_| Vec::new(), |length| self.own.exactly(length)),
+            _ => self.built_length(ctor, &[]),
+        };
+        LocalFacts {
+            minimum: natural_minimum(self.program, value),
+            lengths,
+            shape: Shape::Known(Rc::new(vec![(
+                ctor,
+                vec![LocalFacts::unknown(self.rows); fields],
+            )])),
+            ..LocalFacts::unknown(self.rows)
+        }
+    }
+
     /// A call: a graph where it goes round, what recognized arithmetic says
     /// of its answer, and the verdict it answers where it answers one.
     fn call(&mut self, id: ExprId, to: FnId, args: &[Atom]) -> LocalFacts {
@@ -974,7 +1263,8 @@ impl Reader<'_> {
             None => self.summaries.get(&to).map_or(unknown, |summary| {
                 let args: Vec<&LocalFacts> =
                     args.iter().map(|arg| &self.locals[arg.0.index()]).collect();
-                summary.instantiated(&args, self.rows)
+                let theirs = self.spines.map_or(&NO_SPINES, |spines| &spines[to.index()]);
+                summary.instantiated(&args, self.rows, self.own, theirs)
             }),
         };
         if self.measured {
@@ -1037,7 +1327,10 @@ impl Reader<'_> {
         let count = self.program.fields(ctor).len();
         let shaped = match &self.locals[at].shape {
             Shape::Unknown => None,
-            Shape::Least => Some(vec![LocalFacts::least(self.rows); count]),
+            Shape::Least => Some(vec![
+                LocalFacts::least(self.rows, self.own.keys.len());
+                count
+            ]),
             Shape::Known(entries) => Some(
                 entries
                     .iter()
@@ -1067,6 +1360,10 @@ impl Reader<'_> {
         let field = taken(&self.locals[at], successor);
         self.locals
             .resize(level + self.program.fields(ctor).len(), field);
+        // The rest of a list is one shorter than it.
+        if let Some(rest) = self.rest(ctor) {
+            self.locals[level + rest].lengths = shifted(&self.locals[at].lengths, -1);
+        }
         let param = self.locals[at].same.filter(|&same| same < self.params);
         for (offset, local) in self.locals[level..].iter_mut().enumerate() {
             if let Some(shaped) = shaped.and_then(|fields| fields.get(offset)) {
@@ -1080,6 +1377,37 @@ impl Reader<'_> {
                 local.bounds[self.params + row] = Bound::Offset(0);
             }
             local.same = Some(level + offset);
+        }
+    }
+
+    /// Which field of `ctor` is the rest of a list, where it builds one
+    /// whose length is read.
+    fn rest(&self, ctor: super::CtorId) -> Option<usize> {
+        if self.own.keys.is_empty() {
+            return None;
+        }
+        match super::shape(self.program, self.program.ctor(ctor).owner) {
+            super::Shape::Spine {
+                cons, recursive, ..
+            } if cons == ctor => Some(recursive),
+            _ => None,
+        }
+    }
+
+    /// How long a list `ctor` builds is: nothing at all, or one more than
+    /// its rest.
+    fn built_length(&self, ctor: super::CtorId, args: &[Atom]) -> Vec<Option<i64>> {
+        if self.own.keys.is_empty() {
+            return Vec::new();
+        }
+        match super::shape(self.program, self.program.ctor(ctor).owner) {
+            super::Shape::Spine { nil, .. } if nil == ctor => self.own.exactly(0),
+            super::Shape::Spine { recursive, .. } => {
+                args.get(recursive).map_or_else(Vec::new, |rest| {
+                    shifted(&self.locals[rest.0.index()].lengths, 1)
+                })
+            }
+            super::Shape::Tagged => Vec::new(),
         }
     }
 
@@ -1175,25 +1503,21 @@ impl Reader<'_> {
         let ours = measures(self.program, self.from, self.measured);
         let theirs = measures(self.program, to, self.measured);
         let their_paths = paths(self.program, to, self.pathed);
+        let their_lists: &[usize] = match self.spines {
+            Some(spines) if self.pathed => &spines[to.index()].params,
+            _ => &[],
+        };
         let rows = self.rows + ours.len();
-        let columns = args.len() + their_paths.len() + theirs.len();
+        let columns = args.len() + their_paths.len() + their_lists.len() + theirs.len();
         let mut cells = vec![Step::Unknown; rows * columns];
-        for (column, arg) in args.iter().enumerate() {
-            let Some(facts) = self.locals.get(arg.0.index()) else {
-                continue;
-            };
-            for (row, bound) in facts.bounds.iter().enumerate() {
-                cells[row * columns + column] = step(*bound);
+        self.handed_sizes(&mut cells, columns, args, &their_paths);
+        let lists = args.len() + their_paths.len();
+        for (at, &param) in their_lists.iter().enumerate() {
+            for row in 0..self.rows {
+                cells[row * columns + lists + at] = self.handed_list(args[param], row);
             }
         }
-        for (at, path) in their_paths.iter().enumerate() {
-            if let Some(field) = self.handed_field(args, path) {
-                for (row, bound) in field.bounds.iter().enumerate().take(self.rows) {
-                    cells[row * columns + args.len() + at] = step(*bound);
-                }
-            }
-        }
-        let past = args.len() + their_paths.len();
+        let past = lists + their_lists.len();
         for (row, &(top, bottom)) in ours.iter().enumerate() {
             for (column, &(handed, under)) in theirs.iter().enumerate() {
                 let handed = match handed {
@@ -1211,6 +1535,45 @@ impl Reader<'_> {
             columns,
             cells,
         }
+    }
+
+    /// How deep each argument is against each row here, and each field of
+    /// one the callee reads as a size of its own.
+    fn handed_sizes(
+        &self,
+        cells: &mut [Step],
+        columns: usize,
+        args: &[Atom],
+        their_paths: &[Path],
+    ) {
+        for (column, arg) in args.iter().enumerate() {
+            let Some(facts) = self.locals.get(arg.0.index()) else {
+                continue;
+            };
+            for (row, bound) in facts.bounds.iter().enumerate() {
+                cells[row * columns + column] = step(*bound);
+            }
+        }
+        for (at, path) in their_paths.iter().enumerate() {
+            if let Some(field) = self.handed_field(args, path) {
+                for (row, bound) in field.bounds.iter().enumerate().take(self.rows) {
+                    cells[row * columns + args.len() + at] = step(*bound);
+                }
+            }
+        }
+    }
+
+    /// How long a list handed on is against a row here: no longer than it
+    /// is deep, and no longer than its lengths say against a list here.
+    fn handed_list(&self, arg: Atom, row: usize) -> Step {
+        let facts = &self.locals[arg.0.index()];
+        let deep = step(facts.bounds[row]);
+        let long = row
+            .checked_sub(self.params + self.paths.len())
+            .and_then(|list| self.own.key(1 << list))
+            .and_then(|key| facts.lengths.get(key).copied().flatten())
+            .map_or(Step::Unknown, |bound| step(Bound::Offset(bound)));
+        deep.stronger(long)
     }
 
     /// A field the callee reads of its argument, as the argument's shape
@@ -1346,6 +1709,7 @@ fn taken(value: &LocalFacts, predecessor: bool) -> LocalFacts {
         same: None,
         verdict: None,
         shape: Shape::Unknown,
+        lengths: Vec::new(),
     }
 }
 

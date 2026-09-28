@@ -95,29 +95,14 @@ pair(b, other, dt) ->
     {vel: other.vel + d.scale(b.mass * mag), *other},
   )
 
-# The head after pulling on each of `others` and being pulled by it, and
-# each of them after: Ori's `map_accum` over the pair.
-pull : (Body, List(Body), F64) -> (Body, List(Body))
-pull(body, [], _) -> (body, [])
-pull(body, [other, *rest], dt) ->
-  (pulled, moved) = pair(body, other, dt)
-  (last, others) = pull(pulled, rest, dt)
-  (last, [moved, *others])
-
 # Every velocity after every pair has pulled on each other for `dt`: the head
-# is paired with each body after it, carrying its own updates along, and the
-# rest then kick each other.
+# is paired with each body after it, carrying its own updates along through
+# `map_accum`, and the rest, as many as before, then kick each other.
 kick : (List(Body), F64) -> List(Body)
-kick(bodies, dt) -> kicked(bodies, bodies.len(), dt)
-
-# `pull` hands back as many bodies as it took, which nothing here shows, so
-# the walk counts them down as it goes: the `fuel` Faun's totality gate asks
-# of a recursion on something other than a part of what it was handed.
-kicked : (List(Body), Nat, F64) -> List(Body)
-kicked([body, *rest], Succ(fuel), dt) ->
-  (pulled, others) = pull(body, rest, dt)
-  [pulled, *kicked(others, fuel, dt)]
-kicked(bodies, _, _) -> bodies
+kick([body, *rest], dt) ->
+  (pulled, others) = rest.map_accum(body, |b, other| pair(b, other, dt))
+  [pulled, *kick(others, dt)]
+kick(bodies, _) -> bodies
 
 advance : (List(Body), F64) -> List(Body)
 advance(bodies, dt) -> kick(bodies, dt).map(|body| {pos: body.pos + body.vel.scale(dt), *body})

@@ -184,7 +184,9 @@ fn growths(source: &Program) -> std::collections::BTreeSet<(Growth, ShapeId)> {
     shapes_of(source, |op| match op {
         Op::BufferPush { shape, .. } => Some((Growth::Push, shape)),
         Op::BufferPrepend { shape, .. } => Some((Growth::Prepend, shape)),
-        Op::BufferExtend { shape, .. } => Some((Growth::Extend, shape)),
+        Op::BufferAppend { shape, .. } | Op::BufferExtend { shape, .. } => {
+            Some((Growth::Extend, shape))
+        }
         Op::BufferReplace { shape, .. } => Some((Growth::Replace, shape)),
         _ => None,
     })
@@ -739,6 +741,25 @@ impl Pass<'_> {
         [room, front]
     }
 
+    /// The sequence followed by the element whose leaves are `claimed`:
+    /// written after it in a buffer nothing else holds with room.
+    fn append(
+        &self,
+        b: &mut Builder,
+        sequence: (ValueId, ValueId, ValueId),
+        shape: ShapeId,
+        claimed: &[ValueId],
+    ) -> [ValueId; 2] {
+        let packed = self.shapes.packed(shape);
+        let sequences = self
+            .sequences
+            .as_ref()
+            .expect("buffer helpers were requested");
+        let [room, start, element] = sequences.after(b, packed, sequence);
+        Self::store_leaves(b, (element, 0), packed, claimed);
+        [room, start]
+    }
+
     /// The sequence with element `index` replaced by the one whose leaves
     /// are `claimed`: written where it lies in a buffer nothing else holds.
     fn replace(
@@ -986,6 +1007,18 @@ impl Pass<'_> {
                     .collect();
                 return self.push(b, (buffer, start, len), shape, &claimed).to_vec();
             }
+            Op::BufferAppend { operands, shape } => {
+                let operands = self.source.values(operands);
+                let buffer = self.take(b, scopes, live, at, operands[0]);
+                let (start, len) = (word(b, v(operands[1])), word(b, v(operands[2])));
+                let claimed: Vec<_> = operands[3..]
+                    .iter()
+                    .map(|&old| self.take(b, scopes, live, at, old))
+                    .collect();
+                return self
+                    .append(b, (buffer, start, len), shape, &claimed)
+                    .to_vec();
+            }
             Op::BufferReplace { operands, shape } => {
                 let operands = self.source.values(operands);
                 let buffer = self.take(b, scopes, live, at, operands[0]);
@@ -1001,6 +1034,7 @@ impl Pass<'_> {
             Op::BufferPrepend { operands, shape } => {
                 let operands = self.source.values(operands);
                 let buffer = self.take(b, scopes, live, at, operands[0]);
+                let from = self.take(b, scopes, live, at, operands[3]);
                 let [start, len, from_start, count] =
                     [1, 2, 4, 5].map(|at| word(b, v(operands[at])));
                 return self
@@ -1011,7 +1045,7 @@ impl Pass<'_> {
                         b,
                         self.shapes.packed(shape),
                         (buffer, start, len),
-                        (v(operands[3]), from_start, count),
+                        (from, from_start, count),
                     )
                     .to_vec();
             }

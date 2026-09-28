@@ -6,9 +6,10 @@
 # tag naming the miss. A tag belongs to no module, so a caller's own
 # failures join it in one row.
 #
-# Every walk down a list is a loop: each calls itself last, building what it
-# answers backwards and turning it round once at the end, so a list is as
-# long as memory allows rather than as deep as a stack goes.
+# Every walk down a list is a loop, so a list is as long as memory allows
+# rather than as deep as a stack goes. A walk building a list is written as
+# what it answers, `[f(head), *map(tail, f)]`, and the compiler builds that
+# front to back in a loop; one building something else calls itself last.
 
 import hasher {Hasher}
 import map {Map}
@@ -35,10 +36,12 @@ List(a) : [Nil, Cons(a, List(a))].(
   prepend(values, value) -> [value, *values]
 
   map : (List(a), a -> b) -> List(b)
-  map(values, f) -> map_into(values, f, [])
+  map([], _) -> []
+  map([head, *tail], f) -> [f(head), *map(tail, f)]
 
   map2 : (List(a), List(b), (a, b) -> c) -> List(c)
-  map2(left, right, f) -> map2_into(left, right, f, [])
+  map2([head, *tail], [other, *rest], f) -> [f(head, other), *map2(tail, rest, f)]
+  map2(_, _, _) -> []
 
   flat_map : (List(a), a -> List(b)) -> List(b)
   flat_map(values, f) -> flat_map_into(values, f, [])
@@ -52,7 +55,9 @@ List(a) : [Nil, Cons(a, List(a))].(
   join([first, *rest], separator) -> join_into(rest, separator, reverse_into(first, []))
 
   filter : (List(a), a -> Bool) -> List(a)
-  filter(values, keep) -> filter_into(values, keep, [])
+  filter([], _) -> []
+  filter([head, *tail], keep) if keep(head) -> [head, *filter(tail, keep)]
+  filter([_, *tail], keep) -> filter(tail, keep)
 
   count : (List(a), a -> Bool) -> Nat
   count(values, keep) -> count_from(values, keep, 0)
@@ -77,7 +82,10 @@ List(a) : [Nil, Cons(a, List(a))].(
 
   # Every state a left fold passes through, without the seed.
   trail : (List(a), b, (b, a) -> b) -> List(b)
-  trail(values, state, f) -> trail_into(values, state, f, [])
+  trail([], _, _) -> []
+  trail([head, *tail], state, f) ->
+    next = f(state, head)
+    [next, *trail(tail, next, f)]
 
   # The same length, and equal elements in order, by the element's own
   # `equals`.
@@ -159,7 +167,8 @@ List(a) : [Nil, Cons(a, List(a))].(
   drop([_, *tail], Succ(count)) -> drop(tail, count)
 
   take_while : (List(a), a -> Bool) -> List(a)
-  take_while(values, keep) -> take_while_into(values, keep, [])
+  take_while([head, *tail], keep) if keep(head) -> [head, *take_while(tail, keep)]
+  take_while(_, _) -> []
 
   drop_while : (List(a), a -> Bool) -> List(a)
   drop_while([head, *tail], skip) if skip(head) -> drop_while(tail, skip)
@@ -212,7 +221,11 @@ List(a) : [Nil, Cons(a, List(a))].(
   # element's result. The final state comes back with the results, so one
   # pass can both rewrite a list and carry something out of it.
   map_accum : (List(a), s, (s, a) -> (s, b)) -> (s, List(b))
-  map_accum(values, state, f) -> map_accum_into(values, state, f, [])
+  map_accum([], state, _) -> (state, [])
+  map_accum([value, *rest], state, f) ->
+    (next, result) = f(state, value)
+    (last, results) = map_accum(rest, next, f)
+    (last, [result, *results])
 
   partition : (List(a), a -> Bool) -> (List(a), List(a))
   partition(values, keep) -> partition_into(values, keep, [], [])
@@ -233,7 +246,7 @@ List(a) : [Nil, Cons(a, List(a))].(
 
   # Each element beside its place, counting from nought.
   enumerate : List(a) -> List((Nat, a))
-  enumerate(values) -> enumerate_into(values, 0, [])
+  enumerate(values) -> enumerate_from(values, 0)
 
   # Every run of `size` neighbours, first to last: `[1, 2, 3].windows(2)` is
   # `[[1, 2], [2, 3]]`, none where the list is shorter than `size`, and one
@@ -290,16 +303,9 @@ range_into : (Nat, List(Nat)) -> List(Nat)
 range_into(0, built) -> built
 range_into(Succ(left), built) -> range_into(left, [left, *built])
 
-# The loops the walks above are, each building its answer backwards onto
-# `built` and turning it round at the end.
-
-map_into : (List(a), a -> b, List(b)) -> List(b)
-map_into([], _, built) -> reverse_into(built, [])
-map_into([head, *tail], f, built) -> map_into(tail, f, [f(head), *built])
-
-map2_into : (List(a), List(b), (a, b) -> c, List(c)) -> List(c)
-map2_into([head, *tail], [other, *rest], f, built) -> map2_into(tail, rest, f, [f(head, other), *built])
-map2_into(_, _, _, built) -> reverse_into(built, [])
+# The loops the walks above are that build something other than one list
+# element by element, each building its answer backwards onto `built` and
+# turning it round at the end.
 
 flat_map_into : (List(a), a -> List(b), List(b)) -> List(b)
 flat_map_into([], _, built) -> reverse_into(built, [])
@@ -314,11 +320,6 @@ join_into([], _, built) -> reverse_into(built, [])
 join_into([head, *tail], separator, built) ->
   join_into(tail, separator, reverse_into(head, reverse_into(separator, built)))
 
-filter_into : (List(a), a -> Bool, List(a)) -> List(a)
-filter_into([], _, built) -> reverse_into(built, [])
-filter_into([head, *tail], keep, built) if keep(head) -> filter_into(tail, keep, [head, *built])
-filter_into([_, *tail], keep, built) -> filter_into(tail, keep, built)
-
 count_from : (List(a), a -> Bool, Nat) -> Nat
 count_from([], _, counted) -> counted
 count_from([head, *tail], keep, counted) if keep(head) -> count_from(tail, keep, counted + 1)
@@ -327,12 +328,6 @@ count_from([_, *tail], keep, counted) -> count_from(tail, keep, counted)
 fold_back : (List(a), b, (a, b) -> b) -> b
 fold_back([], state, _) -> state
 fold_back([head, *tail], state, f) -> fold_back(tail, f(head, state), f)
-
-trail_into : (List(a), b, (b, a) -> b, List(b)) -> List(b)
-trail_into([], _, _, built) -> reverse_into(built, [])
-trail_into([head, *tail], state, f, built) ->
-  next = f(state, head)
-  trail_into(tail, next, f, [next, *built])
 
 # The runs of `blocks`: `start` is where the run being walked began, and
 # `left` how many of its elements come after the one at the front of
@@ -344,12 +339,6 @@ blocks_into([_, *rest], start, (width, 0), done) ->
   blocks_into(rest, rest, (width, width - 1), [List.take(start, width), *done])
 blocks_into([_, *rest], start, (width, Succ(left)), done) ->
   blocks_into(rest, start, (width, left), done)
-
-map_accum_into : (List(a), s, (s, a) -> (s, b), List(b)) -> (s, List(b))
-map_accum_into([], state, _, built) -> (state, reverse_into(built, []))
-map_accum_into([value, *rest], state, f, built) ->
-  (next, result) = f(state, value)
-  map_accum_into(rest, next, f, [result, *built])
 
 # The first element, as `get` answers it.
 front : List(a) -> Result(a, [OutOfBounds])
@@ -371,10 +360,6 @@ take_into : (List(a), Nat, List(a)) -> List(a)
 take_into([head, *tail], Succ(count), built) -> take_into(tail, count, [head, *built])
 take_into(_, _, built) -> reverse_into(built, [])
 
-take_while_into : (List(a), a -> Bool, List(a)) -> List(a)
-take_while_into([head, *tail], keep, built) if keep(head) -> take_while_into(tail, keep, [head, *built])
-take_while_into(_, _, built) -> reverse_into(built, [])
-
 partition_into : (List(a), a -> Bool, List(a), List(a)) -> (List(a), List(a))
 partition_into([], _, kept, left) -> (reverse_into(kept, []), reverse_into(left, []))
 partition_into([head, *tail], keep, kept, left) if keep(head) ->
@@ -391,9 +376,9 @@ cross_into([], _, built) -> reverse_into(built, [])
 cross_into([head, *tail], other, built) ->
   cross_into(tail, other, reverse_into(other.map(|paired| (head, paired)), built))
 
-enumerate_into : (List(a), Nat, List((Nat, a))) -> List((Nat, a))
-enumerate_into([], _, built) -> reverse_into(built, [])
-enumerate_into([head, *tail], at, built) -> enumerate_into(tail, at + 1, [(at, head), *built])
+enumerate_from : (List(a), Nat) -> List((Nat, a))
+enumerate_from([], _) -> []
+enumerate_from([head, *tail], at) -> [(at, head), *enumerate_from(tail, at + 1)]
 
 # Once a window is short, every later one is too, so the walk ends there.
 windows_into : (List(a), Nat, List(List(a))) -> List(List(a))
