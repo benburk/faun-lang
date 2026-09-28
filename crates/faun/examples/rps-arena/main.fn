@@ -21,28 +21,36 @@ import bots.rotate {Rotate}
 import bots.random {RandomBot}
 import bots.freq {Freq}
 
-Bot : [Rock(AlwaysRock), Beat(BeatLast), Cycle(Rotate), Rng(RandomBot), Count(Freq)].(
+Bot : [
+  AlwaysRock(AlwaysRock),
+  BeatLast(BeatLast),
+  Rotate(Rotate),
+  RandomBot(RandomBot),
+  Freq(Freq)
+].(
   name : Bot -> Str
   name(Bot(bot)) -> bot.name()
 
-  init : Bot -> (Throw, Bot)
-  init(Bot(bot)) ->
-    (throw, next) = bot.init()
+  open : Bot -> (Throw, Bot)
+  open(Bot(bot)) ->
+    (throw, next) = bot.open()
     (throw, Bot(next))
 
-  get_move : (Bot, Throw) -> (Throw, Bot)
-  get_move(Bot(bot), last) ->
-    (throw, next) = bot.get_move(last)
+  answer : (Bot, Throw) -> (Throw, Bot)
+  answer(Bot(bot), last) ->
+    (throw, next) = bot.answer(last)
     (throw, Bot(next))
 )
 
+# Every bot is built through its `start`, even the two whose constructor is
+# already a value, so the lineup reads the same for all of them.
 lineup : Nat -> List(Bot)
 lineup(seed) -> [
-  Rock(AlwaysRock.start()),
-  Beat(BeatLast.start()),
-  Cycle(Rotate.start()),
-  Rng(RandomBot.start(seed)),
-  Count(Freq.start())
+  AlwaysRock(AlwaysRock.start()),
+  BeatLast(BeatLast.start()),
+  Rotate(Rotate.start()),
+  RandomBot(RandomBot.start(seed)),
+  Freq(Freq.start())
 ]
 
 Settings = {seed: Nat, rounds: Nat}
@@ -64,12 +72,11 @@ usage() -> "usage: rps-arena SEED [ROUNDS]"
 
 report : Settings -> Str
 report({seed, rounds}) ->
-  # Fewest non-wins first is most wins first, every bot having played the
-  # same number of rounds.
+  # Most wins first; the sort is stable, so ties keep lineup order.
   standings = tournament(lineup(seed), rounds)
-  table = standings.sort_on(|score| score.draws + score.losses)
+  table = standings.sort_on(|score| -Int.of_nat(score.wins))
   heading = "seed ${seed}, ${rounds} rounds per match\n"
-  columns = "${pad_end("bot", 12)}${pad_start("wins", 7)}${pad_start("draws", 7)}${pad_start("losses", 7)}\n"
+  columns = row("bot", "wins", "draws", "losses")
   lines = table.map(line)
   Str.join([heading, columns, *lines], "")
 
@@ -86,7 +93,22 @@ pad_start(text, width) -> " ".repeat(width - text.len()).concat(text)
 
 line : Score -> Str
 line(score) ->
-  "${pad_end(score.name, 12)}${pad_start(score.wins.to_str(), 7)}${pad_start(score.draws.to_str(), 7)}${pad_start(score.losses.to_str(), 7)}\n"
+  wins = score.wins.to_str()
+  draws = score.draws.to_str()
+  losses = score.losses.to_str()
+  row(score.name, wins, draws, losses)
+
+# One line of the table: the name left-aligned, then three counts right-aligned.
+row : (Str, Str, Str, Str) -> Str
+row(name, wins, draws, losses) ->
+  cells = [
+    pad_end(name, 12),
+    pad_start(wins, 7),
+    pad_start(draws, 7),
+    pad_start(losses, 7),
+    "\n"
+  ]
+  Str.join(cells, "")
 
 # Two bots of different types meet without any union: beat_last opens with
 # Rock against a wall of Rock, draws once, then wins every round.
@@ -97,7 +119,11 @@ expect play(AlwaysRock.start(), BeatLast.start(), 5) == {left: 0, right: 4, draw
 expect play(BeatLast.start(), Rotate.start(), 30) == {left: 0, right: 0, draws: 30}
 
 # The union plays the same game as the bare types.
-expect play(Rock(AlwaysRock.start()), Beat(BeatLast.start()), 5) == {left: 0, right: 4, draws: 1}
+expect play(
+  AlwaysRock(AlwaysRock.start()),
+  BeatLast(BeatLast.start()),
+  5
+) == {left: 0, right: 4, draws: 1}
 
 # The counter reads a wall of Rock after one round and answers Paper from
 # then on.
@@ -107,7 +133,18 @@ expect play(AlwaysRock.start(), Freq.start(), 5) == {left: 0, right: 4, draws: 1
 # Rock's counter and meets each throw of the cycle in turn.
 expect play(Freq.start(), Rotate.start(), 6) == {left: 1, right: 2, draws: 3}
 
-expect tournament(lineup(1), 3).map(|score| score.name) == ["always_rock", "beat_last", "rotate", "random", "freq"]
+expect tournament(lineup(1), 3).map(|score| score.name) == [
+  "always_rock",
+  "beat_last",
+  "rotate",
+  "random",
+  "freq"
+]
+
+# Two bots of one name keep a line each: a wall of Rock against itself draws
+# every round, and both lines count it.
+expect tournament([AlwaysRock.start(), AlwaysRock.start()], 3).map(|score| score.draws)
+  == [3, 3]
 
 # The table on standard output, or the usage on standard error and status
 # two. A write that fails leaves nothing more to say.

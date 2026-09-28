@@ -12,11 +12,11 @@ Rotate : Throw.(
   name : Rotate -> Str
   name(_) -> "rotate"
 
-  init : Rotate -> (Throw, Rotate)
-  init(bot) -> step(bot)
+  open : Rotate -> (Throw, Rotate)
+  open(bot) -> step(bot)
 
-  get_move : (Rotate, Throw) -> (Throw, Rotate)
-  get_move(bot, _) -> step(bot)
+  answer : (Rotate, Throw) -> (Throw, Rotate)
+  answer(bot, _) -> step(bot)
 )
 
 step(Rotate(throw)) -> (throw, Rotate(throw.counter()))

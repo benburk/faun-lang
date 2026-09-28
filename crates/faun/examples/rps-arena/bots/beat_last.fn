@@ -12,9 +12,9 @@ BeatLast : [BeatLast].(
   name : BeatLast -> Str
   name(_) -> "beat_last"
 
-  init : BeatLast -> (Throw, BeatLast)
-  init(bot) -> (Rock, bot)
+  open : BeatLast -> (Throw, BeatLast)
+  open(bot) -> (Rock, bot)
 
-  get_move : (BeatLast, Throw) -> (Throw, BeatLast)
-  get_move(bot, last) -> (last.counter(), bot)
+  answer : (BeatLast, Throw) -> (Throw, BeatLast)
+  answer(bot, last) -> (last.counter(), bot)
 )

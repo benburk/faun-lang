@@ -305,7 +305,7 @@ fn the_nbody_examples_hold() {
 fn the_rps_arena_plays_ori_s_tournament() {
     let (failed, count) = support::test_file(&example("rps-arena/main.fn"));
     assert_eq!(failed, Vec::<String>::new());
-    assert_eq!(count, 17);
+    assert_eq!(count, 18);
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
         .arg("run")

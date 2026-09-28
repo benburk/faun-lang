@@ -24,10 +24,9 @@ Throw : [Rock, Paper, Scissors].(
   beats : (Throw, Throw) -> Bool
   beats(a, b) -> a == counter(b)
 
-  # The throw `n` names, counting Rock, Paper, Scissors in the order
-  # `counter` cycles them and wrapping every third the way `U8.of_nat`
-  # wraps at 256. A drawn word converts as it arrives, reduced by nothing
-  # the caller has to know about.
+  # The throw at `n` modulo 3, counting Rock, Paper, Scissors in the order
+  # `counter` cycles them. Any `n` will do, so a random word needs no
+  # reducing first.
   of_nat : Nat -> Throw
   of_nat(n) -> cycle_at(n % 3)
 )

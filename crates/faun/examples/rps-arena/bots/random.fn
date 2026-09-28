@@ -13,11 +13,11 @@ RandomBot : Random.(
   name : RandomBot -> Str
   name(_) -> "random"
 
-  init : RandomBot -> (Throw, RandomBot)
-  init(bot) -> draw(bot)
+  open : RandomBot -> (Throw, RandomBot)
+  open(bot) -> draw(bot)
 
-  get_move : (RandomBot, Throw) -> (Throw, RandomBot)
-  get_move(bot, _) -> draw(bot)
+  answer : (RandomBot, Throw) -> (Throw, RandomBot)
+  answer(bot, _) -> draw(bot)
 )
 
 draw : RandomBot -> (Throw, RandomBot)

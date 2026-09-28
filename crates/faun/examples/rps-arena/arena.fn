@@ -1,6 +1,7 @@
 # The arena knows nothing about any bot. `Player(b)` is the whole contract:
 # a player names itself, opens a match with a throw, and answers each of the
-# opponent's throws with a throw and its own next state.
+# opponent's throws with a throw and its own next state. Ori calls `open` and
+# `answer` `init` and `get_move`.
 #
 # `play` is generic in *two* player types, so any two bots meet without a
 # union in sight. Only the tournament's list needs every entry to share one
@@ -12,8 +13,8 @@ import throw {Throw}
 
 Player(b) = where
   b.name : b -> Str
-  b.init : b -> (Throw, b)
-  b.get_move : (b, Throw) -> (Throw, b)
+  b.open : b -> (Throw, b)
+  b.answer : (b, Throw) -> (Throw, b)
 
 # Who took a round, seen from the left side of the table.
 Outcome : [Left, Right, Draw]
@@ -26,19 +27,26 @@ judge(_, _) -> Draw
 # The running score of one match.
 Tally = {left: Nat, right: Nat, draws: Nat}
 
+empty : Tally
+empty() -> {left: 0, right: 0, draws: 0}
+
+# The same match seen from the right side of the table.
+flip : Tally -> Tally
+flip(tally) -> {left: tally.right, right: tally.left, draws: tally.draws}
+
 record : (Tally, Outcome) -> Tally
 record(tally, Left) -> {left: tally.left + 1, *tally}
 record(tally, Right) -> {right: tally.right + 1, *tally}
 record(tally, Draw) -> {draws: tally.draws + 1, *tally}
 
 # A seated player is its state and the throw it has just made. `seat` opens;
-# `answer` responds to what the other side threw.
+# `reply` answers what the other side threw.
 seat(player) ->
-  (throw, state) = player.init()
+  (throw, state) = player.open()
   {state, last: throw}
 
-answer(side, seen) ->
-  (throw, state) = side.state.get_move(seen)
+reply(side, seen) ->
+  (throw, state) = side.state.answer(seen)
   {state, last: throw}
 
 # A table is two seated sides and the tally so far. `score` counts the round
@@ -48,16 +56,16 @@ score(table) ->
   {tally: record(table.tally, outcome), *table}
 
 round(table) ->
-  left = answer(table.left, table.right.last)
-  right = answer(table.right, table.left.last)
+  left = reply(table.left, table.right.last)
+  right = reply(table.right, table.left.last)
   score({left, right, tally: table.tally})
 
 # One match of `rounds` rounds: both players open, that round is scored, and
 # the table is played `rounds - 1` more times.
 play : (a, b, Nat) -> Tally where Player(a), Player(b)
-play(_, _, 0) -> {left: 0, right: 0, draws: 0}
+play(_, _, 0) -> empty()
 play(a, b, rounds) ->
-  opening = score({left: seat(a), right: seat(b), tally: {left: 0, right: 0, draws: 0}})
+  opening = score({left: seat(a), right: seat(b), tally: empty()})
   last = (rounds - 1).times(opening, round)
   last.tally
 
@@ -72,27 +80,33 @@ pairs([first, *rest]) ->
 Score = {name: Str, wins: Nat, draws: Nat, losses: Nat}
 
 # Round robin: every pairing plays one match, and both bots' lines take the
-# result. The standings are a map from name to line, in lineup order.
+# result. Each bot is keyed by its place in the lineup, so two bots may share
+# a name, and the standings come back in lineup order.
 tournament : (List(b), Nat) -> List(Score) where Player(b)
 tournament(bots, rounds) ->
-  lines = bots.map(|bot| (bot.name(), {name: bot.name(), wins: 0, draws: 0, losses: 0}))
+  seats = bots.enumerate()
+  lines = seats.map(|(place, bot)| (place, blank(bot.name())))
   fresh = Map.of_list(lines)
-  standings = pairs(bots).fold(fresh, |standings, (a, b)| settle(standings, a.name(), b.name(), play(a, b, rounds)))
+  standings = pairs(seats).fold(fresh, |standings, ((left, a), (right, b))|
+    settle(standings, left, right, play(a, b, rounds)))
   standings.values()
 
+blank : Str -> Score
+blank(name) -> {name, wins: 0, draws: 0, losses: 0}
+
 settle(standings, left, right, tally) ->
-  settled_left = standings.update(left, |score| {
-    wins: score.wins + tally.left,
-    losses: score.losses + tally.right,
-    draws: score.draws + tally.draws,
-    *score
-  })
-  settled_left.update(right, |score| {
-    wins: score.wins + tally.right,
-    losses: score.losses + tally.left,
-    draws: score.draws + tally.draws,
-    *score
-  })
+  flipped = flip(tally)
+  settled = standings.update(left, |score| credit(score, tally))
+  settled.update(right, |score| credit(score, flipped))
+
+# A bot's line with one match added, the tally read from that bot's side.
+credit : (Score, Tally) -> Score
+credit(score, tally) -> {
+  wins: score.wins + tally.left,
+  losses: score.losses + tally.right,
+  draws: score.draws + tally.draws,
+  *score
+}
 
 expect pairs([1, 2, 3]) == [(1, 2), (1, 3), (2, 3)]
 expect pairs([1]) == []

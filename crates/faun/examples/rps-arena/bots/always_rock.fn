@@ -11,9 +11,9 @@ AlwaysRock : [AlwaysRock].(
   name : AlwaysRock -> Str
   name(_) -> "always_rock"
 
-  init : AlwaysRock -> (Throw, AlwaysRock)
-  init(bot) -> (Rock, bot)
+  open : AlwaysRock -> (Throw, AlwaysRock)
+  open(bot) -> (Rock, bot)
 
-  get_move : (AlwaysRock, Throw) -> (Throw, AlwaysRock)
-  get_move(bot, _) -> (Rock, bot)
+  answer : (AlwaysRock, Throw) -> (Throw, AlwaysRock)
+  answer(bot, _) -> (Rock, bot)
 )

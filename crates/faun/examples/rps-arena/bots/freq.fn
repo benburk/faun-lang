@@ -14,14 +14,14 @@ Freq : {rock: Nat, paper: Nat, scissors: Nat}.(
   name : Freq -> Str
   name(_) -> "freq"
 
-  init : Freq -> (Throw, Freq)
-  init(bot) -> (Rock, bot)
+  open : Freq -> (Throw, Freq)
+  open(bot) -> (Rock, bot)
 
-  get_move : (Freq, Throw) -> (Throw, Freq)
-  get_move(Freq(tally), last) ->
+  answer : (Freq, Throw) -> (Throw, Freq)
+  answer(Freq(tally), last) ->
     seen = count(tally, last)
-    answer = favourite(seen).counter()
-    (answer, Freq(seen))
+    throw = favourite(seen).counter()
+    (throw, Freq(seen))
 )
 
 count(tally, Rock) -> {rock: tally.rock + 1, *tally}
