@@ -69,29 +69,27 @@ x    ::= a parameter, a binding, or a field an arm bound
   reads from writes. Keep fields and construction machinery private or narrowly
   visible within the tier, and re-export the public API from `mod.rs`.
 - `validate.rs`, `stops.rs`: structural checks and size-change termination.
-  A round nothing else shows stops is asked again with a measure besides each
-  parameter, `a ∸ b` for each ordered pair of natural parameters: smaller
-  where the new pair lies within the old, one side moved, and a guard keeps
-  them apart. Where even that fails, what calls answer is read as well: each
-  definition's answer against its parameters, a greatest fixpoint, taken
-  apart by its shape, and each field of a parameter of a sum holding no
-  more of itself is a size of its own, so a parser going round on the rest
-  it answers, in an `Ok` or handed to a helper that takes it apart, is seen
-  to stop. Each list parameter's length is a row of its own there, and what a
-  body holds is bounded by one list's length or two together, plus a
-  constant: a cons is one longer than its rest whatever its element, and a
-  walk onto an accumulator answers the sum. So a walk going round on what
-  `map`, `filter`, `map_accum` or `reverse` answered of its rest is seen to
-  stop. A natural's value is its length on the same scale, with what
-  recognized arithmetic and the recognized `Length`, `Take` and `Drop` mean
-  there, and a list's least length follows the constructors it was matched
-  as, so a merge sort halving by `split_at(len / 2)` past its one-element
-  clause is seen to stop without fuel. A small definition going round
-  nowhere is read in place at a call, with what its arguments are there.
-  A guard keeping a number at or above another gives it that one's least
-  value, a product of at least one by at least two grows, and a recognized
-  operation worked out again on the same operands is the same value, so a
-  walk scaling by ten past a bound, or a digit walk past `n < 10`, stops.
+  Each definition is read against its measures, each a size of a parameter:
+  its depth; its length, where it is a list, or its value, where it is a
+  natural; and the depth of a field, where it is a sum holding no more of
+  itself. Every value a body holds carries upper bounds on how deep and how
+  long it is, and a lower bound on how long, at keys of none, one or two
+  measures added up plus a constant; a call matrix has a row per measure of
+  the caller and a column per measure of the callee. A round nothing shows
+  stops plainly is read again with `a ∸ b` for each ordered pair of
+  naturals besides, smaller where the new pair lies within the old, one
+  side moved, and a guard keeps them apart; and where that fails, with what
+  calls answer: each definition's answer against its measures, a greatest
+  fixpoint, taken apart by its shape. So a parser going round on the rest
+  it answers, a walk on what `map` or `reverse` answered of its rest, a
+  merge sort halving by `split_at(len / 2)` past its one-element clause, a
+  digit walk past `n < 10`, and a walk scaling by ten past a bound are seen
+  to stop. Recognized arithmetic and the recognized `Length`, `Take` and
+  `Drop` answer by what they mean; a list's least length follows the
+  constructors it was matched as; a guard keeping a number at or above
+  another gives it that one's least value; a recognized operation worked
+  out again on the same operands is the same value; and a small definition
+  going round nowhere is read in place at a call.
 - `relations.rs`: what a guard says of the sizes it compared, followed from
   the comparisons recognized by their equations through the definitions
   answering from them, as the facts each constructor of the answer carries.
