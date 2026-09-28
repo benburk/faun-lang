@@ -1,7 +1,7 @@
-error: a type variable has no field or method `equals`
+error: the type variable `a` has no field or method `equals`
  --> a_derived_member_asks_its_fields_through_bounds.fn:2:3
   |
 2 |   equals : (Box(a), Box(a)) -> Bool
   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = help: give it `equals` with a `where` bound in the signature
+  = help: write `a.equals : (a, a) -> Bool` in the signature's `where`

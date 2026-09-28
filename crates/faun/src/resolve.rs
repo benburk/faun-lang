@@ -480,6 +480,7 @@ fn expand_constraints(
         aliases,
         applications: Vec::new(),
         expanding: Vec::new(),
+        through: None,
         members: Vec::new(),
     };
     for constraint in written {
@@ -495,6 +496,9 @@ struct Expansion<'a> {
     applications: Vec<(Symbol, String)>,
     /// The aliases being expanded, innermost last.
     expanding: Vec<Symbol>,
+    /// The outermost application being expanded, where it is of an alias of
+    /// one parameter at a variable: the alias, and the variable.
+    through: Option<(Symbol, Symbol)>,
     /// The members required so far, each once.
     members: Vec<h::Constraint>,
 }
@@ -506,6 +510,7 @@ impl Expansion<'_> {
                 variable,
                 member,
                 ty,
+                ..
             } => (variable, member, ty),
             h::Constraint::Alias { name, arguments } => {
                 return self.apply(name, &arguments, symbols);
@@ -516,6 +521,7 @@ impl Expansion<'_> {
                 variable: other,
                 member: named,
                 ty,
+                ..
             } if *other == variable && *named == member => Some(ty),
             _ => None,
         });
@@ -527,10 +533,15 @@ impl Expansion<'_> {
                 symbols.text(member)
             )),
             None => {
+                let through = self
+                    .through
+                    .filter(|&(_, applied)| applied == variable)
+                    .map(|(alias, _)| alias);
                 self.members.push(h::Constraint::Member {
                     variable,
                     member,
                     ty,
+                    through,
                 });
                 Ok(())
             }
@@ -595,6 +606,10 @@ impl Expansion<'_> {
                 h::Type::Variable(symbols.intern(&renamed))
             });
         }
+        let outermost = self.expanding.is_empty();
+        if outermost && let [h::Type::Variable(applied)] = arguments {
+            self.through = Some((name, *applied));
+        }
         self.expanding.push(name);
         for constraint in &alias.constraints {
             let constraint = match constraint {
@@ -602,6 +617,7 @@ impl Expansion<'_> {
                     variable,
                     member,
                     ty,
+                    ..
                 } => {
                     let h::Type::Variable(variable) = substitution[variable] else {
                         return Err(format!(
@@ -613,6 +629,7 @@ impl Expansion<'_> {
                         variable,
                         member: *member,
                         ty: substitute(ty, &substitution),
+                        through: None,
                     }
                 }
                 h::Constraint::Alias { name, arguments } => h::Constraint::Alias {
@@ -626,6 +643,9 @@ impl Expansion<'_> {
             self.add(constraint, symbols)?;
         }
         self.expanding.pop();
+        if outermost {
+            self.through = None;
+        }
         Ok(())
     }
 }
@@ -910,6 +930,7 @@ fn resolve_constraint(
                     .collect::<Result<_, _>>()?,
                 Box::new(written_type(module, result, source, scope, symbols)?),
             ),
+            through: None,
         },
         s::Constraint::Alias {
             span,

@@ -82,6 +82,10 @@ pub enum Constraint {
         variable: Symbol,
         member: Symbol,
         ty: Type,
+        /// The alias of one parameter whose application at `variable`
+        /// required it, outermost, where one did: what a signature writes
+        /// to require it again, `Hasher(h)`.
+        through: Option<Symbol>,
     },
     Alias {
         name: Symbol,

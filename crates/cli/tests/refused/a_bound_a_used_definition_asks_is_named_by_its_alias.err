@@ -1,0 +1,8 @@
+error: the type variable `h` has no field or method `write_u64`
+ --> a_bound_a_used_definition_asks_is_named_by_its_alias.fn:2:3
+  |
+2 |   hash_into : (Point, h) -> h
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `Nat.hash_into`, used here, asks for `write_u64`
+  = help: write `Hasher(h)` in the signature's `where`, as `Nat.hash_into` does

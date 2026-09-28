@@ -470,6 +470,8 @@ struct Bound {
     /// Whether the member is named on a value with no call, `x.name`: a
     /// field, or a method taking nothing else.
     bare: bool,
+    /// The alias whose application wrote it, where one of one parameter did.
+    through: Option<Symbol>,
 }
 
 impl Bound {
@@ -480,6 +482,7 @@ impl Bound {
             ty: substitute(&self.ty, replacements),
             associated: self.associated,
             bare: self.bare,
+            through: self.through,
         }
     }
 }
@@ -514,6 +517,9 @@ struct PendingMethod {
     result: Ty,
     reach: Reach,
     resolved: bool,
+    /// The definition whose bound this is, and the alias that wrote it,
+    /// where it is owed by a use rather than written.
+    owed: Option<(Symbol, Option<Symbol>)>,
 }
 
 /// How a member is reached.
@@ -1058,52 +1064,39 @@ fn contains(ty: &Ty, variable: u32) -> bool {
 }
 
 fn substitute(ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
+    replaced(ty, &|leaf| match leaf {
+        Ty::Var(id) => replacements.get(id).cloned(),
+        _ => None,
+    })
+}
+
+/// `ty` with each variable, flexible or rigid, that `leaf` answers for
+/// replaced by what it answers.
+fn replaced(ty: &Ty, leaf: &impl Fn(&Ty) -> Option<Ty>) -> Ty {
     match ty {
-        Ty::Var(id) => replacements.get(id).cloned().unwrap_or_else(|| ty.clone()),
-        Ty::Rigid(_) => ty.clone(),
+        Ty::Var(_) | Ty::Rigid(_) => leaf(ty).unwrap_or_else(|| ty.clone()),
         Ty::Named(name, arguments) => Ty::Named(
             *name,
-            arguments
-                .iter()
-                .map(|ty| substitute(ty, replacements))
-                .collect(),
+            arguments.iter().map(|ty| replaced(ty, leaf)).collect(),
         ),
         Ty::Function(parameters, result) => Ty::Function(
-            parameters
-                .iter()
-                .map(|ty| substitute(ty, replacements))
-                .collect(),
-            Rc::new(substitute(result, replacements)),
+            parameters.iter().map(|ty| replaced(ty, leaf)).collect(),
+            Rc::new(replaced(result, leaf)),
         ),
         Ty::Variants(tags, tail) => Ty::Variants(
             tags.iter()
-                .map(|(name, fields)| {
-                    (
-                        *name,
-                        fields
-                            .iter()
-                            .map(|ty| substitute(ty, replacements))
-                            .collect(),
-                    )
-                })
+                .map(|(name, fields)| (*name, fields.iter().map(|ty| replaced(ty, leaf)).collect()))
                 .collect(),
-            tail.as_deref()
-                .map(|tail| Rc::new(substitute(tail, replacements))),
+            tail.as_deref().map(|tail| Rc::new(replaced(tail, leaf))),
         ),
         Ty::Record(fields, tail) => Ty::Record(
             fields
                 .iter()
-                .map(|(name, ty)| (*name, substitute(ty, replacements)))
+                .map(|(name, ty)| (*name, replaced(ty, leaf)))
                 .collect(),
-            tail.as_deref()
-                .map(|tail| Rc::new(substitute(tail, replacements))),
+            tail.as_deref().map(|tail| Rc::new(replaced(tail, leaf))),
         ),
-        Ty::Tuple(members) => Ty::Tuple(
-            members
-                .iter()
-                .map(|ty| substitute(ty, replacements))
-                .collect(),
-        ),
+        Ty::Tuple(members) => Ty::Tuple(members.iter().map(|ty| replaced(ty, leaf)).collect()),
     }
 }
 
@@ -1439,12 +1432,13 @@ impl<'a> Checker<'a> {
         loop {
             let mut progress = false;
             for (constraint, bound) in signature.constraints.iter().zip(&mut bounds) {
-                let (variable, member, ty) = match constraint {
+                let (variable, member, ty, through) = match constraint {
                     h::Constraint::Member {
                         variable,
                         member,
                         ty,
-                    } => (*variable, *member, ty),
+                        through,
+                    } => (*variable, *member, ty, *through),
                     h::Constraint::Alias { .. } => {
                         unreachable!("resolution expands every constraint alias")
                     }
@@ -1466,6 +1460,7 @@ impl<'a> Checker<'a> {
                     ty,
                     associated,
                     bare: false,
+                    through,
                 });
                 progress = true;
             }
@@ -2924,6 +2919,7 @@ impl<'a> Checker<'a> {
             result: result.clone(),
             reach: if member { Reach::Bare } else { Reach::Called },
             resolved: false,
+            owed: None,
         });
         result
     }
@@ -2962,6 +2958,7 @@ impl<'a> Checker<'a> {
                     Reach::Called
                 },
                 resolved: false,
+                owed: Some((definition, bound.through)),
             });
         }
     }
@@ -3292,6 +3289,7 @@ impl<'a> Checker<'a> {
             result: numeral.ty.clone(),
             reach: Reach::Type,
             resolved: false,
+            owed: None,
         });
         if numeral.negative {
             let neg = self.method_symbol(numeral.module, numeral.span, "neg")?;
@@ -3305,6 +3303,7 @@ impl<'a> Checker<'a> {
                 result: numeral.ty.clone(),
                 reach: Reach::Called,
                 resolved: false,
+                owed: None,
             });
         }
         if let Some(site) = numeral.site {
@@ -3353,6 +3352,7 @@ impl<'a> Checker<'a> {
                     ty,
                     associated: pending.reach == Reach::Type,
                     bare: pending.reach == Reach::Bare,
+                    through: None,
                 }),
             }
             if let Some(site) = pending.site {
@@ -3602,6 +3602,7 @@ impl<'a> Checker<'a> {
             }
             let mut progress = false;
             let mut next = Vec::new();
+            let pushed = self.pending_methods.len();
             for index in unresolved {
                 let pending = self.pending_methods[index].clone();
                 let fields = self.field_candidates(&pending);
@@ -3687,13 +3688,7 @@ impl<'a> Checker<'a> {
                                 failure(pending.module, pending.span, message)
                             }
                             // A signature's variable has only what its bounds give.
-                            Ty::Rigid(_) => {
-                                let message =
-                                    format!("a type variable has no field or method `{name}`");
-                                failure(pending.module, pending.span, message).help(format!(
-                                    "give it `{name}` with a `where` bound in the signature"
-                                ))
-                            }
+                            Ty::Rigid(_) => self.unbounded(&pending),
                             receiver => {
                                 let message = format!(
                                     "`{}` has no field or method `{name}`",
@@ -3712,6 +3707,9 @@ impl<'a> Checker<'a> {
                     _ => next.push(index),
                 }
             }
+            // What resolving these owes, and the calls a structural member
+            // makes of its components, are asked in the next round.
+            next.extend(pushed..self.pending_methods.len());
             if next.is_empty() {
                 return Ok(());
             }
@@ -3735,6 +3733,71 @@ impl<'a> Checker<'a> {
             }
             unresolved = next;
         }
+    }
+
+    /// Why a signed body's own variable has no `pending`: its signature
+    /// gives it none. Where a definition used here asks it, that says so,
+    /// and the alias it asks through is what to write.
+    fn unbounded(&self, pending: &PendingMethod) -> CheckError {
+        let member = self.symbols.text(pending.name);
+        let receiver = self.infer.resolve(&pending.receiver);
+        let variable = self
+            .current_names
+            .iter()
+            .find(|(_, ty)| self.infer.resolve(ty) == receiver)
+            .map(|(name, _)| self.symbols.text(*name));
+        let message = variable.map_or_else(
+            || format!("a type variable has no field or method `{member}`"),
+            |variable| format!("the type variable `{variable}` has no field or method `{member}`"),
+        );
+        let refused = failure(pending.module, pending.span, message);
+        let written = variable.and_then(|variable| self.written_bound(pending, variable));
+        let help = written.map_or_else(
+            || format!("give it `{member}` with a `where` bound in the signature"),
+            |bound| format!("write `{bound}` in the signature's `where`"),
+        );
+        let Some((definition, through)) = pending.owed else {
+            return refused.help(help);
+        };
+        let definition = spelled(definition, self.symbols);
+        let refused = refused.note(format!("`{definition}`, used here, asks for `{member}`"));
+        match (through, variable) {
+            (Some(alias), Some(variable)) => refused.help(format!(
+                "write `{}({variable})` in the signature's `where`, as `{definition}` does",
+                spelled(alias, self.symbols)
+            )),
+            _ => refused.help(help),
+        }
+    }
+
+    /// The bound that would give `variable` what `pending` calls on it, as
+    /// a signature writes it, where every type in it is known.
+    fn written_bound(&self, pending: &PendingMethod, variable: &str) -> Option<String> {
+        if pending.reach != Reach::Called {
+            return None;
+        }
+        let names: HashMap<u32, Symbol> = self
+            .current_names
+            .iter()
+            .filter_map(|(name, ty)| match self.infer.resolve(ty) {
+                Ty::Rigid(variable) => Some((variable, *name)),
+                _ => None,
+            })
+            .collect();
+        let parameters: Rc<[Ty]> = std::iter::once(&pending.receiver)
+            .chain(&pending.arguments)
+            .map(|ty| self.infer.resolve(ty))
+            .collect();
+        let ty = Ty::Function(parameters, Rc::new(self.infer.resolve(&pending.result)));
+        let known = replaced(&ty, &|leaf| match leaf {
+            Ty::Rigid(variable) => names
+                .get(variable)
+                .map(|name| Ty::Named(*name, Rc::default())),
+            _ => None,
+        });
+        let shown = show(&known, self.symbols);
+        let member = self.symbols.text(pending.name);
+        (!shown.contains(['_', '\''])).then(|| format!("{variable}.{member} : {shown}"))
     }
 
     fn field_candidates(&mut self, pending: &PendingMethod) -> Vec<Scheme> {
@@ -3907,6 +3970,7 @@ impl<'a> Checker<'a> {
                 result: answer.clone(),
                 reach: Reach::Called,
                 resolved: false,
+                owed: None,
             });
         }
         if let Some(site) = pending.site {
