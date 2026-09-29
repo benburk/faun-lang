@@ -35,6 +35,12 @@
               mainProgram = "faun";
             };
           };
+          # The parser as an editor loads it, at `parser`, with its queries.
+          tree-sitter-faun = pkgs.tree-sitter.buildGrammar {
+            language = "faun";
+            version = workspace.workspace.package.version;
+            src = ./editors/tree-sitter-faun;
+          };
         }
       );
 
@@ -58,6 +64,8 @@
               fd
               ripgrep
               nixfmt
+              tree-sitter
+              nodejs
             ];
           };
         }

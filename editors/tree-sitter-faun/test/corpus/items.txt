@@ -1,0 +1,425 @@
+========================================
+Directives
+========================================
+
+import std.host {Host, List.*, x: y}
+export {f, Host.*}
+package {md5: "../md5"}
+
+---
+
+(source_file
+  (import
+    (module_path
+      (identifier)
+      (identifier))
+    (exposure
+      (type_identifier))
+    (exposure
+      (type_identifier))
+    (exposure
+      (identifier)
+      (identifier)))
+  (export
+    (exposure
+      (identifier))
+    (exposure
+      (type_identifier)))
+  (package
+    (dependency
+      (identifier)
+      (string
+        (string_content)))))
+
+========================================
+A signature with constraints
+========================================
+
+f : (List(a), a -> b) -> {x: a, *} where Show(a), Eq(a), a.show : a -> Str
+
+---
+
+(source_file
+  (signature
+    (identifier)
+    (function_type
+      (tuple_type
+        (generic_type
+          (type_identifier)
+          (type_arguments
+            (type_variable)))
+        (function_type
+          (type_variable)
+          (type_variable)))
+      (record_type
+        (field_type
+          (identifier)
+          (type_variable))
+        (rest)))
+    (constraints
+      (class_constraint
+        (type_identifier)
+        (type_arguments
+          (type_variable)))
+      (class_constraint
+        (type_identifier)
+        (type_arguments
+          (type_variable)))
+      (member_constraint
+        (type_variable)
+        (identifier)
+        (function_type
+          (type_variable)
+          (type_identifier))))))
+
+========================================
+Aliases
+========================================
+
+Name = ((a, b) -> c)
+Num(a) = where a.add : (a, a) -> a
+
+---
+
+(source_file
+  (type_alias
+    (type_identifier)
+    (tuple_type
+      (function_type
+        (tuple_type
+          (type_variable)
+          (type_variable))
+        (type_variable))))
+  (binding
+    (call_expression
+      (type_identifier)
+      (arguments
+        (identifier)))
+    (constraints
+      (member_constraint
+        (type_variable)
+        (identifier)
+        (function_type
+          (tuple_type
+            (type_variable)
+            (type_variable))
+          (type_variable))))))
+
+========================================
+A declaration with methods
+========================================
+
+Maybe(a) : [None, Some(a)].(
+  map : (Maybe(a), a -> b) -> Maybe(b)
+  map(None, _) -> None
+
+  map(Some(x), f) -> Some(f(x))
+)
+
+---
+
+(source_file
+  (signature
+    (call_expression
+      (type_identifier)
+      (arguments
+        (identifier)))
+    (variant_type
+      (variant
+        (type_identifier))
+      (variant
+        (type_identifier)
+        (type_arguments
+          (type_variable))))
+    (methods
+      (signature
+        (identifier)
+        (function_type
+          (tuple_type
+            (generic_type
+              (type_identifier)
+              (type_arguments
+                (type_variable)))
+            (function_type
+              (type_variable)
+              (type_variable)))
+          (generic_type
+            (type_identifier)
+            (type_arguments
+              (type_variable)))))
+      (clause
+        (call_expression
+          (identifier)
+          (arguments
+            (type_identifier)
+            (wildcard)))
+        (type_identifier))
+      (clause
+        (call_expression
+          (identifier)
+          (arguments
+            (call_expression
+              (type_identifier)
+              (arguments
+                (identifier)))
+            (identifier)))
+        (call_expression
+          (type_identifier)
+          (arguments
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier)))))))))
+
+========================================
+A guarded clause and its body
+========================================
+
+f(x) if x > 0 ->
+  log!(x)
+  [y, *rest] = x
+  {a, b: c, *} = y
+  -a * 2 + c?.d.e(|p, Q(r)| p) | !b
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)))
+    (guard
+      (binary_expression
+        (identifier)
+        (number)))
+    (call_expression
+      (effect_identifier)
+      (arguments
+        (identifier))))
+  (binding
+    (list
+      (identifier)
+      (rest
+        (identifier)))
+    (identifier))
+  (binding
+    (record
+      (field
+        (identifier))
+      (field
+        (identifier)
+        (identifier))
+      (rest))
+    (identifier))
+  (binary_expression
+    (binary_expression
+      (binary_expression
+        (unary_expression
+          (identifier))
+        (number))
+      (call_expression
+        (field_expression
+          (field_expression
+            (try_expression
+              (identifier))
+            (identifier))
+          (identifier))
+        (arguments
+          (lambda
+            (lambda_parameters
+              (identifier)
+              (call_expression
+                (type_identifier)
+                (arguments
+                  (identifier))))
+            (identifier)))))
+    (unary_expression
+      (identifier))))
+
+========================================
+Patterns
+========================================
+
+f([x, *r], {a, *}) if x.p(|y| y) ^ !a ->
+  r
+f(_, _) if
+  (a, b) == c -> 0
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (list
+          (identifier)
+          (rest
+            (identifier)))
+        (record
+          (field
+            (identifier))
+          (rest))))
+    (guard
+      (binary_expression
+        (call_expression
+          (field_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (lambda
+              (lambda_parameters
+                (identifier))
+              (identifier))))
+        (unary_expression
+          (identifier))))
+    (identifier))
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (wildcard)
+        (wildcard)))
+    (guard
+      (binary_expression
+        (tuple
+          (identifier)
+          (identifier))
+        (identifier)))
+    (number)))
+
+========================================
+Ranges
+========================================
+
+f(_..-1, -3..5, 'a'.._, -2..-1, [0x80..0xbf, *r]) -> 1
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (range
+          (wildcard)
+          (unary_expression
+            (number)))
+        (unary_expression
+          (range
+            (number)
+            (number)))
+        (range
+          (char)
+          (wildcard))
+        (unary_expression
+          (range
+            (number)
+            (unary_expression
+              (number))))
+        (list
+          (range
+            (number)
+            (number))
+          (rest
+            (identifier)))))
+    (number)))
+
+========================================
+Numerals and characters
+========================================
+
+expect 0x10 == 16 & 0b101 == 5 & 2.0e3 > 1.5 & 'a' == 97 & '\n' == 10
+
+---
+
+(source_file
+  (expect
+    (binary_expression
+      (binary_expression
+        (binary_expression
+          (binary_expression
+            (binary_expression
+              (number)
+              (number))
+            (binary_expression
+              (number)
+              (number)))
+          (binary_expression
+            (decimal)
+            (decimal)))
+        (binary_expression
+          (char)
+          (number)))
+      (binary_expression
+        (char)
+        (number)))))
+
+========================================
+Strings and splices
+========================================
+
+expect "a\t${x:<12}$${"in ${y}"}" == "${{a: x}.a:>3}"
+
+---
+
+(source_file
+  (expect
+    (binary_expression
+      (string
+        (string_content)
+        (escape_sequence)
+        (interpolation
+          (identifier)
+          (width
+            (number)))
+        (string_content)
+        (interpolation
+          (string
+            (string_content)
+            (interpolation
+              (identifier)))))
+      (string
+        (interpolation
+          (field_expression
+            (record
+              (field
+                (identifier)
+                (identifier)))
+            (identifier))
+          (width
+            (number)))))))
+
+========================================
+Effects
+========================================
+
+main! : Host -> []
+main!(host) -> host.print!("hi")
+expect a!=b
+
+---
+
+(source_file
+  (signature
+    (effect_identifier)
+    (function_type
+      (type_identifier)
+      (variant_type)))
+  (clause
+    (call_expression
+      (effect_identifier)
+      (arguments
+        (identifier)))
+    (call_expression
+      (field_expression
+        (identifier)
+        (effect_identifier))
+      (arguments
+        (string
+          (string_content)))))
+  (expect
+    (binary_expression
+      (identifier)
+      (identifier))))

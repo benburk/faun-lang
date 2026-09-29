@@ -1,0 +1,10 @@
+# Faun for Helix editing this repository. `just helix` puts the grammar and
+# its queries in Helix's runtime; see editors/tree-sitter-faun/README.md.
+
+[[language]]
+name = "faun"
+scope = "source.faun"
+file-types = ["fn"]
+comment-token = "#"
+indent = { tab-width = 2, unit = "  " }
+roots = []

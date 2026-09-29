@@ -1,0 +1,222 @@
+========================================
+A chain goes on at a line that begins with a dot
+========================================
+
+f(x) -> x
+  .map(g) # a comment between
+  .filter(h) +
+  1
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)))
+    (binary_expression
+      (call_expression
+        (field_expression
+          (call_expression
+            (field_expression
+              (identifier)
+              (identifier))
+            (arguments
+              (identifier)))
+          (comment)
+          (identifier))
+        (arguments
+          (identifier)))
+      (number))))
+
+========================================
+An operator at a line's end carries it on
+========================================
+
+total(a, b) ->
+  a +
+    b
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (binary_expression
+      (identifier)
+      (identifier))))
+
+========================================
+A spaced minus carries a line on; a held one begins a line
+========================================
+
+a = x
+  - y
+b = x
+-y
+
+---
+
+(source_file
+  (binding
+    (identifier)
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (binding
+    (identifier)
+    (identifier))
+  (unary_expression
+    (identifier)))
+
+========================================
+A where and an if carry a line on
+========================================
+
+f : a -> a
+  where Show(a)
+f(x)
+  if x > 0 -> x
+
+---
+
+(source_file
+  (signature
+    (identifier)
+    (function_type
+      (type_variable)
+      (type_variable))
+    (constraints
+      (class_constraint
+        (type_identifier)
+        (type_arguments
+          (type_variable)))))
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)))
+    (guard
+      (binary_expression
+        (identifier)
+        (number)))
+    (identifier)))
+
+========================================
+A where list's members stand on lines of their own
+========================================
+
+sum : List(a) -> a where
+  a.zero : a
+  a.add : (a, a) -> a
+
+---
+
+(source_file
+  (signature
+    (identifier)
+    (function_type
+      (generic_type
+        (type_identifier)
+        (type_arguments
+          (type_variable)))
+      (type_variable))
+    (constraints
+      (member_constraint
+        (type_variable)
+        (identifier)
+        (type_variable))))
+  (signature
+    (field_expression
+      (identifier)
+      (identifier))
+    (function_type
+      (tuple_type
+        (type_variable)
+        (type_variable))
+      (type_variable))))
+
+========================================
+A body is the lines after its clause
+========================================
+
+area(w, h) ->
+  inner = w - 2
+
+  inner * h
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (binding
+      (identifier)
+      (binary_expression
+        (identifier)
+        (number))))
+  (binary_expression
+    (identifier)
+    (identifier)))
+
+========================================
+A list and a call span lines freely
+========================================
+
+xs = [
+  1,
+  2,
+]
+y = f(
+  a,
+  b,
+)
+
+---
+
+(source_file
+  (binding
+    (identifier)
+    (list
+      (number)
+      (number)))
+  (binding
+    (identifier)
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))))
+
+========================================
+Comments and blank lines between lines
+========================================
+
+# first
+
+x = 1 # trailing
+
+# between
+y = 2
+
+---
+
+(source_file
+  (comment)
+  (binding
+    (identifier)
+    (number))
+  (comment)
+  (comment)
+  (binding
+    (identifier)
+    (number)))

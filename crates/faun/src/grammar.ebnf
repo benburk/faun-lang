@@ -2,6 +2,7 @@
 
    Each choice is made by the next token alone: the grammar is LL(1), and the
    `ebnf` tests check that it is, and that it reads what the parser reads.
+   Editors read by its port in `editors/tree-sitter-faun`: change both.
 
    Terminals are token kinds: quoted, as spelled, or named in capitals. The
    lexer decides what adjacency means, so the grammar never sees a space:

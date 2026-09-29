@@ -1,0 +1,17 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "faun",
+      "camelcase": "Faun",
+      "scope": "source.faun",
+      "path": ".",
+      "file-types": ["fn"],
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "description": "Faun grammar for tree-sitter"
+  }
+}

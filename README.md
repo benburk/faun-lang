@@ -54,6 +54,10 @@ Programs
 - simple arithmetic expressions
 - `expect` tests, run by `faun test`
 
+Editors
+
+- Helix highlighting, by the tree-sitter grammar in [`editors/tree-sitter-faun`](editors/tree-sitter-faun/README.md)
+
 ```ruby
 gcd : (Nat, Nat) -> Nat
 gcd(a, 0) -> a
