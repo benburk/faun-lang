@@ -1,0 +1,32 @@
+# Heapsort as a benchmark: `count` scattered keys pushed one at a time, then
+# popped cheapest first, answering how many came out, whether they came out
+# in order, and their sum.
+
+package {
+  heap: "../src/heap"
+}
+
+import heap {Heap}
+
+# `count` keys scattered by Knuth's multiplicative hash, below a prime.
+scattered : Nat -> List(Nat)
+scattered(count) -> List.range(count).map(|index| index * 2654435761 % 1000003)
+
+Tally = {count: Nat, sum: Nat, previous: Nat, sorted: Bool}
+
+tally : (Tally, (Nat, {})) -> Tally
+tally({count, sum, previous, sorted}, (key, _)) ->
+  {count: count + 1, sum: sum + key, previous: key, sorted: sorted & previous <= key}
+
+app : {args: List(Str)} -> Result(Tally, [Malformed])
+app({args}) -> (
+  count = Nat.from_str(args.get_or(1, "100000"))?
+  keys = scattered(count)
+  heap = keys.fold(Heap.empty(), |heap, key| heap.push(key, {}))
+  drained = heap.to_list()
+  Ok(drained.fold({count: 0, sum: 0, previous: 0, sorted: True}, tally))
+)
+
+main!(host) -> host.run!(app)
+
+expect app({args: ["sort", "50"]}).map_ok(|{count, sorted, *}| count == 50 & sorted) == Ok(True)

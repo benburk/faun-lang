@@ -1,0 +1,184 @@
+# A binary min-heap kept in a list, after Rust's `BinaryHeap` turned round:
+# the entry at `i` costs no more than those at `2i + 1` and `2i + 2`, so the
+# cheapest is first. A push puts its entry last and lets it climb; a pop
+# takes the first, moves the last into its place and lets it sink. Each
+# moves a hole, not the entry: every level passed writes one slot, and the
+# entry is written once, where it stops.
+#
+# Reading an index and taking the last element off copy nothing, and a
+# list nothing else holds is written where it lies, so a heap threaded
+# through its pushes and pops is never copied. One kept and pushed onto
+# again is copied first, and still answers as a heap.
+
+package {}
+
+export {Heap}
+
+Heap(k, v) : List((k, v)).(
+  # The heap holding nothing.
+  empty : Heap(k, v)
+  empty() -> Heap([])
+
+  is_empty : Heap(k, v) -> Bool
+  is_empty(Heap(entries)) -> entries.is_empty()
+
+  len : Heap(k, v) -> Nat
+  len(Heap(entries)) -> entries.len()
+
+  # `heap` holding `value` too, at `key`.
+  push : (Heap(k, v), k, v) -> Heap(k, v) where k.cmp : (k, k) -> Order
+  push(Heap(entries), key, value) -> (
+    hole = entries.len()
+    grown = entries.append((key, value))
+    Heap(climb(grown, hole, (key, value)))
+  )
+
+  # `heap` holding each of `entries` too, each `(key, value)`.
+  push_all : (Heap(k, v), List((k, v))) -> Heap(k, v) where k.cmp : (k, k) -> Order
+  push_all(heap, entries) -> entries.fold(heap, |grown, (key, value)| push(grown, key, value))
+
+  # The cheapest entry, without taking it off.
+  peek : Heap(k, v) -> Result((k, v), [Empty])
+  peek(Heap(entries)) -> entries.first()
+
+  # The cheapest entry and the heap without it. Of entries at one key,
+  # which comes first is not said.
+  pop : Heap(k, v) -> Result({key: k, value: v, rest: Heap(k, v)}, [Empty]) where k.cmp : (k, k) -> Order
+  pop(Heap(entries)) -> (
+    top = entries.first()?
+    count = entries.len() - 1
+    last = entries.get_or(count, top)
+    shortened = entries.take(count)
+    rest = sink(shortened, 0, last, count)
+    Ok(taken(top, Heap(rest)))
+  )
+
+  # The heap of `entries`, each `(key, value)`.
+  of_list : List((k, v)) -> Heap(k, v) where k.cmp : (k, k) -> Order
+  of_list(entries) -> push_all(empty(), entries)
+
+  # The entries cheapest first: every pop, in turn.
+  to_list : Heap(k, v) -> List((k, v)) where k.cmp : (k, k) -> Order
+  to_list(heap) -> (
+    emptied = empty_onto(heap, [], heap.len())
+    emptied.reverse()
+  )
+
+  # `state` once `visit` has seen every entry, cheapest first. Each visit
+  # answers the state and the entries it adds, which it sees in their turn;
+  # `fuel` is how many visits there may be.
+  drain : (Heap(k, v), s, Nat, (s, k, v) -> (s, List((k, v)))) -> s where k.cmp : (k, k) -> Order
+  drain(_, state, 0, _) -> state
+  drain(heap, state, Succ(fuel), visit) -> visiting(heap.pop(), state, fuel, visit)
+)
+
+visiting : (Result({key: k, value: v, rest: Heap(k, v)}, [Empty]), s, Nat, (s, k, v) -> (s, List((k, v)))) -> s where k.cmp : (k, k) -> Order
+visiting(Err(Empty), state, _, _) -> state
+visiting(Ok({key, value, rest}), state, fuel, visit) -> (
+  (next, added) = visit(state, key, value)
+  grown = rest.push_all(added)
+  grown.drain(next, fuel, visit)
+)
+
+taken : ((k, v), Heap(k, v)) -> {key: k, value: v, rest: Heap(k, v)}
+taken((key, value), rest) -> {key, value, rest}
+
+# `entries` with `entry` written where it stops climbing from `hole`: each
+# parent costing more comes down into the hole, and the hole goes up to it.
+climb : (List((k, v)), Nat, (k, v)) -> List((k, v)) where k.cmp : (k, k) -> Order
+climb(entries, 0, entry) -> put(entries, 0, entry)
+climb(entries, hole, entry) -> (
+  above = (hole - 1) / 2
+  parent = entries.get_or(above, entry)
+  climb_past(entries, hole, above, parent, entry)
+)
+
+climb_past : (List((k, v)), Nat, Nat, (k, v), (k, v)) -> List((k, v)) where k.cmp : (k, k) -> Order
+climb_past(entries, hole, above, (parent_key, parent), (key, value)) if key < parent_key ->
+  climb(put(entries, hole, (parent_key, parent)), above, (key, value))
+climb_past(entries, hole, _, _, entry) -> put(entries, hole, entry)
+
+# `entries`, the first `count` of them a heap but for `hole`, with `entry`
+# written where it stops sinking from there: the cheaper child, where it
+# costs less, comes up into the hole, and the hole goes down to it.
+sink : (List((k, v)), Nat, (k, v), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
+sink(entries, hole, entry, count) if hole * 2 + 1 >= count -> put(entries, hole, entry)
+sink(entries, hole, entry, count) -> (
+  left = hole * 2 + 1
+  child = cheaper(entries, left, count, entry)
+  lower = entries.get_or(child, entry)
+  sink_past(entries, hole, child, lower, entry, count)
+)
+
+# The index of the cheaper child: the right one only where there is one and
+# it costs less.
+cheaper : (List((k, v)), Nat, Nat, (k, v)) -> Nat where k.cmp : (k, k) -> Order
+cheaper(entries, left, count, fallback) -> (
+  right = left + 1
+  lower = entries.get_or(left, fallback)
+  higher = entries.get_or(right, fallback)
+  either(left, lower, right, higher, right < count)
+)
+
+either : (Nat, (k, v), Nat, (k, v), Bool) -> Nat where k.cmp : (k, k) -> Order
+either(_, (left_key, _), right, (right_key, _), True) if right_key < left_key -> right
+either(left, _, _, _, _) -> left
+
+sink_past : (List((k, v)), Nat, Nat, (k, v), (k, v), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
+sink_past(entries, hole, child, (child_key, lower), (key, value), count) if child_key < key ->
+  sink(put(entries, hole, (child_key, lower)), child, (key, value), count)
+sink_past(entries, hole, _, _, entry, _) -> put(entries, hole, entry)
+
+empty_onto : (Heap(k, v), List((k, v)), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
+empty_onto(_, found, 0) -> found
+empty_onto(heap, found, Succ(fuel)) -> drained(heap.pop(), found, fuel)
+
+drained : (Result({key: k, value: v, rest: Heap(k, v)}, [Empty]), List((k, v)), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
+drained(Err(Empty), found, _) -> found
+drained(Ok({key, value, rest}), found, fuel) -> empty_onto(rest, [(key, value), *found], fuel)
+
+# `values` with the element at `index` replaced, as `List.set` writes it:
+# where it lies, in a list nothing else holds.
+put : (List(a), Nat, a) -> List(a)
+put([], _, _) -> []
+put([_, *tail], 0, value) -> [value, *tail]
+put([head, *tail], Succ(index), value) -> [head, *put(tail, index, value)]
+
+# An empty heap, at a type: one written bare has nothing to say which.
+nothing : Heap(Nat, Str)
+nothing() -> Heap.empty()
+
+expect nothing().pop().is_err() & nothing().peek() == Err(Empty) & nothing().is_empty()
+expect (
+  heap = Heap.of_list([(5, "e"), (1, "a"), (4, "d"), (2, "b"), (3, "c")])
+  heap.len() == 5 & heap.peek() == Ok((1, "a"))
+)
+# Popping every entry sorts them, whatever order they came in.
+expect Heap.of_list([(3, 'c'), (1, 'a'), (2, 'b')]).to_list() == [(1, 'a'), (2, 'b'), (3, 'c')]
+expect (
+  keys = [9, 4, 7, 1, 8, 2, 6, 3, 5, 0, 4, 7]
+  heap = Heap.of_list(keys.map(|key| (key, {})))
+  sorted = heap.to_list().map(|(key, _)| key)
+  sorted == keys.sort()
+)
+# A pop leaves a heap to push onto again.
+expect (
+  first = Heap.of_list([(4, 4), (2, 2), (6, 6)]).pop()
+  first.map_ok(|{key, rest, *}| (key, rest.push(1, 1).push(5, 5).to_list()))
+    == Ok((2, [(1, 1), (4, 4), (5, 5), (6, 6)]))
+)
+# A drain sees what its visits add, cheapest first: each key below three
+# adds the next two, so the 2 that 0 adds comes out after the 1, and so
+# does the 2 that 1 adds.
+expect (
+  seen = Heap.empty().push(0, {}).drain([], 20, |order, key, _| ([key, *order], following(key)))
+  seen.reverse() == [0, 1, 2, 2, 3, 3, 3, 4, 4]
+)
+# Its fuel is how many entries it sees.
+expect Heap.of_list([(3, {}), (1, {}), (2, {})]).drain([], 2, |order, key, _| ([key, *order], [])) == [2, 1]
+expect Heap.empty().push_all([(2, 'b'), (1, 'a')]).to_list() == [(1, 'a'), (2, 'b')]
+
+# The entries a key below three adds: the next two keys.
+following : Nat -> List((Nat, {}))
+following(key) if key < 3 -> [(key + 1, {}), (key + 2, {})]
+following(_) -> []

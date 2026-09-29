@@ -1,0 +1,25 @@
+# The heap observed from outside: jobs taken cheapest first, however they
+# were queued, and a pop leaving the rest to queue onto again.
+
+package {
+  heap: "../src/heap"
+}
+
+import heap {Heap}
+
+# The jobs in the order they were queued, each by its urgency: the lower,
+# the sooner.
+queued : Heap(Nat, Str)
+queued() -> Heap.of_list([(3, "sweep"), (1, "fire"), (2, "post"), (1, "leak")])
+
+# The name of every job, soonest first.
+names : Heap(Nat, Str) -> List(Str)
+names(jobs) -> jobs.to_list().map(|(_, name)| name)
+
+expect queued().len() == 4
+expect names(queued()).drop(2) == ["post", "sweep"]
+expect (
+  soonest = queued().pop()
+  soonest.map_ok(|{key, rest, *}| (key, rest.len())) == Ok((1, 3))
+)
+expect names(Heap.empty().push(2, "b").push(1, "a")) == ["a", "b"]
