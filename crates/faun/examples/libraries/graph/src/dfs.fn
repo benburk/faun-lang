@@ -1,0 +1,32 @@
+# Depth-first search, petgraph's `Dfs` and edged's `PreOrder`.
+
+import edge {Graph, targets, stored_edges}
+import table {put}
+
+export {dfs}
+
+# The nodes reachable from `start` in depth-first preorder: each node's
+# edges are followed in the order they were given, each to its end before
+# the next.
+dfs : (g, Nat) -> List(Nat) where Graph(g, e)
+dfs(graph, start) if start >= graph.node_count() -> []
+dfs(graph, start) -> (
+  unseen = List.repeat(False, graph.node_count())
+  order = descend(graph, [start], unseen, [], stored_edges(graph) + 1)
+  order.reverse()
+)
+
+# Depth-first with a stack whose top is the next node to enter: entering a
+# node pushes its targets so the first edge's is on top. A node is entered
+# once, so the stack receives at most one entry for each stored edge and one
+# for the start, and the fuel never runs out.
+descend : (g, List(Nat), List(Bool), List(Nat), Nat) -> List(Nat) where Graph(g, e)
+descend(_, [], _, order, _) -> order
+descend(_, _, _, order, 0) -> order
+descend(graph, [node, *stack], seen, order, Succ(fuel)) if seen.get_or(node, True) ->
+  descend(graph, stack, seen, order, fuel)
+descend(graph, [node, *stack], seen, order, Succ(fuel)) -> (
+  pushed = targets(graph.edges_from(node)).extend(stack)
+  marked = put(seen, node, True)
+  descend(graph, pushed, marked, [node, *order], fuel)
+)

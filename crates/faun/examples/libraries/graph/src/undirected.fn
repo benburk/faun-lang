@@ -1,0 +1,59 @@
+# An undirected graph: an edge is followed either way, stored both ways and
+# a loop once.
+
+import edge {Edge, Unweighted, targets}
+import adjacency {unweighted, node_bound, both_ways, adjacency_of}
+import bfs {reach}
+
+export {UnGraph}
+
+UnGraph(e) : {adjacency: List(List(Edge(e))), edges: Nat}.(
+  # The graph of `pairs`, each a pair of ends, over `count` nodes, or more
+  # where an edge names one past them. Its edges weigh nothing.
+  from_edges : (Nat, List((Nat, Nat))) -> UnGraph(Unweighted)
+  from_edges(count, pairs) -> from_weighted_edges(count, pairs.map(unweighted))
+
+  # The graph of `edges`, each `(end, end, weight)`, over `count` nodes, or
+  # more where an edge names one past them.
+  from_weighted_edges : (Nat, List((Nat, Nat, e))) -> UnGraph(e)
+  from_weighted_edges(count, edges) -> (
+    stored = edges.flat_map(both_ways)
+    adjacency = adjacency_of(stored, node_bound(count, edges))
+    UnGraph({adjacency, edges: edges.len()})
+  )
+
+  node_count : UnGraph(e) -> Nat
+  node_count(UnGraph({adjacency, *})) -> adjacency.len()
+
+  # The edges the graph was built from: each counts once.
+  edge_count : UnGraph(e) -> Nat
+  edge_count(UnGraph({edges, *})) -> edges
+
+  # The edges at `node`, each seen from it, in the order they were given.
+  edges_from : (UnGraph(e), Nat) -> List(Edge(e))
+  edges_from(UnGraph({adjacency, *}), node) -> adjacency.get_or(node, [])
+
+  neighbors : (UnGraph(e), Nat) -> List(Nat)
+  neighbors(graph, node) -> targets(edges_from(graph, node))
+
+  # The nodes grouped by which reach which: the connected components, each
+  # in ascending order, and the groups by their least node.
+  components : UnGraph(e) -> List(List(Nat))
+  components(graph) -> (
+    count = node_count(graph)
+    start = {seen: List.repeat(False, count), groups: []}
+    found = List.range(count).fold(start, |state, node| gather(graph, node, state))
+    found.groups.reverse()
+  )
+)
+
+# The component holding `node`, where no earlier one did.
+Found = {seen: List(Bool), groups: List(List(Nat))}
+
+gather : (UnGraph(e), Nat, Found) -> Found
+gather(_, node, found) if found.seen.get_or(node, True) -> found
+gather(graph, node, {seen, groups}) -> (
+  reached = reach(graph, node, seen)
+  members = reached.order.sort()
+  {seen: reached.seen, groups: [members, *groups]}
+)

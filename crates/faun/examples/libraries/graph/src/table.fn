@@ -1,0 +1,9 @@
+# Every table a search keeps is a list indexed by node.
+
+export {put}
+
+# `values` with the element at `index` replaced, as `List.set` writes it.
+put : (List(a), Nat, a) -> List(a)
+put([], _, _) -> []
+put([_, *tail], 0, value) -> [value, *tail]
+put([head, *tail], Succ(index), value) -> [head, *put(tail, index, value)]

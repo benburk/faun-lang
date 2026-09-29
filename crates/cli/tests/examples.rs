@@ -3,7 +3,7 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn example(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -244,7 +244,9 @@ fn the_stdin_runner_hands_the_program_arguments_and_input() {
 }
 
 /// Ori's Advent of Code programs and example libraries, ported: every
-/// expectation each file's package holds.
+/// expectation each file's package holds. A library is asked through its
+/// root, `src/<library>.fn`, which asks every module of it: an inner module
+/// resolves its imports from that root, so it is no package by itself.
 #[test]
 fn the_ported_programs_and_libraries_hold() {
     let mut files = Vec::new();
@@ -254,7 +256,9 @@ fn the_ported_programs_and_libraries_hold() {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 pending.push(path);
-            } else if path.extension().is_some_and(|extension| extension == "fn") {
+            } else if path.extension().is_some_and(|extension| extension == "fn")
+                && !is_inner_module(&path)
+            {
                 files.push(path);
             }
         }
@@ -275,6 +279,19 @@ fn the_ported_programs_and_libraries_hold() {
             assert_eq!(failed, Vec::<String>::new(), "{}", file.display());
         }
     });
+}
+
+/// Whether `path` is a module of a library's `src` other than its root,
+/// the one named for the library.
+fn is_inner_module(path: &Path) -> bool {
+    let Some(src) = path.parent() else {
+        return false;
+    };
+    if src.file_name().is_none_or(|name| name != "src") {
+        return false;
+    }
+    let library = src.parent().and_then(Path::file_name);
+    library != path.file_stem()
 }
 
 /// The grammar, construct by construct: every expectation of the syntax

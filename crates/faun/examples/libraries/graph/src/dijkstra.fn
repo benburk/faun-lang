@@ -1,0 +1,78 @@
+# Dijkstra's algorithm, lazily: every edge leaving a settled node goes on
+# the heap, and entries come off it cheapest first, so a node's first entry
+# settles it and any later one finds it settled. Nothing compares costs but
+# the heap. Each node is settled once and pushes each of its edges once, so
+# the heap receives at most one entry for each stored edge and one for the
+# source, and the fuel never runs out.
+
+import edge {Graph, stored_edges}
+import table {put}
+import heap {Heap}
+
+export {dijkstra, Paths, Weight}
+
+# What a weight must answer: nought, the cost of the path that goes
+# nowhere; adding, for going on; and comparing, for the heap.
+Weight(e) = where
+  e.zero : e,
+  e.add : (e, e) -> e,
+  e.cmp : (e, e) -> Order
+
+# How a settled node was reached: at what cost, and from which node. The
+# source is reached from itself.
+Step(e) = {cost: e, from: Nat}
+
+# How each node was settled, where it was.
+Settled(e) = List(Result(Step(e), [Unreachable]))
+
+# The cheapest paths from `source` to every node. The weights must not be
+# negative.
+dijkstra : (g, Nat) -> Paths(e) where Graph(g, e), Weight(e)
+dijkstra(graph, source) -> (
+  unsettled = List.repeat(Err(Unreachable), graph.node_count())
+  queue = Heap.empty().push(e.zero(), {node: source, from: source})
+  settled = queue.drain(unsettled, stored_edges(graph) + 1, |settled, cost, {node, from}| settle(graph, settled, node, {cost, from}))
+  Paths(settled)
+)
+
+# `node` settled by `step`, and an entry for each edge leaving it, unless
+# it was settled already, more cheaply.
+settle : (g, Settled(e), Nat, Step(e)) -> (Settled(e), List((e, {node: Nat, from: Nat}))) where Graph(g, e), Weight(e)
+settle(_, settled, node, _) if settled.get_or(node, Err(Unreachable)).is_ok() -> (settled, [])
+settle(graph, settled, node, step) -> (
+  marked = put(settled, node, Ok(step))
+  edges = graph.edges_from(node)
+  onward = edges.map(|edge| (step.cost + edge.weight, {node: edge.target, from: node}))
+  (marked, onward)
+)
+
+# What Dijkstra's algorithm found from one source: how each node it
+# reached was reached most cheaply.
+Paths(e) : Settled(e).(
+  # The least cost of a path to `target`.
+  cost : (Paths(e), Nat) -> Result(e, [Unreachable])
+  cost(Paths(settled), target) -> (
+    step = settled.get_or(target, Err(Unreachable))?
+    Ok(step.cost)
+  )
+
+  # The nodes of a cheapest path to `target`, from the source to `target`.
+  path : (Paths(e), Nat) -> Result(List(Nat), [Unreachable])
+  path(Paths(settled), target) -> (
+    _ = settled.get_or(target, Err(Unreachable))?
+    Ok(trace(settled, target, [target], settled.len()))
+  )
+)
+
+# The path back from `node` onto `route`, until the node reached from
+# itself: the source. A path visits each node once.
+trace : (Settled(e), Nat, List(Nat), Nat) -> List(Nat)
+trace(_, _, route, 0) -> route
+trace(settled, node, route, Succ(fuel)) -> (
+  step = settled.get_or(node, Err(Unreachable))
+  back(settled, node, step, route, fuel)
+)
+
+back : (Settled(e), Nat, Result(Step(e), [Unreachable]), List(Nat), Nat) -> List(Nat)
+back(settled, node, Ok({from, *}), route, fuel) if from != node -> trace(settled, from, [from, *route], fuel)
+back(_, _, _, route, _) -> route

@@ -17,8 +17,7 @@ towns() -> ["Ashby", "Bexley", "Crewe", "Dover", "Exeter", "Fenwick"]
 roads : UnGraph(Nat)
 roads() -> (
   lengths = [(0, 1, 7), (0, 2, 9), (0, 3, 14), (1, 2, 10), (2, 3, 2), (3, 4, 9)]
-  built = UnGraph.from_weighted_edges(lengths)
-  built.with_nodes(towns().len())
+  UnGraph.from_weighted_edges(towns().len(), lengths)
 )
 
 # The town at `node`, or its number where the caller has no name for it.
