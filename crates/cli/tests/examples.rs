@@ -343,6 +343,15 @@ fn newton_finds_the_square_root_of_two() {
     );
 }
 
+/// Connected components after the Python cookbook's, without the graph
+/// library: its expectations hold.
+#[test]
+fn connected_components_group_what_each_walk_reaches() {
+    let (failed, count) = support::test_file(&example("components.fn"));
+    assert_eq!(failed, Vec::<String>::new());
+    assert_eq!(count, 3);
+}
+
 /// Ori's rock-paper-scissors round robin, ported: its expectations hold,
 /// and seed 42 over a hundred rounds gives the standings Ori's README
 /// shows.

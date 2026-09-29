@@ -1,0 +1,22 @@
+# What a walk keeps: which nodes it has entered, and in what order.
+
+import edge {Graph, targets}
+import table {put}
+
+export {Walk, unwalked, enter}
+
+Walk = {seen: List(Bool), order: List(Nat)}
+
+# A walk that has entered nothing.
+unwalked : g -> Walk where Graph(g, e)
+unwalked(graph) -> {seen: List.repeat(False, graph.node_count()), order: []}
+
+# `node` entered where it was not before, and the targets of its edges, in
+# the order they were given, to enter later. A node the graph does not have
+# counts as entered.
+enter : (g, Walk, Nat) -> (Walk, List(Nat)) where Graph(g, e)
+enter(_, walk, node) if walk.seen.get_or(node, True) -> (walk, [])
+enter(graph, {seen, order}, node) -> (
+  edges = graph.edges_from(node)
+  ({seen: put(seen, node, True), order: order.append(node)}, targets(edges))
+)

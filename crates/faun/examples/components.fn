@@ -1,0 +1,64 @@
+# Connected components, after the Python cookbook's `connected`: from each
+# node not yet seen, a depth-first walk gathers every node it reaches, and
+# `seen` is shared by the walks, so no node is gathered twice. The graph is
+# each node's neighbors by name. Followed one way, as written, a walk
+# gathers what its first node reaches; with each edge written both ways,
+# the groups are the connected components.
+
+package {}
+
+Graph = SortedMap(Str, List(Str))
+
+# The nodes grouped by which a walk from each group's first node reaches,
+# the groups in the order of their first nodes, each in the order the walk
+# reached them.
+connected : Graph -> List(List(Str))
+connected(graph) -> (
+  bound = graph.values().fold(1, |total, next| total + next.len())
+  start = {seen: Set.empty(), groups: []}
+  found = graph.keys().fold(start, |found, node| component(graph, bound, node, found))
+  found.groups
+)
+
+Found = {seen: Set(Str), groups: List(List(Str))}
+
+# The group a walk from `node` reaches, where no earlier walk reached it.
+component : (Graph, Nat, Str, Found) -> Found
+component(_, _, node, found) if found.seen.contains(node) -> found
+component(graph, bound, node, {seen, groups}) -> (
+  walked = walk(graph, [node], {seen, path: []}, bound)
+  {seen: walked.seen, groups: groups.append(walked.path)}
+)
+
+Walk = {seen: Set(Str), path: List(Str)}
+
+# Take the top of the stack: seen before, pass over it; otherwise add it to
+# the path and push its neighbors, the first on top. Each node is added
+# once and pushes its neighbors once, so the stack takes at most one entry
+# for each edge and one for the start, and the fuel, `bound`, is enough.
+walk : (Graph, List(Str), Walk, Nat) -> Walk
+walk(graph, [current, *stack], walked, Succ(fuel)) if walked.seen.contains(current) ->
+  walk(graph, stack, walked, fuel)
+walk(graph, [current, *stack], {seen, path}, Succ(fuel)) -> (
+  next = graph.get_or(current, [])
+  walk(graph, next.extend(stack), {seen: seen.insert(current), path: path.append(current)}, fuel)
+)
+walk(_, _, walked, _) -> walked
+
+# The cookbook's graphs.
+expect (
+  directed = SortedMap.of_list([("a", ["b"]), ("b", []), ("c", ["d", "e"]), ("d", []), ("e", [])])
+  connected(directed) == [["a", "b"], ["c", "d", "e"]]
+)
+expect (
+  both_ways = SortedMap.of_list([
+    ("a", ["c"]),
+    ("b", ["c", "e"]),
+    ("c", ["a", "b", "d", "e"]),
+    ("d", ["c"]),
+    ("e", ["c", "b"]),
+    ("f", []),
+  ])
+  connected(both_ways) == [["a", "c", "b", "e", "d"], ["f"]]
+)
+expect connected(SortedMap.empty()) == []

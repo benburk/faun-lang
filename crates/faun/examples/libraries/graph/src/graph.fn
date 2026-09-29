@@ -10,8 +10,11 @@
 #
 # The modules are laid out as edged lays out its crate: `edge` is what
 # a search asks, `adjacency` what both graphs keep and `table` what every
-# search keeps, `directed` and `undirected` the graphs, and `bfs`, `dfs` and
-# `dijkstra` the searches.
+# search keeps, `directed` and `undirected` the graphs, and `bfs`, `dfs`,
+# `dijkstra` and `toposort` the searches. Every search is one loop, a
+# worklist: `worklist` drains a stack or a queue, the heap library drains a
+# heap, and `walk` is what visiting a node does in a walk that keeps which
+# nodes it has entered.
 
 package {
   heap: "../../heap/src/heap"
@@ -23,8 +26,9 @@ import undirected {UnGraph}
 import bfs {bfs}
 import dfs {dfs}
 import dijkstra {dijkstra, Paths, Weight}
+import toposort {toposort}
 
-export {DiGraph, UnGraph, Edge, Unweighted, Graph, Paths, Weight, bfs, dfs, dijkstra}
+export {DiGraph, UnGraph, Edge, Unweighted, Graph, Paths, Weight, bfs, dfs, dijkstra, toposort}
 
 # A diamond with a shortcut that costs more than the long way round.
 diamond : DiGraph(Nat)
@@ -69,3 +73,11 @@ expect dfs(DiGraph.from_edges(3, [(0, 1), (1, 2), (2, 0)]), 1) == [1, 2, 0]
 # Weak components ignore direction, and a node with no edges is its own.
 expect DiGraph.from_edges(6, [(1, 0), (2, 3), (4, 3)]).weak_components() == [[0, 1], [2, 3, 4], [5]]
 expect UnGraph.from_edges(3, [(2, 2)]).components() == [[0], [1], [2]]
+
+# Every node before what its edges reach: edged's example, in its order.
+expect toposort(DiGraph.from_edges(6, [(0, 1), (1, 2), (0, 3), (3, 1), (3, 5), (3, 4), (4, 5)])) == Ok([0, 3, 4, 5, 1, 2])
+expect toposort(diamond()) == Ok([0, 1, 2, 3])
+# Two edges into one node both have to be taken, and a node no edge touches
+# is ready from the start.
+expect toposort(DiGraph.from_edges(3, [(0, 1), (0, 1)])) == Ok([0, 1, 2])
+expect toposort(DiGraph.from_edges(3, [(0, 1), (1, 2), (2, 1)])) == Err(Cycle)

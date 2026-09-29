@@ -1,43 +1,15 @@
 # Breadth-first search, petgraph's `Bfs` and edged's `LevelOrder`.
 
-import edge {Graph}
-import table {put}
+import edge {Graph, stored_edges}
+import walk {unwalked, enter}
+import worklist {drain_queue}
 
-export {bfs, reach}
+export {bfs}
 
 # The nodes reachable from `start`, nearest first, each once, and none from a
 # node the graph does not have.
 bfs : (g, Nat) -> List(Nat) where Graph(g, e)
-bfs(graph, start) if start >= graph.node_count() -> []
 bfs(graph, start) -> (
-  unseen = List.repeat(False, graph.node_count())
-  reached = reach(graph, start, unseen)
-  reached.order
+  walked = drain_queue([start], unwalked(graph), stored_edges(graph) + 1, |walk, node| enter(graph, walk, node))
+  walked.order
 )
-
-# Breadth-first with a queue: taking a node off the front puts each target
-# it has not seen on the back, marked seen, so a node is queued once. There
-# are at most as many turns as nodes, so the fuel never runs out.
-Walk = {queue: List(Nat), seen: List(Bool), order: List(Nat)}
-
-# The nodes reachable from `start` that `seen` does not hold, nearest first,
-# and `seen` with them marked.
-reach : (g, Nat, List(Bool)) -> {seen: List(Bool), order: List(Nat)} where Graph(g, e)
-reach(graph, start, seen) -> (
-  first = {queue: [start], seen: put(seen, start, True), order: []}
-  walked = walk(graph, first, graph.node_count())
-  {seen: walked.seen, order: walked.order}
-)
-
-walk : (g, Walk, Nat) -> Walk where Graph(g, e)
-walk(graph, {queue: [node, *waiting], seen, order}, Succ(fuel)) -> (
-  edges = graph.edges_from(node)
-  queued = edges.fold({queue: waiting, seen}, |state, edge| discover(edge.target, state))
-  walk(graph, {queue: queued.queue, seen: queued.seen, order: order.append(node)}, fuel)
-)
-walk(_, walked, _) -> walked
-
-# `target` on the back of the queue, unless it was seen.
-discover : (Nat, {queue: List(Nat), seen: List(Bool)}) -> {queue: List(Nat), seen: List(Bool)}
-discover(target, state) if state.seen.get_or(target, True) -> state
-discover(target, {queue, seen}) -> {queue: queue.append(target), seen: put(seen, target, True)}

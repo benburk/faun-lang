@@ -44,8 +44,7 @@ DiGraph(e) : {adjacency: List(List(Edge(e))), edges: Nat}.(
   )
 
   # The nodes grouped by which reach which along edges followed either way:
-  # the weakly connected components. Each group is in ascending order, and
-  # the groups by their least node.
+  # the weakly connected components, as `UnGraph.components` gives them.
   weak_components : DiGraph(e) -> List(List(Nat))
   weak_components(DiGraph({adjacency, *})) -> (
     undirected = UnGraph.from_weighted_edges(adjacency.len(), arcs(adjacency))

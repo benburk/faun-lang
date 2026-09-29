@@ -1,9 +1,10 @@
 # An undirected graph: an edge is followed either way, stored both ways and
 # a loop once.
 
-import edge {Edge, Unweighted, targets}
+import edge {Edge, Unweighted, targets, stored_edges}
 import adjacency {unweighted, node_bound, both_ways, adjacency_of}
-import bfs {reach}
+import walk {Walk, unwalked, enter}
+import worklist {drain_stack}
 
 export {UnGraph}
 
@@ -37,23 +38,26 @@ UnGraph(e) : {adjacency: List(List(Edge(e))), edges: Nat}.(
   neighbors(graph, node) -> targets(edges_from(graph, node))
 
   # The nodes grouped by which reach which: the connected components, each
-  # in ascending order, and the groups by their least node.
+  # in the order a depth-first walk from its least node enters them, and the
+  # groups by their least node.
   components : UnGraph(e) -> List(List(Nat))
   components(graph) -> (
-    count = node_count(graph)
-    start = {seen: List.repeat(False, count), groups: []}
-    found = List.range(count).fold(start, |state, node| gather(graph, node, state))
-    found.groups.reverse()
+    start = {walk: unwalked(graph), groups: []}
+    bound = stored_edges(graph) + 1
+    found = List.range(graph.node_count()).fold(start, |found, node| connected(graph, bound, node, found))
+    found.groups
   )
 )
 
-# The component holding `node`, where no earlier one did.
-Found = {seen: List(Bool), groups: List(List(Nat))}
+Found = {walk: Walk, groups: List(List(Nat))}
 
-gather : (UnGraph(e), Nat, Found) -> Found
-gather(_, node, found) if found.seen.get_or(node, True) -> found
-gather(graph, node, {seen, groups}) -> (
-  reached = reach(graph, node, seen)
-  members = reached.order.sort()
-  {seen: reached.seen, groups: [members, *groups]}
+# The component holding `node`, where no earlier one did: every node a walk
+# from it enters, sharing what every earlier walk entered. No walk takes
+# more than `bound` items.
+connected : (UnGraph(e), Nat, Nat, Found) -> Found
+connected(_, _, node, found) if found.walk.seen.get_or(node, True) -> found
+connected(graph, bound, node, {walk, groups}) -> (
+  fresh = {order: [], *walk}
+  walked = drain_stack([node], fresh, bound, |entered, next| enter(graph, entered, next))
+  {walk: walked, groups: groups.append(walked.order)}
 )
