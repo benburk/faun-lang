@@ -1,0 +1,45 @@
+# A graph no adjacency list holds: a maze's edges are worked out from where
+# a cell is, each time they are asked for, and the library's searches walk
+# it all the same, since they ask of it only what `Graph` asks: how many
+# nodes there are, and the edges leaving each.
+
+package {
+  graph: "../src/graph"
+}
+
+import graph {Edge, bfs, dfs, dijkstra}
+
+# Cells numbered along each row, then down; a step between neighbours
+# costs one, and a wall is a cell no step enters.
+Maze : {width: Nat, height: Nat, walls: List(Nat)}.(
+  node_count : Maze -> Nat
+  node_count(Maze({width, height, *})) -> width * height
+
+  edges_from : (Maze, Nat) -> List(Edge(Nat))
+  edges_from(Maze({width, height, walls}), cell) -> (
+    x = cell % width
+    y = cell / width
+    beside = [(x > 0, cell - 1), (x + 1 < width, cell + 1), (y > 0, cell - width), (y + 1 < height, cell + width)]
+    inside = beside.filter(|(within, _)| within)
+    open = inside.filter(|(_, next)| !walls.contains(next))
+    open.map(|(_, next)| {target: next, weight: 1})
+  )
+)
+
+# 0 1 2 3
+# 4 # # 7
+# 8 9 # 11
+maze : Maze
+maze() -> Maze({width: 4, height: 3, walls: [5, 6, 10]})
+
+expect maze().edges_from(4) == [{target: 0, weight: 1}, {target: 8, weight: 1}]
+expect bfs(maze(), 0) == [0, 1, 4, 2, 8, 3, 9, 7, 11]
+expect dfs(maze(), 8) == [8, 9, 4, 0, 1, 2, 3, 7, 11]
+# Round the wall the long way: seven steps from one bottom corner to the
+# other, along the top.
+expect (
+  paths = dijkstra(maze(), 8)
+  paths.cost(11) == Ok(7) & paths.path(11) == Ok([8, 4, 0, 1, 2, 3, 7, 11])
+)
+# A wall is a cell no step enters.
+expect dijkstra(maze(), 0).cost(5) == Err(Unreachable)

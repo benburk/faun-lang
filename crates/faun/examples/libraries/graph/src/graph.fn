@@ -1,0 +1,412 @@
+# Graphs built once and then searched, after Rust's petgraph. Nodes are the
+# naturals below a graph's node count, so whatever a caller knows about a
+# node lives in the caller's own list, indexed the same way, and every table
+# a search keeps is a list indexed by node.
+#
+# A `DiGraph` follows each edge from its source to its target; an `UnGraph`
+# follows it either way, storing it both ways and a loop once. Each keeps
+# petgraph's `adj::List`: each node's outgoing edges, in the order they were
+# given, built by one stable sort of the edges by source, which is how a
+# compressed sparse row is built. The representation is private, so it can
+# become one.
+#
+# The searches ask a graph only what `Graph` asks, as petgraph's algorithms
+# ask `NodeCount` and `IntoEdges`, so each is written once for both kinds and
+# for any type answering the same two members: a grid, say, that works its
+# edges out rather than storing them.
+#
+# Each search is a worklist, and its fuel is a bound it cannot exceed rather
+# than a limit: a node is expanded once, so the stack of a depth-first walk
+# and the queue of Dijkstra's receive at most one entry for each stored edge
+# and one for the start, and a breadth-first walk has at most one level for
+# each node. Running out is unreachable, and answers what was found.
+
+package {}
+
+export {DiGraph, UnGraph, Edge, Graph, Paths, bfs, dfs, dijkstra}
+
+# An edge as its source sees it: where it goes, and what it weighs.
+Edge(e) = {target: Nat, weight: e}
+
+# What a search asks of a graph: how many nodes it has, and the edges
+# leaving each, in order.
+Graph(g, e) = where
+  g.node_count : g -> Nat,
+  g.edges_from : (g, Nat) -> List(Edge(e))
+
+# A directed graph: an edge is followed from its source to its target.
+DiGraph(e) : {adjacency: List(List(Edge(e))), edges: Nat}.(
+  # The graph of `pairs`, each `(source, target)`, over the nodes they name,
+  # its edges weighing nothing.
+  from_edges : List((Nat, Nat)) -> DiGraph({})
+  from_edges(pairs) -> from_weighted_edges(pairs.map(unweighted))
+
+  # The graph of `edges`, each `(source, target, weight)`, over the nodes
+  # they name.
+  from_weighted_edges : List((Nat, Nat, e)) -> DiGraph(e)
+  from_weighted_edges(edges) -> (
+    adjacency = adjacency_of(edges, node_bound(edges))
+    DiGraph({adjacency, edges: edges.len()})
+  )
+
+  # The graph with at least `count` nodes: those past the ones its edges
+  # name have none.
+  with_nodes : (DiGraph(e), Nat) -> DiGraph(e)
+  with_nodes(DiGraph({adjacency, edges}), count) ->
+    DiGraph({adjacency: padded(adjacency, count), edges})
+
+  node_count : DiGraph(e) -> Nat
+  node_count(DiGraph({adjacency, *})) -> adjacency.len()
+
+  edge_count : DiGraph(e) -> Nat
+  edge_count(DiGraph({edges, *})) -> edges
+
+  # The edges leaving `node`, in the order they were given, and none from a
+  # node the graph does not have.
+  edges_from : (DiGraph(e), Nat) -> List(Edge(e))
+  edges_from(DiGraph({adjacency, *}), node) -> adjacency.get_or(node, [])
+
+  # The targets of the edges leaving `node`, one for each edge.
+  neighbors : (DiGraph(e), Nat) -> List(Nat)
+  neighbors(graph, node) -> targets(edges_from(graph, node))
+
+  # The graph with every edge turned round: what reaches a node here leaves
+  # it there.
+  reversed : DiGraph(e) -> DiGraph(e)
+  reversed(DiGraph({adjacency, edges})) -> (
+    turned = arcs(adjacency).map(|(source, target, weight)| (target, source, weight))
+    DiGraph({adjacency: adjacency_of(turned, adjacency.len()), edges})
+  )
+
+  # The nodes grouped by which reach which along edges followed either way:
+  # the weakly connected components. Each group is in ascending order, and
+  # the groups by their least node.
+  weak_components : DiGraph(e) -> List(List(Nat))
+  weak_components(DiGraph({adjacency, *})) -> (
+    undirected = UnGraph.from_weighted_edges(arcs(adjacency))
+    whole = undirected.with_nodes(adjacency.len())
+    whole.components()
+  )
+)
+
+# An undirected graph: an edge is followed either way.
+UnGraph(e) : {adjacency: List(List(Edge(e))), edges: Nat}.(
+  # The graph of `pairs`, each a pair of ends, over the nodes they name, its
+  # edges weighing nothing.
+  from_edges : List((Nat, Nat)) -> UnGraph({})
+  from_edges(pairs) -> from_weighted_edges(pairs.map(unweighted))
+
+  # The graph of `edges`, each `(end, end, weight)`, over the nodes they
+  # name.
+  from_weighted_edges : List((Nat, Nat, e)) -> UnGraph(e)
+  from_weighted_edges(edges) -> (
+    stored = edges.flat_map(both_ways)
+    adjacency = adjacency_of(stored, node_bound(edges))
+    UnGraph({adjacency, edges: edges.len()})
+  )
+
+  # The graph with at least `count` nodes, as `DiGraph.with_nodes`.
+  with_nodes : (UnGraph(e), Nat) -> UnGraph(e)
+  with_nodes(UnGraph({adjacency, edges}), count) ->
+    UnGraph({adjacency: padded(adjacency, count), edges})
+
+  node_count : UnGraph(e) -> Nat
+  node_count(UnGraph({adjacency, *})) -> adjacency.len()
+
+  # The edges the graph was built from: each counts once.
+  edge_count : UnGraph(e) -> Nat
+  edge_count(UnGraph({edges, *})) -> edges
+
+  # The edges at `node`, each seen from it, in the order they were given.
+  edges_from : (UnGraph(e), Nat) -> List(Edge(e))
+  edges_from(UnGraph({adjacency, *}), node) -> adjacency.get_or(node, [])
+
+  neighbors : (UnGraph(e), Nat) -> List(Nat)
+  neighbors(graph, node) -> targets(edges_from(graph, node))
+
+  # The nodes grouped by which reach which: the connected components, each
+  # in ascending order, and the groups by their least node.
+  components : UnGraph(e) -> List(List(Nat))
+  components(graph) -> (
+    count = node_count(graph)
+    start = {seen: List.repeat(False, count), groups: []}
+    found = List.range(count).fold(start, |state, node| gather(graph, node, state))
+    found.groups.reverse()
+  )
+)
+
+# The nodes reachable from `start`, nearest first, each once, and none from a
+# node the graph does not have.
+bfs : (g, Nat) -> List(Nat) where Graph(g, e)
+bfs(graph, start) if start >= graph.node_count() -> []
+bfs(graph, start) -> (
+  unseen = List.repeat(False, graph.node_count())
+  reached = reach(graph, start, unseen)
+  reached.order
+)
+
+# The nodes reachable from `start` in depth-first preorder: each node's
+# edges are followed in the order they were given, each to its end before
+# the next.
+dfs : (g, Nat) -> List(Nat) where Graph(g, e)
+dfs(graph, start) if start >= graph.node_count() -> []
+dfs(graph, start) -> (
+  unseen = List.repeat(False, graph.node_count())
+  order = descend(graph, [start], unseen, [], stored_edges(graph) + 1)
+  order.reverse()
+)
+
+# The cheapest paths from `source` to every node, by Dijkstra's algorithm.
+# The weights must not be negative.
+dijkstra : (g, Nat) -> Paths(e) where
+  Graph(g, e),
+  e.zero : e,
+  e.add : (e, e) -> e,
+  e.cmp : (e, e) -> Order
+dijkstra(graph, source) -> (
+  nodes = graph.node_count()
+  unknown = List.repeat(Err(Unreachable), nodes)
+  start = {
+    queue: Queued(e.zero(), source, Empty, Empty),
+    costs: put(unknown, source, Ok(e.zero())),
+    previous: List.repeat(Err(Unreachable), nodes),
+    done: List.repeat(False, nodes),
+  }
+  search = explore(graph, start, stored_edges(graph) + 1)
+  Paths({costs: search.costs, previous: search.previous})
+)
+
+# What Dijkstra's algorithm found from one source: each node's least cost,
+# and the node before it on a path of that cost.
+Paths(e) : {costs: List(Result(e, [Unreachable])), previous: List(Result(Nat, [Unreachable]))}.(
+  # The least cost of a path to `target`.
+  cost : (Paths(e), Nat) -> Result(e, [Unreachable])
+  cost(Paths({costs, *}), target) -> costs.get_or(target, Err(Unreachable))
+
+  # The nodes of a cheapest path to `target`, from the source to `target`.
+  path : (Paths(e), Nat) -> Result(List(Nat), [Unreachable])
+  path(Paths({costs, previous}), target) -> (
+    _ = costs.get_or(target, Err(Unreachable))?
+    Ok(trace(previous, target, [target], previous.len()))
+  )
+)
+
+unweighted : ((Nat, Nat)) -> (Nat, Nat, {})
+unweighted((source, target)) -> (source, target, {})
+
+# Enough nodes for every node an edge names.
+node_bound : List((Nat, Nat, e)) -> Nat
+node_bound(edges) -> edges.fold(0, |most, (source, target, _)| most.max(source + 1).max(target + 1))
+
+both_ways : ((Nat, Nat, e)) -> List((Nat, Nat, e))
+both_ways((source, target, weight)) if source == target -> [(source, target, weight)]
+both_ways((source, target, weight)) -> [(source, target, weight), (target, source, weight)]
+
+# Each node's edges, in the order given: the sort is stable, so grouping
+# the sorted edges by source keeps each group's order.
+adjacency_of : (List((Nat, Nat, e)), Nat) -> List(List(Edge(e)))
+adjacency_of(edges, nodes) -> (
+  sorted = edges.sort_on(|(source, _, _)| source)
+  grouped(sorted, 0, nodes)
+)
+
+grouped : (List((Nat, Nat, e)), Nat, Nat) -> List(List(Edge(e)))
+grouped(_, _, 0) -> []
+grouped(sorted, node, Succ(left)) -> (
+  own = sorted.take_while(|(source, _, _)| source == node)
+  rest = sorted.drop_while(|(source, _, _)| source == node)
+  edges = own.map(|(_, target, weight)| {target, weight})
+  [edges, *grouped(rest, node + 1, left)]
+)
+
+# Every stored edge as `(source, target, weight)`.
+arcs : List(List(Edge(e))) -> List((Nat, Nat, e))
+arcs(adjacency) -> adjacency.enumerate().flat_map(|(source, edges)|
+  edges.map(|edge| (source, edge.target, edge.weight)))
+
+padded : (List(List(Edge(e))), Nat) -> List(List(Edge(e)))
+padded(adjacency, count) -> adjacency.extend(List.repeat([], count - adjacency.len()))
+
+targets : List(Edge(e)) -> List(Nat)
+targets(edges) -> edges.map(|edge| edge.target)
+
+# How many edges `graph` stores, an undirected one's each way.
+stored_edges : g -> Nat where Graph(g, e)
+stored_edges(graph) -> List.range(graph.node_count()).fold(0, |total, node| (
+  edges = graph.edges_from(node)
+  total + edges.len()
+))
+
+# `values` with the element at `index` replaced, as `List.set` writes it.
+put : (List(a), Nat, a) -> List(a)
+put([], _, _) -> []
+put([_, *tail], 0, value) -> [value, *tail]
+put([head, *tail], Succ(index), value) -> [head, *put(tail, index, value)]
+
+# Breadth-first, a level at a time: the next level is every edge's target
+# the walk has not seen, in the order the level's edges reach them.
+Wave = {next: List(Nat), seen: List(Bool), order: List(Nat)}
+
+reach : (g, Nat, List(Bool)) -> {seen: List(Bool), order: List(Nat)} where Graph(g, e)
+reach(graph, start, seen) -> (
+  first = {next: [], seen: put(seen, start, True), order: [start]}
+  found = wave(graph, [start], first, graph.node_count())
+  {seen: found.seen, order: found.order.reverse()}
+)
+
+wave : (g, List(Nat), Wave, Nat) -> Wave where Graph(g, e)
+wave(_, [], found, _) -> found
+wave(_, _, found, 0) -> found
+wave(graph, frontier, found, Succ(fuel)) -> (
+  start = {next: [], *found}
+  level = frontier.fold(start, |state, node| (
+    edges = graph.edges_from(node)
+    edges.fold(state, |inner, edge| discover(edge.target, inner))
+  ))
+  wave(graph, level.next.reverse(), level, fuel)
+)
+
+discover : (Nat, Wave) -> Wave
+discover(target, state) if state.seen.get_or(target, True) -> state
+discover(target, {next, seen, order}) ->
+  {next: [target, *next], seen: put(seen, target, True), order: [target, *order]}
+
+# Depth-first with a stack whose top is the next node to enter: entering a
+# node pushes its targets so the first edge's is on top.
+descend : (g, List(Nat), List(Bool), List(Nat), Nat) -> List(Nat) where Graph(g, e)
+descend(_, [], _, order, _) -> order
+descend(_, _, _, order, 0) -> order
+descend(graph, [node, *stack], seen, order, Succ(fuel)) if seen.get_or(node, True) ->
+  descend(graph, stack, seen, order, fuel)
+descend(graph, [node, *stack], seen, order, Succ(fuel)) -> (
+  pushed = targets(graph.edges_from(node)).extend(stack)
+  marked = put(seen, node, True)
+  descend(graph, pushed, marked, [node, *order], fuel)
+)
+
+# The component holding `node`, where no earlier one did.
+Found = {seen: List(Bool), groups: List(List(Nat))}
+
+gather : (UnGraph(e), Nat, Found) -> Found
+gather(_, node, found) if found.seen.get_or(node, True) -> found
+gather(graph, node, {seen, groups}) -> (
+  reached = reach(graph, node, seen)
+  members = reached.order.sort()
+  {seen: reached.seen, groups: [members, *groups]}
+)
+
+# A skew heap of `(cost, node)` entries, cheapest on top.
+Queue(e) : [Empty, Queued(e, Nat, Queue(e), Queue(e))]
+
+meld : (Queue(e), Queue(e)) -> Queue(e) where e.cmp : (e, e) -> Order
+meld(Empty, right) -> right
+meld(left, Empty) -> left
+meld(Queued(cost, node, left, right), Queued(other, next, before, after)) if cost <= other ->
+  Queued(cost, node, meld(right, Queued(other, next, before, after)), left)
+meld(left, Queued(cost, node, before, after)) -> Queued(cost, node, meld(left, after), before)
+
+Search(e) = {
+  queue: Queue(e),
+  costs: List(Result(e, [Unreachable])),
+  previous: List(Result(Nat, [Unreachable])),
+  done: List(Bool),
+}
+
+# Take the cheapest entry; a node already done was reached more cheaply
+# before, and its entry is stale.
+explore : (g, Search(e), Nat) -> Search(e) where
+  Graph(g, e),
+  e.add : (e, e) -> e,
+  e.cmp : (e, e) -> Order
+explore(_, search, 0) -> search
+explore(graph, search, Succ(fuel)) -> popped(graph, search.queue, search, fuel)
+
+popped : (g, Queue(e), Search(e), Nat) -> Search(e) where
+  Graph(g, e),
+  e.add : (e, e) -> e,
+  e.cmp : (e, e) -> Order
+popped(_, Empty, search, _) -> search
+popped(graph, Queued(cost, node, left, right), search, fuel) -> (
+  rest = {queue: meld(left, right), *search}
+  settled = settle(graph, cost, node, rest)
+  explore(graph, settled, fuel)
+)
+
+settle : (g, e, Nat, Search(e)) -> Search(e) where
+  Graph(g, e),
+  e.add : (e, e) -> e,
+  e.cmp : (e, e) -> Order
+settle(_, _, node, search) if search.done.get_or(node, True) -> search
+settle(graph, cost, node, search) -> (
+  edges = graph.edges_from(node)
+  marked = {done: put(search.done, node, True), *search}
+  edges.fold(marked, |state, edge| relax(state, node, cost + edge.weight, edge.target))
+)
+
+relax : (Search(e), Nat, e, Nat) -> Search(e) where e.cmp : (e, e) -> Order
+relax(search, from, candidate, target) if improves(search.costs.get_or(target, Err(Unreachable)), candidate) -> (
+  entry = Queued(candidate, target, Empty, Empty)
+  {
+    queue: meld(search.queue, entry),
+    costs: put(search.costs, target, Ok(candidate)),
+    previous: put(search.previous, target, Ok(from)),
+    *search,
+  }
+)
+relax(search, _, _, _) -> search
+
+improves : (Result(e, [Unreachable]), e) -> Bool where e.cmp : (e, e) -> Order
+improves(Ok(known), candidate) -> candidate < known
+improves(Err(Unreachable), _) -> True
+
+# The path back from `node` along `previous`, onto `route`, until a node
+# with nothing before it: the source. A path visits each node once.
+trace : (List(Result(Nat, [Unreachable])), Nat, List(Nat), Nat) -> List(Nat)
+trace(_, _, route, 0) -> route
+trace(previous, node, route, Succ(fuel)) -> (
+  before = previous.get_or(node, Err(Unreachable))
+  back(previous, before, route, fuel)
+)
+
+back : (List(Result(Nat, [Unreachable])), Result(Nat, [Unreachable]), List(Nat), Nat) -> List(Nat)
+back(_, Err(Unreachable), route, _) -> route
+back(previous, Ok(before), route, fuel) -> trace(previous, before, [before, *route], fuel)
+
+# A diamond with a shortcut that costs more than the long way round.
+diamond : DiGraph(Nat)
+diamond() -> DiGraph.from_weighted_edges([(0, 1, 1), (0, 2, 4), (1, 2, 2), (1, 3, 6), (2, 3, 1)])
+
+expect diamond().node_count() == 4 & diamond().edge_count() == 5
+expect diamond().neighbors(0) == [1, 2] & diamond().neighbors(3) == []
+expect bfs(diamond(), 0) == [0, 1, 2, 3] & dfs(diamond(), 0) == [0, 1, 2, 3]
+# Direction matters: nothing leaves the sink, and a node the graph does not
+# have reaches nothing.
+expect bfs(diamond(), 3) == [3] & bfs(diamond(), 9) == []
+expect (
+  paths = dijkstra(diamond(), 0)
+  paths.cost(3) == Ok(4) & paths.path(3) == Ok([0, 1, 2, 3]) & paths.path(0) == Ok([0])
+)
+expect dijkstra(diamond(), 3).cost(0) == Err(Unreachable)
+# Turned round, the sink reaches everything and the source nothing.
+expect bfs(diamond().reversed(), 3) == [3, 1, 2, 0] & bfs(diamond().reversed(), 0) == [0]
+
+# Depth first goes to the end of the first edge before trying the second;
+# breadth first takes both before either's targets.
+expect (
+  tree = DiGraph.from_edges([(0, 1), (0, 2), (1, 3), (2, 4)])
+  dfs(tree, 0) == [0, 1, 3, 2, 4] & bfs(tree, 0) == [0, 1, 2, 3, 4]
+)
+
+# An undirected edge is followed either way, and counted once; a loop is
+# stored once.
+expect (
+  line = UnGraph.from_edges([(0, 1), (1, 2), (2, 2)])
+  line.edge_count() == 3 & line.neighbors(1) == [0, 2] & line.neighbors(2) == [1, 2] & bfs(line, 2) == [2, 1, 0]
+)
+
+# A cycle ends the walk where it comes back round.
+expect dfs(DiGraph.from_edges([(0, 1), (1, 2), (2, 0)]), 1) == [1, 2, 0]
+
+# Weak components ignore direction, and a node with no edges is its own.
+expect DiGraph.from_edges([(1, 0), (2, 3), (4, 3)]).with_nodes(6).weak_components() == [[0, 1], [2, 3, 4], [5]]
+expect UnGraph.from_edges([(2, 2)]).with_nodes(3).components() == [[0], [1], [2]]

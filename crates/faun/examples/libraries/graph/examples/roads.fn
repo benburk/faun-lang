@@ -1,0 +1,42 @@
+# The graph observed from outside: towns are the caller's, kept in a list
+# the graph's nodes index, and the roads between them are undirected edges
+# weighted by their length. Dijkstra's paths come back as nodes, and the
+# caller names them.
+
+package {
+  graph: "../src/graph"
+}
+
+import graph {UnGraph, bfs, dfs, dijkstra}
+
+towns : List(Str)
+towns() -> ["Ashby", "Bexley", "Crewe", "Dover", "Exeter", "Fenwick"]
+
+# Fenwick has no road: its node is there only because the graph is given
+# a node for each town.
+roads : UnGraph(Nat)
+roads() -> (
+  lengths = [(0, 1, 7), (0, 2, 9), (0, 3, 14), (1, 2, 10), (2, 3, 2), (3, 4, 9)]
+  built = UnGraph.from_weighted_edges(lengths)
+  built.with_nodes(towns().len())
+)
+
+# The town at `node`, or its number where the caller has no name for it.
+name : Nat -> Str
+name(node) -> towns().get_or(node, node.to_str())
+
+route : (Nat, Nat) -> Result(Str, _)
+route(from, to) -> (
+  paths = dijkstra(roads(), from)
+  cost = paths.cost(to)?
+  stops = paths.path(to)?
+  names = stops.map(name)
+  Ok("${Str.join(names, " -> ")} (${cost})")
+)
+
+expect route(0, 4) == Ok("Ashby -> Crewe -> Dover -> Exeter (20)")
+expect route(4, 0) == Ok("Exeter -> Dover -> Crewe -> Ashby (20)")
+expect route(0, 5) == Err(Unreachable)
+expect roads().components() == [[0, 1, 2, 3, 4], [5]]
+expect bfs(roads(), 4).map(name) == ["Exeter", "Dover", "Ashby", "Crewe", "Bexley"]
+expect dfs(roads(), 0).map(name) == ["Ashby", "Bexley", "Crewe", "Dover", "Exeter"]
