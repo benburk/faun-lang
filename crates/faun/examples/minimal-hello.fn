@@ -8,6 +8,7 @@
 import std.host {Host}
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   host.stdout.write!("Hello, world!".to_utf8())
   host.exit!(0)
+)

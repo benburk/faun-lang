@@ -3,6 +3,7 @@ import std.host {Host}
 twice : Nat -> Nat
 twice(n) -> n * 2
 
-apply() ->
+apply() -> (
   f = twice
   f(1)
+)

@@ -25,19 +25,19 @@ Set(k) : Map(k, Bool).(
 
   # `set` with `key` as a member; membership is idempotent.
   insert : (Set(k), k) -> Set(k) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   insert(Set(members), key) -> Set(Map.insert(members, key, True))
 
   # `set` without `key`; unchanged when `key` is not a member.
   remove : (Set(k), k) -> Set(k) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   remove(Set(members), key) -> Set(Map.remove(members, key))
 
   # Whether `key` is a member of `set`.
   contains : (Set(k), k) -> Bool where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   contains(Set(members), key) -> Map.contains(members, key)
 
@@ -52,32 +52,32 @@ Set(k) : Map(k, Bool).(
 
   # The set whose members are the items of `list`.
   of_list : List(k) -> Set(k) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   of_list(items) -> items.fold(empty(), insert)
 
   # The members of either set.
   union : (Set(k), Set(k)) -> Set(k) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   union(set, other) -> fold(other, set, insert)
 
   # The members of `set` that are not members of `other`.
   difference : (Set(k), Set(k)) -> Set(k) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   difference(set, other) -> fold(other, set, remove)
 
   # The members of both sets.
   intersection : (Set(k), Set(k)) -> Set(k) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   intersection(set, other) -> of_list(to_list(set).filter(|key| contains(other, key)))
 
   # Whether `set` and `other` have the same members, in whatever order
   # either was built. Linear in the size.
   equals : (Set(k), Set(k)) -> Bool where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   equals(set, other) -> len(set) == len(other) & to_list(set).all(|key| contains(other, key))
 )

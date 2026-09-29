@@ -711,6 +711,15 @@ impl Walk<'_, '_> {
                 self.end(&origins, (place(expr), Leaving::Asking));
                 origins
             }
+            // A block's bindings hold what they bind, as a body's do, and
+            // its answer is what it is worth.
+            ExprKind::Block(block) => {
+                for binding in &block.bindings {
+                    let origins = self.value(&binding.value);
+                    self.bind(&binding.pattern, &binding.value.ty, &origins);
+                }
+                self.value(&block.result)
+            }
         }
     }
 

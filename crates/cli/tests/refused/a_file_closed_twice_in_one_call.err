@@ -1,7 +1,7 @@
 error: this `File` is used after it was used up
-  --> a_file_closed_twice_in_one_call.fn:13:24
+  --> a_file_closed_twice_in_one_call.fn:14:24
    |
-13 |   closed = both!(file, file)
+14 |   closed = both!(file, file)
    |                  ----  ^^^^ used again here
    |                  |
    |                  used up here

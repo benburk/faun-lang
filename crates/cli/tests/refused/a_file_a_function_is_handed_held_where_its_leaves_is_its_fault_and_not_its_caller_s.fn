@@ -3,18 +3,21 @@ import std.host {Host}
 import std.host {Files, File, IoError, Mode.*}
 
     main! : Host -> []
-    main!(host) ->
+    main!(host) -> (
       ran = program!(host.files)
       host.exit!(0)
+    )
 
     program! : Files -> Result(Nat, IoError)
-program!(files) ->
+program!(files) -> (
   file = files.open!("a.txt", Read)?
   used = use!(file)
   Ok(0)
+)
 
 use! : File -> Result(Nat, IoError)
-use!(file) ->
+use!(file) -> (
   bytes = file.read!(4)?
   closed = file.close!()?
   Ok(0)
+)

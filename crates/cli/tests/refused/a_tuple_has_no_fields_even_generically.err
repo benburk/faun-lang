@@ -1,4 +1,4 @@
-error: `(_, _)` has no field or method `x`
+error: `(Nat, Nat)` has no field or method `x`
  --> a_tuple_has_no_fields_even_generically.fn:6:37
   |
 6 | main!(host) -> host.exit!(U8.of_nat(x_of((1, 2))))

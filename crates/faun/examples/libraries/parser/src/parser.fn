@@ -83,9 +83,10 @@ Reads(a) : List((a, Input)).(
 Read(a) : [Read(a, Input)].(
   # Run a parser on this read's remainder and retain the value on the left.
   skip : (Read(a), Input -> Result(Read(b), ParserError)) -> Result(Read(a), ParserError)
-  skip(Read(value, input), parser) ->
+  skip(Read(value, input), parser) -> (
     Read(_, remaining) = parser(input)?
     Ok(Read(value, remaining))
+  )
 
   skip_byte : (Read(a), U8) -> Result(Read(a), ParserError)
   skip_byte(read, expected) -> skip(read, |input| input.byte(expected))
@@ -94,9 +95,10 @@ Read(a) : [Read(a, Input)].(
 # The one value must consume its whole input. The remainder is computed, not a
 # parameter, so a helper takes it into its head to decide accept or reject.
 parse_all : (Str, Input -> Result(Read(a), ParserError)) -> Result(a, ParserError)
-parse_all(text, parser) ->
+parse_all(text, parser) -> (
   Read(value, Input(remaining)) = parser(Input(text.to_utf8()))?
   parse_all_rest(value, remaining)
+)
 
 parse_all_rest : (a, List(U8)) -> Result(a, ParserError)
 parse_all_rest(value, []) -> Ok(value)
@@ -119,21 +121,24 @@ parser_line_inputs([chunk, *rest]) -> parser_line_inputs(rest).prepend(Input(chu
 
 parser_inputs_read : (List(Input), Input -> Result(Read(a), ParserError)) -> Result(List((a, Input)), ParserError)
 parser_inputs_read([], parser) -> Ok([])
-parser_inputs_read([input, *rest], parser) ->
+parser_inputs_read([input, *rest], parser) -> (
   Read(value, remaining) = parser(input)?
   Ok(parser_inputs_read(rest, parser)?.prepend((value, remaining)))
+)
 
 parser_reads_read : (List((a, Input)), Input -> Result(Read(b), ParserError)) -> Result(List(((a, b), Input)), ParserError)
 parser_reads_read([], parser) -> Ok([])
-parser_reads_read([(value, input), *rest], parser) ->
+parser_reads_read([(value, input), *rest], parser) -> (
   Read(next, remaining) = parser(input)?
   Ok(parser_reads_read(rest, parser)?.prepend(((value, next), remaining)))
+)
 
 parser_reads_skip : (List((a, Input)), Input -> Result(Read(b), ParserError)) -> Result(List((a, Input)), ParserError)
 parser_reads_skip([], parser) -> Ok([])
-parser_reads_skip([(value, input), *rest], parser) ->
+parser_reads_skip([(value, input), *rest], parser) -> (
   Read(_, remaining) = parser(input)?
   Ok(parser_reads_skip(rest, parser)?.prepend((value, remaining)))
+)
 
 parser_map_reads : (List((a, Input)), a -> b) -> List((b, Input))
 parser_map_reads([], convert) -> []
@@ -170,10 +175,11 @@ to_nat_go([h, *t], value, seen) if h.is_digit() ->
 to_nat_go([h, *t], value, seen) -> Err(NotADigit)
 
 parser_example_pair : Input -> Result(Read({left: Nat, right: Nat}), ParserError)
-parser_example_pair(input) ->
+parser_example_pair(input) -> (
   Read(left, input) = input.nat()?.skip(|remaining| remaining.byte('x'))?
   Read(right, input) = input.nat()?
   Ok(Read({left, right}, input))
+)
 
 parser_example_rows : Str -> Result(List({left: Nat, middle: Nat, right: Nat}), ParserError)
 parser_example_rows(text) -> Input.from_str(text)

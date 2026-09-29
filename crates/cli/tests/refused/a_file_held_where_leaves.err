@@ -1,9 +1,9 @@
 error: the `File` from `Files.open!` is neither used up nor answered on every way `program!` goes on
-  --> a_file_held_where_leaves.fn:12:10
+  --> a_file_held_where_leaves.fn:13:10
    |
-12 |   file = files.open!("a.txt", Read)?
+13 |   file = files.open!("a.txt", Read)?
    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ this `File` is made here
-13 |   bytes = file.read!(4)?
+14 |   bytes = file.read!(4)?
    |           -------------- still held where this `?` leaves
    |
    = help: use it up before asking `?` of anything: keep what a step answers, use it up, then ask `?` of what was kept

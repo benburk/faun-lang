@@ -1,7 +1,7 @@
 error: this `File` is used after it was used up
-  --> a_file_read_after_it_is_closed.fn:14:11
+  --> a_file_read_after_it_is_closed.fn:15:11
    |
-13 |   closed = file.close!()
+14 |   closed = file.close!()
    |            ---- used up here
-14 |   bytes = file.read!(4)
+15 |   bytes = file.read!(4)
    |           ^^^^ used again here

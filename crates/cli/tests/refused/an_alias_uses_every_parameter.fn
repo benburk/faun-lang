@@ -1,0 +1,6 @@
+import std.host {Host}
+
+Tagged(unit) = Nat
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

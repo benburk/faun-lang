@@ -53,19 +53,22 @@ impl Case {
              below(Succ(a), Succ(b)) -> below(a, b)
 
              finish! : (Host, Bool, Nat) -> []
-             finish!(host, False, _) ->
+             finish!(host, False, _) -> (
                five = 5
                host.exit!(U8.of_nat(five * five * 4))
-             finish!(host, True, n) ->
+             )
+             finish!(host, True, n) -> (
                two = 2
                three = two + 1
                five = three + two
                {expression}
+             )
 
              main! : Host -> []
-             main!(host) ->
+             main!(host) -> (
                count = host.args.len()
-               finish!(host, below(count, 32), count)"
+               finish!(host, below(count, 32), count)
+             )"
         )
     }
 

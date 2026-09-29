@@ -1,0 +1,5 @@
+error: alias `Edge` takes 1 type, and is given 0
+ --> an_alias_is_given_as_many_types_as_it_has_parameters.fn:5:1
+  |
+5 | first : List(Edge) -> Nat
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^

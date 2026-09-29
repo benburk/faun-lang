@@ -6,7 +6,7 @@
 
    Terminals are token kinds: quoted, as spelled, or named in capitals. The
    lexer decides what adjacency means, so the grammar never sees a space:
-     NEWLINE     the end of a line of items or of a body
+     NEWLINE     the end of a line of items or of a block
      CALL_PAREN  `(` straight after an operand: a call's, or a type's
    and `.`, `..`, `.*` and `?` are written against what they join.
 
@@ -16,27 +16,21 @@
 
    A pattern is written as the expression that builds what it matches, so a
    binding's or a clause's head is an expression here; the parser makes it a
-   pattern once its line says it is one, and groups lines into items. *)
+   pattern once its line says it is one. A line is one item whole: a body of
+   several lines is a block, and a `where` list's constraints are parted by
+   commas. *)
 
 file              = [ line ] { NEWLINE [ line ] } EOF ;
 
-(* A keyword's line, or an expression and what follows it. After a type's
-   name alone, `=` names a type. *)
+(* A keyword's line, a type's, or an expression and what follows it. After
+   a type's name, and its parameters, `=` names a type. *)
 line              = directive
-                  | "expect" statement
-                  | TYPE after-type
-                  | untyped-operand expr-tail [ trailer ] ;
+                  | "expect" expr
+                  | TYPE [ CALL_PAREN [ arguments ] ")" ] after-type
+                  | untyped-operand expr-tail ( ":" typed | clause ) ;
 after-type        = "=" ( constraints | type )
-                  | ":" typed
-                  | clause
-                  | postfix { postfix } expr-tail [ trailer ]
-                  | infix operand expr-tail [ trailer ]
-                  | (* the name alone *) ;
-trailer           = "=" ( constraints | expr )
-                  | ":" typed
-                  | clause ;
-clause            = [ "if" expr ] "->" statement ;
-statement         = expr [ "=" expr ] ;
+                  | ":" typed ;
+clause            = [ "if" expr ] "->" expr ;
 
 directive         = "package" "{" [ dependencies ] "}"
                   | "import" NAME { "." NAME } "{" [ exposures ] "}"
@@ -52,9 +46,10 @@ any-name          = NAME | EFFECT | TYPE ;
 typed             = type [ constraints ] [ methods ] ;
 methods           = ".(" [ line ] { NEWLINE [ line ] } ")" ;
 
-(* A member's constraint ends its line; more follow on lines of their own. *)
-constraints       = "where" constraint-list ;
-constraint-list   = TYPE CALL_PAREN types ")" [ "," [ constraint-list ] ]
+(* Constraints are parted by commas, and the last takes none: a comma never
+   ends a line, so a list of one to a line is one line. *)
+constraints       = "where" constraint { "," constraint } ;
+constraint        = TYPE CALL_PAREN types ")"
                   | member-constraint ;
 member-constraint = NAME "." ( NAME | EFFECT ) ":" type ;
 
@@ -97,10 +92,16 @@ untyped-primary   = ( NUMBER | CHAR ) [ ".." range-end ]
                   | NAME
                   | EFFECT
                   | STR_START { STR_TEXT | SPLICE_START expr [ width ] SPLICE_END } STR_END
-                  | "(" exprs ")"
+                  | "(" parenthesized ")"
                   | "[" [ elements ] "]"
                   | "{" [ fields ] "}" ;
 exprs             = expr [ "," [ exprs ] ] ;
+
+(* After `(` and one expression, the next token says which: `,` a tuple, `=`
+   or a line's end a block, whose lines are bindings and then its answer,
+   and `)` one value grouped. *)
+parenthesized     = expr [ "," [ exprs ] | "=" expr NEWLINE statements | NEWLINE statements ] ;
+statements        = expr [ "=" expr NEWLINE statements | NEWLINE statements ] ;
 elements          = expr [ "," [ elements ] ]
                   | rest ;
 fields            = NAME [ ":" expr ] [ "," [ fields ] ]

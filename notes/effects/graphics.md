@@ -143,9 +143,10 @@ Programs that want the platform's full API use a target-specific contract,
 and compile only for that target:
 
 ```faun
-main!(host) ->
+main!(host) -> (
   ppu = host.nes_ppu      # exists only on an NES target
   ...
+)
 ```
 
 - **Vulkan, Metal and D3D12** are wrapped by the target in Faun-native terms:

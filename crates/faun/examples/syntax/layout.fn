@@ -1,13 +1,15 @@
-# Lines. An item or a body's line ends at a new line; a line goes on after
-# an arrow, after an infix operator, and into a chain that begins with `.`.
-# Indentation carries no meaning.
+# Lines. An item or a block's line ends at a new line; a line goes on after
+# an arrow, after an infix operator or a comma, and into a chain that begins
+# with `.`. Indentation carries no meaning.
 
-# A body is its bindings, one to a line, and ends with its answer.
+# A body of several lines is a block: its bindings, one to a line, then its
+# answer, in parentheses.
 area : (Nat, Nat) -> Nat
-area(width, height) ->
+area(width, height) -> (
   inner_width = width - 2
   inner_height = height - 2
   inner_width * inner_height
+)
 
 expect area(5, 4) == 6
 
@@ -46,11 +48,43 @@ commented(n) -> n        # a clause
 
 expect commented(1) == 1
 
-# An expectation may be a body of its own.
-expect
+# A block stands wherever an expression does, and its names leave with it:
+# `inner` here is the block's, and gone after it.
+scaled : Nat -> List(Nat)
+scaled(n) -> [1, 2, 3].map(|x| (
+  inner = x * n
+  inner + 1
+))
+
+expect scaled(2) == [3, 5, 7]
+
+nested : Nat -> Nat
+nested(n) -> (
+  inner = (
+    inner = n + 1
+    inner * 2
+  )
+  inner + 1
+)
+
+expect nested(1) == 5
+
+# A guard is an expression, so it may be a block too.
+large : Nat -> Bool
+large(n) if (
+  limit = 10
+  n > limit
+) -> True
+large(_) -> False
+
+expect large(11) & !large(3)
+
+# An expectation of several lines is a block, as a body is.
+expect (
   doubled = [1, 2, 3].map(|n| n * 2)
   doubled.len() == 3
     & doubled.last().ok_or(0) == 6
+)
 
 # Blank lines, and none, between items.
 a : Nat

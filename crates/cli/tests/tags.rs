@@ -65,10 +65,55 @@ const RUNNING: &[(&str, &str, u32)] = &[
          kept(xs) -> xs
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            listed = kept([A, B]).map(|x| code(x)).fold(0, |s, x| s + x)
-           host.exit!(U8.of_nat(code(pick(True)) * 10 + code(pick(False)) + listed * 50))",
+           host.exit!(U8.of_nat(code(pick(True)) * 10 + code(pick(False)) + listed * 50))
+         )",
         173,
+    ),
+    (
+        "a closed row read out of a call, a constructor or a field is widened too, and through `?`",
+        "Box : {held: [Gone, Here]}
+         Wrapped : [Wrapped([Gone, Here])]
+
+         opened : Box -> [Gone, Here]
+         opened(Box({held})) -> held
+
+         unwrapped : Wrapped -> [Gone, Here]
+         unwrapped(Wrapped(held)) -> held
+
+         read : Box -> [Gone, Here]
+         read(Box(inner)) -> inner.held
+
+         first : List(Result(e, [Gone])) -> Result(e, [Gone])
+         first(results) -> results.get_or(0, Err(Gone))
+
+         Table : {rows: List(Result(Nat, [Gone])), size: Nat}
+
+         doubled : Table -> Result(Nat, [Gone])
+         doubled(Table({rows, *})) -> (
+           n = rows.get_or(0, Err(Gone))?
+           Ok(n * 2)
+         )
+
+         code : [Gone, Here, Other] -> Nat
+         code(Gone) -> 1
+         code(Here) -> 2
+         code(Other) -> 3
+
+         status : Result(Nat, [Gone]) -> Nat
+         status(Ok(n)) -> n
+         status(Err(Gone)) -> 5
+
+         main! : Host -> []
+         main!(host) -> (
+           here = Box({held: Here})
+           kinds = code(opened(here)) + code(unwrapped(Wrapped(Gone))) * 10 + code(read(here)) * 60
+           found = status(first([Ok(40)])) + status(first([Ok(40)].take(0)))
+           tabled = status(doubled(Table({rows: [Ok(3)], size: 1})))
+           host.exit!(U8.of_nat(kinds + found + tabled))
+         )",
+        183,
     ),
     (
         "a row inside a tag is widened with it",
@@ -169,10 +214,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
          narrow(n) -> Ok(n)
 
          wide : Nat -> Result(Nat, [B, A])
-         wide(n) ->
+         wide(n) -> (
            taken = narrow(n)
            kept = taken?
            Ok(kept)
+         )
 
          code : Result(Nat, [B, A]) -> Nat
          code(Ok(n)) -> n % 10

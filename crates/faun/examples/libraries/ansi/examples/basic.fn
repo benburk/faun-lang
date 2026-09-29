@@ -14,9 +14,10 @@ banner(text) -> Ansi.color(
 )
 
 app : {stdin: List(U8), *} -> Result(Str, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_utf8(input.stdin)?
   Ok(banner(stdin).concat("\n"))
+)
 
 expect Ansi.escape(Control.erase_line()).to_utf8() == [27, '[', '2', 'K']
 expect banner("Ori").to_utf8() == [

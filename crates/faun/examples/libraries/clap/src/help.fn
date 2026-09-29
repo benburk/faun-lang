@@ -29,9 +29,10 @@ spec_metavar(spec) -> Str.from_utf8(
 # A spec whose short name fails to resolve documents itself long-only; the
 # scan reports the real error, so help never has to.
 help_option : (ArgSpec, HelpValue, HelpMode) -> HelpItem
-help_option(ArgSpec({long, short, about, *}), shape, mode) ->
+help_option(ArgSpec({long, short, about, *}), shape, mode) -> (
   resolved = resolve_short(long, short).ok_or(LongOnly)
   Option({long, short: resolved, shape, mode, about})
+)
 
 help_min : (HelpItem, Nat) -> HelpItem
 help_min(Rest(current), n) -> Rest(current.max(n))
@@ -54,9 +55,10 @@ render_options([Rest(_), *rest]) -> render_options(rest)
 render_options([Option(option), *rest]) ->
   entry(option).concat(render_options(rest))
 
-entry({long, short, shape, mode, about}) ->
+entry({long, short, shape, mode, about}) -> (
   lead = "  ${render_names(long, short, shape)}${render_value(shape)}"
   "${lead}${render_required(mode)}${render_about(about)}\n"
+)
 
 render_names(long, LongOnly, shape) -> render_long(long, shape)
 render_names(long, Short(name), shape) ->

@@ -27,9 +27,10 @@ Verdict(a) : [Passed, Falsified(a, a)].(
   # before it is reported: `Falsified(as_found smallest)`.
   forall : (Nat, Random, Random -> (a, Random), a -> Bool, a -> List(a)) -> Verdict(a)
   forall(0, state, gen, prop, shrink) -> Passed
-  forall(Succ(rest), state, gen, prop, shrink) ->
+  forall(Succ(rest), state, gen, prop, shrink) -> (
     (value, next) = gen(state)
     forall_step(prop(value), value, next, rest, gen, prop, shrink)
+  )
 
   # The drawn value either upholds the law and the trials continue, or it is
   # the counterexample to shrink. The verdict is computed, so it enters a head.
@@ -78,22 +79,25 @@ proptest_refute([c, *rest], prop) -> Ok(c)
 
 # Draw a `Nat` in `0 ..= bound`.
 gen_nat : (Random, Nat) -> (Nat, Random)
-gen_nat(state, bound) ->
+gen_nat(state, bound) -> (
   (value, next) = state.next()
   (value.to_nat().mod(bound.add(1)), next)
+)
 
 # Draw a list of at most `longest` elements, each drawn by `element`.
 gen_list : (Random, Nat, Random -> (a, Random)) -> (List(a), Random)
-gen_list(state, longest, element) ->
+gen_list(state, longest, element) -> (
   (len, next) = gen_nat(state, longest)
   proptest_elements(next, len, element)
+)
 
 proptest_elements : (Random, Nat, Random -> (a, Random)) -> (List(a), Random)
 proptest_elements(state, 0, element) -> ([], state)
-proptest_elements(state, Succ(rest), element) ->
+proptest_elements(state, Succ(rest), element) -> (
   (head, after_head) = element(state)
   (tail, after_tail) = proptest_elements(after_head, rest, element)
   (tail.prepend(head), after_tail)
+)
 
 # Candidates for a failing `Nat`: zero outright, half, one less. Halving makes
 # minimization a binary search down to the property's true boundary.

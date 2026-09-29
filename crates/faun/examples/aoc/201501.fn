@@ -20,8 +20,9 @@ part2(input) -> parse(input)
   .ok_or(0)
 
 app : {stdin: List(U8), *} -> Result({part1: Int, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   Ok({part1: part1(stdin), part2: part2(stdin)})
+)
 
 main!(host) -> host.run_stdin!(app)

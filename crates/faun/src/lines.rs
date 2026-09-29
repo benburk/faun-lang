@@ -1,13 +1,12 @@
-//! From a file's lines to its items.
+//! From a file's lines to its items, a line apiece.
 //!
-//! The grammar reads every line the same way: an expression, and what the
-//! token after it says the line is. `= value` binds, `: type` declares,
-//! `-> value` begins a clause, and a line with none of these is a value. A
-//! pattern is written as the expression that would build what it matches, so
-//! the head of a binding or a clause is read as an expression and made a
-//! pattern here, once the line has said it is one. Then lines are grouped: a
-//! clause or an `expect` takes the lines after it as its body, and a
-//! signature the `where` lines after it as its constraints.
+//! The grammar reads a line as an expression, and what the token after it
+//! says the line is: `: type` declares, and `-> value` is a clause. A pattern
+//! is written as the expression that would build what it matches, so the
+//! head of a clause, a lambda's parameters and a block's bindings are read
+//! as expressions and made patterns here, once the line has said they are
+//! ones. A body of several lines is a block, and a `where` list's
+//! constraints are parted by commas, so each line is one item whole.
 //!
 //! An expression may hold what only a pattern can, `_`, a range, or a rest
 //! with nothing after its `*`, since it is read before anyone knows which it
@@ -26,18 +25,15 @@ pub(crate) enum Line {
     Header(HeaderDecl),
     Import(ImportDecl),
     Exports(ExportsDecl),
-    /// `expect` and its first line.
-    Expect(Span, Statement),
-    /// A value, or a binding: a line of a body.
-    Statement(Statement),
-    /// `head if guard -> first`: a clause and its first line.
+    /// `expect` and what it expects.
+    Expect(Span, Expr),
+    /// `head if guard -> body`.
     Clause {
         head: Expr,
         guard: Option<Expr>,
-        first: Statement,
+        body: Expr,
     },
-    /// `head : ...`: a signature, a data declaration, or a `where` list's
-    /// constraint.
+    /// `head : ...`: a signature or a data declaration.
     Typed(Expr, Typed),
     /// `Name = type`.
     Alias(Expr, Type),
@@ -68,48 +64,11 @@ impl Typed {
     }
 }
 
-/// A line of a body: a value, or `pattern = value`.
+/// A line of a block: a value, or `pattern = value`.
 #[derive(Debug)]
 pub(crate) enum Statement {
     Value(Expr),
     Binding(Expr, Expr),
-}
-
-/// What follows the expression beginning a line.
-#[derive(Debug)]
-pub(crate) enum Trailer {
-    Equals(Equals),
-    Typed(Typed),
-    Clause {
-        guard: Option<Expr>,
-        first: Statement,
-    },
-}
-
-/// What follows `=`.
-#[derive(Debug)]
-pub(crate) enum Equals {
-    Value(Expr),
-    Type(Type),
-    Constraints((Vec<Constraint>, Span)),
-}
-
-impl Line {
-    /// The line an expression and what follows it make.
-    pub(crate) fn new(head: Expr, trailer: Option<Trailer>) -> Self {
-        match trailer {
-            None => Self::Statement(Statement::Value(head)),
-            Some(Trailer::Equals(Equals::Value(value))) => {
-                Self::Statement(Statement::Binding(head, value))
-            }
-            Some(Trailer::Equals(Equals::Type(ty))) => Self::Alias(head, ty),
-            Some(Trailer::Equals(Equals::Constraints(constraints))) => {
-                Self::Constraints(head, constraints)
-            }
-            Some(Trailer::Typed(typed)) => Self::Typed(head, typed),
-            Some(Trailer::Clause { guard, first }) => Self::Clause { head, guard, first },
-        }
-    }
 }
 
 /// Why lines do not make items.
@@ -140,11 +99,6 @@ pub(crate) fn is_type_name(name: Name, source: &str) -> bool {
         .starts_with(|c: char| c.is_ascii_uppercase())
 }
 
-/// Whether `head` is a type's name alone, whose `=` names a type.
-pub(crate) fn names_a_type(head: &Expr, source: &str) -> bool {
-    matches!(head.kind, ExprKind::Name(name) if is_type_name(name, source))
-}
-
 /// The items `lines` make.
 ///
 /// # Errors
@@ -156,11 +110,11 @@ pub(crate) fn items(lines: Vec<Line>, source: &str) -> Result<Vec<Item>, Error> 
     let items = Grouping::new(source, false).group(lines)?;
     for item in &items {
         match item {
-            Item::Clause(clause) | Item::Expect(clause) => clause_expressions(clause)?,
+            Item::Clause(clause) | Item::Expect(clause) => clause_expressions(clause, source)?,
             Item::Data(data) => {
                 for method in &data.methods {
                     if let MethodItem::Clause(clause) = method {
-                        clause_expressions(clause)?;
+                        clause_expressions(clause, source)?;
                     }
                 }
             }
@@ -170,23 +124,13 @@ pub(crate) fn items(lines: Vec<Line>, source: &str) -> Result<Vec<Item>, Error> 
     Ok(items)
 }
 
-/// A body being gathered: its clause, or its `expect`, and its lines.
-struct Open {
-    name: Name,
-    start: Span,
-    patterns: Vec<Pattern>,
-    guard: Option<Expr>,
-    expect: bool,
-    lines: Vec<Statement>,
-}
-
+/// Items from lines, a line apiece.
 struct Grouping<'s> {
     source: &'s str,
     /// Whether these are a method block's lines, which hold only
     /// signatures and clauses.
     methods: bool,
     items: Vec<Item>,
-    open: Option<Open>,
 }
 
 impl<'s> Grouping<'s> {
@@ -195,77 +139,67 @@ impl<'s> Grouping<'s> {
             source,
             methods,
             items: Vec::new(),
-            open: None,
         }
     }
 
     fn group(mut self, lines: Vec<Line>) -> Result<Vec<Item>, Error> {
         for line in lines {
-            if let Line::Statement(statement) = line {
-                let Some(open) = &mut self.open else {
-                    return Err(error(
-                        statement_span(&statement),
-                        "this line belongs to no definition: a body's lines follow its clause's `->`",
-                    ));
-                };
-                open.lines.push(statement);
-                continue;
-            }
-            self.close()?;
             self.line(line)?;
         }
-        self.close()?;
         Ok(self.items)
     }
 
     fn line(&mut self, line: Line) -> Result<(), Error> {
         match line {
-            Line::Statement(_) => unreachable!("statements join the open body"),
             Line::Header(header) => self.item(header.span, Item::Header(header)),
             Line::Import(import) => self.item(import.span, Item::Import(import)),
             Line::Exports(exports) => self.item(exports.span, Item::Exports(exports)),
-            Line::Expect(keyword, first) => {
-                if self.methods {
-                    return Err(error(
-                        keyword,
-                        "a method block holds signatures and clauses",
-                    ));
-                }
-                self.open = Some(Open {
-                    name: Name(keyword),
-                    start: keyword,
-                    patterns: Vec::new(),
-                    guard: None,
-                    expect: true,
-                    lines: vec![first],
-                });
-                Ok(())
+            Line::Expect(keyword, value) => {
+                let body = body_of(value);
+                self.item(
+                    keyword,
+                    Item::Expect(Clause {
+                        span: keyword.through(body.result.span),
+                        name: Name(keyword),
+                        patterns: Vec::new(),
+                        guard: None,
+                        body,
+                    }),
+                )
             }
-            Line::Clause { head, guard, first } => self.clause(head, guard, first),
+            Line::Clause { head, guard, body } => self.clause(head, guard, body),
             Line::Typed(head, typed) => self.typed(head, typed),
             Line::Alias(head, ty) => {
-                let ExprKind::Name(name) = head.kind else {
-                    unreachable!("the grammar reads a type only after a type's name")
-                };
                 let span = head.span.through(type_span(&ty));
-                self.item(head.span, Item::Alias(AliasDecl { span, name, ty }))
+                let (name, params) = self.type_head(head)?;
+                self.item(
+                    span,
+                    Item::Alias(AliasDecl {
+                        span,
+                        name,
+                        params: params.unwrap_or_default(),
+                        ty,
+                    }),
+                )
             }
             Line::Constraints(head, constraints) => self.constraint_alias(head, constraints),
         }
     }
 
-    /// Begin a clause, whose body is `first` and the lines after it.
-    fn clause(&mut self, head: Expr, guard: Option<Expr>, first: Statement) -> Result<(), Error> {
+    /// A clause: its head's name and patterns, its guard, and its body.
+    fn clause(&mut self, head: Expr, guard: Option<Expr>, value: Expr) -> Result<(), Error> {
         let (name, arguments) = self.clause_head(head)?;
-        self.open = Some(Open {
-            name,
-            start: name.0,
-            patterns: patterns(arguments, self.source)?,
-            guard,
-            expect: false,
-            lines: vec![first],
-        });
-        Ok(())
+        let body = body_of(value);
+        self.item(
+            name.0,
+            Item::Clause(Clause {
+                span: name.0.through(body.result.span),
+                name,
+                patterns: patterns(arguments, self.source)?,
+                guard,
+                body,
+            }),
+        )
     }
 
     fn constraint_alias(
@@ -298,27 +232,6 @@ impl<'s> Grouping<'s> {
             return Err(error(span, "a method block holds signatures and clauses"));
         }
         self.items.push(item);
-        Ok(())
-    }
-
-    /// Finish the body being gathered.
-    fn close(&mut self) -> Result<(), Error> {
-        let Some(open) = self.open.take() else {
-            return Ok(());
-        };
-        let body = body(open.lines, self.source)?;
-        let clause = Clause {
-            span: open.start.through(body.result.span),
-            name: open.name,
-            patterns: open.patterns,
-            guard: open.guard,
-            body,
-        };
-        self.items.push(if open.expect {
-            Item::Expect(clause)
-        } else {
-            Item::Clause(clause)
-        });
         Ok(())
     }
 
@@ -377,12 +290,12 @@ impl<'s> Grouping<'s> {
     fn typed(&mut self, head: Expr, typed: Typed) -> Result<(), Error> {
         let span = head.span;
         match head.kind {
-            ExprKind::Member(variable, member) => match variable.kind {
-                ExprKind::Name(variable) if !is_type_name(variable, self.source) => {
-                    self.constraint(span, variable, member, typed)
-                }
-                _ => Err(error(span, "a constraint is `a.member : type`")),
-            },
+            ExprKind::Member(..) => Err(error(
+                span,
+                "a `where` list's constraints are parted by commas, \
+                 `where a.zero : a, a.add : (a, a) -> a`, and a list of one to a line ends each \
+                 but the last with its comma",
+            )),
             ExprKind::Name(name) if !is_type_name(name, self.source) => {
                 if let Some((_, block)) = typed.methods {
                     return Err(error(block, "only a type has a method block"));
@@ -404,28 +317,6 @@ impl<'s> Grouping<'s> {
             }
             _ => self.data(head, typed),
         }
-    }
-
-    /// `a.add : (a, a) -> a`: a `where` list's constraint on a line of its own,
-    /// added to the list just before it.
-    fn constraint(
-        &mut self,
-        span: Span,
-        variable: Name,
-        member: Name,
-        typed: Typed,
-    ) -> Result<(), Error> {
-        if typed.constraints.is_some() || typed.methods.is_some() {
-            return Err(error(span, "a constraint is `a.member : type`"));
-        }
-        let constraint = Constraint::Member {
-            span: span.through(type_span(&typed.result)),
-            variable,
-            member,
-            parameters: typed.parameters,
-            result: typed.result,
-        };
-        self.constrain(span, constraint)
     }
 
     /// `Name(a) : type .(methods)`: a data declaration, whose type in
@@ -469,67 +360,46 @@ impl<'s> Grouping<'s> {
             }),
         )
     }
+}
 
-    /// Add a constraint on a line of its own to the `where` list just
-    /// before it.
-    fn constrain(&mut self, span: Span, constraint: Constraint) -> Result<(), Error> {
-        let end = constraint.span();
-        let listed = match self.items.last_mut() {
-            Some(Item::Signature(signature)) if !signature.constraints.is_empty() => {
-                signature.span = signature.span.through(end);
-                &mut signature.constraints
-            }
-            Some(Item::Constraints(alias)) => {
-                alias.span = alias.span.through(end);
-                &mut alias.constraints
-            }
-            _ => {
-                return Err(error(
-                    span,
-                    "a constraint on a line of its own continues a `where` list",
-                ));
-            }
-        };
-        listed.push(constraint);
-        Ok(())
+/// The body a clause's or an `expect`'s value makes: a block's lines, or
+/// the value alone.
+fn body_of(value: Expr) -> Body {
+    match value.kind {
+        ExprKind::Block(body) => *body,
+        _ => Body {
+            bindings: Vec::new(),
+            result: value,
+        },
     }
 }
 
-/// A body of its lines: the last, a value, is its answer, and each before
+/// A block of its lines: the last, a value, is its answer, and each before
 /// it binds a pattern, or `_` where it is a value asked for what it does.
-fn body(mut lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
-    let result = match lines.pop().expect("a body has its first line") {
+/// Whether such a value is an effect, as only one may be, is asked once the
+/// items are made ([`thrown_away`]).
+///
+/// # Errors
+///
+/// A block that ends in a binding, or a binding whose head is no pattern.
+pub(crate) fn body(mut lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
+    let result = match lines.pop().expect("a block has its first line") {
         Statement::Value(value) => value,
         Statement::Binding(_, value) => {
             return Err(error(
                 value.span,
-                "a body ends with its answer, a line after its last binding",
+                "a block ends with its answer, a line after its last binding",
             ));
         }
     };
     let bindings = lines
         .into_iter()
         .map(|line| match line {
-            Statement::Value(value) => {
-                // Only a call written as an effect may discard its answer.
-                let effect = match &value.kind {
-                    ExprKind::Call(head, _) => {
-                        matches!(&head.kind, ExprKind::Name(name) if name.text(source).ends_with('!'))
-                    }
-                    ExprKind::Method(_, name, _) => name.text(source).ends_with('!'),
-                    _ => false,
-                };
-                if !effect {
-                    return Err(error(value.span, "this value is worked out and then thrown away")
-                        .label("unused")
-                        .help("remove the line, or bind the value to a name if you need it"));
-                }
-                Ok(Binding {
-                    pattern: Pattern::Wild(value.span),
-                    value,
-                    discarded: true,
-                })
-            }
+            Statement::Value(value) => Ok(Binding {
+                pattern: Pattern::Wild(value.span),
+                value,
+                discarded: true,
+            }),
             Statement::Binding(bound, value) => Ok(Binding {
                 pattern: pattern(bound, source)?,
                 value,
@@ -540,11 +410,27 @@ fn body(mut lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
     Ok(Body { bindings, result })
 }
 
-const fn statement_span(statement: &Statement) -> Span {
-    match statement {
-        Statement::Value(value) => value.span,
-        Statement::Binding(bound, value) => bound.span.through(value.span),
+/// Refuse a line of a body whose value nothing keeps, unless it is a call
+/// written as an effect.
+fn thrown_away(body: &Body, source: &str) -> Result<(), Error> {
+    for binding in body.bindings.iter().filter(|binding| binding.discarded) {
+        let value = &binding.value;
+        let effect = match &value.kind {
+            ExprKind::Call(head, _) => {
+                matches!(&head.kind, ExprKind::Name(name) if name.text(source).ends_with('!'))
+            }
+            ExprKind::Method(_, name, _) => name.text(source).ends_with('!'),
+            _ => false,
+        };
+        if !effect {
+            return Err(
+                error(value.span, "this value is worked out and then thrown away")
+                    .label("unused")
+                    .help("remove the line, or bind the value to a name if you need it"),
+            );
+        }
     }
+    Ok(())
 }
 
 const fn type_span(ty: &Type) -> Span {
@@ -725,15 +611,21 @@ fn record(
     })
 }
 
-/// Refuse a pattern-only form left in a clause's expressions.
-fn clause_expressions(clause: &Clause) -> Result<(), Error> {
+/// Refuse a pattern-only form left in a clause's expressions, and a value
+/// a body throws away.
+fn clause_expressions(clause: &Clause, source: &str) -> Result<(), Error> {
     if let Some(guard) = &clause.guard {
-        expression(guard)?;
+        expression(guard, source)?;
     }
-    for binding in &clause.body.bindings {
-        expression(&binding.value)?;
+    body_expressions(&clause.body, source)
+}
+
+fn body_expressions(body: &Body, source: &str) -> Result<(), Error> {
+    thrown_away(body, source)?;
+    for binding in &body.bindings {
+        expression(&binding.value, source)?;
     }
-    expression(&clause.body.result)
+    expression(&body.result, source)
 }
 
 /// Refuse a pattern-only form anywhere in `expr`.
@@ -741,14 +633,14 @@ fn clause_expressions(clause: &Clause) -> Result<(), Error> {
     clippy::too_many_lines,
     reason = "one arm for each kind of expression, to reach every one it holds"
 )]
-fn expression(expr: &Expr) -> Result<(), Error> {
+fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
     match &expr.kind {
         ExprKind::Wild => Err(error(expr.span, "`_` stands only in a pattern")),
         ExprKind::Range(..) => Err(error(expr.span, "a range stands only in a pattern")),
         ExprKind::Name(_) | ExprKind::Number(_) => Ok(()),
         ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
             StringPart::Text(_) => Ok(()),
-            StringPart::Splice(splice, _) => expression(splice),
+            StringPart::Splice(splice, _) => expression(splice, source),
         }),
         ExprKind::List(elements, rest) => {
             if let Some(rest) = rest
@@ -762,9 +654,11 @@ fn expression(expr: &Expr) -> Result<(), Error> {
             elements
                 .iter()
                 .chain(rest.as_deref())
-                .try_for_each(expression)
+                .try_for_each(|each| expression(each, source))
         }
-        ExprKind::Record(fields) => fields.iter().try_for_each(|(_, value)| expression(value)),
+        ExprKind::Record(fields) => fields
+            .iter()
+            .try_for_each(|(_, value)| expression(value, source)),
         ExprKind::Update(fields, base) => {
             if matches!(base.kind, ExprKind::Wild) {
                 return Err(error(
@@ -776,20 +670,23 @@ fn expression(expr: &Expr) -> Result<(), Error> {
                 .iter()
                 .map(|(_, value)| value)
                 .chain(std::iter::once(&**base))
-                .try_for_each(expression)
+                .try_for_each(|each| expression(each, source))
         }
-        ExprKind::Tuple(members) => members.iter().try_for_each(expression),
-        ExprKind::Lambda(_, body) => expression(body),
+        ExprKind::Tuple(members) => members.iter().try_for_each(|each| expression(each, source)),
+        ExprKind::Lambda(_, body) => expression(body, source),
         ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
-            expression(head)?;
-            arguments.iter().try_for_each(expression)
+            expression(head, source)?;
+            arguments
+                .iter()
+                .try_for_each(|each| expression(each, source))
         }
         ExprKind::Member(value, _) | ExprKind::Unary(_, value) | ExprKind::Try(value) => {
-            expression(value)
+            expression(value, source)
         }
+        ExprKind::Block(body) => body_expressions(body, source),
         ExprKind::Binary(_, left, right) => {
-            expression(left)?;
-            expression(right)
+            expression(left, source)?;
+            expression(right, source)
         }
     }
 }

@@ -8,27 +8,31 @@ import std.host {Host, Files, File, Stdout, Chunk, IoError, Mode.*}
 
 trickle! : (File, File, Nat) -> Result(Nat, IoError)
 trickle!(_, _, 0) -> Ok(0)
-trickle!(source, target, Succ(fuel)) ->
+trickle!(source, target, Succ(fuel)) -> (
   chunk = source.read!(2)?
   more!(chunk, source, target, fuel)
+)
 
 more! : (Chunk, File, File, Nat) -> Result(Nat, IoError)
 more!(End, _, _, _) -> Ok(0)
-more!(Data(bytes), source, target, fuel) ->
+more!(Data(bytes), source, target, fuel) -> (
   wrote = target.write_all!(bytes)?
   trickle!(source, target, fuel)
+)
 
 copy! : (Files, Stdout) -> Result(Nat, IoError)
-copy!(files, output) ->
+copy!(files, output) -> (
   source = files.open!("input.txt", Read)?
   making = files.open!("output.txt", Overwrite)
   made!(making, source, output)
+)
 
 made! : (Result(File, IoError), File, Stdout) -> Result(Nat, IoError)
-made!(Err(error), source, _) ->
+made!(Err(error), source, _) -> (
   closed = source.close!()
   Err(error)
-made!(Ok(target), source, output) ->
+)
+made!(Ok(target), source, output) -> (
   copying = trickle!(source, target, 64)
   closing_source = source.close!()
   closing_target = target.close!()
@@ -37,8 +41,10 @@ made!(Ok(target), source, output) ->
   b = closing_target?
   said = output.write_all!("trickled\n".to_utf8())?
   Ok(0)
+)
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   copied = copy!(host.files, host.stdout)
   host.exit!(U8.of_nat(copied.ok_or(1)))
+)

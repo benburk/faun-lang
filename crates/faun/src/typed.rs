@@ -112,4 +112,6 @@ pub enum ExprKind {
     Project(Box<Expr>, Symbol),
     Widen(Box<Expr>),
     Try(Box<Expr>),
+    /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
+    Block(Box<Body>),
 }

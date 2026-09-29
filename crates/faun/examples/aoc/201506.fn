@@ -17,10 +17,11 @@ paired(Ok([x, y])) -> Ok((x, y))
 paired(_) -> Err(MalformedInstruction)
 
 parse_range : (Action, Str, Str) -> Result(Instruction, [MalformedInstruction])
-parse_range(action, start, end) ->
+parse_range(action, start, end) -> (
   (left, top) = parse_coordinate(start)?
   (right, bottom) = parse_coordinate(end)?
   bounded(action, {left, top, right, bottom})
+)
 
 bounded : (Action, {left: Nat, top: Nat, right: Nat, bottom: Nat}) -> Result(Instruction, [MalformedInstruction])
 bounded(action, {left, top, right, bottom})
@@ -90,15 +91,17 @@ part2 : Str -> Result(Nat, [MalformedInstruction])
 part2(input) -> brightness_count(input, 1000, 1000)
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   Ok(run(parse(stdin)?))
+)
 
 run : List(Instruction) -> {part1: Nat, part2: Nat}
-run(instructions) ->
+run(instructions) -> (
   lights = grid_sum(instructions, 1000, 1000, lit_cell)
   brightness = grid_sum(instructions, 1000, 1000, brightness_cell)
   {part1: lights, part2: brightness}
+)
 
 expect lit_count("turn on 0,0 through 2,2\n", 3, 3) == Ok(9)
 expect lit_count(

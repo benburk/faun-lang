@@ -42,13 +42,13 @@ Result(a, e) : [Ok(a), Err(e)].(
   # `Ok(value)` or `Err(error)`, each by its own type's `to_str`, as a tag
   # is written: which it was is the first thing it says.
   to_str : Result(a, e) -> Str where
-    a.to_str : a -> Str
+    a.to_str : a -> Str,
     e.to_str : e -> Str
 
   # Both `Ok` with equal values, or both `Err` with equal errors, each by
   # its own type's `equals`. A tag row's is structural.
   equals : (Result(a, e), Result(a, e)) -> Bool where
-    a.equals : (a, a) -> Bool
+    a.equals : (a, a) -> Bool,
     e.equals : (e, e) -> Bool
 )
 

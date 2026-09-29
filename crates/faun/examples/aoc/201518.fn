@@ -38,7 +38,7 @@ next_light(current, 2) -> current
 next_light(_, _) -> 0
 
 step : List(List(U8)) -> List(List(U8))
-step(rows) ->
+step(rows) -> (
   dark = List.repeat(0, rows.first().ok_or([]).len())
   sums = rows.map(row_sums)
   counts = sums.map2(sums.prepend(dark), add_rows)
@@ -46,18 +46,21 @@ step(rows) ->
   # The nine-cell sum includes the current light; the rule counts only eight.
   rows.map2(counts, |row, totals|
     row.map2(totals, |current, total| next_light(current, total - current)))
+)
 
 corners : (List(List(U8)), Bool) -> List(List(U8))
 corners(rows, False) -> rows
-corners(rows, True) ->
+corners(rows, True) -> (
   last = rows.len() - 1
   rows.enumerate().map(|(at, row)| corner_row(row, at == 0 | at == last))
+)
 
 corner_row : (List(U8), Bool) -> List(U8)
 corner_row(row, False) -> row
-corner_row(row, True) ->
+corner_row(row, True) -> (
   last = row.len() - 1
   row.enumerate().map(|(at, current)| (at == 0 | at == last).select(1, current))
+)
 
 animate : (List(List(U8)), Nat, Bool) -> List(List(U8))
 animate(grid, 0, _) -> grid
@@ -74,10 +77,11 @@ part2 : (Str, Nat) -> Result(Nat, _)
 part2(input, steps) -> Ok(solve(parse_grid(input)?, steps, True))
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   grid = parse_grid(stdin)?
   Ok({part1: solve(grid, 100, False), part2: solve(grid, 100, True)})
+)
 
 example : Str
 example() -> ".#.#.#\n...##.\n#....#\n..#...\n#.#..#\n####..\n"
@@ -88,13 +92,15 @@ expect part1(example(), 0) == Ok(15)
 expect part2(example(), 0) == Ok(17)
 
 # Compare whole generations, not just populations: updates are simultaneous.
-expect
+expect (
   grid = parse_grid(example()).ok_or([])
   Ok(step(grid)) == parse_grid("..##..\n..##.#\n...##.\n......\n#.....\n#.##..\n")
-expect
+)
+expect (
   grid = parse_grid(example()).ok_or([])
   Ok(corners(step(corners(grid, True)), True)) ==
     parse_grid("#.##.#\n####.#\n...##.\n......\n#...#.\n#.####\n")
+)
 
 # All neighbour counts for both current states, including overpopulation.
 expect List.range(9).map(|n| next_light(0, U8.of_nat(n))) == [0, 0, 0, 1, 0, 0, 0, 0, 0]

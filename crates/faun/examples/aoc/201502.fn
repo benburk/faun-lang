@@ -16,16 +16,18 @@ parse_boxes : Str -> Result(List(Box), [MalformedBox])
 parse_boxes(input) -> input.trim().lines().try_map(parse_box)
 
 paper : Box -> Nat
-paper({l, w, h}) ->
+paper({l, w, h}) -> (
   lw = l * w
   wh = w * h
   hl = h * l
   (lw + wh + hl) * 2 + lw.min(wh).min(hl)
+)
 
 ribbon : Box -> Nat
-ribbon({l, w, h}) ->
+ribbon({l, w, h}) -> (
   perimeter = ((l + w) * 2).min((w + h) * 2).min((h + l) * 2)
   perimeter + l * w * h
+)
 
 part1 : Str -> Result(Nat, [MalformedBox])
 part1(input) -> Ok(parse_boxes(input)?.map(paper).sum())
@@ -34,12 +36,13 @@ part2 : Str -> Result(Nat, [MalformedBox])
 part2(input) -> Ok(parse_boxes(input)?.map(ribbon).sum())
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   boxes = parse_boxes(stdin)?
   paper_total = boxes.map(paper).sum()
   ribbon_total = boxes.map(ribbon).sum()
   Ok({part1: paper_total, part2: ribbon_total})
+)
 
 expect part1("2x3x4\n1x1x10") == Ok(101)
 expect part2("2x3x4\n1x1x10") == Ok(48)

@@ -30,10 +30,11 @@ part2(input) -> play(input.trim().to_utf8(), 50).len()
 # Part two is ten more readings of part one's sequence, so main plays the
 # first forty rounds once and both answers share them.
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   forty = play(stdin.trim().to_utf8(), 40)
   Ok({part1: forty.len(), part2: play(forty, 10).len()})
+)
 
 # The published chain, one reading at a time, then five at once.
 expect step("1".to_utf8()) == "11".to_utf8()

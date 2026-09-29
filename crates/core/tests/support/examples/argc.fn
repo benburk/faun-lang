@@ -12,6 +12,7 @@ finish!(host, True, n) -> host.exit!(U8.of_nat(n + n + n + n))
 finish!(host, False, _) -> host.exit!(0)
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   count = host.args.len()
   finish!(host, below(count, 2), count)
+)

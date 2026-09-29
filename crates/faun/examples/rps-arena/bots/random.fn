@@ -21,6 +21,7 @@ RandomBot : Random.(
 )
 
 draw : RandomBot -> (Throw, RandomBot)
-draw(RandomBot(rng)) ->
+draw(RandomBot(rng)) -> (
   (word, next) = rng.next()
   (Throw.of_nat(word.to_nat()), RandomBot(next))
+)

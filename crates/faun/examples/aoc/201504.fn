@@ -40,10 +40,11 @@ part2 : List(U8) -> Nat
 part2(key) -> mine(key, six_zeroes, 1, 10000000).ok_or(0)
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   key = stdin.trim().to_utf8()
   Ok({part1: part1(key), part2: part2(key)})
+)
 
 # The two published five-zero examples and a useful six-zero regression check
 # only their winning candidates; a full search is available with enough fuel.

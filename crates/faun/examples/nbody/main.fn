@@ -76,9 +76,10 @@ bodies() ->
 # zero: it takes the opposite of each planet's momentum, in its own mass.
 offset_momentum : List(Body) -> List(Body)
 offset_momentum([]) -> []
-offset_momentum([sun, *planets]) ->
+offset_momentum([sun, *planets]) -> (
   velocity = planets.fold(Vec3.zero(), |v, body| v - body.vel.scale(body.mass / sun.mass))
   [{vel: velocity, *sun}, *planets]
+)
 
 system : List(Body)
 system() -> offset_momentum(bodies())
@@ -86,7 +87,7 @@ system() -> offset_momentum(bodies())
 # The head and one other body after their mutual pull, the pair's factor
 # computed once and shared between them, as the game's programs do.
 pair : (Body, Body, F64) -> (Body, Body)
-pair(b, other, dt) ->
+pair(b, other, dt) -> (
   d = b.pos - other.pos
   d2 = d.dot(d)
   mag = dt / (d2 * d2.sqrt())
@@ -94,14 +95,16 @@ pair(b, other, dt) ->
     {vel: b.vel - d.scale(other.mass * mag), *b},
     {vel: other.vel + d.scale(b.mass * mag), *other},
   )
+)
 
 # Every velocity after every pair has pulled on each other for `dt`: the head
 # is paired with each body after it, carrying its own updates along through
 # `map_accum`, and the rest, as many as before, then kick each other.
 kick : (List(Body), F64) -> List(Body)
-kick([body, *rest], dt) ->
+kick([body, *rest], dt) -> (
   (pulled, others) = rest.map_accum(body, |b, other| pair(b, other, dt))
   [pulled, *kick(others, dt)]
+)
 kick(bodies, _) -> bodies
 
 advance : (List(Body), F64) -> List(Body)
@@ -113,15 +116,17 @@ steps(bodies, n) -> n.times(bodies, |system| advance(system, 0.01))
 # Kinetic energy of each body, less the potential energy of each pair.
 energy : List(Body) -> F64
 energy([]) -> 0.0
-energy([body, *rest]) ->
+energy([body, *rest]) -> (
   kinetic = 0.5 * body.mass * body.vel.dot(body.vel)
   potential = rest.fold(0.0, |e, other| e - body.mass * other.mass / (body.pos - other.pos).norm())
   kinetic + potential + energy(rest)
+)
 
 app : {args: List(Str)} -> Result(Str, [OutOfBounds, Malformed])
-app(input) ->
+app(input) -> (
   n = Nat.from_str(input.args.get(1)?)?
   Ok("${energy(system()).to_fixed(9)}\n${energy(steps(system(), n)).to_fixed(9)}")
+)
 
 expect energy(system()).to_fixed(9) == "-0.169075164"
 expect energy(steps(system(), 1)).to_fixed(9) == "-0.169074954"

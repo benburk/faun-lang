@@ -156,9 +156,10 @@ expect greeting("hello") == 1 & greeting("hi") == 2 & greeting("hey") == 0
 
 # A binding takes a pattern, and so does a lambda's parameter.
 pair_sum : ((Nat, Nat)) -> Nat
-pair_sum(pair) ->
+pair_sum(pair) -> (
   (a, b) = pair
   a + b
+)
 
 expect pair_sum((3, 4)) == 7
 expect [(1, 2), (3, 4)].map(|(a, b)| a * b) == [2, 12]

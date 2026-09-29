@@ -12,7 +12,8 @@
 //! a tail its scheme quantifies; skolemized for the body, that tail is rigid,
 //! so the body answers only the written tags and callers may widen them. A
 //! closed row answered where such a row is wanted is subsumed, and the
-//! expression is recorded as widened. Clauses taking a row apart without a
+//! expression is recorded as widened; what an answer or a `?` waits on is
+//! settled first, so a row a call or a field hands back meets it as its own. Clauses taking a row apart without a
 //! catch-all close it. A word a declaration claims waits, as a method does,
 //! for its position's type to choose between the tag and the constructor.
 //!
@@ -875,6 +876,20 @@ impl Infer {
                         )?;
                         Ok(true)
                     }
+                    // A closed row holding tags the signature's lacks is
+                    // refused for those tags, which is the whole of it.
+                    Err(_)
+                        if a_tail.is_none() && matches!(b_tail.as_deref(), Some(Ty::Rigid(_))) =>
+                    {
+                        Err(Mismatch::NotAmong {
+                            tags: a
+                                .iter()
+                                .filter(|(name, _)| !b.iter().any(|(found, _)| found == name))
+                                .map(|(name, _)| *name)
+                                .collect(),
+                            row: expected.clone(),
+                        })
+                    }
                     Err(mismatch) => Err(mismatch),
                 }
             }
@@ -1136,6 +1151,10 @@ struct Checker<'a> {
     /// which is what a `?` in it answers early with. A guard answers
     /// nothing.
     answers: Vec<Option<Ty>>,
+    /// Where the pending lists stood when the clause being checked began:
+    /// what an answer, or a `?`, settles before its row meets the
+    /// signature's.
+    clause_marks: Option<Marks>,
     expression_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
     clause_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty, Vec<Bound>)>,
     widenings: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
@@ -1164,6 +1183,7 @@ impl<'a> Checker<'a> {
             pending_bare: Vec::new(),
             pending_closings: Vec::new(),
             answers: Vec::new(),
+            clause_marks: None,
             bounds: HashMap::new(),
             variable_names: HashMap::new(),
             partial: HashMap::new(),
@@ -1925,6 +1945,20 @@ impl<'a> Checker<'a> {
         clause: &h::Clause,
         function: &Ty,
     ) -> Result<(), CheckError> {
+        let marks = self.marks();
+        let outer = self.clause_marks.replace(marks);
+        let checked = self.check_clause_within(module, clause, function, marks);
+        self.clause_marks = outer;
+        checked
+    }
+
+    fn check_clause_within(
+        &mut self,
+        module: ModuleId,
+        clause: &h::Clause,
+        function: &Ty,
+        marks: Marks,
+    ) -> Result<(), CheckError> {
         self.clause_types.push((
             module,
             clause.span,
@@ -1958,21 +1992,20 @@ impl<'a> Checker<'a> {
             self.unify_at(module, guard.span, &actual, &self.bool_type())?;
         }
         self.answers.push(Some((*result).clone()));
-        let checked = self.clause_body(module, clause, &mut locals, &result);
+        let checked = self.clause_body(module, clause, &mut locals, (&result, marks));
         self.answers.pop();
         checked
     }
 
-    /// A clause's bindings and answer, with what it answers on top of
-    /// [`Self::answers`].
-    fn clause_body(
+    /// A body's bindings, each value checked and its pattern bound before
+    /// the next, and what each waits on settled at its line.
+    fn bindings(
         &mut self,
         module: ModuleId,
-        clause: &h::Clause,
+        bindings: &[h::Binding],
         locals: &mut Vec<Option<Scheme>>,
-        result: &Ty,
     ) -> Result<(), CheckError> {
-        for binding in &clause.body.bindings {
+        for binding in bindings {
             let marks = self.marks();
             let value = self.expr(module, &binding.value, locals)?;
             let mut bound = Vec::new();
@@ -2006,7 +2039,25 @@ impl<'a> Checker<'a> {
                 });
             }
         }
+        Ok(())
+    }
+
+    /// A clause's bindings and answer, with what it answers on top of
+    /// [`Self::answers`], and the marks of what the clause left pending.
+    fn clause_body(
+        &mut self,
+        module: ModuleId,
+        clause: &h::Clause,
+        locals: &mut Vec<Option<Scheme>>,
+        (result, marks): (&Ty, Marks),
+    ) -> Result<(), CheckError> {
+        self.bindings(module, &clause.body.bindings, locals)?;
         let actual = self.expr(module, &clause.body.result, locals)?;
+        // What the answer's type waits on -- a method's receiver, a
+        // constructor's pattern, a field read -- is settled first, so a
+        // closed row it holds meets the signature's as that row, and is
+        // widened, rather than the signature's row being taken for it.
+        self.settle(marks)?;
         let span = clause.body.result.span;
         let widened = self
             .infer
@@ -2206,6 +2257,10 @@ impl<'a> Checker<'a> {
         locals: &mut Vec<Option<Scheme>>,
     ) -> Result<Ty, CheckError> {
         match &expression.kind {
+            h::ExprKind::Block(body) => {
+                self.bindings(module, &body.bindings, locals)?;
+                self.expr(module, &body.result, locals)
+            }
             h::ExprKind::Local(local) => {
                 let Some(scheme) = locals[local.index()].as_ref() else {
                     return Err(failure(
@@ -2795,10 +2850,14 @@ impl<'a> Checker<'a> {
         value: &h::Expr,
         locals: &mut Vec<Option<Scheme>>,
     ) -> Result<Ty, CheckError> {
+        let marks = self.clause_marks.unwrap_or_else(|| self.marks());
         let taken = self.expr(module, value, locals)?;
         let (ok, error) = (self.infer.fresh(), self.infer.fresh());
         let result = Ty::Named(self.prelude.result, Rc::from([ok.clone(), error.clone()]));
         self.unify_at(module, value.span, &taken, &result)?;
+        // As for a clause's answer: the producer's own row, once what it
+        // waits on is settled, is what joins the answer's.
+        self.settle(marks)?;
         let Some(Some(answer)) = self.answers.last().cloned() else {
             return Err(failure(
                 module,
@@ -3680,6 +3739,9 @@ impl<'a> Checker<'a> {
                     {
                         next.push(index);
                     }
+                    // Said on the final pass, when what the call answers is
+                    // known too, so the bound the refusal suggests is whole.
+                    [] if !final_pass => next.push(index),
                     [] => {
                         let name = self.symbols.text(pending.name);
                         let refused = match self.infer.resolve(&pending.receiver) {
@@ -4378,6 +4440,14 @@ fn validate_effect_expr(
         h::ExprKind::Try(value) => {
             validate_effect_expr(module, value, owner_effectful, stands_alone, symbols)
         }
+        // A block's lines stand on their own, and its answer where the
+        // block does.
+        h::ExprKind::Block(body) => {
+            for binding in &body.bindings {
+                validate_effect_expr(module, &binding.value, owner_effectful, true, symbols)?;
+            }
+            validate_effect_expr(module, &body.result, owner_effectful, stands_alone, symbols)
+        }
         h::ExprKind::Call(head, arguments) => {
             let effect = match &head.kind {
                 h::ExprKind::Global(name) if symbols.text(*name).ends_with('!') => Some(*name),
@@ -4634,6 +4704,12 @@ fn clause_globals(clause: &h::Clause, symbols: &Symbols, output: &mut HashSet<Sy
 
 fn expr_globals(expression: &h::Expr, symbols: &Symbols, output: &mut HashSet<Symbol>) {
     match &expression.kind {
+        h::ExprKind::Block(body) => {
+            for binding in &body.bindings {
+                expr_globals(&binding.value, symbols, output);
+            }
+            expr_globals(&body.result, symbols, output);
+        }
         h::ExprKind::Global(global) => {
             output.insert(*global);
         }
@@ -4966,6 +5042,10 @@ mod tests {
                 | ExprKind::Project(value, _)
                 | ExprKind::Widen(value)
                 | ExprKind::Try(value) => waiting.push(value),
+                ExprKind::Block(body) => {
+                    waiting.extend(body.bindings.iter().map(|b| &b.value));
+                    waiting.push(&body.result);
+                }
                 ExprKind::Local(_)
                 | ExprKind::Function(_)
                 | ExprKind::Constructor(_)
@@ -5194,8 +5274,8 @@ mod tests {
     #[test]
     fn a_function_is_not_bound() {
         let fixture = Fixture::new();
-        let (prelude, resolved) =
-            fixture.load("id : a -> a\nid(x) -> x\nlocal : Int\nlocal() ->\n  f = id\n  f(-1)\n");
+        let (prelude, resolved) = fixture
+            .load("id : a -> a\nid(x) -> x\nlocal : Int\nlocal() -> (\n  f = id\n  f(-1)\n)\n");
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(
             failure.message.contains("passed straight into a call"),

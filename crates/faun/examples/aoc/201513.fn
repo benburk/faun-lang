@@ -56,9 +56,10 @@ regard : List(Rule) -> Map((Str, Str), Int)
 regard(rules) -> rules.fold(Map.empty(), add_regard)
 
 add_regard : (Map((Str, Str), Int), Rule) -> Map((Str, Str), Int)
-add_regard(table, Rule(subject, neighbour, feeling)) ->
+add_regard(table, Rule(subject, neighbour, feeling)) -> (
   worth = table.get((subject, neighbour)).ok_or(0) + feeling
   table.insert((subject, neighbour), worth).insert((neighbour, subject), worth)
+)
 
 # Summing the two sides into one number costs the table its memory of which
 # lines it was built from: a missing line leaves not a hole but a half-filled
@@ -66,10 +67,11 @@ add_regard(table, Rule(subject, neighbour, feeling)) ->
 # checked for completeness first — every guest speaking of every other —
 # and the seating loop below can then be arithmetic with no failure in it.
 unspoken : List(Rule) -> List((Str, Str))
-unspoken(rules) ->
+unspoken(rules) -> (
   stated = rules.fold(Set.empty(), add_stated)
   everyone = guests(rules)
   everyone.cross(everyone).filter(|pair| unheard(pair, stated))
+)
 
 # A pair still owed a rule: two different guests, and no line saying how the
 # first feels about the second.
@@ -101,17 +103,19 @@ seatings([host, *others]) ->
 # free to sit down in; no seating is empty, so its `Empty` cannot arise, and
 # the 0 it falls to there means nothing either.
 score : (List(Str), Map((Str, Str), Int)) -> (Int, Int)
-score(seating, table) ->
+score(seating, table) -> (
   pairs = neighbours(seating).map(|pair| table.get(pair).ok_or(0))
   (pairs.sum(), pairs.min().ok_or(0))
+)
 
 # Every seating scored once. Both parts are one aggregation over this list:
 # the ring whole, and the ring cut at its weakest pair.
 rings : Str -> Result(List((Int, Int)), _)
-rings(input) ->
+rings(input) -> (
   rules = parse_rules(input)?
   table = opinions(rules)?
   Ok(seatings(guests(rules)).map(|seating| score(seating, table)))
+)
 
 strongest : List(Int) -> Result(Int, [Empty])
 strongest(totals) -> totals.max()
@@ -129,12 +133,13 @@ part2 : Str -> Result(Int, _)
 part2(input) -> strongest(rings(input)?.map(net_score))
 
 app : {stdin: List(U8), *} -> Result({part1: Int, part2: Int}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   scored = rings(stdin)?
   seated = strongest(scored.map(|(total, _)| total))?
   yourself = strongest(scored.map(net_score))?
   Ok({part1: seated, part2: yourself})
+)
 
 example : Str
 example() -> Str.join(["Alice would gain 54 happiness units by sitting next to Bob.",

@@ -2,11 +2,11 @@
 // ends, and whether a name's `!` is its own.
 //
 // The grammar allows a line end only after what a line can end with, and
-// never inside a bracket but a method block's `.( )`. What is left is the
-// next line's first token: a line break ends the line unless that token
-// carries it on, as `.`, an infix operator, `where` or `if` does. A `-`
-// carries it on only where space follows it; held to what follows, it
-// negates.
+// never inside a bracket but a method block's `.( )` and a block's `( )`.
+// What is left is the next line's first token: a line break ends the line
+// unless that token carries it on, as `.`, an infix operator, `where`, `if`
+// or a closing bracket does. A `-` carries it on only where space follows
+// it; held to what follows, it negates.
 //
 // A name's trailing `!` makes it an effect's, unless it begins `!=`.
 //
@@ -54,6 +54,9 @@ static bool next_is_word(TSLexer *lexer, const char *word) {
 // Whether a line beginning here goes on with the line before.
 static bool continues_line(TSLexer *lexer) {
   switch (lexer->lookahead) {
+    case ')':
+    case ']':
+    case '}':
     case '.':
     case '?':
     case ':':

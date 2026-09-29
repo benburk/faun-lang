@@ -8,6 +8,10 @@
         "named": true
       },
       {
+        "type": "block",
+        "named": true
+      },
+      {
         "type": "call_expression",
         "named": true
       },
@@ -249,6 +253,36 @@
     }
   },
   {
+    "type": "block",
+    "named": true,
+    "fields": {
+      "answer": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "_expression",
+          "named": true
+        },
+        {
+          "type": "binding",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "call_expression",
     "named": true,
     "fields": {
@@ -266,6 +300,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "block",
+            "named": true
+          },
           {
             "type": "call_expression",
             "named": true
@@ -367,10 +405,6 @@
           {
             "type": "_expression",
             "named": true
-          },
-          {
-            "type": "binding",
-            "named": true
           }
         ]
       },
@@ -451,10 +485,6 @@
       "types": [
         {
           "type": "_expression",
-          "named": true
-        },
-        {
-          "type": "binding",
           "named": true
         }
       ]
@@ -569,6 +599,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "block",
+            "named": true
+          },
           {
             "type": "call_expression",
             "named": true
@@ -854,6 +888,10 @@
       "required": true,
       "types": [
         {
+          "type": "block",
+          "named": true
+        },
+        {
           "type": "call_expression",
           "named": true
         },
@@ -987,14 +1025,6 @@
       "multiple": true,
       "required": false,
       "types": [
-        {
-          "type": "_expression",
-          "named": true
-        },
-        {
-          "type": "binding",
-          "named": true
-        },
         {
           "type": "clause",
           "named": true
@@ -1205,14 +1235,6 @@
       "required": false,
       "types": [
         {
-          "type": "_expression",
-          "named": true
-        },
-        {
-          "type": "binding",
-          "named": true
-        },
-        {
           "type": "clause",
           "named": true
         },
@@ -1274,6 +1296,10 @@
       "multiple": false,
       "required": true,
       "types": [
+        {
+          "type": "block",
+          "named": true
+        },
         {
           "type": "call_expression",
           "named": true
@@ -1381,6 +1407,16 @@
           }
         ]
       },
+      "parameters": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_parameters",
+            "named": true
+          }
+        ]
+      },
       "type": {
         "multiple": false,
         "required": true,
@@ -1413,6 +1449,21 @@
     }
   },
   {
+    "type": "type_parameters",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "type_variable",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "unary_expression",
     "named": true,
     "fields": {
@@ -1420,6 +1471,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "block",
+            "named": true
+          },
           {
             "type": "call_expression",
             "named": true

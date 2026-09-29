@@ -1,6 +1,7 @@
 import std.host {Host}
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   [1, 2].len()
   host.exit!(0)
+)

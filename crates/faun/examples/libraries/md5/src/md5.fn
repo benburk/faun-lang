@@ -12,44 +12,50 @@ State = (U32, U32, U32, U32)
 # them as the usual 32 hex digits. MD5 is broken for security; use it only
 # as a checksum.
 md5_hash : List(U8) -> List(U8)
-md5_hash(message) ->
+md5_hash(message) -> (
   initial = (0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476)
   (a, b, c, d) = padded(message).blocks(64).complete.fold(initial, compress)
   [a, b, c, d].flat_map(word_bytes)
+)
 
 word_bytes : U32 -> List(U8)
-word_bytes(word) ->
+word_bytes(word) -> (
   (a, b, c, d) = word.le_bytes()
   [a, b, c, d]
+)
 
 # A one bit, zeroes, and the length in bits, to a whole number of blocks.
 padded : List(U8) -> List(U8)
-padded(message) ->
+padded(message) -> (
   length = message.len()
   zeroes = (119 - length % 64) % 64
   message.append(0x80)
     .extend(List.repeat(0, zeroes))
     .extend(length_bytes(U64.of_nat(length * 8)))
+)
 
 length_bytes : U64 -> List(U8)
-length_bytes(bits) ->
+length_bytes(bits) -> (
   (a, b, c, d, e, f, g, h) = bits.le_bytes()
   [a, b, c, d, e, f, g, h]
+)
 
 compress : (State, List(U8)) -> State
-compress((a, b, c, d), block) ->
+compress((a, b, c, d), block) -> (
   words = words_le(block)
   (a2, b2, c2, d2) = steps().enumerate().fold((a, b, c, d), |state, step| round(words, state, step))
   (a + a2, b + b2, c + c2, d + d2)
+)
 
 words_le : List(U8) -> List(U32)
 words_le([a, b, c, d, *rest]) -> [U32.of_le_bytes(a, b, c, d), *words_le(rest)]
 words_le(_) -> []
 
 round : (List(U32), State, (Nat, (U32, Nat))) -> State
-round(words, (a, b, c, d), (i, (k, s))) ->
+round(words, (a, b, c, d), (i, (k, s))) -> (
   (f, g) = mix(b, c, d, i)
   (d, b + (a + f + k + words.get_or(g, 0)).rotate_left(s), b, c)
+)
 
 # Each round's function of b, c and d, and which word of the block it adds.
 mix : (U32, U32, U32, Nat) -> (U32, Nat)

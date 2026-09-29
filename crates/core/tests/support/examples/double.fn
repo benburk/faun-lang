@@ -3,9 +3,10 @@
 import std.host {Host}
 
 double : Nat -> Nat
-double(n) ->
+double(n) -> (
   m = n + n
   m
+)
 
 main! : Host -> []
 main!(host) -> host.exit!(U8.of_nat(double(2)))

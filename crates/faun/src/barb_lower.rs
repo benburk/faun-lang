@@ -228,7 +228,10 @@ impl<'a> Lowerer<'a> {
                 answer: yes,
                 ..
             } => {
-                self.collect_expr(condition, answer)?;
+                for binding in &condition.bindings {
+                    self.collect_expr(&binding.value, answer)?;
+                }
+                self.collect_expr(&condition.result, answer)?;
                 self.collect_decision(otherwise, answer)?;
                 self.collect_decision(yes, answer)?;
             }
@@ -246,6 +249,7 @@ impl<'a> Lowerer<'a> {
     fn collect_expr(&mut self, expression: &Expr, answer: &Type) -> Result<(), LowerError> {
         self.collect_type(&expression.ty)?;
         match &expression.kind {
+            ExprKind::Block(_) => unreachable!("pattern compiling takes a block's bindings out"),
             ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
             ExprKind::Construct(_, fields) | ExprKind::DirectCall(_, fields) => {
                 for field in fields {
@@ -775,7 +779,7 @@ fn emit_decision(
                 .iter()
                 .map(|(local, value)| (*local, values[value]))
                 .collect();
-            let condition = emit_expr(context, builder, condition, &locals);
+            let condition = emit_body(context, builder, condition, locals);
             let bool_ty = Type::Named(context.prelude.bool_, Vec::new());
             let bool_id = context.type_ids[&bool_ty];
             let false_id = context.constructor_ids[&(*false_constructor, bool_ty.clone())];
@@ -945,6 +949,7 @@ fn emit_expr(
     locals: &HashMap<LocalId, Atom>,
 ) -> Atom {
     match &expression.kind {
+        ExprKind::Block(_) => unreachable!("pattern compiling takes a block's bindings out"),
         ExprKind::Local(local) => locals[local],
         ExprKind::Natural(magnitude) => {
             let nat = context.type_ids[&Type::Named(context.prelude.nat, Vec::new())];

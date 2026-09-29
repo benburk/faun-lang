@@ -42,10 +42,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
          twice(n) -> n * 2
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            doubled = [1, 2].map(twice).fold(0, |s, x| s + x)
            wrapped = [3].map(Ok).map(|r| r.ok_or(0)).fold(0, |s, x| s + x)
-           host.exit!(U8.of_nat(doubled + wrapped))",
+           host.exit!(U8.of_nat(doubled + wrapped))
+         )",
         9,
     ),
     (
@@ -70,16 +71,41 @@ const RUNNING: &[(&str, &str, u32)] = &[
         12,
     ),
     (
+        "an alias with parameters is its type at each use's arguments",
+        "Edge(e) = {target: Nat, weight: e}
+         Pair(a, b) = (a, b)
+         Weighted(e) = List(Edge(e))
+
+         heaviest : Weighted(Nat) -> Nat
+         heaviest(edges) -> edges.map(|edge| edge.weight).max().ok_or(0)
+
+         targets : Weighted(e) -> List(Nat)
+         targets(edges) -> edges.map(|edge| edge.target)
+
+         swap : Pair(a, b) -> Pair(b, a)
+         swap((x, y)) -> (y, x)
+
+         main! : Host -> []
+         main!(host) -> (
+           edges = [{target: 4, weight: 30}, {target: 2, weight: 7}]
+           (named, _) = swap((1, \"a\"))
+           labelled = [{target: 3, weight: \"x\"}]
+           host.exit!(U8.of_nat(heaviest(edges) + targets(labelled).sum() + named.len()))
+         )",
+        34,
+    ),
+    (
         "the ordering operators are views of one cmp",
         "bit : Bool -> Nat
          bit(b) -> b.to_nat()
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            n = host.args.len() + 2
            a = bit(n < 5) + bit(n <= 3) * 2 + bit(n > 3) * 4 + bit(n >= 3) * 8
            b = bit(-2 < 1) * 16 + bit(-3 < -2) * 32 + bit(False < True) * 64 + bit(2 > 7) * 128
-           host.exit!(U8.of_nat(a + b))",
+           host.exit!(U8.of_nat(a + b))
+         )",
         123,
     ),
     (
@@ -108,10 +134,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
          dog(n) -> Ok(n)
 
          foo : Nat -> Result(Nat, [Blah, NotFound, SomethingElse])
-         foo(n) ->
+         foo(n) -> (
            x = cat(n)?
            y = dog(n + 1)?
            Ok(x + y)
+         )
 
          inline(n) -> Ok(cat(n)? + dog(n)? * 2)
 
@@ -132,9 +159,10 @@ const RUNNING: &[(&str, &str, u32)] = &[
          half(_) -> Err(Odd)
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            halves = [2, 4].map(|n| Ok(half(n)? + 1))
-           host.exit!(U8.of_nat(halves.map(|r| r.ok_or(0)).fold(0, |s, x| s + x)))",
+           host.exit!(U8.of_nat(halves.map(|r| r.ok_or(0)).fold(0, |s, x| s + x)))
+         )",
         5,
     ),
     (
@@ -157,13 +185,14 @@ const RUNNING: &[(&str, &str, u32)] = &[
          subtract((Succ(m), Succ(n))) -> subtract((m, n))
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            (flag, n) = swap((3, True))
            user = {name: 7, age: 30, city: 2}
            bumped = older(user)
            {age, *} = bumped
            pairs = [(1, 2), (3, 4)].map(|(a, b)| a * b).fold(0, |s, x| s + x)
-           host.exit!(U8.of_nat(n + flag.to_nat() + get_name(user) + age + age_of(user) + first((5, 6)) + sub(9, 4) + pairs))",
+           host.exit!(U8.of_nat(n + flag.to_nat() + get_name(user) + age + age_of(user) + first((5, 6)) + sub(9, 4) + pairs))
+         )",
         96,
     ),
     (
@@ -181,10 +210,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
          paired(_) -> 0
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            n = host.args.len()
            two = doubled([n, n]).select(1, 0) + doubled([n, n + 1]).select(10, 0)
-           host.exit!(U8.of_nat((two + same(n, n) + same(n, 2) + paired([(\"a\", n), (\"a\", 2)])) % 64))",
+           host.exit!(U8.of_nat((two + same(n, n) + same(n, 2) + paired([(\"a\", n), (\"a\", 2)])) % 64))
+         )",
         1 + 4 + 3,
     ),
     (
@@ -206,9 +236,10 @@ const RUNNING: &[(&str, &str, u32)] = &[
          probe(n, lo, mid, _) -> bisect(n, lo, mid)
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            n = host.args.len()
-           host.exit!(U8.of_nat((upto(n, 5) + countdown(n + 2, 0) + bisect(n + 15, 0, n + 16)) % 64))",
+           host.exit!(U8.of_nat((upto(n, 5) + countdown(n + 2, 0) + bisect(n + 15, 0, n + 16)) % 64))
+         )",
         5 + 3 + 4,
     ),
     (
@@ -228,23 +259,26 @@ const RUNNING: &[(&str, &str, u32)] = &[
          settle(xs, _, _, _) -> xs
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            heap = sift([host.args.len(), 9, 4, 7, 8], 0, 5)
-           host.exit!(U8.of_nat((at(heap, 0) * 10 + at(heap, 1)) % 128))",
+           host.exit!(U8.of_nat((at(heap, 0) * 10 + at(heap, 1)) % 128))
+         )",
         98,
     ),
     (
         "a walk goes round on a list a call answers no longer than a part",
         "pull : (Nat, List(Nat)) -> (Nat, List(Nat))
          pull(held, []) -> (held, [])
-         pull(held, [x, *rest]) ->
+         pull(held, [x, *rest]) -> (
            (last, others) = pull(held + x, rest)
            (last, [x + held, *others])
+         )
 
          walk : List(Nat) -> List(Nat)
-         walk([x, *rest]) ->
+         walk([x, *rest]) -> (
            (pulled, others) = pull(x, rest)
            [pulled, *walk(others)]
+         )
          walk(xs) -> xs
 
          shifted : List(Nat) -> Nat
@@ -252,9 +286,10 @@ const RUNNING: &[(&str, &str, u32)] = &[
          shifted([]) -> 0
 
          carried : List(Nat) -> Nat
-         carried([x, *rest]) ->
+         carried([x, *rest]) -> (
            (_, moved) = rest.map_accum(x, |s, y| (s + y, s))
            x + carried(moved)
+         )
          carried([]) -> 0
 
          kept : List(Nat) -> Nat
@@ -262,10 +297,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
          kept([]) -> 0
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            xs = [host.args.len(), 2, 3]
            walked = walk(xs).fold(0, |sum, x| sum + x)
-           host.exit!(U8.of_nat(walked + shifted(xs) + carried(xs) + kept(xs)))",
+           host.exit!(U8.of_nat(walked + shifted(xs) + carried(xs) + kept(xs)))
+         )",
         24 + 11 + 3 + 4,
     ),
     (
@@ -279,9 +315,10 @@ const RUNNING: &[(&str, &str, u32)] = &[
          sort : List(Nat) -> List(Nat)
          sort([]) -> []
          sort([x]) -> [x]
-         sort(values) ->
+         sort(values) -> (
            (front, back) = values.split_at(values.len() / 2)
            merge(sort(front), sort(back))
+         )
 
          tails : List(Nat) -> Nat
          tails([]) -> 0
@@ -296,10 +333,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
          halvings(n) -> 1 + halvings(n / 2)
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            xs = [5, host.args.len(), 4, 2, 3]
            sorted = sort(xs)
-           host.exit!(U8.of_nat(sorted.get_or(0, 9) * 10 + tails(xs) + fronts(xs) + halvings(sorted.len())))",
+           host.exit!(U8.of_nat(sorted.get_or(0, 9) * 10 + tails(xs) + fronts(xs) + halvings(sorted.len())))
+         )",
         10 + 5 + 5 + 3,
     ),
     (
@@ -328,9 +366,10 @@ const RUNNING: &[(&str, &str, u32)] = &[
          halved(n, low, middle, _) -> narrow(n, low, middle)
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            n = host.args.len()
-           host.exit!(U8.of_nat(digits(12345 * n, 0) + below(n, 1000, 1) + hundreds(n, 1000, 1) + narrow(50 * n, 0, 64)))",
+           host.exit!(U8.of_nat(digits(12345 * n, 0) + below(n, 1000, 1) + hundreds(n, 1000, 1) + narrow(50 * n, 0, 64)))
+         )",
         5 + 3 + 2 + 8,
     ),
     (
@@ -350,9 +389,10 @@ const RUNNING: &[(&str, &str, u32)] = &[
          list : (List(Nat), Nat) -> Result((Nat, List(Nat)), [Bad])
          list([], _) -> Err(Bad)
          list([1, *rest], total) -> Ok((total, rest))
-         list(bytes, total) ->
+         list(bytes, total) -> (
            (x, after) = value(bytes)?
            list(after, total + x)
+         )
 
          skipped : List(Nat) -> Nat
          skipped([]) -> 0
@@ -364,10 +404,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
          read(NotFound) -> 0
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            n = host.args.len()
            (total, _) = value([0, 2, n, 3, 1]).ok_or((0, []))
-           host.exit!(U8.of_nat((total + skipped([n, 5, 7, 7, 6, n])) % 64))",
+           host.exit!(U8.of_nat((total + skipped([n, 5, 7, 7, 6, n])) % 64))
+         )",
         2 + (1 + 2 + 1),
     ),
     (
@@ -420,11 +461,12 @@ const RUNNING: &[(&str, &str, u32)] = &[
     (
         "a binding shadows a name, and what follows reads the nearest",
         "main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            n = host.args.len()
            n = n + 1
            (n, m) = (n * 10, n)
-           host.exit!(U8.of_nat((n + m) % 64))",
+           host.exit!(U8.of_nat((n + m) % 64))
+         )",
         22,
     ),
     (
@@ -437,12 +479,13 @@ const RUNNING: &[(&str, &str, u32)] = &[
          step(n) -> (n + 1, Memo([n, n]))
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            (value, Memo(entries)) = step(host.args.len())
            Pair(left, right) = Pair(value, 10)
            Box({size, *}) = Box({size: right, name: \"b\"})
            Box(whole) = Box({size: left, name: \"bb\"})
-           host.exit!(U8.of_nat((value + entries.len() + size + whole.size + whole.name.len()) % 64))",
+           host.exit!(U8.of_nat((value + entries.len() + size + whole.size + whole.name.len()) % 64))
+         )",
         2 + 2 + 10 + 2 + 2,
     ),
     (
@@ -466,9 +509,10 @@ const RUNNING: &[(&str, &str, u32)] = &[
     (
         "a splice is its value's text",
         "main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            n = host.args.len() + 41
-           host.exit!(U8.of_nat(\"n is ${n}, big ${n > 3}, neg ${-7}!\".len() + \"${n}${n}\".len() * 10))",
+           host.exit!(U8.of_nat(\"n is ${n}, big ${n > 3}, neg ${-7}!\".len() + \"${n}${n}\".len() * 10))
+         )",
         66,
     ),
     (
@@ -485,16 +529,17 @@ const RUNNING: &[(&str, &str, u32)] = &[
         "double(x) -> x.mul(2)
 
          total : List(a) -> a where
-           a.zero : a
+           a.zero : a,
            a.add : (a, a) -> a
          total(values) -> values.fold(a.zero(), |sum, value| sum.add(value))
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            a = double(3) + double(U8.of_nat(200)).to_nat()
            b = [1, 2, 3].sum() + (-10 + [-1, -2].sum()).abs() + total([4, 5])
            c = [[1, 2], [3]].contains([3]).to_nat() + ([1, 2] == [1, 2]).to_nat() * 2
-           host.exit!(U8.of_nat(a + b + c))",
+           host.exit!(U8.of_nat(a + b + c))
+         )",
         181,
     ),
     (
@@ -526,11 +571,12 @@ const RUNNING: &[(&str, &str, u32)] = &[
          weigh(False, _) -> 0
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            same = weigh((1, \"a\") == (1, \"a\"), 1) + weigh({x: 1, y: [2, 3]} == {y: [2, 3], x: 1}, 2)
            differ = weigh((1, 2) != (1, 3), 4) + weigh({x: 1, y: [2]} == {x: 1, y: [3]}, 64)
            ordered = weigh((1, (2, \"b\")) < (1, (2, \"c\")), 8) + weigh((2, 1) > (1, 9), 32) + weigh((1, 1) < (1, 1), 128)
-           host.exit!(U8.of_nat(same + differ + ordered + weigh([(1, 2), (3, 4)].contains((3, 4)), 16)))",
+           host.exit!(U8.of_nat(same + differ + ordered + weigh([(1, 2), (3, 4)].contains((3, 4)), 16)))
+         )",
         63,
     ),
     (
@@ -544,7 +590,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
            cmp : (Slot(k), Slot(k)) -> Order where k.cmp : (k, k) -> Order
            to_str : Slot(k) -> Str where k.to_str : k -> Str
            hash_into : (Slot(k), h) -> h where
-             Hasher(h)
+             Hasher(h),
              k.hash_into : (k, h) -> h
          )
 
@@ -558,14 +604,15 @@ const RUNNING: &[(&str, &str, u32)] = &[
          bit(b) -> b.to_nat()
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            p = Point({x: 1, y: 2})
            points = bit(p == Point({y: 2, x: 1})) + bit(p != Point({x: 1, y: 3})) * 2 + bit(p.to_str() == \"{x: 1, y: 2}\") * 4
            slots = bit(filled(\"a\", 1) == filled(\"a\", 1)) * 8 + bit(filled(\"a\", 1) != removed()) * 16
            ordered = bit(filled(\"a\", 2) < filled(\"b\", 1)) * 32 + bit(removed() > filled(\"z\", 9)) * 64
            printed = bit(\"${[filled(\"a\", 1), removed()]}\" == \"[Filled(a, 1), Removed]\") * 128
            keyed = Map.empty().insert(filled(\"a\", 1), 1).insert(removed(), 2).insert(filled(\"a\", 1), 4)
-           host.exit!(U8.of_nat(points + slots + ordered + printed - keyed.len() - keyed.get(removed()).ok_or(0) + keyed.get(filled(\"a\", 1)).ok_or(0)))",
+           host.exit!(U8.of_nat(points + slots + ordered + printed - keyed.len() - keyed.get(removed()).ok_or(0) + keyed.get(filled(\"a\", 1)).ok_or(0)))
+         )",
         255 - 2 - 2 + 4,
     ),
     (
@@ -573,11 +620,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
         "import sealed {Sized}
 
          Additive(a) = where
-           a.zero : a
+           a.zero : a,
            a.add : (a, a) -> a
 
          Summable(a) = where
-           Additive(a)
+           Additive(a),
            a.to_str : a -> Str
 
          total : List(a) -> a where Summable(a), Additive(a)
@@ -609,7 +656,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          )
 
          row : r -> Nat where
-           r.fold : (r, Nat, (Nat, x) -> Nat) -> Nat
+           r.fold : (r, Nat, (Nat, x) -> Nat) -> Nat,
            x.name : x -> Str
          row(items) -> items.fold(0, |total, item| total + item.name().len())
 
@@ -620,19 +667,21 @@ const RUNNING: &[(&str, &str, u32)] = &[
     (
         "a line beginning with an infix operator goes on with the one before",
         "negated : Int -> Int
-         negated(m) ->
+         negated(m) -> (
            k = m
            -k
+         )
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            n = 2
              + 3
              * 4
            big = n > 10
              & n < 20
              & negated(-7) == 7
-           host.exit!(U8.of_nat(big.select(n, 0)))",
+           host.exit!(U8.of_nat(big.select(n, 0)))
+         )",
         14,
     ),
     (
@@ -653,11 +702,12 @@ const RUNNING: &[(&str, &str, u32)] = &[
          opens(_) -> 0
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            sizes = size(Circle(3)) + size(Square(4)) + size(Dot)
            buckets = bucket(0) + bucket(2) * 10 + bucket(7) * 100
            opened = opens([2, 9]) + opens([7, 3]) * 2 + opens([7, 4]) * 4
-           host.exit!(U8.of_nat(sizes + buckets + opened))",
+           host.exit!(U8.of_nat(sizes + buckets + opened))
+         )",
         7 + 210 + 3,
     ),
     (
@@ -677,11 +727,12 @@ const RUNNING: &[(&str, &str, u32)] = &[
          bit(b) -> b.to_nat()
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            tags = bit(kind(3) == Small) + bit(kind(30) == Big(30)) * 2 + bit(kind(30) != Big(31)) * 4
            printed = bit(\"${kind(30)} ${kind(1)}\" == \"Big(30) Small\") * 8
            results = bit(parse(\"48\") == Ok(48)) * 16 + bit(parse(\"x\") == Err(Malformed)) * 32
-           host.exit!(U8.of_nat(tags + printed + results + opens([1, 2, 9]) * 64))",
+           host.exit!(U8.of_nat(tags + printed + results + opens([1, 2, 9]) * 64))
+         )",
         63 + 3 * 64,
     ),
     (
@@ -699,11 +750,12 @@ const RUNNING: &[(&str, &str, u32)] = &[
          double(n) -> n * 2
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            counted = vowels(['a', 'b', 'e'])
            wrapped = shifted(1, double)
            nested = [[1, 2], [3]].map(|inner| inner.map(|x| x * 10).sum()).sum()
-           host.exit!(U8.of_nat(counted + wrapped * 10 + nested))",
+           host.exit!(U8.of_nat(counted + wrapped * 10 + nested))
+         )",
         2 + 70 + 60,
     ),
 ];

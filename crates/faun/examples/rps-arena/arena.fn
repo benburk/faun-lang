@@ -12,8 +12,8 @@ export {Player, Tally, Score, play, pairs, tournament}
 import throw {Throw}
 
 Player(b) = where
-  b.name : b -> Str
-  b.open : b -> (Throw, b)
+  b.name : b -> Str,
+  b.open : b -> (Throw, b),
   b.answer : (b, Throw) -> (Throw, b)
 
 # Who took a round, seen from the left side of the table.
@@ -41,40 +41,46 @@ record(tally, Draw) -> {draws: tally.draws + 1, *tally}
 
 # A seated player is its state and the throw it has just made. `seat` opens;
 # `reply` answers what the other side threw.
-seat(player) ->
+seat(player) -> (
   (throw, state) = player.open()
   {state, last: throw}
+)
 
-reply(side, seen) ->
+reply(side, seen) -> (
   (throw, state) = side.state.answer(seen)
   {state, last: throw}
+)
 
 # A table is two seated sides and the tally so far. `score` counts the round
 # both have just thrown; `round` has each side answer the other, then scores.
-score(table) ->
+score(table) -> (
   outcome = judge(table.left.last, table.right.last)
   {tally: record(table.tally, outcome), *table}
+)
 
-round(table) ->
+round(table) -> (
   left = reply(table.left, table.right.last)
   right = reply(table.right, table.left.last)
   score({left, right, tally: table.tally})
+)
 
 # One match of `rounds` rounds: both players open, that round is scored, and
 # the table is played `rounds - 1` more times.
 play : (a, b, Nat) -> Tally where Player(a), Player(b)
 play(_, _, 0) -> empty()
-play(a, b, rounds) ->
+play(a, b, rounds) -> (
   opening = score({left: seat(a), right: seat(b), tally: empty()})
   last = (rounds - 1).times(opening, round)
   last.tally
+)
 
 # Every unordered pairing, each once: the field of a round robin.
 pairs : List(a) -> List((a, a))
 pairs([]) -> []
-pairs([first, *rest]) ->
+pairs([first, *rest]) -> (
   with_first = rest.map(|other| (first, other))
   with_first.extend(pairs(rest))
+)
 
 # One bot's line in the standings.
 Score = {name: Str, wins: Nat, draws: Nat, losses: Nat}
@@ -83,21 +89,23 @@ Score = {name: Str, wins: Nat, draws: Nat, losses: Nat}
 # result. Each bot is keyed by its place in the lineup, so two bots may share
 # a name, and the standings come back in lineup order.
 tournament : (List(b), Nat) -> List(Score) where Player(b)
-tournament(bots, rounds) ->
+tournament(bots, rounds) -> (
   seats = bots.enumerate()
   lines = seats.map(|(place, bot)| (place, blank(bot.name())))
   fresh = Map.of_list(lines)
   standings = pairs(seats).fold(fresh, |standings, ((left, a), (right, b))|
     settle(standings, left, right, play(a, b, rounds)))
   standings.values()
+)
 
 blank : Str -> Score
 blank(name) -> {name, wins: 0, draws: 0, losses: 0}
 
-settle(standings, left, right, tally) ->
+settle(standings, left, right, tally) -> (
   flipped = flip(tally)
   settled = standings.update(left, |score| credit(score, tally))
   settled.update(right, |score| credit(score, flipped))
+)
 
 # A bot's line with one match added, the tally read from that bot's side.
 credit : (Score, Tally) -> Score

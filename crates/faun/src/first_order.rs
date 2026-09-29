@@ -83,4 +83,8 @@ pub(crate) enum ExprKind {
     Widen(Box<Expr>),
     /// `value?`; see [`crate::specialize::ExprKind::Try`].
     Try(Box<Expr>),
+    /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
+    /// Pattern compiling takes its bindings out ahead of the expression it
+    /// stands in.
+    Block(Box<Body>),
 }

@@ -13,11 +13,12 @@ is_vowel : U8 -> Bool
 is_vowel(byte) -> ['a', 'e', 'i', 'o', 'u'].contains(byte)
 
 is_nice : Str -> Bool
-is_nice(text) ->
+is_nice(text) -> (
   bytes = text.to_utf8()
   has_three_vowels = bytes.count(is_vowel) >= 3
   has_three_vowels & bytes.windows(2).any(doubled)
     & !bytes.windows(2).any(forbidden)
+)
 
 part1 : Str -> Nat
 part1(input) -> input.trim().lines().count(is_nice)
@@ -27,20 +28,22 @@ sandwiched([outer, _, outer]) -> True
 sandwiched(_) -> False
 
 is_nice_v2 : Str -> Bool
-is_nice_v2(text) ->
+is_nice_v2(text) -> (
   bytes = text.to_utf8()
   pairs = bytes.windows(2)
   # The pair one position later overlaps; pairs from `index + 2` onward do not.
   has_repeated_pair = pairs.enumerate().any(|(index, pair)| pairs.drop(index + 2).contains(pair))
   has_repeated_pair & bytes.windows(3).any(sandwiched)
+)
 
 part2 : Str -> Nat
 part2(input) -> input.trim().lines().count(is_nice_v2)
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   Ok({part1: part1(stdin), part2: part2(stdin)})
+)
 
 expect is_nice("ugknbfddgicrmopn")
 expect is_nice("aaa")

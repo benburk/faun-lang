@@ -45,11 +45,12 @@ fn streams_answer_what_they_moved_or_what_they_met() {
         "import std.host {Host, IoError}
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            read = host.stdin.read_to_str!()
            text = read.ok_or(\"unreadable\")
            wrote = host.stdout.write_all!(text.to_utf8())
            host.exit!(U8.of_nat(status(wrote)))
+         )
 
          status : Result(Nat, IoError) -> Nat
          status(Ok(n)) -> n % 100
@@ -124,17 +125,19 @@ fn an_effect_on_its_own_line_goes_on_to_the_next() {
     let package = support::Package::new(
         "statements",
         "main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            host.println!(\"Hello, world!\")
            name = \"Faun\"
            host.print!(\"Hi, \")
            greet!(host, name)
            host.exit!(3)
+         )
 
          greet! : (Host, Str) -> {}
-         greet!(host, name) ->
+         greet!(host, name) -> (
            host.println!(name)
-           {}",
+           {}
+         )",
     );
     assert_eq!(
         support::run_file(&package.entry(), b""),
@@ -187,33 +190,37 @@ fn argument_runners_hand_the_program_its_arguments() {
     );
 }
 
+/// `package` run with `args`, `input` on its standard input: how it exits,
+/// and what it writes.
+fn run(package: &support::Package, args: &[&str], input: &str) -> (Option<i32>, String) {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .arg("run")
+        .arg(package.entry())
+        .arg("--")
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), input.as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
+    (
+        output.status.code(),
+        String::from_utf8(output.stdout).unwrap(),
+    )
+}
+
 /// The standard-input runner reads the input to its end and hands it to the
 /// program beside the arguments.
 #[test]
 fn the_stdin_runner_hands_the_program_arguments_and_input() {
-    let run = |package: &support::Package, args: &[&str], input: &str| {
-        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
-            .arg("run")
-            .arg(package.entry())
-            .arg("--")
-            .args(args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        std::io::Write::write_all(&mut child.stdin.take().unwrap(), input.as_bytes()).unwrap();
-        let output = child.wait_with_output().unwrap();
-        (
-            output.status.code(),
-            String::from_utf8(output.stdout).unwrap(),
-        )
-    };
     let both = support::Package::new(
         "run-input",
         "both : {args: List(Str), stdin: List(U8)} -> Str
-         both({args, stdin}) ->
+         both({args, stdin}) -> (
            text = Str.from_utf8(stdin).ok_or(\"\")
            \"${args.len()} ${text}\"
+         )
 
          main!(host) -> host.run_stdin!(both)",
     );
@@ -221,10 +228,11 @@ fn the_stdin_runner_hands_the_program_arguments_and_input() {
     let named = support::Package::new(
         "run-result-input",
         "named : {args: List(Str), stdin: List(U8)} -> Result(Str, [OutOfBounds])
-         named({args, stdin}) ->
+         named({args, stdin}) -> (
            name = args.get(1)?
            text = Str.from_utf8(stdin).ok_or(\"\")
            Ok(\"${name}: ${text}\")
+         )
 
          main!(host) -> host.run_stdin!(named)",
     );
@@ -275,7 +283,7 @@ fn the_ported_programs_and_libraries_hold() {
 fn the_syntax_examples_hold() {
     let (failed, count) = support::test_file(&example("syntax/main.fn"));
     assert_eq!(failed, Vec::<String>::new());
-    assert_eq!(count, 99);
+    assert_eq!(count, 103);
 }
 
 /// The n-body benchmark's energies, after nought, one and ten steps, are
@@ -357,34 +365,39 @@ fn files_answer_what_opening_one_met() {
         "import std.host {Files, File, IoError, Mode.*}
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            status = met!(host.files)
            host.exit!(U8.of_nat(status))
+         )
 
          met! : Files -> Nat
-         met!(files) ->
+         met!(files) -> (
            missing = files.open!(\"missing.txt\", Read)
            again = files.open!(\"here.txt\", CreateNew)
            above = files.open!(\"../above.txt\", Read)
            kept = files.open!(\"here.txt\", Append)
            said!(missing, again, above, kept)
+         )
 
          said! : (Result(File, IoError), Result(File, IoError), Result(File, IoError), Result(File, IoError)) -> Nat
-         said!(Err(NotFound), Err(AlreadyExists), Err(Escapes), Ok(file)) ->
+         said!(Err(NotFound), Err(AlreadyExists), Err(Escapes), Ok(file)) -> (
            wrote = file.write_all!(\"!\".to_utf8())
            closed = file.close!()
            0
-         said!(missing, again, above, kept) ->
+         )
+         said!(missing, again, above, kept) -> (
            a = close_any!(missing)
            b = close_any!(again)
            c = close_any!(above)
            d = close_any!(kept)
            1
+         )
 
          close_any! : Result(File, IoError) -> Nat
-         close_any!(Ok(file)) ->
+         close_any!(Ok(file)) -> (
            closed = file.close!()
            0
+         )
          close_any!(Err(_)) -> 0",
     );
     let files = [("here.txt".to_owned(), b"there".to_vec())].into();
@@ -405,9 +418,10 @@ fn appends_are_linear_work() {
          built(Succ(n), values) -> built(n, values.append(n % 7))
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            values = built(20000, [])
-           host.exit!(U8.of_nat(values.len() % 256 + values.get_or(19999, 9)))",
+           host.exit!(U8.of_nat(values.len() % 256 + values.get_or(19999, 9)))
+         )",
     );
     assert_eq!(package.run(), 20000 % 256);
 }

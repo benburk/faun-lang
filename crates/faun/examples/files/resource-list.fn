@@ -9,9 +9,10 @@ import std.host {Host, File, Files, IoError, Mode.*}
 
 inspect_all! : List(File) -> Nat
 inspect_all!([]) -> 0
-inspect_all!([file, *rest]) ->
+inspect_all!([file, *rest]) -> (
   inspected = file.read!(0)
   inspect_all!(rest)
+)
 
 split : List(File) -> (List(File), List(File))
 split([]) -> ([], [])
@@ -22,37 +23,43 @@ halves((left, right), file) -> (right, left.prepend(file))
 
 close_head! : List(File) -> List(File)
 close_head!([]) -> []
-close_head!([file, *rest]) ->
+close_head!([file, *rest]) -> (
   closed = file.close!()
   rest
+)
 
 close_all! : List(File) -> Nat
 close_all!([]) -> 0
-close_all!([file, *rest]) ->
+close_all!([file, *rest]) -> (
   closed = file.close!()
   count = close_all!(rest)
   count + 1
+)
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   opened = host.files.open!("a.tmp", Overwrite)
   status = first!(opened, host.files)
   host.exit!(status)
+)
 
 first! : (Result(File, IoError), Files) -> U8
 first!(Err(_), _) -> 1
-first!(Ok(a), files) ->
+first!(Ok(a), files) -> (
   opened = files.open!("b.tmp", Overwrite)
   second!(opened, a)
+)
 
 second! : (Result(File, IoError), File) -> U8
-second!(Err(_), a) ->
+second!(Err(_), a) -> (
   closed = a.close!()
   1
-second!(Ok(b), a) ->
+)
+second!(Ok(b), a) -> (
   files = [a].extend([b]).reverse()
   remaining = close_head!(files.extend([]))
   length = remaining.len()
   inspected = inspect_all!(remaining)
   closed = close_all!(remaining)
   U8.of_nat(closed - length)
+)

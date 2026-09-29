@@ -16,16 +16,17 @@ Memo(k, v) : Map(k, v).(
   empty() -> Memo(Map.empty())
 
   memoize : (Memo(k, v), k, c, (Memo(k, v), c) -> (v, Memo(k, v))) -> (v, Memo(k, v)) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   memoize(Memo(entries), key, context, compute) ->
     recalled(entries.get(key), Memo(entries), key, context, compute)
 )
 
 recalled : (Result(v, [Missing]), Memo(k, v), k, c, (Memo(k, v), c) -> (v, Memo(k, v))) -> (v, Memo(k, v)) where
-  k.hash_into : (k, Mixer) -> Mixer
+  k.hash_into : (k, Mixer) -> Mixer,
   k.equals : (k, k) -> Bool
 recalled(Ok(value), memo, _, _, _) -> (value, memo)
-recalled(Err(_), memo, key, context, compute) ->
+recalled(Err(_), memo, key, context, compute) -> (
   (value, Memo(entries)) = compute(memo, context)
   (value, Memo(entries.insert(key, value)))
+)

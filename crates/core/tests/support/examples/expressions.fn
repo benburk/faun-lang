@@ -9,13 +9,14 @@ below(0, Succ(_)) -> True
 below(Succ(a), Succ(b)) -> below(a, b)
 
 finish! : (Host, Bool, Nat) -> []
-finish!(host, True, n) ->
+finish!(host, True, n) -> (
   a = n + 2
   host.exit!(U8.of_nat(a + n))
+)
 finish!(host, False, _) -> host.exit!(0)
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   one = 1
   two = one + one
   four = two + two
@@ -24,3 +25,4 @@ main!(host) ->
   limit = sixteen + sixteen
   count = host.args.len()
   finish!(host, below(count, limit), count)
+)

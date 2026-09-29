@@ -71,9 +71,11 @@ pub fn parse(source: &str) -> Result<Module, ParseError> {
 pub fn parse_in(source: &str, source_id: SourceId) -> Result<Module, ParseError> {
     let tokens = lex::lex(source).map_err(|error| error_at(source, 0, error.to_string()))?;
     let (lines, errors) = grammar::file(&tokens, source);
-    let mut errors = errors
-        .into_iter()
-        .map(|error| spanned(source, error.span, error.message));
+    let mut errors = errors.into_iter().map(|error| {
+        let mut spanned = spanned(source, error.span, error.message);
+        spanned.advice = Box::new(error.advice);
+        spanned
+    });
     if let Some(mut first) = errors.next() {
         first.also = errors.collect();
         return Err(first);

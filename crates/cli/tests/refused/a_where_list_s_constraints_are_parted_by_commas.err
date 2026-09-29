@@ -1,0 +1,5 @@
+error: a `where` list's constraints are parted by commas, `where a.zero : a, a.add : (a, a) -> a`, and a list of one to a line ends each but the last with its comma
+ --> a_where_list_s_constraints_are_parted_by_commas.fn:5:3
+  |
+5 |   a.add : (a, a) -> a
+  |   ^^^^^

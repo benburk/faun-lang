@@ -78,6 +78,7 @@ Aliases
 
 Name = ((a, b) -> c)
 Num(a) = where a.add : (a, a) -> a
+Edge(e) = {target: Nat, weight: e}
 
 ---
 
@@ -90,11 +91,10 @@ Num(a) = where a.add : (a, a) -> a
           (type_variable)
           (type_variable))
         (type_variable))))
-  (binding
-    (call_expression
-      (type_identifier)
-      (arguments
-        (identifier)))
+  (type_alias
+    (type_identifier)
+    (type_parameters
+      (type_variable))
     (constraints
       (member_constraint
         (type_variable)
@@ -103,7 +103,18 @@ Num(a) = where a.add : (a, a) -> a
           (tuple_type
             (type_variable)
             (type_variable))
-          (type_variable))))))
+          (type_variable)))))
+  (type_alias
+    (type_identifier)
+    (type_parameters
+      (type_variable))
+    (record_type
+      (field_type
+        (identifier)
+        (type_identifier))
+      (field_type
+        (identifier)
+        (type_variable)))))
 
 ========================================
 A declaration with methods
@@ -175,11 +186,12 @@ Maybe(a) : [None, Some(a)].(
 A guarded clause and its body
 ========================================
 
-f(x) if x > 0 ->
+f(x) if x > 0 -> (
   log!(x)
   [y, *rest] = x
   {a, b: c, *} = y
   -a * 2 + c?.d.e(|p, Q(r)| p) | !b
+)
 
 ---
 
@@ -193,49 +205,50 @@ f(x) if x > 0 ->
       (binary_expression
         (identifier)
         (number)))
-    (call_expression
-      (effect_identifier)
-      (arguments
-        (identifier))))
-  (binding
-    (list
-      (identifier)
-      (rest
-        (identifier)))
-    (identifier))
-  (binding
-    (record
-      (field
-        (identifier))
-      (field
-        (identifier)
-        (identifier))
-      (rest))
-    (identifier))
-  (binary_expression
-    (binary_expression
-      (binary_expression
-        (unary_expression
-          (identifier))
-        (number))
+    (block
       (call_expression
-        (field_expression
-          (field_expression
-            (try_expression
-              (identifier))
-            (identifier))
-          (identifier))
+        (effect_identifier)
         (arguments
-          (lambda
-            (lambda_parameters
-              (identifier)
-              (call_expression
-                (type_identifier)
-                (arguments
-                  (identifier))))
-            (identifier)))))
-    (unary_expression
-      (identifier))))
+          (identifier)))
+      (binding
+        (list
+          (identifier)
+          (rest
+            (identifier)))
+        (identifier))
+      (binding
+        (record
+          (field
+            (identifier))
+          (field
+            (identifier)
+            (identifier))
+          (rest))
+        (identifier))
+      (binary_expression
+        (binary_expression
+          (binary_expression
+            (unary_expression
+              (identifier))
+            (number))
+          (call_expression
+            (field_expression
+              (field_expression
+                (try_expression
+                  (identifier))
+                (identifier))
+              (identifier))
+            (arguments
+              (lambda
+                (lambda_parameters
+                  (identifier)
+                  (call_expression
+                    (type_identifier)
+                    (arguments
+                      (identifier))))
+                (identifier)))))
+        (unary_expression
+          (identifier))))))
 
 ========================================
 Patterns
@@ -423,3 +436,66 @@ expect a!=b
     (binary_expression
       (identifier)
       (identifier))))
+
+========================================
+Blocks stand wherever an expression does
+========================================
+
+f(x) if (
+  y = x
+  y > 0
+) -> [x].map(|z| (
+  w = (
+    v = z
+    v
+  )
+  (w, (w))
+))
+expect (
+  f!()
+  True
+)
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (identifier)))
+    (guard
+      (block
+        (binding
+          (identifier)
+          (identifier))
+        (binary_expression
+          (identifier)
+          (number))))
+    (call_expression
+      (field_expression
+        (list
+          (identifier))
+        (identifier))
+      (arguments
+        (lambda
+          (lambda_parameters
+            (identifier))
+          (block
+            (binding
+              (identifier)
+              (block
+                (binding
+                  (identifier)
+                  (identifier))
+                (identifier)))
+            (tuple
+              (identifier)
+              (tuple
+                (identifier))))))))
+  (expect
+    (block
+      (call_expression
+        (effect_identifier)
+        (arguments))
+      (type_identifier))))

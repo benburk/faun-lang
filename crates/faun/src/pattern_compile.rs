@@ -148,8 +148,10 @@ pub(crate) enum Decision {
         fields: Vec<Value>,
         decision: Box<Self>,
     },
+    /// The condition is a body: a guard written as a block has its
+    /// bindings, taken out ahead of its test.
     Guard {
-        condition: Expr,
+        condition: Body,
         locals: HashMap<LocalId, Value>,
         false_constructor: Symbol,
         true_constructor: Symbol,
@@ -306,6 +308,10 @@ impl Compiler<'_> {
                     "Bool must have fieldless False and True constructors",
                 ));
             }
+            let condition = self.body(d::Body {
+                bindings: Vec::new(),
+                result: condition,
+            })?;
             return Ok(Decision::Guard {
                 condition,
                 locals: first.locals,
@@ -599,9 +605,12 @@ impl Compiler<'_> {
 
 /// `body` with every `value?` in it bound on its own, in the order it is
 /// evaluated, and read back where it was written: what follows a `?` runs
-/// only on its `Ok`. Evaluation is pure but for effects, which stand on
-/// their own, so taking a `?` out ahead of the rest of its expression
-/// changes nothing a program can see.
+/// only on its `Ok`. A block's bindings are taken out the same way, ahead of
+/// the expression it stands in, and its answer read where it was written;
+/// its locals are numbered apart from the clause's others, so none is
+/// captured. Evaluation is pure but for effects, which stand on their own,
+/// so taking either out ahead of the rest of its expression changes nothing
+/// a program can see.
 fn hoisted(body: d::Body) -> d::Body {
     let mut fresh = 0;
     let mut bindings = Vec::with_capacity(body.bindings.len());
@@ -616,10 +625,22 @@ fn hoisted(body: d::Body) -> d::Body {
     d::Body { bindings, result }
 }
 
-/// `expression` with each `?` in it replaced by a local bound before it.
+/// `expression` with each `?` in it replaced by a local bound before it, and
+/// each block by its answer, its bindings bound before it.
 fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> Expr {
+    if let ExprKind::Block(block) = expression.kind {
+        for binding in block.bindings {
+            let value = lifted(binding.value, bindings, fresh);
+            bindings.push(d::Binding {
+                pattern: binding.pattern,
+                value,
+            });
+        }
+        return lifted(block.result, bindings, fresh);
+    }
     let mut lift = |inner: Expr| lifted(inner, bindings, fresh);
     let kind = match expression.kind {
+        ExprKind::Block(_) => unreachable!("taken out above"),
         ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {
             return expression;
         }

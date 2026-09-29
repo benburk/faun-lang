@@ -173,15 +173,17 @@ removed_at(Eq, left, _, _, right, _) -> joined(left, right)
 # it.
 joined : (SortedMap(k, v), SortedMap(k, v)) -> SortedMap(k, v)
 joined(left, Tip) -> left
-joined(left, Bin(inner_left, key, value, inner_right, _)) ->
+joined(left, Bin(inner_left, key, value, inner_right, _)) -> (
   ((least, least_value), rest) = split_smallest(inner_left, key, value, inner_right)
   balanced(left, least, least_value, rest)
+)
 
 # The smallest entry of the node `(left, key, value, right)` and that node
 # without it: the entry itself when nothing lies to its left, otherwise the
 # one found further left, with the path back up rebalanced.
 split_smallest : (SortedMap(k, v), k, v, SortedMap(k, v)) -> ((k, v), SortedMap(k, v))
 split_smallest(Tip, key, value, right) -> ((key, value), right)
-split_smallest(Bin(inner_left, inner_key, inner_value, inner_right, _), key, value, right) ->
+split_smallest(Bin(inner_left, inner_key, inner_value, inner_right, _), key, value, right) -> (
   (least, rest) = split_smallest(inner_left, inner_key, inner_value, inner_right)
   (least, balanced(rest, key, value, right))
+)

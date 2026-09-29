@@ -25,14 +25,16 @@ below(0, Succ(_)) -> True
 below(Succ(a), Succ(b)) -> below(a, b)
 
 finish! : (Host, Bool, Nat) -> []
-finish!(host, True, n) ->
+finish!(host, True, n) -> (
   two = n + n
   four = double(two)
   # Nothing here is above four, so three bits hold every number in it.
   host.exit!(U8.of_nat(is_zero(0).select(four, 0)))
+)
 finish!(host, False, _) -> host.exit!(0)
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   count = host.args.len()
   finish!(host, below(count, 2), count)
+)

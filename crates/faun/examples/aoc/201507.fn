@@ -79,17 +79,19 @@ part1(input) -> signal_on(input, "a")
 # Part two reruns the circuit with part one's answer prepended as a rule for
 # `b`: the first rule for a wire wins, so the old `b` gate simply never fires.
 part2 : Str -> Result(Nat, _)
-part2(input) ->
+part2(input) -> (
   wiring = rules(input)
   first = solved(wiring, "a")?
   solved([("b", [first.to_str()]), *wiring], "a")
+)
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   first = part1(stdin)?
   second = part2(stdin)?
   Ok({part1: first, part2: second})
+)
 
 example : Str
 example() -> "123 -> x\n456 -> y\nx AND y -> d\nx OR y -> e\nx LSHIFT 2 -> f\ny RSHIFT 2 -> g\nNOT x -> h\nNOT y -> i\n"

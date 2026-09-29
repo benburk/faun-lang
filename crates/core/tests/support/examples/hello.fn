@@ -3,6 +3,7 @@
 import std.host {Host}
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   host.print!("Hello, world!\n")
   host.exit!(0)
+)

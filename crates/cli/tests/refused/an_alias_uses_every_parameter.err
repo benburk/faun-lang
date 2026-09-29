@@ -1,0 +1,7 @@
+error: alias `Tagged` never uses its parameter `unit`
+ --> an_alias_uses_every_parameter.fn:3:1
+  |
+3 | Tagged(unit) = Nat
+  | ^^^^^^^^^^^^^^^^^^
+  |
+  = help: an alias is the type it names, so it cannot tell types apart by a parameter it leaves out: declare a type with `:` to keep them apart

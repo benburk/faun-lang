@@ -16,7 +16,7 @@ User : {
   display_name: Str, age: Nat, balance: Int, active: Bool, scores: List(Nat)
 }.(
   from_json : Json -> Decode(User)
-  from_json(value) ->
+  from_json(value) -> (
     fields = Fields.of(value)
     fields.finish(Decode.sequence({
       display_name: fields.string("name").arg(),
@@ -25,6 +25,7 @@ User : {
       active: fields.boolean("active").default(False),
       scores: fields.field("scores", decode_nats).default([])
     })).map(User)
+  )
 
   to_json : User -> Json
   to_json(User(user)) -> Members.sequence({
@@ -54,14 +55,16 @@ user_text() -> "{\"name\":\"Ada\",\"age\":37,\"balance\":-4,"
   .concat("\"active\":true,\"scores\":[3,5]}")
 
 decode_user : Str -> Result(User, _)
-decode_user(text) ->
+decode_user(text) -> (
   value = Json.from_str(text).map_err(InvalidJson)?
   User.from_json(value).result().map_err(Undecodable)
+)
 
 app : {stdin: List(U8), *} -> Result(Str, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_utf8(input.stdin)?
   decode_user(stdin).map_ok(|user| user.to_json().to_str())
+)
 
 expect decode_user(user_text()) == Ok(User({
   display_name: "Ada", age: 37, balance: -4, active: True, scores: [3, 5]
@@ -101,9 +104,10 @@ expect Json.from_str("{\"a\":1,}").is_err()
 # dispatch. Widths check on the way in: 70000 does not fit a `u16`.
 Event : [Click(U16, U16), Scroll(Int), Quit].(
   from_json : Json -> Decode(Event)
-  from_json(value) ->
+  from_json(value) -> (
     fields = Fields.of(value)
     fields.finish(fields.string("type").arg().and_then(fields, body))
+  )
 
   body : (Str, Fields) -> Decode(Event)
   body("click", fields) -> Decode.sequence({
@@ -122,9 +126,10 @@ click_at : {x: U16, y: U16} -> Event
 click_at({x, y}) -> Click(x, y)
 
 event : Str -> Result(Event, DecodeError)
-event(text) ->
+event(text) -> (
   value = Json.from_str(text).err_as(InvalidValue("bad JSON"))?
   Event.from_json(value).result()
+)
 
 expect event("{\"type\":\"click\",\"x\":3,\"y\":9}") == Ok(Click(3, 9))
 expect event("{\"type\":\"scroll\",\"amount\":-2}").is_ok()

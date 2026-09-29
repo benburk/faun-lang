@@ -169,8 +169,16 @@ fn located(loaded: &LoadedProgram, error: ResolveError) -> Diagnostic {
         .advised(error.advice)
 }
 
-/// Each alias's definition, resolved in the module that wrote it.
-type Aliases = HashMap<Symbol, (h::Type, ModuleId, s::Span)>;
+/// An alias, `Name = type` or `Name(a) = type`: its parameters, and the
+/// type it names, resolved in the module that wrote it.
+struct Alias {
+    parameters: Vec<Symbol>,
+    ty: h::Type,
+    module: ModuleId,
+    span: s::Span,
+}
+
+type Aliases = HashMap<Symbol, Alias>;
 
 /// A constraint alias, `Name(a) = where ...`: its parameters, and what it
 /// requires of them, applications of other aliases included.
@@ -254,12 +262,16 @@ fn resolve_module(
                 let local = symbols.intern(alias.name.text(source));
                 let canonical = scope.types[&local].canonical;
                 let ty = written_type(module.id, &alias.ty, source, scope, symbols)?;
-                if has_variable(&ty) {
-                    let message = "an alias names one type and has no type variables";
-                    return Err(error(module.id, alias.span, message)
-                        .help("declare a type with parameters with `:`"));
-                }
-                aliases.insert(canonical, (ty, module.id, alias.span));
+                let parameters = alias_parameters(module.id, alias, &ty, source, symbols)?;
+                aliases.insert(
+                    canonical,
+                    Alias {
+                        parameters,
+                        ty,
+                        module: module.id,
+                        span: alias.span,
+                    },
+                );
             }
             s::Item::Constraints(alias) => {
                 let local = symbols.intern(alias.name.text(source));
@@ -315,17 +327,110 @@ fn resolve_module(
     })
 }
 
-fn has_variable(ty: &h::Type) -> bool {
-    match ty {
-        h::Type::Variable(_) => true,
-        h::Type::Named(_, arguments) => arguments.iter().any(has_variable),
-        h::Type::Function(parameters, result) => {
-            parameters.iter().any(has_variable) || has_variable(result)
+/// An alias's parameters, each once, where its type names each and no
+/// other variable. A transparent alias cannot keep types apart, so one
+/// whose parameter goes unused would make `Id(Str)` and `Id(Bool)` one type.
+fn alias_parameters(
+    module: ModuleId,
+    alias: &s::AliasDecl,
+    ty: &h::Type,
+    source: &str,
+    symbols: &mut Symbols,
+) -> Result<Vec<Symbol>, ResolveError> {
+    let name = alias.name.text(source);
+    let mut parameters = Vec::with_capacity(alias.params.len());
+    for parameter in &alias.params {
+        let parameter = symbols.intern(parameter.text(source));
+        if parameters.contains(&parameter) {
+            let message = format!(
+                "alias `{name}` names its parameter `{}` twice",
+                symbols.text(parameter)
+            );
+            return Err(error(module, alias.span, message));
         }
-        h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).any(has_variable),
-        h::Type::Record(fields, _) => fields.iter().any(|(_, field)| has_variable(field)),
-        h::Type::Tuple(members) => members.iter().any(has_variable),
-        h::Type::Hole => false,
+        parameters.push(parameter);
+    }
+    let mut named = Vec::new();
+    variables(ty, &mut named);
+    if let Some(stray) = named.iter().find(|variable| !parameters.contains(variable)) {
+        let stray = symbols.text(*stray);
+        let message = format!("`{stray}` is not among the parameters of alias `{name}`");
+        return Err(error(module, alias.span, message).help(format!(
+            "write it among them, `{name}({stray})`, or name a type"
+        )));
+    }
+    if let Some(unused) = parameters
+        .iter()
+        .find(|parameter| !named.contains(parameter))
+    {
+        let unused = symbols.text(*unused);
+        let message = format!("alias `{name}` never uses its parameter `{unused}`");
+        return Err(error(module, alias.span, message).help(
+            "an alias is the type it names, so it cannot tell types apart by a parameter it \
+             leaves out: declare a type with `:` to keep them apart",
+        ));
+    }
+    Ok(parameters)
+}
+
+/// Every type variable `ty` names, into `found`.
+fn variables(ty: &h::Type, found: &mut Vec<Symbol>) {
+    let inner: Vec<&h::Type> = match ty {
+        h::Type::Variable(variable) => {
+            if !found.contains(variable) {
+                found.push(*variable);
+            }
+            return;
+        }
+        h::Type::Hole => return,
+        h::Type::Named(_, types) | h::Type::Tuple(types) => types.iter().collect(),
+        h::Type::Function(parameters, result) => parameters
+            .iter()
+            .chain(std::iter::once(&**result))
+            .collect(),
+        h::Type::Variants(tags) => tags.iter().flat_map(|tag| &tag.fields).collect(),
+        h::Type::Record(fields, _) => fields.iter().map(|(_, field)| field).collect(),
+    };
+    for each in inner {
+        variables(each, found);
+    }
+}
+
+/// `ty` with each variable `replacements` names replaced.
+fn substituted(ty: &h::Type, replacements: &HashMap<Symbol, h::Type>) -> h::Type {
+    let each = |types: &[h::Type]| {
+        types
+            .iter()
+            .map(|ty| substituted(ty, replacements))
+            .collect()
+    };
+    match ty {
+        h::Type::Variable(variable) => replacements
+            .get(variable)
+            .cloned()
+            .unwrap_or_else(|| ty.clone()),
+        h::Type::Named(name, arguments) => h::Type::Named(*name, each(arguments)),
+        h::Type::Function(parameters, result) => h::Type::Function(
+            each(parameters),
+            Box::new(substituted(result, replacements)),
+        ),
+        h::Type::Variants(tags) => h::Type::Variants(
+            tags.iter()
+                .map(|tag| h::ConstructorDecl {
+                    name: tag.name,
+                    fields: each(&tag.fields),
+                })
+                .collect(),
+        ),
+        h::Type::Record(fields, open) => h::Type::Record(
+            fields
+                .iter()
+                .map(|(name, field)| (*name, substituted(field, replacements)))
+                .collect(),
+            *open,
+        ),
+        h::Type::Tuple(members) => h::Type::Tuple(each(members)),
+        h::Type::Hole => h::Type::Hole,
     }
 }
 
@@ -352,16 +457,31 @@ fn expand_aliases(
         expand_constraints(&[applied], constraint_aliases, symbols)
             .map_err(|message| error(alias.module, alias.span, message))?;
     }
+    // Each alias is expanded over its own parameters, so one naming
+    // itself is refused where it is declared.
     let mut expanded = Aliases::new();
-    for (&alias, &(_, module, span)) in aliases {
+    for (&name, alias) in aliases {
+        let own = alias
+            .parameters
+            .iter()
+            .map(|&parameter| h::Type::Variable(parameter))
+            .collect();
         let ty = expand(
-            &h::Type::Named(alias, Vec::new()),
+            &h::Type::Named(name, own),
             aliases,
             symbols,
             &mut Vec::new(),
         )
-        .map_err(|message| error(module, span, message))?;
-        expanded.insert(alias, (ty, module, span));
+        .map_err(|message| error(alias.module, alias.span, message))?;
+        expanded.insert(
+            name,
+            Alias {
+                parameters: alias.parameters.clone(),
+                ty,
+                module: alias.module,
+                span: alias.span,
+            },
+        );
     }
     for module in modules {
         let id = module.source;
@@ -740,18 +860,32 @@ fn expand(
     };
     Ok(match ty {
         h::Type::Named(name, arguments) if aliases.contains_key(name) => {
-            if !arguments.is_empty() {
-                let message = format!("`{}` is an alias and takes no arguments", spelled(*name));
+            let alias = &aliases[name];
+            if arguments.len() != alias.parameters.len() {
+                let message = match alias.parameters.len() {
+                    0 => format!("`{}` is an alias and takes no arguments", spelled(*name)),
+                    wanted => format!(
+                        "alias `{}` takes {wanted} type{}, and is given {}",
+                        spelled(*name),
+                        if wanted == 1 { "" } else { "s" },
+                        arguments.len()
+                    ),
+                };
                 return Err(Unplaced::from(message));
             }
             if expanding.contains(name) {
                 let message = format!("alias `{}` names itself", spelled(*name));
                 return Err(Unplaced::from(message).help("declare a recursive type with `:`"));
             }
+            let arguments = arguments
+                .iter()
+                .map(|argument| expand(argument, aliases, symbols, expanding))
+                .collect::<Result<Vec<_>, _>>()?;
             expanding.push(*name);
-            let definition = expand(&aliases[name].0, aliases, symbols, expanding)?;
+            let definition = expand(&alias.ty, aliases, symbols, expanding)?;
             expanding.pop();
-            definition
+            let replacements = alias.parameters.iter().copied().zip(arguments).collect();
+            substituted(&definition, &replacements)
         }
         h::Type::Named(name, arguments) => h::Type::Named(
             *name,
@@ -1275,27 +1409,14 @@ fn resolve_clause(
         .map(|guard| resolver.expr(guard))
         .transpose()?;
     let guard = matched_alike(repeated, written, resolver.sites);
-    let mut bindings = Vec::with_capacity(clause.body.bindings.len());
-    for binding in &clause.body.bindings {
-        let value = resolver.expr(&binding.value)?;
-        // The value read the names as they were; what follows reads the
-        // ones this binds, a name it rebinds shadowing the one before.
-        resolver.shadowing = Some(std::collections::HashSet::new());
-        let pattern = resolver.total_pattern(&binding.pattern);
-        resolver.shadowing = None;
-        bindings.push(h::Binding {
-            pattern: pattern?,
-            value,
-        });
-    }
-    let result = resolver.expr(&clause.body.result)?;
+    let body = resolver.body(&clause.body)?;
     Ok(h::Clause {
         site: resolver.sites.fresh(),
         span: clause.span,
         name,
         patterns,
         guard,
-        body: h::Body { bindings, result },
+        body,
         locals: resolver.next_local,
     })
 }
@@ -1360,6 +1481,25 @@ struct ClauseResolver<'a> {
 }
 
 impl ClauseResolver<'_> {
+    /// A body's bindings in order, then its answer: each binding's value
+    /// reads the names as they were, and what follows reads the ones it
+    /// binds, a name it rebinds shadowing the one before.
+    fn body(&mut self, body: &s::Body) -> Result<h::Body, ResolveError> {
+        let mut bindings = Vec::with_capacity(body.bindings.len());
+        for binding in &body.bindings {
+            let value = self.expr(&binding.value)?;
+            self.shadowing = Some(std::collections::HashSet::new());
+            let pattern = self.total_pattern(&binding.pattern);
+            self.shadowing = None;
+            bindings.push(h::Binding {
+                pattern: pattern?,
+                value,
+            });
+        }
+        let result = self.expr(&body.result)?;
+        Ok(h::Body { bindings, result })
+    }
+
     /// Either alternative, each binding the same names, which are the same
     /// locals in every one of them.
     fn alternatives(
@@ -1663,6 +1803,13 @@ impl ClauseResolver<'_> {
                 let body = self.expr(body)?;
                 self.locals = saved;
                 h::ExprKind::Lambda(patterns, Box::new(body))
+            }
+            // A block's names leave with it, as a lambda's do.
+            s::ExprKind::Block(body) => {
+                let saved = self.locals.clone();
+                let body = self.body(body)?;
+                self.locals = saved;
+                h::ExprKind::Block(Box::new(body))
             }
             s::ExprKind::Call(head, arguments) => h::ExprKind::Call(
                 Box::new(self.applied(head)?),

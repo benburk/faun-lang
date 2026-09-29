@@ -98,9 +98,10 @@ Str : List(U8).(
   # The text without `suffix` where it ends with it, and as it is where it
   # does not.
   drop_suffix : (Str, Str) -> Str
-  drop_suffix(Str(bytes), Str(suffix)) ->
+  drop_suffix(Str(bytes), Str(suffix)) -> (
     stripped = strip_prefix(bytes.reverse(), suffix.reverse())
     Str(stripped.map_ok(|kept| kept.reverse()).ok_or(bytes))
+  )
 
   # The pieces between each `separator`, empty ones kept, so there is one
   # more piece than separators. An empty separator leaves the text whole.
@@ -149,9 +150,10 @@ strip_prefix(_, _) -> Err(Mismatch)
 # backwards. A separator is looked for past a byte equal to its first, so
 # what follows one is no longer than the rest after that byte.
 split_into : (List(U8), (U8, List(U8)), List(U8), List(Str)) -> List(Str)
-split_into([byte, *rest], (first, more), piece, pieces) if byte == first ->
+split_into([byte, *rest], (first, more), piece, pieces) if byte == first -> (
   found = strip_prefix(rest, more)
   split_step(found, byte, rest, ((first, more), piece, pieces))
+)
 split_into([byte, *rest], separator, piece, pieces) -> split_into(rest, separator, [byte, *piece], pieces)
 split_into([], _, piece, pieces) -> [Str(piece.reverse()), *pieces].reverse()
 

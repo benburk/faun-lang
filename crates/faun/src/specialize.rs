@@ -229,6 +229,8 @@ pub(crate) enum ExprKind {
     /// `value?`: an `Ok`'s value, or its `Err` answered at once by the
     /// function or lambda this is in.
     Try(Box<Expr>),
+    /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
+    Block(Box<Body>),
 }
 
 /// Specialize what one parameterless `entry` reaches, and nothing else.
@@ -921,20 +923,7 @@ impl<'a> Specializer<'a> {
             .as_ref()
             .map(|expression| self.expr(module, expression, substitution))
             .transpose()?;
-        let body = Body {
-            bindings: clause
-                .body
-                .bindings
-                .iter()
-                .map(|binding| {
-                    Ok(Binding {
-                        pattern: convert_pattern(&binding.pattern),
-                        value: self.expr(module, &binding.value, substitution)?,
-                    })
-                })
-                .collect::<Result<_, LowerError>>()?,
-            result: self.expr(module, &clause.body.result, substitution)?,
-        };
+        let body = self.body(module, &clause.body, substitution)?;
         let mut rows = t::Pattern::rows(&clause.patterns);
         let last = rows.pop().expect("a clause is at least one row");
         let mut clauses = Vec::with_capacity(rows.len() + 1);
@@ -1171,6 +1160,27 @@ impl<'a> Specializer<'a> {
         Ok(Some(joined))
     }
 
+    fn body(
+        &mut self,
+        module: ModuleId,
+        body: &t::Body,
+        substitution: &HashMap<TypeVariable, Type>,
+    ) -> Result<Body, LowerError> {
+        Ok(Body {
+            bindings: body
+                .bindings
+                .iter()
+                .map(|binding| {
+                    Ok(Binding {
+                        pattern: convert_pattern(&binding.pattern),
+                        value: self.expr(module, &binding.value, substitution)?,
+                    })
+                })
+                .collect::<Result<_, LowerError>>()?,
+            result: self.expr(module, &body.result, substitution)?,
+        })
+    }
+
     fn expr(
         &mut self,
         module: ModuleId,
@@ -1180,6 +1190,9 @@ impl<'a> Specializer<'a> {
         let ty = self.site_type(&expression.ty, substitution)?;
         let span = expression.span;
         let kind = match &expression.kind {
+            t::ExprKind::Block(body) => {
+                ExprKind::Block(Box::new(self.body(module, body, substitution)?))
+            }
             t::ExprKind::Local(local) => ExprKind::Local(*local),
             t::ExprKind::Function(name) => {
                 let key = FunctionKey {

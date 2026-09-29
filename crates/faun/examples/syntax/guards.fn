@@ -43,9 +43,10 @@ expect count_small([1, 20, 3, 40, 5]) == 3
 
 # A guard's body may run over lines.
 clamp : Nat -> Nat
-clamp(n) if n > 100 ->
+clamp(n) if n > 100 -> (
   over = n - 100
   n - over
+)
 clamp(n) -> n
 
 expect clamp(150) == 100 & clamp(42) == 42

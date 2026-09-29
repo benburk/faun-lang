@@ -24,11 +24,12 @@ Random : U64.(
   # One draw: the output is the state's high bits xor-shifted and rotated by
   # its top five, and the new state is one more multiply-and-add.
   next : Random -> (U32, Random)
-  next(Random(state)) ->
+  next(Random(state)) -> (
     xorshifted = (state.shift_right(18) ^ state).shift_right(27)
     rotation = state.shift_right(59).to_nat()
     value = xorshifted.to_u32().rotate_right(rotation)
     (value, Random(state * 0x5851f42d4c957f2d + 0x14057b7ef767814f))
+  )
 
   # A uniformly chosen element of `xs`, paired with the state after the draw
   # that chose it, or `Err(Empty)` when `xs` holds no element to choose. The
@@ -40,10 +41,11 @@ Random : U64.(
   # zero length never reaches the caller: every index misses, and that miss
   # names the empty list.
   choice : (Random, List(a)) -> Result((a, Random), [Empty])
-  choice(state, xs) ->
+  choice(state, xs) -> (
     (value, after) = next(state)
     picked = xs.get(value.to_nat() % xs.len()).err_as(Empty)?
     Ok((picked, after))
+  )
 
   # Fisher–Yates: a uniform permutation of `xs`, and the generator state
   # after the draws that chose it. The walk runs from the end: with `n`
@@ -59,36 +61,41 @@ Random : U64.(
 # count of unplaced elements is the descent.
 walk : (List(a), Nat, Random) -> (List(a), Random)
 walk(xs, 0, state) -> (xs, state)
-walk(xs, Succ(m), state) ->
+walk(xs, Succ(m), state) -> (
   (value, next) = state.next()
   walk(xs.exchange(m, value.to_nat() % Succ(m)).ok_or(xs), m, next)
+)
 
 # Drawing with replacement: `count` choices from `xs`, each from the state
 # the one before it left. A miss reports the empty list once for the whole
 # run, since a list with nothing to choose has nothing to choose twice.
 draws : (Random, List(a), Nat) -> Result(List(a), [Empty])
 draws(state, xs, 0) -> Ok([])
-draws(state, xs, Succ(rest)) ->
+draws(state, xs, Succ(rest)) -> (
   (picked, after) = state.choice(xs)?
   draws(after, xs, rest).map_ok(|rest_drawn| rest_drawn.prepend(picked))
+)
 
 random_take : (Random, Nat) -> List(U32)
 random_take(state, 0) -> []
-random_take(state, Succ(rest)) ->
+random_take(state, Succ(rest)) -> (
   (value, next_state) = state.next()
   random_take(next_state, rest).prepend(value)
+)
 
 # A permutation this short is still sensitive to every draw before it, so a
 # fixed vector pins the placement order and the `mod i+1` convention together.
-expect
+expect (
   (shuffled, after) = Random.seed(42).shuffle([1, 2, 3, 4, 5, 6, 7, 8])
   shuffled == [3, 5, 6, 2, 1, 8, 4, 7]
+)
 
 # A single element still draws once — `mod 1` places it at zero — so the
 # returned state has advanced.
-expect
+expect (
   (shuffled, after) = Random.seed(7).shuffle([9])
   shuffled == [9]
+)
 
 # A fixed vector pins the state transition, output permutation, and seeding
 # convention rather than merely checking that two runs happen to agree.

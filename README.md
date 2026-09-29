@@ -10,10 +10,11 @@ factorial(0) -> 1
 factorial(m) -> m * factorial(m - 1)
 
 # Effectful functions come from the host, and end with an exclamation mark
-main!(host) ->
+main!(host) -> (
   name = host.args.get_or(0, "world")
   host.println!("Hello, ${name}!")
   host.exit!(0)
+)
 ```
 
 - **Strict functional semantics**: immutable values, value semantics, algebraic data types, pattern matching, and eager evaluation.

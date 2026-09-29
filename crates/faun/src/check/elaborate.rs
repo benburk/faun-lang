@@ -90,19 +90,22 @@ impl Elaborator<'_> {
                 .map(|p| self.pattern(p))
                 .collect(),
             guard: clause.guard.map(|expr| self.expr(expr)),
-            body: t::Body {
-                bindings: clause
-                    .body
-                    .bindings
-                    .into_iter()
-                    .map(|binding| t::Binding {
-                        pattern: self.pattern(binding.pattern),
-                        value: self.expr(binding.value),
-                    })
-                    .collect(),
-                result: self.expr(clause.body.result),
-            },
+            body: self.body(clause.body),
             locals: clause.locals,
+        }
+    }
+
+    fn body(&mut self, body: h::Body) -> t::Body {
+        t::Body {
+            bindings: body
+                .bindings
+                .into_iter()
+                .map(|binding| t::Binding {
+                    pattern: self.pattern(binding.pattern),
+                    value: self.expr(binding.value),
+                })
+                .collect(),
+            result: self.expr(body.result),
         }
     }
 
@@ -200,6 +203,7 @@ impl Elaborator<'_> {
             t::ExprKind::Numeral(numeral.clone())
         } else {
             match kind {
+                h::ExprKind::Block(body) => t::ExprKind::Block(Box::new(self.body(*body))),
                 h::ExprKind::Local(local) => t::ExprKind::Local(local),
                 h::ExprKind::Global(name) => t::ExprKind::Function(name),
                 h::ExprKind::Constructor(name) | h::ExprKind::Tag(name) => {

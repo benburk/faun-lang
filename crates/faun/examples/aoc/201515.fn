@@ -56,13 +56,14 @@ empty_totals() -> Totals(0, 0, 0, 0, 0)
 
 mix : (Totals, Ingredient, Nat) -> Totals
 mix(Totals(capacity, durability, flavor, texture, calories),
-    Ingredient(_, cap, durable, tasty, textured, energy), amount) ->
+    Ingredient(_, cap, durable, tasty, textured, energy), amount) -> (
   quantity = Int.of_nat(amount)
   Totals(capacity + quantity * cap,
     durability + quantity * durable,
     flavor + quantity * tasty,
     texture + quantity * textured,
     calories + quantity * energy)
+)
 
 # A negative property contributes zero; a non-negative one can leave `Int`
 # behind before multiplication, so every cookie score is naturally a `Nat`.
@@ -112,12 +113,13 @@ search([ingredient, *rest], remaining, totals) ->
 spoonfuls : (Nat, Ingredient, List(Ingredient), Nat, Totals) -> Best
 spoonfuls(0, ingredient, rest, remaining, totals) ->
   search(rest, remaining, mix(totals, ingredient, 0))
-spoonfuls(Succ(n), ingredient, rest, remaining, totals) ->
+spoonfuls(Succ(n), ingredient, rest, remaining, totals) -> (
   amount = n + 1
   better(
     spoonfuls(n, ingredient, rest, remaining, totals),
     search(rest, remaining - amount, mix(totals, ingredient, amount))
   )
+)
 
 solve : Str -> Result(Best, _)
 solve(input) -> kitchen(ingredients(input)?)
@@ -127,9 +129,10 @@ kitchen([]) -> Err(NoIngredients)
 kitchen(pantry) -> Ok(search(pantry, 100, empty_totals()))
 
 part1 : Str -> Result(Nat, _)
-part1(input) ->
+part1(input) -> (
   Best(best, _, _) = solve(input)?
   Ok(best)
+)
 
 part2 : Str -> Result(Nat, _)
 part2(input) -> dietary(solve(input)?)
@@ -139,9 +142,10 @@ dietary(Best(_, diet, True)) -> Ok(diet)
 dietary(Best(_, _, False)) -> Err(NoDietaryRecipe)
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   report(solve(stdin)?)
+)
 
 report : Best -> Result({part1: Nat, part2: Nat}, [NoDietaryRecipe])
 report(Best(best, diet, True)) -> Ok({part1: best, part2: diet})
@@ -158,17 +162,19 @@ example_pantry() -> ingredients(example()).ok_or([])
 
 # The narration's 44/56 recipe has totals 68, 80, 152, and 76.
 expect ingredients(example()).is_ok()
-expect
+expect (
   (points, _) = score(example_pantry(), [44, 56])
   points == 62842880
+)
 expect part1(example()) == Ok(62842880)
 # At exactly 500 calories the best split is 40/60.
 expect part2(example()) == Ok(57600000)
 
 # A bad property can erase the product only after all ingredients contribute.
-expect
+expect (
   (points, _) = score(example_pantry(), [100, 0])
   points == 0
+)
 
 expect part1("").is_err()
 expect parse_ingredient("Sugar: capacity 1 durability 2, flavor 3, texture 4, calories 5").is_err()

@@ -1,5 +1,5 @@
-; A clause is a function's case; its body runs to the lines after it, which
-; the grammar keeps flat, so `inside` is its first line's statement.
+; A clause is a function's case, and its body is one expression: a block
+; where it has several lines.
 (clause
   body: (_) @function.inside) @function.around
 

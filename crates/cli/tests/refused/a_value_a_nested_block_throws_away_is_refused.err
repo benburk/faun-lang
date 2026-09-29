@@ -1,0 +1,7 @@
+error: this value is worked out and then thrown away
+ --> a_value_a_nested_block_throws_away_is_refused.fn:5:3
+  |
+5 |   n + 1
+  |   ^^^^^ unused
+  |
+  = help: remove the line, or bind the value to a name if you need it

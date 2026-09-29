@@ -9,5 +9,5 @@
 export {Hasher}
 
 Hasher(h) = where
-  h.write_u64 : (h, U64) -> h
+  h.write_u64 : (h, U64) -> h,
   h.write_bytes : (h, List(U8)) -> h

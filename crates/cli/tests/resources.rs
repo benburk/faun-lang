@@ -55,15 +55,17 @@ fn a_name_holding_a_nought_byte_is_refused() {
         "import std.host {Host, File, IoError, Mode.*}
 
          main! : Host -> []
-         main!(host) ->
+         main!(host) -> (
            opened = host.files.open!(\"bad\\0name\", Overwrite)
            status = shut!(opened)
            host.exit!(U8.of_nat(status))
+         )
 
          shut! : Result(File, IoError) -> Nat
-         shut!(Ok(file)) ->
+         shut!(Ok(file)) -> (
            closed = file.close!()
            0
+         )
          shut!(Err(Other(_))) -> 6
          shut!(Err(_)) -> 7",
     );

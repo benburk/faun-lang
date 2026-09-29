@@ -42,10 +42,11 @@ Host : {args: List(Str)}.(
 
   # `text` on standard output, all of it.
   print! : (Host, Str) -> Result({}, WriteError)
-  print!(host, text) ->
+  print!(host, text) -> (
     wrote = host.stdout.write_all!(text.to_utf8())
     went = wrote?
     Ok({})
+  )
 
   # `text` and a line's end on standard output.
   println! : (Host, Str) -> Result({}, WriteError)
@@ -59,19 +60,21 @@ Host : {args: List(Str)}.(
   # prints `Ok(...)` or `Err(...)`, which says which it was, and one that
   # must finish with another status writes its own `main!`.
   run! : (Host, {args: List(Str)} -> a) -> [] where a.to_str : a -> Str
-  run!(host, app) ->
+  run!(host, app) -> (
     status = finish!(host.stdout, app({args: host.args}))
     host.exit!(status)
+  )
 
   # The same, having read standard input to its end first, handed to `app`
   # as bytes beside the arguments: an app wanting text asks
   # `Str.from_utf8` itself. Input that cannot be read is reported on
   # standard error, and the app is not run.
   run_stdin! : (Host, {args: List(Str), stdin: List(U8)} -> a) -> [] where a.to_str : a -> Str
-  run_stdin!(host, app) ->
+  run_stdin!(host, app) -> (
     input = host.stdin.read_to_end!()
     status = serve_stdin!(host.stdout, host.stderr, input, host.args, app)
     host.exit!(status)
+  )
 )
 
 Stdin : [Stdin].(
@@ -132,9 +135,10 @@ File : [File(Fd)].(
   # Done with it, whether or not what was written got where it was going:
   # the error closing it met, if any. Nothing may be asked of it after.
   close! : File -> Result({}, CloseError)
-  close!(file) ->
+  close!(file) -> (
     closed = fd_close!(file)
     outcome(closed).map_ok(|_| {}).map_err(close_error)
+  )
 
   # Every byte to the end.
   read_to_end! : File -> Result(List(U8), [Io(ReadError), LimitExceeded])
@@ -190,9 +194,10 @@ named!(files, name, how) -> opening!(files, name.append(0), how, 8)
 # Open `name`, asking again, up to `fuel` times, where the kernel was
 # interrupted or found the name moving under it.
 opening! : (Files, List(U8), (Nat, Nat), Nat) -> Result(File, OpenError)
-opening!(files, name, (how, made), fuel) ->
+opening!(files, name, (how, made), fuel) -> (
   answer = fd_open!(files, name, how, made)
   opened!(files, name, (how, made), fuel, outcome(answer))
+)
 
 opened! : (Files, List(U8), (Nat, Nat), Nat, Result(Nat, Nat)) -> Result(File, OpenError)
 opened!(_, _, _, _, Ok(fd)) -> Ok(File(Fd(U16.of_nat(fd))))
@@ -217,15 +222,17 @@ climbs([_, *rest], _) -> climbs(rest, False)
 # Up to `count` bytes from what `fd` names, and no more than 1024.
 read_from! : (Fd, Nat) -> Result(Chunk, ReadError)
 read_from!(_, 0) -> Ok(Data([]))
-read_from!(fd, count) ->
+read_from!(fd, count) -> (
   (bytes, answer) = fd_read!(fd, 1024 - (1024 - count))
   filled(bytes, outcome(answer).map_err(read_error))
+)
 
 # Some of `bytes` to what `fd` names: how many went.
 put! : (Fd, List(U8)) -> Result(Nat, WriteError)
-put!(fd, bytes) ->
+put!(fd, bytes) -> (
   went = fd_put!(fd, bytes)
   outcome(went).map_err(write_error)
+)
 
 # What the target answers: a number, or an error number that far short of
 # the top of a word, as a kernel answers `-errno`. No error is more than

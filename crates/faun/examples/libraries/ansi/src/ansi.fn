@@ -299,9 +299,10 @@ ansi_color_code(ColorIndexed(index), offset) -> offset.add(8).to_str()
   .concat(index.to_nat().to_str())
 ansi_color_code(ColorRgb(red, green, blue), offset) ->
   ansi_rgb_code(red, green, blue, offset)
-ansi_color_code(ColorHex(value), offset) ->
+ansi_color_code(ColorHex(value), offset) -> (
   (red, green, blue) = ansi_hex_channels(value)
   ansi_rgb_code(red, green, blue, offset)
+)
 
 ansi_rgb_code : (U8, U8, U8, Nat) -> Str
 ansi_rgb_code(red, green, blue, offset) -> offset.add(8).to_str()
@@ -316,9 +317,10 @@ ansi_rgb_code(red, green, blue, offset) -> offset.add(8).to_str()
 # word's own bytes, read back to front, and the quartet destructures
 # irrefutably because its shape is its type.
 ansi_hex_channels : U32 -> (U8, U8, U8)
-ansi_hex_channels(hex) ->
+ansi_hex_channels(hex) -> (
   (blue, green, red, _) = hex.min(0xffffff).le_bytes()
   (red, green, blue)
+)
 
 ansi_color_name_code : ColorName -> Nat
 ansi_color_name_code(ColorBlack) -> 0

@@ -3,21 +3,24 @@ import std.host {Host}
 import std.host {Files, File, IoError, Mode.*}
 
     main! : Host -> []
-    main!(host) ->
+    main!(host) -> (
       ran = program!(host.files)
       host.exit!(0)
+    )
 
     program! : Files -> Result(Nat, IoError)
-program!(files) ->
+program!(files) -> (
   file = files.open!("a.txt", Read)?
   n = through!(file)
   Ok(n)
+)
 
 through! : File -> Nat
 through!(file) -> maybe!(file, 3)
 
 maybe! : (File, Nat) -> Nat
 maybe!(_, 0) -> 0
-maybe!(file, n) ->
+maybe!(file, n) -> (
   closed = file.close!()
   n
+)

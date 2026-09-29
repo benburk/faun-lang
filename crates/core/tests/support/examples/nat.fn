@@ -22,14 +22,16 @@ below(0, Succ(_)) -> True
 below(Succ(a), Succ(b)) -> below(a, b)
 
 finish! : (Host, Bool, Nat) -> []
-finish!(host, True, n) ->
+finish!(host, True, n) -> (
   two = n + n
   four = two * two
   eight = two * four
   host.exit!(U8.of_nat(min(four, eight - two)))
+)
 finish!(host, False, _) -> host.exit!(0)
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   count = host.args.len()
   finish!(host, below(count, 2), count)
+)

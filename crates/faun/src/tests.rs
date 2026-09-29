@@ -29,19 +29,59 @@ fn body(source: &str) -> Body {
 fn items_and_statements_end_with_their_lines() {
     let error = parse("main! : Host -> [] main!(host) -> host.exit!(0)").unwrap_err();
     assert!(error.message.contains("a new line"), "{}", error.message);
-    let error = parse("f(x) ->\n  y = x").unwrap_err();
+    let error = parse("f(x) -> (\n  y = x\n)").unwrap_err();
     assert!(
         error
             .message
-            .contains("a body ends with its answer, a line after its last binding"),
+            .contains("a block ends with its answer, a line after its last binding"),
         "{}",
         error.message
     );
 }
 
 #[test]
+fn a_body_of_several_lines_is_a_block() {
+    for (source, said) in [
+        ("f(x) ->\n  y = x\n  y\n", "a binding belongs to a block"),
+        (
+            "expect\n  y = 1\n  y == 1\n",
+            "a binding belongs to a block",
+        ),
+        ("f(x) -> x\ny = 1\n", "a binding belongs to a block"),
+        ("f(x) -> x\n  x\n", "belongs to no definition"),
+        (
+            "f(x) -> (\n  y = x\n  y\ng(x) -> x\n",
+            "this `(` is not closed: its block runs on into the next item",
+        ),
+    ] {
+        let error = parse(source).unwrap_err();
+        assert!(error.message.contains(said), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn a_block_stands_wherever_an_expression_does() {
+    let lines = body("f(x) -> [1].map(|y| (\n  z = y\n  z + x\n))\n");
+    let ExprKind::Method(_, _, arguments) = &lines.result.kind else {
+        panic!("a method call, found {:?}", lines.result.kind);
+    };
+    assert!(matches!(
+        &arguments[0].kind,
+        ExprKind::Lambda(_, body) if matches!(&body.kind, ExprKind::Block(block) if block.bindings.len() == 1)
+    ));
+    let read = clauses("f(x) if (\n  y = x\n  y > 1\n) -> x\n");
+    assert!(matches!(
+        read[0].guard.as_ref().map(|guard| &guard.kind),
+        Some(ExprKind::Block(_))
+    ));
+    let lines = body("f(x) -> (\n  y = (\n    z = x\n    z\n  )\n  (y, (y))\n)\n");
+    assert!(matches!(lines.bindings[0].value.kind, ExprKind::Block(_)));
+    assert!(matches!(lines.result.kind, ExprKind::Tuple(ref members) if members.len() == 2));
+}
+
+#[test]
 fn a_body_is_its_lines_and_its_last_line_is_its_answer() {
-    let lines = body("f(x) ->\n  log!(x)\n  y = x\n  -y\n");
+    let lines = body("f(x) -> (\n  log!(x)\n  y = x\n  -y\n)\n");
     assert_eq!(lines.bindings.len(), 2);
     assert!(lines.bindings[0].discarded && !lines.bindings[1].discarded);
     assert!(matches!(
@@ -55,13 +95,35 @@ fn a_line_goes_on_after_an_arrow_or_an_operator_and_into_a_chain() {
     let lines = body("f(x) ->\n  x\n    .g()\n    + 1 *\n    2\n");
     assert!(lines.bindings.is_empty());
     let module = parse(
-        "sum : List(a) -> a where\n  a.zero : a\n  a.add : (a, a) -> a\nsum(values) -> values\n",
+        "sum : List(a) -> a where\n  a.zero : a,\n  a.add : (a, a) -> a\nsum(values) -> values\n",
     )
     .unwrap();
     assert!(matches!(
         &module.items[0],
         Item::Signature(signature) if signature.constraints.len() == 2
     ));
+}
+
+#[test]
+fn a_where_list_s_constraints_are_parted_by_commas() {
+    let module = parse("f : a -> a where a.zero : a, Show(a), a.add : (a, a) -> a\n").unwrap();
+    assert!(matches!(
+        &module.items[0],
+        Item::Signature(signature) if signature.constraints.len() == 3
+    ));
+    for (source, said) in [
+        (
+            "f : a -> a where\n  a.zero : a\n  a.add : (a, a) -> a\n",
+            "parted by commas",
+        ),
+        (
+            "f : a -> a where\n  a.zero : a,\nf(x) -> x\n",
+            "last constraint takes no comma",
+        ),
+    ] {
+        let error = parse(source).unwrap_err();
+        assert!(error.message.contains(said), "{source}: {}", error.message);
+    }
 }
 
 #[test]
@@ -139,7 +201,7 @@ fn a_pattern_is_the_expression_that_builds_what_it_matches() {
             Pattern::Or { .. },
         ]
     ));
-    let lines = body("f(xs) ->\n  Some(y) = xs.first()\n  xs.map(|Some(z), _| z)\n");
+    let lines = body("f(xs) -> (\n  Some(y) = xs.first()\n  xs.map(|Some(z), _| z)\n)\n");
     assert!(matches!(
         lines.bindings[0].pattern,
         Pattern::Constructor { .. }
@@ -204,7 +266,7 @@ fn clauses(source: &str) -> Vec<Clause> {
 #[test]
 fn a_guard_stands_between_a_clause_s_patterns_and_its_arrow() {
     let read = clauses(
-        "f(Some(x), y) if x > 1 & y.ok() | !x ->\n  z = x\n  z\nf(_, _) -> 0\ng(x) if\n  x -> x\n",
+        "f(Some(x), y) if x > 1 & y.ok() | !x -> (\n  z = x\n  z\n)\nf(_, _) -> 0\ng(x) if\n  x -> x\n",
     );
     let [guarded, fallback, continued] = &read[..] else {
         panic!("three clauses, found {read:?}");
@@ -282,7 +344,7 @@ fn literal_validation_reaches_every_syntactic_position() {
         r#"match("\q") -> 0"#,
         r"match('\q'..'z') -> 0",
         r"match(x) if x == '\q' -> 0",
-        "value() ->\n  x = '\\q'\n  x",
+        "value() -> (\n  x = '\\q'\n  x\n)",
         r"value() -> map(|'\q'| 0)",
         r#"value() -> "${'\q'}""#,
         r#"value() -> "${"\q"}""#,
@@ -310,11 +372,12 @@ fn literal_errors_cover_the_literal_at_its_unicode_source_position() {
 #[test]
 fn a_discarded_value_must_be_an_effect_in_every_kind_of_body() {
     for source in [
-        "value(x) ->\n  x\n  x",
-        "value(x) ->\n  f(x)\n  x",
-        "value(x) ->\n  x.f()\n  x",
-        "T : Nat.(\n  value(x) ->\n    x\n    x\n)",
-        "expect\n  True\n  True",
+        "value(x) -> (\n  x\n  x\n)",
+        "value(x) -> (\n  f(x)\n  x\n)",
+        "value(x) -> (\n  x.f()\n  x\n)",
+        "T : Nat.(\n  value(x) -> (\n    x\n    x\n  )\n)",
+        "expect (\n  True\n  True\n)",
+        "value(x) -> [(\n  x\n  x\n)]",
     ] {
         let error = parse(source).unwrap_err();
         assert!(
@@ -323,12 +386,12 @@ fn a_discarded_value_must_be_an_effect_in_every_kind_of_body() {
         );
     }
     for source in [
-        "value(x) ->\n  f!(x)\n  x",
-        "value(x) ->\n  x.f!()\n  x",
-        "value(x) ->\n  _ = f(x)\n  x",
+        "value(x) -> (\n  f!(x)\n  x\n)",
+        "value(x) -> (\n  x.f!()\n  x\n)",
+        "value(x) -> (\n  _ = f(x)\n  x\n)",
         "value(x) -> x",
-        "T : Nat.(\n  value(x) ->\n    f!(x)\n    x\n)",
-        "expect\n  f!()\n  True",
+        "T : Nat.(\n  value(x) -> (\n    f!(x)\n    x\n  )\n)",
+        "expect (\n  f!()\n  True\n)",
     ] {
         parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
     }

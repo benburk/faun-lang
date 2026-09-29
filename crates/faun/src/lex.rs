@@ -5,11 +5,13 @@
 //! sees a space. Comments run from `#` to the end of the line and are space. A string is a run of pieces: text, and `${…}` splices whose contents
 //! are ordinary tokens, so the lexer keeps a stack of where it is.
 //!
-//! A line of items or of a body ends with a [`Kind::Newline`]: where a line
+//! A line of items or of a block ends with a [`Kind::Newline`]: where a line
 //! break comes after a token a line can end with, and before one a line can
-//! begin with, outside every bracket but a method block's. So a line runs on
-//! after `->`, `=` or an operator, and into a next line beginning `.`, an
-//! infix operator, `where` or `if`, and a list or a call spans lines freely.
+//! begin with, outside every bracket but a method block's `.(` and a plain
+//! `(`, which may hold a block's lines. So a line runs on after `->`, `=`, a
+//! comma or an operator, and into a next line beginning `.`, an infix
+//! operator, `where`, `if` or a closing bracket, and a list, a record or a
+//! call spans lines freely.
 //!
 //! Whether `-`, `*` or `|` is a prefix or infix is the grammar's to say, by
 //! where it stands, as in any expression grammar. What joins by adjacency is
@@ -129,11 +131,15 @@ impl Kind {
 
     /// Whether a line beginning with this token goes on with the line
     /// before, as nothing a line holds begins with it. A `-` goes on only
-    /// where space follows it; held to what follows, it negates.
+    /// where space follows it; held to what follows, it negates. A closing
+    /// bracket ends the line inside it, so a block's `)` may stand alone.
     const fn continues_line(self) -> bool {
         matches!(
             self,
-            Self::Dot
+            Self::RParen
+                | Self::RBracket
+                | Self::RBrace
+                | Self::Dot
                 | Self::DotParen
                 | Self::DotStar
                 | Self::DotDot
@@ -310,8 +316,10 @@ impl Lexer<'_> {
         }
         let kind = self.classify(kind);
         match kind {
-            Kind::DotParen => self.brackets.push(Bracket::Lines),
-            Kind::LParen | Kind::CallParen | Kind::LBracket | Kind::LBrace => {
+            // A method block's lines, or a block's: a plain `(` may hold
+            // one, where a call's cannot.
+            Kind::DotParen | Kind::LParen => self.brackets.push(Bracket::Lines),
+            Kind::CallParen | Kind::LBracket | Kind::LBrace => {
                 self.brackets.push(Bracket::Joined);
             }
             Kind::RParen | Kind::RBracket | Kind::RBrace => {
@@ -676,7 +684,9 @@ mod tests {
 
     #[test]
     fn lines_end_between_what_ends_one_and_what_begins_one() {
-        use Kind::{Arrow, Dot, DotParen, Ident, LParen, Minus, Newline, RParen, TypeIdent};
+        use Kind::{
+            Arrow, CallParen, Dot, DotParen, Ident, LParen, Minus, Newline, RParen, TypeIdent,
+        };
         assert_eq!(kinds("a\nb"), [Ident, Newline, Ident, Kind::Eof]);
         assert_eq!(kinds("a # note\n\n\nb")[..3], [Ident, Newline, Ident]);
         // After what cannot end a line, and before what cannot begin one,
@@ -685,10 +695,40 @@ mod tests {
         assert_eq!(kinds("a\n  .b"), [Ident, Dot, Ident, Kind::Eof]);
         assert_eq!(kinds("a\n- b"), [Ident, Minus, Ident, Kind::Eof]);
         assert_eq!(kinds("a\n-b"), [Ident, Newline, Minus, Ident, Kind::Eof]);
-        // Brackets join their lines, but a method block holds lines of items.
+        // A call's, a list's and a record's brackets join their lines; a
+        // method block holds lines of items, and a plain `(` a block's.
         assert_eq!(
-            kinds("(a,\nb)"),
+            kinds("f(a,\nb)"),
+            [
+                Ident,
+                CallParen,
+                Ident,
+                Kind::Comma,
+                Ident,
+                RParen,
+                Kind::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("[a\nb]"),
+            [Kind::LBracket, Ident, Ident, Kind::RBracket, Kind::Eof]
+        );
+        assert_eq!(
+            kinds("(a,\nb\n)"),
             [LParen, Ident, Kind::Comma, Ident, RParen, Kind::Eof]
+        );
+        assert_eq!(
+            kinds("(a = b\nc\n)"),
+            [
+                LParen,
+                Ident,
+                Kind::Eq,
+                Ident,
+                Newline,
+                Ident,
+                RParen,
+                Kind::Eof
+            ]
         );
         assert_eq!(
             kinds("T.(a\nb\n)"),
@@ -698,7 +738,6 @@ mod tests {
                 Ident,
                 Newline,
                 Ident,
-                Newline,
                 RParen,
                 Kind::Eof
             ]

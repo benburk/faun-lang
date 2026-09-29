@@ -8,7 +8,7 @@
 import std.host {Host, Files, Stdout, Chunk, IoError, Mode.*}
 
 copy! : (Files, Stdout) -> Result(Nat, IoError)
-copy!(files, output) ->
+copy!(files, output) -> (
   source = files.open!("input.txt", Read)?
   reading = source.read!(4096)
   closing_source = source.close!()
@@ -24,11 +24,13 @@ copy!(files, output) ->
 
   said = output.write_all!("copied\n".to_utf8())?
   Ok(0)
+)
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   copied = copy!(host.files, host.stdout)
   host.exit!(status(copied))
+)
 
 # What a read held: nothing, once the file has ended.
 bytes : Chunk -> List(U8)

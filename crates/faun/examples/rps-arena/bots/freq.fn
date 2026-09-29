@@ -18,10 +18,11 @@ Freq : {rock: Nat, paper: Nat, scissors: Nat}.(
   open(bot) -> (Rock, bot)
 
   answer : (Freq, Throw) -> (Throw, Freq)
-  answer(Freq(tally), last) ->
+  answer(Freq(tally), last) -> (
     seen = count(tally, last)
     throw = favourite(seen).counter()
     (throw, Freq(seen))
+  )
 )
 
 count(tally, Rock) -> {rock: tally.rock + 1, *tally}

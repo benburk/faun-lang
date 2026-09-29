@@ -4,9 +4,10 @@
 import std.host {Host}
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   read = host.stdin.read_to_end!()
   input = read.ok_or([])
   echoed = host.stdout.write_all!(input)
   told = host.stderr.write_all!(input)
   host.exit!(U8.of_nat(input.len() + 4))
+)

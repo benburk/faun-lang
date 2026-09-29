@@ -18,7 +18,7 @@ export {Map}
 Slot(k, v) : [Filled(k, v), Removed].(
   # One constructor, with equal fields.
   equals : (Slot(k, v), Slot(k, v)) -> Bool where
-    k.equals : (k, k) -> Bool
+    k.equals : (k, k) -> Bool,
     v.equals : (v, v) -> Bool
 )
 
@@ -51,30 +51,31 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # The value bound to `key` in `map`: `Ok(value)` when `key` is present;
   # otherwise `Err(Missing)`.
   get : (Map(k, v), k) -> Result(v, [Missing]) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
-  get(Map({seed, slots, index, *}), key) ->
+  get(Map({seed, slots, index, *}), key) -> (
     position = slot_of(seed, index, slots, key)?
     value_at(slots, position)
+  )
 
   # The value bound to `key` in `map`, and `fallback` where it is absent —
   # `get` for a caller that has an answer for a missing key, as `List.get_or`
   # is for a position past the end.
   get_or : (Map(k, v), k, v) -> v where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   get_or(map, key, fallback) -> get(map, key).ok_or(fallback)
 
   # Whether `key` is bound in `map`.
   contains : (Map(k, v), k) -> Bool where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   contains(map, key) -> get(map, key).is_ok()
 
   # `map` with `value` bound to `key`, replacing any existing binding. An
   # existing key keeps its place in insertion order and takes the new value.
   insert : (Map(k, v), k, v) -> Map(k, v) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   insert(Map({seed, slots, index, size}), key, value) ->
     replaced(slot_of(seed, index, slots, key), seed, slots, index, size, key, value)
@@ -84,13 +85,13 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # is the common shape of a keyed edit, and doing it in one step means no
   # caller has to name a value for a key that is not there.
   update : (Map(k, v), k, v -> v) -> Map(k, v) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   update(map, key, change) -> changed(map, key, change, get(map, key))
 
   # `map` without any binding for `key`; unchanged when `key` is absent.
   remove : (Map(k, v), k) -> Map(k, v) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   remove(Map({seed, slots, index, size}), key) ->
     removed(slot_of(seed, index, slots, key), seed, slots, index, size, key)
@@ -125,7 +126,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # The map binding each entry of `entries`, later entries winning as
   # repeated `insert` calls would.
   of_list : List((k, v)) -> Map(k, v) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   of_list(entries) -> entries.fold(empty(), |built, (key, value)| insert(built, key, value))
 
@@ -133,8 +134,8 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   # whatever order either was built: every entry of one is found in the
   # other, and the sizes agree. Linear in the size.
   equals : (Map(k, v), Map(k, v)) -> Bool where
-    k.hash_into : (k, Mixer) -> Mixer
-    k.equals : (k, k) -> Bool
+    k.hash_into : (k, Mixer) -> Mixer,
+    k.equals : (k, k) -> Bool,
     v.equals : (v, v) -> Bool
   equals(map, other) ->
     len(map) == len(other) & to_list(map).all(|(key, value)| get(other, key) == Ok(value))
@@ -143,7 +144,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
 # The read `update` already made, spent: a hit writes the changed value back
 # and a miss answers the map it was given.
 changed : (Map(k, v), k, v -> v, Result(v, [Missing])) -> Map(k, v) where
-  k.hash_into : (k, Mixer) -> Mixer
+  k.hash_into : (k, Mixer) -> Mixer,
   k.equals : (k, k) -> Bool
 changed(map, key, change, Ok(value)) -> Map.insert(map, key, change(value))
 changed(map, _, _, _) -> map
@@ -158,11 +159,12 @@ bucket_of(digest, room) -> digest.to_nat() % room
 # The position of `key`'s slot: `Ok` when a bucket entry carries its digest
 # and the slot there holds an equal key; otherwise `Err(Missing)`.
 slot_of : (U64, List(List((U64, Nat))), List(Slot(k, v)), k) -> Result(Nat, [Missing]) where
-  k.hash_into : (k, Mixer) -> Mixer
+  k.hash_into : (k, Mixer) -> Mixer,
   k.equals : (k, k) -> Bool
-slot_of(seed, index, slots, key) ->
+slot_of(seed, index, slots, key) -> (
   digest = digest_of(seed, key)
   position_in(index.get_or(bucket_of(digest, index.len()), []), digest, slots, key)
+)
 
 position_in : (List((U64, Nat)), U64, List(Slot(k, v)), k) -> Result(Nat, [Missing]) where
   k.equals : (k, k) -> Bool
@@ -208,7 +210,7 @@ replaced : (Result(Nat, [Missing]), U64, List(Slot(k, v)), List(List((U64, Nat))
   k.hash_into : (k, Mixer) -> Mixer
 replaced(Ok(position), seed, slots, index, size, key, value) ->
   Map({seed: seed, slots: slots.set(position, Filled(key, value)).ok_or([]), index: index, size: size})
-replaced(Err(_), seed, slots, index, size, key, value) ->
+replaced(Err(_), seed, slots, index, size, key, value) -> (
   position = slots.len()
   digest = digest_of(seed, key)
   bucket = bucket_of(digest, index.len())
@@ -221,11 +223,12 @@ replaced(Err(_), seed, slots, index, size, key, value) ->
       size: size + 1,
     }),
   )
+)
 
 removed : (Result(Nat, [Missing]), U64, List(Slot(k, v)), List(List((U64, Nat))), Nat, k) -> Map(k, v) where
   k.hash_into : (k, Mixer) -> Mixer
 removed(Err(_), seed, slots, index, size, _) -> Map({seed: seed, slots: slots, index: index, size: size})
-removed(Ok(position), seed, slots, index, size, key) ->
+removed(Ok(position), seed, slots, index, size, key) -> (
   digest = digest_of(seed, key)
   bucket = bucket_of(digest, index.len())
   entries = index.get_or(bucket, []).filter(|(_, at)| at != position)
@@ -235,12 +238,13 @@ removed(Ok(position), seed, slots, index, size, key) ->
     index: index.set(bucket, entries).ok_or([]),
     size: size - 1,
   })
+)
 
 # Past three quarters full, the index doubles and every live entry is
 # placed again; removed slots are dropped on the way, so positions are
 # renumbered from the compacted list.
 resized : Map(k, v) -> Map(k, v) where k.hash_into : (k, Mixer) -> Mixer
-resized(Map({seed, slots, index, size})) if index.len() * 3 < size * 4 ->
+resized(Map({seed, slots, index, size})) if index.len() * 3 < size * 4 -> (
   live = slots.flat_map(filled)
   room = index.len() * 2
   Map({
@@ -252,9 +256,11 @@ resized(Map({seed, slots, index, size})) if index.len() * 3 < size * 4 ->
     ),
     size: size,
   })
+)
 resized(map) -> map
 
 placed : (List(List((U64, Nat))), Nat, U64, Nat) -> List(List((U64, Nat)))
-placed(index, room, digest, position) ->
+placed(index, room, digest, position) -> (
   bucket = bucket_of(digest, room)
   index.set(bucket, [(digest, position), *index.get_or(bucket, [])]).ok_or([])
+)

@@ -12,7 +12,8 @@ down(0) -> 0
 down(Succ(k)) -> k
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   n = host.args.len()
   held = False.not().and(False.or(is_zero(down(n))))
   host.exit!(U8.of_nat(held.select(4, 0)))
+)

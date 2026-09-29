@@ -1,0 +1,7 @@
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat([1, 2].map(|n| (
+  n + 1
+  n
+)).sum()))

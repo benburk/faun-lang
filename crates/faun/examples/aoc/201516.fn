@@ -117,12 +117,13 @@ part2 : Str -> Result(Nat, _)
 part2(input) -> identify(input, Ranged)
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   aunts = parse_sues(stdin)?
   exact = identify_sue(aunts, Exact)?
   ranged = identify_sue(aunts, Ranged)?
   Ok({part1: exact, part2: ranged})
+)
 
 example : Str
 example() -> Str.join([

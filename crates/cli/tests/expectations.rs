@@ -21,10 +21,11 @@ fn a_test_build_asks_every_expectation_in_the_package() {
 
          expect double(2) == 4
          expect double(half(6)) == 7
-         expect
+         expect (
            doubled = [1, 2, 3].map(double)
            doubled.len() == 3
              & doubled.last().ok_or(0) == 6
+         )
 
          main!(host) -> host.exit!(9)",
     );
@@ -350,6 +351,23 @@ fn floats_read_add_divide_and_say_themselves() {
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 6));
 }
 
+/// Two numbers a program is handed, and what `bitwise-input` says of them.
+const BITWISE: [(&str, &str); 4] = [
+    ("12 10", "8 14 6 12 1 12288 0 8"),
+    ("0 0", "0 0 0 1 1 0 0 0"),
+    (
+        "340282366920938463463374607431768211457 18446744073709551617",
+        "1 340282366920938463481821351505477763073 \
+         340282366920938463481821351505477763072 \
+         115792089237316195423570985008687907853950549399482440966384333222776666062849 \
+         4 2 0 1",
+    ),
+    (
+        "4294967295 65",
+        "65 4294967295 4294967230 18446744065119617025 1 4294967295 127 65",
+    ),
+];
+
 /// Bitwise operations and powers of numbers read from what a program is
 /// handed, which nothing works out before it runs: each is recognized and
 /// answered as one operation, at a word where its operands' ranges say
@@ -361,9 +379,10 @@ fn bitwise_and_powers_of_numbers_read_at_run_time() {
         "main!(host) -> host.run_stdin!(app)
 
          app : {stdin: List(U8), *} -> Str
-         app(input) ->
+         app(input) -> (
            text = Str.from_utf8(input.stdin).ok_or(\"\")
            answer(text.trim().split(\" \").map(number))
+         )
 
          number : Str -> Nat
          number(word) -> Nat.from_str(word).ok_or(0)
@@ -376,22 +395,7 @@ fn bitwise_and_powers_of_numbers_read_at_run_time() {
          ].map(|n| n.to_str()), \" \")
          answer(_) -> \"\"",
     );
-    let cases = [
-        ("12 10", "8 14 6 12 1 12288 0 8"),
-        ("0 0", "0 0 0 1 1 0 0 0"),
-        (
-            "340282366920938463463374607431768211457 18446744073709551617",
-            "1 340282366920938463481821351505477763073 \
-             340282366920938463481821351505477763072 \
-             115792089237316195423570985008687907853950549399482440966384333222776666062849 \
-             4 2 0 1",
-        ),
-        (
-            "4294967295 65",
-            "65 4294967295 4294967230 18446744065119617025 1 4294967295 127 65",
-        ),
-    ];
-    for (input, said) in cases {
+    for (input, said) in BITWISE {
         let said: String = said.split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(
             support::run_file(&package.entry(), input.as_bytes()),
@@ -411,9 +415,10 @@ fn a_float_is_read_from_standard_input() {
         "main!(host) -> host.run_stdin!(app)
 
          app : {stdin: List(U8), *} -> Str
-         app(input) ->
+         app(input) -> (
            text = Str.from_utf8(input.stdin).ok_or(\"\")
            read(F64.from_str(text.trim()))
+         )
 
          read : Result(F64, [Malformed]) -> Str
          read(Ok(x)) -> x.mul(2.0).to_str()

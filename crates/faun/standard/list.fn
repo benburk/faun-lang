@@ -83,16 +83,17 @@ List(a) : [Nil, Cons(a, List(a))].(
   # Every state a left fold passes through, without the seed.
   trail : (List(a), b, (b, a) -> b) -> List(b)
   trail([], _, _) -> []
-  trail([head, *tail], state, f) ->
+  trail([head, *tail], state, f) -> (
     next = f(state, head)
     [next, *trail(tail, next, f)]
+  )
 
   # The same length, and equal elements in order, by the element's own
   # `equals`.
   # `hasher` with `xs` fed: its length, then each item in order, so two
   # lists written in sequence hash apart from one holding both.
   hash_into : (List(a), h) -> h where
-    Hasher(h)
+    Hasher(h),
     a.hash_into : (a, h) -> h
   hash_into(xs, hasher) ->
     fold(xs, hasher.write_u64(U64.of_nat(len(xs))), |fed, item| item.hash_into(fed))
@@ -108,7 +109,7 @@ List(a) : [Nil, Cons(a, List(a))].(
 
   # The elements added up from their type's nought.
   sum : List(a) -> a where
-    a.zero : a
+    a.zero : a,
     a.add : (a, a) -> a
   sum(values) -> values.fold(a.zero(), |total, value| total + value)
 
@@ -141,10 +142,11 @@ List(a) : [Nil, Cons(a, List(a))].(
   # The elements exchanged at `i` and `j`, each read before either is
   # written, so a list threaded through here is swapped where it lies.
   exchange : (List(a), Nat, Nat) -> Result(List(a), [OutOfBounds])
-  exchange(values, i, j) ->
+  exchange(values, i, j) -> (
     a = get(values, i)?
     b = get(values, j)?
     Ok(put(put(values, i, b), j, a))
+  )
 
   # `Ok` of every element mapped, where each maps; the first `Err` else.
   try_map : (List(a), a -> Result(b, e)) -> Result(List(b), e)
@@ -202,7 +204,7 @@ List(a) : [Nil, Cons(a, List(a))].(
   # turned round at the end, so gathering does no work proportional to what
   # a group already holds.
   group_by : (List(v), v -> k) -> Map(k, List(v)) where
-    k.hash_into : (k, Mixer) -> Mixer
+    k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   group_by(values, key) ->
     Map.map_values(fold(values, Map.empty(), |table, value| gathered(table, key(value), value)), reverse)
@@ -222,10 +224,11 @@ List(a) : [Nil, Cons(a, List(a))].(
   # pass can both rewrite a list and carry something out of it.
   map_accum : (List(a), s, (s, a) -> (s, b)) -> (s, List(b))
   map_accum([], state, _) -> (state, [])
-  map_accum([value, *rest], state, f) ->
+  map_accum([value, *rest], state, f) -> (
     (next, result) = f(state, value)
     (last, results) = map_accum(rest, next, f)
     (last, [result, *results])
+  )
 
   partition : (List(a), a -> Bool) -> (List(a), List(a))
   partition(values, keep) -> partition_into(values, keep, [], [])
@@ -287,7 +290,7 @@ reverse_into([head, *tail], output) -> reverse_into(tail, [head, *output])
 # none: the store `exchange` makes once its reads have succeeded.
 # `table` with `value` put before the rest of `key`'s group.
 gathered : (Map(k, List(v)), k, v) -> Map(k, List(v)) where
-  k.hash_into : (k, Mixer) -> Mixer
+  k.hash_into : (k, Mixer) -> Mixer,
   k.equals : (k, k) -> Bool
 gathered(table, key, value) -> table.insert(key, [value, *table.get_or(key, [])])
 
@@ -347,9 +350,10 @@ front([head, *_]) -> Ok(head)
 
 try_map_into : (List(a), a -> Result(b, e), List(b)) -> Result(List(b), e)
 try_map_into([], _, built) -> Ok(reverse_into(built, []))
-try_map_into([head, *tail], f, built) ->
+try_map_into([head, *tail], f, built) -> (
   converted = f(head)?
   try_map_into(tail, f, [converted, *built])
+)
 
 find_index_from : (List(a), a -> Bool, Nat) -> Result(Nat, [NotFound])
 find_index_from([], _, _) -> Err(NotFound)
@@ -382,9 +386,10 @@ enumerate_from([head, *tail], at) -> [(at, head), *enumerate_from(tail, at + 1)]
 
 # Once a window is short, every later one is too, so the walk ends there.
 windows_into : (List(a), Nat, List(List(a))) -> List(List(a))
-windows_into([head, *tail], size, built) ->
+windows_into([head, *tail], size, built) -> (
   window = List.take([head, *tail], size)
   windowed(window.len() == size, window, tail, (size, built))
+)
 windows_into([], 0, built) -> reverse_into(built, [[]])
 windows_into([], _, built) -> reverse_into(built, [])
 
@@ -397,9 +402,10 @@ windowed(False, _, _, (_, built)) -> reverse_into(built, [])
 merge_sort : (List(a), a -> k) -> List(a) where k.cmp : (k, k) -> Order
 merge_sort([], _) -> []
 merge_sort([only], _) -> [only]
-merge_sort(values, key) ->
+merge_sort(values, key) -> (
   (front, back) = List.split_at(values, List.len(values) / 2)
   merge_into(merge_sort(front, key), merge_sort(back, key), key, [])
+)
 
 # Two sorted lists as one, the smaller key first and the left one on a tie,
 # which is what keeps the sort stable.

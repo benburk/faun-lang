@@ -2,6 +2,7 @@
   (methods)
   (arguments)
   (tuple)
+  (block)
   (list)
   (record)
   (tuple_type)

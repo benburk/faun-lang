@@ -142,10 +142,11 @@ fn every_list_function_answers_what_ori_says() {
                  small(Succ(_)) -> 1
 
                  main! : Host -> []
-                 main!(host) ->
+                 main!(host) -> (
                    n = 4 + small(host.args.len())
                    xs = [0, 1, 2, 3, n - 1]
-                   host.exit!(U8.of_nat({answer}))"
+                   host.exit!(U8.of_nat({answer}))
+                 )"
             ),
         );
         assert_eq!(package.run(), *expected, "`{name}`: {answer}");
@@ -166,7 +167,7 @@ fn taking_a_lists_first_elements_is_a_view_of_it() {
          app(input) -> answer(input.stdin.map(|b| b.to_nat() - 48))
 
          answer : List(Nat) -> Str
-         answer(xs) ->
+         answer(xs) -> (
            cut = xs.blocks(3)
            (front, back) = xs.split_at(2)
            Str.join([
@@ -175,7 +176,8 @@ fn taking_a_lists_first_elements_is_a_view_of_it() {
              front.len() * 10 + back.len(),
              cut.complete.map(|b| b.fold(0, |s, x| s * 10 + x)).fold(0, |s, x| s + x),
              cut.remainder.fold(0, |s, x| s * 10 + x),
-           ].map(|n| n.to_str()), \",\")",
+           ].map(|n| n.to_str()), \",\")
+         )",
     );
     for (input, said) in [
         ("12345678", "1234,8,26,579,78"),

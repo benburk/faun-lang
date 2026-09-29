@@ -1,12 +1,12 @@
 //! The grammar of `grammar.ebnf`, read by recursive descent.
 //!
-//! A file is lines. Each begins with a keyword or an expression, and the token
-//! after that expression says what the line is; [`lines`](super::lines) makes
-//! the heads that are patterns into patterns, and groups the lines into items.
-//! Every choice is made by the next token, but for `Name =`, whose right side
-//! is a type because its head, already read, is a type's name. Each rule of
-//! the file is a method here, and the `ebnf` tests check that the file is
-//! LL(1) and that this reads what it does.
+//! A file is lines, each one item. A line begins with a keyword, a type's
+//! name, or an expression, and the token after that expression says what the
+//! line is; [`lines`](super::lines) makes the heads that are patterns into
+//! patterns. A body of several lines is a block, `(` … `)`, read as an
+//! expression, so a line is whole when it is read. Every choice is made by the
+//! next token. Each rule of the file is a method here, and the `ebnf` tests
+//! check that the file is LL(1) and that this reads what it does.
 //!
 //! A line that cannot be read is an error, and reading goes on from the next
 //! line, so one file's errors are all found at once.
@@ -16,14 +16,42 @@ use super::ast::{
     Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span,
     StringPart, Type, UnaryOp, Width,
 };
+use super::diagnostic::{Advice, Advised};
 use super::lex::{Kind, Token};
-use super::lines::{self, Equals, Line, Statement, Trailer, Typed};
+use super::lines::{self, Line, Statement, Typed};
 
 /// Why a line could not be read.
 #[derive(Debug)]
 pub(crate) struct SyntaxError {
     pub(crate) span: Span,
     pub(crate) message: String,
+    pub(crate) advice: Advice,
+}
+
+impl SyntaxError {
+    fn new(span: Span, message: impl Into<String>) -> Self {
+        Self {
+            span,
+            message: message.into(),
+            advice: Advice::default(),
+        }
+    }
+}
+
+impl Advised for SyntaxError {
+    fn advice(&mut self) -> &mut Advice {
+        &mut self.advice
+    }
+}
+
+impl From<lines::Error> for SyntaxError {
+    fn from(error: lines::Error) -> Self {
+        Self {
+            span: error.span,
+            message: error.message,
+            advice: error.advice,
+        }
+    }
 }
 
 type Parsed<T> = Result<T, SyntaxError>;
@@ -198,10 +226,7 @@ impl Parser<'_> {
                 }
             }
         };
-        SyntaxError {
-            span: token.span(),
-            message,
-        }
+        SyntaxError::new(token.span(), message)
     }
 
     /// Lines up to the end of the file, or of a method block, each read or
@@ -262,7 +287,8 @@ impl Parser<'_> {
         }
     }
 
-    /// `line`: a keyword's line, or an expression and what follows it.
+    /// `line`: a keyword's line, a type's, or an expression and what
+    /// follows it.
     fn line(&mut self) -> Parsed<Line> {
         match self.peek() {
             Kind::KwPackage => self.package().map(Line::Header),
@@ -270,51 +296,107 @@ impl Parser<'_> {
             Kind::KwExport => self.exports().map(Line::Exports),
             Kind::KwExpect => {
                 let keyword = self.bump();
-                Ok(Line::Expect(keyword.span(), self.statement()?))
+                let value = self.expr()?;
+                self.no_binding_after()?;
+                Ok(Line::Expect(keyword.span(), value))
             }
+            Kind::TypeIdent => self.type_line(),
             _ => {
                 let head = self.expr()?;
-                let trailer = self.trailer(lines::names_a_type(&head, self.source))?;
-                Ok(Line::new(head, trailer))
+                match self.peek() {
+                    Kind::Colon => {
+                        self.bump();
+                        Ok(Line::Typed(head, self.typed()?))
+                    }
+                    Kind::KwIf | Kind::Arrow => self.clause(head),
+                    Kind::Eq => Err(SyntaxError::new(
+                        self.tokens[self.at].span(),
+                        "a binding belongs to a block: a body of several lines is `-> (` … `)`",
+                    )),
+                    Kind::Newline | Kind::Eof | Kind::RParen => Err(SyntaxError::new(
+                        head.span,
+                        "this line belongs to no definition: a body of several lines is \
+                         `-> (` … `)`",
+                    )),
+                    _ => {
+                        self.note("`->`");
+                        self.note("`:`");
+                        Err(self.fail())
+                    }
+                }
             }
         }
     }
 
-    /// `trailer`, or `after-type` where the head is a type's name alone.
-    fn trailer(&mut self, names_a_type: bool) -> Parsed<Option<Trailer>> {
-        Ok(Some(match self.peek() {
+    /// A line beginning with a type's name, perhaps with its parameters:
+    /// an alias, a constraint alias, or a data declaration.
+    fn type_line(&mut self) -> Parsed<Line> {
+        let token = self.bump();
+        let mut head = atom(token, ExprKind::Name(name(token)));
+        if self.peek() == Kind::CallParen {
+            let (arguments, end) = self.arguments()?;
+            head = Expr {
+                span: head.span.through(end),
+                kind: ExprKind::Call(Box::new(head), arguments),
+            };
+        }
+        match self.peek() {
             Kind::Eq => {
                 self.bump();
-                Trailer::Equals(if self.peek() == Kind::KwWhere {
-                    Equals::Constraints(self.constraints()?)
-                } else if names_a_type {
-                    Equals::Type(self.ty()?)
+                if self.peek() == Kind::KwWhere {
+                    Ok(Line::Constraints(head, self.constraints()?))
                 } else {
-                    Equals::Value(self.expr()?)
-                })
+                    Ok(Line::Alias(head, self.ty()?))
+                }
             }
             Kind::Colon => {
                 self.bump();
-                Trailer::Typed(self.typed()?)
+                Ok(Line::Typed(head, self.typed()?))
             }
-            Kind::KwIf | Kind::Arrow => {
-                let guard = match self.eat(Kind::KwIf) {
-                    Some(_) => Some(self.expr()?),
-                    None => None,
-                };
-                self.expect(Kind::Arrow, "`->`")?;
-                Trailer::Clause {
-                    guard,
-                    first: self.statement()?,
-                }
+            Kind::Arrow | Kind::KwIf => Err(SyntaxError::new(
+                head.span,
+                "a clause begins with its name and its patterns: `name(patterns) -> ...`",
+            )),
+            _ => {
+                self.note("`=`");
+                self.note("`:`");
+                Err(self.fail())
             }
-            _ => return Ok(None),
-        }))
+        }
+    }
+
+    /// `clause`: `if guard -> body`, after its head.
+    fn clause(&mut self, head: Expr) -> Parsed<Line> {
+        let guard = match self.eat(Kind::KwIf) {
+            Some(_) => Some(self.expr()?),
+            None => None,
+        };
+        self.expect(Kind::Arrow, "`->`")?;
+        let body = self.expr()?;
+        self.no_binding_after()?;
+        Ok(Line::Clause { head, guard, body })
+    }
+
+    /// A clause's or an `expect`'s body read as one expression, which a
+    /// binding cannot follow: one written after `->` wants a block.
+    fn no_binding_after(&self) -> Parsed<()> {
+        if self.peek() == Kind::Eq {
+            return Err(SyntaxError::new(
+                self.tokens[self.at].span(),
+                "a binding belongs to a block: a body of several lines is `-> (` … `)`",
+            ));
+        }
+        Ok(())
     }
 
     /// `statement`: a value, or `pattern = value`.
     fn statement(&mut self) -> Parsed<Statement> {
         let value = self.expr()?;
+        self.statement_after(value)
+    }
+
+    /// The statement `value` begins.
+    fn statement_after(&mut self, value: Expr) -> Parsed<Statement> {
         Ok(match self.eat(Kind::Eq) {
             Some(_) => Statement::Binding(value, self.expr()?),
             None => Statement::Value(value),
@@ -442,45 +524,65 @@ impl Parser<'_> {
         Ok(self.separated(true, begins_type, "a type", Self::ty)?.0)
     }
 
-    /// `constraints`: after `where`, aliases, and a member's constraint
-    /// last.
+    /// `constraints`: after `where`, constraints parted by commas. A comma
+    /// never ends a line, so a list of one constraint to a line is one
+    /// line, and the last takes no comma: the line would run on.
     fn constraints(&mut self) -> Parsed<(Vec<Constraint>, Span)> {
         self.bump();
-        let mut constraints = Vec::new();
-        while let Some(head) = self.eat(Kind::TypeIdent) {
+        let mut constraints = vec![self.constraint()?];
+        while let Some(comma) = self.eat(Kind::Comma) {
+            let member = self.peek() == Kind::Ident
+                && self
+                    .tokens
+                    .get(self.at + 1)
+                    .is_some_and(|next| next.kind == Kind::Dot);
+            if self.peek() != Kind::TypeIdent && !member {
+                return Err(SyntaxError::new(
+                    comma.span(),
+                    "a `where` list's last constraint takes no comma: the line runs on into \
+                     the next",
+                ));
+            }
+            constraints.push(self.constraint()?);
+        }
+        self.note("`,`");
+        self.constrained(constraints)
+    }
+
+    /// `constraint`: an alias applied, `Name(a)`, or a member's type,
+    /// `a.member : type`.
+    fn constraint(&mut self) -> Parsed<Constraint> {
+        if let Some(head) = self.eat(Kind::TypeIdent) {
             self.expect(Kind::CallParen, "`(`")?;
             let arguments = self.types()?;
             let close = self.expect(Kind::RParen, "`)`")?;
-            constraints.push(Constraint::Alias {
+            return Ok(Constraint::Alias {
                 span: head.span().through(close.span()),
                 name: name(head),
                 arguments,
             });
-            if self.eat(Kind::Comma).is_none() {
-                self.note("`,`");
-                return self.constrained(constraints);
+        }
+        let Some(variable) = self.eat(Kind::Ident) else {
+            self.note("a constraint");
+            return Err(self.fail());
+        };
+        self.expect(Kind::Dot, "`.`")?;
+        let member = match self.peek() {
+            Kind::Ident | Kind::EffectIdent => self.bump(),
+            _ => {
+                self.note("a member's name");
+                return Err(self.fail());
             }
-        }
-        if let Some(variable) = self.eat(Kind::Ident) {
-            self.expect(Kind::Dot, "`.`")?;
-            let member = match self.peek() {
-                Kind::Ident | Kind::EffectIdent => self.bump(),
-                _ => {
-                    self.note("a member's name");
-                    return Err(self.fail());
-                }
-            };
-            self.expect(Kind::Colon, "`:`")?;
-            let (parameters, result) = self.signature()?;
-            constraints.push(Constraint::Member {
-                span: variable.span().through(type_span(&result)),
-                variable: name(variable),
-                member: name(member),
-                parameters,
-                result,
-            });
-        }
-        self.constrained(constraints)
+        };
+        self.expect(Kind::Colon, "`:`")?;
+        let (parameters, result) = self.signature()?;
+        Ok(Constraint::Member {
+            span: variable.span().through(type_span(&result)),
+            variable: name(variable),
+            member: name(member),
+            parameters,
+            result,
+        })
     }
 
     /// Constraints and where they end, if there are any.
@@ -735,10 +837,7 @@ impl Parser<'_> {
             .into_iter()
             .map(|parameter| lines::pattern(parameter, self.source))
             .collect::<Result<_, _>>()
-            .map_err(|error| SyntaxError {
-                span: error.span,
-                message: error.message,
-            })?;
+            .map_err(SyntaxError::from)?;
         Ok(Expr {
             span: open.span().through(body.span),
             kind: ExprKind::Lambda(patterns, Box::new(body)),
@@ -827,24 +926,71 @@ impl Parser<'_> {
         }
     }
 
-    /// A tuple, or one value grouped.
+    /// After `(` and one expression, the next token says which: `,` a
+    /// tuple, `=` or a line's end a block, and `)` one value grouped.
     fn parenthesized(&mut self) -> Parsed<Expr> {
         let open = self.bump();
-        let (mut members, trailing) =
-            self.separated(true, begins_expr, "an expression", Self::expr)?;
+        let first = self.expr()?;
+        match self.peek() {
+            Kind::Comma => self.tuple(open, first),
+            Kind::Eq | Kind::Newline => self.block(open, first),
+            _ => {
+                self.note("`,`");
+                self.note("`=`");
+                let close = self.expect(Kind::RParen, "`)`")?;
+                Ok(Expr {
+                    span: open.span().through(close.span()),
+                    ..first
+                })
+            }
+        }
+    }
+
+    /// The rest of a tuple, after its first member.
+    fn tuple(&mut self, open: Token, first: Expr) -> Parsed<Expr> {
+        let mut members = vec![first];
+        while self.eat(Kind::Comma).is_some() {
+            if !begins_expr(self.peek()) {
+                self.note("an expression");
+                break;
+            }
+            members.push(self.expr()?);
+        }
+        self.note("`,`");
         let span = open
             .span()
             .through(self.expect(Kind::RParen, "`)`")?.span());
-        Ok(match members.len() {
-            1 if !trailing => Expr {
-                span,
-                ..members.pop().expect("one value")
-            },
-            1 => return Err(one_tuple(span)),
-            _ => Expr {
-                span,
-                kind: ExprKind::Tuple(members),
-            },
+        if members.len() == 1 {
+            return Err(one_tuple(span));
+        }
+        Ok(Expr {
+            span,
+            kind: ExprKind::Tuple(members),
+        })
+    }
+
+    /// `block`: statements a line apiece, the last its answer, after the
+    /// first expression.
+    fn block(&mut self, open: Token, first: Expr) -> Parsed<Expr> {
+        let mut statements = vec![self.statement_after(first)?];
+        while self.eat(Kind::Newline).is_some() {
+            statements.push(self.statement()?);
+        }
+        // A clause's `->` and a signature's `:` stand in no block: this one
+        // ran on into the next item, never closed.
+        if matches!(self.peek(), Kind::Arrow | Kind::Colon) {
+            return Err(SyntaxError::new(
+                open.span(),
+                "this `(` is not closed: its block runs on into the next item",
+            )
+            .label("opened here"));
+        }
+        self.note("a new line");
+        let close = self.expect(Kind::RParen, "`)`")?;
+        let body = lines::body(statements, self.source)?;
+        Ok(Expr {
+            span: open.span().through(close.span()),
+            kind: ExprKind::Block(Box::new(body)),
         })
     }
 
@@ -966,10 +1112,10 @@ enum Operand {
 }
 
 fn one_tuple(span: Span) -> SyntaxError {
-    SyntaxError {
+    SyntaxError::new(
         span,
-        message: "a tuple has at least two members: write `(a)` to group one".to_owned(),
-    }
+        "a tuple has at least two members: write `(a)` to group one",
+    )
 }
 
 fn name(token: Token) -> Name {

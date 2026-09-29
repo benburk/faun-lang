@@ -1,6 +1,7 @@
 import std.host {Host}
 
 twice : Nat -> Nat
-twice(n) ->
+twice(n) -> (
   (a, a) = (n, n)
   a
+)

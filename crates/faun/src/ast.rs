@@ -80,11 +80,14 @@ pub enum Item {
     Expect(Clause),
 }
 
-/// `Name = Type`: a second spelling of a type, which mints nothing.
+/// `Name = Type`, or `Name(a) = Type`: a second spelling of a type, which
+/// mints nothing. Where it has parameters, each use applies it to as many
+/// types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AliasDecl {
     pub span: Span,
     pub name: Name,
+    pub params: Vec<Name>,
     pub ty: Type,
 }
 
@@ -428,6 +431,9 @@ pub enum ExprKind {
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
     /// `value?`: an `Ok`'s value, or the `Err` answered at once.
     Try(Box<Expr>),
+    /// `(x = f(y)` … `x + 1)`: bindings, then the answer, in parentheses.
+    /// Its names are seen by its later lines and its answer alone.
+    Block(Box<Body>),
     /// `_`, or a rest with nothing after its `*`: read as an expression
     /// before its line says it is a pattern, and refused by the parser
     /// wherever it is not one, so it never leaves the parser.

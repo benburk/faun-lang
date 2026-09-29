@@ -8,12 +8,13 @@
 import std.host {Files, File, Chunk, IoError, Host, Mode.*}
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   copied = copy!(host.files)
   host.exit!(U8.of_nat(copied.ok_or(2)))
+)
 
 copy! : Files -> Result(Nat, IoError)
-copy!(files) ->
+copy!(files) -> (
   source = files.open!("input.txt", Read)?
   reading = source.read!(64)
   closing = source.close!()
@@ -30,6 +31,7 @@ copy!(files) ->
   above = files.open!("../outside.txt", Read)
   long = files.open!(twice(twice(twice(twice("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))), Read)
   refused!(again, above, long)
+)
 
 # What a read held: nothing, once the file has ended.
 held : Chunk -> List(U8)
@@ -41,24 +43,27 @@ twice : Str -> Str
 twice(text) -> text.concat(text)
 
 write_and_close! : (File, List(U8)) -> Result(Nat, IoError)
-write_and_close!(file, bytes) ->
+write_and_close!(file, bytes) -> (
   writing = file.write_all!(bytes)
   closing = file.close!()
   count = writing?
   done = closing?
   Ok(count)
+)
 
 refused! : (Result(File, IoError), Result(File, IoError), Result(File, IoError)) -> Result(Nat, IoError)
 refused!(Err(_), Err(_), Err(_)) -> Ok(0)
-refused!(again, above, long) ->
+refused!(again, above, long) -> (
   a = shut!(again)
   b = shut!(above)
   c = shut!(long)
   Ok(3)
+)
 
 # Close a file opened where none should have been.
 shut! : Result(File, IoError) -> Nat
-shut!(Ok(file)) ->
+shut!(Ok(file)) -> (
   closing = file.close!()
   1
+)
 shut!(Err(_)) -> 0

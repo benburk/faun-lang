@@ -1,10 +1,10 @@
 error: `maybe!` uses up the `File` in its first parameter on some ways it goes on and not others
-  --> a_file_closed_on_one_way_a_function_goes_on_and_kept_on_another.fn:18:12
+  --> a_file_closed_on_one_way_a_function_goes_on_and_kept_on_another.fn:20:12
    |
-18 |   closed = file.close!()
+20 |   closed = file.close!()
    |            ^^^^ used up here
 ...
-20 | maybe!(_, _) -> 1
+23 | maybe!(_, _) -> 1
    |                 - still held where `maybe!` answers
    |
    = help: use it up on every way the function goes on, or on none, where the caller does

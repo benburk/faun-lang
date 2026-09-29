@@ -10,8 +10,9 @@ import template {compile_template}
 
 app : {stdin: List(U8), args: List(Str)} -> Result(Str, _)
 app({stdin: _, args: []}) -> Err(Usage("template_builder <function-name> < template"))
-app({stdin: bytes, args: [name, *]}) ->
+app({stdin: bytes, args: [name, *]}) -> (
   text = Str.from_utf8(bytes)?
   compile_template(name, text).map_err(Invalid)
+)
 
 main!(host) -> host.run_stdin!(app)

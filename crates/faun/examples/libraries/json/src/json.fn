@@ -24,9 +24,10 @@ Json : [
   # Reading and writing follow the stdlib's naming: `Json.from_str` parses
   # like `Nat.from_str` does, and `to_str` renders like every `to_str` does.
   from_str : Str -> Result(Json, ParseError)
-  from_str(text) ->
+  from_str(text) -> (
     (value, rest) = parse_value(skip_space(text.to_utf8()))?
     parsed_all(value, rest)
+  )
 
   to_str : Json -> Str
   to_str(Null) -> "null"
@@ -281,14 +282,16 @@ parse_value([x, *rest]) if is_space(x) -> parse_value(rest)
 parse_value(['n', 'u', 'l', 'l', *rest]) -> Ok(parsed_json(Null, rest))
 parse_value(['t', 'r', 'u', 'e', *rest]) -> Ok(parsed_json(Bool(True), rest))
 parse_value(['f', 'a', 'l', 's', 'e', *rest]) -> Ok(parsed_json(Bool(False), rest))
-parse_value(['"', *rest]) ->
+parse_value(['"', *rest]) -> (
   (text, after) = parse_string(rest, [])?
   Ok(parsed_json(String(text), after))
+)
 parse_value(['[', *rest]) -> parse_array(rest, [])
 parse_value(['{', *rest]) -> parse_object(rest, [])
-parse_value([first, *rest]) if first.equals('-') | first.is_digit() ->
+parse_value([first, *rest]) if first.equals('-') | first.is_digit() -> (
   (n, after) = parse_integer([first, *rest])?
   Ok(parsed_json(Number(n), after))
+)
 parse_value([_, *]) -> Err(UnexpectedToken)
 
 # Whether anything but whitespace followed the one parsed value.
@@ -302,9 +305,10 @@ parse_array : (List(U8), List(Json)) -> Result((Json, List(U8)), ParseError)
 parse_array([], acc) -> Err(UnexpectedEnd)
 parse_array([x, *rest], acc) if is_space(x) -> parse_array(rest, acc)
 parse_array([']', *rest], acc) -> Ok(parsed_json(Array(acc.reverse()), rest))
-parse_array(bytes, acc) ->
+parse_array(bytes, acc) -> (
   (value, after) = parse_value(bytes)?
   parse_array_after(after, acc, value)
+)
 
 # The remainder after one element decides the array: a `]` closes it, a comma
 # demands another element, anything else is malformed. Computed, so it enters a
@@ -323,16 +327,18 @@ parse_object : (List(U8), List((Str, Json))) -> Result((Json, List(U8)), ParseEr
 parse_object([], acc) -> Err(UnexpectedEnd)
 parse_object([x, *rest], acc) if is_space(x) -> parse_object(rest, acc)
 parse_object(['}', *rest], acc) -> Ok(parsed_json(Object(acc.reverse()), rest))
-parse_object(['"', *key_bytes], acc) ->
+parse_object(['"', *key_bytes], acc) -> (
   (key, after_key) = parse_string(key_bytes, [])?
   parse_object_colon(skip_space(after_key), acc, key)
+)
 parse_object([_, *], acc) -> Err(UnexpectedToken)
 
 # After the key, a colon must separate it from the value.
 parse_object_colon : (List(U8), List((Str, Json)), Str) -> Result((Json, List(U8)), ParseError)
-parse_object_colon([':', *value_bytes], acc, key) ->
+parse_object_colon([':', *value_bytes], acc, key) -> (
   (value, after) = parse_value(value_bytes)?
   parse_object_after(after, acc, key, value)
+)
 parse_object_colon(_, acc, key) -> Err(ExpectedColon)
 
 # The remainder after one member: `}` closes the object, a comma demands
@@ -374,9 +380,10 @@ parse_string(['\\', 'f', *rest], acc) -> parse_string(rest, acc.prepend(12))
 parse_string(['\\', 'n', *rest], acc) -> parse_string(rest, acc.prepend('\n'))
 parse_string(['\\', 'r', *rest], acc) -> parse_string(rest, acc.prepend('\r'))
 parse_string(['\\', 't', *rest], acc) -> parse_string(rest, acc.prepend('\t'))
-parse_string(['\\', 'u', a, b, c, d, *rest], acc) ->
+parse_string(['\\', 'u', a, b, c, d, *rest], acc) -> (
   code = hex4(a, b, c, d)?
   unicode_escape(code, rest, acc)
+)
 parse_string(['\\', _, *], _) -> Err(InvalidEscape)
 parse_string([b, *rest], acc) if b.to_nat() < 32 -> Err(InvalidString)
 parse_string([b, *rest], acc) -> parse_string(rest, acc.prepend(b))
@@ -389,9 +396,10 @@ string_done(Err(_), _) -> Err(InvalidUnicode)
 # a lone low surrogate, or a high one with no partner — is invalid.
 unicode_escape(code, rest, acc) if code < 0xd800 | 0xdfff < code ->
   parse_string(rest, prepend_codepoint(acc, code))
-unicode_escape(code, ['\\', 'u', e, f, g, h, *after], acc) if code <= 0xdbff ->
+unicode_escape(code, ['\\', 'u', e, f, g, h, *after], acc) if code <= 0xdbff -> (
   low = hex4(e, f, g, h)?
   pair_low(code, low, after, acc)
+)
 unicode_escape(_, _, _) -> Err(InvalidUnicode)
 
 pair_low(high, low, after, acc) if 0xdc00 <= low & low <= 0xdfff ->
@@ -421,12 +429,13 @@ prepend_codepoint(acc, code) -> acc
 # A hex quartet fails as `InvalidUnicode` directly: the one place JSON uses
 # hex is a `\u` escape, so the error needs no translation at the call sites.
 hex4 : (U8, U8, U8, U8) -> Result(Nat, ParseError)
-hex4(a, b, c, d) ->
+hex4(a, b, c, d) -> (
   x = hex_digit(a)?
   y = hex_digit(b)?
   z = hex_digit(c)?
   w = hex_digit(d)?
   Ok(x.mul(0x1000).add(y.mul(0x100)).add(z.mul(0x10)).add(w))
+)
 
 hex_digit : U8 -> Result(Nat, ParseError)
 hex_digit(b) if b >= '0' & b <= '9' -> Ok(b.to_nat().sub('0'))
@@ -442,9 +451,10 @@ parse_integer(digits) -> parse_natural(digits, Int.of_nat)
 # no leading zero. `sign` turns the accumulated `Nat` into the signed `Int`.
 parse_natural : (List(U8), Nat -> Int) -> Result((Int, List(U8)), ParseError)
 parse_natural(['0', *rest], sign) -> finish_integer(sign(0), rest)
-parse_natural([first, *rest], sign) if nonzero_digit(first) ->
+parse_natural([first, *rest], sign) if nonzero_digit(first) -> (
   (n, after) = take_digits(rest, first.to_nat().sub('0'))
   finish_integer(sign(n), after)
+)
 parse_natural(_, _) -> Err(InvalidNumber)
 
 finish_integer : (Int, List(U8)) -> Result((Int, List(U8)), ParseError)
@@ -520,9 +530,10 @@ decoded_tail(found, Decoded(values, _)) -> Decoded(values.prepend(found), [])
 # Rendering --------------------------------------------------------------
 
 render_string : Str -> Str
-render_string(text) ->
+render_string(text) -> (
   escaped = Str.from_utf8(text.to_utf8().flat_map(escape_byte)).ok_or("")
   "\"${escaped}\""
+)
 
 # The escape table, mirroring the one `parse_string` reads. Numeral arms on
 # a `U8` are equality tests, so the `_` arm is what makes this exhaustive.
@@ -536,10 +547,11 @@ escape_byte(12) -> ['\\', 'f']
 escape_byte('\n') -> ['\\', 'n']
 escape_byte('\r') -> ['\\', 'r']
 escape_byte('\t') -> ['\\', 't']
-escape_byte(control) if control.to_nat() < 32 ->
+escape_byte(control) if control.to_nat() < 32 -> (
   high = hex_upper(control.to_nat().div(0x10))
   low = hex_upper(control.to_nat().mod(0x10))
   ['\\', 'u', '0', '0', high, low]
+)
 escape_byte(other) -> [other]
 
 hex_upper : Nat -> U8

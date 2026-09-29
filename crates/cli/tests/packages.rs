@@ -100,10 +100,11 @@ fn a_loop_handed_different_strings_is_copied_for_each_where_that_decides_somethi
         &format!(
             "import std.host {{Host}}\n\n{seek}\
              main! : Host -> []\n\
-             main!(host) ->\n  \
+             main!(host) -> (\n  \
                n = host.args.len()\n  \
                host.exit!(U8.of_nat(seek(\"a.txt\".to_utf8(), n) + seek(\"b.txt\".to_utf8(), n) \
-               + count(\"a\".to_utf8(), n) + count(\"bb\".to_utf8(), n)))\n"
+               + count(\"a\".to_utf8(), n) + count(\"bb\".to_utf8(), n)))\n\
+             )\n"
         ),
     );
     let mut barb = faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();

@@ -47,9 +47,10 @@ filled(bytes, Ok(_)) -> Ok(Data(bytes))
 read_chunks! : (r, Nat, List(U8)) -> Result(List(U8), [Io(ReadError), LimitExceeded]) where
   r.read! : (r, Nat) -> Result(Chunk, ReadError)
 read_chunks!(_, 0, _) -> Err(LimitExceeded)
-read_chunks!(input, Succ(fuel), read) ->
+read_chunks!(input, Succ(fuel), read) -> (
   got = input.read!(65536)
   read_on!(input, fuel, read, got)
+)
 
 read_on! : (r, Nat, List(U8), Result(Chunk, ReadError)) -> Result(List(U8), [Io(ReadError), LimitExceeded]) where
   r.read! : (r, Nat) -> Result(Chunk, ReadError)
@@ -61,19 +62,21 @@ read_on!(input, fuel, read, Ok(Data(chunk))) -> read_chunks!(input, fuel, read.e
 # reads.
 read_text! : (r, Nat) -> Result(Str, [Io(ReadError), LimitExceeded, InvalidUtf8]) where
   r.read! : (r, Nat) -> Result(Chunk, ReadError)
-read_text!(input, fuel) ->
+read_text!(input, fuel) -> (
   read = read_chunks!(input, fuel, [])
   bytes = read?
   text = Str.from_utf8(bytes)?
   Ok(text)
+)
 
 # All of `bytes`: how many that is.
 write_everything! : (w, List(U8)) -> Result(Nat, WriteError) where
   w.write! : (w, List(U8)) -> Result(Nat, WriteError)
-write_everything!(output, bytes) ->
+write_everything!(output, bytes) -> (
   wrote = write_rest!(output, bytes, bytes.len(), bytes.len())
   done = wrote?
   Ok(bytes.len())
+)
 
 # Write the last `left` of `bytes` until none are left, one fuel a byte: a
 # stream that keeps taking none runs out of it. Nothing is counted, since a
@@ -85,19 +88,21 @@ write_rest! : (w, List(U8), Nat, Nat) -> Result({}, WriteError) where
   w.write! : (w, List(U8)) -> Result(Nat, WriteError)
 write_rest!(_, _, 0, _) -> Ok({})
 write_rest!(_, _, _, 0) -> Err(Other(5))
-write_rest!(output, bytes, left, Succ(fuel)) ->
+write_rest!(output, bytes, left, Succ(fuel)) -> (
   wrote = output.write!(bytes.drop(bytes.len() - left))
   went = wrote?
   write_rest!(output, bytes, left - went, fuel)
+)
 
 # What a runner finishes with: nought where what it printed was written.
 # `value` said on `output`, and a line's end after it.
 finish! : (o, a) -> U8 where
-  o.write_all! : (o, List(U8)) -> Result(Nat, WriteError)
+  o.write_all! : (o, List(U8)) -> Result(Nat, WriteError),
   a.to_str : a -> Str
-finish!(output, value) ->
+finish!(output, value) -> (
   wrote = output.write_all!("${value}\n".to_utf8())
   written_status(wrote)
+)
 
 written_status : Result(Nat, WriteError) -> U8
 written_status(Ok(_)) -> 0
@@ -107,9 +112,10 @@ written_status(Err(_)) -> 1
 # could not be written.
 report! : (w, Str) -> U8 where
   w.write_all! : (w, List(U8)) -> Result(Nat, WriteError)
-report!(errors, text) ->
+report!(errors, text) -> (
   wrote = errors.write_all!("error: ${text}\n".to_utf8())
   reported_status(wrote)
+)
 
 reported_status : Result(Nat, WriteError) -> U8
 reported_status(Ok(_)) -> 1
@@ -124,8 +130,8 @@ unread!(errors, LimitExceeded) -> report!(errors, "LimitExceeded")
 # answers on `output`; input that could not be read is reported on `errors`,
 # and the app is not run.
 serve_stdin! : (o, w, Result(List(U8), [Io(ReadError), LimitExceeded]), List(Str), {args: List(Str), stdin: List(U8)} -> a) -> U8 where
-  o.write_all! : (o, List(U8)) -> Result(Nat, WriteError)
-  w.write_all! : (w, List(U8)) -> Result(Nat, WriteError)
+  o.write_all! : (o, List(U8)) -> Result(Nat, WriteError),
+  w.write_all! : (w, List(U8)) -> Result(Nat, WriteError),
   a.to_str : a -> Str
 serve_stdin!(_, errors, Err(error), _, _) -> unread!(errors, error)
 serve_stdin!(output, _, Ok(input), args, app) -> finish!(output, app({args: args, stdin: input}))

@@ -1,0 +1,4 @@
+import std.host {Host}
+
+first : List(Result(Nat, [Gone, Other])) -> Result(Nat, [Gone])
+first(results) -> results.get_or(0, Err(Gone))

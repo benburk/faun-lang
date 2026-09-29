@@ -3,6 +3,7 @@ import std.host {Host}
 Shape : [Square(Nat), Circle(Nat)]
 
 size : Shape -> Nat
-size(shape) ->
+size(shape) -> (
   Shape(n) = shape
   n
+)

@@ -103,10 +103,11 @@ U8 : Nat.(
   # The bits moved up by `amount`, those past the top coming round to the
   # bottom. The width round is no change.
   rotate_left : (U8, Nat) -> U8
-  rotate_left(U8(a), amount) ->
+  rotate_left(U8(a), amount) -> (
     # The bits moved up, below the width, and those past it, above.
     moved = a * 2.pow(amount % 8)
     U8(moved % 256 + moved / 256)
+  )
 
   rotate_right : (U8, Nat) -> U8
   rotate_right(word, amount) -> rotate_left(word, 8 - amount % 8)

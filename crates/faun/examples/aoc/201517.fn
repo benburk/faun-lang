@@ -42,9 +42,10 @@ solve : (Str, Nat) -> Result(List(Nat), _)
 solve(input, liters) -> Ok(container_counts(inventory(input)?, liters, 0))
 
 fewest_ways : List(Nat) -> Result(Nat, [Empty])
-fewest_ways(counts) ->
+fewest_ways(counts) -> (
   fewest = counts.min()?
   Ok(counts.count(|used| used == fewest))
+)
 
 part1 : (Str, Nat) -> Result(Nat, _)
 part1(input, liters) -> Ok(solve(input, liters)?.len())
@@ -56,10 +57,11 @@ target : Nat
 target() -> 150
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   counts = solve(stdin, target())?
   Ok({part1: counts.len(), part2: fewest_ways(counts)?})
+)
 
 example : Str
 example() -> "20\n15\n10\n5\n5\n"

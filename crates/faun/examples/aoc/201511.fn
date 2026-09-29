@@ -13,9 +13,10 @@ confusing(letter) -> ['i', 'l', 'o'].contains(letter)
 
 # The next letter in counting order, stepping over the confusing three.
 bump : U8 -> U8
-bump(letter) ->
+bump(letter) -> (
   next = letter + 1
   confusing(next).select(next + 1, next)
+)
 
 # The rightmost letter bumps first, so the walk runs over the reversed
 # password; a z rolls over and carries into the column to its left.
@@ -73,18 +74,20 @@ search(candidate, Succ(remaining)) -> search(increment(candidate), remaining)
 search(_, 0) -> Err(Exhausted)
 
 next_password : Str -> Result(Str, [Exhausted, NotAscii])
-next_password(password) ->
+next_password(password) -> (
   found = search(sanitize(increment(password.to_utf8())), Nat.pow(26, 8))?
   Ok(Str.from_ascii(found)?)
+)
 
 # Part two is the same search started from part one's answer: the password
 # expired again, so it increments again.
 app : {stdin: List(U8), *} -> Result({part1: Str, part2: Str}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   first = next_password(stdin.trim())?
   second = next_password(first)?
   Ok({part1: first, part2: second})
+)
 
 # The Security-Elf's three examples: a straight spoiled by confusing
 # letters, two pairs without a straight, a straight with only one pair.

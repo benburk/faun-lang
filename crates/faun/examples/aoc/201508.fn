@@ -32,9 +32,10 @@ part2 : Str -> Nat
 part2(input) -> input.trim().lines().map(encode_gap).sum()
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   Ok({part1: part1(stdin), part2: part2(stdin)})
+)
 
 example : Str
 example() -> "\"\"\n\"abc\"\n\"aaa\\\"aaa\"\n\"\\x27\"\n"

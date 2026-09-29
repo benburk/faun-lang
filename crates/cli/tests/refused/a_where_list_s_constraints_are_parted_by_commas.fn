@@ -1,0 +1,9 @@
+import std.host {Host}
+
+total : List(a) -> a where
+  a.zero : a
+  a.add : (a, a) -> a
+total(values) -> values.fold(a.zero(), |sum, value| sum + value)
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(total([1, 2])))

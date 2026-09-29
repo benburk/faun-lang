@@ -1,6 +1,7 @@
 import std.host {Host}
 
 main! : Host -> []
-main!(host) ->
+main!(host) -> (
   count = host.args.len()
   host.exit!(U8.of_nat(count))
+)

@@ -100,7 +100,10 @@ import, and rows of tags join by unification where values meet, so
 `[NotFound, SomethingElse]` and `[Blah, NotFound]` flow into one
 `[Blah, NotFound, SomethingElse]`. A row written in a signature is closed for
 the body, which may answer only those tags, and open to callers, which may
-join it with their own. A row in a parameter is what a definition handles
+join it with their own. A closed row a body answers where its signature's
+row stands is rebuilt in that row, however the body came by it: bound by a
+pattern, answered by a call such as `results.get_or(0, Err(Gone))`, or read
+from a field. A row in a parameter is what a definition handles
 and stays closed. Clauses that take a row apart with no catch-all close it,
 so a caller cannot hand them a tag no clause matches. A closed row answered
 where a wider one is still being worked out joins it, as in Ori: a definition
@@ -230,6 +233,14 @@ expands where it is applied, and composes, exports and imports as a type name
 does. A variable its body names besides its parameters is its own, apart from
 the clause's; a member required twice alike is required once, and twice
 differently is refused, as is an alias that applies itself.
+
+`Name(a) = type` names a type of its parameters: `Edge(w) = {target: Nat,
+weight: w}` makes `Edge(Nat)` the record `{target: Nat, weight: Nat}`, and
+nothing downstream sees `Edge`. A use gives it as many types as it has
+parameters. Its type names no variable but its parameters, and every one of
+them, since an alias is the type it names and could not tell `Id(Str)` from
+`Id(Bool)` by one it leaves out; a type that keeps such types apart is
+declared with `:`. No alias names itself, directly or through another.
 
 Records are structural and unordered. `{name: Str, *}` is a record with at
 least a `name`, and reading `.name` asks exactly that of whatever record it
@@ -388,9 +399,10 @@ Only an effect, a call of a name ending `!`, may stand so; anything else is
 bound to a name:
 
 ```
-main!(host) ->
+main!(host) -> (
   host.println!("Hello, world!")
   host.exit!(0)
+)
 ```
 
 A line beginning with an infix operator, or with a `.`, goes on with the
@@ -486,10 +498,11 @@ double : Nat -> Nat
 double(n) -> n * 2
 
 expect double(2) == 4
-expect
-  doubled = [1 2 3].map(double)
+expect (
+  doubled = [1, 2, 3].map(double)
   doubled.len() == 3
     & doubled.last().ok_or(0) == 6
+)
 ```
 
 An expectation is checked as any definition is, typed, exhaustive and seen to

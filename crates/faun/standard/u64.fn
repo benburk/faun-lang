@@ -70,9 +70,10 @@ U64 : Nat.(
   # The bits moved up by `amount`, those past the top coming round to the
   # bottom. The width round is no change.
   rotate_left : (U64, Nat) -> U64
-  rotate_left(U64(a), amount) ->
+  rotate_left(U64(a), amount) -> (
     shift = amount % 64
     of_nat(a * 2.pow(shift) + a / 2.pow(64 - shift))
+  )
 
   rotate_right : (U64, Nat) -> U64
   rotate_right(word, amount) -> rotate_left(word, 64 - amount % 64)

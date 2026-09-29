@@ -181,34 +181,39 @@ parse_custom(Value(value, doc), convert, metavar) ->
 shaped(doc, metavar) -> {shape: Named(metavar), *doc}
 
 custom_value(Ok(found), _, doc, _) -> Value(found, doc)
-custom_value(Err(_), value, doc, metavar) ->
+custom_value(Err(_), value, doc, metavar) -> (
   long = spec_long(doc.spec)
   refusal = "option `--${long}` could not parse `${value}` as ${metavar}"
   Failed(refusal, doc)
+)
 
 repeated(name) -> "option `${name}` was supplied more than once"
 
-conflicting(spec) ->
+conflicting(spec) -> (
   long = spec_long(spec)
   "options `--${long}` and `--no-${long}` cannot be used together"
+)
 
-missing({spec, shape: Flag, *}) ->
+missing({spec, shape: Flag, *}) -> (
   long = spec_long(spec)
   "missing required flag `--${long}` or `--no-${long}`"
+)
 missing({spec, shape: Named(_), *}) ->
   "missing required option `--${spec_long(spec)}`"
 
 finish_match(argv, Documented(inner, _), n) ->
   finish_match(argv, inner, n)
 finish_match(_, Failed(message), _) -> Err(Invalid(message))
-finish_match(argv, Matched(value, claims), n) ->
+finish_match(argv, Matched(value, claims), n) -> (
   rest = collect_rest(argv, claims).map_err(Invalid)?
   with_rest(value, rest, n)
+)
 
 with_rest(value, rest, n) if n <= rest.len() -> Ok({rest, *value})
-with_rest(_, rest, n) ->
+with_rest(_, rest, n) -> (
   got = rest.len()
   Err(Invalid("expected at least ${n} positional values, got ${got}"))
+)
 
 # The positional requirement, recovered from the one Rest item the
 # declarations carry — the strictest, if several were stated.

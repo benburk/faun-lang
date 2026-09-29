@@ -34,10 +34,11 @@ herd(input) -> input.trim().lines().try_map(parse_reindeer)
 # the remainder. A reindeer with no cycle at all divides by zero and is fine
 # for it — `div(a 0)` is 0 and `mod(a 0)` is a, so it simply never moves.
 distance : (Reindeer, Nat) -> Nat
-distance(Reindeer(speed, flying, resting), second) ->
+distance(Reindeer(speed, flying, resting), second) -> (
   cycle = flying + resting
   flown = second / cycle * flying + Nat.min(second % cycle, flying)
   speed * flown
+)
 
 furthest : List(Nat) -> Result(Nat, [Empty])
 furthest(flown) -> flown.max()
@@ -62,11 +63,12 @@ points(racers, duration) -> furthest(ticks(duration)
 # of it scores — ties included, so the points awarded can outnumber the
 # seconds raced.
 compute_scores : (List(Reindeer), List(Nat), Nat) -> List(Nat)
-compute_scores(racers, scores, second) ->
+compute_scores(racers, scores, second) -> (
   reached = racers.map(|racer| distance(racer, second))
   front = reached.max().ok_or(0)
   points = reached.map(|flown| (flown == front).to_nat())
   scores.map2(points, Nat.add)
+)
 
 race_length : Nat
 race_length() -> 2503
@@ -78,10 +80,11 @@ part2 : (Str, Nat) -> Result(Nat, _)
 part2(input, duration) -> points(herd(input)?, duration)
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
-app(input) ->
+app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   racers = herd(stdin)?
   Ok({part1: lead(racers, race_length())?, part2: points(racers, race_length())?})
+)
 
 comet : Reindeer
 comet() -> Reindeer(14, 10, 127)

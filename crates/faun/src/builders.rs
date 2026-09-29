@@ -144,6 +144,12 @@ impl Builder<'_> {
     )]
     fn expr(&mut self, expression: &mut h::Expr) {
         match &mut expression.kind {
+            h::ExprKind::Block(body) => {
+                for binding in &mut body.bindings {
+                    self.expr(&mut binding.value);
+                }
+                self.expr(&mut body.result);
+            }
             h::ExprKind::Local(_)
             | h::ExprKind::Global(_)
             | h::ExprKind::Constructor(_)

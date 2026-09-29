@@ -28,7 +28,7 @@ Mode : [Fast, Slow].(
 
 parse_args : List(Str) -> Result({verbose: Bool, count: Nat, output: Str,
   mode: Mode, rest: List(Str)}, ArgError)
-parse_args(argv) ->
+parse_args(argv) -> (
   args = Args.of(argv)
   args.finish(Match.sequence({
     verbose: args.opt("verbose").short("v")
@@ -42,11 +42,12 @@ parse_args(argv) ->
       .parse(Mode.from_str).default(Fast),
     rest: args.rest().min(1)
   }))
+)
 
 # `arg()` makes absence fail the outer parse.
 required_args : List(Str) -> Result({count: Nat, output: Str, mode: Mode,
   rest: List(Str)}, ArgError)
-required_args(argv) ->
+required_args(argv) -> (
   args = Args.of(argv)
   args.finish(Match.sequence({
     count: args.opt("count").nat().arg(),
@@ -54,13 +55,14 @@ required_args(argv) ->
     mode: args.opt("mode").parse(Mode.from_str).arg(),
     rest: args.rest()
   }))
+)
 
 # `opt()` preserves absence as the named `Missing` error. `auto()` derives the
 # short spelling from the long name's first letter.
 optional_args : List(Str) -> Result({verbose: Result(Bool, [Missing]),
   count: Result(Nat, [Missing]), output: Result(Str, [Missing]),
   mode: Result(Mode, [Missing]), rest: List(Str)}, ArgError)
-optional_args(argv) ->
+optional_args(argv) -> (
   args = Args.of(argv)
   args.finish(Match.sequence({
     verbose: args.opt("verbose").auto().flag().opt(),
@@ -69,16 +71,18 @@ optional_args(argv) ->
     mode: args.opt("mode").auto().parse(Mode.from_str).opt(),
     rest: args.rest()
   }))
+)
 
 app : {args: List(Str)} -> Result(Str, Str)
 app(input) -> report(parse_args(input.args))
 
 report(Err(Help(text))) -> Ok(text)
 report(Err(Invalid(message))) -> Err(message)
-report(Ok(config)) ->
+report(Ok(config)) -> (
   lead = "verbose=${config.verbose} count=${config.count}"
   tail = "mode=${config.mode} files=${config.rest.len()}"
   Ok("${lead} output=${config.output} ${tail}")
+)
 
 # Options may appear in any order and may be interspersed with positionals.
 expect parse_args(["input.ori", "--count", "3", "--verbose", "--output", "out.c"]) == Ok({

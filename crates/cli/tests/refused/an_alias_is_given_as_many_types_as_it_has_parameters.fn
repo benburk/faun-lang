@@ -1,0 +1,6 @@
+import std.host {Host}
+
+Edge(e) = {target: Nat, weight: e}
+
+first : List(Edge) -> Nat
+first(_) -> 0

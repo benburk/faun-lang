@@ -116,6 +116,12 @@ fn calls<'a>(expression: &'a Expr, found: &mut impl FnMut(&'a FunctionKey, &'a E
             arguments.iter().collect()
         }
         ExprKind::Invoke(head, arguments) => std::iter::once(&**head).chain(arguments).collect(),
+        ExprKind::Block(body) => body
+            .bindings
+            .iter()
+            .map(|binding| &binding.value)
+            .chain([&body.result])
+            .collect(),
     };
     for expression in inner {
         calls(expression, found);
@@ -146,6 +152,8 @@ fn value(expression: &Expr, passed: bool) -> Result<(), LowerError> {
         }
         ExprKind::Tuple(members) => members.iter().try_for_each(|member| value(member, false)),
         ExprKind::Project(receiver, _) => value(receiver, false),
+        // A block answers a value: a function stands in none of its lines.
+        ExprKind::Block(inner) => body(inner),
         ExprKind::DirectCall(_, arguments) => arguments
             .iter()
             .try_for_each(|argument| value(argument, true)),

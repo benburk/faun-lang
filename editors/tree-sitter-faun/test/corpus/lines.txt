@@ -55,24 +55,33 @@ total(a, b) ->
 A spaced minus carries a line on; a held one begins a line
 ========================================
 
-a = x
-  - y
-b = x
--y
+f(x, y) -> (
+  a = x
+    - y
+  b = x
+  -y
+)
 
 ---
 
 (source_file
-  (binding
-    (identifier)
-    (binary_expression
+  (clause
+    (call_expression
       (identifier)
-      (identifier)))
-  (binding
-    (identifier)
-    (identifier))
-  (unary_expression
-    (identifier)))
+      (arguments
+        (identifier)
+        (identifier)))
+    (block
+      (binding
+        (identifier)
+        (binary_expression
+          (identifier)
+          (identifier)))
+      (binding
+        (identifier)
+        (identifier))
+      (unary_expression
+        (identifier)))))
 
 ========================================
 A where and an if carry a line on
@@ -108,11 +117,11 @@ f(x)
     (identifier)))
 
 ========================================
-A where list's members stand on lines of their own
+A where list's constraints are parted by commas, a line apiece
 ========================================
 
 sum : List(a) -> a where
-  a.zero : a
+  a.zero : a,
   a.add : (a, a) -> a
 
 ---
@@ -130,25 +139,25 @@ sum : List(a) -> a where
       (member_constraint
         (type_variable)
         (identifier)
-        (type_variable))))
-  (signature
-    (field_expression
-      (identifier)
-      (identifier))
-    (function_type
-      (tuple_type
-        (type_variable)
         (type_variable))
-      (type_variable))))
+      (member_constraint
+        (type_variable)
+        (identifier)
+        (function_type
+          (tuple_type
+            (type_variable)
+            (type_variable))
+          (type_variable))))))
 
 ========================================
-A body is the lines after its clause
+A body of several lines is a block
 ========================================
 
-area(w, h) ->
+area(w, h) -> (
   inner = w - 2
 
   inner * h
+)
 
 ---
 
@@ -159,43 +168,51 @@ area(w, h) ->
       (arguments
         (identifier)
         (identifier)))
-    (binding
-      (identifier)
+    (block
+      (binding
+        (identifier)
+        (binary_expression
+          (identifier)
+          (number)))
       (binary_expression
         (identifier)
-        (number))))
-  (binary_expression
-    (identifier)
-    (identifier)))
+        (identifier)))))
 
 ========================================
 A list and a call span lines freely
 ========================================
 
-xs = [
-  1,
-  2,
-]
-y = f(
-  a,
-  b,
+f(a, b) -> (
+  xs = [
+    1,
+    2,
+  ]
+  f(
+    a,
+    b,
+  )
 )
 
 ---
 
 (source_file
-  (binding
-    (identifier)
-    (list
-      (number)
-      (number)))
-  (binding
-    (identifier)
+  (clause
     (call_expression
       (identifier)
       (arguments
         (identifier)
-        (identifier)))))
+        (identifier)))
+    (block
+      (binding
+        (identifier)
+        (list
+          (number)
+          (number)))
+      (call_expression
+        (identifier)
+        (arguments
+          (identifier)
+          (identifier))))))
 
 ========================================
 Comments and blank lines between lines
@@ -203,20 +220,24 @@ Comments and blank lines between lines
 
 # first
 
-x = 1 # trailing
+x() -> 1 # trailing
 
 # between
-y = 2
+y() -> 2
 
 ---
 
 (source_file
   (comment)
-  (binding
-    (identifier)
+  (clause
+    (call_expression
+      (identifier)
+      (arguments))
     (number))
   (comment)
   (comment)
-  (binding
-    (identifier)
+  (clause
+    (call_expression
+      (identifier)
+      (arguments))
     (number)))

@@ -412,6 +412,7 @@ impl<'a> Callbacks<'a> {
 
     fn expr(&mut self, frame: &mut Frame, expression: &Expr) -> Result<d::Expr, LowerError> {
         let kind = match &expression.kind {
+            ExprKind::Block(body) => d::ExprKind::Block(Box::new(self.body(frame, body)?)),
             ExprKind::Local(local) if frame.functions.contains_key(local) => {
                 return Err(located(
                     expression,
@@ -674,6 +675,12 @@ fn for_each<'a>(expression: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
             }
         }
         ExprKind::Lambda(_, _, body) => for_each(body, visit),
+        ExprKind::Block(body) => {
+            for binding in &body.bindings {
+                for_each(&binding.value, visit);
+            }
+            for_each(&body.result, visit);
+        }
     }
 }
 
@@ -708,6 +715,12 @@ fn expr_local_highest(expression: &Expr) -> u32 {
     match &expression.kind {
         ExprKind::Local(local) => local.0,
         ExprKind::Lambda(_, patterns, _) => patterns.iter().map(pattern_highest).max().unwrap_or(0),
+        ExprKind::Block(body) => body
+            .bindings
+            .iter()
+            .map(|binding| pattern_highest(&binding.pattern))
+            .max()
+            .unwrap_or(0),
         _ => 0,
     }
 }
@@ -792,6 +805,16 @@ fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap
                 pattern_locals(pattern, &mut nested);
             }
             free_locals(body, &nested, found);
+        }
+        // Each binding's value reads what came before it; what follows
+        // reads what it binds.
+        S::Block(body) => {
+            let mut nested = bound.clone();
+            for binding in &body.bindings {
+                free_locals(&binding.value, &nested, found);
+                pattern_locals(&binding.pattern, &mut nested);
+            }
+            free_locals(&body.result, &nested, found);
         }
     }
 }

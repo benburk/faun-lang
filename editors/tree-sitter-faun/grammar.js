@@ -4,8 +4,9 @@
  *
  * The compiler's lexer decides what a line break and adjacency mean; here
  * `src/scanner.c` says where a line ends and whether a name's `!` is its
- * own, and `token.immediate` says what must stand against what it joins. Lines stay flat, as in the EBNF: a
- * clause's body and a signature's `where` lines are the lines after it.
+ * own, and `token.immediate` says what must stand against what it joins. A
+ * line is one item whole, as in the EBNF: a body of several lines is a
+ * block, `( )`, and a `where` list's constraints are parted by commas.
  */
 
 /// <reference types="tree-sitter-cli/dsl" />
@@ -69,6 +70,10 @@ module.exports = grammar({
 
   supertypes: $ => [$._expression, $._type],
 
+  // `Name(a)` begins an alias or a declaration, and which only the `=` or
+  // `:` after it says.
+  conflicts: $ => [[$.type_alias, $._primary]],
+
   rules: {
     source_file: $ => lines($),
 
@@ -79,9 +84,7 @@ module.exports = grammar({
       $.expect,
       $.type_alias,
       $.signature,
-      $.binding,
       $.clause,
-      $._expression,
     ),
 
     // Directives.
@@ -117,14 +120,21 @@ module.exports = grammar({
     // Lines headed by an expression, told apart by what follows it. A
     // pattern is written as the expression that builds what it matches.
 
-    expect: $ => seq('expect', $._statement),
+    expect: $ => seq('expect', $._expression),
 
-    // After a type's name alone, `=` names a type.
-    type_alias: $ => prec(1, seq(
+    // After a type's name, and its parameters, `=` names a type.
+    type_alias: $ => seq(
       field('name', $.type_identifier),
+      optional(field('parameters', $.type_parameters)),
       '=',
       field('type', choice($._type, $.constraints)),
-    )),
+    ),
+
+    type_parameters: $ => seq(
+      $._call_paren,
+      commaSep1(alias($.identifier, $.type_variable)),
+      ')',
+    ),
 
     signature: $ => seq(
       field('name', $._expression),
@@ -144,12 +154,10 @@ module.exports = grammar({
       field('head', $._expression),
       optional($.guard),
       '->',
-      field('body', $._statement),
+      field('body', $._expression),
     ),
 
     guard: $ => seq('if', $._expression),
-
-    _statement: $ => choice($._expression, $.binding),
 
     // A type's methods: lines in `.( )`.
     methods: $ => seq('.(', lines($), ')'),
@@ -158,8 +166,11 @@ module.exports = grammar({
 
     constraints: $ => seq(
       'where',
-      commaSep1(choice($.class_constraint, $.member_constraint)),
+      $._constraint,
+      repeat(seq(',', $._constraint)),
     ),
+
+    _constraint: $ => choice($.class_constraint, $.member_constraint),
 
     class_constraint: $ => seq(
       field('class', $.type_identifier),
@@ -282,6 +293,7 @@ module.exports = grammar({
       $.range,
       $.string,
       $.tuple,
+      $.block,
       $.list,
       $.record,
     ),
@@ -304,6 +316,15 @@ module.exports = grammar({
     ),
 
     tuple: $ => seq('(', commaSep1($._expression), ')'),
+
+    // Bindings, then the answer, a line apiece; a line before the last that
+    // binds nothing is an effect asked for what it does.
+    block: $ => seq(
+      '(',
+      repeat1(seq(choice($.binding, $._expression), $._newline)),
+      field('answer', $._expression),
+      ')',
+    ),
 
     list: $ => seq('[', elements($._expression, $.rest), ']'),
 

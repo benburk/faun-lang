@@ -530,43 +530,57 @@ fn the_grammar_reads_every_program_in_the_repository_as_the_parser_does() {
     }
 }
 
+/// Programs both read, one probing each rule.
+const READ: &[&str] = &[
+    "import std.host {Host, List.*, x: y}\nexport {f, Host.*}\npackage {md5: \"../md5\"}\n",
+    "f : (List(a), a -> b) -> {x: a, *} where Show(a), Eq(a), a.show : a -> Str\n",
+    "sum : List(a) -> a where\n  a.zero : a,\n  a.add : (a, a) -> a\n",
+    "f : a -> a where a.zero : a, Show(a), a.add : (a, a) -> a\n",
+    "Maybe(a) : [None, Some(a)].(\n  map : (Maybe(a), a -> b) -> Maybe(b)\n  map(None, _) -> None\n  map(Some(x), f) -> Some(f(x))\n)\n",
+    "Name = ((a, b) -> c)\nNum(a) = where a.add : (a, a) -> a\n",
+    "f(x) if x > 0 -> (\n  log!(x)\n  [y, *rest] = x\n  {a, b: c, *} = y\n  -a * 2 + c?.d.e(|p, Q(r)| p) | !b\n)\n",
+    "f(x) -> [(\n  y = x\n  y\n), (a, b), (c)]\nexpect (\n  f!()\n  True\n)\n",
+    "Edge(e) = {target: Nat, weight: e}\ng(x) if (\n  y = x\n  y\n) -> x.map(|z| (\n  w = z\n  w\n))\n",
+    "expect 'a'..'z' == \"s${x}t\"\n",
+    "f(x) -> [(x), (x, y), _, 1.5, -2, *xs]\n",
+    "f(x) -> x\n  .map(g)\n  .filter(h) +\n  1\n",
+    "f([x, *r], {a, *}) if x.p(|y| y) ^ !a ->\n  r\nf(_, _) if\n  (a, b) == c -> 0\n",
+    "T : [A, B].(\n  f(A) if g() -> 1\n  f(_) -> 0\n)\n",
+    "",
+];
+
+/// Programs both refuse.
+const REFUSED: &[&str] = &[
+    "f : a -> a where a.zero : a b.one : b\n",
+    "main! : Host -> [] main!(host) -> 0\n",
+    "Name = 1 + 2\n",
+    "f(x) -> x .y\n",
+    "f(x) -> x?? .y\n",
+    "f(x) -> [a\"b\"]\n",
+    "f(x) -> [a b]\n",
+    "f(x) -> (x -> x)\n",
+    "f(x) -> x ->\n",
+    "f(x) if -> x\n",
+    "f(x) if x if y -> x\n",
+    "f(x) if x = 1 -> x\n",
+    "f(x) -> x if x\n",
+    "f : Nat if x -> Nat\n",
+    "x = 1\n",
+    "f(x) -> x\n  x\n",
+    "f(x) ->\n  y = x\n  y\n",
+    "f(x) -> (\n  y = x\n)\n",
+    "f(x) -> (\n  y = x\n  y\ng(x) -> x\n",
+    "f : a -> a where\n  a.zero : a,\nf(x) -> x\n",
+    "Pair(a, b) = Pair(1, 2)\n",
+];
+
 #[test]
 fn the_grammar_reads_and_refuses_what_the_parser_does() {
     let grammar = Grammar::read(GRAMMAR);
-    let read = [
-        "import std.host {Host, List.*, x: y}\nexport {f, Host.*}\npackage {md5: \"../md5\"}\n",
-        "f : (List(a), a -> b) -> {x: a, *} where Show(a), Eq(a), a.show : a -> Str\n",
-        "sum : List(a) -> a where\n  a.zero : a\n  a.add : (a, a) -> a\n",
-        "Maybe(a) : [None, Some(a)].(\n  map : (Maybe(a), a -> b) -> Maybe(b)\n  map(None, _) -> None\n  map(Some(x), f) -> Some(f(x))\n)\n",
-        "Name = ((a, b) -> c)\nNum(a) = where a.add : (a, a) -> a\n",
-        "f(x) if x > 0 ->\n  log!(x)\n  [y, *rest] = x\n  {a, b: c, *} = y\n  -a * 2 + c?.d.e(|p, Q(r)| p) | !b\n",
-        "expect 'a'..'z' == \"s${x}t\"\n",
-        "f(x) -> [(x), (x, y), _, 1.5, -2, *xs]\nx = 1\nx\n",
-        "f(x) -> x\n  .map(g)\n  .filter(h) +\n  1\n",
-        "f([x, *r], {a, *}) if x.p(|y| y) ^ !a ->\n  r\nf(_, _) if\n  (a, b) == c -> 0\n",
-        "T : [A, B].(\n  f(A) if g() -> 1\n  f(_) -> 0\n)\n",
-        "",
-    ];
-    for source in read {
+    for source in READ {
         assert!(agree(&grammar, source, source), "{source} is read");
     }
-    let refused = [
-        "f : a -> a where a.zero : a b.one : b\n",
-        "main! : Host -> [] main!(host) -> 0\n",
-        "Name = 1 + 2\n",
-        "f(x) -> x .y\n",
-        "f(x) -> x?? .y\n",
-        "f(x) -> [a\"b\"]\n",
-        "f(x) -> [a b]\n",
-        "f(x) -> (x -> x)\n",
-        "f(x) -> x ->\n",
-        "f(x) if -> x\n",
-        "f(x) if x if y -> x\n",
-        "f(x) if x = 1 -> x\n",
-        "f(x) -> x if x\n",
-        "f : Nat if x -> Nat\n",
-    ];
-    for source in refused {
+    for source in REFUSED {
         assert!(!agree(&grammar, source, source), "{source} is refused");
     }
 }

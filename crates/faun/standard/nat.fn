@@ -30,16 +30,18 @@ Nat : [Zero, Succ(Nat)].(
   div : (Nat, Nat) -> Nat
   div(_, 0) -> 0
   div(0, Succ(_)) -> 0
-  div(Succ(a), Succ(b)) ->
+  div(Succ(a), Succ(b)) -> (
     quotient = div(a, Succ(b))
     div_step(nat_same(mod(a, Succ(b)), b), quotient)
+  )
 
   mod : (Nat, Nat) -> Nat
   mod(a, 0) -> a
   mod(0, Succ(_)) -> 0
-  mod(Succ(a), Succ(b)) ->
+  mod(Succ(a), Succ(b)) -> (
     remainder = mod(a, Succ(b))
     mod_step(nat_same(remainder, b), remainder)
+  )
 
   # `base` to the `exponent`, squaring the base as the exponent halves: as
   # many steps as the exponent has bits, each going round again. The
@@ -136,9 +138,10 @@ and_bits(a, b, place, built) -> and_bits(a / 2, b / 2, place * 2, built + a % 2 
 or_bits : (Nat, Nat, Nat, Nat) -> Nat
 or_bits(0, b, place, built) -> built + b * place
 or_bits(a, 0, place, built) -> built + a * place
-or_bits(a, b, place, built) ->
+or_bits(a, b, place, built) -> (
   low = (a % 2 == 1 | b % 2 == 1).to_nat()
   or_bits(a / 2, b / 2, place * 2, built + low * place)
+)
 
 xor_bits : (Nat, Nat, Nat, Nat) -> Nat
 xor_bits(0, b, place, built) -> built + b * place
@@ -149,16 +152,18 @@ xor_bits(a, b, place, built) -> xor_bits(a / 2, b / 2, place * 2, built + (a + b
 pow_into : (Nat, Nat, Nat) -> Nat
 pow_into(_, 0, built) -> built
 pow_into(base, 1, built) -> built * base
-pow_into(base, exponent, built) ->
+pow_into(base, exponent, built) -> (
   kept = (exponent % 2 == 1).select(built * base, built)
   pow_into(base * base, exponent / 2, kept)
+)
 
 # `built` times `base` to the `exponent`, modulo `modulus`.
 pow_mod_into : (Nat, Nat, Nat, Nat) -> Nat
 pow_mod_into(_, 0, built, _) -> built
-pow_mod_into(base, exponent, built, modulus) ->
+pow_mod_into(base, exponent, built, modulus) -> (
   kept = (exponent % 2 == 1).select(built * base % modulus, built)
   pow_mod_into(base * base % modulus, exponent / 2, kept, modulus)
+)
 
 # Whether `a` and `b` are one number: a walk down both, which the compiler
 # recognizes as one comparison.

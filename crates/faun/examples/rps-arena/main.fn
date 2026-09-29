@@ -32,14 +32,16 @@ Bot : [
   name(Bot(bot)) -> bot.name()
 
   open : Bot -> (Throw, Bot)
-  open(Bot(bot)) ->
+  open(Bot(bot)) -> (
     (throw, next) = bot.open()
     (throw, Bot(next))
+  )
 
   answer : (Bot, Throw) -> (Throw, Bot)
-  answer(Bot(bot), last) ->
+  answer(Bot(bot), last) -> (
     (throw, next) = bot.answer(last)
     (throw, Bot(next))
+  )
 )
 
 # Every bot is built through its `start`, even the two whose constructor is
@@ -62,16 +64,17 @@ configure([_, seed, rounds]) -> settings(seed, rounds)
 configure(_) -> Err(usage())
 
 settings : (Str, Str) -> Result(Settings, Str)
-settings(seed, rounds) ->
+settings(seed, rounds) -> (
   seed_nat = Nat.from_str(seed).err_as(usage())?
   rounds_nat = Nat.from_str(rounds).err_as(usage())?
   Ok({seed: seed_nat, rounds: rounds_nat})
+)
 
 usage : Str
 usage() -> "usage: rps-arena SEED [ROUNDS]"
 
 report : Settings -> Str
-report({seed, rounds}) ->
+report({seed, rounds}) -> (
   standings = tournament(lineup(seed), rounds)
   fewest_first = standings.sort_on(|score| score.wins)
   table = fewest_first.reverse()
@@ -79,6 +82,7 @@ report({seed, rounds}) ->
   columns = row("bot", "wins", "draws", "losses")
   lines = table.map(line)
   Str.join([heading, columns, *lines], "")
+)
 
 line : Score -> Str
 line(score) -> row(score.name, score.wins, score.draws, score.losses)
@@ -89,18 +93,21 @@ row(name, wins, draws, losses) -> "${name:<12}${wins:>7}${draws:>7}${losses:>7}\
 
 # The table on standard output, or the usage on standard error and status
 # two. A write that fails leaves nothing more to say.
-main!(host) ->
+main!(host) -> (
   said = configure(host.args).map_ok(report)
   status = finish!(host, said)
   host.exit!(status)
+)
 
 finish! : (Host, Result(Str, Str)) -> U8
-finish!(host, Ok(table)) ->
+finish!(host, Ok(table)) -> (
   printed = host.print!(table)
   0
-finish!(host, Err(message)) ->
+)
+finish!(host, Err(message)) -> (
   written = host.stderr.write_all!("${message}\n".to_utf8())
   2
+)
 
 # Two bots of different types meet without any union: beat_last opens with
 # Rock against a wall of Rock, draws once, then wins every round.

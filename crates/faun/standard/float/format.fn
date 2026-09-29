@@ -60,11 +60,12 @@ binary64() ->
 Unpacked : [NaN, Inf(Bool), Finite(Bool, Nat, Nat)]
 
 unpack : (Format, Nat) -> Unpacked
-unpack({hidden, field_max, sign, *}, bits) ->
+unpack({hidden, field_max, sign, *}, bits) -> (
   negative = bits / sign == 1
   field = bits / hidden % (field_max + 1)
   fraction = bits % hidden
   classify(hidden, field_max, negative, field, fraction)
+)
 
 classify : (Nat, Nat, Bool, Nat, Nat) -> Unpacked
 classify(_, field_max, negative, field, 0) if field == field_max -> Inf(negative)
@@ -109,9 +110,10 @@ add_unpacked(fmt, _, NaN) -> nan_bits(fmt)
 add_unpacked(fmt, Inf(s), Inf(t)) -> (s == t).select(inf_bits(fmt, s), nan_bits(fmt))
 add_unpacked(fmt, Inf(s), _) -> inf_bits(fmt, s)
 add_unpacked(fmt, _, Inf(t)) -> inf_bits(fmt, t)
-add_unpacked(fmt, Finite(s, ma, ea), Finite(t, mb, eb)) ->
+add_unpacked(fmt, Finite(s, ma, ea), Finite(t, mb, eb)) -> (
   lift = fmt.scale - fmt.offset
   add_exact(fmt, s, ma, ea + lift, t, mb, eb + lift)
+)
 
 # The product of two unpacked operands, as a pattern. An infinity times zero
 # has no product; every other infinite case is an infinity with the product's
@@ -164,7 +166,7 @@ div_unpacked(fmt, Inf(s), Finite(t, _, _)) -> inf_bits(fmt, s.xor(t))
 div_unpacked(fmt, Finite(s, _, _), Inf(t)) -> pack(fmt, s.xor(t), 0, 0)
 div_unpacked(fmt, Finite(_, 0, _), Finite(_, 0, _)) -> nan_bits(fmt)
 div_unpacked(fmt, Finite(s, _, _), Finite(t, 0, _)) -> inf_bits(fmt, s.xor(t))
-div_unpacked(fmt, Finite(s, ma, ea), Finite(t, mb, eb)) ->
+div_unpacked(fmt, Finite(s, ma, ea), Finite(t, mb, eb)) -> (
   # The dividend is scaled up to the working width, so a divisor of the
   # precision leaves a quotient with three bits to spare, and
   # `with_remainder` puts the inexactness two or more places below the last
@@ -179,6 +181,7 @@ div_unpacked(fmt, Finite(s, ma, ea), Finite(t, mb, eb)) ->
     with_remainder(quotient, scaled % mb),
     (ea + fmt.scale - lift - 1) - eb,
   )
+)
 
 # The square root of an unpacked operand, as a pattern. A negative value other
 # than `-0` has no root; `-0` is its own root, as is `+Inf`. The power of two
@@ -201,7 +204,7 @@ sqrt_unpacked(fmt, Finite(False, mantissa, field)) -> root_of(fmt, mantissa, fie
 # `sqrt(m * 2^(2h)) * 2^((field - offset) / 2 - h)`, one bit lower once
 # `with_remainder` appends its bit.
 root_of : (Format, Nat, Nat) -> Nat
-root_of(fmt, mantissa, field) ->
+root_of(fmt, mantissa, field) -> (
   half = (width(fmt) + 1 - bit_length(mantissa)) / 2
   scaled = mantissa * 2.pow(2 * half)
   root = isqrt(scaled)
@@ -211,6 +214,7 @@ root_of(fmt, mantissa, field) ->
     with_remainder(root, scaled - root * root),
     ((field + fmt.scale * 2 - fmt.offset) / 2 - 1) - half,
   )
+)
 
 # The working width of an intermediate: twice the precision and four, which
 # is what a product of two mantissas needs and what keeps binary32's
@@ -239,7 +243,7 @@ add_exact(fmt, s, ma, ea, t, mb, eb) -> add_led(fmt, t, mb, eb, s, ma, ea)
 add_led : (Format, Bool, Nat, Nat, Bool, Nat, Nat) -> Nat
 add_led(fmt, s, ma, ea, t, mb, eb) if eb + width(fmt) >= ea + bit_length(ma) ->
   add_aligned(fmt, s, ma * 2.pow(ea - eb), t, mb, eb)
-add_led(fmt, s, ma, ea, t, mb, eb) ->
+add_led(fmt, s, ma, ea, t, mb, eb) -> (
   floor = ea + bit_length(ma) - width(fmt)
   unit = 2.pow(floor - eb)
   add_aligned(
@@ -250,6 +254,7 @@ add_led(fmt, s, ma, ea, t, mb, eb) ->
     with_remainder(mb / unit, mb % unit),
     floor - 1,
   )
+)
 
 # Same signs add magnitudes; different signs subtract the smaller from the
 # larger and take its sign. Exact cancellation is `+0` under round-to-nearest,
@@ -308,13 +313,14 @@ field_at(fmt, exponent, w) -> (exponent + w + bias(fmt)) - (fmt.scale + 1)
 
 # `mantissa / 2^shift` to the nearest integer, ties to even.
 round_shift : (Nat, Nat) -> Nat
-round_shift(mantissa, shift) ->
+round_shift(mantissa, shift) -> (
   unit = 2.pow(shift)
   kept = mantissa / unit
   dropped = mantissa % unit
   half = unit / 2
   up = (dropped > half) | ((dropped == half) & (kept % 2 == 1))
   kept + up.to_nat()
+)
 
 # Rounding up may carry past the precision, which renormalises by one.
 carry : (Format, Bool, Nat, Nat) -> Nat
@@ -364,9 +370,10 @@ isqrt(n) -> root(n)
 
 root : Nat -> Nat
 root(0) -> 0
-root(n) ->
+root(n) -> (
   r = 2 * root(n / 4)
   ((r + 1) * (r + 1) <= n).select(r + 1, r)
+)
 
 # --- Integers ---
 
@@ -376,10 +383,11 @@ Rounding : [Toward, Down, Up, Away, Even]
 # A finite value below the offset, rounded to an integer under a rule,
 # keeping the sign of a zero; one at or past it is already an integer.
 rounded : (Format, Bool, Nat, Nat, Rounding) -> Nat
-rounded(fmt, negative, mantissa, field, rule) ->
+rounded(fmt, negative, mantissa, field, rule) -> (
   unit = 2.pow(fmt.offset - field)
   whole = mantissa / unit
   round_pack(fmt, negative, whole + bump(rule, negative, whole, mantissa % unit, unit), fmt.scale)
+)
 
 # Whether a fractional remainder of `rest / unit` carries into the integer
 # part: a positive remainder for a rounding toward the value's sign side,
@@ -426,12 +434,14 @@ signed(False, bytes) -> bytes
 # power of two, where the neighbour beneath is closer. The point's position
 # is returned offset by 1000, so it stays a natural for either format.
 shortest : (Format, Nat, Nat) -> (List(Nat), Nat)
-shortest(fmt, mantissa, field) if field >= fmt.offset & mantissa == fmt.hidden ->
+shortest(fmt, mantissa, field) if field >= fmt.offset & mantissa == fmt.hidden -> (
   unit = 2.pow(field - fmt.offset)
   place(fmt, mantissa * unit * 4, 4, unit * 2, unit, even(mantissa))
-shortest(fmt, mantissa, field) if field >= fmt.offset ->
+)
+shortest(fmt, mantissa, field) if field >= fmt.offset -> (
   unit = 2.pow(field - fmt.offset)
   place(fmt, mantissa * unit * 2, 2, unit, unit, even(mantissa))
+)
 shortest(fmt, mantissa, field) if mantissa == fmt.hidden & field > 1 ->
   place(fmt, mantissa * 4, 2.pow(fmt.offset + 1 - field) * 2, 2, 1, even(mantissa))
 shortest(fmt, mantissa, field) ->
@@ -473,12 +483,13 @@ lower(r, s, mp, mm, k, closed, _, digits) -> (generate(r, s, mp, mm, closed, dig
 # precision's worth.
 generate : (Nat, Nat, Nat, Nat, Bool, Nat) -> List(Nat)
 generate(_, _, _, _, _, 0) -> []
-generate(r, s, mp, mm, closed, Succ(left)) ->
+generate(r, s, mp, mm, closed, Succ(left)) -> (
   digit = r * 10 / s
   rest = r * 10 % s
   low = within(rest, mm * 10, closed)
   high = reaches(rest + mp * 10, s, closed)
   step(digit, rest, s, mp * 10, mm * 10, closed, left, low, high)
+)
 
 step : (Nat, Nat, Nat, Nat, Nat, Bool, Nat, Bool, Bool) -> List(Nat)
 step(digit, rest, s, mp, mm, closed, left, False, False) -> [digit, *generate(rest, s, mp, mm, closed, left)]
@@ -527,9 +538,10 @@ zeros(n) -> List.repeat(digit_byte(0), n)
 # ties to even, as printf does, and writes no point when nothing follows it.
 
 fixed : (Format, Unpacked, Nat) -> List(U8)
-fixed(fmt, Finite(negative, mantissa, field), places) ->
+fixed(fmt, Finite(negative, mantissa, field), places) -> (
   n = scaled(fmt, mantissa, field, places, 0)
   signed(negative, digits_of(n / 10.pow(places), 1).extend(decimals(n, places)))
+)
 fixed(fmt, other, _) -> text(fmt, other)
 
 decimals : (Nat, Nat) -> List(U8)
@@ -537,18 +549,20 @@ decimals(_, 0) -> []
 decimals(n, places) -> point(digits_of(n % 10.pow(places), places))
 
 exponent : (Format, Unpacked, Nat) -> List(U8)
-exponent(fmt, Finite(negative, mantissa, field), places) ->
+exponent(fmt, Finite(negative, mantissa, field), places) -> (
   (digits, k) = significant(fmt, mantissa, field, places + 1)
   signed(negative, exponent_form(digits, k))
+)
 exponent(fmt, other, _) -> text(fmt, other)
 
 # Plain from `0.0001` up to `10^count`, where every digit sits beside the
 # point, and in scientific notation outside that range.
 precision : (Format, Unpacked, Nat) -> List(U8)
-precision(fmt, Finite(negative, mantissa, field), count) ->
+precision(fmt, Finite(negative, mantissa, field), count) -> (
   wanted = count.max(1)
   (digits, k) = significant(fmt, mantissa, field, wanted)
   signed(negative, (k >= 997 & k < 1001 + wanted).select(plain(digits, k), exponent_form(digits, k)))
+)
 precision(fmt, other, _) -> text(fmt, other)
 
 # `value * 10^up / 10^down` to the nearest integer, for the finite value
@@ -563,20 +577,22 @@ scaled(fmt, mantissa, field, up, down) ->
 
 # `numerator / denominator` to the nearest integer, ties to even.
 round_div : (Nat, Nat) -> Nat
-round_div(numerator, denominator) ->
+round_div(numerator, denominator) -> (
   kept = numerator / denominator
   twice = numerator % denominator * 2
   up = (twice > denominator) | ((twice == denominator) & (kept % 2 == 1))
   kept + up.to_nat()
+)
 
 # The value at `count` significant digits, with the leading digit's decimal
 # exponent offset by 1001 as `exponent_text` reads it. Rounding can carry to
 # one more digit, which moves the exponent up instead.
 significant : (Format, Nat, Nat, Nat) -> (List(U8), Nat)
 significant(_, 0, _, count) -> (zeros(count), 1001)
-significant(fmt, mantissa, field, count) ->
+significant(fmt, mantissa, field, count) -> (
   k = leading(fmt, mantissa, field)
   carried(scaled(fmt, mantissa, field, (count + 1000) - k, k - (count + 1000)), k, count)
+)
 
 carried : (Nat, Nat, Nat) -> (List(U8), Nat)
 carried(n, k, count) if n == 10.pow(count) -> (digits_of(n / 10, count), k + 1)
@@ -587,9 +603,10 @@ carried(n, k, count) -> (digits_of(n, count), k)
 # takes to reach one. `significant` asks only of a mantissa of one or more,
 # which ten times over comes to `unit`.
 leading : (Format, Nat, Nat) -> Nat
-leading(fmt, mantissa, field) ->
+leading(fmt, mantissa, field) -> (
   unit = 2.pow(fmt.offset - field)
   lead_from(mantissa * 2.pow(field - fmt.offset) / unit, mantissa, unit)
+)
 
 lead_from : (Nat, Nat, Nat) -> Nat
 lead_from(0, mantissa, unit) -> 1001 - below(mantissa, unit, 1)
@@ -615,9 +632,10 @@ point(bytes) -> ['.', *bytes]
 
 # `n` in decimal, padded with zeros to `width` digits.
 digits_of : (Nat, Nat) -> List(U8)
-digits_of(n, width) ->
+digits_of(n, width) -> (
   digits = Nat.to_str(n).to_utf8()
   zeros(width - digits.len()).extend(digits)
+)
 
 # Parsing: an optional sign, digits with at most one point among them, and
 # an optional exponent. The significand is read as one natural with a count
@@ -675,10 +693,11 @@ fraction(fmt, negative, n, power) -> divide(fmt, negative, n, 10.pow(power))
 divide : (Format, Bool, Nat, Nat) -> Nat
 divide(fmt, negative, n, divisor) if bit_length(divisor) + fmt.precision + 3 > bit_length(n) + fmt.scale ->
   pack(fmt, negative, 0, 0)
-divide(fmt, negative, n, divisor) ->
+divide(fmt, negative, n, divisor) -> (
   lift = (bit_length(divisor) + fmt.precision + 2) - bit_length(n)
   scaled = n * 2.pow(lift)
   round_pack(fmt, negative, with_remainder(scaled / divisor, scaled % divisor), (fmt.scale - lift) - 1)
+)
 
 is_eq : Result(Order, [Unordered]) -> Bool
 is_eq(Ok(Eq)) -> True
