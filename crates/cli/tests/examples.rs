@@ -297,6 +297,27 @@ fn the_nbody_examples_hold() {
     }
 }
 
+/// Ori's Newton's method, ported: its expectations hold, and running it
+/// prints the square root of two.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn newton_finds_the_square_root_of_two() {
+    let (failed, count) = support::test_file(&example("newton.fn"));
+    assert_eq!(failed, Vec::<String>::new());
+    assert_eq!(count, 3);
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .arg("run")
+        .arg(example("newton.fn"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Ok(1.4142135623730951)\n"
+    );
+}
+
 /// Ori's rock-paper-scissors round robin, ported: its expectations hold,
 /// and seed 42 over a hundred rounds gives the standings Ori's README
 /// shows.

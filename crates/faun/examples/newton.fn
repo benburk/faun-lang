@@ -1,0 +1,40 @@
+# Newton's method: from a guess `x`, step to `x - f(x)/f'(x)` until `f(x)`
+# is within tolerance of zero, giving up after `n` steps. The two functions
+# are passed by name, as any function argument is. The step count is what
+# makes the search total: a root the method never reaches, because the
+# guess was poor or the derivative vanished, answers `NoConvergence` rather
+# than looping.
+
+package {}
+
+import std.host {Host}
+
+Func = F64 -> F64
+
+newton : (Func, Func, F64, Nat) -> Result(F64, [NoConvergence])
+newton(_, _, _, 0) -> Err(NoConvergence)
+newton(f, _, x, _) if f(x).abs() < 1.0e-12 -> Ok(x)
+newton(f, df, x, n) -> newton(f, df, x - f(x) / df(x), n - 1)
+
+# The zero of x² - 2 is the square root of two.
+f : Func
+f(x) -> x * x - 2.0
+
+df : Func
+df(x) -> 2.0 * x
+
+root_two : Result(F64, [NoConvergence])
+root_two() -> newton(f, df, 2.0, 50)
+
+expect root_two().ok_or(0.0).to_fixed(12) == "1.414213562373"
+expect newton(f, df, 2.0, 2).is_err()
+# From zero the derivative vanishes, the first step is infinite, and the
+# iteration never settles: the fuel runs out and the failure is reported.
+expect newton(f, df, 0.0, 50) == Err(NoConvergence)
+
+# `faun run crates/faun/examples/newton.fn` prints the square root of two.
+app : {args: List(Str)} -> Result(F64, [NoConvergence])
+app(_) -> root_two()
+
+main! : Host -> []
+main!(host) -> host.run!(app)
