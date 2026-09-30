@@ -39,7 +39,7 @@ fn schedules() -> Vec<(&'static str, Stages)> {
         ("laws", super::laws::laws),
         ("folding", fold),
         ("refolding each definition", |p| {
-            for id in super::stops::callees_first(p) {
+            for id in super::calls::callees_first(p) {
                 fold::refold(p, &[id]);
             }
         }),
@@ -442,7 +442,7 @@ fn unknown_nonreturning_bindings_are_not_folded_away() {
     let test = program.declare("test", &[], ty);
     program.define(test, |b, _| b.call(helper, &[]));
     program.set_entry(test);
-    assert!(validate(&program).unwrap_err().message.contains("stops"));
+    validate(&program).expect("stopping is not asked");
     fold(&mut program);
     assert!(matches!(
         program.expr(program.function(test).body().unwrap().tail),
@@ -936,45 +936,6 @@ fn cleanup_removes_a_wide_dead_constructor_chain_in_one_pass() {
             .iter()
             .any(|expr| matches!(expr, Expr::Con(..)))
     );
-}
-
-/// A definition that does not stop is refused where a program is checked,
-/// and lowering checks before it reads anything, so no optimization or
-/// analysis is trusted with one.
-#[test]
-fn optimizing_never_bypasses_totality_checking() {
-    let mut library = super::fixture::Library::new();
-    let (nat, zero, succ) = (library.nat, library.zero, library.succ);
-    let program = &mut library.program;
-    let forever = program.declare("forever", &[nat], nat);
-    // forever(Zero) -> Succ(forever(Zero))
-    // forever(Succ(n)) -> Succ(forever(Succ(n)))
-    program.define(forever, |b, args| {
-        b.match_(args[0], nat, |b, ctor, fields| {
-            let again = if ctor == zero {
-                b.con(zero, &[])
-            } else {
-                b.con(succ, &[fields[0]])
-            };
-            let rest = b.call(forever, &[again]);
-            b.con(succ, &[rest])
-        })
-    });
-    let main = program.declare("main", &[], nat);
-    program.define(main, |b, _| {
-        let zero = b.con(zero, &[]);
-        b.call(forever, &[zero])
-    });
-    program.set_entry(main);
-    for error in [
-        validate(program).unwrap_err().message,
-        crate::lower_to_machine_ir(program, &crate::platform::Routines::builtin()).unwrap_err(),
-    ] {
-        assert!(
-            error.contains("forever") && error.contains("stops"),
-            "{error}"
-        );
-    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # Breadth-first search, petgraph's `Bfs` and edged's `LevelOrder`.
 
-import edge {Graph, stored_edges}
+import edge {Graph}
 import walk {unwalked, enter}
 import worklist {drain_queue}
 
@@ -10,6 +10,6 @@ export {bfs}
 # node the graph does not have.
 bfs : (g, Nat) -> List(Nat) where Graph(g, e)
 bfs(graph, start) -> (
-  walked = drain_queue([start], unwalked(graph), stored_edges(graph) + 1, |walk, node| enter(graph, walk, node))
+  walked = drain_queue([start], unwalked(graph), |walk, node| enter(graph, walk, node))
   walked.order
 )

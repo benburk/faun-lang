@@ -5,14 +5,13 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
 use faun_core::barb::{self, Atom, Builder, CtorId, FnId, TypeId};
 
 use crate::blessed::PreludeIds;
 use crate::check::CheckedProgram;
-use crate::diagnostic::{Advised, Diagnostic, LowerError};
+use crate::diagnostic::{Diagnostic, LowerError};
 use crate::first_order::{Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::pattern_compile::{self as p, Decision, Unpack, Value};
@@ -72,10 +71,6 @@ struct Lowerer<'a> {
     /// rebuilding it answers for.
     widenings: BTreeSet<(Type, Type)>,
     widen_ids: HashMap<(Type, Type), FnId>,
-    /// Where each call emitted was written, so a refusal naming the call
-    /// can point at it. Barb's ids hold until the program is rewritten,
-    /// which is after it is validated.
-    call_sites: RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
     /// Whether two naturals are equal, written once where a numeral is
     /// matched, in the shape Barb recognizes as that comparison.
     numeral_equals: Option<FnId>,
@@ -101,7 +96,6 @@ impl<'a> Lowerer<'a> {
             function_ids: HashMap::new(),
             widenings: BTreeSet::new(),
             widen_ids: HashMap::new(),
-            call_sites: RefCell::default(),
             numeral_equals: None,
             output: barb::Program::default(),
         };
@@ -127,24 +121,13 @@ impl<'a> Lowerer<'a> {
         Ok(self.output)
     }
 
-    /// A refusal, placed at the call it names, or else at the definition.
+    /// A refusal, placed at the definition it names.
     fn refused(&self, refusal: barb::Refusal) -> LowerError {
-        let call = refusal
-            .call
-            .and_then(|call| self.call_sites.borrow().get(&call).copied());
-        let definition = || {
-            let function = refusal.function?;
+        let definition = refusal.function.and_then(|function| {
             let (key, _) = self.function_ids.iter().find(|(_, id)| **id == function)?;
             self.definition_site(key.name)
-        };
-        let mut error = LowerError::new(refusal.message, call.or_else(definition));
-        if let Some(label) = refusal.label.filter(|_| call.is_some()) {
-            error = error.label(label);
-        }
-        if let Some(help) = refusal.help {
-            error = error.help(help);
-        }
-        error
+        });
+        LowerError::new(refusal.message, definition)
     }
 
     /// Where the first clause defining `name` is written.
@@ -543,7 +526,6 @@ impl<'a> Lowerer<'a> {
                 record_wrappers: &self.record_wrappers,
                 function_ids: &self.function_ids,
                 widen_ids: &self.widen_ids,
-                call_sites: &self.call_sites,
                 prelude: self.prelude,
                 numeral_equals: self.numeral_equals,
                 answer: &to,
@@ -603,7 +585,6 @@ impl<'a> Lowerer<'a> {
                 record_wrappers: &self.record_wrappers,
                 function_ids: &self.function_ids,
                 widen_ids: &self.widen_ids,
-                call_sites: &self.call_sites,
                 prelude: self.prelude,
                 numeral_equals: self.numeral_equals,
                 answer,
@@ -652,7 +633,6 @@ struct EmitContext<'a> {
     record_wrappers: &'a HashMap<Type, Type>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
     widen_ids: &'a HashMap<(Type, Type), FnId>,
-    call_sites: &'a RefCell<HashMap<barb::ExprId, (ModuleId, crate::ast::Span)>>,
     prelude: &'a PreludeIds,
     numeral_equals: Option<FnId>,
     /// What the function or lambda being emitted answers, which a `?` in
@@ -698,21 +678,6 @@ impl EmitContext<'_> {
             || fields.to_vec(),
             |record| vec![builder.con(self.record_constructor_ids[record], fields)],
         )
-    }
-
-    /// Emit a call to `function` written as `expression`, noting where.
-    fn call_written(
-        &self,
-        builder: &mut Builder<'_>,
-        function: FnId,
-        arguments: &[Atom],
-        expression: &Expr,
-    ) -> Atom {
-        let (atom, site) = builder.call_site(function, arguments);
-        self.call_sites
-            .borrow_mut()
-            .insert(site, (expression.module, expression.span));
-        atom
     }
 }
 
@@ -1027,7 +992,7 @@ fn emit_expr(
                 .iter()
                 .map(|argument| emit_expr(context, builder, argument, locals))
                 .collect::<Vec<_>>();
-            context.call_written(builder, context.function_ids[key], &arguments, expression)
+            builder.call(context.function_ids[key], &arguments)
         }
         ExprKind::Widen(value) => {
             let atom = emit_expr(context, builder, value, locals);

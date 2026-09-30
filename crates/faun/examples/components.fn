@@ -14,36 +14,33 @@ Graph = SortedMap(Str, List(Str))
 # reached them.
 connected : Graph -> List(List(Str))
 connected(graph) -> (
-  bound = graph.values().fold(1, |total, next| total + next.len())
   start = {seen: Set.empty(), groups: []}
-  found = graph.keys().fold(start, |found, node| component(graph, bound, node, found))
+  found = graph.keys().fold(start, |found, node| component(graph, node, found))
   found.groups
 )
 
 Found = {seen: Set(Str), groups: List(List(Str))}
 
 # The group a walk from `node` reaches, where no earlier walk reached it.
-component : (Graph, Nat, Str, Found) -> Found
-component(_, _, node, found) if found.seen.contains(node) -> found
-component(graph, bound, node, {seen, groups}) -> (
-  walked = walk(graph, [node], {seen, path: []}, bound)
+component : (Graph, Str, Found) -> Found
+component(_, node, found) if found.seen.contains(node) -> found
+component(graph, node, {seen, groups}) -> (
+  walked = walk(graph, [node], {seen, path: []})
   {seen: walked.seen, groups: groups.append(walked.path)}
 )
 
 Walk = {seen: Set(Str), path: List(Str)}
 
 # Take the top of the stack: seen before, pass over it; otherwise add it to
-# the path and push its neighbors, the first on top. Each node is added
-# once and pushes its neighbors once, so the stack takes at most one entry
-# for each edge and one for the start, and the fuel, `bound`, is enough.
-walk : (Graph, List(Str), Walk, Nat) -> Walk
-walk(graph, [current, *stack], walked, Succ(fuel)) if walked.seen.contains(current) ->
-  walk(graph, stack, walked, fuel)
-walk(graph, [current, *stack], {seen, path}, Succ(fuel)) -> (
+# the path and push its neighbors, the first on top.
+walk : (Graph, List(Str), Walk) -> Walk
+walk(graph, [current, *stack], walked) if walked.seen.contains(current) ->
+  walk(graph, stack, walked)
+walk(graph, [current, *stack], {seen, path}) -> (
   next = graph.get_or(current, [])
-  walk(graph, next.extend(stack), {seen: seen.insert(current), path: path.append(current)}, fuel)
+  walk(graph, next.extend(stack), {seen: seen.insert(current), path: path.append(current)})
 )
-walk(_, _, walked, _) -> walked
+walk(_, [], walked) -> walked
 
 # The cookbook's graphs.
 expect (

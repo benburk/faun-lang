@@ -210,6 +210,45 @@ fn run(package: &support::Package, args: &[&str], input: &str) -> (Option<i32>, 
     )
 }
 
+/// A call whose answer is needed and never comes back hangs the program
+/// there, after what was written before it. Nothing refuses the loop.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn a_needed_call_that_never_comes_back_hangs_the_program() {
+    let package = support::Package::new(
+        "hang",
+        "spin : Nat -> Nat
+         spin(n) -> spin(n)
+
+         main!(host) -> (
+           host.println!(\"before\")
+           host.println!(spin(3).to_str())
+           host.exit!(0)
+         )",
+    );
+    let binary = package.entry().with_file_name("hang");
+    let built = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .arg("build")
+        .arg(format!("--output={}", binary.display()))
+        .arg(package.entry())
+        .status()
+        .unwrap();
+    assert!(built.success());
+    let mut child = std::process::Command::new(&binary)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    std::io::BufRead::read_line(&mut stdout, &mut line).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let running = child.try_wait().unwrap().is_none();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(line, "before\n");
+    assert!(running, "the program exited rather than hanging");
+}
+
 /// The standard-input runner reads the input to its end and hands it to the
 /// program beside the arguments.
 #[test]

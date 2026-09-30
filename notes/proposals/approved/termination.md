@@ -1,8 +1,9 @@
 # Proposal: Termination is not checked
 
-- **Status:** Draft
+- **Status:** Approved
 - **Author:** cullback
 - **Created:** 2026-09-29
+- **Approved:** 2026-09-29
 - **Affects:** what a pure definition may do, Barb validation and the
   termination analysis, which goes, the refused programs about stopping, the
   README's promise, every step limit written only to satisfy the checker
@@ -247,9 +248,9 @@ growth remain.
 
 ## Open questions
 
-- **Does the Ori port diverge here for good?** Ori's premise is totality. A
-  program ported from Ori still means the same, since everything Ori accepts
-  stops, but Faun programs will no longer all run under Ori's rules.
+None. Faun diverges from Ori here for good: a program ported from Ori means
+the same, since everything Ori accepts stops, but a Faun program need not run
+under Ori's rules.
 
 ## Origin
 
@@ -259,3 +260,24 @@ them. It worked, but at a cost to the compiler out of proportion to the
 limits it removed, and raised the question of what the check was for.
 Following it through, the optimizer turned out to need only that unneeded
 work may be skipped, not that every call comes back.
+
+## Errata
+
+**2026-09-29.** Two machine-tier passes needed more than a comment. Building
+a program whose needed call never comes back showed both:
+
+- **Pruning** dropped a loop that never breaks, because nothing read its
+  answer, and left the function holding it with nothing after the loop and
+  no terminator. Such a loop is not unneeded work: what follows is reached
+  only because it does not come back. `ir/prune.rs` now keeps a loop that
+  never breaks and an `if` with an arm that never comes back.
+- **Lowering** turned a definition called from one place, and going round
+  only by calling itself, into a loop in its caller, with the caller's
+  instructions after it. Where every path goes round again the loop never
+  leaves, and nothing may follow it; `once_round` in `ir/lower.rs` now leaves
+  such a definition a function.
+
+One limitation remains. Range analysis reads a term nothing ever answers as
+able to hold anything, so a value that never exists, handed to a host call
+that must be proven to fit a word, is refused: `host.exit!(spin(3))` with
+`spin` never coming back. `host.println!(spin(3).to_str())` builds and hangs.

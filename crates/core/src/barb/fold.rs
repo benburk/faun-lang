@@ -10,7 +10,7 @@ pub(crate) fn fold(program: &mut Program) {
 }
 
 pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
-    let order = super::stops::callees_first(program);
+    let order = super::calls::callees_first(program);
     fold_in(program, order, limits);
 }
 
@@ -23,7 +23,7 @@ pub(crate) fn refold(program: &mut Program, changed: &[FnId]) {
         [] => {}
         &[id] => fold_in(program, [id], limits),
         _ => {
-            let order = super::stops::callees_first(program);
+            let order = super::calls::callees_first(program);
             fold_in(
                 program,
                 order.into_iter().filter(|id| changed.contains(id)),

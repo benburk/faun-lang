@@ -81,9 +81,8 @@ TemplateNode : [
   equals(_, _) -> False
 )
 
-# The consumed text is wrapped as `Str`, leaving exactly one `List(U8)` field.
-# That lets the totality checker retain the returned suffix's size relation to
-# the input across the parser helper boundary.
+# The consumed text is wrapped as `Str`, leaving exactly one `List(U8)` field:
+# the rest of the input the parser goes on with.
 TemplateRead : [TemplateFound(Str, List(U8)), TemplateNotFound]
 TemplateListHeader : [TemplateListHeaderFound(List(U8), List(U8)), TemplateListHeaderInvalid]
 TemplateIfBody : [TemplateIfBody(List(U8), List(U8))]
@@ -140,14 +139,13 @@ template_validate_read(TemplateFound(_, after), context, _) -> template_validate
 
 # Blocks are deliberately one level deep in this version. Their bodies still
 # support escaped and raw interpolation. Keeping the block parser separate from
-# the inline parser makes totality structural without an artificial depth fuel;
-# nested block support needs a first-order parser stack rather than recursion
-# over a remainder hidden inside a parse result.
+# the inline parser keeps each a walk over the text it is handed, with no
+# depth counter; nested block support needs a first-order parser stack rather
+# than recursion over a remainder hidden inside a parse result.
 #
 # The recursion rides a remainder pulled out of a computed `template_read_until`
-# and dispatched through head-matching helpers. The checker follows the descent
-# across those helper boundaries: the remainder's `≤` bound survives the call
-# and composes with the opening delimiter's peel into a strict decrease.
+# and dispatched through head-matching helpers, each handing on less of the
+# text than it was handed.
 template_parse : List(U8) -> Result(List(TemplateNode), TemplateError)
 template_parse([]) -> Ok([])
 template_parse(['{', '{', '{', *rest]) ->
@@ -162,8 +160,7 @@ template_parse(['{', '%', *]) -> Err(UnexpectedBlockTag)
 template_parse([byte, *rest]) -> Ok(template_prepend_text(byte, template_parse(rest)?))
 
 # Each block helper matches the read result in its head — the remainder rode
-# out of `read_until` below the opening delimiter, so recursing on it descends,
-# a relation the checker now carries across the helper boundary.
+# out of `read_until` below the opening delimiter, so recursing on it descends.
 template_block_raw : TemplateRead -> Result(List(TemplateNode), TemplateError)
 template_block_raw(TemplateNotFound) -> Err(UnclosedRawInterpolation)
 template_block_raw(TemplateFound(expression, after)) -> (

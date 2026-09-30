@@ -2,8 +2,11 @@
 
 use super::{FoldLimits, InlineLimits, Program};
 
-/// Optimize a validated program. Validation/totality must precede this: laws
-/// and evaluation must not hide a malformed or nonterminating definition.
+/// Optimize a validated program.
+///
+/// Validation must precede this: laws and evaluation must not hide a
+/// malformed definition. A definition may never come back; a pass may leave
+/// out pure work nothing needs, and nothing else, as the module's rules say.
 ///
 /// Each stage runs once, in this order: structural normalization, building
 /// lists front to back, descent,

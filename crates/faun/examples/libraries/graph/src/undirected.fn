@@ -1,7 +1,7 @@
 # An undirected graph: an edge is followed either way, stored both ways and
 # a loop once.
 
-import edge {Edge, Unweighted, targets, stored_edges}
+import edge {Edge, Unweighted, targets}
 import adjacency {unweighted, node_bound, both_ways, adjacency_of}
 import walk {Walk, unwalked, enter}
 import worklist {drain_stack}
@@ -43,8 +43,7 @@ UnGraph(e) : {adjacency: List(List(Edge(e))), edges: Nat}.(
   components : UnGraph(e) -> List(List(Nat))
   components(graph) -> (
     start = {walk: unwalked(graph), groups: []}
-    bound = stored_edges(graph) + 1
-    found = List.range(graph.node_count()).fold(start, |found, node| connected(graph, bound, node, found))
+    found = List.range(graph.node_count()).fold(start, |found, node| connected(graph, node, found))
     found.groups
   )
 )
@@ -52,12 +51,11 @@ UnGraph(e) : {adjacency: List(List(Edge(e))), edges: Nat}.(
 Found = {walk: Walk, groups: List(List(Nat))}
 
 # The component holding `node`, where no earlier one did: every node a walk
-# from it enters, sharing what every earlier walk entered. No walk takes
-# more than `bound` items.
-connected : (UnGraph(e), Nat, Nat, Found) -> Found
-connected(_, _, node, found) if found.walk.seen.get_or(node, True) -> found
-connected(graph, bound, node, {walk, groups}) -> (
+# from it enters, sharing what every earlier walk entered.
+connected : (UnGraph(e), Nat, Found) -> Found
+connected(_, node, found) if found.walk.seen.get_or(node, True) -> found
+connected(graph, node, {walk, groups}) -> (
   fresh = {order: [], *walk}
-  walked = drain_stack([node], fresh, bound, |entered, next| enter(graph, entered, next))
+  walked = drain_stack([node], fresh, |entered, next| enter(graph, entered, next))
   {walk: walked, groups: groups.append(walked.order)}
 )

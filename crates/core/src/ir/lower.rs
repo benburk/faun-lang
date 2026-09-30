@@ -380,7 +380,9 @@ fn declare<'a>(
 
 /// Whether `id` goes round by calling itself only as what it answers, and
 /// is called from one place besides: a loop that place may as well hold.
-/// One answering nothing is left a function, since it never leaves.
+/// One answering nothing is left a function, since it never leaves, and so
+/// is one every path of which goes round again: nothing follows a loop that
+/// never leaves.
 fn once_round(program: &barb::Program, reached: &[bool], id: barb::FnId) -> bool {
     let Some(body) = program.function(id).body() else {
         return false;
@@ -389,7 +391,7 @@ fn once_round(program: &barb::Program, reached: &[bool], id: barb::FnId) -> bool
         return false;
     }
     let tails = tail_calls(program, id, body);
-    if tails.is_empty() {
+    if tails.is_empty() || !leaves(program, id, body) {
         return false;
     }
     let mut outside = 0;
@@ -425,6 +427,21 @@ fn calls_of(program: &barb::Program, body: barb::Body, id: barb::FnId) -> Vec<ba
         }
     }
     found
+}
+
+/// Whether some path through `body` answers without calling `id` again.
+fn leaves(program: &barb::Program, id: barb::FnId, body: barb::Body) -> bool {
+    let mut waiting = vec![body];
+    while let Some(body) = waiting.pop() {
+        match program.expr(body.tail) {
+            barb::Expr::Call(callee, _) if callee == id => {}
+            barb::Expr::Match(_, arms) => {
+                waiting.extend(program.arms(arms).iter().map(|arm| arm.body));
+            }
+            _ => return true,
+        }
+    }
+    false
 }
 
 /// The calls of `id` in `body` that are what it answers.

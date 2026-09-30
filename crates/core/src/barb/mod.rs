@@ -4,7 +4,7 @@
 //!
 //! - The inductive types a program is built from, and their constructors
 //! - Which operations run, over which values, in what order
-//! - Totality: that every function is defined for every input and stops
+//! - That every function is defined for every input
 //!
 //! It does not decide:
 //!
@@ -32,9 +32,9 @@
 //!
 //! [`validate`] answers most of it: every call and construction saturated,
 //! every name a term reads bound by something above it, every match with an
-//! arm per constructor in the order the declaration gave them, and every
-//! definition stopping. A program built rather than written gets these checks
-//! too. This is not a full type checker or a validator for corrupted arenas:
+//! arm per constructor in the order the declaration gave them. A program
+//! built rather than written gets these checks too. Whether a definition
+//! stops is not asked; see [`optimize`] for what that allows. This is not a full type checker or a validator for corrupted arenas:
 //! frontend typing and the pool-construction invariants remain preconditions.
 //!
 //! Two other things must come from outside, because nothing here can see them:
@@ -54,12 +54,21 @@
 //! may perform an effect or exit without returning, even if its result is
 //! unused. Without further proof, keep its multiplicity, order and path.
 //!
+//! A definition with a body may never come back: nothing here asks whether
+//! one stops. Where its answer is needed, by a bodyless call, by the entry's
+//! answer, or by a match deciding either, a call that never comes back hangs
+//! the program there. Where its answer is not needed and it reaches no
+//! bodyless name, a pass may leave it out, so whether it would have come
+//! back is not observable. That is all the license there is: a pass never
+//! concludes that anything stops, and so never derives from a call that it
+//! must have answered.
+//!
 //! The bounded optimizer substitutes already-evaluated ANF atoms, leaves
 //! argument bindings in place when applying laws. Cleanup removes aliases and
 //! unused atoms, constants and constructors, but retains calls and matches.
 //! Constant evaluation refuses a whole call or match if any
-//! selected eager binding cannot be evaluated. Totality checking runs before
-//! any of these rewrites; optimization must not hide a rejected definition.
+//! selected eager binding cannot be evaluated, and its budget bounds the
+//! work, so a definition that never comes back cannot hang the compiler.
 //!
 //! Doing less work is the point of a pass rather than a rule over one.
 //! Nothing here knows what a branch costs, what a word is, or how often
@@ -83,6 +92,7 @@ mod arithmetic;
 mod bounds;
 mod budget;
 mod builder;
+mod calls;
 mod claim;
 mod cleanup;
 mod constant;
@@ -104,10 +114,8 @@ mod normalize;
 mod optimize;
 mod pretty;
 mod program;
-mod relations;
 mod sequence;
 mod specialize;
-mod stops;
 mod sweep;
 mod terms;
 mod types;

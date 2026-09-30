@@ -1,9 +1,0 @@
-import std.host {Host}
-
-# A list of one halves into nothing and itself.
-sort : List(Nat) -> List(Nat)
-sort([]) -> []
-sort(values) -> (
-  (front, back) = values.split_at(values.len() / 2)
-  sort(front).extend(sort(back))
-)

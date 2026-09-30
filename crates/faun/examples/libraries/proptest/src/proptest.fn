@@ -10,9 +10,9 @@
 #   a shrinker  `a -> List(a)` proposes smaller candidates for a failing value.
 #
 # Shrinking spends explicit fuel. That a shrinker's candidates get *smaller* is
-# the shrinker author's promise, not something the totality gate can know about
-# a function it is handed — so the descent that promise would justify is paid
-# for with a counter the gate can see.
+# the shrinker author's promise, which nothing checks — so the descent is
+# bounded by a counter, and a shrinker that does not shrink runs out of it
+# rather than going on forever.
 
 package {
   random: "../../random/src/random"

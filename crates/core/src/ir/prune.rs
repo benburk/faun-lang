@@ -12,12 +12,14 @@
 //! A container holding a call or a store that stays, stays for what it
 //! holds rather than for what it answers. So does an `if` an arm of which
 //! leaves some other way than by answering: a loop's `break` or `continue`,
-//! or a return; and a loop that returns.
+//! or a return; an `if` an arm of which never comes back; a loop that
+//! returns; and a loop that never breaks, since what follows it is reached
+//! only because it does not come back.
 //!
 //! A loop that does none of that goes when nothing reads what it answers.
-//! Every loop comes back: each is a total definition's tail call, or one
-//! lowering writes over something it has counted, so dropping one never
-//! takes away a program's failure to finish.
+//! It may be one that would never have come back, for a pure computation
+//! whose answer nothing needs may be left out: whether it would have
+//! stopped is not observable.
 //!
 //! A result of a function no call reads is not answered at all: the
 //! function's signature loses it, and what worked it out is then read by
@@ -486,8 +488,15 @@ impl Read {
                     || self.acts(source, else_region)
                     || leaves(source, then_region)
                     || leaves(source, else_region)
+                    || stops_here(source, then_region)
+                    || stops_here(source, else_region)
             }
-            Op::Loop { body, .. } => answered() || self.acts(source, body) || returns(source, body),
+            Op::Loop { body, .. } => {
+                answered()
+                    || self.acts(source, body)
+                    || returns(source, body)
+                    || !breaks(source, body)
+            }
             _ => answered(),
         }
     }
@@ -605,6 +614,32 @@ fn leaves(source: &Program, region: RegionId) -> bool {
         } => leaves(source, then_region) || leaves(source, else_region),
         // A loop's own `break` and `continue` stay within it.
         Op::Loop { body, .. } => returns(source, body),
+        _ => false,
+    })
+}
+
+/// Whether a region never comes back: it ends without a terminator, as one
+/// holding a call that never returns or a loop that never breaks does.
+fn stops_here(source: &Program, region: RegionId) -> bool {
+    source.region(region).terminator.is_none()
+}
+
+/// Whether a loop's body, or an arm within it, breaks out of the loop. A
+/// loop within holds its own breaks.
+fn breaks(source: &Program, region: RegionId) -> bool {
+    let held = source.region(region);
+    if held
+        .terminator
+        .is_some_and(|terminator| terminator.exit == Exit::Break)
+    {
+        return true;
+    }
+    source.walk(region).any(|(op, _)| match *op {
+        Op::If {
+            then_region,
+            else_region,
+            ..
+        } => breaks(source, then_region) || breaks(source, else_region),
         _ => false,
     })
 }

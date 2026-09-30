@@ -1,6 +1,0 @@
-import std.host {Host}
-
-below : (Nat, Nat, Nat) -> Nat
-below(0, _, j) -> j
-below(tenths, unit, j) if tenths * 1 < unit -> below(tenths * 1, unit, j + 1)
-below(_, _, j) -> j

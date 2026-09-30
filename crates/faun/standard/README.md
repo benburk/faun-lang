@@ -340,7 +340,7 @@ A `read!` moves some bytes, at most 64 KiB at once (1 KiB on sim65), or
 answers `End` where the stream has ended; asked for none, it answers none
 without asking the target. A `write!` moves some bytes and answers how many.
 `read_to_end!` and `write_all!` are Faun, going on until the stream is done,
-each bounded by fuel so it is seen to stop. The `Host`, `Stdin`, `Stdout`,
+each bounded by fuel: as many reads as a word counts. The `Host`, `Stdin`, `Stdout`,
 `Stderr`, `Files` and `File` constructors remain private, so only the target
 makes one. A method of a value's own type is reached whether or not the type
 was imported, so `host.stdout.write_all!(bytes)` needs only `Host`. A method a
@@ -462,9 +462,9 @@ function parameter is, is known where it is passed. A definition taking a
 function is made once for each set of callbacks it is handed, as in Ori, and
 calling its parameter is a direct call of the callback; a lambda is a
 definition of its own, handed what it reads from where it was written. Each
-callback's calls are then seen to stop as they would on their own:
-`bytes.count(|byte| ['a', 'e'].contains(byte))` goes round only as `contains`
-does. A recursive call that wraps the callback it was handed in a new lambda
+callback's call is then a direct call, read as it would be on its own:
+`bytes.count(|byte| ['a', 'e'].contains(byte))` calls `contains` directly. A
+recursive call that wraps the callback it was handed in a new lambda
 each time round is refused, since it would need a definition for every
 round; recurse on data that says what to call instead.
 

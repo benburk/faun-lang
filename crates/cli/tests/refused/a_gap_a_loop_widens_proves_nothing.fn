@@ -1,5 +1,0 @@
-import std.host {Host}
-
-grows : (Nat, Nat) -> Nat
-grows(i, n) if i < n -> grows(i, Succ(n))
-grows(i, _) -> i

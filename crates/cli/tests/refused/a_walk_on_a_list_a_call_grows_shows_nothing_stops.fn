@@ -1,7 +1,0 @@
-import std.host {Host}
-
-# `map` answers as many as it was handed, and one more is as many as the
-# list the walk began with.
-walk : List(Nat) -> List(Nat)
-walk([x, *rest]) -> [x, *walk(rest.map(|y| y + x).append(x))]
-walk(xs) -> xs

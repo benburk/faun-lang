@@ -107,9 +107,8 @@ search([ingredient, *rest], remaining, totals) ->
   spoonfuls(remaining, ingredient, rest, remaining, totals)
 
 # Every amount of this ingredient from `amount` down to none, each followed
-# by a search of the rest, and the best kept. Direct recursion, so the
-# checker sees both descents plainly: the amount here, the pantry in
-# `search`.
+# by a search of the rest, and the best kept, by direct recursion: the
+# amount goes down here, the pantry in `search`.
 spoonfuls : (Nat, Ingredient, List(Ingredient), Nat, Totals) -> Best
 spoonfuls(0, ingredient, rest, remaining, totals) ->
   search(rest, remaining, mix(totals, ingredient, 0))

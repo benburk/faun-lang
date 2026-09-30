@@ -60,24 +60,22 @@ Heap(k, v) : List((k, v)).(
   # The entries cheapest first: every pop, in turn.
   to_list : Heap(k, v) -> List((k, v)) where k.cmp : (k, k) -> Order
   to_list(heap) -> (
-    emptied = empty_onto(heap, [], heap.len())
+    emptied = empty_onto(heap, [])
     emptied.reverse()
   )
 
   # `state` once `visit` has seen every entry, cheapest first. Each visit
-  # answers the state and the entries it adds, which it sees in their turn;
-  # `fuel` is how many visits there may be.
-  drain : (Heap(k, v), s, Nat, (s, k, v) -> (s, List((k, v)))) -> s where k.cmp : (k, k) -> Order
-  drain(_, state, 0, _) -> state
-  drain(heap, state, Succ(fuel), visit) -> visiting(heap.pop(), state, fuel, visit)
+  # answers the state and the entries it adds, which it sees in their turn.
+  drain : (Heap(k, v), s, (s, k, v) -> (s, List((k, v)))) -> s where k.cmp : (k, k) -> Order
+  drain(heap, state, visit) -> visiting(heap.pop(), state, visit)
 )
 
-visiting : (Result({key: k, value: v, rest: Heap(k, v)}, [Empty]), s, Nat, (s, k, v) -> (s, List((k, v)))) -> s where k.cmp : (k, k) -> Order
-visiting(Err(Empty), state, _, _) -> state
-visiting(Ok({key, value, rest}), state, fuel, visit) -> (
+visiting : (Result({key: k, value: v, rest: Heap(k, v)}, [Empty]), s, (s, k, v) -> (s, List((k, v)))) -> s where k.cmp : (k, k) -> Order
+visiting(Err(Empty), state, _) -> state
+visiting(Ok({key, value, rest}), state, visit) -> (
   (next, added) = visit(state, key, value)
   grown = rest.push_all(added)
-  grown.drain(next, fuel, visit)
+  grown.drain(next, visit)
 )
 
 taken : ((k, v), Heap(k, v)) -> {key: k, value: v, rest: Heap(k, v)}
@@ -129,13 +127,12 @@ sink_past(entries, hole, child, (child_key, lower), (key, value), count) if chil
   sink(put(entries, hole, (child_key, lower)), child, (key, value), count)
 sink_past(entries, hole, _, _, entry, _) -> put(entries, hole, entry)
 
-empty_onto : (Heap(k, v), List((k, v)), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
-empty_onto(_, found, 0) -> found
-empty_onto(heap, found, Succ(fuel)) -> drained(heap.pop(), found, fuel)
+empty_onto : (Heap(k, v), List((k, v))) -> List((k, v)) where k.cmp : (k, k) -> Order
+empty_onto(heap, found) -> drained(heap.pop(), found)
 
-drained : (Result({key: k, value: v, rest: Heap(k, v)}, [Empty]), List((k, v)), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
-drained(Err(Empty), found, _) -> found
-drained(Ok({key, value, rest}), found, fuel) -> empty_onto(rest, [(key, value), *found], fuel)
+drained : (Result({key: k, value: v, rest: Heap(k, v)}, [Empty]), List((k, v))) -> List((k, v)) where k.cmp : (k, k) -> Order
+drained(Err(Empty), found) -> found
+drained(Ok({key, value, rest}), found) -> empty_onto(rest, [(key, value), *found])
 
 # `values` with the element at `index` replaced, as `List.set` writes it:
 # where it lies, in a list nothing else holds.
@@ -171,11 +168,10 @@ expect (
 # adds the next two, so the 2 that 0 adds comes out after the 1, and so
 # does the 2 that 1 adds.
 expect (
-  seen = Heap.empty().push(0, {}).drain([], 20, |order, key, _| ([key, *order], following(key)))
+  seen = Heap.empty().push(0, {}).drain([], |order, key, _| ([key, *order], following(key)))
   seen.reverse() == [0, 1, 2, 2, 3, 3, 3, 4, 4]
 )
-# Its fuel is how many entries it sees.
-expect Heap.of_list([(3, {}), (1, {}), (2, {})]).drain([], 2, |order, key, _| ([key, *order], [])) == [2, 1]
+expect Heap.of_list([(3, {}), (1, {}), (2, {})]).drain([], |order, key, _| ([key, *order], [])) == [3, 2, 1]
 expect Heap.empty().push_all([(2, 'b'), (1, 'a')]).to_list() == [(1, 'a'), (2, 'b')]
 
 # The entries a key below three adds: the next two keys.

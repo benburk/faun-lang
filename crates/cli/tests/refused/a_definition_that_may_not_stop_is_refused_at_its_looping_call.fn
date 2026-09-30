@@ -1,6 +1,0 @@
-step : Nat -> Nat
-step(Succ(n)) -> hop(n)
-step(Zero) -> 0
-
-hop : Nat -> Nat
-hop(m) -> step(Succ(Succ(m)))

@@ -1,7 +1,7 @@
 # What a search asks of a graph: how many nodes it has, and the edges
 # leaving each, as petgraph's algorithms ask `NodeCount` and `IntoEdges`.
 
-export {Edge, Unweighted, Graph, targets, stored_edges}
+export {Edge, Unweighted, Graph, targets}
 
 # An edge as its source sees it: where it goes, and what it weighs.
 Edge(e) = {target: Nat, weight: e}
@@ -17,10 +17,3 @@ Graph(g, e) = where
 
 targets : List(Edge(e)) -> List(Nat)
 targets(edges) -> edges.map(|edge| edge.target)
-
-# How many edges `graph` stores, an undirected one's each way.
-stored_edges : g -> Nat where Graph(g, e)
-stored_edges(graph) -> List.range(graph.node_count()).fold(0, |total, node| (
-  edges = graph.edges_from(node)
-  total + edges.len()
-))

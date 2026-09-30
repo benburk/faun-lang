@@ -1,6 +1,6 @@
 # Depth-first search, petgraph's `Dfs` and edged's `PreOrder`.
 
-import edge {Graph, stored_edges}
+import edge {Graph}
 import walk {unwalked, enter}
 import worklist {drain_stack}
 
@@ -11,6 +11,6 @@ export {dfs}
 # the next, and none from a node the graph does not have.
 dfs : (g, Nat) -> List(Nat) where Graph(g, e)
 dfs(graph, start) -> (
-  walked = drain_stack([start], unwalked(graph), stored_edges(graph) + 1, |walk, node| enter(graph, walk, node))
+  walked = drain_stack([start], unwalked(graph), |walk, node| enter(graph, walk, node))
   walked.order
 )

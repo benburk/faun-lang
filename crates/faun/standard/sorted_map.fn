@@ -145,8 +145,8 @@ got(Eq, _, value, _, _) -> Ok(value)
 got(Gt, _, _, right, key) -> SortedMap.get(right, key)
 
 # The comparison's verdict replaces in place or descends, rebalancing the
-# grown side. The node arrives as its pieces, so the recursion into a
-# child is a descent the checker reads off the caller's pattern.
+# grown side. The node arrives as its pieces, and the recursion goes into
+# a child.
 inserted_at : (Order, SortedMap(k, v), k, v, SortedMap(k, v), Nat, k, v) -> SortedMap(k, v) where
   k.cmp : (k, k) -> Order
 inserted_at(Eq, left, _, _, right, depth, key, value) -> Bin(left, key, value, right, depth)
@@ -157,8 +157,7 @@ inserted_at(Gt, left, found, existing, right, _, key, value) ->
 
 # The comparison's verdict removes here or descends, rebalancing the side
 # that did not shrink. The node arrives as its pieces, as for `inserted_at`,
-# so the recursion into a child is a descent the checker reads off the
-# caller's pattern.
+# and the recursion goes into a child.
 removed_at : (Order, SortedMap(k, v), k, v, SortedMap(k, v), k) -> SortedMap(k, v) where
   k.cmp : (k, k) -> Order
 removed_at(Lt, left, found, value, right, key) ->

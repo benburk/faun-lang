@@ -1,7 +1,0 @@
-error: nothing here shows `loop` stops
- --> a_generic_definition_nothing_calls_must_stop_at_the_empty_type.fn:3:13
-  |
-3 | loop(xs) -> loop(xs)
-  |             ^^^^^^^^ goes round on what it was handed, not on a part of it
-  |
-  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

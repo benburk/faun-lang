@@ -14,7 +14,9 @@ The idea is that, by encoding very little information in the program, there are 
 
 value semantics. a bodyless call is a value the target computes
 
-- functions with bodies must be total - able to be proven to terminate by totality checker
+- functions with bodies need not stop. A call whose answer is needed and never comes back
+  hangs the program there; pure work whose answer is not needed may be left out, so whether
+  it would have stopped is not observable. Nothing is concluded from a call having answered
 - bodyless functions
   - can be used for representing effects
   - must be bodyless, implemented by the target
@@ -24,8 +26,8 @@ value semantics. a bodyless call is a value the target computes
   - sizeof, alignment, layout dependent serialization, casts between representations
   - weak refs, finalizers
 - whole source available. ish. backend will be able to dynamically link libs eventually
-- an entry is optional. Every defined function is validated and must be total
-  whether or not the entry reaches it. Optimization then keeps only what the
+- an entry is optional. Every defined function is validated whether or not
+  the entry reaches it. Optimization then keeps only what the
   entry reaches, so what is checked is everything written and what is kept is
   what runs; a program with no entry is checked, keeps every definition, and
   lowers to nothing
@@ -68,47 +70,13 @@ x    ::= a parameter, a binding, or a field an arm bound
   core API with its definition; separate substantial named algorithms, not
   reads from writes. Keep fields and construction machinery private or narrowly
   visible within the tier, and re-export the public API from `mod.rs`.
-- `validate.rs`, `stops.rs`: structural checks and size-change termination.
-  Each definition is read against its measures, each a size of a parameter:
-  its depth; its length, where it is a list, or its value, where it is a
-  natural; and the depth of a field, where it is a sum holding no more of
-  itself. Every value a body holds carries upper bounds on how deep and how
-  long it is, and a lower bound on how long, at keys of none, one or two
-  measures added up plus a constant; a call matrix has a row per measure of
-  the caller and a column per measure of the callee. A round nothing shows
-  stops plainly is read again with `a ∸ b` for each ordered pair of
-  naturals besides, smaller where the new pair lies within the old, one
-  side moved, and a guard keeps them apart; and where that fails, with what
-  calls answer: each definition's answer against its measures, a greatest
-  fixpoint, taken apart by its shape. So a parser going round on the rest
-  it answers, a walk on what `map` or `reverse` answered of its rest, a
-  merge sort halving by `split_at(len / 2)` past its one-element clause, a
-  digit walk past `n < 10`, and a walk scaling by ten past a bound are seen
-  to stop. Recognized arithmetic and the recognized `Length`, `Take` and
-  `Drop` answer by what they mean; a list's least length follows the
-  constructors it was matched as; a guard becomes bounds on entering an
-  arm, one side at most what the other is at most; a recognized operation worked
-  out again on the same operands is the same value; and a small definition
-  going round nowhere is read in place at a call.
-- `relations.rs`: what a guard says of the sizes it compared, followed from
-  the comparisons recognized by their equations through the definitions
-  answering from them, as the facts each constructor of the answer carries.
-  A `Refusal` names what it refuses by Barb's own ids -- the function, and for
-  a definition that may not stop, the call beginning a way round with no
-  descent -- never by source; a frontend maps them back through what
-  `Builder::call_site` told it, before anything rewrites the program.
-  The termination pass keeps signed constructor-depth bounds for locals, so taking
-  two fields and rebuilding one constructor still records a decrease. Structurally
-  recognized natural arithmetic contributes its semantic result bounds: monus and
-  division do not exceed the dividend, monus of a positive by a positive and
-  division by at least two strictly reduce a positive dividend, and a remainder
-  is below a positive divisor. This proves such definitions as factorial,
-  Fibonacci, GCD, and popcount without trusting their source names.
-  The pass then closes call matrices within each recursive component and requires
-  every idempotent self-path to have a strict diagonal. Matrices are flat and
-  endpoint-indexed, so closure considers only composable paths and stops at the
-  first counterexample. Frontend typing and well-formed arena references remain
-  preconditions, not proofs supplied here.
+- `validate.rs`: structural checks: every call and construction saturated,
+  every name bound, every match with an arm per constructor. Whether a
+  definition stops is not asked. A `Refusal` names what it refuses by Barb's
+  own ids, never by source; a frontend maps the definition back.
+- `calls.rs`: the call graph, the rounds it goes in (its strongly connected
+  components), the loop breakers inlining keeps whole, and the order
+  folding reads definitions in, each after what it calls.
 - `claim.rs`: what a claimed float is -- a natural in one-field wrappers,
   taken and answered at one type -- and answering a claimed call from its
   operands' patterns with the host's arithmetic (`crate::float`). A claimed
@@ -251,7 +219,8 @@ x    ::= a parameter, a binding, or a field an arm bound
   in one walk. Where the consumer is itself a producer, so is the fused one,
   so a chain fuses a link at a time. Only definitions reaching no bodyless
   call take part: fusing interleaves their work and cuts the producer short
-  where the consumer stops. Nothing is recognized by name. The same walk
+  where the consumer stops, which leaves out pure work nothing needs.
+  Nothing is recognized by name. The same walk
   turns a list reversed onto nothing and read once, by a reversal of it onto
   another, into one prepend in order: the recognized definition for that
   type, or one declared in the shape recognition reads.

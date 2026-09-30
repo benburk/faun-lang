@@ -43,7 +43,7 @@ impl Inlining {
             return None;
         }
         Some(Self {
-            breakers: super::stops::breakers(program),
+            breakers: super::calls::breakers(program),
             costs: program
                 .functions()
                 .iter()

@@ -1,5 +1,0 @@
-import std.host {Host}
-
-still : (Nat, Nat) -> Nat
-still(i, n) if i < n -> still(i, n)
-still(i, _) -> i

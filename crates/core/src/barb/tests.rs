@@ -158,216 +158,44 @@ fn large_arithmetic_does_not_expand_constructor_spines() {
     assert!(!large.contains("add(v0, v0)"), "{large}");
 }
 
-/// Constructor distances survive partial reconstruction: the recursive value
-/// below removes two constructors and puts one back.
+/// Nothing asks whether a definition stops: one going round on what it was
+/// handed, which never comes back, is a program all the same.
 #[test]
-fn size_change_accepts_reconstructed_subterms() {
-    let (mut program, nat, _, _) = types();
-    let zero = program.ctor_at(nat, 0);
-    let successor = program.ctor_at(nat, 1);
-    let descend = program.declare("descend", &[nat], nat);
-    program.define(descend, |b, args| {
-        b.match_(args[0], nat, |b, ctor, fields| {
-            if ctor == zero {
-                return b.con(zero, &[]);
-            }
-            b.match_(fields[0], nat, |b, ctor, fields| {
-                if ctor == zero {
-                    b.con(zero, &[])
-                } else {
-                    let predecessor = b.con(successor, &[fields[0]]);
-                    b.call(descend, &[predecessor])
-                }
-            })
-        })
-    });
-    program.set_entry(descend);
-
-    validate(&program).expect("two constructors taken and one rebuilt is a decrease");
-}
-
-/// Weak arithmetic bounds are not strict decreases. Dividing by one and
-/// taking a remainder with zero therefore cannot disguise an unchanged
-/// recursive argument.
-#[test]
-fn size_change_rejects_non_decreasing_arithmetic() {
-    let mut lib = fixture::Library::new();
-    let (nat, zero, succ) = (lib.nat, lib.zero, lib.succ);
-    let (div, modulo) = (lib.div, lib.modulo);
-    let p = &mut lib.program;
-    // stall(Zero) -> Zero
-    // stall(Succ(n)) -> value = Succ(n) one = Succ(Zero) stall_mod(div(value, one))
-    // stall_mod(n) -> zero = Zero stall(mod(n, zero))
-    let stall = p.declare("stall", &[nat], nat);
-    let stall_mod = p.declare("stall_mod", &[nat], nat);
-    p.define(stall, |b, args| {
-        b.match_(args[0], nat, |b, ctor, fields| {
-            if ctor == zero {
-                return b.con(zero, &[]);
-            }
-            let value = b.con(succ, &[fields[0]]);
-            let nought = b.con(zero, &[]);
-            let one = b.con(succ, &[nought]);
-            let divided = b.call(div, &[value, one]);
-            b.call(stall_mod, &[divided])
-        })
-    });
-    p.define(stall_mod, |b, args| {
-        let nought = b.con(zero, &[]);
-        let remainder = b.call(modulo, &[args[0], nought]);
-        b.call(stall, &[remainder])
-    });
-    enter(p, nat, stall, 0);
-    let refused = validate(p).unwrap_err();
-    assert!(
-        refused
-            .message
-            .contains("nothing here shows `stall`, `stall_mod` stops"),
-        "{refused}"
-    );
-}
-
-/// Monus of two positives is below its dividend, so `m - 1` descends where
-/// `m` was matched as a successor; monus by nought does not.
-#[test]
-fn size_change_reads_monus_of_positives_as_a_decrease() {
-    let refusal = |subtrahend: u64| {
-        let mut lib = fixture::Library::new();
-        let (nat, zero, succ, sub) = (lib.nat, lib.zero, lib.succ, lib.sub);
-        let p = &mut lib.program;
-        // count(Zero) -> Zero
-        // count(Succ(n)) -> count(sub(Succ(n) subtrahend))
-        let by = p.intern_number(nat, subtrahend).unwrap();
-        let count = p.declare("count", &[nat], nat);
-        p.define(count, |b, args| {
-            b.match_(args[0], nat, |b, ctor, fields| {
-                if ctor == zero {
-                    return b.con(zero, &[]);
-                }
-                let value = b.con(succ, &[fields[0]]);
-                let by = b.known(by);
-                let less = b.call(sub, &[value, by]);
-                b.call(count, &[less])
-            })
-        });
-        enter(p, nat, count, 3);
-        validate(p).err()
-    };
-    assert!(refusal(1).is_none(), "{:?}", refusal(1));
-    let refused = refusal(0).expect("monus by nought is no decrease");
-    assert!(
-        refused.message.contains("nothing here shows `count` stops"),
-        "{refused}"
-    );
-}
-
-/// Names that go round together are one round, however many of them there
-/// are and whichever of them is reached first. What every definition in one
-/// reaches is every other, so a round is found the way a program's calls
-/// make it rather than by asking each pair in turn.
-#[test]
-fn a_round_is_every_name_that_goes_round_together() {
-    // Three deep, taking a part each time round, which stops.
-    // one(Zero) -> Zero    one(Succ(k)) -> two(k)
-    // two(Zero) -> Zero    two(Succ(k)) -> three(k)
-    // three(Zero) -> Zero  three(Succ(k)) -> one(k)
-    let mut lib = fixture::Library::new();
-    let (nat, zero) = (lib.nat, lib.zero);
-    let p = &mut lib.program;
-    let round = ["one", "two", "three"].map(|name| p.declare(name, &[nat], nat));
-    for (at, &id) in round.iter().enumerate() {
-        let next = round[(at + 1) % round.len()];
-        p.define(id, |b, args| {
-            b.match_(args[0], nat, |b, ctor, fields| {
-                if ctor == zero {
-                    b.con(zero, &[])
-                } else {
-                    b.call(next, &[fields[0]])
-                }
-            })
-        });
-    }
-    enter(p, nat, round[0], 3);
-    validate(p).expect("a round that takes something apart");
-
-    // The same three, going round on what they were handed.
-    // one(n) -> add(Zero two(n)), and so on round.
-    let mut lib = fixture::Library::new();
-    let (nat, zero, add) = (lib.nat, lib.zero, lib.add);
-    let p = &mut lib.program;
-    let round = ["one", "two", "three"].map(|name| p.declare(name, &[nat], nat));
-    for (at, &id) in round.iter().enumerate() {
-        let next = round[(at + 1) % round.len()];
-        p.define(id, |b, args| {
-            let nought = b.con(zero, &[]);
-            let again = b.call(next, &[args[0]]);
-            b.call(add, &[nought, again])
-        });
-    }
-    enter(p, nat, round[0], 0);
-    let refused = validate(p).unwrap_err();
-    assert!(
-        refused.message.contains("`one`, `two`, `three` stops"),
-        "{refused}"
-    );
-}
-
-/// Give `program` an entry answering `called(n)`.
-fn enter(program: &mut Program, nat: TypeId, called: FnId, n: u64) {
-    let n = program.intern_number(nat, n).unwrap();
-    let main = program.declare("main", &[], nat);
-    program.define(main, |b, _| {
-        let n = b.known(n);
-        b.call(called, &[n])
-    });
-    program.set_entry(main);
-}
-
-/// Size-change termination follows each repeatable path rather than demanding
-/// that one argument decrease at every recursive call site.
-#[test]
-fn size_change_accepts_descent_on_alternative_arguments() {
-    let (mut program, _, _, list) = types();
-    let choice = program.declare_type("Choice");
-    program.define_type(choice, &[("Left", &[]), ("Right", &[])]);
-
-    let merge = program.declare("merge", &[list, list, choice], list);
-    let left_choice = program.ctor_at(choice, 0);
-    program.define(merge, |b, args| {
-        let (left, right, choose) = (args[0], args[1], args[2]);
-        b.match_(choose, choice, |b, ctor, _| {
-            if ctor == left_choice {
-                b.match_(left, list, |b, _, fields| match fields {
-                    [] => right,
-                    [_, tail] => b.call(merge, &[*tail, right, choose]),
-                    _ => unreachable!("a list has zero or two fields"),
-                })
-            } else {
-                b.match_(right, list, |b, _, fields| match fields {
-                    [] => left,
-                    [_, tail] => b.call(merge, &[left, *tail, choose]),
-                    _ => unreachable!("a list has zero or two fields"),
-                })
-            }
-        })
-    });
-    program.set_entry(merge);
-
-    validate(&program).expect("each path through merge descends on one list");
-}
-
-/// A decrease somewhere in a matrix is not enough: only a strict diagonal in
-/// every idempotent composition proves that repeated calls run out.
-#[test]
-fn size_change_rejects_an_unchanged_permutation() {
+fn a_definition_that_never_stops_is_valid() {
     let (mut program, nat, _, _) = types();
     let swap = program.declare("swap", &[nat, nat], nat);
     program.define(swap, |b, args| b.call(swap, &[args[1], args[0]]));
     program.set_entry(swap);
 
-    let refused = validate(&program).unwrap_err();
-    assert!(
-        refused.message.contains("nothing here shows `swap` stops"),
-        "{refused}"
-    );
+    validate(&program).expect("stopping is not asked");
+}
+
+/// Names that go round together are one round, however many of them there
+/// are and whichever of them is reached first, and each is read after what
+/// it calls but those it goes round with. Of a round of three calling each
+/// other in a ring, one is kept whole so the other two may be copied in.
+#[test]
+fn a_round_is_every_name_that_goes_round_together() {
+    // one(n) -> two(n), two(n) -> three(n), three(n) -> one(n), and a
+    // main calling one.
+    let mut lib = fixture::Library::new();
+    let nat = lib.nat;
+    let p = &mut lib.program;
+    let round = ["one", "two", "three"].map(|name| p.declare(name, &[nat], nat));
+    for (at, &id) in round.iter().enumerate() {
+        let next = round[(at + 1) % round.len()];
+        p.define(id, |b, args| b.call(next, &[args[0]]));
+    }
+    let main = p.declare("main", &[nat], nat);
+    p.define(main, |b, args| b.call(round[0], &[args[0]]));
+    p.set_entry(main);
+
+    let order = calls::callees_first(p);
+    let at = |id: FnId| order.iter().position(|&held| held == id).unwrap();
+    assert!(round.iter().all(|&id| at(id) < at(main)), "{order:?}");
+
+    let breakers = calls::breakers(p);
+    let kept = round.iter().filter(|id| breakers[id.index()]).count();
+    assert_eq!(kept, 1, "{breakers:?}");
+    assert!(!breakers[main.index()]);
 }

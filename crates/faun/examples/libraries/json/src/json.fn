@@ -274,8 +274,7 @@ Members(a) : [Members(a, List((Str, Json)))].(
 
 # The value, array, and object parsers form one mutual recursion cycle. Each
 # cycle consumes syntax from the input; the unconsumed remainder rides beside
-# the value inside `Ok`, and the checker's path summaries carry that suffix
-# relation through the sum and the tuple, so `?` is all the plumbing there is.
+# the value inside `Ok`, so `?` is all the plumbing there is.
 parse_value : List(U8) -> Result((Json, List(U8)), ParseError)
 parse_value([]) -> Err(UnexpectedEnd)
 parse_value([x, *rest]) if is_space(x) -> parse_value(rest)

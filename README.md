@@ -4,7 +4,7 @@ A work-in-progress compiled, strict functional language exploring whether C-like
 
 ```ruby
 # Computes the factorial of an arbitrarily large natural number.
-# Proven total and panic free.
+# Panic free: every match covers every input.
 factorial : Nat -> Nat
 factorial(0) -> 1
 factorial(m) -> m * factorial(m - 1)
@@ -19,7 +19,7 @@ main!(host) -> (
 
 - **Strict functional semantics**: immutable values, value semantics, algebraic data types, pattern matching, and eager evaluation.
 - **Static, decidable typing**: HM-style type inference with row-polymorphic structural types; type signatures are optional, and may leave any part to inference with `_`.
-- **A total pure core**: pattern matches must be exhaustive, and recursive definitions are accepted only when the compiler can establish termination. Effects enter explicitly through host-provided capabilities.
+- **A pure core defined for every input**: pattern matches must be exhaustive. Recursion is not checked to stop: a call whose answer is needed and never comes back hangs, and pure work nothing needs may be left out. Effects enter explicitly through host-provided capabilities.
 - **Immutable semantics, mutable implementation**: heap values are reference-counted; uniquely owned storage may be reused in place when observationally equivalent to allocating a fresh value, with copy-on-write as the fallback.
 - **Second-order functions without runtime closures**: functions may accept statically known function arguments and call-site lambdas, but functions are not general runtime values.
 - **Explicit effects and resources**: effectful operations are syntactically marked, capabilities are passed explicitly, and linear resource types enforce explicit acquisition, use, and cleanup.

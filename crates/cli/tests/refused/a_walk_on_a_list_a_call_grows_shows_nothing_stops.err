@@ -1,7 +1,0 @@
-error: nothing here shows `walk` stops
- --> a_walk_on_a_list_a_call_grows_shows_nothing_stops.fn:6:26
-  |
-6 | walk([x, *rest]) -> [x, *walk(rest.map(|y| y + x).append(x))]
-  |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ goes round on what it was handed, not on a part of it
-  |
-  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

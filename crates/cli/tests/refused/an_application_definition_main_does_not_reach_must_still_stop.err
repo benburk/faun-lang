@@ -1,7 +1,0 @@
-error: nothing here shows `spin` stops
- --> an_application_definition_main_does_not_reach_must_still_stop.fn:4:12
-  |
-4 | spin(n) -> spin(n)
-  |            ^^^^^^^ goes round on what it was handed, not on a part of it
-  |
-  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

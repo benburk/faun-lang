@@ -8,6 +8,19 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "a definition that never stops for some inputs is a program all the same",
+        "step : Nat -> Nat
+         step(Succ(n)) -> hop(n)
+         step(Zero) -> 7
+
+         hop : Nat -> Nat
+         hop(m) -> step(Succ(Succ(m)))
+
+         main! : Host -> []
+         main!(host) -> host.exit!(U8.of_nat(step(0)))",
+        7,
+    ),
+    (
         "a large numeral is a test, however large",
         "code : Nat -> Nat
          code(13) -> 1
@@ -218,7 +231,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
         1 + 4 + 3,
     ),
     (
-        "a guard's gap that closes shows a loop stops",
+        "a guard's gap that closes ends a loop",
         "upto : (Nat, Nat) -> Nat
          upto(i, n) if i < n -> upto(Succ(i), n)
          upto(i, _) -> i
@@ -341,7 +354,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
         10 + 5 + 5 + 3,
     ),
     (
-        "a number a guard keeps at least ten, or one grown past a bound, shows a walk stops",
+        "a number a guard keeps at least ten, or one grown past a bound, ends a walk",
         "digits : (Nat, Nat) -> Nat
          digits(n, count) if n < 10 -> count + 1
          digits(n, count) -> digits(n / 10, count + 1)

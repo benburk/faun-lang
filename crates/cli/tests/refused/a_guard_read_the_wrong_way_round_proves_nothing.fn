@@ -1,5 +1,0 @@
-import std.host {Host}
-
-wrong : (Nat, Nat) -> Nat
-wrong(i, n) if i >= n -> wrong(Succ(i), n)
-wrong(i, _) -> i

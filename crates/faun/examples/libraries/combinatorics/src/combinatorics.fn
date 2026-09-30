@@ -13,9 +13,8 @@
 # over the same engine — and can join as further choice modes when a
 # consumer arrives.
 #
-# Termination is structural on `length` alone, which is why no variant
-# needs fuel: the continuation list a choice hands back is opaque to the
-# totality checker, and never needs to be anything else.
+# Each variant goes round on `length` alone, so it stops however the
+# continuation list a choice hands back was made.
 
 package {}
 
@@ -55,8 +54,8 @@ generate(xs, Succ(remaining), repeats, inorder) ->
   walk(choices(xs, repeats, inorder), remaining, repeats, inorder)
 
 # One choice at a time, each extended by every shorter selection its
-# remainder generates. Direct recursion threads the switches flat, so the
-# checker sees the peeled `remaining` descend into `generate` unwrapped.
+# remainder generates. Direct recursion threads the switches flat, and the
+# peeled `remaining` goes into `generate` unwrapped.
 walk : (List((a, List(a))), Nat, Bool, Bool) -> List(List(a))
 walk([], _, _, _) -> []
 walk([(x, continue_from), *rest], remaining, repeats, inorder) ->

@@ -7,8 +7,8 @@
 # read moves some bytes or says the stream has ended, a write moves some
 # bytes and answers how many, and either may answer the error it met;
 # `read_to_end!` and `write_all!` go on until the stream is done. Each loop
-# is bounded by fuel, so it is seen to stop, and a stream that never ends
-# runs out of it: as many reads as a word counts. Each stream is what a
+# is bounded by fuel: a stream that never ends runs out of it, as many
+# reads as a word counts. Each stream is what a
 # descriptor names, and the three standard ones are the first three.
 #
 # What every target shares is in `common.fn`; what is here is WASI's: its

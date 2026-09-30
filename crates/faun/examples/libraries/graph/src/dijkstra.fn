@@ -1,11 +1,9 @@
 # Dijkstra's algorithm, lazily: every edge leaving a settled node goes on
 # the heap, and entries come off it cheapest first, so a node's first entry
 # settles it and any later one finds it settled. Nothing compares costs but
-# the heap. Each node is settled once and pushes each of its edges once, so
-# the heap receives at most one entry for each stored edge and one for the
-# source, and the fuel never runs out.
+# the heap. Each node is settled once and pushes each of its edges once.
 
-import edge {Graph, stored_edges}
+import edge {Graph}
 import table {put}
 import heap {Heap}
 
@@ -31,7 +29,7 @@ dijkstra : (g, Nat) -> Paths(e) where Graph(g, e), Weight(e)
 dijkstra(graph, source) -> (
   unsettled = List.repeat(Err(Unreachable), graph.node_count())
   queue = Heap.empty().push(e.zero(), {node: source, from: source})
-  settled = queue.drain(unsettled, stored_edges(graph) + 1, |settled, cost, {node, from}| settle(graph, settled, node, {cost, from}))
+  settled = queue.drain(unsettled, |settled, cost, {node, from}| settle(graph, settled, node, {cost, from}))
   Paths(settled)
 )
 
@@ -61,19 +59,18 @@ Paths(e) : Settled(e).(
   path : (Paths(e), Nat) -> Result(List(Nat), [Unreachable])
   path(Paths(settled), target) -> (
     _ = settled.get_or(target, Err(Unreachable))?
-    Ok(trace(settled, target, [target], settled.len()))
+    Ok(trace(settled, target, [target]))
   )
 )
 
 # The path back from `node` onto `route`, until the node reached from
 # itself: the source. A path visits each node once.
-trace : (Settled(e), Nat, List(Nat), Nat) -> List(Nat)
-trace(_, _, route, 0) -> route
-trace(settled, node, route, Succ(fuel)) -> (
+trace : (Settled(e), Nat, List(Nat)) -> List(Nat)
+trace(settled, node, route) -> (
   step = settled.get_or(node, Err(Unreachable))
-  back(settled, node, step, route, fuel)
+  back(settled, node, step, route)
 )
 
-back : (Settled(e), Nat, Result(Step(e), [Unreachable]), List(Nat), Nat) -> List(Nat)
-back(settled, node, Ok({from, *}), route, fuel) if from != node -> trace(settled, from, [from, *route], fuel)
-back(_, _, _, route, _) -> route
+back : (Settled(e), Nat, Result(Step(e), [Unreachable]), List(Nat)) -> List(Nat)
+back(settled, node, Ok({from, *}), route) if from != node -> trace(settled, from, [from, *route])
+back(_, _, _, route) -> route

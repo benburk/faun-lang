@@ -455,8 +455,8 @@ impl Compiler<'_> {
     ///
     /// A small numeral is taken apart instead, a successor at a time. That
     /// is as few matches as tests, and what it says is more: past `0` a
-    /// number is a successor, which is how a definition counting down is
-    /// seen to stop. A column also taking successors apart is taken apart,
+    /// number is a successor, which a definition counting down takes apart.
+    /// A column also taking successors apart is taken apart,
     /// numerals and all, since a test says nothing about what a successor
     /// holds.
     fn numeral_column(

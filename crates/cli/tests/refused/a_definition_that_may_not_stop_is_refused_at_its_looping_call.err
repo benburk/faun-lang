@@ -1,7 +1,0 @@
-error: nothing here shows `step`, `hop` stops
- --> a_definition_that_may_not_stop_is_refused_at_its_looping_call.fn:2:18
-  |
-2 | step(Succ(n)) -> hop(n)
-  |                  ^^^^^^ goes round on what it was handed, not on a part of it
-  |
-  = help: hand each round a part of what it was handed, such as a list's rest, so it gets smaller until it stops

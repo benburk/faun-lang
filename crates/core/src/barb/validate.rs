@@ -5,13 +5,16 @@
 //! about text: a program built rather than written reaches here too, and
 //! nothing about a builder makes a call give a name what it takes.
 //!
-//! Three things, and the third is the one worth the file:
+//! Two things:
 //!
 //! - every call and construction is saturated, and every name it reads is
 //!   one something bound
 //! - every match has an arm per constructor of what it takes apart, in the
 //!   order the declaration gave them
-//! - every definition stops, which [`stops`](super::stops) answers
+//!
+//! Whether a definition stops is not asked: a pure computation that never
+//! comes back hangs the program where its answer is needed, and may be left
+//! out where it is not.
 
 use super::model::{Atom, Body, Expr, ExprId, FnId, Range};
 use super::program::Program;
@@ -25,13 +28,6 @@ pub struct Refusal {
     pub message: String,
     /// The definition refused, when it is one definition's fault.
     pub function: Option<FnId>,
-    /// For a definition that may not stop, the call in `function` that
-    /// begins a way round on which nothing gets smaller.
-    pub call: Option<ExprId>,
-    /// What is at the call, where it names one.
-    pub label: Option<String>,
-    /// What would fix it.
-    pub help: Option<String>,
 }
 
 impl Refusal {
@@ -39,9 +35,6 @@ impl Refusal {
         Self {
             message,
             function: None,
-            call: None,
-            label: None,
-            help: None,
         }
     }
 
@@ -50,9 +43,6 @@ impl Refusal {
         Self {
             message,
             function: Some(function),
-            call: None,
-            label: None,
-            help: None,
         }
     }
 }
@@ -100,7 +90,7 @@ pub fn validate(program: &Program) -> Result<(), Refusal> {
         let level = u32::try_from(program.params(id).len()).expect("a sane arity");
         shaped(program, name, body, level).map_err(|message| Refusal::of_function(message, id))?;
     }
-    super::stops::stops(program)
+    Ok(())
 }
 
 /// Every term of one body: what it reads, and how much of it.

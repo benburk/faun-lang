@@ -1,5 +1,5 @@
 //! A package is checked whole: every definition it writes that can stand on
-//! its own is lowered and must be total, whether or not anything calls it.
+//! its own is lowered and validated, whether or not anything calls it.
 //! An entry defining `main!` makes it an application, whose Barb starts
 //! there; without one it is a library, whose Barb has no entry and which has
 //! nothing to build.

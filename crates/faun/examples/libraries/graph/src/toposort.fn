@@ -1,8 +1,7 @@
 # Topological sort by Kahn's algorithm, petgraph's `toposort` and edged's
 # `Topological`: a node is ready once every edge into it has been taken, and
 # taking a ready node takes the edges leaving it. A node is made ready once,
-# when its last edge in is taken, so there are at most as many turns as
-# nodes, and the fuel never runs out.
+# when its last edge in is taken.
 
 import edge {Graph}
 import table {put}
@@ -18,7 +17,7 @@ toposort(graph) -> (
   count = graph.node_count()
   degrees = in_degrees(graph)
   ready = List.range(count).filter(|node| degrees.get_or(node, 0) == 0)
-  taken = drain_stack(ready, {degrees, order: []}, count, |kahn, node| take(graph, kahn, node))
+  taken = drain_stack(ready, {degrees, order: []}, |kahn, node| take(graph, kahn, node))
   sorted(taken.order, count)
 )
 

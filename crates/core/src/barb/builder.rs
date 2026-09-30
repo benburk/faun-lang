@@ -51,16 +51,8 @@ impl Builder<'_> {
 
     /// A saturated call to a top-level name.
     pub fn call(&mut self, function: FnId, args: &[Atom]) -> Atom {
-        self.call_site(function, args).0
-    }
-
-    /// [`Self::call`], also answering the id a [`super::Refusal`] names the
-    /// call by. It holds until the program is next rewritten, so a frontend
-    /// maps it before optimizing.
-    pub fn call_site(&mut self, function: FnId, args: &[Atom]) -> (Atom, ExprId) {
         let args = self.program.terms.hold_atoms(args.iter().copied());
-        let site = self.program.terms.push(Expr::Call(function, args));
-        (self.bind(site), site)
+        self.emit(Expr::Call(function, args))
     }
 
     /// Hold a number in the program's pool, for [`Self::known`].
