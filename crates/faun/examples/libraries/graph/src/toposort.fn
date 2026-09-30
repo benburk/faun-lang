@@ -3,16 +3,16 @@
 # taking a ready node takes the edges leaving it. A node is made ready once,
 # when its last edge in is taken.
 
-import edge {Graph}
+import edge {Walkable}
 import table {put}
-import worklist {drain_stack}
+import walk {drain_stack}
 
 export {toposort}
 
 # Every node, each before the targets of the edges leaving it, or `Cycle`
 # where edges go round and no such order exists. Of the nodes ready at
 # once, the latest made ready goes first.
-toposort : g -> Result(List(Nat), [Cycle]) where Graph(g, e)
+toposort : g -> Result(List(Nat), [Cycle]) where Walkable(g, e)
 toposort(graph) -> (
   count = graph.node_count()
   degrees = in_degrees(graph)
@@ -22,7 +22,7 @@ toposort(graph) -> (
 )
 
 # How many edges go into each node.
-in_degrees : g -> List(Nat) where Graph(g, e)
+in_degrees : g -> List(Nat) where Walkable(g, e)
 in_degrees(graph) -> (
   none = List.repeat(0, graph.node_count())
   List.range(graph.node_count()).fold(none, |degrees, node| (
@@ -34,7 +34,7 @@ in_degrees(graph) -> (
 Kahn = {degrees: List(Nat), order: List(Nat)}
 
 # `node` taken, and the targets its edges make ready.
-take : (g, Kahn, Nat) -> (Kahn, List(Nat)) where Graph(g, e)
+take : (g, Kahn, Nat) -> (Kahn, List(Nat)) where Walkable(g, e)
 take(graph, {degrees, order}, node) -> (
   edges = graph.edges_from(node)
   freed = edges.fold({ready: [], degrees}, |state, edge| release(edge.target, state))

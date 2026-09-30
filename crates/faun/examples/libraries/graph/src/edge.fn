@@ -1,7 +1,7 @@
 # What a search asks of a graph: how many nodes it has, and the edges
 # leaving each, as petgraph's algorithms ask `NodeCount` and `IntoEdges`.
 
-export {Edge, Unweighted, Graph, targets}
+export {Edge, Unweighted, Walkable, targets}
 
 # An edge as its source sees it: where it goes, and what it weighs.
 Edge(e) = {target: Nat, weight: e}
@@ -11,7 +11,7 @@ Unweighted = {}
 
 # What a search asks of a graph: how many nodes it has, and the edges
 # leaving each, in order.
-Graph(g, e) = where
+Walkable(g, e) = where
   g.node_count : g -> Nat,
   g.edges_from : (g, Nat) -> List(Edge(e))
 

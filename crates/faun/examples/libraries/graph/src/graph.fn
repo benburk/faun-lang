@@ -3,42 +3,37 @@
 # node lives in the caller's own list, indexed the same way, and every table
 # a search keeps is a list indexed by node.
 #
-# The searches ask a graph only what `Graph` asks, as petgraph's algorithms
-# ask `NodeCount` and `IntoEdges`, so each is written once for both kinds and
-# for any type answering the same two members: a grid, say, that works its
-# edges out rather than storing them.
+# A `Graph` is directed or undirected, as petgraph's is. The searches ask a
+# graph only what `Walkable` asks, as petgraph's algorithms ask `NodeCount`
+# and `IntoEdges`, so each is written once for both and for any type
+# answering the same two members: a grid, say, that works its edges out
+# rather than storing them.
 #
-# The modules are laid out as edged lays out its crate: `edge` is what
-# a search asks, `adjacency` what both graphs keep and `table` what every
-# search keeps, `directed` and `undirected` the graphs, and `bfs`, `dfs`,
-# `dijkstra` and `toposort` the searches. Every search is one loop, a
-# worklist: `worklist` drains a stack or a queue, the heap library drains a
-# heap, and `walk` is what visiting a node does in a walk that keeps which
-# nodes it has entered.
+# `edge` is what a search asks, `adjacency` the graph, `table` what every
+# search keeps, `walk` the walks, which are each one worklist, and
+# `dijkstra` and `toposort` the rest.
 
 package {
   heap: "../../heap/src/heap"
 }
 
-import edge {Edge, Unweighted, Graph}
-import directed {DiGraph}
-import undirected {UnGraph}
-import bfs {bfs}
-import dfs {dfs}
+import edge {Edge, Unweighted, Walkable}
+import adjacency {Graph, Direction}
+import walk {bfs, dfs, components}
 import dijkstra {dijkstra, Paths, Weight}
 import toposort {toposort}
 
-export {DiGraph, UnGraph, Edge, Unweighted, Graph, Paths, Weight, bfs, dfs, dijkstra, toposort}
+export {Graph, Direction, Edge, Unweighted, Walkable, Paths, Weight, bfs, dfs, components, dijkstra, toposort}
 
 # A diamond with a shortcut that costs more than the long way round.
-diamond : DiGraph(Nat)
-diamond() -> DiGraph.from_weighted_edges(4, [(0, 1, 1), (0, 2, 4), (1, 2, 2), (1, 3, 6), (2, 3, 1)])
+diamond : Graph(Nat)
+diamond() -> Graph.from_weighted_edges(Directed, 4, [(0, 1, 1), (0, 2, 4), (1, 2, 2), (1, 3, 6), (2, 3, 1)])
 
 expect diamond().node_count() == 4 & diamond().edge_count() == 5
 expect diamond().neighbors(0) == [1, 2] & diamond().neighbors(3) == []
 # A graph has the nodes it is given, even with no edges, and grows to hold
 # an edge that names one past them.
-expect UnGraph.from_edges(3, []).node_count() == 3 & DiGraph.from_edges(2, [(0, 3)]).node_count() == 4
+expect Graph.from_edges(Undirected, 3, []).node_count() == 3 & Graph.from_edges(Directed, 2, [(0, 3)]).node_count() == 4
 expect bfs(diamond(), 0) == [0, 1, 2, 3] & dfs(diamond(), 0) == [0, 1, 2, 3]
 # Direction matters: nothing leaves the sink, and a node the graph does not
 # have reaches nothing.
@@ -56,28 +51,35 @@ expect bfs(diamond().reversed(), 3) == [3, 1, 2, 0] & bfs(diamond().reversed(), 
 # Depth first goes to the end of the first edge before trying the second;
 # breadth first takes both before either's targets.
 expect (
-  tree = DiGraph.from_edges(5, [(0, 1), (0, 2), (1, 3), (2, 4)])
+  tree = Graph.from_edges(Directed, 5, [(0, 1), (0, 2), (1, 3), (2, 4)])
   dfs(tree, 0) == [0, 1, 3, 2, 4] & bfs(tree, 0) == [0, 1, 2, 3, 4]
 )
 
 # An undirected edge is followed either way, and counted once; a loop is
 # stored once.
 expect (
-  line = UnGraph.from_edges(3, [(0, 1), (1, 2), (2, 2)])
+  line = Graph.from_edges(Undirected, 3, [(0, 1), (1, 2), (2, 2)])
   line.edge_count() == 3 & line.neighbors(1) == [0, 2] & line.neighbors(2) == [1, 2] & bfs(line, 2) == [2, 1, 0]
 )
 
 # A cycle ends the walk where it comes back round.
-expect dfs(DiGraph.from_edges(3, [(0, 1), (1, 2), (2, 0)]), 1) == [1, 2, 0]
+expect dfs(Graph.from_edges(Directed, 3, [(0, 1), (1, 2), (2, 0)]), 1) == [1, 2, 0]
 
-# Weak components ignore direction, and a node with no edges is its own.
-expect DiGraph.from_edges(6, [(1, 0), (2, 3), (4, 3)]).weak_components() == [[0, 1], [2, 3, 4], [5]]
-expect UnGraph.from_edges(3, [(2, 2)]).components() == [[0], [1], [2]]
+# Components follow edges as the graph does: one way, each group what its
+# least node reaches and no earlier one holds, unless the graph is taken as
+# undirected, which finds the weakly connected components. A node with no
+# edges is its own.
+expect (
+  pointing = Graph.from_edges(Directed, 6, [(1, 0), (2, 3), (4, 3)])
+  components(pointing) == [[0], [1], [2, 3], [4], [5]] & components(pointing.undirected()) == [[0, 1], [2, 3, 4], [5]]
+)
+expect components(Graph.from_edges(Undirected, 3, [(2, 2)])) == [[0], [1], [2]]
+expect Graph.from_edges(Undirected, 3, [(0, 1)]).undirected().edge_count() == 1
 
 # Every node before what its edges reach: edged's example, in its order.
-expect toposort(DiGraph.from_edges(6, [(0, 1), (1, 2), (0, 3), (3, 1), (3, 5), (3, 4), (4, 5)])) == Ok([0, 3, 4, 5, 1, 2])
+expect toposort(Graph.from_edges(Directed, 6, [(0, 1), (1, 2), (0, 3), (3, 1), (3, 5), (3, 4), (4, 5)])) == Ok([0, 3, 4, 5, 1, 2])
 expect toposort(diamond()) == Ok([0, 1, 2, 3])
 # Two edges into one node both have to be taken, and a node no edge touches
 # is ready from the start.
-expect toposort(DiGraph.from_edges(3, [(0, 1), (0, 1)])) == Ok([0, 1, 2])
-expect toposort(DiGraph.from_edges(3, [(0, 1), (1, 2), (2, 1)])) == Err(Cycle)
+expect toposort(Graph.from_edges(Directed, 3, [(0, 1), (0, 1)])) == Ok([0, 1, 2])
+expect toposort(Graph.from_edges(Directed, 3, [(0, 1), (1, 2), (2, 1)])) == Err(Cycle)

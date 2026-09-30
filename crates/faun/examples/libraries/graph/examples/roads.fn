@@ -7,17 +7,17 @@ package {
   graph: "../src/graph"
 }
 
-import graph {UnGraph, bfs, dfs, dijkstra}
+import graph {Graph, bfs, dfs, components, dijkstra}
 
 towns : List(Str)
 towns() -> ["Ashby", "Bexley", "Crewe", "Dover", "Exeter", "Fenwick"]
 
 # Fenwick has no road: its node is there only because the graph is given
 # a node for each town.
-roads : UnGraph(Nat)
+roads : Graph(Nat)
 roads() -> (
   lengths = [(0, 1, 7), (0, 2, 9), (0, 3, 14), (1, 2, 10), (2, 3, 2), (3, 4, 9)]
-  UnGraph.from_weighted_edges(towns().len(), lengths)
+  Graph.from_weighted_edges(Undirected, towns().len(), lengths)
 )
 
 # The town at `node`, or its number where the caller has no name for it.
@@ -36,6 +36,6 @@ route(from, to) -> (
 expect route(0, 4) == Ok("Ashby -> Crewe -> Dover -> Exeter (20)")
 expect route(4, 0) == Ok("Exeter -> Dover -> Crewe -> Ashby (20)")
 expect route(0, 5) == Err(Unreachable)
-expect roads().components() == [[0, 1, 2, 3, 4], [5]]
+expect components(roads()) == [[0, 1, 2, 3, 4], [5]]
 expect bfs(roads(), 4).map(name) == ["Exeter", "Dover", "Ashby", "Crewe", "Bexley"]
 expect dfs(roads(), 0).map(name) == ["Ashby", "Bexley", "Crewe", "Dover", "Exeter"]

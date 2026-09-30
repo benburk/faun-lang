@@ -7,7 +7,7 @@ package {
   graph: "../src/graph"
 }
 
-import graph {Edge, bfs, dfs, dijkstra}
+import graph {Edge, bfs, dfs, components, dijkstra}
 
 # Cells numbered along each row, then down; a step between neighbours
 # costs one, and a wall is a cell no step enters.
@@ -43,3 +43,6 @@ expect (
 )
 # A wall is a cell no step enters.
 expect dijkstra(maze(), 0).cost(5) == Err(Unreachable)
+# Every cell but a wall is reached from the first, and each wall, which no
+# step enters, is a group of its own.
+expect components(maze()).filter(|group| group.len() == 1) == [[5], [6], [10]]

@@ -7,22 +7,22 @@ package {
   graph: "../src/graph"
 }
 
-import graph {UnGraph, Unweighted}
+import graph {Graph, Unweighted, components}
 
 people : List(Str)
 people() -> ["Ada", "Bea", "Cy", "Dot", "Eli", "Fay", "Gus"]
 
 # Gus has no friends here: his node is there only because the graph is
 # given one for each person.
-friendships : UnGraph(Unweighted)
-friendships() -> UnGraph.from_edges(people().len(), [(0, 1), (1, 2), (3, 4), (5, 3)])
+friendships : Graph(Unweighted)
+friendships() -> Graph.from_edges(Undirected, people().len(), [(0, 1), (1, 2), (3, 4), (5, 3)])
 
 # The person at `node`, or their number where the caller has no name.
 name : Nat -> Str
 name(node) -> people().get_or(node, node.to_str())
 
 circles : List(List(Str))
-circles() -> friendships().components().map(|members| members.map(name))
+circles() -> components(friendships()).map(|members| members.map(name))
 
 expect circles() == [["Ada", "Bea", "Cy"], ["Dot", "Eli", "Fay"], ["Gus"]]
 # A friendship goes both ways: Fay befriended Dot, and Dot's circle has her.

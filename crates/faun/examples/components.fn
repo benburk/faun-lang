@@ -7,33 +7,25 @@
 
 package {}
 
-Graph = SortedMap(Str, List(Str))
-
 # The nodes grouped by which a walk from each group's first node reaches,
 # the groups in the order of their first nodes, each in the order the walk
 # reached them.
-connected : Graph -> List(List(Str))
+connected : SortedMap(Str, List(Str)) -> List(List(Str))
 connected(graph) -> (
   start = {seen: Set.empty(), groups: []}
   found = graph.keys().fold(start, |found, node| component(graph, node, found))
   found.groups
 )
 
-Found = {seen: Set(Str), groups: List(List(Str))}
-
 # The group a walk from `node` reaches, where no earlier walk reached it.
-component : (Graph, Str, Found) -> Found
 component(_, node, found) if found.seen.contains(node) -> found
 component(graph, node, {seen, groups}) -> (
   walked = walk(graph, [node], {seen, path: []})
   {seen: walked.seen, groups: groups.append(walked.path)}
 )
 
-Walk = {seen: Set(Str), path: List(Str)}
-
 # Take the top of the stack: seen before, pass over it; otherwise add it to
 # the path and push its neighbors, the first on top.
-walk : (Graph, List(Str), Walk) -> Walk
 walk(graph, [current, *stack], walked) if walked.seen.contains(current) ->
   walk(graph, stack, walked)
 walk(graph, [current, *stack], {seen, path}) -> (

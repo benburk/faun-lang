@@ -1,22 +1,81 @@
-# What a walk keeps: which nodes it has entered, and in what order.
+# Every walk is one loop, a worklist: take a node, visit it, and keep what
+# the visit adds for later, until nothing is left. A stack takes the last
+# added first, which is depth first; a queue takes the first, which is
+# breadth first. A visit marks a node entered as it is taken, so one taken
+# again is passed over, and a node the graph does not have counts as
+# entered.
 
-import edge {Graph, targets}
+import edge {Walkable, targets}
 import table {put}
 
-export {Walk, unwalked, enter}
+export {bfs, dfs, components, drain_stack}
+
+# The nodes reachable from `start`, nearest first, each once.
+bfs : (g, Nat) -> List(Nat) where Walkable(g, e)
+bfs(graph, start) -> (
+  walked = drain_queue([start], unwalked(graph), |walk, node| enter(graph, walk, node))
+  walked.order
+)
+
+# The nodes reachable from `start` in depth-first preorder: each node's
+# edges are followed in the order they were given, each to its end before
+# the next.
+dfs : (g, Nat) -> List(Nat) where Walkable(g, e)
+dfs(graph, start) -> (
+  walked = drain_stack([start], unwalked(graph), |walk, node| enter(graph, walk, node))
+  walked.order
+)
+
+# The nodes grouped by which reach which, each group in the order a
+# depth-first walk from its least node enters it, and the groups by their
+# least node. Following edges one way, each group is what its least node
+# reaches that no earlier group holds.
+components : g -> List(List(Nat)) where Walkable(g, e)
+components(graph) -> (
+  start = {walk: unwalked(graph), groups: []}
+  found = List.range(graph.node_count()).fold(start, |found, node| connected(graph, node, found))
+  found.groups
+)
 
 Walk = {seen: List(Bool), order: List(Nat)}
 
-# A walk that has entered nothing.
-unwalked : g -> Walk where Graph(g, e)
+Found = {walk: Walk, groups: List(List(Nat))}
+
+# The group holding `node`, where no earlier one did: every node a walk
+# from it enters, sharing what every earlier walk entered.
+connected : (g, Nat, Found) -> Found where Walkable(g, e)
+connected(_, node, found) if found.walk.seen.get_or(node, True) -> found
+connected(graph, node, {walk, groups}) -> (
+  fresh = {order: [], *walk}
+  walked = drain_stack([node], fresh, |entered, next| enter(graph, entered, next))
+  {walk: walked, groups: groups.append(walked.order)}
+)
+
+unwalked : g -> Walk where Walkable(g, e)
 unwalked(graph) -> {seen: List.repeat(False, graph.node_count()), order: []}
 
 # `node` entered where it was not before, and the targets of its edges, in
-# the order they were given, to enter later. A node the graph does not have
-# counts as entered.
-enter : (g, Walk, Nat) -> (Walk, List(Nat)) where Graph(g, e)
+# the order they were given, to enter later.
+enter : (g, Walk, Nat) -> (Walk, List(Nat)) where Walkable(g, e)
 enter(_, walk, node) if walk.seen.get_or(node, True) -> (walk, [])
 enter(graph, {seen, order}, node) -> (
   edges = graph.edges_from(node)
   ({seen: put(seen, node, True), order: order.append(node)}, targets(edges))
 )
+
+# The state once `visit` has seen every item, the last added first: each
+# visit answers the state and the items it adds.
+drain_stack : (List(a), s, (s, a) -> (s, List(a))) -> s
+drain_stack([item, *stack], state, visit) -> (
+  (next, added) = visit(state, item)
+  drain_stack(added.extend(stack), next, visit)
+)
+drain_stack([], state, _) -> state
+
+# The same, the first added first.
+drain_queue : (List(a), s, (s, a) -> (s, List(a))) -> s
+drain_queue([item, *queue], state, visit) -> (
+  (next, added) = visit(state, item)
+  drain_queue(queue.extend(added), next, visit)
+)
+drain_queue([], state, _) -> state
