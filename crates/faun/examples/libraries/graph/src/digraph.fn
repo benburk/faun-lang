@@ -1,0 +1,57 @@
+# A directed graph built once and then searched, petgraph's `DiGraph`: each
+# node's edges out, in the order they were given, and its edges in, each
+# listed as the graph turned round would list it. Keeping both makes turning
+# the graph round a swap that builds nothing, and gives each node's count of
+# edges in without a pass over every edge.
+
+import edge {Edge, Unweighted, targets}
+import adjacency {unweighted, node_bound, adjacency_of, turned_round, arcs}
+import ungraph {UnGraph}
+
+export {DiGraph}
+
+DiGraph(e) : {outgoing: List(List(Edge(e))), incoming: List(List(Edge(e))), edges: Nat}.(
+  # The graph of `pairs`, each `(source, target)`, over `count` nodes, or
+  # more where an edge names one past them. Its edges weigh nothing.
+  from_edges : (Nat, List((Nat, Nat))) -> DiGraph(Unweighted)
+  from_edges(count, pairs) -> from_weighted_edges(count, pairs.map(unweighted))
+
+  # The graph of `edges`, each `(source, target, weight)`, over `count`
+  # nodes, or more where an edge names one past them.
+  from_weighted_edges : (Nat, List((Nat, Nat, e))) -> DiGraph(e)
+  from_weighted_edges(count, edges) -> (
+    nodes = node_bound(count, edges)
+    turned = edges.map(turned_round)
+    outgoing = adjacency_of(edges, nodes)
+    incoming = adjacency_of(turned, nodes)
+    DiGraph({outgoing, incoming, edges: edges.len()})
+  )
+
+  node_count : DiGraph(e) -> Nat
+  node_count(DiGraph({outgoing, *})) -> outgoing.len()
+
+  edge_count : DiGraph(e) -> Nat
+  edge_count(DiGraph({edges, *})) -> edges
+
+  # The edges leaving `node`, in the order they were given, and none from a
+  # node the graph does not have.
+  edges_from : (DiGraph(e), Nat) -> List(Edge(e))
+  edges_from(DiGraph({outgoing, *}), node) -> outgoing.get_or(node, [])
+
+  # The targets of the edges leaving `node`, one for each edge.
+  neighbors : (DiGraph(e), Nat) -> List(Nat)
+  neighbors(graph, node) -> targets(edges_from(graph, node))
+
+  # How many edges come into `node`.
+  in_degree : (DiGraph(e), Nat) -> Nat
+  in_degree(DiGraph({incoming, *}), node) -> incoming.get_or(node, []).len()
+
+  # The graph with every edge turned round: what reaches a node here leaves
+  # it there.
+  reversed : DiGraph(e) -> DiGraph(e)
+  reversed(DiGraph({outgoing, incoming, edges})) -> DiGraph({outgoing: incoming, incoming: outgoing, edges})
+
+  # The graph with every edge followed either way.
+  undirected : DiGraph(e) -> UnGraph(e)
+  undirected(DiGraph({outgoing, *})) -> UnGraph.from_weighted_edges(outgoing.len(), arcs(outgoing))
+)

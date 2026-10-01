@@ -1,0 +1,44 @@
+# An undirected graph built once and then searched, petgraph's `UnGraph`:
+# each edge as it was given, once, and each node's edges from either end, so
+# a walk follows an edge both ways and a loop once.
+
+import edge {Edge, Unweighted, targets}
+import adjacency {unweighted, node_bound, adjacency_of, both_ways}
+
+export {UnGraph}
+
+UnGraph(e) : {adjacency: List(List(Edge(e))), given: List((Nat, Nat, e))}.(
+  # The graph of `pairs`, each `(one end, other end)`, over `count` nodes, or
+  # more where an edge names one past them. Its edges weigh nothing.
+  from_edges : (Nat, List((Nat, Nat))) -> UnGraph(Unweighted)
+  from_edges(count, pairs) -> from_weighted_edges(count, pairs.map(unweighted))
+
+  # The graph of `edges`, each `(one end, other end, weight)`, over `count`
+  # nodes, or more where an edge names one past them.
+  from_weighted_edges : (Nat, List((Nat, Nat, e))) -> UnGraph(e)
+  from_weighted_edges(count, edges) -> (
+    nodes = node_bound(count, edges)
+    ends = edges.flat_map(both_ways)
+    adjacency = adjacency_of(ends, nodes)
+    UnGraph({adjacency, given: edges})
+  )
+
+  node_count : UnGraph(e) -> Nat
+  node_count(UnGraph({adjacency, *})) -> adjacency.len()
+
+  edge_count : UnGraph(e) -> Nat
+  edge_count(UnGraph({given, *})) -> given.len()
+
+  # Every edge once, as it was given: `(one end, other end, weight)`.
+  edges : UnGraph(e) -> List((Nat, Nat, e))
+  edges(UnGraph({given, *})) -> given
+
+  # The edges at `node`, each as `node` sees it, in the order they were
+  # given, and none at a node the graph does not have.
+  edges_from : (UnGraph(e), Nat) -> List(Edge(e))
+  edges_from(UnGraph({adjacency, *}), node) -> adjacency.get_or(node, [])
+
+  # The other ends of the edges at `node`, one for each edge.
+  neighbors : (UnGraph(e), Nat) -> List(Nat)
+  neighbors(graph, node) -> targets(edges_from(graph, node))
+)

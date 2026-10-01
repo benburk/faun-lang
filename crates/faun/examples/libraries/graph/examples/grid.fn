@@ -1,7 +1,8 @@
 # A graph no adjacency list holds: a maze's edges are worked out from where
 # a cell is, each time they are asked for, and the library's searches walk
-# it all the same, since they ask of it only what `Graph` asks: how many
-# nodes there are, and the edges leaving each.
+# it all the same, since they ask of it only what `Walkable` asks: how many
+# nodes there are, and the edges leaving each. Answering every edge once as
+# well, which an undirected graph does, lets it be split into components.
 
 package {
   graph: "../src/graph"
@@ -10,12 +11,13 @@ package {
 import graph {Edge, bfs, dfs, components, dijkstra}
 
 # Cells numbered along each row, then down; a step between neighbours
-# costs one, and a wall is a cell no step enters.
+# costs one, and a wall is a cell no step enters or leaves.
 Maze : {width: Nat, height: Nat, walls: List(Nat)}.(
   node_count : Maze -> Nat
   node_count(Maze({width, height, *})) -> width * height
 
   edges_from : (Maze, Nat) -> List(Edge(Nat))
+  edges_from(Maze({walls, *}), cell) if walls.contains(cell) -> []
   edges_from(Maze({width, height, walls}), cell) -> (
     x = cell % width
     y = cell / width
@@ -24,6 +26,21 @@ Maze : {width: Nat, height: Nat, walls: List(Nat)}.(
     open = inside.filter(|(_, next)| !walls.contains(next))
     open.map(|(_, next)| {target: next, weight: 1})
   )
+
+  # Every step once, from the earlier cell of the two.
+  edges : Maze -> List((Nat, Nat, Nat))
+  edges(maze) -> (
+    cells = List.range(node_count(maze))
+    cells.flat_map(|cell| forward_steps(maze, cell))
+  )
+)
+
+# The steps from `cell` to a later one.
+forward_steps : (Maze, Nat) -> List((Nat, Nat, Nat))
+forward_steps(maze, cell) -> (
+  steps = maze.edges_from(cell)
+  later = steps.filter(|step| step.target > cell)
+  later.map(|step| (cell, step.target, step.weight))
 )
 
 # 0 1 2 3
@@ -45,4 +62,5 @@ expect (
 expect dijkstra(maze(), 0).cost(5) == Err(Unreachable)
 # Every cell but a wall is reached from the first, and each wall, which no
 # step enters, is a group of its own.
-expect components(maze()).filter(|group| group.len() == 1) == [[5], [6], [10]]
+expect components(maze()) == [[0, 1, 2, 3, 4, 7, 8, 9, 11], [5], [6], [10]]
+expect maze().edges_from(5) == []

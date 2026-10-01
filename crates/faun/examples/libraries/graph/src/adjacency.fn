@@ -1,63 +1,11 @@
-# A graph built once and then searched, petgraph's `Graph`: each node's
-# outgoing edges in the order they were given, and whether an edge is
-# followed from its source to its target, `Directed`, or either way,
-# `Undirected`, which stores it both ways and a loop once. The lists are
-# built by one stable sort of the edges by source, which is how a compressed
-# sparse row is built; the representation is private, so it can become one.
+# How both graphs build their lists: each node's edges in the order they
+# were given, by one stable sort of the edges by source, which is how a
+# compressed sparse row is built; each graph's representation is private, so
+# it can become one.
 
-import edge {Edge, Unweighted, targets}
+import edge {Edge, Unweighted}
 
-export {Graph, Direction}
-
-Direction = [Directed, Undirected]
-
-Graph(e) : {adjacency: List(List(Edge(e))), edges: Nat, direction: Direction}.(
-  # The graph of `pairs`, each `(source, target)`, over `count` nodes, or
-  # more where an edge names one past them. Its edges weigh nothing.
-  from_edges : (Direction, Nat, List((Nat, Nat))) -> Graph(Unweighted)
-  from_edges(direction, count, pairs) -> from_weighted_edges(direction, count, pairs.map(unweighted))
-
-  # The graph of `edges`, each `(source, target, weight)`, over `count`
-  # nodes, or more where an edge names one past them.
-  from_weighted_edges : (Direction, Nat, List((Nat, Nat, e))) -> Graph(e)
-  from_weighted_edges(direction, count, edges) -> (
-    stored = stored_as(direction, edges)
-    adjacency = adjacency_of(stored, node_bound(count, edges))
-    Graph({adjacency, edges: edges.len(), direction})
-  )
-
-  node_count : Graph(e) -> Nat
-  node_count(Graph({adjacency, *})) -> adjacency.len()
-
-  # The edges the graph was built from: an undirected one counts once.
-  edge_count : Graph(e) -> Nat
-  edge_count(Graph({edges, *})) -> edges
-
-  # The edges leaving `node`, in the order they were given, and none from a
-  # node the graph does not have.
-  edges_from : (Graph(e), Nat) -> List(Edge(e))
-  edges_from(Graph({adjacency, *}), node) -> adjacency.get_or(node, [])
-
-  # The targets of the edges leaving `node`, one for each edge.
-  neighbors : (Graph(e), Nat) -> List(Nat)
-  neighbors(graph, node) -> targets(edges_from(graph, node))
-
-  # The graph with every edge turned round: what reaches a node here leaves
-  # it there. An undirected graph is its own.
-  reversed : Graph(e) -> Graph(e)
-  reversed(Graph({adjacency, edges, direction: Directed})) -> (
-    turned = arcs(adjacency).map(|(source, target, weight)| (target, source, weight))
-    Graph({adjacency: adjacency_of(turned, adjacency.len()), edges, direction: Directed})
-  )
-  reversed(graph) -> graph
-
-  # The graph with every edge followed either way. An undirected graph is
-  # its own.
-  undirected : Graph(e) -> Graph(e)
-  undirected(Graph({adjacency, direction: Directed, *})) ->
-    from_weighted_edges(Undirected, adjacency.len(), arcs(adjacency))
-  undirected(graph) -> graph
-)
+export {unweighted, node_bound, adjacency_of, both_ways, turned_round, arcs}
 
 unweighted : ((Nat, Nat)) -> (Nat, Nat, Unweighted)
 unweighted((source, target)) -> (source, target, {})
@@ -67,15 +15,13 @@ unweighted((source, target)) -> (source, target, {})
 node_bound : (Nat, List((Nat, Nat, e))) -> Nat
 node_bound(count, edges) -> edges.fold(count, |most, (source, target, _)| most.max(source + 1).max(target + 1))
 
-# The edges kept for a graph: as given where it is directed, and each both
-# ways but a loop where it is not.
-stored_as : (Direction, List((Nat, Nat, e))) -> List((Nat, Nat, e))
-stored_as(Directed, edges) -> edges
-stored_as(Undirected, edges) -> edges.flat_map(both_ways)
-
+# An edge followed either way: from each end, and a loop once.
 both_ways : ((Nat, Nat, e)) -> List((Nat, Nat, e))
 both_ways((source, target, weight)) if source == target -> [(source, target, weight)]
 both_ways((source, target, weight)) -> [(source, target, weight), (target, source, weight)]
+
+turned_round : ((Nat, Nat, e)) -> (Nat, Nat, e)
+turned_round((source, target, weight)) -> (target, source, weight)
 
 # Each node's edges, in the order given: the sort is stable, so grouping
 # the sorted edges by source keeps each group's order.
@@ -94,7 +40,7 @@ grouped(sorted, node, Succ(left)) -> (
   [edges, *grouped(rest, node + 1, left)]
 )
 
-# Every stored edge as `(source, target, weight)`.
+# Every listed edge as `(source, target, weight)`.
 arcs : List(List(Edge(e))) -> List((Nat, Nat, e))
 arcs(adjacency) -> adjacency.enumerate().flat_map(|(source, edges)|
   edges.map(|edge| (source, edge.target, edge.weight)))

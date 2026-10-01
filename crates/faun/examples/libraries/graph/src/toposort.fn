@@ -1,7 +1,8 @@
 # Topological sort by Kahn's algorithm, petgraph's `toposort` and edged's
 # `Topological`: a node is ready once every edge into it has been taken, and
 # taking a ready node takes the edges leaving it. A node is made ready once,
-# when its last edge in is taken.
+# when its last edge in is taken. It asks a graph how many edges come into
+# each node, which only a directed graph answers.
 
 import edge {Walkable}
 import table {put}
@@ -12,23 +13,16 @@ export {toposort}
 # Every node, each before the targets of the edges leaving it, or `Cycle`
 # where edges go round and no such order exists. Of the nodes ready at
 # once, the latest made ready goes first.
-toposort : g -> Result(List(Nat), [Cycle]) where Walkable(g, e)
+toposort : g -> Result(List(Nat), [Cycle]) where
+  Walkable(g, e),
+  g.in_degree : (g, Nat) -> Nat
 toposort(graph) -> (
   count = graph.node_count()
-  degrees = in_degrees(graph)
-  ready = List.range(count).filter(|node| degrees.get_or(node, 0) == 0)
+  nodes = List.range(count)
+  degrees = nodes.map(|node| graph.in_degree(node))
+  ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
   taken = drain_stack(ready, {degrees, order: []}, |kahn, node| take(graph, kahn, node))
   sorted(taken.order, count)
-)
-
-# How many edges go into each node.
-in_degrees : g -> List(Nat) where Walkable(g, e)
-in_degrees(graph) -> (
-  none = List.repeat(0, graph.node_count())
-  List.range(graph.node_count()).fold(none, |degrees, node| (
-    edges = graph.edges_from(node)
-    edges.fold(degrees, |counted, edge| put(counted, edge.target, counted.get_or(edge.target, 0) + 1))
-  ))
 )
 
 Kahn = {degrees: List(Nat), order: List(Nat)}

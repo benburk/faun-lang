@@ -8,7 +8,7 @@
 import edge {Walkable, targets}
 import table {put}
 
-export {bfs, dfs, components, drain_stack}
+export {bfs, dfs, groups_from, drain_stack}
 
 # The nodes reachable from `start`, nearest first, each once.
 bfs : (g, Nat) -> List(Nat) where Walkable(g, e)
@@ -26,14 +26,13 @@ dfs(graph, start) -> (
   walked.order
 )
 
-# The nodes grouped by which reach which, each group in the order a
-# depth-first walk from its least node enters it, and the groups by their
-# least node. Following edges one way, each group is what its least node
-# reaches that no earlier group holds.
-components : g -> List(List(Nat)) where Walkable(g, e)
-components(graph) -> (
+# The nodes grouped by walks from each of `starts` in turn, each walk
+# entering what no earlier one did, depth first, and none started from a
+# node an earlier walk entered.
+groups_from : (g, List(Nat)) -> List(List(Nat)) where Walkable(g, e)
+groups_from(graph, starts) -> (
   start = {walk: unwalked(graph), groups: []}
-  found = List.range(graph.node_count()).fold(start, |found, node| connected(graph, node, found))
+  found = starts.fold(start, |found, node| connected(graph, node, found))
   found.groups
 )
 
