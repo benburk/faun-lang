@@ -1,7 +1,6 @@
 # Proposal: Termination is not checked
 
 - **Status:** Approved
-- **Author:** cullback
 - **Created:** 2026-09-29
 - **Approved:** 2026-09-29
 - **Affects:** what a pure definition may do, Barb validation and the

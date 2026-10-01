@@ -1,7 +1,6 @@
 # Proposal: Blocks
 
 - **Status:** Approved
-- **Author:** cullback
 - **Created:** 2026-09-29
 - **Approved:** 2026-09-29
 - **Affects:** the lexer, `grammar.ebnf`, the parser, grouping lines into

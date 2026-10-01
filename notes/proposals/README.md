@@ -33,7 +33,6 @@ replaces another names it under `Supersedes`, and the old one moves to
 # Proposal: Title
 
 - **Status:** Draft
-- **Author:** name
 - **Created:** 2026-01-31
 - **Affects:** what changes: the lexer, the checker, every program, ...
 

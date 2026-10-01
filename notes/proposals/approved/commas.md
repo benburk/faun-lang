@@ -1,7 +1,6 @@
 # Proposal: Commas Between Elements
 
 - **Status:** Approved
-- **Author:** cullback
 - **Created:** 2026-09-26
 - **Approved:** 2026-09-26
 - **Affects:** the lexer, `grammar.ebnf`, the parser, diagnostics, `to_str`,
