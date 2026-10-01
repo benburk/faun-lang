@@ -72,7 +72,7 @@ const EXAMPLE_SIZES: &[(&str, usize)] = &[
     ("width", 156),
     ("argc", 169),
     ("expressions", 168),
-    ("hello", 239),
+    ("hello", 230),
 ];
 const ARITHMETIC_SIZES: [usize; 3] = [165, 199, 198];
 

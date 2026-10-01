@@ -94,7 +94,7 @@ For each proposed operation:
    helper thread or a shadow data structure to meet the contract, then either
    the contract is wrong, or that target should omit it and offer its own.
 4. **Put the loop in Faun, not in the host.** `write_all!` and `read_to_end!`
-   already work this way. That code is checked, total and portable, and the
+   already work this way. That code is checked and portable, and the
    target writes it only once.
 5. **Split a capability wherever a launcher would reasonably grant only part
    of it.** Examples: reading files versus writing them, connecting versus

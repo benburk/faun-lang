@@ -301,8 +301,8 @@ Host : {args: List(Str)}.(
 )
 
 Stdin    read! : (Stdin, Nat) -> Result(Chunk, ReadError)
-         read_to_end! : Stdin -> Result(List(U8), [Io(ReadError), LimitExceeded])
-         read_to_str! : Stdin -> Result(Str, [Io(ReadError), LimitExceeded, InvalidUtf8])
+         read_to_end! : Stdin -> Result(List(U8), ReadError)
+         read_to_str! : Stdin -> Result(Str, [IsADirectory, Other(Nat), InvalidUtf8])
 Stdout   write!, write_all! : (Stdout, List(U8)) -> Result(Nat, WriteError)
 Stderr   write!, write_all! : (Stderr, List(U8)) -> Result(Nat, WriteError)
 Files    open! : (Files, Str, Mode) -> Result(File, OpenError)
@@ -339,8 +339,9 @@ runner that meets it finishes quietly with status one.
 A `read!` moves some bytes, at most 64 KiB at once (1 KiB on sim65), or
 answers `End` where the stream has ended; asked for none, it answers none
 without asking the target. A `write!` moves some bytes and answers how many.
-`read_to_end!` and `write_all!` are Faun, going on until the stream is done,
-each bounded by fuel: as many reads as a word counts. The `Host`, `Stdin`, `Stdout`,
+`read_to_end!` and `write_all!` are Faun, going on until the stream is done;
+`write_all!` answers an error where a write takes none of what it is offered,
+rather than asking again. The `Host`, `Stdin`, `Stdout`,
 `Stderr`, `Files` and `File` constructors remain private, so only the target
 makes one. A method of a value's own type is reached whether or not the type
 was imported, so `host.stdout.write_all!(bytes)` needs only `Host`. A method a

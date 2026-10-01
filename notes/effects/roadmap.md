@@ -12,8 +12,8 @@ The foundation is sound. The hardest pieces already exist:
   are produced only if read, and each target mounts its own host module at
   `std.host`.
 - **Weak primitives in the host, loops in Faun.** Four descriptor routines
-  plus `exit!`. `write_all!`, `read_to_end!` and the runners are Faun code
-  bounded by fuel.
+  plus `exit!`. `write_all!`, `read_to_end!` and the runners are Faun
+  code.
 - **Linearity.** `crates/faun/src/linearity.rs` infers borrow and consume,
   and refuses drops, double use, and `?` while a resource is held.
 - **Bytes handed over without copying.** `Takes::Bytes` and

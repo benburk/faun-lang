@@ -84,7 +84,7 @@ Writer.close! : Writer -> Result({}, WriteError)       # consumes on both branch
   an archive reader actually wants. Streams keep the cursor, because the
   kernel keeps it anyway.
 - **`read!` and `write!` are partial.** `read_to_end!` and `write_all!` are
-  Faun loops bounded by fuel, as they are now.
+  Faun loops, as they are now.
 - **Offsets are `U64`.** File sizes are bounded by the host, not by `Nat`, and
   the type says so.
 - `sync!` is its own operation. Durability is never implied by `close!`.

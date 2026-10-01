@@ -337,19 +337,18 @@ overflow(fmt, negative, kept, field) -> pack(fmt, negative, field, kept - fmt.hi
 # bit per step, halving until nothing is left, which costs nothing on a
 # word. A wider one is found by doubling a bound past it and then halving
 # the interval, one power of two and one comparison a step, so it costs its
-# logarithm in bignum operations rather than one per bit; the doubling stops
-# at 2^70 bits.
+# logarithm in bignum operations rather than one per bit.
 bit_length : Nat -> Nat
 bit_length(n) if n < 0x20000000000000 -> bits(n)
-bit_length(n) -> narrow(n, 0, widen(n, 1, 70))
+bit_length(n) -> narrow(n, 0, widen(n, 1))
 
 bits : Nat -> Nat
 bits(0) -> 0
 bits(n) -> 1 + bits(n / 2)
 
-widen : (Nat, Nat, Nat) -> Nat
-widen(n, high, Succ(fuel)) if n >= 2.pow(high) -> widen(n, high * 2, fuel)
-widen(_, high, _) -> high
+widen : (Nat, Nat) -> Nat
+widen(n, high) if n >= 2.pow(high) -> widen(n, high * 2)
+widen(_, high) -> high
 
 # `2^low <= n < 2^high`, closed in on until the bounds are neighbours. The
 # middle lies strictly between them, which `halved` says, so each step
@@ -461,21 +460,19 @@ within(x, m, True) -> x <= m
 within(x, m, False) -> x < m
 
 # Scale by ten until the upper boundary lies in `[1/10, 1)` of `s`, counting
-# the point's position as it moves. The fuel is the widest exponent range,
-# which the field's maximum bounds, and the digits never exceed the
-# precision.
+# the point's position as it moves. The digits never exceed the precision.
 place : (Format, Nat, Nat, Nat, Nat, Bool) -> (List(Nat), Nat)
-place(fmt, r, s, mp, mm, closed) -> raise(r, s, mp, mm, 1000, closed, fmt.field_max, fmt.precision)
+place(fmt, r, s, mp, mm, closed) -> raise(r, s, mp, mm, 1000, closed, fmt.precision)
 
-raise : (Nat, Nat, Nat, Nat, Nat, Bool, Nat, Nat) -> (List(Nat), Nat)
-raise(r, s, mp, mm, k, closed, Succ(fuel), digits) if reaches(r + mp, s, closed) ->
-  raise(r, s * 10, mp, mm, k + 1, closed, fuel, digits)
-raise(r, s, mp, mm, k, closed, fuel, digits) -> lower(r, s, mp, mm, k, closed, fuel, digits)
+raise : (Nat, Nat, Nat, Nat, Nat, Bool, Nat) -> (List(Nat), Nat)
+raise(r, s, mp, mm, k, closed, digits) if reaches(r + mp, s, closed) ->
+  raise(r, s * 10, mp, mm, k + 1, closed, digits)
+raise(r, s, mp, mm, k, closed, digits) -> lower(r, s, mp, mm, k, closed, digits)
 
-lower : (Nat, Nat, Nat, Nat, Nat, Bool, Nat, Nat) -> (List(Nat), Nat)
-lower(r, s, mp, mm, k, closed, Succ(fuel), digits) if reaches((r + mp) * 10, s, closed).not() ->
-  lower(r * 10, s, mp * 10, mm * 10, k - 1, closed, fuel, digits)
-lower(r, s, mp, mm, k, closed, _, digits) -> (generate(r, s, mp, mm, closed, digits), k)
+lower : (Nat, Nat, Nat, Nat, Nat, Bool, Nat) -> (List(Nat), Nat)
+lower(r, s, mp, mm, k, closed, digits) if reaches((r + mp) * 10, s, closed).not() ->
+  lower(r * 10, s, mp * 10, mm * 10, k - 1, closed, digits)
+lower(r, s, mp, mm, k, closed, digits) -> (generate(r, s, mp, mm, closed, digits), k)
 
 # One digit at a time. The digit is the next tenth; `low` says the digits so
 # far already lie inside the interval, `high` that one more would, and when

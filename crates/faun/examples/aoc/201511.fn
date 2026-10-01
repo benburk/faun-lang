@@ -4,9 +4,9 @@
 # confusing letters, two different doubled letters. The incrementer counts
 # in the alphabet without i, l, and o — a bump steps past them, and one
 # sanitising jump clears any the input arrived with, since every password
-# between is invalid anyway. The search is total because the space is
-# finite: 26^8 increments laps it, so the fuel starts there and running
-# dry means no valid password of this length exists.
+# between is invalid anyway. The space is finite: 26^8 increments lap it,
+# so the search counts down from there, and reaching nought means no valid
+# password of this length exists.
 
 confusing : U8 -> Bool
 confusing(letter) -> ['i', 'l', 'o'].contains(letter)

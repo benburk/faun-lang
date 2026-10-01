@@ -122,14 +122,15 @@ search : (List(Rule), Bounds, Work, Map(List(U8), Nat), Nat) -> Result(Nat, [Unf
 search(_, _, Empty, _, _) -> Err(Unfabricable)
 search(_, _, Queued(_, steps, ['e'], _, _), _, _) -> Ok(steps)
 search(_, _, _, _, 0) -> Err(SearchLimit)
-search(reverse_rules, limits, Queued(_, steps, text, left, right), seen, Succ(fuel)) -> (
+search(reverse_rules, limits, Queued(_, steps, text, left, right), seen, Succ(budget)) -> (
   next = expand(reverse_rules, limits, text, steps, {work: merge_work(left, right), seen})
-  search(reverse_rules, limits, next.work, next.seen, fuel)
+  search(reverse_rules, limits, next.work, next.seen, budget)
 )
 
-# A resource limit makes even an unbounded, unreachable rewrite system total.
-# Exhausting it is an explicit error, never an approximate answer or a claim
-# of impossibility. Callers can raise the budget of non-goal queue removals.
+# Searching backwards can grow without end: undoing `AA => A` makes `AA` of
+# `A`, then `AAA`, and an unreachable medicine never empties the queue. So
+# the search takes at most `limit` molecules off it, and running out is an
+# explicit error, never an approximate answer or a claim of impossibility.
 fabricate_with_limit : (List(Rule), List(U8), Nat) -> Result(Nat, [Unfabricable, SearchLimit])
 fabricate_with_limit(rules, medicine, limit) -> (
   limits = bounds(rules)

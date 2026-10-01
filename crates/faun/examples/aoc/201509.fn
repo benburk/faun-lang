@@ -2,8 +2,7 @@
 # The shortest Hamiltonian path: visit every location exactly once, starting
 # and ending anywhere. Not Dijkstra's problem — no prefix-optimality survives
 # "visit everything" — but the inputs are eight locations, so walking every
-# permutation is honest, and the combinatorics library generates them with
-# termination structural on the route length: no fuel anywhere in this file.
+# permutation is honest, and the combinatorics library generates them.
 
 package {
   combinatorics: "../libraries/combinatorics/src/combinatorics"

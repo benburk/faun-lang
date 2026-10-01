@@ -6,9 +6,9 @@
 # next layer of the dependency graph — and a wire still missing then never
 # had a signal to receive: a cycle, a gap, or a gate that reads as nonsense.
 #
-# Nothing here recurses except two structural list walks. Evaluating a gate
-# is a lookup, not a descent, so there is no memo to thread and no fuel to
-# spend — the sweep count is the termination argument, and it is a length.
+# Evaluating a gate is a lookup, not a descent, so there is no memo to
+# thread, and the sweep count is what tells a wire that never gets a signal
+# from one still waiting for its operands.
 # Signals are U32 values masked to the puzzle's 16 bits.
 
 Rules = List((Str, List(Str)))

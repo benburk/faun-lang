@@ -1,7 +1,7 @@
 # Advent of Code 2015, day 4: The Ideal Stocking Stuffer.
-# The search is fuel-bounded so the example remains total independently of the
-# puzzle's promise that an AdventCoin exists. The MD5 implementation is another
-# example library and is checked against RFC vectors there.
+# The search counts up until it finds the AdventCoin the puzzle promises; for
+# a key with none, it never ends. The MD5 implementation is another example
+# library and is checked against RFC vectors there.
 
 package {
   md5: "../libraries/md5/src/md5"
@@ -22,22 +22,16 @@ six_zeroes : List(U8) -> Bool
 six_zeroes([0, 0, 0, *]) -> True
 six_zeroes(_) -> False
 
-mine : (List(U8), List(U8) -> Bool, Nat, Nat) -> Result(Nat, [Exhausted])
-mine(_, _, _, 0) -> Err(Exhausted)
-mine(key, qualifies, candidate, Succ(rest)) ->
-  advance(qualifies(candidate_digest(key, candidate)), key, qualifies, candidate, rest)
-
-# The verdict on one candidate, as its own rule set: a hit answers, a miss
-# goes around with the next candidate and the spent fuel.
-advance : (Bool, List(U8), List(U8) -> Bool, Nat, Nat) -> Result(Nat, [Exhausted])
-advance(True, _, _, candidate, _) -> Ok(candidate)
-advance(False, key, qualifies, candidate, rest) -> mine(key, qualifies, candidate + 1, rest)
+# The first candidate, from `candidate` on, whose digest qualifies.
+mine : (List(U8), List(U8) -> Bool, Nat) -> Nat
+mine(key, qualifies, candidate) if qualifies(candidate_digest(key, candidate)) -> candidate
+mine(key, qualifies, candidate) -> mine(key, qualifies, candidate + 1)
 
 part1 : List(U8) -> Nat
-part1(key) -> mine(key, five_zeroes, 1, 1000000).ok_or(0)
+part1(key) -> mine(key, five_zeroes, 1)
 
 part2 : List(U8) -> Nat
-part2(key) -> mine(key, six_zeroes, 1, 10000000).ok_or(0)
+part2(key) -> mine(key, six_zeroes, 1)
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) -> (
@@ -47,10 +41,10 @@ app(input) -> (
 )
 
 # The two published five-zero examples and a useful six-zero regression check
-# only their winning candidates; a full search is available with enough fuel.
+# only their winning candidates: a full search is too long for an expectation.
 expect five_zeroes(candidate_digest("abcdef".to_utf8(), 609043))
 expect five_zeroes(candidate_digest("pqrstuv".to_utf8(), 1048970))
 expect six_zeroes(candidate_digest("abcdef".to_utf8(), 6742839))
-expect mine("abcdef".to_utf8(), five_zeroes, 1, 0).is_err()
+expect mine("abcdef".to_utf8(), five_zeroes, 609040) == 609043
 
 main!(host) -> host.run_stdin!(app)

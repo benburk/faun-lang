@@ -42,28 +42,27 @@ filled(_, Err(error)) -> Err(error)
 filled([], Ok(_)) -> Ok(End)
 filled(bytes, Ok(_)) -> Ok(Data(bytes))
 
-# Every byte to the end, after `read`; each read takes one fuel. Each chunk
-# goes on the end of what came before, in place where there is room.
-read_chunks! : (r, Nat, List(U8)) -> Result(List(U8), [Io(ReadError), LimitExceeded]) where
+# Every byte to the end, after `read`. Each chunk goes on the end of what
+# came before, in place where there is room. A stream that never ends is
+# read for as long as it goes on.
+read_chunks! : (r, List(U8)) -> Result(List(U8), ReadError) where
   r.read! : (r, Nat) -> Result(Chunk, ReadError)
-read_chunks!(_, 0, _) -> Err(LimitExceeded)
-read_chunks!(input, Succ(fuel), read) -> (
+read_chunks!(input, read) -> (
   got = input.read!(65536)
-  read_on!(input, fuel, read, got)
+  read_on!(input, read, got)
 )
 
-read_on! : (r, Nat, List(U8), Result(Chunk, ReadError)) -> Result(List(U8), [Io(ReadError), LimitExceeded]) where
+read_on! : (r, List(U8), Result(Chunk, ReadError)) -> Result(List(U8), ReadError) where
   r.read! : (r, Nat) -> Result(Chunk, ReadError)
-read_on!(_, _, _, Err(error)) -> Err(Io(error))
-read_on!(_, _, read, Ok(End)) -> Ok(read)
-read_on!(input, fuel, read, Ok(Data(chunk))) -> read_chunks!(input, fuel, read.extend(chunk))
+read_on!(_, _, Err(error)) -> Err(error)
+read_on!(_, read, Ok(End)) -> Ok(read)
+read_on!(input, read, Ok(Data(chunk))) -> read_chunks!(input, read.extend(chunk))
 
-# Every byte to the end of what `input` reads, as text, in at most `fuel`
-# reads.
-read_text! : (r, Nat) -> Result(Str, [Io(ReadError), LimitExceeded, InvalidUtf8]) where
+# Every byte to the end of what `input` reads, as text.
+read_text! : r -> Result(Str, [IsADirectory, Other(Nat), InvalidUtf8]) where
   r.read! : (r, Nat) -> Result(Chunk, ReadError)
-read_text!(input, fuel) -> (
-  read = read_chunks!(input, fuel, [])
+read_text!(input) -> (
+  read = read_chunks!(input, [])
   bytes = read?
   text = Str.from_utf8(bytes)?
   Ok(text)
@@ -73,26 +72,33 @@ read_text!(input, fuel) -> (
 write_everything! : (w, List(U8)) -> Result(Nat, WriteError) where
   w.write! : (w, List(U8)) -> Result(Nat, WriteError)
 write_everything!(output, bytes) -> (
-  wrote = write_rest!(output, bytes, bytes.len(), bytes.len())
+  wrote = write_rest!(output, bytes, bytes.len())
   done = wrote?
   Ok(bytes.len())
 )
 
-# Write the last `left` of `bytes` until none are left, one fuel a byte: a
-# stream that keeps taking none runs out of it. Nothing is counted, since a
-# total would be a number the host's answers add up to, wider than any word
-# a target picks: once it ends well, every byte went. The bytes go round
-# unchanged, so bytes known before the program runs are still known on every
-# round, and what is left only falls, so it is never more than there were.
-write_rest! : (w, List(U8), Nat, Nat) -> Result({}, WriteError) where
+# Write the last `left` of `bytes` until none are left. Nothing is counted,
+# since a total would be a number the host's answers add up to, wider than
+# any word a target picks: once it ends well, every byte went. The bytes go
+# round unchanged, so bytes known before the program runs are still known on
+# every round, and what is left only falls, so it is never more than there
+# were.
+write_rest! : (w, List(U8), Nat) -> Result({}, WriteError) where
   w.write! : (w, List(U8)) -> Result(Nat, WriteError)
-write_rest!(_, _, 0, _) -> Ok({})
-write_rest!(_, _, _, 0) -> Err(Other(5))
-write_rest!(output, bytes, left, Succ(fuel)) -> (
+write_rest!(_, _, 0) -> Ok({})
+write_rest!(output, bytes, left) -> (
   wrote = output.write!(bytes.drop(bytes.len() - left))
   went = wrote?
-  write_rest!(output, bytes, left - went, fuel)
+  write_on!(output, bytes, left, went)
 )
+
+# Go on writing after a write that moved `went`. A stream that took none of
+# what it was offered would take none of it again, so that is an I/O error
+# rather than a reason to ask again.
+write_on! : (w, List(U8), Nat, Nat) -> Result({}, WriteError) where
+  w.write! : (w, List(U8)) -> Result(Nat, WriteError)
+write_on!(_, _, _, 0) -> Err(Other(5))
+write_on!(output, bytes, left, went) -> write_rest!(output, bytes, left - went)
 
 # What a runner finishes with: nought where what it printed was written.
 # `value` said on `output`, and a line's end after it.
@@ -121,17 +127,12 @@ reported_status : Result(Nat, WriteError) -> U8
 reported_status(Ok(_)) -> 1
 reported_status(Err(_)) -> 2
 
-unread! : (w, [Io(ReadError), LimitExceeded]) -> U8 where
-  w.write_all! : (w, List(U8)) -> Result(Nat, WriteError)
-unread!(errors, Io(error)) -> report!(errors, error.to_str())
-unread!(errors, LimitExceeded) -> report!(errors, "LimitExceeded")
-
 # Run `app` on the arguments and what standard input held, printing what it
 # answers on `output`; input that could not be read is reported on `errors`,
 # and the app is not run.
-serve_stdin! : (o, w, Result(List(U8), [Io(ReadError), LimitExceeded]), List(Str), {args: List(Str), stdin: List(U8)} -> a) -> U8 where
+serve_stdin! : (o, w, Result(List(U8), ReadError), List(Str), {args: List(Str), stdin: List(U8)} -> a) -> U8 where
   o.write_all! : (o, List(U8)) -> Result(Nat, WriteError),
   w.write_all! : (w, List(U8)) -> Result(Nat, WriteError),
   a.to_str : a -> Str
-serve_stdin!(_, errors, Err(error), _, _) -> unread!(errors, error)
+serve_stdin!(_, errors, Err(error), _, _) -> report!(errors, error.to_str())
 serve_stdin!(output, _, Ok(input), args, app) -> finish!(output, app({args: args, stdin: input}))

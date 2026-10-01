@@ -6,10 +6,9 @@
 # Standard input, output and error are Ori's streams, and so is a file: a
 # read moves some bytes or says the stream has ended, a write moves some
 # bytes and answers how many, and either may answer the error it met;
-# `read_to_end!` and `write_all!` go on until the stream is done. Each loop
-# is bounded by fuel: a stream that never ends runs out of it, as many
-# reads as a word counts. Each stream is what a
-# descriptor names, and the three standard ones are the first three.
+# `read_to_end!` and `write_all!` go on until the stream is done, and on a
+# stream that never ends, `read_to_end!` never does either. Each stream is
+# what a descriptor names, and the three standard ones are the first three.
 #
 # What every target shares is in `common.fn`; what is here is WASI's: its
 # descriptors, its `path_open` flags and rights, and its error numbers.
@@ -84,12 +83,12 @@ Stdin : [Stdin].(
   read!(_, count) -> read_from!(Fd(0), count)
 
   # Every byte to the end.
-  read_to_end! : Stdin -> Result(List(U8), [Io(ReadError), LimitExceeded])
-  read_to_end!(input) -> read_chunks!(input, 4294967295, [])
+  read_to_end! : Stdin -> Result(List(U8), ReadError)
+  read_to_end!(input) -> read_chunks!(input, [])
 
   # Every byte to the end, as text.
-  read_to_str! : Stdin -> Result(Str, [Io(ReadError), LimitExceeded, InvalidUtf8])
-  read_to_str!(input) -> read_text!(input, 4294967295)
+  read_to_str! : Stdin -> Result(Str, [IsADirectory, Other(Nat), InvalidUtf8])
+  read_to_str!(input) -> read_text!(input)
 )
 
 Stdout : [Stdout].(
@@ -141,12 +140,12 @@ File : [File(Fd)].(
   )
 
   # Every byte to the end.
-  read_to_end! : File -> Result(List(U8), [Io(ReadError), LimitExceeded])
-  read_to_end!(file) -> read_chunks!(file, 4294967295, [])
+  read_to_end! : File -> Result(List(U8), ReadError)
+  read_to_end!(file) -> read_chunks!(file, [])
 
   # Every byte to the end, as text.
-  read_to_str! : File -> Result(Str, [Io(ReadError), LimitExceeded, InvalidUtf8])
-  read_to_str!(file) -> read_text!(file, 4294967295)
+  read_to_str! : File -> Result(Str, [IsADirectory, Other(Nat), InvalidUtf8])
+  read_to_str!(file) -> read_text!(file)
 
   # All of `bytes`: how many that is.
   write_all! : (File, List(U8)) -> Result(Nat, WriteError)
@@ -192,18 +191,18 @@ named! : (Files, List(U8), (Nat, Nat)) -> Result(File, OpenError)
 named!(_, name, _) if name.contains(0) -> Err(Other(28))
 named!(files, name, how) -> opening!(files, name, how, 8)
 
-# Open `name`, asking again, up to `fuel` times, where the kernel was
+# Open `name`, asking again, up to `tries` times, where the kernel was
 # interrupted or found the name moving under it.
 opening! : (Files, List(U8), (Nat, Nat), Nat) -> Result(File, OpenError)
-opening!(files, name, (how, made), fuel) -> (
+opening!(files, name, (how, made), tries) -> (
   answer = fd_open!(files, name, how, made)
-  opened!(files, name, (how, made), fuel, outcome(answer))
+  opened!(files, name, (how, made), tries, outcome(answer))
 )
 
 opened! : (Files, List(U8), (Nat, Nat), Nat, Result(Nat, Nat)) -> Result(File, OpenError)
 opened!(_, _, _, _, Ok(fd)) -> Ok(File(Fd(U32.of_nat(fd))))
-opened!(files, name, how, Succ(fuel), Err(27)) -> opening!(files, name, how, fuel)
-opened!(files, name, how, Succ(fuel), Err(6)) -> opening!(files, name, how, fuel)
+opened!(files, name, how, Succ(tries), Err(27)) -> opening!(files, name, how, tries)
+opened!(files, name, how, Succ(tries), Err(6)) -> opening!(files, name, how, tries)
 opened!(_, _, _, _, Err(code)) -> Err(open_error(code))
 
 # Up to `count` bytes from what `fd` names, and no more than 65536.

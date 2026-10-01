@@ -94,7 +94,7 @@ Done (see [roadmap.md](roadmap.md)):
 
   What remains to watch:
   - A program that discards its write results keeps running after its
-    reader is gone, until its loop or fuel ends. A warning for a discarded
+    reader is gone, until its loop ends. A warning for a discarded
     write `Result` would catch it.
   - An ignored signal is inherited, so the spawn code must restore the
     default in a child (see [processes.md](processes.md)).
