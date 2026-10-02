@@ -7,7 +7,7 @@
 //! breaker, a definition kept whole; folding reads each definition after
 //! what it calls, so a caller meets its callees' answers.
 
-use super::model::{Body, Expr, FnId};
+use super::model::{Expr, FnId};
 use super::program::Program;
 
 /// The definitions expanding a call of must not, so that expanding every
@@ -165,33 +165,18 @@ impl Rounds<'_> {
 }
 
 /// Which definitions each one calls.
-fn graph(program: &Program) -> Vec<Vec<FnId>> {
-    fn within(program: &Program, body: Body, held: &mut Vec<FnId>) {
-        for expr in program
-            .bindings(body.bindings)
-            .iter()
-            .chain([&body.tail])
-            .copied()
-        {
-            match program.expr(expr) {
-                Expr::Call(called, _) => held.push(called),
-                Expr::Match(_, arms) => {
-                    for arm in program.arms(arms) {
-                        within(program, arm.body, held);
-                    }
-                }
-                Expr::Atom(_) | Expr::Con(..) | Expr::Static(..) => {}
-            }
-        }
-    }
+pub(super) fn graph(program: &Program) -> Vec<Vec<FnId>> {
     (0..program.functions().len())
         .map(|at| {
-            let id = FnId::at(at);
-            let mut held = Vec::new();
-            if let Some(body) = program.function(id).body() {
-                within(program, body, &mut held);
-            }
-            held
+            let Some(body) = program.function(FnId::at(at)).body() else {
+                return Vec::new();
+            };
+            super::walk::within(program, body)
+                .filter_map(|expr| match program.expr(expr) {
+                    Expr::Call(called, _) => Some(called),
+                    _ => None,
+                })
+                .collect()
         })
         .collect()
 }

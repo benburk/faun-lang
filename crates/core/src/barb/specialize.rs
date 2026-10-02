@@ -292,22 +292,14 @@ fn holding(program: &mut Program, body: Body, key: &Key) -> Body {
 
 /// Send the calls of `from` in `body`, which nothing else shares, to `to`.
 fn renamed(program: &mut Program, body: Body, from: FnId, to: FnId) {
-    let mut pending = vec![body];
-    while let Some(body) = pending.pop() {
-        for &expr in program
-            .bindings(body.bindings)
-            .to_vec()
-            .iter()
-            .chain([&body.tail])
-        {
-            match program.expr(expr) {
-                Expr::Call(callee, args) if callee == from => {
-                    program.write(expr, Expr::Call(to, args));
-                }
-                Expr::Match(_, arms) => pending.extend(program.arms(arms).iter().map(|a| a.body)),
-                _ => {}
-            }
-        }
+    let calls: Vec<_> = super::walk::within(program, body)
+        .filter_map(|expr| match program.expr(expr) {
+            Expr::Call(callee, args) if callee == from => Some((expr, args)),
+            _ => None,
+        })
+        .collect();
+    for (expr, args) in calls {
+        program.write(expr, Expr::Call(to, args));
     }
 }
 

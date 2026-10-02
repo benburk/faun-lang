@@ -272,17 +272,8 @@ fn pushed(program: &Program, ctor: CtorId, fields: &[Atom], rest: usize) -> Opti
 
 /// Whether `expr` calls `id`, anywhere in it.
 fn calls_itself(program: &Program, id: FnId, expr: super::ExprId) -> bool {
-    match program.expr(expr) {
-        Expr::Call(callee, _) => callee == id,
-        Expr::Match(_, arms) => program.arms(arms).iter().any(|arm| {
-            program
-                .bindings(arm.body.bindings)
-                .iter()
-                .chain([&arm.body.tail])
-                .any(|&inner| calls_itself(program, id, inner))
-        }),
-        Expr::Atom(_) | Expr::Con(..) | Expr::Static(_) => false,
-    }
+    super::walk::nested(program, [expr])
+        .any(|inner| matches!(program.expr(inner), Expr::Call(callee, _) if callee == id))
 }
 
 /// The sequence operations a rewritten walk calls, for one sequence type.
@@ -477,77 +468,21 @@ impl Writer<'_> {
             return helpers;
         }
         let list = walk.list;
-        let found = |operation, program: &Program, recognised: &Recognised, takes: &[TypeId]| {
-            (0..recognised.sequences.len()).map(FnId::at).find(|&id| {
-                recognised.sequences[id.index()] == Some(operation) && program.params(id) == takes
-            })
-        };
         let element = self.program.types_of(self.program.ctor(walk.push).fields)
             [usize::from(walk.recursive == 0)];
-        let prepend = found(
-            SequenceOperation::Prepend,
-            self.program,
-            &self.recognised,
-            &[list, list],
-        )
-        .unwrap_or_else(|| self.write_prepend(walk));
-        let append = found(
-            SequenceOperation::Append,
-            self.program,
-            &self.recognised,
-            &[list, element],
-        )
-        .unwrap_or_else(|| self.write_append(walk, element, prepend));
+        let prepend = self
+            .recognised
+            .sequence_over(self.program, SequenceOperation::Prepend, &[list, list])
+            .unwrap_or_else(|| {
+                let reverse = super::sequence::write_reverse_onto(self.program, list);
+                super::sequence::write_prepend(self.program, list, reverse)
+            });
+        let append = self
+            .recognised
+            .sequence_over(self.program, SequenceOperation::Append, &[list, element])
+            .unwrap_or_else(|| super::sequence::write_append(self.program, list, element, prepend));
         let helpers = Helpers { append, prepend };
         self.helpers.insert(list, helpers);
         helpers
-    }
-
-    /// `p(list, onto) = r(r(list, empty), onto)`, and `r` beside it.
-    fn write_prepend(&mut self, walk: &Walk) -> FnId {
-        let (list, empty, push, recursive) = (walk.list, walk.empty, walk.push, walk.recursive);
-        let reverse = self.program.declare("reverse_onto", &[list, list], list);
-        self.program.define(reverse, |b, args| {
-            let (from, onto) = (args[0], args[1]);
-            b.match_(from, list, |b, ctor, fields| {
-                if ctor == empty {
-                    return onto;
-                }
-                let (element, rest) = if recursive == 0 {
-                    (fields[1], fields[0])
-                } else {
-                    (fields[0], fields[1])
-                };
-                let pushed = if recursive == 0 {
-                    b.con(push, &[onto, element])
-                } else {
-                    b.con(push, &[element, onto])
-                };
-                b.call(reverse, &[rest, pushed])
-            })
-        });
-        let prepend = self.program.declare("prepend", &[list, list], list);
-        self.program.define(prepend, |b, args| {
-            let nothing = b.con(empty, &[]);
-            let reversed = b.call(reverse, &[args[0], nothing]);
-            b.call(reverse, &[reversed, args[1]])
-        });
-        prepend
-    }
-
-    /// `a(list, x) = p(list, push(x, empty))`.
-    fn write_append(&mut self, walk: &Walk, element: TypeId, prepend: FnId) -> FnId {
-        let (list, empty, push, recursive) = (walk.list, walk.empty, walk.push, walk.recursive);
-        let append = self.program.declare("append", &[list, element], list);
-        self.program.define(append, |b, args| {
-            let nothing = b.con(empty, &[]);
-            let single = if recursive == 0 {
-                b.con(push, &[nothing, args[1]])
-            } else {
-                b.con(push, &[args[1], nothing])
-            };
-            b.call(prepend, &[args[0], single])
-        });
-        append
     }
 }

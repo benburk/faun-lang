@@ -34,6 +34,7 @@
 
 use super::copy::{self, Scope};
 use super::facts::Recognised;
+use super::walk::{calls, split_arms, top_match};
 use super::{Atom, Body, CtorId, Expr, FnId, Local, Operation, Program, TypeId, TypeShape};
 
 /// Rewrite every definition of that shape.
@@ -83,12 +84,12 @@ fn descent(program: &Program, id: FnId) -> Option<Descent> {
     let TypeShape::Natural { empty, push, .. } = super::type_shape(program, number) else {
         return None;
     };
-    let (first_empty, first_step) = split(program, outer, empty, push)?;
+    let [first_empty, first_step] = split_arms(program, outer, empty, push)?.map(|arm| arm.body);
     let (second, inner) = top_match(program, first_step)?;
     if second == first || second >= arity || params[second] != number {
         return None;
     }
-    let (second_empty, both_step) = split(program, inner, empty, push)?;
+    let [second_empty, both_step] = split_arms(program, inner, empty, push)?.map(|arm| arm.body);
     // Both a step: itself again, on the two numbers one less, with every
     // other parameter as it was.
     if !both_step.bindings.is_empty() {
@@ -125,86 +126,13 @@ fn descent(program: &Program, id: FnId) -> Option<Descent> {
     })
 }
 
-/// A body that is nothing but a match on a parameter: which one, and its
-/// arms.
-fn top_match(program: &Program, body: Body) -> Option<(usize, super::Range)> {
-    if !body.bindings.is_empty() {
-        return None;
-    }
-    let Expr::Match(Atom(on), arms) = program.expr(body.tail) else {
-        return None;
-    };
-    Some((on.index(), arms))
-}
-
-/// A number's two arms: the one for nought, and the one for a step.
-fn split(
-    program: &Program,
-    arms: super::Range,
-    empty: CtorId,
-    push: CtorId,
-) -> Option<(Body, Body)> {
-    let &[a, b] = program.arms(arms) else {
-        return None;
-    };
-    match (a.ctor, b.ctor) {
-        (x, y) if x == empty && y == push => Some((a.body, b.body)),
-        (x, y) if x == push && y == empty => Some((b.body, a.body)),
-        _ => None,
-    }
-}
-
-/// Whether `body` calls `id` anywhere in it.
-fn calls(program: &Program, body: Body, id: FnId) -> bool {
-    let mut exprs: Vec<_> = program.bindings(body.bindings).to_vec();
-    exprs.push(body.tail);
-    while let Some(expr) = exprs.pop() {
-        match program.expr(expr) {
-            Expr::Call(callee, _) if callee == id => return true,
-            Expr::Match(_, arms) => {
-                for arm in program.arms(arms) {
-                    exprs.extend_from_slice(program.bindings(arm.body.bindings));
-                    exprs.push(arm.body.tail);
-                }
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
 /// The definition recognized as natural monus over `number`, or one written
-/// here in the shape the recognizer reads.
+/// in the shape the recognizer reads.
 fn monus(program: &mut Program, recognised: &Recognised, number: TypeId) -> FnId {
-    let found = (0..recognised.operations.len()).map(FnId::at).find(|&id| {
-        recognised.operations[id.index()] == Some(Operation::Monus)
-            && program.params(id) == [number, number]
-            && program.function(id).result == number
-    });
-    if let Some(id) = found {
-        return id;
-    }
-    let TypeShape::Natural { empty, push, .. } = super::type_shape(program, number) else {
-        unreachable!("a descent takes down numbers");
-    };
-    let id = program.declare("monus", &[number, number], number);
-    program.define(id, |b, args| {
-        let (a, c) = (args[0], args[1]);
-        b.match_(a, number, |b, ctor, fields| {
-            if ctor == empty {
-                return b.con(empty, &[]);
-            }
-            let x = fields[0];
-            b.match_(c, number, |b, ctor, fields| {
-                if ctor == empty {
-                    b.con(push, &[x])
-                } else {
-                    b.call(id, &[x, fields[0]])
-                }
-            })
-        })
-    });
-    id
+    let params = [number, number];
+    recognised
+        .operation_over(program, Operation::Monus, &params, number)
+        .unwrap_or_else(|| super::arithmetic::write_monus(program, number))
 }
 
 fn rewritten(program: &mut Program, id: FnId, found: &Descent, monus: FnId) -> Body {

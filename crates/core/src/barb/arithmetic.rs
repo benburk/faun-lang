@@ -716,3 +716,29 @@ impl<'a> Normal<'a> {
         Some(Term::Match(Box::new(value.clone()), choices))
     }
 }
+
+/// A definition of natural monus over `number`, in the shape recognized as
+/// one.
+pub(super) fn write_monus(program: &mut Program, number: TypeId) -> FnId {
+    let TypeShape::Natural { empty, push, .. } = type_shape(program, number) else {
+        unreachable!("monus is over a natural");
+    };
+    let id = program.declare("monus", &[number, number], number);
+    program.define(id, |b, args| {
+        let (a, c) = (args[0], args[1]);
+        b.match_(a, number, |b, ctor, fields| {
+            if ctor == empty {
+                return b.con(empty, &[]);
+            }
+            let x = fields[0];
+            b.match_(c, number, |b, ctor, fields| {
+                if ctor == empty {
+                    b.con(push, &[x])
+                } else {
+                    b.call(id, &[x, fields[0]])
+                }
+            })
+        })
+    });
+    id
+}

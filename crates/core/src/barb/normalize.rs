@@ -102,27 +102,6 @@ fn rebuilt(program: &Program, arms: &[Arm], level: usize) -> bool {
         })
 }
 
-/// Whether anything in `body` reads the local at `level`.
-fn reads(program: &Program, body: Body, level: usize) -> bool {
-    let is = |atom: &Atom| atom.0.index() == level;
-    program
-        .bindings(body.bindings)
-        .iter()
-        .chain([&body.tail])
-        .any(|&expr| match program.expr(expr) {
-            Expr::Atom(atom) => is(&atom),
-            Expr::Static(_) => false,
-            Expr::Con(_, atoms) | Expr::Call(_, atoms) => program.atoms(atoms).iter().any(is),
-            Expr::Match(on, arms) => {
-                is(&on)
-                    || program
-                        .arms(arms)
-                        .iter()
-                        .any(|arm| reads(program, arm.body, level))
-            }
-        })
-}
-
 fn rewrite(
     program: &mut Program,
     inlining: Option<Inlining>,
@@ -443,11 +422,13 @@ impl Rewrite<'_> {
                 return None;
             }
         }
-        let read = self
-            .program
-            .arms(second)
-            .iter()
-            .any(|arm| reads(self.program, arm.body, answer));
+        let read = self.program.arms(second).iter().any(|arm| {
+            super::walk::reads(
+                self.program,
+                super::walk::within(self.program, arm.body),
+                answer,
+            ) > 0
+        });
         (!read).then_some((scrutinee, first, second))
     }
 

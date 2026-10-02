@@ -118,6 +118,7 @@ mod sweep;
 mod terms;
 mod types;
 mod validate;
+mod walk;
 
 pub(crate) use affine::Affine;
 pub use bounds::{Assumed, Bounds};

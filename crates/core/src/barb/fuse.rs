@@ -24,10 +24,8 @@ use std::collections::HashMap;
 
 use super::copy::{self, Redirect, Scope};
 use super::facts::Recognised;
-use super::{
-    Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range, SequenceOperation, TypeId,
-    TypeShape,
-};
+use super::walk;
+use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, SequenceOperation, TypeId};
 
 /// Fuse every producer read once by a consumer, in every body.
 pub(crate) fn fuse(program: &mut Program) {
@@ -123,39 +121,19 @@ impl Fusion<'_> {
     /// Whether anything in a body calls a producer, which is all that makes
     /// rewriting it worth a copy.
     fn calls_a_producer(&mut self, body: Body) -> bool {
-        let mut exprs: Vec<_> = self.program.bindings(body.bindings).to_vec();
-        exprs.push(body.tail);
-        while let Some(id) = exprs.pop() {
-            match self.program.expr(id) {
-                Expr::Call(callee, _)
-                    if self.producer(callee).is_some() || self.reversal(callee) =>
-                {
-                    return true;
-                }
-                Expr::Match(_, arms) => {
-                    for arm in self.program.arms(arms).to_vec() {
-                        exprs.extend_from_slice(self.program.bindings(arm.body.bindings));
-                        exprs.push(arm.body.tail);
-                    }
-                }
-                _ => {}
-            }
-        }
-        false
-    }
-
-    /// The list type a function's parameter is, and its constructors: the
-    /// empty one, the push, and the position of the push's rest.
-    fn sequence(&self, ty: TypeId) -> Option<(super::CtorId, super::CtorId, usize)> {
-        match super::type_shape(self.program, ty) {
-            TypeShape::Sequence {
-                empty,
-                push,
-                recursive,
-                ..
-            } => Some((empty, push, recursive)),
-            _ => None,
-        }
+        #[expect(
+            clippy::needless_collect,
+            reason = "asking whether a callee is a producer caches the answer, which the walk's borrow forbids"
+        )]
+        let callees: Vec<FnId> = walk::within(self.program, body)
+            .filter_map(|id| match self.program.expr(id) {
+                Expr::Call(callee, _) => Some(callee),
+                _ => None,
+            })
+            .collect();
+        callees
+            .into_iter()
+            .any(|callee| self.producer(callee).is_some() || self.reversal(callee))
     }
 
     /// Whether `id` is a producer:
@@ -187,11 +165,11 @@ impl Fusion<'_> {
             return None;
         }
         let body = self.program.function(id).body()?;
-        let (list, arms) = self.top_match(body)?;
+        let (list, arms) = walk::top_match(self.program, body)?;
         let params = self.program.params(id);
-        let (empty, push, recursive) = self.sequence(params[list])?;
+        let (empty, push, recursive) = super::sequence::sequence(self.program, params[list])?;
         let arity = params.len();
-        let [nil_arm, push_arm] = self.split_arms(arms, empty, push)?;
+        let [nil_arm, push_arm] = walk::split_arms(self.program, arms, empty, push)?;
         // The empty arm answers the accumulator reversed onto nothing.
         let Expr::Call(reverse, args) = self.program.expr(nil_arm.body.tail) else {
             return None;
@@ -207,8 +185,9 @@ impl Fusion<'_> {
             return None;
         }
         // What it builds is a list too, but not necessarily of what it walks.
-        let (built_empty, built_push, built_recursive) = self.sequence(params[acc])?;
-        let onto = self.bound(nil_arm.body, arity, onto.index())?;
+        let (built_empty, built_push, built_recursive) =
+            super::sequence::sequence(self.program, params[acc])?;
+        let onto = walk::bound(self.program, nil_arm.body, arity, onto.index())?;
         if !self.empty_constant(onto, built_empty) {
             return None;
         }
@@ -225,7 +204,7 @@ impl Fusion<'_> {
         if args.len() != arity || args[list].0.index() != rest {
             return None;
         }
-        let pushed = self.bound(push_body, arity + 2, args[acc].0.index())?;
+        let pushed = walk::bound(self.program, push_body, arity + 2, args[acc].0.index())?;
         self.pushed_element(pushed, acc, (built_push, built_recursive))?;
         // Nothing else reads the accumulator, or the list it pushed onto.
         let next = args[acc].0.index();
@@ -291,11 +270,11 @@ impl Fusion<'_> {
             return None;
         }
         let body = self.program.function(id).body()?;
-        let (list, arms) = self.top_match(body)?;
+        let (list, arms) = walk::top_match(self.program, body)?;
         let params = self.program.params(id);
-        let (empty, push, recursive) = self.sequence(params[list])?;
+        let (empty, push, recursive) = super::sequence::sequence(self.program, params[list])?;
         let arity = params.len();
-        let [nil_arm, push_arm] = self.split_arms(arms, empty, push)?;
+        let [nil_arm, push_arm] = walk::split_arms(self.program, arms, empty, push)?;
         if self.reads(nil_arm.body, list) + self.reads(push_arm.body, list) != 0 {
             return None;
         }
@@ -328,44 +307,6 @@ impl Fusion<'_> {
         }
     }
 
-    /// A body that is nothing but a match on a parameter: which one, and
-    /// its arms.
-    fn top_match(&self, body: Body) -> Option<(usize, Range)> {
-        if !body.bindings.is_empty() {
-            return None;
-        }
-        // With no bindings before it, what it matches is a parameter.
-        let Expr::Match(Atom(on), arms) = self.program.expr(body.tail) else {
-            return None;
-        };
-        Some((on.index(), arms))
-    }
-
-    /// A sequence's two arms, the empty one first, whichever order its
-    /// declaration gave them.
-    fn split_arms(
-        &self,
-        arms: Range,
-        empty: super::CtorId,
-        push: super::CtorId,
-    ) -> Option<[Arm; 2]> {
-        let &[first, second] = self.program.arms(arms) else {
-            return None;
-        };
-        match (first.ctor, second.ctor) {
-            (a, b) if a == empty && b == push => Some([first, second]),
-            (a, b) if a == push && b == empty => Some([second, first]),
-            _ => None,
-        }
-    }
-
-    /// What wrote local `level`, where it is a binding of `body`, whose
-    /// first binding takes level `base`.
-    fn bound(&self, body: Body, base: usize, level: usize) -> Option<ExprId> {
-        let at = level.checked_sub(base)?;
-        self.program.bindings(body.bindings).get(at).copied()
-    }
-
     /// Whether an expression is the empty list: `empty` applied, or a known
     /// value built by it, which is what folding makes of the first.
     fn empty_constant(&self, expr: ExprId, empty: super::CtorId) -> bool {
@@ -380,44 +321,16 @@ impl Fusion<'_> {
     /// of it: in its bindings, its tail, and every arm in them. Arms bind
     /// only levels past it, so a read of `level` anywhere is this one.
     fn reads(&self, body: Body, level: usize) -> usize {
-        self.reads_in(
-            self.program.bindings(body.bindings).to_vec(),
-            body.tail,
-            level,
-        )
+        walk::reads(self.program, walk::within(self.program, body), level)
     }
 
     /// How many times the bindings of `body` after its binding at `level`,
     /// and its tail, read that binding. Its first binding takes `base`. An
     /// arm of an earlier binding may bind the same level for itself.
     fn reads_after(&self, body: Body, base: usize, level: usize) -> usize {
-        let later = self.program.bindings(body.bindings)[level + 1 - base..].to_vec();
-        self.reads_in(later, body.tail, level)
-    }
-
-    fn reads_in(&self, mut exprs: Vec<ExprId>, tail: ExprId, level: usize) -> usize {
-        let mut count = 0;
-        exprs.push(tail);
-        while let Some(id) = exprs.pop() {
-            count += match self.program.expr(id) {
-                Expr::Atom(atom) => usize::from(atom.0.index() == level),
-                Expr::Static(_) => 0,
-                Expr::Con(_, args) | Expr::Call(_, args) => self
-                    .program
-                    .atoms(args)
-                    .iter()
-                    .filter(|atom| atom.0.index() == level)
-                    .count(),
-                Expr::Match(on, arms) => {
-                    for arm in self.program.arms(arms) {
-                        exprs.extend_from_slice(self.program.bindings(arm.body.bindings));
-                        exprs.push(arm.body.tail);
-                    }
-                    usize::from(on.0.index() == level)
-                }
-            };
-        }
-        count
+        let later = &self.program.bindings(body.bindings)[level + 1 - base..];
+        let exprs = walk::nested(self.program, later.iter().copied().chain([body.tail]));
+        walk::reads(self.program, exprs, level)
     }
 
     /// The function walking what `producer` walks and doing what `consumer`
@@ -440,14 +353,16 @@ impl Fusion<'_> {
         let p_body = self.program.function(producer).body().expect("a producer");
         let c_body = self.program.function(consumer).body().expect("a consumer");
         let list = pair.list;
-        let (_, p_arms) = self.top_match(p_body).expect("a producer's match");
-        let (_, c_arms) = self.top_match(c_body).expect("a consumer's match");
+        let (_, p_arms) = walk::top_match(self.program, p_body).expect("a producer's match");
+        let (_, c_arms) = walk::top_match(self.program, c_body).expect("a consumer's match");
         let walked = self.program.params(producer)[list];
-        let (empty, push, recursive) = self.sequence(walked).expect("a list");
+        let (empty, push, recursive) =
+            super::sequence::sequence(self.program, walked).expect("a list");
         let taken = self.program.params(consumer)[pair.taken];
-        let (c_empty, c_push, _) = self.sequence(taken).expect("a list");
-        let [_, p_step] = self.split_arms(p_arms, empty, push).expect("two arms");
-        let [c_nil, c_step] = self.split_arms(c_arms, c_empty, c_push).expect("two arms");
+        let (c_empty, c_push, _) = super::sequence::sequence(self.program, taken).expect("a list");
+        let [_, p_step] = walk::split_arms(self.program, p_arms, empty, push).expect("two arms");
+        let [c_nil, c_step] =
+            walk::split_arms(self.program, c_arms, c_empty, c_push).expect("two arms");
         let mut arms = Vec::new();
         for arm in self.program.arms(p_arms).to_vec() {
             let body = if arm.ctor == empty {
@@ -528,9 +443,9 @@ impl Fusion<'_> {
     )]
     fn step(&mut self, pair: &Pair, (p_step, walked): (Arm, usize), c_step: Arm) -> Body {
         let arity = pair.arity;
-        let (_, _, recursive) = self
-            .sequence(self.program.params(pair.consumer)[pair.taken])
-            .expect("a list");
+        let (_, _, recursive) =
+            super::sequence::sequence(self.program, self.program.params(pair.consumer)[pair.taken])
+                .expect("a list");
         let mut scope = Scope::at(arity + 2);
         let mut locals = pair.p_locals.clone();
         locals.extend([Atom(Local::at(arity)), Atom(Local::at(arity + 1))]);
@@ -614,10 +529,12 @@ impl Fusion<'_> {
     /// Whether a reversal onto nothing is read once, by another reversal
     /// later in the same body, as what it reverses.
     fn reversed_twice(&self, call: &Deferred, body: Body, base: usize, level: usize) -> bool {
-        let Some(onto) = self.bound(body, base, call.written[1].0.index()) else {
+        let Some(onto) = walk::bound(self.program, body, base, call.written[1].0.index()) else {
             return false;
         };
-        let Some((empty, _, _)) = self.sequence(self.program.params(call.callee)[1]) else {
+        let Some((empty, _, _)) =
+            super::sequence::sequence(self.program, self.program.params(call.callee)[1])
+        else {
             return false;
         };
         if !self.empty_constant(onto, empty) || self.reads_after(body, base, level) != 1 {
@@ -640,20 +557,11 @@ impl Fusion<'_> {
         if let Some(&id) = self.prepends.get(&ty) {
             return id;
         }
-        let found = (0..self.recognised.sequences.len())
-            .map(FnId::at)
-            .find(|&id| {
-                self.recognised.sequences[id.index()] == Some(SequenceOperation::Prepend)
-                    && self.program.params(id) == [ty, ty]
-            });
+        let found =
+            self.recognised
+                .sequence_over(self.program, SequenceOperation::Prepend, &[ty, ty]);
         let id = found.unwrap_or_else(|| {
-            let (empty, _, _) = self.sequence(ty).expect("a reversal is of sequences");
-            let id = self.program.declare("prepend", &[ty, ty], ty);
-            self.program.define(id, |b, args| {
-                let nothing = b.con(empty, &[]);
-                let reversed = b.call(reverse, &[args[0], nothing]);
-                b.call(reverse, &[reversed, args[1]])
-            });
+            let id = super::sequence::write_prepend(self.program, ty, reverse);
             self.pure.push(true);
             id
         });
@@ -782,10 +690,12 @@ impl Fusion<'_> {
         let Some(Producer { acc, .. }) = self.producer(call.callee) else {
             return false;
         };
-        let Some(onto) = self.bound(body, base, call.written[acc].0.index()) else {
+        let Some(onto) = walk::bound(self.program, body, base, call.written[acc].0.index()) else {
             return false;
         };
-        let Some((empty, _, _)) = self.sequence(self.program.params(call.callee)[acc]) else {
+        let Some((empty, _, _)) =
+            super::sequence::sequence(self.program, self.program.params(call.callee)[acc])
+        else {
             return false;
         };
         if !self.empty_constant(onto, empty) || self.reads_after(body, base, level) != 1 {
@@ -806,26 +716,16 @@ impl Fusion<'_> {
 
 /// Whether each function reaches no bodyless call, by function.
 fn pure(program: &Program) -> Vec<bool> {
-    let count = program.functions().len();
     let mut pure: Vec<bool> = program
         .functions()
         .iter()
         .map(|function| function.body().is_some())
         .collect();
-    let callees: Vec<Vec<FnId>> = program
-        .functions()
-        .iter()
-        .map(|function| {
-            function
-                .body()
-                .map(|body| called(program, body))
-                .unwrap_or_default()
-        })
-        .collect();
+    let callees = super::calls::graph(program);
     loop {
         let mut changed = false;
-        for at in 0..count {
-            if pure[at] && callees[at].iter().any(|callee| !pure[callee.index()]) {
+        for (at, callees) in callees.iter().enumerate() {
+            if pure[at] && callees.iter().any(|callee| !pure[callee.index()]) {
                 pure[at] = false;
                 changed = true;
             }
@@ -834,24 +734,4 @@ fn pure(program: &Program) -> Vec<bool> {
             return pure;
         }
     }
-}
-
-/// Every function a body calls.
-fn called(program: &Program, body: Body) -> Vec<FnId> {
-    let mut found = Vec::new();
-    let mut exprs: Vec<_> = program.bindings(body.bindings).to_vec();
-    exprs.push(body.tail);
-    while let Some(id) = exprs.pop() {
-        match program.expr(id) {
-            Expr::Call(callee, _) => found.push(callee),
-            Expr::Match(_, arms) => {
-                for arm in program.arms(arms) {
-                    exprs.extend_from_slice(program.bindings(arm.body.bindings));
-                    exprs.push(arm.body.tail);
-                }
-            }
-            _ => {}
-        }
-    }
-    found
 }

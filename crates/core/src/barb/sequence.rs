@@ -8,7 +8,8 @@
 //! as one keeps its body, as recognized arithmetic does, and a call to it is
 //! answered from the representation rather than walked.
 
-use super::{Arm, Atom, Body, CtorId, Expr, ExprId, FnId, Local, Program, Range, TypeShape};
+use super::walk::{bound, split_arms, top_match};
+use super::{Arm, Atom, Body, CtorId, Expr, ExprId, FnId, Local, Program, TypeId, TypeShape};
 use super::{SequenceOperation, type_shape};
 
 /// Which definitions are one of the operations recognized here, given which
@@ -47,7 +48,7 @@ pub(super) fn recognise(program: &Program, length: &[bool]) -> Vec<Option<Sequen
 
 /// The empty constructor of a sequence type, its step, and which of the
 /// step's two fields is the rest.
-fn sequence(program: &Program, ty: super::TypeId) -> Option<(CtorId, CtorId, usize)> {
+pub(super) fn sequence(program: &Program, ty: TypeId) -> Option<(CtorId, CtorId, usize)> {
     match type_shape(program, ty) {
         TypeShape::Sequence {
             empty,
@@ -504,33 +505,66 @@ fn replaces(program: &Program, id: FnId) -> bool {
     matched.index() == 1 && written && again && pushes(step.body.tail, head, 6)
 }
 
-/// A body that is nothing but a match on a parameter: which one, and its
-/// arms.
-fn top_match(program: &Program, body: Body) -> Option<(usize, Range)> {
-    if !body.bindings.is_empty() {
-        return None;
-    }
-    let Expr::Match(Atom(on), arms) = program.expr(body.tail) else {
-        return None;
-    };
-    Some((on.index(), arms))
+/// A definition reversing one `list` onto another, in the shape recognized
+/// as [`SequenceOperation::ReverseOnto`].
+pub(super) fn write_reverse_onto(program: &mut Program, list: TypeId) -> FnId {
+    let (empty, push, recursive) =
+        sequence(program, list).expect("a sequence operation is over a sequence");
+    let reverse = program.declare("reverse_onto", &[list, list], list);
+    program.define(reverse, |b, args| {
+        let (from, onto) = (args[0], args[1]);
+        b.match_(from, list, |b, ctor, fields| {
+            if ctor == empty {
+                return onto;
+            }
+            let (element, rest) = if recursive == 0 {
+                (fields[1], fields[0])
+            } else {
+                (fields[0], fields[1])
+            };
+            let pushed = if recursive == 0 {
+                b.con(push, &[onto, element])
+            } else {
+                b.con(push, &[element, onto])
+            };
+            b.call(reverse, &[rest, pushed])
+        })
+    });
+    reverse
 }
 
-/// Two arms, the one for `empty` first.
-fn split_arms(program: &Program, arms: Range, empty: CtorId, push: CtorId) -> Option<[Arm; 2]> {
-    let &[first, second] = program.arms(arms) else {
-        return None;
-    };
-    match (first.ctor, second.ctor) {
-        (a, b) if a == empty && b == push => Some([first, second]),
-        (a, b) if a == push && b == empty => Some([second, first]),
-        _ => None,
-    }
+/// `p(list, onto) = r(r(list, empty), onto)`, where `r` reverses one `list`
+/// onto another: recognized as [`SequenceOperation::Prepend`].
+pub(super) fn write_prepend(program: &mut Program, list: TypeId, reverse: FnId) -> FnId {
+    let (empty, _, _) = sequence(program, list).expect("a sequence operation is over a sequence");
+    let prepend = program.declare("prepend", &[list, list], list);
+    program.define(prepend, |b, args| {
+        let nothing = b.con(empty, &[]);
+        let reversed = b.call(reverse, &[args[0], nothing]);
+        b.call(reverse, &[reversed, args[1]])
+    });
+    prepend
 }
 
-/// What wrote local `level`, where it is a binding of `body`, whose first
-/// binding takes level `base`.
-fn bound(program: &Program, body: Body, base: usize, level: usize) -> Option<ExprId> {
-    let at = level.checked_sub(base)?;
-    program.bindings(body.bindings).get(at).copied()
+/// `a(list, x) = p(list, push(x, empty))`, where `p` prepends one `list`
+/// onto another: recognized as [`SequenceOperation::Append`].
+pub(super) fn write_append(
+    program: &mut Program,
+    list: TypeId,
+    element: TypeId,
+    prepend: FnId,
+) -> FnId {
+    let (empty, push, recursive) =
+        sequence(program, list).expect("a sequence operation is over a sequence");
+    let append = program.declare("append", &[list, element], list);
+    program.define(append, |b, args| {
+        let nothing = b.con(empty, &[]);
+        let single = if recursive == 0 {
+            b.con(push, &[nothing, args[1]])
+        } else {
+            b.con(push, &[args[1], nothing])
+        };
+        b.call(prepend, &[args[0], single])
+    });
+    append
 }

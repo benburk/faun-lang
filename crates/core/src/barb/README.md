@@ -230,6 +230,13 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `copy.rs`: copying terms into a body under construction through a map of
   locals, with an optional redirect of one function's calls; what fusion and
   descent build new bodies with.
+- `walk.rs`: reading terms without a scope -- every expression a body
+  holds however deep its matches nest, how often a local is read, whether a
+  body calls a definition -- and the equation shapes recognizers and
+  rewrites share: a body that is one match on a parameter, its two arms in
+  constructor order. A definition a rewrite needs and the program lacks is
+  written beside the recognizer that reads its shape: monus in
+  `arithmetic.rs`, reversal, prepend and append in `sequence.rs`.
 - `constant.rs`, `constant/view.rs`, `constant/checked.rs`: compact encoding,
   validated semantic views, and checked construction.
   Views read magnitudes and constructors without materializing trees.

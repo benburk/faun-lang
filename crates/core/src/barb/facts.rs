@@ -7,7 +7,7 @@ use crate::float::Float;
 
 use super::affine::Affine;
 use super::bounds::{Bounds, Ranges};
-use super::model::{CtorId, ExprId, FnId};
+use super::model::{CtorId, ExprId, FnId, TypeId};
 use super::program::Program;
 
 /// Operations on unbounded naturals. These are not wrapping machine ops.
@@ -137,6 +137,34 @@ impl Recognised {
         self.operations[id.index()].is_some()
             || self.sequences[id.index()].is_some()
             || self.floats[id.index()].is_some()
+    }
+
+    /// The first definition recognized as `operation` over `params`,
+    /// answering `result`.
+    pub(super) fn operation_over(
+        &self,
+        program: &Program,
+        operation: Operation,
+        params: &[TypeId],
+        result: TypeId,
+    ) -> Option<FnId> {
+        (0..self.operations.len()).map(FnId::at).find(|&id| {
+            self.operations[id.index()] == Some(operation)
+                && program.params(id) == params
+                && program.function(id).result == result
+        })
+    }
+
+    /// The first definition recognized as `operation` over `params`.
+    pub(super) fn sequence_over(
+        &self,
+        program: &Program,
+        operation: SequenceOperation,
+        params: &[TypeId],
+    ) -> Option<FnId> {
+        (0..self.sequences.len()).map(FnId::at).find(|&id| {
+            self.sequences[id.index()] == Some(operation) && program.params(id) == params
+        })
     }
 }
 
