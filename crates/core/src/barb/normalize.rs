@@ -38,7 +38,14 @@ use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Operation, Program, Rang
 
 /// Remove local aliases without expanding calls or dropping eager bindings.
 pub(crate) fn structural(program: &mut Program) {
-    rewrite(program, None, None);
+    rewrite(program, None, false, None);
+}
+
+/// The same walk, writing a recognized operation an identity decides as
+/// what it decides: see [`Rewrite::identity`].
+#[cfg(test)]
+pub(super) fn identities(program: &mut Program) {
+    rewrite(program, None, true, None);
 }
 
 /// The same walk again, for what folding made knowable.
@@ -48,14 +55,22 @@ pub(crate) fn structural(program: &mut Program) {
 /// modulus by working one out, and what a sum modulo a power of two is worth
 /// knowing about cannot be seen until that power is folded.
 pub(super) fn algebra(program: &mut Program, limits: FoldLimits) {
-    rewrite(program, None, Some(limits));
+    rewrite(program, None, true, Some(limits));
 }
 
 /// Normalize aliases and inline nonrecursive helpers within the supplied limits.
 /// A zero limit disables expansion without computing recursion or copy costs.
+#[cfg(test)]
 pub(crate) fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
     let inlining = Inlining::new(program, limits);
-    rewrite(program, inlining, None);
+    rewrite(program, inlining, false, None);
+}
+
+/// Inline as [`normalize_with_limits`] does, and apply the identities as
+/// [`identities`] does, in one walk.
+pub(super) fn inline_with_identities(program: &mut Program, limits: InlineLimits) {
+    let inlining = Inlining::new(program, limits);
+    rewrite(program, inlining, true, None);
 }
 
 /// Whether every arm puts back the constructor it took apart, out of that
@@ -108,12 +123,18 @@ fn reads(program: &Program, body: Body, level: usize) -> bool {
         })
 }
 
-fn rewrite(program: &mut Program, inlining: Option<Inlining>, algebra_limits: Option<FoldLimits>) {
+fn rewrite(
+    program: &mut Program,
+    inlining: Option<Inlining>,
+    identities: bool,
+    algebra_limits: Option<FoldLimits>,
+) {
     let recognised = program.recognised().clone();
     let mut rewrite = Rewrite {
         program,
         recognised,
         inlining,
+        identities,
         algebra: algebra_limits.map(Budget::new),
         inline_depth: 0,
         written: Vec::new(),
@@ -227,6 +248,9 @@ struct Rewrite<'a> {
     /// expanded, so what they were recognised as stays true of them.
     recognised: Recognised,
     inlining: Option<Inlining>,
+    /// Whether a recognized operation an identity decides is written as
+    /// what it decides.
+    identities: bool,
     /// One shared resource budget for this algebra pass. Its absence means a
     /// structural or inlining walk that must not perform algebraic rewrites.
     algebra: Option<Budget>,
@@ -490,6 +514,11 @@ impl Rewrite<'_> {
             Expr::Call(called, args) => {
                 let args = self.args(args, locals);
                 if let Some(held) = self.counted(called, &args, scope) {
+                    return held;
+                }
+                if self.identities
+                    && let Some(held) = self.identity(called, &args, scope)
+                {
                     return held;
                 }
                 if let Some(body) = self.callee(called) {
@@ -961,6 +990,82 @@ impl Rewrite<'_> {
                         .all(|(l, r)| l.ctor == r.ctor && self.same_body(l.body, r.body))
             }
             _ => false,
+        }
+    }
+
+    /// A recognized operation whose answer an identity decides, from which
+    /// operands are the same local or known to be nought or one: that
+    /// operand, nought, or the comparison's answer. Its argument bindings
+    /// stay where they are, so nothing they evaluate is dropped.
+    fn identity(&mut self, called: FnId, args: &[Atom], scope: &mut Scope) -> Option<Atom> {
+        let op = self.recognised.operations[called.index()]?;
+        let &[a, b] = args else {
+            return None;
+        };
+        let (x, y) = (self.small(a), self.small(b));
+        let zero = |rewrite: &mut Self, scope: &mut Scope| {
+            let result = rewrite.program.function(called).result;
+            let zero = rewrite
+                .program
+                .intern_number(result, 0)
+                .expect("a recognized natural result");
+            rewrite.push(Expr::Static(zero), scope)
+        };
+        Some(match op {
+            Operation::Add | Operation::Or | Operation::Xor if x == Some(0) => b,
+            Operation::Add | Operation::Monus | Operation::Mod | Operation::Or | Operation::Xor
+                if y == Some(0) =>
+            {
+                a
+            }
+            Operation::Mul if x == Some(1) => b,
+            Operation::Mul | Operation::Div | Operation::Pow if y == Some(1) => a,
+            Operation::And | Operation::Or if a == b => a,
+            Operation::Monus if x == Some(0) => zero(self, scope),
+            Operation::Monus | Operation::Xor if a == b => zero(self, scope),
+            Operation::Mul | Operation::Div | Operation::And if x == Some(0) || y == Some(0) => {
+                zero(self, scope)
+            }
+            Operation::Mod if x == Some(0) || y == Some(1) || a == b => zero(self, scope),
+            Operation::Equals { yes, .. } if a == b => {
+                self.push(Expr::Con(yes, Range::default()), scope)
+            }
+            Operation::LessThan { no, .. } if a == b => {
+                self.push(Expr::Con(no, Range::default()), scope)
+            }
+            // In particular x/x is NOT one: x can be zero.
+            _ => return None,
+        })
+    }
+
+    /// Whether a local is a natural known to be nought or one: written as
+    /// that number, or as nought or the step of nought.
+    fn small(&self, atom: Atom) -> Option<u8> {
+        let wrote = (*self.written.get(atom.0.index())?)?;
+        match self.program.expr(wrote) {
+            Expr::Static(value) => {
+                let super::ConstantView::Natural(number) = self.program.constant(value).view()
+                else {
+                    return None;
+                };
+                match number.try_u64() {
+                    Ok(0) => Some(0),
+                    Ok(1) => Some(1),
+                    _ => None,
+                }
+            }
+            Expr::Con(ctor, fields) => {
+                let (nil, _) =
+                    super::arithmetic::natural(self.program, self.program.ctor(ctor).owner)?;
+                if ctor == nil {
+                    Some(0)
+                } else if self.small(self.program.atoms(fields)[0]) == Some(0) {
+                    Some(1)
+                } else {
+                    None
+                }
+            }
+            Expr::Atom(_) | Expr::Call(..) | Expr::Match(..) => None,
         }
     }
 

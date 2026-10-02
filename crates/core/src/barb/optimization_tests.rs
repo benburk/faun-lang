@@ -36,7 +36,7 @@ fn schedules() -> Vec<(&'static str, Stages)> {
             normalize_with_limits(p, InlineLimits::default());
         }),
         ("fusion", super::fuse::fuse),
-        ("laws", super::laws::laws),
+        ("identities", super::normalize::identities),
         ("folding", fold),
         ("refolding each definition", |p| {
             for id in super::calls::callees_first(p) {
@@ -310,7 +310,7 @@ fn self_division_is_not_one_and_misleading_names_do_not_earn_laws() {
         let zero = b.known(zero);
         b.call(fake, &[zero, args[0]])
     });
-    super::laws::laws(&mut program);
+    super::normalize::identities(&mut program);
     assert!(
         matches!(program.expr(program.function(test).body().unwrap().tail), Expr::Call(called, _) if called == div)
     );

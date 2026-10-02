@@ -108,7 +108,6 @@ mod forward;
 mod fuse;
 mod inline;
 mod invariant;
-mod laws;
 mod model;
 mod normalize;
 mod optimize;
@@ -149,7 +148,9 @@ pub use model::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId, Function, Local,
     Range, Symbol, Type, TypeId,
 };
-pub(crate) use normalize::{normalize_with_limits, structural};
+#[cfg(test)]
+pub(crate) use normalize::normalize_with_limits;
+pub(crate) use normalize::structural;
 pub use optimize::optimize;
 pub(crate) use program::shape;
 pub use program::{Program, type_shape};

@@ -10,7 +10,7 @@ use super::{FoldLimits, InlineLimits, Program};
 ///
 /// Each stage runs once, in this order: structural normalization, building
 /// lists front to back, descent,
-/// helper inlining, fusion, arithmetic laws, constant folding, copies of a
+/// helper inlining with arithmetic identities, fusion, constant folding, copies of a
 /// loop for the known values its callers hand it, invariant arguments and
 /// folding again where they bound something, algebraic
 /// normalization, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
@@ -24,9 +24,8 @@ pub fn optimize(program: &mut Program) {
     super::structural(program);
     super::forward::forward(program);
     super::descent::descend(program);
-    super::normalize_with_limits(program, InlineLimits::default());
+    super::normalize::inline_with_identities(program, InlineLimits::default());
     super::fuse::fuse(program);
-    super::laws::laws(program);
     super::fold(program);
     super::specialize::specialize(program);
     // What a definition now holds itself may fold what reads it.

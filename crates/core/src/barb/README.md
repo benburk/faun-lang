@@ -238,7 +238,10 @@ x    ::= a parameter, a binding, or a field an arm bound
   `Program` keeps this pool paired with its own declarations; callers cannot
   substitute a different catalogue. The codec and views borrow only type metadata.
 - `evaluate.rs`, `budget.rs`: evaluation and its shared work/size/depth policy.
-- `laws.rs`, `fold.rs`, `normalize.rs`, `cleanup.rs`: separate optimizing rewrites.
+- `fold.rs`, `normalize.rs`, `cleanup.rs`: separate optimizing rewrites. The
+  arithmetic identities -- `x + 0`, `x * 1`, `x monus x` and the like, on
+  recognized operations only -- are a rule of the normalizing walk, which
+  knows what wrote each local.
 - `optimize.rs`: the fixed schedule below; `pretty.rs`: rendering.
 
 ## Diagnostic rendering
@@ -269,35 +272,37 @@ two types -- so nothing infers a provider or an effect from the display name.
    enough of the rest that no cycle is left among the others; each other one may
    be copied into its caller, so definitions calling each other become one
    calling itself, which machine lowering makes a loop where the call is a tail.
+   The same walk applies the arithmetic identities justified by structurally
+   recognized `Operation` facts, so what one decides is decided before folding.
 5. Fusion: a list built by one walk and read once by another is never built.
-6. Arithmetic identities justified by structurally recognized `Operation` facts.
-7. Constant folding, each definition after what it calls, so that a caller
+6. Constant folding, each definition after what it calls, so that a caller
    meets its callees' answers as constants; each definition draws at most a
    per-definition allowance from the pass's budget, so a costly answer
    declined in one leaves the rest something to fold with.
-8. Specialization: a parameter a definition passes on to itself as it came,
+7. Specialization: a parameter a definition passes on to itself as it came,
    which callers hand different known values, gets a copy of the definition
    for each value, at most four, folded with that value bound. A copy is kept,
    and takes the calls handing its value, only where that decides a match
    between two or more arms, so a loop is not copied for values it only
    carries. Refolding one copy skips call-graph construction and ordering;
    refolding several definitions retains callee-first order and the same budgets.
-9. Invariant arguments: a parameter every caller the entry reaches hands one
+8. Invariant arguments: a parameter every caller the entry reaches hands one
    known value is bound to that value in its definition. After folding, so
    what they hand is known, and before algebraic normalization, which reads a
    known sequence's length as a number. Each definition given a value is then
    folded again, with a budget of its own, so what it asks of that value is
    answered too.
-10. Bounded algebraic normalization: combine constants across recognized associative
-    operations and directional monus/division chains, then push power-of-two moduli
-    through sums and products.
-11. Sweep: where there is an entry, drop every definition it does not reach,
+9. Bounded algebraic normalization: combine constants across recognized associative
+   operations and directional monus/division chains, then push power-of-two moduli
+   through sums and products, and apply the identities again to what folding made
+   known.
+10. Sweep: where there is an entry, drop every definition it does not reach,
     renumbering function IDs in order. Types, constructors and constants stay.
-12. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+11. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
     pure arithmetic or lengths, and matches whose arms are all inert; retain calls
     of unknown meaning.
 
-Every normalizing stage (1, 4 and 10) also decides what is already decided: a
+Every normalizing stage (1, 4 and 9) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
 number, and a match whose arms agree is that
 arm. A match that is the last binding of a body answering a match on it, and
@@ -368,7 +373,7 @@ share storage operations, not traversal, liveness or inlining policy. Storage
 construction still assumes valid references and lexical scopes; it neither brands
 IDs nor makes panicking builders or iterators transactional.
 
-Read-only walks borrow pool slices; mutating laws and folding traverse stable ranges
+Read-only walks borrow pool slices; mutating folding traverses stable ranges
 one entry at a time instead of copying binding/arm lists. Range propagation borrows
 the current result table for each function, then publishes its answer; it does not
 snapshot the whole table per function or delay answers until the next round.
