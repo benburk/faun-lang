@@ -107,7 +107,6 @@ mod fold;
 mod forward;
 mod fuse;
 mod inline;
-mod invariant;
 mod model;
 mod normalize;
 mod optimize;

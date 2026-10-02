@@ -1,10 +1,26 @@
-//! A loop handed different known values by different callers is copied for
-//! each, where knowing one decides something.
+//! Known values a definition's callers hand it, held by the definition.
 //!
-//! [`super::invariant`] binds a parameter every caller hands the same known
-//! value. Where callers hand different ones, no single definition can hold
-//! it, so each value gets a copy of its own, which holds it and goes round
-//! with itself:
+//! A definition calling itself goes round with some of its parameters
+//! changing and others passed on as they came. Where one of those passed
+//! on is a value known before the program runs, the definition may as well
+//! hold it itself, so that everything reading it inside reads something
+//! known: its length folds, and a tier below can hand out known bytes where
+//! they lie rather than build them.
+//!
+//! Where every call from outside hands the same value, the definition
+//! binds it first and reads it there:
+//!
+//! ```text
+//! f(k, n) = ... f(k, n') ...        called as f(K, a), f(K, b)
+//! f(k, n) = k' = K; ... f(k', n') ...
+//! ```
+//!
+//! The parameter stays, read by nothing, so no caller or signature changes;
+//! a tier holding only what is read holds none of it.
+//!
+//! Where callers hand different ones, no single definition can hold it, so
+//! each value gets a copy of its own, which holds it and goes round with
+//! itself:
 //!
 //! ```text
 //! f(k, n) = ... f(k, n') ...        called as f(K, a), f(L, b)
@@ -19,8 +35,16 @@
 //! One kept takes over the calls handing its values; one refused is called
 //! by nothing, and the sweep takes it away.
 //!
-//! Only parameters every call of the definition by itself passes on as they
-//! came are followed, and constants are compared by identity, as there.
+//! Copies come first, and the calls are read again after: a copy holding a
+//! value hands it on, so what it calls may now be handed one value
+//! everywhere. Each definition given a value is folded again, with a budget
+//! of its own, so what it asks of that value is answered too.
+//!
+//! Only known values are followed, only parameters every call of the
+//! definition by itself passes on as they came, and only calls from
+//! definitions the entry reaches: one it does not is swept away, whatever
+//! it hands. Constants are compared by identity, so two interned apart
+//! count as two.
 
 use std::collections::HashSet;
 
@@ -32,9 +56,17 @@ const COPIES: usize = 4;
 /// The largest definition copied, in what copying it allocates.
 const LARGEST: usize = 4096;
 
-/// Copy each such definition for the values its callers hand it, and send
-/// each call handing them to its folded copy.
+/// Copy each such definition for the values its callers hand it, then bind
+/// the values every caller hands alike, and fold again what was given one.
 pub(crate) fn specialize(program: &mut Program) {
+    copy_for_values(program);
+    let held = hold_shared(program);
+    super::fold::refold(program, &held);
+}
+
+/// Copy each definition callers hand different values for each of them,
+/// and send each call handing them to its folded copy.
+fn copy_for_values(program: &mut Program) {
     let sites = Sites::of(program);
     for (at, calls) in sites.calls.iter().enumerate() {
         let id = FnId::at(at);
@@ -51,7 +83,7 @@ pub(crate) fn specialize(program: &mut Program) {
                 keys.push(key);
             }
         }
-        // One value everywhere is the invariant pass's to bind.
+        // One value everywhere is bound where it is, by `hold_shared`.
         if keys.len() < 2 || super::inline::cost(program, body) > LARGEST {
             continue;
         }
@@ -71,6 +103,36 @@ pub(crate) fn specialize(program: &mut Program) {
             }
         }
     }
+}
+
+/// Bind in each definition the values every call of it from outside hands
+/// alike: which definitions those are.
+fn hold_shared(program: &mut Program) -> Vec<FnId> {
+    let sites = Sites::of(program);
+    let mut bodies = Vec::new();
+    for (at, calls) in sites.calls.iter().enumerate() {
+        let id = FnId::at(at);
+        let Some(body) = program.function(id).body() else {
+            continue;
+        };
+        let shared = Key(sites.passed[at]
+            .iter()
+            .enumerate()
+            .map(|(param, &passed)| {
+                let (first, rest) = calls.split_first()?;
+                let value = first.handed[param].filter(|_| passed)?;
+                rest.iter()
+                    .all(|call| call.handed[param] == Some(value))
+                    .then_some(value)
+            })
+            .collect());
+        if shared.known() {
+            bodies.push((id, holding(program, body, &shared)));
+        }
+    }
+    let changed = bodies.iter().map(|&(id, _)| id).collect();
+    program.replace_bodies(bodies);
+    changed
 }
 
 /// The known values a call hands the parameters a definition passes on.
@@ -204,7 +266,15 @@ fn copied(program: &mut Program, id: FnId, body: Body, key: &Key) -> FnId {
         .collect();
     let name = format!("{}.{}", program.name(name), program.functions().len());
     let copy = program.declare_named(&name, &named, result);
-    let mut scope = Scope::at(params.len());
+    let body = holding(program, body, key);
+    renamed(program, body, id, copy);
+    program.replace_bodies(vec![(copy, body)]);
+    copy
+}
+
+/// `body` with each parameter `key` knows read as that value, bound first.
+fn holding(program: &mut Program, body: Body, key: &Key) -> Body {
+    let mut scope = Scope::at(key.0.len());
     let locals: Vec<_> = key
         .0
         .iter()
@@ -217,10 +287,7 @@ fn copied(program: &mut Program, id: FnId, body: Body, key: &Key) -> FnId {
         })
         .collect();
     let answer = copy::into(program, body, locals, &mut scope, None);
-    let body = copy::close(program, scope, answer);
-    renamed(program, body, id, copy);
-    program.replace_bodies(vec![(copy, body)]);
-    copy
+    copy::close(program, scope, answer)
 }
 
 /// Send the calls of `from` in `body`, which nothing else shares, to `to`.
