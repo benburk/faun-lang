@@ -28,8 +28,9 @@
 //! f.2(k, n) = k' = L; ... f.2(k', n') ...     called as f.2(L, b)
 //! ```
 //!
-//! A copy is kept only where folding it decides a match between two or more
-//! arms: a way the loop could go that, for that value, it never does. A
+//! A copy is kept only where simplifying it decides a match between two or
+//! more arms -- leaves fewer of them than its original -- a way the loop
+//! could go that, for that value, it never does. A
 //! copy that decides nothing is the same loop twice, which is what a
 //! program writing many known strings through one loop must not become.
 //! One kept takes over the calls handing its values; one refused is called
@@ -37,7 +38,7 @@
 //!
 //! Copies come first, and the calls are read again after: a copy holding a
 //! value hands it on, so what it calls may now be handed one value
-//! everywhere. Each definition given a value is folded again, with a budget
+//! everywhere. Each definition given a value is simplified again, with a budget
 //! of its own, so what it asks of that value is answered too.
 //!
 //! Only known values are followed, only parameters every call of the
@@ -57,15 +58,15 @@ const COPIES: usize = 4;
 const LARGEST: usize = 4096;
 
 /// Copy each such definition for the values its callers hand it, then bind
-/// the values every caller hands alike, and fold again what was given one.
+/// the values every caller hands alike, and simplify again what was given one.
 pub(crate) fn specialize(program: &mut Program) {
     copy_for_values(program);
     let held = hold_shared(program);
-    super::fold::refold(program, &held);
+    super::normalize::resimplify(program, &held);
 }
 
 /// Copy each definition callers hand different values for each of them,
-/// and send each call handing them to its folded copy.
+/// and send each call handing them to its simplified copy.
 fn copy_for_values(program: &mut Program) {
     let sites = Sites::of(program);
     for (at, calls) in sites.calls.iter().enumerate() {
@@ -87,12 +88,12 @@ fn copy_for_values(program: &mut Program) {
         if keys.len() < 2 || super::inline::cost(program, body) > LARGEST {
             continue;
         }
-        let before = decided(program, body, program.params(id).len());
+        let before = branches(program, body);
         for key in keys.into_iter().filter(Key::known).take(COPIES) {
             let copied = copied(program, id, body, &key);
-            super::fold::refold(program, &[copied]);
+            super::normalize::resimplify(program, &[copied]);
             let body = program.function(copied).body().expect("a copy has a body");
-            if decided(program, body, program.params(copied).len()) <= before {
+            if branches(program, body) >= before {
                 continue;
             }
             for call in calls.iter().filter(|call| call.key(passed) == key) {
@@ -303,37 +304,11 @@ fn renamed(program: &mut Program, body: Body, from: FnId, to: FnId) {
     }
 }
 
-/// How many matches between two or more arms in `body` are on a value
-/// known before the program runs.
-fn decided(program: &Program, body: Body, params: usize) -> usize {
-    let mut known = vec![false; params];
-    decided_in(program, body, &mut known)
-}
-
-fn decided_in(program: &Program, body: Body, known: &mut Vec<bool>) -> usize {
-    let depth = known.len();
-    let mut count = 0;
-    for &expr in program.bindings(body.bindings).iter().chain([&body.tail]) {
-        let value = match program.expr(expr) {
-            Expr::Static(_) => true,
-            Expr::Atom(atom) => known[atom.0.index()],
-            Expr::Con(..) | Expr::Call(..) => false,
-            Expr::Match(on, arms) => {
-                let arms = program.arms(arms);
-                if arms.len() > 1 && known[on.0.index()] {
-                    count += 1;
-                }
-                for arm in arms {
-                    let fields = program.fields(arm.ctor).len();
-                    known.extend(std::iter::repeat_n(false, fields));
-                    count += decided_in(program, arm.body, known);
-                    known.truncate(known.len() - fields);
-                }
-                false
-            }
-        };
-        known.push(value);
-    }
-    known.truncate(depth);
-    count
+/// How many matches between two or more arms `body` holds. Simplifying a
+/// copy holding a value takes the arm a match on it selects, so a copy with
+/// fewer than its original decided something.
+fn branches(program: &Program, body: Body) -> usize {
+    super::walk::within(program, body)
+        .filter(|&expr| matches!(program.expr(expr), Expr::Match(_, arms) if arms.len() > 1))
+        .count()
 }

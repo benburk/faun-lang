@@ -39,19 +39,25 @@ pub(super) fn calls(program: &Program, body: Body, id: FnId) -> bool {
         .any(|expr| matches!(program.expr(expr), Expr::Call(callee, _) if callee == id))
 }
 
+/// The locals `id` reads itself, not counting what its arms read.
+pub(super) fn operands(program: &Program, id: ExprId) -> impl Iterator<Item = Atom> + '_ {
+    let (one, many) = match program.expr(id) {
+        Expr::Atom(atom) | Expr::Match(atom, _) => (Some(atom), &[][..]),
+        Expr::Static(_) => (None, &[][..]),
+        Expr::Con(_, args) | Expr::Call(_, args) => (None, program.atoms(args)),
+    };
+    one.into_iter().chain(many.iter().copied())
+}
+
 /// How many times `exprs` read local `level`. A local bound before every
 /// one of them is read as itself in any arm, since arms bind only levels
 /// past it.
 pub(super) fn reads(program: &Program, exprs: impl Iterator<Item = ExprId>, level: usize) -> usize {
-    let is = |atom: &Atom| atom.0.index() == level;
     exprs
-        .map(|id| match program.expr(id) {
-            Expr::Atom(atom) => usize::from(is(&atom)),
-            Expr::Static(_) => 0,
-            Expr::Con(_, args) | Expr::Call(_, args) => {
-                program.atoms(args).iter().filter(|a| is(a)).count()
-            }
-            Expr::Match(on, _) => usize::from(is(&on)),
+        .map(|id| {
+            operands(program, id)
+                .filter(|atom| atom.0.index() == level)
+                .count()
         })
         .sum()
 }

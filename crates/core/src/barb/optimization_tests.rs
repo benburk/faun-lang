@@ -1,10 +1,10 @@
 use super::budget::{Budget, LimitExceeded};
 use super::constant::Held;
 use super::evaluate::{CannotFold, Evaluator};
-use super::fold::fold_with_limits;
+use super::normalize::fold_with_limits;
 use super::{
-    Body, ConstantView, Expr, ExprId, FnId, FoldLimits, InlineLimits, Program, Value, arithmetic,
-    decode, fold, normalize_with_limits, optimize, validate,
+    Body, ConstantView, Expr, ExprId, FnId, FoldLimits, InlineLimits, Program, TypeId, Value,
+    arithmetic, decode, fold, normalize_with_limits, optimize, validate,
 };
 
 /// `Nat`, `Bool` and their arithmetic, as a source library writes them,
@@ -38,14 +38,12 @@ fn schedules() -> Vec<(&'static str, Stages)> {
         ("fusion", super::fuse::fuse),
         ("identities", super::normalize::identities),
         ("folding", fold),
-        ("refolding each definition", |p| {
+        ("simplifying each definition", |p| {
             for id in super::calls::callees_first(p) {
-                fold::refold(p, &[id]);
+                super::normalize::resimplify(p, &[id]);
             }
         }),
-        ("algebra", |p| {
-            super::normalize::algebra(p, FoldLimits::default());
-        }),
+        ("simplifying", super::normalize::simplify),
         ("cleanup", super::cleanup::cleanup),
         ("everything", optimize),
     ]
@@ -233,7 +231,7 @@ fn algebra_probe(
     program: &mut Program,
     name: &str,
     called: FnId,
-    ty: super::TypeId,
+    ty: TypeId,
     three: super::ConstId,
     five: super::ConstId,
 ) -> FnId {
@@ -263,7 +261,7 @@ fn algebra_probe(
 fn assert_normalized_arithmetic(
     original: &Program,
     optimized: &Program,
-    ty: super::TypeId,
+    ty: TypeId,
     (name, id, called, expected): (&str, FnId, FnId, u64),
 ) {
     assert_eq!(calls_to(optimized, id, called), 1, "{}", optimized.render());
@@ -422,10 +420,12 @@ fn folding_a_known_match_does_not_erase_effects_in_its_selected_arm() {
     let mut trace = vec![];
     run(&program, test, vec![], &mut trace);
     assert_eq!(trace, [effect]);
-    assert!(matches!(
-        program.expr(program.function(test).body().unwrap().tail),
-        Expr::Match(..)
-    ));
+    // The arm is taken where the match stood, and its call stays in it.
+    assert!(
+        expressions(&program, test)
+            .iter()
+            .any(|expr| matches!(expr, Expr::Call(called, _) if *called == effect))
+    );
 }
 
 #[test]
@@ -468,9 +468,9 @@ fn refolding_only_rewrites_selected_functions() {
     }
     validate(&program).unwrap();
     let original = program.clone();
-    fold::refold(&mut program, &[]);
+    super::normalize::resimplify(&mut program, &[]);
     assert_eq!(program, original);
-    fold::refold(&mut program, &[first]);
+    super::normalize::resimplify(&mut program, &[first]);
     assert!(matches!(
         program.expr(program.function(first).body().unwrap().tail),
         Expr::Static(..)
@@ -488,8 +488,8 @@ fn refolding_only_rewrites_selected_functions() {
 
     // Recognition and external declarations remain untouched on the local path.
     let folded = program.clone();
-    fold::refold(&mut program, &[mul]);
-    fold::refold(&mut program, &[effect]);
+    super::normalize::resimplify(&mut program, &[mul]);
+    super::normalize::resimplify(&mut program, &[effect]);
     assert_eq!(program, folded);
 }
 
@@ -511,7 +511,7 @@ fn refolding_several_definitions_still_orders_callees_first() {
             }
         });
     }
-    fold::refold(&mut program, &ids);
+    super::normalize::resimplify(&mut program, &ids);
     for id in ids {
         assert!(matches!(
             program.expr(program.function(id).body().unwrap().tail),
@@ -952,19 +952,56 @@ fn zero_fold_budget_is_an_exact_noop() {
     assert_eq!(program, original);
 }
 
-#[test]
-fn deep_evaluation_declines_without_exhausting_aggregate_fuel() {
+/// `count(n)` builds `n` again a step at a time, its call of itself
+/// nested inside the step it builds, where `tail` is false; where it is
+/// true, it calls itself last and answers nought.
+fn counting(tail: bool) -> (Program, FnId, TypeId) {
     let (mut program, ty, _, _) = super::tests::types();
+    let succ = program.ctor_at(ty, 1);
     let count = program.declare("count", &[ty], ty);
     program.define(count, |b, args| {
         b.match_(args[0], ty, |b, _, fields| {
             if let [rest] = fields {
-                b.call(count, &[*rest])
+                let counted = b.call(count, &[*rest]);
+                if tail {
+                    counted
+                } else {
+                    b.con(succ, &[counted])
+                }
             } else {
                 args[0]
             }
         })
     });
+    (program, count, ty)
+}
+
+#[test]
+fn a_loop_longer_than_the_depth_limit_still_evaluates() {
+    let (program, count, ty) = counting(true);
+    let value = Held::number(program.type_info(), ty, &num_bigint::BigUint::from(1000u32));
+    let ops = arithmetic::recognise(&program);
+    let mut budget = Budget::new(FoldLimits {
+        max_depth: 16,
+        ..FoldLimits::default()
+    });
+    let answer = Evaluator {
+        program: &program,
+        operations: &ops,
+    }
+    .body(
+        program.function(count).body().unwrap(),
+        vec![Ok(value)],
+        &mut budget,
+    )
+    .unwrap();
+    let nought = Held::number(program.type_info(), ty, &num_bigint::BigUint::default());
+    assert_eq!(answer.encoded(), nought.encoded());
+}
+
+#[test]
+fn deep_evaluation_declines_without_exhausting_aggregate_fuel() {
+    let (program, count, ty) = counting(false);
     let value = Held::number(
         program.type_info(),
         ty,
@@ -998,8 +1035,8 @@ fn deep_evaluation_declines_without_exhausting_aggregate_fuel() {
 /// at)` counts from `at` to the first element past `limit`.
 struct Walks {
     reverse: FnId,
-    nat: super::TypeId,
-    list: super::TypeId,
+    nat: TypeId,
+    list: TypeId,
     zero: super::CtorId,
     succ: super::CtorId,
     nil: super::CtorId,

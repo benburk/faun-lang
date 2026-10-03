@@ -245,10 +245,14 @@ x    ::= a parameter, a binding, or a field an arm bound
   `Program` keeps this pool paired with its own declarations; callers cannot
   substitute a different catalogue. The codec and views borrow only type metadata.
 - `evaluate.rs`, `budget.rs`: evaluation and its shared work/size/depth policy.
-- `fold.rs`, `normalize.rs`, `cleanup.rs`: separate optimizing rewrites. The
-  arithmetic identities -- `x + 0`, `x * 1`, `x monus x` and the like, on
-  recognized operations only -- are a rule of the normalizing walk, which
-  knows what wrote each local.
+  A tail taking an arm or calling a definition goes on in a loop, so a loop
+  as long as its input costs work but not depth.
+- `normalize.rs`, `cleanup.rs`: separate optimizing rewrites. The normalizing
+  walk knows what wrote each local, and its rules are switched on per walk:
+  the arithmetic identities -- `x + 0`, `x * 1`, `x monus x` and the like,
+  on recognized operations only -- combining constants, and evaluating a
+  construction, call or match whose every input is known. Evaluating is
+  constant folding: there is no pass of its own for it.
 - `optimize.rs`: the fixed schedule below; `pretty.rs`: rendering.
 
 ## Diagnostic rendering
@@ -282,35 +286,34 @@ two types -- so nothing infers a provider or an effect from the display name.
    The same walk applies the arithmetic identities justified by structurally
    recognized `Operation` facts, so what one decides is decided before folding.
 5. Fusion: a list built by one walk and read once by another is never built.
-6. Constant folding, each definition after what it calls, so that a caller
-   meets its callees' answers as constants; each definition draws at most a
-   per-definition allowance from the pass's budget, so a costly answer
-   declined in one leaves the rest something to fold with.
+6. Simplification: the normalizing walk with every rule on, each definition
+   after what it calls, so that a caller meets its callees' answers as
+   constants. A construction, call or match whose every input is known is
+   evaluated; the identities apply; constants combine across recognized
+   associative operations and directional monus/division chains; and
+   power-of-two moduli push through sums and products. Each definition
+   draws at most a per-definition allowance from the walk's budget, so a
+   costly answer declined in one leaves the rest something to fold with.
 7. Specialization: a parameter a definition passes on to itself as it came,
    which callers hand different known values, gets a copy of the definition
-   for each value, at most four, folded with that value bound. A copy is kept,
-   and takes the calls handing its value, only where that decides a match
-   between two or more arms, so a loop is not copied for values it only
-   carries. Then a parameter every caller the entry reaches hands one
+   for each value, at most four, simplified with that value bound. A copy is
+   kept, and takes the calls handing its value, only where simplifying it
+   leaves fewer matches between two or more arms than its original, so a loop
+   is not copied for values it only carries. Then a parameter every caller the entry reaches hands one
    known value is bound to that value in its definition, the calls read
-   again after copying, since a copy hands on what it holds. After folding,
-   so what they hand is known, and before algebraic normalization, which
-   reads a known sequence's length as a number. Each definition given a
-   value is then folded again, with a budget of its own, so what it asks of
-   that value is answered too. Refolding one copy skips call-graph
-   construction and ordering; refolding several definitions retains
-   callee-first order and the same budgets.
-8. Bounded algebraic normalization: combine constants across recognized associative
-   operations and directional monus/division chains, then push power-of-two moduli
-   through sums and products, and apply the identities again to what folding made
-   known.
-9. Sweep: where there is an entry, drop every definition it does not reach,
+   again after copying, since a copy hands on what it holds. After
+   simplification, so what they hand is known. Each definition given a
+   value is then simplified again, with a budget of its own, so what it asks
+   of that value -- a known sequence's length, a match on it -- is answered
+   too. Simplifying one copy again skips call-graph construction and
+   ordering; several keep callee-first order and the same budgets.
+8. Sweep: where there is an entry, drop every definition it does not reach,
    renumbering function IDs in order. Types, constructors and constants stay.
-10. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
-    pure arithmetic or lengths, and matches whose arms are all inert; retain calls
-    of unknown meaning.
+9. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+   pure arithmetic or lengths, and matches whose arms are all inert; retain calls
+   of unknown meaning.
 
-Every normalizing stage (1, 4 and 8) also decides what is already decided: a
+Every normalizing stage (1, 4 and 6) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
 number, and a match whose arms agree is that
 arm. A match that is the last binding of a body answering a match on it, and
@@ -341,9 +344,9 @@ evaluation depth. Work
 includes expression visits, copied bytes and conservative bigint word-operation
 estimates. Result-size and work checks precede native arithmetic and constructor
 concatenation. Limits are optimization policy, never language integer limits; a
-refused fold retains the original expression. Algebraic normalization starts a
-separate budget with the same limits; a refused constant combination is left
-uncombined. Traversing/recognizing the input is not covered by evaluator
+refused fold retains the original expression, and a refused constant
+combination is left uncombined. A loop evaluated costs work for every time
+round, and depth only for what it nests. Traversing/recognizing the input is not covered by evaluator
 fuel.
 
 Final-program analysis also records bounded affine forms of recognized natural

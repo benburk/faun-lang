@@ -4,6 +4,13 @@
 //! Expanding rewrites use the policy in `inline`; both preserve eager bindings
 //! and protect recognized arithmetic definitions from changes to their equations.
 //!
+//! A walk may also evaluate: a construction or call whose every input is a
+//! known value is written as the value it comes to, and a match on a known
+//! sequence, which is not taken apart here, is evaluated whole. That is
+//! constant folding. Such a walk reads each definition after what it calls,
+//! publishing each as it goes, so a caller evaluates its callees as they now
+//! stand; a refusal leaves the expression as it was.
+//!
 //! Every walk also decides what is already decided. A match on a local
 //! written as a constructor, or as a known value, is the arm for that
 //! constructor, with its fields what built it: nothing is tested. And a
@@ -31,31 +38,41 @@
 //! so nothing is copied twice.
 
 use super::budget::{Budget, FoldLimits};
-use super::evaluate::Evaluator;
+use super::constant::Held;
+use super::evaluate::{CannotFold, Evaluation, Evaluator};
 use super::facts::Recognised;
 use super::inline::{InlineLimits, Inlining};
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Operation, Program, Range};
 
+/// What a walk does beyond rebuilding, substituting aliases and deciding
+/// what is already decided, which every walk does.
+#[derive(Clone, Copy, Default)]
+struct Rules {
+    /// Write a recognized operation an identity decides as what it
+    /// decides: see [`Rewrite::identity`].
+    identities: bool,
+    /// Combine constants across recognized operations, and work a sum or
+    /// product modulo a power of two out modulo it throughout.
+    algebra: bool,
+    /// Write a construction or call whose every input is known as the value
+    /// it evaluates to, reading each definition after what it calls.
+    evaluate: bool,
+}
+
 /// Remove local aliases without expanding calls or dropping eager bindings.
 pub(crate) fn structural(program: &mut Program) {
-    rewrite(program, None, false, None);
+    rewrite(program, None, Rules::default(), FoldLimits::default(), None);
 }
 
 /// The same walk, writing a recognized operation an identity decides as
 /// what it decides: see [`Rewrite::identity`].
 #[cfg(test)]
 pub(super) fn identities(program: &mut Program) {
-    rewrite(program, None, true, None);
-}
-
-/// The same walk again, for what folding made knowable.
-///
-/// Recognized addition and multiplication are associative and commutative, so
-/// constants separated by one of them can be combined. A program also says a
-/// modulus by working one out, and what a sum modulo a power of two is worth
-/// knowing about cannot be seen until that power is folded.
-pub(super) fn algebra(program: &mut Program, limits: FoldLimits) {
-    rewrite(program, None, true, Some(limits));
+    let rules = Rules {
+        identities: true,
+        ..Rules::default()
+    };
+    rewrite(program, None, rules, FoldLimits::default(), None);
 }
 
 /// Normalize aliases and inline nonrecursive helpers within the supplied limits.
@@ -63,15 +80,82 @@ pub(super) fn algebra(program: &mut Program, limits: FoldLimits) {
 #[cfg(test)]
 pub(crate) fn normalize_with_limits(program: &mut Program, limits: InlineLimits) {
     let inlining = Inlining::new(program, limits);
-    rewrite(program, inlining, false, None);
+    rewrite(
+        program,
+        inlining,
+        Rules::default(),
+        FoldLimits::default(),
+        None,
+    );
 }
 
 /// Inline as [`normalize_with_limits`] does, and apply the identities as
 /// [`identities`] does, in one walk.
 pub(super) fn inline_with_identities(program: &mut Program, limits: InlineLimits) {
     let inlining = Inlining::new(program, limits);
-    rewrite(program, inlining, true, None);
+    let rules = Rules {
+        identities: true,
+        ..Rules::default()
+    };
+    rewrite(program, inlining, rules, FoldLimits::default(), None);
 }
+
+/// Constant folding alone: the walk evaluating what it can, without the
+/// identities or algebra.
+#[cfg(test)]
+pub(crate) fn fold(program: &mut Program) {
+    fold_with_limits(program, FoldLimits::default());
+}
+
+/// [`fold`], within `limits`.
+#[cfg(test)]
+pub(crate) fn fold_with_limits(program: &mut Program, limits: FoldLimits) {
+    // Nothing to spend evaluates nothing, and the walk is not worth taking.
+    if limits.work == 0 || limits.work_per_function == 0 {
+        return;
+    }
+    let rules = Rules {
+        evaluate: true,
+        ..Rules::default()
+    };
+    rewrite(program, None, rules, limits, None);
+}
+
+/// Evaluate what is known, apply the identities, and combine what is left.
+///
+/// Each definition is rewritten after what it calls, so a call of one whose
+/// answer is known outright is a constant by the time a caller asks, and
+/// combining constants sees what evaluating made known in the same walk:
+/// recognized addition and multiplication are associative and commutative,
+/// so constants separated by one of them can be combined, and what a sum
+/// modulo a power of two is worth knowing about cannot be seen until that
+/// power is folded. Each definition draws at most a per-definition
+/// allowance from one budget, so a costly answer declined in one leaves
+/// the rest something to work with.
+pub(super) fn simplify(program: &mut Program) {
+    rewrite(program, None, SIMPLIFY, FoldLimits::default(), None);
+}
+
+/// [`simplify`] again for only `changed`, which a later stage handed
+/// something new to read, with a budget of its own.
+pub(super) fn resimplify(program: &mut Program, changed: &[FnId]) {
+    if changed.is_empty() {
+        return;
+    }
+    rewrite(
+        program,
+        None,
+        SIMPLIFY,
+        FoldLimits::default(),
+        Some(changed),
+    );
+}
+
+const SIMPLIFY: Rules = Rules {
+    identities: true,
+    algebra: true,
+    evaluate: true,
+};
 
 /// Whether every arm puts back the constructor it took apart, out of that
 /// constructor's own fields and nothing else.
@@ -105,25 +189,27 @@ fn rebuilt(program: &Program, arms: &[Arm], level: usize) -> bool {
 fn rewrite(
     program: &mut Program,
     inlining: Option<Inlining>,
-    identities: bool,
-    algebra_limits: Option<FoldLimits>,
+    rules: Rules,
+    limits: FoldLimits,
+    only: Option<&[FnId]>,
 ) {
     let recognised = program.recognised().clone();
+    let order = order(program, rules, only);
     let mut rewrite = Rewrite {
         program,
         recognised,
         inlining,
-        identities,
-        algebra: algebra_limits.map(Budget::new),
+        rules,
+        budget: Budget::new(limits),
         inline_depth: 0,
         written: Vec::new(),
     };
-    // Reads name existing entries; writes only append. Keep all function roots
-    // unchanged until the end, so later callers still inline original bodies
-    // using the costs and depth limits computed for those bodies.
+    let mut remaining = limits.work;
+    // Inlining reads existing entries; writes only append. Keep all function
+    // roots unchanged until the end, so later callers still inline original
+    // bodies using the costs and depth limits computed for those bodies.
     let mut bodies = vec![];
-    for at in 0..rewrite.program.functions().len() {
-        let id = FnId::at(at);
+    for id in order {
         if rewrite.recognised.answered(id) {
             continue;
         }
@@ -133,13 +219,39 @@ fn rewrite(
         if let Some(inlining) = &mut rewrite.inlining {
             inlining.begin_function();
         }
+        let allowance = remaining.min(limits.work_per_function);
+        rewrite.budget = Budget::new(FoldLimits {
+            work: allowance,
+            ..limits
+        });
         let count = rewrite.program.params(id).len();
         let locals: Vec<_> = (0..count).map(|at| Atom(Local::at(at))).collect();
         rewrite.written.clear();
         let body = rewrite.body(body, locals, count);
-        bodies.push((id, body));
+        remaining -= allowance - rewrite.budget.remaining;
+        if rewrite.inlining.is_some() {
+            bodies.push((id, body));
+        } else {
+            rewrite.program.replace_bodies(vec![(id, body)]);
+        }
     }
     rewrite.program.replace_bodies(bodies);
+}
+
+/// The definitions a walk rewrites, `only` where it is given, in the order
+/// it rewrites them. Evaluating reads callees as they now stand, so each is
+/// rewritten, and published, before what calls it; a single definition
+/// needs no order.
+fn order(program: &Program, rules: Rules, only: Option<&[FnId]>) -> Vec<FnId> {
+    match only {
+        Some(&[id]) => vec![id],
+        Some(ids) => super::calls::callees_first(program)
+            .into_iter()
+            .filter(|id| ids.contains(id))
+            .collect(),
+        None if rules.evaluate => super::calls::callees_first(program),
+        None => (0..program.functions().len()).map(FnId::at).collect(),
+    }
 }
 
 /// The most answers a question of tags is composed through.
@@ -227,12 +339,10 @@ struct Rewrite<'a> {
     /// expanded, so what they were recognised as stays true of them.
     recognised: Recognised,
     inlining: Option<Inlining>,
-    /// Whether a recognized operation an identity decides is written as
-    /// what it decides.
-    identities: bool,
-    /// One shared resource budget for this algebra pass. Its absence means a
-    /// structural or inlining walk that must not perform algebraic rewrites.
-    algebra: Option<Budget>,
+    rules: Rules,
+    /// What evaluating and combining constants may still spend in the
+    /// definition being rewritten.
+    budget: Budget,
     inline_depth: usize,
     /// What wrote each local of the body being rebuilt, by level, where a
     /// binding of it did: a parameter or a field an arm took apart says
@@ -286,6 +396,11 @@ impl Rewrite<'_> {
         let answer = write(self, &mut scope);
         let tail = if answer.0.index() + 1 == scope.level && !scope.bindings.is_empty() {
             scope.bindings.pop().expect("the last binding")
+        } else if let Some(value) = self.known(answer).filter(|_| self.rules.evaluate) {
+            // Answering the value itself leaves the local it was written to
+            // for nothing to read, where it was written before a match
+            // whose other arms do not need it.
+            self.program.terms.push(Expr::Static(value))
         } else {
             self.program.terms.push(Expr::Atom(answer))
         };
@@ -311,6 +426,7 @@ impl Rewrite<'_> {
         for at in from..last {
             if let Some((scrutinee, first, second)) = cased
                 && at + 1 == last
+                && !self.decided(locals[scrutinee.0.index()])
             {
                 return self.merged(scrutinee, first, second, &locals, scope);
             }
@@ -333,16 +449,19 @@ impl Rewrite<'_> {
         let &[arm] = self.program.arms(arms) else {
             return None;
         };
-        let scrutinee = locals[value.0.index()];
-        let known = self
-            .written
-            .get(scrutinee.0.index())
+        (!self.decided(locals[value.0.index()])).then_some(arm)
+    }
+
+    /// Whether a local was written as a constructor or a known value, so
+    /// that a match on it takes one arm: see [`Self::selected`].
+    fn decided(&self, atom: Atom) -> bool {
+        self.written
+            .get(atom.0.index())
             .copied()
             .flatten()
             .is_some_and(|wrote| {
                 matches!(self.program.expr(wrote), Expr::Con(..) | Expr::Static(..))
-            });
-        (!known).then_some(arm)
+            })
     }
 
     /// A match of one arm, which cannot but take it, taking apart a value
@@ -490,14 +609,24 @@ impl Rewrite<'_> {
             value @ Expr::Static(..) => value,
             Expr::Con(ctor, fields) => {
                 let fields = self.args(fields, locals);
+                if let Some(held) = self.evaluated(&fields, scope, |evaluator, fields, budget| {
+                    evaluator.construct(ctor, &fields, budget)
+                }) {
+                    return held;
+                }
                 Expr::Con(ctor, self.program.terms.hold_atoms(fields.into_iter()))
             }
             Expr::Call(called, args) => {
                 let args = self.args(args, locals);
+                if let Some(held) = self.evaluated(&args, scope, |evaluator, args, budget| {
+                    evaluator.call(called, args, budget)
+                }) {
+                    return held;
+                }
                 if let Some(held) = self.counted(called, &args, scope) {
                     return held;
                 }
-                if self.identities
+                if self.rules.identities
                     && let Some(held) = self.identity(called, &args, scope)
                 {
                     return held;
@@ -508,7 +637,7 @@ impl Rewrite<'_> {
                     self.inline_depth -= 1;
                     return answer;
                 }
-                if self.algebra.is_some() {
+                if self.rules.algebra {
                     if let Some(held) = self.chained(called, &args, scope) {
                         return held;
                     }
@@ -524,6 +653,9 @@ impl Rewrite<'_> {
             Expr::Match(value, arms) => {
                 let scrutinee = locals[value.0.index()];
                 if let Some(answer) = self.selected(scrutinee, arms, locals, scope) {
+                    return answer;
+                }
+                if let Some(answer) = self.evaluated_match(id, scrutinee, locals, scope) {
                     return answer;
                 }
                 if let Some(answer) = self.composed(scrutinee, arms, scope) {
@@ -1164,7 +1296,7 @@ impl Rewrite<'_> {
         scope: &mut Scope,
     ) -> Option<Atom> {
         let (left, right) = (self.constant(scope, left)?, self.constant(scope, right)?);
-        let budget = self.algebra.as_mut()?;
+        let budget = &mut self.budget;
         let left = self.program.constant(left).to_owned(budget).ok()?;
         let right = self.program.constant(right).to_owned(budget).ok()?;
         let value = Evaluator {
@@ -1180,6 +1312,95 @@ impl Rewrite<'_> {
         .ok()?;
         let value = self.program.intern_held(&value);
         Some(self.push(Expr::Static(value), scope))
+    }
+
+    /// What `evaluate` answers for `args`, written as a known value, where
+    /// the walk evaluates and every one of `args` is known. A refusal --
+    /// an input known only as it runs, a call with no body, or the budget --
+    /// leaves the expression to be written as it was.
+    fn evaluated(
+        &mut self,
+        args: &[Atom],
+        scope: &mut Scope,
+        evaluate: impl FnOnce(&Evaluator, Vec<Held>, &mut Budget) -> Evaluation,
+    ) -> Option<Atom> {
+        if !self.rules.evaluate || self.budget.remaining == 0 {
+            return None;
+        }
+        let known = args
+            .iter()
+            .map(|&atom| self.known(atom))
+            .collect::<Option<Vec<_>>>()?;
+        let budget = &mut self.budget;
+        let values = known
+            .into_iter()
+            .map(|value| self.program.constant(value).to_owned(budget))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let evaluator = Evaluator {
+            program: self.program,
+            operations: &self.recognised.operations,
+        };
+        let value = evaluate(&evaluator, values, budget).ok()?;
+        let value = self.program.intern_held(&value);
+        Some(self.push(Expr::Static(value), scope))
+    }
+
+    /// A match on a known value [`Self::selected`] does not take apart, a
+    /// sequence, evaluated whole, where the walk evaluates: the arm it takes
+    /// may read only what is known. Opening the sequence instead would hold
+    /// its rest as a second known value, a copy of all but one element.
+    fn evaluated_match(
+        &mut self,
+        id: ExprId,
+        scrutinee: Atom,
+        locals: &[Atom],
+        scope: &mut Scope,
+    ) -> Option<Atom> {
+        if !self.rules.evaluate || self.budget.remaining == 0 {
+            return None;
+        }
+        self.known(scrutinee)?;
+        // Only what the match reads from outside it is worth copying out.
+        let mut read = vec![false; locals.len()];
+        for expr in super::walk::nested(self.program, [id]) {
+            for atom in super::walk::operands(self.program, expr) {
+                if let Some(read) = read.get_mut(atom.0.index()) {
+                    *read = true;
+                }
+            }
+        }
+        let known: Vec<_> = locals
+            .iter()
+            .zip(read)
+            .map(|(&atom, read)| self.known(atom).filter(|_| read))
+            .collect();
+        let budget = &mut self.budget;
+        let mut env = Vec::with_capacity(known.len());
+        for value in known {
+            let held = match value {
+                Some(value) => Ok(self.program.constant(value).to_owned(budget).ok()?),
+                None => Err(CannotFold::DynamicInput),
+            };
+            env.push(held);
+        }
+        let evaluator = Evaluator {
+            program: self.program,
+            operations: &self.recognised.operations,
+        };
+        let value = evaluator.expr(id, &env, budget).ok()?;
+        let value = self.program.intern_held(&value);
+        Some(self.push(Expr::Static(value), scope))
+    }
+
+    /// The known value a local was written as, in this scope or one
+    /// around it.
+    fn known(&self, atom: Atom) -> Option<super::ConstId> {
+        let wrote = (*self.written.get(atom.0.index())?)?;
+        let Expr::Static(value) = self.program.expr(wrote) else {
+            return None;
+        };
+        Some(value)
     }
 
     /// Which constant wrote a local, if one did.

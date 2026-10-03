@@ -71,27 +71,51 @@ impl Evaluator<'_> {
 
     /// A call's answer: from its operands where it is claimed or recognized,
     /// and otherwise by walking its body.
-    fn call(&self, called: super::FnId, fields: Vec<Held>, budget: &mut Budget) -> Evaluation {
+    pub(super) fn call(
+        &self,
+        called: super::FnId,
+        fields: Vec<Held>,
+        budget: &mut Budget,
+    ) -> Evaluation {
+        if let Some(answered) = self.answered(called, &fields, budget) {
+            return answered;
+        }
+        let body = self
+            .program
+            .function(called)
+            .body()
+            .ok_or(CannotFold::ExternalCall)?;
+        self.body(body, fields.into_iter().map(Ok).collect(), budget)
+    }
+
+    /// A call's answer from its operands, where it is claimed or recognized.
+    fn answered(
+        &self,
+        called: super::FnId,
+        fields: &[Held],
+        budget: &mut Budget,
+    ) -> Option<Evaluation> {
         let function = self.program.function(called);
         if let Some(float) = function.float {
-            budget.spend(u64::try_from(fields.len()).map_err(|_| LimitExceeded::Work)?)?;
+            if let Err(limit) = budget.spend(u64::try_from(fields.len()).unwrap_or(u64::MAX)) {
+                return Some(Err(limit.into()));
+            }
             let answered =
-                super::claim::answer(self.program, float, function.result, &fields, budget);
-            if let Some(answered) = answered {
+                super::claim::answer(self.program, float, function.result, fields, budget);
+            if answered.is_some() {
                 return answered;
             }
         }
-        if let Some(op) = self.operations[called.index()] {
-            return self.arithmetic(op, function.result, &fields, budget);
-        }
-        self.body(
-            function.body().ok_or(CannotFold::ExternalCall)?,
-            fields.into_iter().map(Ok).collect(),
-            budget,
-        )
+        let op = self.operations[called.index()]?;
+        Some(self.arithmetic(op, function.result, fields, budget))
     }
 
-    fn construct(&self, ctor: super::CtorId, fields: &[Held], budget: &mut Budget) -> Evaluation {
+    pub(super) fn construct(
+        &self,
+        ctor: super::CtorId,
+        fields: &[Held],
+        budget: &mut Budget,
+    ) -> Evaluation {
         match Held::build(self.program.type_info(), ctor, fields, budget) {
             Ok(value) => Ok(value),
             Err(ConstructionError::Limit(limit)) => Err(limit.into()),
@@ -165,17 +189,56 @@ impl Evaluator<'_> {
         self.construct(ctor, &[], budget)
     }
 
+    /// What `body` answers, where `env` holds what each local before it is.
+    ///
+    /// A tail taking a match's arm, or calling a definition answered by
+    /// walking its body, goes on into that body here, in a loop rather than
+    /// a level deeper: a loop as long as its input costs work, which the
+    /// budget bounds, but not depth, which bounds what is nested.
     pub(super) fn body(
         &self,
-        body: Body,
+        mut body: Body,
         mut env: Vec<Evaluation>,
         budget: &mut Budget,
     ) -> Evaluation {
-        for &binding in self.program.bindings(body.bindings) {
-            // An unused eager binding may perform effects or fail to return.
-            let value = self.expr(binding, &env, budget)?;
-            env.push(Ok(value));
+        loop {
+            for &binding in self.program.bindings(body.bindings) {
+                // An unused eager binding may perform effects or fail to return.
+                let value = self.expr(binding, &env, budget)?;
+                env.push(Ok(value));
+            }
+            match self.program.expr(body.tail) {
+                Expr::Match(value, arms) => {
+                    budget.spend(1)?;
+                    let held = env[value.0.index()].as_ref().map_err(|e| *e)?;
+                    let (ctor, fields) =
+                        held.as_constant(self.program.type_info()).parts(budget)?;
+                    let arm = self
+                        .program
+                        .arms(arms)
+                        .iter()
+                        .find(|a| a.ctor == ctor)
+                        .expect("an exhaustive match");
+                    env.extend(fields.into_iter().map(Ok));
+                    body = arm.body;
+                }
+                Expr::Call(called, args) => {
+                    let fields = self.args(args, &env, budget)?;
+                    if let Some(answered) = self.answered(called, &fields, budget) {
+                        return answered;
+                    }
+                    budget.spend(1)?;
+                    body = self
+                        .program
+                        .function(called)
+                        .body()
+                        .ok_or(CannotFold::ExternalCall)?;
+                    env = fields.into_iter().map(Ok).collect();
+                }
+                Expr::Atom(_) | Expr::Con(..) | Expr::Static(_) => {
+                    return self.expr(body.tail, &env, budget);
+                }
+            }
         }
-        self.expr(body.tail, &env, budget)
     }
 }

@@ -1,6 +1,6 @@
 //! A deliberately small, bounded schedule, not a fixed-point optimizer.
 
-use super::{FoldLimits, InlineLimits, Program};
+use super::{InlineLimits, Program};
 
 /// Optimize a validated program.
 ///
@@ -9,11 +9,11 @@ use super::{FoldLimits, InlineLimits, Program};
 /// out pure work nothing needs, and nothing else, as the module's rules say.
 ///
 /// Each stage runs once, in this order: structural normalization, building
-/// lists front to back, descent,
-/// helper inlining with arithmetic identities, fusion, constant folding, copies of a
-/// loop for the known values its callers hand it and the values they all
-/// hand alike, folded again where they bound something, algebraic
-/// normalization, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
+/// lists front to back, descent, helper inlining with arithmetic
+/// identities, fusion, simplification -- evaluating what is known, the
+/// identities and combining constants, in one walk -- copies of a loop for
+/// the known values its callers hand it and the values they all hand alike,
+/// simplified again where they bound something, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
 /// aliases and unused inert bindings, never calls or matches whose
 /// evaluation may have effects. Inlining and folding stop at their fixed
 /// budgets, which bound work rather than choose what is done.
@@ -26,9 +26,8 @@ pub fn optimize(program: &mut Program) {
     super::descent::descend(program);
     super::normalize::inline_with_identities(program, InlineLimits::default());
     super::fuse::fuse(program);
-    super::fold(program);
+    super::normalize::simplify(program);
     super::specialize::specialize(program);
-    super::normalize::algebra(program, FoldLimits::default());
     super::sweep::sweep(program);
     super::cleanup::cleanup(program);
 }

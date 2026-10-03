@@ -103,7 +103,6 @@ mod evaluate;
 mod facts;
 #[cfg(test)]
 pub(crate) mod fixture;
-mod fold;
 mod forward;
 mod fuse;
 mod inline;
@@ -142,12 +141,13 @@ pub(crate) fn analyzed(program: &Program) -> Facts {
     copy.analyze();
     copy.facts().expect("just analyzed").clone()
 }
-pub(crate) use fold::fold;
 pub use inline::InlineLimits;
 pub use model::{
     Arm, Atom, Body, ConstId, Ctor, CtorId, Definition, Expr, ExprId, Field, FnId, Function, Local,
     Range, Symbol, Type, TypeId,
 };
+#[cfg(test)]
+pub(crate) use normalize::fold;
 #[cfg(test)]
 pub(crate) use normalize::normalize_with_limits;
 pub(crate) use normalize::structural;
