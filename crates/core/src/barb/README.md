@@ -261,7 +261,12 @@ x    ::= a parameter, a binding, or a field an arm bound
 
 `Program::render` uses indentation to delimit match arms and nested bodies,
 without braces. Bodyless declarations keep `= <elsewhere>` on the signature
-line. Types reserved with `declare_inline_type` carry their complete structural
+line, and a definition answered rather than walked keeps what it is answered
+as there instead of its body: `<binary64 add>` for a claimed float, and, once
+the program is analyzed, `<add>` or `<prepend>` for a recognized operation.
+Where there is an entry, a definition it reaches only through such a body --
+soft-float helpers a target with the instruction never runs -- is named at
+the end rather than rendered. `faun emit barb` analyzes before rendering. Types reserved with `declare_inline_type` carry their complete structural
 spelling at each use and omit a redundant top-level declaration. The text is a
 diagnostic view, not surface syntax or a serialization.
 Frontend-created declarations retain their source names, including `!` on

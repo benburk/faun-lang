@@ -4,6 +4,7 @@ use std::fmt::Write;
 
 use super::model::{Body, ConstId, Expr, ExprId, FnId, Range, Symbol, TypeId};
 use super::program::Program;
+use super::{Operation, SequenceOperation};
 
 impl Program {
     /// The whole program: its types, then its functions.
@@ -16,11 +17,68 @@ impl Program {
                 self.render_type(id, &mut out);
             }
         }
-        for id in 0..self.functions().len() {
-            out.push('\n');
-            self.render_function(FnId::at(id), &mut out);
+        let shown = self.shown();
+        let mut hidden = Vec::new();
+        for (at, &shown) in shown.iter().enumerate() {
+            let id = FnId::at(at);
+            if shown {
+                out.push('\n');
+                self.render_function(id, &mut out);
+            } else {
+                hidden.push(self.name(self.function(id).name));
+            }
+        }
+        if !hidden.is_empty() {
+            let _ = writeln!(
+                out,
+                "\nCalled only by an answered body: {}",
+                hidden.join(", ")
+            );
         }
         out
+    }
+
+    /// Which definitions to render: all but those the entry reaches only
+    /// by going into an answered definition's body. Those are what an
+    /// answered operation's body is written with -- a target with the
+    /// instruction never walks them -- and are only named.
+    fn shown(&self) -> Vec<bool> {
+        let count = self.functions().len();
+        let Some(entry) = self.entry() else {
+            return vec![true; count];
+        };
+        let through = self.reached(entry, true);
+        let around = self.reached(entry, false);
+        through
+            .iter()
+            .zip(around)
+            .map(|(&through, around)| around || !through)
+            .collect()
+    }
+
+    /// Which definitions `entry` reaches, going into answered definitions'
+    /// bodies only where `answered` says to.
+    fn reached(&self, entry: FnId, answered: bool) -> Vec<bool> {
+        let mut reached = vec![false; self.functions().len()];
+        let mut waiting = vec![entry];
+        while let Some(id) = waiting.pop() {
+            if std::mem::replace(&mut reached[id.index()], true) {
+                continue;
+            }
+            if !answered && self.answered_as(id).is_some() {
+                continue;
+            }
+            let Some(body) = self.function(id).body() else {
+                continue;
+            };
+            waiting.extend(super::walk::within(self, body).filter_map(
+                |expr| match self.expr(expr) {
+                    Expr::Call(called, _) => Some(called),
+                    _ => None,
+                },
+            ));
+        }
+        reached
     }
 
     fn render_type(&self, id: TypeId, out: &mut String) {
@@ -68,6 +126,10 @@ impl Program {
             params.join(", "),
             self.name(self.type_(function.result).name)
         );
+        if let Some(answered) = self.answered_as(id) {
+            let _ = writeln!(out, " <{answered}>");
+            return;
+        }
         match function.body() {
             Some(body) => {
                 out.push('\n');
@@ -76,6 +138,43 @@ impl Program {
             }
             None => out.push_str(" <elsewhere>\n"),
         }
+    }
+
+    /// What a definition is answered as rather than walked, where it is:
+    /// the IEEE 754 operation it is claimed to compute, or, once the program
+    /// is analyzed, the operation it was recognized as. Its body is the
+    /// operation's equations and says nothing new, so it is not rendered.
+    fn answered_as(&self, id: FnId) -> Option<String> {
+        if let Some(float) = self.function(id).float {
+            return Some(float.to_string());
+        }
+        let facts = self.facts()?;
+        if let Some(operation) = facts.operation(id) {
+            let name = match operation {
+                Operation::Add => "add",
+                Operation::Monus => "monus",
+                Operation::Mul => "mul",
+                Operation::Div => "div",
+                Operation::Mod => "mod",
+                Operation::And => "and",
+                Operation::Or => "or",
+                Operation::Xor => "xor",
+                Operation::Pow => "pow",
+                Operation::Equals { .. } => "equals",
+                Operation::LessThan { .. } => "less than",
+            };
+            return Some(name.to_owned());
+        }
+        let name = match facts.sequence_operation(id)? {
+            SequenceOperation::Length => "length",
+            SequenceOperation::ReverseOnto => "reverse onto",
+            SequenceOperation::Prepend => "prepend",
+            SequenceOperation::Append => "append",
+            SequenceOperation::Drop => "drop",
+            SequenceOperation::Take => "take",
+            SequenceOperation::Replace => "replace",
+        };
+        Some(name.to_owned())
     }
 
     /// Each binding on its own line, then what the body answers.

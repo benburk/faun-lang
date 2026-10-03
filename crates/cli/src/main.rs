@@ -207,7 +207,7 @@ fn emit(stage: Stage, source: &Path, target: &dyn Target) -> Result<(), Diagnost
     barb::optimize(&mut barb);
     let routines = target.routines();
     let text = match stage {
-        Stage::Barb => barb.render(),
+        Stage::Barb => barb.analyze().render(),
         Stage::Machine => {
             let machine =
                 faun_core::lower_to_machine_ir(&mut barb, &routines).map_err(Diagnostic::new)?;
