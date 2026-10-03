@@ -110,12 +110,19 @@ x    ::= a parameter, a binding, or a field an arm bound
   byte string records the range of its bytes, and a known sequence of up to
   4096 other elements what each element's fields hold. A remainder by a
   natural known outright is below it even past what a `u64` bound says, so
-  `n % 2^64` is a word. A recognized length
-  answers what `Assumed` says a length can be; machine lowering says a word.
+  `n % 2^64` is a word. A call of a recognized sequence operation is
+  answered from what its operands hold, as arithmetic is: a length is how
+  many its sequence holds, replacing keeps them, appending adds one,
+  putting one before another adds both, dropping takes the count away and
+  taking keeps the fewer -- within what `Assumed` says a length can be,
+  which machine lowering says is below the largest word, and which a way
+  nothing reaches answers. So a list a loop rewrites keeps the length it
+  started with, and machine lowering holds a length known outright as that
+  number, which answers whether an index is within it before anything asks.
   Widening settles what recursion leaves growing: a greatest that keeps
   growing goes to the next machine width -- 8, 16, 32 or 64 bits -- and past
   the widest to no bound, so a value a remainder keeps below a width settles
-  there. Narrowing cannot take back a bound a field copied into itself holds,
+  there. The first bound found for something, however late, is no growth. Narrowing cannot take back a bound a field copied into itself holds,
   so giving that up would be for good. A few narrowing rounds then
   walk every definition afresh from the settled state, without widening, and
   take back what nothing reaches -- a remainder of a widened count is still

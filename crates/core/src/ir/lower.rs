@@ -120,12 +120,7 @@ fn lower_with(
     // a library type (or retaining an old expression in the arena) does not.
     let demand = Demand::discover(program, facts, routines, entry)?;
     let (entry_params, arguments) = entry_parameters(&demand, entry, routines, wanted)?;
-    let borrowed: Vec<_> = entry_params
-        .iter()
-        .map(|(name, class)| (name.as_str(), *class))
-        .collect();
-    let (mut machine, main) =
-        Program::new_with_params(program.name(program.function(entry).name), &borrowed);
+    let (mut machine, main) = begun(program, entry, &entry_params);
     let callees = declare(&demand, routines, &mut machine, (entry, main))?;
     let bytes = argument_bytes(program, facts, entry, &demand.carries);
 
@@ -152,6 +147,19 @@ fn lower_with(
     }
     validate(&machine)?;
     Ok(machine)
+}
+
+/// The machine program, begun with its entry taking `params`.
+fn begun(
+    program: &barb::Program,
+    entry: barb::FnId,
+    params: &NamedParams,
+) -> (Program, FunctionId) {
+    let borrowed: Vec<_> = params
+        .iter()
+        .map(|(name, class)| (name.as_str(), *class))
+        .collect();
+    Program::new_with_params(program.name(program.function(entry).name), &borrowed)
 }
 
 /// Parameters by name and class, in order.
@@ -528,6 +536,34 @@ enum Storage {
 
 /// The leaves every sequence is held as, which open every leaf pool.
 const SEQUENCE_LEAVES: [Class; 3] = [Class::Buffer, Class::Word, Class::Word];
+
+/// A sequence whose length range analysis knows outright, with that length
+/// as its length leaf, a constant whose class says so: asking whether an
+/// index is within it, or how many a drop leaves, is then answered here
+/// rather than asked. A length known only to lie in a range is left a word:
+/// converting it to a class saying so costs more where it is read than the
+/// questions it answers save.
+fn counted(b: &mut super::Builder, held: Held, count: barb::Bounds) -> Held {
+    let Held::Flat { leaves, values } = &held else {
+        return held;
+    };
+    if *leaves != sequence_run() || count.high != Some(count.low) {
+        return held;
+    }
+    let len = b.constant(Class::Held(count), count.low);
+    Held::Flat {
+        leaves: *leaves,
+        values: [values[0], values[1], len].as_slice().into(),
+    }
+}
+
+/// Whether `index` is surely below `len`: the most it can be is less than
+/// the least `len` can be, so asking would answer yes every time.
+fn below(b: &super::Builder, index: ValueId, len: ValueId) -> bool {
+    let most = b.class(index).facts().and_then(|facts| facts.high);
+    let least = b.class(len).facts().map(|facts| facts.low);
+    matches!((most, least), (Some(most), Some(least)) if most < least)
+}
 
 /// The run [`SEQUENCE_LEAVES`] occupy.
 fn sequence_run() -> barb::Range {
@@ -1137,8 +1173,16 @@ fn reachable(
 ) -> impl Iterator<Item = barb::Arm> + '_ {
     program.arms(arms).iter().copied().filter(move |arm| {
         match barb::type_shape(program, program.ctor(arm.ctor).owner) {
-            barb::TypeShape::Natural { empty, .. } if arm.ctor == empty => bounds.low == 0,
-            barb::TypeShape::Natural { .. } => bounds.high != Some(0),
+            // A number's bounds are what it counts to, and a sequence's how
+            // many elements it holds: nought is the empty arm's alone.
+            barb::TypeShape::Natural { empty, .. } | barb::TypeShape::Sequence { empty, .. }
+                if arm.ctor == empty =>
+            {
+                bounds.low == 0
+            }
+            barb::TypeShape::Natural { .. } | barb::TypeShape::Sequence { .. } => {
+                bounds.high != Some(0)
+            }
             // What the tier above found a value's constructor can be, the
             // same for a sum whose constructors carry something as for one
             // whose do not: an arm for one it cannot be is never taken, and
@@ -1151,7 +1195,6 @@ fn reachable(
             | barb::TypeShape::Unit { .. }
             | barb::TypeShape::Wrapper { .. }
             | barb::TypeShape::Product { .. }
-            | barb::TypeShape::Sequence { .. }
             | barb::TypeShape::Spine { .. } => true,
         }
     })
@@ -1957,7 +2000,7 @@ impl Lowering<'_> {
                 } else {
                     params.to_vec()
                 };
-                let mut locals = self.parameters(id, &params);
+                let mut locals = self.parameters(b, id, &params);
                 let mut statics = vec![None; locals.len()];
                 let answer = self.body(b, body, &mut locals, &mut statics);
                 returned(b, answer, &destination)
@@ -2062,7 +2105,7 @@ impl Lowering<'_> {
         let defined = machine.try_define(into, |b, params| {
             let mut lowered = Ok(());
             b.loop_(params, &[], |b, state| {
-                let mut locals = self.parameters(id, state);
+                let mut locals = self.parameters(b, id, state);
                 let mut statics = vec![None; locals.len()];
                 let answer = self.body(b, body, &mut locals, &mut statics);
                 lowered = returned(b, answer, destination);
@@ -2090,7 +2133,7 @@ impl Lowering<'_> {
         // it goes back to once this one is left.
         let outer = self.looping.replace(Some((id, tails)));
         let left = b.loop_(args, returns, |b, state| {
-            let mut locals = self.parameters(id, state);
+            let mut locals = self.parameters(b, id, state);
             let mut statics = vec![None; locals.len()];
             match self.body(b, body, &mut locals, &mut statics) {
                 Answer::Value(held) => {
@@ -2126,7 +2169,12 @@ impl Lowering<'_> {
     /// The source parameters, as the machine ones hold them. Erased and
     /// unused parameters take no machine slot and a flat product takes one
     /// per leaf; the rest match in order.
-    fn parameters(&self, id: barb::FnId, params: &[ValueId]) -> Vec<Option<Held>> {
+    fn parameters(
+        &self,
+        b: &mut super::Builder,
+        id: barb::FnId,
+        params: &[ValueId],
+    ) -> Vec<Option<Held>> {
         let mut taken = params.iter().copied();
         self.barb
             .params(id)
@@ -2141,7 +2189,7 @@ impl Lowering<'_> {
                         .iter()
                         .map(|_| taken.next().expect("a parameter"))
                         .collect();
-                    Held::of(carried, &values)
+                    counted(b, Held::of(carried, &values), *bounds)
                 })
             })
             .collect()
@@ -2158,7 +2206,9 @@ impl Lowering<'_> {
         for &binding in self.barb.bindings(body.bindings) {
             let static_value = self.propagate_static(binding, statics);
             match self.expr(b, binding, locals, statics) {
-                Answer::Value(value) => locals.push(Some(value)),
+                Answer::Value(value) => {
+                    locals.push(Some(counted(b, value, self.facts.held(binding))));
+                }
                 Answer::Nothing => locals.push(None),
                 // A body leaves where its bindings do: nothing after this
                 // one is reached, so nothing after it is lowered.
@@ -2780,16 +2830,21 @@ impl Lowering<'_> {
         let fields = self.element_leaves(b, (push, element), value, locals);
         let shape = self.element_shape(b, push, element);
         let index = Self::skipped(b, Self::scalar(locals, count), (len, None));
-        let within = b.compare(Relation::Less, index, len);
-        let written = b.if_(
-            within,
-            &[Class::Buffer, Class::Word],
-            |b| {
-                let written = b.buffer_replace((buffer, first, len), index, shape, &fields);
-                b.yield_(&written);
-            },
-            |b| b.yield_(&[buffer, first]),
-        );
+        let sequence = (buffer, first, len);
+        let written = if below(b, index, len) {
+            b.buffer_replace(sequence, index, shape, &fields).to_vec()
+        } else {
+            let within = b.compare(Relation::Less, index, len);
+            b.if_(
+                within,
+                &[Class::Buffer, Class::Word],
+                |b| {
+                    let written = b.buffer_replace(sequence, index, shape, &fields);
+                    b.yield_(&written);
+                },
+                |b| b.yield_(&[buffer, first]),
+            )
+        };
         Held::Flat {
             leaves: sequence_run(),
             values: [written[0], written[1], len].as_slice().into(),
@@ -2805,6 +2860,7 @@ impl Lowering<'_> {
         (len, known): (ValueId, Option<u64>),
     ) -> ValueId {
         let most = b.class(count).facts().and_then(|facts| facts.high);
+        let known = known.or_else(|| b.class(len).facts().map(|facts| facts.low));
         if let (Some(most), Some(known)) = (most, known)
             && most <= known
         {

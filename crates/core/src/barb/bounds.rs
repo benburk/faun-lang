@@ -553,6 +553,7 @@ fn walk(
         program,
         assumed,
         operations: &recognised.operations,
+        sequences: &recognised.sequences,
         results: &held.results,
         fields: &held.fields,
         built: Vec::new(),
@@ -580,9 +581,15 @@ fn walk(
 /// down from a large constant, would otherwise be walked once for every
 /// number it can reach.
 fn settle(held: &mut Option<Bounds>, found: Bounds, round: usize) -> bool {
-    let Some(before) = *held else {
-        *held = Some(found);
-        return true;
+    // Nothing yet, held or found, is no bound to have moved: the first
+    // thing found is what is held, however late it is found.
+    let before = match *held {
+        Some(before) if !before.is_nothing() => before,
+        _ => {
+            let changed = *held != Some(found);
+            *held = Some(found);
+            return changed;
+        }
     };
     if found.within(before) {
         return false;
@@ -635,6 +642,7 @@ struct FunctionWalk<'a> {
     program: &'a Program,
     assumed: &'a Assumed,
     operations: &'a [Option<super::Operation>],
+    sequences: &'a [Option<SequenceOperation>],
     results: &'a [Option<Bounds>],
     /// What each field was built with so far, and what this walk builds.
     fields: &'a [Option<Bounds>],
@@ -776,9 +784,12 @@ impl FunctionWalk<'_> {
             .iter()
             .map(|atom| self.scope[atom.0.index()])
             .collect();
-        let answer = match self.operations.get(called.index()).copied().flatten() {
-            Some(op) => operation(self.program, op, held[0], held[1]),
-            None => self.results[called.index()].unwrap_or(Bounds::NOTHING),
+        let operation_of = self.operations.get(called.index()).copied().flatten();
+        let sequence_of = self.sequences.get(called.index()).copied().flatten();
+        let answer = match (operation_of, sequence_of) {
+            (Some(op), _) => operation(self.program, op, held[0], held[1]),
+            (None, Some(op)) => self.sequence(op, &held),
+            (None, None) => self.results[called.index()].unwrap_or(Bounds::NOTHING),
         };
         let answer = self.claimed(called, args, answer);
         self.calls.push((called, held));
@@ -791,6 +802,29 @@ impl FunctionWalk<'_> {
         } else {
             answer
         }
+    }
+
+    /// How many elements a recognized sequence operation answers, or its
+    /// length: worked out here from what its operands hold, as arithmetic
+    /// is, rather than from its definition, which is answered for every
+    /// call at once. Replacing keeps a length, appending adds one, putting
+    /// one before another adds theirs, dropping takes the count away and
+    /// taking keeps the fewer.
+    fn sequence(&self, op: SequenceOperation, held: &[Bounds]) -> Bounds {
+        let counted = match op {
+            SequenceOperation::Length | SequenceOperation::Replace => held[0],
+            SequenceOperation::Append => held[0].up(),
+            SequenceOperation::ReverseOnto | SequenceOperation::Prepend => held[0].plus(held[1]),
+            SequenceOperation::Drop => held[0].monus(held[1]),
+            SequenceOperation::Take => fewer(held[0], held[1]),
+        };
+        let length = self.assumed.length.unwrap_or(Bounds::ANY);
+        // On a way nothing reaches, what any length can be: a definition
+        // handed only that is still handed a length, which a word holds.
+        if counted.is_nothing() {
+            return length;
+        }
+        counted.and(length)
     }
 
     /// Record what a known value holds in each field, all the way down. A
@@ -1006,6 +1040,22 @@ impl FunctionWalk<'_> {
                     })
                 }));
         }
+    }
+}
+
+/// The fewer of two counts, each anywhere in its bounds.
+fn fewer(a: Bounds, b: Bounds) -> Bounds {
+    if a.is_nothing() || b.is_nothing() {
+        return Bounds::NOTHING;
+    }
+    let high = match (a.high, b.high) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(high), None) | (None, Some(high)) => Some(high),
+        (None, None) => None,
+    };
+    Bounds {
+        low: a.low.min(b.low),
+        high,
     }
 }
 
