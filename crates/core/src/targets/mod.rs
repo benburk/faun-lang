@@ -164,6 +164,9 @@ pub trait Target: fmt::Debug {
         // What legalization wrote -- offsets from known sizes, steps by
         // known strides -- is worked out again with the word's width known.
         let prepared = crate::ir::optimize(&prepared);
+        // Each loop then asks whether it is done where it goes round.
+        let prepared = crate::ir::rotate(&prepared);
+        crate::ir::validate(&prepared).map_err(|error| format!("after rotating loops: {error}"))?;
         self.accepts(&prepared)?;
         Ok(prepared)
     }
