@@ -273,6 +273,13 @@ two types -- so nothing infers a provider or an effect from the display name.
 `optimize(program)` runs a small fixed schedule after validation:
 
 1. Structural normalization: substitute local aliases, without expanding calls.
+   It also floats a one-arm match, as reading a record's field is, over the rest
+   of its body, so a record read several times is taken apart once. Inlining
+   prices each callee before it begins, so this is what lets it price a helper
+   by what copying it costs rather than by how it was written: without this
+   stage a helper reading several fields looks several times its size, the
+   per-definition budget runs out sooner, and less is inlined, which leaves a
+   smaller program that does more calling.
 2. Building forward: a walk answering `[f(x), *walk(rest)]`, or its list so
    beside a state, carries what it has built and appends each element, so it
    calls itself only in tail position.
