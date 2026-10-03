@@ -98,25 +98,25 @@ Attribute : [
   height(value) -> HtmlAttribute("height", value)
 
   disabled : Attribute
-  disabled() -> HtmlBooleanAttribute("disabled")
+  disabled = HtmlBooleanAttribute("disabled")
 
   checked : Attribute
-  checked() -> HtmlBooleanAttribute("checked")
+  checked = HtmlBooleanAttribute("checked")
 
   selected : Attribute
-  selected() -> HtmlBooleanAttribute("selected")
+  selected = HtmlBooleanAttribute("selected")
 
   required : Attribute
-  required() -> HtmlBooleanAttribute("required")
+  required = HtmlBooleanAttribute("required")
 
   autofocus : Attribute
-  autofocus() -> HtmlBooleanAttribute("autofocus")
+  autofocus = HtmlBooleanAttribute("autofocus")
 
   multiple : Attribute
-  multiple() -> HtmlBooleanAttribute("multiple")
+  multiple = HtmlBooleanAttribute("multiple")
 
   hidden : Attribute
-  hidden() -> HtmlBooleanAttribute("hidden")
+  hidden = HtmlBooleanAttribute("hidden")
 )
 
 Html : [
@@ -133,7 +133,7 @@ Html : [
   fragment(children) -> HtmlFragment(children)
 
   empty : Html
-  empty() -> HtmlFragment([])
+  empty = HtmlFragment([])
 
   dangerously_raw : Str -> Html
   dangerously_raw(value) -> HtmlRaw(value)
@@ -376,37 +376,37 @@ Html : [
   template_with(attributes, children) -> HtmlElement("template", attributes, children)
 
   meta : Html
-  meta() -> HtmlVoidElement("meta", [])
+  meta = HtmlVoidElement("meta", [])
   meta_with : List(Attribute) -> Html
   meta_with(attributes) -> HtmlVoidElement("meta", attributes)
 
   link : Html
-  link() -> HtmlVoidElement("link", [])
+  link = HtmlVoidElement("link", [])
   link_with : List(Attribute) -> Html
   link_with(attributes) -> HtmlVoidElement("link", attributes)
 
   input : Html
-  input() -> HtmlVoidElement("input", [])
+  input = HtmlVoidElement("input", [])
   input_with : List(Attribute) -> Html
   input_with(attributes) -> HtmlVoidElement("input", attributes)
 
   img : Html
-  img() -> HtmlVoidElement("img", [])
+  img = HtmlVoidElement("img", [])
   img_with : List(Attribute) -> Html
   img_with(attributes) -> HtmlVoidElement("img", attributes)
 
   br : Html
-  br() -> HtmlVoidElement("br", [])
+  br = HtmlVoidElement("br", [])
   br_with : List(Attribute) -> Html
   br_with(attributes) -> HtmlVoidElement("br", attributes)
 
   hr : Html
-  hr() -> HtmlVoidElement("hr", [])
+  hr = HtmlVoidElement("hr", [])
   hr_with : List(Attribute) -> Html
   hr_with(attributes) -> HtmlVoidElement("hr", attributes)
 
   source : Html
-  source() -> HtmlVoidElement("source", [])
+  source = HtmlVoidElement("source", [])
   source_with : List(Attribute) -> Html
   source_with(attributes) -> HtmlVoidElement("source", attributes)
 )
@@ -464,8 +464,8 @@ html_escape_bytes([byte, *rest]) -> html_escape_bytes(rest).prepend(byte)
 
 expect Html.text("<script>alert('x')</script>").render() == "&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"
 expect Html.div_with([Attribute.class("card")], [Html.text("A&B")]).render() == "<div class=\"card\">A&amp;B</div>"
-expect Html.input_with([Attribute.type("checkbox"), Attribute.checked()]).render() == "<input type=\"checkbox\" checked>"
-expect Html.div([Html.text("before"), Html.br(), Html.text("after")]).render() == "<div>before<br>after</div>"
+expect Html.input_with([Attribute.type("checkbox"), Attribute.checked]).render() == "<input type=\"checkbox\" checked>"
+expect Html.div([Html.text("before"), Html.br, Html.text("after")]).render() == "<div>before<br>after</div>"
 expect Html.a_with([Attribute.href("/?q=\"x\"&next=<y>")], [Html.text("go")]).render() == "<a href=\"/?q=&quot;x&quot;&amp;next=&lt;y&gt;\">go</a>"
 expect Html.fragment([
   Html.text("safe <text>"),

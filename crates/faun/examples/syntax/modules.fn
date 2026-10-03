@@ -4,5 +4,5 @@
 
 import geometry.shapes {Shape.*, unit_square: unit}
 
-expect unit().area() == 1
+expect unit.area() == 1
 expect Square(3).area() == 9 & Oblong(2, 5).area() == 10

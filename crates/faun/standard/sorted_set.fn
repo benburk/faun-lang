@@ -11,11 +11,11 @@ export {SortedSet}
 SortedSet(k) : SortedMap(k, Bool).(
   # The empty set.
   empty : SortedSet(k)
-  empty() -> SortedSet(SortedMap.empty())
+  empty = SortedSet(SortedMap.empty)
 
   # The set whose only member is `key`.
   singleton : k -> SortedSet(k) where k.cmp : (k, k) -> Order
-  singleton(key) -> SortedSet(SortedMap.empty().insert(key, True))
+  singleton(key) -> SortedSet(SortedMap.empty.insert(key, True))
 
   # Whether `set` has no members.
   is_empty : SortedSet(k) -> Bool
@@ -64,5 +64,5 @@ SortedSet(k) : SortedMap(k, Bool).(
   # The set whose members are the items of `list`, later duplicates winning as
   # repeated `insert` calls would.
   of_list : List(k) -> SortedSet(k) where k.cmp : (k, k) -> Order
-  of_list(items) -> items.fold(empty(), insert)
+  of_list(items) -> items.fold(empty, insert)
 )

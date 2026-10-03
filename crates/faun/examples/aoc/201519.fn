@@ -134,7 +134,7 @@ search(reverse_rules, limits, Queued(_, steps, text, left, right), seen, Succ(bu
 fabricate_with_limit : (List(Rule), List(U8), Nat) -> Result(Nat, [Unfabricable, SearchLimit])
 fabricate_with_limit(rules, medicine, limit) -> (
   limits = bounds(rules)
-  initial = offer(medicine, 0, limits, {work: Empty, seen: Map.empty()})
+  initial = offer(medicine, 0, limits, {work: Empty, seen: Map.empty})
   reversed = rules.map(|Rule(from, to)| Rule(to, from))
   search(reversed, limits, initial.work, initial.seen, limit)
 )
@@ -156,12 +156,12 @@ app(input) -> (
 )
 
 example_rules : Str
-example_rules() -> "H => HO\nH => OH\nO => HH\n\n"
+example_rules = "H => HO\nH => OH\nO => HH\n\n"
 
-expect part1(example_rules().concat("HOH\n")) == Ok(4)
-expect part1(example_rules().concat("HOHOHO")) == Ok(7)
+expect part1(example_rules.concat("HOH\n")) == Ok(4)
+expect part1(example_rules.concat("HOHOHO")) == Ok(7)
 expect (
-  {rules, medicine} = parse(example_rules().concat("HOH")).ok_or({rules: [], medicine: []})
+  {rules, medicine} = parse(example_rules.concat("HOH")).ok_or({rules: [], medicine: []})
   products(rules, medicine) == Set.of_list(["HOOH", "HOHO", "OHOH", "HHHH"].map(|text| text.to_utf8()))
 )
 
@@ -199,12 +199,12 @@ expect part1("H => O => H\n\nH").is_err()
 expect part1("H => O\n\nH O").is_err()
 
 fabrication_rules : Str
-fabrication_rules() -> "e => H\ne => O\n".concat(example_rules())
+fabrication_rules = "e => H\ne => O\n".concat(example_rules)
 
-expect part2(fabrication_rules().concat("HOH")) == Ok(3)
-expect part2(fabrication_rules().concat("HOHOHO")) == Ok(6)
-expect part2(fabrication_rules().concat("e")) == Ok(0)
-expect part2(fabrication_rules().concat("H")) == Ok(1)
+expect part2(fabrication_rules.concat("HOH")) == Ok(3)
+expect part2(fabrication_rules.concat("HOHOHO")) == Ok(6)
+expect part2(fabrication_rules.concat("e")) == Ok(0)
+expect part2(fabrication_rules.concat("H")) == Ok(1)
 
 # A first reduction can be a dead end or lead to a longer route. Neither
 # rule order nor a preference for short molecules proves an optimal answer.

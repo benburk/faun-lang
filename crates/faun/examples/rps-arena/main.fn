@@ -48,11 +48,11 @@ Bot : [
 # already a value, so the lineup reads the same for all of them.
 lineup : Nat -> List(Bot)
 lineup(seed) -> [
-  AlwaysRock(AlwaysRock.start()),
-  BeatLast(BeatLast.start()),
-  Rotate(Rotate.start()),
+  AlwaysRock(AlwaysRock.start),
+  BeatLast(BeatLast.start),
+  Rotate(Rotate.start),
   RandomBot(RandomBot.start(seed)),
-  Freq(Freq.start())
+  Freq(Freq.start)
 ]
 
 Settings = {seed: Nat, rounds: Nat}
@@ -61,17 +61,17 @@ Settings = {seed: Nat, rounds: Nat}
 configure : List(Str) -> Result(Settings, Str)
 configure([_, seed]) -> settings(seed, "100")
 configure([_, seed, rounds]) -> settings(seed, rounds)
-configure(_) -> Err(usage())
+configure(_) -> Err(usage)
 
 settings : (Str, Str) -> Result(Settings, Str)
 settings(seed, rounds) -> (
-  seed_nat = Nat.from_str(seed).err_as(usage())?
-  rounds_nat = Nat.from_str(rounds).err_as(usage())?
+  seed_nat = Nat.from_str(seed).err_as(usage)?
+  rounds_nat = Nat.from_str(rounds).err_as(usage)?
   Ok({seed: seed_nat, rounds: rounds_nat})
 )
 
 usage : Str
-usage() -> "usage: rps-arena SEED [ROUNDS]"
+usage = "usage: rps-arena SEED [ROUNDS]"
 
 report : Settings -> Str
 report({seed, rounds}) -> (
@@ -111,26 +111,26 @@ finish!(host, Err(message)) -> (
 
 # Two bots of different types meet without any union: beat_last opens with
 # Rock against a wall of Rock, draws once, then wins every round.
-expect play(AlwaysRock.start(), BeatLast.start(), 5) == {left: 0, right: 4, draws: 1}
+expect play(AlwaysRock.start, BeatLast.start, 5) == {left: 0, right: 4, draws: 1}
 
 # Against the cycle, beat_last's answer to the previous throw is exactly the
 # cycle's next throw, so they draw forever.
-expect play(BeatLast.start(), Rotate.start(), 30) == {left: 0, right: 0, draws: 30}
+expect play(BeatLast.start, Rotate.start, 30) == {left: 0, right: 0, draws: 30}
 
 # The union plays the same game as the bare types.
 expect play(
-  AlwaysRock(AlwaysRock.start()),
-  BeatLast(BeatLast.start()),
+  AlwaysRock(AlwaysRock.start),
+  BeatLast(BeatLast.start),
   5
 ) == {left: 0, right: 4, draws: 1}
 
 # The counter reads a wall of Rock after one round and answers Paper from
 # then on.
-expect play(AlwaysRock.start(), Freq.start(), 5) == {left: 0, right: 4, draws: 1}
+expect play(AlwaysRock.start, Freq.start, 5) == {left: 0, right: 4, draws: 1}
 
 # Against the cycle the tally keeps tying, so the counter keeps answering
 # Rock's counter and meets each throw of the cycle in turn.
-expect play(Freq.start(), Rotate.start(), 6) == {left: 1, right: 2, draws: 3}
+expect play(Freq.start, Rotate.start, 6) == {left: 1, right: 2, draws: 3}
 
 expect tournament(lineup(1), 3).map(|score| score.name) == [
   "always_rock",
@@ -142,5 +142,5 @@ expect tournament(lineup(1), 3).map(|score| score.name) == [
 
 # Two bots of one name keep a line each: a wall of Rock against itself draws
 # every round, and both lines count it.
-expect tournament([AlwaysRock.start(), AlwaysRock.start()], 3).map(|score| score.draws)
+expect tournament([AlwaysRock.start, AlwaysRock.start], 3).map(|score| score.draws)
   == [3, 3]

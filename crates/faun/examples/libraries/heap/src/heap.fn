@@ -17,7 +17,7 @@ export {Heap}
 Heap(k, v) : List((k, v)).(
   # The heap holding nothing.
   empty : Heap(k, v)
-  empty() -> Heap([])
+  empty = Heap([])
 
   is_empty : Heap(k, v) -> Bool
   is_empty(Heap(entries)) -> entries.is_empty()
@@ -55,7 +55,7 @@ Heap(k, v) : List((k, v)).(
 
   # The heap of `entries`, each `(key, value)`.
   of_list : List((k, v)) -> Heap(k, v) where k.cmp : (k, k) -> Order
-  of_list(entries) -> push_all(empty(), entries)
+  of_list(entries) -> push_all(empty, entries)
 
   # The entries cheapest first: every pop, in turn.
   to_list : Heap(k, v) -> List((k, v)) where k.cmp : (k, k) -> Order
@@ -143,9 +143,9 @@ put([head, *tail], Succ(index), value) -> [head, *put(tail, index, value)]
 
 # An empty heap, at a type: one written bare has nothing to say which.
 nothing : Heap(Nat, Str)
-nothing() -> Heap.empty()
+nothing = Heap.empty
 
-expect nothing().pop().is_err() & nothing().peek() == Err(Empty) & nothing().is_empty()
+expect nothing.pop().is_err() & nothing.peek() == Err(Empty) & nothing.is_empty()
 expect (
   heap = Heap.of_list([(5, "e"), (1, "a"), (4, "d"), (2, "b"), (3, "c")])
   heap.len() == 5 & heap.peek() == Ok((1, "a"))
@@ -168,11 +168,11 @@ expect (
 # adds the next two, so the 2 that 0 adds comes out after the 1, and so
 # does the 2 that 1 adds.
 expect (
-  seen = Heap.empty().push(0, {}).drain([], |order, key, _| ([key, *order], following(key)))
+  seen = Heap.empty.push(0, {}).drain([], |order, key, _| ([key, *order], following(key)))
   seen.reverse() == [0, 1, 2, 2, 3, 3, 3, 4, 4]
 )
 expect Heap.of_list([(3, {}), (1, {}), (2, {})]).drain([], |order, key, _| ([key, *order], [])) == [3, 2, 1]
-expect Heap.empty().push_all([(2, 'b'), (1, 'a')]).to_list() == [(1, 'a'), (2, 'b')]
+expect Heap.empty.push_all([(2, 'b'), (1, 'a')]).to_list() == [(1, 'a'), (2, 'b')]
 
 # The entries a key below three adds: the next two keys.
 following : Nat -> List((Nat, {}))

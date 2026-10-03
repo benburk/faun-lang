@@ -31,7 +31,7 @@ Slot(k, v) : [Filled(k, v), Removed].(
 Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), size: Nat}.(
   # The empty map.
   empty : Map(k, v)
-  empty() -> seeded(0)
+  empty = seeded(0)
 
   # The empty map whose hashing begins from `seed`. Two maps with different
   # seeds file the same keys under different digests and behave alike in
@@ -128,7 +128,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   of_list : List((k, v)) -> Map(k, v) where
     k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
-  of_list(entries) -> entries.fold(empty(), |built, (key, value)| insert(built, key, value))
+  of_list(entries) -> entries.fold(empty, |built, (key, value)| insert(built, key, value))
 
   # Whether `map` and `other` bind the same keys to equal values, in
   # whatever order either was built: every entry of one is found in the

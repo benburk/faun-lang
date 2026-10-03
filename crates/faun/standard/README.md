@@ -205,7 +205,7 @@ Generic code that uses a method has a `where` bound, as in Ori: structural,
 met by any type having the member, with no trait and no runtime dictionary.
 A signature writes them after `where`, each member on a line of its own:
 `sum : List(a) -> a where` over `a.zero : a` and `a.add : (a, a) -> a`, a
-value member called on the type as `a.zero()`; an unsigned definition
+value member named on the type as `a.zero`; an unsigned definition
 infers them, so `double(x) -> x.mul(2)` serves every type with a `mul`. Where
 every method a generic receiver could have shares a shape, that shape is
 context before any default, so the `2` is whatever `x` is, built through its

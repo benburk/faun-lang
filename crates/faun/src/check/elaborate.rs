@@ -214,7 +214,10 @@ impl Elaborator<'_> {
                         self.facts.readings[&dual.site];
                     t::ExprKind::Constructor(name)
                 }
-                h::ExprKind::Associated(..) => unreachable!("an associated member is only called"),
+                // `a.zero`: a bound's member that takes no parameters.
+                h::ExprKind::Associated(..) => {
+                    t::ExprKind::Method(self.target(site, false), Vec::new())
+                }
                 h::ExprKind::Number(_) | h::ExprKind::Decimal(..) => {
                     unreachable!("every numeral was elaborated or deferred")
                 }

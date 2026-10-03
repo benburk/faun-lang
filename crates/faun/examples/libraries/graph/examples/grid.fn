@@ -47,20 +47,20 @@ forward_steps(maze, cell) -> (
 # 4 # # 7
 # 8 9 # 11
 maze : Maze
-maze() -> Maze({width: 4, height: 3, walls: [5, 6, 10]})
+maze = Maze({width: 4, height: 3, walls: [5, 6, 10]})
 
-expect maze().edges_from(4) == [{target: 0, weight: 1}, {target: 8, weight: 1}]
-expect bfs(maze(), 0) == [0, 1, 4, 2, 8, 3, 9, 7, 11]
-expect dfs(maze(), 8) == [8, 9, 4, 0, 1, 2, 3, 7, 11]
+expect maze.edges_from(4) == [{target: 0, weight: 1}, {target: 8, weight: 1}]
+expect bfs(maze, 0) == [0, 1, 4, 2, 8, 3, 9, 7, 11]
+expect dfs(maze, 8) == [8, 9, 4, 0, 1, 2, 3, 7, 11]
 # Round the wall the long way: seven steps from one bottom corner to the
 # other, along the top.
 expect (
-  paths = dijkstra(maze(), 8)
+  paths = dijkstra(maze, 8)
   paths.cost(11) == Ok(7) & paths.path(11) == Ok([8, 4, 0, 1, 2, 3, 7, 11])
 )
 # A wall is a cell no step enters.
-expect dijkstra(maze(), 0).cost(5) == Err(Unreachable)
+expect dijkstra(maze, 0).cost(5) == Err(Unreachable)
 # Every cell but a wall is reached from the first, and each wall, which no
 # step enters, is a group of its own.
-expect components(maze()) == [[0, 1, 2, 3, 4, 7, 8, 9, 11], [5], [6], [10]]
-expect maze().edges_from(5) == []
+expect components(maze) == [[0, 1, 2, 3, 4, 7, 8, 9, 11], [5], [6], [10]]
+expect maze.edges_from(5) == []

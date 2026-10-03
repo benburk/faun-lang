@@ -25,7 +25,7 @@ F32 : U32.(
   # pattern it arrived as: a codec that writes floats as bits gets every
   # number back exactly and every NaN back canonical.
   to_bits : F32 -> U32
-  to_bits(F32(word)) -> U32.of_nat(observe(binary32(), U32.to_nat(word)))
+  to_bits(F32(word)) -> U32.of_nat(observe(binary32, U32.to_nat(word)))
 
   # `-x`: the sign bit flipped. The standard's sign operations act on the
   # bit alone, whatever the pattern: a zero changes sign, and so does a NaN,
@@ -45,42 +45,42 @@ F32 : U32.(
   # The NaN. Every invalid operation answers it, and every NaN pattern reads
   # as it.
   nan : F32
-  nan() -> F32(0x7fc00000)
+  nan = F32(0x7fc00000)
 
-  # Positive infinity; `infinity().neg()` is the negative one.
+  # Positive infinity; `infinity.neg()` is the negative one.
   infinity : F32
-  infinity() -> F32(0x7f800000)
+  infinity = F32(0x7f800000)
 
-  # Positive zero. As a nullary method it satisfies a `where a.zero : a`
+  # Positive zero. As a value of the type it satisfies a `where a.zero : a`
   # bound, so a list of floats sums.
   zero : F32
-  zero() -> F32(0)
+  zero = F32(0)
 
   # The largest finite value, `3.4028235e38`.
   largest : F32
-  largest() -> F32(0x7f7fffff)
+  largest = F32(0x7f7fffff)
 
   # The smallest positive normal value, `2^-126`.
   smallest_normal : F32
-  smallest_normal() -> F32(0x00800000)
+  smallest_normal = F32(0x00800000)
 
   # The smallest positive value, the subnormal `2^-149`.
   smallest_subnormal : F32
-  smallest_subnormal() -> F32(0x00000001)
+  smallest_subnormal = F32(0x00000001)
 
   # The gap between one and the next value up, `2^-23`.
   epsilon : F32
-  epsilon() -> F32(0x34000000)
+  epsilon = F32(0x34000000)
 
   # The nearest value to π, `3.1415927`.
   pi : F32
-  pi() -> F32(0x40490fdb)
+  pi = F32(0x40490fdb)
 
   # The nearest value to `n`, correctly rounded; past the largest, infinity.
   # A conversion only: a plain numeral is never a float, so `3` in a float
   # position is refused and `3.0` is how a float is written (numbers.md).
   of_nat : Nat -> F32
-  of_nat(n) -> wrap32(round_pack(binary32(), False, n, 450))
+  of_nat(n) -> wrap32(round_pack(binary32, False, n, 450))
 
   # A word's value, exactly when it fits the precision and otherwise
   # correctly rounded.
@@ -116,7 +116,7 @@ F32 : U32.(
   # here; and not `Int.from_f32`, because only this module can read the
   # fields it is computed from.
   integer_part : F32 -> Result(Int, [NotFinite])
-  integer_part(x) -> integer(binary32(), unpack32(x))
+  integer_part(x) -> integer(binary32, unpack32(x))
 
   # `x` rounded to an integer value, toward zero.
   trunc : F32 -> F32
@@ -144,48 +144,48 @@ F32 : U32.(
   # numeral form of `from_str`: every float numeral carries a point, so `3`
   # never arrives here and `3.0` does.
   of_decimal : (Nat, Nat) -> F32
-  of_decimal(digits, scale) -> wrap32(from_decimal(binary32(), False, digits, scale, False, 0))
+  of_decimal(digits, scale) -> wrap32(from_decimal(binary32, False, digits, scale, False, 0))
 
   # The shortest decimal that reads back as `x`: the fewest digits whose
   # nearest binary32 is `x`, and among those the closest to it. The text is
   # always a float literal: `1.0`, `0.1`, `-0.0`, `NaN`, `Infinity`, and the
   # exponent form `1.5e21` or `1.0e-7` below `0.0001` and from `1.0e16`.
   to_str : F32 -> Str
-  to_str(x) -> Str.from_ascii(text(binary32(), unpack32(x))).ok_or("")
+  to_str(x) -> Str.from_ascii(text(binary32, unpack32(x))).ok_or("")
 
   # `x` with `places` digits after the point: the exact value rounded once,
   # to nearest with ties to even, as `%.*f` prints it. `to_fixed(2)` writes
   # `1234.5678` as `1234.57`, `-0.001` as `-0.00`, and a large value in
   # full. No point follows the integer part when `places` is zero.
   to_fixed : (F32, Nat) -> Str
-  to_fixed(x, places) -> Str.from_ascii(fixed(binary32(), unpack32(x), places)).ok_or("")
+  to_fixed(x, places) -> Str.from_ascii(fixed(binary32, unpack32(x), places)).ok_or("")
 
   # `x` in scientific notation with `places` digits after the point:
   # `to_exponent(2)` writes `1234.5678` as `1.23e3`. The exponent is spelled
   # as `to_str` spells it.
   to_exponent : (F32, Nat) -> Str
-  to_exponent(x, places) -> Str.from_ascii(exponent(binary32(), unpack32(x), places)).ok_or("")
+  to_exponent(x, places) -> Str.from_ascii(exponent(binary32, unpack32(x), places)).ok_or("")
 
   # `x` at `count` significant digits, at least one, keeping trailing
   # zeros: `to_precision(3)` writes `0.5` as `0.500`, `1234.5678` as
   # `1.23e3`, and `0.00012345` as `0.00012`. Plain from `0.0001` up to
   # `10^count`, and in scientific notation outside that.
   to_precision : (F32, Nat) -> Str
-  to_precision(x, count) -> Str.from_ascii(precision(binary32(), unpack32(x), count)).ok_or("")
+  to_precision(x, count) -> Str.from_ascii(precision(binary32, unpack32(x), count)).ok_or("")
 
   # The nearest binary32 to a decimal in the notation `to_str` writes, also
   # with `E`, a `+` in the exponent, and digits on one side of the point
   # only. Correctly rounded, so every text `to_str` writes reads back as the
   # value it came from.
   from_str : Str -> Result(F32, [Malformed])
-  from_str("NaN") -> Ok(nan())
-  from_str("Infinity") -> Ok(infinity())
-  from_str("-Infinity") -> Ok(neg(infinity()))
-  from_str(s) -> wrap32_result(parse_sign(binary32(), s.to_utf8()))
+  from_str("NaN") -> Ok(nan)
+  from_str("Infinity") -> Ok(infinity)
+  from_str("-Infinity") -> Ok(neg(infinity))
+  from_str(s) -> wrap32_result(parse_sign(binary32, s.to_utf8()))
 
   # `x + y`, correctly rounded.
   add : (F32, F32) -> F32
-  add(x, y) -> wrap32(add_unpacked(binary32(), unpack32(x), unpack32(y)))
+  add(x, y) -> wrap32(add_unpacked(binary32, unpack32(x), unpack32(y)))
 
   # `x - y`, which the standard defines as `x + (-y)`, zeros and NaN included.
   sub : (F32, F32) -> F32
@@ -193,19 +193,19 @@ F32 : U32.(
 
   # `x * y`, correctly rounded.
   mul : (F32, F32) -> F32
-  mul(x, y) -> wrap32(mul_unpacked(binary32(), unpack32(x), unpack32(y)))
+  mul(x, y) -> wrap32(mul_unpacked(binary32, unpack32(x), unpack32(y)))
 
   # `x * y + z` with one rounding of the exact result.
   fma : (F32, F32, F32) -> F32
-  fma(x, y, z) -> wrap32(fma_unpacked(binary32(), unpack32(x), unpack32(y), unpack32(z)))
+  fma(x, y, z) -> wrap32(fma_unpacked(binary32, unpack32(x), unpack32(y), unpack32(z)))
 
   # `x / y`, correctly rounded.
   div : (F32, F32) -> F32
-  div(x, y) -> wrap32(div_unpacked(binary32(), unpack32(x), unpack32(y)))
+  div(x, y) -> wrap32(div_unpacked(binary32, unpack32(x), unpack32(y)))
 
   # The square root of `x`, correctly rounded.
   sqrt : F32 -> F32
-  sqrt(x) -> wrap32(sqrt_unpacked(binary32(), unpack32(x)))
+  sqrt(x) -> wrap32(sqrt_unpacked(binary32, unpack32(x)))
 
   # The total order of IEEE 754 clause 5.10 over values with one NaN: `-Inf`,
   # the negatives by magnitude, `-0`, `+0`, the positives, `+Inf`, NaN. Every
@@ -217,7 +217,7 @@ F32 : U32.(
   # differ, and the NaN equals itself; `numeric_equals` is the hardware's.
   cmp : (F32, F32) -> Order
   cmp(F32(a), F32(b)) ->
-    Nat.cmp(rank(binary32(), U32.to_nat(a)), rank(binary32(), U32.to_nat(b)))
+    Nat.cmp(rank(binary32, U32.to_nat(a)), rank(binary32, U32.to_nat(b)))
 
   # `hasher` with the bit pattern of `x` fed: values that are `equals`
   # under the total order hash alike, which is the only agreement a hash
@@ -247,7 +247,7 @@ F32 : U32.(
 
   # Whether the sign bit is set: true of `-0`, never of the NaN.
   sign_bit : F32 -> Bool
-  sign_bit(F32(word)) -> observe(binary32(), U32.to_nat(word)) >= 0x80000000
+  sign_bit(F32(word)) -> observe(binary32, U32.to_nat(word)) >= 0x80000000
 
   is_nan : F32 -> Bool
   is_nan(x) -> magnitude32(x) > 0x7f800000
@@ -277,14 +277,14 @@ wrap32_result(Ok(pattern)) -> Ok(wrap32(pattern))
 wrap32_result(Err(Malformed)) -> Err(Malformed)
 
 unpack32 : F32 -> Unpacked
-unpack32(F32(word)) -> unpack(binary32(), U32.to_nat(word))
+unpack32(F32(word)) -> unpack(binary32, U32.to_nat(word))
 
 integral32 : (F32, Rounding) -> F32
 integral32(x, rule) -> rounded32(unpack32(x), rule, x)
 
 rounded32 : (Unpacked, Rounding, F32) -> F32
 rounded32(Finite(sign, mantissa, field), rule, _) if field < 150 ->
-  wrap32(rounded(binary32(), sign, mantissa, field, rule))
+  wrap32(rounded(binary32, sign, mantissa, field, rule))
 rounded32(_, _, x) -> x
 
 # `x` when it is exactly `i`; otherwise `Err(Inexact)`.

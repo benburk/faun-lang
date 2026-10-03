@@ -7,7 +7,7 @@ export {Nat.*}
 
 Nat : [Zero, Succ(Nat)].(
   zero : Nat
-  zero() -> 0
+  zero = 0
 
   # A numeral of a generic type is built through its type's `of_nat`, and a
   # natural is already one.

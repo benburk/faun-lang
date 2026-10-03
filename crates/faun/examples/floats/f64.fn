@@ -20,15 +20,15 @@ expect 9007199254740992.0.add(1.0) == 9007199254740992.0   # a tie past 2^53, to
 expect 9007199254740992.0.add(3.0) == 9007199254740996.0
 expect F64.to_bits(0.1) == 0x3fb999999999999a
 expect F64.fma(f64(0x3ff0000000000001), f64(0x3ff0000000000001), f64(0xbff0000000000002)).to_bits() == 0x3970000000000000
-expect F64.infinity().sub(F64.infinity()).to_bits() == 0x7ff8000000000000
-expect F64.nan() == F64.nan()
-expect F64.infinity() < F64.nan()
+expect F64.infinity.sub(F64.infinity).to_bits() == 0x7ff8000000000000
+expect F64.nan == F64.nan
+expect F64.infinity < F64.nan
 expect f64(0xfff0000000000001).to_bits() == 0x7ff8000000000000   # a NaN pattern reads canonical
-expect F64.largest().to_str() == "1.7976931348623157e308"
-expect F64.smallest_normal().to_str() == "2.2250738585072014e-308"
-expect F64.smallest_subnormal().to_str() == "5.0e-324"
-expect F64.epsilon().to_bits() == 0x3cb0000000000000
-expect 1.0e308.mul(10.0) == F64.infinity()
+expect F64.largest.to_str() == "1.7976931348623157e308"
+expect F64.smallest_normal.to_str() == "2.2250738585072014e-308"
+expect F64.smallest_subnormal.to_str() == "5.0e-324"
+expect F64.epsilon.to_bits() == 0x3cb0000000000000
+expect 1.0e308.mul(10.0) == F64.infinity
 expect 5.0e-324.div(2.0) == 0.0
 expect F64.from_str("0.1") == Ok(0.1)
 expect F64.from_str(0.1.add(0.2).to_str()) == Ok(0.1.add(0.2))
@@ -55,11 +55,11 @@ expect F32.of_u32(0xffffffff) == 4294967296.0
 expect F32.of_u8(200) == 200.0
 
 # π is correctly rounded in each width and reads back as its digits.
-expect F64.pi().to_bits() == 0x400921fb54442d18
-expect F64.pi().to_str() == "3.141592653589793"
-expect F32.pi().to_bits() == 0x40490fdb
-expect F32.pi().to_str() == "3.1415927"
-expect F64.pi() == 3.141592653589793
+expect F64.pi.to_bits() == 0x400921fb54442d18
+expect F64.pi.to_str() == "3.141592653589793"
+expect F32.pi.to_bits() == 0x40490fdb
+expect F32.pi.to_str() == "3.1415927"
+expect F64.pi == 3.141592653589793
 
 # Text at a chosen precision rounds the exact value once, ties to even, so
 # `0.125` at two places is `0.12` and `2.5` at none is `2`.
@@ -72,8 +72,8 @@ expect (-0.001).to_fixed(2) == "-0.00"
 expect (-0.0).to_fixed(1) == "-0.0"
 expect 5.0e-324.to_fixed(3) == "0.000"
 expect F64.of_nat(2.pow(70)).to_fixed(0) == "1180591620717411303424"
-expect F64.nan().to_fixed(2) == "NaN"
-expect F64.infinity().neg().to_fixed(2) == "-Infinity"
+expect F64.nan.to_fixed(2) == "NaN"
+expect F64.infinity.neg().to_fixed(2) == "-Infinity"
 expect 1234.5678.to_exponent(2) == "1.23e3"
 expect 0.000123.to_exponent(1) == "1.2e-4"
 expect 9.999.to_exponent(2) == "1.00e1"
@@ -90,4 +90,4 @@ expect 7.0.to_precision(0) == "7"
 expect 0.0.to_precision(3) == "0.00"
 expect F32.to_fixed(0.1, 10) == "0.1000000015"
 expect F32.to_exponent(0.1, 3) == "1.000e-1"
-expect F32.to_precision(F32.largest(), 4) == "3.403e38"
+expect F32.to_precision(F32.largest, 4) == "3.403e38"

@@ -51,7 +51,7 @@ nat_number : Nat -> Json
 nat_number(v) -> Number(Int.of_nat(v))
 
 user_text : Str
-user_text() -> "{\"name\":\"Ada\",\"age\":37,\"balance\":-4,"
+user_text = "{\"name\":\"Ada\",\"age\":37,\"balance\":-4,"
   .concat("\"active\":true,\"scores\":[3,5]}")
 
 decode_user : Str -> Result(User, _)
@@ -66,27 +66,27 @@ app(input) -> (
   decode_user(stdin).map_ok(|user| user.to_json().to_str())
 )
 
-expect decode_user(user_text()) == Ok(User({
+expect decode_user(user_text) == Ok(User({
   display_name: "Ada", age: 37, balance: -4, active: True, scores: [3, 5]
 }))
 # Decoding then re-encoding round-trips to the original text.
-expect decode_user(user_text()).map_ok(|user| user.to_json().to_str()) == Ok(user_text())
+expect decode_user(user_text).map_ok(|user| user.to_json().to_str()) == Ok(user_text)
 
 # Missing defaulted fields are accepted.
 minimal_text : Str
-minimal_text() -> "{\"name\":\"A\",\"age\":1}"
-expect decode_user(minimal_text()) == Ok(User({
+minimal_text = "{\"name\":\"A\",\"age\":1}"
+expect decode_user(minimal_text) == Ok(User({
   display_name: "A", age: 1, balance: 0, active: False, scores: []
 }))
 
 # Strict object decoding rejects unknown and duplicate members.
 unknown_text : Str
-unknown_text() -> "{\"name\":\"A\",\"age\":1,\"x\":0}"
-expect decode_user(unknown_text()).is_err()
+unknown_text = "{\"name\":\"A\",\"age\":1,\"x\":0}"
+expect decode_user(unknown_text).is_err()
 
 duplicate_text : Str
-duplicate_text() -> "{\"name\":\"A\",\"name\":\"B\",\"age\":1}"
-expect decode_user(duplicate_text()).is_err()
+duplicate_text = "{\"name\":\"A\",\"name\":\"B\",\"age\":1}"
+expect decode_user(duplicate_text).is_err()
 
 # Integers are arbitrary precision; fractions and exponents are intentionally
 # outside this first library version.
@@ -160,9 +160,9 @@ expect Json.from_str("\"warm\"").map_ok(rejects_level).ok_or(False)
 
 # UTF-16 escapes, including a surrogate pair, decode to UTF-8.
 unicode_text : Str
-unicode_text() -> "\"\\u0041\\uD83D\\uDE00\""
+unicode_text = "\"\\u0041\\uD83D\\uDE00\""
 decoded_smiley : Json
-decoded_smiley() -> Json.String(Str.from_utf8(['A', 0xf0, 0x9f, 0x98, 0x80]).ok_or(""))
-expect Json.from_str(unicode_text()) == Ok(decoded_smiley())
+decoded_smiley = Json.String(Str.from_utf8(['A', 0xf0, 0x9f, 0x98, 0x80]).ok_or(""))
+expect Json.from_str(unicode_text) == Ok(decoded_smiley)
 
 main!(host) -> host.run_stdin!(app)

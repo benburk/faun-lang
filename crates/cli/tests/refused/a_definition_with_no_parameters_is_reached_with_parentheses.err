@@ -1,5 +1,0 @@
-error: a definition with no parameters is a value, reached as `name()`
-  --> a_definition_with_no_parameters_is_reached_with_parentheses.fn:10:38
-   |
-10 | main!(host) -> host.exit!(U8.of_nat([zero].len()))
-   |                                      ^^^^

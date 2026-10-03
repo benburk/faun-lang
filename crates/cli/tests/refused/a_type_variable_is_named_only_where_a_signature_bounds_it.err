@@ -1,5 +1,5 @@
 error: `a` names a type only in a signature's `where` bounds
  --> a_type_variable_is_named_only_where_a_signature_bounds_it.fn:3:14
   |
-3 | nought(_) -> a.zero()
-  |              ^^^^^^^^
+3 | nought(_) -> a.zero
+  |              ^^^^^^

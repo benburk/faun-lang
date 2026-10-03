@@ -17,7 +17,7 @@ export {SortedMap}
 SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   # The empty map.
   empty : SortedMap(k, v)
-  empty() -> Tip
+  empty = Tip
 
   # Whether `map` has no entries.
   is_empty : SortedMap(k, v) -> Bool

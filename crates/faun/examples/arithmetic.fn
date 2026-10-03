@@ -1,5 +1,5 @@
 natural_arithmetic : Nat
-natural_arithmetic() -> (9 / 2) + (9 % 2) + (9 / 0) + (9 % 0)
+natural_arithmetic = (9 / 2) + (9 % 2) + (9 / 0) + (9 % 0)
 
 signed_arithmetic : Nat
-signed_arithmetic() -> ((-7 / 3) + (-7 % 3) + (-7 / 0) + (-7 % 0)).abs()
+signed_arithmetic = ((-7 / 3) + (-7 % 3) + (-7 / 0) + (-7 % 0)).abs()

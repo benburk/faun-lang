@@ -1016,7 +1016,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "numbers.fn",
-            "export {Nat.*}\nNat : [Zero, Succ(Nat)]\nsecret() -> Zero\n",
+            "export {Nat.*}\nNat : [Zero, Succ(Nat)]\nsecret = Zero\n",
         );
         let entry = fixture.write("main.fn", "import numbers {Nat.*}\nid(x) -> Succ(x)\n");
         let loaded = load_program(&entry, &fixture.empty_prelude(), &fixture.host()).unwrap();
@@ -1030,8 +1030,8 @@ mod tests {
     #[test]
     fn private_names_cannot_be_imported() {
         let fixture = Fixture::new();
-        fixture.write("hidden.fn", "secret() -> 0\n");
-        let entry = fixture.write("main.fn", "import hidden {secret}\nmain() -> secret()\n");
+        fixture.write("hidden.fn", "secret = 0\n");
+        let entry = fixture.write("main.fn", "import hidden {secret}\nmain = secret\n");
         let error = load_program(&entry, &fixture.empty_prelude(), &fixture.host()).unwrap_err();
         assert!(error.message.contains("not exported"));
     }

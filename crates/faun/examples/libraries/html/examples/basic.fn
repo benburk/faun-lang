@@ -21,7 +21,7 @@ page(name) -> Html.html_with([Attribute.lang("en")], [
         Html.a_with([Attribute.href("https://ori-lang.org/?from=html&safe=true")], [Html.text("Ori")]),
         Html.text(".")
       ]),
-      Html.input_with([Attribute.type("checkbox"), Attribute.checked()])
+      Html.input_with([Attribute.type("checkbox"), Attribute.checked])
     ])
   ])
 ])

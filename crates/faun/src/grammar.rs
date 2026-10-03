@@ -309,10 +309,12 @@ impl Parser<'_> {
                         Ok(Line::Typed(head, self.typed()?))
                     }
                     Kind::KwIf | Kind::Arrow => self.clause(head),
-                    Kind::Eq => Err(SyntaxError::new(
-                        self.tokens[self.at].span(),
-                        "a binding belongs to a block: a body of several lines is `-> (` … `)`",
-                    )),
+                    Kind::Eq => {
+                        self.bump();
+                        let value = self.expr()?;
+                        self.no_binding_after()?;
+                        Ok(Line::Value(head, value))
+                    }
                     Kind::Newline | Kind::Eof | Kind::RParen => Err(SyntaxError::new(
                         head.span,
                         "this line belongs to no definition: a body of several lines is \
@@ -321,6 +323,7 @@ impl Parser<'_> {
                     _ => {
                         self.note("`->`");
                         self.note("`:`");
+                        self.note("`=`");
                         Err(self.fail())
                     }
                 }

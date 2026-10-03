@@ -22,13 +22,13 @@ Ansi : [AnsiNamespace].(
     text,
     [Style.foreground(colors.fg), Style.background(colors.bg)],
     ""
-  ).concat(ansi_reset_style())
+  ).concat(ansi_reset_style)
 
   reset_style : Str
-  reset_style() -> ansi_reset_style()
+  reset_style = ansi_reset_style
 
   reset_terminal : Str
-  reset_terminal() -> ansi_escape().concat("c")
+  reset_terminal = ansi_escape.concat("c")
 )
 
 ColorName : [
@@ -45,55 +45,55 @@ Color : [
   ColorHex(U32)
 ].(
   default : Color
-  default() -> ColorDefault
+  default = ColorDefault
 
   black : Color
-  black() -> ColorStandard(ColorBlack)
+  black = ColorStandard(ColorBlack)
 
   red : Color
-  red() -> ColorStandard(ColorRed)
+  red = ColorStandard(ColorRed)
 
   green : Color
-  green() -> ColorStandard(ColorGreen)
+  green = ColorStandard(ColorGreen)
 
   yellow : Color
-  yellow() -> ColorStandard(ColorYellow)
+  yellow = ColorStandard(ColorYellow)
 
   blue : Color
-  blue() -> ColorStandard(ColorBlue)
+  blue = ColorStandard(ColorBlue)
 
   magenta : Color
-  magenta() -> ColorStandard(ColorMagenta)
+  magenta = ColorStandard(ColorMagenta)
 
   cyan : Color
-  cyan() -> ColorStandard(ColorCyan)
+  cyan = ColorStandard(ColorCyan)
 
   white : Color
-  white() -> ColorStandard(ColorWhite)
+  white = ColorStandard(ColorWhite)
 
   bright_black : Color
-  bright_black() -> ColorBright(ColorBlack)
+  bright_black = ColorBright(ColorBlack)
 
   bright_red : Color
-  bright_red() -> ColorBright(ColorRed)
+  bright_red = ColorBright(ColorRed)
 
   bright_green : Color
-  bright_green() -> ColorBright(ColorGreen)
+  bright_green = ColorBright(ColorGreen)
 
   bright_yellow : Color
-  bright_yellow() -> ColorBright(ColorYellow)
+  bright_yellow = ColorBright(ColorYellow)
 
   bright_blue : Color
-  bright_blue() -> ColorBright(ColorBlue)
+  bright_blue = ColorBright(ColorBlue)
 
   bright_magenta : Color
-  bright_magenta() -> ColorBright(ColorMagenta)
+  bright_magenta = ColorBright(ColorMagenta)
 
   bright_cyan : Color
-  bright_cyan() -> ColorBright(ColorCyan)
+  bright_cyan = ColorBright(ColorCyan)
 
   bright_white : Color
-  bright_white() -> ColorBright(ColorWhite)
+  bright_white = ColorBright(ColorWhite)
 
   indexed : U8 -> Color
   indexed(index) -> ColorIndexed(index)
@@ -118,43 +118,43 @@ Style : [
   StyleBackground(Color)
 ].(
   reset : Style
-  reset() -> StyleReset
+  reset = StyleReset
 
   bold : Style
-  bold() -> StyleBold(True)
+  bold = StyleBold(True)
 
   bold_off : Style
-  bold_off() -> StyleBold(False)
+  bold_off = StyleBold(False)
 
   faint : Style
-  faint() -> StyleFaint(True)
+  faint = StyleFaint(True)
 
   faint_off : Style
-  faint_off() -> StyleFaint(False)
+  faint_off = StyleFaint(False)
 
   italic : Style
-  italic() -> StyleItalic(True)
+  italic = StyleItalic(True)
 
   italic_off : Style
-  italic_off() -> StyleItalic(False)
+  italic_off = StyleItalic(False)
 
   underline : Style
-  underline() -> StyleUnderline(True)
+  underline = StyleUnderline(True)
 
   underline_off : Style
-  underline_off() -> StyleUnderline(False)
+  underline_off = StyleUnderline(False)
 
   strikethrough : Style
-  strikethrough() -> StyleStrikethrough(True)
+  strikethrough = StyleStrikethrough(True)
 
   strikethrough_off : Style
-  strikethrough_off() -> StyleStrikethrough(False)
+  strikethrough_off = StyleStrikethrough(False)
 
   invert : Style
-  invert() -> StyleInvert(True)
+  invert = StyleInvert(True)
 
   invert_off : Style
-  invert_off() -> StyleInvert(False)
+  invert_off = StyleInvert(False)
 
   foreground : Color -> Style
   foreground(color) -> StyleForeground(color)
@@ -188,22 +188,22 @@ Control : [
   ControlScrollDown(Nat)
 ].(
   screen_size : Control
-  screen_size() -> ControlScreenSize
+  screen_size = ControlScreenSize
 
   cursor_position : Control
-  cursor_position() -> ControlCursorPosition
+  cursor_position = ControlCursorPosition
 
   cursor_save : Control
-  cursor_save() -> ControlCursorSave
+  cursor_save = ControlCursorSave
 
   cursor_restore : Control
-  cursor_restore() -> ControlCursorRestore
+  cursor_restore = ControlCursorRestore
 
   cursor_show : Control
-  cursor_show() -> ControlCursorShow
+  cursor_show = ControlCursorShow
 
   cursor_hide : Control
-  cursor_hide() -> ControlCursorHide
+  cursor_hide = ControlCursorHide
 
   cursor_up : Nat -> Control
   cursor_up(amount) -> ControlCursorUp(amount)
@@ -230,22 +230,22 @@ Control : [
   cursor_column(column) -> ControlCursorColumn(column)
 
   erase_display_to_end : Control
-  erase_display_to_end() -> ControlEraseDisplayToEnd
+  erase_display_to_end = ControlEraseDisplayToEnd
 
   erase_display_to_start : Control
-  erase_display_to_start() -> ControlEraseDisplayToStart
+  erase_display_to_start = ControlEraseDisplayToStart
 
   erase_display : Control
-  erase_display() -> ControlEraseDisplayAll
+  erase_display = ControlEraseDisplayAll
 
   erase_line_to_end : Control
-  erase_line_to_end() -> ControlEraseLineToEnd
+  erase_line_to_end = ControlEraseLineToEnd
 
   erase_line_to_start : Control
-  erase_line_to_start() -> ControlEraseLineToStart
+  erase_line_to_start = ControlEraseLineToStart
 
   erase_line : Control
-  erase_line() -> ControlEraseLineAll
+  erase_line = ControlEraseLineAll
 
   scroll_up : Nat -> Control
   scroll_up(amount) -> ControlScrollUp(amount)
@@ -255,13 +255,13 @@ Control : [
 )
 
 ansi_escape : Str
-ansi_escape() -> Str.from_utf8([27]).ok_or("")
+ansi_escape = Str.from_utf8([27]).ok_or("")
 
 ansi_csi : Str -> Str
-ansi_csi(code) -> ansi_escape().concat("[").concat(code)
+ansi_csi(code) -> ansi_escape.concat("[").concat(code)
 
 ansi_reset_style : Str
-ansi_reset_style() -> ansi_csi("0m")
+ansi_reset_style = ansi_csi("0m")
 
 ansi_style : (Str, List(Style), Str) -> Str
 ansi_style(text, [], output) -> output.concat(text)
@@ -366,7 +366,7 @@ expect Ansi.escape(Control.cursor_up(3)).to_utf8() == [27, '[', '3', 'A']
 expect Ansi.escape(Control.cursor_to(12, 40)).to_utf8() == [
   27, '[', '1', '2', ';', '4', '0', 'H'
 ]
-expect Ansi.style("warning", [Style.bold(), Style.foreground(Color.yellow())])
+expect Ansi.style("warning", [Style.bold, Style.foreground(Color.yellow)])
   .to_utf8() == [
     27, '[', '1', 'm',
     27, '[', '3', '3', 'm',
@@ -381,4 +381,4 @@ expect Ansi.color("ok", {fg: Color.rgb(1, 2, 3), bg: Color.indexed(17)})
   ]
 expect Ansi.style("red", [Style.foreground(Color.hex(0xff0000))])
   .to_utf8() == [27, '[', '3', '8', ';', '2', ';', '2', '5', '5', ';', '0', ';', '0', 'm', 'r', 'e', 'd']
-expect Ansi.reset_terminal().to_utf8() == [27, 'c']
+expect Ansi.reset_terminal.to_utf8() == [27, 'c']

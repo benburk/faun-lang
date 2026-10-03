@@ -9,7 +9,7 @@ import throw {Throw.*}
 
 Freq : {rock: Nat, paper: Nat, scissors: Nat}.(
   start : Freq
-  start() -> Freq({rock: 0, paper: 0, scissors: 0})
+  start = Freq({rock: 0, paper: 0, scissors: 0})
 
   name : Freq -> Str
   name(_) -> "freq"

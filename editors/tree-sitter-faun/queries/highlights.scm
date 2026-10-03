@@ -96,6 +96,9 @@
   head: (call_expression
     function: (identifier) @function))
 
+(value
+  name: (identifier) @constant)
+
 (member_constraint
   member: (identifier) @function.method)
 

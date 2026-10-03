@@ -15,10 +15,10 @@ expect area(5, 4) == 6
 
 # The answer may begin on the line after the arrow.
 answer : Nat
-answer() ->
+answer =
   42
 
-expect answer() == 42
+expect answer == 42
 
 # An operator at a line's end carries it on.
 total : (Nat, Nat, Nat) -> Nat
@@ -88,9 +88,9 @@ expect (
 
 # Blank lines, and none, between items.
 a : Nat
-a() -> 1
+a = 1
 b : Nat
-b() -> a() + 1
+b = a + 1
 
 
-expect b() == 2
+expect b == 2

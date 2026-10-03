@@ -545,8 +545,10 @@ const READ: &[&str] = &[
     "f(x) -> [(x), (x, y), _, 1.5, -2, *xs]\n",
     "f(x) -> x\n  .map(g)\n  .filter(h) +\n  1\n",
     "f([x, *r], {a, *}) if x.p(|y| y) ^ !a ->\n  r\nf(_, _) if\n  (a, b) == c -> 0\n",
-    "T : [A, B].(\n  f(A) if g() -> 1\n  f(_) -> 0\n)\n",
+    "T : [A, B].(\n  f(A) if g -> 1\n  f(_) -> 0\n)\n",
     "",
+    "x = 1\nT : Nat.(\n  zero = 0\n)\n",
+    "table =\n  [1, 2]\n",
 ];
 
 /// Programs both refuse.
@@ -565,7 +567,7 @@ const REFUSED: &[&str] = &[
     "f(x) if x = 1 -> x\n",
     "f(x) -> x if x\n",
     "f : Nat if x -> Nat\n",
-    "x = 1\n",
+    "x = 1 = 2\n",
     "f(x) -> x\n  x\n",
     "f(x) ->\n  y = x\n  y\n",
     "f(x) -> (\n  y = x\n)\n",

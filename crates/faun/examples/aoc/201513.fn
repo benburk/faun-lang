@@ -44,7 +44,7 @@ parse_rules(input) -> input.trim().lines().try_map(parse_rule)
 # Anyone named on either side of a rule is at the table, including a guest
 # only ever spoken about: seating them is what makes their silence a gap.
 guests : List(Rule) -> List(Str)
-guests(rules) -> rules.fold(Set.empty(), add_guest).to_list()
+guests(rules) -> rules.fold(Set.empty, add_guest).to_list()
 
 add_guest : (Set(Str), Rule) -> Set(Str)
 add_guest(seen, Rule(subject, neighbour, _)) -> seen.insert(subject).insert(neighbour)
@@ -53,7 +53,7 @@ add_guest(seen, Rule(subject, neighbour, _)) -> seen.insert(subject).insert(neig
 # both orders. Reading a rule adds to what the pair already holds, so the
 # second line finds the first waiting and the fold needs no second pass.
 regard : List(Rule) -> Map((Str, Str), Int)
-regard(rules) -> rules.fold(Map.empty(), add_regard)
+regard(rules) -> rules.fold(Map.empty, add_regard)
 
 add_regard : (Map((Str, Str), Int), Rule) -> Map((Str, Str), Int)
 add_regard(table, Rule(subject, neighbour, feeling)) -> (
@@ -68,7 +68,7 @@ add_regard(table, Rule(subject, neighbour, feeling)) -> (
 # and the seating loop below can then be arithmetic with no failure in it.
 unspoken : List(Rule) -> List((Str, Str))
 unspoken(rules) -> (
-  stated = rules.fold(Set.empty(), add_stated)
+  stated = rules.fold(Set.empty, add_stated)
   everyone = guests(rules)
   everyone.cross(everyone).filter(|pair| unheard(pair, stated))
 )
@@ -142,7 +142,7 @@ app(input) -> (
 )
 
 example : Str
-example() -> Str.join(["Alice would gain 54 happiness units by sitting next to Bob.",
+example = Str.join(["Alice would gain 54 happiness units by sitting next to Bob.",
   "Alice would lose 79 happiness units by sitting next to Carol.",
   "Alice would lose 2 happiness units by sitting next to David.",
   "Bob would gain 83 happiness units by sitting next to Alice.",
@@ -156,18 +156,18 @@ example() -> Str.join(["Alice would gain 54 happiness units by sitting next to B
   "David would gain 41 happiness units by sitting next to Carol."], "\n")
 
 # The puzzle's arrangement, David beside Alice beside Bob beside Carol.
-expect part1(example()) == Ok(330)
+expect part1(example) == Ok(330)
 # Its four pairs are 137, 53, 96, and 44; you take the seat worth 44.
-expect part2(example()) == Ok(286)
+expect part2(example) == Ok(286)
 
 pair : Str
-pair() -> Str.join(["A would gain 3 happiness units by sitting next to B.",
+pair = Str.join(["A would gain 3 happiness units by sitting next to B.",
   "B would gain 4 happiness units by sitting next to A."], "\n")
 
 # Two guests at a round table are neighbours twice over, once on each side,
 # so their one pair is counted twice; seating yourself uncounts it once.
-expect part1(pair()) == Ok(14)
-expect part2(pair()) == Ok(7)
+expect part1(pair) == Ok(14)
+expect part2(pair) == Ok(7)
 
 # One side of a pair stated and not the other. The table cannot tell this
 # from a pair worth 3, which is exactly why the rules are checked first.

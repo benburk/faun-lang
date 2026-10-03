@@ -23,11 +23,12 @@
 file              = [ line ] { NEWLINE [ line ] } EOF ;
 
 (* A keyword's line, a type's, or an expression and what follows it. After
-   a type's name, and its parameters, `=` names a type. *)
+   a type's name, and its parameters, `=` names a type; after a value's
+   name, `=` gives the value. *)
 line              = directive
                   | "expect" expr
                   | TYPE [ CALL_PAREN [ arguments ] ")" ] after-type
-                  | untyped-operand expr-tail ( ":" typed | clause ) ;
+                  | untyped-operand expr-tail ( ":" typed | clause | "=" expr ) ;
 after-type        = "=" ( constraints | type )
                   | ":" typed ;
 clause            = [ "if" expr ] "->" expr ;

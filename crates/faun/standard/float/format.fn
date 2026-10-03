@@ -41,10 +41,10 @@ export {
 Format = {precision: Nat, hidden: Nat, field_max: Nat, offset: Nat, scale: Nat, sign: Nat}
 
 binary32 : Format
-binary32() -> {precision: 24, hidden: 0x800000, field_max: 255, offset: 150, scale: 450, sign: 0x80000000}
+binary32 = {precision: 24, hidden: 0x800000, field_max: 255, offset: 150, scale: 450, sign: 0x80000000}
 
 binary64 : Format
-binary64() ->
+binary64 =
   {
     precision: 53,
     hidden: 0x10000000000000,

@@ -176,7 +176,7 @@ fn with_dependency(name: &str, entry: &str) -> Package {
 fn a_package_imports_the_root_of_one_it_depends_on() {
     let package = with_dependency(
         "dependency",
-        "package {\n  shapes: \"vendor/shapes/shapes\",\n}\n\nimport shapes {double_square}\n\neight : Nat\neight() -> double_square(2)\n\nexpect eight() == 8\n",
+        "package {\n  shapes: \"vendor/shapes/shapes\",\n}\n\nimport shapes {double_square}\n\neight : Nat\neight = double_square(2)\n\nexpect eight == 8\n",
     );
     faun::lower_to_barb(&package.entry(), &X86_64Linux).unwrap();
     let tests = faun::lower_tests_to_barb(&package.entry(), &X86_64Linux).unwrap();

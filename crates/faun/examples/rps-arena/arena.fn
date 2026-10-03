@@ -28,7 +28,7 @@ judge(_, _) -> Draw
 Tally = {left: Nat, right: Nat, draws: Nat}
 
 empty : Tally
-empty() -> {left: 0, right: 0, draws: 0}
+empty = {left: 0, right: 0, draws: 0}
 
 # The same match seen from the right side of the table.
 flip : Tally -> Tally
@@ -67,9 +67,9 @@ round(table) -> (
 # One match of `rounds` rounds: both players open, that round is scored, and
 # the table is played `rounds - 1` more times.
 play : (a, b, Nat) -> Tally where Player(a), Player(b)
-play(_, _, 0) -> empty()
+play(_, _, 0) -> empty
 play(a, b, rounds) -> (
-  opening = score({left: seat(a), right: seat(b), tally: empty()})
+  opening = score({left: seat(a), right: seat(b), tally: empty})
   last = (rounds - 1).times(opening, round)
   last.tally
 )

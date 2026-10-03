@@ -133,7 +133,7 @@ fn binding_chain(count: usize) -> String {
 /// the last is a tree of `2^depth` naturals. A checker that shares a type
 /// rather than copying it pays for `depth`, not `2^depth`.
 fn doubling_types(depth: usize) -> String {
-    let mut source = String::from("pair(a) -> (a, a)\n\np0() -> 0\n");
+    let mut source = String::from("pair(a) -> (a, a)\n\np0 = 0\n");
     for i in 1..=depth {
         let before = i - 1;
         writeln!(source, "p{i}() -> pair(p{before}())").unwrap();
@@ -146,7 +146,7 @@ fn wide_record(count: usize) -> String {
     let fields: Vec<String> = (0..count).map(|i| format!("f{i}: {i}")).collect();
     let reads: Vec<String> = (0..count).map(|i| format!("r.f{i}")).collect();
     format!(
-        "record() -> {{{}}}\n\nsum : Nat\nsum() ->\n  r = record()\n  {}\n",
+        "record = {{{}}}\n\nsum : Nat\nsum =\n  r = record\n  {}\n",
         fields.join(", "),
         reads.join(" + ")
     )
@@ -173,7 +173,7 @@ fn method_chain(count: usize) -> String {
 /// A list literal of `count` numerals, each given its type.
 fn list_literal(count: usize) -> String {
     let items: Vec<String> = (0..count).map(|i| i.to_string()).collect();
-    format!("numbers : List(U32)\nnumbers() -> [{}]\n", items.join(", "))
+    format!("numbers : List(U32)\nnumbers = [{}]\n", items.join(", "))
 }
 
 /// An application writing one line `count` times, each its own statement.

@@ -266,7 +266,8 @@ each thing, and the classic algorithms as short and plain as their Python.
 
 - **One way to write each kind of definition.** At the top level, a
   function with parameters is clauses, and a value is a binding, `pi =
-  3.14159`, worked out once, in place of a definition of no parameters.
+  3.14159`, in place of a definition of no parameters: built, as
+  [values](../approved/values.md).
   In a body, a local function is a binding of a lambda, `walk = |stack|
   …`, which may call itself. Clauses stay the top-level form: a third of
   the corpus's 1,974 definitions have several clauses, each of which would

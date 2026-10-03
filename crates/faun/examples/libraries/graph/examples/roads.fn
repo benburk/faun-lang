@@ -10,23 +10,23 @@ package {
 import graph {UnGraph, bfs, dfs, components, dijkstra}
 
 towns : List(Str)
-towns() -> ["Ashby", "Bexley", "Crewe", "Dover", "Exeter", "Fenwick"]
+towns = ["Ashby", "Bexley", "Crewe", "Dover", "Exeter", "Fenwick"]
 
 # Fenwick has no road: its node is there only because the graph is given
 # a node for each town.
 roads : UnGraph(Nat)
-roads() -> (
+roads = (
   lengths = [(0, 1, 7), (0, 2, 9), (0, 3, 14), (1, 2, 10), (2, 3, 2), (3, 4, 9)]
-  UnGraph.from_weighted_edges(towns().len(), lengths)
+  UnGraph.from_weighted_edges(towns.len(), lengths)
 )
 
 # The town at `node`, or its number where the caller has no name for it.
 name : Nat -> Str
-name(node) -> towns().get_or(node, node.to_str())
+name(node) -> towns.get_or(node, node.to_str())
 
 route : (Nat, Nat) -> Result(Str, _)
 route(from, to) -> (
-  paths = dijkstra(roads(), from)
+  paths = dijkstra(roads, from)
   cost = paths.cost(to)?
   stops = paths.path(to)?
   names = stops.map(name)
@@ -36,6 +36,6 @@ route(from, to) -> (
 expect route(0, 4) == Ok("Ashby -> Crewe -> Dover -> Exeter (20)")
 expect route(4, 0) == Ok("Exeter -> Dover -> Crewe -> Ashby (20)")
 expect route(0, 5) == Err(Unreachable)
-expect components(roads()) == [[0, 1, 2, 3, 4], [5]]
-expect bfs(roads(), 4).map(name) == ["Exeter", "Dover", "Ashby", "Crewe", "Bexley"]
-expect dfs(roads(), 0).map(name) == ["Ashby", "Bexley", "Crewe", "Dover", "Exeter"]
+expect components(roads) == [[0, 1, 2, 3, 4], [5]]
+expect bfs(roads, 4).map(name) == ["Exeter", "Dover", "Ashby", "Crewe", "Bexley"]
+expect dfs(roads, 0).map(name) == ["Ashby", "Bexley", "Crewe", "Dover", "Exeter"]

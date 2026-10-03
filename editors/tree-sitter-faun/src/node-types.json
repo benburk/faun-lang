@@ -1052,6 +1052,10 @@
         {
           "type": "type_alias",
           "named": true
+        },
+        {
+          "type": "value",
+          "named": true
         }
       ]
     }
@@ -1260,6 +1264,10 @@
         },
         {
           "type": "type_alias",
+          "named": true
+        },
+        {
+          "type": "value",
           "named": true
         }
       ]
@@ -1552,6 +1560,32 @@
           {
             "type": "-",
             "named": false
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "value",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
           }
         ]
       }

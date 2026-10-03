@@ -178,7 +178,7 @@ fn placed(expression: &Expr, passed: bool) -> Result<(), LowerError> {
     if signature.parameters.is_empty() {
         return Err(located(
             expression,
-            "a definition with no parameters is a value, reached as `name()`",
+            "a definition with no parameters is a value, reached by its name",
         ));
     }
     if !passed {

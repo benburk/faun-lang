@@ -209,7 +209,7 @@ pub struct SignatureDecl {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Constraint {
     /// `a.add : (a, a) -> a`, a method every type `a` stands for must have; or
-    /// `a.zero : a`, a value it must supply, read as `a.zero()`.
+    /// `a.zero : a`, a value it must supply, read as `a.zero`.
     Member {
         span: Span,
         variable: Name,

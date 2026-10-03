@@ -1,0 +1,5 @@
+error: `a.zero` is a value, not a function: write `a.zero`
+ --> a_value_a_bound_gives_is_not_called.fn:6:30
+  |
+6 | total(values) -> values.fold(a.zero(), |sum, value| sum + value)
+  |                              ^^^^^^^^

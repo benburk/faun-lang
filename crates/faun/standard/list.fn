@@ -111,7 +111,7 @@ List(a) : [Nil, Cons(a, List(a))].(
   sum : List(a) -> a where
     a.zero : a,
     a.add : (a, a) -> a
-  sum(values) -> values.fold(a.zero(), |total, value| total + value)
+  sum(values) -> values.fold(a.zero, |total, value| total + value)
 
   reverse : List(a) -> List(a)
   reverse(values) -> reverse_into(values, [])
@@ -207,7 +207,7 @@ List(a) : [Nil, Cons(a, List(a))].(
     k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   group_by(values, key) ->
-    Map.map_values(fold(values, Map.empty(), |table, value| gathered(table, key(value), value)), reverse)
+    Map.map_values(fold(values, Map.empty, |table, value| gathered(table, key(value), value)), reverse)
 
   # `values` cut into a quotient and a remainder: `complete` holds every
   # whole run of exactly `size` elements, in order, and `remainder` the short

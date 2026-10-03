@@ -610,7 +610,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          total : List(a) -> a where
            a.zero : a,
            a.add : (a, a) -> a
-         total(values) -> values.fold(a.zero(), |sum, value| sum.add(value))
+         total(values) -> values.fold(a.zero, |sum, value| sum.add(value))
 
          main! : Host -> []
          main!(host) -> (
@@ -677,7 +677,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          filled(key, n) -> Filled(key, n)
 
          removed : Slot(Str)
-         removed() -> Removed
+         removed = Removed
 
          bit : Bool -> Nat
          bit(b) -> b.to_nat()
@@ -686,11 +686,11 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> (
            p = Point({x: 1, y: 2})
            points = bit(p == Point({y: 2, x: 1})) + bit(p != Point({x: 1, y: 3})) * 2 + bit(p.to_str() == \"{x: 1, y: 2}\") * 4
-           slots = bit(filled(\"a\", 1) == filled(\"a\", 1)) * 8 + bit(filled(\"a\", 1) != removed()) * 16
-           ordered = bit(filled(\"a\", 2) < filled(\"b\", 1)) * 32 + bit(removed() > filled(\"z\", 9)) * 64
-           printed = bit(\"${[filled(\"a\", 1), removed()]}\" == \"[Filled(a, 1), Removed]\") * 128
-           keyed = Map.empty().insert(filled(\"a\", 1), 1).insert(removed(), 2).insert(filled(\"a\", 1), 4)
-           host.exit!(U8.of_nat(points + slots + ordered + printed - keyed.len() - keyed.get(removed()).ok_or(0) + keyed.get(filled(\"a\", 1)).ok_or(0)))
+           slots = bit(filled(\"a\", 1) == filled(\"a\", 1)) * 8 + bit(filled(\"a\", 1) != removed) * 16
+           ordered = bit(filled(\"a\", 2) < filled(\"b\", 1)) * 32 + bit(removed > filled(\"z\", 9)) * 64
+           printed = bit(\"${[filled(\"a\", 1), removed]}\" == \"[Filled(a, 1), Removed]\") * 128
+           keyed = Map.empty.insert(filled(\"a\", 1), 1).insert(removed, 2).insert(filled(\"a\", 1), 4)
+           host.exit!(U8.of_nat(points + slots + ordered + printed - keyed.len() - keyed.get(removed).ok_or(0) + keyed.get(filled(\"a\", 1)).ok_or(0)))
          )",
         255 - 2 - 2 + 4,
     ),
@@ -707,7 +707,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
            a.to_str : a -> Str
 
          total : List(a) -> a where Summable(a), Additive(a)
-         total(values) -> values.fold(a.zero(), |sum, value| sum + value)
+         total(values) -> values.fold(a.zero, |sum, value| sum + value)
 
          Tally(r) = where
            r.fold : (r, Nat, (Nat, e) -> Nat) -> Nat

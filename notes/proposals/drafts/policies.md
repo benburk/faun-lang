@@ -120,7 +120,7 @@ get : (Map(k, v, p), k) -> Result(v, [Missing]) where KeyHash(p, k)
 ```
 
 `empty`, `of_list` and their kin answer a container under `Own`, so an
-unsigned `Map.empty()` means what it means today. `empty_by(policy)` and
+unsigned `Map.empty` means what it means today. `empty_by(policy)` and
 `of_list_by(entries, policy)` take one.
 
 ### The standard policies
@@ -233,7 +233,7 @@ No grammar change, so nothing in `grammar.ebnf` or the tree-sitter grammar.
 ## Open questions
 
 - **Should an alias answer for the type it names?** With `Map(k, v) =
-  HashMap(k, v, Own)`, signatures would keep `Map(k, v)`, but `Map.empty()`
+  HashMap(k, v, Own)`, signatures would keep `Map(k, v)`, but `Map.empty`
   is refused today: an alias names a type and has no methods. Letting it
   answer for the methods of what it names would remove most of the cost to
   signatures, without new syntax.

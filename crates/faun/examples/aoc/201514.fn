@@ -71,7 +71,7 @@ compute_scores(racers, scores, second) -> (
 )
 
 race_length : Nat
-race_length() -> 2503
+race_length = 2503
 
 part1 : (Str, Nat) -> Result(Nat, _)
 part1(input, duration) -> lead(herd(input)?, duration)
@@ -83,50 +83,50 @@ app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
   racers = herd(stdin)?
-  Ok({part1: lead(racers, race_length())?, part2: points(racers, race_length())?})
+  Ok({part1: lead(racers, race_length)?, part2: points(racers, race_length)?})
 )
 
 comet : Reindeer
-comet() -> Reindeer(14, 10, 127)
+comet = Reindeer(14, 10, 127)
 
 dancer : Reindeer
-dancer() -> Reindeer(16, 11, 162)
+dancer = Reindeer(16, 11, 162)
 
 # The puzzle's narration, second by second: both fly, then Comet stops on the
 # eleventh while Dancer carries on, then both rest until the 138th.
-expect distance(comet(), 1) == 14
-expect distance(dancer(), 1) == 16
-expect distance(comet(), 10) == 140
-expect distance(comet(), 11) == 140
-expect distance(dancer(), 11) == 176
-expect distance(comet(), 137) == 140
-expect distance(comet(), 138) == 154
+expect distance(comet, 1) == 14
+expect distance(dancer, 1) == 16
+expect distance(comet, 10) == 140
+expect distance(comet, 11) == 140
+expect distance(dancer, 11) == 176
+expect distance(comet, 137) == 140
+expect distance(comet, 138) == 154
 # Dancer's second flight starts on the 174th.
-expect distance(dancer(), 173) == 176
-expect distance(dancer(), 174) == 192
+expect distance(dancer, 173) == 176
+expect distance(dancer, 174) == 192
 
 # Zero speed, zero flight, zero cycle: no distance and no division by zero.
 expect distance(Reindeer(14, 0, 0), 1000) == 0
 expect distance(Reindeer(0, 10, 127), 1000) == 0
 
 example : Str
-example() -> Str.join(["Comet can fly 14 km/s for 10 seconds, but then must rest for 127 seconds.",
+example = Str.join(["Comet can fly 14 km/s for 10 seconds, but then must rest for 127 seconds.",
   "Dancer can fly 16 km/s for 11 seconds, but then must rest for 162 seconds."], "\n")
 
 # Dancer leads early and Comet takes it back; the answer depends on when you
 # look, which is the whole of part two's complaint about part one's scoring.
-expect part1(example(), 1) == Ok(16)
-expect part1(example(), 11) == Ok(176)
-expect part2(example(), 1) == Ok(1)
+expect part1(example, 1) == Ok(16)
+expect part1(example, 11) == Ok(176)
+expect part2(example, 1) == Ok(1)
 # Through the eleventh second Dancer has led every one of them.
-expect part2(example(), 11) == Ok(11)
+expect part2(example, 11) == Ok(11)
 
 # The thousandth second, where the two scorings name different winners:
 # Comet is 64 km up the road, and Dancer has out-pointed him more than two to
 # one. Dancer's 689 and Comet's 312 come to 1001, one more than the seconds
 # raced, because for one second they were level and both were paid for it.
-expect part1(example(), 1000) == Ok(1120)
-expect part2(example(), 1000) == Ok(689)
+expect part1(example, 1000) == Ok(1120)
+expect part2(example, 1000) == Ok(689)
 
 expect part1("", 1000).is_err()
 expect parse_reindeer("Comet can fly 14 km/s for 10 seconds, but then must rest for ages.").is_err()

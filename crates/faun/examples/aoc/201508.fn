@@ -38,16 +38,16 @@ app(input) -> (
 )
 
 example : Str
-example() -> "\"\"\n\"abc\"\n\"aaa\\\"aaa\"\n\"\\x27\"\n"
+example = "\"\"\n\"abc\"\n\"aaa\\\"aaa\"\n\"\\x27\"\n"
 
 # The four published examples: decode gaps 2, 2, 3, 5; encode gaps 4, 4, 6, 5.
 expect decode_gap("\"\"".to_utf8()) + 2 == 2
 expect decode_gap("\"abc\"".to_utf8()) + 2 == 2
 expect decode_gap("\"aaa\\\"aaa\"".to_utf8()) + 2 == 3
 expect decode_gap("\"\\x27\"".to_utf8()) + 2 == 5
-expect part1(example()) == 12
+expect part1(example) == 12
 expect encode_gap("\"aaa\\\"aaa\"") == 6
-expect part2(example()) == 19
+expect part2(example) == 19
 # A literal backslash before x stays literal: not a hex escape.
 expect decode_gap("\"\\\\x27\"".to_utf8()) + 2 == 3
 

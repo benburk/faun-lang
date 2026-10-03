@@ -3,4 +3,4 @@ package {}
 export {one}
 
 one : Nat
-one() -> 1
+one = 1

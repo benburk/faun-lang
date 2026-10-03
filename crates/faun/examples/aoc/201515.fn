@@ -52,7 +52,7 @@ Totals : [Totals(Int, Int, Int, Int, Int)]
 Best : [Best(Nat, Nat, Bool)]
 
 empty_totals : Totals
-empty_totals() -> Totals(0, 0, 0, 0, 0)
+empty_totals = Totals(0, 0, 0, 0, 0)
 
 mix : (Totals, Ingredient, Nat) -> Totals
 mix(Totals(capacity, durability, flavor, texture, calories),
@@ -82,7 +82,7 @@ cookie(Totals(capacity, durability, flavor, texture, calories)) -> (
 
 score : (List(Ingredient), List(Nat)) -> (Nat, Int)
 score(pantry, amounts) -> cookie(pantry.zip(amounts)
-  .fold(empty_totals(), |totals, (ingredient, amount)| mix(totals, ingredient, amount)))
+  .fold(empty_totals, |totals, (ingredient, amount)| mix(totals, ingredient, amount)))
 
 better : (Best, Best) -> Best
 better(Best(best, diet, found_diet), Best(other, other_diet, other_found)) ->
@@ -125,7 +125,7 @@ solve(input) -> kitchen(ingredients(input)?)
 
 kitchen : List(Ingredient) -> Result(Best, [NoIngredients])
 kitchen([]) -> Err(NoIngredients)
-kitchen(pantry) -> Ok(search(pantry, 100, empty_totals()))
+kitchen(pantry) -> Ok(search(pantry, 100, empty_totals))
 
 part1 : Str -> Result(Nat, _)
 part1(input) -> (
@@ -151,27 +151,27 @@ report(Best(best, diet, True)) -> Ok({part1: best, part2: diet})
 report(Best(_, _, False)) -> Err(NoDietaryRecipe)
 
 example : Str
-example() -> Str.join([
+example = Str.join([
   "Butterscotch: capacity -1, durability -2, flavor 6, texture 3, calories 8",
   "Cinnamon: capacity 2, durability 3, flavor -2, texture -1, calories 3"
 ], "\n")
 
 example_pantry : List(Ingredient)
-example_pantry() -> ingredients(example()).ok_or([])
+example_pantry = ingredients(example).ok_or([])
 
 # The narration's 44/56 recipe has totals 68, 80, 152, and 76.
-expect ingredients(example()).is_ok()
+expect ingredients(example).is_ok()
 expect (
-  (points, _) = score(example_pantry(), [44, 56])
+  (points, _) = score(example_pantry, [44, 56])
   points == 62842880
 )
-expect part1(example()) == Ok(62842880)
+expect part1(example) == Ok(62842880)
 # At exactly 500 calories the best split is 40/60.
-expect part2(example()) == Ok(57600000)
+expect part2(example) == Ok(57600000)
 
 # A bad property can erase the product only after all ingredients contribute.
 expect (
-  (points, _) = score(example_pantry(), [100, 0])
+  (points, _) = score(example_pantry, [100, 0])
   points == 0
 )
 

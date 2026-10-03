@@ -85,6 +85,7 @@ module.exports = grammar({
       $.type_alias,
       $.signature,
       $.clause,
+      $.value,
     ),
 
     // Directives.
@@ -158,6 +159,14 @@ module.exports = grammar({
     ),
 
     guard: $ => seq('if', $._expression),
+
+    // After a value's name, `=` gives the value: a definition of no
+    // parameters.
+    value: $ => seq(
+      field('name', $.identifier),
+      '=',
+      field('value', $._expression),
+    ),
 
     // A type's methods: lines in `.( )`.
     methods: $ => seq('.(', lines($), ')'),

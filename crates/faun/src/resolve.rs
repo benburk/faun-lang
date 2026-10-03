@@ -4,7 +4,7 @@
 // makes omissions visible when surface syntax gains a variant.
 #![allow(clippy::too_many_lines)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use super::ast as s;
@@ -120,21 +120,26 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
     let mut sites = h::Sites::default();
     let mut aliases = HashMap::new();
     let mut constraint_aliases = HashMap::new();
+    let mut scopes = Vec::with_capacity(loaded.modules.len());
     for module in &loaded.modules {
-        let source = loaded
-            .sources
-            .get(module.source)
-            .expect("loaded module has source")
-            .text();
         let mut scope = prelude.clone();
         scope.merge(&module.scope).map_err(|clash| {
             let name = loaded.symbols.text(clash.name);
             Diagnostic::new(format!("module scope binds {} `{name}` twice", clash.kind))
         })?;
+        scopes.push(scope);
+    }
+    let values = values(&loaded, &scopes);
+    for (module, scope) in loaded.modules.iter().zip(&scopes) {
+        let source = loaded
+            .sources
+            .get(module.source)
+            .expect("loaded module has source")
+            .text();
         let resolved = resolve_module(
             module,
             source,
-            &scope,
+            (scope, &values),
             (&mut loaded.symbols, &mut sites),
             (&mut aliases, &mut constraint_aliases),
         );
@@ -155,6 +160,48 @@ pub fn resolve_names(mut loaded: LoadedProgram) -> Result<ResolvedProgram, Diagn
         symbols: loaded.symbols,
         program: h::Program { modules },
     })
+}
+
+/// The definitions written `name = value`, which take no parameters: a
+/// use of one is its value, and calling it is refused.
+type Values = HashSet<Symbol>;
+
+/// Every value the program defines, top-level or a type's.
+fn values(loaded: &LoadedProgram, scopes: &[Interface]) -> Values {
+    let mut values = Values::new();
+    for (module, scope) in loaded.modules.iter().zip(scopes) {
+        let source = loaded
+            .sources
+            .get(module.source)
+            .expect("loaded module has source")
+            .text();
+        let spelled = |name: s::Name| loaded.symbols.find(name.text(source));
+        for item in &module.syntax.items {
+            match item {
+                s::Item::Clause(clause) if clause.patterns.is_empty() => {
+                    let global = spelled(clause.name).and_then(|name| scope.values.get(&name));
+                    values.extend(global);
+                }
+                s::Item::Data(data) => {
+                    let Some(binding) = spelled(data.name).and_then(|name| scope.types.get(&name))
+                    else {
+                        continue;
+                    };
+                    for method in &data.methods {
+                        if let s::MethodItem::Clause(clause) = method
+                            && clause.patterns.is_empty()
+                        {
+                            let method =
+                                spelled(clause.name).and_then(|name| binding.methods.get(&name));
+                            values.extend(method);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    values
 }
 
 /// A resolve error as a diagnostic at the place it names.
@@ -194,7 +241,7 @@ type ConstraintAliases = HashMap<Symbol, ConstraintAlias>;
 fn resolve_module(
     module: &LoadedModule,
     source: &str,
-    scope: &Interface,
+    (scope, values): (&Interface, &Values),
     (symbols, sites): (&mut Symbols, &mut h::Sites),
     (aliases, constraint_aliases): (&mut Aliases, &mut ConstraintAliases),
 ) -> Result<h::Module, ResolveError> {
@@ -203,7 +250,12 @@ fn resolve_module(
     for item in &module.syntax.items {
         match item {
             s::Item::Data(data) => items.push(h::Item::Data(resolve_data(
-                module.id, data, source, scope, symbols, sites,
+                module.id,
+                data,
+                source,
+                (scope, values),
+                symbols,
+                sites,
             )?)),
             s::Item::Signature(signature) => {
                 let name = global_value(module.id, signature.name, source, scope, symbols)?;
@@ -218,7 +270,7 @@ fn resolve_module(
                     clause,
                     name,
                     source,
-                    scope,
+                    (scope, values),
                     None,
                     (symbols, sites),
                 )?;
@@ -252,7 +304,7 @@ fn resolve_module(
                     clause,
                     name,
                     source,
-                    scope,
+                    (scope, values),
                     (None, None),
                     (symbols, sites),
                 )?));
@@ -936,7 +988,7 @@ fn resolve_data(
     module: ModuleId,
     data: &s::DataDecl,
     source: &str,
-    scope: &Interface,
+    (scope, values): (&Interface, &Values),
     symbols: &mut Symbols,
     sites: &mut h::Sites,
 ) -> Result<h::DataDecl, ResolveError> {
@@ -996,7 +1048,7 @@ fn resolve_data(
                     clause,
                     name,
                     source,
-                    scope,
+                    (scope, values),
                     Some(binding),
                     (symbols, sites),
                 )?;
@@ -1234,7 +1286,7 @@ fn resolve_clauses(
     clause: &s::Clause,
     name: Symbol,
     source: &str,
-    scope: &Interface,
+    (scope, values): (&Interface, &Values),
     methods: Option<&TypeBinding>,
     (symbols, sites): (&mut Symbols, &mut h::Sites),
 ) -> Result<Vec<h::Clause>, ResolveError> {
@@ -1248,7 +1300,7 @@ fn resolve_clauses(
             clause,
             name,
             source,
-            scope,
+            (scope, values),
             (methods, None),
             (symbols, sites),
         )?;
@@ -1295,7 +1347,7 @@ fn resolve_clauses(
                 clause,
                 name,
                 source,
-                scope,
+                (scope, values),
                 (methods, Some((spelling, constructor))),
                 (&mut *symbols, &mut *sites),
             )
@@ -1379,7 +1431,7 @@ fn resolve_clause(
     clause: &s::Clause,
     name: Symbol,
     source: &str,
-    scope: &Interface,
+    (scope, values): (&Interface, &Values),
     (methods, standing): (Option<&TypeBinding>, Option<(Symbol, Symbol)>),
     (symbols, sites): (&mut Symbols, &mut h::Sites),
 ) -> Result<h::Clause, ResolveError> {
@@ -1387,6 +1439,7 @@ fn resolve_clause(
         module,
         source,
         scope,
+        values,
         methods,
         standing,
         symbols,
@@ -1458,6 +1511,7 @@ struct ClauseResolver<'a> {
     module: ModuleId,
     source: &'a str,
     scope: &'a Interface,
+    values: &'a Values,
     methods: Option<&'a TypeBinding>,
     /// In one copy of a clause whose head takes a sum apart by its own name,
     /// that name, and the constructor it stands for in this copy.
@@ -1473,7 +1527,7 @@ struct ClauseResolver<'a> {
     /// While a binding's pattern is resolved, the names it has bound so
     /// far: a binding may shadow a name already in scope, though not one it
     /// binds itself.
-    shadowing: Option<std::collections::HashSet<Symbol>>,
+    shadowing: Option<HashSet<Symbol>>,
     /// While a clause's head is resolved, outside any `|`, each name bound
     /// again there: the local it was bound as, the one it is bound as now,
     /// and where. Elsewhere, a pattern binds each name once.
@@ -1488,7 +1542,7 @@ impl ClauseResolver<'_> {
         let mut bindings = Vec::with_capacity(body.bindings.len());
         for binding in &body.bindings {
             let value = self.expr(&binding.value)?;
-            self.shadowing = Some(std::collections::HashSet::new());
+            self.shadowing = Some(HashSet::new());
             let pattern = self.total_pattern(&binding.pattern);
             self.shadowing = None;
             bindings.push(h::Binding {
@@ -1811,16 +1865,25 @@ impl ClauseResolver<'_> {
                 self.locals = saved;
                 h::ExprKind::Block(Box::new(body))
             }
-            s::ExprKind::Call(head, arguments) => h::ExprKind::Call(
-                Box::new(self.applied(head)?),
-                arguments
-                    .iter()
-                    .map(|argument| self.expr(argument))
-                    .collect::<Result<_, _>>()?,
-            ),
+            s::ExprKind::Call(head, arguments) => {
+                let applied = self.applied(head)?;
+                if matches!(head.kind, s::ExprKind::Name(_)) && self.used_value(&applied.kind) {
+                    return Err(self.called_value(head.span));
+                }
+                h::ExprKind::Call(
+                    Box::new(applied),
+                    arguments
+                        .iter()
+                        .map(|argument| self.expr(argument))
+                        .collect::<Result<_, _>>()?,
+                )
+            }
             s::ExprKind::Member(head, member) => {
                 if let Some(found) = self.static_member(head, *member) {
-                    found?
+                    self.value_or(expression.span, found?)
+                } else if let Some(variable) = self.type_variable(head) {
+                    // `a.zero`: a value a `where` bound on `a` names.
+                    h::ExprKind::Associated(variable, self.symbols.intern(member.text(self.source)))
                 } else {
                     h::ExprKind::Member(
                         Box::new(self.expr(head)?),
@@ -1834,16 +1897,21 @@ impl ClauseResolver<'_> {
                     .map(|argument| self.expr(argument))
                     .collect::<Result<Vec<_>, _>>()?;
                 if let Some(found) = self.static_member(head, *member) {
+                    let found = found?;
+                    if matches!(found, h::ExprKind::Global(global) if self.values.contains(&global))
+                    {
+                        return Err(self.called_value(head.span.through(member.0)));
+                    }
                     h::ExprKind::Call(
                         Box::new(h::Expr {
                             site: self.sites.fresh(),
                             span: head.span.through(member.0),
-                            kind: found?,
+                            kind: found,
                         }),
                         arguments,
                     )
                 } else if let Some(variable) = self.type_variable(head) {
-                    // `a.zero()`: a member a `where` bound on `a` names.
+                    // `a.of_nat(n)`: a member a `where` bound on `a` names.
                     h::ExprKind::Call(
                         Box::new(h::Expr {
                             site: self.sites.fresh(),
@@ -1929,12 +1997,12 @@ impl ClauseResolver<'_> {
             return Ok(h::ExprKind::Local(local));
         }
         if let Some(&global) = self.scope.values.get(&spelling) {
-            return Ok(h::ExprKind::Global(global));
+            return Ok(self.value_or(name.0, h::ExprKind::Global(global)));
         }
         if let Some(methods) = self.methods
             && let Some(&method) = methods.methods.get(&spelling)
         {
-            return Ok(h::ExprKind::Global(method));
+            return Ok(self.value_or(name.0, h::ExprKind::Global(method)));
         }
         if let Some(candidates) = self.scope.constructors.get(&spelling) {
             return Ok(h::ExprKind::Dual(self.dual(spelling, candidates)));
@@ -1949,6 +2017,35 @@ impl ClauseResolver<'_> {
             name.0,
             format!("unknown name `{}`", name.text(self.source)),
         ))
+    }
+
+    /// A use of `found`: where it is a value, its definition called, and
+    /// otherwise `found` itself.
+    fn value_or(&mut self, span: s::Span, found: h::ExprKind) -> h::ExprKind {
+        match found {
+            h::ExprKind::Global(global) if self.values.contains(&global) => {
+                let definition = self.sites.expr(span, found);
+                h::ExprKind::Call(Box::new(definition), Vec::new())
+            }
+            found => found,
+        }
+    }
+
+    /// Whether `resolved` is a value's use, as [`Self::value_or`] makes it.
+    fn used_value(&self, resolved: &h::ExprKind) -> bool {
+        matches!(resolved, h::ExprKind::Call(definition, arguments)
+            if arguments.is_empty()
+                && matches!(definition.kind, h::ExprKind::Global(global) if self.values.contains(&global)))
+    }
+
+    /// A value, at `span`, written as a function called.
+    fn called_value(&self, span: s::Span) -> ResolveError {
+        let shown = span.text(self.source);
+        error(
+            self.module,
+            span,
+            format!("`{shown}` is a value, not a function: write `{shown}`"),
+        )
     }
 
     /// The type variable a head spells, where it is a lowercase word naming
@@ -1976,7 +2073,7 @@ impl ClauseResolver<'_> {
         fields: &[(s::Name, s::Expr)],
         span: s::Span,
     ) -> Result<Vec<(Symbol, h::Expr)>, ResolveError> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let mut resolved = Vec::with_capacity(fields.len());
         for (name, value) in fields {
             let name = self.symbols.intern(name.text(self.source));
@@ -2181,7 +2278,7 @@ mod tests {
         );
         let entry = fixture.write(
             "main.fn",
-            "number : Int\nnumber() -> Int.of_nat(42)\ntext : Str\ntext() -> \"é\"\n",
+            "number : Int\nnumber = Int.of_nat(42)\ntext : Str\ntext = \"é\"\n",
         );
         let host = fixture.write("host.fn", "export {Host}\nHost : {argc: Nat}\n");
         let loaded = modules::load_program(&entry, &standard, &host).unwrap();
@@ -2208,11 +2305,11 @@ mod tests {
     fn rejects_an_unresolved_name_at_its_span() {
         let fixture = Fixture::new();
         let prelude = fixture.write("standard.fn", "package {}\nexport {}\n");
-        let entry = fixture.write("main.fn", "f() -> missing\n");
+        let entry = fixture.write("main.fn", "f = missing\n");
         let host = fixture.write("host.fn", "export {Host}\nHost : {}\n");
         let loaded = modules::load_program(&entry, &prelude, &host).unwrap();
         let failure = resolve_names(loaded).unwrap_err();
         let at = failure.location().expect("a place in the source");
-        assert_eq!((at.line, at.column, at.width), (1, 8, 7));
+        assert_eq!((at.line, at.column, at.width), (1, 5, 7));
     }
 }

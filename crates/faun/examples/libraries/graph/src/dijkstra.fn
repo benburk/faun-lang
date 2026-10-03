@@ -28,7 +28,7 @@ Settled(e) = List(Result(Step(e), [Unreachable]))
 dijkstra : (g, Nat) -> Paths(e) where Walkable(g, e), Weight(e)
 dijkstra(graph, source) -> (
   unsettled = List.repeat(Err(Unreachable), graph.node_count())
-  queue = Heap.empty().push(e.zero(), {node: source, from: source})
+  queue = Heap.empty.push(e.zero, {node: source, from: source})
   settled = queue.drain(unsettled, |settled, cost, {node, from}| settle(graph, settled, node, {cost, from}))
   Paths(settled)
 )

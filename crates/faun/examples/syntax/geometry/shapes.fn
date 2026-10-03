@@ -10,7 +10,7 @@ Shape : [Square(Nat), Oblong(Nat, Nat)].(
 )
 
 unit_square : Shape
-unit_square() -> Square(1)
+unit_square = Square(1)
 
 hidden : Nat
-hidden() -> 0
+hidden = 0

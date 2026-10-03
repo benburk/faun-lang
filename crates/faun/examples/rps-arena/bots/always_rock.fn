@@ -6,7 +6,7 @@ import throw {Throw.*}
 
 AlwaysRock : [AlwaysRock].(
   start : AlwaysRock
-  start() -> AlwaysRock
+  start = AlwaysRock
 
   name : AlwaysRock -> Str
   name(_) -> "always_rock"

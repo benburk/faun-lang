@@ -464,7 +464,7 @@ struct Bound {
     owner: Ty,
     member: Symbol,
     ty: Ty,
-    /// Whether the member is reached through the type, `a.zero()` or
+    /// Whether the member is reached through the type, `a.zero` or
     /// `a.of_nat(n)`, rather than as a method of a value of it, which is
     /// its type's first parameter.
     associated: bool,
@@ -531,7 +531,7 @@ enum Reach {
     /// Named on a value with no call, `x.name`: a field, or a method of no
     /// other arguments.
     Bare,
-    /// Through the type, `a.zero()`: a value of the type rather than a
+    /// Through the type, `a.zero`: a value of the type rather than a
     /// method of one.
     Type,
 }
@@ -2284,15 +2284,13 @@ impl<'a> Checker<'a> {
                 self.oblige(module, expression.span, *global, &replacements);
                 Ok(ty)
             }
-            h::ExprKind::Associated(variable, member) => Err(failure(
+            h::ExprKind::Associated(..) => self.associated_call(
                 module,
-                expression.span,
-                format!(
-                    "a member a bound gives is called: write `{}.{}()`",
-                    self.symbols.text(*variable),
-                    self.symbols.text(*member)
-                ),
-            )),
+                (expression.site, expression.span),
+                expression,
+                None,
+                locals,
+            ),
             h::ExprKind::Call(head, arguments)
                 if matches!(head.kind, h::ExprKind::Associated(..)) =>
             {
@@ -2300,7 +2298,7 @@ impl<'a> Checker<'a> {
                     module,
                     (expression.site, expression.span),
                     head,
-                    arguments,
+                    Some(arguments),
                     locals,
                 )
             }
@@ -2774,14 +2772,16 @@ impl<'a> Checker<'a> {
         tail
     }
 
-    /// `a.zero()`: the member a `where` bound of the signed body being
-    /// checked gives type `a`, named by the signature's name for it.
+    /// `a.zero`, or `a.parse(text)`: the member a `where` bound of the
+    /// signed body being checked gives type `a`, named by the signature's
+    /// name for it. A member taking no parameters is a value, written with
+    /// no arguments, `None`; any other is called.
     fn associated_call(
         &mut self,
         module: ModuleId,
         (site, span): (h::SiteId, super::ast::Span),
         head: &h::Expr,
-        arguments: &[h::Expr],
+        arguments: Option<&[h::Expr]>,
         locals: &mut Vec<Option<Scheme>>,
     ) -> Result<Ty, CheckError> {
         let h::ExprKind::Associated(variable, member) = head.kind else {
@@ -2818,6 +2818,31 @@ impl<'a> Checker<'a> {
         };
         let Ty::Function(parameters, result) = bound.ty else {
             unreachable!("a bound's member is a function")
+        };
+        let arguments = match arguments {
+            None if parameters.is_empty() => &[][..],
+            Some([]) if parameters.is_empty() => {
+                return Err(failure(
+                    module,
+                    span,
+                    format!(
+                        "`{}` is a value, not a function: write `{}`",
+                        spelled(self),
+                        spelled(self)
+                    ),
+                ));
+            }
+            None => {
+                return Err(failure(
+                    module,
+                    span,
+                    format!(
+                        "a member a bound gives is called: write `{}(…)`",
+                        spelled(self)
+                    ),
+                ));
+            }
+            Some(arguments) => arguments,
         };
         if parameters.len() != arguments.len() {
             return Err(failure(
@@ -5106,7 +5131,7 @@ mod tests {
     fn context_selects_nat_int_and_str_elaboration() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load(
-            "natural : Nat\nnatural() -> 42\ninteger : Int\ninteger() -> -42\ntext : Str\ntext() -> \"é\"\n",
+            "natural : Nat\nnatural = 42\ninteger : Int\ninteger = -42\ntext : Str\ntext = \"é\"\n",
         );
         let checked = type_check(n::normalize(resolved), prelude.clone()).unwrap();
         let entry = *checked.resolved.package.last().unwrap();
@@ -5211,7 +5236,7 @@ mod tests {
     fn never_is_an_ordinary_constructor_name() {
         let fixture = Fixture::new();
         let (prelude, resolved) =
-            fixture.load("Outcome : [Never]\nvalue : Outcome\nvalue() -> Never\n");
+            fixture.load("Outcome : [Never]\nvalue : Outcome\nvalue = Never\n");
         type_check(n::normalize(resolved), prelude).unwrap();
     }
 
@@ -5219,7 +5244,7 @@ mod tests {
     fn polymorphic_functions_are_instantiated_at_each_call() {
         let fixture = Fixture::new();
         let (prelude, resolved) = fixture.load(
-            "id : a -> a\nid(x) -> x\nnatural : Nat\nnatural() -> id(1)\ninteger : Int\ninteger() -> id(-1)\n",
+            "id : a -> a\nid(x) -> x\nnatural : Nat\nnatural = id(1)\ninteger : Int\ninteger = id(-1)\n",
         );
         let id = resolved
             .program
@@ -5263,9 +5288,8 @@ mod tests {
     #[test]
     fn unsigned_definitions_are_generalized_between_components() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load(
-            "id(x) -> x\nnatural : Nat\nnatural() -> id(1)\ninteger : Int\ninteger() -> id(-1)\n",
-        );
+        let (prelude, resolved) = fixture
+            .load("id(x) -> x\nnatural : Nat\nnatural = id(1)\ninteger : Int\ninteger = id(-1)\n");
         type_check(n::normalize(resolved), prelude).unwrap();
     }
 
@@ -5274,8 +5298,8 @@ mod tests {
     #[test]
     fn a_function_is_not_bound() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture
-            .load("id : a -> a\nid(x) -> x\nlocal : Int\nlocal() -> (\n  f = id\n  f(-1)\n)\n");
+        let (prelude, resolved) =
+            fixture.load("id : a -> a\nid(x) -> x\nlocal : Int\nlocal = (\n  f = id\n  f(-1)\n)\n");
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(
             failure.message.contains("passed straight into a call"),
@@ -5329,7 +5353,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "hidden.fn",
-            "export {helper}\nSecret : [Hidden].(not : Secret -> Secret\nnot(Hidden) -> Hidden)\nhelper : Nat\nhelper() -> 0\n",
+            "export {helper}\nSecret : [Hidden].(not : Secret -> Secret\nnot(Hidden) -> Hidden)\nhelper : Nat\nhelper = 0\n",
         );
         let (prelude, resolved) = fixture.load("import hidden {helper}\nchoose(x) -> x.not()\n");
         let checked = type_check(n::normalize(resolved), prelude.clone()).unwrap();
@@ -5383,8 +5407,7 @@ mod tests {
     #[test]
     fn pure_definitions_and_nested_expressions_cannot_hide_effects() {
         let fixture = Fixture::new();
-        let (prelude, resolved) =
-            fixture.load("stop! : Nat -> Nat\nbad : Nat\nbad() -> stop!(0)\n");
+        let (prelude, resolved) = fixture.load("stop! : Nat -> Nat\nbad : Nat\nbad = stop!(0)\n");
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(
             failure
@@ -5393,7 +5416,7 @@ mod tests {
         );
 
         let (prelude, resolved) = fixture.load(
-            "stop! : Nat -> Nat\nid : Nat -> Nat\nid(n) -> n\nbad! : Nat\nbad!() -> id(stop!(0))\n",
+            "stop! : Nat -> Nat\nid : Nat -> Nat\nid(n) -> n\nbad! : Nat -> Nat\nbad!(n) -> id(stop!(n))\n",
         );
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(failure.message.contains("must stand on its own"));
@@ -5404,7 +5427,7 @@ mod tests {
     #[test]
     fn a_constructor_where_another_type_is_wanted_says_both() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> Zero.add(True)\n");
+        let (prelude, resolved) = fixture.load("bad : Nat\nbad = Zero.add(True)\n");
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert_eq!(failure.message, "mismatched types");
         assert_eq!(failure.labels[0].text, "expected `Nat`, found `Bool`");
@@ -5413,7 +5436,7 @@ mod tests {
     #[test]
     fn a_negative_nat_is_rejected() {
         let fixture = Fixture::new();
-        let (prelude, resolved) = fixture.load("bad : Nat\nbad() -> -1\n");
+        let (prelude, resolved) = fixture.load("bad : Nat\nbad = -1\n");
         let failure = type_check(n::normalize(resolved), prelude).unwrap_err();
         assert!(failure.message.contains("negative numeral"));
     }

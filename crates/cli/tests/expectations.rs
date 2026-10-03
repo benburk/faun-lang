@@ -76,8 +76,8 @@ fn record_builders_do_not_depend_on_whitespace() {
                  both(_, Err(e), _) -> Err(e)
 
                  built : Result({{a: Nat, b: Bool, c: Nat, d: Nat, e: Nat, f: Nat, g: Nat, h: Nat, i: Nat, j: Nat}}, [Malformed])
-                 built() -> both({{a: Ok(1), b: Ok(True), c: Ok(3), d: Ok(4), e: Ok(5), f: Ok(6), g: Ok(7), h: Ok(8), i: Ok(9), j: Ok(10){padding}}})
-                 expect built() == Ok({{a: 1, b: True, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10}})"
+                 built = both({{a: Ok(1), b: Ok(True), c: Ok(3), d: Ok(4), e: Ok(5), f: Ok(6), g: Ok(7), h: Ok(8), i: Ok(9), j: Ok(10){padding}}})
+                 expect built == Ok({{a: 1, b: True, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10}})"
             ),
         );
         assert_eq!(support::test_file(&package.entry()), (Vec::new(), 1));
@@ -115,11 +115,11 @@ fn an_operator_reaches_a_method_without_a_signature() {
            neg(Pair({a, b})) -> of(b, a)
          )
 
-         doubled() -> [Pair.of(1, 2)].fold(Pair.of(1, 2), |sum, pair| sum + pair)
+         doubled = [Pair.of(1, 2)].fold(Pair.of(1, 2), |sum, pair| sum + pair)
          total(pairs) -> pairs.fold(Pair.of(0, 0), |sum, pair| sum + pair)
          swapped(pairs) -> pairs.map(|pair| -pair)
 
-         expect doubled().b == 4
+         expect doubled.b == 4
          expect total([Pair.of(1, 2), Pair.of(3, 4)]).a == 4
          expect swapped([Pair.of(1, 2)]).map(|pair| pair.a) == [2]",
     );
@@ -339,14 +339,14 @@ fn floats_read_add_divide_and_say_themselves() {
     let package = Package::new(
         "floats",
         "third : F32
-         third() -> F32.div(1.0, 3.0)
+         third = F32.div(1.0, 3.0)
 
          expect 0.1.add(0.2).to_str() == \"0.30000000000000004\"
          expect F32.add(0.1, 0.2) == 0.3
-         expect third().to_str() == \"0.33333334\"
+         expect third.to_str() == \"0.33333334\"
          expect (-2.5).to_str() == \"-2.5\" & 2.5E2 == 250.0 & 1.0e-12.to_str() == \"1.0e-12\"
          expect F64.from_str(\"0.1\") == Ok(0.1) & F32.from_str(\"1e\") == Err(Malformed)
-         expect F32.sqrt(2.0).to_bits() == 0x3fb504f3 & F32.nan() == F32.nan()",
+         expect F32.sqrt(2.0).to_bits() == 0x3fb504f3 & F32.nan == F32.nan",
     );
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 6));
 }

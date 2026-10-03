@@ -5,11 +5,11 @@
 import std.host {Host}
 
 table : List((U32, Nat))
-table() -> [(0x12345678, 4), (0xdeadbeef, 1), (70000, 9)]
+table = [(0x12345678, 4), (0xdeadbeef, 1), (70000, 9)]
 
 row : Nat -> Nat
 row(at) -> (
-  (word, count) = table().get(at).ok_or((0, 0))
+  (word, count) = table.get(at).ok_or((0, 0))
   word.to_nat() % 4 + count
 )
 

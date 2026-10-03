@@ -8,11 +8,11 @@ expect "Faun 🦌".len() == 9
 
 # A splice is its value's `to_str`, and may hold any expression.
 name : Str
-name() -> "Faun"
+name = "Faun"
 
-expect "hi ${name()}!" == "hi Faun!"
+expect "hi ${name}!" == "hi Faun!"
 expect "${1 + 2} and ${[1, 2]}" == "3 and [1, 2]"
-expect "${"inner ${name()}"}" == "inner Faun"
+expect "${"inner ${name}"}" == "inner Faun"
 expect "${True}${False}" == "TrueFalse"
 
 # A width pads the splice's text with spaces: `<` keeps it left and `>`

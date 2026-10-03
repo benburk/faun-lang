@@ -7,7 +7,7 @@ import throw {Throw.*}
 
 BeatLast : [BeatLast].(
   start : BeatLast
-  start() -> BeatLast
+  start = BeatLast
 
   name : BeatLast -> Str
   name(_) -> "beat_last"

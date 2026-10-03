@@ -24,9 +24,9 @@ df : Func
 df(x) -> 2.0 * x
 
 root_two : Result(F64, [NoConvergence])
-root_two() -> newton(f, df, 2.0, 50)
+root_two = newton(f, df, 2.0, 50)
 
-expect root_two().ok_or(0.0).to_fixed(12) == "1.414213562373"
+expect root_two.ok_or(0.0).to_fixed(12) == "1.414213562373"
 expect newton(f, df, 2.0, 2).is_err()
 # From zero the derivative vanishes, the first step is infinite, and the
 # iteration never settles: the fuel runs out and the failure is reported.
@@ -34,7 +34,7 @@ expect newton(f, df, 0.0, 50) == Err(NoConvergence)
 
 # `faun run crates/faun/examples/newton.fn` prints the square root of two.
 app : {args: List(Str)} -> Result(F64, [NoConvergence])
-app(_) -> root_two()
+app(_) -> root_two
 
 main! : Host -> []
 main!(host) -> host.run!(app)

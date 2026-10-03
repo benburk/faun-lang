@@ -23,13 +23,13 @@ edge(_) -> Err(MalformedEdge)
 
 # Both directions of every pair: the routes read the table either way.
 distances : List(Edge) -> Map((Str, Str), Nat)
-distances(edges) -> edges.fold(Map.empty(), add_edge)
+distances(edges) -> edges.fold(Map.empty, add_edge)
 
 add_edge : (Map((Str, Str), Nat), Edge) -> Map((Str, Str), Nat)
 add_edge(table, Edge(from, to, span)) -> table.insert((from, to), span).insert((to, from), span)
 
 places : List(Edge) -> List(Str)
-places(edges) -> edges.fold(Set.empty(), add_places).to_list()
+places(edges) -> edges.fold(Set.empty, add_places).to_list()
 
 add_places : (Set(Str), Edge) -> Set(Str)
 add_places(seen, Edge(from, to, _)) -> seen.insert(from).insert(to)
@@ -68,11 +68,11 @@ app(input) -> (
 )
 
 example : Str
-example() -> "London to Dublin = 464\nLondon to Belfast = 518\nDublin to Belfast = 141\n"
+example = "London to Dublin = 464\nLondon to Belfast = 518\nDublin to Belfast = 141\n"
 
-expect part1(example()) == Ok(605)
+expect part1(example) == Ok(605)
 # The scenic route: the same tours, aggregated the other way.
-expect part2(example()) == Ok(982)
+expect part2(example) == Ok(982)
 # One pair is a route of its own length, either way round.
 expect part1("A to B = 7\n") == Ok(7)
 # A disconnected pair has no single-night route: the missing leg is named.

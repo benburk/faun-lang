@@ -33,6 +33,8 @@ pub(crate) enum Line {
         guard: Option<Expr>,
         body: Expr,
     },
+    /// `name = value`.
+    Value(Expr, Expr),
     /// `head : ...`: a signature or a data declaration.
     Typed(Expr, Typed),
     /// `Name = type`.
@@ -168,6 +170,7 @@ impl<'s> Grouping<'s> {
                 )
             }
             Line::Clause { head, guard, body } => self.clause(head, guard, body),
+            Line::Value(head, value) => self.value(&head, value),
             Line::Typed(head, typed) => self.typed(head, typed),
             Line::Alias(head, ty) => {
                 let span = head.span.through(type_span(&ty));
@@ -189,6 +192,15 @@ impl<'s> Grouping<'s> {
     /// A clause: its head's name and patterns, its guard, and its body.
     fn clause(&mut self, head: Expr, guard: Option<Expr>, value: Expr) -> Result<(), Error> {
         let (name, arguments) = self.clause_head(head)?;
+        if arguments.is_empty() {
+            let text = name.text(self.source);
+            let message = if text.ends_with('!') {
+                "a definition of no parameters is a value, and a value is no effect".to_owned()
+            } else {
+                format!("a definition of no parameters is a value: `{text} = ...`")
+            };
+            return Err(error(name.0, message));
+        }
         let body = body_of(value);
         self.item(
             name.0,
@@ -197,6 +209,29 @@ impl<'s> Grouping<'s> {
                 name,
                 patterns: patterns(arguments, self.source)?,
                 guard,
+                body,
+            }),
+        )
+    }
+
+    /// A value, `name = value`: a definition of no parameters.
+    fn value(&mut self, head: &Expr, value: Expr) -> Result<(), Error> {
+        let span = head.span;
+        let ExprKind::Name(name) = head.kind else {
+            return Err(error(span, "a value is named by one name: `name = ...`"));
+        };
+        let text = name.text(self.source);
+        if text.ends_with('!') {
+            return Err(error(span, "a value is no effect: its name takes no `!`"));
+        }
+        let body = body_of(value);
+        self.item(
+            name.0,
+            Item::Clause(Clause {
+                span: name.0.through(body.result.span),
+                name,
+                patterns: Vec::new(),
+                guard: None,
                 body,
             }),
         )

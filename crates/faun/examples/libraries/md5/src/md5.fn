@@ -43,7 +43,7 @@ length_bytes(bits) -> (
 compress : (State, List(U8)) -> State
 compress((a, b, c, d), block) -> (
   words = words_le(block)
-  (a2, b2, c2, d2) = steps().enumerate().fold((a, b, c, d), |state, step| round(words, state, step))
+  (a2, b2, c2, d2) = steps.enumerate().fold((a, b, c, d), |state, step| round(words, state, step))
   (a + a2, b + b2, c + c2, d + d2)
 )
 
@@ -66,7 +66,7 @@ mix(b, c, d, i) -> (c ^ (b | !d), 7 * i % 16)
 
 # Each step's constant and how far it rotates.
 steps : List((U32, Nat))
-steps() -> [
+steps = [
   (0xd76aa478, 7), (0xe8c7b756, 12), (0x242070db, 17), (0xc1bdceee, 22),
   (0xf57c0faf, 7), (0x4787c62a, 12), (0xa8304613, 17), (0xfd469501, 22),
   (0x698098d8, 7), (0x8b44f7af, 12), (0xffff5bb1, 17), (0x895cd7be, 22),

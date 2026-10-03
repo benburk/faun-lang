@@ -54,21 +54,21 @@ part2 : (Str, Nat) -> Result(Nat, _)
 part2(input, liters) -> fewest_ways(solve(input, liters)?)
 
 target : Nat
-target() -> 150
+target = 150
 
 app : {stdin: List(U8), *} -> Result({part1: Nat, part2: Nat}, _)
 app(input) -> (
   stdin = Str.from_ascii(input.stdin)?
-  counts = solve(stdin, target())?
+  counts = solve(stdin, target)?
   Ok({part1: counts.len(), part2: fewest_ways(counts)?})
 )
 
 example : Str
-example() -> "20\n15\n10\n5\n5\n"
+example = "20\n15\n10\n5\n5\n"
 
-expect part1(example(), 25) == Ok(4)
+expect part1(example, 25) == Ok(4)
 # Three of the four packings use two containers; 15 + 5 + 5 uses three.
-expect part2(example(), 25) == Ok(3)
+expect part2(example, 25) == Ok(3)
 
 # Equal capacities denote separate containers: each five can accompany the
 # twenty independently, and choosing both remains a third physical subset.

@@ -2,13 +2,13 @@ increment : Nat -> Nat
 increment(n) -> n + 1
 
 mapped : List(Nat)
-mapped() -> [1, 2, 3].map(|n| increment(n))
+mapped = [1, 2, 3].map(|n| increment(n))
 
 combined : Result(Nat, Str)
-combined() -> Ok(20).map_ok(|n| n + 22)
+combined = Ok(20).map_ok(|n| n + 22)
 
 signed_sum : Int
-signed_sum() -> -2 + 3
+signed_sum = -2 + 3
 
 choose : a -> a
 choose(value) -> True.select(value, value)

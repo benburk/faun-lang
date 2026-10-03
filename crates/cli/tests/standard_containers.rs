@@ -48,17 +48,17 @@ fn sorted_containers_keep_their_keys_in_order() {
     let package = Package::new(
         "sorted-containers-keep-their-keys-in-order",
         r#"built : SortedMap(Nat, Str)
-         built() -> SortedMap.of_list([(5, "five"), (1, "one"), (9, "nine"), (3, "three"), (7, "seven"), (1, "uno")])
+         built = SortedMap.of_list([(5, "five"), (1, "one"), (9, "nine"), (3, "three"), (7, "seven"), (1, "uno")])
 
-         expect built().len() == 5
-         expect built().keys() == [1, 3, 5, 7, 9]
-         expect built().get(1) == Ok("uno")
-         expect built().get(4).is_err()
-         expect built().remove(5).keys() == [1, 3, 7, 9]
-         expect built().remove(4).len() == 5
-         expect built().fold(0, |total, key, _| total + key) == 25
-         expect List.range(200).fold(SortedMap.empty(), |map, n| map.insert(n * 7 % 200, n)).len() == 200
-         expect List.range(100).fold(SortedMap.empty(), |map, n| map.insert(n, n)).remove(50).remove(3).keys().len() == 98
+         expect built.len() == 5
+         expect built.keys() == [1, 3, 5, 7, 9]
+         expect built.get(1) == Ok("uno")
+         expect built.get(4).is_err()
+         expect built.remove(5).keys() == [1, 3, 7, 9]
+         expect built.remove(4).len() == 5
+         expect built.fold(0, |total, key, _| total + key) == 25
+         expect List.range(200).fold(SortedMap.empty, |map, n| map.insert(n * 7 % 200, n)).len() == 200
+         expect List.range(100).fold(SortedMap.empty, |map, n| map.insert(n, n)).remove(50).remove(3).keys().len() == 98
          expect SortedMap.of_list([((1, 2), "a"), ((0, 5), "b")]).keys() == [(0, 5), (1, 2)]
          expect SortedSet.of_list([1, 2, 3]).intersection(SortedSet.of_list([2, 3, 4])).to_list() == [2, 3]
          expect SortedSet.of_list([1, 2, 3]).difference(SortedSet.of_list([2])).to_list() == [1, 3]
@@ -76,21 +76,21 @@ fn hashed_containers_keep_insertion_order() {
     let package = Package::new(
         "hashed-containers-keep-insertion-order",
         r#"counts : Map(Str, Nat)
-         counts() -> Map.of_list([("b", 2), ("a", 1), ("c", 3)])
+         counts = Map.of_list([("b", 2), ("a", 1), ("c", 3)])
 
-         expect counts().get("a") == Ok(1)
-         expect counts().get("z") == Err(Missing)
-         expect counts().get_or("z", 0) == 0
-         expect counts().len() == 3 & !counts().is_empty() & Map.empty().is_empty()
-         expect counts().keys() == ["b", "a", "c"]
-         expect counts().insert("a", 10).to_list() == [("b", 2), ("a", 10), ("c", 3)]
-         expect counts().remove("a").keys() == ["b", "c"] & counts().remove("a").len() == 2
-         expect counts().remove("q") == counts()
-         expect counts().update("c", |n| n * 2).get("c") == Ok(6)
-         expect counts().map_values(|n| n + 1).values() == [3, 2, 4]
-         expect counts().fold(0, |total, _, n| total + n) == 6
-         expect counts() == Map.of_list([("c", 3), ("a", 1), ("b", 2)])
-         expect counts() != counts().insert("a", 5)
+         expect counts.get("a") == Ok(1)
+         expect counts.get("z") == Err(Missing)
+         expect counts.get_or("z", 0) == 0
+         expect counts.len() == 3 & !counts.is_empty() & Map.empty.is_empty()
+         expect counts.keys() == ["b", "a", "c"]
+         expect counts.insert("a", 10).to_list() == [("b", 2), ("a", 10), ("c", 3)]
+         expect counts.remove("a").keys() == ["b", "c"] & counts.remove("a").len() == 2
+         expect counts.remove("q") == counts
+         expect counts.update("c", |n| n * 2).get("c") == Ok(6)
+         expect counts.map_values(|n| n + 1).values() == [3, 2, 4]
+         expect counts.fold(0, |total, _, n| total + n) == 6
+         expect counts == Map.of_list([("c", 3), ("a", 1), ("b", 2)])
+         expect counts != counts.insert("a", 5)
          expect Map.of_list(List.range(100).map(|n| (n, n * n))).get(77) == Ok(5929)
          expect Map.of_list(List.range(100).map(|n| (n, n))).len() == 100
          expect Map.of_list([((1, "x"), True)]).contains((1, "x"))
@@ -101,14 +101,14 @@ fn hashed_containers_keep_insertion_order() {
          expect ["ab", "c", "de", "f"].group_by(|word| word.len()).values() == [["ab", "de"], ["c", "f"]]
 
          letters : Set(Str)
-         letters() -> Set.of_list(["x", "y", "x", "z"])
+         letters = Set.of_list(["x", "y", "x", "z"])
 
-         expect letters().to_list() == ["x", "y", "z"]
-         expect letters().contains("y") & !letters().contains("w")
-         expect letters().union(Set.of_list(["w"])).len() == 4
-         expect letters().intersection(Set.of_list(["z", "x", "q"])).to_list() == ["x", "z"]
-         expect letters().difference(Set.of_list(["x"])).to_list() == ["y", "z"]
-         expect letters() == Set.of_list(["z", "y", "x"])"#,
+         expect letters.to_list() == ["x", "y", "z"]
+         expect letters.contains("y") & !letters.contains("w")
+         expect letters.union(Set.of_list(["w"])).len() == 4
+         expect letters.intersection(Set.of_list(["z", "x", "q"])).to_list() == ["x", "z"]
+         expect letters.difference(Set.of_list(["x"])).to_list() == ["y", "z"]
+         expect letters == Set.of_list(["z", "y", "x"])"#,
     );
     assert_eq!(support::test_file(&package.entry()), (Vec::new(), 26));
 }

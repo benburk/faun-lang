@@ -12,7 +12,7 @@ package {}
 # reached them.
 connected : SortedMap(Str, List(Str)) -> List(List(Str))
 connected(graph) -> (
-  start = {seen: Set.empty(), groups: []}
+  start = {seen: Set.empty, groups: []}
   found = graph.keys().fold(start, |found, node| component(graph, node, found))
   found.groups
 )
@@ -50,4 +50,4 @@ expect (
   ])
   connected(both_ways) == [["a", "c", "b", "e", "d"], ["f"]]
 )
-expect connected(SortedMap.empty()) == []
+expect connected(SortedMap.empty) == []

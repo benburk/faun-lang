@@ -7,7 +7,7 @@ export {Int.*}
 
 Int : [Pos(Nat), NegSucc(Nat)].(
   zero : Int
-  zero() -> Pos(0)
+  zero = Pos(0)
 
   of_nat : Nat -> Int
   of_nat(n) -> Pos(n)

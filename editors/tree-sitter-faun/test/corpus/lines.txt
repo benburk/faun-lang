@@ -220,10 +220,10 @@ Comments and blank lines between lines
 
 # first
 
-x() -> 1 # trailing
+x(n) -> n # trailing
 
 # between
-y() -> 2
+y = 2
 
 ---
 
@@ -232,12 +232,39 @@ y() -> 2
   (clause
     (call_expression
       (identifier)
-      (arguments))
-    (number))
+      (arguments
+        (identifier)))
+    (identifier))
   (comment)
   (comment)
-  (clause
-    (call_expression
-      (identifier)
-      (arguments))
+  (value
+    (identifier)
     (number)))
+
+========================================
+A value
+========================================
+
+origin : (Nat, Nat)
+origin = (0, 0)
+
+table =
+  [origin]
+
+---
+
+(source_file
+  (signature
+    (identifier)
+    (tuple_type
+      (type_identifier)
+      (type_identifier)))
+  (value
+    (identifier)
+    (tuple
+      (number)
+      (number)))
+  (value
+    (identifier)
+    (list
+      (identifier))))

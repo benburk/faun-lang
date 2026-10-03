@@ -5,34 +5,34 @@ identity : a -> a
 identity(value) -> value
 
 multi_specialized : List(Nat)
-multi_specialized() -> identity([identity(1)])
+multi_specialized = identity([identity(1)])
 
 external : Nat -> Nat
 
 from_external : Nat
-from_external() -> external(1)
+from_external = external(1)
 
 guarded : Bool -> Nat
 guarded(True) if True -> 1
 guarded(_) -> 0
 
 guarded_entry : Nat
-guarded_entry() -> guarded(True)
+guarded_entry = guarded(True)
 
 mapped_global : List(Nat)
-mapped_global() -> [1, 2, 3].map(increment)
+mapped_global = [1, 2, 3].map(increment)
 
 mapped_capture : List(Nat)
-mapped_capture() -> (
+mapped_capture = (
   offset = 40
   [1, 2].map(|n| n + offset)
 )
 
 wrapped : Result(List(Nat), Str)
-wrapped() -> Ok(mapped_global())
+wrapped = Ok(mapped_global)
 
 wrapped_each : List(Result(Nat, Str))
-wrapped_each() -> [1, 2].map(Ok)
+wrapped_each = [1, 2].map(Ok)
 
 Point : {x: Nat, y: Nat}
 
@@ -40,7 +40,7 @@ point_sum : Point -> Nat
 point_sum(Point({x, y})) -> x + y
 
 record_entry : Nat
-record_entry() -> (
+record_entry = (
   point = Point({y: 22, x: 20})
   point_sum(point) + point.x
 )

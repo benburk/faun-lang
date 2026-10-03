@@ -13,7 +13,7 @@ export {Set}
 Set(k) : Map(k, Bool).(
   # The empty set.
   empty : Set(k)
-  empty() -> Set(Map.empty())
+  empty = Set(Map.empty)
 
   # Whether `set` has no members.
   is_empty : Set(k) -> Bool
@@ -54,7 +54,7 @@ Set(k) : Map(k, Bool).(
   of_list : List(k) -> Set(k) where
     k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
-  of_list(items) -> items.fold(empty(), insert)
+  of_list(items) -> items.fold(empty, insert)
 
   # The members of either set.
   union : (Set(k), Set(k)) -> Set(k) where

@@ -44,7 +44,7 @@ parse_args(argv) -> (
   }))
 )
 
-# `arg()` makes absence fail the outer parse.
+# `arg` makes absence fail the outer parse.
 required_args : List(Str) -> Result({count: Nat, output: Str, mode: Mode,
   rest: List(Str)}, ArgError)
 required_args(argv) -> (
@@ -57,7 +57,7 @@ required_args(argv) -> (
   }))
 )
 
-# `opt()` preserves absence as the named `Missing` error. `auto()` derives the
+# `opt` preserves absence as the named `Missing` error. `auto` derives the
 # short spelling from the long name's first letter.
 optional_args : List(Str) -> Result({verbose: Result(Bool, [Missing]),
   count: Result(Nat, [Missing]), output: Result(Str, [Missing]),
@@ -96,7 +96,7 @@ expect parse_args(["-o", "out.c", "input.ori", "-v", "-n", "3"]) == Ok({
 # The generated help, line for line — the byte-exact expectation below reads
 # far better assembled than inlined.
 help_text : Str
-help_text() -> "Options:\n"
+help_text = "Options:\n"
   .concat("  -v, --[no-]verbose  [default: False]  Enable verbose output\n")
   .concat("  -n, --count <NAT>  [default: 1]  Number of times to run\n")
   .concat("  -o, --output <STR>  [default: <stdout>]  Output destination\n")
@@ -107,8 +107,8 @@ help_text() -> "Options:\n"
 
 # Help is generated from the same declarations and bypasses positional and
 # required-option validation.
-expect parse_args(["--help"]) == Err(Help(help_text()))
-expect parse_args(["-h"]) == Err(Help(help_text()))
+expect parse_args(["--help"]) == Err(Help(help_text))
+expect parse_args(["-h"]) == Err(Help(help_text))
 
 # Defaults and the end-of-options marker are explicit. After `--`, a value
 # beginning with a dash is positional rather than an unknown option.

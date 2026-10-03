@@ -15,7 +15,7 @@ stale(memo, n) -> (n + 100, memo)
 # A miss computes and records; a hit returns the recorded value without using
 # the second computation's answer.
 expect (
-  (first, memo) = Memo.empty().memoize(4, 4, fresh)
+  (first, memo) = Memo.empty.memoize(4, 4, fresh)
   (second, _) = memo.memoize(4, 4, stale)
   first == 5 & second == 5
 )
@@ -24,7 +24,7 @@ expect (
 # through the specialised higher-order adapters.
 memo_len : List(Nat) -> Nat
 memo_len(items) -> (
-  (length, _) = memo_walk(items, Memo.empty())
+  (length, _) = memo_walk(items, Memo.empty)
   length
 )
 

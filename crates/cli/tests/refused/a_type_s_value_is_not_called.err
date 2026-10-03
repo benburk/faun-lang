@@ -1,0 +1,5 @@
+error: `Map.empty` is a value, not a function: write `Map.empty`
+ --> a_type_s_value_is_not_called.fn:4:37
+  |
+4 | main!(host) -> host.exit!(U8.of_nat(Map.empty().len()))
+  |                                     ^^^^^^^^^

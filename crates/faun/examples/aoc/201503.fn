@@ -3,7 +3,7 @@
 # keys in the persistent set library.
 
 origin : (Int, Int)
-origin() -> (0, 0)
+origin = (0, 0)
 
 step : ((Int, Int), U8) -> (Int, Int)
 step((x, y), '>') -> (x + 1, y)
@@ -13,7 +13,7 @@ step((x, y), 'v') -> (x, y - 1)
 step(position, _) -> position
 
 trail : List(U8) -> List((Int, Int))
-trail(directions) -> directions.trail(origin(), step).prepend(origin())
+trail(directions) -> directions.trail(origin, step).prepend(origin)
 
 # Deal alternating cards into two hands. The first receives the even-indexed
 # directions and may have one extra; interleaving the hands recovers the input.

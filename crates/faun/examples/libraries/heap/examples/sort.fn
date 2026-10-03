@@ -22,7 +22,7 @@ app : {args: List(Str)} -> Result(Tally, [Malformed])
 app({args}) -> (
   count = Nat.from_str(args.get_or(1, "100000"))?
   keys = scattered(count)
-  heap = keys.fold(Heap.empty(), |heap, key| heap.push(key, {}))
+  heap = keys.fold(Heap.empty, |heap, key| heap.push(key, {}))
   drained = heap.to_list()
   Ok(drained.fold({count: 0, sum: 0, previous: 0, sorted: True}, tally))
 )

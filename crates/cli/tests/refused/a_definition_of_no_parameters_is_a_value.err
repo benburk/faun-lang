@@ -1,0 +1,5 @@
+error: a definition of no parameters is a value: `zero = ...`
+ --> a_definition_of_no_parameters_is_a_value.fn:4:1
+  |
+4 | zero() -> 0
+  | ^^^^

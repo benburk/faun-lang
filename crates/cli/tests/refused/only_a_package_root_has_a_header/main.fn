@@ -1,4 +1,4 @@
 import helper {one}
 
 two : Nat
-two() -> one() + one()
+two = one + one

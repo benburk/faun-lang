@@ -34,29 +34,29 @@ export {DiGraph, UnGraph, Edge, Unweighted, Walkable, Paths, Weight, bfs, dfs, c
 
 # A diamond with a shortcut that costs more than the long way round.
 diamond : DiGraph(Nat)
-diamond() -> DiGraph.from_weighted_edges(4, [(0, 1, 1), (0, 2, 4), (1, 2, 2), (1, 3, 6), (2, 3, 1)])
+diamond = DiGraph.from_weighted_edges(4, [(0, 1, 1), (0, 2, 4), (1, 2, 2), (1, 3, 6), (2, 3, 1)])
 
-expect diamond().node_count() == 4 & diamond().edge_count() == 5
-expect diamond().neighbors(0) == [1, 2] & diamond().neighbors(3) == []
-expect diamond().in_degree(0) == 0 & diamond().in_degree(2) == 2 & diamond().in_degree(9) == 0
+expect diamond.node_count() == 4 & diamond.edge_count() == 5
+expect diamond.neighbors(0) == [1, 2] & diamond.neighbors(3) == []
+expect diamond.in_degree(0) == 0 & diamond.in_degree(2) == 2 & diamond.in_degree(9) == 0
 # A graph has the nodes it is given, even with no edges, and grows to hold
 # an edge that names one past them.
 expect UnGraph.from_edges(3, []).node_count() == 3 & DiGraph.from_edges(2, [(0, 3)]).node_count() == 4
-expect bfs(diamond(), 0) == [0, 1, 2, 3] & dfs(diamond(), 0) == [0, 1, 2, 3]
+expect bfs(diamond, 0) == [0, 1, 2, 3] & dfs(diamond, 0) == [0, 1, 2, 3]
 # Direction matters: nothing leaves the sink, and a node the graph does not
 # have reaches nothing.
-expect bfs(diamond(), 3) == [3] & bfs(diamond(), 9) == []
+expect bfs(diamond, 3) == [3] & bfs(diamond, 9) == []
 expect (
-  paths = dijkstra(diamond(), 0)
+  paths = dijkstra(diamond, 0)
   paths.cost(3) == Ok(4) & paths.path(3) == Ok([0, 1, 2, 3]) & paths.path(0) == Ok([0])
 )
-expect dijkstra(diamond(), 3).cost(0) == Err(Unreachable)
+expect dijkstra(diamond, 3).cost(0) == Err(Unreachable)
 # A source the graph does not have reaches nothing, itself included.
-expect dijkstra(diamond(), 9).cost(9) == Err(Unreachable) & dijkstra(diamond(), 9).path(0) == Err(Unreachable)
+expect dijkstra(diamond, 9).cost(9) == Err(Unreachable) & dijkstra(diamond, 9).path(0) == Err(Unreachable)
 # Turned round, the sink reaches everything and the source nothing, and
 # what came in goes out.
-expect bfs(diamond().reversed(), 3) == [3, 1, 2, 0] & bfs(diamond().reversed(), 0) == [0]
-expect diamond().reversed().in_degree(0) == 2 & diamond().reversed().reversed().neighbors(0) == [1, 2]
+expect bfs(diamond.reversed(), 3) == [3, 1, 2, 0] & bfs(diamond.reversed(), 0) == [0]
+expect diamond.reversed().in_degree(0) == 2 & diamond.reversed().reversed().neighbors(0) == [1, 2]
 
 # Depth first goes to the end of the first edge before trying the second;
 # breadth first takes both before either's targets.
@@ -89,12 +89,12 @@ expect components(UnGraph.from_edges(5, [(3, 4), (4, 0), (2, 1)])) == [[0, 3, 4]
 # Strongly connected components follow edges one way: a cycle is one, and
 # the groups come so that every edge between two goes forwards.
 expect strong_components(DiGraph.from_edges(5, [(0, 1), (1, 2), (2, 0), (2, 3), (3, 4), (4, 3)])) == [[0, 2, 1], [3, 4]]
-expect strong_components(diamond()) == [[0], [1], [2], [3]]
+expect strong_components(diamond) == [[0], [1], [2], [3]]
 expect strong_components(DiGraph.from_edges(2, [(1, 0)])) == [[1], [0]]
 
 # Every node before what its edges reach: edged's example, in its order.
 expect toposort(DiGraph.from_edges(6, [(0, 1), (1, 2), (0, 3), (3, 1), (3, 5), (3, 4), (4, 5)])) == Ok([0, 3, 4, 5, 1, 2])
-expect toposort(diamond()) == Ok([0, 1, 2, 3])
+expect toposort(diamond) == Ok([0, 1, 2, 3])
 # Two edges into one node both have to be taken, and a node no edge touches
 # is ready from the start.
 expect toposort(DiGraph.from_edges(3, [(0, 1), (0, 1)])) == Ok([0, 1, 2])

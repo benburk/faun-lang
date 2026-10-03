@@ -9,11 +9,11 @@ import hasher {Hasher}
 export {U8}
 
 numerals_below : Nat
-numerals_below() -> 256
+numerals_below = 256
 
 U8 : Nat.(
   zero : U8
-  zero() -> U8(0)
+  zero = U8(0)
 
   of_nat : Nat -> U8
   of_nat(n) -> U8(n % 256)

@@ -1,0 +1,5 @@
+error: `zero` is a value, not a function: write `zero`
+ --> a_value_is_not_called.fn:7:37
+  |
+7 | main!(host) -> host.exit!(U8.of_nat(zero()))
+  |                                     ^^^^

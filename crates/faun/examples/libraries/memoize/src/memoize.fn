@@ -13,7 +13,7 @@ export {Memo}
 
 Memo(k, v) : Map(k, v).(
   empty : Memo(k, v)
-  empty() -> Memo(Map.empty())
+  empty = Memo(Map.empty)
 
   memoize : (Memo(k, v), k, c, (Memo(k, v), c) -> (v, Memo(k, v))) -> (v, Memo(k, v)) where
     k.hash_into : (k, Mixer) -> Mixer,

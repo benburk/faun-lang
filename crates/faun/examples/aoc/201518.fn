@@ -84,20 +84,20 @@ app(input) -> (
 )
 
 example : Str
-example() -> ".#.#.#\n...##.\n#....#\n..#...\n#.#..#\n####..\n"
+example = ".#.#.#\n...##.\n#....#\n..#...\n#.#..#\n####..\n"
 
-expect part1(example(), 4) == Ok(4)
-expect part2(example(), 5) == Ok(17)
-expect part1(example(), 0) == Ok(15)
-expect part2(example(), 0) == Ok(17)
+expect part1(example, 4) == Ok(4)
+expect part2(example, 5) == Ok(17)
+expect part1(example, 0) == Ok(15)
+expect part2(example, 0) == Ok(17)
 
 # Compare whole generations, not just populations: updates are simultaneous.
 expect (
-  grid = parse_grid(example()).ok_or([])
+  grid = parse_grid(example).ok_or([])
   Ok(step(grid)) == parse_grid("..##..\n..##.#\n...##.\n......\n#.....\n#.##..\n")
 )
 expect (
-  grid = parse_grid(example()).ok_or([])
+  grid = parse_grid(example).ok_or([])
   Ok(corners(step(corners(grid, True)), True)) ==
     parse_grid("#.##.#\n####.#\n...##.\n......\n#...#.\n#.####\n")
 )

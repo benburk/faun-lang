@@ -47,12 +47,28 @@ fn a_body_of_several_lines_is_a_block() {
             "expect\n  y = 1\n  y == 1\n",
             "a binding belongs to a block",
         ),
-        ("f(x) -> x\ny = 1\n", "a binding belongs to a block"),
         ("f(x) -> x\n  x\n", "belongs to no definition"),
         (
             "f(x) -> (\n  y = x\n  y\ng(x) -> x\n",
             "this `(` is not closed: its block runs on into the next item",
         ),
+    ] {
+        let error = parse(source).unwrap_err();
+        assert!(error.message.contains(said), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn a_definition_of_no_parameters_is_a_value() {
+    let read = clauses("origin = (0, 0)\n");
+    assert!(read[0].patterns.is_empty());
+    for (source, said) in [
+        (
+            "origin() -> (0, 0)\n",
+            "a definition of no parameters is a value: `origin = ...`",
+        ),
+        ("(x, y) = (0, 0)\n", "a value is named by one name"),
+        ("Origin = (0, 0)\n", "expected"),
     ] {
         let error = parse(source).unwrap_err();
         assert!(error.message.contains(said), "{source}: {}", error.message);
@@ -324,31 +340,31 @@ fn a_range_s_ends_may_be_negated_or_left_open() {
 
 #[test]
 fn decimal_limits_do_not_depend_on_other_literals_in_the_file() {
-    for suffix in ["", "\ntext() -> \"text\"", "\ncharacter() -> 'x'"] {
+    for suffix in ["", "\ntext = \"text\"", "\ncharacter = 'x'"] {
         for exponent in ["10001", "-10001", "4294967296"] {
-            let source = format!("number() -> 1.0e{exponent}{suffix}");
+            let source = format!("number = 1.0e{exponent}{suffix}");
             let error = parse(&source).unwrap_err();
             assert!(error.message.contains("reaches past 10000"), "{error}");
-            assert_eq!((error.line, error.column), (1, 13));
+            assert_eq!((error.line, error.column), (1, 10));
         }
     }
     for exponent in ["10000", "-10000"] {
-        parse(&format!("number() -> 1.0e{exponent}")).unwrap();
+        parse(&format!("number = 1.0e{exponent}")).unwrap();
     }
 }
 
 #[test]
 fn literal_validation_reaches_every_syntactic_position() {
     for source in [
-        r#"value() -> "\q""#,
+        r#"value = "\q""#,
         r#"match("\q") -> 0"#,
         r"match('\q'..'z') -> 0",
         r"match(x) if x == '\q' -> 0",
-        "value() -> (\n  x = '\\q'\n  x\n)",
-        r"value() -> map(|'\q'| 0)",
-        r#"value() -> "${'\q'}""#,
-        r#"value() -> "${"\q"}""#,
-        "T : Nat.(\n  value() -> \"\\q\"\n)",
+        "value = (\n  x = '\\q'\n  x\n)",
+        r"value = map(|'\q'| 0)",
+        r#"value = "${'\q'}""#,
+        r#"value = "${"\q"}""#,
+        "T : Nat.(\n  value = \"\\q\"\n)",
         r#"expect "\q" == """#,
         r#"package {dep: "\q"}"#,
     ] {
@@ -362,11 +378,11 @@ fn literal_validation_reaches_every_syntactic_position() {
 
 #[test]
 fn literal_errors_cover_the_literal_at_its_unicode_source_position() {
-    let source = "value() -> (\"é\", '\\q')";
+    let source = "value = (\"é\", '\\q')";
     let error = parse(source).unwrap_err();
     let start = source.find("'\\q'").unwrap();
     assert_eq!((error.offset, error.end), (start, start + 4));
-    assert_eq!((error.line, error.column), (1, 18));
+    assert_eq!((error.line, error.column), (1, 15));
 }
 
 #[test]

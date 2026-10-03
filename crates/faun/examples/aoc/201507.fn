@@ -15,7 +15,7 @@ Rules = List((Str, List(Str)))
 Signals = Map(Str, U32)
 
 mask : U32
-mask() -> 0xffff
+mask = 0xffff
 
 rules : Str -> Rules
 rules(input) -> input.trim().lines().map(|line| line.split(" -> ")).flat_map(ruled)
@@ -43,14 +43,14 @@ filled(Err(_), signals, _) -> signals
 # binary form shares one row.
 value : (List(Str), Signals) -> Result(U32, [Missing, Unreadable])
 value([a], signals) -> resolve(a, signals)
-value(["NOT", a], signals) -> Ok(resolve(a, signals)? ^ mask())
+value(["NOT", a], signals) -> Ok(resolve(a, signals)? ^ mask)
 value([a, op, b], signals) -> combine(op, resolve(a, signals)?, resolve(b, signals)?)
 value(_, _) -> Err(Unreadable)
 
 combine : (Str, U32, U32) -> Result(U32, [Unreadable])
 combine("AND", x, y) -> Ok(x & y)
 combine("OR", x, y) -> Ok(x | y)
-combine("LSHIFT", x, y) -> Ok(x.shift_left(y.to_nat()) & mask())
+combine("LSHIFT", x, y) -> Ok(x.shift_left(y.to_nat()) & mask)
 combine("RSHIFT", x, y) -> Ok(x.shift_right(y.to_nat()))
 combine(_, _, _) -> Err(Unreadable)
 
@@ -61,11 +61,11 @@ resolve : (Str, Signals) -> Result(U32, [Missing, Unreadable])
 resolve(token, signals) -> operand(Nat.from_str(token), token, signals)
 
 operand : (Result(Nat, e), Str, Signals) -> Result(U32, [Missing, Unreadable])
-operand(Ok(numeral), _, _) -> Ok(U32.of_nat(numeral) & mask())
+operand(Ok(numeral), _, _) -> Ok(U32.of_nat(numeral) & mask)
 operand(Err(_), name, signals) -> signals.get(name)
 
 solved : (Rules, Str) -> Result(Nat, _)
-solved(wiring, wire) -> wiring.len().times(Map.empty(), |signals| sweep(wiring, signals))
+solved(wiring, wire) -> wiring.len().times(Map.empty, |signals| sweep(wiring, signals))
   .get(wire)
   .map_ok(|signal| signal.to_nat())
   .err_as(NoSignal(wire))
@@ -94,16 +94,16 @@ app(input) -> (
 )
 
 example : Str
-example() -> "123 -> x\n456 -> y\nx AND y -> d\nx OR y -> e\nx LSHIFT 2 -> f\ny RSHIFT 2 -> g\nNOT x -> h\nNOT y -> i\n"
+example = "123 -> x\n456 -> y\nx AND y -> d\nx OR y -> e\nx LSHIFT 2 -> f\ny RSHIFT 2 -> g\nNOT x -> h\nNOT y -> i\n"
 
-expect signal_on(example(), "d") == Ok(72)
-expect signal_on(example(), "e") == Ok(507)
-expect signal_on(example(), "f") == Ok(492)
-expect signal_on(example(), "g") == Ok(114)
-expect signal_on(example(), "h") == Ok(65412)
-expect signal_on(example(), "i") == Ok(65079)
-expect signal_on(example(), "x") == Ok(123)
-expect signal_on(example(), "y") == Ok(456)
+expect signal_on(example, "d") == Ok(72)
+expect signal_on(example, "e") == Ok(507)
+expect signal_on(example, "f") == Ok(492)
+expect signal_on(example, "g") == Ok(114)
+expect signal_on(example, "h") == Ok(65412)
+expect signal_on(example, "i") == Ok(65079)
+expect signal_on(example, "x") == Ok(123)
+expect signal_on(example, "y") == Ok(456)
 
 # Rules may arrive in any order: a later sweep settles what an early one met
 # too soon.
