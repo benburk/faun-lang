@@ -121,10 +121,17 @@ energy([body, *rest]) -> (
   kinetic + potential + energy(rest)
 )
 
+# How many steps to take, held in 32 bits as a C program would hold it in
+# a fixed word: the game's workload is 50,000,000. A count past that word
+# is refused rather than wrapped.
+step_count : Nat -> Result(U32, [OutOfBounds])
+step_count(n) if n < 4294967296 -> Ok(U32.of_nat(n))
+step_count(_) -> Err(OutOfBounds)
+
 app : {args: List(Str)} -> Result(Str, [OutOfBounds, Malformed])
 app(input) -> (
-  n = Nat.from_str(input.args.get(1)?)?
-  Ok("${energy(system).to_fixed(9)}\n${energy(steps(system, n)).to_fixed(9)}")
+  n = step_count(Nat.from_str(input.args.get(1)?)?)?
+  Ok("${energy(system).to_fixed(9)}\n${energy(steps(system, n.to_nat())).to_fixed(9)}")
 )
 
 expect energy(system).to_fixed(9) == "-0.169075164"

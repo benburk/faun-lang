@@ -27,6 +27,8 @@ three) and with counters over 5,000,000, per step:
 | In place (`bcb809f`)     |  0.14 s |       4,100 |    748 |      555 |
 | `kick` fused (`a6c989f`) |  0.11 s |       3,326 |    606 |      401 |
 | Composed (`94cc271`)     |  0.07 s |       2,192 |    401 |      229 |
+| Lengths kept (`9e47e44`) |  0.07 s |       2,067 |    413 |      134 |
+| `U32` step count         |  0.07 s |       1,995 |    414 |      122 |
 | Scalar C, as below       |  0.03 s |         544 |    194 |       13 |
 
 `map` and `map_accum` replace each body where it lies instead of building
@@ -38,7 +40,15 @@ checked. Composing in-place walks then writes `kick`'s answer into the
 buffer it walks too, through the `map_accum` it goes on with, so a step
 builds no buffer at all; the rest of the gap is the calls between walks,
 the index and uniqueness checks each replacement makes, and reference-count
-traffic.
+traffic. Keeping a list's length through recognized sequence operations
+then holds nbody's at five outright, so a replacement asks nothing of its
+index; and holding the step count in 32 bits, as C holds it in a fixed
+word, makes the step loop count in a word rather than an arbitrary-precision
+natural, with no `nat.drop` a step. Neither moves the time: those branches
+and calls were all predicted. What a step still asks is whether each buffer
+it writes is its own, fifteen times, and the unconditional jumps the x86
+backend lays structured control flow out with: 62 conditional branches and
+59 unconditional against C's 10 and 3.
 
 ## Comparison with C
 
