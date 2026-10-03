@@ -8,6 +8,17 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "a list of words mapped, written without asking, is read after as it was",
+        "main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           xs = [U32.of_nat(n), U32.of_nat(n + 1), U32.of_nat(n + 2)]
+           ys = xs.map(|x| x + U32.of_nat(10))
+           host.exit!(U8.of_nat(xs.fold(0, |s, x| s + x.to_nat()) * 10 + ys.fold(0, |s, y| s + y.to_nat()) + ys.len() - 3))
+         )",
+        96,
+    ),
+    (
         "a list a walk rewrites through another walk is read after as it was",
         "pass : List(Nat) -> List(Nat)
          pass([x, *rest]) -> (

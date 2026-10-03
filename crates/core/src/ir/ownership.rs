@@ -150,26 +150,8 @@ fn sequence_taken(op: &Op, operands: &[ValueId], out: &mut Vec<ValueId>) {
 /// The values some instruction in a region, or its exit, takes a claim to.
 fn consumed_in(source: &Program, region: RegionId, owned: &[Vec<bool>], out: &mut Vec<ValueId>) {
     for (op, results) in source.walk(region) {
+        taken_by(source, op, results, owned, out);
         match *op {
-            Op::Cell { fields, .. } => out.extend_from_slice(source.values(fields)),
-            Op::BufferPush { operands, .. }
-            | Op::BufferAppend { operands, .. }
-            | Op::BufferReplace { operands, .. }
-            | Op::BufferPrepend { operands, .. }
-            | Op::BufferExtend { operands, .. } => {
-                sequence_taken(op, source.values(operands), out);
-            }
-            Op::Convert { value } if source.class(value) == source.class(results[0]) => {
-                out.push(value);
-            }
-            Op::Call { function, args } => out.extend(
-                source
-                    .values(args)
-                    .iter()
-                    .zip(taken(owned, function))
-                    .filter(|&(_, &owned)| owned)
-                    .map(|(&arg, _)| arg),
-            ),
             Op::If {
                 then_region,
                 else_region,
@@ -178,14 +160,47 @@ fn consumed_in(source: &Program, region: RegionId, owned: &[Vec<bool>], out: &mu
                 consumed_in(source, then_region, owned, out);
                 consumed_in(source, else_region, owned, out);
             }
-            Op::Loop { initial, body } => {
-                out.extend_from_slice(source.values(initial));
-                consumed_in(source, body, owned, out);
-            }
+            Op::Loop { body, .. } => consumed_in(source, body, owned, out),
             _ => {}
         }
     }
     out.extend_from_slice(source.outgoing(region));
+}
+
+/// The values one instruction takes a claim to itself, not counting what
+/// the regions it holds take: a cell its fields, a sequence's instruction
+/// what [`sequence_taken`] says, a conversion within one class its value,
+/// a call what it hands an owned parameter, and a loop its initial state.
+pub(super) fn taken_by(
+    source: &Program,
+    op: &Op,
+    results: &[ValueId],
+    owned: &[Vec<bool>],
+    out: &mut Vec<ValueId>,
+) {
+    match *op {
+        Op::Cell { fields, .. } => out.extend_from_slice(source.values(fields)),
+        Op::BufferPush { operands, .. }
+        | Op::BufferAppend { operands, .. }
+        | Op::BufferReplace { operands, .. }
+        | Op::BufferPrepend { operands, .. }
+        | Op::BufferExtend { operands, .. } => {
+            sequence_taken(op, source.values(operands), out);
+        }
+        Op::Convert { value } if source.class(value) == source.class(results[0]) => {
+            out.push(value);
+        }
+        Op::Call { function, args } => out.extend(
+            source
+                .values(args)
+                .iter()
+                .zip(taken(owned, function))
+                .filter(|&(_, &owned)| owned)
+                .map(|(&arg, _)| arg),
+        ),
+        Op::Loop { initial, .. } => out.extend_from_slice(source.values(initial)),
+        _ => {}
+    }
 }
 
 /// Whether each parameter of `function` is owned.

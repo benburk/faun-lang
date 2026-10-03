@@ -208,6 +208,48 @@ impl Library {
         [owned, front, written]
     }
 
+    /// The same, where nothing else holds the buffer, which is known before
+    /// the program runs: written where it lies, and nothing asked.
+    pub(super) fn replace_unique(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
+        (buffer, start, _): (ValueId, ValueId, ValueId),
+        index: ValueId,
+    ) -> [ValueId; 3] {
+        let at = b.binary(Binary::Add, start, index);
+        let written = self.element(b, buffer, element.size, at);
+        [buffer, start, written]
+    }
+
+    /// The sequence of `len` from `start` of `buffer`, whose claim this
+    /// takes, in a buffer nothing else holds: the same one where that is
+    /// so, and otherwise a copy, as replacing an element would make. The
+    /// buffer and where the sequence starts in it.
+    pub(super) fn own(
+        &self,
+        b: &mut Builder<'_>,
+        element: &Packed,
+        (buffer, start, len): (ValueId, ValueId, ValueId),
+    ) -> [ValueId; 2] {
+        let own = self.routines[&(Growth::Replace, key(element))];
+        let refs = b.load(Width::Word, buffer, Offset::Words(1));
+        let one = number(b, 1);
+        let alone = b.compare(Relation::Equal, refs, one);
+        let zero = number(b, 0);
+        let owned = b.if_(
+            alone,
+            &[A, W],
+            |b| b.yield_(&[buffer, start]),
+            |b| {
+                let fresh = b.call_one(own, &[buffer, start, len, zero]);
+                let front = started(b, (buffer, fresh), (start, len), zero);
+                b.yield_(&[fresh, front]);
+            },
+        );
+        [owned[0], owned[1]]
+    }
+
     /// The `count` elements from `from_start` of `from`, last first, put
     /// before the sequence of `len` from `start` of `buffer`, the claims to
     /// both of which this takes: the buffer and where the joined sequence

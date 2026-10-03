@@ -8,6 +8,12 @@
 //! use is its last and retains a new one otherwise. A value whose last use is
 //! an `if` hands its claim to both arms, and each releases it at its own last
 //! use. An exit releases whatever the scopes it leaves still hold.
+//!
+//! A replacement asks whether anything else holds its buffer, unless
+//! [`super::uniqueness`] knows nothing does: then it writes where the
+//! element lies. A loop rewriting a buffer every time round makes the one it
+//! is handed nothing else's once, on entry, so that each replacement in it
+//! is one of those.
 
 use std::{cell::Cell, collections::BTreeMap};
 
@@ -61,6 +67,10 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
     let shapes = Shapes::of(source, &mut output, config.word_bits)?;
     let (cells, sequences) = managed_runtime(&mut output, source, &library, (config, &shapes));
     let constants = constants(source, &mut output, config)?;
+    let owned = ownership::owned_parameters(source);
+    let unique = super::uniqueness::unique(source, &owned, &|shape| {
+        shapes.packed(shape).managed().next().is_none()
+    });
     let pass = Pass {
         source,
         library,
@@ -71,7 +81,8 @@ pub fn legalize(source: &Program, config: Config) -> Result<Program, String> {
         constants,
         divisors,
         values: vec![Cell::new(None); source.values_count()],
-        owned: ownership::owned_parameters(source),
+        unique,
+        owned,
     };
     pass.define_bodies(&mut output);
     validate(&output).map_err(|error| format!("after natural legalization: {error}"))?;
@@ -563,6 +574,9 @@ struct Pass<'a> {
     values: Vec<Cell<Option<ValueId>>>,
     /// Which parameters of each function own a claim.
     owned: Vec<Vec<bool>>,
+    /// Which replacements write a buffer nothing else holds, and which
+    /// loops make theirs one on entry.
+    unique: super::uniqueness::Unique,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -762,11 +776,13 @@ impl Pass<'_> {
 
     /// The sequence with element `index` replaced by the one whose leaves
     /// are `claimed`: written where it lies in a buffer nothing else holds.
+    /// Replace element `index` of a sequence, where `unique` says nothing
+    /// else holds its buffer, so nothing need ask.
     fn replace(
         &self,
         b: &mut Builder,
         sequence: (ValueId, ValueId, ValueId),
-        index: ValueId,
+        (index, unique): (ValueId, bool),
         shape: ShapeId,
         claimed: &[ValueId],
     ) -> [ValueId; 2] {
@@ -775,9 +791,43 @@ impl Pass<'_> {
             .sequences
             .as_ref()
             .expect("buffer helpers were requested");
-        let [owned, front, element] = sequences.replace(b, packed, sequence, index);
+        let [owned, front, element] = if unique {
+            sequences.replace_unique(b, packed, sequence, index)
+        } else {
+            sequences.replace(b, packed, sequence, index)
+        };
         Self::store_leaves(b, (element, 0), packed, claimed);
         [owned, front]
+    }
+
+    /// A loop's initial state, with each buffer it rewrites every time round
+    /// made one nothing else holds, where it may not be: its start beside
+    /// it moves with it where it is copied.
+    fn owned_on_entry(
+        &self,
+        b: &mut Builder,
+        body: RegionId,
+        mut initial: Vec<ValueId>,
+    ) -> Vec<ValueId> {
+        let Some(owning) = self.unique.owned.get(&body) else {
+            return initial;
+        };
+        let sequences = self
+            .sequences
+            .as_ref()
+            .expect("buffer helpers were requested");
+        for &(at, shape) in owning {
+            let packed = self.shapes.packed(shape);
+            let (start, len) = (word(b, initial[at + 1]), word(b, initial[at + 2]));
+            let [owned, front] = sequences.own(b, packed, (initial[at], start, len));
+            initial[at] = owned;
+            initial[at + 1] = if b.class(initial[at + 1]) == Class::Word {
+                front
+            } else {
+                b.convert(b.class(initial[at + 1]), front)
+            };
+        }
+        initial
     }
 
     /// Read one leaf of element `start` of a buffer, holding a claim to it.
@@ -1027,8 +1077,9 @@ impl Pass<'_> {
                     .iter()
                     .map(|&old| self.take(b, scopes, live, at, old))
                     .collect();
+                let unique = self.unique.replaced.contains(&results[0]);
                 return self
-                    .replace(b, (buffer, start, len), index, shape, &claimed)
+                    .replace(b, (buffer, start, len), (index, unique), shape, &claimed)
                     .to_vec();
             }
             Op::BufferPrepend { operands, shape } => {
@@ -1244,6 +1295,7 @@ impl Pass<'_> {
                         }
                     })
                     .collect();
+                let initial = self.owned_on_entry(b, body, initial);
                 let outer: &[Scope] = scopes;
                 return b.loop_(&initial, &classes(), |b, params| {
                     let mut scopes = outer.to_vec();

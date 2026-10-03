@@ -29,6 +29,7 @@ three) and with counters over 5,000,000, per step:
 | Composed (`94cc271`)     |  0.07 s |       2,192 |    401 |      229 |
 | Lengths kept (`9e47e44`) |  0.07 s |       2,067 |    413 |      134 |
 | `U32` step count         |  0.07 s |       1,995 |    414 |      122 |
+| Static uniqueness        |  0.05 s |       1,517 |    309 |       74 |
 | Scalar C, as below       |  0.03 s |         544 |    194 |       13 |
 
 `map` and `map_accum` replace each body where it lies instead of building
@@ -48,7 +49,10 @@ natural, with no `nat.drop` a step. Neither moves the time: those branches
 and calls were all predicted. What a step still asks is whether each buffer
 it writes is its own, fifteen times, and the unconditional jumps the x86
 backend lays structured control flow out with: 62 conditional branches and
-59 unconditional against C's 10 and 3.
+59 unconditional against C's 10 and 3. Knowing statically that the buffer a
+loop rewrites is nothing else's -- it is a replacement's answer, moved round,
+once made so on entry -- removes the fifteen: a step then asks once, on
+entering `kick`, and writes every element without asking, at 309 cycles.
 
 ## Comparison with C
 

@@ -82,6 +82,7 @@ mod sequence;
 mod shifts;
 mod simplify;
 mod split;
+mod uniqueness;
 mod validate;
 
 pub use builder::Builder;
