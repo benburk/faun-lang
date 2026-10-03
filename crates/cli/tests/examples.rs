@@ -361,6 +361,22 @@ fn the_nbody_examples_hold() {
     }
 }
 
+/// The spectral-norm benchmark's norms, at sizes one, ten and a hundred,
+/// are the ones its C reference gives, the last the benchmarks game's own:
+/// built and run on this machine as `faun test` does.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn the_spectralnorm_example_holds() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_faun"))
+        .arg("test")
+        .arg(example("spectralnorm/main.fn"))
+        .output()
+        .unwrap();
+    let said = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{said}");
+    assert_eq!(said, "3 expectations hold\n");
+}
+
 /// Ori's Newton's method, ported: its expectations hold, and running it
 /// prints the square root of two.
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]

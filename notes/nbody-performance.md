@@ -365,13 +365,14 @@ objdump -D -b binary -m i386:x86-64 -M intel /tmp/nbody-after > /tmp/nbody.asm
 Compare energy text before timing, preserving the raw timing samples as JSON:
 
 ```sh
-python3 crates/faun/examples/nbody/compare.py --cpu 10 --steps 1000000 \
+python3 crates/faun/examples/compare.py --cpu 10 --argument 1000000 \
+  --check 0,1,10,1000,10000,100000 \
   /tmp/nbody-before /tmp/nbody-after /tmp/nbody-c-scalar /tmp/nbody-c-auto
 ```
 
 Choose a permitted, idle CPU and check its SMT sibling as well. The script
 warms each executable, alternates run order, checks every timed output and
-reports seven-run medians. `--steps 50000000 --runs 1` performs the longer
+reports seven-run medians. `--argument 50000000 --runs 1` performs the longer
 correctness comparison without treating one run as a stable timing estimate.
 
 Use `/tmp/nbody-before` for the baseline build. The ELF has no section or symbol

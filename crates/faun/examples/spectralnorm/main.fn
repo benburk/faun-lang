@@ -1,0 +1,68 @@
+# The spectral norm of an infinite matrix, after the benchmarks-game program
+# of the same name: ten rounds of the power method on its leading `n` by `n`
+# corner, each multiplying by the matrix and then by its transpose.
+#
+# This is the floating-point benchmark of long lists rather than small
+# records: every multiplication walks a list of `n` `F64`s once for each of
+# its `n` rows, and builds the next list from what each row sums to. It
+# measures `F64` arithmetic, chiefly the division each entry takes, the fold
+# over a list carrying a column beside its sum, the function passed for the
+# matrix or its transpose, and building and freeing the lists the rounds
+# pass on.
+#
+# The first argument is `n`. The line printed is the norm to nine decimal
+# places, the game's own output.
+
+import std.host {Host}
+
+# The matrix's entry at row `i` and column `j`, counting from nought. The
+# indices are floats, as Chapel's and Haskell's programs take them: each
+# number here is whole and below `2^53`, so exact, and the entry is the one
+# integers would give.
+entry : (F64, F64) -> F64
+entry(i, j) -> (
+  diagonal = i + j
+  1.0 / (diagonal * (diagonal + 1.0) * 0.5 + i + 1.0)
+)
+
+# `u` multiplied by the matrix whose entries `at` gives by row and column:
+# each row's entries times `u`, summed left to right.
+times : (List(F64), (F64, F64) -> F64) -> List(F64)
+times(u, at) -> List.range(u.len()).map(|i| (
+  row = F64.of_nat(i)
+  (_, sum) = u.fold((0.0, 0.0), |(column, sum), x| (column + 1.0, sum + at(row, column) * x))
+  sum
+))
+
+# `u` multiplied by the matrix, then by its transpose.
+times_ata : List(F64) -> List(F64)
+times_ata(u) -> (
+  v = times(u, entry)
+  times(v, |i, j| entry(j, i))
+)
+
+# Starting from ones, ten rounds each taking `u` to `v` and `v` to the next
+# `u`; then the square root of the ratio of `u`·`v` to `v`·`v`.
+norm : Nat -> F64
+norm(n) -> (
+  (u, v) = 10.times((List.repeat(1.0, n), []), |(u, _)| (
+    v = times_ata(u)
+    (times_ata(v), v)
+  ))
+  vbv = u.map2(v, |a, b| a * b).sum()
+  vv = v.map2(v, |a, b| a * b).sum()
+  (vbv / vv).sqrt()
+)
+
+app : {args: List(Str)} -> Result(Str, [OutOfBounds, Malformed])
+app(input) -> (
+  n = Nat.from_str(input.args.get(1)?)?
+  Ok(norm(n).to_fixed(9))
+)
+
+expect norm(1).to_fixed(9) == "1.000000000"
+expect norm(10).to_fixed(9) == "1.271844019"
+expect norm(100).to_fixed(9) == "1.274219991"
+
+main! : Host -> []
+main!(host) -> host.run!(app)
