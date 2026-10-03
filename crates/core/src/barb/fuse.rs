@@ -170,26 +170,33 @@ impl Fusion<'_> {
         let (empty, push, recursive) = super::sequence::sequence(self.program, params[list])?;
         let arity = params.len();
         let [nil_arm, push_arm] = walk::split_arms(self.program, arms, empty, push)?;
-        // The empty arm answers the accumulator reversed onto nothing.
-        let Expr::Call(reverse, args) = self.program.expr(nil_arm.body.tail) else {
-            return None;
+        // The empty arm answers the accumulator reversed or prepended onto
+        // nothing -- or, built front to back, the accumulator itself, which
+        // is what prepending it onto nothing answers.
+        let (acc, ended) = match self.program.expr(nil_arm.body.tail) {
+            Expr::Atom(Atom(acc)) => (acc.index(), None),
+            Expr::Call(reverse, args) => {
+                let &[Atom(acc), Atom(onto)] = self.program.atoms(args) else {
+                    return None;
+                };
+                (acc.index(), Some((reverse, onto)))
+            }
+            _ => return None,
         };
-        let &[Atom(acc), Atom(onto)] = self.program.atoms(args) else {
-            return None;
-        };
-        let acc = acc.index();
-        let ends = super::sequence::reverses(self.program, reverse)
-            || self.recognised.sequences.get(reverse.index())
-                == Some(&Some(SequenceOperation::Prepend));
-        if acc >= arity || acc == list || !ends {
+        if acc >= arity || acc == list {
             return None;
         }
         // What it builds is a list too, but not necessarily of what it walks.
         let (built_empty, built_push, built_recursive) =
             super::sequence::sequence(self.program, params[acc])?;
-        let onto = walk::bound(self.program, nil_arm.body, arity, onto.index())?;
-        if !self.empty_constant(onto, built_empty) {
-            return None;
+        if let Some((reverse, onto)) = ended {
+            let ends = super::sequence::reverses(self.program, reverse)
+                || self.recognised.sequences.get(reverse.index())
+                    == Some(&Some(SequenceOperation::Prepend));
+            let onto = walk::bound(self.program, nil_arm.body, arity, onto.index())?;
+            if !ends || !self.empty_constant(onto, built_empty) {
+                return None;
+            }
         }
         // The push arm pushes one element onto it, and goes on.
         let push_body = push_arm.body;
@@ -206,6 +213,10 @@ impl Fusion<'_> {
         }
         let pushed = walk::bound(self.program, push_body, arity + 2, args[acc].0.index())?;
         self.pushed_element(pushed, acc, (built_push, built_recursive))?;
+        // Answered as it stands, it must have been built in order.
+        if ended.is_none() && !self.appends(pushed) {
+            return None;
+        }
         // Nothing else reads the accumulator, or the list it pushed onto.
         let next = args[acc].0.index();
         let reads = self.reads(push_body, acc) + self.reads(nil_arm.body, acc);
@@ -236,6 +247,16 @@ impl Fusion<'_> {
             }
             Expr::Atom(_) | Expr::Static(_) | Expr::Match(..) => None,
         }
+    }
+
+    /// Whether `expr` appends to what it builds, rather than pushing in
+    /// front of it.
+    fn appends(&self, expr: ExprId) -> bool {
+        matches!(
+            self.program.expr(expr),
+            Expr::Call(callee, _) if self.recognised.sequences.get(callee.index())
+                == Some(&Some(SequenceOperation::Append))
+        )
     }
 
     /// Whether a definition may be fused at all: it reaches no bodyless

@@ -44,7 +44,9 @@ use super::constant::Held;
 use super::evaluate::{CannotFold, Evaluation, Evaluator};
 use super::facts::Recognised;
 use super::inline::{InlineLimits, Inlining};
-use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Operation, Program, Range};
+use super::{
+    Arm, Atom, Body, Expr, ExprId, FnId, Local, Operation, Program, Range, SequenceOperation,
+};
 
 /// What a walk does beyond rebuilding, substituting aliases and deciding
 /// what is already decided, which every walk does.
@@ -981,7 +983,7 @@ impl Rewrite<'_> {
     /// The length of a sequence written as a known value, which is a number
     /// known too.
     fn counted(&mut self, called: FnId, args: &[Atom], scope: &mut Scope) -> Option<Atom> {
-        if self.recognised.sequences[called.index()] != Some(super::SequenceOperation::Length) {
+        if self.recognised.sequences[called.index()] != Some(SequenceOperation::Length) {
             return None;
         }
         let &[sequence] = args else {
@@ -1171,6 +1173,9 @@ impl Rewrite<'_> {
     /// operand, nought, or the comparison's answer. Its argument bindings
     /// stay where they are, so nothing they evaluate is dropped.
     fn identity(&mut self, called: FnId, args: &[Atom], scope: &mut Scope) -> Option<Atom> {
+        if let Some(op) = self.recognised.sequences[called.index()] {
+            return self.sequence_identity(op, called, args, scope);
+        }
         let op = self.recognised.operations[called.index()]?;
         let &[a, b] = args else {
             return None;
@@ -1209,6 +1214,56 @@ impl Rewrite<'_> {
             // In particular x/x is NOT one: x can be zero.
             _ => return None,
         })
+    }
+
+    /// A recognized sequence operation an empty operand decides, or a count
+    /// of nought: the operand it answers, the empty one it took, or nought
+    /// for the length of an empty sequence.
+    fn sequence_identity(
+        &mut self,
+        op: SequenceOperation,
+        called: FnId,
+        args: &[Atom],
+        scope: &mut Scope,
+    ) -> Option<Atom> {
+        let params = self.program.params(called).to_vec();
+        let empty = |at: usize| self.empty(args[at], params[at]);
+        Some(match op {
+            SequenceOperation::ReverseOnto | SequenceOperation::Prepend if empty(0) => args[1],
+            SequenceOperation::Prepend if empty(1) => args[0],
+            SequenceOperation::Drop if self.small(args[1]) == Some(0) => args[0],
+            SequenceOperation::Drop | SequenceOperation::Take | SequenceOperation::Replace
+                if empty(0) =>
+            {
+                args[0]
+            }
+            SequenceOperation::Length if empty(0) => {
+                let result = self.program.function(called).result;
+                let zero = self
+                    .program
+                    .intern_number(result, 0)
+                    .expect("a length is a natural");
+                self.push(Expr::Static(zero), scope)
+            }
+            _ => return None,
+        })
+    }
+
+    /// Whether a local of sequence type `ty` is known to be the empty one:
+    /// written as its empty constructor or as a known value built by it, or
+    /// taken apart into it by the arm it is read in.
+    fn empty(&self, atom: Atom, ty: super::TypeId) -> bool {
+        let Some((nil, _, _)) = super::sequence::sequence(self.program, ty) else {
+            return false;
+        };
+        let Some(Some(wrote)) = self.written.get(atom.0.index()) else {
+            return false;
+        };
+        match self.program.expr(*wrote) {
+            Expr::Con(ctor, _) => ctor == nil,
+            Expr::Static(value) => self.program.constant(value).constructor() == nil,
+            Expr::Atom(_) | Expr::Call(..) | Expr::Match(..) => false,
+        }
     }
 
     /// Whether a local is a natural known to be nought or one: written as

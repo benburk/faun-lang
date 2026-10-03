@@ -212,7 +212,8 @@ x    ::= a parameter, a binding, or a field an arm bound
   and prepend it calls are recognized definitions, found or written here.
 - `fuse.rs`: a producer walks a list, pushes one element onto an accumulator
   per step and answers it reversed, or appends each and answers it prepended
-  onto nothing, as `forward.rs` writes a walk; a consumer takes a list apart from the
+  onto nothing, as `forward.rs` writes a walk, or answers it as it is, which
+  is what the identities make of that; a consumer takes a list apart from the
   front, reading its rest only as the argument of tail calls to itself. A
   producer's call onto an empty accumulator read once, by a consumer's call
   later in the same body, becomes a call of a new definition doing both steps
@@ -252,7 +253,9 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `normalize.rs`, `cleanup.rs`: separate optimizing rewrites. The normalizing
   walk knows what wrote each local, and its rules are switched on per walk:
   the arithmetic identities -- `x + 0`, `x * 1`, `x monus x` and the like,
-  on recognized operations only -- combining constants, evaluating a
+  on recognized operations only, and their sequence counterparts:
+  prepending onto or reversing nothing, dropping nought, the length of
+  the empty sequence -- combining constants, evaluating a
   construction, call or match whose every input is known, and sharing.
   Evaluating is constant folding: there is no pass of its own for it.
   Sharing answers a call of an answered definition -- pure and total --
