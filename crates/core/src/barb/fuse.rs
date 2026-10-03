@@ -141,12 +141,15 @@ impl Fusion<'_> {
     /// ```text
     /// p(.. list .. acc ..) = match list
     ///   empty => ...; reverse(acc, <empty>)
-    ///   push(x, rest) => ...; next = push(e, acc); p(.. rest .. next ..)
+    ///   push(x, rest) => ...; next = push(e, acc); p(.. next ..)
     /// ```
     ///
     /// where `acc` is read nowhere else, and `reverse` is a reversal; or the
     /// same building front to back, as [`super::forward`] writes a walk,
-    /// `append(acc, e)` for the push and `prepend(acc, <empty>)` at the end.
+    /// `append(acc, e)` for the push and `prepend(acc, <empty>)`, or `acc`
+    /// itself, at the end. What it goes on walking is its own: the rest, or
+    /// whatever its step worked out. Its call may stand inside matches of
+    /// one arm ending the step.
     fn producer(&mut self, id: FnId) -> Option<Producer> {
         if let Some(&known) = self.producers.get(&id) {
             return known;
@@ -167,7 +170,7 @@ impl Fusion<'_> {
         let body = self.program.function(id).body()?;
         let (list, arms) = walk::top_match(self.program, body)?;
         let params = self.program.params(id);
-        let (empty, push, recursive) = super::sequence::sequence(self.program, params[list])?;
+        let (empty, push, _) = super::sequence::sequence(self.program, params[list])?;
         let arity = params.len();
         let [nil_arm, push_arm] = walk::split_arms(self.program, arms, empty, push)?;
         // The empty arm answers the accumulator reversed or prepended onto
@@ -198,20 +201,23 @@ impl Fusion<'_> {
                 return None;
             }
         }
-        // The push arm pushes one element onto it, and goes on.
+        // The push arm pushes one element onto it, and goes on, maybe
+        // inside matches of one arm taking apart what it goes on with. What
+        // it goes on walking is its own affair: the consumer is handed
+        // what it pushed, wherever that came from.
         let push_body = push_arm.body;
-        let Expr::Call(again, args) = self.program.expr(push_body.tail) else {
+        let (inner, base) = innermost(self.program, push_body, arity + 2);
+        let Expr::Call(again, args) = self.program.expr(inner.tail) else {
             return None;
         };
         if again != id {
             return None;
         }
         let args = self.program.atoms(args);
-        let rest = arity + recursive;
-        if args.len() != arity || args[list].0.index() != rest {
+        if args.len() != arity {
             return None;
         }
-        let pushed = walk::bound(self.program, push_body, arity + 2, args[acc].0.index())?;
+        let pushed = walk::bound(self.program, inner, base, args[acc].0.index())?;
         self.pushed_element(pushed, acc, (built_push, built_recursive))?;
         // Answered as it stands, it must have been built in order.
         if ended.is_none() && !self.appends(pushed) {
@@ -220,8 +226,7 @@ impl Fusion<'_> {
         // Nothing else reads the accumulator, or the list it pushed onto.
         let next = args[acc].0.index();
         let reads = self.reads(push_body, acc) + self.reads(nil_arm.body, acc);
-        (reads == 2 && self.reads_after(push_body, arity + 2, next) == 1)
-            .then_some(Producer { list, acc })
+        (reads == 2 && self.reads_after(inner, base, next) == 1).then_some(Producer { list, acc })
     }
 
     /// The element `expr` puts onto the accumulator at level `acc`: a push
@@ -458,27 +463,79 @@ impl Fusion<'_> {
     /// call, then the consumer's step on the element it would have pushed,
     /// going on with the fused walk wherever the consumer went on with
     /// itself.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the producer step, the element, and the consumer step are copied into one scope in order"
-    )]
     fn step(&mut self, pair: &Pair, (p_step, walked): (Arm, usize), c_step: Arm) -> Body {
         let arity = pair.arity;
-        let (_, _, recursive) =
-            super::sequence::sequence(self.program, self.program.params(pair.consumer)[pair.taken])
-                .expect("a list");
-        let mut scope = Scope::at(arity + 2);
         let mut locals = pair.p_locals.clone();
         locals.extend([Atom(Local::at(arity)), Atom(Local::at(arity + 1))]);
         // The rest of what the producer walks, which is the fused walk's.
         let rest = Atom(Local::at(arity + walked));
-        let Expr::Call(_, again) = self.program.expr(p_step.body.tail) else {
+        self.step_body(pair, p_step.body, locals, arity + 2, (rest, c_step))
+    }
+
+    /// The producer's step `body`, whose locals so far `locals` maps, its
+    /// first binding at `level` in the fused walk: down through each match
+    /// of one arm it ends with, to where it pushes and goes on, which goes
+    /// on as the consumer's step instead.
+    fn step_body(
+        &mut self,
+        pair: &Pair,
+        body: Body,
+        mut locals: Vec<Atom>,
+        level: usize,
+        (rest, c_step): (Atom, Arm),
+    ) -> Body {
+        let mut scope = Scope::at(level);
+        let Expr::Match(on, arms) = self.program.expr(body.tail) else {
+            return self.pushing(pair, body, locals, scope, (rest, c_step));
+        };
+        let &[arm] = self.program.arms(arms) else {
+            unreachable!("a producer's step ends in matches of one arm, then its call");
+        };
+        for binding in self.program.bindings(body.bindings).to_vec() {
+            let value = copy::expr(self.program, binding, &locals, &mut scope, None);
+            locals.push(value);
+        }
+        let fields = self.program.fields(arm.ctor).len();
+        let mut inner = locals.clone();
+        inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
+        let taken = self.step_body(pair, arm.body, inner, scope.level + fields, (rest, c_step));
+        let arms = self.program.terms.hold_arms(&[Arm {
+            ctor: arm.ctor,
+            body: taken,
+        }]);
+        let answer = copy::push(
+            self.program,
+            &mut scope,
+            Expr::Match(locals[on.0.index()], arms),
+        );
+        copy::close(self.program, scope, answer)
+    }
+
+    /// The body where the producer pushes and goes on, copied into `scope`
+    /// but for its push and its call, then the consumer's step on the
+    /// element it would have pushed.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the producer step, the element, and the consumer step are copied into one scope in order"
+    )]
+    fn pushing(
+        &mut self,
+        pair: &Pair,
+        body: Body,
+        mut locals: Vec<Atom>,
+        mut scope: Scope,
+        (rest, c_step): (Atom, Arm),
+    ) -> Body {
+        let (_, _, recursive) =
+            super::sequence::sequence(self.program, self.program.params(pair.consumer)[pair.taken])
+                .expect("a list");
+        let Expr::Call(_, again) = self.program.expr(body.tail) else {
             unreachable!("a producer's step calls itself")
         };
         let again = self.program.atoms(again).to_vec();
-        let p_arity = pair.p_locals.len();
-        let pushed = again[pair.acc].0.index() - (p_arity + 2);
-        let bindings = self.program.bindings(p_step.body.bindings).to_vec();
+        // The producer's own level of this body's first binding.
+        let pushed = again[pair.acc].0.index() - locals.len();
+        let bindings = self.program.bindings(body.bindings).to_vec();
         for (at, &binding) in bindings.iter().enumerate() {
             let value = if at == pushed {
                 UNREAD
@@ -746,6 +803,19 @@ impl Fusion<'_> {
                 .is_some_and(|Consumer { list }| args[list].0.index() == level)
         })
     }
+}
+
+/// The body a step ends in, down through each match of one arm it ends
+/// with, and the level of that body's first binding, where `body`'s is at
+/// `base`.
+fn innermost(program: &Program, mut body: Body, mut base: usize) -> (Body, usize) {
+    while let Expr::Match(_, arms) = program.expr(body.tail)
+        && let &[arm] = program.arms(arms)
+    {
+        base += program.bindings(body.bindings).len() + program.fields(arm.ctor).len();
+        body = arm.body;
+    }
+    (body, base)
 }
 
 /// Whether each function reaches no bodyless call, by function.

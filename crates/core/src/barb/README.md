@@ -213,7 +213,10 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `fuse.rs`: a producer walks a list, pushes one element onto an accumulator
   per step and answers it reversed, or appends each and answers it prepended
   onto nothing, as `forward.rs` writes a walk, or answers it as it is, which
-  is what the identities make of that; a consumer takes a list apart from the
+  is what the identities make of that. Its step may go on walking
+  whatever it likes -- `kick` goes on with what pairing its head with the
+  rest worked out -- and may call itself inside matches of one arm, taking
+  apart what it worked out first; a consumer takes a list apart from the
   front, reading its rest only as the argument of tail calls to itself. A
   producer's call onto an empty accumulator read once, by a consumer's call
   later in the same body, becomes a call of a new definition doing both steps
