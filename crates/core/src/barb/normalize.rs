@@ -1388,7 +1388,7 @@ impl Rewrite<'_> {
             program: self.program,
             operations: &self.recognised.operations,
         };
-        let value = evaluator.expr(id, &env, budget).ok()?;
+        let value = evaluator.expr(id, &mut env, budget).ok()?;
         let value = self.program.intern_held(&value);
         Some(self.push(Expr::Static(value), scope))
     }

@@ -246,7 +246,9 @@ x    ::= a parameter, a binding, or a field an arm bound
   substitute a different catalogue. The codec and views borrow only type metadata.
 - `evaluate.rs`, `budget.rs`: evaluation and its shared work/size/depth policy.
   A tail taking an arm or calling a definition goes on in a loop, so a loop
-  as long as its input costs work but not depth.
+  as long as its input costs work but not depth, and a match takes its arm
+  with the fields pushed onto the locals in scope rather than a copy of them,
+  so it costs what its arm does and not what is in scope.
 - `normalize.rs`, `cleanup.rs`: separate optimizing rewrites. The normalizing
   walk knows what wrote each local, and its rules are switched on per walk:
   the arithmetic identities -- `x + 0`, `x * 1`, `x monus x` and the like,

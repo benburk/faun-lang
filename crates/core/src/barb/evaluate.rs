@@ -26,7 +26,15 @@ pub(super) struct Evaluator<'a> {
 }
 
 impl Evaluator<'_> {
-    pub(super) fn expr(&self, id: ExprId, env: &[Evaluation], budget: &mut Budget) -> Evaluation {
+    /// What `id` evaluates to, where `env` holds what each local before it
+    /// is. A match extends `env` with its arm's fields while it evaluates
+    /// that arm, and leaves it as it found it.
+    pub(super) fn expr(
+        &self,
+        id: ExprId,
+        env: &mut Vec<Evaluation>,
+        budget: &mut Budget,
+    ) -> Evaluation {
         budget.descend(|budget| self.expr_inner(id, env, budget))
     }
 
@@ -45,7 +53,7 @@ impl Evaluator<'_> {
         atoms.iter().map(|a| env[a.0.index()].clone()).collect()
     }
 
-    fn expr_inner(&self, id: ExprId, env: &[Evaluation], budget: &mut Budget) -> Evaluation {
+    fn expr_inner(&self, id: ExprId, env: &mut Vec<Evaluation>, budget: &mut Budget) -> Evaluation {
         match self.program.expr(id) {
             Expr::Atom(a) => {
                 let value = env[a.0.index()].as_ref().map_err(|e| *e)?;
@@ -60,12 +68,13 @@ impl Evaluator<'_> {
                 let fields = self.args(fields, env, budget)?;
                 self.call(called, fields, budget)
             }
-            Expr::Match(value, arms) => self.branch(
-                env[value.0.index()].as_ref().map_err(|e| *e)?,
-                arms,
-                env,
-                budget,
-            ),
+            Expr::Match(value, arms) => {
+                let level = env.len();
+                let arm = self.arm(value, arms, env, budget)?;
+                let answer = self.run(arm, env, level, budget);
+                env.truncate(level);
+                answer
+            }
         }
     }
 
@@ -123,13 +132,16 @@ impl Evaluator<'_> {
         }
     }
 
-    fn branch(
+    /// The arm a match on `value` takes, its fields pushed onto `env`.
+    fn arm(
         &self,
-        held: &Held,
+        value: super::Atom,
         arms: super::Range,
-        env: &[Evaluation],
+        env: &mut Vec<Evaluation>,
         budget: &mut Budget,
-    ) -> Evaluation {
+    ) -> Result<Body, CannotFold> {
+        budget.spend(1)?;
+        let held = env[value.0.index()].as_ref().map_err(|e| *e)?;
         let (ctor, fields) = held.as_constant(self.program.type_info()).parts(budget)?;
         let arm = self
             .program
@@ -137,13 +149,8 @@ impl Evaluator<'_> {
             .iter()
             .find(|a| a.ctor == ctor)
             .expect("an exhaustive match");
-        budget.spend(u64::try_from(env.len()).map_err(|_| LimitExceeded::Work)?)?;
-        for value in env.iter().flatten() {
-            budget.bytes(value.encoded().len())?;
-        }
-        let mut inner = env.to_vec();
-        inner.extend(fields.into_iter().map(Ok));
-        self.body(arm.body, inner, budget)
+        env.extend(fields.into_iter().map(Ok));
+        Ok(arm.body)
     }
 
     pub(super) fn arithmetic(
@@ -190,40 +197,41 @@ impl Evaluator<'_> {
     }
 
     /// What `body` answers, where `env` holds what each local before it is.
+    pub(super) fn body(
+        &self,
+        body: Body,
+        mut env: Vec<Evaluation>,
+        budget: &mut Budget,
+    ) -> Evaluation {
+        self.run(body, &mut env, 0, budget)
+    }
+
+    /// What `body` answers, its bindings pushed onto `env`, whose first
+    /// `kept` locals belong to what is evaluating it.
     ///
     /// A tail taking a match's arm, or calling a definition answered by
     /// walking its body, goes on into that body here, in a loop rather than
     /// a level deeper: a loop as long as its input costs work, which the
-    /// budget bounds, but not depth, which bounds what is nested.
-    pub(super) fn body(
+    /// budget bounds, but not depth, which bounds what is nested. A call
+    /// goes on in `env` where nothing before it is kept, and in a new one
+    /// otherwise.
+    fn run(
         &self,
         mut body: Body,
-        mut env: Vec<Evaluation>,
+        env: &mut Vec<Evaluation>,
+        kept: usize,
         budget: &mut Budget,
     ) -> Evaluation {
         loop {
             for &binding in self.program.bindings(body.bindings) {
                 // An unused eager binding may perform effects or fail to return.
-                let value = self.expr(binding, &env, budget)?;
+                let value = self.expr(binding, env, budget)?;
                 env.push(Ok(value));
             }
             match self.program.expr(body.tail) {
-                Expr::Match(value, arms) => {
-                    budget.spend(1)?;
-                    let held = env[value.0.index()].as_ref().map_err(|e| *e)?;
-                    let (ctor, fields) =
-                        held.as_constant(self.program.type_info()).parts(budget)?;
-                    let arm = self
-                        .program
-                        .arms(arms)
-                        .iter()
-                        .find(|a| a.ctor == ctor)
-                        .expect("an exhaustive match");
-                    env.extend(fields.into_iter().map(Ok));
-                    body = arm.body;
-                }
+                Expr::Match(value, arms) => body = self.arm(value, arms, env, budget)?,
                 Expr::Call(called, args) => {
-                    let fields = self.args(args, &env, budget)?;
+                    let fields = self.args(args, env, budget)?;
                     if let Some(answered) = self.answered(called, &fields, budget) {
                         return answered;
                     }
@@ -233,10 +241,15 @@ impl Evaluator<'_> {
                         .function(called)
                         .body()
                         .ok_or(CannotFold::ExternalCall)?;
-                    env = fields.into_iter().map(Ok).collect();
+                    let fields = fields.into_iter().map(Ok);
+                    if kept > 0 {
+                        return self.body(body, fields.collect(), budget);
+                    }
+                    env.clear();
+                    env.extend(fields);
                 }
                 Expr::Atom(_) | Expr::Con(..) | Expr::Static(_) => {
-                    return self.expr(body.tail, &env, budget);
+                    return self.expr(body.tail, env, budget);
                 }
             }
         }
