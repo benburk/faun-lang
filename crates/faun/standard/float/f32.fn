@@ -79,7 +79,12 @@ F32 : U32.(
   # The nearest value to `n`, correctly rounded; past the largest, infinity.
   # A conversion only: a plain numeral is never a float, so `3` in a float
   # position is refused and `3.0` is how a float is written (numbers.md).
+  #
+  # Below `2^23`, `n` is exact: its bits under the pattern of `2^23` make
+  # `2^23 + n`, and taking `2^23` away leaves `n`, both exactly, so the
+  # conversion is one claimed subtraction rather than a rounding in software.
   of_nat : Nat -> F32
+  of_nat(n) if n < 0x800000 -> sub(wrap32(n + 0x4b000000), two_to_23)
   of_nat(n) -> wrap32(round_pack(binary32, False, n, 450))
 
   # A word's value, exactly when it fits the precision and otherwise
@@ -266,6 +271,10 @@ F32 : U32.(
   is_subnormal(x) -> magnitude32(x) > 0 & magnitude32(x) < 0x800000
 
 )
+
+# `2^23`, the least value whose units are its last place.
+two_to_23 : F32
+two_to_23 = F32(0x4b000000)
 
 # The binary32 wrapper's seams: a pattern from the core becomes a word, and
 # a word's pattern goes to the core.

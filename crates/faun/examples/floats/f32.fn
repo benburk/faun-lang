@@ -112,6 +112,10 @@ expect F32.to_str([1.5, 2.5].sum()) == "4.0"
 # Conversions with the integers: correctly rounded in, exact out, and the
 # five roundings to an integer value, each keeping the sign of a zero.
 expect F32.of_nat(16777217) == 16777216.0                  # a tie, to even
+expect F32.of_nat(0).to_bits() == 0                        # positive zero
+expect F32.of_nat(8388607).to_bits() == 0x4afffffe         # 2^23 - 1, exact
+expect F32.of_nat(8388608).to_bits() == 0x4b000000         # 2^23
+expect F32.of_nat(8388609).to_bits() == 0x4b000001
 expect F32.of_nat(2.pow(100)) == 1.2676506e30
 expect F32.of_nat(10.pow(40)) == F32.infinity
 expect F32.of_int(3.neg()) == -3.0

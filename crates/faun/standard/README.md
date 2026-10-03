@@ -41,10 +41,12 @@ check them, as `examples/floats/` is asked both ways. Folding answers a
 claimed call from its operands with the host's own arithmetic, and x86-64
 with one SSE2 instruction; a NaN may then be any NaN's pattern, which no
 program can tell, since `to_bits`, `cmp` and `sign_bit` read every NaN as
-one. What is left in software -- `of_decimal`, the conversions and the
-text -- costs a program that runs it thousands of instructions an
-operation, and constant folding what it can a hundred thousand steps of
-its budget: a numeral is folded, but slowly.
+one. `of_nat` of a natural below `2^52`, or `2^23`, is a claimed
+subtraction: that power taken from the pattern of the power plus the
+natural, both exact. What is left in software -- `of_decimal`, the other
+conversions and the text -- costs a program that runs it thousands of
+instructions an operation, and constant folding what it can a hundred
+thousand steps of its budget: a numeral is folded, but slowly.
 
 The words' `and`, `or` and `xor` reduce their answer modulo the word's
 size. Two words' bits make a word, so the remainder changes nothing; it is

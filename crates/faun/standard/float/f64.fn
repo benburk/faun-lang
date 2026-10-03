@@ -79,7 +79,12 @@ F64 : U64.(
   # The nearest value to `n`, correctly rounded; past the largest, infinity.
   # A conversion only: a plain numeral is never a float, so `3` in a float
   # position is refused and `3.0` is how a float is written (numbers.md).
+  #
+  # Below `2^52`, `n` is exact: its bits under the pattern of `2^52` make
+  # `2^52 + n`, and taking `2^52` away leaves `n`, both exactly, so the
+  # conversion is one claimed subtraction rather than a rounding in software.
   of_nat : Nat -> F64
+  of_nat(n) if n < 0x10000000000000 -> sub(wrap64(n + 0x4330000000000000), two_to_52)
   of_nat(n) -> wrap64(round_pack(binary64, False, n, 3225))
 
   # A word's value, exactly when it fits the precision and otherwise
@@ -266,6 +271,10 @@ F64 : U64.(
   is_subnormal(x) -> magnitude64(x) > 0 & magnitude64(x) < 0x10000000000000
 
 )
+
+# `2^52`, the least value whose units are its last place.
+two_to_52 : F64
+two_to_52 = F64(0x4330000000000000)
 
 # The binary64 wrapper's seams: a pattern from the core becomes a word, and
 # a word's pattern goes to the core.
