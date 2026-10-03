@@ -252,9 +252,16 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `normalize.rs`, `cleanup.rs`: separate optimizing rewrites. The normalizing
   walk knows what wrote each local, and its rules are switched on per walk:
   the arithmetic identities -- `x + 0`, `x * 1`, `x monus x` and the like,
-  on recognized operations only -- combining constants, and evaluating a
-  construction, call or match whose every input is known. Evaluating is
-  constant folding: there is no pass of its own for it.
+  on recognized operations only -- combining constants, evaluating a
+  construction, call or match whose every input is known, and sharing.
+  Evaluating is constant folding: there is no pass of its own for it.
+  Sharing answers a call of an answered definition -- pure and total --
+  with an earlier call of it with the same operands still in scope, known
+  values compared by what they are and a commutative operation's operands
+  in either order. Inside an arm of a match on the first call's answer,
+  what the arm knows of it then decides a match on the second's too.
+  Constant bindings are not merged, which would keep one live across more
+  of the program than either was.
 - `optimize.rs`: the fixed schedule below; `pretty.rs`: rendering.
 
 ## Diagnostic rendering
@@ -298,14 +305,16 @@ two types -- so nothing infers a provider or an effect from the display name.
    be copied into its caller, so definitions calling each other become one
    calling itself, which machine lowering makes a loop where the call is a tail.
    The same walk applies the arithmetic identities justified by structurally
-   recognized `Operation` facts, so what one decides is decided before folding.
+   recognized `Operation` facts, so what one decides is decided before folding,
+   and shares repeated calls of answered definitions.
 5. Fusion: a list built by one walk and read once by another is never built.
 6. Simplification: the normalizing walk with every rule on, each definition
    after what it calls, so that a caller meets its callees' answers as
    constants. A construction, call or match whose every input is known is
    evaluated; the identities apply; constants combine across recognized
-   associative operations and directional monus/division chains; and
-   power-of-two moduli push through sums and products. Each definition
+   associative operations and directional monus/division chains;
+   power-of-two moduli push through sums and products; and a repeated call
+   of an answered definition answers what the first did. Each definition
    draws at most a per-definition allowance from the walk's budget, so a
    costly answer declined in one leaves the rest something to fold with.
 7. Specialization: a parameter a definition passes on to itself as it came,
@@ -375,7 +384,8 @@ operations then leave during machine-IR pruning. Source functions named like ari
 equations are structurally recognized.
 
 Cleanup walks bindings backward, accounting for captures in nested match arms, then
-renames retained locals. Dead constructor chains disappear in this single traversal;
+renames retained locals. A body left answering its last binding answers that
+binding's expression. Dead constructor chains disappear in this single traversal;
 there is no fixed-point loop. Calls of unknown meaning are conservatively
 retained even when their results are unused. Calls structurally recognized as pure,
 total arithmetic or lengths are inert and may go, and so may a match every

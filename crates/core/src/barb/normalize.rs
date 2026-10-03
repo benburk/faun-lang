@@ -37,6 +37,8 @@
 //! both. Only where no arm of the second is taken by two arms of the first,
 //! so nothing is copied twice.
 
+use std::collections::HashMap;
+
 use super::budget::{Budget, FoldLimits};
 use super::constant::Held;
 use super::evaluate::{CannotFold, Evaluation, Evaluator};
@@ -47,6 +49,10 @@ use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Operation, Program, Rang
 /// What a walk does beyond rebuilding, substituting aliases and deciding
 /// what is already decided, which every walk does.
 #[derive(Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches, one per rule a walk applies"
+)]
 struct Rules {
     /// Write a recognized operation an identity decides as what it
     /// decides: see [`Rewrite::identity`].
@@ -57,6 +63,10 @@ struct Rules {
     /// Write a construction or call whose every input is known as the value
     /// it evaluates to, reading each definition after what it calls.
     evaluate: bool,
+    /// Answer a call of an answered definition with what an earlier one
+    /// with the same operands answered, where that is still in scope: see
+    /// [`Rewrite::shared`].
+    share: bool,
 }
 
 /// Remove local aliases without expanding calls or dropping eager bindings.
@@ -95,6 +105,7 @@ pub(super) fn inline_with_identities(program: &mut Program, limits: InlineLimits
     let inlining = Inlining::new(program, limits);
     let rules = Rules {
         identities: true,
+        share: true,
         ..Rules::default()
     };
     rewrite(program, inlining, rules, FoldLimits::default(), None);
@@ -155,6 +166,7 @@ const SIMPLIFY: Rules = Rules {
     identities: true,
     algebra: true,
     evaluate: true,
+    share: true,
 };
 
 /// Whether every arm puts back the constructor it took apart, out of that
@@ -193,17 +205,8 @@ fn rewrite(
     limits: FoldLimits,
     only: Option<&[FnId]>,
 ) {
-    let recognised = program.recognised().clone();
     let order = order(program, rules, only);
-    let mut rewrite = Rewrite {
-        program,
-        recognised,
-        inlining,
-        rules,
-        budget: Budget::new(limits),
-        inline_depth: 0,
-        written: Vec::new(),
-    };
+    let mut rewrite = Rewrite::new(program, inlining, rules, limits);
     let mut remaining = limits.work;
     // Inlining reads existing entries; writes only append. Keep all function
     // roots unchanged until the end, so later callers still inline original
@@ -227,6 +230,7 @@ fn rewrite(
         let count = rewrite.program.params(id).len();
         let locals: Vec<_> = (0..count).map(|at| Atom(Local::at(at))).collect();
         rewrite.written.clear();
+        rewrite.calls.clear();
         let body = rewrite.body(body, locals, count);
         remaining -= allowance - rewrite.budget.remaining;
         if rewrite.inlining.is_some() {
@@ -348,6 +352,24 @@ struct Rewrite<'a> {
     /// binding of it did: a parameter or a field an arm took apart says
     /// nothing. Arms reuse levels, so this is cut back to where each begins.
     written: Vec<Option<ExprId>>,
+    /// Each call of an answered definition written so far in the body being
+    /// rebuilt, by what it was called with: the local it was written to, and
+    /// the expression that wrote it, which says whether it still stands.
+    calls: HashMap<Call, (Atom, ExprId)>,
+    /// What [`Self::known_as`] has written over, by level: a local an arm
+    /// knows the constructor of is still the binding that wrote it.
+    shadowed: Vec<(usize, ExprId)>,
+}
+
+/// A call as [`Rewrite::shared`] compares it: the definition, and each
+/// operand as the local it is or, where it is known, the value.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Call(FnId, Vec<Operand>);
+
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum Operand {
+    Local(usize),
+    Value(super::TypeId, Vec<u8>),
 }
 /// What rebuilding a match came to.
 enum Matched {
@@ -374,6 +396,28 @@ impl Scope {
         self.bindings.get(at.checked_sub(self.base)?).copied()
     }
 }
+impl<'a> Rewrite<'a> {
+    fn new(
+        program: &'a mut Program,
+        inlining: Option<Inlining>,
+        rules: Rules,
+        limits: FoldLimits,
+    ) -> Self {
+        let recognised = program.recognised().clone();
+        Self {
+            program,
+            recognised,
+            inlining,
+            rules,
+            budget: Budget::new(limits),
+            inline_depth: 0,
+            written: Vec::new(),
+            calls: HashMap::new(),
+            shadowed: Vec::new(),
+        }
+    }
+}
+
 impl Rewrite<'_> {
     fn body(&mut self, body: Body, locals: Vec<Atom>, level: usize) -> Body {
         self.body_with(level, |rewrite, scope| rewrite.into(body, locals, scope))
@@ -637,6 +681,10 @@ impl Rewrite<'_> {
                     self.inline_depth -= 1;
                     return answer;
                 }
+                let call = self.sharing(called, &args);
+                if let Some(held) = call.as_ref().and_then(|call| self.shared(call, scope)) {
+                    return held;
+                }
                 if self.rules.algebra {
                     if let Some(held) = self.chained(called, &args, scope) {
                         return held;
@@ -648,7 +696,13 @@ impl Rewrite<'_> {
                         return held;
                     }
                 }
-                Expr::Call(called, self.program.terms.hold_atoms(args.into_iter()))
+                let args = self.program.terms.hold_atoms(args.into_iter());
+                let held = self.push(Expr::Call(called, args), scope);
+                if let Some(call) = call {
+                    let wrote = *scope.bindings.last().expect("a call just written");
+                    self.calls.insert(call, (held, wrote));
+                }
+                return held;
             }
             Expr::Match(value, arms) => {
                 let scrutinee = locals[value.0.index()];
@@ -1020,7 +1074,13 @@ impl Rewrite<'_> {
         let fields = self.program.terms.hold_atoms(fields.iter().copied());
         let known = self.program.terms.push(Expr::Con(ctor, fields));
         self.written[level] = Some(known);
+        if let Some(before) = before {
+            self.shadowed.push((level, before));
+        }
         let written = write(self);
+        if before.is_some() {
+            self.shadowed.pop();
+        }
         if let Some(entry) = self.written.get_mut(level) {
             *entry = before;
         }
@@ -1391,6 +1451,55 @@ impl Rewrite<'_> {
         let value = evaluator.expr(id, &mut env, budget).ok()?;
         let value = self.program.intern_held(&value);
         Some(self.push(Expr::Static(value), scope))
+    }
+
+    /// A call of `called` with `args` as [`Self::shared`] compares it, where
+    /// the walk shares and `called` is answered rather than walked: pure and
+    /// total, so a second call with the same operands answers the same.
+    /// Operands known as values are compared by what they are, and those of
+    /// a commutative operation in order.
+    fn sharing(&self, called: FnId, args: &[Atom]) -> Option<Call> {
+        if !self.rules.share || !self.recognised.answered(called) {
+            return None;
+        }
+        let mut operands: Vec<_> = args
+            .iter()
+            .map(|&atom| {
+                self.known(atom).map_or_else(
+                    || Operand::Local(atom.0.index()),
+                    |value| {
+                        let constant = self.program.constant(value);
+                        Operand::Value(constant.owner(), constant.encoded().to_vec())
+                    },
+                )
+            })
+            .collect();
+        if matches!(
+            self.recognised.operations[called.index()],
+            Some(
+                Operation::Add
+                    | Operation::Mul
+                    | Operation::And
+                    | Operation::Or
+                    | Operation::Xor
+                    | Operation::Equals { .. }
+            )
+        ) {
+            operands.sort();
+        }
+        Some(Call(called, operands))
+    }
+
+    /// The local an earlier call the same as `call` was written to, where
+    /// the binding that wrote it is still in scope: below the next level
+    /// `scope` binds, and written there still or written over only by what
+    /// an arm knows it to be.
+    fn shared(&self, call: &Call, scope: &Scope) -> Option<Atom> {
+        let &(atom, wrote) = self.calls.get(call)?;
+        let level = atom.0.index();
+        let stands = level < scope.level && self.written.get(level) == Some(&Some(wrote))
+            || self.shadowed.contains(&(level, wrote));
+        stands.then_some(atom)
     }
 
     /// The known value a local was written as, in this scope or one

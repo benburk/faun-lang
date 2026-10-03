@@ -160,7 +160,13 @@ impl Rewrite<'_> {
             locals.push(value);
         }
         let expr = self.expr(plan.tail, &locals, level);
-        let tail = self.terms.push(expr);
+        // A body answering its last binding is that binding's expression.
+        let tail = match expr {
+            Expr::Atom(answer) if answer.0.index() + 1 == level && !bindings.is_empty() => {
+                bindings.pop().expect("the last binding")
+            }
+            _ => self.terms.push(expr),
+        };
         self.terms.hold_body(&bindings, tail)
     }
 
