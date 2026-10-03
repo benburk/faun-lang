@@ -625,6 +625,9 @@ struct Allocator<'a, R> {
     /// Preferred bank for otherwise unconstrained placement. Definitions
     /// bound it; agreeing uses narrow it. Uses can still request another bank.
     homes: Vec<RegSet>,
+    /// Each value handed along an edge, by value: the block it is handed to
+    /// and the parameter it becomes there.
+    handed_to: Vec<Vec<(BlockId, VReg)>>,
     operand_locations: Vec<Option<Vec<Location<R>>>>,
     operand_moves: Vec<Option<Vec<CopyMove<R>>>>,
     edge_moves: Vec<EdgeMoves<R>>,
@@ -661,6 +664,7 @@ impl<'a, R: Register> Allocator<'a, R> {
             placement: Placement::new(code.values),
             preferred: preferred_registers(code),
             homes: preferred_sets(code),
+            handed_to: handed_to(code),
             operand_locations: vec![None; code.instructions.len()],
             operand_moves: vec![None; code.instructions.len()],
             edge_moves: Vec::new(),
@@ -799,8 +803,13 @@ impl<'a, R: Register> Allocator<'a, R> {
             .zip(&self.code.operands[args.range()])
             .zip(specs)
         {
+            // A parameter starts where its argument was only in the bank it
+            // is best in: a loop's would otherwise stay wherever its entry
+            // left it, and every time round would move it to where its
+            // body works on it and back.
             if let (Some(Location::Register(reg)), Constraint::Any) = (held(arg), spec.constraint)
                 && spec.allowed.contains(reg)
+                && self.homes[param.index()].contains(reg)
             {
                 handed.push((param, Location::Register(reg)));
             }
@@ -991,7 +1000,8 @@ impl<'a, R: Register> Allocator<'a, R> {
                     Constraint::Any => {
                         // A preferred register is worth taking where it is
                         // free, not worth putting something else out for.
-                        if let Some(reg) = self.preferred[value.index()]
+                        if let Some(reg) =
+                            self.preferred[value.index()].or_else(|| self.awaited(value))
                             && !requirements.scratch.contains(reg)
                             && spec.allowed.contains(reg)
                             && self.register_occupant(reg).is_none()
@@ -1096,6 +1106,23 @@ impl<'a, R: Register> Allocator<'a, R> {
         let spilled = self.spill(value)?;
         self.placement.set(value, spilled);
         Ok(())
+    }
+
+    /// The register a block already allocated holds the parameter `value`
+    /// is handed to as, where it holds it in one: a value going round a loop
+    /// made where the loop's start holds what it becomes goes round without
+    /// moving.
+    fn awaited(&self, value: VReg) -> Option<R> {
+        self.handed_to[value.index()]
+            .iter()
+            .find_map(|&(target, param)| {
+                let entry = self.liveness.blocks[target.index()].entry;
+                let state = self.states[entry.index()].as_ref()?;
+                match state.values.iter().find(|&&(held, _)| held == param)?.1 {
+                    Location::Register(reg) => Some(reg),
+                    Location::Spill(_) => None,
+                }
+            })
     }
 
     /// How far from where allocation is `value` is next read.
@@ -1662,6 +1689,20 @@ fn preferred_sets<R: Register>(code: &Code<R>) -> Vec<RegSet> {
         }
     }
     homes
+}
+
+/// Each value handed along an edge, by value: where to, as which parameter.
+fn handed_to<R: Register>(code: &Code<R>) -> Vec<Vec<(BlockId, VReg)>> {
+    let mut handed = vec![Vec::new(); code.values];
+    for block in &code.blocks {
+        for (target, args) in edges(block.terminator) {
+            let params = &code.block_params[code.blocks[target].params.range()];
+            for (&arg, &param) in code.operands[args.range()].iter().zip(params) {
+                handed[arg.index()].push((target, param));
+            }
+        }
+    }
+    handed
 }
 
 /// The register each value is best defined in: the one every fixed use of
