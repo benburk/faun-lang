@@ -564,7 +564,8 @@ impl Fusion<'_> {
         // The consumer going round on the rest of the list goes round as
         // the fused walk, on what the producer goes on with.
         let (going_round, taken, fused) = (pair.consumer, pair.taken, pair.id);
-        let mut redirect = |program: &mut Program, _: ExprId, expr: Expr| match expr {
+        let mut redirect = |program: &mut Program, _: &mut Scope, _: ExprId, expr: Expr| match expr
+        {
             Expr::Call(callee, args)
                 if callee == going_round && program.atoms(args)[taken] == rest =>
             {

@@ -8,6 +8,24 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "a list a walk rewrites through another walk is read after as it was",
+        "pass : List(Nat) -> List(Nat)
+         pass([x, *rest]) -> (
+           (total, others) = rest.map_accum(x, |s, y| (s + y, y + 1))
+           [total, *pass(others)]
+         )
+         pass([]) -> []
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           xs = [n, n + 1, n + 2]
+           ys = pass(xs)
+           host.exit!(U8.of_nat(xs.fold(0, |s, x| s * 10 + x) - 100 + ys.fold(0, |s, y| s + y) + ys.len() - 3))
+         )",
+        41,
+    ),
+    (
         "a walk going on with what it worked out is fused with the map after it",
         "pass : List(Nat) -> List(Nat)
          pass([x, *rest]) -> (

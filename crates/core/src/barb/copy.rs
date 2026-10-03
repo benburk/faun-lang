@@ -26,9 +26,10 @@ impl Scope {
 }
 
 /// What a copy writes in place of an expression it copies: handed the
-/// expression's id in the body copied from, and the expression with its
-/// locals already read through the map, it answers what to write.
-pub(super) type Edit<'e> = dyn FnMut(&mut Program, ExprId, Expr) -> Expr + 'e;
+/// scope it is copied into, the expression's id in the body copied from,
+/// and the expression with its locals already read through the map, it
+/// answers what to write, having written any bindings that needs first.
+pub(super) type Edit<'e> = dyn FnMut(&mut Program, &mut Scope, ExprId, Expr) -> Expr + 'e;
 
 /// Copy `body` as a body of its own, whose first binding takes `level`.
 pub(super) fn body(
@@ -101,7 +102,7 @@ pub(super) fn expr(
             Expr::Match(locals[on.0.index()], arms)
         }
     };
-    let copied = edit.map_or(copied, |edit| edit(program, id, copied));
+    let copied = edit.map_or(copied, |edit| edit(program, scope, id, copied));
     push(program, scope, copied)
 }
 

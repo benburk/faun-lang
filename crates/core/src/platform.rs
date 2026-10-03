@@ -428,10 +428,16 @@ impl Routines {
     }
 
     /// What a sequence's length can be. A sequence is held in memory, and
-    /// how many elements it has is a word, so no more than a word holds.
+    /// how many elements it has is a word, so no more than a word holds;
+    /// and its buffer's header takes memory too, so fewer than that: one
+    /// more than an index into it still fits a word.
     #[must_use]
     pub fn length(&self) -> crate::barb::Bounds {
-        held_bounds(self.word.map_or(Class::Word, Class::fixed))
+        let word = held_bounds(self.word.map_or(Class::Word, Class::fixed));
+        crate::barb::Bounds {
+            high: word.high.map(|high| high - 1),
+            ..word
+        }
     }
 
     /// Every routine a program may call by name.

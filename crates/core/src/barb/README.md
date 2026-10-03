@@ -231,14 +231,20 @@ x    ::= a parameter, a binding, or a field an arm bound
 - `inplace.rs`: a walk built front to back that appends, for each element
   it takes off what it walks, one element of the same type -- `map`, or
   `map_accum` beside its state -- is written again replacing each element
-  where it lies: `drop` reads the element, `replace` writes its successor,
-  and a count of those left steps down beside the count replaced so range
-  analysis bounds both by the length. A call handing it nothing built goes
-  to the rewriting, through a definition starting it on the whole. A
-  buffer nothing else holds is written in place; a shared one is copied
-  once, by the first replacement. What it built may be read only in
-  appending and going round, and the rest of what it walks only in going
-  round, so nothing else holds the buffer while it writes.
+  where it lies: `drop` reads the element and `replace` writes its
+  successor. It counts only how many are left; the one to replace is as far
+  from the end as that, worked out from the length, which replacing keeps,
+  so range analysis bounds it by a length with nothing to relate. A step
+  may go on with what another walk so rewritten made of its rest, through
+  matches of one arm taking that answer apart, as `kick` goes on with what
+  `map_accum` made of the bodies after its head: the other walk then runs
+  on the whole, with one fewer left, and the element is written into what
+  it answered. A call handing a walk nothing built goes to the rewriting,
+  through a definition starting it on the whole. A buffer nothing else
+  holds is written in place; a shared one is copied once, by the first
+  replacement. What a walk built may be read only in appending and going
+  round, and the rest of what it walks only in going round or in the other
+  walk's call, so nothing else holds the buffer while it writes.
 - `sweep.rs`: dropping the definitions an entry does not reach, once
   validation has checked them and inlining and fusion have copied what they
   needed out of them.
