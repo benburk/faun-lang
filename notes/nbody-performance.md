@@ -26,6 +26,7 @@ three) and with counters over 5,000,000, per step:
 | Before (`bf2e09b`)       |  0.16 s |       4,635 |    866 |      495 |
 | In place (`bcb809f`)     |  0.14 s |       4,100 |    748 |      555 |
 | `kick` fused (`a6c989f`) |  0.11 s |       3,326 |    606 |      401 |
+| Composed (`94cc271`)     |  0.07 s |       2,192 |    401 |      229 |
 | Scalar C, as below       |  0.03 s |         544 |    194 |       13 |
 
 `map` and `map_accum` replace each body where it lies instead of building
@@ -33,9 +34,11 @@ a new buffer; their index check and the runtime's uniqueness test add
 branches, which fusing `kick` with the `map` that moves every body then
 more than takes back. The sequence identities (`aa1801e`) drop the
 `prepend(built, [])` each walk ended with. Energies match at every count
-checked. `kick` still builds one buffer a step, appending each body it
-finishes; the rest of the gap is that buffer, the calls between walks, and
-reference-count traffic.
+checked. Composing in-place walks then writes `kick`'s answer into the
+buffer it walks too, through the `map_accum` it goes on with, so a step
+builds no buffer at all; the rest of the gap is the calls between walks,
+the index and uniqueness checks each replacement makes, and reference-count
+traffic.
 
 ## Comparison with C
 
