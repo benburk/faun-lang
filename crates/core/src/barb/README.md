@@ -225,12 +225,24 @@ x    ::= a parameter, a binding, or a field an arm bound
   turns a list reversed onto nothing and read once, by a reversal of it onto
   another, into one prepend in order: the recognized definition for that
   type, or one declared in the shape recognition reads.
+- `inplace.rs`: a walk built front to back that appends, for each element
+  it takes off what it walks, one element of the same type -- `map`, or
+  `map_accum` beside its state -- is written again replacing each element
+  where it lies: `drop` reads the element, `replace` writes its successor,
+  and a count of those left steps down beside the count replaced so range
+  analysis bounds both by the length. A call handing it nothing built goes
+  to the rewriting, through a definition starting it on the whole. A
+  buffer nothing else holds is written in place; a shared one is copied
+  once, by the first replacement. What it built may be read only in
+  appending and going round, and the rest of what it walks only in going
+  round, so nothing else holds the buffer while it writes.
 - `sweep.rs`: dropping the definitions an entry does not reach, once
   validation has checked them and inlining and fusion have copied what they
   needed out of them.
 - `copy.rs`: copying terms into a body under construction through a map of
-  locals, with an optional redirect of one function's calls; what fusion and
-  descent build new bodies with.
+  locals, with an optional edit of what each copied expression becomes;
+  what fusion, descent, specialization and writing in place build new
+  bodies with.
 - `walk.rs`: reading terms without a scope -- every expression a body
   holds however deep its matches nest, how often a local is read, whether a
   body calls a definition -- and the equation shapes recognizers and
@@ -311,7 +323,10 @@ two types -- so nothing infers a provider or an effect from the display name.
    recognized `Operation` facts, so what one decides is decided before folding,
    and shares repeated calls of answered definitions.
 5. Fusion: a list built by one walk and read once by another is never built.
-6. Simplification: the normalizing walk with every rule on, each definition
+6. In place: a walk building a list of what it walks, element for element,
+   replaces each where it lies instead, once fusion has had every walk it
+   can remove outright.
+7. Simplification: the normalizing walk with every rule on, each definition
    after what it calls, so that a caller meets its callees' answers as
    constants. A construction, call or match whose every input is known is
    evaluated; the identities apply; constants combine across recognized
@@ -320,7 +335,7 @@ two types -- so nothing infers a provider or an effect from the display name.
    of an answered definition answers what the first did. Each definition
    draws at most a per-definition allowance from the walk's budget, so a
    costly answer declined in one leaves the rest something to fold with.
-7. Specialization: a parameter a definition passes on to itself as it came,
+8. Specialization: a parameter a definition passes on to itself as it came,
    which callers hand different known values, gets a copy of the definition
    for each value, at most four, simplified with that value bound. A copy is
    kept, and takes the calls handing its value, only where simplifying it
@@ -333,21 +348,22 @@ two types -- so nothing infers a provider or an effect from the display name.
    of that value -- a known sequence's length, a match on it -- is answered
    too. Simplifying one copy again skips call-graph construction and
    ordering; several keep callee-first order and the same budgets.
-8. Sweep: where there is an entry, drop every definition it does not reach,
+9. Sweep: where there is an entry, drop every definition it does not reach,
    renumbering function IDs in order. Types, constructors and constants stay.
-9. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
-   pure arithmetic or lengths, and matches whose arms are all inert; retain calls
-   of unknown meaning.
+10. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
+    pure arithmetic or lengths, and matches whose arms are all inert; retain calls
+    of unknown meaning.
 
-Every normalizing stage (1, 4 and 6) also decides what is already decided: a
+Every normalizing stage (1, 4 and 7) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
 number, and a match whose arms agree is that
 arm. A match that is the last binding of a body answering a match on it, and
 read nothing else there, becomes one match: where each of its arms ends by
 building a constructor, that arm goes on into the second's arm for it. Only
 where no arm of the second is taken by two of the first, so nothing is copied
-twice. Fusion, descent and specialization add definitions; a copy's name is its
-original's and a number after a dot; a fused walk's name joins its two
+twice. Fusion, descent, specialization and writing in place add definitions;
+a copy's name is its original's and a number after a dot; a walk written in
+place is named with `.place` after it, and what starts it with `.enter`; a fused walk's name joins its two
 halves' with `+`, and what they replace stays until nothing calls it.
 
 Each stage runs once, always; there are no switches. Tests isolating one stage

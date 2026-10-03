@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use super::copy::{self, Redirect, Scope};
+use super::copy::{self, Scope};
 use super::facts::Recognised;
 use super::walk;
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, SequenceOperation, TypeId};
@@ -504,19 +504,32 @@ impl Fusion<'_> {
             .collect();
         let mut consumed = pair.c_locals.clone();
         consumed.extend((0..2).map(|at| if at == recursive { rest } else { element }));
-        let redirect = Redirect {
-            from: pair.consumer,
-            at: pair.taken,
-            rest,
-            to: pair.id,
-            leading: going_on,
+        // The consumer going round on the rest of the list goes round as
+        // the fused walk, on what the producer goes on with.
+        let (going_round, taken, fused) = (pair.consumer, pair.taken, pair.id);
+        let mut redirect = |program: &mut Program, _: ExprId, expr: Expr| match expr {
+            Expr::Call(callee, args)
+                if callee == going_round && program.atoms(args)[taken] == rest =>
+            {
+                let mut going = going_on.clone();
+                going.extend(
+                    program
+                        .atoms(args)
+                        .iter()
+                        .enumerate()
+                        .filter(|&(at, _)| at != taken)
+                        .map(|(_, &atom)| atom),
+                );
+                Expr::Call(fused, program.terms.hold_atoms(going.into_iter()))
+            }
+            other => other,
         };
         let answer = copy::into(
             self.program,
             c_step.body,
             consumed,
             &mut scope,
-            Some(&redirect),
+            Some(&mut redirect),
         );
         copy::close(self.program, scope, answer)
     }

@@ -10,7 +10,7 @@
 
 use super::walk::{bound, split_arms, top_match};
 use super::{Arm, Atom, Body, CtorId, Expr, ExprId, FnId, Local, Program, TypeId, TypeShape};
-use super::{SequenceOperation, type_shape};
+use super::{Builder, SequenceOperation, type_shape};
 
 /// Which definitions are one of the operations recognized here, given which
 /// counts of a sequence `length` already found.
@@ -567,4 +567,92 @@ pub(super) fn write_append(
         b.call(prepend, &[args[0], single])
     });
     append
+}
+
+/// `l(list) = match list: empty => 0; push(_, rest) => l(rest) + 1`, counting
+/// in `count`: recognized as [`SequenceOperation::Length`].
+pub(super) fn write_length(program: &mut Program, list: TypeId, count: TypeId) -> FnId {
+    let (empty, _, recursive) = sequence(program, list).expect("a length is of a sequence");
+    let TypeShape::Natural {
+        empty: zero,
+        push: succ,
+        ..
+    } = type_shape(program, count)
+    else {
+        unreachable!("a length is a natural");
+    };
+    let length = program.declare("length", &[list], count);
+    program.define(length, |b, args| {
+        b.match_(args[0], list, |b, ctor, fields| {
+            if ctor == empty {
+                return b.con(zero, &[]);
+            }
+            let counted = b.call(length, &[fields[recursive]]);
+            b.con(succ, &[counted])
+        })
+    });
+    length
+}
+
+/// `d(list, n) = match n: zero => list; step(m) => match list: empty =>
+/// empty; push(_, rest) => d(rest, m)`: recognized as
+/// [`SequenceOperation::Drop`].
+pub(super) fn write_drop(program: &mut Program, list: TypeId, count: TypeId) -> FnId {
+    let (empty, _, recursive) = sequence(program, list).expect("a drop is of a sequence");
+    let TypeShape::Natural { empty: zero, .. } = type_shape(program, count) else {
+        unreachable!("a drop counts in a natural");
+    };
+    let drop = program.declare("drop", &[list, count], list);
+    program.define(drop, |b, args| {
+        let (whole, n) = (args[0], args[1]);
+        b.match_(n, count, |b, ctor, fields| {
+            if ctor == zero {
+                return whole;
+            }
+            let fewer = fields[0];
+            b.match_(whole, list, |b, ctor, fields| {
+                if ctor == empty {
+                    return b.con(empty, &[]);
+                }
+                b.call(drop, &[fields[recursive], fewer])
+            })
+        })
+    });
+    drop
+}
+
+/// `s(list, n, x) = match list: empty => empty; push(y, rest) => match n:
+/// zero => push(x, rest); step(m) => push(y, s(rest, m, x))`: recognized as
+/// [`SequenceOperation::Replace`].
+pub(super) fn write_replace(program: &mut Program, list: TypeId, count: TypeId) -> FnId {
+    let (empty, push, recursive) = sequence(program, list).expect("a replacement is of a sequence");
+    let TypeShape::Natural { empty: zero, .. } = type_shape(program, count) else {
+        unreachable!("a replacement counts in a natural");
+    };
+    let element = program.types_of(program.ctor(push).fields)[1 - recursive];
+    let replace = program.declare("replace", &[list, count, element], list);
+    program.define(replace, |b, args| {
+        let (whole, n, value) = (args[0], args[1], args[2]);
+        b.match_(whole, list, |b, ctor, fields| {
+            if ctor == empty {
+                return b.con(empty, &[]);
+            }
+            let (kept, rest) = (fields[1 - recursive], fields[recursive]);
+            let pushed = |b: &mut Builder, head: Atom, tail: Atom| {
+                let mut fields = [head, tail];
+                if recursive == 0 {
+                    fields.reverse();
+                }
+                b.con(push, &fields)
+            };
+            b.match_(n, count, |b, ctor, fields| {
+                if ctor == zero {
+                    return pushed(b, value, rest);
+                }
+                let later = b.call(replace, &[rest, fields[0], value]);
+                pushed(b, kept, later)
+            })
+        })
+    });
+    replace
 }

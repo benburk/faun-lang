@@ -7,7 +7,7 @@
 //! each piece where it goes. Terms are appended; nothing is shared with the
 //! bodies copied from, which stay as they were until a pass replaces them.
 
-use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program};
+use super::{Arm, Atom, Body, Expr, ExprId, Local, Program};
 
 /// The bindings of a body under construction, and the level the next takes.
 pub(super) struct Scope {
@@ -25,15 +25,10 @@ impl Scope {
     }
 }
 
-/// Calls of `from` whose argument `at` is `rest` go to `to` instead, with
-/// `leading` before the rest of their arguments.
-pub(super) struct Redirect {
-    pub from: FnId,
-    pub at: usize,
-    pub rest: Atom,
-    pub to: FnId,
-    pub leading: Vec<Atom>,
-}
+/// What a copy writes in place of an expression it copies: handed the
+/// expression's id in the body copied from, and the expression with its
+/// locals already read through the map, it answers what to write.
+pub(super) type Edit<'e> = dyn FnMut(&mut Program, ExprId, Expr) -> Expr + 'e;
 
 /// Copy `body` as a body of its own, whose first binding takes `level`.
 pub(super) fn body(
@@ -41,10 +36,10 @@ pub(super) fn body(
     body: Body,
     locals: Vec<Atom>,
     level: usize,
-    redirect: Option<&Redirect>,
+    edit: Option<&mut Edit<'_>>,
 ) -> Body {
     let mut scope = Scope::at(level);
-    let answer = into(program, body, locals, &mut scope, redirect);
+    let answer = into(program, body, locals, &mut scope, edit);
     close(program, scope, answer)
 }
 
@@ -54,27 +49,23 @@ pub(super) fn into(
     body: Body,
     mut locals: Vec<Atom>,
     scope: &mut Scope,
-    redirect: Option<&Redirect>,
+    mut edit: Option<&mut Edit<'_>>,
 ) -> Atom {
     for binding in program.bindings(body.bindings).to_vec() {
-        let value = expr(program, binding, &locals, scope, redirect);
+        let value = expr(program, binding, &locals, scope, edit.as_deref_mut());
         locals.push(value);
     }
-    expr(program, body.tail, &locals, scope, redirect)
+    expr(program, body.tail, &locals, scope, edit)
 }
 
 /// Copy one expression into `scope`, answering the local it takes, or the
 /// atom it reads where it is only that.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm per expression kind, each copied through the map"
-)]
 pub(super) fn expr(
     program: &mut Program,
     id: ExprId,
     locals: &[Atom],
     scope: &mut Scope,
-    redirect: Option<&Redirect>,
+    mut edit: Option<&mut Edit<'_>>,
 ) -> Atom {
     let map = |held: &[Atom]| -> Vec<Atom> { held.iter().map(|a| locals[a.0.index()]).collect() };
     let copied = match program.expr(id) {
@@ -86,19 +77,6 @@ pub(super) fn expr(
         }
         Expr::Call(callee, args) => {
             let args = map(program.atoms(args));
-            let (callee, args) = match redirect {
-                Some(redirect) if callee == redirect.from && args[redirect.at] == redirect.rest => {
-                    let mut going = redirect.leading.clone();
-                    going.extend(
-                        args.iter()
-                            .enumerate()
-                            .filter(|&(at, _)| at != redirect.at)
-                            .map(|(_, &atom)| atom),
-                    );
-                    (redirect.to, going)
-                }
-                _ => (callee, args),
-            };
             Expr::Call(callee, program.terms.hold_atoms(args.into_iter()))
         }
         Expr::Match(on, arms) => {
@@ -107,7 +85,13 @@ pub(super) fn expr(
                 let fields = program.fields(arm.ctor).len();
                 let mut inner = locals.to_vec();
                 inner.extend((0..fields).map(|at| Atom(Local::at(scope.level + at))));
-                let copied = body(program, arm.body, inner, scope.level + fields, redirect);
+                let copied = body(
+                    program,
+                    arm.body,
+                    inner,
+                    scope.level + fields,
+                    edit.as_deref_mut(),
+                );
                 rebuilt.push(Arm {
                     ctor: arm.ctor,
                     body: copied,
@@ -117,6 +101,7 @@ pub(super) fn expr(
             Expr::Match(locals[on.0.index()], arms)
         }
     };
+    let copied = edit.map_or(copied, |edit| edit(program, id, copied));
     push(program, scope, copied)
 }
 

@@ -8,6 +8,37 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "a list mapped is read after as it was",
+        "main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           xs = [n, n + 1, n + 2]
+           ys = xs.map(|x| x + 10)
+           host.exit!(U8.of_nat(xs.fold(0, |s, x| s + x) * 10 + ys.fold(0, |s, y| s + y) + ys.len() - 3))
+         )",
+        96,
+    ),
+    (
+        "a list nothing else holds is mapped where it lies",
+        "main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           ys = [n, n + 1, n + 2].map(|x| x * 2)
+           host.exit!(U8.of_nat(ys.fold(0, |s, y| s * 10 + y) + ys.len() - 3))
+         )",
+        246,
+    ),
+    (
+        "a list mapped with a running state keeps the state and the order",
+        "main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           (total, ys) = [n, n + 1, n + 2].map_accum(0, |s, x| (s + x, s))
+           host.exit!(U8.of_nat(total * 10 + ys.fold(0, |s, y| s * 10 + y)))
+         )",
+        73,
+    ),
+    (
         "a definition that never stops for some inputs is a program all the same",
         "step : Nat -> Nat
          step(Succ(n)) -> hop(n)

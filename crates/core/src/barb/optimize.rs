@@ -10,7 +10,7 @@ use super::{InlineLimits, Program};
 ///
 /// Each stage runs once, in this order: structural normalization, building
 /// lists front to back, descent, helper inlining with arithmetic
-/// identities, fusion, simplification -- evaluating what is known, the
+/// identities, fusion, writing a walk over a list in place, simplification -- evaluating what is known, the
 /// identities and combining constants, in one walk -- copies of a loop for
 /// the known values its callers hand it and the values they all hand alike,
 /// simplified again where they bound something, the sweep and cleanup. Recognized induction equations are left intact. Cleanup removes
@@ -26,6 +26,7 @@ pub fn optimize(program: &mut Program) {
     super::descent::descend(program);
     super::normalize::inline_with_identities(program, InlineLimits::default());
     super::fuse::fuse(program);
+    super::inplace::in_place(program);
     super::normalize::simplify(program);
     super::specialize::specialize(program);
     super::sweep::sweep(program);

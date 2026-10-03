@@ -106,6 +106,7 @@ pub(crate) mod fixture;
 mod forward;
 mod fuse;
 mod inline;
+mod inplace;
 mod model;
 mod normalize;
 mod optimize;
