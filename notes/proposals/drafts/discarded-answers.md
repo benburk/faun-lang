@@ -2,8 +2,8 @@
 
 - **Status:** Draft
 - **Created:** 2026-10-04
-- **Affects:** the checker, the hosts' printing effects, the generated
-  expectation runner, every program that prints on a line of its own
+- **Affects:** the checker, the generated expectation runner, every
+  program that prints on a line of its own
 
 ---
 
@@ -47,26 +47,29 @@ thrown away with `_ = call!(…)`.
 - **`_ = call!(…)`** throws an answer away in so many words, as a binding
   to `_` already does.
 - **An answer whose type is not yet known** is not refused.
+- **Printing is no exception.** `print!` answers whether the write went
+  through, and a program that does not care says so with `_ =`, as any
+  other.
 
 ## Costs
 
-Built and run on 2026-10-04, the rule refused about forty tests' programs.
-Nearly all are printing:
-
-- **`print!`, `println!` and `write!` answer a `Result`,** since a write can
-  fail, and programs call them on lines of their own: three examples, the
-  hosts' own code, and the runner `faun test` generates for expectations.
-- **Each would need `_ =`,** or the hosts' printing effects would answer
-  `{}` and handle a failed write themselves.
+- **`_ =` before every dropped print.** `print!`, `println!` and `write!`
+  answer a `Result`, since a write can fail. Eleven lines in the corpus
+  call one on a line of its own, in the hello examples and in programs the
+  Rust tests write, and the runner `faun test` generates for expectations
+  is a twelfth. Built on 2026-10-04, the rule refused about forty tests,
+  nearly all through that one generated line.
+- **A line longer by four characters** wherever a program means to ignore
+  a failure. That is the point: the ignoring is written down.
 
 ## Alternatives considered
 
 - **Leave it.** A dropped `Err` stays silent, as it is today.
-- **Printing answers `{}`.** A failed write to standard output is rarely
-  something a program can act on; the host could end the program, as
-  Python's does on a broken pipe, and every print line stays as written.
-  Writes to files would still answer a `Result`, and be refused when
-  dropped.
+- **Printing answers `{}`,** the host ending the program on a failed
+  write, as Python does on a broken pipe. Every print line stays as
+  written, but printing would be the one effect whose failure no program
+  can see or answer, and a program writing a report it must not lose
+  could not tell it was lost.
 - **A warning, not a refusal.** Faun has no warnings; every diagnostic
   refuses.
 
@@ -76,21 +79,17 @@ Nearly all are printing:
    is refused where its answer is more than `{}` or `[]`. A sketch built on
    2026-10-04 carried a `discarded` flag from the syntax tree into the HIR's
    bindings and checked it after each binding's type settled.
-2. **The hosts and the expectation runner** bind or throw away what their
-   printing answers, or printing answers `{}`.
-3. **Programs.** Each printing line, as the open question decides.
+2. **The expectation runner** in `expectations.rs` binds what its
+   printing answers to `_`.
+3. **Programs.** `_ =` before each of the eleven printing lines.
 
 ## Testing
 
 - A refused case with its `.err`: `host.stdin.read_to_end!()` alone on a
   line.
 - `_ = host.stdin.read_to_end!()` is accepted.
-- The examples and libraries pass, changed as decided.
-
-## Open questions
-
-- **Printing.** `_ =` on every print line, or printing that answers `{}`
-  and handles its own failure?
+- The examples and libraries pass, with `_ =` where they print on a line
+  of their own.
 
 ## Origin
 
