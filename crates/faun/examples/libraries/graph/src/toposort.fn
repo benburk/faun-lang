@@ -22,7 +22,8 @@ toposort(graph) -> (
   degrees = nodes.map(|node| graph.in_degree(node))
   ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
   taken = drain_stack(ready, {degrees, order: []}, |kahn, node| take(graph, kahn, node))
-  sorted(taken.order, count)
+  # A node never ready was on a cycle.
+  if taken.order.len() == count then Ok(taken.order) else Err(Cycle)
 )
 
 Kahn = {degrees: List(Nat), order: List(Nat)}
@@ -41,8 +42,3 @@ release(target, {ready, degrees}) if degrees.get_or(target, 0) == 1 ->
   {ready: [target, *ready], degrees: put(degrees, target, 0)}
 release(target, {ready, degrees}) ->
   {ready, degrees: put(degrees, target, degrees.get_or(target, 0) - 1)}
-
-# The order, where it holds every node; a node never ready was on a cycle.
-sorted : (List(Nat), Nat) -> Result(List(Nat), [Cycle])
-sorted(order, count) if order.len() == count -> Ok(order)
-sorted(_, _) -> Err(Cycle)

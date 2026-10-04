@@ -113,14 +113,10 @@ sink(entries, hole, entry, count) -> (
 cheaper : (List((k, v)), Nat, Nat, (k, v)) -> Nat where k.cmp : (k, k) -> Order
 cheaper(entries, left, count, fallback) -> (
   right = left + 1
-  lower = entries.get_or(left, fallback)
-  higher = entries.get_or(right, fallback)
-  either(left, lower, right, higher, right < count)
+  (left_key, _) = entries.get_or(left, fallback)
+  (right_key, _) = entries.get_or(right, fallback)
+  if right < count & right_key < left_key then right else left
 )
-
-either : (Nat, (k, v), Nat, (k, v), Bool) -> Nat where k.cmp : (k, k) -> Order
-either(_, (left_key, _), right, (right_key, _), True) if right_key < left_key -> right
-either(left, _, _, _, _) -> left
 
 sink_past : (List((k, v)), Nat, Nat, (k, v), (k, v), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
 sink_past(entries, hole, child, (child_key, lower), (key, value), count) if child_key < key ->
