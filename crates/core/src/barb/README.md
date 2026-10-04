@@ -20,10 +20,13 @@ value semantics. a bodyless call is a value the target computes
 - bodyless functions
   - can be used for representing effects
   - must be bodyless, implemented by the target
-  - are observable: optimization keeps each call's order, how often it is
-    made and the path it is made on, with no world state threaded through
-    them. A function whose calls reach one is observable too; one reaching
-    none is pure (see cleanup below)
+  - are observable: optimization keeps their calls in order among
+    themselves, made as often and on the same paths, with no world state
+    threaded through them. A function whose calls reach one is observable
+    too; one reaching none is pure (see cleanup below). Pure work may move
+    to either side of an observable call, and be left out where nothing
+    reads it, even where it would not have come back: a hang that moves past
+    an effect lets that effect happen first
 - must not have
   - pointer equality, reference identity, identity hashing. since representation is selected for you.
   - sizeof, alignment, layout dependent serialization, casts between representations
@@ -440,7 +443,8 @@ whichever arm it takes. Inert work may go where nothing reads it and move to
 the one arm that does, even though a pure call may not come back: leaving it
 uncalled only ever does less. A call reaching an external routine is retained
 even when its result is unused, and never moves: skipped on one path, or moved
-past another, it would change what the program does. In particular, dropping a
+past another such call, it would change what the program does. Pure work moves
+past it freely. In particular, dropping a
 constructor does not drop eager calls reaching external routines that computed
 its fields. Folded, now-unused product
 constants no longer demand runtime representations; live products lower to
