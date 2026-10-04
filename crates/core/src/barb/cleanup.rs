@@ -4,6 +4,10 @@
 //! about a sequence -- is pure and total, so it is inert, and so is a match
 //! whose every arm is: it answers whichever arm it takes. Dropping a constructor never drops eager opaque calls that
 //! produced its fields.
+//!
+//! An inert binding is worked out only on the paths that read it: one read
+//! only inside one arm of a later match moves to the top of that arm, and
+//! what it reads may follow it there. Each run moves work one match down.
 //! Rebuild into fresh term pools, then replace the old pools in one commit.
 //! Declarations and constants stay in place; expression IDs and ranges change.
 
@@ -48,12 +52,40 @@ pub(super) fn cleanup(program: &mut Program) {
 // Plans belong to occurrences, not ExprIds: an arena expression can be used
 // in different lexical scopes. Only retained matches have child body plans.
 struct PlannedBody {
+    /// Bindings of an enclosing body moved to the top of this one, each
+    /// with the local it bound there, last first.
+    sunk: Vec<(usize, PlannedExpr)>,
     bindings: Vec<Option<PlannedExpr>>,
     tail: PlannedExpr,
 }
+
 struct PlannedExpr {
     id: ExprId,
     arms: Vec<PlannedBody>,
+}
+
+/// Where a body's local is read, as far as that body can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Read {
+    Unread,
+    /// Only inside one arm of the match the body binds or answers at `site`:
+    /// a binding's index, or the number of bindings for the tail.
+    InArm {
+        site: usize,
+        arm: usize,
+    },
+    /// Anywhere else, or in more than one arm.
+    Here,
+}
+
+impl Read {
+    fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Unread, read) | (read, Self::Unread) => read,
+            (read, other) if read == other => read,
+            _ => Self::Here,
+        }
+    }
 }
 
 /// Which expressions may go unevaluated where nothing reads them, found
@@ -84,6 +116,8 @@ impl Inert<'_> {
     }
 }
 
+/// Plan `body`, whose first `base` locals are its enclosing scope's, and
+/// say which of those it reads.
 fn plan_body(
     program: &Program,
     inert: &mut Inert,
@@ -91,42 +125,74 @@ fn plan_body(
     base: usize,
 ) -> (PlannedBody, Vec<bool>) {
     let bindings = program.bindings(body.bindings);
-    let mut live = vec![false; base + bindings.len()];
-    let tail = plan_expr(program, inert, body.tail, &mut live);
-    let mut kept = Vec::with_capacity(bindings.len());
-    for &id in bindings.iter().rev() {
-        let needed = live.pop().expect("one local per binding");
-        let eager = !inert.is(program, id);
-        kept.push((needed || eager).then(|| plan_expr(program, inert, id, &mut live)));
+    let mut reads = vec![Read::Unread; base + bindings.len()];
+    let mut tail = plan_expr(program, inert, body.tail, &mut reads, bindings.len(), None);
+    let mut kept: Vec<Option<PlannedExpr>> = (0..bindings.len()).map(|_| None).collect();
+    for (index, &id) in bindings.iter().enumerate().rev() {
+        let read = reads.pop().expect("one local per binding");
+        match (read, inert.is(program, id)) {
+            (Read::Unread, true) => {}
+            (Read::InArm { site, arm }, true) => {
+                let planned = plan_expr(program, inert, id, &mut reads, index, Some((site, arm)));
+                let target = if site == bindings.len() {
+                    &mut tail
+                } else {
+                    kept[site]
+                        .as_mut()
+                        .expect("a binding read in an arm is kept")
+                };
+                target.arms[arm].sunk.push((base + index, planned));
+            }
+            _ => kept[index] = Some(plan_expr(program, inert, id, &mut reads, index, None)),
+        }
     }
-    kept.reverse();
+    let captures = reads.iter().map(|&read| read != Read::Unread).collect();
     (
         PlannedBody {
+            sunk: vec![],
             bindings: kept,
             tail,
         },
-        live,
+        captures,
     )
 }
 
-fn plan_expr(program: &Program, inert: &mut Inert, id: ExprId, live: &mut [bool]) -> PlannedExpr {
+/// Plan the expression at `site` of the body `reads` belongs to, which
+/// stands there or, where `within` says, at the top of an arm of a later
+/// match, where every local it reads is read too.
+fn plan_expr(
+    program: &Program,
+    inert: &mut Inert,
+    id: ExprId,
+    reads: &mut [Read],
+    site: usize,
+    within: Option<(usize, usize)>,
+) -> PlannedExpr {
+    let here = within.map_or(Read::Here, |(site, arm)| Read::InArm { site, arm });
+    let read = |reads: &mut [Read], a: Atom, as_read: Read| {
+        let at = &mut reads[a.0.index()];
+        *at = at.and(as_read);
+    };
     let mut children = vec![];
     match program.expr(id) {
-        Expr::Atom(a) => live[a.0.index()] = true,
+        Expr::Atom(a) => read(reads, a, here),
         Expr::Static(..) => {}
         Expr::Con(_, args) | Expr::Call(_, args) => {
-            for a in program.atoms(args) {
-                live[a.0.index()] = true;
+            for &a in program.atoms(args) {
+                read(reads, a, here);
             }
         }
         Expr::Match(value, arms) => {
-            live[value.0.index()] = true;
-            for arm in program.arms(arms) {
-                let base = live.len() + program.fields(arm.ctor).len();
+            read(reads, value, here);
+            for (index, arm) in program.arms(arms).iter().enumerate() {
+                let in_arm = within.map_or(Read::InArm { site, arm: index }, |_| here);
+                let base = reads.len() + program.fields(arm.ctor).len();
                 let (plan, captures) = plan_body(program, inert, arm.body, base);
                 // Fields are local to this arm, not captures of its parent.
-                for (used, captured) in live.iter_mut().zip(captures) {
-                    *used |= captured;
+                for (at, captured) in captures.into_iter().enumerate().take(reads.len()) {
+                    if captured {
+                        reads[at] = reads[at].and(in_arm);
+                    }
                 }
                 children.push(plan);
             }
@@ -146,6 +212,20 @@ struct Rewrite<'a> {
 impl Rewrite<'_> {
     fn body(&mut self, plan: PlannedBody, mut locals: Vec<Option<Atom>>, mut level: usize) -> Body {
         let mut bindings = vec![];
+        // Moved here from an enclosing body, they come first, in the order
+        // they were written, each read in the scope it was written in: the
+        // locals before its own, which a match's fields are numbered after.
+        for (local, sunk) in plan.sunk.into_iter().rev() {
+            let value = if let Expr::Atom(a) = self.source.expr(sunk.id) {
+                self::local(&locals, a)
+            } else {
+                let expr = self.expr(sunk, &locals[..local], level);
+                bindings.push(self.terms.push(expr));
+                level += 1;
+                Atom(Local::at(level - 1))
+            };
+            locals[local] = Some(value);
+        }
         for binding in plan.bindings {
             let value = binding.map(|binding| {
                 if let Expr::Atom(a) = self.source.expr(binding.id) {

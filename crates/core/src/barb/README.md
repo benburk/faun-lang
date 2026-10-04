@@ -368,7 +368,8 @@ two types -- so nothing infers a provider or an effect from the display name.
    renumbering function IDs in order. Types, constructors and constants stay.
 10. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
     pure arithmetic or lengths, and matches whose arms are all inert; retain calls
-    of unknown meaning.
+    of unknown meaning. Inert work read only inside one arm of a later match
+    moves to the top of that arm, so the other arms do none of it.
 
 Every normalizing stage (1, 4 and 7) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
@@ -419,7 +420,12 @@ operations then leave during machine-IR pruning. Source functions named like ari
 equations are structurally recognized.
 
 Cleanup walks bindings backward, accounting for captures in nested match arms, then
-renames retained locals. A body left answering its last binding answers that
+renames retained locals. It records not only whether a local is read but where: an
+inert binding read only inside one arm of one later match is planned into that
+arm, ahead of the arm's own bindings and in the order written, and what it reads
+is then read in that arm too, so a chain of inert work moves with it. Each run
+moves work one match down. Calls of unknown meaning never move: an external call
+skipped on one path, or moved past another, would change what the program does. A body left answering its last binding answers that
 binding's expression. Dead constructor chains disappear in this single traversal;
 there is no fixed-point loop. Calls of unknown meaning are conservatively
 retained even when their results are unused. Calls structurally recognized as pure,

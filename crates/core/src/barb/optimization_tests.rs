@@ -938,6 +938,164 @@ fn cleanup_removes_a_wide_dead_constructor_chain_in_one_pass() {
     );
 }
 
+/// The bindings of `test`'s own body, not those of its arms.
+fn top_level(program: &Program, test: FnId) -> Vec<Expr> {
+    let body = program.function(test).body().unwrap();
+    program
+        .bindings(body.bindings)
+        .iter()
+        .map(|&id| program.expr(id))
+        .collect()
+}
+
+/// `sunk(a, b)` builds `b + 2` ahead of a match on `a` and reads it only
+/// where `a` is nought; with `both`, the other arm reads it as well.
+fn built_ahead(both: bool) -> (Program, FnId, TypeId) {
+    let (mut program, ty, _, _) = super::tests::types();
+    let nought = program.ctor_at(ty, 0);
+    let succ = program.ctor_at(ty, 1);
+    let zero = program.intern_number(ty, 0).unwrap();
+    let test = program.declare("sunk", &[ty, ty], ty);
+    program.define(test, |b, args| {
+        let once = b.con(succ, &[args[1]]);
+        let twice = b.con(succ, &[once]);
+        b.match_(args[0], ty, |b, built, _| {
+            if built == nought {
+                twice
+            } else if both {
+                b.con(succ, &[twice])
+            } else {
+                b.known(zero)
+            }
+        })
+    });
+    program.set_entry(test);
+    (program, test, ty)
+}
+
+/// Inert work read in one arm of a match is worked out only there, the
+/// work it depends on with it, so the other arm works out none of it.
+#[test]
+fn cleanup_sinks_inert_work_into_the_one_arm_that_reads_it() {
+    let (original, test, ty) = built_ahead(false);
+    let mut program = original.clone();
+    super::cleanup::cleanup(&mut program);
+    validate(&program).unwrap();
+    assert!(top_level(&program, test).is_empty());
+    assert_eq!(
+        expressions(&program, test)
+            .iter()
+            .filter(|expr| matches!(expr, Expr::Con(..)))
+            .count(),
+        2
+    );
+    for a in 0..3 {
+        for b in 0..3 {
+            let args = vec![
+                super::tests::nat(&original, ty, a),
+                super::tests::nat(&original, ty, b),
+            ];
+            assert_eq!(
+                run(&program, test, args.clone(), &mut vec![]),
+                run(&original, test, args, &mut vec![])
+            );
+        }
+    }
+}
+
+/// A match moved into an arm still reads its own fields where it binds
+/// them, beneath the arm's.
+#[test]
+fn cleanup_sinks_a_match_with_its_fields() {
+    let (mut original, ty, _, _) = super::tests::types();
+    let nought = original.ctor_at(ty, 0);
+    let succ = original.ctor_at(ty, 1);
+    let zero = original.intern_number(ty, 0).unwrap();
+    let test = original.declare("before", &[ty, ty], ty);
+    original.define(test, |b, args| {
+        let before = b.match_(args[1], ty, |b, built, fields| {
+            if built == nought {
+                b.known(zero)
+            } else {
+                fields[0]
+            }
+        });
+        b.match_(args[0], ty, |b, built, _| {
+            if built == nought {
+                b.known(zero)
+            } else {
+                b.con(succ, &[before])
+            }
+        })
+    });
+    original.set_entry(test);
+    let mut program = original.clone();
+    super::cleanup::cleanup(&mut program);
+    validate(&program).unwrap();
+    assert!(top_level(&program, test).is_empty());
+    for a in 0..3 {
+        for b in 0..3 {
+            let args = vec![
+                super::tests::nat(&original, ty, a),
+                super::tests::nat(&original, ty, b),
+            ];
+            assert_eq!(
+                run(&program, test, args.clone(), &mut vec![]),
+                run(&original, test, args, &mut vec![])
+            );
+        }
+    }
+}
+
+/// Work two arms read stays where it was built, worked out once.
+#[test]
+fn cleanup_keeps_work_two_arms_read_ahead_of_them() {
+    let (mut program, test, _) = built_ahead(true);
+    super::cleanup::cleanup(&mut program);
+    validate(&program).unwrap();
+    assert_eq!(
+        top_level(&program, test)
+            .iter()
+            .filter(|expr| matches!(expr, Expr::Con(..)))
+            .count(),
+        2
+    );
+}
+
+/// A call of unknown meaning read in one arm may have effects, so it stays
+/// where it was, and happens on every path.
+#[test]
+fn cleanup_keeps_a_call_one_arm_reads_where_it_was() {
+    let (mut program, ty, _, _) = super::tests::types();
+    let nought = program.ctor_at(ty, 0);
+    let first = program.declare("first", &[], ty);
+    let zero = program.intern_number(ty, 0).unwrap();
+    let test = program.declare("called", &[ty], ty);
+    program.define(test, |b, args| {
+        let called = b.call(first, &[]);
+        b.match_(args[0], ty, |b, built, _| {
+            if built == nought {
+                called
+            } else {
+                b.known(zero)
+            }
+        })
+    });
+    program.set_entry(test);
+    super::cleanup::cleanup(&mut program);
+    validate(&program).unwrap();
+    for n in 0..2 {
+        let mut trace = vec![];
+        run(
+            &program,
+            test,
+            vec![super::tests::nat(&program, ty, n)],
+            &mut trace,
+        );
+        assert_eq!(trace, [first]);
+    }
+}
+
 #[test]
 fn zero_fold_budget_is_an_exact_noop() {
     let mut program = library();
