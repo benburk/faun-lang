@@ -145,6 +145,33 @@ fn an_effect_on_its_own_line_goes_on_to_the_next() {
     );
 }
 
+/// An effect on a line of its own may pass its failure on with `?`, and
+/// the line after it goes on where it succeeded.
+#[test]
+fn an_effect_passing_its_failure_on_goes_on_to_the_next() {
+    let package = support::Package::new(
+        "passed-on",
+        "import std.host {WriteError}
+
+         main! : Host -> []
+         main!(host) -> (
+           _ = greet!(host)
+           host.exit!(3)
+         )
+
+         greet! : Host -> Result({}, WriteError)
+         greet!(host) -> (
+           host.print!(\"Hi, \")?
+           host.println!(\"Faun\")?
+           Ok({})
+         )",
+    );
+    assert_eq!(
+        support::run_file(&package.entry(), b""),
+        (3, "Hi, Faun\n".to_owned())
+    );
+}
+
 /// A runner handed the arguments: what the program answers of them printed.
 /// The reference interpreter holds no arguments to read, so this runs the
 /// program on the machine.

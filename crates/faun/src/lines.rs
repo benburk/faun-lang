@@ -446,11 +446,15 @@ pub(crate) fn body(mut lines: Vec<Statement>, source: &str) -> Result<Body, Erro
 }
 
 /// Refuse a line of a body whose value nothing keeps, unless it is a call
-/// written as an effect.
+/// written as an effect, its failure passed on with `?` or not.
 fn thrown_away(body: &Body, source: &str) -> Result<(), Error> {
     for binding in body.bindings.iter().filter(|binding| binding.discarded) {
         let value = &binding.value;
-        let effect = match &value.kind {
+        let mut called = value;
+        while let ExprKind::Try(tried) = &called.kind {
+            called = tried;
+        }
+        let effect = match &called.kind {
             ExprKind::Call(head, _) => {
                 matches!(&head.kind, ExprKind::Name(name) if name.text(source).ends_with('!'))
             }

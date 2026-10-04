@@ -1,11 +1,32 @@
 # Proposal: An effect's answer is read or thrown away in so many words
 
-- **Status:** Draft
+- **Status:** Rejected
 - **Created:** 2026-10-04
+- **Rejected:** 2026-10-04
 - **Affects:** the checker, the generated expectation runner, every
   program that prints on a line of its own
 
 ---
+
+## Decision
+
+Rejected. An effect on a line of its own may drop what it answers, as
+today. Every effect ends in `!`, so a dropped answer is found by grep or a
+lint, where a refusal would cost every program that prints:
+
+- **Scripts printing from `main!`** cannot use `?`, since `main!` answers
+  `[]`, and would write `_ =` before every print, hello world first. A
+  marker on every print stops marking anything: a `_ =` before a write to
+  a file would look like all the others.
+- **A debugging print** would need `_ =`, or a `?` its function's error
+  type may not hold.
+- **A print added to a function with a closed error row** and passed on
+  with `?` puts `WriteError` in that row, and in every caller's above it,
+  as a checked exception does.
+
+What the rule would catch, a dropped `Err` from a write that matters, is
+left to review and to lints that look for `!` lines whose answer is a
+`Result`. A line `call!()?` stands on its own, passing its failure on.
 
 ## Summary
 

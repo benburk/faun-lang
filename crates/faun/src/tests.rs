@@ -394,6 +394,7 @@ fn a_discarded_value_must_be_an_effect_in_every_kind_of_body() {
         "T : Nat.(\n  value(x) -> (\n    x\n    x\n  )\n)",
         "expect (\n  True\n  True\n)",
         "value(x) -> [(\n  x\n  x\n)]",
+        "value(x) -> (\n  f(x)?\n  x\n)",
     ] {
         let error = parse(source).unwrap_err();
         assert!(
@@ -404,6 +405,8 @@ fn a_discarded_value_must_be_an_effect_in_every_kind_of_body() {
     for source in [
         "value(x) -> (\n  f!(x)\n  x\n)",
         "value(x) -> (\n  x.f!()\n  x\n)",
+        "value(x) -> (\n  f!(x)?\n  x\n)",
+        "value(x) -> (\n  x.f!()?\n  x\n)",
         "value(x) -> (\n  _ = f(x)\n  x\n)",
         "value(x) -> x",
         "T : Nat.(\n  value(x) -> (\n    f!(x)\n    x\n  )\n)",
