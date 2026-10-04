@@ -20,7 +20,10 @@ value semantics. a bodyless call is a value the target computes
 - bodyless functions
   - can be used for representing effects
   - must be bodyless, implemented by the target
-  - modeled by threading world state through calls
+  - are observable: optimization keeps each call's order, how often it is
+    made and the path it is made on, with no world state threaded through
+    them. A function whose calls reach one is observable too; one reaching
+    none is pure (see cleanup below)
 - must not have
   - pointer equality, reference identity, identity hashing. since representation is selected for you.
   - sizeof, alignment, layout dependent serialization, casts between representations
