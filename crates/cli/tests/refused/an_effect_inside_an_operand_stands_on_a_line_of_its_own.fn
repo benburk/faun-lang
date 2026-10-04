@@ -1,0 +1,7 @@
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  read = host.stdin.read_to_end!().is_ok() & host.args.is_empty()
+  host.exit!(read.to_nat().to_u8())
+)

@@ -4589,6 +4589,8 @@ fn validate_effect_call(
             ),
         ));
     }
+    // An effect inside an expression would happen in an order the line's
+    // reader must work out; standing alone, it happens where its line is.
     if !stands_alone {
         return Err(failure(
             module,
@@ -4597,7 +4599,9 @@ fn validate_effect_call(
                 "effect `{}` must stand on its own",
                 source_name(symbols, effect)
             ),
-        ));
+        )
+        .label("inside an expression")
+        .help("bind what it answers to a name on a line of its own, and use the name here"));
     }
     Ok(())
 }

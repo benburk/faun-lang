@@ -1,0 +1,7 @@
+error: effect `read_to_end!` must stand on its own
+ --> an_effect_inside_an_argument_stands_on_a_line_of_its_own.fn:4:37
+  |
+4 | main!(host) -> host.exit!(U8.of_nat(host.stdin.read_to_end!().ok_or([]).len()))
+  |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^ inside an expression
+  |
+  = help: bind what it answers to a name on a line of its own, and use the name here

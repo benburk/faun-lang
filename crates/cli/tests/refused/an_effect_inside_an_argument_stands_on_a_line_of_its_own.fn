@@ -1,0 +1,4 @@
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> host.exit!(U8.of_nat(host.stdin.read_to_end!().ok_or([]).len()))
