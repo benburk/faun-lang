@@ -2,6 +2,7 @@
 
 - **Status:** Draft
 - **Created:** 2026-10-01
+- **Depends on:** conditions.md, for `return`
 - **Affects:** the lexer's keywords, `grammar.ebnf`, the parser, the
   tree-sitter grammar, pattern compiling, every helper definition that
   exists only to take a computed value apart
@@ -114,6 +115,22 @@ as they are.
   clauses.
 - **`?`** in an arm answers early from the clause or lambda the `when` is
   written in, as in a block: a `when` is not a function.
+- **An arm may leave.** Where the `when` is a line of a block or a
+  binding's value, an arm's body may be `return value`, answering the
+  clause or lambda the `when` is written in, as `?` does; inside a loop, it
+  may be `continue` or `break`. An arm that leaves adds nothing to the
+  `when`'s type. This is the many-way form of a destructuring that can
+  fail, each failure leaving its own way:
+
+  ```
+  value = when parsed (
+    Ok(value) -> value
+    Err(Missing) -> return fallback
+    Err(error) -> return Err(error)
+  )
+  ```
+
+  Inside an expression, an argument or an operand, no arm leaves.
 - **Where it goes:** anywhere an expression goes, with no rule of its own: a
   clause's body, a binding's value, a lambda's body, an argument, a guard,
   an arm.
@@ -174,8 +191,7 @@ as they are.
   `n -> a -1 -> b` reads as a subtraction.
 - **`if` expressions.** `if c then a else b` is a `when` on a `Bool`, and
   many of the helpers above are two-way tests on a comparison: `sorted`,
-  `either`, `climb_past`. Left for after `when`, to see whether `when` with
-  a guard is enough.
+  `either`, `climb_past`. Taken up in [conditions](conditions.md).
 - **Lambdas bound to names,** `walk = |stack, walked| …`, called or passed
   but never stored, lifted to a top-level definition with what they read as
   extra parameters. They would end the passing of context by hand, as
@@ -217,59 +233,18 @@ Discussed alongside `when`, not part of it, and recorded for when this
 draft is taken up again (2026-10-02). The aim behind them: one way to write
 each thing, and the classic algorithms as short and plain as their Python.
 
-- **Guard conditions.** A guard becomes conditions parted by commas, each a
-  `Bool` or a binding, `pattern = expr`, whose names the later conditions
-  and the body see; any that fails falls to the next clause or arm, which
-  is Haskell's pattern guards and Rust's `if let` chains with the next arm
-  as their shared `else`. One change to `clause`, so definitions and `when`
-  arms both get it:
-
-  ```
-  clause     = [ "if" conditions ] "->" expr ;
-  conditions = expr [ "=" expr ] [ "," conditions ] ;
-  ```
-
-  The heap's `climb_past` folds into `climb`:
-
-  ```
-  climb(entries, hole, (key, value)) if hole > 0,
-    above = (hole - 1) / 2,
-    (parent_key, parent) = entries.get_or(above, (key, value)),
-    key < parent_key ->
-    climb(put(entries, hole, (parent_key, parent)), above, (key, value))
-  climb(entries, hole, entry) -> put(entries, hole, entry)
-  ```
-
-- **`else` lines.** Any line of a block may end `else fallback`: a binding
-  whose pattern fails, Rust's `let … else`, or a `Bool` that is false,
-  Swift's `guard`, answers the fallback from the clause or lambda, as `?`
-  does. A binding that can fail is refused today, and would be refused
-  without its `else`, the message saying so. `?` stays as the short form
-  for a `Result`. Lines stack, so a body stays flat; the heap's `visiting`
-  and `drained` fold into `drain` and `empty_onto`:
-
-  ```
-  drain(heap, state, visit) -> (
-    Ok({key, value, rest}) = heap.pop() else state
-    (next, added) = visit(state, key, value)
-    grown = rest.push_all(added)
-    grown.drain(next, visit)
-  )
-  ```
-
-  Answering the innermost block instead would make a block Rust's `if let`
-  expression, but `?` and `else` would then leave from different places.
-
-- **A destructuring `if`,** `if conditions then a else b`, taking the
-  conditions a guard takes. Left until `when`, guard conditions and `else`
-  lines are in, which cover most of what it would.
+- **Guard conditions, `else` lines and a destructuring `if`** are now one
+  proposal, [conditions](conditions.md), built on a binding test, `value is
+  pattern`.
 
 - **One way to write each kind of definition.** At the top level, a
   function with parameters is clauses, and a value is a binding, `pi =
   3.14159`, in place of a definition of no parameters: built, as
   [values](../approved/values.md).
   In a body, a local function is a binding of a lambda, `walk = |stack|
-  …`, which may call itself. Clauses stay the top-level form: a third of
+  …`, which may call itself: a binding of a lambda sees its own name, and
+  so may not shadow another, since a binding otherwise reads the names
+  bound before it. Clauses stay the top-level form: a third of
   the corpus's 1,974 definitions have several clauses, each of which would
   become a `when` on a tuple of its parameters if a lambda were the only
   form, and a name bound to a lambda reads as a value, which a function is
@@ -286,13 +261,8 @@ each thing, and the classic algorithms as short and plain as their Python.
   ordering are no obstacle: a type holding a function answers none of
   them, as in Rust, Haskell and Roc. Nothing written so far wants it.
 
-- **Loops that rebind,** after Lean 4's `do` notation: local mutable names,
-  `for`, `break` and `continue`, lowered to folds that carry what they
-  rebind. With the rest above, `connected` comes out at Python's length and
-  in its order; what is still longer than Python is threading several
-  tables through nested loops, Dijkstra's relaxation, union-find, dynamic
-  programming over a grid, and only this closes it. A list nothing else
-  holds is already written in place, so it would cost no speed.
+- **Loops that rebind** are now their own proposal, [loops](loops.md):
+  variables written `$name`, `for`, `while` and `loop`.
 
 ## Open questions
 
