@@ -889,8 +889,8 @@ fn cleanup_retains_unused_calls_and_matches_in_order() {
         b.known(zero)
     });
     super::cleanup::cleanup(&mut program);
-    // Even a pure call is retained when no analysis classifies it as inert.
-    assert_eq!(calls_to(&program, test, pure), 1);
+    // A call reaching no external routine is pure: unread, it goes.
+    assert_eq!(calls_to(&program, test, pure), 0);
     assert_eq!(
         expressions(&program, test)
             .iter()
@@ -1044,6 +1044,50 @@ fn cleanup_sinks_a_match_with_its_fields() {
                 run(&original, test, args, &mut vec![])
             );
         }
+    }
+}
+
+/// A call of a definition reaching no external routine is pure, so it
+/// moves into the one arm reading it; one reaching an external routine,
+/// however far down, stays and happens on every path.
+#[test]
+fn cleanup_sinks_a_pure_call_and_keeps_one_reaching_an_effect() {
+    let (mut original, ty, _, _) = super::tests::types();
+    let nought = original.ctor_at(ty, 0);
+    let succ = original.ctor_at(ty, 1);
+    let effect = original.declare("effect", &[], ty);
+    let pure = original.declare("pure", &[ty], ty);
+    original.define(pure, |b, args| b.con(succ, &[args[0]]));
+    let wrapped = original.declare("wrapped", &[], ty);
+    original.define(wrapped, |b, _| b.call(effect, &[]));
+    let test = original.declare("calls", &[ty], ty);
+    original.define(test, |b, args| {
+        let pured = b.call(pure, &[args[0]]);
+        let effected = b.call(wrapped, &[]);
+        b.match_(args[0], ty, |b, built, _| {
+            if built == nought {
+                b.con(succ, &[pured])
+            } else {
+                b.con(succ, &[effected])
+            }
+        })
+    });
+    original.set_entry(test);
+    let mut program = original.clone();
+    super::cleanup::cleanup(&mut program);
+    validate(&program).unwrap();
+    let top = top_level(&program, test);
+    let ahead = |called| matches!(top[..], [Expr::Call(first, _)] if first == called);
+    assert!(ahead(wrapped) && !ahead(pure));
+    assert_eq!(calls_to(&program, test, pure), 1);
+    for n in 0..3 {
+        let args = vec![super::tests::nat(&original, ty, n)];
+        let mut trace = vec![];
+        assert_eq!(
+            run(&program, test, args.clone(), &mut trace),
+            run(&original, test, args, &mut vec![])
+        );
+        assert_eq!(trace, [effect]);
     }
 }
 

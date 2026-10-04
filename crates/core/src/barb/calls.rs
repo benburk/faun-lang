@@ -7,6 +7,7 @@
 //! breaker, a definition kept whole; folding reads each definition after
 //! what it calls, so a caller meets its callees' answers.
 
+use super::facts::Recognised;
 use super::model::{Expr, FnId};
 use super::program::Program;
 
@@ -65,6 +66,37 @@ pub(super) fn breakers(program: &Program) -> Vec<bool> {
 /// each other, which come together in no particular order.
 pub(super) fn callees_first(program: &Program) -> Vec<FnId> {
     rounds(&graph(program)).into_iter().flatten().collect()
+}
+
+/// Which definitions are pure: what they answer is all they do, so one
+/// whose answer nothing reads may go uncalled, and one called on a path
+/// that does not read it need not be called there. A definition is pure
+/// where it is answered as a recognized operation, or where it has a body
+/// and everything it calls is pure or in its own round. An external
+/// routine, and anything reaching one, is not. A pure call may still fail
+/// to come back; leaving it uncalled only ever means less is done.
+pub(super) fn pure(program: &Program, recognised: &Recognised) -> Vec<bool> {
+    let calls = graph(program);
+    let mut pure = vec![false; calls.len()];
+    let mut within = vec![false; calls.len()];
+    // Each round comes after every round it calls into.
+    for round in rounds(&calls) {
+        for id in &round {
+            within[id.index()] = true;
+        }
+        let clean = round.iter().all(|&id| {
+            recognised.answered(id)
+                || (program.function(id).body().is_some()
+                    && calls[id.index()]
+                        .iter()
+                        .all(|callee| within[callee.index()] || pure[callee.index()]))
+        });
+        for id in &round {
+            within[id.index()] = false;
+            pure[id.index()] = clean;
+        }
+    }
+    pure
 }
 
 /// The rounds a program's calls make: every definition in one reaches every

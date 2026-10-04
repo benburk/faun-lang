@@ -1,9 +1,10 @@
 //! Backward liveness for inert bindings, followed by capture-free renaming.
-//! Calls of unknown meaning are retained even when their answers are
-//! unused. A structurally recognized call -- arithmetic, or a question
-//! about a sequence -- is pure and total, so it is inert, and so is a match
-//! whose every arm is: it answers whichever arm it takes. Dropping a constructor never drops eager opaque calls that
-//! produced its fields.
+//! A call of a definition reaching an external routine is retained even
+//! when its answer is unused. A call of a pure one -- a recognized
+//! operation, or a definition reaching no external routine -- is inert, and
+//! so is a match whose every arm is: it answers whichever arm it takes.
+//! Dropping a constructor never drops eager calls reaching external
+//! routines that produced its fields.
 //!
 //! An inert binding is worked out only on the paths that read it: one read
 //! only inside one arm of a later match moves to the top of that arm, and
@@ -14,13 +15,12 @@
 use super::terms::TermArena;
 use std::collections::HashMap;
 
-use super::facts::Recognised;
 use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, Range};
 
 pub(super) fn cleanup(program: &mut Program) {
     let recognised = program.recognised().clone();
     let mut inert = Inert {
-        recognised: &recognised,
+        pure: super::calls::pure(program, &recognised),
         known: HashMap::new(),
     };
     let mut rewrite = Rewrite {
@@ -90,18 +90,19 @@ impl Read {
 
 /// Which expressions may go unevaluated where nothing reads them, found
 /// once for each: an expression is inert wherever it stands.
-struct Inert<'a> {
-    recognised: &'a Recognised,
+struct Inert {
+    /// Indexed by definition: see [`super::calls::pure`].
+    pure: Vec<bool>,
     known: HashMap<ExprId, bool>,
 }
 
-impl Inert<'_> {
+impl Inert {
     fn is(&mut self, program: &Program, id: ExprId) -> bool {
         if let Some(&known) = self.known.get(&id) {
             return known;
         }
         let inert = match program.expr(id) {
-            Expr::Call(called, _) => self.recognised.answered(called),
+            Expr::Call(called, _) => self.pure[called.index()],
             Expr::Match(_, arms) => program.arms(arms).iter().all(|arm| {
                 program
                     .bindings(arm.body.bindings)

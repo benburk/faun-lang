@@ -366,10 +366,11 @@ two types -- so nothing infers a provider or an effect from the display name.
    ordering; several keep callee-first order and the same budgets.
 9. Sweep: where there is an entry, drop every definition it does not reach,
    renumbering function IDs in order. Types, constructors and constants stay.
-10. Effect-safe cleanup: remove aliases, unused inert terms, and calls proved to be
-    pure arithmetic or lengths, and matches whose arms are all inert; retain calls
-    of unknown meaning. Inert work read only inside one arm of a later match
-    moves to the top of that arm, so the other arms do none of it.
+10. Effect-safe cleanup: remove aliases, unused inert terms -- constructors,
+    calls of pure definitions, and matches whose arms are all inert -- and
+    retain calls reaching an external routine. Inert work read only inside
+    one arm of a later match moves to the top of that arm, so the other arms
+    do none of it.
 
 Every normalizing stage (1, 4 and 7) also decides what is already decided: a
 match on a known constructor is its arm, the length of a known sequence is a
@@ -424,14 +425,21 @@ renames retained locals. It records not only whether a local is read but where: 
 inert binding read only inside one arm of one later match is planned into that
 arm, ahead of the arm's own bindings and in the order written, and what it reads
 is then read in that arm too, so a chain of inert work moves with it. Each run
-moves work one match down. Calls of unknown meaning never move: an external call
-skipped on one path, or moved past another, would change what the program does. A body left answering its last binding answers that
+moves work one match down. A body left answering its last binding answers that
 binding's expression. Dead constructor chains disappear in this single traversal;
-there is no fixed-point loop. Calls of unknown meaning are conservatively
-retained even when their results are unused. Calls structurally recognized as pure,
-total arithmetic or lengths are inert and may go, and so may a match every
-arm of which is inert: it answers whichever arm it takes. In particular, dropping a constructor does
-not drop opaque eager calls that computed its fields. Folded, now-unused product
+there is no fixed-point loop.
+
+A definition is pure where it is recognized as an operation, or has a body and
+calls only pure definitions and those in its own round of recursion; an
+external routine, and anything that reaches one, is not. A call of a pure
+definition is inert, and so is a match every arm of which is inert: it answers
+whichever arm it takes. Inert work may go where nothing reads it and move to
+the one arm that does, even though a pure call may not come back: leaving it
+uncalled only ever does less. A call reaching an external routine is retained
+even when its result is unused, and never moves: skipped on one path, or moved
+past another, it would change what the program does. In particular, dropping a
+constructor does not drop eager calls reaching external routines that computed
+its fields. Folded, now-unused product
 constants no longer demand runtime representations; live products lower to
 their fields' machine values and payload-carrying sums to machine cells.
 
