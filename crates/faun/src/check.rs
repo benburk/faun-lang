@@ -2313,6 +2313,17 @@ impl<'a> Checker<'a> {
                 Ok(self.infer.instantiate(&scheme))
             }
             h::ExprKind::Try(value) => self.try_(module, expression.span, value, locals),
+            // Its branches answer one type, the one the `if` answers.
+            h::ExprKind::If(condition, yes, no) => {
+                let asked = self.expr(module, condition, locals)?;
+                let bool_ = self.bool_type();
+                self.unify_at(module, condition.span, &asked, &bool_)?;
+                let answer = self.expr(module, yes, locals)?;
+                let other = self.expr(module, no, locals)?;
+                self.unify_at(module, no.span, &other, &answer)
+                    .map_err(|error| error.note("both branches of an `if` answer one type"))?;
+                Ok(answer)
+            }
             // A tag alone is a value of a row holding it with no fields, or
             // where a function is wanted, the function building it from its
             // fields: `map_err(Wrap)`.
@@ -4560,6 +4571,12 @@ fn validate_effect_expr(
             validate_effect_expr(module, left, owner_effectful, false, symbols)?;
             validate_effect_expr(module, right, owner_effectful, false, symbols)
         }
+        // A branch stands where the `if` does: one of them is taken, there.
+        h::ExprKind::If(condition, yes, no) => {
+            validate_effect_expr(module, condition, owner_effectful, false, symbols)?;
+            validate_effect_expr(module, yes, owner_effectful, stands_alone, symbols)?;
+            validate_effect_expr(module, no, owner_effectful, stands_alone, symbols)
+        }
         h::ExprKind::Local(_)
         | h::ExprKind::Global(_)
         | h::ExprKind::Constructor(_)
@@ -4775,6 +4792,11 @@ fn expr_globals(expression: &h::Expr, symbols: &Symbols, output: &mut HashSet<Sy
         }
         h::ExprKind::Lambda(_, body) | h::ExprKind::Try(body) => {
             expr_globals(body, symbols, output);
+        }
+        h::ExprKind::If(condition, yes, no) => {
+            for each in [condition, yes, no] {
+                expr_globals(each, symbols, output);
+            }
         }
         // An operator is its member's spelling, as a dot call is.
         h::ExprKind::Unary(operator, value) => {
@@ -5018,7 +5040,7 @@ mod tests {
             );
             self.write(
             "order.fn",
-            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\neq : Order -> Bool\neq(Eq) -> True\neq(_) -> False\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
+            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\neq : Order -> Bool\neq(Eq) -> True\neq(_) -> False\nor : (Order, Order) -> Order\nor(Eq, next) -> next\nor(decided, _) -> decided)\n",
         );
             let standard = self.write(
                 "standard.fn",
@@ -5071,6 +5093,9 @@ mod tests {
                 | ExprKind::Project(value, _)
                 | ExprKind::Widen(value)
                 | ExprKind::Try(value) => waiting.push(value),
+                ExprKind::If(condition, yes, no) => {
+                    waiting.extend([condition, yes, no].map(|e| &**e));
+                }
                 ExprKind::Block(body) => {
                     waiting.extend(body.bindings.iter().map(|b| &b.value));
                     waiting.push(&body.result);

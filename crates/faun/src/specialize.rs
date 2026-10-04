@@ -229,6 +229,8 @@ pub(crate) enum ExprKind {
     /// `value?`: an `Ok`'s value, or its `Err` answered at once by the
     /// function or lambda this is in.
     Try(Box<Expr>),
+    /// `if condition then yes else no`; see [`crate::hir::ExprKind::If`].
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     Block(Box<Body>),
 }
@@ -825,7 +827,7 @@ impl<'a> Specializer<'a> {
             });
         }
         let (join, unit) = if Some(key.name) == self.prelude.cmp {
-            (self.prelude.order_then, self.prelude.order_eq)
+            (self.prelude.order_or, self.prelude.order_eq)
         } else {
             (self.prelude.bool_and, self.prelude.bool_true)
         };
@@ -1315,6 +1317,11 @@ impl<'a> Specializer<'a> {
                 }
                 ExprKind::Widen(Box::new(value))
             }
+            t::ExprKind::If(condition, yes, no) => ExprKind::If(
+                Box::new(self.expr(module, condition, substitution)?),
+                Box::new(self.expr(module, yes, substitution)?),
+                Box::new(self.expr(module, no, substitution)?),
+            ),
             t::ExprKind::Try(value) => {
                 ExprKind::Try(Box::new(self.expr(module, value, substitution)?))
             }

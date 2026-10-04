@@ -46,7 +46,21 @@ pub(crate) struct Body {
 #[derive(Clone, Debug)]
 pub(crate) struct Binding {
     pub(crate) unpack: Unpack,
-    pub(crate) value: Expr,
+    pub(crate) value: Bound,
+}
+
+/// What a binding binds.
+#[derive(Clone, Debug)]
+pub(crate) enum Bound {
+    Value(Expr),
+    /// `if condition then yes else no`, the condition a `Bool` worked out
+    /// ahead of it and each branch a body of its own, worked out only where
+    /// it is chosen.
+    If {
+        condition: Expr,
+        yes: Box<Body>,
+        no: Box<Body>,
+    },
 }
 
 /// Every unpack has one possible constructor and fields in declaration order.
@@ -201,7 +215,12 @@ struct Compiler<'a> {
 
 impl Compiler<'_> {
     fn body(&self, body: d::Body) -> Result<Body, LowerError> {
-        let body = hoisted(body);
+        self.compiled(hoisted(body, &mut 0))
+    }
+
+    /// A body [`hoisted`] already, whose `if`s each stand alone on a line,
+    /// their branches hoisted too.
+    fn compiled(&self, body: d::Body) -> Result<Body, LowerError> {
         let bindings = body
             .bindings
             .into_iter()
@@ -212,10 +231,21 @@ impl Compiler<'_> {
                             error.at = Some((binding.value.module, binding.value.span));
                             error
                         })?;
-                Ok(Binding {
-                    unpack,
-                    value: binding.value,
-                })
+                let value = match binding.value.kind {
+                    ExprKind::If(condition, yes, no) => {
+                        let (ExprKind::Block(yes), ExprKind::Block(no)) = (yes.kind, no.kind)
+                        else {
+                            unreachable!("hoisting makes each branch a block")
+                        };
+                        Bound::If {
+                            condition: *condition,
+                            yes: Box::new(self.compiled(*yes)?),
+                            no: Box::new(self.compiled(*no)?),
+                        }
+                    }
+                    _ => Bound::Value(binding.value),
+                };
+                Ok(Binding { unpack, value })
             })
             .collect::<Result<_, LowerError>>()?;
         Ok(Body {
@@ -611,17 +641,21 @@ impl Compiler<'_> {
 /// captured. Evaluation is pure but for effects, which stand on their own,
 /// so taking either out ahead of the rest of its expression changes nothing
 /// a program can see.
-fn hoisted(body: d::Body) -> d::Body {
-    let mut fresh = 0;
+///
+/// An `if` is bound on its own too, its condition taken out ahead of it and
+/// each branch hoisted into a block of its own, since what a branch works
+/// out is worked out only where it is chosen. `fresh` counts the locals
+/// made so far, across every branch.
+fn hoisted(body: d::Body, fresh: &mut u32) -> d::Body {
     let mut bindings = Vec::with_capacity(body.bindings.len());
     for binding in body.bindings {
-        let value = lifted(binding.value, &mut bindings, &mut fresh);
+        let value = lifted(binding.value, &mut bindings, fresh);
         bindings.push(d::Binding {
             pattern: binding.pattern,
             value,
         });
     }
-    let result = lifted(body.result, &mut bindings, &mut fresh);
+    let result = lifted(body.result, &mut bindings, fresh);
     d::Body { bindings, result }
 }
 
@@ -669,6 +703,35 @@ fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> 
             ExprKind::DirectCall(key, arguments.into_iter().map(&mut lift).collect())
         }
         ExprKind::Widen(value) => ExprKind::Widen(Box::new(lift(*value))),
+        ExprKind::If(condition, yes, no) => {
+            let condition = lift(*condition);
+            let branch = |branch: Expr, fresh: &mut u32| {
+                let body = d::Body {
+                    bindings: Vec::new(),
+                    result: branch,
+                };
+                Expr {
+                    module: expression.module,
+                    span: expression.span,
+                    ty: expression.ty.clone(),
+                    kind: ExprKind::Block(Box::new(hoisted(body, fresh))),
+                }
+            };
+            let yes = branch(*yes, fresh);
+            let no = branch(*no, fresh);
+            let local = LocalId(u32::MAX - *fresh);
+            *fresh += 1;
+            bindings.push(d::Binding {
+                pattern: Pattern::Bind(local),
+                value: Expr {
+                    module: expression.module,
+                    span: expression.span,
+                    ty: expression.ty.clone(),
+                    kind: ExprKind::If(Box::new(condition), Box::new(yes), Box::new(no)),
+                },
+            });
+            ExprKind::Local(local)
+        }
         ExprKind::Try(value) => {
             let value = lift(*value);
             // Past any local a clause can have: they are numbered from nought.

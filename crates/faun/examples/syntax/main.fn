@@ -3,6 +3,7 @@
 # `faun test examples/syntax/main.fn` asks them all.
 
 import guards {}
+import conditions {}
 import patterns {}
 import operators {}
 import layout {}

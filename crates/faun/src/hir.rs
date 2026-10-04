@@ -359,6 +359,8 @@ pub enum ExprKind {
     /// `value?`: an `Ok`'s value, or the `Err` answered at once by the
     /// clause or lambda it is written in.
     Try(Box<Expr>),
+    /// `if condition then yes else no`: the branch the condition chooses.
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// Bindings, then the answer: a block written inside an expression.
     /// Its locals are the clause's, numbered apart from every other.
     Block(Box<Body>),

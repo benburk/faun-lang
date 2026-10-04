@@ -6,7 +6,9 @@
 
    Terminals are token kinds: quoted, as spelled, or named in capitals. The
    lexer decides what adjacency means, so the grammar never sees a space:
-     NEWLINE     the end of a line of items or of a block
+     NEWLINE     the end of a line of items or of a block; a line beginning
+                 `if` goes on with the line before where items are written,
+                 as a guard, and begins a block's next line
      CALL_PAREN  `(` straight after an operand: a call's, or a type's
    and `.`, `..`, `.*` and `?` are written against what they join.
 
@@ -69,7 +71,10 @@ field-types       = NAME ":" type [ "," [ field-types ] ]
 (* Infix operators, loosest first:
      |   ^   &   == != < <= > >=   + -   / % *
    each level left-associative. *)
-expr              = operand expr-tail ;
+(* An `if` takes everything after its `else`, so it begins an expression
+   and is no operand: `1 + (if c then a else b)`. *)
+expr              = "if" expr "then" expr "else" expr
+                  | operand expr-tail ;
 expr-tail         = { infix operand } ;
 infix             = "|" | "^" | "&" | "==" | "!=" | "<" | "<=" | ">" | ">="
                   | "+" | "-" | "/" | "%" | "*" ;

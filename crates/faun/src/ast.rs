@@ -431,6 +431,9 @@ pub enum ExprKind {
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
     /// `value?`: an `Ok`'s value, or the `Err` answered at once.
     Try(Box<Expr>),
+    /// `if condition then yes else no`: only the branch the condition
+    /// chooses is worked out.
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `(x = f(y)` … `x + 1)`: bindings, then the answer, in parentheses.
     /// Its names are seen by its later lines and its answer alone.
     Block(Box<Body>),

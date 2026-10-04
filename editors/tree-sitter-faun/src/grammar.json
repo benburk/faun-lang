@@ -1232,6 +1232,10 @@
         {
           "type": "SYMBOL",
           "name": "_operand"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "if_expression"
         }
       ]
     },
@@ -1828,6 +1832,51 @@
         }
       ]
     },
+    "if_expression": {
+      "type": "PREC_RIGHT",
+      "value": 0,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "if"
+          },
+          {
+            "type": "FIELD",
+            "name": "condition",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "then"
+          },
+          {
+            "type": "FIELD",
+            "name": "consequence",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "else"
+          },
+          {
+            "type": "FIELD",
+            "name": "alternative",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          }
+        ]
+      }
+    },
     "range": {
       "type": "SEQ",
       "members": [
@@ -1995,7 +2044,7 @@
               },
               {
                 "type": "SYMBOL",
-                "name": "_newline"
+                "name": "_block_newline"
               }
             ]
           }
@@ -2422,6 +2471,10 @@
     {
       "type": "SYMBOL",
       "name": "effect_identifier"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_block_newline"
     }
   ],
   "inline": [],

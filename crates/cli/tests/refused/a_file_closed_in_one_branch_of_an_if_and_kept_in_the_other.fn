@@ -1,0 +1,14 @@
+import std.host {Host, Files, File, IoError, Mode.*}
+
+main! : Host -> []
+main!(host) -> (
+  ran = program!(host.files, host.args.len())
+  host.exit!(0)
+)
+
+program! : (Files, Nat) -> Result(Nat, IoError)
+program!(files, n) -> (
+  file = files.open!("a.txt", Read)?
+  closed = if n == 0 then file.close!() else Ok({})
+  Ok(n)
+)

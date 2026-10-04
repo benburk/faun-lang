@@ -450,6 +450,11 @@ impl<'a> Callbacks<'a> {
             }
             ExprKind::Widen(value) => d::ExprKind::Widen(Box::new(self.expr(frame, value)?)),
             ExprKind::Try(value) => d::ExprKind::Try(Box::new(self.expr(frame, value)?)),
+            ExprKind::If(condition, yes, no) => d::ExprKind::If(
+                Box::new(self.expr(frame, condition)?),
+                Box::new(self.expr(frame, yes)?),
+                Box::new(self.expr(frame, no)?),
+            ),
             ExprKind::DirectCall(key, arguments) => self.call(frame, key, arguments)?,
             ExprKind::Invoke(head, arguments) => {
                 let (callback, carried) = callback(frame, head)?;
@@ -668,6 +673,11 @@ fn for_each<'a>(expression: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
         ExprKind::Project(value, _) | ExprKind::Widen(value) | ExprKind::Try(value) => {
             for_each(value, visit);
         }
+        ExprKind::If(condition, yes, no) => {
+            for each in [condition, yes, no] {
+                for_each(each, visit);
+            }
+        }
         ExprKind::Invoke(head, arguments) => {
             for_each(head, visit);
             for each in arguments {
@@ -792,6 +802,11 @@ fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap
         }
         S::Project(receiver, _) | S::Widen(receiver) | S::Try(receiver) => {
             free_locals(receiver, bound, found);
+        }
+        S::If(condition, yes, no) => {
+            for each in [condition, yes, no] {
+                free_locals(each, bound, found);
+            }
         }
         S::Invoke(head, arguments) => {
             free_locals(head, bound, found);

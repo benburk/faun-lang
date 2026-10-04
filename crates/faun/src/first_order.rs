@@ -83,6 +83,9 @@ pub(crate) enum ExprKind {
     Widen(Box<Expr>),
     /// `value?`; see [`crate::specialize::ExprKind::Try`].
     Try(Box<Expr>),
+    /// `if condition then yes else no`; see [`crate::hir::ExprKind::If`].
+    /// Pattern compiling binds it on a line of its own, each branch a body.
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     /// Pattern compiling takes its bindings out ahead of the expression it
     /// stands in.

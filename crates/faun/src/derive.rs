@@ -370,8 +370,8 @@ impl Writer<'_> {
                 result = Some(match result {
                     None => order,
                     Some(before) => {
-                        let then = self.expr(h::ExprKind::Global(self.prelude.order_then));
-                        self.expr(h::ExprKind::Call(Box::new(then), vec![before, order]))
+                        let or = self.expr(h::ExprKind::Global(self.prelude.order_or));
+                        self.expr(h::ExprKind::Call(Box::new(or), vec![before, order]))
                     }
                 });
             }

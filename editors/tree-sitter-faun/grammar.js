@@ -61,8 +61,10 @@ function lines($) {
 module.exports = grammar({
   name: 'faun',
 
-  // Where a line ends, and a name's `!`: see `src/scanner.c`.
-  externals: $ => [$._newline, $.effect_identifier],
+  // Where a line ends, and a name's `!`: see `src/scanner.c`. A block's
+  // lines end apart from items', since a line beginning `if` goes on with
+  // a clause above it and begins a block's next line.
+  externals: $ => [$._newline, $.effect_identifier, $._block_newline],
 
   extras: $ => [/\s/, $.comment],
 
@@ -241,7 +243,8 @@ module.exports = grammar({
 
     // Expressions.
 
-    _expression: $ => choice($.binary_expression, $._operand),
+    // An `if` takes everything after its `else`, so nothing follows it.
+    _expression: $ => choice($.binary_expression, $._operand, $.if_expression),
 
     binary_expression: $ => choice(...INFIX.map((operators, level) =>
       prec.left(level + 1, seq(
@@ -307,6 +310,16 @@ module.exports = grammar({
       $.record,
     ),
 
+    // Its `else` as far as an expression goes.
+    if_expression: $ => prec.right(seq(
+      'if',
+      field('condition', $._expression),
+      'then',
+      field('consequence', $._expression),
+      'else',
+      field('alternative', $._expression),
+    )),
+
     // A range's end may be negated, or `_` to leave that side open.
     range: $ => seq(
       field('start', choice($.number, $.char, $.wildcard)),
@@ -330,7 +343,7 @@ module.exports = grammar({
     // binds nothing is an effect asked for what it does.
     block: $ => seq(
       '(',
-      repeat1(seq(choice($.binding, $._expression), $._newline)),
+      repeat1(seq(choice($.binding, $._expression), $._block_newline)),
       field('answer', $._expression),
       ')',
     ),

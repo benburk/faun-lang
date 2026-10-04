@@ -1048,6 +1048,38 @@ fn it_reads_standard_input() {
     }
 }
 
+/// An `if` works out only the branch it chooses, so the recursion its
+/// other branch would start never begins, and a branch may be a block of
+/// its own; the count of arguments says which branch runs.
+#[test]
+fn an_if_works_out_only_the_branch_it_chooses() {
+    let program = read(
+        "import std.host {Host}
+
+         count : Nat -> Nat
+         count(n) -> if n == 0 then 0 else 1 + count(n - 1)
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           answer = if n > 1 then 99 else (
+             more = n + 4
+             count(more)
+           )
+           host.exit!(U8.of_nat(answer))
+         )",
+    )
+    .expect("a program choosing a branch");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers: Vec<_> = execute_counts(&program, &[1, 2])
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(answers, [5, 99]);
+}
+
 /// The arguments a program is run with are a list of strings, its own name
 /// first: a greeting names the first after it, or the world where there is
 /// none, and the count is how many there are.

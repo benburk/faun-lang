@@ -1,0 +1,8 @@
+error: this `File` is used up in one branch of an `if` and not the other
+  --> a_file_closed_in_one_branch_of_an_if_and_kept_in_the_other.fn:12:27
+   |
+12 |   closed = if n == 0 then file.close!() else Ok({})
+   |            ---------------------------------------- the other branch still holds it
+   |                           ^^^^ used up here
+   |
+   = help: use it up in both branches, or in neither

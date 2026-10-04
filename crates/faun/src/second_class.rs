@@ -111,6 +111,7 @@ fn calls<'a>(expression: &'a Expr, found: &mut impl FnMut(&'a FunctionKey, &'a E
         | ExprKind::Lambda(_, _, inner)
         | ExprKind::Widen(inner)
         | ExprKind::Try(inner) => vec![&**inner],
+        ExprKind::If(condition, yes, no) => vec![&**condition, &**yes, &**no],
         ExprKind::DirectCall(callee, arguments) => {
             found(callee, expression);
             arguments.iter().collect()
@@ -166,6 +167,11 @@ fn value(expression: &Expr, passed: bool) -> Result<(), LowerError> {
         ExprKind::Lambda(_, _, result) => value(result, false),
         ExprKind::Widen(inner) => value(inner, passed),
         ExprKind::Try(inner) => value(inner, false),
+        ExprKind::If(condition, yes, no) => {
+            value(condition, false)?;
+            value(yes, false)?;
+            value(no, false)
+        }
     }
 }
 

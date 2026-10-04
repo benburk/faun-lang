@@ -1,0 +1,37 @@
+# `if condition then yes else no`: an expression answering one of two
+# values, the condition a `Bool`. Only the branch it chooses is worked out,
+# and both answer one type. It takes everything after its `else`, so it
+# begins an expression: as an operand it is written in parentheses.
+
+sign : Int -> Str
+sign(n) -> if n < 0 then "negative" else if n == 0 then "zero" else "positive"
+
+# The branch not chosen is not worked out, so a recursion stops there.
+count : Nat -> Nat
+count(n) -> if n == 0 then 0 else 1 + count(n - 1)
+
+# A branch may be a block, its bindings its own; and in a block, a line
+# beginning `if` begins one, where after a clause it would be a guard.
+spread : (Nat, Nat) -> Nat
+spread(a, b) -> (
+  low = a.min(b)
+  if a == b then 0 else (
+    high = a.max(b)
+    high - low
+  )
+)
+
+# A branch is a value and never leaves: to pass a failure on, both
+# branches answer a `Result`, and the whole `if` is asked `?`.
+parsed : (Bool, Str) -> Result(Nat, [Malformed])
+parsed(strict, text) -> (
+  n = (if strict then Nat.from_str(text) else Ok(0))?
+  Ok(n + 1)
+)
+
+expect sign(-3) == "negative" & sign(0) == "zero" & sign(5) == "positive"
+expect count(4) == 4
+expect spread(3, 7) == 4 & spread(5, 5) == 0
+expect (if True then 1 else 2) + 1 == 2
+expect parsed(True, "41") == Ok(42) & parsed(False, "x") == Ok(1)
+expect parsed(True, "x").is_err()

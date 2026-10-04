@@ -10,8 +10,9 @@
 //! begin with, outside every bracket but a method block's `.(` and a plain
 //! `(`, which may hold a block's lines. So a line runs on after `->`, `=`, a
 //! comma or an operator, and into a next line beginning `.`, an infix
-//! operator, `where`, `if` or a closing bracket, and a list, a record or a
-//! call spans lines freely.
+//! operator, `where`, `then`, `else` or a closing bracket, or `if` where
+//! items are written, as a guard; a block's line beginning `if` begins an
+//! `if`. A list, a record or a call spans lines freely.
 //!
 //! Whether `-`, `*` or `|` is a prefix or infix is the grammar's to say, by
 //! where it stands, as in any expression grammar. What joins by adjacency is
@@ -90,6 +91,8 @@ pub enum Kind {
     Bang,
     Question,
     KwIf,
+    KwThen,
+    KwElse,
     KwPackage,
     KwImport,
     KwExport,
@@ -161,7 +164,8 @@ impl Kind {
                 | Self::Bar
                 | Self::Caret
                 | Self::KwWhere
-                | Self::KwIf
+                | Self::KwThen
+                | Self::KwElse
         )
     }
 }
@@ -200,9 +204,11 @@ enum Mode {
 }
 
 /// A bracket the lexer is inside: lines end within a method block, which
-/// holds items, and not within any other.
+/// holds items as the top level does, and within a plain `(`, which may
+/// hold a block's lines, and not within any other.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Bracket {
+    Items,
     Lines,
     Joined,
 }
@@ -318,7 +324,8 @@ impl Lexer<'_> {
         match kind {
             // A method block's lines, or a block's: a plain `(` may hold
             // one, where a call's cannot.
-            Kind::DotParen | Kind::LParen => self.brackets.push(Bracket::Lines),
+            Kind::DotParen => self.brackets.push(Bracket::Items),
+            Kind::LParen => self.brackets.push(Bracket::Lines),
             Kind::CallParen | Kind::LBracket | Kind::LBrace => {
                 self.brackets.push(Bracket::Joined);
             }
@@ -360,17 +367,19 @@ impl Lexer<'_> {
     }
 
     /// Whether the line break before `kind`, just lexed, ends a line.
+    ///
+    /// Where items are written, a line beginning `if` is a guard of the
+    /// clause above; a block holds no clauses, so there it begins an `if`.
     fn ends_line_before(&self, kind: Kind) -> bool {
-        let lines = self.modes.is_empty()
-            && self
-                .brackets
-                .last()
-                .is_none_or(|bracket| *bracket == Bracket::Lines);
+        let bracket = self.brackets.last().copied();
+        let items = bracket.is_none_or(|bracket| bracket == Bracket::Items);
+        let lines = self.modes.is_empty() && (items || bracket == Some(Bracket::Lines));
         let held_minus = kind == Kind::Minus && !self.space_after();
+        let guard = kind == Kind::KwIf && items;
         lines
             && kind != Kind::Eof
             && self.out.last().is_some_and(|last| last.kind.ends_line())
-            && (!kind.continues_line() && (kind != Kind::Minus || held_minus))
+            && (!kind.continues_line() && !guard && (kind != Kind::Minus || held_minus))
     }
 
     fn skip_space(&mut self) {
@@ -542,6 +551,8 @@ impl Lexer<'_> {
         let kind = match text {
             "_" => return Kind::Wild,
             "if" => Kind::KwIf,
+            "then" => Kind::KwThen,
+            "else" => Kind::KwElse,
             "package" => Kind::KwPackage,
             "import" => Kind::KwImport,
             "export" => Kind::KwExport,

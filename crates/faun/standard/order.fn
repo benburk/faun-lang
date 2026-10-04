@@ -31,10 +31,10 @@ Order : [Lt, Eq, Gt].(
   ne(_) -> True
 
   # This order, or where it is `Eq`, the next: how a tuple is ordered
-  # position by position.
-  then : (Order, Order) -> Order
-  then(Eq, next) -> next
-  then(decided, _) -> decided
+  # position by position. Written `|`, as `a.cmp(b) | c.cmp(d)`.
+  or : (Order, Order) -> Order
+  or(Eq, next) -> next
+  or(decided, _) -> decided
 )
 
 expect Lt.ne() & !Eq.ne()

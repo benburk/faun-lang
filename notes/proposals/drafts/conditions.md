@@ -171,11 +171,24 @@ overflows the stack today, since `even(0)` still calls `odd`. `is` needs
 the rule regardless: in `x is Some(n) & n > 0`, `n` does not exist where
 the left fails. No program that answers today answers differently.
 
+Built on 2026-10-04: emission matches on the left and works out the right
+only in the arm that needs it.
+
 ### `if`
 
-- **Syntax.** `"if" expr "then" expr "else" expr`, an untyped primary. The
-  `else` is required: an `if` always answers. `if a then b else if c then d
-  else e` chains with no rule of its own.
+- **Syntax.** `expr = "if" expr "then" expr "else" expr | operand
+  expr-tail`. An `if` takes everything after its `else`, so it begins an
+  expression and is no operand: `1 + (if c then a else b)`, and `1 + if
+  …` is refused with that advice. As an operand, what followed its `else`
+  could belong to the branch or to the expression around it, and the
+  grammar would no longer be LL(1). The `else` is required: an `if` always
+  answers. `if a then b else if c then d else e` chains with no rule of its
+  own.
+- **Lines.** Where items are written, a line beginning `if` goes on with
+  the line before, as a guard; a block holds no clauses, so there it begins
+  an `if`. Lines beginning `then` and `else` go on with the line before.
+- **`?` in a branch is refused.** A branch is a value; the advice is to
+  answer a `Result` from both branches and ask `?` of the whole `if`.
 - **`then` is required.** Without it, `if n -1 else 0` reads as `n - 1`.
 - **Meaning.** The condition is a `Bool`; both branches have one type; the
   `then` branch sees what the condition bound. A branch is a value, never
@@ -188,6 +201,9 @@ the left fails. No program that answers today answers differently.
   greeting(acct) if acct is (Admin(name) | User(name)) & name != "root" -> "Hello, {name}"
   greeting(_) -> "Hello"
   ```
+
+Built on 2026-10-04, as above, with `Order.then` renamed `Order.or`, since
+`then` became a keyword; `|` on orders now reads it.
 
 ### `else` lines
 

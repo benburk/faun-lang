@@ -262,7 +262,7 @@ take a record or tuple apart, since that always matches, and a type's one
 constructor. A closed record and a
 tuple have `equals` without declaring it, as a tag row does, each component
 equal by its own type's `equals`, and a tuple has `cmp`, its positions in
-order with `Order.then`;
+order with `Order.or`;
 a record has no order of its fields, and an open record no `equals`, its other
 fields being a caller's. A declared type writes its own, or asks for the
 structural one by its signature alone.
@@ -397,7 +397,8 @@ too.
 
 `host.print!(text)` and `host.println!(text)` write a text to standard output,
 the second with a line's end, and answer `Result({}, WriteError)`. An effect whose
-answer nothing needs is written on a line of its own, which binds it to `_`.
+answer nothing needs is written on a line of its own, which binds it to `_`;
+`host.println!(text)?` on a line of its own passes a failed write on.
 Only an effect, a call of a name ending `!`, may stand so; anything else is
 bound to a name:
 
@@ -412,6 +413,29 @@ A line beginning with an infix operator, or with a `.`, goes on with the
 line before rather than standing on its own, so a long condition may be
 broken before its `&`. A `-` held to what follows it is a negation and
 begins a line of its own.
+
+## If
+
+`if condition then yes else no` answers `yes` where the `Bool` condition is
+`True` and `no` where it is `False`, working out only the branch it chooses;
+both answer one type, and `else` is always written. It takes everything
+after its `else`, so it begins an expression, as a clause's body, a
+binding's value, an argument or a branch; as an operand it is written in
+parentheses, `1 + (if late then 10 else 0)`. A line of a block beginning
+`if` begins one, where after a clause it is that clause's guard.
+
+A branch is a value and never leaves: `?` in one is refused, and a failure
+is passed on by answering a `Result` from both and asking `?` of the whole,
+`(if strict then Nat.from_str(text) else Ok(0))?`. A resource one branch
+uses up the other uses up too.
+
+On `Bool`, `&` and `|` likewise work out their right side only where the
+left has not decided: `n == 0 | odd(n - 1)` stops at nought.
+
+```
+sign : Int -> Str
+sign(n) -> if n < 0 then "negative" else if n == 0 then "zero" else "positive"
+```
 
 ## Or-patterns
 

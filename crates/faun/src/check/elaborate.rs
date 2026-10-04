@@ -323,6 +323,11 @@ impl Elaborator<'_> {
                     t::ExprKind::Method(target, arguments)
                 }
                 h::ExprKind::Try(value) => t::ExprKind::Try(Box::new(self.expr(*value))),
+                h::ExprKind::If(condition, yes, no) => t::ExprKind::If(
+                    Box::new(self.expr(*condition)),
+                    Box::new(self.expr(*yes)),
+                    Box::new(self.expr(*no)),
+                ),
                 h::ExprKind::Unary(_, value) => {
                     t::ExprKind::Method(self.target(site, false), vec![self.expr(*value)])
                 }

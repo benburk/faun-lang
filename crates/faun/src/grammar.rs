@@ -119,6 +119,7 @@ const fn begins_expr(kind: Kind) -> bool {
             | Kind::TypeIdent
             | Kind::Ident
             | Kind::EffectIdent
+            | Kind::KwIf
     )
 }
 
@@ -741,6 +742,9 @@ impl Parser<'_> {
     /// `expr`: operands and the infix operators between them, each binding
     /// as tight as its level and its left side first.
     fn expr(&mut self) -> Parsed<Expr> {
+        if self.peek() == Kind::KwIf {
+            return self.if_();
+        }
         self.binary(0)
     }
 
@@ -873,6 +877,11 @@ impl Parser<'_> {
                 ))
             }
             Kind::StrStart => self.string(),
+            Kind::KwIf => Err(SyntaxError::new(
+                self.tokens[self.at].span(),
+                "an `if` takes everything after its `else`, so as an operand it is \
+                 written in parentheses: `(if c then a else b)`",
+            )),
             Kind::LParen => self.parenthesized(),
             Kind::LBracket => self.list(),
             Kind::LBrace => self.record(),
@@ -881,6 +890,21 @@ impl Parser<'_> {
                 Err(self.fail())
             }
         }
+    }
+
+    /// `if condition then yes else no`, its `else` as far as an expression
+    /// goes, so it begins an expression and is no operand.
+    fn if_(&mut self) -> Parsed<Expr> {
+        let keyword = self.bump();
+        let condition = self.expr()?;
+        self.expect(Kind::KwThen, "`then`")?;
+        let yes = self.expr()?;
+        self.expect(Kind::KwElse, "`else`")?;
+        let no = self.expr()?;
+        Ok(Expr {
+            span: keyword.span().through(no.span),
+            kind: ExprKind::If(Box::new(condition), Box::new(yes), Box::new(no)),
+        })
     }
 
     /// A numeral, or a range from it.

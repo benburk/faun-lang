@@ -415,3 +415,12 @@ fn a_discarded_value_must_be_an_effect_in_every_kind_of_body() {
         parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
     }
 }
+
+/// An `if` takes everything after its `else`, so as an operand it is
+/// refused, saying to put it in parentheses, and in parentheses it is read.
+#[test]
+fn an_if_as_an_operand_is_written_in_parentheses() {
+    let error = parse("offset(late) -> 1 + if late then 10 else 0").unwrap_err();
+    assert!(error.message.contains("written in parentheses"), "{error}");
+    assert!(parse("offset(late) -> 1 + (if late then 10 else 0)").is_ok());
+}

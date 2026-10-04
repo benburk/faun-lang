@@ -88,6 +88,8 @@ fn terminal(spelling: &str) -> Kind {
         "\"expect\"" => Kind::KwExpect,
         "\"where\"" => Kind::KwWhere,
         "\"if\"" => Kind::KwIf,
+        "\"then\"" => Kind::KwThen,
+        "\"else\"" => Kind::KwElse,
         "\"(\"" => Kind::LParen,
         "\")\"" => Kind::RParen,
         "\"[\"" => Kind::LBracket,
@@ -549,6 +551,11 @@ const READ: &[&str] = &[
     "",
     "x = 1\nT : Nat.(\n  zero = 0\n)\n",
     "table =\n  [1, 2]\n",
+    "f(x) -> if x > 0 then -x else if x == 0 then 0 else x.abs() + 1\n",
+    "f(x) -> (\n  y = x\n  if y then (\n    z = y\n    z\n  ) else 0\n)\n",
+    "f(x) -> if x\n  then 1\n  else 2\nf(x)\n  if if x then a else b -> x\n",
+    "f(x) -> 1 + (if x then 1 else 2)\n",
+    "f(x) -> g(if x then 1 else 2, if y then 3 else 4)\n",
 ];
 
 /// Programs both refuse.
@@ -574,6 +581,11 @@ const REFUSED: &[&str] = &[
     "f(x) -> (\n  y = x\n  y\ng(x) -> x\n",
     "f : a -> a where\n  a.zero : a,\nf(x) -> x\n",
     "Pair(a, b) = Pair(1, 2)\n",
+    "f(x) -> if x then 1\n",
+    "f(x) -> if x 1 else 2\n",
+    "f(x) -> if x then 1 else\n",
+    "f(x) -> 1 + if x then 1 else 2\n",
+    "f(x) -> -if x then 1 else 2\n",
 ];
 
 #[test]

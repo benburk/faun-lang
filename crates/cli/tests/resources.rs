@@ -46,6 +46,33 @@ fn a_lent_file_may_be_held_where_a_function_leaves() {
     assert_eq!(left["output.txt"], text);
 }
 
+/// A file closed in both branches of an `if` is closed whichever is
+/// chosen, so it is used up once on every way the function goes on.
+#[test]
+fn a_file_closed_in_both_branches_of_an_if_is_closed_once() {
+    let package = Package::new(
+        "both-branches",
+        "import std.host {Host, Files, IoError, Mode.*}
+
+         main! : Host -> []
+         main!(host) -> (
+           ran = program!(host.files, host.args.len())
+           host.exit!(if ran == Ok(1) then 0 else 1)
+         )
+
+         program! : (Files, Nat) -> Result(Nat, IoError)
+         program!(files, n) -> (
+           file = files.open!(\"a.txt\", Overwrite)?
+           closed = if n == 0 then file.close!() else file.close!()
+           _ = closed?
+           Ok(n)
+         )",
+    );
+    let (status, _, left) = support::run_among(&package.entry(), Directory::new());
+    assert_eq!(status, 0);
+    assert_eq!(left.keys().collect::<Vec<_>>(), ["a.txt"]);
+}
+
 /// A name holding a nought byte is refused before the target is asked,
 /// which would read it as ending there: nothing named by its front is made.
 #[test]

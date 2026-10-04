@@ -1935,6 +1935,11 @@ impl ClauseResolver<'_> {
                 h::ExprKind::Unary(*operator, Box::new(self.expr(value)?))
             }
             s::ExprKind::Try(value) => h::ExprKind::Try(Box::new(self.expr(value)?)),
+            s::ExprKind::If(condition, yes, no) => h::ExprKind::If(
+                Box::new(self.expr(condition)?),
+                Box::new(self.expr(yes)?),
+                Box::new(self.expr(no)?),
+            ),
             s::ExprKind::Wild | s::ExprKind::Range(..) => {
                 unreachable!("the parser refuses a pattern's form outside a pattern")
             }

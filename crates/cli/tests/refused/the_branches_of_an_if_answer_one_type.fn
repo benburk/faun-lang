@@ -1,0 +1,7 @@
+import std.host {Host}
+
+label : Nat -> Str
+label(n) -> if n == 0 then "none" else n
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

@@ -1,0 +1,7 @@
+error: a branch of an `if` is a value, so `?` does not leave from it
+ --> a_branch_of_an_if_is_a_value_and_does_not_leave.fn:5:22
+  |
+5 |   n = if strict then Nat.from_str(text)? else 0
+  |                      ^^^^^^^^^^^^^^^^^^^ would leave here
+  |
+  = help: answer a `Result` from both branches, and ask `?` of the whole `if`: `(if c then f(x) else Ok(0))?`

@@ -47,7 +47,7 @@ pub struct PreludeIds {
     pub order_gt: Symbol,
     pub order_ge: Symbol,
     /// How a tuple's `cmp` goes on past an equal position.
-    pub order_then: Symbol,
+    pub order_or: Symbol,
     pub order_eq: Symbol,
     /// The other two answers, which a derived `cmp` gives between two
     /// constructors.
@@ -195,7 +195,7 @@ impl PreludeIds {
             order_le: method(program, &order, "Order", "le")?,
             order_gt: method(program, &order, "Order", "gt")?,
             order_ge: method(program, &order, "Order", "ge")?,
-            order_then: method(program, &order, "Order", "then")?,
+            order_or: method(program, &order, "Order", "or")?,
             order_eq: constructor(program, &order, "Order", "Eq")?,
             order_less: constructor(program, &order, "Order", "Lt")?,
             order_greater: constructor(program, &order, "Order", "Gt")?,
@@ -514,7 +514,7 @@ mod tests {
         );
         fixture.write(
             "order.fn",
-            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\neq : Order -> Bool\neq(Eq) -> True\neq(_) -> False\nthen : (Order, Order) -> Order\nthen(Eq, next) -> next\nthen(decided, _) -> decided)\n",
+            "export {Order.*}\nOrder : [Lt, Eq, Gt].(lt : Order -> Bool\nlt(Lt) -> True\nlt(_) -> False\nle : Order -> Bool\nle(Gt) -> False\nle(_) -> True\ngt : Order -> Bool\ngt(Gt) -> True\ngt(_) -> False\nge : Order -> Bool\nge(Lt) -> False\nge(_) -> True\neq : Order -> Bool\neq(Eq) -> True\neq(_) -> False\nor : (Order, Order) -> Order\nor(Eq, next) -> next\nor(decided, _) -> decided)\n",
         );
         let root = fixture.write(
             "standard.fn",

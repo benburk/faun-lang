@@ -187,12 +187,7 @@ impl<'a> Lowerer<'a> {
 
     fn collect_decision(&mut self, decision: &Decision, answer: &Type) -> Result<(), LowerError> {
         match decision {
-            Decision::Body { body, .. } => {
-                for binding in &body.bindings {
-                    self.collect_expr(&binding.value, answer)?;
-                }
-                self.collect_expr(&body.result, answer)?;
-            }
+            Decision::Body { body, .. } => self.collect_body(body, answer)?,
             Decision::Match { owner, arms, .. } => {
                 self.collect_type(owner)?;
                 for arm in arms {
@@ -211,10 +206,7 @@ impl<'a> Lowerer<'a> {
                 answer: yes,
                 ..
             } => {
-                for binding in &condition.bindings {
-                    self.collect_expr(&binding.value, answer)?;
-                }
-                self.collect_expr(&condition.result, answer)?;
+                self.collect_body(condition, answer)?;
                 self.collect_decision(otherwise, answer)?;
                 self.collect_decision(yes, answer)?;
             }
@@ -229,10 +221,25 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    fn collect_body(&mut self, body: &p::Body, answer: &Type) -> Result<(), LowerError> {
+        for binding in &body.bindings {
+            match &binding.value {
+                p::Bound::Value(value) => self.collect_expr(value, answer)?,
+                p::Bound::If { condition, yes, no } => {
+                    self.collect_expr(condition, answer)?;
+                    self.collect_body(yes, answer)?;
+                    self.collect_body(no, answer)?;
+                }
+            }
+        }
+        self.collect_expr(&body.result, answer)
+    }
+
     fn collect_expr(&mut self, expression: &Expr, answer: &Type) -> Result<(), LowerError> {
         self.collect_type(&expression.ty)?;
         match &expression.kind {
             ExprKind::Block(_) => unreachable!("pattern compiling takes a block's bindings out"),
+            ExprKind::If(..) => unreachable!("pattern compiling binds each `if` on its own"),
             ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
             ExprKind::Construct(_, fields) | ExprKind::DirectCall(_, fields) => {
                 for field in fields {
@@ -819,8 +826,12 @@ fn emit_bindings(
         }
         Unpack::Fields { .. } => unreachable!("an unpack is emitted by `destructure`"),
     };
-    let ExprKind::Try(taken) = &binding.value.kind else {
-        let value = emit_expr(context, builder, &binding.value, &locals);
+    let p::Bound::Value(Expr {
+        kind: ExprKind::Try(taken),
+        ..
+    }) = &binding.value
+    else {
+        let value = emit_bound(context, builder, &binding.value, &locals);
         if !matches!(binding.unpack, Unpack::Ignore | Unpack::Bind(_)) {
             return destructure(
                 context,
@@ -859,6 +870,37 @@ fn emit_bindings(
             }
         },
     )
+}
+
+/// What a binding binds: its value, or for an `if`, a match on its
+/// condition whose arm for each answer works out that branch alone.
+fn emit_bound(
+    context: &EmitContext<'_>,
+    builder: &mut Builder<'_>,
+    bound: &p::Bound,
+    locals: &HashMap<LocalId, Atom>,
+) -> Atom {
+    match bound {
+        p::Bound::Value(value) => emit_expr(context, builder, value, locals),
+        p::Bound::If { condition, yes, no } => {
+            let asked = emit_expr(context, builder, condition, locals);
+            let true_ = context.constructor_ids[&(context.prelude.bool_true, condition.ty.clone())];
+            builder.match_(
+                asked,
+                context.type_ids[&condition.ty],
+                |builder, built, _| {
+                    let branch = if built == true_ { yes } else { no };
+                    emit_bindings(
+                        context,
+                        builder,
+                        &branch.bindings,
+                        &branch.result,
+                        locals.clone(),
+                    )
+                },
+            )
+        }
+    }
 }
 
 /// Execute an unpack already validated and ordered by pattern compilation.
@@ -915,6 +957,7 @@ fn emit_expr(
 ) -> Atom {
     match &expression.kind {
         ExprKind::Block(_) => unreachable!("pattern compiling takes a block's bindings out"),
+        ExprKind::If(..) => unreachable!("pattern compiling binds each `if` on its own"),
         ExprKind::Local(local) => locals[local],
         ExprKind::Natural(magnitude) => {
             let nat = context.type_ids[&Type::Named(context.prelude.nat, Vec::new())];

@@ -727,6 +727,62 @@ fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
             expression(left, source)?;
             expression(right, source)
         }
+        ExprKind::If(condition, yes, no) => {
+            for branch in [yes, no] {
+                if let Some(span) = passed_on(branch) {
+                    return Err(error(
+                        span,
+                        "a branch of an `if` is a value, so `?` does not leave from it",
+                    )
+                    .label("would leave here")
+                    .help(
+                        "answer a `Result` from both branches, and ask `?` of the whole `if`: \
+                               `(if c then f(x) else Ok(0))?`",
+                    ));
+                }
+            }
+            expression(condition, source)?;
+            expression(yes, source)?;
+            expression(no, source)
+        }
+    }
+}
+
+/// Where `expr` passes a failure on with `?` from the clause it stands in:
+/// a `?` in a lambda answers the lambda, so one there is not.
+fn passed_on(expr: &Expr) -> Option<Span> {
+    fn each<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Option<Span> {
+        exprs.into_iter().find_map(passed_on)
+    }
+    match &expr.kind {
+        ExprKind::Try(_) => Some(expr.span),
+        ExprKind::Lambda(..)
+        | ExprKind::Name(_)
+        | ExprKind::Number(_)
+        | ExprKind::Wild
+        | ExprKind::Range(..) => None,
+        ExprKind::String(parts) => parts.iter().find_map(|part| match part {
+            StringPart::Text(_) => None,
+            StringPart::Splice(splice, _) => passed_on(splice),
+        }),
+        ExprKind::List(elements, rest) => each(elements.iter().chain(rest.as_deref())),
+        ExprKind::Record(fields) => each(fields.iter().map(|(_, value)| value)),
+        ExprKind::Update(fields, base) => {
+            each(fields.iter().map(|(_, value)| value).chain([&**base]))
+        }
+        ExprKind::Tuple(members) => each(members.iter()),
+        ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
+            each(std::iter::once(&**head).chain(arguments))
+        }
+        ExprKind::Member(value, _) | ExprKind::Unary(_, value) => passed_on(value),
+        ExprKind::Binary(_, left, right) => each([&**left, &**right]),
+        ExprKind::If(condition, yes, no) => each([&**condition, &**yes, &**no]),
+        ExprKind::Block(body) => each(
+            body.bindings
+                .iter()
+                .map(|binding| &binding.value)
+                .chain([&body.result]),
+        ),
     }
 }
 

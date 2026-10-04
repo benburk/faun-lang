@@ -1,0 +1,5 @@
+error: mismatched types
+ --> an_if_asks_a_bool.fn:4:16
+  |
+4 | label(n) -> if n then "some" else "none"
+  |                ^ expected `Bool`, found `Nat`

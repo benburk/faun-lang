@@ -711,6 +711,7 @@ impl Walk<'_, '_> {
                 self.end(&origins, (place(expr), Leaving::Asking));
                 origins
             }
+            ExprKind::If(condition, yes, no) => self.branches(expr, condition, yes, no),
             // A block's bindings hold what they bind, as a body's do, and
             // its answer is what it is worth.
             ExprKind::Block(block) => {
@@ -720,6 +721,70 @@ impl Walk<'_, '_> {
                 }
                 self.value(&block.result)
             }
+        }
+    }
+
+    /// An `if`: each branch walked from what was held before it, and what
+    /// either answers is what the `if` is worth. What one branch uses up
+    /// the other must too, since after the `if` it is gone or held, not
+    /// both.
+    fn branches(
+        &mut self,
+        expr: &d::Expr,
+        condition: &d::Expr,
+        yes: &d::Expr,
+        no: &d::Expr,
+    ) -> Vec<Origin> {
+        self.lend(condition);
+        let before: Vec<State> = self.held.iter().map(|held| held.state).collect();
+        let mut answered = self.value(yes);
+        let taken: Vec<State> = self.held[..before.len()]
+            .iter()
+            .map(|held| held.state)
+            .collect();
+        for (held, state) in self.held.iter_mut().zip(&before) {
+            held.state = *state;
+        }
+        answered.extend(self.value(no));
+        for (at, yes) in taken.into_iter().enumerate() {
+            self.held[at].state = match (yes, self.held[at].state) {
+                (State::Held, State::Gone(gone)) | (State::Gone(gone), State::Held) => {
+                    let refusal = self.one_branch(expr, at, gone);
+                    self.refused.push(refusal);
+                    State::Gone(gone)
+                }
+                (State::Gone(gone), _) | (_, State::Gone(gone)) => State::Gone(gone),
+                (State::Unknown, _) | (_, State::Unknown) => State::Unknown,
+                (State::Held, State::Held) => State::Held,
+            };
+        }
+        answered
+    }
+
+    /// A resource held at `held` used up at `gone`, in one branch of the
+    /// `if` at `expr` and not the other.
+    fn one_branch(&self, expr: &d::Expr, held: usize, gone: Place) -> Refusal {
+        let resource = self.held[held]
+            .origins
+            .iter()
+            .find_map(|origin| match origin {
+                Origin::Made(_, made) => made.resource,
+                Origin::Parameter(parameter) => self.facts.program.functions[self.function]
+                    .key
+                    .signature
+                    .parameters
+                    .get(*parameter)
+                    .and_then(|ty| self.facts.resource_in(ty)),
+            });
+        let resource = self.facts.called(resource, "resource");
+        Refusal {
+            at: Some(gone),
+            message: format!(
+                "this {resource} is used up in one branch of an `if` and not the other"
+            ),
+            label: "used up here".to_owned(),
+            also: Some((place(expr), "the other branch still holds it".to_owned())),
+            help: Some("use it up in both branches, or in neither".to_owned()),
         }
     }
 

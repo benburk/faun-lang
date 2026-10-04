@@ -36,6 +36,10 @@
         "named": true
       },
       {
+        "type": "if_expression",
+        "named": true
+      },
+      {
         "type": "list",
         "named": true
       },
@@ -806,6 +810,42 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "if_expression",
+    "named": true,
+    "fields": {
+      "alternative": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "consequence": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1781,6 +1821,10 @@
     "named": true
   },
   {
+    "type": "else",
+    "named": false
+  },
+  {
     "type": "escape_sequence",
     "named": true
   },
@@ -1815,6 +1859,10 @@
   {
     "type": "string_content",
     "named": true
+  },
+  {
+    "type": "then",
+    "named": false
   },
   {
     "type": "type_identifier",

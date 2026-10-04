@@ -4,9 +4,11 @@
 // The grammar allows a line end only after what a line can end with, and
 // never inside a bracket but a method block's `.( )` and a block's `( )`.
 // What is left is the next line's first token: a line break ends the line
-// unless that token carries it on, as `.`, an infix operator, `where`, `if`
-// or a closing bracket does. A `-` carries it on only where space follows
-// it; held to what follows, it negates.
+// unless that token carries it on, as `.`, an infix operator, `where`,
+// `then`, `else` or a closing bracket does, and `if` where items are
+// written, as a guard: a block's line beginning `if` begins an `if`, which
+// the parser says by asking for a block's line end. A `-` carries it on
+// only where space follows it; held to what follows, it negates.
 //
 // A name's trailing `!` makes it an effect's, unless it begins `!=`.
 //
@@ -14,7 +16,7 @@
 
 #include "tree_sitter/parser.h"
 
-enum TokenType { NEWLINE, EFFECT_IDENTIFIER };
+enum TokenType { NEWLINE, EFFECT_IDENTIFIER, BLOCK_NEWLINE };
 
 void *tree_sitter_faun_external_scanner_create(void) { return NULL; }
 
@@ -51,8 +53,9 @@ static bool next_is_word(TSLexer *lexer, const char *word) {
   return !is_word_char(lexer->lookahead);
 }
 
-// Whether a line beginning here goes on with the line before.
-static bool continues_line(TSLexer *lexer) {
+// Whether a line beginning here goes on with the line before, in a block
+// or where items are written.
+static bool continues_line(TSLexer *lexer, bool block) {
   switch (lexer->lookahead) {
     case ')':
     case ']':
@@ -81,7 +84,11 @@ static bool continues_line(TSLexer *lexer) {
     case 'w':
       return next_is_word(lexer, "where");
     case 'i':
-      return next_is_word(lexer, "if");
+      return !block && next_is_word(lexer, "if");
+    case 't':
+      return next_is_word(lexer, "then");
+    case 'e':
+      return next_is_word(lexer, "else");
     default:
       return false;
   }
@@ -90,7 +97,7 @@ static bool continues_line(TSLexer *lexer) {
 // From a line break: the break and the space after it, if the line ends. A
 // comment after that is left to be read as one, but looked past for the next
 // line's first token.
-static bool scan_newline(TSLexer *lexer) {
+static bool scan_newline(TSLexer *lexer, bool block) {
   while (is_space(lexer->lookahead)) {
     lexer->advance(lexer, false);
   }
@@ -106,10 +113,10 @@ static bool scan_newline(TSLexer *lexer) {
       break;
     }
   }
-  if (lexer->eof(lexer) || continues_line(lexer)) {
+  if (lexer->eof(lexer) || continues_line(lexer, block)) {
     return false;
   }
-  lexer->result_symbol = NEWLINE;
+  lexer->result_symbol = block ? BLOCK_NEWLINE : NEWLINE;
   return true;
 }
 
@@ -138,8 +145,8 @@ bool tree_sitter_faun_external_scanner_scan(void *payload, TSLexer *lexer,
     lexer->advance(lexer, true);
   }
   if (lexer->lookahead == '\n') {
-    if (valid_symbols[NEWLINE]) {
-      return scan_newline(lexer);
+    if (valid_symbols[NEWLINE] || valid_symbols[BLOCK_NEWLINE]) {
+      return scan_newline(lexer, !valid_symbols[NEWLINE]);
     }
     while (is_space(lexer->lookahead)) {
       lexer->advance(lexer, true);
