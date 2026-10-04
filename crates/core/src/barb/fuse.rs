@@ -31,7 +31,7 @@ use super::{Arm, Atom, Body, Expr, ExprId, FnId, Local, Program, SequenceOperati
 pub(crate) fn fuse(program: &mut Program) {
     let recognised = program.recognised().clone();
     let mut fusion = Fusion {
-        pure: pure(program),
+        pure: super::calls::pure(program, &recognised),
         recognised,
         producers: HashMap::new(),
         consumers: HashMap::new(),
@@ -102,7 +102,7 @@ struct Deferred {
 struct Fusion<'a> {
     program: &'a mut Program,
     recognised: Recognised,
-    /// Whether each function reaches no bodyless call.
+    /// Indexed by definition: see [`super::calls::pure`].
     pure: Vec<bool>,
     producers: HashMap<FnId, Option<Producer>>,
     consumers: HashMap<FnId, Option<Consumer>>,
@@ -817,26 +817,4 @@ fn innermost(program: &Program, mut body: Body, mut base: usize) -> (Body, usize
         body = arm.body;
     }
     (body, base)
-}
-
-/// Whether each function reaches no bodyless call, by function.
-fn pure(program: &Program) -> Vec<bool> {
-    let mut pure: Vec<bool> = program
-        .functions()
-        .iter()
-        .map(|function| function.body().is_some())
-        .collect();
-    let callees = super::calls::graph(program);
-    loop {
-        let mut changed = false;
-        for (at, callees) in callees.iter().enumerate() {
-            if pure[at] && callees.iter().any(|callee| !pure[callee.index()]) {
-                pure[at] = false;
-                changed = true;
-            }
-        }
-        if !changed {
-            return pure;
-        }
-    }
 }
