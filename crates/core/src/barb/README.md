@@ -45,6 +45,35 @@ value semantics. a bodyless call is a value the target computes
   shape. A target with float instructions answers it with one; everything
   else, the evaluator excepted, walks the body.
 
+## Semantics
+
+What a Barb program means, and so what every pass keeps. A frontend may
+rely on these; a pass that breaks one is wrong.
+
+- **Values only.** A value is what it holds, never where: there is no
+  identity, so a value may be copied, shared or rebuilt freely.
+- **Representation is Barb's.** A frontend says what each type holds,
+  structurally, and nothing about how it is laid out; Barb chooses each
+  type's representation (see `type_shape` below), and a program cannot tell
+  which it chose.
+- **Bodyless calls are observable.** Their order among themselves, how often
+  each is made and on which paths are kept as written. A function whose
+  calls reach one is observable too. There is no world value threaded
+  through them: this rule is what orders them.
+- **Pure work is only work.** A function reaching no bodyless call is pure.
+  Its calls, and constructions, matches and recognized operations, may be
+  left out where nothing reads them, moved to either side of an observable
+  call, and moved onto only the paths that read them, even where they would
+  not have come back: a hang that moves past an effect lets that effect
+  happen first.
+- **Optimization does less work, never more.** Each pass aims to do no more
+  work on any path than its input did; inlining copies code, not
+  evaluations. So an operand a function reads on only some paths tends to
+  be worked out only on those once the function is inlined, which is how a
+  frontend's lazily-read operators come out lazy without a rule of their
+  own. That is the optimizer's doing, under its budgets, and not a promise:
+  a frontend wanting it guaranteed emits the match itself.
+
 ## The IR
 
 ```

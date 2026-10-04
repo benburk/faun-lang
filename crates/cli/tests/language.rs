@@ -8,6 +8,19 @@ use support::Package;
 /// Programs and the status each exits with.
 const RUNNING: &[(&str, &str, u32)] = &[
     (
+        "an order chained with `|` works out the next only where the first ties",
+        "forever : Nat -> Nat
+         forever(n) -> forever(n + 1)
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           order = n.cmp(n + 1) | forever(n).cmp(0)
+           host.exit!(if order.lt() then 7 else 0)
+         )",
+        7,
+    ),
+    (
         "a list of words mapped, written without asking, is read after as it was",
         "main! : Host -> []
          main!(host) -> (

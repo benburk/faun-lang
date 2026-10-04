@@ -430,7 +430,12 @@ is passed on by answering a `Result` from both and asking `?` of the whole,
 uses up the other uses up too.
 
 On `Bool`, `&` and `|` likewise work out their right side only where the
-left has not decided: `n == 0 | odd(n - 1)` stops at nought.
+left has not decided: `n == 0 | odd(n - 1)` stops at nought. That is
+promised. For any other type, an operator's right side is worked out where
+its definition reads it, which the optimizer arranges where it can and does
+not promise: `Order.or` reads its second order only on a tie, so in
+`a.cmp(b) | slow(x).cmp(slow(y))` the slow comparison runs only where the
+first ties.
 
 ```
 sign : Int -> Str
