@@ -7,6 +7,52 @@ it are [conditions](proposals/drafts/conditions.md),
 [branching](proposals/drafts/branching.md) and
 [loops](proposals/drafts/loops.md).
 
+## What we want
+
+**Kinds of match**
+
+- **Clauses:** pattern, optional guard, `->` body. Kept as they are.
+- **Ternary:** `if c then a else b`. Built.
+- **Infallible destructure:** `(a, b) = pair`. A pattern that can fail is
+  refused, with advice.
+- **Fallible destructure:** pattern and optional conditions, else leave by
+  `return`, `continue` or `break`. A default is a ternary: `n = if r is
+  Ok(v) then v else 0`, or `r.ok_or(0)`.
+- **Many-way on a computed value:** arms of pattern, optional guard, body;
+  exhaustive.
+- **Plain test:** is it this shape, as a `Bool`.
+- **Loops:** `for` takes an infallible pattern; `while x is P` binds.
+- **Lambda parameters:** infallible patterns, as today.
+
+**Pattern vocabulary**
+
+- Today's forms: constructors, literals, ranges, strings, lists with a
+  rest, records open or closed, tuples, a repeated name as equality.
+- Or-patterns everywhere, not only in a clause's parameters.
+- The whole and its parts, `@` or `as`. Missing.
+- Against a name in scope: guard, pin, or refused shadowing. Missing, and
+  a trap.
+
+**Rules**
+
+- Names are seen where success is known: along the `&` chain, in the
+  success branch or body, and below a guard line.
+- A guard may bind, `r is Ok(v) & v > 0`, on one line.
+- Exits are explicit: `return`, `continue`, `break`, `?`. No `return`
+  expression.
+- `&` and `|` short-circuit on `Bool`. Built.
+- Effects stand one to a line. Built.
+- `?` does not leave from a nested place for now: a branch, the right of
+  `&`. To lift with loops.
+
+**Constraints**
+
+- One way to write each thing.
+- LL(1); few keywords; no rule for one construct alone.
+- The tree-sitter grammar mirrors the compiler's.
+- Concise and plain: Python's length or shorter.
+- A helper is cheap to write, and nesting is capped.
+
 ## What Faun has today
 
 **Where a pattern stands:** a clause's parameters, a binding's left side, a
