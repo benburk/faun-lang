@@ -32,8 +32,10 @@ pub struct PreludeIds {
     pub str_concat: Symbol,
     /// What a string pattern is tested with.
     pub str_equals: Symbol,
-    /// How a clause's tests are joined with its guard.
+    /// How a clause's tests are joined with its guard. It and `bool_or`
+    /// work out their right side only where the left has not decided.
     pub bool_and: Symbol,
+    pub bool_or: Symbol,
     pub u8_constructor: Symbol,
     pub list_nil: Symbol,
     pub list_cons: Symbol,
@@ -184,6 +186,7 @@ impl PreludeIds {
             str_concat: method(program, &str_, "Str", "concat")?,
             str_equals: method(program, &str_, "Str", "equals")?,
             bool_and: method(program, &bool_, "Bool", "and")?,
+            bool_or: method(program, &bool_, "Bool", "or")?,
             u8_constructor: constructor(program, &u8_, "U8", "U8")?,
             list_nil: constructor(program, &list, "List", "Nil")?,
             list_cons: constructor(program, &list, "List", "Cons")?,
@@ -490,7 +493,7 @@ mod tests {
 
     fn loaded() -> LoadedProgram {
         let fixture = Fixture::new();
-        fixture.write("bool.fn", "export {Bool.*}\nBool : [False, True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : (Bool, Bool) -> Bool\nand(True, True) -> True\nand(_, _) -> False)\n");
+        fixture.write("bool.fn", "export {Bool.*}\nBool : [False, True].(not : Bool -> Bool\nnot(False) -> True\nnot(True) -> False\nand : (Bool, Bool) -> Bool\nand(True, True) -> True\nand(_, _) -> False\nor : (Bool, Bool) -> Bool\nor(False, False) -> False\nor(_, _) -> True)\n");
         fixture.write("nat.fn", "export {Nat.*}\nNat : [Zero, Succ(Nat)]\n");
         fixture.write(
             "int.fn",

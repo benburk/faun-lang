@@ -987,6 +987,33 @@ fn emit_expr(
             let atom = emit_expr(context, builder, receiver, locals);
             emit_projection(context, builder, atom, &receiver.ty, *field)
         }
+        // `left & right` answers the left where it is `False`, and `left |
+        // right` where it is `True`; only otherwise is the right worked out.
+        ExprKind::DirectCall(key, arguments)
+            if key.name == context.prelude.bool_and || key.name == context.prelude.bool_or =>
+        {
+            let [left, right] = arguments.as_slice() else {
+                unreachable!("`and` and `or` take two `Bool`s")
+            };
+            let decided = if key.name == context.prelude.bool_and {
+                context.prelude.bool_false
+            } else {
+                context.prelude.bool_true
+            };
+            let decided = context.constructor_ids[&(decided, left.ty.clone())];
+            let left_value = emit_expr(context, builder, left, locals);
+            builder.match_(
+                left_value,
+                context.type_ids[&left.ty],
+                |builder, built, _| {
+                    if built == decided {
+                        left_value
+                    } else {
+                        emit_expr(context, builder, right, locals)
+                    }
+                },
+            )
+        }
         ExprKind::DirectCall(key, arguments) => {
             let arguments = arguments
                 .iter()
