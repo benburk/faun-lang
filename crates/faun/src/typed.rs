@@ -114,6 +114,8 @@ pub enum ExprKind {
     Try(Box<Expr>),
     /// `if condition then yes else no`; see [`crate::hir::ExprKind::If`].
     If(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `value is pattern`; see [`crate::hir::ExprKind::Is`].
+    Is(Box<Expr>, Pattern),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     Block(Box<Body>),
 }

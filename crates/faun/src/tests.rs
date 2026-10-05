@@ -424,3 +424,14 @@ fn an_if_as_an_operand_is_written_in_parentheses() {
     assert!(error.message.contains("written in parentheses"), "{error}");
     assert!(parse("offset(late) -> 1 + (if late then 10 else 0)").is_ok());
 }
+
+/// A test answers a `Bool`, so testing it again or comparing it is refused,
+/// each saying what to write instead.
+#[test]
+fn a_test_is_not_tested_again_or_compared() {
+    let error = parse("f(x) -> x is A is B").unwrap_err();
+    assert!(error.message.contains("join tests with `&`"), "{error}");
+    let error = parse("f(x) -> x is 3 == y").unwrap_err();
+    assert!(error.message.contains("put it in parentheses"), "{error}");
+    assert!(parse("f(x) -> (x is 3) == y").is_ok());
+}

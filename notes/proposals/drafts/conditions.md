@@ -157,6 +157,14 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   became `Order.or`, `then` being a keyword.
 - **`&` and `|` on `Bool`** work out their right side only where the left
   has not decided, 2026-10-04.
+- **`is` as a test,** 2026-10-05: binding along `&` and into `then`,
+  tuples, grouped alternatives, the shadowing rule, and `?` refused on the
+  right of `&` and `|`. Lowering makes each test a decision of its own
+  rows, a row for each alternative and one for any other value, its `else`
+  copied to each test of a chain. Left for later: a test of a value holding
+  a resource, refused for now; a type taken apart by its own name, as
+  `U8(…)`, which only a clause's head expands; and a guard's test binding
+  for its clause's body.
 
 ## Costs
 

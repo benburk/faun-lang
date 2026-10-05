@@ -442,6 +442,29 @@ sign : Int -> Str
 sign(n) -> if n < 0 then "negative" else if n == 0 then "zero" else "positive"
 ```
 
+## Is
+
+`value is pattern` answers whether the value has the pattern's shape: any
+pattern a clause's parameter takes, with alternatives in parentheses, `x is
+(A | B)`. What the pattern binds is seen where the test is known to have
+held: along the rest of an `&` chain, and in the `then` of an `if` whose
+condition is the test or such a chain. Under `|` or `!`, or in `else`, it
+is not, and a use there says so.
+
+```
+doubled(r) -> if r is Ok(v) & v < 100 then v * 2 else 0
+both(a, b) -> if (a, b) is (Ok(x), Ok(y)) & x <= y then y - x else 0
+```
+
+`is` binds tighter than `&` and looser than a comparison; a test tested
+again, `x is A is B`, or compared, `x is 3 == y`, is refused. A test may bind
+again the name it tests, `step is Ok(step)`, and no other name in scope:
+`r is Ok(limit)` would bind a new `limit` where a comparison was meant, so
+it is refused. `?` on the right of `&` or `|` is refused, since that side may
+not be worked out. Not yet: a test of a value holding a resource, a type
+taken apart by its own name, as `U8(…)`, and a guard's test binding for its
+clause's body.
+
 ## Or-patterns
 
 `A | B` among a clause's parameters matches either alternative, and every

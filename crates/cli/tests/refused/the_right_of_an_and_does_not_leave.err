@@ -1,0 +1,7 @@
+error: the right of `&` or `|` may not be worked out, so `?` does not leave from it
+ --> the_right_of_an_and_does_not_leave.fn:4:42
+  |
+4 | checked(r, text) -> Ok(r is Ok(v) & v == Nat.from_str(text)?)
+  |                                          ^^^^^^^^^^^^^^^^^^^ would leave here
+  |
+  = help: bind it with `?` on a line before, and use the name here

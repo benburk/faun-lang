@@ -90,6 +90,7 @@ fn terminal(spelling: &str) -> Kind {
         "\"if\"" => Kind::KwIf,
         "\"then\"" => Kind::KwThen,
         "\"else\"" => Kind::KwElse,
+        "\"is\"" => Kind::KwIs,
         "\"(\"" => Kind::LParen,
         "\")\"" => Kind::RParen,
         "\"[\"" => Kind::LBracket,
@@ -556,6 +557,8 @@ const READ: &[&str] = &[
     "f(x) -> if x\n  then 1\n  else 2\nf(x)\n  if if x then a else b -> x\n",
     "f(x) -> 1 + (if x then 1 else 2)\n",
     "f(x) -> g(if x then 1 else 2, if y then 3 else 4)\n",
+    "f(r) -> if r is Ok(v) & v > 0 then v else 0\nf(r) -> r is (A | B(_)) | r is [*_, C]\n",
+    "f(a, b) -> (a, b) is (Ok(x), Ok(y)) & x <= y\n",
 ];
 
 /// Programs both refuse.

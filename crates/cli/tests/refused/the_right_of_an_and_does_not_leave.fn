@@ -1,0 +1,7 @@
+import std.host {Host}
+
+checked : (Result(Nat, [Gone]), Str) -> Result(Bool, [Gone, Malformed])
+checked(r, text) -> Ok(r is Ok(v) & v == Nat.from_str(text)?)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

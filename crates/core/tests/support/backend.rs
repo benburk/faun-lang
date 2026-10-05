@@ -1080,6 +1080,38 @@ fn an_if_works_out_only_the_branch_it_chooses() {
     assert_eq!(answers, [5, 99]);
 }
 
+/// A test binds where it holds: along its `&` chain and into `then`, a
+/// tuple tested whole, and a list by its end; the count of arguments picks
+/// the way it goes.
+#[test]
+fn a_test_binds_where_it_holds() {
+    let program = read(
+        "import std.host {Host}
+
+         parsed : Nat -> Result(Nat, [Few])
+         parsed(n) -> if n > 1 then Ok(n * 10) else Err(Few)
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           r = parsed(n)
+           a = if r is Ok(v) & v < 25 then v else 1
+           b = if (r, n) is (Ok(_), 2) then 2 else 3
+           c = if [n, n + 1] is [*_, last] then last else 0
+           host.exit!(U8.of_nat(a + b + c))
+         )",
+    )
+    .expect("a program testing what it has");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers: Vec<_> = execute_counts(&program, &[1, 2, 3])
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(answers, [1 + 3 + 2, 20 + 2 + 3, 1 + 3 + 4]);
+}
+
 /// The arguments a program is run with are a list of strings, its own name
 /// first: a greeting names the first after it, or the world where there is
 /// none, and the count is how many there are.

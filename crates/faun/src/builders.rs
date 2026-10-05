@@ -189,6 +189,7 @@ impl Builder<'_> {
                 self.expr(left);
                 self.expr(right);
             }
+            h::ExprKind::Is(value, _) => self.expr(value),
             h::ExprKind::If(condition, yes, no) => {
                 self.expr(condition);
                 self.expr(yes);

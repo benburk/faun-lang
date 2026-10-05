@@ -257,14 +257,22 @@ module.exports = grammar({
     // Expressions.
 
     // An `if` takes everything after its `else`, so nothing follows it.
-    _expression: $ => choice($.binary_expression, $._operand, $.if_expression),
+    _expression: $ => choice($.binary_expression, $.is_expression, $._operand, $.if_expression),
 
     binary_expression: $ => choice(...INFIX.map((operators, level) =>
-      prec.left(level + 1, seq(
+      prec.left(level + 1 + (level >= 3 ? 1 : 0), seq(
         field('left', $._expression),
         field('operator', operators.length === 1 ? operators[0] : choice(...operators)),
         field('right', $._expression),
       )),
+    )),
+
+    // `value is pattern`, between `&` and the comparisons; its pattern is
+    // one operand.
+    is_expression: $ => prec.left(4, seq(
+      field('value', $._expression),
+      'is',
+      field('pattern', $._operand),
     )),
 
     _operand: $ => choice($.unary_expression, $._postfix),

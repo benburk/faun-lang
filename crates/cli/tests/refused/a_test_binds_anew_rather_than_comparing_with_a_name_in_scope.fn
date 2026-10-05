@@ -1,0 +1,7 @@
+import std.host {Host}
+
+at_limit : (Result(Nat, [Gone]), Nat) -> Bool
+at_limit(r, limit) -> r is Ok(limit)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

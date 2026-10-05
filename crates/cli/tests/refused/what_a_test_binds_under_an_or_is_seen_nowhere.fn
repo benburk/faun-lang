@@ -1,0 +1,7 @@
+import std.host {Host}
+
+either : (Result(Nat, [Gone]), Bool) -> Nat
+either(r, ready) -> if r is Ok(v) | ready then v else 0
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

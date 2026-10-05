@@ -35,3 +35,35 @@ expect spread(3, 7) == 4 & spread(5, 5) == 0
 expect (if True then 1 else 2) + 1 == 2
 expect parsed(True, "41") == Ok(42) & parsed(False, "x") == Ok(1)
 expect parsed(True, "x").is_err()
+
+# `value is pattern` asks whether a value has a shape, answering a `Bool`.
+# What the pattern binds is seen where the test is known to have held: the
+# rest of an `&` chain, and the `then` of an `if` asking it.
+present : List(Result(Nat, [Gone])) -> Nat
+present(results) -> results.filter(|result| result is Ok(_)).len()
+
+doubled : Result(Nat, [Gone]) -> Nat
+doubled(r) -> if r is Ok(v) & v < 100 then v * 2 else 0
+
+# Several values at once as a tuple; alternatives grouped in parentheses;
+# a list's end; a test reading what an earlier one bound.
+both : (Result(Nat, [Gone]), Result(Nat, [Gone])) -> Nat
+both(a, b) -> if (a, b) is (Ok(x), Ok(y)) & x <= y then y - x else 0
+
+word : Str -> Nat
+word(text) -> if text is ("get" | "fetch") then 1 else 0
+
+last : List(Nat) -> Nat
+last(xs) -> if xs is [*_, x] & x is 1..9 then x else 0
+
+# A test may bind again the name it tests.
+inner : Result(Nat, [Gone]) -> Nat
+inner(step) -> if step is Ok(step) then step else 0
+
+expect present([Ok(1), Err(Gone), Ok(3)]) == 2
+expect doubled(Ok(4)) == 8 & doubled(Ok(400)) == 0 & doubled(Err(Gone)) == 0
+expect both(Ok(2), Ok(5)) == 3 & both(Ok(5), Ok(2)) == 0 & both(Err(Gone), Ok(1)) == 0
+expect word("get") == 1 & word("fetch") == 1 & word("put") == 0
+expect last([4, 7]) == 7 & last([4, 70]) == 0 & last([]) == 0
+expect inner(Ok(6)) == 6 & inner(Err(Gone)) == 0
+expect [1, 2] is [_, *_] & !([] is [_, *_])

@@ -87,20 +87,23 @@ const fn infix(kind: Kind) -> Option<(u8, BinaryOp)> {
         Kind::Bar => (1, BinaryOp::Or),
         Kind::Caret => (2, BinaryOp::Xor),
         Kind::Amp => (3, BinaryOp::And),
-        Kind::EqEq => (4, BinaryOp::Equal),
-        Kind::Ne => (4, BinaryOp::NotEqual),
-        Kind::Lt => (4, BinaryOp::Less),
-        Kind::Le => (4, BinaryOp::LessEqual),
-        Kind::Gt => (4, BinaryOp::Greater),
-        Kind::Ge => (4, BinaryOp::GreaterEqual),
-        Kind::Plus => (5, BinaryOp::Add),
-        Kind::Minus => (5, BinaryOp::Subtract),
-        Kind::Slash => (6, BinaryOp::Divide),
-        Kind::Percent => (6, BinaryOp::Remainder),
-        Kind::Star => (6, BinaryOp::Multiply),
+        Kind::EqEq => (5, BinaryOp::Equal),
+        Kind::Ne => (5, BinaryOp::NotEqual),
+        Kind::Lt => (5, BinaryOp::Less),
+        Kind::Le => (5, BinaryOp::LessEqual),
+        Kind::Gt => (5, BinaryOp::Greater),
+        Kind::Ge => (5, BinaryOp::GreaterEqual),
+        Kind::Plus => (6, BinaryOp::Add),
+        Kind::Minus => (6, BinaryOp::Subtract),
+        Kind::Slash => (7, BinaryOp::Divide),
+        Kind::Percent => (7, BinaryOp::Remainder),
+        Kind::Star => (7, BinaryOp::Multiply),
         _ => return None,
     })
 }
+
+/// How tightly `is` binds: looser than a comparison, tighter than `&`.
+const IS: u8 = 4;
 
 /// Whether an expression can begin with `kind`.
 const fn begins_expr(kind: Kind) -> bool {
@@ -750,14 +753,45 @@ impl Parser<'_> {
 
     fn binary(&mut self, looser: u8) -> Parsed<Expr> {
         let mut left = self.operand()?;
-        while let Some((level, op)) = infix(self.peek())
-            && level > looser
-        {
+        loop {
+            if self.peek() == Kind::KwIs && IS > looser {
+                left = self.is(left)?;
+                continue;
+            }
+            let Some((level, op)) = infix(self.peek()).filter(|(level, _)| *level > looser) else {
+                return Ok(left);
+            };
             self.bump();
             let right = self.binary(level)?;
             left = binary(op, left, right);
         }
-        Ok(left)
+    }
+
+    /// `value is pattern`: one operand after `is`, which is the pattern.
+    /// What would go on from it, another `is` or an operator binding
+    /// tighter, is refused rather than read as a test of a `Bool`.
+    fn is(&mut self, value: Expr) -> Parsed<Expr> {
+        self.bump();
+        let written = self.operand()?;
+        let pattern = lines::pattern(written, self.source).map_err(SyntaxError::from)?;
+        let span = value.span.through(pattern.span());
+        let next = self.tokens[self.at];
+        if next.kind == Kind::KwIs {
+            return Err(SyntaxError::new(
+                next.span(),
+                "a test is not tested again: join tests with `&`, as `a is P & b is Q`",
+            ));
+        }
+        if infix(next.kind).is_some_and(|(level, _)| level > IS) {
+            return Err(SyntaxError::new(
+                next.span(),
+                "a test answers a `Bool`: to compare it, put it in parentheses, `(x is P) == y`",
+            ));
+        }
+        Ok(Expr {
+            span,
+            kind: ExprKind::Is(Box::new(value), pattern),
+        })
     }
 
     /// `operand`: prefixes, a primary, and its postfixes.

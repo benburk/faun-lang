@@ -2322,6 +2322,26 @@ impl<'a> Checker<'a> {
                 Ok(self.infer.instantiate(&scheme))
             }
             h::ExprKind::Try(value) => self.try_(module, expression.span, value, locals),
+            // A test answers a `Bool`; its pattern types what it binds,
+            // each at one type, as a binding's names are.
+            h::ExprKind::Is(value, pattern) => {
+                let tested = self.expr(module, value, locals)?;
+                self.pattern(module, pattern, &tested, locals, value.span)?;
+                let mut bound = Vec::new();
+                collect_pattern_locals(pattern, &mut bound);
+                for local in bound {
+                    let ty = locals[local.index()]
+                        .as_ref()
+                        .expect("pattern binding installs its local")
+                        .ty
+                        .clone();
+                    locals[local.index()] = Some(Scheme {
+                        variables: Vec::new(),
+                        ty,
+                    });
+                }
+                Ok(self.bool_type())
+            }
             // Its branches answer one type, the one the `if` answers.
             h::ExprKind::If(condition, yes, no) => {
                 let asked = self.expr(module, condition, locals)?;
@@ -4573,7 +4593,7 @@ fn validate_effect_expr(
             validate_effect_expr(module, member, owner_effectful, false, symbols)
         }),
         h::ExprKind::Lambda(_, body) => validate_effect_expr(module, body, false, false, symbols),
-        h::ExprKind::Unary(_, value) => {
+        h::ExprKind::Unary(_, value) | h::ExprKind::Is(value, _) => {
             validate_effect_expr(module, value, owner_effectful, false, symbols)
         }
         h::ExprKind::Binary(_, left, right) => {
@@ -4807,6 +4827,7 @@ fn expr_globals(expression: &h::Expr, symbols: &Symbols, output: &mut HashSet<Sy
                 expr_globals(each, symbols, output);
             }
         }
+        h::ExprKind::Is(value, _) => expr_globals(value, symbols, output),
         // An operator is its member's spelling, as a dot call is.
         h::ExprKind::Unary(operator, value) => {
             output.extend(symbols.find(unary_member(*operator)));
@@ -5106,6 +5127,7 @@ mod tests {
                     waiting.extend(args);
                 }
                 ExprKind::Lambda(_, value)
+                | ExprKind::Is(value, _)
                 | ExprKind::Project(value, _)
                 | ExprKind::Widen(value)
                 | ExprKind::Try(value) => waiting.push(value),

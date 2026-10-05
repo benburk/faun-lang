@@ -327,6 +327,9 @@ impl Elaborator<'_> {
                     t::ExprKind::Method(target, arguments)
                 }
                 h::ExprKind::Try(value) => t::ExprKind::Try(Box::new(self.expr(*value))),
+                h::ExprKind::Is(value, pattern) => {
+                    t::ExprKind::Is(Box::new(self.expr(*value)), self.pattern(pattern))
+                }
                 h::ExprKind::If(condition, yes, no) => t::ExprKind::If(
                     Box::new(self.expr(*condition)),
                     Box::new(self.expr(*yes)),

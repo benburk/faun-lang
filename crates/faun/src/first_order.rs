@@ -86,6 +86,10 @@ pub(crate) enum ExprKind {
     /// `if condition then yes else no`; see [`crate::hir::ExprKind::If`].
     /// Pattern compiling binds it on a line of its own, each branch a body.
     If(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `value is pattern`; see [`crate::hir::ExprKind::Is`]. Pattern
+    /// compiling makes each a match, the names it binds in scope where it
+    /// holds.
+    Is(Box<Expr>, Vec<(Pattern, Option<Expr>)>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     /// Pattern compiling takes its bindings out ahead of the expression it
     /// stands in.

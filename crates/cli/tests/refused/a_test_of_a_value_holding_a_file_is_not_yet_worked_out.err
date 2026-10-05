@@ -1,0 +1,7 @@
+error: a test of a value holding a `File` is not yet worked out
+  --> a_test_of_a_value_holding_a_file_is_not_yet_worked_out.fn:12:15
+   |
+12 |   closed = if opened is Ok(file) then file.close!() else Ok({})
+   |               ^^^^^^ tested here
+   |
+   = help: take it apart with a definition's clauses

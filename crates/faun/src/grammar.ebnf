@@ -69,15 +69,17 @@ field-types       = NAME ":" type [ "," [ field-types ] ]
                   | "*" [ "," ] ;
 
 (* Infix operators, loosest first:
-     |   ^   &   == != < <= > >=   + -   / % *
-   each level left-associative. *)
+     |   ^   &   is   == != < <= > >=   + -   / % *
+   each level left-associative. `is` tests the value on its left against
+   the pattern its operand spells; the parser refuses one tested again or
+   compared, which this grammar does not say. *)
 (* An `if` takes everything after its `else`, so it begins an expression
    and is no operand: `1 + (if c then a else b)`. *)
 expr              = "if" expr "then" expr "else" expr
                   | operand expr-tail ;
 expr-tail         = { infix operand } ;
-infix             = "|" | "^" | "&" | "==" | "!=" | "<" | "<=" | ">" | ">="
-                  | "+" | "-" | "/" | "%" | "*" ;
+infix             = "|" | "^" | "&" | "is" | "==" | "!=" | "<" | "<=" | ">"
+                  | ">=" | "+" | "-" | "/" | "%" | "*" ;
 operand           = prefix operand
                   | primary { postfix } ;
 untyped-operand   = prefix operand

@@ -241,6 +241,10 @@ impl<'a> Lowerer<'a> {
         for binding in &body.bindings {
             match &binding.value {
                 p::Bound::Value(value) => self.collect_expr(value, answer)?,
+                p::Bound::Match { subject, decision } => {
+                    self.collect_expr(subject, answer)?;
+                    self.collect_decision(decision, answer)?;
+                }
                 p::Bound::If { condition, yes, no } => {
                     self.collect_expr(condition, answer)?;
                     self.collect_body(yes, answer)?;
@@ -255,7 +259,9 @@ impl<'a> Lowerer<'a> {
         self.collect_type(&expression.ty)?;
         match &expression.kind {
             ExprKind::Block(_) => unreachable!("pattern compiling takes a block's bindings out"),
-            ExprKind::If(..) => unreachable!("pattern compiling binds each `if` on its own"),
+            ExprKind::If(..) | ExprKind::Is(..) => {
+                unreachable!("pattern compiling binds each `if` on its own")
+            }
             ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
             ExprKind::Construct(_, fields) | ExprKind::DirectCall(_, fields) => {
                 for field in fields {
@@ -641,7 +647,7 @@ impl<'a> Lowerer<'a> {
                         (Value(u32::try_from(index).expect("a sane arity")), *atom)
                     })
                     .collect();
-                emit_decision(&context, builder, &decision, &values)
+                emit_decision(&context, builder, &decision, &values, &HashMap::new())
             });
         }
     }
@@ -731,14 +737,13 @@ fn emit_decision(
     builder: &mut Builder<'_>,
     decision: &Decision,
     values: &HashMap<Value, Atom>,
+    outer: &HashMap<LocalId, Atom>,
 ) -> Atom {
     match decision {
         Decision::Body { body, locals } => {
-            let locals = locals
-                .iter()
-                .map(|(local, value)| (*local, values[value]))
-                .collect();
-            emit_body(context, builder, body, locals)
+            let mut within = outer.clone();
+            within.extend(locals.iter().map(|(local, value)| (*local, values[value])));
+            emit_body(context, builder, body, within)
         }
         Decision::Match {
             subject,
@@ -758,7 +763,7 @@ fn emit_decision(
                 for (value, atom) in arm.fields.iter().zip(fields) {
                     nested.insert(*value, atom);
                 }
-                emit_decision(context, builder, &arm.decision, &nested)
+                emit_decision(context, builder, &arm.decision, &nested, outer)
             })
         }
         Decision::Record {
@@ -774,7 +779,7 @@ fn emit_decision(
                 for (value, atom) in fields.iter().zip(atoms) {
                     nested.insert(*value, *atom);
                 }
-                emit_decision(context, builder, decision, &nested)
+                emit_decision(context, builder, decision, &nested, outer)
             },
         ),
         Decision::Guard {
@@ -785,21 +790,19 @@ fn emit_decision(
             otherwise,
             answer,
         } => {
-            let locals: HashMap<_, _> = locals
-                .iter()
-                .map(|(local, value)| (*local, values[value]))
-                .collect();
-            let condition = emit_body(context, builder, condition, locals);
+            let mut within = outer.clone();
+            within.extend(locals.iter().map(|(local, value)| (*local, values[value])));
+            let condition = emit_body(context, builder, condition, within);
             let bool_ty = Type::Named(context.prelude.bool_, Vec::new());
             let bool_id = context.type_ids[&bool_ty];
             let false_id = context.constructor_ids[&(*false_constructor, bool_ty.clone())];
             let true_id = context.constructor_ids[&(*true_constructor, bool_ty)];
             builder.match_(condition, bool_id, |builder, constructor, _| {
                 if constructor == false_id {
-                    emit_decision(context, builder, otherwise, values)
+                    emit_decision(context, builder, otherwise, values, outer)
                 } else {
                     assert_eq!(constructor, true_id, "Bool has exactly two constructors");
-                    emit_decision(context, builder, answer, values)
+                    emit_decision(context, builder, answer, values, outer)
                 }
             })
         }
@@ -825,9 +828,9 @@ fn emit_decision(
                 context.type_ids[&bool_ty],
                 |builder, constructor, _| {
                     if constructor == true_id {
-                        emit_decision(context, builder, equal, values)
+                        emit_decision(context, builder, equal, values, outer)
                     } else {
-                        emit_decision(context, builder, otherwise, values)
+                        emit_decision(context, builder, otherwise, values, outer)
                     }
                 },
             )
@@ -861,7 +864,7 @@ fn emit_decision(
             let mut nested = values.clone();
             nested.insert(*front, builder.call(take, &[list, kept]));
             nested.insert(*back, builder.call(drop, &[list, kept]));
-            emit_decision(context, builder, decision, &nested)
+            emit_decision(context, builder, decision, &nested, outer)
         }
         Decision::Unreachable { subject, ty } => {
             builder.call(context.unreachable_ids[ty], &[values[subject]])
@@ -954,6 +957,13 @@ fn emit_bound(
 ) -> Atom {
     match bound {
         p::Bound::Value(value) => emit_expr(context, builder, value, locals),
+        // The subject is the decision's value nought; its bodies see what
+        // the body around it binds.
+        p::Bound::Match { subject, decision } => {
+            let tested = emit_expr(context, builder, subject, locals);
+            let values = HashMap::from([(Value(0), tested)]);
+            emit_decision(context, builder, decision, &values, locals)
+        }
         p::Bound::If { condition, yes, no } => {
             let asked = emit_expr(context, builder, condition, locals);
             let true_ = context.constructor_ids[&(context.prelude.bool_true, condition.ty.clone())];
@@ -1029,7 +1039,9 @@ fn emit_expr(
 ) -> Atom {
     match &expression.kind {
         ExprKind::Block(_) => unreachable!("pattern compiling takes a block's bindings out"),
-        ExprKind::If(..) => unreachable!("pattern compiling binds each `if` on its own"),
+        ExprKind::If(..) | ExprKind::Is(..) => {
+            unreachable!("pattern compiling binds each `if` on its own")
+        }
         ExprKind::Local(local) => locals[local],
         ExprKind::Natural(magnitude) => {
             let nat = context.type_ids[&Type::Named(context.prelude.nat, Vec::new())];

@@ -61,6 +61,13 @@ pub(crate) enum Bound {
         yes: Box<Body>,
         no: Box<Body>,
     },
+    /// `if subject is pattern then yes else no`: a decision on the subject,
+    /// which is its value nought, each branch a body in it, what the
+    /// pattern binds in scope in `yes`.
+    Match {
+        subject: Expr,
+        decision: Box<Decision>,
+    },
 }
 
 /// Every unpack has one possible constructor and fields in declaration order.
@@ -249,7 +256,55 @@ enum RunOut {
 
 impl Compiler<'_> {
     fn body(&self, body: d::Body) -> Result<Body, LowerError> {
+        let body = d::Body {
+            bindings: body
+                .bindings
+                .into_iter()
+                .map(|binding| d::Binding {
+                    pattern: binding.pattern,
+                    value: tested(binding.value, self.prelude),
+                })
+                .collect(),
+            result: tested(body.result, self.prelude),
+        };
         self.compiled(hoisted(body, &mut 0))
+    }
+
+    /// `if subject is pattern then yes else no`, as a decision on the
+    /// subject: each of the pattern's rows answers `yes`, and any other
+    /// value `no`.
+    fn test(
+        &self,
+        subject: Expr,
+        alternatives: Vec<(Pattern, Option<Expr>)>,
+        yes: d::Body,
+        no: d::Body,
+    ) -> Result<Bound, LowerError> {
+        let subjects = [Subject {
+            value: Value(0),
+            ty: subject.ty.clone(),
+        }];
+        let yes = self.compiled(yes)?;
+        let mut rows: Vec<Row> = alternatives
+            .into_iter()
+            .map(|(pattern, guard)| Row {
+                patterns: vec![pattern],
+                guard,
+                body: yes.clone(),
+                locals: HashMap::new(),
+            })
+            .collect();
+        rows.push(Row {
+            patterns: vec![Pattern::Wild],
+            guard: None,
+            body: self.compiled(no)?,
+            locals: HashMap::new(),
+        });
+        let decision = self.plan(&rows, &subjects, &mut 1)?;
+        Ok(Bound::Match {
+            subject,
+            decision: Box::new(decision),
+        })
     }
 
     /// A body [`hoisted`] already, whose `if`s each stand alone on a line,
@@ -271,10 +326,15 @@ impl Compiler<'_> {
                         else {
                             unreachable!("hoisting makes each branch a block")
                         };
-                        Bound::If {
-                            condition: *condition,
-                            yes: Box::new(self.compiled(*yes)?),
-                            no: Box::new(self.compiled(*no)?),
+                        match condition.kind {
+                            ExprKind::Is(subject, alternatives) => {
+                                self.test(*subject, alternatives, *yes, *no)?
+                            }
+                            _ => Bound::If {
+                                condition: *condition,
+                                yes: Box::new(self.compiled(*yes)?),
+                                no: Box::new(self.compiled(*no)?),
+                            },
                         }
                     }
                     _ => Bound::Value(binding.value),
@@ -759,6 +819,172 @@ fn hoisted(body: d::Body, fresh: &mut u32) -> d::Body {
     d::Body { bindings, result }
 }
 
+/// `expression` with every test the condition of an `if` of its own: an
+/// `if` asking a chain of `&` holding a test asks each part in turn, its
+/// `else` copied to each, so what a test binds is in scope for the rest of
+/// the chain and `then`; a test or such a chain standing as a value is an
+/// `if` answering `True` or `False`.
+fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
+    let Expr {
+        module,
+        span,
+        ty,
+        kind,
+    } = expression;
+    let each = |list: Vec<Expr>| list.into_iter().map(|e| tested(e, prelude)).collect();
+    let one = |e: Box<Expr>| Box::new(tested(*e, prelude));
+    let kind = match kind {
+        ExprKind::If(condition, yes, no) => {
+            let yes = tested(*yes, prelude);
+            let no = tested(*no, prelude);
+            return branched(*condition, yes, no, prelude);
+        }
+        kind @ ExprKind::Is(..) => {
+            let condition = Expr {
+                module,
+                span,
+                ty,
+                kind,
+            };
+            let (yes, no) = (
+                boolean(&condition, true, prelude),
+                boolean(&condition, false, prelude),
+            );
+            return branched(condition, yes, no, prelude);
+        }
+        ExprKind::DirectCall(key, arguments)
+            if key.name == prelude.bool_and && arguments.iter().any(|a| binds(a, prelude)) =>
+        {
+            let condition = Expr {
+                module,
+                span,
+                ty,
+                kind: ExprKind::DirectCall(key, arguments),
+            };
+            let (yes, no) = (
+                boolean(&condition, true, prelude),
+                boolean(&condition, false, prelude),
+            );
+            return branched(condition, yes, no, prelude);
+        }
+        kind @ (ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_)) => kind,
+        ExprKind::Construct(constructor, fields) => ExprKind::Construct(constructor, each(fields)),
+        ExprKind::Record(fields) => ExprKind::Record(
+            fields
+                .into_iter()
+                .map(|(name, field)| (name, tested(field, prelude)))
+                .collect(),
+        ),
+        ExprKind::Update(base, fields) => ExprKind::Update(
+            one(base),
+            fields
+                .into_iter()
+                .map(|(name, field)| (name, tested(field, prelude)))
+                .collect(),
+        ),
+        ExprKind::Tuple(members) => ExprKind::Tuple(each(members)),
+        ExprKind::Project(receiver, field) => ExprKind::Project(one(receiver), field),
+        ExprKind::DirectCall(key, arguments) => ExprKind::DirectCall(key, each(arguments)),
+        ExprKind::Widen(value) => ExprKind::Widen(one(value)),
+        ExprKind::Try(value) => ExprKind::Try(one(value)),
+        ExprKind::Block(body) => ExprKind::Block(Box::new(d::Body {
+            bindings: body
+                .bindings
+                .into_iter()
+                .map(|binding| d::Binding {
+                    pattern: binding.pattern,
+                    value: tested(binding.value, prelude),
+                })
+                .collect(),
+            result: tested(body.result, prelude),
+        })),
+    };
+    Expr {
+        module,
+        span,
+        ty,
+        kind,
+    }
+}
+
+/// `if condition then yes else no`, `yes` and `no` already [`tested`]:
+/// where the condition is a chain of `&` holding a test, an `if` for each
+/// part, the last asking `yes`, and each answering `no` where its part
+/// fails.
+fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
+    let (module, span, ty) = (yes.module, condition.span, yes.ty.clone());
+    let header = |kind| Expr {
+        module,
+        span,
+        ty: ty.clone(),
+        kind,
+    };
+    if !binds(&condition, prelude) {
+        let condition = tested(condition, prelude);
+        return header(ExprKind::If(
+            Box::new(condition),
+            Box::new(yes),
+            Box::new(no),
+        ));
+    }
+    let mut parts = Vec::new();
+    conjuncts(condition, prelude, &mut parts);
+    let mut answer = yes;
+    for part in parts.into_iter().rev() {
+        let part = match part.kind {
+            ExprKind::Is(value, pattern) => Expr {
+                kind: ExprKind::Is(Box::new(tested(*value, prelude)), pattern),
+                ..part
+            },
+            kind => tested(Expr { kind, ..part }, prelude),
+        };
+        answer = header(ExprKind::If(
+            Box::new(part),
+            Box::new(answer),
+            Box::new(no.clone()),
+        ));
+    }
+    answer
+}
+
+/// Whether `expression` is a test, or a chain of `&` holding one.
+fn binds(expression: &Expr, prelude: &PreludeIds) -> bool {
+    match &expression.kind {
+        ExprKind::Is(..) => true,
+        ExprKind::DirectCall(key, arguments) if key.name == prelude.bool_and => {
+            arguments.iter().any(|argument| binds(argument, prelude))
+        }
+        _ => false,
+    }
+}
+
+/// The parts of a chain of `&`, in order.
+fn conjuncts(expression: Expr, prelude: &PreludeIds, parts: &mut Vec<Expr>) {
+    match expression.kind {
+        ExprKind::DirectCall(key, arguments) if key.name == prelude.bool_and => {
+            for argument in arguments {
+                conjuncts(argument, prelude, parts);
+            }
+        }
+        kind => parts.push(Expr { kind, ..expression }),
+    }
+}
+
+/// `True` or `False`, written where `like` is.
+const fn boolean(like: &Expr, value: bool, prelude: &PreludeIds) -> Expr {
+    let constructor = if value {
+        prelude.bool_true
+    } else {
+        prelude.bool_false
+    };
+    Expr {
+        module: like.module,
+        span: like.span,
+        ty: Type::Named(prelude.bool_, Vec::new()),
+        kind: ExprKind::Construct(constructor, Vec::new()),
+    }
+}
+
 /// `expression` with each `?` in it replaced by a local bound before it, and
 /// each block by its answer, its bindings bound before it.
 fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> Expr {
@@ -803,8 +1029,24 @@ fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> 
             ExprKind::DirectCall(key, arguments.into_iter().map(&mut lift).collect())
         }
         ExprKind::Widen(value) => ExprKind::Widen(Box::new(lift(*value))),
+        ExprKind::Is(..) => unreachable!("each test is an `if`'s condition by now"),
         ExprKind::If(condition, yes, no) => {
-            let condition = lift(*condition);
+            // A test's value is worked out ahead; its pattern is asked by
+            // the decision the `if` becomes.
+            let condition = match *condition {
+                Expr {
+                    module,
+                    span,
+                    ty,
+                    kind: ExprKind::Is(value, pattern),
+                } => Expr {
+                    module,
+                    span,
+                    ty,
+                    kind: ExprKind::Is(Box::new(lift(*value)), pattern),
+                },
+                condition => lift(condition),
+            };
             let branch = |branch: Expr, fresh: &mut u32| {
                 let body = d::Body {
                     bindings: Vec::new(),

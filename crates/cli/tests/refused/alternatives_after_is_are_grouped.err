@@ -1,0 +1,7 @@
+error: alternatives after `is` are grouped, or `|` reads as an or of a test
+ --> alternatives_after_is_are_grouped.fn:4:31
+  |
+4 | signed(r) -> r is Err(Gone) | Err(Lost)
+  |                               ^^^^^^^^^ taken as a `Bool`
+  |
+  = help: write the alternatives in parentheses: `x is (A | B)`

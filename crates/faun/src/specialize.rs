@@ -247,6 +247,10 @@ pub(crate) enum ExprKind {
     Try(Box<Expr>),
     /// `if condition then yes else no`; see [`crate::hir::ExprKind::If`].
     If(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `value is pattern`; see [`crate::hir::ExprKind::Is`]: a row for
+    /// each choice of the pattern's alternatives, with the tests its
+    /// literals ask.
+    Is(Box<Expr>, Vec<(Pattern, Option<Expr>)>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     Block(Box<Body>),
 }
@@ -353,6 +357,9 @@ struct Specializer<'a> {
     structural: HashMap<FunctionKey, (ModuleId, crate::ast::Span)>,
     queue: VecDeque<FunctionKey>,
     functions: Vec<Option<Function>>,
+    /// The next local a test's literal is held in, numbered apart from
+    /// every clause's own.
+    test_locals: u32,
 }
 
 impl<'a> Specializer<'a> {
@@ -390,6 +397,7 @@ impl<'a> Specializer<'a> {
             structural: HashMap::new(),
             queue: VecDeque::new(),
             functions: Vec::new(),
+            test_locals: 1 << 30,
         }
     }
 
@@ -1355,6 +1363,21 @@ impl<'a> Specializer<'a> {
                     return Ok(value);
                 }
                 ExprKind::Widen(Box::new(value))
+            }
+            // A row for each choice of alternatives, its literals tested
+            // as a clause's are, before nothing.
+            t::ExprKind::Is(value, pattern) => {
+                let value = self.expr(module, value, substitution)?;
+                let mut next = self.test_locals;
+                let mut rows = Vec::new();
+                for row in t::Pattern::rows(std::slice::from_ref(pattern)) {
+                    let mut tests = Vec::new();
+                    let pattern =
+                        self.tested((module, span), &row[0], &value.ty, (&mut next, &mut tests))?;
+                    rows.push((pattern, self.joined(module, span, tests, None)?));
+                }
+                self.test_locals = next;
+                ExprKind::Is(Box::new(value), rows)
             }
             t::ExprKind::If(condition, yes, no) => ExprKind::If(
                 Box::new(self.expr(module, condition, substitution)?),

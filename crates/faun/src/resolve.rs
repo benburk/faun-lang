@@ -1454,6 +1454,9 @@ fn resolve_clause(
         alternative: None,
         shadowing: None,
         repeated: Some(Vec::new()),
+        testing: false,
+        tested: None,
+        hidden: HashMap::new(),
     };
     let patterns = clause
         .patterns
@@ -1533,6 +1536,14 @@ struct ClauseResolver<'a> {
     /// far: a binding may shadow a name already in scope, though not one it
     /// binds itself.
     shadowing: Option<HashSet<Symbol>>,
+    /// Whether a test's pattern is being resolved, which may bind again the
+    /// name it tests and no other in scope.
+    testing: bool,
+    /// While `testing`, the name tested, where the value is one.
+    tested: Option<Symbol>,
+    /// Names a test bound that are out of sight here, where it is not known
+    /// to have held, and where the test was: what a use of one is told.
+    hidden: HashMap<Symbol, s::Span>,
     /// While a clause's head is resolved, outside any `|`, each name bound
     /// again there: the local it was bound as, the one it is bound as now,
     /// and where. Elsewhere, a pattern binds each name once.
@@ -1540,6 +1551,45 @@ struct ClauseResolver<'a> {
 }
 
 impl ClauseResolver<'_> {
+    /// Mark what was bound since `before` as out of sight from here on,
+    /// bound by the test at `span`.
+    fn hide(&mut self, before: &HashMap<Symbol, h::LocalId>, span: s::Span) {
+        for (name, local) in &self.locals {
+            if before.get(name) != Some(local) {
+                self.hidden.insert(*name, span);
+            }
+        }
+    }
+
+    /// A condition whose tests bind into the current scope: those of a
+    /// test, and along a chain of `&`, those of each part. Anything else
+    /// binds for nothing outside it.
+    fn condition(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
+        let kind = match &expression.kind {
+            s::ExprKind::Is(value, pattern) => {
+                let tested = match &value.kind {
+                    s::ExprKind::Name(name) => Some(self.symbols.intern(name.text(self.source))),
+                    _ => None,
+                };
+                let value = self.expr(value)?;
+                let outer = (std::mem::replace(&mut self.testing, true), self.tested);
+                self.tested = tested;
+                self.shadowing = Some(HashSet::new());
+                let pattern = self.pattern(pattern);
+                self.shadowing = None;
+                (self.testing, self.tested) = outer;
+                h::ExprKind::Is(Box::new(value), pattern?)
+            }
+            s::ExprKind::Binary(s::BinaryOp::And, left, right) => h::ExprKind::Binary(
+                s::BinaryOp::And,
+                Box::new(self.condition(left)?),
+                Box::new(self.condition(right)?),
+            ),
+            _ => return self.expr(expression),
+        };
+        Ok(self.sites.expr(expression.span, kind))
+    }
+
     /// A body's bindings in order, then its answer: each binding's value
     /// reads the names as they were, and what follows reads the ones it
     /// binds, a name it rebinds shadowing the one before.
@@ -1630,8 +1680,26 @@ impl ClauseResolver<'_> {
             s::Pattern::Wild(_) => Ok(h::Pattern::Wild),
             s::Pattern::Bind(name) => {
                 let spelling = self.symbols.intern(name.text(self.source));
+                if self.testing
+                    && self.tested != Some(spelling)
+                    && self.locals.contains_key(&spelling)
+                {
+                    let shown = name.text(self.source);
+                    return Err(error(
+                        self.module,
+                        name.0,
+                        format!("`{shown}` is a name already, and a test binds it anew rather than comparing with it"),
+                    )
+                    .label("bound again here")
+                    .help(format!("to compare, bind another name and ask: `x is Ok(n) & n == {shown}`")));
+                }
+                // An alternative after the first binds the names the first did.
+                let alternate = self
+                    .alternative
+                    .as_ref()
+                    .is_some_and(|first| first.contains_key(&spelling));
                 let again_here = match &mut self.shadowing {
-                    Some(bound) => !bound.insert(spelling),
+                    Some(bound) => !bound.insert(spelling) && !alternate,
                     None => self.locals.contains_key(&spelling),
                 };
                 // In a clause's head, a name bound again is a fresh local the
@@ -1946,11 +2014,36 @@ impl ClauseResolver<'_> {
                 h::ExprKind::Unary(*operator, Box::new(self.expr(value)?))
             }
             s::ExprKind::Try(value) => h::ExprKind::Try(Box::new(self.expr(value)?)),
-            s::ExprKind::If(condition, yes, no) => h::ExprKind::If(
-                Box::new(self.expr(condition)?),
-                Box::new(self.expr(yes)?),
-                Box::new(self.expr(no)?),
-            ),
+            // What the condition binds is seen by `yes` alone.
+            s::ExprKind::If(condition, yes, no) => {
+                let before = self.locals.clone();
+                let asked = condition.span;
+                let condition = self.condition(condition);
+                let yes = condition.and_then(|condition| Ok((condition, self.expr(yes)?)));
+                self.hide(&before, asked);
+                self.locals = before;
+                let (condition, yes) = yes?;
+                h::ExprKind::If(Box::new(condition), Box::new(yes), Box::new(self.expr(no)?))
+            }
+            // Alone, a test binds for nothing after it.
+            s::ExprKind::Is(..) => {
+                let before = self.locals.clone();
+                let tested = self.condition(expression);
+                self.hide(&before, expression.span);
+                self.locals = before;
+                return tested;
+            }
+            // What the left binds is seen by the right, and no further.
+            s::ExprKind::Binary(s::BinaryOp::And, left, right) => {
+                let before = self.locals.clone();
+                let both = self
+                    .condition(left)
+                    .and_then(|left| Ok((left, self.condition(right)?)));
+                self.hide(&before, expression.span);
+                self.locals = before;
+                let (left, right) = both?;
+                h::ExprKind::Binary(s::BinaryOp::And, Box::new(left), Box::new(right))
+            }
             s::ExprKind::Wild | s::ExprKind::Range(..) | s::ExprKind::Ending(..) => {
                 unreachable!("the parser refuses a pattern's form outside a pattern")
             }
@@ -2027,6 +2120,18 @@ impl ClauseResolver<'_> {
         // exists by being written, and belongs to no module.
         if capitalised(name.text(self.source)) {
             return Ok(h::ExprKind::Tag(spelling));
+        }
+        if self.hidden.contains_key(&spelling) {
+            return Err(error(
+                self.module,
+                name.0,
+                format!(
+                    "`{}` is bound by a test, and seen only where that test is known to have held",
+                    name.text(self.source)
+                ),
+            )
+            .label("not known to hold here")
+            .help("a test binds for the rest of its `&` chain and its `if`'s `then`; under `|`, `!` or in `else`, it may not have held"));
         }
         Err(error(
             self.module,

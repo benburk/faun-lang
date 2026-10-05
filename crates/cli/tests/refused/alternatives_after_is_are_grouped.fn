@@ -1,0 +1,7 @@
+import std.host {Host}
+
+signed : Result(Nat, [Gone, Lost]) -> Bool
+signed(r) -> r is Err(Gone) | Err(Lost)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

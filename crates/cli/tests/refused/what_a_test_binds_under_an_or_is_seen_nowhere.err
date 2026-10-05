@@ -1,0 +1,7 @@
+error: `v` is bound by a test, and seen only where that test is known to have held
+ --> what_a_test_binds_under_an_or_is_seen_nowhere.fn:4:48
+  |
+4 | either(r, ready) -> if r is Ok(v) | ready then v else 0
+  |                                                ^ not known to hold here
+  |
+  = help: a test binds for the rest of its `&` chain and its `if`'s `then`; under `|`, `!` or in `else`, it may not have held

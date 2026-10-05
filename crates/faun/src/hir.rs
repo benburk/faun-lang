@@ -382,6 +382,10 @@ pub enum ExprKind {
     Try(Box<Expr>),
     /// `if condition then yes else no`: the branch the condition chooses.
     If(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `value is pattern`: whether it matches. What the pattern binds is
+    /// seen where resolution scoped it: along an `&` chain, and in the
+    /// `then` branch of an `if` whose condition this is part of.
+    Is(Box<Expr>, Pattern),
     /// Bindings, then the answer: a block written inside an expression.
     /// Its locals are the clause's, numbered apart from every other.
     Block(Box<Body>),

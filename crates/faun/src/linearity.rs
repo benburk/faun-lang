@@ -692,6 +692,10 @@ impl Walk<'_, '_> {
     /// whoever receives it now holds. A local handed over whole is taken
     /// once everything written beside it has been worked out, so what
     /// looks at it first still sees it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm for each kind of expression, each saying what it is worth"
+    )]
     fn value(&mut self, expr: &d::Expr) -> Vec<Origin> {
         match &expr.kind {
             ExprKind::Local(_) => self.take(expr),
@@ -723,6 +727,10 @@ impl Walk<'_, '_> {
                 origins
             }
             ExprKind::If(condition, yes, no) => self.branches(expr, condition, yes, no),
+            ExprKind::Is(value, _) => {
+                self.tested(value);
+                Vec::new()
+            }
             // A block's bindings hold what they bind, as a body's do, and
             // its answer is what it is worth.
             ExprKind::Block(block) => {
@@ -733,6 +741,25 @@ impl Walk<'_, '_> {
                 self.value(&block.result)
             }
         }
+    }
+
+    /// A test, which looks at its value. One holding a resource would leave
+    /// it held in some way the branches must agree on, which is not worked
+    /// out yet, so it is refused.
+    fn tested(&mut self, value: &d::Expr) {
+        if self.facts.carries(&value.ty) {
+            let resource = self
+                .facts
+                .called(self.facts.resource_in(&value.ty), "resource");
+            self.refused.push(Refusal {
+                at: Some(place(value)),
+                message: format!("a test of a value holding a {resource} is not yet worked out"),
+                label: "tested here".to_owned(),
+                also: None,
+                help: Some("take it apart with a definition's clauses".to_owned()),
+            });
+        }
+        self.lend(value);
     }
 
     /// An `if`: each branch walked from what was held before it, and what

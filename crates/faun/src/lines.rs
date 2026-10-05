@@ -13,7 +13,7 @@
 //! is; such a form is refused wherever it stays an expression.
 
 use super::ast::{
-    AliasDecl, Binding, Body, Bound, Clause, Constraint, ConstraintAliasDecl, DataDecl,
+    AliasDecl, BinaryOp, Binding, Body, Bound, Clause, Constraint, ConstraintAliasDecl, DataDecl,
     DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item, MethodItem,
     Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
 };
@@ -623,7 +623,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
                 None => Err(not_a_pattern()),
             }
         }
-        ExprKind::Binary(super::ast::BinaryOp::Or, left, right) => {
+        ExprKind::Binary(BinaryOp::Or, left, right) => {
             let mut alternatives = Vec::new();
             for side in [*left, *right] {
                 match pattern(side, source)? {
@@ -734,10 +734,31 @@ fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
             expression(value, source)
         }
         ExprKind::Block(body) => body_expressions(body, source),
+        ExprKind::Binary(operator @ (BinaryOp::And | BinaryOp::Or), left, right) => {
+            if *operator == BinaryOp::Or && is_test(left) && is_constructor(right, source) {
+                return Err(error(
+                    right.span,
+                    "alternatives after `is` are grouped, or `|` reads as an or of a test",
+                )
+                .label("taken as a `Bool`")
+                .help("write the alternatives in parentheses: `x is (A | B)`"));
+            }
+            if let Some(span) = passed_on(right) {
+                return Err(error(
+                    span,
+                    "the right of `&` or `|` may not be worked out, so `?` does not leave from it",
+                )
+                .label("would leave here")
+                .help("bind it with `?` on a line before, and use the name here"));
+            }
+            expression(left, source)?;
+            expression(right, source)
+        }
         ExprKind::Binary(_, left, right) => {
             expression(left, source)?;
             expression(right, source)
         }
+        ExprKind::Is(value, _) => expression(value, source),
         ExprKind::If(condition, yes, no) => {
             for branch in [yes, no] {
                 if let Some(span) = passed_on(branch) {
@@ -756,6 +777,25 @@ fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
             expression(yes, source)?;
             expression(no, source)
         }
+    }
+}
+
+/// Whether `expr` is a test, or a chain of `&` ending in one.
+fn is_test(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Is(..) => true,
+        ExprKind::Binary(BinaryOp::And, _, right) => is_test(right),
+        _ => false,
+    }
+}
+
+/// Whether `expr` names a constructor, alone or applied: what an
+/// alternative after `is` would be.
+fn is_constructor(expr: &Expr, source: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Name(name) => is_type_name(*name, source),
+        ExprKind::Call(head, _) => is_constructor(head, source),
+        _ => false,
     }
 }
 
@@ -786,7 +826,9 @@ fn passed_on(expr: &Expr) -> Option<Span> {
         ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
             each(std::iter::once(&**head).chain(arguments))
         }
-        ExprKind::Member(value, _) | ExprKind::Unary(_, value) => passed_on(value),
+        ExprKind::Member(value, _) | ExprKind::Unary(_, value) | ExprKind::Is(value, _) => {
+            passed_on(value)
+        }
         ExprKind::Binary(_, left, right) => each([&**left, &**right]),
         ExprKind::If(condition, yes, no) => each([&**condition, &**yes, &**no]),
         ExprKind::Block(body) => each(

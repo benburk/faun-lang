@@ -450,6 +450,18 @@ impl<'a> Callbacks<'a> {
             }
             ExprKind::Widen(value) => d::ExprKind::Widen(Box::new(self.expr(frame, value)?)),
             ExprKind::Try(value) => d::ExprKind::Try(Box::new(self.expr(frame, value)?)),
+            ExprKind::Is(value, rows) => d::ExprKind::Is(
+                Box::new(self.expr(frame, value)?),
+                rows.iter()
+                    .map(|(pattern, guard)| {
+                        let guard = guard
+                            .as_ref()
+                            .map(|guard| self.expr(frame, guard))
+                            .transpose()?;
+                        Ok((pattern.clone(), guard))
+                    })
+                    .collect::<Result<_, LowerError>>()?,
+            ),
             ExprKind::If(condition, yes, no) => d::ExprKind::If(
                 Box::new(self.expr(frame, condition)?),
                 Box::new(self.expr(frame, yes)?),
@@ -678,6 +690,12 @@ fn for_each<'a>(expression: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
                 for_each(each, visit);
             }
         }
+        ExprKind::Is(value, rows) => {
+            for_each(value, visit);
+            for guard in rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+                for_each(guard, visit);
+            }
+        }
         ExprKind::Invoke(head, arguments) => {
             for_each(head, visit);
             for each in arguments {
@@ -779,6 +797,14 @@ fn captures(patterns: &[Pattern], body: &Expr) -> Vec<(LocalId, Type)> {
     for pattern in patterns {
         pattern_locals(pattern, &mut bound);
     }
+    // What a test binds is bound inside the body, where resolution scoped it.
+    for_each(body, &mut |expression| {
+        if let ExprKind::Is(_, rows) = &expression.kind {
+            for (pattern, _) in rows {
+                pattern_locals(pattern, &mut bound);
+            }
+        }
+    });
     let mut found = BTreeMap::new();
     free_locals(body, &bound, &mut found);
     found.into_iter().collect()
@@ -815,6 +841,12 @@ fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap
         S::If(condition, yes, no) => {
             for each in [condition, yes, no] {
                 free_locals(each, bound, found);
+            }
+        }
+        S::Is(value, rows) => {
+            free_locals(value, bound, found);
+            for guard in rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+                free_locals(guard, bound, found);
             }
         }
         S::Invoke(head, arguments) => {
