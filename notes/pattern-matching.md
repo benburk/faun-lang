@@ -7,6 +7,32 @@ it are [conditions](proposals/drafts/conditions.md),
 [branching](proposals/drafts/branching.md) and
 [loops](proposals/drafts/loops.md).
 
+## Decided
+
+As of 2026-10-05, after the designs below and two drawn up afresh from the
+brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
+`is` with flowing names and a dedicated exit line):
+
+- **`value is pattern`** is a `Bool` that binds where it is known to have
+  held: along `&`, into `then`, below a `guard`. Built.
+- **`guard condition else exit`** leaves where the condition fails, keeping
+  its names for the lines below. One direction only; the exits are
+  `return x`, `continue`, `break`. It replaces design E's `if` lines.
+- **Many ways on a value** are `is` with arms, `x is ( P -> … )`, with no
+  `match` or `when` keyword. Both fresh designs used `match`; the brief did
+  not offer Finch's idea, so that says nothing against it.
+- **`is` inside a pattern** binds the whole and its parts: `right is [y,
+  *_]`.
+- **`==name` in a pattern** compares with a name in scope: `Some(==node)`.
+- **No rebinding.** A name means one value for its whole scope: no shadowing
+  in a binding, a pattern or a lambda. Variables written `$name`, coming
+  with loops, are the only names that change. Until they come, a step takes
+  a fresh name.
+- **Alternatives after `is` are parenthesized,** `x is (A(v) | B(v))`,
+  since `|` is also the `Bool` or.
+- **Clauses where the body is the dispatch;** `is` where a test is one step
+  among several; the ternary for a choice of two values.
+
 ## What we want
 
 **Kinds of match**
@@ -16,9 +42,9 @@ it are [conditions](proposals/drafts/conditions.md),
 - **Infallible destructure:** `(a, b) = pair`. A pattern that can fail is
   refused, with advice.
 - **Fallible destructure:** pattern and optional conditions, else leave by
-  `return`, `continue` or `break`: `if r is Ok(v) else return 0`. A default
-  is a ternary, `n = if r is Ok(v) then v else 0`, or `r.ok_or(0)`.
-- **Early exit on a test:** `if n == 0 return 0`, `if seen continue`.
+  `return`, `continue` or `break`: `guard r is Ok(v) else return 0`. A
+  default is a ternary, `n = if r is Ok(v) then v else 0`, or `r.ok_or(0)`.
+- **Early exit on a test:** `guard n != 0 else return 0`.
 - **Many-way on a computed value:** `x is ( arms )`, each arm a pattern,
   optional guard, `->` body; exhaustive. No `when`.
 - **Plain test:** is it this shape, as a `Bool`: `x is P`. Several values
@@ -35,8 +61,8 @@ it are [conditions](proposals/drafts/conditions.md),
 - The whole and its parts, `is` inside a pattern: `right is [y, *_]`.
   Missing.
 - A list's end, `[*init, last]`: elements after a rest, in clauses. Built.
-- Against a name in scope: guard, pin, or refused shadowing. Missing, and
-  a trap.
+- Against a name in scope: `==name`. Missing; with no rebinding, writing
+  the name alone is refused rather than a trap.
 
 **Rules**
 
@@ -57,6 +83,11 @@ it are [conditions](proposals/drafts/conditions.md),
 - The tree-sitter grammar mirrors the compiler's.
 - Concise and plain: Python's length or shorter.
 - A helper is cheap to write, and nesting is capped.
+- **Clauses where the body is the dispatch.** A function whose first and
+  only step is taking a value apart is clauses, through a helper if need
+  be: each case a line, its pattern at the margin. `if … is` is for a test
+  that is one step among several, and the ternary for a choice of two
+  values.
 
 ## Faun's forms, simplest first
 
@@ -65,7 +96,7 @@ Every form programs keep writing, as Faun spells it under the current lean
 are the examples of the ultimate and penultimate conditional syntaxes,
 translated. Each comment says whether it is built or planned.
 
-```
+```faun
 # Take a value apart where it cannot fail. Built.
 (a, b) = pair
 {x, y, *} = point
@@ -84,17 +115,20 @@ count = Nat.from_str(text).ok_or(0)
 empty = list is []
 found = results.filter(|result| result is Ok(_))
 
-# Leave early on a test: the function, a round, the loop. Planned.
-if n == 0 return 0
-if $seen.contains(node) continue
-if $total > limit break
+# Go on only where a test holds: else leave the function, a round, the loop. Planned.
+guard n != 0 else return 0
+guard !$seen.contains(node) else continue
+guard $total <= limit else break
 
 # Take apart, or leave: what it binds goes on below. Planned.
-if heap.pop() is Ok({key, value, rest}) else return state
-if args is [_, name, *_] else return Err(Usage)
+guard heap.pop() is Ok({key, value, rest}) else return state
+guard args is [_, name, *_] else return Err(Usage)
 
 # The same, with conditions reading what it bound. Planned.
-if entry is Ok({key, *}) & key < limit else return Rejected
+guard entry is Ok({key, *}) & key < limit else return Rejected
+
+# Compare with a name in scope, rather than bind. Planned.
+reached_from_itself = prev.get(node) is Some(==node)
 
 # A default for a shape `ok_or` cannot reach. Planned.
 width = if config is {width: Ok(w), *} then w else 80
@@ -171,19 +205,18 @@ identifier(name, arity) ->
 
 # The same as early exits, a step to a line. Planned.
 identifier(name, arity) -> (
-  if name.drop_prefix("_") is Ok(digits) else return Err(Invalid(name))
-  if Nat.from_str(digits) is Ok(index) & index < arity else return Err(Invalid(name))
+  guard name.drop_prefix("_") is Ok(digits) else return Err(Invalid(name))
+  guard Nat.from_str(digits) is Ok(index) & index < arity else return Err(Invalid(name))
   Ok((index, name))
 )
 
 # Early exits instead of nesting. The paper's `normalize`, after Finch. Planned.
 meet(t1, t2) -> (
   n1 = normalize(t1)
-  if n1 is Bot return Bot
+  guard !(n1 is Bot) else return Bot
   n2 = normalize(t2)
-  if n2 is Bot return Bot
-  if merge(n1, n2) is Ok(merged) return merged
-  glb(n1, n2)
+  guard !(n2 is Bot) else return Bot
+  if merge(n1, n2) is Ok(merged) then merged else glb(n1, n2)
 )
 
 # Clauses and `?` together. Finch's `zip_with`. Planned.
@@ -196,15 +229,14 @@ zip_with(_, _, _) -> Err(Mismatch)
 
 # A worklist taken apart as a loop goes round. Planned, with loops.
 while $stack is [node, *$stack] (
-  if $seen.contains(node) continue
+  guard !$seen.contains(node) else continue
   $seen.insert(node)
   $stack.extend(graph.targets(node))
 )
 ```
 
-Not spelled yet: equality with a name in scope inside a pattern. `r is
-Ok(limit)` binds a new `limit`; for now, `r is Ok(n) & n == limit`, and the
-trap is an open question.
+With no rebinding, `r is Ok(limit)` where `limit` is a name already is
+refused, offering `Ok(==limit)` to compare or a fresh name to bind.
 
 ## What Faun has today
 
@@ -610,6 +642,9 @@ leaving where it fails is what a binding needs, since what the condition
 binds goes on with the lines below. A plain test could be written either
 way; the style is the first, unless the condition binds for what follows.
 
+Since decided otherwise: the two directions became one, `guard condition
+else exit`, leaving where the condition fails. See Decided, at the top.
+
 ### Comparing
 
 | Measure              | A   | B     | C     | D    | E    |
@@ -626,11 +661,174 @@ way; the style is the first, unless the condition binds for what follows.
 
 ## Open questions
 
-- Whether E is the design: `is`, `if` guards, and `if` lines leaving where
-  their condition holds or fails.
-- Whether shadowing in a test is refused, pinned or left to a guard.
-- Whether or-patterns need parentheses after `is`, or `or` becomes a word.
-- Whether a many-way `is` on a bare parameter is refused, saying to write
-  clauses, or left to style.
-- Whether arms after `is` need a line each, as a block's lines do.
-- When `?` may leave from a branch, an arm or the right of `&`.
+- **Leaving where a test holds.** With `guard` going one way, a line leaving
+  on a shape is negated: `guard !(n1 is Bot) else return Bot`, where `if n1
+  is Bot return Bot` read straight. Accept it, or keep a second form for
+  this one case.
+- **What `else` takes.** One exit, or a block ending in one, for an effect
+  before leaving, as both fresh designs allow.
+- **Migrating off rebinding.** How much of the corpus shadows, measured by
+  refusing it; and what replaces each case until `$` names come.
+- **Arms after `is`.** A line each, as a block's lines; whether an arm may be
+  a block; whether a many-way `is` on a bare parameter is refused, saying to
+  write clauses.
+- **Rules that pick a form.** Which of Claude's to enforce: `x is 3` written
+  `x == 3`; a two-arm match ending in `_` written as an `if`; a `guard`
+  before a block's last line written as a ternary.
+- **`?` from a nested place:** a branch, an arm, the right of `&`. Loops
+  need the same mechanism.
+- **An `|` binding what both sides bind,** Astra's rule: `a is Some(t) |
+  b is Some(t)`, short-circuiting a fallback. A candidate, not adopted.
+- **Relational patterns,** `Some(< 0)`, for floats. Later, if wanted.
+- **Left for later in what is built:** a guard's test binding for its
+  clause's body; a test of a value holding a resource; a type taken apart by
+  its own name, as `U8(…)`.
+
+## A brief, without syntax
+
+What a design has to do, stated with no syntax, so one can be drawn up
+afresh and compared with the designs above. Hand this section over on its
+own.
+
+### The task
+
+Design how a small, pure, strict language takes values apart and branches
+on them: every construct for matching, testing, conditions and leaving
+early. **The aim is code that is easy and natural to read**, then short,
+then simple to parse. A reader new to the language should guess what a
+line does.
+
+The goals, qualities and non-goals below say what the language's authors
+have found they want so far. They are evidence, not a contract, and none
+outweighs the aim. Where one looks too onerous, or where letting it go buys
+a more general or prettier design, relax it and say so: which, why, and what
+a program loses. A design that covers fewer goals and reads better is a
+good answer. Two things are fixed: the language section below, which says
+what the language is, and that the grammar can be read without
+backtracking.
+
+Hand back:
+
+- each construct, with a line on what it means;
+- every program at the end of this brief, written in the design;
+- what was relaxed or left out, and why;
+- what the design does badly.
+
+Write the rest of each program, calls, lists, records and lambdas, in
+whatever ordinary syntax reads best; the constructs for matching are what
+is judged.
+
+Prefer one idea used everywhere to a construct for each case, and
+spellings readers already know to new ones, unless the new one is clearly
+better.
+
+### The language
+
+- **Pure and strict.** Every expression is worked out before it is used,
+  except the right operand of a logical and or or, which is worked out only
+  where the left has not decided. Values have no identity: no references,
+  no aliasing, no mutation a caller can see.
+- **Effects are marked.** A function that performs effects is marked as
+  one by its name, and each effectful call stands alone, at the start of a
+  line or as a whole body, never inside an expression.
+- **Failure is a value.** There are no exceptions. A computation that can
+  fail answers a result, success or failure, whose failures are a union of
+  tags the type system tracks; an operator passes a failure on to the
+  caller.
+- **Functions are second class.** A function may be passed to a call, never
+  stored or returned. Lambdas exist, as arguments.
+- **Definitions are clauses today.** A function is a list of clauses tried
+  in order, each a pattern per parameter and an optional boolean guard;
+  together they must cover every input. A clause is the program's only way
+  to take a value apart that may not have the shape asked for.
+- **Bindings are total.** A local binding takes a value apart only where
+  the shape cannot fail, and may shadow an earlier name.
+- **Patterns look like the expressions that build what they match.**
+
+### The data
+
+- **Named sums:** constructors with positional fields, recursive allowed,
+  each type's constructors known.
+- **Structural tag unions:** tags with fields, open or closed, the usual
+  type of a failure.
+- **Records:** structural, fields by name; a pattern may name some fields
+  and leave the rest.
+- **Tuples** of two or more.
+- **Lists:** taken apart at the front, at the back, or both, around one
+  rest.
+- **Naturals,** inductive in principle, written as numerals; fixed-width
+  integers, floats, characters and strings, matched by literal, and the
+  ordered ones by an inclusive range open at either end.
+- **Nominal wrappers:** a named type around one value, taken apart by its
+  name.
+
+### Goals
+
+1. **Dispatch on parameters,** case by case, as clauses do now.
+2. **Branch on a computed value** two ways, and many ways with every case
+   covered and checked.
+3. **Ask whether a value has a shape,** as a boolean value.
+4. **Take a value apart where it cannot fail.**
+5. **Take a value apart where it can,** binding its parts for what
+   follows, or else leave: the function with an answer, a loop's round, or
+   a loop.
+6. **Leave early on a plain condition.**
+7. **Combine tests and conditions,** a later one reading what an earlier
+   one bound, short-circuiting.
+8. **Test several values at once.**
+9. **A default where a shape is missing.**
+10. **Name a value and take it apart at once.**
+11. **Compare with a name in scope** without binding a new one by mistake.
+12. **Alternatives,** binding the same names, wherever a pattern stands.
+13. **Loops** that take each element apart, and that take a worklist apart
+    as they go round.
+14. **Names seen exactly where their match is known to have held,** and a
+    clear message where one is used beyond that.
+
+### Qualities
+
+- One way to write each thing; where two forms could do one job, a rule
+  says which.
+- A grammar decidable by the next token, with few keywords and no rule
+  for one construct alone.
+- Layout carries no meaning: no indentation rule.
+- Every exit is written, and is easy to find when scanning a body.
+- A body reads top to bottom, a step to a line, and nests shallowly;
+  pulling a step out into a named helper stays cheap.
+- Programs as short as their Python, or shorter.
+- Mistakes the compiler can see are refused, with a message saying what to
+  write instead.
+
+### Non-goals
+
+- Exceptions, and a general early return usable anywhere in an expression.
+- Flow typing: a name's type does not change because of a test above it.
+- Laziness beyond the logical operators.
+- References, identity and mutation a caller can see.
+- Indentation-sensitive layout.
+- View patterns, active patterns, pattern synonyms, and splitting a
+  condition from a shared prefix.
+- Macros and operators a program defines.
+- Syntax for choosing a value, such as a default operator: a method or a
+  conditional does it. Syntax is for control flow and for binding names.
+- A conditional answering nothing, and an exit not written as one.
+- A shorthand that only saves writing a name twice.
+- Checking a partial test for completeness: only a many-way match, and a
+  function's clauses, must cover every case.
+
+### Programs to try a design on
+
+- **Drain a priority queue:** take the cheapest entry off, or answer the
+  state when it is empty; visit it, add what the visit found, go round.
+- **Walk back a path:** look up how a node was reached; unreachable fails,
+  reached from itself ends the path, otherwise go on from its predecessor.
+- **Tokenize:** many ways on a byte list's front: empty, a digit, a space
+  to skip, any other byte.
+- **Validate an identifier:** it begins with an underscore, the rest
+  parses as a number, the number is below a bound; any failure is one
+  error.
+- **Merge two sorted lists,** passing the untouched list on whole.
+- **Topological sort** over a graph giving node count, neighbors and
+  in-degrees, failing on a cycle.
+- **Evaluate an expression tree,** with several shapes that simplify to the
+  same value, and a lookup of a variable that may be missing.
