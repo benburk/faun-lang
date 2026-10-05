@@ -37,7 +37,7 @@ dijkstra(graph, source) -> (
 # it was settled already, more cheaply. A node the graph does not have
 # counts as settled, so an edge to one leads nowhere.
 settle : (g, Settled(e), Nat, Step(e)) -> (Settled(e), List((e, {node: Nat, from: Nat}))) where Walkable(g, e), Weight(e)
-settle(_, settled, node, step) if settled.get_or(node, Ok(step)).is_ok() -> (settled, [])
+settle(_, settled, node, step) if settled.get_or(node, Ok(step)) is Ok(_) -> (settled, [])
 settle(graph, settled, node, step) -> (
   marked = put(settled, node, Ok(step))
   edges = graph.edges_from(node)
@@ -61,11 +61,9 @@ Paths(e) : Settled(e).(
 # the source.
 back : (Settled(e), Nat, List(Nat)) -> Result(List(Nat), [Unreachable])
 back(settled, node, route) -> (
+  walked = [node, *route]
   step = settled.get_or(node, Err(Unreachable))
-  stepped(settled, node, step, [node, *route])
+  if step is Ok({from, *})
+    then (if from == node then Ok(walked) else back(settled, from, walked))
+    else Err(Unreachable)
 )
-
-stepped : (Settled(e), Nat, Result(Step(e), [Unreachable]), List(Nat)) -> Result(List(Nat), [Unreachable])
-stepped(_, _, Err(Unreachable), _) -> Err(Unreachable)
-stepped(_, node, Ok({from, *}), route) if from == node -> Ok(route)
-stepped(settled, _, Ok({from, *}), route) -> back(settled, from, route)

@@ -59,13 +59,13 @@ inside(x, y, area) -> area.left <= x & x <= area.right
 lit_cell : (List(Instruction), Nat, Nat) -> Nat
 lit_cell(instructions, x, y) ->
   instructions.fold(False, |light, Instruction(action, area)|
-    inside(x, y, area).select(apply(light, action), light)).to_nat()
+    if inside(x, y, area) then apply(light, action) else light).to_nat()
 
 # One light's part-2 contribution: the same fold over a brightness.
 brightness_cell : (List(Instruction), Nat, Nat) -> Nat
 brightness_cell(instructions, x, y) ->
   instructions.fold(0, |brightness, Instruction(action, area)|
-    inside(x, y, area).select(adjust_brightness(brightness, action), brightness))
+    if inside(x, y, area) then adjust_brightness(brightness, action) else brightness)
 
 # Both parts sum a per-cell score over the grid; only the scorer differs.
 row_sum : (List(Instruction), Nat, Nat, (List(Instruction), Nat, Nat) -> Nat) -> Nat

@@ -85,27 +85,26 @@ taken((key, value), rest) -> {key, value, rest}
 # parent costing more comes down into the hole, and the hole goes up to it.
 climb : (List((k, v)), Nat, (k, v)) -> List((k, v)) where k.cmp : (k, k) -> Order
 climb(entries, 0, entry) -> put(entries, 0, entry)
-climb(entries, hole, entry) -> (
+climb(entries, hole, (key, value)) -> (
   above = (hole - 1) / 2
-  parent = entries.get_or(above, entry)
-  climb_past(entries, hole, above, parent, entry)
+  (parent_key, parent) = entries.get_or(above, (key, value))
+  if key < parent_key
+    then climb(put(entries, hole, (parent_key, parent)), above, (key, value))
+    else put(entries, hole, (key, value))
 )
-
-climb_past : (List((k, v)), Nat, Nat, (k, v), (k, v)) -> List((k, v)) where k.cmp : (k, k) -> Order
-climb_past(entries, hole, above, (parent_key, parent), (key, value)) if key < parent_key ->
-  climb(put(entries, hole, (parent_key, parent)), above, (key, value))
-climb_past(entries, hole, _, _, entry) -> put(entries, hole, entry)
 
 # `entries`, the first `count` of them a heap but for `hole`, with `entry`
 # written where it stops sinking from there: the cheaper child, where it
 # costs less, comes up into the hole, and the hole goes down to it.
 sink : (List((k, v)), Nat, (k, v), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
 sink(entries, hole, entry, count) if hole * 2 + 1 >= count -> put(entries, hole, entry)
-sink(entries, hole, entry, count) -> (
+sink(entries, hole, (key, value), count) -> (
   left = hole * 2 + 1
-  child = cheaper(entries, left, count, entry)
-  lower = entries.get_or(child, entry)
-  sink_past(entries, hole, child, lower, entry, count)
+  child = cheaper(entries, left, count, (key, value))
+  (child_key, lower) = entries.get_or(child, (key, value))
+  if child_key < key
+    then sink(put(entries, hole, (child_key, lower)), child, (key, value), count)
+    else put(entries, hole, (key, value))
 )
 
 # The index of the cheaper child: the right one only where there is one and
@@ -117,11 +116,6 @@ cheaper(entries, left, count, fallback) -> (
   (right_key, _) = entries.get_or(right, fallback)
   if right < count & right_key < left_key then right else left
 )
-
-sink_past : (List((k, v)), Nat, Nat, (k, v), (k, v), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
-sink_past(entries, hole, child, (child_key, lower), (key, value), count) if child_key < key ->
-  sink(put(entries, hole, (child_key, lower)), child, (key, value), count)
-sink_past(entries, hole, _, _, entry, _) -> put(entries, hole, entry)
 
 empty_onto : (Heap(k, v), List((k, v))) -> List((k, v)) where k.cmp : (k, k) -> Order
 empty_onto(heap, found) -> drained(heap.pop(), found)

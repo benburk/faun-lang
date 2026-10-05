@@ -107,7 +107,7 @@ place_of(sign, bits) -> bits + sign
 add_unpacked : (Format, Unpacked, Unpacked) -> Nat
 add_unpacked(fmt, NaN, _) -> nan_bits(fmt)
 add_unpacked(fmt, _, NaN) -> nan_bits(fmt)
-add_unpacked(fmt, Inf(s), Inf(t)) -> (s == t).select(inf_bits(fmt, s), nan_bits(fmt))
+add_unpacked(fmt, Inf(s), Inf(t)) -> if s == t then inf_bits(fmt, s) else nan_bits(fmt)
 add_unpacked(fmt, Inf(s), _) -> inf_bits(fmt, s)
 add_unpacked(fmt, _, Inf(t)) -> inf_bits(fmt, t)
 add_unpacked(fmt, Finite(s, ma, ea), Finite(t, mb, eb)) -> (
@@ -371,7 +371,7 @@ root : Nat -> Nat
 root(0) -> 0
 root(n) -> (
   r = 2 * root(n / 4)
-  ((r + 1) * (r + 1) <= n).select(r + 1, r)
+  if (r + 1) * (r + 1) <= n then r + 1 else r
 )
 
 # --- Integers ---
@@ -492,7 +492,7 @@ step : (Nat, Nat, Nat, Nat, Nat, Bool, Nat, Bool, Bool) -> List(Nat)
 step(digit, rest, s, mp, mm, closed, left, False, False) -> [digit, *generate(rest, s, mp, mm, closed, left)]
 step(digit, _, _, _, _, _, _, False, True) -> [digit + 1]
 step(digit, _, _, _, _, _, _, True, False) -> [digit]
-step(digit, rest, s, _, _, _, _, True, True) -> (rest * 2 < s).select([digit], [digit + 1])
+step(digit, rest, s, _, _, _, _, True, True) -> if rest * 2 < s then [digit] else [digit + 1]
 
 # The digits laid out: plain from `0.0001` up to `1.0e16`, with a point
 # always, and otherwise one digit, a point, the rest, and the exponent. The
@@ -509,7 +509,7 @@ layout((digits, k)) -> scientific(digits, k)
 scientific : (List(Nat), Nat) -> List(U8)
 scientific([first, *rest], k) ->
   [digit_byte(first), '.']
-    .extend(rest.is_empty().select("0".to_utf8(), digit_bytes(rest)))
+    .extend(if rest.is_empty() then "0".to_utf8() else digit_bytes(rest))
     .append('e')
     .extend(exponent_text(k))
 scientific([], _) -> []
@@ -558,7 +558,8 @@ precision : (Format, Unpacked, Nat) -> List(U8)
 precision(fmt, Finite(negative, mantissa, field), count) -> (
   wanted = count.max(1)
   (digits, k) = significant(fmt, mantissa, field, wanted)
-  signed(negative, (k >= 997 & k < 1001 + wanted).select(plain(digits, k), exponent_form(digits, k)))
+  form = if k >= 997 & k < 1001 + wanted then plain(digits, k) else exponent_form(digits, k)
+  signed(negative, form)
 )
 precision(fmt, other, _) -> text(fmt, other)
 

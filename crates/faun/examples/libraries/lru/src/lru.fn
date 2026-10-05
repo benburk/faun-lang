@@ -29,11 +29,13 @@ Lru(k, v) : {recent: List((k, v)), room: Nat}.(
   keys(Lru({recent, *})) -> recent.map(|(key, _)| key)
 
   # The value under `key`, and the cache with that use remembered: a hit
-  # moves its entry to the front.
+  # moves its entry to the front, and a miss leaves the order as it was.
   get : (Lru(k, v), k) -> (Result(v, [Missing]), Lru(k, v)) where k.equals : (k, k) -> Bool
   get(Lru({recent, room}), key) -> (
     (found, remaining) = pluck(recent, key)
-    refreshed(found, remaining, key, room)
+    if found is Ok(value)
+      then (found, Lru({recent: [(key, value), *remaining], room}))
+      else (found, Lru({recent: remaining, room}))
   )
 
   # Insert or refresh: the entry goes to the front, any older entry under the
@@ -54,12 +56,6 @@ pluck([entry, *rest], wanted) -> (
   (found, remaining) = pluck(rest, wanted)
   (found, [entry, *remaining])
 )
-
-# A hit re-enters at the front; a miss leaves the order exactly as it was.
-refreshed : (Result(v, [Missing]), List((k, v)), k, Nat) -> (Result(v, [Missing]), Lru(k, v))
-refreshed(Ok(value), remaining, key, room) ->
-  (Ok(value), Lru({recent: [(key, value), *remaining], room}))
-refreshed(Err(Missing), remaining, _, room) -> (Err(Missing), Lru({recent: remaining, room}))
 
 # A fresh entry is readable back.
 expect (
