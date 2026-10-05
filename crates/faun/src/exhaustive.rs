@@ -78,6 +78,16 @@ pub(crate) fn exhaustive(
 /// written over them.
 type Declaration<'a> = (&'a [Symbol], HashMap<Symbol, &'a [h::Type]>);
 
+/// Whether `pattern` matches every value of its type.
+fn takes_anything(pattern: &t::Pattern) -> bool {
+    match pattern {
+        t::Pattern::Wild | t::Pattern::Bind(_) => true,
+        t::Pattern::Tuple(members) => members.iter().all(takes_anything),
+        t::Pattern::Record(fields, _) => fields.iter().all(|(_, field)| takes_anything(field)),
+        _ => false,
+    }
+}
+
 /// A pattern as coverage reads it.
 #[derive(Clone, Debug)]
 enum Pattern {
@@ -188,6 +198,18 @@ impl<'a> Coverage<'a> {
                         self.prelude.list_cons,
                         vec![self.pattern(element), tail],
                     );
+                }
+                tail
+            }
+            // Where nothing in it can fail, a list ending in `m` elements is
+            // any list of `m` or more; otherwise it covers nothing whole.
+            t::Pattern::Ending(front, last) => {
+                if !takes_anything(front) || !last.iter().all(takes_anything) {
+                    return Pattern::Range;
+                }
+                let mut tail = Pattern::Wild;
+                for _ in last {
+                    tail = Pattern::Constructor(self.prelude.list_cons, vec![Pattern::Wild, tail]);
                 }
                 tail
             }

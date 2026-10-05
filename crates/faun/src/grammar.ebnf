@@ -108,11 +108,13 @@ exprs             = expr [ "," [ exprs ] ] ;
    and `)` one value grouped. *)
 parenthesized     = expr [ "," [ exprs ] | "=" expr NEWLINE statements | NEWLINE statements ] ;
 statements        = expr [ "=" expr NEWLINE statements | NEWLINE statements ] ;
+(* A list's rest may have elements after it, which its end matches:
+   `[*front, last]`. *)
 elements          = expr [ "," [ elements ] ]
-                  | rest ;
+                  | rest [ "," [ exprs ] ] ;
 fields            = NAME [ ":" expr ] [ "," [ fields ] ]
-                  | rest ;
-rest              = "*" [ expr ] [ "," ] ;
+                  | rest [ "," ] ;
+rest              = "*" [ expr ] ;
 
 (* A range's end may be negated, or `_` to leave that side open. Its start
    is negated as an operand is, `-3..5`, and the parser holds the `-` to it. *)

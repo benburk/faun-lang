@@ -340,6 +340,37 @@ f(_..-1, -3..5, 'a'.._, -2..-1, [0x80..0xbf, *r]) -> 1
     (number)))
 
 ========================================
+A list's end
+========================================
+
+f([*front, last], [*, a3, a2, a1], [a, b, *middle, y, z]) -> 1
+
+---
+
+(source_file
+  (clause
+    (call_expression
+      (identifier)
+      (arguments
+        (list
+          (rest
+            (identifier))
+          (identifier))
+        (list
+          (rest)
+          (identifier)
+          (identifier)
+          (identifier))
+        (list
+          (identifier)
+          (identifier)
+          (rest
+            (identifier))
+          (identifier)
+          (identifier))))
+    (number)))
+
+========================================
 Numerals and characters
 ========================================
 

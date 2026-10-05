@@ -1071,7 +1071,10 @@ impl Parser<'_> {
         let open = self.bump();
         let (elements, trailing) =
             self.separated(false, begins_expr, "an expression", Self::expr)?;
-        let rest = self.rest(elements.is_empty() || trailing)?;
+        let rest = match self.rest(elements.is_empty() || trailing)? {
+            Some(rest) if self.eat(Kind::Comma).is_some() => Some(self.ending(rest)?),
+            rest => rest,
+        };
         let close = self.expect(Kind::RBracket, "`]`")?;
         Ok(Expr {
             span: open.span().through(close.span()),
@@ -1095,6 +1098,9 @@ impl Parser<'_> {
             },
         )?;
         let base = self.rest(fields.is_empty() || trailing)?;
+        if base.is_some() {
+            self.eat(Kind::Comma);
+        }
         let span = open
             .span()
             .through(self.expect(Kind::RBrace, "`}`")?.span());
@@ -1108,7 +1114,7 @@ impl Parser<'_> {
     }
 
     /// `rest`, where one may stand: `*rest`, or `*` alone, a pattern's
-    /// rest it does not name, and perhaps a comma after it.
+    /// rest it does not name.
     fn rest(&mut self, may: bool) -> Parsed<Option<Expr>> {
         if !may {
             return Ok(None);
@@ -1122,8 +1128,20 @@ impl Parser<'_> {
         } else {
             atom(star, ExprKind::Wild)
         };
-        self.eat(Kind::Comma);
         Ok(Some(rest))
+    }
+
+    /// A list's rest and the elements after its comma, if any: `*front, a,
+    /// b` is a list ending in `a` and `b`.
+    fn ending(&mut self, front: Expr) -> Parsed<Expr> {
+        let (last, _) = self.separated(false, begins_expr, "an expression", Self::expr)?;
+        let Some(end) = last.last() else {
+            return Ok(front);
+        };
+        Ok(Expr {
+            span: front.span.through(end.span),
+            kind: ExprKind::Ending(Box::new(front), last),
+        })
     }
 }
 

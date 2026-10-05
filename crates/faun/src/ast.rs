@@ -365,6 +365,13 @@ pub enum Pattern {
         elements: Vec<Self>,
         rest: Option<Box<Self>>,
     },
+    /// A list's rest with elements after it, `*front, a, b`: a list ending
+    /// in `a` and `b`, what comes before them matched by `front`.
+    Ending {
+        span: Span,
+        front: Box<Self>,
+        last: Vec<Self>,
+    },
     /// `{x}`, or with `*`, `{x, *}`: naming some fields and ignoring the rest.
     Record {
         span: Span,
@@ -398,6 +405,7 @@ impl Pattern {
             | Self::Number { span, .. }
             | Self::Range { span, .. }
             | Self::List { span, .. }
+            | Self::Ending { span, .. }
             | Self::Record { span, .. }
             | Self::Tuple { span, .. }
             | Self::String { span, .. }
@@ -444,6 +452,9 @@ pub enum ExprKind {
     /// `1..9`, or `_..-1`: as `Wild`, a pattern's alone, which never leaves
     /// the parser. An end written `_` is open.
     Range(Option<Bound>, Option<Bound>),
+    /// `*front, a, b` as a list's rest: a list ending in `a` and `b`, what
+    /// comes before them `front`. As `Wild`, a pattern's alone.
+    Ending(Box<Expr>, Vec<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

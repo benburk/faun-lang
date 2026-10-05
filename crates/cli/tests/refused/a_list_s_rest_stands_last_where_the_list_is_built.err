@@ -1,0 +1,8 @@
+error: a list's rest stands last where the list is built
+ --> a_list_s_rest_stands_last_where_the_list_is_built.fn:6:26
+  |
+6 |   host.exit!(U8.of_nat([*xs, 3].len()))
+  |                          ^^^^^
+  |
+  = note: `[*front, last]` only takes a list apart
+  = help: build it with `front.append(last)`

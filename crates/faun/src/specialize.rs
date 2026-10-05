@@ -182,6 +182,22 @@ pub(crate) enum Pattern {
     /// A string, which only a clause's guard can test for; see
     /// [`Specializer::tested`].
     String,
+    /// A list's end, which only a clause takes apart, as a [`Split`]; see
+    /// [`Specializer::tested`].
+    Ending,
+    Split(Box<Split>),
+}
+
+/// A list's end, `[*front, a, b]`, as a clause takes it apart: the list
+/// split before its last `last.len()` elements, through its type's `len`,
+/// `take` and `drop` at this element type, each side matched as written.
+#[derive(Clone, Debug)]
+pub(crate) struct Split {
+    pub(crate) front: Pattern,
+    pub(crate) last: Vec<Pattern>,
+    pub(crate) len: FunctionKey,
+    pub(crate) take: FunctionKey,
+    pub(crate) drop: FunctionKey,
 }
 
 #[derive(Clone, Debug)]
@@ -1100,6 +1116,29 @@ impl<'a> Specializer<'a> {
                         .map(Box::new),
                 )
             }
+            (t::Pattern::Ending(front, last), Type::Named(_, arguments))
+                if arguments.len() == 1 =>
+            {
+                let element = arguments[0].clone();
+                let nat = Type::Named(self.prelude.nat, Vec::new());
+                let len = self.method_key(self.prelude.list_len, ty, &[], &nat)?;
+                let take =
+                    self.method_key(self.prelude.list_take, ty, std::slice::from_ref(&nat), ty)?;
+                let drop = self.method_key(self.prelude.list_drop, ty, &[nat], ty)?;
+                for key in [&len, &take, &drop] {
+                    self.request(key.clone());
+                }
+                Pattern::Split(Box::new(Split {
+                    front: self.tested((module, span), front, ty, (next, tests))?,
+                    last: last
+                        .iter()
+                        .map(|item| self.tested((module, span), item, &element, (next, tests)))
+                        .collect::<Result<_, _>>()?,
+                    len,
+                    take,
+                    drop,
+                }))
+            }
             (t::Pattern::Record(fields, _), Type::Record(types)) => Pattern::Record(
                 fields
                     .iter()
@@ -1733,6 +1772,7 @@ fn convert_pattern(pattern: &t::Pattern) -> Pattern {
             negative: *negative,
         },
         t::Pattern::Range(..) => Pattern::Range,
+        t::Pattern::Ending(..) => Pattern::Ending,
         t::Pattern::List(elements, rest) => Pattern::List(
             elements.iter().map(convert).collect(),
             rest.as_deref().map(convert).map(Box::new),

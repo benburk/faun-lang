@@ -2204,6 +2204,15 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
+            h::Pattern::Ending(front, last) => {
+                let element = self.infer.fresh();
+                self.unify_pattern_at(module, span, expected, &self.list_type(element.clone()))?;
+                self.pattern(module, front, expected, locals, span)?;
+                for pattern in last {
+                    self.pattern(module, pattern, &element, locals, span)?;
+                }
+                Ok(())
+            }
             // `{x, *}` names some fields and takes a record with any others.
             h::Pattern::Record(fields, open) => {
                 let field_types: Vec<_> = fields
@@ -4856,6 +4865,12 @@ fn collect_pattern_locals(pattern: &h::Pattern, output: &mut Vec<h::LocalId>) {
                 collect_pattern_locals(rest, output);
             }
         }
+        h::Pattern::Ending(front, last) => {
+            collect_pattern_locals(front, output);
+            for element in last {
+                collect_pattern_locals(element, output);
+            }
+        }
         h::Pattern::Record(fields, _) => {
             for (_, pattern) in fields {
                 collect_pattern_locals(pattern, output);
@@ -4875,12 +4890,13 @@ fn collect_pattern_locals(pattern: &h::Pattern, output: &mut Vec<h::LocalId>) {
     }
 }
 
-/// The test a pattern makes that only a clause can, `range` or `string`,
-/// wherever in it one is.
+/// The test a pattern makes that only a clause can, `range`, `string` or
+/// `list's end`, wherever in it one is.
 fn test_in(pattern: &h::Pattern) -> Option<&'static str> {
     match pattern {
         h::Pattern::Range(..) => Some("range"),
         h::Pattern::String(_) => Some("string"),
+        h::Pattern::Ending(..) => Some("list's end"),
         h::Pattern::Constructor(_, fields)
         | h::Pattern::Tag(_, fields)
         | h::Pattern::Dual(_, fields)
@@ -5028,7 +5044,7 @@ mod tests {
             self.write("u8.fn", "export {U8}\nU8 : Nat\n");
             self.write(
                 "list.fn",
-                "export {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
+                "export {List.*}\nList(a) : [Nil, Cons(a, List(a))].(len : List(a) -> Nat\nlen(_) -> 0\ntake : (List(a), Nat) -> List(a)\ntake(values, _) -> values\ndrop : (List(a), Nat) -> List(a)\ndrop(values, _) -> values)\n",
             );
             self.write(
                 "str.fn",

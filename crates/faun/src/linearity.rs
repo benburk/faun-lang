@@ -405,6 +405,17 @@ impl<'a> Facts<'a> {
                     .chain(rest.as_deref().map(|rest| (rest, ty.clone())))
                     .collect()
             }
+            (Pattern::Split(split), Type::Named(_, arguments)) => {
+                let element = arguments.first().cloned();
+                std::iter::once((&split.front, ty.clone()))
+                    .chain(
+                        split
+                            .last
+                            .iter()
+                            .filter_map(|pattern| Some((pattern, element.clone()?))),
+                    )
+                    .collect()
+            }
             _ => Vec::new(),
         }
     }

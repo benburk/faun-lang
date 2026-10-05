@@ -1,0 +1,24 @@
+# A list's end, matched from the back: its length and the slices before
+# and after the last few elements, read where the list lies, and a list
+# too short for one end tried against the next. A byte taken from the end
+# stays a byte: the ways no list takes answer nothing, not any number.
+
+import std.host {Host}
+
+ends : List(Nat) -> Nat
+ends([*, 0]) -> 9
+ends([]) -> 0
+ends([only]) -> only
+ends([first, *middle, last]) -> first + middle.len() + last
+
+last_byte : List(U8) -> U8
+last_byte([]) -> 0
+last_byte([*_, last]) -> last
+
+main! : Host -> []
+main!(host) -> (
+  n = host.args.len()
+  ended = ends([n, 0])
+  total = ends([n, n, 2, n]) + ended - 9 + ends([])
+  host.exit!(last_byte([U8.of_nat(n), U8.of_nat(total)]))
+)

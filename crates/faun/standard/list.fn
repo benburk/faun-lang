@@ -122,8 +122,7 @@ List(a) : [Nil, Cons(a, List(a))].(
 
   last : List(a) -> Result(a, [Empty])
   last([]) -> Err(Empty)
-  last([only]) -> Ok(only)
-  last([_, *tail]) -> last(tail)
+  last([*_, only]) -> Ok(only)
 
   # The element at `index`, counting from nought.
   get : (List(a), Nat) -> Result(a, [OutOfBounds])

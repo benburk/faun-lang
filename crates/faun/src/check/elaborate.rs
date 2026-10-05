@@ -139,6 +139,10 @@ impl Elaborator<'_> {
                 elements.into_iter().map(|p| self.pattern(p)).collect(),
                 rest.map(|p| Box::new(self.pattern(*p))),
             ),
+            h::Pattern::Ending(front, last) => t::Pattern::Ending(
+                Box::new(self.pattern(*front)),
+                last.into_iter().map(|p| self.pattern(p)).collect(),
+            ),
             h::Pattern::Record(fields, open) => t::Pattern::Record(
                 fields
                     .into_iter()

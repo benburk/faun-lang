@@ -15,7 +15,7 @@ use crate::declarations::Data;
 use crate::diagnostic::LowerError;
 use crate::first_order::{self as d, Expr, ExprKind};
 use crate::hir::LocalId;
-use crate::specialize::{FunctionKey, Pattern, Type};
+use crate::specialize::{FunctionKey, Pattern, Split, Type};
 use crate::{Symbol, Symbols};
 
 #[derive(Clone, Debug)]
@@ -81,6 +81,7 @@ pub(crate) fn compile(
         data: &program.data,
         prelude,
         symbols,
+        run_out: RunOut::Refused,
     };
     let functions = program
         .functions
@@ -180,15 +181,33 @@ pub(crate) enum Decision {
         equal: Box<Self>,
         otherwise: Box<Self>,
     },
+    /// A list split before its last `count` elements, or before all of them
+    /// where it holds fewer: `front` is `take(subject, c)` and `back` is
+    /// `drop(subject, c)`, where `c` is `len(drop(subject, count))`.
+    Split {
+        subject: Value,
+        count: usize,
+        len: FunctionKey,
+        take: FunctionKey,
+        drop: FunctionKey,
+        front: Value,
+        back: Value,
+        decision: Box<Self>,
+    },
+    /// A way no value takes, below a split of `subject`, of type `ty`; see
+    /// [`RunOut::Unreachable`].
+    Unreachable { subject: Value, ty: Type },
 }
 
 impl Decision {
     pub(crate) fn tests_numerals(&self) -> bool {
         match self {
-            Self::Body { .. } => false,
+            Self::Body { .. } | Self::Unreachable { .. } => false,
             Self::Numeral { .. } => true,
             Self::Match { arms, .. } => arms.iter().any(|arm| arm.decision.tests_numerals()),
-            Self::Record { decision, .. } => decision.tests_numerals(),
+            Self::Record { decision, .. } | Self::Split { decision, .. } => {
+                decision.tests_numerals()
+            }
             Self::Guard {
                 otherwise, answer, ..
             } => otherwise.tests_numerals() || answer.tests_numerals(),
@@ -207,10 +226,25 @@ pub(crate) struct DecisionArm {
 /// tested against. See [`Compiler::numeral_column`].
 const PEELED_NUMERALS: u8 = 8;
 
+#[derive(Clone)]
 struct Compiler<'a> {
     data: &'a HashMap<Symbol, Data>,
     prelude: &'a PreludeIds,
     symbols: &'a Symbols,
+    run_out: RunOut,
+}
+
+/// What a plan makes of a way no row is left for.
+#[derive(Clone)]
+enum RunOut {
+    /// Some value matches no clause, which is refused.
+    Refused,
+    /// No value goes this way. Below a split of this list, the list and its
+    /// end are both taken apart, and what one decides the other may test
+    /// again: a list matched as `Cons` has an end that is not `Nil`. The
+    /// clauses were found to cover every value before planning, so a way
+    /// they leave is one of those.
+    Unreachable(Subject),
 }
 
 impl Compiler<'_> {
@@ -307,10 +341,16 @@ impl Compiler<'_> {
         subjects: &[Subject],
         next: &mut u32,
     ) -> Result<Decision, LowerError> {
-        if rows.is_empty() {
-            return Err(error("function clauses are not exhaustive"));
-        }
-        let mut first = rows[0].clone();
+        let Some(first) = rows.first() else {
+            return match &self.run_out {
+                RunOut::Refused => Err(error("function clauses are not exhaustive")),
+                RunOut::Unreachable(subject) => Ok(Decision::Unreachable {
+                    subject: subject.value,
+                    ty: subject.ty.clone(),
+                }),
+            };
+        };
+        let mut first = first.clone();
         if first.patterns.iter().all(irrefutable) {
             for (pattern, subject) in first.patterns.iter().zip(subjects) {
                 if let Pattern::Bind(local) = pattern {
@@ -358,6 +398,9 @@ impl Compiler<'_> {
             .map(|(column, _)| column)
             .expect("a refutable pattern exists");
         let subject = &subjects[column];
+        if let Some(split) = rows.iter().find_map(|row| ending(&row.patterns[column])) {
+            return self.split(rows, subjects, column, split.clone(), next);
+        }
         if let Some(member_types) = subject.ty.members() {
             let fields: Vec<_> = member_types
                 .iter()
@@ -479,6 +522,62 @@ impl Compiler<'_> {
         })
     }
 
+    /// Split the list in `column` as `split` does, the front and back two
+    /// columns more. Each row ending its list in as many elements matches
+    /// them there, taking anything in the list itself; every other row is
+    /// left as it was, taking anything in the two.
+    fn split(
+        &self,
+        rows: &[Row],
+        subjects: &[Subject],
+        column: usize,
+        split: Split,
+        next: &mut u32,
+    ) -> Result<Decision, LowerError> {
+        let subject = &subjects[column];
+        let count = split.last.len();
+        let mut fresh = || {
+            let value = Value(*next);
+            *next = next.checked_add(1).expect("fewer than 2^32 plan values");
+            value
+        };
+        let (front, back) = (fresh(), fresh());
+        let mut specialized = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut row = row.clone();
+            let (front, back) = match ending(&row.patterns[column]) {
+                Some(split) if split.last.len() == count => {
+                    let split = split.clone();
+                    row.patterns[column] = Pattern::Wild;
+                    (split.front, Pattern::List(split.last, None))
+                }
+                _ => (Pattern::Wild, Pattern::Wild),
+            };
+            row.patterns.push(front);
+            row.patterns.push(back);
+            specialized.push(row);
+        }
+        let mut split_subjects = subjects.to_vec();
+        split_subjects.extend([front, back].map(|value| Subject {
+            value,
+            ty: subject.ty.clone(),
+        }));
+        let below = Self {
+            run_out: RunOut::Unreachable(subject.clone()),
+            ..self.clone()
+        };
+        Ok(Decision::Split {
+            subject: subject.value,
+            count,
+            len: split.len,
+            take: split.take,
+            drop: split.drop,
+            front,
+            back,
+            decision: Box::new(below.plan(&specialized, &split_subjects, next)?),
+        })
+    }
+
     /// The numeral a column of naturals is first tested for, where every
     /// pattern in it is a numeral or takes anything, and some numeral is
     /// past [`PEELED_NUMERALS`]: then each is one test.
@@ -528,6 +627,7 @@ impl Compiler<'_> {
             Pattern::String => Err(error(
                 "a string pattern is a test, which only a clause's guard makes",
             )),
+            Pattern::Ending => Err(error("a list's end is taken apart only by a clause")),
             Pattern::List(elements, rest) => {
                 let mut tail = rest.map_or(
                     Pattern::Constructor(self.prelude.list_nil, Vec::new()),
@@ -757,6 +857,16 @@ fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> 
     }
 }
 
+/// The list's end `pattern` takes apart, where it is one: alone, or as the
+/// rest of a list naming no element before it.
+fn ending(pattern: &Pattern) -> Option<&Split> {
+    match pattern {
+        Pattern::Split(split) => Some(split),
+        Pattern::List(elements, Some(rest)) if elements.is_empty() => ending(rest),
+        _ => None,
+    }
+}
+
 const fn irrefutable(pattern: &Pattern) -> bool {
     matches!(pattern, Pattern::Wild | Pattern::Bind(_))
 }
@@ -813,6 +923,7 @@ mod tests {
             data: &checked.resolved.program.data,
             prelude,
             symbols: &checked.resolved.symbols,
+            run_out: RunOut::Refused,
         };
         let subjects = [Subject {
             value: Value(0),
@@ -862,6 +973,7 @@ mod tests {
             data: &checked.resolved.program.data,
             prelude,
             symbols: &checked.resolved.symbols,
+            run_out: RunOut::Refused,
         };
         let nat = Type::Named(prelude.nat, Vec::new());
         let record = Type::Record(vec![(a, nat.clone()), (b, nat)]);

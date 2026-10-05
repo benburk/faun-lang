@@ -585,6 +585,11 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
                 .map(|rest| pattern(*rest, source).map(Box::new))
                 .transpose()?,
         }),
+        ExprKind::Ending(front, last) => Ok(Pattern::Ending {
+            span,
+            front: Box::new(pattern(*front, source)?),
+            last: patterns(last, source)?,
+        }),
         ExprKind::Record(fields) => record(span, fields, false, source),
         ExprKind::Update(fields, base) => {
             if !matches!(base.kind, ExprKind::Wild) {
@@ -676,6 +681,12 @@ fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
     match &expr.kind {
         ExprKind::Wild => Err(error(expr.span, "`_` stands only in a pattern")),
         ExprKind::Range(..) => Err(error(expr.span, "a range stands only in a pattern")),
+        ExprKind::Ending(..) => Err(error(
+            expr.span,
+            "a list's rest stands last where the list is built",
+        )
+        .note("`[*front, last]` only takes a list apart")
+        .help("build it with `front.append(last)`")),
         ExprKind::Name(_) | ExprKind::Number(_) => Ok(()),
         ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
             StringPart::Text(_) => Ok(()),
@@ -766,6 +777,7 @@ fn passed_on(expr: &Expr) -> Option<Span> {
             StringPart::Splice(splice, _) => passed_on(splice),
         }),
         ExprKind::List(elements, rest) => each(elements.iter().chain(rest.as_deref())),
+        ExprKind::Ending(front, last) => each(std::iter::once(&**front).chain(last)),
         ExprKind::Record(fields) => each(fields.iter().map(|(_, value)| value)),
         ExprKind::Update(fields, base) => {
             each(fields.iter().map(|(_, value)| value).chain([&**base]))

@@ -71,6 +71,11 @@ struct Lowerer<'a> {
     /// rebuilding it answers for.
     widenings: BTreeSet<(Type, Type)>,
     widen_ids: HashMap<(Type, Type), FnId>,
+    /// Each list type a split takes apart where the plan has a way no value
+    /// takes: one function for each, which calls itself and answers the
+    /// uninhabited `[]`, so the tier below knows it never comes back.
+    unreachables: BTreeSet<Type>,
+    unreachable_ids: HashMap<Type, FnId>,
     /// Whether two naturals are equal, written once where a numeral is
     /// matched, in the shape Barb recognizes as that comparison.
     numeral_equals: Option<FnId>,
@@ -96,6 +101,8 @@ impl<'a> Lowerer<'a> {
             function_ids: HashMap::new(),
             widenings: BTreeSet::new(),
             widen_ids: HashMap::new(),
+            unreachables: BTreeSet::new(),
+            unreachable_ids: HashMap::new(),
             numeral_equals: None,
             output: barb::Program::default(),
         };
@@ -109,6 +116,7 @@ impl<'a> Lowerer<'a> {
         self.declare_functions();
         self.define_functions();
         self.define_widenings()?;
+        self.define_unreachables();
         if let Some(routines) = self.routines
             && routines.get("exit!").is_none()
         {
@@ -216,6 +224,14 @@ impl<'a> Lowerer<'a> {
                 self.collect_type(&Type::Named(self.prelude.bool_, Vec::new()))?;
                 self.collect_decision(equal, answer)?;
                 self.collect_decision(otherwise, answer)?;
+            }
+            Decision::Split { decision, .. } => {
+                self.collect_type(&Type::Named(self.prelude.nat, Vec::new()))?;
+                self.collect_decision(decision, answer)?;
+            }
+            Decision::Unreachable { ty, .. } => {
+                self.collect_type(&Type::empty())?;
+                self.unreachables.insert(ty.clone());
             }
         }
         Ok(())
@@ -517,6 +533,25 @@ impl<'a> Lowerer<'a> {
                 .declare("widen", &[self.type_ids[from]], self.type_ids[to]);
             self.widen_ids.insert((from.clone(), to.clone()), id);
         }
+        for list in &self.unreachables {
+            let id = self.output.declare(
+                "unreachable",
+                &[self.type_ids[list]],
+                self.type_ids[&Type::empty()],
+            );
+            self.unreachable_ids.insert(list.clone(), id);
+        }
+    }
+
+    /// Each function a way no value takes calls: itself, so it never
+    /// answers, and as `[]`, so its call may answer an arm of any type. It
+    /// takes the list split above that way, which is not known where the
+    /// way is left in, so folding never runs it.
+    fn define_unreachables(&mut self) {
+        for id in self.unreachable_ids.values().copied() {
+            self.output
+                .define(id, |builder, parameters| builder.call(id, parameters));
+        }
     }
 
     /// Each widening rebuilds a value in the wider type: the constructor it
@@ -533,6 +568,7 @@ impl<'a> Lowerer<'a> {
                 record_wrappers: &self.record_wrappers,
                 function_ids: &self.function_ids,
                 widen_ids: &self.widen_ids,
+                unreachable_ids: &self.unreachable_ids,
                 prelude: self.prelude,
                 numeral_equals: self.numeral_equals,
                 answer: &to,
@@ -592,6 +628,7 @@ impl<'a> Lowerer<'a> {
                 record_wrappers: &self.record_wrappers,
                 function_ids: &self.function_ids,
                 widen_ids: &self.widen_ids,
+                unreachable_ids: &self.unreachable_ids,
                 prelude: self.prelude,
                 numeral_equals: self.numeral_equals,
                 answer,
@@ -640,6 +677,7 @@ struct EmitContext<'a> {
     record_wrappers: &'a HashMap<Type, Type>,
     function_ids: &'a HashMap<FunctionKey, FnId>,
     widen_ids: &'a HashMap<(Type, Type), FnId>,
+    unreachable_ids: &'a HashMap<Type, FnId>,
     prelude: &'a PreludeIds,
     numeral_equals: Option<FnId>,
     /// What the function or lambda being emitted answers, which a `?` in
@@ -793,6 +831,40 @@ fn emit_decision(
                     }
                 },
             )
+        }
+        Decision::Split {
+            subject,
+            count,
+            len,
+            take,
+            drop,
+            front,
+            back,
+            decision,
+        } => {
+            let nat_ty = Type::Named(context.prelude.nat, Vec::new());
+            let count = builder
+                .natural(
+                    context.type_ids[&nat_ty],
+                    &num_bigint::BigUint::from(*count),
+                )
+                .expect("Nat has a natural's shape");
+            let count = builder.known(count);
+            let list = values[subject];
+            let (len, take, drop) = (
+                context.function_ids[len],
+                context.function_ids[take],
+                context.function_ids[drop],
+            );
+            let beyond = builder.call(drop, &[list, count]);
+            let kept = builder.call(len, &[beyond]);
+            let mut nested = values.clone();
+            nested.insert(*front, builder.call(take, &[list, kept]));
+            nested.insert(*back, builder.call(drop, &[list, kept]));
+            emit_decision(context, builder, decision, &nested)
+        }
+        Decision::Unreachable { subject, ty } => {
+            builder.call(context.unreachable_ids[ty], &[values[subject]])
         }
     }
 }

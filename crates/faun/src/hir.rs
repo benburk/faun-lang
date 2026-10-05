@@ -196,6 +196,9 @@ pub enum Pattern<D = Dual> {
     /// `lo..hi`, inclusive, either end open where it is `None`.
     Range(Option<Bound>, Option<Bound>),
     List(Vec<Self>, Option<Box<Self>>),
+    /// A list ending in the elements of the second, what comes before them
+    /// matched by the first: a list's rest, `[*front, last]`.
+    Ending(Box<Self>, Vec<Self>),
     /// Named fields, and whether the pattern ignores the others.
     Record(Vec<(Symbol, Self)>, bool),
     Tuple(Vec<Self>),
@@ -228,6 +231,9 @@ impl<D: Clone> Pattern<D> {
                 elements.iter().any(Self::has_alternatives)
                     || rest.as_deref().is_some_and(Self::has_alternatives)
             }
+            Self::Ending(front, last) => {
+                front.has_alternatives() || last.iter().any(Self::has_alternatives)
+            }
             Self::Record(fields, _) => fields.iter().any(|(_, field)| field.has_alternatives()),
             Self::Wild
             | Self::Bind(_)
@@ -257,6 +263,7 @@ impl<D: Clone> Pattern<D> {
                 .collect(),
             Self::Tuple(members) => Self::rows(members).into_iter().map(Self::Tuple).collect(),
             Self::List(elements, rest) => list_choices(elements, rest.as_deref()),
+            Self::Ending(front, last) => ending_choices(front, last),
             Self::Record(fields, open) => {
                 let patterns: Vec<Self> = fields.iter().map(|(_, field)| field.clone()).collect();
                 Self::rows(&patterns)
@@ -289,6 +296,20 @@ fn list_choices<D: Clone>(elements: &[Pattern<D>], rest: Option<&Pattern<D>>) ->
             rests
                 .iter()
                 .map(move |rest| Pattern::List(row.clone(), rest.clone().map(Box::new)))
+        })
+        .collect()
+}
+
+/// [`Pattern::choices`] of a list's end: each choice of its front, with its
+/// last elements' rows.
+fn ending_choices<D: Clone>(front: &Pattern<D>, last: &[Pattern<D>]) -> Vec<Pattern<D>> {
+    let rows = Pattern::rows(last);
+    front
+        .choices()
+        .into_iter()
+        .flat_map(|front| {
+            rows.iter()
+                .map(move |row| Pattern::Ending(Box::new(front.clone()), row.clone()))
         })
         .collect()
 }

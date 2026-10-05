@@ -39,6 +39,10 @@ pub struct PreludeIds {
     pub u8_constructor: Symbol,
     pub list_nil: Symbol,
     pub list_cons: Symbol,
+    /// What a clause splits a list with to match its end, `[*front, last]`.
+    pub list_len: Symbol,
+    pub list_take: Symbol,
+    pub list_drop: Symbol,
     /// A comparison's answer, and the fixed view of it each ordering
     /// operator reads: `<` is `lt`, `<=` is `le`, and so on.
     pub order: Symbol,
@@ -190,6 +194,9 @@ impl PreludeIds {
             u8_constructor: constructor(program, &u8_, "U8", "U8")?,
             list_nil: constructor(program, &list, "List", "Nil")?,
             list_cons: constructor(program, &list, "List", "Cons")?,
+            list_len: method(program, &list, "List", "len")?,
+            list_take: method(program, &list, "List", "take")?,
+            list_drop: method(program, &list, "List", "drop")?,
             order: order.canonical,
             order_lt: method(program, &order, "Order", "lt")?,
             order_le: method(program, &order, "Order", "le")?,
@@ -502,7 +509,7 @@ mod tests {
         fixture.write("u8.fn", "export {U8}\nU8 : Nat\n");
         fixture.write(
             "list.fn",
-            "export {List.*}\nList(a) : [Nil, Cons(a, List(a))]\n",
+            "export {List.*}\nList(a) : [Nil, Cons(a, List(a))].(len : List(a) -> Nat\nlen(_) -> 0\ntake : (List(a), Nat) -> List(a)\ntake(values, _) -> values\ndrop : (List(a), Nat) -> List(a)\ndrop(values, _) -> values)\n",
         );
         fixture.write(
             "str.fn",

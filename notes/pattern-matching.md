@@ -31,7 +31,7 @@ it are [conditions](proposals/drafts/conditions.md),
   rest, records open or closed, tuples, a repeated name as equality.
 - Or-patterns everywhere, not only in a clause's parameters.
 - The whole and its parts, `@` or `as`. Missing.
-- A list's end, `[*init, last]`: a rest stands only last today. Missing.
+- A list's end, `[*init, last]`: elements after a rest, in clauses. Built.
 - Against a name in scope: guard, pin, or refused shadowing. Missing, and
   a trap.
 
@@ -89,7 +89,7 @@ lean (design E below). Built, planned, or a gap.
 - **Grouped cases:** `Red | Orange -> warm`. Built in clauses; planned in
   arms and after `is`.
 - **Two parts equal:** `same([a, a])`. Built.
-- **The last element:** `[*init, last]`. A gap.
+- **The last element:** `[*init, last]`. Built, in clauses.
 - **The whole and its parts:** `node @ Leaf(x)`. A gap.
 - **Equal to a name in scope:** a guard, `x is n if n == limit`. A trap,
   since `x is limit` binds.
@@ -111,6 +111,7 @@ clause; a binding's and a lambda's must always match.
 | Range         | `0..9`, `_..-1`       | clauses only: a test        |
 | String        | `"get"`               | clauses only: a test        |
 | List          | `[a, b, *rest]`, `[]` | rest binds the tail         |
+| List's end    | `[*init, a, b]`       | clauses only: a split       |
 | Record        | `{x, y: p}`, `{x, *}` | `*` leaves the other fields |
 | Tuple         | `(a, b)`              |                             |
 | Or            | `A(x) \| B(x)`        | clauses only; same names    |
@@ -458,7 +459,6 @@ way; the style is the first, unless the condition binds for what follows.
 - Whether E is the design: `is`, `if` guards, and `if` lines leaving where
   their condition holds or fails.
 - `@` or `as` for the whole and its parts, if either.
-- `[*init, last]`: a rest anywhere in a list, or only last.
 - Whether shadowing in a test is refused, pinned or left to a guard.
 - Whether or-patterns need parentheses after `is`, or `or` becomes a word.
 - Whether clauses and `when` are both kept, and which takes a parameter

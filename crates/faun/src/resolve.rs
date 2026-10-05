@@ -1411,6 +1411,11 @@ fn standing_in(
                 standing_in(element, source, scope, symbols, found);
             }
         }
+        s::Pattern::Ending { front, last, .. } => {
+            for element in std::iter::once(&**front).chain(last) {
+                standing_in(element, source, scope, symbols, found);
+            }
+        }
         s::Pattern::Record { fields, .. } => {
             for (_, field) in fields {
                 standing_in(field, source, scope, symbols, found);
@@ -1742,6 +1747,12 @@ impl ClauseResolver<'_> {
                     .map(|rest| self.pattern(rest).map(Box::new))
                     .transpose()?,
             )),
+            s::Pattern::Ending { front, last, .. } => Ok(h::Pattern::Ending(
+                Box::new(self.pattern(front)?),
+                last.iter()
+                    .map(|element| self.pattern(element))
+                    .collect::<Result<_, _>>()?,
+            )),
             s::Pattern::String { parts, .. } => Ok(h::Pattern::String(
                 parts
                     .iter()
@@ -1940,7 +1951,7 @@ impl ClauseResolver<'_> {
                 Box::new(self.expr(yes)?),
                 Box::new(self.expr(no)?),
             ),
-            s::ExprKind::Wild | s::ExprKind::Range(..) => {
+            s::ExprKind::Wild | s::ExprKind::Range(..) | s::ExprKind::Ending(..) => {
                 unreachable!("the parser refuses a pattern's form outside a pattern")
             }
             s::ExprKind::Tuple(members) => h::ExprKind::Tuple(

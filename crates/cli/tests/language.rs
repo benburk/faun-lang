@@ -861,6 +861,81 @@ const RUNNING: &[(&str, &str, u32)] = &[
          )",
         2 + 70 + 60,
     ),
+    (
+        "a list's end is matched from the back, what comes before it bound whole",
+        "import std.host {Host}
+
+         ends : List(Nat) -> Nat
+         ends([]) -> 0
+         ends([only]) -> only
+         ends([*front, a, b]) -> front.len() * 50 + a * 10 + b
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           host.exit!(U8.of_nat(ends([n, 2, 3, n + 3]) + ends([n + 6]) + ends([])))
+         )",
+        141,
+    ),
+    (
+        "a list's end tests what it holds, and a list too short for it goes on to the next clause",
+        "import std.host {Host}
+
+         kind : List(Nat) -> Nat
+         kind([*, 0]) -> 1
+         kind([*, a3, _, _]) -> a3 * 10
+         kind([x, *_]) -> x + 100
+         kind([]) -> 3
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           host.exit!(U8.of_nat(kind([n, 0]) + kind([n + 4, n, n]) + kind([n, n]) + kind([])))
+         )",
+        155,
+    ),
+    (
+        "a list's front and end are matched together, the middle bound whole",
+        "import std.host {Host}
+
+         shape : List(Nat) -> Nat
+         shape([first, second, *middle, y, z]) -> first + second + middle.len() * 20 + y * 10 + z
+         shape(_) -> 0
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           host.exit!(U8.of_nat(shape([n, 2, 3, 4, 5, n + 6]) + shape([n, 2, 3]) + shape([n, 2, 3, 4])))
+         )",
+        137,
+    ),
+    (
+        "a list's end matches a range, holds any type and stands inside a tuple",
+        "import std.host {Host}
+
+         ends_in_digit : List(U8) -> Bool
+         ends_in_digit([*, '0'..'9']) -> True
+         ends_in_digit(_) -> False
+
+         last_two : List(a) -> Result((a, a), [Short])
+         last_two([*, a, b]) -> Ok((a, b))
+         last_two(_) -> Err(Short)
+
+         beside : ((List(Nat), Nat)) -> Nat
+         beside(([*, x], y)) -> x * y
+         beside(_) -> 0
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           digit = if ends_in_digit(['a', 'b', '7']) then 1 else 0
+           letter = if ends_in_digit(['7', 'b']) then 1 else 0
+           (a, b) = last_two([n, n + 1, n + 2]).ok_or((0, 0))
+           (w, v) = last_two([\"x\", \"yz\"]).ok_or((\"\", \"\"))
+           host.exit!(U8.of_nat(digit * 100 + letter * 50 + a * 10 + b + w.len() + v.len() + beside(([n, 4], 5)) + beside(([], 9))))
+         )",
+        146,
+    ),
 ];
 
 #[test]

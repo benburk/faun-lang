@@ -1,0 +1,8 @@
+error: a lambda's parameter cannot test a list's end
+ --> a_list_s_end_is_a_test_which_only_a_clause_makes.fn:4:50
+  |
+4 | main!(host) -> host.exit!(U8.of_nat([[1, 2]].map(|[*_, x]| x).len()))
+  |                                                  ^^^^^^^^^^^
+  |
+  = note: a list's end pattern is a test, which only a clause makes
+  = help: test it in a clause of a named definition

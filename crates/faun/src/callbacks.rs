@@ -752,7 +752,16 @@ fn pattern_highest(pattern: &Pattern) -> u32 {
             .map(|(_, field)| pattern_highest(field))
             .max()
             .unwrap_or(0),
-        Pattern::Wild | Pattern::Number { .. } | Pattern::Range | Pattern::String => 0,
+        Pattern::Split(split) => std::iter::once(&split.front)
+            .chain(&split.last)
+            .map(pattern_highest)
+            .max()
+            .unwrap_or(0),
+        Pattern::Wild
+        | Pattern::Number { .. }
+        | Pattern::Range
+        | Pattern::String
+        | Pattern::Ending => 0,
     }
 }
 
@@ -857,7 +866,16 @@ fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
                 pattern_locals(pattern, output);
             }
         }
-        Pattern::Wild | Pattern::Number { .. } | Pattern::Range | Pattern::String => {}
+        Pattern::Split(split) => {
+            for pattern in std::iter::once(&split.front).chain(&split.last) {
+                pattern_locals(pattern, output);
+            }
+        }
+        Pattern::Wild
+        | Pattern::Number { .. }
+        | Pattern::Range
+        | Pattern::String
+        | Pattern::Ending => {}
     }
 }
 

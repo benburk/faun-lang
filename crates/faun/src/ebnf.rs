@@ -602,10 +602,13 @@ fn the_grammar_reads_and_refuses_what_the_parser_does() {
 #[test]
 fn the_grammar_reads_and_refuses_commas_as_the_parser_does() {
     let grammar = Grammar::read(GRAMMAR);
-    let read = "f(x,) -> [x, *,]\ng : (Nat,) -> {a: Nat, *,}\nh : ((a, b)) -> [A,]\n";
+    let read = "f(x,) -> [x, *,]\ng : (Nat,) -> {a: Nat, *,}\nh : ((a, b)) -> [A,]\n\
+                i([*r, a], [*, a,], [a, *r, b, c]) -> 1\n";
     assert!(agree(&grammar, read, read), "{read} is read");
     for refused in [
-        "f(x) -> [*r, a]\n",
+        "f(x) -> [*r a]\n",
+        "f(x) -> [*r, a, *s]\n",
+        "f(x) -> {*r, a}\n",
         "f(x) -> {a: 1 b}\n",
         "f(x) -> (,)\n",
         "f : a -> b -> c\n",

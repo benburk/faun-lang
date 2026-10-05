@@ -73,6 +73,11 @@ rely on these; a pass that breaks one is wrong.
   frontend's lazily-read operators come out lazy without a rule of their
   own. That is the optimizer's doing, under its budgets, and not a promise:
   a frontend wanting it guaranteed emits the match itself.
+- **What never comes back answers any type.** A call of a definition whose
+  result type is uninhabited never answers, so it may answer an arm of any
+  type: an arm the frontend knows no value takes. Machine lowering reads
+  such a definition as one that never returns, and the joins after the arm
+  take their width from the other arms alone.
 
 ## The IR
 

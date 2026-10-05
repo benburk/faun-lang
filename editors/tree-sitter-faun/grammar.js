@@ -37,7 +37,7 @@ function commaSep(rule) {
 }
 
 /**
- * Elements parted by commas, a rest only last: `[a, b, *rest]`.
+ * Elements parted by commas, a rest only last: `{a, b, *rest}`.
  *
  * @param {RuleOrLiteral} element
  * @param {RuleOrLiteral} rest
@@ -46,6 +46,19 @@ function elements(element, rest) {
   return seq(
     repeat(seq(element, ',')),
     optional(choice(element, seq(rest, optional(',')))),
+  );
+}
+
+/**
+ * A list's elements, its rest perhaps with more after it: `[a, *rest, b]`.
+ *
+ * @param {RuleOrLiteral} element
+ * @param {RuleOrLiteral} rest
+ */
+function listElements(element, rest) {
+  return seq(
+    repeat(seq(element, ',')),
+    optional(choice(element, seq(rest, optional(seq(',', commaSep(element)))))),
   );
 }
 
@@ -348,7 +361,7 @@ module.exports = grammar({
       ')',
     ),
 
-    list: $ => seq('[', elements($._expression, $.rest), ']'),
+    list: $ => seq('[', listElements($._expression, $.rest), ']'),
 
     record: $ => seq('{', elements($.field, $.rest), '}'),
 
