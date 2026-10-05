@@ -16,8 +16,9 @@ it are [conditions](proposals/drafts/conditions.md),
 - **Infallible destructure:** `(a, b) = pair`. A pattern that can fail is
   refused, with advice.
 - **Fallible destructure:** pattern and optional conditions, else leave by
-  `return`, `continue` or `break`. A default is a ternary: `n = if r is
-  Ok(v) then v else 0`, or `r.ok_or(0)`.
+  `return`, `continue` or `break`: `if r is Ok(v) else return 0`. A default
+  is a ternary, `n = if r is Ok(v) then v else 0`, or `r.ok_or(0)`.
+- **Early exit on a test:** `if n == 0 return 0`, `if seen continue`.
 - **Many-way on a computed value:** arms of pattern, optional guard, body;
   exhaustive.
 - **Plain test:** is it this shape, as a `Bool`.
@@ -30,6 +31,7 @@ it are [conditions](proposals/drafts/conditions.md),
   rest, records open or closed, tuples, a repeated name as equality.
 - Or-patterns everywhere, not only in a clause's parameters.
 - The whole and its parts, `@` or `as`. Missing.
+- A list's end, `[*init, last]`: a rest stands only last today. Missing.
 - Against a name in scope: guard, pin, or refused shadowing. Missing, and
   a trap.
 
@@ -52,6 +54,45 @@ it are [conditions](proposals/drafts/conditions.md),
 - The tree-sitter grammar mirrors the compiler's.
 - Concise and plain: Python's length or shorter.
 - A helper is cheap to write, and nesting is capped.
+
+## Common forms, and Faun's answer
+
+What real programs keep writing, each with the answer under the current
+lean (design E below). Built, planned, or a gap.
+
+- **Dispatch on a parameter's shape,** a list's or a tree's: clauses.
+  Built.
+- **Several guards on one parameter:** clauses, or `f(x) -> if x < 0 then
+  … else if …`. Built.
+- **Unwrap or pass the error on:** `v = r?`. Built.
+- **Unwrap or leave:** `if r is Ok(v) else return 0`. Planned.
+- **Unwrap or a default:** `r.ok_or(0)`, or `if r is Ok(v) then v else 0`.
+  Built; the second planned.
+- **Return early on a test:** `if n == 0 return 0`. Planned.
+- **Skip or stop in a loop:** `if seen continue`, `if done break`. Planned,
+  with loops.
+- **Several fallible steps in a row:** a guard line or `?` each. Planned.
+- **Branch many ways on a computed value,** a state machine or a token:
+  `when x ( … )`. Planned.
+- **Branch on two values at once,** FizzBuzz: `when (n % 3, n % 5) ( (0, 0)
+  -> … )`. Planned.
+- **Test a shape as a value,** in a filter: `xs.filter(|x| x is Some(_))`.
+  Planned.
+- **Take a pair or record apart:** `(a, b) = pair`, `{x, y, *} = point`.
+  Built.
+- **Take apart in a loop or a lambda:** `for (k, v) in pairs`, `|(k, v)|`.
+  The lambda built; the loop planned.
+- **Nested shapes:** `Ok(Some(x))`, `[(k, v), *rest]`. Built.
+- **Character classes and byte formats:** `'0'..'9'`, `[0xe0, a, *rest]`.
+  Built.
+- **Commands by string:** `"get"`. Built, in clauses.
+- **Grouped cases:** `Red | Orange -> warm`. Built in clauses; planned in
+  arms and after `is`.
+- **Two parts equal:** `same([a, a])`. Built.
+- **The last element:** `[*init, last]`. A gap.
+- **The whole and its parts:** `node @ Leaf(x)`. A gap.
+- **Equal to a name in scope:** a guard, `x is n if n == limit`. A trap,
+  since `x is limit` binds.
 
 ## What Faun has today
 
@@ -357,24 +398,69 @@ A pattern is always on the left of `=`, so a binding and a fallible one
 read alike. A binding guard takes a second line, and a two-way test needs
 `if let`-like syntax of its own: `if Ok(v) = x then`.
 
+### E. `is`, `if` guards, `if` lines that leave (the current lean)
+
+C, with an exit allowed straight after the condition, leaving where it
+holds, beside `else` and an exit, leaving where it fails.
+
+```
+drain(heap, state) -> (
+  if heap.pop() is Ok({key, value, rest}) else return state
+  next = visit(state, key, value)
+  rest.drain(next)
+)
+
+back(settled, node, route) -> (
+  if settled.get_or(node, Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
+  walked = [node, *route]
+  if from == node return Ok(walked)
+  back(settled, from, walked)
+)
+
+walk(graph, stack, seen) -> (
+  if stack is [node, *rest] else return seen
+  if seen.contains(node) return walk(graph, rest, seen)
+  …
+)
+```
+
+A line that may leave begins `if`; the token after its condition says
+which way:
+
+```
+"if" condition ( exit                       # leave where it holds
+               | "else" exit                # leave where it fails
+               | "then" expr "else" expr )  # a value either way
+exit = "return" expr | "continue" | "break"
+```
+
+Leaving where it holds reads best for a plain test, `if n == 0 return 0`;
+leaving where it fails is what a binding needs, since what the condition
+binds goes on with the lines below. A plain test could be written either
+way; the style is the first, unless the condition binds for what follows.
+
 ### Comparing
 
-| Measure                 | A          | B        | C          | D         |
-| ----------------------- | ---------- | -------- | ---------- | --------- |
-| New keywords            | 4          | 4        | 4          | 3         |
-| One rule for names      | yes        | yes      | yes        | two forms |
-| Exits at the margin     | no         | no       | yes        | no        |
-| `if` means one thing    | no         | yes      | by reading | no        |
-| Binding guard, one line | yes        | yes      | yes        | no        |
-| Guards migrate          | no         | ~100     | no         | no        |
-| Grammar size            | middle     | smallest | largest    | middle    |
-| Familiar from           | C#, Kotlin | Haskell  | Swift      | Rust      |
+| Measure              | A   | B     | C     | D    | E    |
+| -------------------- | --- | ----- | ----- | ---- | ---- |
+| New keywords         | 4   | 4     | 4     | 3    | 4    |
+| One rule for names   | yes | yes   | yes   | no   | yes  |
+| Exits at the margin  | no  | no    | yes   | no   | yes  |
+| `if` means one thing | no  | yes   | yes   | no   | yes  |
+| Binding guard inline | yes | yes   | yes   | no   | yes  |
+| Plain test, short    | no  | no    | no    | no   | yes  |
+| Guards migrate       | no  | ~100  | no    | no   | no   |
+| Grammar size         | mid | least | most  | mid  | most |
+| Familiar from        | C#  | Hask. | Swift | Rust | Ruby |
 
 ## Open questions
 
-- Which of A, B and C, the three that share `is`.
+- Whether E is the design: `is`, `if` guards, and `if` lines leaving where
+  their condition holds or fails.
 - `@` or `as` for the whole and its parts, if either.
+- `[*init, last]`: a rest anywhere in a list, or only last.
 - Whether shadowing in a test is refused, pinned or left to a guard.
 - Whether or-patterns need parentheses after `is`, or `or` becomes a word.
 - Whether clauses and `when` are both kept, and which takes a parameter
   apart.
+- When `?` may leave from a branch, an arm or the right of `&`.
