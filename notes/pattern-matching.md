@@ -19,9 +19,11 @@ it are [conditions](proposals/drafts/conditions.md),
   `return`, `continue` or `break`: `if r is Ok(v) else return 0`. A default
   is a ternary, `n = if r is Ok(v) then v else 0`, or `r.ok_or(0)`.
 - **Early exit on a test:** `if n == 0 return 0`, `if seen continue`.
-- **Many-way on a computed value:** arms of pattern, optional guard, body;
-  exhaustive.
-- **Plain test:** is it this shape, as a `Bool`.
+- **Many-way on a computed value:** `x is ( arms )`, each arm a pattern,
+  optional guard, `->` body; exhaustive. No `when`.
+- **Plain test:** is it this shape, as a `Bool`: `x is P`. Several values
+  at once as a tuple, `(a, b) is (Ok(x), Ok(y))`; a chain, `x is Some(y) &
+  f(y) is Some(z)`, where a test reads what an earlier one bound.
 - **Loops:** `for` takes an infallible pattern; `while x is P` binds.
 - **Lambda parameters:** infallible patterns, as today.
 
@@ -30,7 +32,8 @@ it are [conditions](proposals/drafts/conditions.md),
 - Today's forms: constructors, literals, ranges, strings, lists with a
   rest, records open or closed, tuples, a repeated name as equality.
 - Or-patterns everywhere, not only in a clause's parameters.
-- The whole and its parts, `@` or `as`. Missing.
+- The whole and its parts, `is` inside a pattern: `right is [y, *_]`.
+  Missing.
 - A list's end, `[*init, last]`: elements after a rest, in clauses. Built.
 - Against a name in scope: guard, pin, or refused shadowing. Missing, and
   a trap.
@@ -73,9 +76,11 @@ lean (design E below). Built, planned, or a gap.
   with loops.
 - **Several fallible steps in a row:** a guard line or `?` each. Planned.
 - **Branch many ways on a computed value,** a state machine or a token:
-  `when x ( … )`. Planned.
-- **Branch on two values at once,** FizzBuzz: `when (n % 3, n % 5) ( (0, 0)
+  `x is ( P -> … )`. Planned.
+- **Branch on two values at once,** FizzBuzz: `(n % 3, n % 5) is ( (0, 0)
   -> … )`. Planned.
+- **Test several values at once:** `(a, b) is (Ok(x), Ok(y)) & x < y`.
+  Planned.
 - **Test a shape as a value,** in a filter: `xs.filter(|x| x is Some(_))`.
   Planned.
 - **Take a pair or record apart:** `(a, b) = pair`, `{x, y, *} = point`.
@@ -90,7 +95,8 @@ lean (design E below). Built, planned, or a gap.
   arms and after `is`.
 - **Two parts equal:** `same([a, a])`. Built.
 - **The last element:** `[*init, last]`. Built, in clauses.
-- **The whole and its parts:** `node @ Leaf(x)`. A gap.
+- **The whole and its parts:** `merge([x, *xs], right is [y, *_])`. A
+  gap.
 - **Equal to a name in scope:** a guard, `x is n if n == limit`. A trap,
   since `x is limit` binds.
 
@@ -154,7 +160,7 @@ every one.
 
 | Failure goes to           | Where                                           |
 | ------------------------- | ----------------------------------------------- |
-| The next clause or arm    | clauses, `when` arms                            |
+| The next clause or arm    | clauses, `is` arms                              |
 | An `else` branch          | `if`                                            |
 | `False`                   | a plain test                                    |
 | An exit                   | fallible binding: `return`, `continue`, `break` |
@@ -188,7 +194,8 @@ failure path is the cover.
 ### 7. Pattern vocabulary, beyond today's
 
 - **The whole and its parts:** bind `node` and also take it apart. Rust and
-  Haskell `node @ Leaf(x)`, OCaml and Roc `Leaf(x) as node`.
+  Haskell `node @ Leaf(x)`, OCaml and Roc `Leaf(x) as node`; here `node is
+  Leaf(x)`, after Finch.
 - **Against a name in scope:** match where the value equals `limit`, not
   bind a new `limit`. Elixir pins, `^limit`; most languages make you write a
   guard. In Faun a name in a pattern always binds, so `n is limit` binds a
@@ -210,7 +217,47 @@ failure path is the cover.
   name in scope needs a guard, and forgetting is silent.
 - **`?` cannot leave from a nested place.** A branch, an arm, the right side
   of `&`: `?` there is refused until leaving from a nested match is built.
-- **Clauses and `when` overlap.** `f(x) -> when x (…)` does what clauses do.
+- **Clauses and many-way `is` overlap.** `f(x) -> x is (…)` does what
+  clauses do. Style, not grammar, sends a parameter to clauses.
+
+## The ultimate and penultimate conditional syntax
+
+Cheng and Parreaux's
+[ultimate conditional syntax](https://lptk.github.io/files/ucs-paper.pdf)
+(OOPSLA 2024) and Tony Finch's
+[penultimate conditional syntax](https://dotat.at/@/2025-05-13-if-is.html)
+(2025) turn pattern matching into a generalization of `if`, rather than
+`if` into a case of matching. Both arrive where this note does:
+
+- `x is P` is a `Bool`, and what it binds flows into whatever is known to
+  follow its success: the rest of an `and` chain and the `then` branch,
+  which the paper calls conditional pattern flowing.
+- Chains interleave computation: `expr is Var(name) and ctx.get(name) is
+  Some(value)`.
+- Alternatives after `is` must be grouped, since `b is true || false`
+  reads two ways. Finch requires braces where this note requires
+  parentheses.
+- Evaluation is left to right and short-circuiting, with no backtracking.
+- Early returns and `?` flatten what nested matches would indent.
+
+Taken from them:
+
+- **A many-way match is `is` with arms.** Finch writes `x is { || P => a ||
+  Q => b }`; here `x is ( P -> a … )`, so `when` is not needed. `is` always
+  means matches: a pattern makes a test, arms make a value.
+- **`is` inside a pattern binds the whole.** Finch's `Some(p is Pair(x,
+  y))` names `p` and takes it apart, with no `@` or `as`.
+
+Left with them:
+
+- **Splits,** continuing a condition from a shared prefix, `if x == 0 then
+  … > 0 then …`. They lean on an offside rule and on compiling away the
+  tests they repeat; a many-way `is` does their work.
+- **`let` inside a condition,** against rightward drift, which guard lines
+  prevent.
+- **`then` and `else` as operators,** Finch's `=>` and `|| =>`.
+- **Relational patterns,** C#'s `Some(< 0)`. Ranges, `_..-1`, cover
+  integers; perhaps later, for floats.
 
 ## How others spell it
 
@@ -240,7 +287,11 @@ first, then the pattern** (`x is P`) reads as a question and composes with
 
 ### Many-way on a computed value
 
-- **`when x ( P -> e … )`,** the draft. Arms read as clauses, and the
+- **`x is ( P -> e … )`,** the lean, after Finch. No keyword: `is` already
+  means matches. It parses as a parenthesis does, by what follows its first
+  expression: `->` or a guard's `if` begins arms, so `x is (A | B)` stays a
+  test.
+- **`when x ( P -> e … )`,** the branching draft. Arms read as clauses, and the
   grammar stays LL(1). A keyword, and `when x(` is a call.
 - **`match x ( … )`.** Familiar, but takes a name programs want.
 - **A postfix block, `x.( P -> e … )`.** No keyword, reusing a type's `.(`;
@@ -290,6 +341,9 @@ first, then the pattern** (`x is P`) reads as a question and composes with
 
 ### The whole and its parts
 
+- **`node is Leaf(x)` inside a pattern,** the lean, after Finch. No new
+  token, and `is` means what it means anywhere: the name, which is that
+  shape.
 - **`node @ Leaf(x)`.** Rust's and Haskell's; a new token.
 - **`Leaf(x) as node`.** OCaml's and Roc's, reading as English; a keyword.
 - **`node = Leaf(x)` inside a pattern.** No new token; `=` already ends a
@@ -402,7 +456,8 @@ read alike. A binding guard takes a second line, and a two-way test needs
 ### E. `is`, `if` guards, `if` lines that leave (the current lean)
 
 C, with an exit allowed straight after the condition, leaving where it
-holds, beside `else` and an exit, leaving where it fails.
+holds, beside `else` and an exit, leaving where it fails; a many-way match
+is `is` with arms, and `is` inside a pattern binds the whole.
 
 ```
 drain(heap, state) -> (
@@ -423,6 +478,15 @@ walk(graph, stack, seen) -> (
   if seen.contains(node) return walk(graph, rest, seen)
   …
 )
+
+token(bytes) -> bytes is (
+  [] -> End
+  ['0'..'9', *rest] -> number(bytes)
+  [c, *rest] if c.is_space() -> token(rest)
+  [c, *rest] -> Symbol(c, rest)
+)
+
+merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
 ```
 
 A line that may leave begins `if`; the token after its condition says
@@ -444,7 +508,7 @@ way; the style is the first, unless the condition binds for what follows.
 
 | Measure              | A   | B     | C     | D    | E    |
 | -------------------- | --- | ----- | ----- | ---- | ---- |
-| New keywords         | 4   | 4     | 4     | 3    | 4    |
+| New keywords         | 5   | 5     | 5     | 4    | 4    |
 | One rule for names   | yes | yes   | yes   | no   | yes  |
 | Exits at the margin  | no  | no    | yes   | no   | yes  |
 | `if` means one thing | no  | yes   | yes   | no   | yes  |
@@ -458,9 +522,9 @@ way; the style is the first, unless the condition binds for what follows.
 
 - Whether E is the design: `is`, `if` guards, and `if` lines leaving where
   their condition holds or fails.
-- `@` or `as` for the whole and its parts, if either.
 - Whether shadowing in a test is refused, pinned or left to a guard.
 - Whether or-patterns need parentheses after `is`, or `or` becomes a word.
-- Whether clauses and `when` are both kept, and which takes a parameter
-  apart.
+- Whether a many-way `is` on a bare parameter is refused, saying to write
+  clauses, or left to style.
+- Whether arms after `is` need a line each, as a block's lines do.
 - When `?` may leave from a branch, an arm or the right of `&`.
