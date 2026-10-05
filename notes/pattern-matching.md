@@ -14,10 +14,20 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 `is` with flowing names and a dedicated exit line):
 
 - **`value is pattern`** is a `Bool` that binds where it is known to have
-  held: along `&`, into `then`, below a `guard`. Built.
-- **`guard condition else exit`** leaves where the condition fails, keeping
-  its names for the lines below. One direction only; the exits are
-  `return x`, `continue`, `break`. It replaces design E's `if` lines.
+  held: along `&`, into `then`, below an `expect` line. Built.
+- **`expect condition else …`** goes on where the condition holds, keeping
+  its names for the lines below, and otherwise leaves: `else return x`,
+  `else continue`, `else break`, or `else` a block whose last line is one of
+  those. One direction only. It replaces design E's `if` lines; both fresh
+  designs used a keyword of their own, `guard`, and `expect` serves without
+  one more.
+- **A bare `expect` in a body,** an assumption checked in development and
+  skipped in optimized builds, binding nothing, is for later; until then
+  `expect` in a body takes an `else`.
+- **Arms after `is`** are a line each; an arm may be a block, but nothing
+  leaves from inside one yet. Arms on a bare parameter are left to style:
+  clauses by default, arms where the other parameters would repeat on every
+  clause.
 - **Many ways on a value** are `is` with arms, `x is ( P -> … )`, with no
   `match` or `when` keyword. Both fresh designs used `match`; the brief did
   not offer Finch's idea, so that says nothing against it.
@@ -42,9 +52,9 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - **Infallible destructure:** `(a, b) = pair`. A pattern that can fail is
   refused, with advice.
 - **Fallible destructure:** pattern and optional conditions, else leave by
-  `return`, `continue` or `break`: `guard r is Ok(v) else return 0`. A
+  `return`, `continue` or `break`: `expect r is Ok(v) else return 0`. A
   default is a ternary, `n = if r is Ok(v) then v else 0`, or `r.ok_or(0)`.
-- **Early exit on a test:** `guard n != 0 else return 0`.
+- **Leave early on a test:** `expect n != 0 else return 0`.
 - **Many-way on a computed value:** `x is ( arms )`, each arm a pattern,
   optional guard, `->` body; exhaustive. No `when`.
 - **Plain test:** is it this shape, as a `Bool`: `x is P`. Several values
@@ -116,16 +126,16 @@ empty = list is []
 found = results.filter(|result| result is Ok(_))
 
 # Go on only where a test holds: else leave the function, a round, the loop. Planned.
-guard n != 0 else return 0
-guard !$seen.contains(node) else continue
-guard $total <= limit else break
+expect n != 0 else return 0
+expect !$seen.contains(node) else continue
+expect $total <= limit else break
 
 # Take apart, or leave: what it binds goes on below. Planned.
-guard heap.pop() is Ok({key, value, rest}) else return state
-guard args is [_, name, *_] else return Err(Usage)
+expect heap.pop() is Ok({key, value, rest}) else return state
+expect args is [_, name, *_] else return Err(Usage)
 
 # The same, with conditions reading what it bound. Planned.
-guard entry is Ok({key, *}) & key < limit else return Rejected
+expect entry is Ok({key, *}) & key < limit else return Rejected
 
 # Compare with a name in scope, rather than bind. Planned.
 reached_from_itself = prev.get(node) is Some(==node)
@@ -205,17 +215,17 @@ identifier(name, arity) ->
 
 # The same as early exits, a step to a line. Planned.
 identifier(name, arity) -> (
-  guard name.drop_prefix("_") is Ok(digits) else return Err(Invalid(name))
-  guard Nat.from_str(digits) is Ok(index) & index < arity else return Err(Invalid(name))
+  expect name.drop_prefix("_") is Ok(digits) else return Err(Invalid(name))
+  expect Nat.from_str(digits) is Ok(index) & index < arity else return Err(Invalid(name))
   Ok((index, name))
 )
 
 # Early exits instead of nesting. The paper's `normalize`, after Finch. Planned.
 meet(t1, t2) -> (
   n1 = normalize(t1)
-  guard !(n1 is Bot) else return Bot
+  expect !(n1 is Bot) else return Bot
   n2 = normalize(t2)
-  guard !(n2 is Bot) else return Bot
+  expect !(n2 is Bot) else return Bot
   if merge(n1, n2) is Ok(merged) then merged else glb(n1, n2)
 )
 
@@ -229,7 +239,7 @@ zip_with(_, _, _) -> Err(Mismatch)
 
 # A worklist taken apart as a loop goes round. Planned, with loops.
 while $stack is [node, *$stack] (
-  guard !$seen.contains(node) else continue
+  expect !$seen.contains(node) else continue
   $seen.insert(node)
   $stack.extend(graph.targets(node))
 )
@@ -642,8 +652,8 @@ leaving where it fails is what a binding needs, since what the condition
 binds goes on with the lines below. A plain test could be written either
 way; the style is the first, unless the condition binds for what follows.
 
-Since decided otherwise: the two directions became one, `guard condition
-else exit`, leaving where the condition fails. See Decided, at the top.
+Since decided otherwise: the two directions became one, `expect condition
+else …`, leaving where the condition fails. See Decided, at the top.
 
 ### Comparing
 
@@ -661,20 +671,16 @@ else exit`, leaving where the condition fails. See Decided, at the top.
 
 ## Open questions
 
-- **Leaving where a test holds.** With `guard` going one way, a line leaving
-  on a shape is negated: `guard !(n1 is Bot) else return Bot`, where `if n1
-  is Bot return Bot` read straight. Accept it, or keep a second form for
-  this one case.
-- **What `else` takes.** One exit, or a block ending in one, for an effect
-  before leaving, as both fresh designs allow.
-- **Migrating off rebinding.** How much of the corpus shadows, measured by
-  refusing it; and what replaces each case until `$` names come.
-- **Arms after `is`.** A line each, as a block's lines; whether an arm may be
-  a block; whether a many-way `is` on a bare parameter is refused, saying to
-  write clauses.
+- **Leaving where a test holds.** With `expect` going one way, a line
+  leaving on a shape is negated: `expect !(n1 is Bot) else return Bot`,
+  where `if n1 is Bot return Bot` read straight. Accept it, or keep a
+  second form for this one case.
+- **How much shadows today.** Rebinding goes; how many programs it touches,
+  and whether stepwise updates read badly as `v1`, `v2` until `$` names come,
+  is measured by refusing it.
 - **Rules that pick a form.** Which of Claude's to enforce: `x is 3` written
-  `x == 3`; a two-arm match ending in `_` written as an `if`; a `guard`
-  before a block's last line written as a ternary.
+  `x == 3`; a two-arm match ending in `_` written as an `if`; an
+  `expect` before a block's last line written as a ternary.
 - **`?` from a nested place:** a branch, an arm, the right of `&`. Loops
   need the same mechanism.
 - **An `|` binding what both sides bind,** Astra's rule: `a is Some(t) |
