@@ -176,9 +176,9 @@ to_nat_go([h, *t], value, seen) -> Err(NotADigit)
 
 parser_example_pair : Input -> Result(Read({left: Nat, right: Nat}), ParserError)
 parser_example_pair(input) -> (
-  Read(left, input) = input.nat()?.skip(|remaining| remaining.byte('x'))?
-  Read(right, input) = input.nat()?
-  Ok(Read({left, right}, input))
+  Read(left, after_left) = input.nat()?.skip(|remaining| remaining.byte('x'))?
+  Read(right, rest) = after_left.nat()?
+  Ok(Read({left, right}, rest))
 )
 
 parser_example_rows : Str -> Result(List({left: Nat, middle: Nat, right: Nat}), ParserError)

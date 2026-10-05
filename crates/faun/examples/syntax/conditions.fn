@@ -56,9 +56,10 @@ word(text) -> if text is ("get" | "fetch") then 1 else 0
 last : List(Nat) -> Nat
 last(xs) -> if xs is [*_, x] & x is 1..9 then x else 0
 
-# A test may bind again the name it tests.
+# A test binds names of its own: a name means one value for its whole
+# scope, so none in scope is bound again.
 inner : Result(Nat, [Gone]) -> Nat
-inner(step) -> if step is Ok(step) then step else 0
+inner(step) -> if step is Ok(found) then found else 0
 
 expect present([Ok(1), Err(Gone), Ok(3)]) == 2
 expect doubled(Ok(4)) == 8 & doubled(Ok(400)) == 0 & doubled(Err(Gone)) == 0

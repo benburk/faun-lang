@@ -1455,7 +1455,6 @@ fn resolve_clause(
         shadowing: None,
         repeated: Some(Vec::new()),
         testing: false,
-        tested: None,
         hidden: HashMap::new(),
     };
     let patterns = clause
@@ -1536,11 +1535,9 @@ struct ClauseResolver<'a> {
     /// far: a binding may shadow a name already in scope, though not one it
     /// binds itself.
     shadowing: Option<HashSet<Symbol>>,
-    /// Whether a test's pattern is being resolved, which may bind again the
-    /// name it tests and no other in scope.
+    /// Whether a test's pattern is being resolved, whose names would be
+    /// taken for comparisons where they are bound again.
     testing: bool,
-    /// While `testing`, the name tested, where the value is one.
-    tested: Option<Symbol>,
     /// Names a test bound that are out of sight here, where it is not known
     /// to have held, and where the test was: what a use of one is told.
     hidden: HashMap<Symbol, s::Span>,
@@ -1567,17 +1564,12 @@ impl ClauseResolver<'_> {
     fn condition(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
         let kind = match &expression.kind {
             s::ExprKind::Is(value, pattern) => {
-                let tested = match &value.kind {
-                    s::ExprKind::Name(name) => Some(self.symbols.intern(name.text(self.source))),
-                    _ => None,
-                };
                 let value = self.expr(value)?;
-                let outer = (std::mem::replace(&mut self.testing, true), self.tested);
-                self.tested = tested;
+                let outer = std::mem::replace(&mut self.testing, true);
                 self.shadowing = Some(HashSet::new());
                 let pattern = self.pattern(pattern);
                 self.shadowing = None;
-                (self.testing, self.tested) = outer;
+                self.testing = outer;
                 h::ExprKind::Is(Box::new(value), pattern?)
             }
             s::ExprKind::Binary(s::BinaryOp::And, left, right) => h::ExprKind::Binary(
@@ -1680,18 +1672,35 @@ impl ClauseResolver<'_> {
             s::Pattern::Wild(_) => Ok(h::Pattern::Wild),
             s::Pattern::Bind(name) => {
                 let spelling = self.symbols.intern(name.text(self.source));
-                if self.testing
-                    && self.tested != Some(spelling)
+                // A name means one value for its whole scope: a binding's or a
+                // test's pattern binds none already seen. A clause's head and a
+                // lambda's parameters see none of their own but what they
+                // bind, which the checks below look after.
+                if let Some(bound) = &self.shadowing
+                    && !bound.contains(&spelling)
                     && self.locals.contains_key(&spelling)
+                    && !self
+                        .alternative
+                        .as_ref()
+                        .is_some_and(|first| first.contains_key(&spelling))
                 {
                     let shown = name.text(self.source);
+                    if self.testing {
+                        return Err(error(
+                            self.module,
+                            name.0,
+                            format!("`{shown}` is a name already, and a test binds it anew rather than comparing with it"),
+                        )
+                        .label("bound again here")
+                        .help(format!("to compare, bind another name and ask: `x is Ok(n) & n == {shown}`")));
+                    }
                     return Err(error(
                         self.module,
                         name.0,
-                        format!("`{shown}` is a name already, and a test binds it anew rather than comparing with it"),
+                        format!("`{shown}` is a name already, and a name means one value for its whole scope"),
                     )
                     .label("bound again here")
-                    .help(format!("to compare, bind another name and ask: `x is Ok(n) & n == {shown}`")));
+                    .help("give this value a name of its own"));
                 }
                 // An alternative after the first binds the names the first did.
                 let alternate = self

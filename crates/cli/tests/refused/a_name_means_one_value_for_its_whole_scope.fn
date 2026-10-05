@@ -1,0 +1,8 @@
+import std.host {Host}
+
+main! : Host -> []
+main!(host) -> (
+  n = host.args.len()
+  n = n + 1
+  host.exit!(U8.of_nat(n))
+)

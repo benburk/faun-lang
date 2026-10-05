@@ -562,17 +562,6 @@ const RUNNING: &[(&str, &str, u32)] = &[
         7,
     ),
     (
-        "a binding shadows a name, and what follows reads the nearest",
-        "main! : Host -> []
-         main!(host) -> (
-           n = host.args.len()
-           n = n + 1
-           (n, m) = (n * 10, n)
-           host.exit!(U8.of_nat((n + m) % 64))
-         )",
-        22,
-    ),
-    (
         "a binding takes apart a type's one constructor",
         "Memo : List(Nat)
          Pair : [Pair(Nat, Nat)]

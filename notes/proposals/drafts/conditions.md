@@ -177,6 +177,9 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   a resource, refused for now; a type taken apart by its own name, as
   `U8(…)`, which only a clause's head expands; and a guard's test binding
   for its clause's body.
+- **No rebinding,** 2026-10-05: a binding or a test binding a name already
+  in scope is refused; a lambda's and a clause's patterns already were. The
+  parser library's example and AoC 2015 day 19 took names of their own.
 
 ## Costs
 

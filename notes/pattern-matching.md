@@ -37,7 +37,15 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - **No rebinding.** A name means one value for its whole scope: no shadowing
   in a binding, a pattern or a lambda. Variables written `$name`, coming
   with loops, are the only names that change. Until they come, a step takes
-  a fresh name.
+  a fresh name. Built, 2026-10-05.
+- **Leaving where a test holds** reads negated, `expect !(n1 is Bot) else
+  return Bot`, or `expect n1 != Bot else return Bot` where the type has
+  equality. Accepted: it is rare, and a second form would be two ways to
+  write one exit.
+- **Rules that pick between forms** are a linter's, not the compiler's:
+  `x is 3` written `x == 3`; a two-arm `is` ending in `_` written as an
+  `if`; an `expect` before a block's last line written as a ternary; a
+  many-way `is` on a bare parameter written as clauses.
 - **Alternatives after `is` are parenthesized,** `x is (A(v) | B(v))`,
   since `|` is also the `Bool` or.
 - **Clauses where the body is the dispatch;** `is` where a test is one step
@@ -671,16 +679,6 @@ else …`, leaving where the condition fails. See Decided, at the top.
 
 ## Open questions
 
-- **Leaving where a test holds.** With `expect` going one way, a line
-  leaving on a shape is negated: `expect !(n1 is Bot) else return Bot`,
-  where `if n1 is Bot return Bot` read straight. Accept it, or keep a
-  second form for this one case.
-- **How much shadows today.** Rebinding goes; how many programs it touches,
-  and whether stepwise updates read badly as `v1`, `v2` until `$` names come,
-  is measured by refusing it.
-- **Rules that pick a form.** Which of Claude's to enforce: `x is 3` written
-  `x == 3`; a two-arm match ending in `_` written as an `if`; an
-  `expect` before a block's last line written as a ternary.
 - **`?` from a nested place:** a branch, an arm, the right of `&`. Loops
   need the same mechanism.
 - **An `|` binding what both sides bind,** Astra's rule: `a is Some(t) |

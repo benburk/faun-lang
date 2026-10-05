@@ -457,10 +457,9 @@ both(a, b) -> if (a, b) is (Ok(x), Ok(y)) & x <= y then y - x else 0
 ```
 
 `is` binds tighter than `&` and looser than a comparison; a test tested
-again, `x is A is B`, or compared, `x is 3 == y`, is refused. A test may bind
-again the name it tests, `step is Ok(step)`, and no other name in scope:
-`r is Ok(limit)` would bind a new `limit` where a comparison was meant, so
-it is refused. `?` on the right of `&` or `|` is refused, since that side may
+again, `x is A is B`, or compared, `x is 3 == y`, is refused. A test binds
+names of its own: `r is Ok(limit)`, with `limit` a name already, would bind
+a new one where a comparison was meant, so it is refused. `?` on the right of `&` or `|` is refused, since that side may
 not be worked out. Not yet: a test of a value holding a resource, a type
 taken apart by its own name, as `U8(…)`, and a guard's test binding for its
 clause's body.
@@ -472,9 +471,10 @@ alternative binds the same names at the same types. A clause holding one is
 a row for each choice of alternatives, checked and covered as those rows
 would be. A binding's or a lambda's pattern must match whatever it is
 handed, and holds none: names, records, tuples, and the constructor of a
-type that has no other, as in `(value, Memo(entries)) = step(n)`. A binding may shadow a name already in scope, as in Ori: its value reads
-the name as it was, and every line after reads the nearest, so
-`v = v + 1` counts on. A binding's or a lambda's pattern binds each name once.
+type that has no other, as in `(value, Memo(entries)) = step(n)`. A name means one value for its whole scope: no binding, test or lambda
+binds a name already in scope, so `v = v + 1` is refused, and a step takes
+a name of its own, `next = v + 1`. A binding's or a lambda's pattern binds
+each name once.
 
 A clause's head may bind a name twice, and then matches only where both are
 equal by their type's `equals`: `doubled([a, a]) -> True` is
