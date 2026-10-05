@@ -58,47 +58,153 @@ it are [conditions](proposals/drafts/conditions.md),
 - Concise and plain: Python's length or shorter.
 - A helper is cheap to write, and nesting is capped.
 
-## Common forms, and Faun's answer
+## Faun's forms, simplest first
 
-What real programs keep writing, each with the answer under the current
-lean (design E below). Built, planned, or a gap.
+Every form programs keep writing, as Faun spells it under the current lean
+(design E below), from a plain binding to a match nested in a match. Several
+are the examples of the ultimate and penultimate conditional syntaxes,
+translated. Each comment says whether it is built or planned.
 
-- **Dispatch on a parameter's shape,** a list's or a tree's: clauses.
-  Built.
-- **Several guards on one parameter:** clauses, or `f(x) -> if x < 0 then
-  … else if …`. Built.
-- **Unwrap or pass the error on:** `v = r?`. Built.
-- **Unwrap or leave:** `if r is Ok(v) else return 0`. Planned.
-- **Unwrap or a default:** `r.ok_or(0)`, or `if r is Ok(v) then v else 0`.
-  Built; the second planned.
-- **Return early on a test:** `if n == 0 return 0`. Planned.
-- **Skip or stop in a loop:** `if seen continue`, `if done break`. Planned,
-  with loops.
-- **Several fallible steps in a row:** a guard line or `?` each. Planned.
-- **Branch many ways on a computed value,** a state machine or a token:
-  `x is ( P -> … )`. Planned.
-- **Branch on two values at once,** FizzBuzz: `(n % 3, n % 5) is ( (0, 0)
-  -> … )`. Planned.
-- **Test several values at once:** `(a, b) is (Ok(x), Ok(y)) & x < y`.
-  Planned.
-- **Test a shape as a value,** in a filter: `xs.filter(|x| x is Some(_))`.
-  Planned.
-- **Take a pair or record apart:** `(a, b) = pair`, `{x, y, *} = point`.
-  Built.
-- **Take apart in a loop or a lambda:** `for (k, v) in pairs`, `|(k, v)|`.
-  The lambda built; the loop planned.
-- **Nested shapes:** `Ok(Some(x))`, `[(k, v), *rest]`. Built.
-- **Character classes and byte formats:** `'0'..'9'`, `[0xe0, a, *rest]`.
-  Built.
-- **Commands by string:** `"get"`. Built, in clauses.
-- **Grouped cases:** `Red | Orange -> warm`. Built in clauses; planned in
-  arms and after `is`.
-- **Two parts equal:** `same([a, a])`. Built.
-- **The last element:** `[*init, last]`. Built, in clauses.
-- **The whole and its parts:** `merge([x, *xs], right is [y, *_])`. A
-  gap.
-- **Equal to a name in scope:** a guard, `x is n if n == limit`. A trap,
-  since `x is limit` binds.
+```
+# Take a value apart where it cannot fail. Built.
+(a, b) = pair
+{x, y, *} = point
+total = pairs.fold(0, |sum, (_, value)| sum + value)
+
+# Choose between two values. Built.
+sign = if n < 0 then -1 else if n == 0 then 0 else 1
+
+# Pass a failure on to the caller. Built.
+count = Nat.from_str(text)?
+
+# A default where it fails. Built.
+count = Nat.from_str(text).ok_or(0)
+
+# Ask whether a value has a shape, as a Bool. Planned.
+empty = list is []
+found = results.filter(|result| result is Ok(_))
+
+# Leave early on a test: the function, a round, the loop. Planned.
+if n == 0 return 0
+if $seen.contains(node) continue
+if $total > limit break
+
+# Take apart, or leave: what it binds goes on below. Planned.
+if heap.pop() is Ok({key, value, rest}) else return state
+if args is [_, name, *_] else return Err(Usage)
+
+# The same, with conditions reading what it bound. Planned.
+if entry is Ok({key, *}) & key < limit else return Rejected
+
+# A default for a shape `ok_or` cannot reach. Planned.
+width = if config is {width: Ok(w), *} then w else 80
+
+# Several values at once, as a tuple. Planned.
+order = if (a, b) is (Ok(x), Ok(y)) & x <= y then Sorted else Unsorted
+
+# One test reading what another bound. The paper's context lookup. Planned.
+value = if expr is Var(name) & context.get(name) is Ok(found) then found else Unbound
+
+# Dispatch on a parameter's shape: clauses. Built.
+len([]) -> 0
+len([_, *rest]) -> 1 + len(rest)
+
+# Classes, alternatives and a list's end, in clauses. Built.
+kind('0'..'9') -> Digit
+kind(' ' | '\t' | '\n') -> Space
+kind(_) -> Other
+
+last([*_, x]) -> Ok(x)
+last([]) -> Err(Empty)
+
+# Many ways on a computed value: `is` and arms. Finch's sign. Planned.
+sign = n is (
+  _..-1 -> -1
+  0 -> 0
+  _ -> 1
+)
+
+# Arms with guards. The paper's sizes, without its splits. Planned.
+size = foo(args) is (
+  0 -> "null"
+  n if n.abs() > 100 -> "large"
+  n if n.abs() < 10 -> "small"
+  _ -> "medium"
+)
+
+# Two values at once, many ways. Planned.
+fizz(n) -> (n % 3, n % 5) is (
+  (0, 0) -> "FizzBuzz"
+  (0, _) -> "Fizz"
+  (_, 0) -> "Buzz"
+  _ -> n.to_str()
+)
+
+# An arm going on into a further match. The paper's cache. Planned.
+answer = x is (
+  Right(Err(_)) -> default
+  Right(Ok(cached)) -> f(cached)
+  Left(input) -> compute(input) is (
+    Err(_) -> default
+    Ok(result) -> f(result)
+  )
+)
+
+# Alternatives binding one name. The paper's evaluator. Planned.
+simple = e is (
+  Lit(value) | Add(Lit(0), value) | Add(value, Lit(0)) -> Ok(value)
+  _ -> Err(NotSimple)
+)
+
+# The whole and its parts: `is` inside a pattern, after Finch. Planned.
+merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
+merge(left, [y, *ys]) -> [y, *merge(left, ys)]
+merge(left, []) -> left
+
+# A chain of steps in one condition. The paper's `_1234`. Planned.
+identifier(name, arity) ->
+  if name.drop_prefix("_") is Ok(digits)
+    & Nat.from_str(digits) is Ok(index)
+    & index < arity
+  then Ok((index, name))
+  else Err(Invalid(name))
+
+# The same as early exits, a step to a line. Planned.
+identifier(name, arity) -> (
+  if name.drop_prefix("_") is Ok(digits) else return Err(Invalid(name))
+  if Nat.from_str(digits) is Ok(index) & index < arity else return Err(Invalid(name))
+  Ok((index, name))
+)
+
+# Early exits instead of nesting. The paper's `normalize`, after Finch. Planned.
+meet(t1, t2) -> (
+  n1 = normalize(t1)
+  if n1 is Bot return Bot
+  n2 = normalize(t2)
+  if n2 is Bot return Bot
+  if merge(n1, n2) is Ok(merged) return merged
+  glb(n1, n2)
+)
+
+# Clauses and `?` together. Finch's `zip_with`. Planned.
+zip_with(f, [x, *xs], [y, *ys]) -> (
+  tail = zip_with(f, xs, ys)?
+  Ok([f(x, y), *tail])
+)
+zip_with(_, [], []) -> Ok([])
+zip_with(_, _, _) -> Err(Mismatch)
+
+# A worklist taken apart as a loop goes round. Planned, with loops.
+while $stack is [node, *$stack] (
+  if $seen.contains(node) continue
+  $seen.insert(node)
+  $stack.extend(graph.targets(node))
+)
+```
+
+Not spelled yet: equality with a name in scope inside a pattern. `r is
+Ok(limit)` binds a new `limit`; for now, `r is Ok(n) & n == limit`, and the
+trap is an open question.
 
 ## What Faun has today
 
@@ -351,9 +457,9 @@ first, then the pattern** (`x is P`) reads as a question and composes with
 
 ### Against a name in scope
 
-- **A guard, `x is n if n == limit`.** Nothing new; long, and easy to
+- **A test, `r is Ok(n) & n == limit`.** Nothing new; long, and easy to
   forget.
-- **A pin, `x is ^limit`.** Elixir's; a sigil.
+- **A pin, `r is Ok(^limit)`.** Elixir's; a sigil.
 - **Refuse shadowing in a test.** The trap cannot happen, for a rule of its
   own.
 
