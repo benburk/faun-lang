@@ -42,6 +42,19 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   return Bot`, or `expect n1 != Bot else return Bot` where the type has
   equality. Accepted: it is rare, and a second form would be two ways to
   write one exit.
+- **`?` anywhere an expression goes,** as `expect … else return` will be in
+  any block: in a branch, an arm, a block inside either, the right of `&`
+  or `|`, leaving the clause or lambda from there. Today's refusals are a
+  gap in lowering, closed by join points: the rest of a body after a branch
+  made a local function each branch calls, so a branch can leave instead.
+  Loops need the same.
+- **A name both sides of `|` bind,** at one type, is seen where the `|` held:
+  to its right along `&`, in `then`, below an `expect`. Whichever side held
+  supplies it. A name only one side binds is seen nowhere past the `|`.
+- **What a guard's test binds is seen in its clause's body,** as `then` sees
+  an `if`'s. Often the test belongs in the head instead: `describe(Ok(v))
+  if v > 100`, or `describe(r is Ok(v))`; a guard's test is for a value the
+  head cannot reach, `f(x) if lookup(x) is Some(v) -> …`.
 - **Rules that pick between forms** are a linter's, not the compiler's:
   `x is 3` written `x == 3`; a two-arm `is` ending in `_` written as an
   `if`; an `expect` before a block's last line written as a ternary; a
@@ -679,14 +692,10 @@ else …`, leaving where the condition fails. See Decided, at the top.
 
 ## Open questions
 
-- **`?` from a nested place:** a branch, an arm, the right of `&`. Loops
-  need the same mechanism.
-- **An `|` binding what both sides bind,** Astra's rule: `a is Some(t) |
-  b is Some(t)`, short-circuiting a fallback. A candidate, not adopted.
 - **Relational patterns,** `Some(< 0)`, for floats. Later, if wanted.
-- **Left for later in what is built:** a guard's test binding for its
-  clause's body; a test of a value holding a resource; a type taken apart by
-  its own name, as `U8(…)`.
+- **Left for later in what is built:** a test of a value holding a
+  resource, used up on the failing side where no shape it may still have
+  holds one; a type taken apart by its own name, as `U8(…)`.
 
 ## A brief, without syntax
 
