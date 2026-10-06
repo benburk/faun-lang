@@ -17,8 +17,8 @@ node_bound(count, edges) -> edges.fold(count, |most, (source, target, _)| most.m
 
 # An edge followed either way: from each end, and a loop once.
 both_ways : ((Nat, Nat, e)) -> List((Nat, Nat, e))
-both_ways((source, target, weight)) if source == target -> [(source, target, weight)]
-both_ways((source, target, weight)) -> [(source, target, weight), (target, source, weight)]
+both_ways(edge is (source, source, _)) -> [edge]
+both_ways(edge is (source, target, weight)) -> [edge, (target, source, weight)]
 
 turned_round : ((Nat, Nat, e)) -> (Nat, Nat, e)
 turned_round((source, target, weight)) -> (target, source, weight)

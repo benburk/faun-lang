@@ -107,12 +107,10 @@ parse_all_rest(value, [_, *]) -> Err(ParserTrailingInput)
 # `seen` records whether any digit has been consumed, so the end-of-input and
 # non-digit shapes dispatch on it; a digit extends the value and marks it seen.
 parser_read_nat : (List(U8), Nat, Bool) -> Result(Read(Nat), ParserError)
-parser_read_nat([], value, True) -> Ok(Read(value, Input([])))
-parser_read_nat([], value, False) -> Err(ParserExpectedNat)
-parser_read_nat([byte, *rest], value, seen) if byte.is_digit() ->
+parser_read_nat([byte, *rest], value, _) if byte.is_digit() ->
   parser_read_nat(rest, value.mul(10).add(byte.to_nat().sub('0')), True)
-parser_read_nat([byte, *rest], value, True) -> Ok(Read(value, Input([byte, *rest])))
-parser_read_nat([byte, *rest], value, False) -> Err(ParserExpectedNat)
+parser_read_nat(input, value, True) -> Ok(Read(value, Input(input)))
+parser_read_nat(_, _, False) -> Err(ParserExpectedNat)
 
 parser_line_inputs : List(List(U8)) -> List(Input)
 parser_line_inputs([]) -> []

@@ -1,0 +1,7 @@
+error: `==a` compares with a name from outside its pattern, and this pattern binds `a`
+ --> equal_to_a_name_compares_with_one_from_outside_its_pattern.fn:4:13
+  |
+4 | doubled([a, ==a, *_]) -> True
+  |             ^^^
+  |
+  = help: to ask two of its parts equal, write `a` again in place of `==a`

@@ -196,11 +196,23 @@ merge(left is [_, *_], [y, *ys]) -> [y, *merge(left, ys)]
 
 expect merge([1, 4, 6], [2, 3, 7]) == [1, 2, 3, 4, 6, 7]
 
-# `==name` matches a value equal to a name in scope, by its type's `equals`,
-# and binds nothing.
-value_of : (Str, List((Str, Nat))) -> Nat
-value_of(_, []) -> 0
-value_of(key, [(==key, value), *_]) -> value
-value_of(key, [_, *rest]) -> value_of(key, rest)
+# `==name` matches a value equal to a name from outside the pattern, by its
+# type's `equals`, and binds nothing. Within a pattern, a name written twice
+# asks its two parts equal.
+wanted : Str
+wanted = "b"
 
-expect value_of("b", [("a", 1), ("b", 2)]) == 2 & value_of("c", [("a", 1)]) == 0
+value_of : List((Str, Nat)) -> Nat
+value_of([]) -> 0
+value_of([(==wanted, value), *_]) -> value
+value_of([_, *rest]) -> value_of(rest)
+
+expect value_of([("a", 1), ("b", 2)]) == 2 & value_of([("a", 1)]) == 0
+
+pair_of : (Nat, List(Nat)) -> Bool
+pair_of(n, xs) -> xs is [==n, ==n, *_]
+
+doubled_head : List(Nat) -> Bool
+doubled_head(xs) -> xs is [a, a, *_]
+
+expect pair_of(3, [3, 3, 1]) & !pair_of(3, [3, 1]) & doubled_head([2, 2]) & !doubled_head([2, 1])

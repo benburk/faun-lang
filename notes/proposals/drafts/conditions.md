@@ -21,7 +21,7 @@ One operator and one line form, as the
   what it bound for the lines below, and otherwise leaves the clause, a
   round or a loop.
 - **`is` inside a pattern** binds a value and takes it apart: `right is [y,
-  *_]`; **`==name`** in a pattern compares with a name in scope.
+  *_]`; **`==name`** in a pattern compares with a name from outside it.
 - **No rebinding.** A name means one value for its whole scope.
 
 Built already, as parts of this proposal: `if c then a else b`, and `&` and
@@ -113,7 +113,10 @@ job, so a default for a failed `Result` stays `ok_or`.
   too. Variables written `$name`, with [loops](loops.md), are the only names
   that change.
 - **`==name`** in a pattern matches a value equal, by its type's `equals`,
-  to a name in scope, binding nothing: `r is Some(==node)`.
+  to a name from outside the pattern, binding nothing: `r is Some(==node)`.
+  Within one pattern, a clause's parameters too, a name written twice asks
+  its two parts equal, `[a, a, *_]`; `[a, ==a]` would read as if `a` were
+  bound before the pattern, and is refused.
 - **`?` on the right of `&` is refused,** as in a branch: it would be worked
   out before the left had decided, and before the left's names exist.
 - **`=` against `is`.** A binding, `P = expr`, cannot fail, and a pattern
@@ -193,7 +196,9 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   decision, worked out where the head has matched, so a failure falls to
   the next clause; its `|` is tried as one among a head's parameters, the
   right where the left or what follows it fails. An `|` in a test copies its
-  `then` to each side.
+  `then` to each side. Guards asking two parameters' parts equal became a name written twice, and clauses
+  rebuilding what their head took apart name it whole, as the standard
+  list's merge does; the parser library's number reader lost two clauses.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.

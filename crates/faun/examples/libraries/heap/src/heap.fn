@@ -82,12 +82,12 @@ taken((key, value), rest) -> {key, value, rest}
 # parent costing more comes down into the hole, and the hole goes up to it.
 climb : (List((k, v)), Nat, (k, v)) -> List((k, v)) where k.cmp : (k, k) -> Order
 climb(entries, 0, entry) -> put(entries, 0, entry)
-climb(entries, hole, (key, value)) -> (
+climb(entries, hole, entry is (key, _)) -> (
   above = (hole - 1) / 2
-  (parent_key, parent) = entries.get_or(above, (key, value))
+  (parent_key, parent) = entries.get_or(above, entry)
   if key < parent_key
-    then climb(put(entries, hole, (parent_key, parent)), above, (key, value))
-    else put(entries, hole, (key, value))
+    then climb(put(entries, hole, (parent_key, parent)), above, entry)
+    else put(entries, hole, entry)
 )
 
 # `entries`, the first `count` of them a heap but for `hole`, with `entry`
@@ -95,13 +95,13 @@ climb(entries, hole, (key, value)) -> (
 # costs less, comes up into the hole, and the hole goes down to it.
 sink : (List((k, v)), Nat, (k, v), Nat) -> List((k, v)) where k.cmp : (k, k) -> Order
 sink(entries, hole, entry, count) if hole * 2 + 1 >= count -> put(entries, hole, entry)
-sink(entries, hole, (key, value), count) -> (
+sink(entries, hole, entry is (key, _), count) -> (
   left = hole * 2 + 1
-  child = cheaper(entries, left, count, (key, value))
-  (child_key, lower) = entries.get_or(child, (key, value))
+  child = cheaper(entries, left, count, entry)
+  (child_key, lower) = entries.get_or(child, entry)
   if child_key < key
-    then sink(put(entries, hole, (child_key, lower)), child, (key, value), count)
-    else put(entries, hole, (key, value))
+    then sink(put(entries, hole, (child_key, lower)), child, entry, count)
+    else put(entries, hole, entry)
 )
 
 # The index of the cheaper child: the right one only where there is one and

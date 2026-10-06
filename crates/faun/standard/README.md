@@ -477,13 +477,15 @@ type taken apart by its own name, as `U8(…)`.
 
 `name is pattern`, where a pattern stands, binds the whole value to `name`
 and takes it apart with `pattern`. `==name` matches a value equal, by its
-type's `equals`, to a name in scope, and binds nothing; in a clause's head
-the name may be an earlier parameter's.
+type's `equals`, to a name from outside the pattern, and binds nothing:
+a constant, or in a test a name bound before it. Within one pattern,
+across a clause's parameters too, two parts are asked equal by writing a
+name twice, `[a, a, *_]`, and `[a, ==a]` is refused.
 
 ```
 merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
-value_of(key, [(==key, value), *_]) -> value
 found(r, node) -> r is Some(==node)
+strip_prefix([byte, *rest], [byte, *prefix]) -> strip_prefix(rest, prefix)
 ```
 
 `==name` asks its equality where the rest of the pattern has matched,
@@ -527,8 +529,8 @@ binds a name already in scope, so `v = v + 1` is refused, and a step takes
 a name of its own, `next = v + 1`. A binding's or a lambda's pattern binds
 each name once.
 
-A clause's head may bind a name twice, and then matches only where both are
-equal by their type's `equals`: `doubled([a, a]) -> True` is
+A clause's head, or a test's pattern, may bind a name twice, and then
+matches only where both are equal by their type's `equals`: `doubled([a, a]) -> True` is
 `doubled([a, b]) if a == b -> True`, the equality asked before any guard
 written. The clause covers only equal values, so another must cover the
 rest, and an alternative of `|` binds each name once, since the equality is

@@ -68,8 +68,8 @@ unpack({hidden, field_max, sign, *}, bits) -> (
 )
 
 classify : (Nat, Nat, Bool, Nat, Nat) -> Unpacked
-classify(_, field_max, negative, field, 0) if field == field_max -> Inf(negative)
-classify(_, field_max, _, field, _) if field == field_max -> NaN
+classify(_, field_max, negative, field_max, 0) -> Inf(negative)
+classify(_, field_max, _, field_max, _) -> NaN
 classify(_, _, negative, 0, fraction) -> Finite(negative, fraction, 1)
 classify(hidden, _, negative, field, fraction) -> Finite(negative, fraction + hidden, field)
 
@@ -260,7 +260,7 @@ add_led(fmt, s, ma, ea, t, mb, eb) -> (
 # larger and take its sign. Exact cancellation is `+0` under round-to-nearest,
 # which is also what `-0 + +0` must answer.
 add_aligned : (Format, Bool, Nat, Bool, Nat, Nat) -> Nat
-add_aligned(fmt, s, xa, t, xb, e) if s == t -> round_pack(fmt, s, xa + xb, e)
+add_aligned(fmt, s, xa, s, xb, e) -> round_pack(fmt, s, xa + xb, e)
 add_aligned(fmt, s, xa, _, xb, e) if xa > xb -> round_pack(fmt, s, xa - xb, e)
 add_aligned(fmt, _, xa, t, xb, e) if xb > xa -> round_pack(fmt, t, xb - xa, e)
 add_aligned(_, _, _, _, _, _) -> 0

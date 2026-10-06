@@ -98,7 +98,7 @@ scan_flag([_, *rest], long, short, index) -> scan_flag(rest, long, short, index 
 # One occurrence combined with whatever the rest of argv held: nothing more is
 # a find, an agreeing find is a repeat, a disagreeing one a conflict.
 merge_flag(value, _, Absent, index) -> Found(value, [index])
-merge_flag(value, arg, Found(other, _), _) if value == other -> Repeated(arg)
+merge_flag(value, arg, Found(value, _), _) -> Repeated(arg)
 merge_flag(_, _, Found(_, _), _) -> Conflict
 merge_flag(_, _, Repeated(name), _) -> Repeated(name)
 merge_flag(_, _, Conflict, _) -> Conflict

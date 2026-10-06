@@ -61,9 +61,9 @@ Random : U64.(
 # count of unplaced elements is the descent.
 walk : (List(a), Nat, Random) -> (List(a), Random)
 walk(xs, 0, state) -> (xs, state)
-walk(xs, Succ(m), state) -> (
+walk(xs, count is Succ(m), state) -> (
   (value, next) = state.next()
-  walk(xs.exchange(m, value.to_nat() % Succ(m)).ok_or(xs), m, next)
+  walk(xs.exchange(m, value.to_nat() % count).ok_or(xs), m, next)
 )
 
 # Drawing with replacement: `count` choices from `xs`, each from the state

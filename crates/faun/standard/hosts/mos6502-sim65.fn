@@ -193,9 +193,9 @@ named!(files, name, how) -> opening!(files, name.append(0), how, 8)
 # Open `name`, asking again, up to `tries` times, where the kernel was
 # interrupted or found the name moving under it.
 opening! : (Files, List(U8), (Nat, Nat), Nat) -> Result(File, OpenError)
-opening!(files, name, (how, made), tries) -> (
+opening!(files, name, mode is (how, made), tries) -> (
   answer = fd_open!(files, name, how, made)
-  opened!(files, name, (how, made), tries, outcome(answer))
+  opened!(files, name, mode, tries, outcome(answer))
 )
 
 opened! : (Files, List(U8), (Nat, Nat), Nat, Result(Nat, Nat)) -> Result(File, OpenError)

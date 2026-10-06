@@ -1806,10 +1806,11 @@ impl ClauseResolver<'_> {
                     Some(bound) => !bound.insert(spelling) && !alternate,
                     None => self.locals.contains_key(&spelling),
                 };
-                // In a clause's head, a name bound again is a fresh local the
-                // guard asks equal to the first; what reads it reads the first.
+                // In a clause's head or a test, a name bound again is a fresh
+                // local asked equal to the first; what reads it reads the
+                // first.
                 if again_here
-                    && self.shadowing.is_none()
+                    && (self.testing || self.shadowing.is_none())
                     && !self.choosing
                     && self.compared.is_some()
                     && let Some(first) = self.locals.get(&spelling).copied()
@@ -1980,6 +1981,22 @@ impl ClauseResolver<'_> {
                         format!("`{shown}` compares only in a clause's head or a test"),
                     )
                     .help("a binding's pattern cannot fail: test the value with `expect value is pattern else …`"));
+                }
+                // Within its own pattern, a name asks equality by being
+                // written again.
+                let spelling = self.symbols.intern(name.text(self.source));
+                let own = self
+                    .shadowing
+                    .as_ref()
+                    .is_none_or(|bound| bound.contains(&spelling));
+                if own && self.locals.contains_key(&spelling) {
+                    let written = name.text(self.source);
+                    return Err(error(
+                        self.module,
+                        *span,
+                        format!("`{shown}` compares with a name from outside its pattern, and this pattern binds `{written}`"),
+                    )
+                    .help(format!("to ask two of its parts equal, write `{written}` again in place of `{shown}`")));
                 }
                 let value = s::Expr {
                     span: name.0,

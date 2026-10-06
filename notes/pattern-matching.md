@@ -33,7 +33,10 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   not offer Finch's idea, so that says nothing against it.
 - **`is` inside a pattern** binds the whole and its parts: `right is [y,
   *_]`. Built, 2026-10-06.
-- **`==name` in a pattern** compares with a name in scope: `Some(==node)`.
+- **`==name` in a pattern** compares with a name from outside it:
+  `Some(==node)`. Within one pattern, a name written twice asks its parts
+  equal, `[a, a, *_]`, in a test as in a clause's head; `[a, ==a]` is
+  refused, since `==` reads as reaching outside the pattern.
   Built, 2026-10-06.
 - **No rebinding.** A name means one value for its whole scope: no shadowing
   in a binding, a pattern or a lambda. Variables written `$name`, coming
@@ -293,9 +296,9 @@ clause; a binding's and a lambda's must always match.
 | Record        | `{x, y: p}`, `{x, *}` | `*` leaves the other fields |
 | Tuple         | `(a, b)`              |                             |
 | Or            | `A(x) \| B(x)`        | clauses only; same names    |
-| Repeated name | `same([a, a])`        | clauses only; equal values  |
+| Repeated name | `same([a, a])`        | clauses and tests; equal    |
 | Whole, parts  | `all is [x, *_]`      | clauses and tests           |
-| Equal to name | `Some(==node)`        | clauses and tests           |
+| Equal to name | `Some(==node)`        | a name from outside it      |
 
 **Guards:** `if condition` after a clause's patterns. On failure, the next
 clause.

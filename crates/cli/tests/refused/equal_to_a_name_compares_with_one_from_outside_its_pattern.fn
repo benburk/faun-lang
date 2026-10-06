@@ -1,0 +1,8 @@
+import std.host {Host}
+
+doubled : List(Nat) -> Bool
+doubled([a, ==a, *_]) -> True
+doubled(_) -> False
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

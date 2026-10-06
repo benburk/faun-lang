@@ -46,7 +46,7 @@ has_straight([]) -> False
 
 # The letters that appear doubled, one entry per non-overlapping pair.
 doubled : List(U8) -> List(U8)
-doubled([a, b, *tail]) if a == b -> [a, *doubled(tail)]
+doubled([a, a, *tail]) -> [a, *doubled(tail)]
 doubled([_, *rest]) -> doubled(rest)
 doubled([]) -> []
 

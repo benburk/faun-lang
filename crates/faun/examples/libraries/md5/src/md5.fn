@@ -41,9 +41,9 @@ length_bytes(bits) -> (
 )
 
 compress : (State, List(U8)) -> State
-compress((a, b, c, d), block) -> (
+compress(start is (a, b, c, d), block) -> (
   words = words_le(block)
-  (a2, b2, c2, d2) = steps.enumerate().fold((a, b, c, d), |state, step| round(words, state, step))
+  (a2, b2, c2, d2) = steps.enumerate().fold(start, |state, step| round(words, state, step))
   (a + a2, b + b2, c + c2, d + d2)
 )
 

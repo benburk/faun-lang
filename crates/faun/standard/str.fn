@@ -142,7 +142,7 @@ utf8(_, _, _, _) -> False
 # `Ok` of what follows `prefix` in `bytes`, where they begin with it.
 strip_prefix : (List(U8), List(U8)) -> Result(List(U8), [Mismatch])
 strip_prefix(bytes, []) -> Ok(bytes)
-strip_prefix([byte, *rest], [wanted, *prefix]) if byte == wanted -> strip_prefix(rest, prefix)
+strip_prefix([byte, *rest], [byte, *prefix]) -> strip_prefix(rest, prefix)
 strip_prefix(_, _) -> Err(Mismatch)
 
 # The pieces of `bytes` between each separator, `first` then `more`, where

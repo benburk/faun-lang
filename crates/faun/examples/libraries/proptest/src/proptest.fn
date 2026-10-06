@@ -98,7 +98,7 @@ proptest_elements(state, Succ(rest), element) -> (
 # minimization a binary search down to the property's true boundary.
 shrink_nat : Nat -> List(Nat)
 shrink_nat(0) -> []
-shrink_nat(Succ(m)) -> [0, Succ(m).div(2), m]
+shrink_nat(n is Succ(m)) -> [0, n.div(2), m]
 
 # Candidates for a failing list: every one-element removal (shorter first),
 # then each element shrunk in place. Removals are tried before element

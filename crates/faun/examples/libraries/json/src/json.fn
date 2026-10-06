@@ -287,8 +287,8 @@ parse_value(['"', *rest]) -> (
 )
 parse_value(['[', *rest]) -> parse_array(rest, [])
 parse_value(['{', *rest]) -> parse_object(rest, [])
-parse_value([first, *rest]) if first.equals('-') | first.is_digit() -> (
-  (n, after) = parse_integer([first, *rest])?
+parse_value(input is [first, *_]) if first.equals('-') | first.is_digit() -> (
+  (n, after) = parse_integer(input)?
   Ok(parsed_json(Number(n), after))
 )
 parse_value([_, *]) -> Err(UnexpectedToken)

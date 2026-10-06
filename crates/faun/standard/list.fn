@@ -215,7 +215,7 @@ List(a) : [Nil, Cons(a, List(a))].(
   # remains, as `Nat`'s `x / 0` is 0 and `x % 0` is `x`.
   blocks : (List(a), Nat) -> {complete: List(List(a)), remainder: List(a)}
   blocks(values, 0) -> {complete: [], remainder: values}
-  blocks(values, Succ(width)) -> blocks_into(values, values, (Succ(width), width), [])
+  blocks(values, size is Succ(width)) -> blocks_into(values, values, (size, width), [])
 
   # Each element mapped while a state goes left to right beside it: `f`
   # takes the state and an element, and answers the next state and that
@@ -385,22 +385,20 @@ enumerate_from([head, *tail], at) -> [(at, head), *enumerate_from(tail, at + 1)]
 
 # Once a window is short, every later one is too, so the walk ends there.
 windows_into : (List(a), Nat, List(List(a))) -> List(List(a))
-windows_into([head, *tail], size, built) -> (
-  window = List.take([head, *tail], size)
-  windowed(window.len() == size, window, tail, (size, built))
+windows_into(values is [_, *tail], size, built) -> (
+  window = List.take(values, size)
+  if window.len() == size
+    then windows_into(tail, size, [window, *built])
+    else reverse_into(built, [])
 )
 windows_into([], 0, built) -> reverse_into(built, [[]])
 windows_into([], _, built) -> reverse_into(built, [])
-
-windowed : (Bool, List(a), List(a), (Nat, List(List(a)))) -> List(List(a))
-windowed(True, window, tail, (size, built)) -> windows_into(tail, size, [window, *built])
-windowed(False, _, _, (_, built)) -> reverse_into(built, [])
 
 # Sort each half and merge them. Past the first two clauses a list holds two
 # or more, so each half is shorter than it.
 merge_sort : (List(a), a -> k) -> List(a) where k.cmp : (k, k) -> Order
 merge_sort([], _) -> []
-merge_sort([only], _) -> [only]
+merge_sort(one is [_], _) -> one
 merge_sort(values, key) -> (
   (front, back) = List.split_at(values, List.len(values) / 2)
   merge_into(merge_sort(front, key), merge_sort(back, key), key, [])
@@ -411,8 +409,8 @@ merge_sort(values, key) -> (
 merge_into : (List(a), List(a), a -> k, List(a)) -> List(a) where k.cmp : (k, k) -> Order
 merge_into([], right, _, built) -> reverse_into(built, right)
 merge_into(left, [], _, built) -> reverse_into(built, left)
-merge_into([x, *left], [y, *right], key, built) if key(x) <= key(y) ->
-  merge_into(left, [y, *right], key, [x, *built])
+merge_into([x, *left], right is [y, *_], key, built) if key(x) <= key(y) ->
+  merge_into(left, right, key, [x, *built])
 merge_into(left, [y, *right], key, built) -> merge_into(left, right, key, [y, *built])
 
 repeat_onto : (a, Nat, List(a)) -> List(a)

@@ -20,7 +20,7 @@ Nat : [Zero, Succ(Nat)].(
 
   sub : (Nat, Nat) -> Nat
   sub(0, _) -> 0
-  sub(Succ(m), 0) -> Succ(m)
+  sub(m, 0) -> m
   sub(Succ(m), Succ(n)) -> m - n
 
   mul : (Nat, Nat) -> Nat
@@ -30,16 +30,16 @@ Nat : [Zero, Succ(Nat)].(
   div : (Nat, Nat) -> Nat
   div(_, 0) -> 0
   div(0, Succ(_)) -> 0
-  div(Succ(a), Succ(b)) -> (
-    quotient = div(a, Succ(b))
-    div_step(nat_same(mod(a, Succ(b)), b), quotient)
+  div(Succ(a), divisor is Succ(b)) -> (
+    quotient = div(a, divisor)
+    div_step(nat_same(mod(a, divisor), b), quotient)
   )
 
   mod : (Nat, Nat) -> Nat
   mod(a, 0) -> a
   mod(0, Succ(_)) -> 0
-  mod(Succ(a), Succ(b)) -> (
-    remainder = mod(a, Succ(b))
+  mod(Succ(a), divisor is Succ(b)) -> (
+    remainder = mod(a, divisor)
     mod_step(nat_same(remainder, b), remainder)
   )
 
