@@ -257,7 +257,23 @@ module.exports = grammar({
     // Expressions.
 
     // An `if` takes everything after its `else`, so nothing follows it.
-    _expression: $ => choice($.binary_expression, $.is_expression, $._operand, $.if_expression),
+    _expression: $ => choice(
+      $.binary_expression,
+      $.is_expression,
+      $._operand,
+      $.if_expression,
+      $.return_expression,
+    ),
+
+    // A block's line: go on where the condition holds, else leave.
+    expect_line: $ => seq(
+      'expect',
+      field('condition', $._expression),
+      'else',
+      field('otherwise', $._expression),
+    ),
+
+    return_expression: $ => prec.right(seq('return', field('value', $._expression))),
 
     binary_expression: $ => choice(...INFIX.map((operators, level) =>
       prec.left(level + 1 + (level >= 3 ? 1 : 0), seq(
@@ -364,7 +380,7 @@ module.exports = grammar({
     // binds nothing is an effect asked for what it does.
     block: $ => seq(
       '(',
-      repeat1(seq(choice($.binding, $._expression), $._block_newline)),
+      repeat1(seq(choice($.binding, $.expect_line, $._expression), $._block_newline)),
       field('answer', $._expression),
       ')',
     ),

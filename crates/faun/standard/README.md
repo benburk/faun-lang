@@ -424,10 +424,12 @@ binding's value, an argument or a branch; as an operand it is written in
 parentheses, `1 + (if late then 10 else 0)`. A line of a block beginning
 `if` begins one, where after a clause it is that clause's guard.
 
-A branch is a value and never leaves: `?` in one is refused, and a failure
-is passed on by answering a `Result` from both and asking `?` of the whole,
-`(if strict then Nat.from_str(text) else Ok(0))?`. A resource one branch
-uses up the other uses up too.
+A branch answering the clause, its value the clause's answer, may leave it
+with `?`, as the clause's body may. One whose value goes on into more of the
+body may not yet: there a failure is passed on by answering a `Result` from
+both branches and asking `?` of the whole, `(if strict then
+Nat.from_str(text) else Ok(0))?`. A resource one branch uses up the other
+uses up too.
 
 On `Bool`, `&` and `|` likewise work out their right side only where the
 left has not decided: `n == 0 | odd(n - 1)` stops at nought. That is
@@ -463,6 +465,29 @@ a new one where a comparison was meant, so it is refused. `?` on the right of `&
 not be worked out. Not yet: a test of a value holding a resource, a type
 taken apart by its own name, as `U8(…)`, and a guard's test binding for its
 clause's body.
+
+## Expect
+
+A block's line `expect condition else …` goes on where the condition holds,
+the lines after it seeing what it bound, and where it fails, leaves the
+clause or lambda: `else return value`, or `else` a block whose last line
+returns, doing its steps first. It is never a block's last line, since the
+lines after it answer.
+
+```
+first_doubled(xs) -> (
+  expect xs is [x, *_] else return 0
+  x * 2
+)
+```
+
+It says what should hold, so a line leaving where a shape matches is
+negated: `expect n != 0 else return 0`. `return` stands only in an
+`expect`'s `else`. An `expect` leaves from a block answering its clause or
+lambda, a body or a branch answering it, and not yet from one whose value
+goes on into more of the body, such as a binding's. A bare `expect`, an
+assumption checked in development, is not built; at the top level, `expect`
+is a test, as before.
 
 ## Or-patterns
 

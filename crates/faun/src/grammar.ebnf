@@ -76,6 +76,7 @@ field-types       = NAME ":" type [ "," [ field-types ] ]
 (* An `if` takes everything after its `else`, so it begins an expression
    and is no operand: `1 + (if c then a else b)`. *)
 expr              = "if" expr "then" expr "else" expr
+                  | "return" expr
                   | operand expr-tail ;
 expr-tail         = { infix operand } ;
 infix             = "|" | "^" | "&" | "is" | "==" | "!=" | "<" | "<=" | ">"
@@ -108,8 +109,14 @@ exprs             = expr [ "," [ exprs ] ] ;
 (* After `(` and one expression, the next token says which: `,` a tuple, `=`
    or a line's end a block, whose lines are bindings and then its answer,
    and `)` one value grouped. *)
-parenthesized     = expr [ "," [ exprs ] | "=" expr NEWLINE statements | NEWLINE statements ] ;
-statements        = expr [ "=" expr NEWLINE statements | NEWLINE statements ] ;
+parenthesized     = expect-line NEWLINE statements
+                  | expr [ "," [ exprs ] | "=" expr NEWLINE statements | NEWLINE statements ] ;
+statements        = expect-line NEWLINE statements
+                  | expr [ "=" expr NEWLINE statements | NEWLINE statements ] ;
+(* A block's line going on where its condition holds, the lines after it
+   answering, and leaving by its `else` where it fails. Where `return` and an
+   `expect` may stand is told after parsing. *)
+expect-line       = "expect" expr "else" expr ;
 (* A list's rest may have elements after it, which its end matches:
    `[*front, last]`. *)
 elements          = expr [ "," [ elements ] ]

@@ -71,6 +71,8 @@ impl Typed {
 pub(crate) enum Statement {
     Value(Expr),
     Binding(Expr, Expr),
+    /// `expect condition else otherwise`, written at `span`.
+    Expect(Span, Expr, Expr),
 }
 
 /// Why lines do not make items.
@@ -417,7 +419,8 @@ fn body_of(value: Expr) -> Body {
 /// # Errors
 ///
 /// A block that ends in a binding, or a binding whose head is no pattern.
-pub(crate) fn body(mut lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
+pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
+    let mut lines = held(lines, source)?;
     let result = match lines.pop().expect("a block has its first line") {
         Statement::Value(value) => value,
         Statement::Binding(_, value) => {
@@ -426,6 +429,7 @@ pub(crate) fn body(mut lines: Vec<Statement>, source: &str) -> Result<Body, Erro
                 "a block ends with its answer, a line after its last binding",
             ));
         }
+        Statement::Expect(..) => unreachable!("an `expect` holds the lines after it"),
     };
     let bindings = lines
         .into_iter()
@@ -440,9 +444,41 @@ pub(crate) fn body(mut lines: Vec<Statement>, source: &str) -> Result<Body, Erro
                 value,
                 discarded: false,
             }),
+            Statement::Expect(..) => unreachable!("an `expect` holds the lines after it"),
         })
         .collect::<Result<_, Error>>()?;
     Ok(Body { bindings, result })
+}
+
+/// `lines` with their first `expect` holding the lines after it, which
+/// answer where it holds, those taken apart the same way.
+fn held(mut lines: Vec<Statement>, source: &str) -> Result<Vec<Statement>, Error> {
+    let Some(at) = lines
+        .iter()
+        .position(|line| matches!(line, Statement::Expect(..)))
+    else {
+        return Ok(lines);
+    };
+    let rest = lines.split_off(at + 1);
+    let Some(Statement::Expect(span, condition, otherwise)) = lines.pop() else {
+        unreachable!("the line found is an `expect`")
+    };
+    if rest.is_empty() {
+        return Err(error(
+            span,
+            "an `expect` is not a block's last line: the lines after it answer where it holds",
+        ));
+    }
+    let rest = body(rest, source)?;
+    lines.push(Statement::Value(Expr {
+        span: span.through(rest.result.span),
+        kind: ExprKind::Expect {
+            condition: Box::new(condition),
+            otherwise: Box::new(otherwise),
+            rest: Box::new(rest),
+        },
+    }));
+    Ok(lines)
 }
 
 /// Refuse a line of a body whose value nothing keeps, unless it is a call
@@ -659,17 +695,17 @@ fn record(
 /// a body throws away.
 fn clause_expressions(clause: &Clause, source: &str) -> Result<(), Error> {
     if let Some(guard) = &clause.guard {
-        expression(guard, source)?;
+        expression(guard, source, false)?;
     }
-    body_expressions(&clause.body, source)
+    body_expressions(&clause.body, source, true)
 }
 
-fn body_expressions(body: &Body, source: &str) -> Result<(), Error> {
+fn body_expressions(body: &Body, source: &str, answering: bool) -> Result<(), Error> {
     thrown_away(body, source)?;
     for binding in &body.bindings {
-        expression(&binding.value, source)?;
+        expression(&binding.value, source, false)?;
     }
-    expression(&body.result, source)
+    expression(&body.result, source, answering)
 }
 
 /// Refuse a pattern-only form anywhere in `expr`.
@@ -677,7 +713,7 @@ fn body_expressions(body: &Body, source: &str) -> Result<(), Error> {
     clippy::too_many_lines,
     reason = "one arm for each kind of expression, to reach every one it holds"
 )]
-fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
+fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
     match &expr.kind {
         ExprKind::Wild => Err(error(expr.span, "`_` stands only in a pattern")),
         ExprKind::Range(..) => Err(error(expr.span, "a range stands only in a pattern")),
@@ -690,7 +726,7 @@ fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
         ExprKind::Name(_) | ExprKind::Number(_) => Ok(()),
         ExprKind::String(parts) => parts.iter().try_for_each(|part| match part {
             StringPart::Text(_) => Ok(()),
-            StringPart::Splice(splice, _) => expression(splice, source),
+            StringPart::Splice(splice, _) => expression(splice, source, false),
         }),
         ExprKind::List(elements, rest) => {
             if let Some(rest) = rest
@@ -704,11 +740,11 @@ fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
             elements
                 .iter()
                 .chain(rest.as_deref())
-                .try_for_each(|each| expression(each, source))
+                .try_for_each(|each| expression(each, source, false))
         }
         ExprKind::Record(fields) => fields
             .iter()
-            .try_for_each(|(_, value)| expression(value, source)),
+            .try_for_each(|(_, value)| expression(value, source, false)),
         ExprKind::Update(fields, base) => {
             if matches!(base.kind, ExprKind::Wild) {
                 return Err(error(
@@ -720,20 +756,22 @@ fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
                 .iter()
                 .map(|(_, value)| value)
                 .chain(std::iter::once(&**base))
-                .try_for_each(|each| expression(each, source))
+                .try_for_each(|each| expression(each, source, false))
         }
-        ExprKind::Tuple(members) => members.iter().try_for_each(|each| expression(each, source)),
-        ExprKind::Lambda(_, body) => expression(body, source),
+        ExprKind::Tuple(members) => members
+            .iter()
+            .try_for_each(|each| expression(each, source, false)),
+        ExprKind::Lambda(_, body) => expression(body, source, true),
         ExprKind::Call(head, arguments) | ExprKind::Method(head, _, arguments) => {
-            expression(head, source)?;
+            expression(head, source, false)?;
             arguments
                 .iter()
-                .try_for_each(|each| expression(each, source))
+                .try_for_each(|each| expression(each, source, false))
         }
         ExprKind::Member(value, _) | ExprKind::Unary(_, value) | ExprKind::Try(value) => {
-            expression(value, source)
+            expression(value, source, false)
         }
-        ExprKind::Block(body) => body_expressions(body, source),
+        ExprKind::Block(body) => body_expressions(body, source, answering),
         ExprKind::Binary(operator @ (BinaryOp::And | BinaryOp::Or), left, right) => {
             if *operator == BinaryOp::Or && is_test(left) && is_constructor(right, source) {
                 return Err(error(
@@ -751,16 +789,18 @@ fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
                 .label("would leave here")
                 .help("bind it with `?` on a line before, and use the name here"));
             }
-            expression(left, source)?;
-            expression(right, source)
+            expression(left, source, false)?;
+            expression(right, source, false)
         }
         ExprKind::Binary(_, left, right) => {
-            expression(left, source)?;
-            expression(right, source)
+            expression(left, source, false)?;
+            expression(right, source, false)
         }
-        ExprKind::Is(value, _) => expression(value, source),
+        ExprKind::Is(value, _) => expression(value, source, false),
+        // A branch that answers the clause may leave it, as its body may;
+        // one whose value goes on into more of the body cannot, yet.
         ExprKind::If(condition, yes, no) => {
-            for branch in [yes, no] {
+            for branch in [yes, no].into_iter().filter(|_| !answering) {
                 if let Some(span) = passed_on(branch) {
                     return Err(error(
                         span,
@@ -773,10 +813,52 @@ fn expression(expr: &Expr, source: &str) -> Result<(), Error> {
                     ));
                 }
             }
-            expression(condition, source)?;
-            expression(yes, source)?;
-            expression(no, source)
+            expression(condition, source, false)?;
+            expression(yes, source, answering)?;
+            expression(no, source, answering)
         }
+        ExprKind::Expect {
+            condition,
+            otherwise,
+            rest,
+        } => {
+            if !answering {
+                return Err(error(
+                    expr.span,
+                    "an `expect` leaves where its block answers the clause or lambda, and nowhere else yet",
+                )
+                .label("its block's value goes on into more of the body")
+                .help("take this step out into a function of its own, where its block answers"));
+            }
+            let leaving = match &otherwise.kind {
+                ExprKind::Return(value) => Some(value),
+                ExprKind::Block(body) => match &body.result.kind {
+                    ExprKind::Return(value) => {
+                        thrown_away(body, source)?;
+                        for binding in &body.bindings {
+                            expression(&binding.value, source, false)?;
+                        }
+                        Some(value)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(value) = leaving else {
+                return Err(error(
+                    otherwise.span,
+                    "an `expect`'s `else` leaves: `return` a value, or a block whose last line does",
+                )
+                .label("goes on rather than leaving"));
+            };
+            expression(condition, source, false)?;
+            expression(value, source, true)?;
+            body_expressions(rest, source, true)
+        }
+        ExprKind::Return(_) => Err(error(
+            expr.span,
+            "`return` stands only where an `expect` leaves: `expect c else return x`",
+        )),
     }
 }
 
@@ -801,6 +883,10 @@ fn is_constructor(expr: &Expr, source: &str) -> bool {
 
 /// Where `expr` passes a failure on with `?` from the clause it stands in:
 /// a `?` in a lambda answers the lambda, so one there is not.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm for each kind of expression, to reach every one it holds"
+)]
 fn passed_on(expr: &Expr) -> Option<Span> {
     fn each<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Option<Span> {
         exprs.into_iter().find_map(passed_on)
@@ -831,6 +917,17 @@ fn passed_on(expr: &Expr) -> Option<Span> {
         }
         ExprKind::Binary(_, left, right) => each([&**left, &**right]),
         ExprKind::If(condition, yes, no) => each([&**condition, &**yes, &**no]),
+        ExprKind::Return(value) => passed_on(value),
+        ExprKind::Expect {
+            condition,
+            otherwise,
+            rest,
+        } => each(
+            [&**condition, &**otherwise]
+                .into_iter()
+                .chain(rest.bindings.iter().map(|binding| &binding.value))
+                .chain([&rest.result]),
+        ),
         ExprKind::Block(body) => each(
             body.bindings
                 .iter()

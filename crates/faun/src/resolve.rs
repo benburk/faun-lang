@@ -2034,6 +2034,35 @@ impl ClauseResolver<'_> {
                 let (condition, yes) = yes?;
                 h::ExprKind::If(Box::new(condition), Box::new(yes), Box::new(self.expr(no)?))
             }
+            // Where its block answers, an `expect` is an `if`: the lines
+            // after it, seeing what its condition bound, where it holds, and
+            // what its `else` answers where it fails.
+            s::ExprKind::Expect {
+                condition,
+                otherwise,
+                rest,
+            } => {
+                let before = self.locals.clone();
+                let asked = condition.span;
+                let condition = self.condition(condition);
+                let yes = condition.and_then(|condition| {
+                    let body = self.body(rest)?;
+                    let block = self
+                        .sites
+                        .expr(expression.span, h::ExprKind::Block(Box::new(body)));
+                    Ok((condition, block))
+                });
+                self.hide(&before, asked);
+                self.locals = before;
+                let (condition, yes) = yes?;
+                h::ExprKind::If(
+                    Box::new(condition),
+                    Box::new(yes),
+                    Box::new(self.expr(otherwise)?),
+                )
+            }
+            // Only where its clause answers, so its value is that answer.
+            s::ExprKind::Return(value) => return self.expr(value),
             // Alone, a test binds for nothing after it.
             s::ExprKind::Is(..) => {
                 let before = self.locals.clone();
@@ -2140,7 +2169,7 @@ impl ClauseResolver<'_> {
                 ),
             )
             .label("not known to hold here")
-            .help("a test binds for the rest of its `&` chain and its `if`'s `then`; under `|`, `!` or in `else`, it may not have held"));
+            .help("a test binds along its `&` chain, into `then`, and for the lines below an `expect`; under `|`, `!` or in `else`, it may not have held"));
         }
         Err(error(
             self.module,

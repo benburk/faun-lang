@@ -445,6 +445,17 @@ pub enum ExprKind {
     /// `value is pattern`: whether it matches, binding the pattern's names
     /// where it is known to have.
     Is(Box<Expr>, Pattern),
+    /// A block's line `expect condition else otherwise`, holding the lines
+    /// after it: where the condition holds, those lines answer, seeing what
+    /// it bound; where it fails, `otherwise` leaves.
+    Expect {
+        condition: Box<Expr>,
+        otherwise: Box<Expr>,
+        rest: Box<Body>,
+    },
+    /// `return value`: the answer of the clause or lambda, which stands
+    /// only where an `expect` leaves.
+    Return(Box<Expr>),
     /// `(x = f(y)` … `x + 1)`: bindings, then the answer, in parentheses.
     /// Its names are seen by its later lines and its answer alone.
     Block(Box<Body>),

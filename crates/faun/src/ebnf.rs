@@ -91,6 +91,7 @@ fn terminal(spelling: &str) -> Kind {
         "\"then\"" => Kind::KwThen,
         "\"else\"" => Kind::KwElse,
         "\"is\"" => Kind::KwIs,
+        "\"return\"" => Kind::KwReturn,
         "\"(\"" => Kind::LParen,
         "\")\"" => Kind::RParen,
         "\"[\"" => Kind::LBracket,
@@ -559,6 +560,7 @@ const READ: &[&str] = &[
     "f(x) -> g(if x then 1 else 2, if y then 3 else 4)\n",
     "f(r) -> if r is Ok(v) & v > 0 then v else 0\nf(r) -> r is (A | B(_)) | r is [*_, C]\n",
     "f(a, b) -> (a, b) is (Ok(x), Ok(y)) & x <= y\n",
+    "f(xs) -> (\n  expect xs is [x, *_] else return 0\n  y = x\n  expect y > 1\n    else (\n      z = y\n      return z\n    )\n  y\n)\n",
 ];
 
 /// Programs both refuse.
@@ -589,6 +591,9 @@ const REFUSED: &[&str] = &[
     "f(x) -> if x then 1 else\n",
     "f(x) -> 1 + if x then 1 else 2\n",
     "f(x) -> -if x then 1 else 2\n",
+    "f(x) -> (\n  expect x\n)\n",
+    "f(x) -> (\n  expect x else\n)\n",
+    "f(x) -> (\n  y = x\n  expect y else return 0\n)\n",
 ];
 
 #[test]

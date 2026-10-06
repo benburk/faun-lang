@@ -1,0 +1,7 @@
+error: `x` is bound by a test, and seen only where that test is known to have held
+ --> what_an_expect_binds_is_not_seen_in_its_else.fn:5:36
+  |
+5 |   expect xs is [x, *_] else return x
+  |                                    ^ not known to hold here
+  |
+  = help: a test binds along its `&` chain, into `then`, and for the lines below an `expect`; under `|`, `!` or in `else`, it may not have held

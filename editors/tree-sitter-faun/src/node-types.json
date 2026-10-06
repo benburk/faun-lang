@@ -60,6 +60,10 @@
         "named": true
       },
       {
+        "type": "return_expression",
+        "named": true
+      },
+      {
         "type": "string",
         "named": true
       },
@@ -286,6 +290,10 @@
         {
           "type": "binding",
           "named": true
+        },
+        {
+          "type": "expect_line",
+          "named": true
         }
       ]
     }
@@ -496,6 +504,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "expect_line",
+    "named": true,
+    "fields": {
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "otherwise": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1324,6 +1358,22 @@
     }
   },
   {
+    "type": "return_expression",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "signature",
     "named": true,
     "fields": {
@@ -1952,6 +2002,10 @@
   },
   {
     "type": "package",
+    "named": false
+  },
+  {
+    "type": "return",
     "named": false
   },
   {

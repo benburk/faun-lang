@@ -1112,6 +1112,38 @@ fn a_test_binds_where_it_holds() {
     assert_eq!(answers, [1 + 3 + 2, 20 + 2 + 3, 1 + 3 + 4]);
 }
 
+/// An `expect` line goes on where its condition holds, with what it bound,
+/// and leaves where it fails, from a clause and from a branch answering it.
+#[test]
+fn an_expect_goes_on_or_leaves() {
+    let program = read(
+        "import std.host {Host}
+
+         first_or : (List(Nat), Nat) -> Nat
+         first_or(xs, fallback) -> (
+           expect xs is [x, *_] else return fallback
+           x * 10
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           listed = if n > 1 then [n] else []
+           answer = first_or(listed, 7)
+           host.exit!(U8.of_nat(answer))
+         )",
+    )
+    .expect("a program leaving early");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers: Vec<_> = execute_counts(&program, &[1, 2])
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(answers, [7, 20]);
+}
+
 /// The arguments a program is run with are a list of strings, its own name
 /// first: a greeting names the first after it, or the world where there is
 /// none, and the count is how many there are.

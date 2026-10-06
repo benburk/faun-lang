@@ -398,8 +398,24 @@ impl Parser<'_> {
 
     /// `statement`: a value, or `pattern = value`.
     fn statement(&mut self) -> Parsed<Statement> {
+        if self.peek() == Kind::KwExpect {
+            return self.expect_line();
+        }
         let value = self.expr()?;
         self.statement_after(value)
+    }
+
+    /// `expect condition else otherwise`, a block's line.
+    fn expect_line(&mut self) -> Parsed<Statement> {
+        let keyword = self.bump();
+        let condition = self.expr()?;
+        self.expect(Kind::KwElse, "`else`")?;
+        let otherwise = self.expr()?;
+        Ok(Statement::Expect(
+            keyword.span().through(otherwise.span),
+            condition,
+            otherwise,
+        ))
     }
 
     /// The statement `value` begins.
@@ -745,10 +761,18 @@ impl Parser<'_> {
     /// `expr`: operands and the infix operators between them, each binding
     /// as tight as its level and its left side first.
     fn expr(&mut self) -> Parsed<Expr> {
-        if self.peek() == Kind::KwIf {
-            return self.if_();
+        match self.peek() {
+            Kind::KwIf => self.if_(),
+            Kind::KwReturn => {
+                let keyword = self.bump();
+                let value = self.expr()?;
+                Ok(Expr {
+                    span: keyword.span().through(value.span),
+                    kind: ExprKind::Return(Box::new(value)),
+                })
+            }
+            _ => self.binary(0),
         }
-        self.binary(0)
     }
 
     fn binary(&mut self, looser: u8) -> Parsed<Expr> {
@@ -991,6 +1015,10 @@ impl Parser<'_> {
     /// tuple, `=` or a line's end a block, and `)` one value grouped.
     fn parenthesized(&mut self) -> Parsed<Expr> {
         let open = self.bump();
+        if self.peek() == Kind::KwExpect {
+            let first = self.expect_line()?;
+            return self.lines_from(open, first);
+        }
         let first = self.expr()?;
         match self.peek() {
             Kind::Comma => self.tuple(open, first),
@@ -1033,7 +1061,13 @@ impl Parser<'_> {
     /// `block`: statements a line apiece, the last its answer, after the
     /// first expression.
     fn block(&mut self, open: Token, first: Expr) -> Parsed<Expr> {
-        let mut statements = vec![self.statement_after(first)?];
+        let first = self.statement_after(first)?;
+        self.lines_from(open, first)
+    }
+
+    /// The rest of a block, after its first line.
+    fn lines_from(&mut self, open: Token, first: Statement) -> Parsed<Expr> {
+        let mut statements = vec![first];
         while self.eat(Kind::Newline).is_some() {
             statements.push(self.statement()?);
         }

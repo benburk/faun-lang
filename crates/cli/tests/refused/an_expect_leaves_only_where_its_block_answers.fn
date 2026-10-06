@@ -1,0 +1,13 @@
+import std.host {Host}
+
+halved : Nat -> Nat
+halved(n) -> (
+  half = (
+    expect n > 0 else return 0
+    n / 2
+  )
+  half + 1
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

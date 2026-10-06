@@ -177,6 +177,12 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   a resource, refused for now; a type taken apart by its own name, as
   `U8(…)`, which only a clause's head expands; and a guard's test binding
   for its clause's body.
+- **`expect … else`,** 2026-10-06: `return` and a block's `expect` line,
+  leaving by `return` or by a block ending in one, from a block answering
+  its clause or lambda; elsewhere refused until join points. Where its block
+  answers, an `expect` is an `if` holding the lines after it, so it needed
+  no lowering of its own; `?` in an `if` branch answering its clause came
+  with it. Dijkstra's `back` is three flat lines.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.

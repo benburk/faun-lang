@@ -1,0 +1,10 @@
+import std.host {Host}
+
+head : List(Nat) -> Nat
+head(xs) -> (
+  expect xs is [x, *_] else return x
+  x
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)
