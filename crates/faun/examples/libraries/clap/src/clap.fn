@@ -175,17 +175,16 @@ parse_custom(Absent(doc), convert, metavar) ->
   Absent(shaped(doc, metavar))
 parse_custom(Failed(message, doc), convert, metavar) ->
   Failed(message, shaped(doc, metavar))
-parse_custom(Value(value, doc), convert, metavar) ->
-  custom_value(convert(value), value, shaped(doc, metavar), metavar)
+parse_custom(Value(value, doc), convert, metavar) -> (
+  typed = shaped(doc, metavar)
+  if convert(value) is Ok(found) then Value(found, typed) else (
+    long = spec_long(doc.spec)
+    refusal = "option `--${long}` could not parse `${value}` as ${metavar}"
+    Failed(refusal, typed)
+  )
+)
 
 shaped(doc, metavar) -> {shape: Named(metavar), *doc}
-
-custom_value(Ok(found), _, doc, _) -> Value(found, doc)
-custom_value(Err(_), value, doc, metavar) -> (
-  long = spec_long(doc.spec)
-  refusal = "option `--${long}` could not parse `${value}` as ${metavar}"
-  Failed(refusal, doc)
-)
 
 repeated(name) -> "option `${name}` was supplied more than once"
 

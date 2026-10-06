@@ -93,8 +93,19 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   remove : (Map(k, v), k) -> Map(k, v) where
     k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
-  remove(Map({seed, slots, index, size}), key) ->
-    removed(slot_of(seed, index, slots, key), seed, slots, index, size, key)
+  remove(map, key) -> (
+    Map({seed, slots, index, size}) = map
+    expect slot_of(seed, index, slots, key) is Ok(position) else return map
+    digest = digest_of(seed, key)
+    bucket = bucket_of(digest, index.len())
+    entries = index.get_or(bucket, []).filter(|(_, at)| at != position)
+    Map({
+      seed: seed,
+      slots: slots.set(position, Removed).ok_or([]),
+      index: index.set(bucket, entries).ok_or([]),
+      size: size - 1,
+    })
+  )
 
   # The entries of `map` in insertion order.
   to_list : Map(k, v) -> List((k, v))
@@ -223,21 +234,6 @@ replaced(Err(_), seed, slots, index, size, key, value) -> (
       size: size + 1,
     }),
   )
-)
-
-removed : (Result(Nat, [Missing]), U64, List(Slot(k, v)), List(List((U64, Nat))), Nat, k) -> Map(k, v) where
-  k.hash_into : (k, Mixer) -> Mixer
-removed(Err(_), seed, slots, index, size, _) -> Map({seed: seed, slots: slots, index: index, size: size})
-removed(Ok(position), seed, slots, index, size, key) -> (
-  digest = digest_of(seed, key)
-  bucket = bucket_of(digest, index.len())
-  entries = index.get_or(bucket, []).filter(|(_, at)| at != position)
-  Map({
-    seed: seed,
-    slots: slots.set(position, Removed).ok_or([]),
-    index: index.set(bucket, entries).ok_or([]),
-    size: size - 1,
-  })
 )
 
 # Past three quarters full, the index doubles and every live entry is

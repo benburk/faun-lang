@@ -182,7 +182,9 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   its clause or lambda; elsewhere refused until join points. Where its block
   answers, an `expect` is an `if` holding the lines after it, so it needed
   no lowering of its own; `?` in an `if` branch answering its clause came
-  with it. Dijkstra's `back` is three flat lines.
+  with it. Dijkstra's `back` is three flat lines; the heap's `visiting` and
+  `drained`, proptest's step, and `Map`'s `removed` became `expect` lines,
+  and `split_step`, `recalled` and clap's `custom_value` became `if … is`.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.

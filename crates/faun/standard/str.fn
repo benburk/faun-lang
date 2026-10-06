@@ -151,19 +151,12 @@ strip_prefix(_, _) -> Err(Mismatch)
 # what follows one is no longer than the rest after that byte.
 split_into : (List(U8), (U8, List(U8)), List(U8), List(Str)) -> List(Str)
 split_into([byte, *rest], (first, more), piece, pieces) if byte == first -> (
-  found = strip_prefix(rest, more)
-  split_step(found, byte, rest, ((first, more), piece, pieces))
+  if strip_prefix(rest, more) is Ok(after)
+    then split_into(after, (first, more), [], [Str(piece.reverse()), *pieces])
+    else split_into(rest, (first, more), [byte, *piece], pieces)
 )
 split_into([byte, *rest], separator, piece, pieces) -> split_into(rest, separator, [byte, *piece], pieces)
 split_into([], _, piece, pieces) -> [Str(piece.reverse()), *pieces].reverse()
-
-# A separator where the bytes go on, and a fresh piece after it; or else
-# the byte kept in the piece.
-split_step : (Result(List(U8), [Mismatch]), U8, List(U8), ((U8, List(U8)), List(U8), List(Str))) -> List(Str)
-split_step(Ok(after), _, _, (separator, piece, pieces)) ->
-  split_into(after, separator, [], [Str(piece.reverse()), *pieces])
-split_step(Err(_), byte, rest, (separator, piece, pieces)) ->
-  split_into(rest, separator, [byte, *piece], pieces)
 
 # The lines of `bytes`, the line so far `line` and those finished `lines`,
 # both backwards.

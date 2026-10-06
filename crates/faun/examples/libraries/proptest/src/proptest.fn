@@ -61,15 +61,10 @@ Verdict(a) : [Passed, Falsified(a, a)].(
 # ample: the shrinkers below halve or decrement, so real descents are short.
 proptest_minimize : (a, a -> Bool, a -> List(a), Nat) -> a
 proptest_minimize(value, prop, shrink, 0) -> value
-proptest_minimize(value, prop, shrink, Succ(rest)) ->
-  proptest_minimize_step(proptest_refute(shrink(value), prop), value, prop, shrink, rest)
-
-# A still-failing candidate is the new value to minimize; exhaustion of the
-# candidates leaves the value minimal. The candidate is computed, so it heads.
-proptest_minimize_step : (Result(a, [Exhausted]), a, a -> Bool, a -> List(a), Nat) -> a
-proptest_minimize_step(Err(Exhausted), value, prop, shrink, rest) -> value
-proptest_minimize_step(Ok(smaller), value, prop, shrink, rest) ->
+proptest_minimize(value, prop, shrink, Succ(rest)) -> (
+  expect proptest_refute(shrink(value), prop) is Ok(smaller) else return value
   proptest_minimize(smaller, prop, shrink, rest)
+)
 
 # The first candidate the property rejects, if any.
 proptest_refute : (List(a), a -> Bool) -> Result(a, [Exhausted])

@@ -18,15 +18,11 @@ Memo(k, v) : Map(k, v).(
   memoize : (Memo(k, v), k, c, (Memo(k, v), c) -> (v, Memo(k, v))) -> (v, Memo(k, v)) where
     k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
-  memoize(Memo(entries), key, context, compute) ->
-    recalled(entries.get(key), Memo(entries), key, context, compute)
-)
-
-recalled : (Result(v, [Missing]), Memo(k, v), k, c, (Memo(k, v), c) -> (v, Memo(k, v))) -> (v, Memo(k, v)) where
-  k.hash_into : (k, Mixer) -> Mixer,
-  k.equals : (k, k) -> Bool
-recalled(Ok(value), memo, _, _, _) -> (value, memo)
-recalled(Err(_), memo, key, context, compute) -> (
-  (value, Memo(entries)) = compute(memo, context)
-  (value, Memo(entries.insert(key, value)))
+  memoize(memo, key, context, compute) -> (
+    Memo(entries) = memo
+    if entries.get(key) is Ok(known) then (known, memo) else (
+      (value, Memo(computed)) = compute(memo, context)
+      (value, Memo(computed.insert(key, value)))
+    )
+  )
 )
