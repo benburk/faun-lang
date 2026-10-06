@@ -185,3 +185,22 @@ nudged : ((Nudge, Nat)) -> Nudge
 nudged((Nudge(by), extra)) -> Nudge(by + extra)
 
 expect nudged((Down(2), 1)).to_str() == "down 3"
+
+# `name is pattern` names the whole value and takes it apart: the clause
+# tests the list's head and hands on the list itself.
+merge : (List(Nat), List(Nat)) -> List(Nat)
+merge([], right) -> right
+merge(left, []) -> left
+merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
+merge(left is [_, *_], [y, *ys]) -> [y, *merge(left, ys)]
+
+expect merge([1, 4, 6], [2, 3, 7]) == [1, 2, 3, 4, 6, 7]
+
+# `==name` matches a value equal to a name in scope, by its type's `equals`,
+# and binds nothing.
+value_of : (Str, List((Str, Nat))) -> Nat
+value_of(_, []) -> 0
+value_of(key, [(==key, value), *_]) -> value
+value_of(key, [_, *rest]) -> value_of(key, rest)
+
+expect value_of("b", [("a", 1), ("b", 2)]) == 2 & value_of("c", [("a", 1)]) == 0

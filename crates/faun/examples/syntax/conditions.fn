@@ -91,3 +91,11 @@ checked(name, limit) -> (
 
 expect head_doubled([4, 5]) == 9 & head_doubled([]) == 0
 expect checked("_12", 20) == Ok(12) & checked("x", 20) == Err(Invalid) & checked("_30", 20) == Err(Invalid)
+
+# A name both sides of an `|` bind is seen where either held.
+Shape : [Circle(Nat), Square(Nat), Dot]
+
+size : Shape -> Nat
+size(shape) -> if shape is Circle(n) | shape is Square(n) then n else 0
+
+expect size(Circle(3)) == 3 & size(Square(4)) == 4 & size(Dot) == 0

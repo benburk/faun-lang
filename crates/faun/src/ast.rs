@@ -387,6 +387,17 @@ pub enum Pattern {
         span: Span,
         parts: Vec<Span>,
     },
+    /// `==name`: a value equal, by its type's `equals`, to `name`.
+    Equal {
+        span: Span,
+        name: Name,
+    },
+    /// `name is pattern`: the whole value named, and taken apart.
+    As {
+        span: Span,
+        name: Name,
+        pattern: Box<Self>,
+    },
     /// `A | B`: either alternative, each binding the same names. Only a
     /// clause's parameters take one.
     Or {
@@ -409,6 +420,8 @@ impl Pattern {
             | Self::Record { span, .. }
             | Self::Tuple { span, .. }
             | Self::String { span, .. }
+            | Self::As { span, .. }
+            | Self::Equal { span, .. }
             | Self::Or { span, .. } => *span,
         }
     }
@@ -463,6 +476,9 @@ pub enum ExprKind {
     /// before its line says it is a pattern, and refused by the parser
     /// wherever it is not one, so it never leaves the parser.
     Wild,
+    /// `==name`: as `Wild`, a pattern's alone, matching a value equal to
+    /// `name`.
+    Equal(Name),
     /// `1..9`, or `_..-1`: as `Wild`, a pattern's alone, which never leaves
     /// the parser. An end written `_` is open.
     Range(Option<Bound>, Option<Bound>),

@@ -160,7 +160,7 @@ impl Frame {
         parameters: &mut Vec<Pattern>,
     ) {
         let carried = self.carry(callback, lambdas);
-        if let Pattern::Bind(local) = pattern {
+        if let Pattern::Bind(local) | Pattern::As(local, _) = pattern {
             parameters.extend(carried.iter().map(|(local, _)| Pattern::Bind(*local)));
             self.functions.insert(*local, (callback.clone(), carried));
         } else {
@@ -756,6 +756,7 @@ fn expr_local_highest(expression: &Expr) -> u32 {
 fn pattern_highest(pattern: &Pattern) -> u32 {
     match pattern {
         Pattern::Bind(local) => local.0,
+        Pattern::As(local, pattern) => local.0.max(pattern_highest(pattern)),
         Pattern::Constructor(_, fields) | Pattern::Product(fields) => {
             fields.iter().map(pattern_highest).max().unwrap_or(0)
         }
@@ -879,6 +880,10 @@ fn pattern_locals(pattern: &Pattern, output: &mut HashSet<LocalId>) {
     match pattern {
         Pattern::Bind(local) => {
             output.insert(*local);
+        }
+        Pattern::As(local, pattern) => {
+            output.insert(*local);
+            pattern_locals(pattern, output);
         }
         Pattern::Constructor(_, fields)
         | Pattern::List(fields, None)

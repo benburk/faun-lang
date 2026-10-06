@@ -279,6 +279,7 @@ impl<'a> Facts<'a> {
                 paths: Vec::new(),
                 refused: Vec::new(),
                 guarded: false,
+                answering: Some(place(&clause.body.result)),
             };
             walk.clause(clause, parameters);
             paths.append(&mut walk.paths);
@@ -593,6 +594,8 @@ struct Walk<'f, 'a> {
     refused: Vec<Refusal>,
     /// Whether a guard is being read, which may look and nothing more.
     guarded: bool,
+    /// Where the clause walked answers, for what its head is refused.
+    answering: Option<Place>,
 }
 
 impl Walk<'_, '_> {
@@ -635,6 +638,20 @@ impl Walk<'_, '_> {
                     state: State::Held,
                 });
                 self.locals.insert(*local, self.held.len() - 1);
+            }
+            // The whole and its parts would each hold what it holds.
+            Pattern::As(_, pattern) => {
+                let resource = self.facts.called(self.facts.resource_in(ty), "resource");
+                self.refused.push(Refusal {
+                    at: self.answering,
+                    message: format!(
+                        "a value holding a {resource} is named whole or taken apart, not both"
+                    ),
+                    label: "in the clause answering this".to_owned(),
+                    also: None,
+                    help: Some("name the whole, or its parts".to_owned()),
+                });
+                self.bind(pattern, ty, origins);
             }
             Pattern::Constructor(_, _) if self.is_resource(ty) => self.hold(origins),
             Pattern::Wild => self.hold(origins),

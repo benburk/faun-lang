@@ -103,8 +103,9 @@ job, so a default for a failed `Result` stays `ok_or`.
 - **Scope.** What a pattern binds is seen where the test is known to have
   held: by the operands to its right along `&`, and, where the whole
   condition is such a chain, by an `if`'s `then` branch, a guard's clause
-  body, and the lines below an `expect` line. Under `|`,
-  `!` or an argument, nowhere; a use there is refused, naming what hid it.
+  body, and the lines below an `expect` line. Past an `|`, a name both
+  sides bind, from whichever held; under `!` or an argument, nowhere. A use
+  where a name is not seen is refused, naming what hid it.
 - **No rebinding.** A pattern may not bind a name already in scope, here
   or anywhere: `r is Ok(limit)` with `limit` in scope reads as a comparison
   and would be a fresh binding, so it is refused, offering `Ok(==limit)` to
@@ -175,8 +176,7 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   rows, a row for each alternative and one for any other value, its `else`
   copied to each test of a chain. Left for later: a test of a value holding
   a resource, refused for now; a type taken apart by its own name, as
-  `U8(…)`, which only a clause's head expands; and a guard's test binding
-  for its clause's body.
+  `U8(…)`, which only a clause's head expands.
 - **`expect … else`,** 2026-10-06: `return` and a block's `expect` line,
   leaving by `return` or by a block ending in one, from a block answering
   its clause or lambda; elsewhere refused until join points. Where its block
@@ -185,6 +185,15 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   with it. Dijkstra's `back` is three flat lines; the heap's `visiting` and
   `drained`, proptest's step, and `Map`'s `removed` became `expect` lines,
   and `split_step`, `recalled` and clap's `custom_value` became `if … is`.
+- **Patterns and guards,** 2026-10-06: `name is pattern` and `==name` in a
+  clause's head and a test; a guard's test binding for its clause's body; a
+  name both sides of an `|` bind seen past it. `==name` becomes a fresh
+  name asked equal after the pattern matches, as a name repeated in a head
+  already was. A guard's test is a column of its own in the clause's
+  decision, worked out where the head has matched, so a failure falls to
+  the next clause; its `|` is tried as one among a head's parameters, the
+  right where the left or what follows it fails. An `|` in a test copies its
+  `then` to each side.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.

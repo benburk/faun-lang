@@ -82,6 +82,7 @@ type Declaration<'a> = (&'a [Symbol], HashMap<Symbol, &'a [h::Type]>);
 fn takes_anything(pattern: &t::Pattern) -> bool {
     match pattern {
         t::Pattern::Wild | t::Pattern::Bind(_) => true,
+        t::Pattern::As(_, pattern) => takes_anything(pattern),
         t::Pattern::Tuple(members) => members.iter().all(takes_anything),
         t::Pattern::Record(fields, _) => fields.iter().all(|(_, field)| takes_anything(field)),
         _ => false,
@@ -172,6 +173,7 @@ impl<'a> Coverage<'a> {
     fn pattern(&self, pattern: &t::Pattern) -> Pattern {
         match pattern {
             t::Pattern::Wild | t::Pattern::Bind(_) => Pattern::Wild,
+            t::Pattern::As(_, pattern) => self.pattern(pattern),
             t::Pattern::Or(_) => unreachable!("clauses are read as rows, one per alternative"),
             t::Pattern::Constructor(name, fields) => Pattern::Constructor(
                 *name,

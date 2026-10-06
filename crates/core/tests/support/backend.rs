@@ -1144,6 +1144,49 @@ fn an_expect_goes_on_or_leaves() {
     assert_eq!(answers, [7, 20]);
 }
 
+/// A pattern names a whole value and takes it apart, compares with a name
+/// by `==name`, and a guard's test, and names both sides of an `|` bind,
+/// are seen by what follows.
+#[test]
+fn patterns_name_wholes_compare_and_bind_from_guards() {
+    let program = read(
+        "import std.host {Host}
+
+         merge : (List(Nat), List(Nat)) -> List(Nat)
+         merge([], right) -> right
+         merge(left, []) -> left
+         merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
+         merge(left is [_, *_], [y, *ys]) -> [y, *merge(left, ys)]
+
+         lookup : (List(Nat), Nat) -> Nat
+         lookup(xs, i) if xs.get(i) is Ok(found) -> found
+         lookup(_, _) -> 0
+
+         either : (Result(Nat, [Gone]), Result(Nat, [Gone])) -> Nat
+         either(a, b) -> if a is Ok(v) | b is Ok(v) then v else 1
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           merged = merge([n, 5], [2, 4])
+           second = lookup(merged, 1)
+           found = if merged is [_, ==n, *_] then 100 else 0
+           tried = if n > 1 then Ok(n) else Err(Gone)
+           answer = second + found + either(Err(Gone), tried) * 10
+           host.exit!(U8.of_nat(answer))
+         )",
+    )
+    .expect("a program naming wholes, comparing and binding from guards");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers: Vec<_> = execute_counts(&program, &[1, 2])
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(answers, [12, 122]);
+}
+
 /// The arguments a program is run with are a list of strings, its own name
 /// first: a greeting names the first after it, or the world where there is
 /// none, and the count is how many there are.

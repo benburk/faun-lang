@@ -113,7 +113,10 @@ pub(crate) fn compile(
                         .map(|clause| {
                             Ok(Row {
                                 patterns: clause.patterns,
-                                guard: clause.guard,
+                                guard: clause
+                                    .guard
+                                    .map(|guard| asked(guard, prelude))
+                                    .unwrap_or_default(),
                                 body: compiler.body(clause.body)?,
                                 locals: HashMap::new(),
                             })
@@ -148,7 +151,8 @@ struct Subject {
 #[derive(Clone, Debug)]
 struct Row {
     patterns: Vec<Pattern>,
-    guard: Option<Expr>,
+    /// What the row's guard asks, in turn; see [`asked`].
+    guard: Vec<Expr>,
     body: Body,
     locals: HashMap<LocalId, Value>,
 }
@@ -168,6 +172,14 @@ pub(crate) enum Decision {
         subject: Value,
         owner: Type,
         fields: Vec<Value>,
+        decision: Box<Self>,
+    },
+    /// `value` worked out by `subject` where the row's patterns have
+    /// matched, as a guard's test asks of it, and what is decided of it.
+    Let {
+        value: Value,
+        subject: Body,
+        locals: HashMap<LocalId, Value>,
         decision: Box<Self>,
     },
     /// The condition is a body: a guard written as a block has its
@@ -212,9 +224,9 @@ impl Decision {
             Self::Body { .. } | Self::Unreachable { .. } => false,
             Self::Numeral { .. } => true,
             Self::Match { arms, .. } => arms.iter().any(|arm| arm.decision.tests_numerals()),
-            Self::Record { decision, .. } | Self::Split { decision, .. } => {
-                decision.tests_numerals()
-            }
+            Self::Record { decision, .. }
+            | Self::Split { decision, .. }
+            | Self::Let { decision, .. } => decision.tests_numerals(),
             Self::Guard {
                 otherwise, answer, ..
             } => otherwise.tests_numerals() || answer.tests_numerals(),
@@ -289,14 +301,14 @@ impl Compiler<'_> {
             .into_iter()
             .map(|(pattern, guard)| Row {
                 patterns: vec![pattern],
-                guard,
+                guard: guard.into_iter().collect(),
                 body: yes.clone(),
                 locals: HashMap::new(),
             })
             .collect();
         rows.push(Row {
             patterns: vec![Pattern::Wild],
-            guard: None,
+            guard: Vec::new(),
             body: self.compiled(no)?,
             locals: HashMap::new(),
         });
@@ -401,6 +413,14 @@ impl Compiler<'_> {
         subjects: &[Subject],
         next: &mut u32,
     ) -> Result<Decision, LowerError> {
+        if rows.iter().any(|row| {
+            row.patterns
+                .iter()
+                .any(|pattern| matches!(pattern, Pattern::As(..)))
+        }) {
+            let peeled: Vec<Row> = rows.iter().map(|row| named_whole(row, subjects)).collect();
+            return self.plan(&peeled, subjects, next);
+        }
         let Some(first) = rows.first() else {
             return match &self.run_out {
                 RunOut::Refused => Err(error("function clauses are not exhaustive")),
@@ -417,13 +437,42 @@ impl Compiler<'_> {
                     first.locals.insert(*local, subject.value);
                 }
             }
-            let answer = Decision::Body {
-                body: first.body,
-                locals: first.locals.clone(),
-            };
-            let Some(condition) = first.guard else {
-                return Ok(answer);
-            };
+            if first.guard.is_empty() {
+                return Ok(Decision::Body {
+                    body: first.body,
+                    locals: first.locals,
+                });
+            }
+            let condition = first.guard.remove(0);
+            if let ExprKind::Is(subject, alternatives) = condition.kind {
+                return self.let_test(first, *subject, alternatives, (rows, subjects), next);
+            }
+            if let ExprKind::DirectCall(key, _) = &condition.kind
+                && key.name == self.prelude.bool_or
+                && binds(&condition, self.prelude)
+            {
+                // Either side, as an `|` among a clause's patterns is: a row
+                // for each, the left's tried first.
+                let ExprKind::DirectCall(_, sides) = condition.kind else {
+                    unreachable!("matched above")
+                };
+                let mut either = Vec::with_capacity(rows.len() + 1);
+                for side in sides {
+                    let mut row = first.clone();
+                    row.guard = asked(side, self.prelude)
+                        .into_iter()
+                        .chain(first.guard.iter().cloned())
+                        .collect();
+                    either.push(row);
+                }
+                either.extend(rows[1..].iter().cloned());
+                return self.plan(&either, subjects, next);
+            }
+            let otherwise = self.plan(&rows[1..], subjects, next)?;
+            let locals = first.locals.clone();
+            let mut going_on = vec![first];
+            going_on.extend(rows[1..].iter().cloned());
+            let answer = self.plan(&going_on, subjects, next)?;
             let booleans = Type::Named(self.prelude.bool_, Vec::new()).constructors(self.data)?;
             if booleans.len() != 2
                 || booleans.iter().any(|(_, fields)| !fields.is_empty())
@@ -444,10 +493,10 @@ impl Compiler<'_> {
             })?;
             return Ok(Decision::Guard {
                 condition,
-                locals: first.locals,
+                locals,
                 false_constructor: self.prelude.bool_false,
                 true_constructor: self.prelude.bool_true,
-                otherwise: Box::new(self.plan(&rows[1..], subjects, next)?),
+                otherwise: Box::new(otherwise),
                 answer: Box::new(answer),
             });
         }
@@ -579,6 +628,53 @@ impl Compiler<'_> {
             subject: subject.value,
             owner: subject.ty.clone(),
             arms,
+        })
+    }
+
+    /// The rows with `first`'s guard asking `subject is alternatives`
+    /// next: the subject worked out as a column of its own, which `first`
+    /// matches against each alternative, its rest asked after, and every
+    /// other row takes anything in. Where none matches, or what follows
+    /// fails, the rows below are tried, as a guard failing is.
+    fn let_test(
+        &self,
+        first: Row,
+        subject: Expr,
+        alternatives: Vec<(Pattern, Option<Expr>)>,
+        (rows, subjects): (&[Row], &[Subject]),
+        next: &mut u32,
+    ) -> Result<Decision, LowerError> {
+        let value = Value(*next);
+        *next = next.checked_add(1).expect("fewer than 2^32 plan values");
+        let mut tested = subjects.to_vec();
+        tested.push(Subject {
+            value,
+            ty: subject.ty.clone(),
+        });
+        let mut below = Vec::with_capacity(alternatives.len() + rows.len());
+        for (pattern, guard) in alternatives {
+            let mut row = first.clone();
+            row.patterns.push(pattern);
+            row.guard = guard
+                .into_iter()
+                .chain(first.guard.iter().cloned())
+                .collect();
+            below.push(row);
+        }
+        for row in &rows[1..] {
+            let mut row = row.clone();
+            row.patterns.push(Pattern::Wild);
+            below.push(row);
+        }
+        let subject = self.body(d::Body {
+            bindings: Vec::new(),
+            result: subject,
+        })?;
+        Ok(Decision::Let {
+            value,
+            subject,
+            locals: first.locals,
+            decision: Box::new(self.plan(&below, &tested, next)?),
         })
     }
 
@@ -820,10 +916,10 @@ fn hoisted(body: d::Body, fresh: &mut u32) -> d::Body {
 }
 
 /// `expression` with every test the condition of an `if` of its own: an
-/// `if` asking a chain of `&` holding a test asks each part in turn, its
-/// `else` copied to each, so what a test binds is in scope for the rest of
-/// the chain and `then`; a test or such a chain standing as a value is an
-/// `if` answering `True` or `False`.
+/// `if` asking a chain of `&` and `|` holding a test asks each part in
+/// turn, as [`branched`] does, so what a test binds is in scope for the
+/// rest of the chain and `then`; a test or such a chain standing as a
+/// value is an `if` answering `True` or `False`.
 fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
     let Expr {
         module,
@@ -853,7 +949,8 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
             return branched(condition, yes, no, prelude);
         }
         ExprKind::DirectCall(key, arguments)
-            if key.name == prelude.bool_and && arguments.iter().any(|a| binds(a, prelude)) =>
+            if (key.name == prelude.bool_and || key.name == prelude.bool_or)
+                && arguments.iter().any(|a| binds(a, prelude)) =>
         {
             let condition = Expr {
                 module,
@@ -908,9 +1005,11 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
 }
 
 /// `if condition then yes else no`, `yes` and `no` already [`tested`]:
-/// where the condition is a chain of `&` holding a test, an `if` for each
-/// part, the last asking `yes`, and each answering `no` where its part
-/// fails.
+/// where the condition is a chain of `&` and `|` holding a test, an `if`
+/// for each part, so what a test binds is in scope where it held. Past an
+/// `&` the right is asked; past an `|`, `yes` answers where the left held
+/// and the right is asked where it failed. A branch is copied to each
+/// place it is reached from.
 fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr {
     let (module, span, ty) = (yes.module, condition.span, yes.ty.clone());
     let header = |kind| Expr {
@@ -927,31 +1026,47 @@ fn branched(condition: Expr, yes: Expr, no: Expr, prelude: &PreludeIds) -> Expr 
             Box::new(no),
         ));
     }
-    let mut parts = Vec::new();
-    conjuncts(condition, prelude, &mut parts);
-    let mut answer = yes;
-    for part in parts.into_iter().rev() {
-        let part = match part.kind {
-            ExprKind::Is(value, pattern) => Expr {
+    match condition.kind {
+        ExprKind::Is(value, pattern) => {
+            let part = Expr {
                 kind: ExprKind::Is(Box::new(tested(*value, prelude)), pattern),
-                ..part
-            },
-            kind => tested(Expr { kind, ..part }, prelude),
-        };
-        answer = header(ExprKind::If(
-            Box::new(part),
-            Box::new(answer),
-            Box::new(no.clone()),
-        ));
+                ..condition
+            };
+            header(ExprKind::If(Box::new(part), Box::new(yes), Box::new(no)))
+        }
+        ExprKind::DirectCall(key, sides) if key.name == prelude.bool_and => {
+            sides.into_iter().rev().fold(yes, |answer, side| {
+                branched(side, answer, no.clone(), prelude)
+            })
+        }
+        ExprKind::DirectCall(key, sides) if key.name == prelude.bool_or => {
+            sides.into_iter().rev().fold(no, |otherwise, side| {
+                branched(side, yes.clone(), otherwise, prelude)
+            })
+        }
+        _ => unreachable!("only a test, `&` and `|` bind"),
     }
-    answer
 }
 
-/// Whether `expression` is a test, or a chain of `&` holding one.
+/// What a guard asks, in turn: the parts of a chain of `&` holding a test,
+/// each asked where those before it held; anything else, asked whole.
+fn asked(guard: Expr, prelude: &PreludeIds) -> Vec<Expr> {
+    let mut parts = Vec::new();
+    if binds(&guard, prelude) {
+        conjuncts(guard, prelude, &mut parts);
+    } else {
+        parts.push(guard);
+    }
+    parts
+}
+
+/// Whether `expression` is a test, or a chain of `&` and `|` holding one.
 fn binds(expression: &Expr, prelude: &PreludeIds) -> bool {
     match &expression.kind {
         ExprKind::Is(..) => true,
-        ExprKind::DirectCall(key, arguments) if key.name == prelude.bool_and => {
+        ExprKind::DirectCall(key, arguments)
+            if key.name == prelude.bool_and || key.name == prelude.bool_or =>
+        {
             arguments.iter().any(|argument| binds(argument, prelude))
         }
         _ => false,
@@ -1101,6 +1216,19 @@ fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> 
 
 /// The list's end `pattern` takes apart, where it is one: alone, or as the
 /// rest of a list naming no element before it.
+/// `row` with each whole value its patterns name bound to its subject,
+/// and taken apart by what the name stood for.
+fn named_whole(row: &Row, subjects: &[Subject]) -> Row {
+    let mut row = row.clone();
+    for (pattern, subject) in row.patterns.iter_mut().zip(subjects) {
+        while let Pattern::As(local, inner) = pattern {
+            row.locals.insert(*local, subject.value);
+            *pattern = std::mem::replace(&mut **inner, Pattern::Wild);
+        }
+    }
+    row
+}
+
 fn ending(pattern: &Pattern) -> Option<&Split> {
     match pattern {
         Pattern::Split(split) => Some(split),
@@ -1143,7 +1271,7 @@ mod tests {
         let prelude = &checked.prelude;
         Row {
             patterns: vec![pattern],
-            guard: None,
+            guard: Vec::new(),
             locals: HashMap::new(),
             body: Body {
                 bindings: Vec::new(),
@@ -1187,11 +1315,11 @@ mod tests {
             assert_eq!(matches!(plan, Decision::Match { .. }), !tested);
         }
         let mut guarded = row(Pattern::Wild, &checked);
-        guarded.guard = Some(Expr {
+        guarded.guard = vec![Expr {
             ty: Type::Named(prelude.bool_, Vec::new()),
             kind: ExprKind::Construct(prelude.bool_false, Vec::new()),
             ..guarded.body.result.clone()
-        });
+        }];
         let plan = compiler
             .plan(&[guarded, row(Pattern::Wild, &checked)], &subjects, &mut 1)
             .unwrap();

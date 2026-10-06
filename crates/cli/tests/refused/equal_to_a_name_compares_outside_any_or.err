@@ -1,0 +1,7 @@
+error: `==n` compares outside any `|`, which an alternative not holding it could not answer
+ --> equal_to_a_name_compares_outside_any_or.fn:4:24
+  |
+4 | pick(r, n) -> r is (Ok(==n) | Err(Gone))
+  |                        ^^^
+  |
+  = help: test each alternative on its own, joined by `|`: `r is Ok(==n) | r is Err(_)`

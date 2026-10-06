@@ -4,4 +4,4 @@ error: `x` is bound by a test, and seen only where that test is known to have he
 5 |   expect xs is [x, *_] else return x
   |                                    ^ not known to hold here
   |
-  = help: a test binds along its `&` chain, into `then`, and for the lines below an `expect`; under `|`, `!` or in `else`, it may not have held
+  = help: a test binds along its `&` chain, into `then`, into its clause from a guard, and for the lines below an `expect`; past an `|` only what both sides bind, and nothing under `!` or in `else`

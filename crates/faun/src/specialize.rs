@@ -186,6 +186,8 @@ pub(crate) enum Pattern {
     /// [`Specializer::tested`].
     Ending,
     Split(Box<Split>),
+    /// `name is pattern`: the whole value bound, and taken apart.
+    As(h::LocalId, Box<Self>),
 }
 
 /// A list's end, `[*front, a, b]`, as a clause takes it apart: the list
@@ -1172,6 +1174,10 @@ impl<'a> Specializer<'a> {
                     .map(|(member, ty)| self.tested((module, span), member, ty, (next, tests)))
                     .collect::<Result<_, _>>()?,
             ),
+            (t::Pattern::As(local, pattern), _) => Pattern::As(
+                *local,
+                Box::new(self.tested((module, span), pattern, ty, (next, tests))?),
+            ),
             _ => convert_pattern(pattern),
         })
     }
@@ -1784,6 +1790,7 @@ fn convert_pattern(pattern: &t::Pattern) -> Pattern {
         t::Pattern::Or(_) => unreachable!("a clause is specialized a row at a time"),
         t::Pattern::String(_) => Pattern::String,
         t::Pattern::Bind(local) => Pattern::Bind(*local),
+        t::Pattern::As(local, pattern) => Pattern::As(*local, Box::new(convert(pattern))),
         t::Pattern::Constructor(constructor, fields) | t::Pattern::Tag(constructor, fields) => {
             Pattern::Constructor(*constructor, fields.iter().map(convert).collect())
         }

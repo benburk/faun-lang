@@ -1,0 +1,7 @@
+error: `==x` stands only in a pattern, where it matches a value equal to the name
+ --> equal_to_a_name_stands_only_in_a_pattern.fn:5:7
+  |
+5 |   y = ==x
+  |       ^^^
+  |
+  = help: to compare two values, write `==` between them

@@ -2110,6 +2110,10 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
+            h::Pattern::As(local, pattern) => {
+                self.pattern(module, &h::Pattern::Bind(*local), expected, locals, span)?;
+                self.pattern(module, pattern, expected, locals, span)
+            }
             h::Pattern::Constructor(constructor, fields) => {
                 let Some(scheme) = self.constructors.get(constructor).cloned() else {
                     return Err(failure(module, span, "constructor has no declared type"));
@@ -2790,6 +2794,9 @@ impl<'a> Checker<'a> {
     /// A pattern as what it matches: a list as the constructors it stands
     /// for, and a claimed word as the reading it took.
     fn desugared(&self, pattern: h::Pattern) -> h::Pattern {
+        if let h::Pattern::As(_, pattern) = pattern {
+            return self.desugared(*pattern);
+        }
         if let h::Pattern::Dual(dual, fields) = pattern {
             return match self.checked.readings.get(&dual.site) {
                 Some(Reading::Constructor(constructor)) => {
@@ -4870,6 +4877,10 @@ fn expr_globals(expression: &h::Expr, symbols: &Symbols, output: &mut HashSet<Sy
 fn collect_pattern_locals(pattern: &h::Pattern, output: &mut Vec<h::LocalId>) {
     match pattern {
         h::Pattern::Bind(local) => output.push(*local),
+        h::Pattern::As(local, pattern) => {
+            output.push(*local);
+            collect_pattern_locals(pattern, output);
+        }
         h::Pattern::Constructor(_, fields)
         | h::Pattern::Tag(_, fields)
         | h::Pattern::Dual(_, fields)
@@ -4925,6 +4936,7 @@ fn test_in(pattern: &h::Pattern) -> Option<&'static str> {
         | h::Pattern::Or(fields) => fields.iter().find_map(test_in),
         h::Pattern::List(fields, rest) => fields.iter().chain(rest.as_deref()).find_map(test_in),
         h::Pattern::Record(fields, _) => fields.iter().find_map(|(_, field)| test_in(field)),
+        h::Pattern::As(_, pattern) => test_in(pattern),
         h::Pattern::Wild | h::Pattern::Bind(_) | h::Pattern::Number { .. } => None,
     }
 }

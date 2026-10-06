@@ -1,0 +1,7 @@
+error: a value holding a `File` is named whole or taken apart, not both
+  --> a_value_holding_a_file_is_named_whole_or_taken_apart.fn:17:32
+   |
+17 | closing!(pair is (file, _)) -> file.close!()
+   |                                ^^^^^^^^^^^^^ in the clause answering this
+   |
+   = help: name the whole, or its parts

@@ -28,6 +28,10 @@
         "named": true
       },
       {
+        "type": "equal_pattern",
+        "named": true
+      },
+      {
         "type": "field_expression",
         "named": true
       },
@@ -485,6 +489,22 @@
         "types": [
           {
             "type": "string",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "equal_pattern",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
             "named": true
           }
         ]
@@ -960,6 +980,10 @@
             "named": true
           },
           {
+            "type": "equal_pattern",
+            "named": true
+          },
+          {
             "type": "field_expression",
             "named": true
           },
@@ -1073,6 +1097,10 @@
         },
         {
           "type": "effect_identifier",
+          "named": true
+        },
+        {
+          "type": "equal_pattern",
           "named": true
         },
         {
@@ -1681,6 +1709,10 @@
           },
           {
             "type": "effect_identifier",
+            "named": true
+          },
+          {
+            "type": "equal_pattern",
             "named": true
           },
           {

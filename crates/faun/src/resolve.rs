@@ -1421,11 +1421,41 @@ fn standing_in(
                 standing_in(field, source, scope, symbols, found);
             }
         }
+        s::Pattern::As { pattern, .. } => standing_in(pattern, source, scope, symbols, found),
         s::Pattern::Wild(_)
+        | s::Pattern::Equal { .. }
         | s::Pattern::Bind(_)
         | s::Pattern::Number { .. }
         | s::Pattern::Range { .. }
         | s::Pattern::String { .. } => {}
+    }
+}
+
+/// Where `pattern` names a whole value it also takes apart, if anywhere.
+fn named_whole(pattern: &s::Pattern) -> Option<s::Span> {
+    match pattern {
+        s::Pattern::As { span, .. } => Some(*span),
+        s::Pattern::Constructor { fields: parts, .. }
+        | s::Pattern::Tuple { members: parts, .. }
+        | s::Pattern::Or {
+            alternatives: parts,
+            ..
+        } => parts.iter().find_map(named_whole),
+        s::Pattern::List { elements, rest, .. } => {
+            elements.iter().chain(rest.as_deref()).find_map(named_whole)
+        }
+        s::Pattern::Ending { front, last, .. } => {
+            std::iter::once(&**front).chain(last).find_map(named_whole)
+        }
+        s::Pattern::Record { fields, .. } => {
+            fields.iter().find_map(|(_, field)| named_whole(field))
+        }
+        s::Pattern::Wild(_)
+        | s::Pattern::Equal { .. }
+        | s::Pattern::Bind(_)
+        | s::Pattern::Number { .. }
+        | s::Pattern::Range { .. }
+        | s::Pattern::String { .. } => None,
     }
 }
 
@@ -1453,7 +1483,8 @@ fn resolve_clause(
         next_local: 0,
         alternative: None,
         shadowing: None,
-        repeated: Some(Vec::new()),
+        compared: Some(Vec::new()),
+        choosing: false,
         testing: false,
         hidden: HashMap::new(),
     };
@@ -1462,13 +1493,14 @@ fn resolve_clause(
         .iter()
         .map(|pattern| resolver.pattern(pattern))
         .collect::<Result<_, _>>()?;
-    let repeated = resolver.repeated.take().unwrap_or_default();
+    let compared = resolver.compared.take().unwrap_or_default();
+    // What the guard's tests bind is seen by the body.
     let written = clause
         .guard
         .as_ref()
-        .map(|guard| resolver.expr(guard))
+        .map(|guard| resolver.condition(guard))
         .transpose()?;
-    let guard = matched_alike(repeated, written, resolver.sites);
+    let guard = matched_alike(compared, written, resolver.sites);
     let body = resolver.body(&clause.body)?;
     Ok(h::Clause {
         site: resolver.sites.fresh(),
@@ -1483,29 +1515,14 @@ fn resolve_clause(
 
 /// A clause's guard with the equalities its head asks first: a name bound
 /// twice there matches only values equal by their type's `equals`, as
-/// `doubled([a, a])` reads.
+/// `doubled([a, a])` reads, and `==name` only a value equal to the name.
 fn matched_alike(
-    repeated: Vec<(h::LocalId, h::LocalId, s::Span)>,
+    compared: Vec<Compared>,
     written: Option<h::Expr>,
     sites: &mut h::Sites,
 ) -> Option<h::Expr> {
-    let mut guard = None;
-    for (first, again, span) in repeated {
-        let first = sites.expr(span, h::ExprKind::Local(first));
-        let again = sites.expr(span, h::ExprKind::Local(again));
-        let equal = sites.expr(
-            span,
-            h::ExprKind::Binary(s::BinaryOp::Equal, Box::new(first), Box::new(again)),
-        );
-        guard = Some(match guard {
-            None => equal,
-            Some(asked) => sites.expr(
-                span,
-                h::ExprKind::Binary(s::BinaryOp::And, Box::new(asked), Box::new(equal)),
-            ),
-        });
-    }
-    match (guard, written) {
+    let asked = equalities(compared, sites);
+    match (asked, written) {
         (Some(asked), Some(written)) => Some(sites.expr(
             asked.span.through(written.span),
             h::ExprKind::Binary(s::BinaryOp::And, Box::new(asked), Box::new(written)),
@@ -1513,6 +1530,30 @@ fn matched_alike(
         (guard, None) | (None, guard) => guard,
     }
 }
+
+/// Each local asked equal to its value, joined by `&`, if any is.
+fn equalities(asked: impl IntoIterator<Item = Compared>, sites: &mut h::Sites) -> Option<h::Expr> {
+    let mut joined = None;
+    for (value, again, span) in asked {
+        let again = sites.expr(span, h::ExprKind::Local(again));
+        let equal = sites.expr(
+            span,
+            h::ExprKind::Binary(s::BinaryOp::Equal, Box::new(value), Box::new(again)),
+        );
+        joined = Some(match joined {
+            None => equal,
+            Some(asked) => sites.expr(
+                span,
+                h::ExprKind::Binary(s::BinaryOp::And, Box::new(asked), Box::new(equal)),
+            ),
+        });
+    }
+    joined
+}
+
+/// A value a pattern asks equal to what it matched: the name's value, the
+/// local the matched value is bound as, and where.
+type Compared = (h::Expr, h::LocalId, s::Span);
 
 struct ClauseResolver<'a> {
     module: ModuleId,
@@ -1541,10 +1582,12 @@ struct ClauseResolver<'a> {
     /// Names a test bound that are out of sight here, where it is not known
     /// to have held, and where the test was: what a use of one is told.
     hidden: HashMap<Symbol, s::Span>,
-    /// While a clause's head is resolved, outside any `|`, each name bound
-    /// again there: the local it was bound as, the one it is bound as now,
-    /// and where. Elsewhere, a pattern binds each name once.
-    repeated: Option<Vec<(h::LocalId, h::LocalId, s::Span)>>,
+    /// While a clause's head or a test's pattern is resolved, each
+    /// `==name` in it, and in a head each name bound again, outside any
+    /// `|`. Elsewhere, a pattern compares nothing.
+    compared: Option<Vec<Compared>>,
+    /// Whether an alternative of an `|` pattern is being resolved.
+    choosing: bool,
 }
 
 impl ClauseResolver<'_> {
@@ -1559,27 +1602,75 @@ impl ClauseResolver<'_> {
     }
 
     /// A condition whose tests bind into the current scope: those of a
-    /// test, and along a chain of `&`, those of each part. Anything else
-    /// binds for nothing outside it.
+    /// test, along a chain of `&` those of each part, and of an `|` the
+    /// names both sides bind. Anything else binds for nothing outside it.
     fn condition(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
         let kind = match &expression.kind {
+            // A test, each `==name` in its pattern asked after it matches.
             s::ExprKind::Is(value, pattern) => {
                 let value = self.expr(value)?;
                 let outer = std::mem::replace(&mut self.testing, true);
+                let comparing = self.compared.replace(Vec::new());
                 self.shadowing = Some(HashSet::new());
                 let pattern = self.pattern(pattern);
                 self.shadowing = None;
                 self.testing = outer;
-                h::ExprKind::Is(Box::new(value), pattern?)
+                let compared = std::mem::replace(&mut self.compared, comparing);
+                let tested = h::ExprKind::Is(Box::new(value), pattern?);
+                let tested = self.sites.expr(expression.span, tested);
+                let compared = compared.unwrap_or_default();
+                let Some(asked) = equalities(compared, self.sites) else {
+                    return Ok(tested);
+                };
+                h::ExprKind::Binary(s::BinaryOp::And, Box::new(tested), Box::new(asked))
             }
             s::ExprKind::Binary(s::BinaryOp::And, left, right) => h::ExprKind::Binary(
                 s::BinaryOp::And,
                 Box::new(self.condition(left)?),
                 Box::new(self.condition(right)?),
             ),
+            s::ExprKind::Binary(s::BinaryOp::Or, left, right) => {
+                let (left, right) = self.either(left, right, expression.span)?;
+                h::ExprKind::Binary(s::BinaryOp::Or, Box::new(left), Box::new(right))
+            }
             _ => return self.expr(expression),
         };
         Ok(self.sites.expr(expression.span, kind))
+    }
+
+    /// The two sides of an `|`, the right binding as the same locals the
+    /// names the left bound. A name both bind is seen past the `|`, where
+    /// one side or the other held; one only a side binds is hidden.
+    fn either(
+        &mut self,
+        left: &s::Expr,
+        right: &s::Expr,
+        span: s::Span,
+    ) -> Result<(h::Expr, h::Expr), ResolveError> {
+        let before = self.locals.clone();
+        let left = self.condition(left)?;
+        let after_left = std::mem::replace(&mut self.locals, before.clone());
+        let first = after_left
+            .iter()
+            .filter(|(name, local)| before.get(*name) != Some(*local))
+            .map(|(&name, &local)| (name, local))
+            .collect();
+        let outer = self.alternative.replace(first);
+        let right = self.condition(right);
+        let first = std::mem::replace(&mut self.alternative, outer).unwrap_or_default();
+        let right = right?;
+        let after_right = std::mem::replace(&mut self.locals, before.clone());
+        for (name, local) in after_left.iter().chain(&after_right) {
+            if before.get(name) == Some(local) {
+                continue;
+            }
+            if first.get(name) == Some(local) && after_right.get(name) == Some(local) {
+                self.locals.insert(*name, *local);
+            } else {
+                self.hidden.insert(*name, span);
+            }
+        }
+        Ok((left, right))
     }
 
     /// A body's bindings in order, then its answer: each binding's value
@@ -1616,21 +1707,16 @@ impl ClauseResolver<'_> {
                 .map(|(&name, &local)| (name, local))
                 .collect()
         };
-        // A name bound twice asks an equality of the whole clause, which an
-        // alternative not binding it could not answer.
-        let repeating = self.repeated.take();
-        let first = self.pattern(&alternatives[0]);
-        self.repeated = repeating;
-        let first = first?;
+        // A name bound twice, or `==name`, asks an equality of the whole
+        // clause, which an alternative not holding it could not answer.
+        let choosing = std::mem::replace(&mut self.choosing, true);
+        let first = self.pattern(&alternatives[0])?;
         let bound = newly(&self.locals);
         let outer = self.alternative.replace(bound.clone());
         let mut resolved = vec![first];
         for alternative in &alternatives[1..] {
             let after_first = std::mem::replace(&mut self.locals, before.clone());
-            let repeating = self.repeated.take();
-            let pattern = self.pattern(alternative);
-            self.repeated = repeating;
-            let pattern = pattern?;
+            let pattern = self.pattern(alternative)?;
             let these = newly(&self.locals);
             if let Some(name) = bound
                 .keys()
@@ -1650,12 +1736,21 @@ impl ClauseResolver<'_> {
             resolved.push(pattern);
         }
         self.alternative = outer;
+        self.choosing = choosing;
         Ok(h::Pattern::Or(resolved))
     }
 
     /// A pattern that must match whatever it is handed, a binding's or a
     /// lambda's, which no `|` may choose within.
     fn total_pattern(&mut self, pattern: &s::Pattern) -> Result<h::Pattern, ResolveError> {
+        if let Some(span) = named_whole(pattern) {
+            return Err(error(
+                self.module,
+                span,
+                "a binding names the whole value or takes it apart, not both",
+            )
+            .help("name it on a line of its own, then take that name apart"));
+        }
         let resolved = self.pattern(pattern)?;
         if resolved.has_alternatives() {
             return Err(error(
@@ -1692,7 +1787,7 @@ impl ClauseResolver<'_> {
                             format!("`{shown}` is a name already, and a test binds it anew rather than comparing with it"),
                         )
                         .label("bound again here")
-                        .help(format!("to compare, bind another name and ask: `x is Ok(n) & n == {shown}`")));
+                        .help(format!("to compare, write `=={shown}` in its place; to bind, use a name of its own")));
                     }
                     return Err(error(
                         self.module,
@@ -1715,15 +1810,19 @@ impl ClauseResolver<'_> {
                 // guard asks equal to the first; what reads it reads the first.
                 if again_here
                     && self.shadowing.is_none()
+                    && !self.choosing
+                    && self.compared.is_some()
                     && let Some(first) = self.locals.get(&spelling).copied()
-                    && let Some(repeated) = self.repeated.as_mut()
                 {
+                    let first = self.sites.expr(name.0, h::ExprKind::Local(first));
                     let again = h::LocalId(self.next_local);
                     self.next_local = self
                         .next_local
                         .checked_add(1)
                         .expect("fewer than 2^32 locals");
-                    repeated.push((first, again, name.0));
+                    if let Some(compared) = self.compared.as_mut() {
+                        compared.push((first, again, name.0));
+                    }
                     return Ok(h::Pattern::Bind(again));
                 }
                 if again_here {
@@ -1864,6 +1963,45 @@ impl ClauseResolver<'_> {
                 Ok(h::Pattern::Record(resolved, *open))
             }
             s::Pattern::Or { span, alternatives } => self.alternatives(*span, alternatives),
+            s::Pattern::Equal { span, name } => {
+                let shown = span.text(self.source);
+                if self.choosing {
+                    return Err(error(
+                        self.module,
+                        *span,
+                        format!("`{shown}` compares outside any `|`, which an alternative not holding it could not answer"),
+                    )
+                    .help("test each alternative on its own, joined by `|`: `r is Ok(==n) | r is Err(_)`"));
+                }
+                if self.compared.is_none() {
+                    return Err(error(
+                        self.module,
+                        *span,
+                        format!("`{shown}` compares only in a clause's head or a test"),
+                    )
+                    .help("a binding's pattern cannot fail: test the value with `expect value is pattern else …`"));
+                }
+                let value = s::Expr {
+                    span: name.0,
+                    kind: s::ExprKind::Name(*name),
+                };
+                let value = self.expr(&value)?;
+                let local = h::LocalId(self.next_local);
+                self.next_local = self
+                    .next_local
+                    .checked_add(1)
+                    .expect("fewer than 2^32 locals");
+                if let Some(compared) = self.compared.as_mut() {
+                    compared.push((value, local, *span));
+                }
+                Ok(h::Pattern::Bind(local))
+            }
+            s::Pattern::As { name, pattern, .. } => {
+                let h::Pattern::Bind(local) = self.pattern(&s::Pattern::Bind(*name))? else {
+                    unreachable!("a name binds a local")
+                };
+                Ok(h::Pattern::As(local, Box::new(self.pattern(pattern)?)))
+            }
         }
     }
 
@@ -2082,7 +2220,10 @@ impl ClauseResolver<'_> {
                 let (left, right) = both?;
                 h::ExprKind::Binary(s::BinaryOp::And, Box::new(left), Box::new(right))
             }
-            s::ExprKind::Wild | s::ExprKind::Range(..) | s::ExprKind::Ending(..) => {
+            s::ExprKind::Wild
+            | s::ExprKind::Equal(_)
+            | s::ExprKind::Range(..)
+            | s::ExprKind::Ending(..) => {
                 unreachable!("the parser refuses a pattern's form outside a pattern")
             }
             s::ExprKind::Tuple(members) => h::ExprKind::Tuple(
@@ -2169,7 +2310,7 @@ impl ClauseResolver<'_> {
                 ),
             )
             .label("not known to hold here")
-            .help("a test binds along its `&` chain, into `then`, and for the lines below an `expect`; under `|`, `!` or in `else`, it may not have held"));
+            .help("a test binds along its `&` chain, into `then`, into its clause from a guard, and for the lines below an `expect`; past an `|` only what both sides bind, and nothing under `!` or in `else`"));
         }
         Err(error(
             self.module,

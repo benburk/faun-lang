@@ -208,6 +208,12 @@ impl<'a> Lowerer<'a> {
                 self.collect_type(owner)?;
                 self.collect_decision(decision, answer)?;
             }
+            Decision::Let {
+                subject, decision, ..
+            } => {
+                self.collect_body(subject, answer)?;
+                self.collect_decision(decision, answer)?;
+            }
             Decision::Guard {
                 condition,
                 otherwise,
@@ -782,6 +788,19 @@ fn emit_decision(
                 emit_decision(context, builder, decision, &nested, outer)
             },
         ),
+        Decision::Let {
+            value,
+            subject,
+            locals,
+            decision,
+        } => {
+            let mut within = outer.clone();
+            within.extend(locals.iter().map(|(local, value)| (*local, values[value])));
+            let worked_out = emit_body(context, builder, subject, within);
+            let mut values = values.clone();
+            values.insert(*value, worked_out);
+            emit_decision(context, builder, decision, &values, outer)
+        }
         Decision::Guard {
             condition,
             locals,

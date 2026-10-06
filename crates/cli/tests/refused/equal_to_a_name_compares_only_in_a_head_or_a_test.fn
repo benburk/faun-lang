@@ -1,0 +1,10 @@
+import std.host {Host}
+
+first : ((Nat, Nat), Nat) -> Nat
+first(pair, x) -> (
+  (==x, y) = pair
+  y
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

@@ -566,6 +566,7 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
     };
     match expr.kind {
         ExprKind::Wild => Ok(Pattern::Wild(span)),
+        ExprKind::Equal(name) => Ok(Pattern::Equal { span, name }),
         ExprKind::Name(name) if is_type_name(name, source) => constructor(None, name, Vec::new()),
         ExprKind::Name(name) if name.text(source).ends_with('!') => Err(not_a_pattern()),
         ExprKind::Name(name) => Ok(Pattern::Bind(name)),
@@ -659,6 +660,18 @@ pub(crate) fn pattern(expr: Expr, source: &str) -> Result<Pattern, Error> {
                 None => Err(not_a_pattern()),
             }
         }
+        // The whole value named, and taken apart.
+        ExprKind::Is(value, inner) => match value.kind {
+            ExprKind::Name(name) if !is_type_name(name, source) => Ok(Pattern::As {
+                span,
+                name,
+                pattern: Box::new(inner),
+            }),
+            _ => Err(error(
+                value.span,
+                "in a pattern, `is` names the whole value: a name stands on its left",
+            )),
+        },
         ExprKind::Binary(BinaryOp::Or, left, right) => {
             let mut alternatives = Vec::new();
             for side in [*left, *right] {
@@ -716,6 +729,14 @@ fn body_expressions(body: &Body, source: &str, answering: bool) -> Result<(), Er
 fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
     match &expr.kind {
         ExprKind::Wild => Err(error(expr.span, "`_` stands only in a pattern")),
+        ExprKind::Equal(_) => Err(error(
+            expr.span,
+            format!(
+                "`{}` stands only in a pattern, where it matches a value equal to the name",
+                expr.span.text(source)
+            ),
+        )
+        .help("to compare two values, write `==` between them")),
         ExprKind::Range(..) => Err(error(expr.span, "a range stands only in a pattern")),
         ExprKind::Ending(..) => Err(error(
             expr.span,
@@ -897,6 +918,7 @@ fn passed_on(expr: &Expr) -> Option<Span> {
         | ExprKind::Name(_)
         | ExprKind::Number(_)
         | ExprKind::Wild
+        | ExprKind::Equal(_)
         | ExprKind::Range(..) => None,
         ExprKind::String(parts) => parts.iter().find_map(|part| match part {
             StringPart::Text(_) => None,

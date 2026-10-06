@@ -1,0 +1,5 @@
+error: in a pattern, `is` names the whole value: a name stands on its left
+ --> in_a_pattern_is_names_the_whole_by_a_name.fn:4:7
+  |
+4 | first(Ok(_) is [x, *_]) -> x
+  |       ^^^^^

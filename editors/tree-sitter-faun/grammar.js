@@ -291,7 +291,10 @@ module.exports = grammar({
       field('pattern', $._operand),
     )),
 
-    _operand: $ => choice($.unary_expression, $._postfix),
+    _operand: $ => choice($.unary_expression, $.equal_pattern, $._postfix),
+
+    // A pattern's: a value equal to the name.
+    equal_pattern: $ => seq('==', field('name', $.identifier)),
 
     unary_expression: $ => seq(
       field('operator', choice('-', '!')),

@@ -111,6 +111,7 @@ const fn begins_expr(kind: Kind) -> bool {
         kind,
         Kind::Minus
             | Kind::Bang
+            | Kind::EqEq
             | Kind::Number
             | Kind::Char
             | Kind::Decimal
@@ -829,6 +830,7 @@ impl Parser<'_> {
                 let token = self.bump();
                 Ok(unary(UnaryOp::Not, token, self.operand()?))
             }
+            Kind::EqEq => self.equal(),
             _ => {
                 let mut value = self.primary()?;
                 loop {
@@ -853,6 +855,16 @@ impl Parser<'_> {
                 }
             }
         }
+    }
+
+    /// `==name`, a pattern's: a value equal to the name.
+    fn equal(&mut self) -> Parsed<Expr> {
+        let equals = self.bump();
+        let name = self.expect(Kind::Ident, "a name to compare with")?;
+        Ok(Expr {
+            span: equals.span().through(name.span()),
+            kind: ExprKind::Equal(Name(name.span())),
+        })
     }
 
     /// `.name`, or `.name(arguments)`, of `value`.

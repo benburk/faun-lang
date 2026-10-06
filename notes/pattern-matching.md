@@ -32,8 +32,9 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   `match` or `when` keyword. Both fresh designs used `match`; the brief did
   not offer Finch's idea, so that says nothing against it.
 - **`is` inside a pattern** binds the whole and its parts: `right is [y,
-  *_]`.
+  *_]`. Built, 2026-10-06.
 - **`==name` in a pattern** compares with a name in scope: `Some(==node)`.
+  Built, 2026-10-06.
 - **No rebinding.** A name means one value for its whole scope: no shadowing
   in a binding, a pattern or a lambda. Variables written `$name`, coming
   with loops, are the only names that change. Until they come, a step takes
@@ -51,10 +52,12 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - **A name both sides of `|` bind,** at one type, is seen where the `|` held:
   to its right along `&`, in `then`, below an `expect`. Whichever side held
   supplies it. A name only one side binds is seen nowhere past the `|`.
+  Built, 2026-10-06.
 - **What a guard's test binds is seen in its clause's body,** as `then` sees
   an `if`'s. Often the test belongs in the head instead: `describe(Ok(v))
   if v > 100`, or `describe(r is Ok(v))`; a guard's test is for a value the
-  head cannot reach, `f(x) if lookup(x) is Some(v) -> …`.
+  head cannot reach, `f(x) if lookup(x) is Some(v) -> …`. Built,
+  2026-10-06.
 - **Rules that pick between forms** are a linter's, not the compiler's:
   `x is 3` written `x == 3`; a two-arm `is` ending in `_` written as an
   `if`; an `expect` before a block's last line written as a ternary; a
@@ -291,11 +294,14 @@ clause; a binding's and a lambda's must always match.
 | Tuple         | `(a, b)`              |                             |
 | Or            | `A(x) \| B(x)`        | clauses only; same names    |
 | Repeated name | `same([a, a])`        | clauses only; equal values  |
+| Whole, parts  | `all is [x, *_]`      | clauses and tests           |
+| Equal to name | `Some(==node)`        | clauses and tests           |
 
 **Guards:** `if condition` after a clause's patterns. On failure, the next
 clause.
 
-**Missing:** binding a whole value while taking it apart, matching against
+**Missing,** until `is`, `expect` and the forms above (2026-10-05 and
+2026-10-06): binding a whole value while taking it apart, matching against
 the value of a name already in scope, testing a computed value without a
 helper definition, and a fallible binding.
 

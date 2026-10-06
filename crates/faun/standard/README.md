@@ -449,22 +449,48 @@ sign(n) -> if n < 0 then "negative" else if n == 0 then "zero" else "positive"
 `value is pattern` answers whether the value has the pattern's shape: any
 pattern a clause's parameter takes, with alternatives in parentheses, `x is
 (A | B)`. What the pattern binds is seen where the test is known to have
-held: along the rest of an `&` chain, and in the `then` of an `if` whose
-condition is the test or such a chain. Under `|` or `!`, or in `else`, it
-is not, and a use there says so.
+held: along the rest of an `&` chain, in the `then` of an `if` whose
+condition is the test or such a chain, in a clause's body from its guard,
+and for the lines below an `expect`. Past an `|`, a name both sides bind is
+seen, from whichever held, at one type; one only a side binds is not, and
+neither is a name under `!` or in `else`. A use there says so.
 
 ```
 doubled(r) -> if r is Ok(v) & v < 100 then v * 2 else 0
 both(a, b) -> if (a, b) is (Ok(x), Ok(y)) & x <= y then y - x else 0
+size(shape) -> if shape is Circle(n) | shape is Square(n) then n else 0
+first_large(xs) if xs.first() is Ok(x) & x > 10 -> x
 ```
+
+A guard's `|` is tried as an `|` among a clause's parameters is: where the
+left holds and what follows it fails, the right is tried.
 
 `is` binds tighter than `&` and looser than a comparison; a test tested
 again, `x is A is B`, or compared, `x is 3 == y`, is refused. A test binds
 names of its own: `r is Ok(limit)`, with `limit` a name already, would bind
-a new one where a comparison was meant, so it is refused. `?` on the right of `&` or `|` is refused, since that side may
-not be worked out. Not yet: a test of a value holding a resource, a type
-taken apart by its own name, as `U8(…)`, and a guard's test binding for its
-clause's body.
+a new one where a comparison was meant, so it is refused, offering
+`Ok(==limit)`. `?` on the right of `&` or `|` is refused, since that side may
+not be worked out. Not yet: a test of a value holding a resource, and a
+type taken apart by its own name, as `U8(…)`.
+
+## Wholes and comparisons in patterns
+
+`name is pattern`, where a pattern stands, binds the whole value to `name`
+and takes it apart with `pattern`. `==name` matches a value equal, by its
+type's `equals`, to a name in scope, and binds nothing; in a clause's head
+the name may be an earlier parameter's.
+
+```
+merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
+value_of(key, [(==key, value), *_]) -> value
+found(r, node) -> r is Some(==node)
+```
+
+`==name` asks its equality where the rest of the pattern has matched,
+before a clause's written guard, and so stands in a clause's head or a
+test, outside any `|`. A binding cannot fail, so neither form stands in a
+binding's or a lambda's pattern. A value holding a resource is named whole
+or taken apart, not both.
 
 ## Expect
 

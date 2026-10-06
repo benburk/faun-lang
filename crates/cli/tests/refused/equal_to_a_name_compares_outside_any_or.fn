@@ -1,0 +1,7 @@
+import std.host {Host}
+
+pick : (Result(Nat, [Gone]), Nat) -> Bool
+pick(r, n) -> r is (Ok(==n) | Err(Gone))
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

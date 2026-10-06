@@ -58,3 +58,10 @@ odd_one(a, _) if !a -> 2
 odd_one(_, _) -> 3
 
 expect odd_one(True, False) == 1 & odd_one(False, False) == 2 & odd_one(True, True) == 3
+
+# What a guard's test binds, the clause's body sees.
+first_large : List(Nat) -> Nat
+first_large(xs) if xs.first() is Ok(x) & x > 10 -> x
+first_large(_) -> 0
+
+expect first_large([20, 1]) == 20 & first_large([5]) == 0 & first_large([]) == 0

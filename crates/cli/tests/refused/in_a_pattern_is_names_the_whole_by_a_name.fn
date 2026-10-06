@@ -1,0 +1,8 @@
+import std.host {Host}
+
+first : List(Nat) -> Nat
+first(Ok(_) is [x, *_]) -> x
+first(_) -> 0
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

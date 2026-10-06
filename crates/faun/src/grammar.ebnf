@@ -81,9 +81,12 @@ expr              = "if" expr "then" expr "else" expr
 expr-tail         = { infix operand } ;
 infix             = "|" | "^" | "&" | "is" | "==" | "!=" | "<" | "<=" | ">"
                   | ">=" | "+" | "-" | "/" | "%" | "*" ;
+(* `==name` is a pattern's: a value equal to the name. *)
 operand           = prefix operand
+                  | "==" NAME
                   | primary { postfix } ;
 untyped-operand   = prefix operand
+                  | "==" NAME
                   | untyped-primary { postfix } ;
 prefix            = "-" | "!" ;
 postfix           = CALL_PAREN [ arguments ] ")"

@@ -1,0 +1,7 @@
+error: a binding names the whole value or takes it apart, not both
+ --> a_binding_names_the_whole_or_takes_it_apart.fn:5:3
+  |
+5 |   all is [x, *_] = xs
+  |   ^^^^^^^^^^^^^^
+  |
+  = help: name it on a line of its own, then take that name apart

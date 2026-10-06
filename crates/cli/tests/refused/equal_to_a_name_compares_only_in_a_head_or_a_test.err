@@ -1,0 +1,7 @@
+error: `==x` compares only in a clause's head or a test
+ --> equal_to_a_name_compares_only_in_a_head_or_a_test.fn:5:4
+  |
+5 |   (==x, y) = pair
+  |    ^^^
+  |
+  = help: a binding's pattern cannot fail: test the value with `expect value is pattern else …`

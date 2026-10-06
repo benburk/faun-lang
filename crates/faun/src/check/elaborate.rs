@@ -156,6 +156,9 @@ impl Elaborator<'_> {
             h::Pattern::Or(alternatives) => {
                 t::Pattern::Or(alternatives.into_iter().map(|p| self.pattern(p)).collect())
             }
+            h::Pattern::As(local, pattern) => {
+                t::Pattern::As(local, Box::new(self.pattern(*pattern)))
+            }
         }
     }
 

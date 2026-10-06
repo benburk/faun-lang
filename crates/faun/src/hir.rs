@@ -207,6 +207,8 @@ pub enum Pattern<D = Dual> {
     /// Either of two or more alternatives, each binding the same locals.
     /// Only a clause's parameters hold one.
     Or(Vec<Self>),
+    /// `name is pattern`: the whole value bound, and taken apart.
+    As(LocalId, Box<Self>),
 }
 
 impl<D: Clone> Pattern<D> {
@@ -235,6 +237,7 @@ impl<D: Clone> Pattern<D> {
                 front.has_alternatives() || last.iter().any(Self::has_alternatives)
             }
             Self::Record(fields, _) => fields.iter().any(|(_, field)| field.has_alternatives()),
+            Self::As(_, pattern) => pattern.has_alternatives(),
             Self::Wild
             | Self::Bind(_)
             | Self::Number { .. }
@@ -262,6 +265,11 @@ impl<D: Clone> Pattern<D> {
                 .map(|fields| Self::Dual(dual.clone(), fields))
                 .collect(),
             Self::Tuple(members) => Self::rows(members).into_iter().map(Self::Tuple).collect(),
+            Self::As(local, pattern) => pattern
+                .choices()
+                .into_iter()
+                .map(|pattern| Self::As(*local, Box::new(pattern)))
+                .collect(),
             Self::List(elements, rest) => list_choices(elements, rest.as_deref()),
             Self::Ending(front, last) => ending_choices(front, last),
             Self::Record(fields, open) => {
