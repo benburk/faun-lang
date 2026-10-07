@@ -208,6 +208,15 @@ List(a) : [Nil, Cons(a, List(a))].(
   group_by(values, key) ->
     Map.map_values(fold(values, Map.empty, |table, value| gathered(table, key(value), value)), reverse)
 
+  # How many times each of `values` occurs, as Python's `Counter` counts:
+  # each value a key, in the order it first appears, bound to its count.
+  # A value that never occurs is missing, so `get_or(value, 0)` reads it.
+  counts : List(v) -> Map(v, Nat) where
+    v.hash_into : (v, Mixer) -> Mixer,
+    v.equals : (v, v) -> Bool
+  counts(values) ->
+    fold(values, Map.empty, |counted, value| counted.insert(value, counted.get_or(value, 0) + 1))
+
   # `values` cut into a quotient and a remainder: `complete` holds every
   # whole run of exactly `size` elements, in order, and `remainder` the short
   # run left at the end. Nothing is lost: `complete.flatten()` followed by
@@ -433,3 +442,4 @@ expect [1, 2, 3, 4, 5].blocks(2) == {complete: [[1, 2], [3, 4]], remainder: [5]}
 expect [1, 2, 3, 4].blocks(2) == {complete: [[1, 2], [3, 4]], remainder: []}
 expect [1, 2].blocks(0) == {complete: [], remainder: [1, 2]}
 expect [1, 2, 3].map_accum(10, |sum, x| (sum + x, sum)) == (16, [10, 11, 13])
+expect ["a", "b", "a"].counts().to_list() == [("a", 2), ("b", 1)] & [0].drop(1).counts().is_empty()

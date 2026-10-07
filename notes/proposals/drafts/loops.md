@@ -62,32 +62,34 @@ def toposort(graph):
     return order
 ```
 
-With this proposal Faun writes it in 16:
+With this proposal Faun writes it in 16, counting the in-degrees itself, so
+the graph answers only `node_count` and `neighbors`:
 
 ```
 toposort(graph) -> (
   nodes = List.range(graph.node_count())
-  degrees = nodes.map(|node| graph.in_degree(node))
+  degrees = nodes.flat_map(|node| graph.neighbors(node)).counts()
   ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
   order = []
   while ready is [node, *rest] (
     ready = rest
     order = order.append(node)
-    for {target, *} in graph.edges_from(node) (
+    for target in graph.neighbors(node) (
       degrees = degrees.update(target, |degree| degree - 1)
       if degrees.get_or(target, 0) > 0 continue
       ready = ready.prepend(target)
     )
   )
-  order.len() == nodes.len() else return Err(Cycle)
-  Ok(order)
+  if order.len() == nodes.len() then Ok(order) else Err(Cycle)
 )
 ```
 
-The cycle check is one line where Python's is two; the edge's target is
-taken apart once, where Python reads `edge.target` three times. Faun
-spends three lines on closing parentheses and one on taking the rest of
-the worklist.
+The in-degrees are one line, `List.counts` as Python's `Counter`, where a
+Python that counts them itself spends four; the cycle check is one line
+where Python's is two. Faun spends three lines on closing parentheses and
+one on taking the rest of the worklist, and a step is written whole:
+`degrees = degrees.update(target, |degree| degree - 1)` where Python
+writes `degrees[target] -= 1`.
 
 ### What it keeps that Python gives up
 

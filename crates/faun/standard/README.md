@@ -182,7 +182,8 @@ insertion order, so no program observes the mixing. The package exports
 key by `k.hash_into : (k, Mixer) -> Mixer`; neither its seed nor its digest
 is exported. `SortedMap` and `SortedSet` are AVL trees ordered by the key's
 `cmp`, for keys that must come back in order. `List.group_by` gathers into a
-`Map`.
+`Map`, and `List.counts` counts how many times each element occurs, as
+Python's `Counter` does: `["a", "b", "a"].counts().get_or("a", 0)` is 2.
 
 A type's block asks for `equals`, `cmp`, `to_str` or `hash_into` by writing
 its signature with no clauses, as in Ori, and has the structural member of
