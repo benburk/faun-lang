@@ -11,19 +11,20 @@ it are [conditions](proposals/drafts/conditions.md),
 
 As of 2026-10-05, after the designs below and two drawn up afresh from the
 brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
-`is` with flowing names and a dedicated exit line):
+`is` with flowing names and a dedicated exit line), and revised 2026-10-07:
 
 - **`value is pattern`** is a `Bool` that binds where it is known to have
-  held: along `&`, into `then`, below an `expect` line. Built.
-- **`expect condition else …`** goes on where the condition holds, keeping
-  its names for the lines below, and otherwise leaves: `else return x`,
-  `else continue`, `else break`, or `else` a block whose last line is one of
-  those. One direction only. It replaces design E's `if` lines; both fresh
-  designs used a keyword of their own, `guard`, and `expect` serves without
-  one more.
+  held: along `&`, into `then`, below an `else` line. Built.
+- **`condition else …`,** a block's line, goes on where the condition
+  holds, keeping its names for the lines below, and otherwise leaves: `else
+  return x`, `else continue`, `else break`, or `else` a block whose last
+  line is one of those. One direction only. It replaces design E's `if`
+  lines. Both fresh designs led it with a keyword, `guard`, and it was
+  built first as `expect … else`; the keyword went on 2026-10-07, since
+  `return`, `continue` and `break` already mark every leave. Built.
 - **A bare `expect` in a body,** an assumption checked in development and
-  skipped in optimized builds, binding nothing, is for later; until then
-  `expect` in a body takes an `else`.
+  skipped in optimized builds, binding nothing, is for later; until then a
+  body's line beginning `expect` is refused.
 - **Arms after `is`** are a line each; an arm may be a block, but nothing
   leaves from inside one yet but where the `is` answers its clause. Built,
   with guards, 2026-10-07. Arms on a bare parameter are left to style:
@@ -39,22 +40,23 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   equal, `[a, a, *_]`, in a test as in a clause's head; `[a, ==a]` is
   refused, since `==` reads as reaching outside the pattern.
   Built, 2026-10-06.
-- **No rebinding.** A name means one value for its whole scope: no shadowing
-  in a binding, a pattern or a lambda. Variables written `$name`, coming
-  with loops, are the only names that change. Until they come, a step takes
-  a fresh name. Built, 2026-10-05.
-- **Leaving where a test holds** reads negated, `expect !(n1 is Bot) else
-  return Bot`, or `expect n1 != Bot else return Bot` where the type has
-  equality. Accepted: it is rare, and a second form would be two ways to
+- **Assignment, not shadowing.** `name = value` on a name in scope changes
+  it from there on, past branches and across a loop's rounds, keeping its
+  type; nothing changes in place, so a step is `order =
+  order.append(node)`. Patterns only declare: one binding a name in scope
+  is refused. This replaced no-rebinding (built 2026-10-05) and the loops
+  draft's `$` variables on 2026-10-07; it comes with join points.
+- **Leaving where a test holds** reads negated, `!(n1 is Bot) else return
+  Bot`, or `n1 != Bot else return Bot` where the type has equality. Accepted: it is rare, and a second form would be two ways to
   write one exit.
-- **`?` anywhere an expression goes,** as `expect … else return` will be in
-  any block: in a branch, an arm, a block inside either, the right of `&`
+- **`?` anywhere an expression goes,** as an `else` line will be in any
+  block: in a branch, an arm, a block inside either, the right of `&`
   or `|`, leaving the clause or lambda from there. Today's refusals are a
   gap in lowering, closed by join points: the rest of a body after a branch
   made a local function each branch calls, so a branch can leave instead.
   Loops need the same.
 - **A name both sides of `|` bind,** at one type, is seen where the `|` held:
-  to its right along `&`, in `then`, below an `expect`. Whichever side held
+  to its right along `&`, in `then`, below an `else` line. Whichever side held
   supplies it. A name only one side binds is seen nowhere past the `|`.
   Built, 2026-10-06.
 - **What a guard's test binds is seen in its clause's body,** as `then` sees
@@ -64,7 +66,7 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   2026-10-06.
 - **Rules that pick between forms** are a linter's, not the compiler's:
   `x is 3` written `x == 3`; a two-arm `is` ending in `_` written as an
-  `if`; an `expect` before a block's last line written as a ternary; a
+  `if`; an `else` line before a block's last line written as a ternary; a
   many-way `is` on a bare parameter written as clauses.
 - **Alternatives after `is` are parenthesized,** `x is (A(v) | B(v))`,
   since `|` is also the `Bool` or.

@@ -4,8 +4,8 @@
 - **Created:** 2026-10-03
 - **Affects:** the lexer's keywords, `grammar.ebnf`, the parser, the
   tree-sitter grammar, name resolution, the checker, pattern compiling,
-  every helper that exists only for a two-way test or a destructuring that
-  can fail
+  lowering to Barb, every helper that exists only for a two-way test or a
+  destructuring that can fail
 
 ---
 
@@ -16,26 +16,31 @@ One operator and one line form, as the
 
 - **`value is pattern`** is a `Bool` that binds the pattern's names where
   it holds: along the rest of an `&` chain, into an `if`'s `then` branch, a
-  guard's clause body, and the lines below an `expect` line.
-- **`expect condition else …`** goes on where the condition holds, keeping
-  what it bound for the lines below, and otherwise leaves the clause, a
-  round or a loop.
+  guard's clause body, an arm's value, and the lines below an `else` line.
+- **`condition else …`**, a block's line, goes on where the condition
+  holds, keeping what it bound for the lines below, and otherwise leaves the
+  clause, a round or a loop.
+- **`value is ( arms )`** answers by the first arm that matches.
 - **`is` inside a pattern** binds a value and takes it apart: `right is [y,
   *_]`; **`==name`** in a pattern compares with a name from outside it.
-- **No rebinding.** A name means one value for its whole scope.
+- **Assignment, not shadowing.** `name = value` on a name in scope changes
+  it from there on, past branches and across a loop's rounds. Patterns only
+  ever declare names.
 
 Built already, as parts of this proposal: `if c then a else b`, and `&` and
 `|` on `Bool` working out their right side only where the left has not
 decided.
 
-| Form                 | Today       | Proposed                          |
-| -------------------- | ----------- | --------------------------------- |
-| Test a shape         | `r.is_ok()` | `r is Ok(_)`                      |
-| Test and bind        | a helper    | `if r is Ok(v) then v else 0`     |
-| Take apart, or leave | a helper    | `expect r is Ok(v) else return 0` |
-| Leave on a test      | a helper    | `expect n != 0 else return 0`     |
-| Whole and parts      | rebuild it  | `right is [y, *_]`                |
-| Compare in a pattern | a guard     | `r is Some(==node)`               |
+| Form                 | Today       | Proposed                           |
+| -------------------- | ----------- | ---------------------------------- |
+| Test a shape         | `r.is_ok()` | `r is Ok(_)`                       |
+| Test and bind        | a helper    | `if r is Ok(v) then v else 0`      |
+| Take apart, or leave | a helper    | `r is Ok(v) else return 0`         |
+| Leave on a test      | a helper    | `n != 0 else return 0`             |
+| Choose by shape      | a helper    | `r is (Ok(v) -> v`, `Err(_) -> 0)` |
+| Whole and parts      | rebuild it  | `right is [y, *_]`                 |
+| Compare in a pattern | a guard     | `r is Some(==node)`                |
+| A step               | a new name  | `order = order.append(node)`       |
 
 ```
 # Today
@@ -51,7 +56,7 @@ stepped(settled, _, Ok({from, *}), route) -> back(settled, from, route)
 
 # Proposed
 back(settled, node, route) -> (
-  expect settled.get_or(node, Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
+  settled.get_or(node, Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
   walked = [node, *route]
   if from == node then Ok(walked) else back(settled, from, walked)
 )
@@ -67,9 +72,9 @@ by hand. In the heap and graph libraries, `visiting`, `drained`, `stepped`,
 `climb_past`, `sink_past` and `enter` exist only for that; `sorted` and
 `either` did, until `if` folded them.
 
-An early exit closes off a case: once `expect popped is Ok(…) else return
-state` has run, nothing below has to think about an empty heap. A nested
-branch holds the case open to the end of its `else`.
+An early exit closes off a case: once `popped is Ok(…) else return state`
+has run, nothing below has to think about an empty heap. A nested branch
+holds the case open to the end of its `else`.
 
 ## Design
 
@@ -103,15 +108,14 @@ job, so a default for a failed `Result` stays `ok_or`.
 - **Scope.** What a pattern binds is seen where the test is known to have
   held: by the operands to its right along `&`, and, where the whole
   condition is such a chain, by an `if`'s `then` branch, a guard's clause
-  body, and the lines below an `expect` line. Past an `|`, a name both
-  sides bind, from whichever held; under `!` or an argument, nowhere. A use
-  where a name is not seen is refused, naming what hid it.
-- **No rebinding.** A pattern may not bind a name already in scope, here
-  or anywhere: `r is Ok(limit)` with `limit` in scope reads as a comparison
-  and would be a fresh binding, so it is refused, offering `Ok(==limit)` to
-  compare or a fresh name to bind. `step is Ok(step)` takes a fresh name
-  too. Variables written `$name`, with [loops](loops.md), are the only names
-  that change.
+  body, and the lines below an `else` line. Past an `|`, a name both sides
+  bind, from whichever held; under `!` or an argument, nowhere. A use where
+  a name is not seen is refused, naming what hid it.
+- **A pattern declares.** A pattern may not bind a name already in scope:
+  `r is Ok(limit)` with `limit` in scope reads as a comparison and would be
+  a fresh binding, so it is refused, offering `Ok(==limit)` to compare or a
+  fresh name to bind. Changing a name is `=`'s alone; see
+  [Names](#names-assignment-not-shadowing).
 - **`==name`** in a pattern matches a value equal, by its type's `equals`,
   to a name from outside the pattern, binding nothing: `r is Some(==node)`.
   Within one pattern, a clause's parameters too, a name written twice asks
@@ -120,8 +124,8 @@ job, so a default for a failed `Result` stays `ok_or`.
 - **`?` on the right of `&` is refused,** as in a branch: it would be worked
   out before the left had decided, and before the left's names exist.
 - **`=` against `is`.** A binding, `P = expr`, cannot fail, and a pattern
-  that can is refused, the message now offering `expect expr is P else
-  return …`. Which a line writes says whether it can fail.
+  that can is refused, the message offering `expr is P else return …`.
+  Which a line writes says whether it can fail.
 
 ### `is` inside a pattern
 
@@ -133,38 +137,85 @@ syntax:
 merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
 ```
 
-### `expect … else`
+### Arms
 
-- **Syntax.** A block line, `"expect" condition "else" out`, with `out =
-  "return" expr | "continue" | "break" | block`, a block's last line being
-  one of the others; `continue` and `break` come with [loops](loops.md). Not
-  an expression, and not a block's last line.
+`value is ( arms )`, an arm a line, `pattern if guard -> value`, answers by
+the first arm whose pattern matches and whose guard holds. An arm's names
+are seen by its guard and its value; the arms cover every value, as
+clauses do, and answer one type.
+
+```
+area(shape) -> shape is (
+  Circle(r) -> 3 * r * r
+  Rect(w, h) -> w * h
+  Dot -> 0
+)
+```
+
+Clauses where the body is the dispatch; arms where a value worked out
+partway through a body is.
+
+### `else` lines
+
+- **Syntax.** A block line, `condition "else" out`, with `out = "return"
+  expr | "continue" | "break" | block`, a block's last line being one of
+  the others; `continue` and `break` come with [loops](loops.md). Not an
+  expression, and not a block's last line.
 - **Meaning.** Where the condition holds, the block goes on, what it bound
   in scope for every line below. Where it fails, the `else` runs and leaves:
   `return x` answers `x` from the clause or lambda the block is in, as `?`
   does, its type that clause's; a block may do its effects first.
 
   ```
-  expect config is Ok(settings) else (
+  config is Ok(settings) else (
     log!("no config, using defaults")
     return defaults
   )
   ```
 - **One direction.** A line says what should hold. A plain test reads
-  `expect n != 0 else return 0`; a shape to leave on is negated, `expect
-  !(n is Bot) else return Bot`, and binds nothing.
-- **Bare `expect`, later.** `expect` with no `else`, in a body, will be an
-  assumption: checked in development and in tests, skipped in optimized
-  builds, binding nothing, changing nothing a program does. It is not built
-  yet, and `expect` in a body takes an `else` until it is. At the top level,
-  `expect` stays what it is: a test.
-- **Which to write.** `expect … else` for a check before the main work; the
+  `n != 0 else return 0`; a shape to leave on is negated, `!(n is Bot) else
+  return Bot`, and binds nothing.
+- **Every way out is marked.** `return`, `continue` and `break` stand only
+  after a line's `else`, so a body leaves only on a line saying `else
+  return`, `else continue` or `else break`. A line `r is Ok(v)` missing its
+  `else` throws away a `Bool`, which is refused.
+- **`expect` stays a test.** At the top level, `expect` is a test, as
+  before. In a body it will be an assumption: checked in development and in
+  tests, skipped in optimized builds, binding nothing, changing nothing a
+  program does. It is not built yet, and a body's line beginning `expect`
+  is refused, saying how to leave.
+- **Which to write.** An `else` line for a check before the main work; the
   ternary for the answer itself, on a body's last line: `if done then
-  Ok(order) else Err(Cycle)`; clauses where the whole body is the dispatch.
-- **`return` is not an expression.** It stands only in an `expect`'s
-  `else`, so every way out of a body is on a line beginning `expect`.
-- **Leave, not exit.** A program ends with `host.exit!`; an `expect` leaves
-  a clause, a round or a loop.
+  Ok(order) else Err(Cycle)`; arms for a choice among shapes; clauses where
+  the whole body is the dispatch.
+- **Leave, not exit.** A program ends with `host.exit!`; an `else` leaves a
+  clause, a round or a loop.
+
+### Names: assignment, not shadowing
+
+- **`name = value` on a name in scope assigns it.** From that line on the
+  name holds the new value: on the lines below, after the branch or arm it
+  was assigned in, and in a loop's next round and after the loop. `x = x +
+  1` is a step, as in Python.
+- **A name keeps its type.** Assigning a value of another type is refused.
+- **Patterns declare.** A name in a pattern, a clause's head, a lambda's
+  parameters, a test or an arm, is a new one, and one already in scope is
+  refused. Only `=` assigns. A destructuring binding assigns the names it
+  holds that are in scope and declares the rest: `(a, b) = (b, a)` swaps.
+- **Nothing changes in place.** A method answers a new value and changes
+  nothing it was given: `order = order.append(node)`, never a bare
+  `order.append(node)`, which throws its answer away and is refused. A list
+  nothing else holds is still written where it lies, so a step costs what a
+  mutation would.
+- **No aliasing.** `snapshot = order` stays a snapshot when `order`
+  changes: values have no identity.
+- **A lambda assigns only its own names.** One assigning a name of the body
+  around it is refused: a callee may call it any number of times, or none.
+- **Meaning.** Each assignment is a new version of the name. Where branches
+  meet, after an `if`, an `is` with arms, or an `else` line's block, the
+  names a branch assigned are the parameters of the code after it, a join
+  point; a loop's round is a call of the loop with the names its body
+  assigned. So a function with assignments is as pure as one without.
 
 ### Built
 
@@ -180,14 +231,16 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   copied to each test of a chain. Left for later: a test of a value holding
   a resource, refused for now; a type taken apart by its own name, as
   `U8(…)`, which only a clause's head expands.
-- **`expect … else`,** 2026-10-06: `return` and a block's `expect` line,
-  leaving by `return` or by a block ending in one, from a block answering
-  its clause or lambda; elsewhere refused until join points. Where its block
-  answers, an `expect` is an `if` holding the lines after it, so it needed
-  no lowering of its own; `?` in an `if` branch answering its clause came
-  with it. Dijkstra's `back` is three flat lines; the heap's `visiting` and
-  `drained`, proptest's step, and `Map`'s `removed` became `expect` lines,
-  and `split_step`, `recalled` and clap's `custom_value` became `if … is`.
+- **`expect … else`,** 2026-10-06, then **`… else`,** 2026-10-07: `return`
+  and a block's `else` line, leaving by `return` or by a block ending in
+  one, from a block answering its clause or lambda; elsewhere refused until
+  join points. Where its block answers, an `else` line is an `if` holding
+  the lines after it, so it needed no lowering of its own; `?` in an `if`
+  branch answering its clause came with it. Dijkstra's `back` is three flat
+  lines; the heap's `visiting` and `drained`, proptest's step, and `Map`'s
+  `removed` became `else` lines, and `split_step`, `recalled` and clap's
+  `custom_value` became `if … is`. The line first began with `expect`; the
+  keyword went once `return` was seen to mark the leave.
 - **Patterns and guards,** 2026-10-06: `name is pattern` and `==name` in a
   clause's head and a test; a guard's test binding for its clause's body; a
   name both sides of an `|` bind seen past it. `==name` becomes a fresh
@@ -196,9 +249,10 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   decision, worked out where the head has matched, so a failure falls to
   the next clause; its `|` is tried as one among a head's parameters, the
   right where the left or what follows it fails. An `|` in a test copies its
-  `then` to each side. Guards asking two parameters' parts equal became a name written twice, and clauses
-  rebuilding what their head took apart name it whole, as the standard
-  list's merge does; the parser library's number reader lost two clauses.
+  `then` to each side. Guards asking two parameters' parts equal became a
+  name written twice, and clauses rebuilding what their head took apart
+  name it whole, as the standard list's merge does; the parser library's
+  number reader lost two clauses.
 - **Arms,** 2026-10-07: `value is ( arms )`, a line apiece, with guards.
   Arms read where a parenthesized expression's first one is followed by
   `->` or `if`, and are refused after parsing where no `is` takes them. One
@@ -208,39 +262,43 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.
+  Assignment replaces it for `=`; patterns keep the refusal.
 
 ## Costs
 
-- **Keywords.** `is` and `return` now, `continue` and `break` with loops;
-  `expect` already is one. No program uses one as a name.
-- **One keyword, two meanings later.** A bare `expect` will assert, and one
-  with `else` leaves; the difference is at the line's end. A bare one binds
-  nothing, so a line meant to bind and missing its `else` is refused where
-  its names are used.
+- **Keywords.** `is` and `return` now, `continue` and `break` with loops.
+  No program uses one as a name.
+- **The leave is at the line's end.** A line begins like any expression and
+  says it leaves only at `else return`. A search for exits looks for
+  `return`, `continue` and `break`, which nothing else spells.
 - **Two orders.** `P = expr` puts the pattern first, `expr is P` the value.
   The order marks the meaning: one cannot fail, the other can.
 - **Flow-sensitive scope.** Where a name is seen depends on `&` and on
-  `expect` lines, not only on blocks and clauses.
-- **Leaving on a shape reads negated:** `expect !(n is Bot) else return Bot`.
-- **No rebinding** costs a fresh name where a program reused one, and
-  programs that shadow today migrate.
+  `else` lines, not only on blocks and clauses.
+- **Leaving on a shape reads negated:** `!(n is Bot) else return Bot`.
+- **A name may change.** A reader meeting `order` must look above for the
+  lines assigning it, where a name meaning one value spared that. A typo,
+  `totl = total + 1`, declares a new name, which an unused-name lint
+  catches.
 - **A shared failure branch.** In `if a is P & b is Q then x else y`, `y`
   is reached from either test. Lowering copies it to each place it is
-  reached from until a branch can be shared.
+  reached from until join points share it.
 
 ## Alternatives considered
 
-- **A bare `else` line,** `r is Ok(v) else return 0`. The exit hides at the
-  end of the line.
+- **`expect condition else …`,** the line form first built. A keyword
+  leading every exit, where `return` already marks one; and `expect` in a
+  body would have meant both an assumption and a leave, told apart at the
+  line's end.
 - **`if` lines in both directions,** `if c return x` and `if c else return
   x`. Two forms for one job; both designs drawn up afresh from the survey's
   brief chose a single line form.
-- **`guard`,** the keyword both fresh designs chose. `expect` reads as well
-  and is a keyword already, and its bare form has a use to come.
+- **`guard`,** the keyword both fresh designs chose. A keyword where `else`
+  and `return` already say it.
 - **`&` guards,** `f(Move(d)) & d > 100 ->`, reading as `is P & c`. A
   hundred guards migrate, and `|` in a guard needs parentheses.
-- **`let … else`,** `Ok(v) = x else return 0`. A second form for a plain
-  test, and pattern-first where a test is value-first.
+- **`let … else`,** `Ok(v) = x else return 0`. Pattern-first where a test
+  is value-first.
 - **`??` with an exit,** `v = x ?? return 0`, as Zig's `orelse`. Only for a
   `Result`; a second way to write that case.
 - **A general `return` expression.** Exits anywhere in an expression.
@@ -248,8 +306,15 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   `is` already means "which is".
 - **A pin, `^name`,** to compare in a pattern: a new sigil where `==`
   already means equal.
-- **Shadowing refused only for the same type,** or for all but the tested
-  name. Finer, but either keeps a rule to learn where none is the simplest.
+- **No rebinding, with `$` variables for loops,** as built first and as the
+  loops draft had it. A name meant one value for its whole scope, at the
+  price of a fresh name for every step and a sigil on every mention of what
+  a loop changes.
+- **Shadowing,** a name bound again hiding the one before for the rest of
+  its block. Straight-line code reads the same as assignment, but a branch's
+  `count = count + 1` would vanish after the branch, silently.
+- **Writing back,** a bare `order.append(node)` changing `order`. Whether a
+  line changes a name would hang on the line's shape and the method's type.
 - **Word operators, `and` and `or`,** freeing `|` for patterns. Every
   `Bool` expression changes.
 - **`??` for a default.** It is `ok_or`: a value, not control flow.
@@ -262,29 +327,42 @@ The survey compares these as whole designs.
    `grammar.ebnf` and tree-sitter; resolution scoping names along `&` and
    into a `then` branch; the checker typing the pattern against the value;
    lowering each `if` whose condition binds into the matches it needs, its
-   failure branch copied to each test.
-2. **`expect … else` lines.** `return`; resolution keeping a line's names
-   for the lines below; lowering a line as a match whose failure arm
-   leaves.
-3. **`is` and `==name` inside patterns,** and guards whose `is` binds for
-   the clause body.
-4. **No rebinding,** refused in resolution, the corpus migrated.
-5. **Programs.** Helpers that branch partway through their caller folded;
-   those whose body is the dispatch kept as clauses.
+   failure branch copied to each test. Built.
+2. **`else` lines.** `return`; resolution keeping a line's names for the
+   lines below; lowering a line as a match whose failure arm leaves. Built
+   where the block answers.
+3. **`is` and `==name` inside patterns, arms,** and guards whose `is` binds
+   for the clause body. Built.
+4. **Join points.** Lowering to Barb makes the rest of a body after a
+   branch an ordinary function of the names live there, called in tail
+   position from each branch that goes on, so a branch can leave instead:
+   `?` and `else` lines anywhere, and no copied branches. No change to Barb.
+5. **Assignment.** Resolution makes each assignment a new version of the
+   name and records, for each branch and loop, the names it assigns; those
+   are the join point's parameters. The no-rebinding refusal for `=` goes;
+   patterns keep theirs.
+6. **Programs.** Helpers that branch partway through their caller folded;
+   those whose body is the dispatch kept as clauses; steps that took fresh
+   names may assign.
 
 ## Testing
 
 - `ebnf.rs` probes for each form; refused probes for `is` chained or
-  compared and an unparenthesized or-pattern.
+  compared, an unparenthesized or-pattern, and an `else` line ending a
+  block.
 - Refused cases with their `.err`: a name used where `|` or `!` hid it, a
-  rebinding, `?` on the right of `&`, `return` outside an `expect`'s `else`,
-  a bare `expect` in a body.
-- Running cases across the three backends: tests in `if`, chains,
-  tuples, a test as a value, `expect … else` lines, `==name`.
+  pattern binding a name in scope, `?` on the right of `&`, `return` outside
+  a line's `else`, an assignment changing a name's type, a lambda assigning
+  its body's name.
+- Running cases across the three backends: tests in `if`, chains, tuples,
+  a test as a value, `else` lines, arms, `==name`, and a name assigned in a
+  branch and read after it.
 
 ## Origin
 
 Discussion of the [branching](branching.md) draft's further steps
 (2026-10-03), then the [pattern matching survey](../../pattern-matching.md)
 (2026-10-04), which compared five designs and took two ideas from the
-ultimate and penultimate conditional syntaxes.
+ultimate and penultimate conditional syntaxes. On 2026-10-07 the `expect`
+keyword left the line form, and assignment replaced no-rebinding and the
+loops draft's `$` variables.

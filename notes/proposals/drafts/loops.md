@@ -1,33 +1,30 @@
-# Proposal: Loops and variables
+# Proposal: Loops
 
 - **Status:** Draft
 - **Created:** 2026-10-04
-- **Affects:** the lexer's tokens and keywords, `grammar.ebnf`, the parser,
-  the tree-sitter grammar, name resolution, the checker, lowering, the
+- **Affects:** the lexer's keywords, `grammar.ebnf`, the parser, the
+  tree-sitter grammar, name resolution, the checker, lowering, the
   standard library's lists, the graph library, the HTML library's `for`
 
 ---
 
 ## Summary
 
-A function may declare variables, names written with a leading `$`, and
-loop over them with `for`, `while` and `loop`. A variable is rebound only
-inside the function that declares it; a loop carries every variable it
-rebinds into its next round and out of it. A line that is only a method
-chain on a variable updates it: `$order.append(node)` is `$order =
-$order.append(node)`. A pattern may bind into a variable. `else continue`
-and `else break` leave a round or a loop. Each loop compiles to a local
-recursive function whose parameters are its variables, so a function with
-loops is as pure as one without.
+A body may loop with `for`, `while` and `loop`. A name assigned in a
+loop's body, as the [conditions](conditions.md) draft assigns, carries into
+its next round and out of it. `else continue` and `else break` leave a
+round or a loop. Each loop compiles to a recursive function whose
+parameters are the names it assigns, so a function with loops is as pure
+as one without.
 
-| Form               | Today                     | Proposed               |
-| ------------------ | ------------------------- | ---------------------- |
-| Loop state         | a record type of its own  | `$names`               |
-| Walk a list        | a fold and a visit helper | `for P in list ( … )`  |
-| Worklist           | `drain_stack` and a visit | `while $s is [x, *$s]` |
-| Skip an item       | a helper's guarded clause | `c else continue`      |
-| Update a value     | `next = put(state, …)`    | `$state.put(…)`        |
-| Unconditional loop | a recursive helper        | `loop ( … )`           |
+| Form               | Today                     | Proposed                   |
+| ------------------ | ------------------------- | -------------------------- |
+| Loop state         | a record type of its own  | names the loop assigns     |
+| Walk a list        | a fold and a visit helper | `for P in list ( … )`      |
+| Worklist           | `drain_stack` and a visit | `while s is [x, *t] ( … )` |
+| Skip an item       | a helper's guarded clause | `c else continue`          |
+| Update a value     | `next = put(state, …)`    | `state = state.put(…)`     |
+| Unconditional loop | a recursive helper        | `loop ( … )`               |
 
 ## Motivation
 
@@ -64,47 +61,47 @@ def toposort(graph):
     return order
 ```
 
-With this proposal Faun writes it in 15:
+With this proposal Faun writes it in 16:
 
 ```
 toposort(graph) -> (
   nodes = List.range(graph.node_count())
-  $degrees = nodes.map(|node| graph.in_degree(node))
-  $ready = nodes.filter(|node| $degrees.get_or(node, 0) == 0)
-  $order = []
-  while $ready is [node, *$ready] (
-    $order.append(node)
+  degrees = nodes.map(|node| graph.in_degree(node))
+  ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
+  order = []
+  while ready is [node, *rest] (
+    ready = rest
+    order = order.append(node)
     for {target, *} in graph.edges_from(node) (
-      $degrees.update(target, |degree| degree - 1)
-      $degrees.get_or(target, 0) == 0 else continue
-      $ready.prepend(target)
+      degrees = degrees.update(target, |degree| degree - 1)
+      degrees.get_or(target, 0) == 0 else continue
+      ready = ready.prepend(target)
     )
   )
-  $order.len() == nodes.len() else return Err(Cycle)
-  Ok($order)
+  order.len() == nodes.len() else return Err(Cycle)
+  Ok(order)
 )
 ```
 
-Taking the next item is one line where Python's is two; the cycle check is
-one line where Python's is two; the edge's target is taken apart once,
-where Python reads `edge.target` three times. Faun spends three lines on
-closing parentheses.
+The cycle check is one line where Python's is two; the edge's target is
+taken apart once, where Python reads `edge.target` three times. Faun
+spends three lines on closing parentheses and one on taking the rest of
+the worklist.
 
 ### What it keeps that Python gives up
 
 The spelling is Python's; what a reader may assume is not.
 
 - **A call cannot change what it is given.** In Python, `f(order)` may
-  append to `order`. Here only a line beginning `$order` changes `$order`.
-- **No aliasing.** `snapshot = $order` stays a snapshot when `$order`
+  append to `order`. Here only a line `order = …` changes `order`.
+- **No aliasing.** `snapshot = order` stays a snapshot when `order`
   changes; Python's `snapshot = order` does not. No default argument is
-  shared between calls, and a lambda captures values, not a loop's
-  variable.
-- **The function stays pure.** No lambda rebinds a variable, and each loop
-  is a recursive function underneath, so `toposort` is a function of
-  `graph` alone, as it is today. Effects stay marked by `!`.
-- **The failures are checked.** `while $ready is [node, *$ready]` cannot
-  take from an empty list; `get_or` cannot raise; `Err(Cycle)` is in the
+  shared between calls, and a lambda captures values, not a loop's names.
+- **The function stays pure.** No lambda assigns a name of its body, and
+  each loop is a recursive function underneath, so `toposort` is a function
+  of `graph` alone, as it is today. Effects stay marked by `!`.
+- **The failures are checked.** `while ready is [node, *rest]` cannot take
+  from an empty list; `get_or` cannot raise; `Err(Cycle)` is in the
   signature, where Python's `raise Cycle` is in no signature at all.
 
 A list nothing else holds is already written in place, so the updates cost
@@ -112,45 +109,19 @@ what Python's mutation costs.
 
 ## Design
 
-### Variables
+### Names a loop changes
 
-- **A variable is a name with a leading `$`**, a token of its own, as an
-  effectful name ends in `!`. The mark is on the name because changing is
-  a property of the name for its whole life: a reader meeting `$degrees`
-  partway down a loop knows it may differ from when it was last seen.
-- **The first binding of a `$` name in a function declares it;** each later
-  one rebinds it. There is no `var`: the `$` says what it would.
-- **A variable is rebound only in the function that declares it,** the
-  clause or lambda whose body holds its declaration. A lambda inside reads
-  it and cannot rebind it. This is what lets a loop compile to a function
-  of its variables, and Roc's rule for its `var`s.
-- **A variable keeps its type.** Rebinding it to a value of another type is
-  refused.
-- **No variables at the top level,** and no parameter is a variable.
-- **A variable is never shadowed.** A `$` name bound again in the same
-  function rebinds; plain names shadow as they do today.
+Assignment is the conditions draft's: `name = value` on a name in scope
+changes it, keeping its type, and a lambda assigns only its own names. A
+loop adds:
 
-### Changing a variable
-
-Every line that changes `$x` starts with `$x`, or binds it in a pattern:
-
-- **`$x = expr`** rebinds it.
-- **A line that is only a method chain starting at `$x`** rebinds it to the
-  chain's result, which must have `$x`'s type. `$order.append(node)` is
-  `$order = $order.append(node)`; `$order.append(a).append(b)` takes both.
-  A line that goes on after the chain, `$degrees.get_or(t, 0) == 0 else
-  continue`, reads `$degrees` and changes nothing.
-- **A pattern may bind into an existing variable:** `(n, $rng) =
-  $rng.int(0, 24)`, `while $ready is [node, *$ready]`. A name with `$` in a
-  pattern rebinds; one without is a fresh name, as today.
-- **A call inside an expression is a value.** `y = $order.append(node)`
-  binds `y` and leaves `$order` as it was.
-- **A pure call that is a whole line and changes nothing is refused:** its
-  answer would be thrown away. `$order.len()` alone on a line is refused,
-  its answer a `Nat` where `$order` is a `List(Nat)`.
-
-The rule is syntactic: whether a line updates is read from the line, never
-from the method's signature, which only has to allow it.
+- **A name assigned in a loop's body carries.** Its next round sees the
+  value the last one left, and the lines after the loop see the value the
+  loop ended with.
+- **A name declared in a loop's body is the round's.** It is new each round
+  and unseen after the loop.
+- **Patterns declare,** so a worklist takes its head into a new name and
+  assigns its rest: `while ready is [node, *rest] ( ready = rest …`.
 
 ### Loops
 
@@ -161,19 +132,19 @@ loop-line = "for" operand "in" expr "(" loop-body ")"
 ```
 
 - **`for P in list ( … )`** runs its body once for each element, in order,
-  `P` a pattern that cannot fail, binding fresh names each round. It walks
-  a `List`; a range is `List.range`.
+  `P` a pattern that cannot fail, binding new names each round. It walks a
+  `List`; a range is `List.range`.
 - **`while c ( … )`** runs while `c` holds. `c` may be an `is`, whose names
-  the body sees: `while $ready is [node, *$ready]` takes the head off on
-  each round.
+  the body sees.
 - **`loop ( … )`** runs until an `else break` or `else return` leaves it.
   It writes the loop whose test is partway through, as in reading until
   input ends.
 - **The space before the body's `(` matters,** as anywhere: `while
   done(` is a call to `done`. The formatter writes the space.
 - **A loop is a line of a block,** not an expression, and not the block's
-  last line, which answers. What a loop computes is left in its variables.
-- **A loop's body is block lines with no answer:** bindings, updates,
+  last line, which answers. What a loop computes is left in the names it
+  assigned.
+- **A loop's body is block lines with no answer:** bindings, assignments,
   `else` lines and loops.
 
 ### Leaving a round or a loop
@@ -199,58 +170,55 @@ an inner loop over a node's edges.
 
 ### Meaning
 
-Each loop is a local recursive function, its parameters the variables its
-body rebinds and its answer their values when it ends. `continue` calls
-it for the next round; `break` answers; a `return` inside answers a tag
-the code after the loop checks. Variables a loop only reads are captured,
-as a lambda captures. None of this is visible: a function with loops
-answers what the same function written with folds answers.
+Each loop is a recursive function, its parameters the names its body
+assigns and its answer their values when it ends; the lines after it are
+the join point it answers to. `continue` calls the loop for the next round;
+`break` and the loop's end call the join point; a `return` inside answers
+the function. Names a loop only reads are passed in, as a lambda captures.
+None of this is visible: a function with loops answers what the same
+function written with folds answers.
 
 ## Costs
 
-- **The sigil.** `$` on every mention of a variable. It is the price of
-  seeing, at each use, that the value may have changed.
+- **Every change is spelled whole.** `order = order.append(node)` where
+  Python writes `order.append(node)`. The line says what changes at its
+  start.
+- **No mark at the use.** A reader meeting `degrees` in a loop's body must
+  know whether the loop assigns it.
 - **Two ways to fold.** `for` and `fold` both walk a list. `fold` stays the
-  form for an expression of one value; a loop is for several variables, or
-  a body of several steps. Style holds this, not the grammar.
+  form for an expression of one value; a loop is for several names, or a
+  body of several steps. Style holds this, not the grammar.
 - **Six keywords.** `for`, `in`, `while`, `loop`, `break` and `continue`.
   The HTML library's `for` attribute must be renamed.
-- **A line starting `$x.` may not change `$x`,** where it goes on after the
-  call. A reader sees the difference at the line's end.
-- **`y = $x.append(1)` leaves `$x` unchanged,** which someone from Python
-  may not expect. Inside an expression, a value is the only reading.
-- **Order matters in a body.** Moving a line past an update of the
-  variable it reads changes what it reads, as in any language with
-  variables.
+- **The worklist's extra line.** A pattern declares, so the rest of the
+  list is a new name assigned back: `ready = rest`.
+- **Order matters in a body.** Moving a line past an assignment of the name
+  it reads changes what it reads, as in any language with variables.
 
 ## Alternatives considered
 
-- **Shadowing alone,** with a loop carrying any name it rebinds. No sigil,
-  but whether a body's `seen = …` is a step or the loop's state is
-  invisible, and a pattern cannot say whether it binds a fresh name or the
-  loop's.
-- **A declaration keyword,** `var x` or Lean's `let mut x`, with plain uses.
-  The mark is then pages from where a reader meets the name. Roc writes
-  both, `var $x`; the `$` alone says it.
-- **An update operator,** `$order .= append(node)`, after `+=`. It marks
-  the act at the line, but every changing line already starts with `$x`,
-  and a whole line that is a pure call has no other meaning to keep apart.
-- **`:=` for rebinding,** as Lean has. A second binding operator, where `$`
-  already says which names rebind.
-- **Writing back from any method call** of the right shape, everywhere.
-  Expressions would change their receivers, and whether `xs.map(f)` writes
-  back would hang on whether `f` keeps the element type.
-- **Writing back from a plain function's first argument,** `put($degrees,
-  t, 0)` on a line. The `$` is then not at the line's start; methods are
-  the common case, and `$degrees = put($degrees, t, 0)` is plain.
-- **Compound assignment,** `$count += 1`. Left out until counting loops ask
-  for it; it would keep every changing line starting with `$x`.
-- **Rebinding inside lambdas,** as Python and JavaScript allow. A lambda
+- **`$` variables,** the draft's first design: a sigil on every mention of
+  a name that changes, write-back from a line that is only a method chain,
+  `$order.append(node)`, and patterns binding into variables, `while $ready
+  is [node, *$ready]`. It marked change at each use, at the price of a
+  token on every mention, a write-back rule read from the line's end, and a
+  second kind of name.
+- **Shadowing, with a loop carrying any name it binds again.** A branch's
+  assignment would vanish after the branch; assignment is the same rule for
+  branches and loops.
+- **A declaration keyword,** `var x` or Lean's `let mut x`. A mark pages
+  from where a reader meets the name, which says less than reading the
+  loop's lines.
+- **An update operator,** `order .= append(node)`, after `+=`. A second
+  binding operator for what `order = order.append(node)` says.
+- **Compound assignment,** `count += 1`. Left out until counting loops ask
+  for it.
+- **Assigning inside lambdas,** as Python and JavaScript allow. A lambda
   could then change its caller's state, and a loop would no longer be a
-  function of its variables.
+  function of its names.
 - **One level of loops.** Kahn's algorithm's inner loop would become a
-  helper answering two variables at once, `($degrees, $ready)`; two levels
-  keep it where the textbook has it.
+  helper answering two names at once, `(degrees, ready)`; two levels keep
+  it where the textbook has it.
 - **`while` only, no `loop`.** Reading until input ends then reads before
   the loop and again at the end of its body.
 - **`loop` only, no `while`.** `while c ( … )` is `loop ( c else break …
@@ -258,19 +226,18 @@ answers what the same function written with folds answers.
 
 ## Implementation impact
 
-1. **The lexer** gains `$` names as a token kind, and the keywords `for`,
-   `in`, `while`, `loop`, `break` and `continue`.
+1. **The lexer** gains the keywords `for`, `in`, `while`, `loop`, `break`
+   and `continue`.
 2. **The grammar.** `grammar.ebnf` and the tree-sitter grammar gain loop
    lines and `continue` and `break` as exits.
-3. **Resolution** tracks each variable's declaring function, refuses a
-   rebinding from a lambda, and marks each loop's variables.
-4. **The checker** holds a variable to its type, refuses a whole-line pure
-   call that changes nothing, and checks a `for` pattern cannot fail.
-5. **Lowering** makes each loop a local recursive function of its
-   variables, as `callbacks.rs` lifts a lambda.
+3. **Resolution** records, for each loop, the names its body assigns, and
+   refuses `continue` and `break` outside a loop.
+4. **The checker** checks a `for` pattern cannot fail.
+5. **Lowering** makes each loop a recursive function of the names it
+   assigns, and the lines after it a join point, as the conditions draft's
+   branches are.
 6. **The standard library** gains `List.update(list, index, f)`, total,
-   leaving a list without that index as it was. A method that can fail,
-   such as `set`, answers a `Result` and cannot update a variable.
+   leaving a list without that index as it was.
 7. **Programs.** The graph library's walks, components and toposort, and
    the heap's sift loops, written with loops; the HTML library's `for`
    renamed.
@@ -279,13 +246,10 @@ answers what the same function written with folds answers.
 
 ## Testing
 
-- `crates/faun/src/ebnf.rs` probes: each loop form, loops two deep, an
-  update line, a chain update, a pattern binding into a variable, and
+- `crates/faun/src/ebnf.rs` probes: each loop form, loops two deep, and
   `else continue` and `else break`.
-- Refused cases, each with its `.err`: a variable rebound in a lambda, a
-  variable retyped, a whole-line pure call that changes nothing, a loop
-  three deep, a multi-line lambda in a loop, `break` outside a loop, a `$`
-  name at the top level, and a refutable `for` pattern.
+- Refused cases, each with its `.err`: a loop three deep, a multi-line
+  lambda in a loop, `break` outside a loop, and a refutable `for` pattern.
 - A running case across all three backends: toposort, a depth-first walk,
   a loop with `return` from inside, and a `loop` that reads until a list
   is empty, each against the fold it replaces.
@@ -295,8 +259,7 @@ answers what the same function written with folds answers.
 - **`while` and `loop` both,** or one?
 - **What `for` walks.** A `List` only, or anything with a `fold`: a `Map`'s
   entries, a `Set`?
-- **A variable as a parameter,** `f($acc, x)`, rebinding the caller's? It
-  would need the caller to pass a variable, and is left out.
+- **Compound assignment,** `count += 1`, once counting loops are written.
 
 ## Origin
 
@@ -305,5 +268,6 @@ Comparing the graph library's walks and toposort with their Python
 guard helpers, left the threading of state through folds as the largest
 difference. Roc's newer compiler (`docs/mini-tutorial-new-compiler.md` in
 roc-lang/roc) writes `var $x`, `for` and `while`, and confines a `var` to
-its declaring function; this draft takes the sigil and that rule, and
-drops `var`.
+its declaring function; this draft first took the sigil and that rule.
+On 2026-10-07 the sigil and write-back gave way to plain assignment, which
+the conditions draft makes the rule for every name.
