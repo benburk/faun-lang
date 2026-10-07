@@ -186,7 +186,10 @@ list by the container, so the caller says which: `Map.of_list(entries)`,
 `Map.grouped(values, key)` gathering values by a key, and
 `Map.counted(values)` counting how many times each occurs, as Python's
 `Counter` does, `Map.counted(["a", "b", "a"]).get_or("a", 0)` being 2.
-`SortedMap` has the same three, its keys in order.
+`SortedMap` has the same three, its keys in order. Both update a key as
+Python's `defaultdict` does with `update_or(key, missing, change)`, which
+changes the value there, or `missing` where the key is absent: `counts =
+counts.update_or(word, 0, |count| count + 1)`.
 
 A type's block asks for `equals`, `cmp`, `to_str` or `hash_into` by writing
 its signature with no clauses, as in Ori, and has the structural member of

@@ -89,6 +89,14 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
     k.equals : (k, k) -> Bool
   update(map, key, change) -> changed(map, key, change, get(map, key))
 
+  # `map` with `key`'s value replaced by `change` applied to it, or to
+  # `missing` where `key` is absent, as Python's `defaultdict` updates:
+  # `counts.update_or(word, 0, |count| count + 1)`.
+  update_or : (Map(k, v), k, v, v -> v) -> Map(k, v) where
+    k.hash_into : (k, Mixer) -> Mixer,
+    k.equals : (k, k) -> Bool
+  update_or(map, key, missing, change) -> insert(map, key, change(get_or(map, key, missing)))
+
   # `map` without any binding for `key`; unchanged when `key` is absent.
   remove : (Map(k, v), k) -> Map(k, v) where
     k.hash_into : (k, Mixer) -> Mixer,
@@ -156,7 +164,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
     k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
   grouped(values, key) -> (
-    gathered = values.fold(empty, |table, value| gathered_into(table, key(value), value))
+    gathered = values.fold(empty, |table, value| update_or(table, key(value), [], |group| [value, *group]))
     map_values(gathered, |group| group.reverse())
   )
 
@@ -166,7 +174,7 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   counted : List(k) -> Map(k, Nat) where
     k.hash_into : (k, Mixer) -> Mixer,
     k.equals : (k, k) -> Bool
-  counted(values) -> values.fold(empty, |tally, value| insert(tally, value, get_or(tally, value, 0) + 1))
+  counted(values) -> values.fold(empty, |tally, value| update_or(tally, value, 0, |count| count + 1))
 
   # Whether `map` and `other` bind the same keys to equal values, in
   # whatever order either was built: every entry of one is found in the
@@ -178,12 +186,6 @@ Map(k, v) : {seed: U64, slots: List(Slot(k, v)), index: List(List((U64, Nat))), 
   equals(map, other) ->
     len(map) == len(other) & to_list(map).all(|(key, value)| get(other, key) == Ok(value))
 )
-
-# `table` with `value` put before the rest of `key`'s group.
-gathered_into : (Map(k, List(v)), k, v) -> Map(k, List(v)) where
-  k.hash_into : (k, Mixer) -> Mixer,
-  k.equals : (k, k) -> Bool
-gathered_into(table, key, value) -> Map.insert(table, key, [value, *Map.get_or(table, key, [])])
 
 # The read `update` already made, spent: a hit writes the changed value back
 # and a miss answers the map it was given.
@@ -296,3 +298,4 @@ placed(index, room, digest, position) -> (
 
 expect Map.counted(["a", "b", "a"]).to_list() == [("a", 2), ("b", 1)] & Map.counted([0].drop(1)).is_empty()
 expect Map.grouped([1, 2, 3, 4, 5], |n| n % 2).to_list() == [(1, [1, 3, 5]), (0, [2, 4])]
+expect Map.of_list([("a", 1)]).update_or("a", 0, |n| n + 1).update_or("b", 0, |n| n + 1).to_list() == [("a", 2), ("b", 1)]
