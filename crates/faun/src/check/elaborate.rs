@@ -211,6 +211,36 @@ impl Elaborator<'_> {
         } else {
             match kind {
                 h::ExprKind::Block(body) => t::ExprKind::Block(Box::new(self.body(*body))),
+                h::ExprKind::Loop(looped) => {
+                    let h::Loop {
+                        carried,
+                        head,
+                        body,
+                        rest,
+                    } = *looped;
+                    t::ExprKind::Loop(Box::new(t::Loop {
+                        carried: carried
+                            .into_iter()
+                            .map(|(initial, within, after)| (self.expr(initial), within, after))
+                            .collect(),
+                        head: match head {
+                            h::LoopHead::While(condition) => {
+                                t::LoopHead::While(self.expr(condition))
+                            }
+                            h::LoopHead::For(pattern, list) => {
+                                t::LoopHead::For(self.pattern(pattern), self.expr(list))
+                            }
+                        },
+                        body: self.body(body),
+                        rest: self.body(rest),
+                    }))
+                }
+                h::ExprKind::Continue(values) => t::ExprKind::Continue(
+                    values.into_iter().map(|value| self.expr(value)).collect(),
+                ),
+                h::ExprKind::Break(values) => {
+                    t::ExprKind::Break(values.into_iter().map(|value| self.expr(value)).collect())
+                }
                 h::ExprKind::Local(local) => t::ExprKind::Local(local),
                 h::ExprKind::Global(name) => t::ExprKind::Function(name),
                 h::ExprKind::Constructor(name) | h::ExprKind::Tag(name) => {

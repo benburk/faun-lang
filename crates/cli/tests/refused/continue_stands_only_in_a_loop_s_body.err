@@ -1,0 +1,5 @@
+error: `continue` stands only in a loop's body
+ --> continue_stands_only_in_a_loop_s_body.fn:5:12
+  |
+5 |   if n > 1 continue
+  |            ^^^^^^^^

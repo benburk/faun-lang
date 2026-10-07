@@ -1312,6 +1312,47 @@ fn an_assigned_name_holds_its_new_value_past_its_branch() {
     assert_eq!(answers, [12, 26]);
 }
 
+/// A loop runs its round once for each element, or while its condition
+/// holds, carrying what it binds again from round to round; an effect in
+/// a round happens each round, in order; and `continue`, `break` and
+/// `return` leave the round, the loop and the clause.
+#[test]
+fn loops_carry_names_and_keep_their_effects_in_order() {
+    let program = read(
+        "import std.host {Host, Stdout, IoError}
+
+         counted! : (Stdout, Nat) -> Result(Nat, IoError)
+         counted!(out, n) -> (
+           total = 0
+           for x in List.range(n + 3) (
+             if x == 4 break
+             x % 2 == 1 else continue
+             written = out.write_all!(\"${x};\".to_utf8())?
+             total = total + x
+           )
+           ready = [5, 6]
+           while ready is [head, *rest] (
+             ready = rest
+             if head > 5 return Ok(total * 10 + head)
+           )
+           Ok(total)
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           tried = counted!(host.stdout, host.args.len())
+           answer = tried.ok_or(99)
+           host.exit!(U8.of_nat(answer))
+         )",
+    )
+    .expect("a program with loops");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers = execute_counts(&program, &[1, 2]);
+    assert_eq!(answers, [(46, "1;3;".to_owned()), (46, "1;3;".to_owned())]);
+}
+
 /// The arguments a program is run with are a list of strings, its own name
 /// first: a greeting names the first after it, or the world where there is
 /// none, and the count is how many there are.

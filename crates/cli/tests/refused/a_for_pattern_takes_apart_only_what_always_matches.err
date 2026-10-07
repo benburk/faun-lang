@@ -1,0 +1,5 @@
+error: a binding takes apart only what always matches, and `Ok` is one of several constructors
+ --> a_for_pattern_takes_apart_only_what_always_matches.fn:6:3
+  |
+6 |   for Ok(n) in rs (
+  |   ^^^^^^^^^^^^^^^^^

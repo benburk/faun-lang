@@ -144,6 +144,24 @@ impl Builder<'_> {
     )]
     fn expr(&mut self, expression: &mut h::Expr) {
         match &mut expression.kind {
+            h::ExprKind::Loop(looped) => {
+                for (initial, _, _) in &mut looped.carried {
+                    self.expr(initial);
+                }
+                match &mut looped.head {
+                    h::LoopHead::While(condition) => self.expr(condition),
+                    h::LoopHead::For(_, list) => self.expr(list),
+                }
+                for body in [&mut looped.body, &mut looped.rest] {
+                    for binding in &mut body.bindings {
+                        self.expr(&mut binding.value);
+                    }
+                    self.expr(&mut body.result);
+                }
+            }
+            h::ExprKind::Continue(values) | h::ExprKind::Break(values) => {
+                self.exprs(values.iter_mut());
+            }
             h::ExprKind::Block(body) => {
                 for binding in &mut body.bindings {
                     self.expr(&mut binding.value);

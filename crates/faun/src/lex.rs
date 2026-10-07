@@ -97,6 +97,9 @@ pub enum Kind {
     KwReturn,
     KwContinue,
     KwBreak,
+    KwFor,
+    KwIn,
+    KwWhile,
     KwPackage,
     KwImport,
     KwExport,
@@ -115,7 +118,7 @@ pub enum Kind {
 
 impl Kind {
     /// Whether a line can end with this token: it ends a name, a literal, a
-    /// bracket, or a `?`.
+    /// bracket, a `?`, or a leave that takes no value.
     const fn ends_line(self) -> bool {
         matches!(
             self,
@@ -132,6 +135,8 @@ impl Kind {
                 | Self::RBrace
                 | Self::DotStar
                 | Self::Question
+                | Self::KwContinue
+                | Self::KwBreak
                 | Self::Error
         )
     }
@@ -561,6 +566,9 @@ impl Lexer<'_> {
             "return" => Kind::KwReturn,
             "continue" => Kind::KwContinue,
             "break" => Kind::KwBreak,
+            "for" => Kind::KwFor,
+            "in" => Kind::KwIn,
+            "while" => Kind::KwWhile,
             "package" => Kind::KwPackage,
             "import" => Kind::KwImport,
             "export" => Kind::KwExport,

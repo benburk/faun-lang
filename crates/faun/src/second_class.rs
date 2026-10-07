@@ -94,6 +94,27 @@ fn callers(program: &Program) -> HashMap<&FunctionKey, Vec<(&FunctionKey, &Expr)
     callers
 }
 
+/// The expressions a loop holds: what it carries in, its head, and its
+/// round's and what follows it's lines.
+fn loop_parts(looped: &crate::specialize::Loop) -> Vec<&Expr> {
+    let head = match &looped.head {
+        crate::specialize::LoopHead::While(condition) => condition,
+        crate::specialize::LoopHead::For(_, list) => list,
+    };
+    looped
+        .carried
+        .iter()
+        .map(|(initial, _, _)| initial)
+        .chain([head])
+        .chain([&looped.body, &looped.rest].into_iter().flat_map(|body| {
+            body.bindings
+                .iter()
+                .map(|binding| &binding.value)
+                .chain([&body.result])
+        }))
+        .collect()
+}
+
 /// Each call in `expression` naming a definition, with what it names.
 #[expect(
     clippy::too_many_lines,
@@ -120,6 +141,8 @@ fn calls<'a>(expression: &'a Expr, found: &mut impl FnMut(&'a FunctionKey, &'a E
         ExprKind::Is(value, rows) => std::iter::once(&**value)
             .chain(rows.iter().filter_map(|(_, guard)| guard.as_ref()))
             .collect(),
+        ExprKind::Loop(looped) => loop_parts(looped),
+        ExprKind::Continue(values) | ExprKind::Break(values) => values.iter().collect(),
         ExprKind::Match(value, arms) => std::iter::once(&**value)
             .chain(arms.iter().flat_map(|arm| {
                 arm.rows
@@ -197,6 +220,12 @@ fn value(expression: &Expr, passed: bool) -> Result<(), LowerError> {
             value(condition, false)?;
             value(yes, false)?;
             value(no, false)
+        }
+        ExprKind::Loop(looped) => loop_parts(looped)
+            .into_iter()
+            .try_for_each(|part| value(part, false)),
+        ExprKind::Continue(values) | ExprKind::Break(values) => {
+            values.iter().try_for_each(|part| value(part, false))
         }
         ExprKind::Match(tested, arms) => {
             value(tested, false)?;

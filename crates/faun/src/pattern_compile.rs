@@ -17,7 +17,7 @@ use crate::diagnostic::LowerError;
 use crate::first_order::{self as d, Expr, ExprKind};
 use crate::hir::LocalId;
 use crate::specialize::{FunctionKey, Instance, Pattern, Signature, Split, Type};
-use crate::{Symbol, Symbols};
+use crate::{ModuleId, Symbol, Symbols};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Program {
@@ -258,11 +258,29 @@ struct Compiler<'a> {
     joins: &'a Joins,
 }
 
-/// The join points made while compiling, and how many there are.
+/// The join points made while compiling, and how many there are; the
+/// locals hoisting and loops make, numbered across the whole program so
+/// that none a function is handed is made again in it; and the loops whose
+/// rounds are being compiled, innermost last.
 #[derive(Default)]
 struct Joins {
     functions: RefCell<Vec<Function>>,
     made: Cell<u32>,
+    hoisted: Cell<u32>,
+    looped: Cell<u32>,
+    exits: RefCell<Vec<Exits>>,
+}
+
+/// Where a loop's `continue` and `break` go: the round's function, with
+/// what it reads beside what the loop carries and, for `for`, the rest of
+/// the list; and the function of the lines after it, with what they read.
+#[derive(Clone)]
+struct Exits {
+    round: FunctionKey,
+    round_reads: Vec<(LocalId, Type)>,
+    rest_of_list: Option<(LocalId, Type)>,
+    after: FunctionKey,
+    after_reads: Vec<(LocalId, Type)>,
 }
 
 /// What a plan makes of a way no row is left for.
@@ -282,6 +300,16 @@ impl Compiler<'_> {
     /// A body the function answers, made so that each branch that may
     /// leave answers it too; see [`Self::joined`].
     fn tail_body(&self, body: d::Body, key: &FunctionKey) -> Result<Body, LowerError> {
+        self.tail_body_then(body, key, None)
+    }
+
+    /// [`Self::tail_body`], its answer handed to `then` where there is one.
+    fn tail_body_then(
+        &self,
+        body: d::Body,
+        key: &FunctionKey,
+        then: Option<&(FunctionKey, Vec<(LocalId, Type)>)>,
+    ) -> Result<Body, LowerError> {
         let body = d::Body {
             bindings: body
                 .bindings
@@ -293,8 +321,288 @@ impl Compiler<'_> {
                 .collect(),
             result: tested(body.result, self.prelude),
         };
-        let body = self.joined(exported(hoisted(body, &mut 0)), key)?;
+        let mut body = exported(self.hoisted(body));
+        if let Some((then, reads)) = then {
+            body.result = handed_on(body.result, then, reads, key);
+        }
+        let body = self.joined(body, key)?;
         self.compiled(body)
+    }
+
+    /// [`hoisted`], numbering what it makes across the program.
+    fn hoisted(&self, body: d::Body) -> d::Body {
+        let mut fresh = self.joins.hoisted.get();
+        let body = hoisted(body, &mut fresh);
+        self.joins.hoisted.set(fresh);
+        body
+    }
+
+    /// A local no clause has, for a loop's element and the rest of its list.
+    fn loop_local(&self) -> LocalId {
+        let made = self.joins.looped.get();
+        self.joins.looped.set(made + 1);
+        LocalId((1 << 31) + made)
+    }
+
+    /// A function key for what lowering makes of `key`'s body.
+    fn made_key(&self, key: &FunctionKey, parameters: Vec<Type>) -> FunctionKey {
+        let made = self.joins.made.get();
+        self.joins.made.set(made + 1);
+        FunctionKey {
+            name: key.name,
+            signature: Signature {
+                parameters,
+                result: key.signature.result.clone(),
+            },
+            instance: Instance::Join(made),
+        }
+    }
+
+    /// A loop answering the function: the lines after it a function of what
+    /// it carries out and what they read, `after`, whose answer goes on to
+    /// `then` where there is one; the round a function of what it carries
+    /// in, what it and `after` read, and for `for` the rest of the list,
+    /// calling itself for the next round and `after` once the loop ends.
+    /// What stands for the loop is a call of the round.
+    fn looped(
+        &self,
+        looped: d::Loop,
+        (module, span): (ModuleId, crate::ast::Span),
+        key: &FunctionKey,
+        then: Option<&(FunctionKey, Vec<(LocalId, Type)>)>,
+    ) -> Result<Expr, LowerError> {
+        let answer = key.signature.result.as_ref().clone();
+        let d::Loop {
+            carried,
+            head,
+            body,
+            rest,
+        } = looped;
+        let local = |local: LocalId, ty: &Type| Expr {
+            module,
+            span,
+            ty: ty.clone(),
+            kind: ExprKind::Local(local),
+        };
+        let types: Vec<Type> = carried
+            .iter()
+            .map(|(initial, _, _)| initial.ty.clone())
+            .collect();
+        let afters: Vec<LocalId> = carried.iter().map(|(_, _, after)| *after).collect();
+        let withins: Vec<LocalId> = carried.iter().map(|(_, within, _)| *within).collect();
+
+        let mut after_reads = free_in(&rest, &afters.iter().copied().collect());
+        // A `continue` or `break` of the loop around this one, written
+        // after it, hands on what that loop's functions read.
+        let outer: Vec<(LocalId, Type)> = self
+            .joins
+            .exits
+            .borrow()
+            .last()
+            .map(|exits| {
+                exits
+                    .round_reads
+                    .iter()
+                    .chain(&exits.rest_of_list)
+                    .chain(&exits.after_reads)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        for read in then.iter().flat_map(|(_, reads)| reads).chain(&outer) {
+            if !afters.contains(&read.0) && !after_reads.contains(read) {
+                after_reads.push(read.clone());
+            }
+        }
+        let after = self.made_key(
+            key,
+            types
+                .iter()
+                .cloned()
+                .chain(after_reads.iter().map(|(_, ty)| ty.clone()))
+                .collect(),
+        );
+        let after_body = self.tail_body_then(rest, key, then)?;
+        self.made(
+            after.clone(),
+            after_body,
+            afters
+                .iter()
+                .chain(after_reads.iter().map(|(read, _)| read)),
+        );
+
+        let ended = Expr {
+            module,
+            span,
+            ty: answer.clone(),
+            kind: ExprKind::Break(
+                withins
+                    .iter()
+                    .zip(&types)
+                    .map(|(within, ty)| local(*within, ty))
+                    .collect(),
+            ),
+        };
+        let ended = block(
+            d::Body {
+                bindings: Vec::new(),
+                result: ended,
+            },
+            &answer,
+        );
+        let (decided, walking, list) = match head {
+            d::LoopHead::While(condition) => (
+                ExprKind::If(
+                    Box::new(condition),
+                    Box::new(block(body, &answer)),
+                    Box::new(ended),
+                ),
+                None,
+                None,
+            ),
+            d::LoopHead::For(pattern, list) => {
+                let element = match &list.ty {
+                    Type::Named(_, arguments) if arguments.len() == 1 => arguments[0].clone(),
+                    _ => return Err(error("a `for` loop walks a list")),
+                };
+                let (walked, taken, more) =
+                    (self.loop_local(), self.loop_local(), self.loop_local());
+                let mut round = d::Body {
+                    bindings: vec![d::Binding {
+                        pattern,
+                        value: local(taken, &element),
+                    }],
+                    result: body.result,
+                };
+                round.bindings.extend(body.bindings);
+                let arms = vec![
+                    d::Arm {
+                        rows: vec![(
+                            Pattern::List(
+                                vec![Pattern::Bind(taken)],
+                                Some(Box::new(Pattern::Bind(more))),
+                            ),
+                            None,
+                        )],
+                        body: block(round, &answer),
+                    },
+                    d::Arm {
+                        rows: vec![(Pattern::List(Vec::new(), None), None)],
+                        body: ended,
+                    },
+                ];
+                (
+                    ExprKind::Match(Box::new(local(walked, &list.ty)), arms),
+                    Some((walked, more, list.ty.clone())),
+                    Some(list),
+                )
+            }
+        };
+        let round_body = d::Body {
+            bindings: Vec::new(),
+            result: Expr {
+                module,
+                span,
+                ty: answer.clone(),
+                kind: decided,
+            },
+        };
+        let mut own: HashSet<LocalId> = withins.iter().copied().collect();
+        own.extend(
+            walking
+                .iter()
+                .flat_map(|(walked, more, _)| [*walked, *more]),
+        );
+        let mut round_reads = free_in(&round_body, &own);
+        for read in &after_reads {
+            if !round_reads.contains(read) {
+                round_reads.push(read.clone());
+            }
+        }
+        let mut parameters = types;
+        parameters.extend(round_reads.iter().map(|(_, ty)| ty.clone()));
+        parameters.extend(walking.iter().map(|(_, _, ty)| ty.clone()));
+        let round = self.made_key(key, parameters);
+        self.joins.exits.borrow_mut().push(Exits {
+            round: round.clone(),
+            round_reads: round_reads.clone(),
+            rest_of_list: walking.as_ref().map(|(_, more, ty)| (*more, ty.clone())),
+            after,
+            after_reads,
+        });
+        let compiled = self.tail_body(round_body, key);
+        self.joins.exits.borrow_mut().pop();
+        self.made(
+            round.clone(),
+            compiled?,
+            withins
+                .iter()
+                .chain(round_reads.iter().map(|(read, _)| read))
+                .chain(walking.iter().map(|(walked, _, _)| walked)),
+        );
+        let mut arguments: Vec<Expr> = carried.into_iter().map(|(initial, _, _)| initial).collect();
+        arguments.extend(round_reads.iter().map(|(read, ty)| local(*read, ty)));
+        arguments.extend(list);
+        Ok(Expr {
+            module,
+            span,
+            ty: answer,
+            kind: ExprKind::DirectCall(round, arguments),
+        })
+    }
+
+    /// A function lowering made, `body` with `parameters` as its locals.
+    fn made<'p>(
+        &self,
+        key: FunctionKey,
+        body: Body,
+        parameters: impl Iterator<Item = &'p LocalId>,
+    ) {
+        let locals = parameters
+            .enumerate()
+            .map(|(at, local)| (*local, Value(u32::try_from(at).expect("a sane arity"))))
+            .collect();
+        self.joins.functions.borrow_mut().push(Function {
+            key,
+            definition: Definition::Body(Box::new(Decision::Body { body, locals })),
+        });
+    }
+
+    /// A body's answer where it is a `continue` or a `break`: a call of the
+    /// innermost loop's round, or of the lines after it.
+    fn left(&self, answer: Expr) -> Expr {
+        let (values, continuing) = match answer.kind {
+            ExprKind::Continue(values) => (values, true),
+            ExprKind::Break(values) => (values, false),
+            kind => return Expr { kind, ..answer },
+        };
+        let exits = self.joins.exits.borrow();
+        let exits = exits
+            .last()
+            .expect("resolution keeps `continue` and `break` in loops");
+        let read = |(local, ty): &(LocalId, Type)| Expr {
+            module: answer.module,
+            span: answer.span,
+            ty: ty.clone(),
+            kind: ExprKind::Local(*local),
+        };
+        let (callee, mut arguments) = if continuing {
+            let mut arguments = values;
+            arguments.extend(exits.round_reads.iter().map(read));
+            if let Some((more, ty)) = &exits.rest_of_list {
+                arguments.push(read(&(*more, ty.clone())));
+            }
+            (exits.round.clone(), arguments)
+        } else {
+            (exits.after.clone(), values)
+        };
+        if !continuing {
+            arguments.extend(exits.after_reads.iter().map(read));
+        }
+        Expr {
+            kind: ExprKind::DirectCall(callee, arguments),
+            ..answer
+        }
     }
 
     /// A hoisted body the function answers, each `if` or arms of it whose
@@ -352,7 +660,18 @@ impl Compiler<'_> {
             Some((join, live))
         };
         let (module, span) = (construct.value.module, construct.value.span);
-        let value = self.answering(construct.value, &answer, join.as_ref(), key)?;
+        let value = match construct.value.kind {
+            ExprKind::Loop(looped) => self.looped(*looped, (module, span), key, join.as_ref())?,
+            kind => self.answering(
+                Expr {
+                    kind,
+                    ..construct.value
+                },
+                &answer,
+                join.as_ref(),
+                key,
+            )?,
+        };
         body.bindings.push(d::Binding {
             pattern: Pattern::Bind(local),
             value,
@@ -383,6 +702,12 @@ impl Compiler<'_> {
             let mut body = *body;
             body.result = match body.result.kind {
                 ExprKind::Return(value) => *value,
+                // Leaving a round or the loop, which the loop's own lowering
+                // turns into a call.
+                kind @ (ExprKind::Continue(_) | ExprKind::Break(_)) => Expr {
+                    kind,
+                    ..body.result
+                },
                 kind => {
                     let result = Expr {
                         kind,
@@ -562,7 +887,7 @@ impl Compiler<'_> {
             .collect::<Result<_, LowerError>>()?;
         Ok(Body {
             bindings,
-            result: body.result,
+            result: self.left(body.result),
         })
     }
 
@@ -1277,10 +1602,46 @@ fn handed_out(binding: d::Binding, after: &HashSet<LocalId>) -> d::Binding {
     }
 }
 
+/// `body` as a block of type `ty`.
+fn block(body: d::Body, ty: &Type) -> Expr {
+    Expr {
+        module: body.result.module,
+        span: body.result.span,
+        ty: ty.clone(),
+        kind: ExprKind::Block(Box::new(body)),
+    }
+}
+
+/// `answer` handed to `then`, with what it reads beside.
+fn handed_on(
+    answer: Expr,
+    then: &FunctionKey,
+    reads: &[(LocalId, Type)],
+    key: &FunctionKey,
+) -> Expr {
+    let (module, span) = (answer.module, answer.span);
+    let mut arguments = vec![answer];
+    arguments.extend(reads.iter().map(|(local, ty)| Expr {
+        module,
+        span,
+        ty: ty.clone(),
+        kind: ExprKind::Local(*local),
+    }));
+    Expr {
+        module,
+        span,
+        ty: key.signature.result.as_ref().clone(),
+        kind: ExprKind::DirectCall(then.clone(), arguments),
+    }
+}
+
 /// Whether `value` is an `if` or arms with a branch that may leave the
 /// function, by `?` or `return`, anywhere inside it.
 fn branches_leave(value: &Expr) -> bool {
     match &value.kind {
+        // A loop always answers the function, its rounds and what follows
+        // it calling one another.
+        ExprKind::Loop(_) => true,
         ExprKind::If(_, yes, no) => leaves(yes) || leaves(no),
         ExprKind::Match(_, arms) => arms.iter().any(|arm| leaves(&arm.body)),
         _ => false,
@@ -1291,7 +1652,14 @@ fn branches_leave(value: &Expr) -> bool {
 fn leaves(expression: &Expr) -> bool {
     let mut found = false;
     each_expr(expression, &mut |inner| {
-        found |= matches!(inner.kind, ExprKind::Try(_) | ExprKind::Return(_));
+        found |= matches!(
+            inner.kind,
+            ExprKind::Try(_)
+                | ExprKind::Return(_)
+                | ExprKind::Continue(_)
+                | ExprKind::Break(_)
+                | ExprKind::Loop(_)
+        );
     });
     found
 }
@@ -1299,8 +1667,15 @@ fn leaves(expression: &Expr) -> bool {
 /// What `rest` reads that it does not bind, but `answered`, each at its
 /// type, in order: a join point's parameters after the branch's value.
 fn live_in(rest: &d::Body, answered: LocalId) -> Vec<(LocalId, Type)> {
+    free_in(rest, &HashSet::from([answered]))
+}
+
+/// What `body` reads that neither it binds nor `own` holds, each at its
+/// type, in order.
+fn free_in(body: &d::Body, own: &HashSet<LocalId>) -> Vec<(LocalId, Type)> {
+    let rest = body;
     let mut read = BTreeMap::new();
-    let mut bound = HashSet::from([answered]);
+    let mut bound = own.clone();
     for binding in &rest.bindings {
         pattern_bound(&binding.pattern, &mut bound);
     }
@@ -1321,6 +1696,17 @@ fn live_in(rest: &d::Body, answered: LocalId) -> Vec<(LocalId, Type)> {
         ExprKind::Match(_, arms) => {
             for (pattern, _) in arms.iter().flat_map(|arm| &arm.rows) {
                 pattern_bound(pattern, &mut bound);
+            }
+        }
+        ExprKind::Loop(looped) => {
+            for (_, within, after) in &looped.carried {
+                bound.extend([*within, *after]);
+            }
+            if let d::LoopHead::For(pattern, _) = &looped.head {
+                pattern_bound(pattern, &mut bound);
+            }
+            for binding in looped.body.bindings.iter().chain(&looped.rest.bindings) {
+                pattern_bound(&binding.pattern, &mut bound);
             }
         }
         _ => {}
@@ -1376,6 +1762,26 @@ fn pattern_bound(pattern: &Pattern, bound: &mut HashSet<LocalId>) {
 fn each_expr(expression: &Expr, visit: &mut impl FnMut(&Expr)) {
     visit(expression);
     match &expression.kind {
+        ExprKind::Loop(looped) => {
+            for (initial, _, _) in &looped.carried {
+                each_expr(initial, visit);
+            }
+            match &looped.head {
+                d::LoopHead::While(condition) => each_expr(condition, visit),
+                d::LoopHead::For(_, list) => each_expr(list, visit),
+            }
+            for body in [&looped.body, &looped.rest] {
+                for binding in &body.bindings {
+                    each_expr(&binding.value, visit);
+                }
+                each_expr(&body.result, visit);
+            }
+        }
+        ExprKind::Continue(values) | ExprKind::Break(values) => {
+            for value in values {
+                each_expr(value, visit);
+            }
+        }
         ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
         ExprKind::Construct(_, list) | ExprKind::Tuple(list) | ExprKind::DirectCall(_, list) => {
             for inner in list {
@@ -1475,7 +1881,11 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
             );
             return branched(condition, yes, no, prelude);
         }
-        kind @ (ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_)) => kind,
+        kind @ (ExprKind::Local(_)
+        | ExprKind::Natural(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Continue(_)
+        | ExprKind::Break(_)) => kind,
         ExprKind::Construct(constructor, fields) => ExprKind::Construct(constructor, each(fields)),
         ExprKind::Record(fields) => ExprKind::Record(
             fields
@@ -1496,6 +1906,18 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
         ExprKind::Widen(value) => ExprKind::Widen(one(value)),
         ExprKind::Try(value) => ExprKind::Try(one(value)),
         ExprKind::Return(value) => ExprKind::Return(one(value)),
+        // What goes into a loop is worked out where it stands; the rest is
+        // worked out where lowering makes the loop's functions.
+        ExprKind::Loop(looped) => {
+            let mut looped = *looped;
+            for (initial, _, _) in &mut looped.carried {
+                *initial = tested(initial.clone(), prelude);
+            }
+            if let d::LoopHead::For(_, list) = &mut looped.head {
+                *list = tested(list.clone(), prelude);
+            }
+            ExprKind::Loop(Box::new(looped))
+        }
         // A guard is asked a part at a time where its arm is planned.
         ExprKind::Match(value, arms) => ExprKind::Match(
             one(value),
@@ -1668,6 +2090,30 @@ fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> 
         ExprKind::Widen(value) => ExprKind::Widen(Box::new(lift(*value))),
         // A branch's answer, which stays where it stands.
         ExprKind::Return(value) => ExprKind::Return(Box::new(lift(*value))),
+        kind @ (ExprKind::Continue(_) | ExprKind::Break(_)) => kind,
+        // A loop is bound on its own line, what goes into it worked out
+        // ahead of it.
+        ExprKind::Loop(looped) => {
+            let mut looped = *looped;
+            for (initial, _, _) in &mut looped.carried {
+                *initial = lift(initial.clone());
+            }
+            if let d::LoopHead::For(_, list) = &mut looped.head {
+                *list = lift(list.clone());
+            }
+            let local = LocalId(u32::MAX - *fresh);
+            *fresh += 1;
+            bindings.push(d::Binding {
+                pattern: Pattern::Bind(local),
+                value: Expr {
+                    module: expression.module,
+                    span: expression.span,
+                    ty: expression.ty.clone(),
+                    kind: ExprKind::Loop(Box::new(looped)),
+                },
+            });
+            ExprKind::Local(local)
+        }
         ExprKind::Is(..) => unreachable!("each test is an `if`'s condition by now"),
         ExprKind::If(condition, yes, no) => {
             // A test's value is worked out ahead; its pattern is asked by

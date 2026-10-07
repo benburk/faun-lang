@@ -96,10 +96,33 @@ pub(crate) enum ExprKind {
     /// `value is ( arms )`; see [`crate::hir::ExprKind::Match`]. Pattern
     /// compiling binds it on a line of its own, one decision for every arm.
     Match(Box<Expr>, Vec<Arm>),
+    /// A loop; see [`crate::hir::Loop`]. Pattern compiling makes it a
+    /// function of what it carries, calling itself for each round.
+    Loop(Box<Loop>),
+    /// `continue`; see [`crate::hir::ExprKind::Continue`].
+    Continue(Vec<Expr>),
+    /// `break`; see [`crate::hir::ExprKind::Break`].
+    Break(Vec<Expr>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     /// Pattern compiling takes its bindings out ahead of the expression it
     /// stands in.
     Block(Box<Body>),
+}
+
+/// A loop; see [`crate::hir::Loop`].
+#[derive(Clone, Debug)]
+pub(crate) struct Loop {
+    pub(crate) carried: Vec<(Expr, LocalId, LocalId)>,
+    pub(crate) head: LoopHead,
+    pub(crate) body: Body,
+    pub(crate) rest: Body,
+}
+
+/// What a loop runs over; see [`crate::hir::LoopHead`].
+#[derive(Clone, Debug)]
+pub(crate) enum LoopHead {
+    While(Expr),
+    For(Pattern, Expr),
 }
 
 /// One arm; see [`crate::specialize::Arm`].

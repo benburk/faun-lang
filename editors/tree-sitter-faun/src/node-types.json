@@ -334,6 +334,10 @@
           {
             "type": "_expression",
             "named": true
+          },
+          {
+            "type": "leave",
+            "named": true
           }
         ]
       }
@@ -356,6 +360,10 @@
         },
         {
           "type": "if_line",
+          "named": true
+        },
+        {
+          "type": "loop_line",
           "named": true
         }
       ]
@@ -578,6 +586,10 @@
         "types": [
           {
             "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "leave",
             "named": true
           }
         ]
@@ -992,12 +1004,8 @@
         "required": true,
         "types": [
           {
-            "type": "break",
-            "named": false
-          },
-          {
-            "type": "continue",
-            "named": false
+            "type": "leave",
+            "named": true
           },
           {
             "type": "return_expression",
@@ -1264,6 +1272,11 @@
     }
   },
   {
+    "type": "leave",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "list",
     "named": true,
     "fields": {},
@@ -1280,6 +1293,124 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "loop_line",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "round",
+            "named": true
+          }
+        ]
+      },
+      "condition": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "list": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "arms",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "char",
+            "named": true
+          },
+          {
+            "type": "decimal",
+            "named": true
+          },
+          {
+            "type": "effect_identifier",
+            "named": true
+          },
+          {
+            "type": "equal_pattern",
+            "named": true
+          },
+          {
+            "type": "field_expression",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "list",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "range",
+            "named": true
+          },
+          {
+            "type": "record",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "try_expression",
+            "named": true
+          },
+          {
+            "type": "tuple",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          },
+          {
+            "type": "wildcard",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1508,6 +1639,41 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "round",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "_expression",
+          "named": true
+        },
+        {
+          "type": "binding",
+          "named": true
+        },
+        {
+          "type": "else_line",
+          "named": true
+        },
+        {
+          "type": "if_line",
+          "named": true
+        },
+        {
+          "type": "leave",
+          "named": true
+        },
+        {
+          "type": "loop_line",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -2138,6 +2304,10 @@
     "named": false
   },
   {
+    "type": "for",
+    "named": false
+  },
+  {
     "type": "identifier",
     "named": true
   },
@@ -2147,6 +2317,10 @@
   },
   {
     "type": "import",
+    "named": false
+  },
+  {
+    "type": "in",
     "named": false
   },
   {
@@ -2183,6 +2357,10 @@
   },
   {
     "type": "where",
+    "named": false
+  },
+  {
+    "type": "while",
     "named": false
   },
   {

@@ -111,10 +111,13 @@ untyped-primary   = ( NUMBER | CHAR ) [ ".." range-end ]
                   | "{" [ fields ] "}" ;
 exprs             = expr [ "," [ exprs ] ] ;
 
-(* After `(` and one expression, the next token says which: `,` a tuple, `=`,
-   `else` or a line's end a block, whose lines are bindings and then its
-   answer, `->` or `if` arms, and `)` one value grouped. *)
+(* After `(` and one line, the next token says which: `,` a tuple, `=`,
+   `else` or a line's end a block, whose lines are bindings, leaving lines
+   and loops and then its answer, `->` or `if` arms, and `)` one value
+   grouped. *)
 parenthesized     = if-head ( "then" expr "else" expr after-first | leave NEWLINE statements )
+                  | loop-line NEWLINE statements
+                  | bare-leave
                   | plain after-first ;
 after-first       = [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE statements
                     | arm-tail { NEWLINE arm } ] ;
@@ -122,18 +125,31 @@ after-first       = [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE sta
    `is` takes are refused after parsing. *)
 arm               = expr arm-tail ;
 arm-tail          = [ "if" expr ] "->" expr ;
-(* A line beginning `if` is the ternary, or, where a leave follows its
-   condition, a line leaving where the condition holds, the lines after it
-   answering where it fails. *)
+(* A block answering: lines whose last is its answer, or a leave. A line
+   beginning `if` is the ternary, or, where a leave follows its condition, a
+   line leaving where the condition holds. Where `return`, `continue` and
+   `break` may stand is told after parsing. *)
 statements        = if-head ( "then" expr "else" expr statement-tail | leave NEWLINE statements )
+                  | loop-line NEWLINE statements
+                  | bare-leave
                   | plain statement-tail ;
 statement-tail    = [ line-tail NEWLINE statements | NEWLINE statements ] ;
-(* A binding, or a line going on where its condition holds, the lines after
-   it answering, and leaving by its `else` where it fails. Where `return` and
-   a leaving line may stand is told after parsing, and `continue` and `break`
-   wait for loops. *)
-line-tail         = "=" expr | "else" expr ;
-leave             = "return" expr | "continue" | "break" ;
+(* A loop's body: lines, any of which may be the last, the round going on
+   to the next where nothing leaves it. *)
+round             = block-line { NEWLINE block-line } ;
+block-line        = if-head ( "then" expr "else" expr [ line-tail ] | leave )
+                  | loop-line
+                  | bare-leave
+                  | plain [ line-tail ] ;
+(* A binding, or a line going on where its condition holds and leaving by
+   its `else` where it fails. *)
+line-tail         = "=" expr | "else" ( bare-leave | expr ) ;
+leave             = "return" expr | bare-leave ;
+bare-leave        = "continue" | "break" ;
+(* A loop runs its body each round. The body's `(` follows a space, so
+   that `while done(` is a call. *)
+loop-line         = "while" expr "(" round ")"
+                  | "for" operand "in" expr "(" round ")" ;
 (* A list's rest may have elements after it, which its end matches:
    `[*front, last]`. *)
 elements          = expr [ "," [ elements ] ]

@@ -129,9 +129,8 @@ line on, and a lambda binds again only its own names. A loop adds:
 ### Loops
 
 ```
-loop-line = "for" operand "in" expr "(" loop-body ")"
-          | "while" expr "(" loop-body ")"
-          | "loop" "(" loop-body ")" ;
+loop-line = "while" expr "(" round ")"
+          | "for" operand "in" expr "(" round ")" ;
 ```
 
 - **`for P in list ( … )`** runs its body once for each element, in order,
@@ -139,16 +138,16 @@ loop-line = "for" operand "in" expr "(" loop-body ")"
   `List`; a range is `List.range`.
 - **`while c ( … )`** runs while `c` holds. `c` may be an `is`, whose names
   the body sees.
-- **`loop ( … )`** runs until a `break` or a `return` leaves it.
-  It writes the loop whose test is partway through, as in reading until
-  input ends.
+- **No `loop`.** A loop whose test is partway through, as in reading
+  until input ends, is `while True ( … if done break … )`.
 - **The space before the body's `(` matters,** as anywhere: `while
   done(` is a call to `done`. The formatter writes the space.
-- **A loop is a line of a block,** not an expression, and not the block's
-  last line, which answers. What a loop computes is left in the names it
-  assigned.
-- **A loop's body is block lines with no answer:** bindings, leaving lines
-  and loops.
+- **A loop is a line of a block,** not an expression, and not the last
+  line of a block that answers. What a loop computes is left in the names
+  it bound again.
+- **A loop's body, a round, is block lines with no answer:** bindings,
+  effects, leaving lines and loops, any of which may be its last; where
+  nothing leaves it, the round goes on to the next.
 
 ### Leaving a round or a loop
 
@@ -166,21 +165,21 @@ stands outside a loop.
 
 ### Nesting
 
-Loops nest two deep. A third is refused, and so is a lambda of more than
-one line inside a loop's body: what goes deeper is a named step, a helper.
-Every body is then at most two levels of indentation below its
-function's, and Kahn's algorithm and Dijkstra's keep their textbook shape,
-an inner loop over a node's edges.
+Loops nest as deep as blocks do. How deep is a style's to say, a
+linter's, as the conditions draft leaves which form to write; the
+compiler refuses no depth. A lambda inside a loop is no part of its
+round: a `continue` or `break` in it is refused.
 
 ### Meaning
 
 Each loop is a recursive function, its parameters the names its body
-assigns and its answer their values when it ends; the lines after it are
-the join point it answers to. `continue` calls the loop for the next round;
-`break` and the loop's end call the join point; a `return` inside answers
-the function. Names a loop only reads are passed in, as a lambda captures.
-None of this is visible: a function with loops answers what the same
-function written with folds answers.
+binds again, what it reads, and for `for` the rest of the list; the lines
+after it are a join point it answers to. `continue` calls the loop for the
+next round; `break` and the loop's end call the join point; a `return`
+inside answers the function. The call of the loop for the next round is in
+tail position, so a round costs a jump. None of this is visible: a
+function with loops answers what the same function written with folds
+answers.
 
 ## Costs
 
@@ -220,28 +219,29 @@ function written with folds answers.
 - **Assigning inside lambdas,** as Python and JavaScript allow. A lambda
   could then change its caller's state, and a loop would no longer be a
   function of its names.
-- **One level of loops.** Kahn's algorithm's inner loop would become a
-  helper answering two names at once, `(degrees, ready)`; two levels keep
-  it where the textbook has it.
-- **`while` only, no `loop`.** Reading until input ends then reads before
-  the loop and again at the end of its body.
+- **Nesting limits,** two loops deep and no multi-line lambda in a round,
+  as first drafted. They said what style should, which is a linter's to
+  say.
+- **`loop` beside `while`,** for a loop whose test is partway through. It
+  is `while True ( … if done break … )`, a keyword fewer.
 - **`loop` only, no `while`.** `while c ( … )` is `loop ( c else break …
   )`, a construct fewer for a line more on every loop.
 
 ## Implementation impact
 
-1. **The lexer** gains the keywords `for`, `in`, `while`, `loop`, `break`
-   and `continue`.
+1. **The lexer** gains the keywords `for`, `in`, `while`, `break` and
+   `continue`.
 2. **The grammar.** `grammar.ebnf` and the tree-sitter grammar gain loop
    lines and `continue` and `break` as exits.
 3. **Resolution** records, for each loop, the names its body assigns, and
    refuses `continue` and `break` outside a loop.
-4. **The checker** checks a `for` pattern cannot fail.
+4. **The checker** holds what a loop carries to one type across its
+   rounds; lowering refuses a `for` pattern that can fail, as a binding's.
 5. **Lowering** makes each loop a recursive function of the names it
    assigns, and the lines after it a join point, as the conditions draft's
    branches are.
-6. **The standard library** gains `List.update(list, index, f)`, total,
-   leaving a list without that index as it was.
+6. **The standard library** gains `Map.counted`, `Map.grouped` and
+   `update_or`, which the toposort reads.
 7. **Programs.** The graph library's walks, components and toposort, and
    the heap's sift loops, written with loops; the HTML library's `for`
    renamed.
@@ -250,19 +250,30 @@ function written with folds answers.
 
 ## Testing
 
-- `crates/faun/src/ebnf.rs` probes: each loop form, loops two deep, and
-  `else continue` and `else break`.
-- Refused cases, each with its `.err`: a loop three deep, a multi-line
-  lambda in a loop, `break` outside a loop, and a refutable `for` pattern.
-- A running case across all three backends: toposort, a depth-first walk,
-  a loop with `return` from inside, and a `loop` that reads until a list
-  is empty, each against the fold it replaces.
+- `crates/faun/src/ebnf.rs` probes: each loop form, loops nested, and
+  `else continue` and `if c break`.
+- Refused cases, each with its `.err`: `continue` outside a loop, and in a
+  lambda inside one, and a refutable `for` pattern.
+- A running case across all three backends: a loop with an effect each
+  round, `continue`, `break` and a `return` from inside.
+
+## Built
+
+- **Loops,** 2026-10-07: `while` and `for` over a `List`, `continue` and
+  `break` in leaving lines, a round's last line free. Resolution reads a
+  loop's body once ahead to find the names it binds again, which it then
+  carries: a local within a round and another after the loop, each
+  `continue` and `break` handing on the versions where it stands. Lowering
+  makes every loop answer the function, as the join points do a branch that
+  may leave: the lines after it a function of what it carries out, the
+  round a function of what it carries in calling itself in tail position,
+  so nine million rounds run in constant stack. A loop carrying or walking
+  a value holding a resource is refused for now.
 
 ## Open questions
 
-- **`while` and `loop` both,** or one?
-- **What `for` walks.** A `List` only, or anything with a `fold`: a `Map`'s
-  entries, a `Set`?
+- **What `for` walks.** A `List` only, for now; a `Map`'s entries or a
+  `Set` later, through their `to_list` or a fold.
 - **Compound assignment,** `count += 1`, once counting loops are written.
 
 ## Origin

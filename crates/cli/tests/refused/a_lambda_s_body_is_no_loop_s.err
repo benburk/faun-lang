@@ -1,0 +1,7 @@
+error: `continue` stands only in a loop's body
+ --> a_lambda_s_body_is_no_loop_s.fn:8:16
+  |
+8 |       if y > 1 continue
+  |                ^^^^^^^^
+  |
+  = help: a lambda's body is no loop's, though a loop holds the lambda

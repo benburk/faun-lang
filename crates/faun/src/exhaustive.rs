@@ -163,6 +163,26 @@ fn with_arms<'e>(expression: &'e t::Expr, found: &mut Vec<(&'e t::Expr, &'e [t::
             }
             each(&body.result);
         }
+        t::ExprKind::Loop(looped) => {
+            for (initial, _, _) in &looped.carried {
+                each(initial);
+            }
+            match &looped.head {
+                t::LoopHead::While(condition) => each(condition),
+                t::LoopHead::For(_, list) => each(list),
+            }
+            for body in [&looped.body, &looped.rest] {
+                for binding in &body.bindings {
+                    each(&binding.value);
+                }
+                each(&body.result);
+            }
+        }
+        t::ExprKind::Continue(values) | t::ExprKind::Break(values) => {
+            for value in values {
+                each(value);
+            }
+        }
         t::ExprKind::Local(_)
         | t::ExprKind::Function(_)
         | t::ExprKind::Constructor(_)

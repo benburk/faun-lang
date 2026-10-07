@@ -269,14 +269,45 @@ module.exports = grammar({
     else_line: $ => seq(
       field('condition', $._expression),
       'else',
-      field('otherwise', $._expression),
+      field('otherwise', choice($._expression, $.leave)),
+    ),
+
+    // `continue` or `break`: on to the next round, or out of the loop.
+    leave: $ => choice('continue', 'break'),
+
+    // A loop runs its body each round, any of whose lines may be its last.
+    loop_line: $ => choice(
+      seq('while', field('condition', $._expression), field('body', $.round)),
+      seq(
+        'for',
+        field('pattern', $._operand),
+        'in',
+        field('list', $._expression),
+        field('body', $.round),
+      ),
+    ),
+
+    round: $ => seq(
+      '(',
+      $._round_line,
+      repeat(seq($._block_newline, $._round_line)),
+      ')',
+    ),
+
+    _round_line: $ => choice(
+      $.binding,
+      $.else_line,
+      $.if_line,
+      $.loop_line,
+      $.leave,
+      $._expression,
     ),
 
     // A block's line: leave where the condition holds, else go on.
     if_line: $ => seq(
       'if',
       field('condition', $._expression),
-      field('leave', choice($.return_expression, 'continue', 'break')),
+      field('leave', choice($.return_expression, $.leave)),
     ),
 
     return_expression: $ => prec.right(seq('return', field('value', $._expression))),
@@ -401,8 +432,8 @@ module.exports = grammar({
     // binds nothing is an effect asked for what it does.
     block: $ => seq(
       '(',
-      repeat1(seq(choice($.binding, $.else_line, $.if_line, $._expression), $._block_newline)),
-      field('answer', $._expression),
+      repeat1(seq(choice($.binding, $.else_line, $.if_line, $.loop_line, $._expression), $._block_newline)),
+      field('answer', choice($._expression, $.leave)),
       ')',
     ),
 

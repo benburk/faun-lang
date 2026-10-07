@@ -262,6 +262,28 @@ pub(crate) enum ExprKind {
     Match(Box<Expr>, Vec<Arm>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     Block(Box<Body>),
+    /// A loop; see [`crate::hir::Loop`].
+    Loop(Box<Loop>),
+    /// `continue`; see [`crate::hir::ExprKind::Continue`].
+    Continue(Vec<Expr>),
+    /// `break`; see [`crate::hir::ExprKind::Break`].
+    Break(Vec<Expr>),
+}
+
+/// A loop; see [`crate::hir::Loop`].
+#[derive(Clone, Debug)]
+pub(crate) struct Loop {
+    pub(crate) carried: Vec<(Expr, h::LocalId, h::LocalId)>,
+    pub(crate) head: LoopHead,
+    pub(crate) body: Body,
+    pub(crate) rest: Body,
+}
+
+/// What a loop runs over; see [`crate::hir::LoopHead`].
+#[derive(Clone, Debug)]
+pub(crate) enum LoopHead {
+    While(Expr),
+    For(Pattern, Expr),
 }
 
 /// One arm: a row for each choice of its pattern's alternatives, each
@@ -1264,6 +1286,38 @@ impl<'a> Specializer<'a> {
             t::ExprKind::Block(body) => {
                 ExprKind::Block(Box::new(self.body(module, body, substitution)?))
             }
+            t::ExprKind::Loop(looped) => ExprKind::Loop(Box::new(Loop {
+                carried: looped
+                    .carried
+                    .iter()
+                    .map(|(initial, within, after)| {
+                        Ok((self.expr(module, initial, substitution)?, *within, *after))
+                    })
+                    .collect::<Result<_, LowerError>>()?,
+                head: match &looped.head {
+                    t::LoopHead::While(condition) => {
+                        LoopHead::While(self.expr(module, condition, substitution)?)
+                    }
+                    t::LoopHead::For(pattern, list) => LoopHead::For(
+                        convert_pattern(pattern),
+                        self.expr(module, list, substitution)?,
+                    ),
+                },
+                body: self.body(module, &looped.body, substitution)?,
+                rest: self.body(module, &looped.rest, substitution)?,
+            })),
+            t::ExprKind::Continue(values) => ExprKind::Continue(
+                values
+                    .iter()
+                    .map(|value| self.expr(module, value, substitution))
+                    .collect::<Result<_, _>>()?,
+            ),
+            t::ExprKind::Break(values) => ExprKind::Break(
+                values
+                    .iter()
+                    .map(|value| self.expr(module, value, substitution))
+                    .collect::<Result<_, _>>()?,
+            ),
             t::ExprKind::Local(local) => ExprKind::Local(*local),
             t::ExprKind::Function(name) => {
                 let key = FunctionKey {

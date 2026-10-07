@@ -1158,6 +1158,9 @@ struct Checker<'a> {
     /// In the clause being checked, each local a name bound again in a
     /// branch is after it, and the name.
     merges: HashMap<h::LocalId, Symbol>,
+    /// The types of the names each loop around the expression being checked
+    /// carries, innermost last.
+    loops: Vec<Vec<Ty>>,
     expression_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
     clause_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty, Vec<Bound>)>,
     widenings: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
@@ -1188,6 +1191,7 @@ impl<'a> Checker<'a> {
             answers: Vec::new(),
             clause_marks: None,
             merges: HashMap::new(),
+            loops: Vec::new(),
             bounds: HashMap::new(),
             variable_names: HashMap::new(),
             partial: HashMap::new(),
@@ -2075,6 +2079,50 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// A loop: each carried name one type going in, within a round and
+    /// after; the condition a `Bool`, or the pattern an element of the
+    /// list; the body; and what follows it, whose answer the loop's is.
+    fn looped(
+        &mut self,
+        module: ModuleId,
+        looped: &h::Loop,
+        locals: &mut Vec<Option<Scheme>>,
+    ) -> Result<Ty, CheckError> {
+        let mut carried = Vec::with_capacity(looped.carried.len());
+        for (initial, within, after) in &looped.carried {
+            let ty = self.expr(module, initial, locals)?;
+            for local in [within, after] {
+                locals[local.index()] = Some(Scheme {
+                    variables: Vec::new(),
+                    ty: ty.clone(),
+                });
+            }
+            carried.push(ty);
+        }
+        match &looped.head {
+            h::LoopHead::While(condition) => {
+                let asked = self.expr(module, condition, locals)?;
+                let bool_ = self.bool_type();
+                self.unify_at(module, condition.span, &asked, &bool_)?;
+            }
+            h::LoopHead::For(pattern, list) => {
+                let walked = self.expr(module, list, locals)?;
+                let element = self.infer.fresh();
+                let list_ty = self.list_type(element.clone());
+                self.unify_at(module, list.span, &walked, &list_ty)?;
+                self.tested_pattern(module, pattern, &element, locals, list.span)?;
+            }
+        }
+        self.loops.push(carried);
+        let round = self
+            .bindings(module, &looped.body.bindings, locals)
+            .and_then(|()| self.expr(module, &looped.body.result, locals));
+        self.loops.pop();
+        round?;
+        self.bindings(module, &looped.rest.bindings, locals)?;
+        self.expr(module, &looped.rest.result, locals)
+    }
+
     /// A test's pattern at the type of what it tests, each name it binds
     /// at one type, as a binding's names are.
     fn tested_pattern(
@@ -2316,6 +2364,21 @@ impl<'a> Checker<'a> {
             h::ExprKind::Block(body) => {
                 self.bindings(module, &body.bindings, locals)?;
                 self.expr(module, &body.result, locals)
+            }
+            h::ExprKind::Loop(looped) => self.looped(module, looped, locals),
+            // What a `continue` or a `break` hands on has the types of the
+            // names the loop carries; the leave itself is worth whatever its
+            // place asks.
+            h::ExprKind::Continue(values) | h::ExprKind::Break(values) => {
+                let carried = self.loops.last().cloned().unwrap_or_default();
+                for (value, ty) in values.iter().zip(&carried) {
+                    let handed = self.expr(module, value, locals)?;
+                    self.unify_at(module, value.span, &handed, ty)
+                        .map_err(|error| {
+                            error.note("a name a loop carries has one type across its rounds")
+                        })?;
+                }
+                Ok(self.infer.fresh())
             }
             h::ExprKind::Local(local) => {
                 let Some(scheme) = locals[local.index()].as_ref() else {
@@ -4582,6 +4645,37 @@ fn validate_effect_expr(
             }
             validate_effect_expr(module, &body.result, owner_effectful, stands_alone, symbols)
         }
+        // A loop's round is a block's lines, and what follows it stands
+        // where the loop does.
+        h::ExprKind::Loop(looped) => {
+            for (initial, _, _) in &looped.carried {
+                validate_effect_expr(module, initial, owner_effectful, false, symbols)?;
+            }
+            let head = match &looped.head {
+                h::LoopHead::While(condition) => condition,
+                h::LoopHead::For(_, list) => list,
+            };
+            validate_effect_expr(module, head, owner_effectful, false, symbols)?;
+            for binding in &looped.body.bindings {
+                validate_effect_expr(module, &binding.value, owner_effectful, true, symbols)?;
+            }
+            validate_effect_expr(module, &looped.body.result, owner_effectful, true, symbols)?;
+            for binding in &looped.rest.bindings {
+                validate_effect_expr(module, &binding.value, owner_effectful, true, symbols)?;
+            }
+            validate_effect_expr(
+                module,
+                &looped.rest.result,
+                owner_effectful,
+                stands_alone,
+                symbols,
+            )
+        }
+        h::ExprKind::Continue(values) | h::ExprKind::Break(values) => {
+            values.iter().try_for_each(|value| {
+                validate_effect_expr(module, value, owner_effectful, false, symbols)
+            })
+        }
         h::ExprKind::Call(head, arguments) => {
             let effect = match &head.kind {
                 h::ExprKind::Global(name) if symbols.text(*name).ends_with('!') => Some(*name),
@@ -4858,6 +4952,26 @@ fn clause_globals(clause: &h::Clause, symbols: &Symbols, output: &mut HashSet<Sy
 
 fn expr_globals(expression: &h::Expr, symbols: &Symbols, output: &mut HashSet<Symbol>) {
     match &expression.kind {
+        h::ExprKind::Loop(looped) => {
+            for (initial, _, _) in &looped.carried {
+                expr_globals(initial, symbols, output);
+            }
+            match &looped.head {
+                h::LoopHead::While(condition) => expr_globals(condition, symbols, output),
+                h::LoopHead::For(_, list) => expr_globals(list, symbols, output),
+            }
+            for body in [&looped.body, &looped.rest] {
+                for binding in &body.bindings {
+                    expr_globals(&binding.value, symbols, output);
+                }
+                expr_globals(&body.result, symbols, output);
+            }
+        }
+        h::ExprKind::Continue(values) | h::ExprKind::Break(values) => {
+            for value in values {
+                expr_globals(value, symbols, output);
+            }
+        }
         h::ExprKind::Block(body) => {
             for binding in &body.bindings {
                 expr_globals(&binding.value, symbols, output);
@@ -5233,6 +5347,18 @@ mod tests {
                         waiting.extend(arm.guard.iter().chain([&arm.body]));
                     }
                 }
+                ExprKind::Loop(looped) => {
+                    waiting.extend(looped.carried.iter().map(|(initial, _, _)| initial));
+                    waiting.push(match &looped.head {
+                        crate::typed::LoopHead::While(condition) => condition,
+                        crate::typed::LoopHead::For(_, list) => list,
+                    });
+                    for body in [&looped.body, &looped.rest] {
+                        waiting.extend(body.bindings.iter().map(|b| &b.value));
+                        waiting.push(&body.result);
+                    }
+                }
+                ExprKind::Continue(values) | ExprKind::Break(values) => waiting.extend(values),
                 ExprKind::Block(body) => {
                     waiting.extend(body.bindings.iter().map(|b| &b.value));
                     waiting.push(&body.result);

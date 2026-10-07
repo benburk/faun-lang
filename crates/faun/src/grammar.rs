@@ -13,8 +13,8 @@
 
 use super::ast::{
     Align, Arm, BinaryOp, Bound, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl,
-    Exposure, Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span,
-    StringPart, Type, UnaryOp, Width,
+    Exposure, Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, LoopHead, Name, Numeral,
+    NumeralKind, Span, StringPart, Type, UnaryOp, Width,
 };
 use super::diagnostic::{Advice, Advised};
 use super::lex::{Kind, Token};
@@ -416,8 +416,12 @@ impl Parser<'_> {
     /// token after the condition says whether it is the ternary or a line
     /// leaving where its condition holds.
     fn begun(&mut self) -> Parsed<Begun> {
-        if self.peek() != Kind::KwIf {
-            return Ok(Begun::Value(self.expr()?));
+        match self.peek() {
+            Kind::KwIf => {}
+            Kind::KwWhile | Kind::KwFor => return self.loop_line().map(Begun::Line),
+            // A block's last line, after an `else`.
+            Kind::KwContinue | Kind::KwBreak => return self.leaving().map(Begun::Value),
+            _ => return Ok(Begun::Value(self.expr()?)),
         }
         let keyword = self.bump();
         let condition = self.expr()?;
@@ -436,20 +440,45 @@ impl Parser<'_> {
         )))
     }
 
-    /// What a leaving line leaves by: `return value`. `continue` and `break`
-    /// come with loops.
+    /// What a leaving line leaves by: `return value`, `continue` or `break`.
     fn leaving(&mut self) -> Parsed<Expr> {
-        if matches!(self.peek(), Kind::KwContinue | Kind::KwBreak) {
-            let keyword = self.bump();
-            return Err(SyntaxError::new(
-                keyword.span(),
-                format!(
-                    "`{}` leaves a loop's round or the loop, and there are no loops yet",
-                    keyword.span().text(self.source)
-                ),
-            ));
+        let kind = match self.peek() {
+            Kind::KwContinue => ExprKind::Continue,
+            Kind::KwBreak => ExprKind::Break,
+            _ => return self.expr(),
+        };
+        let keyword = self.bump();
+        Ok(atom(keyword, kind))
+    }
+
+    /// `while condition ( … )` or `for pattern in list ( … )`, a block's
+    /// line, with its body's lines.
+    fn loop_line(&mut self) -> Parsed<Statement> {
+        let keyword = self.bump();
+        let head = if keyword.kind == Kind::KwWhile {
+            LoopHead::While(Box::new(self.expr()?))
+        } else {
+            let written = self.operand()?;
+            self.expect(Kind::KwIn, "`in`")?;
+            let list = self.expr()?;
+            let pattern = lines::pattern(written, self.source).map_err(SyntaxError::from)?;
+            LoopHead::For(pattern, Box::new(list))
+        };
+        self.expect(
+            Kind::LParen,
+            "`(`, after a space, beginning the loop's body",
+        )?;
+        let mut lines = vec![self.statement()?];
+        while self.eat(Kind::Newline).is_some() {
+            lines.push(self.statement()?);
         }
-        self.expr()
+        self.note("a new line");
+        let close = self.expect(Kind::RParen, "`)`")?;
+        Ok(Statement::Loop(
+            keyword.span().through(close.span()),
+            head,
+            lines,
+        ))
     }
 
     /// A block's line beginning `expect`, which a later assumption will be.
@@ -471,7 +500,7 @@ impl Parser<'_> {
             return Ok(Statement::Binding(value, self.expr()?));
         }
         if self.eat(Kind::KwElse).is_some() {
-            let otherwise = self.expr()?;
+            let otherwise = self.leaving()?;
             return Ok(Statement::Else(
                 value.span.through(otherwise.span),
                 value,

@@ -273,6 +273,15 @@ pub struct Clause {
     pub body: Body,
 }
 
+/// What a loop runs over.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LoopHead {
+    /// `while condition`: while it holds, what it binds seen by the round.
+    While(Box<Expr>),
+    /// `for pattern in list`: once for each element, in order.
+    For(Pattern, Box<Expr>),
+}
+
 /// `pattern if guard -> body`: one way an `is` with arms goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Arm {
@@ -488,6 +497,18 @@ pub enum ExprKind {
         out: Box<Expr>,
         rest: Box<Body>,
     },
+    /// A block's line `for pattern in list ( … )` or `while condition ( …
+    /// )`, holding the lines after it, which go on once it ends. Its body's
+    /// lines run each round, the last going on to the next.
+    Loop {
+        head: LoopHead,
+        body: Box<Body>,
+        rest: Box<Body>,
+    },
+    /// `continue`, after a leaving line's `if` or `else`: the next round.
+    Continue,
+    /// `break`, after a leaving line's `if` or `else`: out of the loop.
+    Break,
     /// `return value`: the answer of the clause or lambda, which stands
     /// only where a line's `else` leaves.
     Return(Box<Expr>),

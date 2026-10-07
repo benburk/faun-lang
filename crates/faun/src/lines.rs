@@ -15,7 +15,8 @@
 use super::ast::{
     AliasDecl, Arm, BinaryOp, Binding, Body, Bound, Clause, Constraint, ConstraintAliasDecl,
     DataDecl, DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item,
-    MethodItem, Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
+    LoopHead, MethodItem, Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type,
+    UnaryOp,
 };
 use super::diagnostic::{Advice, Advised};
 
@@ -75,6 +76,8 @@ pub(crate) enum Statement {
     Else(Span, Expr, Expr),
     /// `if condition out`, written at `span`.
     If(Span, Expr, Expr),
+    /// A loop and its body's lines, written at `span`.
+    Loop(Span, LoopHead, Vec<Self>),
 }
 
 /// Why lines do not make items.
@@ -422,18 +425,38 @@ fn body_of(value: Expr) -> Body {
 ///
 /// A block that ends in a binding, or a binding whose head is no pattern.
 pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
-    let mut lines = held(lines, source)?;
-    let result = match lines.pop().expect("a block has its first line") {
-        Statement::Value(value) => value,
-        Statement::Binding(_, value) => {
-            return Err(error(
-                value.span,
-                "a block ends with its answer, a line after its last binding",
-            ));
-        }
-        Statement::Else(..) | Statement::If(..) => {
-            unreachable!("a leaving line holds the lines after it")
-        }
+    block(lines, source, Ends::Answer)
+}
+
+/// How a block's lines end: with its answer, or, a loop's body, going on
+/// to the next round.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ends {
+    Answer,
+    Round,
+}
+
+/// [`body`], or a loop's body, its lines ending as `ends` says.
+fn block(lines: Vec<Statement>, source: &str, ends: Ends) -> Result<Body, Error> {
+    let (mut lines, held) = held(lines, source, ends)?;
+    let result = match (held, ends) {
+        (Some(held), _) => held,
+        (None, Ends::Round) => Expr {
+            span: lines.last().map_or_else(Span::default, statement_span),
+            kind: ExprKind::Continue,
+        },
+        (None, Ends::Answer) => match lines.pop().expect("a block has its first line") {
+            Statement::Value(value) => value,
+            Statement::Binding(_, value) => {
+                return Err(error(
+                    value.span,
+                    "a block ends with its answer, a line after its last binding",
+                ));
+            }
+            Statement::Else(..) | Statement::If(..) | Statement::Loop(..) => {
+                unreachable!("a leaving line and a loop hold the lines after them")
+            }
+        },
     };
     let bindings = lines
         .into_iter()
@@ -448,42 +471,61 @@ pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
                 value,
                 discarded: false,
             }),
-            Statement::Else(..) | Statement::If(..) => {
-                unreachable!("a leaving line holds the lines after it")
+            Statement::Else(..) | Statement::If(..) | Statement::Loop(..) => {
+                unreachable!("a leaving line and a loop hold the lines after them")
             }
         })
         .collect::<Result<_, Error>>()?;
     Ok(Body { bindings, result })
 }
 
-/// `lines` with their first leaving line, `else` or `if`, holding the
-/// lines after it, which answer where it goes on, those taken apart the same
-/// way.
-fn held(mut lines: Vec<Statement>, source: &str) -> Result<Vec<Statement>, Error> {
-    let Some(at) = lines
-        .iter()
-        .position(|line| matches!(line, Statement::Else(..) | Statement::If(..)))
-    else {
-        return Ok(lines);
+/// Why `line`, holding the lines after it, is not a block's last.
+const fn not_last(line: &Statement) -> &'static str {
+    match line {
+        Statement::If(..) => {
+            "an `if` line is not a block's last: the lines after it answer where its condition fails"
+        }
+        Statement::Loop(..) => {
+            "a loop is not a block's last line: the lines after it answer once it ends"
+        }
+        _ => {
+            "a line with `else` is not a block's last: the lines after it answer where its condition holds"
+        }
+    }
+}
+
+/// Where `line` was written.
+const fn statement_span(line: &Statement) -> Span {
+    match line {
+        Statement::Value(value) | Statement::Binding(_, value) => value.span,
+        Statement::Else(span, ..) | Statement::If(span, ..) | Statement::Loop(span, ..) => *span,
+    }
+}
+
+/// `lines` before their first leaving line or loop, and that line holding
+/// the lines after it, which go on where it does, those taken apart the
+/// same way. In a block answering, the lines after it are its answer, so
+/// such a line is not the last; in a loop's body, they may end the round.
+fn held(
+    mut lines: Vec<Statement>,
+    source: &str,
+    ends: Ends,
+) -> Result<(Vec<Statement>, Option<Expr>), Error> {
+    let Some(at) = lines.iter().position(|line| {
+        matches!(
+            line,
+            Statement::Else(..) | Statement::If(..) | Statement::Loop(..)
+        )
+    }) else {
+        return Ok((lines, None));
     };
     let rest = lines.split_off(at + 1);
     let line = lines.pop().expect("the line found");
-    let span = match &line {
-        Statement::Else(span, ..) | Statement::If(span, ..) => *span,
-        _ => unreachable!("the line found leaves"),
-    };
-    if rest.is_empty() {
-        let message = match line {
-            Statement::If(..) => {
-                "an `if` line is not a block's last: the lines after it answer where its condition fails"
-            }
-            _ => {
-                "a line with `else` is not a block's last: the lines after it answer where its condition holds"
-            }
-        };
-        return Err(error(span, message));
+    let span = statement_span(&line);
+    if rest.is_empty() && ends == Ends::Answer {
+        return Err(error(span, not_last(&line)));
     }
-    let rest = Box::new(body(rest, source)?);
+    let rest = Box::new(block(rest, source, ends)?);
     let span = span.through(rest.result.span);
     let kind = match line {
         Statement::Else(_, condition, otherwise) => ExprKind::Else {
@@ -496,10 +538,14 @@ fn held(mut lines: Vec<Statement>, source: &str) -> Result<Vec<Statement>, Error
             out: Box::new(out),
             rest,
         },
-        _ => unreachable!("the line found leaves"),
+        Statement::Loop(_, head, round) => ExprKind::Loop {
+            head,
+            body: Box::new(block(round, source, Ends::Round)?),
+            rest,
+        },
+        _ => unreachable!("the line found leaves or loops"),
     };
-    lines.push(Statement::Value(Expr { span, kind }));
-    Ok(lines)
+    Ok((lines, Some(Expr { span, kind })))
 }
 
 /// Refuse a line of a body whose value nothing keeps, unless it is a call
@@ -739,6 +785,10 @@ fn body_expressions(body: &Body, source: &str, answering: bool) -> Result<(), Er
     for binding in &body.bindings {
         expression(&binding.value, source, false)?;
     }
+    // A round ends by going on to the next, or by leaving the loop.
+    if matches!(body.result.kind, ExprKind::Continue | ExprKind::Break) {
+        return Ok(());
+    }
     expression(&body.result, source, answering)
 }
 
@@ -865,31 +915,44 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             otherwise,
             rest,
         } => {
-            let leaving = match &otherwise.kind {
-                ExprKind::Return(value) => Some(value),
-                ExprKind::Block(body) => match &body.result.kind {
-                    ExprKind::Return(value) => {
-                        thrown_away(body, source)?;
-                        for binding in &body.bindings {
-                            expression(&binding.value, source, false)?;
-                        }
-                        Some(value)
+            let leave = match &otherwise.kind {
+                ExprKind::Block(body) if leaves(&body.result) => {
+                    thrown_away(body, source)?;
+                    for binding in &body.bindings {
+                        expression(&binding.value, source, false)?;
                     }
-                    _ => None,
-                },
-                _ => None,
-            };
-            let Some(value) = leaving else {
-                return Err(error(
-                    otherwise.span,
-                    "a line's `else` leaves: `return` a value, or a block whose last line does",
-                )
-                .label("goes on rather than leaving"));
+                    &body.result
+                }
+                _ if leaves(otherwise) => otherwise,
+                _ => {
+                    return Err(error(
+                        otherwise.span,
+                        "a line's `else` leaves: `return` a value, `continue`, `break`, or a block whose last line does",
+                    )
+                    .label("goes on rather than leaving"));
+                }
             };
             expression(condition, source, false)?;
-            expression(value, source, true)?;
+            left_by(leave, source)?;
             body_expressions(rest, source, true)
         }
+        // A loop's head is worked out as values are; its body and what
+        // follows it are blocks of their own.
+        ExprKind::Loop { head, body, rest } => {
+            match head {
+                LoopHead::While(condition) => expression(condition, source, false)?,
+                LoopHead::For(_, list) => expression(list, source, false)?,
+            }
+            body_expressions(body, source, true)?;
+            body_expressions(rest, source, answering)
+        }
+        ExprKind::Continue | ExprKind::Break => Err(error(
+            expr.span,
+            format!(
+                "`{}` stands only in a leaving line: `if c {0}`, or `c else {0}`",
+                expr.span.text(source)
+            ),
+        )),
         // What the condition binds, the leave sees; the lines after it
         // answer where it fails.
         ExprKind::Leave {
@@ -897,16 +960,33 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             out,
             rest,
         } => {
-            let ExprKind::Return(value) = &out.kind else {
-                unreachable!("the parser reads only `return` after an `if` line's condition")
-            };
             expression(condition, source, false)?;
-            expression(value, source, true)?;
+            left_by(out, source)?;
             body_expressions(rest, source, true)
         }
         ExprKind::Return(_) => Err(error(
             expr.span,
             "`return` stands only in a leaving line: `c else return x`, or `if c return x`",
+        )),
+    }
+}
+
+/// Whether `expr` is a leave: `return value`, `continue` or `break`.
+const fn leaves(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::Return(_) | ExprKind::Continue | ExprKind::Break
+    )
+}
+
+/// Refuse a pattern-only form in what `leave` leaves with.
+fn left_by(leave: &Expr, source: &str) -> Result<(), Error> {
+    match &leave.kind {
+        ExprKind::Return(value) => expression(value, source, true),
+        ExprKind::Continue | ExprKind::Break => Ok(()),
+        _ => Err(error(
+            leave.span,
+            "a leaving line leaves by `return` a value, `continue` or `break`",
         )),
     }
 }
@@ -953,6 +1033,8 @@ fn passed_on(expr: &Expr) -> Option<Span> {
         | ExprKind::Number(_)
         | ExprKind::Wild
         | ExprKind::Equal(_)
+        | ExprKind::Continue
+        | ExprKind::Break
         | ExprKind::Range(..) => None,
         ExprKind::String(parts) => parts.iter().find_map(|part| match part {
             StringPart::Text(_) => None,
@@ -976,6 +1058,19 @@ fn passed_on(expr: &Expr) -> Option<Span> {
         ExprKind::Match(value, arms) => passed_on(value).or_else(|| arms_passed_on(arms)),
         ExprKind::Arms(arms) => arms_passed_on(arms),
         ExprKind::Return(value) => passed_on(value),
+        ExprKind::Loop { head, body, rest } => {
+            let head = match head {
+                LoopHead::While(condition) => condition,
+                LoopHead::For(_, list) => list,
+            };
+            each(
+                std::iter::once(&**head)
+                    .chain(body.bindings.iter().map(|binding| &binding.value))
+                    .chain([&body.result])
+                    .chain(rest.bindings.iter().map(|binding| &binding.value))
+                    .chain([&rest.result]),
+            )
+        }
         ExprKind::Leave {
             condition,
             out,

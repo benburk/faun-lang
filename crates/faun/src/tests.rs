@@ -446,12 +446,14 @@ fn an_else_line_is_not_a_block_s_last() {
 }
 
 /// An `if` line leaves where its condition holds, so the lines after it
-/// answer; and `continue` and `break` wait for loops.
+/// answer; a loop is no block's last line either, but in a loop's body
+/// either may end the round.
 #[test]
-fn an_if_line_is_not_a_block_s_last_and_loops_leave_later() {
+fn an_if_line_and_a_loop_are_not_a_block_s_last() {
     let error = parse("f(x) -> (\n  y = x\n  if y return 0\n)").unwrap_err();
     assert!(error.message.contains("not a block's last"), "{error}");
-    let error = parse("f(x) -> (\n  if x continue\n  1\n)").unwrap_err();
-    assert!(error.message.contains("no loops yet"), "{error}");
+    let error = parse("f(x) -> (\n  for y in x (\n    if y break\n  )\n)").unwrap_err();
+    assert!(error.message.contains("not a block's last"), "{error}");
     assert!(parse("f(x) -> (\n  if x return 0\n  x\n)").is_ok());
+    assert!(parse("f(x) -> (\n  for y in x (\n    if y break\n  )\n  0\n)").is_ok());
 }

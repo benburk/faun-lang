@@ -130,4 +130,26 @@ pub enum ExprKind {
     Match(Box<Expr>, Vec<Arm>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     Block(Box<Body>),
+    /// A loop; see [`crate::hir::Loop`].
+    Loop(Box<Loop>),
+    /// `continue`; see [`crate::hir::ExprKind::Continue`].
+    Continue(Vec<Expr>),
+    /// `break`; see [`crate::hir::ExprKind::Break`].
+    Break(Vec<Expr>),
+}
+
+/// A loop; see [`crate::hir::Loop`].
+#[derive(Clone, Debug)]
+pub struct Loop {
+    pub carried: Vec<(Expr, LocalId, LocalId)>,
+    pub head: LoopHead,
+    pub body: Body,
+    pub rest: Body,
+}
+
+/// What a loop runs over; see [`crate::hir::LoopHead`].
+#[derive(Clone, Debug)]
+pub enum LoopHead {
+    While(Expr),
+    For(Pattern, Expr),
 }

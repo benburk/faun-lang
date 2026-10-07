@@ -416,6 +416,35 @@ pub enum ExprKind {
     /// Bindings, then the answer: a block written inside an expression.
     /// Its locals are the clause's, numbered apart from every other.
     Block(Box<Body>),
+    /// A loop, holding the lines after it; see [`Loop`].
+    Loop(Box<Loop>),
+    /// `continue`: the next round, each name the loop carries as it is
+    /// here, in the loop's order.
+    Continue(Vec<Expr>),
+    /// `break`: out of the loop, each name the loop carries as it is here.
+    Break(Vec<Expr>),
+}
+
+/// `while condition ( body )` or `for pattern in list ( body )`, and the
+/// lines after it, `rest`, which go on once it ends.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Loop {
+    /// Each name bound before the loop and again in its body: its value
+    /// going in, the local it is within a round, and the one it is after
+    /// the loop.
+    pub carried: Vec<(Expr, LocalId, LocalId)>,
+    pub head: LoopHead,
+    /// The round, its answer a `continue`, or a leave, on every way through.
+    pub body: Body,
+    pub rest: Body,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LoopHead {
+    /// While the condition holds, what it binds seen by the round.
+    While(Expr),
+    /// Once for each element of the list, the pattern binding it.
+    For(Pattern, Expr),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

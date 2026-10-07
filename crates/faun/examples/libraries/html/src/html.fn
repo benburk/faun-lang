@@ -82,8 +82,8 @@ Attribute : [
   method : Str -> Attribute
   method(value) -> HtmlAttribute("method", value)
 
-  for : Str -> Attribute
-  for(value) -> HtmlAttribute("for", value)
+  html_for : Str -> Attribute
+  html_for(value) -> HtmlAttribute("for", value)
 
   placeholder : Str -> Attribute
   placeholder(value) -> HtmlAttribute("placeholder", value)

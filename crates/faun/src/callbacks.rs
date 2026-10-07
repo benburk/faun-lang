@@ -30,8 +30,8 @@ use crate::diagnostic::{Advised, LowerError};
 use crate::first_order as d;
 use crate::hir::{LocalId, SiteId};
 use crate::specialize::{
-    Body, Clause, Definition, Expr, ExprKind, Function, FunctionKey, Instance, Pattern, Program,
-    Signature, Type,
+    Body, Clause, Definition, Expr, ExprKind, Function, FunctionKey, Instance, LoopHead, Pattern,
+    Program, Signature, Type,
 };
 
 /// Replace every function value in `program` with the callbacks it stands
@@ -413,6 +413,25 @@ impl<'a> Callbacks<'a> {
     fn expr(&mut self, frame: &mut Frame, expression: &Expr) -> Result<d::Expr, LowerError> {
         let kind = match &expression.kind {
             ExprKind::Block(body) => d::ExprKind::Block(Box::new(self.body(frame, body)?)),
+            ExprKind::Loop(looped) => d::ExprKind::Loop(Box::new(d::Loop {
+                carried: looped
+                    .carried
+                    .iter()
+                    .map(|(initial, within, after)| {
+                        Ok((self.expr(frame, initial)?, *within, *after))
+                    })
+                    .collect::<Result<_, LowerError>>()?,
+                head: match &looped.head {
+                    LoopHead::While(condition) => d::LoopHead::While(self.expr(frame, condition)?),
+                    LoopHead::For(pattern, list) => {
+                        d::LoopHead::For(pattern.clone(), self.expr(frame, list)?)
+                    }
+                },
+                body: self.body(frame, &looped.body)?,
+                rest: self.body(frame, &looped.rest)?,
+            })),
+            ExprKind::Continue(values) => d::ExprKind::Continue(self.exprs(frame, values)?),
+            ExprKind::Break(values) => d::ExprKind::Break(self.exprs(frame, values)?),
             ExprKind::Local(local) if frame.functions.contains_key(local) => {
                 return Err(located(
                     expression,
@@ -744,6 +763,26 @@ fn for_each<'a>(expression: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
             }
             for_each(&body.result, visit);
         }
+        ExprKind::Loop(looped) => {
+            for (initial, _, _) in &looped.carried {
+                for_each(initial, visit);
+            }
+            match &looped.head {
+                LoopHead::While(condition) => for_each(condition, visit),
+                LoopHead::For(_, list) => for_each(list, visit),
+            }
+            for body in [&looped.body, &looped.rest] {
+                for binding in &body.bindings {
+                    for_each(&binding.value, visit);
+                }
+                for_each(&body.result, visit);
+            }
+        }
+        ExprKind::Continue(values) | ExprKind::Break(values) => {
+            for value in values {
+                for_each(value, visit);
+            }
+        }
     }
 }
 
@@ -852,6 +891,18 @@ fn captures(patterns: &[Pattern], body: &Expr) -> Vec<(LocalId, Type)> {
                 pattern_locals(&binding.pattern, &mut bound);
             }
         }
+        // A loop binds what it carries, its pattern, and its lines.
+        ExprKind::Loop(looped) => {
+            for (_, within, after) in &looped.carried {
+                bound.extend([*within, *after]);
+            }
+            if let LoopHead::For(pattern, _) = &looped.head {
+                pattern_locals(pattern, &mut bound);
+            }
+            for binding in looped.body.bindings.iter().chain(&looped.rest.bindings) {
+                pattern_locals(&binding.pattern, &mut bound);
+            }
+        }
         _ => {}
     });
     let mut found = BTreeMap::new();
@@ -929,6 +980,32 @@ fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap
                 pattern_locals(&binding.pattern, &mut nested);
             }
             free_locals(&body.result, &nested, found);
+        }
+        S::Loop(looped) => {
+            let mut nested = bound.clone();
+            for (initial, within, after) in &looped.carried {
+                free_locals(initial, bound, found);
+                nested.extend([*within, *after]);
+            }
+            match &looped.head {
+                LoopHead::While(condition) => free_locals(condition, &nested, found),
+                LoopHead::For(pattern, list) => {
+                    free_locals(list, bound, found);
+                    pattern_locals(pattern, &mut nested);
+                }
+            }
+            for body in [&looped.body, &looped.rest] {
+                for binding in &body.bindings {
+                    free_locals(&binding.value, &nested, found);
+                    pattern_locals(&binding.pattern, &mut nested);
+                }
+                free_locals(&body.result, &nested, found);
+            }
+        }
+        S::Continue(values) | S::Break(values) => {
+            for value in values {
+                free_locals(value, bound, found);
+            }
         }
     }
 }

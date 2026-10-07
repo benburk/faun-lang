@@ -543,7 +543,7 @@ struct Held {
     state: State,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
     Held,
     /// Used up, or answered, here.
@@ -766,14 +766,83 @@ impl Walk<'_, '_> {
             }
             // A block's bindings hold what they bind, as a body's do, and
             // its answer is what it is worth.
-            ExprKind::Block(block) => {
-                for binding in &block.bindings {
-                    let origins = self.value(&binding.value);
-                    self.bind(&binding.pattern, &binding.value.ty, &origins);
+            ExprKind::Block(block) => self.block(block),
+            ExprKind::Loop(looped) => self.looped(looped),
+            ExprKind::Continue(values) | ExprKind::Break(values) => {
+                for value in values {
+                    self.lend(value);
                 }
-                self.value(&block.result)
+                Vec::new()
             }
         }
+    }
+
+    /// What a loop carries or walks, looked at: one holding a resource is
+    /// not yet worked out, so it is refused.
+    fn carried_in(&mut self, value: &d::Expr) {
+        if self.facts.carries(&value.ty) {
+            let resource = self
+                .facts
+                .called(self.facts.resource_in(&value.ty), "resource");
+            self.refused.push(Refusal {
+                at: Some(place(value)),
+                message: format!("a loop over a value holding a {resource} is not yet worked out"),
+                label: "carried or walked here".to_owned(),
+                also: None,
+                help: Some("take it a step at a time in a definition of its own".to_owned()),
+            });
+        }
+        self.lend(value);
+    }
+
+    fn block(&mut self, block: &d::Body) -> Vec<Origin> {
+        for binding in &block.bindings {
+            let origins = self.value(&binding.value);
+            self.bind(&binding.pattern, &binding.value.ty, &origins);
+        }
+        self.value(&block.result)
+    }
+
+    /// A loop, which may run its round any number of times. Carrying or
+    /// walking a value holding a resource is not yet worked out, so it is
+    /// refused; and a round may neither use up what was held before the
+    /// loop nor leave held what it made.
+    fn looped(&mut self, looped: &d::Loop) -> Vec<Origin> {
+        let head = match &looped.head {
+            d::LoopHead::While(condition) => condition,
+            d::LoopHead::For(_, list) => list,
+        };
+        for value in looped
+            .carried
+            .iter()
+            .map(|(initial, _, _)| initial)
+            .chain([head])
+        {
+            self.carried_in(value);
+        }
+        let before: Vec<State> = self.held.iter().map(|held| held.state).collect();
+        let outer = std::mem::take(&mut self.returned);
+        self.block(&looped.body);
+        self.returned = outer;
+        let changed = before
+            .iter()
+            .zip(&self.held)
+            .any(|(was, held)| *was != held.state);
+        let made_held = self.held[before.len()..]
+            .iter()
+            .any(|held| held.state == State::Held);
+        if changed || made_held {
+            self.refused.push(Refusal {
+                at: Some(place(&looped.body.result)),
+                message: "a loop's round uses up a resource held before it, or keeps one it made"
+                    .to_owned(),
+                label: "where the round ends".to_owned(),
+                also: None,
+                help: Some("use each resource up within one round, or take the work a step at a time in a definition of its own".to_owned()),
+            });
+        }
+        self.restored(&before);
+        self.block(&looped.rest)
     }
 
     /// A test, which looks at its value. One holding a resource would leave

@@ -4,6 +4,7 @@
 
 import guards {}
 import conditions {}
+import loops {}
 import patterns {}
 import operators {}
 import layout {}

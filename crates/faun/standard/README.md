@@ -548,6 +548,32 @@ of the body. `continue` and `break` leave the same way, and come with
 loops. `expect` stands only at the top level, as a test; in a body it will
 be an assumption checked in development, which is not built.
 
+## Loops
+
+`for pattern in list ( … )` runs its body, a round, once for each element
+in order, and `while condition ( … )` while the condition holds, what a
+test in it binds seen by the round. A name bound before a loop and again in
+its body carries from round to round and out of the loop, at one type; one
+first bound in the body is the round's. `if c continue` or `c else
+continue` ends a round, `break` the loop, and `return` the clause from
+inside any loop; any line may be a round's last. A loop is a block's line,
+not the last of a block that answers.
+
+```
+summed(xs) -> (
+  total = 0
+  for x in xs (
+    if x > 100 continue
+    total = total + x
+  )
+  total
+)
+```
+
+A loop is a function of what it carries calling itself for the next
+round, so a round costs a jump. A lambda inside a loop is no part of its
+round. Not yet: a loop carrying or walking a value holding a resource.
+
 ## Or-patterns
 
 `A | B` among a clause's parameters matches either alternative, and every

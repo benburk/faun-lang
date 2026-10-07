@@ -1,0 +1,17 @@
+import std.host {Host}
+
+f : List(Nat) -> List(Nat)
+f(xs) -> (
+  total = 0
+  for x in xs (
+    doubled = xs.map(|y| (
+      if y > 1 continue
+      y
+    ))
+    total = total + x
+  )
+  xs
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)
