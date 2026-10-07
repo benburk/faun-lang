@@ -1155,6 +1155,9 @@ struct Checker<'a> {
     /// what an answer, or a `?`, settles before its row meets the
     /// signature's.
     clause_marks: Option<Marks>,
+    /// In the clause being checked, each local a name bound again in a
+    /// branch is after it, and the name.
+    merges: HashMap<h::LocalId, Symbol>,
     expression_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
     clause_types: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty, Vec<Bound>)>,
     widenings: Vec<(ModuleId, super::ast::Span, h::SiteId, Ty)>,
@@ -1184,6 +1187,7 @@ impl<'a> Checker<'a> {
             pending_closings: Vec::new(),
             answers: Vec::new(),
             clause_marks: None,
+            merges: HashMap::new(),
             bounds: HashMap::new(),
             variable_names: HashMap::new(),
             partial: HashMap::new(),
@@ -1981,6 +1985,7 @@ impl<'a> Checker<'a> {
             ));
         }
         let mut locals = vec![None; usize::try_from(clause.locals).expect("u32 fits usize")];
+        self.merges = clause.merged.iter().copied().collect();
         for (pattern, parameter) in clause.patterns.iter().zip(parameters.iter()) {
             self.pattern(module, pattern, parameter, &mut locals, clause.span)?;
         }
@@ -2053,7 +2058,6 @@ impl<'a> Checker<'a> {
     ) -> Result<(), CheckError> {
         self.bindings(module, &clause.body.bindings, locals)?;
         let actual = self.expr(module, &clause.body.result, locals)?;
-        self.assignments_keep_types(module, clause, locals)?;
         // What the answer's type waits on -- a method's receiver, a
         // constructor's pattern, a field read -- is settled first, so a
         // closed row it holds meets the signature's as that row, and is
@@ -2067,31 +2071,6 @@ impl<'a> Checker<'a> {
         if widened {
             self.widenings
                 .push((module, span, clause.body.result.site, (*result).clone()));
-        }
-        Ok(())
-    }
-
-    /// Each assignment in `clause` holds its name to the type it had.
-    fn assignments_keep_types(
-        &mut self,
-        module: ModuleId,
-        clause: &h::Clause,
-        locals: &[Option<Scheme>],
-    ) -> Result<(), CheckError> {
-        for (old, new, span) in &clause.assigned {
-            let (Some(was), Some(now)) = (&locals[old.index()], &locals[new.index()]) else {
-                continue;
-            };
-            let (was, now) = (was.ty.clone(), now.ty.clone());
-            self.infer.unify(&was, &now).map_err(|_| {
-                let shown_was = show(&self.infer.resolve(&was), self.symbols);
-                let shown_now = show(&self.infer.resolve(&now), self.symbols);
-                failure(module, *span, "an assignment keeps the name's type")
-                    .label(format!(
-                        "a `{shown_was}` before, assigned a `{shown_now}` here"
-                    ))
-                    .help("give the new value a name of its own")
-            })?;
         }
         Ok(())
     }
@@ -2142,9 +2121,20 @@ impl<'a> Checker<'a> {
             h::Pattern::Bind(local) => {
                 if let Some(bound) = &locals[local.index()] {
                     let bound = bound.ty.clone();
+                    let merged = self.merges.get(local).copied();
                     return self.infer.unify(expected, &bound).map_err(|_| {
                         let first = show(&self.infer.resolve(&bound), self.symbols);
                         let other = show(&self.infer.resolve(expected), self.symbols);
+                        if let Some(name) = merged {
+                            let name = self.symbols.text(name);
+                            return failure(
+                                module,
+                                span,
+                                format!("`{name}` is bound again in a branch, and where the branches meet it has one type"),
+                            )
+                            .label(format!("a `{first}` one way through, and a `{other}` another"))
+                            .help("give the value a name of its own in the branch");
+                        }
                         let message = "the alternatives of this `|` bind a name at different types";
                         failure(module, span, message).label(format!(
                             "bound as `{first}` by one alternative and as `{other}` by another"

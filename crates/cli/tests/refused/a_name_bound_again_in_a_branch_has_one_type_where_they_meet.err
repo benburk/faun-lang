@@ -1,0 +1,7 @@
+error: `x` is bound again in a branch, and where the branches meet it has one type
+ --> a_name_bound_again_in_a_branch_has_one_type_where_they_meet.fn:6:7
+  |
+6 |   y = if c then (
+  |       ^^^^^^^^^^^ a `Str` one way through, and a `Nat` another
+  |
+  = help: give the value a name of its own in the branch

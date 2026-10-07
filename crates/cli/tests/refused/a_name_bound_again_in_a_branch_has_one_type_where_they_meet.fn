@@ -1,0 +1,14 @@
+import std.host {Host}
+
+f : (Bool, Nat) -> Nat
+f(c, n) -> (
+  x = n
+  y = if c then (
+    x = "many"
+    1
+  ) else 2
+  y
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

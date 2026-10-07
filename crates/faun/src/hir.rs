@@ -118,9 +118,10 @@ pub struct Clause {
     pub guard: Option<Expr>,
     pub body: Body,
     pub locals: u32,
-    /// Each assignment in the clause: the local the name was, the one it
-    /// is now, and where. Checking holds the two to one type.
-    pub assigned: Vec<(LocalId, LocalId, Span)>,
+    /// Each local a name bound again in a branch is after it, which every
+    /// branch going on binds, and the name: checking holds the branches to
+    /// one type there.
+    pub merged: Vec<(LocalId, Symbol)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

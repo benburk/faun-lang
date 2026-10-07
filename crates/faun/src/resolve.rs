@@ -1487,7 +1487,7 @@ fn resolve_clause(
         choosing: false,
         testing: false,
         hidden: HashMap::new(),
-        assigned: Vec::new(),
+        merged: Vec::new(),
         lambda_outer: None,
         conditional: 0,
     };
@@ -1513,7 +1513,7 @@ fn resolve_clause(
         guard,
         body,
         locals: resolver.next_local,
-        assigned: resolver.assigned,
+        merged: resolver.merged,
     })
 }
 
@@ -1592,9 +1592,8 @@ struct ClauseResolver<'a> {
     compared: Option<Vec<Compared>>,
     /// Whether an alternative of an `|` pattern is being resolved.
     choosing: bool,
-    /// Each assignment so far: the local the name was, the one it is now,
-    /// and where.
-    assigned: Vec<(h::LocalId, h::LocalId, s::Span)>,
+    /// Each local a name bound again in a branch is after it, and the name.
+    merged: Vec<(h::LocalId, Symbol)>,
     /// Inside a lambda, the names its body sees from around it, which it
     /// does not assign.
     lambda_outer: Option<HashSet<Symbol>>,
@@ -1691,7 +1690,7 @@ impl ClauseResolver<'_> {
     }
 
     /// `name = …` where `name` is in scope: a new local the name is from
-    /// here on, held to the old one's type.
+    /// here on, at whatever type it is given.
     fn assign(&mut self, name: s::Name, spelling: Symbol) -> Result<h::Pattern, ResolveError> {
         let shown = name.text(self.source);
         if self.conditional > 0 {
@@ -1727,9 +1726,7 @@ impl ClauseResolver<'_> {
                 format!("local `{shown}` is bound more than once"),
             ));
         }
-        let old = self.locals[&spelling];
         let local = self.fresh_local();
-        self.assigned.push((old, local, name.0));
         self.locals.insert(spelling, local);
         Ok(h::Pattern::Bind(local))
     }
@@ -1749,7 +1746,7 @@ impl ClauseResolver<'_> {
     /// going on binds last, to the local the name was there.
     fn merged(
         &mut self,
-        before: &HashMap<Symbol, h::LocalId>,
+        (before, at): (&HashMap<Symbol, h::LocalId>, s::Span),
         branches: Vec<(h::Expr, Option<HashMap<Symbol, h::LocalId>>)>,
     ) -> Vec<h::Expr> {
         let mut changed: Vec<Symbol> = before
@@ -1780,7 +1777,7 @@ impl ClauseResolver<'_> {
                     let last = end.get(name).copied().unwrap_or_else(|| before[name]);
                     bindings.push(h::Binding {
                         pattern: h::Pattern::Bind(*merge),
-                        value: self.sites.expr(span, h::ExprKind::Local(last)),
+                        value: self.sites.expr(at, h::ExprKind::Local(last)),
                     });
                 }
                 let result = self.sites.expr(span, h::ExprKind::Local(answer));
@@ -1792,6 +1789,7 @@ impl ClauseResolver<'_> {
             .collect();
         for (name, merge) in changed.into_iter().zip(merges) {
             self.locals.insert(name, merge);
+            self.merged.push((merge, name));
         }
         branches
     }
@@ -2352,7 +2350,10 @@ impl ClauseResolver<'_> {
                 let no_end = self.locals.clone();
                 self.locals.clone_from(&before);
                 let mut branches = self
-                    .merged(&before, vec![(yes, Some(yes_end)), (no, Some(no_end))])
+                    .merged(
+                        (&before, expression.span),
+                        vec![(yes, Some(yes_end)), (no, Some(no_end))],
+                    )
                     .into_iter();
                 let (yes, no) = (branches.next(), branches.next());
                 let (Some(yes), Some(no)) = (yes, no) else {
@@ -2385,7 +2386,10 @@ impl ClauseResolver<'_> {
                 let otherwise = self.expr(otherwise)?;
                 self.locals.clone_from(&before);
                 let mut branches = self
-                    .merged(&before, vec![(yes, Some(end)), (otherwise, None)])
+                    .merged(
+                        (&before, expression.span),
+                        vec![(yes, Some(end)), (otherwise, None)],
+                    )
                     .into_iter();
                 let (yes, otherwise) = (branches.next(), branches.next());
                 let (Some(yes), Some(otherwise)) = (yes, otherwise) else {
@@ -2404,7 +2408,7 @@ impl ClauseResolver<'_> {
                     branches.push((arm.body.clone(), Some(end)));
                     resolved.push(arm);
                 }
-                let bodies = self.merged(&before, branches);
+                let bodies = self.merged((&before, expression.span), branches);
                 for (arm, body) in resolved.iter_mut().zip(bodies) {
                     arm.body = body;
                 }

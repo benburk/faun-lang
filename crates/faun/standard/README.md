@@ -547,15 +547,19 @@ handed, and holds none: names, records, tuples, and the constructor of a
 type that has no other, as in `(value, Memo(entries)) = step(n)`. A
 binding's or a lambda's pattern binds each name once.
 
-## Assignment
+## Binding again
 
-A binding naming a name already in scope assigns it: the name holds the
-new value from that line on, past the branch, arm or block it was assigned
-in, and keeps its type. `count = count + 1` is a step; `(a, b) = (b, a)`
-swaps. Nothing changes in place: a method answers a new value, so a step
-is written whole, `order = order.append(node)`, and a list nothing else
-holds is still written where it lies. Values have no identity, so
-`snapshot = order` stays what it was when `order` changes.
+`=` binds a name from that line on, whether or not it was bound before, as
+Python's does: past the branch, arm or block it was bound in, and in a
+loop's next round. `count = count + 1` is a step, and `(a, b) = (b, a)`
+swaps. On a straight line the name may take another type, `x =
+Nat.from_str(x)?` after `x = text.trim()`; where paths meet, after a branch
+that bound it again, it has one type whichever way was taken. A name first
+bound inside a block leaves with it. Nothing changes in place: a method
+answers a new value, so a step is written whole, `order =
+order.append(node)`, and a list nothing else holds is still written where
+it lies. Values have no identity, so `snapshot = order` stays what it was
+when `order` changes.
 
 ```
 bumped(up, n) -> (
@@ -568,11 +572,11 @@ bumped(up, n) -> (
 )
 ```
 
-Only a binding assigns. A test, an arm, a clause's head and a lambda's
-parameters declare their names, and one already in scope is refused. A
-lambda assigns only its own names, since what calls it may call it any
-number of times; and nothing is assigned in a condition, or on the right of
-`&` or `|`, where it may not be worked out.
+Only `=` binds a name again. A test, an arm, a clause's head and a
+lambda's parameters bind new names, and one already in scope is refused.
+A lambda binds again only its own names, since what calls it may call it
+any number of times; and no name of the body is bound again in a
+condition, or on the right of `&` or `|`, where it may not be worked out.
 
 A clause's head, or a test's pattern, may bind a name twice, and then
 matches only where both are equal by their type's `equals`: `doubled([a, a]) -> True` is
