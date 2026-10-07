@@ -117,3 +117,18 @@ described(reading) -> reading is (
 
 expect described(Celsius(0)) == "freezing" & described(Celsius(35)) == "hot"
 expect described(Kelvin(300)) == "300 degrees" & described(Missing) == "no reading"
+
+# A binding naming a name in scope assigns it, from there on: past the
+# branch it was assigned in, and below a line's `else`.
+tally : (List(Nat), Bool) -> (Nat, Nat)
+tally(xs, strict) -> (
+  count = xs.len()
+  total = xs.sum()
+  total = if strict then (
+    count = count + 1
+    total * 2
+  ) else total
+  (count, total)
+)
+
+expect tally([1, 2], True) == (3, 6) & tally([1, 2], False) == (2, 3)

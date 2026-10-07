@@ -1,0 +1,7 @@
+error: an assignment keeps the name's type
+ --> an_assignment_keeps_the_name_s_type.fn:6:3
+  |
+6 |   x = "many"
+  |   ^ a `Nat` before, assigned a `Str` here
+  |
+  = help: give the new value a name of its own

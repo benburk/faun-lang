@@ -1,0 +1,7 @@
+error: `n` is assigned where it may not be worked out
+ --> a_name_is_assigned_where_it_is_worked_out.fn:5:3
+  |
+5 |   n = n + 1
+  |   ^ in a condition, or the right of `&` or `|`
+  |
+  = help: assign it on a line of its own, before or after

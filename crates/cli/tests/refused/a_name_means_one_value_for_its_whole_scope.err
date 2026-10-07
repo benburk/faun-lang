@@ -1,7 +1,0 @@
-error: `n` is a name already, and a name means one value for its whole scope
- --> a_name_means_one_value_for_its_whole_scope.fn:6:3
-  |
-6 |   n = n + 1
-  |   ^ bound again here
-  |
-  = help: give this value a name of its own

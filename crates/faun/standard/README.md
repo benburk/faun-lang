@@ -544,10 +544,35 @@ alternative binds the same names at the same types. A clause holding one is
 a row for each choice of alternatives, checked and covered as those rows
 would be. A binding's or a lambda's pattern must match whatever it is
 handed, and holds none: names, records, tuples, and the constructor of a
-type that has no other, as in `(value, Memo(entries)) = step(n)`. A name means one value for its whole scope: no binding, test or lambda
-binds a name already in scope, so `v = v + 1` is refused, and a step takes
-a name of its own, `next = v + 1`. A binding's or a lambda's pattern binds
-each name once.
+type that has no other, as in `(value, Memo(entries)) = step(n)`. A
+binding's or a lambda's pattern binds each name once.
+
+## Assignment
+
+A binding naming a name already in scope assigns it: the name holds the
+new value from that line on, past the branch, arm or block it was assigned
+in, and keeps its type. `count = count + 1` is a step; `(a, b) = (b, a)`
+swaps. Nothing changes in place: a method answers a new value, so a step
+is written whole, `order = order.append(node)`, and a list nothing else
+holds is still written where it lies. Values have no identity, so
+`snapshot = order` stays what it was when `order` changes.
+
+```
+bumped(up, n) -> (
+  count = n
+  label = if up then (
+    count = count + 10
+    "up"
+  ) else "down"
+  (count, label)
+)
+```
+
+Only a binding assigns. A test, an arm, a clause's head and a lambda's
+parameters declare their names, and one already in scope is refused. A
+lambda assigns only its own names, since what calls it may call it any
+number of times; and nothing is assigned in a condition, or on the right of
+`&` or `|`, where it may not be worked out.
 
 A clause's head, or a test's pattern, may bind a name twice, and then
 matches only where both are equal by their type's `equals`: `doubled([a, a]) -> True` is

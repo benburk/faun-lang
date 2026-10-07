@@ -845,6 +845,13 @@ fn captures(patterns: &[Pattern], body: &Expr) -> Vec<(LocalId, Type)> {
                 pattern_locals(pattern, &mut bound);
             }
         }
+        // What a block binds may be read after it, where it assigned a
+        // name of the body around it.
+        ExprKind::Block(body) => {
+            for binding in &body.bindings {
+                pattern_locals(&binding.pattern, &mut bound);
+            }
+        }
         _ => {}
     });
     let mut found = BTreeMap::new();

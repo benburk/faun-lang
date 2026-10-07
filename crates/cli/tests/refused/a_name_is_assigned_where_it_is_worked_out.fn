@@ -1,0 +1,10 @@
+import std.host {Host}
+
+f : Nat -> Nat
+f(n) -> if (
+  n = n + 1
+  n > 2
+) then n else 0
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

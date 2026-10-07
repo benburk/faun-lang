@@ -1,0 +1,7 @@
+error: `total` is the body's around this lambda, which a lambda does not assign
+ --> a_lambda_assigns_only_its_own_names.fn:7:5
+  |
+7 |     total = total + x
+  |     ^^^^^ assigned inside the lambda
+  |
+  = help: answer the new value from the lambda, and assign it outside

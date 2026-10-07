@@ -184,6 +184,7 @@ fn equal_order(
             result,
         },
         locals: 2,
+        assigned: Vec::new(),
     }
 }
 
@@ -494,6 +495,7 @@ impl Writer<'_> {
                 result,
             },
             locals: u32::try_from(bound).expect("a constructor has fewer than 2^31 fields"),
+            assigned: Vec::new(),
         }
     }
 }

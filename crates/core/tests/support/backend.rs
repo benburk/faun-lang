@@ -1275,6 +1275,43 @@ fn a_branch_whose_value_goes_on_may_leave() {
     assert_eq!(answers, [17, 53]);
 }
 
+/// A name assigned again holds its new value from there on, past the
+/// branch or arm it was assigned in.
+#[test]
+fn an_assigned_name_holds_its_new_value_past_its_branch() {
+    let program = read(
+        "import std.host {Host}
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           count = n
+           count = count * 10
+           label = if n > 1 then (
+             count = count + 5
+             1
+           ) else 2
+           seen = host.args is (
+             [_, *_] -> (
+               count = count + label
+               True
+             )
+             [] -> False
+           )
+           host.exit!(U8.of_nat(count))
+         )",
+    )
+    .expect("a program assigning names");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers: Vec<_> = execute_counts(&program, &[1, 2])
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(answers, [12, 26]);
+}
+
 /// The arguments a program is run with are a list of strings, its own name
 /// first: a greeting names the first after it, or the world where there is
 /// none, and the count is how many there are.

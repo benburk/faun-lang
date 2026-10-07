@@ -2053,6 +2053,7 @@ impl<'a> Checker<'a> {
     ) -> Result<(), CheckError> {
         self.bindings(module, &clause.body.bindings, locals)?;
         let actual = self.expr(module, &clause.body.result, locals)?;
+        self.assignments_keep_types(module, clause, locals)?;
         // What the answer's type waits on -- a method's receiver, a
         // constructor's pattern, a field read -- is settled first, so a
         // closed row it holds meets the signature's as that row, and is
@@ -2066,6 +2067,31 @@ impl<'a> Checker<'a> {
         if widened {
             self.widenings
                 .push((module, span, clause.body.result.site, (*result).clone()));
+        }
+        Ok(())
+    }
+
+    /// Each assignment in `clause` holds its name to the type it had.
+    fn assignments_keep_types(
+        &mut self,
+        module: ModuleId,
+        clause: &h::Clause,
+        locals: &[Option<Scheme>],
+    ) -> Result<(), CheckError> {
+        for (old, new, span) in &clause.assigned {
+            let (Some(was), Some(now)) = (&locals[old.index()], &locals[new.index()]) else {
+                continue;
+            };
+            let (was, now) = (was.ty.clone(), now.ty.clone());
+            self.infer.unify(&was, &now).map_err(|_| {
+                let shown_was = show(&self.infer.resolve(&was), self.symbols);
+                let shown_now = show(&self.infer.resolve(&now), self.symbols);
+                failure(module, *span, "an assignment keeps the name's type")
+                    .label(format!(
+                        "a `{shown_was}` before, assigned a `{shown_now}` here"
+                    ))
+                    .help("give the new value a name of its own")
+            })?;
         }
         Ok(())
     }

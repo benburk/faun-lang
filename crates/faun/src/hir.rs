@@ -118,6 +118,9 @@ pub struct Clause {
     pub guard: Option<Expr>,
     pub body: Body,
     pub locals: u32,
+    /// Each assignment in the clause: the local the name was, the one it
+    /// is now, and where. Checking holds the two to one type.
+    pub assigned: Vec<(LocalId, LocalId, Span)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

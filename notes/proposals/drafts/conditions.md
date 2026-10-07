@@ -265,6 +265,14 @@ partway through a body is.
   function of the branch's value and what they read, each branch going on
   calls it, and a `return` answers where it stands. `return` stays a node
   until then. No change to Barb.
+- **Assignment,** 2026-10-07: a binding naming a name in scope assigns it,
+  a new local from there on, held to the old one's type. After an `if`,
+  arms or an `else` line, each name a branch going on assigned is a new
+  local every such branch binds last; a block's assignments stay. Lowering
+  hands those out of a branch as a tuple beside its value where no branch
+  leaves, and as the join point's parameters where one does. Refused: an
+  assignment in a condition or the right of `&` or `|`, and a lambda
+  assigning its body's name.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.

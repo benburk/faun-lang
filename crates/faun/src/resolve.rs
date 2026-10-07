@@ -1487,6 +1487,9 @@ fn resolve_clause(
         choosing: false,
         testing: false,
         hidden: HashMap::new(),
+        assigned: Vec::new(),
+        lambda_outer: None,
+        conditional: 0,
     };
     let patterns = clause
         .patterns
@@ -1510,6 +1513,7 @@ fn resolve_clause(
         guard,
         body,
         locals: resolver.next_local,
+        assigned: resolver.assigned,
     })
 }
 
@@ -1588,6 +1592,15 @@ struct ClauseResolver<'a> {
     compared: Option<Vec<Compared>>,
     /// Whether an alternative of an `|` pattern is being resolved.
     choosing: bool,
+    /// Each assignment so far: the local the name was, the one it is now,
+    /// and where.
+    assigned: Vec<(h::LocalId, h::LocalId, s::Span)>,
+    /// Inside a lambda, the names its body sees from around it, which it
+    /// does not assign.
+    lambda_outer: Option<HashSet<Symbol>>,
+    /// How deep in what may not be worked out, a condition or the right of
+    /// `&` or `|`, resolution is: where an assignment is refused.
+    conditional: u32,
 }
 
 impl ClauseResolver<'_> {
@@ -1605,6 +1618,14 @@ impl ClauseResolver<'_> {
     /// test, along a chain of `&` those of each part, and of an `|` the
     /// names both sides bind. Anything else binds for nothing outside it.
     fn condition(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
+        self.conditional += 1;
+        let asked = self.asked(expression);
+        self.conditional -= 1;
+        asked
+    }
+
+    /// [`Self::condition`], within it.
+    fn asked(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
         let kind = match &expression.kind {
             // A test, each `==name` in its pattern asked after it matches.
             s::ExprKind::Is(value, pattern) => {
@@ -1640,7 +1661,7 @@ impl ClauseResolver<'_> {
 
     /// One arm: what its pattern binds, as a test's does, seen by its guard
     /// and its body, and nowhere after the arm.
-    fn arm(&mut self, arm: &s::Arm) -> Result<h::Arm, ResolveError> {
+    fn arm(&mut self, arm: &s::Arm) -> Result<(h::Arm, HashMap<Symbol, h::LocalId>), ResolveError> {
         let before = self.locals.clone();
         let outer = std::mem::replace(&mut self.testing, true);
         let comparing = self.compared.replace(Vec::new());
@@ -1663,9 +1684,116 @@ impl ClauseResolver<'_> {
                 body,
             })
         });
+        let end = self.locals.clone();
         self.hide(&before, arm.pattern.span());
         self.locals = before;
-        resolved
+        Ok((resolved?, end))
+    }
+
+    /// `name = …` where `name` is in scope: a new local the name is from
+    /// here on, held to the old one's type.
+    fn assign(&mut self, name: s::Name, spelling: Symbol) -> Result<h::Pattern, ResolveError> {
+        let shown = name.text(self.source);
+        if self.conditional > 0 {
+            return Err(error(
+                self.module,
+                name.0,
+                format!("`{shown}` is assigned where it may not be worked out"),
+            )
+            .label("in a condition, or the right of `&` or `|`")
+            .help("assign it on a line of its own, before or after"));
+        }
+        if self
+            .lambda_outer
+            .as_ref()
+            .is_some_and(|outer| outer.contains(&spelling))
+        {
+            return Err(error(
+                self.module,
+                name.0,
+                format!(
+                    "`{shown}` is the body's around this lambda, which a lambda does not assign"
+                ),
+            )
+            .label("assigned inside the lambda")
+            .help("answer the new value from the lambda, and assign it outside"));
+        }
+        if let Some(bound) = self.shadowing.as_mut()
+            && !bound.insert(spelling)
+        {
+            return Err(error(
+                self.module,
+                name.0,
+                format!("local `{shown}` is bound more than once"),
+            ));
+        }
+        let old = self.locals[&spelling];
+        let local = self.fresh_local();
+        self.assigned.push((old, local, name.0));
+        self.locals.insert(spelling, local);
+        Ok(h::Pattern::Bind(local))
+    }
+
+    const fn fresh_local(&mut self) -> h::LocalId {
+        let local = h::LocalId(self.next_local);
+        self.next_local = self
+            .next_local
+            .checked_add(1)
+            .expect("fewer than 2^32 locals");
+        local
+    }
+
+    /// Branches resolved from `before`, each with the names as it left
+    /// them, or `None` where it leaves: each name of `before` a branch
+    /// going on assigned is a new local after them, which every branch
+    /// going on binds last, to the local the name was there.
+    fn merged(
+        &mut self,
+        before: &HashMap<Symbol, h::LocalId>,
+        branches: Vec<(h::Expr, Option<HashMap<Symbol, h::LocalId>>)>,
+    ) -> Vec<h::Expr> {
+        let mut changed: Vec<Symbol> = before
+            .iter()
+            .filter(|(name, local)| {
+                branches
+                    .iter()
+                    .filter_map(|(_, end)| end.as_ref())
+                    .any(|end| end.get(*name) != Some(*local))
+            })
+            .map(|(name, _)| *name)
+            .collect();
+        changed.sort_unstable();
+        let merges: Vec<_> = changed.iter().map(|_| self.fresh_local()).collect();
+        let branches = branches
+            .into_iter()
+            .map(|(branch, end)| {
+                let Some(end) = end.filter(|_| !changed.is_empty()) else {
+                    return branch;
+                };
+                let span = branch.span;
+                let answer = self.fresh_local();
+                let mut bindings = vec![h::Binding {
+                    pattern: h::Pattern::Bind(answer),
+                    value: branch,
+                }];
+                for (name, merge) in changed.iter().zip(&merges) {
+                    let last = end.get(name).copied().unwrap_or_else(|| before[name]);
+                    bindings.push(h::Binding {
+                        pattern: h::Pattern::Bind(*merge),
+                        value: self.sites.expr(span, h::ExprKind::Local(last)),
+                    });
+                }
+                let result = self.sites.expr(span, h::ExprKind::Local(answer));
+                self.sites.expr(
+                    span,
+                    h::ExprKind::Block(Box::new(h::Body { bindings, result })),
+                )
+            })
+            .collect();
+        for (name, merge) in changed.into_iter().zip(merges) {
+            self.locals.insert(name, merge);
+        }
+        branches
     }
 
     /// The two sides of an `|`, the right binding as the same locals the
@@ -1797,10 +1925,10 @@ impl ClauseResolver<'_> {
             s::Pattern::Wild(_) => Ok(h::Pattern::Wild),
             s::Pattern::Bind(name) => {
                 let spelling = self.symbols.intern(name.text(self.source));
-                // A name means one value for its whole scope: a binding's or a
-                // test's pattern binds none already seen. A clause's head and a
-                // lambda's parameters see none of their own but what they
-                // bind, which the checks below look after.
+                // A binding's pattern assigns a name already in scope; a
+                // test's declares only, so binding one is refused, as is a
+                // clause's head or a lambda's parameters binding one twice,
+                // which the checks below look after.
                 if let Some(bound) = &self.shadowing
                     && !bound.contains(&spelling)
                     && self.locals.contains_key(&spelling)
@@ -1809,23 +1937,17 @@ impl ClauseResolver<'_> {
                         .as_ref()
                         .is_some_and(|first| first.contains_key(&spelling))
                 {
-                    let shown = name.text(self.source);
-                    if self.testing {
-                        return Err(error(
-                            self.module,
-                            name.0,
-                            format!("`{shown}` is a name already, and a test binds it anew rather than comparing with it"),
-                        )
-                        .label("bound again here")
-                        .help(format!("to compare, write `=={shown}` in its place; to bind, use a name of its own")));
+                    if !self.testing {
+                        return self.assign(*name, spelling);
                     }
+                    let shown = name.text(self.source);
                     return Err(error(
                         self.module,
                         name.0,
-                        format!("`{shown}` is a name already, and a name means one value for its whole scope"),
+                        format!("`{shown}` is a name already, and a test binds it anew rather than comparing with it"),
                     )
                     .label("bound again here")
-                    .help("give this value a name of its own"));
+                    .help(format!("to compare, write `=={shown}` in its place; to bind, use a name of its own")));
                 }
                 // An alternative after the first binds the names the first did.
                 let alternate = self
@@ -2123,18 +2245,26 @@ impl ClauseResolver<'_> {
             }
             s::ExprKind::Lambda(patterns, body) => {
                 let saved = self.locals.clone();
+                let seen: HashSet<Symbol> = saved.keys().copied().collect();
+                let outer = self.lambda_outer.replace(seen);
                 let patterns = patterns
                     .iter()
                     .map(|pattern| self.total_pattern(pattern))
-                    .collect::<Result<_, _>>()?;
-                let body = self.expr(body)?;
+                    .collect::<Result<Vec<_>, _>>();
+                let body = patterns.and_then(|patterns| Ok((patterns, self.expr(body)?)));
+                self.lambda_outer = outer;
                 self.locals = saved;
+                let (patterns, body) = body?;
                 h::ExprKind::Lambda(patterns, Box::new(body))
             }
-            // A block's names leave with it, as a lambda's do.
+            // A block's names leave with it, as a lambda's do; what it
+            // assigned of the names around it stays assigned.
             s::ExprKind::Block(body) => {
-                let saved = self.locals.clone();
+                let mut saved = self.locals.clone();
                 let body = self.body(body)?;
+                for (name, local) in &mut saved {
+                    *local = self.locals[name];
+                }
                 self.locals = saved;
                 h::ExprKind::Block(Box::new(body))
             }
@@ -2214,10 +2344,21 @@ impl ClauseResolver<'_> {
                 let asked = condition.span;
                 let condition = self.condition(condition);
                 let yes = condition.and_then(|condition| Ok((condition, self.expr(yes)?)));
+                let yes_end = self.locals.clone();
                 self.hide(&before, asked);
-                self.locals = before;
+                self.locals.clone_from(&before);
                 let (condition, yes) = yes?;
-                h::ExprKind::If(Box::new(condition), Box::new(yes), Box::new(self.expr(no)?))
+                let no = self.expr(no)?;
+                let no_end = self.locals.clone();
+                self.locals.clone_from(&before);
+                let mut branches = self
+                    .merged(&before, vec![(yes, Some(yes_end)), (no, Some(no_end))])
+                    .into_iter();
+                let (yes, no) = (branches.next(), branches.next());
+                let (Some(yes), Some(no)) = (yes, no) else {
+                    unreachable!("two branches in, two out")
+                };
+                h::ExprKind::If(Box::new(condition), Box::new(yes), Box::new(no))
             }
             // Where its block answers, an `else` line is an `if`: the lines
             // after it, seeing what its condition bound, where it holds, and
@@ -2237,23 +2378,37 @@ impl ClauseResolver<'_> {
                         .expr(expression.span, h::ExprKind::Block(Box::new(body)));
                     Ok((condition, block))
                 });
+                let end = self.locals.clone();
                 self.hide(&before, asked);
-                self.locals = before;
+                self.locals.clone_from(&before);
                 let (condition, yes) = yes?;
-                h::ExprKind::If(
-                    Box::new(condition),
-                    Box::new(yes),
-                    Box::new(self.expr(otherwise)?),
-                )
+                let otherwise = self.expr(otherwise)?;
+                self.locals.clone_from(&before);
+                let mut branches = self
+                    .merged(&before, vec![(yes, Some(end)), (otherwise, None)])
+                    .into_iter();
+                let (yes, otherwise) = (branches.next(), branches.next());
+                let (Some(yes), Some(otherwise)) = (yes, otherwise) else {
+                    unreachable!("two branches in, two out")
+                };
+                h::ExprKind::If(Box::new(condition), Box::new(yes), Box::new(otherwise))
             }
             s::ExprKind::Return(value) => h::ExprKind::Return(Box::new(self.expr(value)?)),
             s::ExprKind::Match(value, arms) => {
                 let value = self.expr(value)?;
-                let arms = arms
-                    .iter()
-                    .map(|arm| self.arm(arm))
-                    .collect::<Result<_, _>>()?;
-                h::ExprKind::Match(Box::new(value), arms)
+                let before = self.locals.clone();
+                let mut resolved = Vec::with_capacity(arms.len());
+                let mut branches = Vec::with_capacity(arms.len());
+                for arm in arms {
+                    let (arm, end) = self.arm(arm)?;
+                    branches.push((arm.body.clone(), Some(end)));
+                    resolved.push(arm);
+                }
+                let bodies = self.merged(&before, branches);
+                for (arm, body) in resolved.iter_mut().zip(bodies) {
+                    arm.body = body;
+                }
+                h::ExprKind::Match(Box::new(value), resolved)
             }
             s::ExprKind::Arms(_) => unreachable!("the parser refuses arms no `is` takes"),
             // Alone, a test binds for nothing after it.
@@ -2287,11 +2442,16 @@ impl ClauseResolver<'_> {
                     .map(|member| self.expr(member))
                     .collect::<Result<_, _>>()?,
             ),
-            s::ExprKind::Binary(operator, left, right) => h::ExprKind::Binary(
-                *operator,
-                Box::new(self.expr(left)?),
-                Box::new(self.expr(right)?),
-            ),
+            s::ExprKind::Binary(operator, left, right) => {
+                let left = self.expr(left)?;
+                // The right of `|` is worked out only where the left has not
+                // decided.
+                let conditional = matches!(operator, s::BinaryOp::Or);
+                self.conditional += u32::from(conditional);
+                let right = self.expr(right);
+                self.conditional -= u32::from(conditional);
+                h::ExprKind::Binary(*operator, Box::new(left), Box::new(right?))
+            }
         };
         Ok(h::Expr {
             site: self.sites.fresh(),

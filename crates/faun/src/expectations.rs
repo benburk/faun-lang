@@ -125,6 +125,7 @@ fn entry(resolved: &mut ResolvedProgram, main: &Main, asked: &[Symbol]) -> h::Cl
             result: exited,
         },
         locals: 1,
+        assigned: Vec::new(),
     }
 }
 

@@ -293,7 +293,7 @@ impl Compiler<'_> {
                 .collect(),
             result: tested(body.result, self.prelude),
         };
-        let body = self.joined(hoisted(body, &mut 0), key)?;
+        let body = self.joined(exported(hoisted(body, &mut 0)), key)?;
         self.compiled(body)
     }
 
@@ -1119,6 +1119,162 @@ fn hoisted(body: d::Body, fresh: &mut u32) -> d::Body {
     }
     let result = lifted(body.result, &mut bindings, fresh);
     d::Body { bindings, result }
+}
+
+/// `body` with each `if` or arms in it that no branch leaves handing out,
+/// beside its value, what every branch binds last and the lines after it
+/// read: the names a branch assigned, which resolution bound again at the
+/// end of each branch. Its branches answer a tuple, which its binding takes
+/// apart. Inner ones are made first.
+fn exported(mut body: d::Body) -> d::Body {
+    let mut read = HashSet::new();
+    let reads = |expression: &Expr, read: &mut HashSet<LocalId>| {
+        each_expr(expression, &mut |inner| {
+            if let ExprKind::Local(local) = inner.kind {
+                read.insert(local);
+            }
+        });
+    };
+    reads(&body.result, &mut read);
+    let mut after = vec![HashSet::new(); body.bindings.len()];
+    for (at, binding) in body.bindings.iter().enumerate().rev() {
+        after[at].clone_from(&read);
+        reads(&binding.value, &mut read);
+    }
+    body.bindings = body
+        .bindings
+        .into_iter()
+        .zip(after)
+        .map(|(binding, after)| handed_out(binding, &after))
+        .collect();
+    body
+}
+
+/// One binding of [`exported`], its value's branches made first.
+fn handed_out(binding: d::Binding, after: &HashSet<LocalId>) -> d::Binding {
+    let inner = |branch: Expr| match branch.kind {
+        ExprKind::Block(body) => Expr {
+            kind: ExprKind::Block(Box::new(exported(*body))),
+            ..branch
+        },
+        kind => Expr { kind, ..branch },
+    };
+    let value = binding.value;
+    let value = match value.kind {
+        ExprKind::If(condition, yes, no) => Expr {
+            kind: ExprKind::If(condition, Box::new(inner(*yes)), Box::new(inner(*no))),
+            ..value
+        },
+        ExprKind::Match(subject, arms) => Expr {
+            kind: ExprKind::Match(
+                subject,
+                arms.into_iter()
+                    .map(|arm| d::Arm {
+                        rows: arm.rows,
+                        body: inner(arm.body),
+                    })
+                    .collect(),
+            ),
+            ..value
+        },
+        kind => {
+            return d::Binding {
+                pattern: binding.pattern,
+                value: Expr { kind, ..value },
+            };
+        }
+    };
+    if branches_leave(&value) {
+        return d::Binding {
+            pattern: binding.pattern,
+            value,
+        };
+    }
+    let branches: Vec<&Expr> = match &value.kind {
+        ExprKind::If(_, yes, no) => vec![yes, no],
+        ExprKind::Match(_, arms) => arms.iter().map(|arm| &arm.body).collect(),
+        _ => unreachable!("matched above"),
+    };
+    let bound_last = |branch: &Expr| -> BTreeMap<LocalId, Type> {
+        let ExprKind::Block(body) = &branch.kind else {
+            return BTreeMap::new();
+        };
+        body.bindings
+            .iter()
+            .filter_map(|binding| match binding.pattern {
+                Pattern::Bind(local) => Some((local, binding.value.ty.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut handed: BTreeMap<LocalId, Type> = branches
+        .first()
+        .map(|branch| bound_last(branch))
+        .unwrap_or_default();
+    for branch in &branches[1..] {
+        let bound = bound_last(branch);
+        handed.retain(|local, _| bound.contains_key(local));
+    }
+    handed.retain(|local, _| after.contains(local));
+    if handed.is_empty() {
+        return d::Binding {
+            pattern: binding.pattern,
+            value,
+        };
+    }
+    let mut members = vec![value.ty.clone()];
+    members.extend(handed.values().cloned());
+    let tuple = Type::Tuple(members);
+    let answering = |branch: Expr| {
+        let ExprKind::Block(mut body) = branch.kind else {
+            unreachable!("hoisting makes each branch a block")
+        };
+        let mut members = vec![body.result];
+        members.extend(handed.iter().map(|(local, ty)| Expr {
+            module: branch.module,
+            span: branch.span,
+            ty: ty.clone(),
+            kind: ExprKind::Local(*local),
+        }));
+        body.result = Expr {
+            module: branch.module,
+            span: branch.span,
+            ty: tuple.clone(),
+            kind: ExprKind::Tuple(members),
+        };
+        Expr {
+            ty: tuple.clone(),
+            kind: ExprKind::Block(body),
+            ..branch
+        }
+    };
+    let kind = match value.kind {
+        ExprKind::If(condition, yes, no) => ExprKind::If(
+            condition,
+            Box::new(answering(*yes)),
+            Box::new(answering(*no)),
+        ),
+        ExprKind::Match(subject, arms) => ExprKind::Match(
+            subject,
+            arms.into_iter()
+                .map(|arm| d::Arm {
+                    rows: arm.rows,
+                    body: answering(arm.body),
+                })
+                .collect(),
+        ),
+        _ => unreachable!("matched above"),
+    };
+    let mut parts = vec![binding.pattern];
+    parts.extend(handed.keys().map(|local| Pattern::Bind(*local)));
+    d::Binding {
+        pattern: Pattern::Product(parts),
+        value: Expr {
+            ty: tuple.clone(),
+            kind,
+            ..value
+        },
+    }
 }
 
 /// Whether `value` is an `if` or arms with a branch that may leave the

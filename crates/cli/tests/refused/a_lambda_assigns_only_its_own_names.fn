@@ -1,0 +1,14 @@
+import std.host {Host}
+
+f : List(Nat) -> Nat
+f(xs) -> (
+  total = 0
+  doubled = xs.map(|x| (
+    total = total + x
+    x * 2
+  ))
+  total
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)
