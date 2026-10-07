@@ -59,6 +59,11 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   remove(Bin(left, found, value, right, _), key) ->
     removed_at(key.cmp(found), left, found, value, right, key)
 
+  # `map` with `key`'s value replaced by `change` applied to it; unchanged
+  # when `key` is absent, as `remove` is, and as `Map.update` does.
+  update : (SortedMap(k, v), k, v -> v) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
+  update(map, key, change) -> get(map, key).map_ok(|value| insert(map, key, change(value))).ok_or(map)
+
   # `map` with `key`'s value replaced by `change` applied to it, or to
   # `missing` where `key` is absent, as `Map.update_or` does.
   update_or : (SortedMap(k, v), k, v, v -> v) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
@@ -215,3 +220,4 @@ split_smallest(Bin(inner_left, inner_key, inner_value, inner_right, _), key, val
 expect SortedMap.counted(["b", "a", "b"]).to_list() == [("a", 1), ("b", 2)]
 expect SortedMap.grouped([1, 2, 3, 4, 5], |n| n % 2).to_list() == [(0, [2, 4]), (1, [1, 3, 5])]
 expect SortedMap.of_list([(2, [1])]).update_or(1, [], |xs| [0, *xs]).update_or(2, [], |xs| [0, *xs]).to_list() == [(1, [0]), (2, [0, 1])]
+expect SortedMap.of_list([(1, 10)]).update(1, |n| n + 1).update(2, |n| n + 1).to_list() == [(1, 11)]
