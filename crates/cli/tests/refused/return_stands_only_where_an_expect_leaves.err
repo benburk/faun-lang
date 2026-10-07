@@ -1,5 +1,0 @@
-error: `return` stands only where an `expect` leaves: `expect c else return x`
- --> return_stands_only_where_an_expect_leaves.fn:4:14
-  |
-4 | halved(n) -> return n / 2
-  |              ^^^^^^^^^^^^

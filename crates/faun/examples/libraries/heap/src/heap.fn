@@ -68,7 +68,7 @@ Heap(k, v) : List((k, v)).(
   # answers the state and the entries it adds, which it sees in their turn.
   drain : (Heap(k, v), s, (s, k, v) -> (s, List((k, v)))) -> s where k.cmp : (k, k) -> Order
   drain(heap, state, visit) -> (
-    expect heap.pop() is Ok({key, value, rest}) else return state
+    heap.pop() is Ok({key, value, rest}) else return state
     (next, added) = visit(state, key, value)
     grown = rest.push_all(added)
     grown.drain(next, visit)
@@ -116,7 +116,7 @@ cheaper(entries, left, count, fallback) -> (
 
 empty_onto : (Heap(k, v), List((k, v))) -> List((k, v)) where k.cmp : (k, k) -> Order
 empty_onto(heap, found) -> (
-  expect heap.pop() is Ok({key, value, rest}) else return found
+  heap.pop() is Ok({key, value, rest}) else return found
   empty_onto(rest, [(key, value), *found])
 )
 

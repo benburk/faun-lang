@@ -472,16 +472,16 @@ pub enum ExprKind {
     /// `( pattern -> value` … `)`: arms, read before an `is` takes them,
     /// and refused by the parser wherever no `is` does.
     Arms(Vec<Arm>),
-    /// A block's line `expect condition else otherwise`, holding the lines
-    /// after it: where the condition holds, those lines answer, seeing what
-    /// it bound; where it fails, `otherwise` leaves.
-    Expect {
+    /// A block's line `condition else otherwise`, holding the lines after
+    /// it: where the condition holds, those lines answer, seeing what it
+    /// bound; where it fails, `otherwise` leaves.
+    Else {
         condition: Box<Expr>,
         otherwise: Box<Expr>,
         rest: Box<Body>,
     },
     /// `return value`: the answer of the clause or lambda, which stands
-    /// only where an `expect` leaves.
+    /// only where a line's `else` leaves.
     Return(Box<Expr>),
     /// `(x = f(y)` … `x + 1)`: bindings, then the answer, in parentheses.
     /// Its names are seen by its later lines and its answer alone.

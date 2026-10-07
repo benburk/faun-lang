@@ -1,0 +1,5 @@
+error: a line's `else` leaves: `return` a value, or a block whose last line does
+ --> a_line_s_else_leaves.fn:5:14
+  |
+5 |   n > 0 else 0
+  |              ^ goes on rather than leaving

@@ -2219,10 +2219,10 @@ impl ClauseResolver<'_> {
                 let (condition, yes) = yes?;
                 h::ExprKind::If(Box::new(condition), Box::new(yes), Box::new(self.expr(no)?))
             }
-            // Where its block answers, an `expect` is an `if`: the lines
+            // Where its block answers, an `else` line is an `if`: the lines
             // after it, seeing what its condition bound, where it holds, and
             // what its `else` answers where it fails.
-            s::ExprKind::Expect {
+            s::ExprKind::Else {
                 condition,
                 otherwise,
                 rest,
@@ -2366,7 +2366,7 @@ impl ClauseResolver<'_> {
                 ),
             )
             .label("not known to hold here")
-            .help("a test binds along its `&` chain, into `then`, into its clause from a guard, for the lines below an `expect`, and into its arm from an arm's pattern; past an `|` only what both sides bind, and nothing under `!` or in `else`"));
+            .help("a test binds along its `&` chain, into `then`, into its clause from a guard, for the lines below its `else` line, and into its arm from an arm's pattern; past an `|` only what both sides bind, and nothing under `!` or in `else`"));
         }
         Err(error(
             self.module,

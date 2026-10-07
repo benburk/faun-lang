@@ -4,4 +4,4 @@ error: `v` is bound by a test, and seen only where that test is known to have he
 4 | either(r, ready) -> if r is Ok(v) | ready then v else 0
   |                                                ^ not known to hold here
   |
-  = help: a test binds along its `&` chain, into `then`, into its clause from a guard, for the lines below an `expect`, and into its arm from an arm's pattern; past an `|` only what both sides bind, and nothing under `!` or in `else`
+  = help: a test binds along its `&` chain, into `then`, into its clause from a guard, for the lines below its `else` line, and into its arm from an arm's pattern; past an `|` only what both sides bind, and nothing under `!` or in `else`

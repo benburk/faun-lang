@@ -61,7 +61,7 @@ Paths(e) : Settled(e).(
 # the source.
 back : (Settled(e), Nat, List(Nat)) -> Result(List(Nat), [Unreachable])
 back(settled, node, route) -> (
-  expect settled.get_or(node, Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
+  settled.get_or(node, Err(Unreachable)) is Ok({from, *}) else return Err(Unreachable)
   walked = [node, *route]
   if from == node then Ok(walked) else back(settled, from, walked)
 )

@@ -266,8 +266,7 @@ module.exports = grammar({
     ),
 
     // A block's line: go on where the condition holds, else leave.
-    expect_line: $ => seq(
-      'expect',
+    else_line: $ => seq(
       field('condition', $._expression),
       'else',
       field('otherwise', $._expression),
@@ -395,7 +394,7 @@ module.exports = grammar({
     // binds nothing is an effect asked for what it does.
     block: $ => seq(
       '(',
-      repeat1(seq(choice($.binding, $.expect_line, $._expression), $._block_newline)),
+      repeat1(seq(choice($.binding, $.else_line, $._expression), $._block_newline)),
       field('answer', $._expression),
       ')',
     ),

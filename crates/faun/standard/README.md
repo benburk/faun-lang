@@ -451,7 +451,7 @@ pattern a clause's parameter takes, with alternatives in parentheses, `x is
 (A | B)`. What the pattern binds is seen where the test is known to have
 held: along the rest of an `&` chain, in the `then` of an `if` whose
 condition is the test or such a chain, in a clause's body from its guard,
-and for the lines below an `expect`. Past an `|`, a name both sides bind is
+and for the lines below an `else` line. Past an `|`, a name both sides bind is
 seen, from whichever held, at one type; one only a side binds is not, and
 neither is a name under `!` or in `else`. A use there says so.
 
@@ -512,33 +512,33 @@ area(shape) -> shape is (
 
 An arm takes every pattern a clause's parameter does, alternatives
 unparenthesized, `Celsius(c) | Kelvin(c) -> c`, and its value may be a
-block. As an `if`'s branches, arms may leave by `?` or an `expect` where
+block. As an `if`'s branches, arms may leave by `?` or an `else` line where
 the `is` answers its clause. Clauses suit a body that is the dispatch;
 arms suit a value worked out partway through one. Not yet: arms of a value
 holding a resource.
 
-## Expect
+## Leaving by `else`
 
-A block's line `expect condition else …` goes on where the condition holds,
-the lines after it seeing what it bound, and where it fails, leaves the
-clause or lambda: `else return value`, or `else` a block whose last line
-returns, doing its steps first. It is never a block's last line, since the
-lines after it answer.
+A block's line `condition else …` goes on where the condition holds, the
+lines after it seeing what it bound, and where it fails, leaves the clause
+or lambda: `else return value`, or `else` a block whose last line returns,
+doing its steps first. It is never a block's last line, since the lines
+after it answer.
 
 ```
 first_doubled(xs) -> (
-  expect xs is [x, *_] else return 0
+  xs is [x, *_] else return 0
   x * 2
 )
 ```
 
 It says what should hold, so a line leaving where a shape matches is
-negated: `expect n != 0 else return 0`. `return` stands only in an
-`expect`'s `else`. An `expect` leaves from a block answering its clause or
-lambda, a body or a branch answering it, and not yet from one whose value
-goes on into more of the body, such as a binding's. A bare `expect`, an
-assumption checked in development, is not built; at the top level, `expect`
-is a test, as before.
+negated: `n != 0 else return 0`. `return` stands only in such an `else`, so
+every way out of a body is a line's `else`. An `else` line leaves from a
+block answering its clause or lambda, a body or a branch answering it, and
+not yet from one whose value goes on into more of the body, such as a
+binding's. `expect` stands only at the top level, as a test; in a body it
+will be an assumption checked in development, which is not built.
 
 ## Or-patterns
 

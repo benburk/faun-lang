@@ -562,7 +562,7 @@ const READ: &[&str] = &[
     "f(a, b) -> (a, b) is (Ok(x), Ok(y)) & x <= y\n",
     "f(x, ==y, all is [_, *_]) -> x is Some(==y) | x is (==z, w)\n",
     "f(x) -> x is (\n  A(v) if v > 0 -> v\n  B | C -> (\n    y = 1\n    y\n  )\n  _ -> 0\n)\n",
-    "f(xs) -> (\n  expect xs is [x, *_] else return 0\n  y = x\n  expect y > 1\n    else (\n      z = y\n      return z\n    )\n  y\n)\n",
+    "f(xs) -> (\n  xs is [x, *_] else return 0\n  y = x\n  y > 1\n    else (\n      z = y\n      return z\n    )\n  y\n)\n",
 ];
 
 /// Programs both refuse.
@@ -594,7 +594,8 @@ const REFUSED: &[&str] = &[
     "f(x) -> -if x then 1 else 2\n",
     "f(x) -> (\n  expect x\n)\n",
     "f(x) -> (\n  expect x else\n)\n",
-    "f(x) -> (\n  y = x\n  expect y else return 0\n)\n",
+    "f(x) -> (\n  y = x\n  y else return 0\n)\n",
+    "f(x) -> (\n  y = x\n  expect y else return 0\n  y\n)\n",
     "f(x) -> x is Some(==)\n",
     "f(x) -> x is Some(==Y)\n",
     "f(x) -> x is (\n  A -> 1\n  B 2\n)\n",

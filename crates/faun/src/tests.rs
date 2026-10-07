@@ -436,11 +436,11 @@ fn a_test_is_not_tested_again_or_compared() {
     assert!(parse("f(x) -> (x is 3) == y").is_ok());
 }
 
-/// The lines after an `expect` answer where it holds, so a block does not
-/// end with one.
+/// The lines after an `else` line answer where its condition holds, so a
+/// block does not end with one.
 #[test]
-fn an_expect_is_not_a_block_s_last_line() {
-    let error = parse("f(x) -> (\n  y = x\n  expect y > 0 else return 0\n)").unwrap_err();
-    assert!(error.message.contains("not a block's last line"), "{error}");
-    assert!(parse("f(x) -> (\n  expect x > 0 else return 0\n  x\n)").is_ok());
+fn an_else_line_is_not_a_block_s_last() {
+    let error = parse("f(x) -> (\n  y = x\n  y > 0 else return 0\n)").unwrap_err();
+    assert!(error.message.contains("not a block's last"), "{error}");
+    assert!(parse("f(x) -> (\n  x > 0 else return 0\n  x\n)").is_ok());
 }

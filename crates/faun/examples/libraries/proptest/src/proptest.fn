@@ -62,7 +62,7 @@ Verdict(a) : [Passed, Falsified(a, a)].(
 proptest_minimize : (a, a -> Bool, a -> List(a), Nat) -> a
 proptest_minimize(value, prop, shrink, 0) -> value
 proptest_minimize(value, prop, shrink, Succ(rest)) -> (
-  expect proptest_refute(shrink(value), prop) is Ok(smaller) else return value
+  proptest_refute(shrink(value), prop) is Ok(smaller) else return value
   proptest_minimize(smaller, prop, shrink, rest)
 )
 

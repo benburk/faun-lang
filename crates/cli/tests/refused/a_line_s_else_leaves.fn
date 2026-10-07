@@ -2,11 +2,8 @@ import std.host {Host}
 
 halved : Nat -> Nat
 halved(n) -> (
-  half = (
-    expect n > 0 else return 0
-    n / 2
-  )
-  half + 1
+  n > 0 else 0
+  n / 2
 )
 
 main! : Host -> []

@@ -109,22 +109,20 @@ untyped-primary   = ( NUMBER | CHAR ) [ ".." range-end ]
                   | "{" [ fields ] "}" ;
 exprs             = expr [ "," [ exprs ] ] ;
 
-(* After `(` and one expression, the next token says which: `,` a tuple, `=`
-   or a line's end a block, whose lines are bindings and then its answer,
-   and `)` one value grouped. *)
-parenthesized     = expect-line NEWLINE statements
-                  | expr [ "," [ exprs ] | "=" expr NEWLINE statements | NEWLINE statements
+(* After `(` and one expression, the next token says which: `,` a tuple, `=`,
+   `else` or a line's end a block, whose lines are bindings and then its
+   answer, `->` or `if` arms, and `)` one value grouped. *)
+parenthesized     = expr [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE statements
                          | arm-tail { NEWLINE arm } ] ;
 (* Arms a line apiece, which an `is` takes: `x is (P -> a` … `)`. Arms no
    `is` takes are refused after parsing. *)
 arm               = expr arm-tail ;
 arm-tail          = [ "if" expr ] "->" expr ;
-statements        = expect-line NEWLINE statements
-                  | expr [ "=" expr NEWLINE statements | NEWLINE statements ] ;
-(* A block's line going on where its condition holds, the lines after it
-   answering, and leaving by its `else` where it fails. Where `return` and an
-   `expect` may stand is told after parsing. *)
-expect-line       = "expect" expr "else" expr ;
+statements        = expr [ line-tail NEWLINE statements | NEWLINE statements ] ;
+(* A binding, or a line going on where its condition holds, the lines after
+   it answering, and leaving by its `else` where it fails. Where `return` and
+   an `else` line may stand is told after parsing. *)
+line-tail         = "=" expr | "else" expr ;
 (* A list's rest may have elements after it, which its end matches:
    `[*front, last]`. *)
 elements          = expr [ "," [ elements ] ]

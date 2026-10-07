@@ -71,8 +71,8 @@ impl Typed {
 pub(crate) enum Statement {
     Value(Expr),
     Binding(Expr, Expr),
-    /// `expect condition else otherwise`, written at `span`.
-    Expect(Span, Expr, Expr),
+    /// `condition else otherwise`, written at `span`.
+    Else(Span, Expr, Expr),
 }
 
 /// Why lines do not make items.
@@ -429,7 +429,7 @@ pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
                 "a block ends with its answer, a line after its last binding",
             ));
         }
-        Statement::Expect(..) => unreachable!("an `expect` holds the lines after it"),
+        Statement::Else(..) => unreachable!("an `else` line holds the lines after it"),
     };
     let bindings = lines
         .into_iter()
@@ -444,35 +444,35 @@ pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
                 value,
                 discarded: false,
             }),
-            Statement::Expect(..) => unreachable!("an `expect` holds the lines after it"),
+            Statement::Else(..) => unreachable!("an `else` line holds the lines after it"),
         })
         .collect::<Result<_, Error>>()?;
     Ok(Body { bindings, result })
 }
 
-/// `lines` with their first `expect` holding the lines after it, which
+/// `lines` with their first `else` line holding the lines after it, which
 /// answer where it holds, those taken apart the same way.
 fn held(mut lines: Vec<Statement>, source: &str) -> Result<Vec<Statement>, Error> {
     let Some(at) = lines
         .iter()
-        .position(|line| matches!(line, Statement::Expect(..)))
+        .position(|line| matches!(line, Statement::Else(..)))
     else {
         return Ok(lines);
     };
     let rest = lines.split_off(at + 1);
-    let Some(Statement::Expect(span, condition, otherwise)) = lines.pop() else {
-        unreachable!("the line found is an `expect`")
+    let Some(Statement::Else(span, condition, otherwise)) = lines.pop() else {
+        unreachable!("the line found has an `else`")
     };
     if rest.is_empty() {
         return Err(error(
             span,
-            "an `expect` is not a block's last line: the lines after it answer where it holds",
+            "a line with `else` is not a block's last: the lines after it answer where its condition holds",
         ));
     }
     let rest = body(rest, source)?;
     lines.push(Statement::Value(Expr {
         span: span.through(rest.result.span),
-        kind: ExprKind::Expect {
+        kind: ExprKind::Else {
             condition: Box::new(condition),
             otherwise: Box::new(otherwise),
             rest: Box::new(rest),
@@ -863,7 +863,7 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             expression(yes, source, answering)?;
             expression(no, source, answering)
         }
-        ExprKind::Expect {
+        ExprKind::Else {
             condition,
             otherwise,
             rest,
@@ -871,7 +871,7 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             if !answering {
                 return Err(error(
                     expr.span,
-                    "an `expect` leaves where its block answers the clause or lambda, and nowhere else yet",
+                    "a line's `else` leaves where its block answers the clause or lambda, and nowhere else yet",
                 )
                 .label("its block's value goes on into more of the body")
                 .help("take this step out into a function of its own, where its block answers"));
@@ -893,7 +893,7 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             let Some(value) = leaving else {
                 return Err(error(
                     otherwise.span,
-                    "an `expect`'s `else` leaves: `return` a value, or a block whose last line does",
+                    "a line's `else` leaves: `return` a value, or a block whose last line does",
                 )
                 .label("goes on rather than leaving"));
             };
@@ -903,7 +903,7 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
         }
         ExprKind::Return(_) => Err(error(
             expr.span,
-            "`return` stands only where an `expect` leaves: `expect c else return x`",
+            "`return` stands only where a line's `else` leaves: `c else return x`",
         )),
     }
 }
@@ -973,7 +973,7 @@ fn passed_on(expr: &Expr) -> Option<Span> {
         ExprKind::Match(value, arms) => passed_on(value).or_else(|| arms_passed_on(arms)),
         ExprKind::Arms(arms) => arms_passed_on(arms),
         ExprKind::Return(value) => passed_on(value),
-        ExprKind::Expect {
+        ExprKind::Else {
             condition,
             otherwise,
             rest,

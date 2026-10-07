@@ -1247,13 +1247,9 @@
         }
       ]
     },
-    "expect_line": {
+    "else_line": {
       "type": "SEQ",
       "members": [
-        {
-          "type": "STRING",
-          "value": "expect"
-        },
         {
           "type": "FIELD",
           "name": "condition",
@@ -2233,7 +2229,7 @@
                   },
                   {
                     "type": "SYMBOL",
-                    "name": "expect_line"
+                    "name": "else_line"
                   },
                   {
                     "type": "SYMBOL",

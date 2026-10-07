@@ -1,9 +1,9 @@
 import std.host {Host}
 
-halved : Nat -> Nat
-halved(n) -> (
-  expect n > 0 else 0
-  n / 2
+head : List(Nat) -> Nat
+head(xs) -> (
+  xs is [x, *_] else return x
+  x
 )
 
 main! : Host -> []

@@ -399,32 +399,38 @@ impl Parser<'_> {
 
     /// `statement`: a value, or `pattern = value`.
     fn statement(&mut self) -> Parsed<Statement> {
-        if self.peek() == Kind::KwExpect {
-            return self.expect_line();
-        }
+        self.no_expect_in_a_block()?;
         let value = self.expr()?;
         self.statement_after(value)
     }
 
-    /// `expect condition else otherwise`, a block's line.
-    fn expect_line(&mut self) -> Parsed<Statement> {
-        let keyword = self.bump();
-        let condition = self.expr()?;
-        self.expect(Kind::KwElse, "`else`")?;
-        let otherwise = self.expr()?;
-        Ok(Statement::Expect(
-            keyword.span().through(otherwise.span),
-            condition,
-            otherwise,
-        ))
+    /// A block's line beginning `expect`, which a later assumption will be.
+    fn no_expect_in_a_block(&self) -> Parsed<()> {
+        if self.peek() != Kind::KwExpect {
+            return Ok(());
+        }
+        Err(SyntaxError::new(
+            self.tokens[self.at].span(),
+            "`expect` stands only at the top level, as a test",
+        )
+        .help("to leave where a condition fails, write `condition else return value`"))
     }
 
-    /// The statement `value` begins.
+    /// The statement `value` begins: a binding, `condition else otherwise`,
+    /// or a value.
     fn statement_after(&mut self, value: Expr) -> Parsed<Statement> {
-        Ok(match self.eat(Kind::Eq) {
-            Some(_) => Statement::Binding(value, self.expr()?),
-            None => Statement::Value(value),
-        })
+        if self.eat(Kind::Eq).is_some() {
+            return Ok(Statement::Binding(value, self.expr()?));
+        }
+        if self.eat(Kind::KwElse).is_some() {
+            let otherwise = self.expr()?;
+            return Ok(Statement::Else(
+                value.span.through(otherwise.span),
+                value,
+                otherwise,
+            ));
+        }
+        Ok(Statement::Value(value))
     }
 
     fn package(&mut self) -> Parsed<HeaderDecl> {
@@ -1033,14 +1039,11 @@ impl Parser<'_> {
     /// tuple, `=` or a line's end a block, and `)` one value grouped.
     fn parenthesized(&mut self) -> Parsed<Expr> {
         let open = self.bump();
-        if self.peek() == Kind::KwExpect {
-            let first = self.expect_line()?;
-            return self.lines_from(open, first);
-        }
+        self.no_expect_in_a_block()?;
         let first = self.expr()?;
         match self.peek() {
             Kind::Comma => self.tuple(open, first),
-            Kind::Eq | Kind::Newline => self.block(open, first),
+            Kind::Eq | Kind::KwElse | Kind::Newline => self.block(open, first),
             Kind::Arrow | Kind::KwIf => self.arms(open, first),
             _ => {
                 self.note("`,`");

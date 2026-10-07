@@ -69,20 +69,20 @@ expect last([4, 7]) == 7 & last([4, 70]) == 0 & last([]) == 0
 expect inner(Ok(6)) == 6 & inner(Err(Gone)) == 0
 expect [1, 2] is [_, *_] & !([] is [_, *_])
 
-# `expect condition else …`, a block's line: the lines after it go on where
-# the condition holds, seeing what it bound, and the `else` leaves where it
+# `condition else …`, a block's line: the lines after it go on where the
+# condition holds, seeing what it bound, and the `else` leaves where it
 # fails, by `return`, or by a block whose last line returns.
 head_doubled : List(Nat) -> Nat
 head_doubled(xs) -> (
-  expect xs is [x, *_] else return 0
+  xs is [x, *_] else return 0
   doubled = x * 2
   doubled + 1
 )
 
 checked : (Str, Nat) -> Result(Nat, [Invalid])
 checked(name, limit) -> (
-  expect name.starts_with("_") else return Err(Invalid)
-  expect Nat.from_str(name.drop_prefix("_")) is Ok(n) & n < limit else (
+  name.starts_with("_") else return Err(Invalid)
+  Nat.from_str(name.drop_prefix("_")) is Ok(n) & n < limit else (
     reason = Invalid
     return Err(reason)
   )

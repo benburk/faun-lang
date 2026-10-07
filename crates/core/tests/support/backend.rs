@@ -1121,7 +1121,7 @@ fn an_expect_goes_on_or_leaves() {
 
          first_or : (List(Nat), Nat) -> Nat
          first_or(xs, fallback) -> (
-           expect xs is [x, *_] else return fallback
+           xs is [x, *_] else return fallback
            x * 10
          )
 

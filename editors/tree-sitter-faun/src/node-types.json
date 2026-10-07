@@ -351,7 +351,7 @@
           "named": true
         },
         {
-          "type": "expect_line",
+          "type": "else_line",
           "named": true
         }
       ]
@@ -555,6 +555,32 @@
     }
   },
   {
+    "type": "else_line",
+    "named": true,
+    "fields": {
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "otherwise": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "equal_pattern",
     "named": true,
     "fields": {
@@ -583,32 +609,6 @@
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "expect_line",
-    "named": true,
-    "fields": {
-      "condition": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "_expression",
-            "named": true
-          }
-        ]
-      },
-      "otherwise": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "_expression",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {
