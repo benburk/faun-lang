@@ -1187,6 +1187,51 @@ fn patterns_name_wholes_compare_and_bind_from_guards() {
     assert_eq!(answers, [12, 122]);
 }
 
+/// An `is` with arms answers by the first arm whose pattern matches and
+/// whose guard holds, as a value the body goes on from and as a clause's
+/// answer.
+#[test]
+fn arms_answer_by_the_first_that_matches() {
+    let program = read(
+        "import std.host {Host}
+
+         Shape : [Circle(Nat), Square(Nat), Dot]
+
+         area : Shape -> Nat
+         area(shape) -> shape is (
+           Circle(r) -> 3 * r * r
+           Square(s) -> s * s
+           Dot -> 0
+         )
+
+         sized : List(Nat) -> Nat
+         sized(xs) -> xs.first() is (
+           Ok(n) if n > 1 -> 100
+           Ok(1 | 0) -> 10
+           Ok(_) -> 5
+           Err(_) -> 1
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           shape = if n > 1 then Square(n) else Dot
+           counted = sized([n]) + sized([])
+           answer = area(shape) + counted
+           host.exit!(U8.of_nat(answer))
+         )",
+    )
+    .expect("a program choosing by arms");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers: Vec<_> = execute_counts(&program, &[1, 2])
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(answers, [11, 105]);
+}
+
 /// The arguments a program is run with are a list of strings, its own name
 /// first: a greeting names the first after it, or the world where there is
 /// none, and the count is how many there are.

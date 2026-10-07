@@ -494,6 +494,29 @@ test, outside any `|`. A binding cannot fail, so neither form stands in a
 binding's or a lambda's pattern. A value holding a resource is named whole
 or taken apart, not both.
 
+## Arms
+
+`value is ( arms )` answers by the first arm, a line apiece, whose pattern
+matches the value and whose guard, `if condition`, holds. What an arm's
+pattern and its guard's tests bind is seen by its value alone. The arms
+must cover every value, as a definition's clauses must, a guarded arm
+covering nothing; every arm answers one type.
+
+```
+area(shape) -> shape is (
+  Circle(r) -> 3 * r * r
+  Rect(w, h) -> w * h
+  Dot -> 0
+)
+```
+
+An arm takes every pattern a clause's parameter does, alternatives
+unparenthesized, `Celsius(c) | Kelvin(c) -> c`, and its value may be a
+block. As an `if`'s branches, arms may leave by `?` or an `expect` where
+the `is` answers its clause. Clauses suit a body that is the dispatch;
+arms suit a value worked out partway through one. Not yet: arms of a value
+holding a resource.
+
 ## Expect
 
 A block's line `expect condition else …` goes on where the condition holds,

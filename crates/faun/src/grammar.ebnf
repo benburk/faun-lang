@@ -113,7 +113,12 @@ exprs             = expr [ "," [ exprs ] ] ;
    or a line's end a block, whose lines are bindings and then its answer,
    and `)` one value grouped. *)
 parenthesized     = expect-line NEWLINE statements
-                  | expr [ "," [ exprs ] | "=" expr NEWLINE statements | NEWLINE statements ] ;
+                  | expr [ "," [ exprs ] | "=" expr NEWLINE statements | NEWLINE statements
+                         | arm-tail { NEWLINE arm } ] ;
+(* Arms a line apiece, which an `is` takes: `x is (P -> a` … `)`. Arms no
+   `is` takes are refused after parsing. *)
+arm               = expr arm-tail ;
+arm-tail          = [ "if" expr ] "->" expr ;
 statements        = expect-line NEWLINE statements
                   | expr [ "=" expr NEWLINE statements | NEWLINE statements ] ;
 (* A block's line going on where its condition holds, the lines after it

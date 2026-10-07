@@ -199,6 +199,12 @@ merge([x, *xs], right is [y, *_]) if x <= y -> [x, *merge(xs, right)]
   `then` to each side. Guards asking two parameters' parts equal became a name written twice, and clauses
   rebuilding what their head took apart name it whole, as the standard
   list's merge does; the parser library's number reader lost two clauses.
+- **Arms,** 2026-10-07: `value is ( arms )`, a line apiece, with guards.
+  Arms read where a parenthesized expression's first one is followed by
+  `->` or `if`, and are refused after parsing where no `is` takes them. One
+  decision tests the value for every arm, a row for each alternative, each
+  arm's body a block as an `if`'s branch is; arms cover every value, as
+  clauses do, and a resource is not yet taken apart by them.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.

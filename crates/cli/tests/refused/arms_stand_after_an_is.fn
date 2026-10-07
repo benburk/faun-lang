@@ -1,0 +1,13 @@
+import std.host {Host}
+
+f : Nat -> Nat
+f(n) -> (
+  arms = (
+    0 -> 1
+    _ -> 2
+  )
+  arms
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

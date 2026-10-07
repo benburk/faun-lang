@@ -273,6 +273,14 @@ pub struct Clause {
     pub body: Body,
 }
 
+/// `pattern if guard -> body`: one way an `is` with arms goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Arm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Expr,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Body {
     pub bindings: Vec<Binding>,
@@ -458,6 +466,12 @@ pub enum ExprKind {
     /// `value is pattern`: whether it matches, binding the pattern's names
     /// where it is known to have.
     Is(Box<Expr>, Pattern),
+    /// `value is ( arms )`: the first arm whose pattern matches and whose
+    /// guard holds answers, what both bind seen by its body.
+    Match(Box<Expr>, Vec<Arm>),
+    /// `( pattern -> value` … `)`: arms, read before an `is` takes them,
+    /// and refused by the parser wherever no `is` does.
+    Arms(Vec<Arm>),
     /// A block's line `expect condition else otherwise`, holding the lines
     /// after it: where the condition holds, those lines answer, seeing what
     /// it bound; where it fails, `otherwise` leaves.

@@ -1,0 +1,5 @@
+error: arms stand after an `is`, which says what they match: `value is (P -> a` … `)`
+ --> arms_stand_after_an_is.fn:6:5
+  |
+6 |     0 -> 1
+  |     ^

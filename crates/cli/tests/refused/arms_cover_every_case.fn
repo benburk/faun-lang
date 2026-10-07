@@ -1,0 +1,13 @@
+import std.host {Host}
+
+Shape : [Circle(Nat), Square(Nat), Dot]
+
+area : Shape -> Nat
+area(shape) -> shape is (
+  Circle(r) -> r
+  Square(s) if s > 1 -> s
+  Dot -> 0
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

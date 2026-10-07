@@ -1,0 +1,13 @@
+import std.host {Host}
+
+f : Result(Nat, [Gone]) -> Nat
+f(r) -> (
+  base = r is (
+    Ok(v) -> v
+    Err(_) -> 0
+  )
+  base + v
+)
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

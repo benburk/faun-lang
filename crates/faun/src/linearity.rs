@@ -748,6 +748,10 @@ impl Walk<'_, '_> {
                 self.tested(value);
                 Vec::new()
             }
+            ExprKind::Match(value, arms) => {
+                self.tested(value);
+                self.arms(expr, arms)
+            }
             // A block's bindings hold what they bind, as a body's do, and
             // its answer is what it is worth.
             ExprKind::Block(block) => {
@@ -793,14 +797,50 @@ impl Walk<'_, '_> {
         self.lend(condition);
         let before: Vec<State> = self.held.iter().map(|held| held.state).collect();
         let mut answered = self.value(yes);
-        let taken: Vec<State> = self.held[..before.len()]
+        let taken = self.restored(&before);
+        answered.extend(self.value(no));
+        self.agreed(expr, taken);
+        answered
+    }
+
+    /// An `is` with arms: each arm, its guards looked at, walked from what
+    /// was held before it, as an `if`'s branches are, and every arm must
+    /// use up what the others do.
+    fn arms(&mut self, expr: &d::Expr, arms: &[d::Arm]) -> Vec<Origin> {
+        let before: Vec<State> = self.held.iter().map(|held| held.state).collect();
+        let mut answered = Vec::new();
+        let mut taken = Vec::new();
+        for (at, arm) in arms.iter().enumerate() {
+            if at > 0 {
+                taken.push(self.restored(&before));
+            }
+            for guard in arm.rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+                self.lend(guard);
+            }
+            answered.extend(self.value(&arm.body));
+        }
+        for each in taken {
+            self.agreed(expr, each);
+        }
+        answered
+    }
+
+    /// What was held before a branch, and how a branch walked since left
+    /// it, put back to what it was.
+    fn restored(&mut self, before: &[State]) -> Vec<State> {
+        let taken = self.held[..before.len()]
             .iter()
             .map(|held| held.state)
             .collect();
-        for (held, state) in self.held.iter_mut().zip(&before) {
+        for (held, state) in self.held.iter_mut().zip(before) {
             held.state = *state;
         }
-        answered.extend(self.value(no));
+        taken
+    }
+
+    /// What one branch left, `taken`, agreed with what the one walked last
+    /// left, refusing what one used up and the other did not.
+    fn agreed(&mut self, expr: &d::Expr, taken: Vec<State>) {
         for (at, yes) in taken.into_iter().enumerate() {
             self.held[at].state = match (yes, self.held[at].state) {
                 (State::Held, State::Gone(gone)) | (State::Gone(gone), State::Held) => {
@@ -813,7 +853,6 @@ impl Walk<'_, '_> {
                 (State::Held, State::Held) => State::Held,
             };
         }
-        answered
     }
 
     /// A resource held at `held` used up at `gone`, in one branch of the
@@ -832,6 +871,17 @@ impl Walk<'_, '_> {
                     .and_then(|ty| self.facts.resource_in(ty)),
             });
         let resource = self.facts.called(resource, "resource");
+        if matches!(expr.kind, ExprKind::Match(..)) {
+            return Refusal {
+                at: Some(gone),
+                message: format!(
+                    "this {resource} is used up in one arm of an `is` and not another"
+                ),
+                label: "used up here".to_owned(),
+                also: Some((place(expr), "another arm still holds it".to_owned())),
+                help: Some("use it up in every arm, or in none".to_owned()),
+            };
+        }
         Refusal {
             at: Some(gone),
             message: format!(

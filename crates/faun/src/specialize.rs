@@ -253,8 +253,19 @@ pub(crate) enum ExprKind {
     /// each choice of the pattern's alternatives, with the tests its
     /// literals ask.
     Is(Box<Expr>, Vec<(Pattern, Option<Expr>)>),
+    /// `value is ( arms )`; see [`crate::hir::ExprKind::Match`].
+    Match(Box<Expr>, Vec<Arm>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     Block(Box<Body>),
+}
+
+/// One arm: a row for each choice of its pattern's alternatives, each
+/// asking the tests its literals do and then the arm's guard, and the
+/// body each answers.
+#[derive(Clone, Debug)]
+pub(crate) struct Arm {
+    pub(crate) rows: Vec<(Pattern, Option<Expr>)>,
+    pub(crate) body: Expr,
 }
 
 /// Specialize what one parameterless `entry` reaches, and nothing else.
@@ -1384,6 +1395,33 @@ impl<'a> Specializer<'a> {
                 }
                 self.test_locals = next;
                 ExprKind::Is(Box::new(value), rows)
+            }
+            t::ExprKind::Match(value, arms) => {
+                let value = self.expr(module, value, substitution)?;
+                let mut specialized = Vec::with_capacity(arms.len());
+                for arm in arms {
+                    let guard = arm
+                        .guard
+                        .as_ref()
+                        .map(|guard| self.expr(module, guard, substitution))
+                        .transpose()?;
+                    let mut next = self.test_locals;
+                    let mut rows = Vec::new();
+                    for row in t::Pattern::rows(std::slice::from_ref(&arm.pattern)) {
+                        let mut tests = Vec::new();
+                        let pattern = self.tested(
+                            (module, span),
+                            &row[0],
+                            &value.ty,
+                            (&mut next, &mut tests),
+                        )?;
+                        rows.push((pattern, self.joined(module, span, tests, guard.clone())?));
+                    }
+                    self.test_locals = next;
+                    let body = self.expr(module, &arm.body, substitution)?;
+                    specialized.push(Arm { rows, body });
+                }
+                ExprKind::Match(Box::new(value), specialized)
             }
             t::ExprKind::If(condition, yes, no) => ExprKind::If(
                 Box::new(self.expr(module, condition, substitution)?),

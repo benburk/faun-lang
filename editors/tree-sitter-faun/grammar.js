@@ -291,6 +291,17 @@ module.exports = grammar({
       field('pattern', $._operand),
     )),
 
+    // `value is ( arms )`: the first arm that matches answers, a line
+    // apiece. Arms no `is` takes are refused after parsing.
+    arms: $ => seq('(', $.arm, repeat(seq($._block_newline, $.arm)), ')'),
+
+    arm: $ => seq(
+      field('pattern', $._expression),
+      optional(seq('if', field('guard', $._expression))),
+      '->',
+      field('value', $._expression),
+    ),
+
     _operand: $ => choice($.unary_expression, $.equal_pattern, $._postfix),
 
     // A pattern's: a value equal to the name.
@@ -346,6 +357,7 @@ module.exports = grammar({
       $.string,
       $.tuple,
       $.block,
+      $.arms,
       $.list,
       $.record,
     ),

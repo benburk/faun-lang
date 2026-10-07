@@ -319,6 +319,38 @@ impl Compiler<'_> {
         })
     }
 
+    /// `subject is ( arms )`, as a decision on the subject: a row for each
+    /// alternative of each arm, in order, each answering its arm's body.
+    /// Checking found the arms cover every value.
+    fn arms(&self, subject: Expr, arms: Vec<d::Arm>) -> Result<Bound, LowerError> {
+        let subjects = [Subject {
+            value: Value(0),
+            ty: subject.ty.clone(),
+        }];
+        let mut rows = Vec::new();
+        for arm in arms {
+            let ExprKind::Block(body) = arm.body.kind else {
+                unreachable!("hoisting makes each arm a block")
+            };
+            let body = self.compiled(*body)?;
+            for (pattern, guard) in arm.rows {
+                rows.push(Row {
+                    patterns: vec![pattern],
+                    guard: guard
+                        .map(|guard| asked(guard, self.prelude))
+                        .unwrap_or_default(),
+                    body: body.clone(),
+                    locals: HashMap::new(),
+                });
+            }
+        }
+        let decision = self.plan(&rows, &subjects, &mut 1)?;
+        Ok(Bound::Match {
+            subject,
+            decision: Box::new(decision),
+        })
+    }
+
     /// A body [`hoisted`] already, whose `if`s each stand alone on a line,
     /// their branches hoisted too.
     fn compiled(&self, body: d::Body) -> Result<Body, LowerError> {
@@ -349,6 +381,7 @@ impl Compiler<'_> {
                             },
                         }
                     }
+                    ExprKind::Match(subject, arms) => self.arms(*subject, arms)?,
                     _ => Bound::Value(binding.value),
                 };
                 Ok(Binding { unpack, value })
@@ -984,6 +1017,16 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
         ExprKind::DirectCall(key, arguments) => ExprKind::DirectCall(key, each(arguments)),
         ExprKind::Widen(value) => ExprKind::Widen(one(value)),
         ExprKind::Try(value) => ExprKind::Try(one(value)),
+        // A guard is asked a part at a time where its arm is planned.
+        ExprKind::Match(value, arms) => ExprKind::Match(
+            one(value),
+            arms.into_iter()
+                .map(|arm| d::Arm {
+                    rows: arm.rows,
+                    body: tested(arm.body, prelude),
+                })
+                .collect(),
+        ),
         ExprKind::Block(body) => ExprKind::Block(Box::new(d::Body {
             bindings: body
                 .bindings
@@ -1185,6 +1228,41 @@ fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> 
                     span: expression.span,
                     ty: expression.ty.clone(),
                     kind: ExprKind::If(Box::new(condition), Box::new(yes), Box::new(no)),
+                },
+            });
+            ExprKind::Local(local)
+        }
+        // As an `if`: the value worked out ahead, each arm's body a block
+        // of its own, worked out only where it is chosen.
+        ExprKind::Match(value, arms) => {
+            let value = lift(*value);
+            let arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let body = d::Body {
+                        bindings: Vec::new(),
+                        result: arm.body,
+                    };
+                    d::Arm {
+                        rows: arm.rows,
+                        body: Expr {
+                            module: expression.module,
+                            span: expression.span,
+                            ty: expression.ty.clone(),
+                            kind: ExprKind::Block(Box::new(hoisted(body, fresh))),
+                        },
+                    }
+                })
+                .collect();
+            let local = LocalId(u32::MAX - *fresh);
+            *fresh += 1;
+            bindings.push(d::Binding {
+                pattern: Pattern::Bind(local),
+                value: Expr {
+                    module: expression.module,
+                    span: expression.span,
+                    ty: expression.ty.clone(),
+                    kind: ExprKind::Match(Box::new(value), arms),
                 },
             });
             ExprKind::Local(local)

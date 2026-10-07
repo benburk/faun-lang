@@ -99,3 +99,21 @@ size : Shape -> Nat
 size(shape) -> if shape is Circle(n) | shape is Square(n) then n else 0
 
 expect size(Circle(3)) == 3 & size(Square(4)) == 4 & size(Dot) == 0
+
+# `value is ( arms )`: the first arm whose pattern matches, and whose guard
+# holds, answers. An arm is a line; its value may be a block.
+Reading : [Celsius(Nat), Kelvin(Nat), Missing]
+
+described : Reading -> Str
+described(reading) -> reading is (
+  Celsius(0) -> "freezing"
+  Celsius(c) if c > 30 -> "hot"
+  Celsius(c) | Kelvin(c) -> "${c} degrees"
+  Missing -> (
+    note = "no reading"
+    note
+  )
+)
+
+expect described(Celsius(0)) == "freezing" & described(Celsius(35)) == "hot"
+expect described(Kelvin(300)) == "300 degrees" & described(Missing) == "no reading"

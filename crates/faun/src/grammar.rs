@@ -12,8 +12,8 @@
 //! line, so one file's errors are all found at once.
 
 use super::ast::{
-    Align, BinaryOp, Bound, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl, Exposure,
-    Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span,
+    Align, Arm, BinaryOp, Bound, Constraint, ConstructorDecl, Dependency, Export, ExportsDecl,
+    Exposure, Expr, ExprKind, HeaderDecl, HeaderKind, ImportDecl, Name, Numeral, NumeralKind, Span,
     StringPart, Type, UnaryOp, Width,
 };
 use super::diagnostic::{Advice, Advised};
@@ -798,9 +798,15 @@ impl Parser<'_> {
     fn is(&mut self, value: Expr) -> Parsed<Expr> {
         self.bump();
         let written = self.operand()?;
+        let next = self.tokens[self.at];
+        if let ExprKind::Arms(arms) = written.kind {
+            return Ok(Expr {
+                span: value.span.through(written.span),
+                kind: ExprKind::Match(Box::new(value), arms),
+            });
+        }
         let pattern = lines::pattern(written, self.source).map_err(SyntaxError::from)?;
         let span = value.span.through(pattern.span());
-        let next = self.tokens[self.at];
         if next.kind == Kind::KwIs {
             return Err(SyntaxError::new(
                 next.span(),
@@ -1035,9 +1041,11 @@ impl Parser<'_> {
         match self.peek() {
             Kind::Comma => self.tuple(open, first),
             Kind::Eq | Kind::Newline => self.block(open, first),
+            Kind::Arrow | Kind::KwIf => self.arms(open, first),
             _ => {
                 self.note("`,`");
                 self.note("`=`");
+                self.note("`->`");
                 let close = self.expect(Kind::RParen, "`)`")?;
                 Ok(Expr {
                     span: open.span().through(close.span()),
@@ -1045,6 +1053,38 @@ impl Parser<'_> {
                 })
             }
         }
+    }
+
+    /// Arms a line apiece, after the first one's pattern, for an `is`.
+    fn arms(&mut self, open: Token, first: Expr) -> Parsed<Expr> {
+        let mut arms = vec![self.arm(first)?];
+        while self.eat(Kind::Newline).is_some() {
+            let pattern = self.expr()?;
+            arms.push(self.arm(pattern)?);
+        }
+        self.note("a new line");
+        let close = self.expect(Kind::RParen, "`)`")?;
+        Ok(Expr {
+            span: open.span().through(close.span()),
+            kind: ExprKind::Arms(arms),
+        })
+    }
+
+    /// An arm after its pattern: its guard, if any, and its value.
+    fn arm(&mut self, written: Expr) -> Parsed<Arm> {
+        let guard = match self.eat(Kind::KwIf) {
+            Some(_) => Some(self.expr()?),
+            None => None,
+        };
+        self.note("`if`");
+        self.expect(Kind::Arrow, "`->`")?;
+        let body = self.expr()?;
+        let pattern = lines::pattern(written, self.source).map_err(SyntaxError::from)?;
+        Ok(Arm {
+            pattern,
+            guard,
+            body,
+        })
     }
 
     /// The rest of a tuple, after its first member.

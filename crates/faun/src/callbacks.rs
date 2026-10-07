@@ -467,6 +467,28 @@ impl<'a> Callbacks<'a> {
                 Box::new(self.expr(frame, yes)?),
                 Box::new(self.expr(frame, no)?),
             ),
+            ExprKind::Match(value, arms) => d::ExprKind::Match(
+                Box::new(self.expr(frame, value)?),
+                arms.iter()
+                    .map(|arm| {
+                        let rows = arm
+                            .rows
+                            .iter()
+                            .map(|(pattern, guard)| {
+                                let guard = guard
+                                    .as_ref()
+                                    .map(|guard| self.expr(frame, guard))
+                                    .transpose()?;
+                                Ok((pattern.clone(), guard))
+                            })
+                            .collect::<Result<_, LowerError>>()?;
+                        Ok(d::Arm {
+                            rows,
+                            body: self.expr(frame, &arm.body)?,
+                        })
+                    })
+                    .collect::<Result<_, LowerError>>()?,
+            ),
             ExprKind::DirectCall(key, arguments) => self.call(frame, key, arguments)?,
             ExprKind::Invoke(head, arguments) => {
                 let (callback, carried) = callback(frame, head)?;
@@ -696,6 +718,15 @@ fn for_each<'a>(expression: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
                 for_each(guard, visit);
             }
         }
+        ExprKind::Match(value, arms) => {
+            for_each(value, visit);
+            for arm in arms {
+                for guard in arm.rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+                    for_each(guard, visit);
+                }
+                for_each(&arm.body, visit);
+            }
+        }
         ExprKind::Invoke(head, arguments) => {
             for_each(head, visit);
             for each in arguments {
@@ -799,12 +830,18 @@ fn captures(patterns: &[Pattern], body: &Expr) -> Vec<(LocalId, Type)> {
         pattern_locals(pattern, &mut bound);
     }
     // What a test binds is bound inside the body, where resolution scoped it.
-    for_each(body, &mut |expression| {
-        if let ExprKind::Is(_, rows) = &expression.kind {
+    for_each(body, &mut |expression| match &expression.kind {
+        ExprKind::Is(_, rows) => {
             for (pattern, _) in rows {
                 pattern_locals(pattern, &mut bound);
             }
         }
+        ExprKind::Match(_, arms) => {
+            for (pattern, _) in arms.iter().flat_map(|arm| &arm.rows) {
+                pattern_locals(pattern, &mut bound);
+            }
+        }
+        _ => {}
     });
     let mut found = BTreeMap::new();
     free_locals(body, &bound, &mut found);
@@ -848,6 +885,15 @@ fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap
             free_locals(value, bound, found);
             for guard in rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
                 free_locals(guard, bound, found);
+            }
+        }
+        S::Match(value, arms) => {
+            free_locals(value, bound, found);
+            for arm in arms {
+                for guard in arm.rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+                    free_locals(guard, bound, found);
+                }
+                free_locals(&arm.body, bound, found);
             }
         }
         S::Invoke(head, arguments) => {

@@ -338,6 +338,15 @@ fn product<D: Clone>(columns: Vec<Vec<Pattern<D>>>) -> Vec<Vec<Pattern<D>>> {
     })
 }
 
+/// One way a `value is ( arms )` goes: its guard asks the equalities its
+/// pattern does first, as a clause's does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Arm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Expr,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Body {
     pub bindings: Vec<Binding>,
@@ -394,6 +403,9 @@ pub enum ExprKind {
     /// seen where resolution scoped it: along an `&` chain, and in the
     /// `then` branch of an `if` whose condition this is part of.
     Is(Box<Expr>, Pattern),
+    /// `value is ( arms )`: the first arm that matches answers. What an
+    /// arm's pattern binds is seen by its guard and its body.
+    Match(Box<Expr>, Vec<Arm>),
     /// Bindings, then the answer: a block written inside an expression.
     /// Its locals are the clause's, numbered apart from every other.
     Block(Box<Body>),

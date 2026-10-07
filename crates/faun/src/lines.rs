@@ -13,9 +13,9 @@
 //! is; such a form is refused wherever it stays an expression.
 
 use super::ast::{
-    AliasDecl, BinaryOp, Binding, Body, Bound, Clause, Constraint, ConstraintAliasDecl, DataDecl,
-    DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item, MethodItem,
-    Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
+    AliasDecl, Arm, BinaryOp, Binding, Body, Bound, Clause, Constraint, ConstraintAliasDecl,
+    DataDecl, DataRepresentation, ExportsDecl, Expr, ExprKind, HeaderDecl, ImportDecl, Item,
+    MethodItem, Name, NumeralKind, Pattern, SignatureDecl, Span, StringPart, Type, UnaryOp,
 };
 use super::diagnostic::{Advice, Advised};
 
@@ -818,6 +818,31 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             expression(right, source, false)
         }
         ExprKind::Is(value, _) => expression(value, source, false),
+        ExprKind::Arms(arms) => Err(error(
+            arms.first().map_or(expr.span, |arm| arm.pattern.span()),
+            "arms stand after an `is`, which says what they match: `value is (P -> a` … `)`",
+        )),
+        // An arm is a branch: where the `is` answers the clause, it may
+        // leave it.
+        ExprKind::Match(value, arms) => {
+            expression(value, source, false)?;
+            for arm in arms {
+                if !answering && let Some(span) = passed_on(&arm.body) {
+                    return Err(
+                        error(span, "an arm is a value, so `?` does not leave from it")
+                            .label("would leave here")
+                            .help(
+                                "answer a `Result` from every arm, and ask `?` of the whole `is`",
+                            ),
+                    );
+                }
+                if let Some(guard) = &arm.guard {
+                    expression(guard, source, false)?;
+                }
+                expression(&arm.body, source, answering)?;
+            }
+            Ok(())
+        }
         // A branch that answers the clause may leave it, as its body may;
         // one whose value goes on into more of the body cannot, yet.
         ExprKind::If(condition, yes, no) => {
@@ -904,6 +929,12 @@ fn is_constructor(expr: &Expr, source: &str) -> bool {
 
 /// Where `expr` passes a failure on with `?` from the clause it stands in:
 /// a `?` in a lambda answers the lambda, so one there is not.
+/// Where a `?` in `arms`, in a guard or a value, would leave from.
+fn arms_passed_on(arms: &[Arm]) -> Option<Span> {
+    arms.iter()
+        .find_map(|arm| arm.guard.iter().chain([&arm.body]).find_map(passed_on))
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one arm for each kind of expression, to reach every one it holds"
@@ -939,6 +970,8 @@ fn passed_on(expr: &Expr) -> Option<Span> {
         }
         ExprKind::Binary(_, left, right) => each([&**left, &**right]),
         ExprKind::If(condition, yes, no) => each([&**condition, &**yes, &**no]),
+        ExprKind::Match(value, arms) => passed_on(value).or_else(|| arms_passed_on(arms)),
+        ExprKind::Arms(arms) => arms_passed_on(arms),
         ExprKind::Return(value) => passed_on(value),
         ExprKind::Expect {
             condition,

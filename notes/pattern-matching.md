@@ -25,7 +25,8 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   skipped in optimized builds, binding nothing, is for later; until then
   `expect` in a body takes an `else`.
 - **Arms after `is`** are a line each; an arm may be a block, but nothing
-  leaves from inside one yet. Arms on a bare parameter are left to style:
+  leaves from inside one yet but where the `is` answers its clause. Built,
+  with guards, 2026-10-07. Arms on a bare parameter are left to style:
   clauses by default, arms where the other parameters would repeat on every
   clause.
 - **Many ways on a value** are `is` with arms, `x is ( P -> … )`, with no

@@ -1,4 +1,5 @@
-//! Whether each definition's clauses cover every value its parameters hold.
+//! Whether each definition's clauses cover every value its parameters hold,
+//! and each `is` with arms every value it tests.
 //!
 //! This runs on checked HIR, before specialization, so a generic definition
 //! nothing calls is judged too: whether `[]` and `[x, *rest]` cover a list
@@ -70,8 +71,103 @@ pub(crate) fn exhaustive(
                 .label(format!("no clause matches {missing}"))
                 .help(format!("add a clause matching {missing}")));
         }
+        let mut found = Vec::new();
+        for clause in clauses {
+            for expression in clause.guard.iter().chain(
+                clause
+                    .body
+                    .bindings
+                    .iter()
+                    .map(|binding| &binding.value)
+                    .chain([&clause.body.result]),
+            ) {
+                with_arms(expression, &mut found);
+            }
+        }
+        for (value, arms) in found {
+            let rows = arms
+                .iter()
+                .filter(|arm| arm.guard.is_none())
+                .flat_map(|arm| t::Pattern::rows(std::slice::from_ref(&arm.pattern)))
+                .map(|row| row.iter().map(|p| checker.pattern(p)).collect())
+                .collect();
+            if let Some(missing) = checker.missing(rows, &[Some(value.ty.clone())]) {
+                let missing = format!("`{}`", checker.render_all(&missing, symbols));
+                return Err(failure(
+                    function.module,
+                    value.span,
+                    "this `is` does not cover every case",
+                )
+                .label(format!("no arm matches {missing}"))
+                .help(format!(
+                    "add an arm matching {missing}, or `_ -> …` for the rest"
+                )));
+            }
+        }
     }
     Ok(())
+}
+
+/// Each `is` with arms in `expression`, at any depth: the value it tests
+/// and its arms.
+fn with_arms<'e>(expression: &'e t::Expr, found: &mut Vec<(&'e t::Expr, &'e [t::Arm])>) {
+    let mut each = |inner: &'e t::Expr| with_arms(inner, found);
+    match &expression.kind {
+        t::ExprKind::Match(value, arms) => {
+            found.push((value, arms));
+            with_arms(value, found);
+            for arm in arms {
+                for inner in arm.guard.iter().chain([&arm.body]) {
+                    with_arms(inner, found);
+                }
+            }
+        }
+        t::ExprKind::Construct(_, list)
+        | t::ExprKind::Tuple(list)
+        | t::ExprKind::Method(_, list) => {
+            for inner in list {
+                each(inner);
+            }
+        }
+        t::ExprKind::Record(fields) => {
+            for (_, field) in fields {
+                each(field);
+            }
+        }
+        t::ExprKind::Update(base, fields) => {
+            each(base);
+            for (_, field) in fields {
+                each(field);
+            }
+        }
+        t::ExprKind::Call(head, arguments) => {
+            each(head);
+            for argument in arguments {
+                each(argument);
+            }
+        }
+        t::ExprKind::Lambda(_, inner)
+        | t::ExprKind::Is(inner, _)
+        | t::ExprKind::Project(inner, _)
+        | t::ExprKind::Widen(inner)
+        | t::ExprKind::Try(inner) => each(inner),
+        t::ExprKind::If(condition, yes, no) => {
+            for inner in [condition, yes, no] {
+                each(inner);
+            }
+        }
+        t::ExprKind::Block(body) => {
+            for binding in &body.bindings {
+                each(&binding.value);
+            }
+            each(&body.result);
+        }
+        t::ExprKind::Local(_)
+        | t::ExprKind::Function(_)
+        | t::ExprKind::Constructor(_)
+        | t::ExprKind::Literal(_)
+        | t::ExprKind::Numeral(_) => {}
+    }
 }
 
 /// A declared type's parameters, and each constructor's field types

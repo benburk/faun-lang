@@ -90,8 +90,18 @@ pub(crate) enum ExprKind {
     /// compiling makes each a match, the names it binds in scope where it
     /// holds.
     Is(Box<Expr>, Vec<(Pattern, Option<Expr>)>),
+    /// `value is ( arms )`; see [`crate::hir::ExprKind::Match`]. Pattern
+    /// compiling binds it on a line of its own, one decision for every arm.
+    Match(Box<Expr>, Vec<Arm>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     /// Pattern compiling takes its bindings out ahead of the expression it
     /// stands in.
     Block(Box<Body>),
+}
+
+/// One arm; see [`crate::specialize::Arm`].
+#[derive(Clone, Debug)]
+pub(crate) struct Arm {
+    pub(crate) rows: Vec<(Pattern, Option<Expr>)>,
+    pub(crate) body: Expr,
 }

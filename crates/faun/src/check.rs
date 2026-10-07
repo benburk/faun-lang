@@ -2070,6 +2070,33 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// A test's pattern at the type of what it tests, each name it binds
+    /// at one type, as a binding's names are.
+    fn tested_pattern(
+        &mut self,
+        module: ModuleId,
+        pattern: &h::Pattern,
+        tested: &Ty,
+        locals: &mut [Option<Scheme>],
+        span: super::ast::Span,
+    ) -> Result<(), CheckError> {
+        self.pattern(module, pattern, tested, locals, span)?;
+        let mut bound = Vec::new();
+        collect_pattern_locals(pattern, &mut bound);
+        for local in bound {
+            let ty = locals[local.index()]
+                .as_ref()
+                .expect("pattern binding installs its local")
+                .ty
+                .clone();
+            locals[local.index()] = Some(Scheme {
+                variables: Vec::new(),
+                ty,
+            });
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn pattern(
         &mut self,
@@ -2330,21 +2357,26 @@ impl<'a> Checker<'a> {
             // each at one type, as a binding's names are.
             h::ExprKind::Is(value, pattern) => {
                 let tested = self.expr(module, value, locals)?;
-                self.pattern(module, pattern, &tested, locals, value.span)?;
-                let mut bound = Vec::new();
-                collect_pattern_locals(pattern, &mut bound);
-                for local in bound {
-                    let ty = locals[local.index()]
-                        .as_ref()
-                        .expect("pattern binding installs its local")
-                        .ty
-                        .clone();
-                    locals[local.index()] = Some(Scheme {
-                        variables: Vec::new(),
-                        ty,
-                    });
-                }
+                self.tested_pattern(module, pattern, &tested, locals, value.span)?;
                 Ok(self.bool_type())
+            }
+            // Every arm's pattern is the value's, its guard a `Bool`, and its
+            // body answers the one type the `is` does.
+            h::ExprKind::Match(value, arms) => {
+                let tested = self.expr(module, value, locals)?;
+                let answer = self.infer.fresh();
+                for arm in arms {
+                    self.tested_pattern(module, &arm.pattern, &tested, locals, value.span)?;
+                    if let Some(guard) = &arm.guard {
+                        let asked = self.expr(module, guard, locals)?;
+                        let bool_ = self.bool_type();
+                        self.unify_at(module, guard.span, &asked, &bool_)?;
+                    }
+                    let answered = self.expr(module, &arm.body, locals)?;
+                    self.unify_at(module, arm.body.span, &answered, &answer)
+                        .map_err(|error| error.note("every arm of an `is` answers one type"))?;
+                }
+                Ok(answer)
             }
             // Its branches answer one type, the one the `if` answers.
             h::ExprKind::If(condition, yes, no) => {
@@ -4607,6 +4639,16 @@ fn validate_effect_expr(
             validate_effect_expr(module, left, owner_effectful, false, symbols)?;
             validate_effect_expr(module, right, owner_effectful, false, symbols)
         }
+        // An arm stands where the `is` does, as a branch does.
+        h::ExprKind::Match(value, arms) => {
+            validate_effect_expr(module, value, owner_effectful, false, symbols)?;
+            arms.iter().try_for_each(|arm| {
+                if let Some(guard) = &arm.guard {
+                    validate_effect_expr(module, guard, owner_effectful, false, symbols)?;
+                }
+                validate_effect_expr(module, &arm.body, owner_effectful, stands_alone, symbols)
+            })
+        }
         // A branch stands where the `if` does: one of them is taken, there.
         h::ExprKind::If(condition, yes, no) => {
             validate_effect_expr(module, condition, owner_effectful, false, symbols)?;
@@ -4835,6 +4877,14 @@ fn expr_globals(expression: &h::Expr, symbols: &Symbols, output: &mut HashSet<Sy
             }
         }
         h::ExprKind::Is(value, _) => expr_globals(value, symbols, output),
+        h::ExprKind::Match(value, arms) => {
+            expr_globals(value, symbols, output);
+            for arm in arms {
+                for each in arm.guard.iter().chain([&arm.body]) {
+                    expr_globals(each, symbols, output);
+                }
+            }
+        }
         // An operator is its member's spelling, as a dot call is.
         h::ExprKind::Unary(operator, value) => {
             output.extend(symbols.find(unary_member(*operator)));
@@ -5145,6 +5195,12 @@ mod tests {
                 | ExprKind::Try(value) => waiting.push(value),
                 ExprKind::If(condition, yes, no) => {
                     waiting.extend([condition, yes, no].map(|e| &**e));
+                }
+                ExprKind::Match(value, arms) => {
+                    waiting.push(value);
+                    for arm in arms {
+                        waiting.extend(arm.guard.iter().chain([&arm.body]));
+                    }
                 }
                 ExprKind::Block(body) => {
                     waiting.extend(body.bindings.iter().map(|b| &b.value));

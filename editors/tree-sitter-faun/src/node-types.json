@@ -4,6 +4,10 @@
     "named": true,
     "subtypes": [
       {
+        "type": "arms",
+        "named": true
+      },
+      {
         "type": "binary_expression",
         "named": true
       },
@@ -145,6 +149,57 @@
         },
         {
           "type": "lambda",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "arm",
+    "named": true,
+    "fields": {
+      "guard": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "arms",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "arm",
           "named": true
         }
       ]
@@ -320,6 +375,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "arms",
+            "named": true
+          },
           {
             "type": "block",
             "named": true
@@ -662,6 +721,10 @@
         "required": true,
         "types": [
           {
+            "type": "arms",
+            "named": true
+          },
+          {
             "type": "block",
             "named": true
           },
@@ -960,6 +1023,10 @@
         "required": true,
         "types": [
           {
+            "type": "arms",
+            "named": true
+          },
+          {
             "type": "block",
             "named": true
           },
@@ -1079,6 +1146,10 @@
       "multiple": true,
       "required": true,
       "types": [
+        {
+          "type": "arms",
+          "named": true
+        },
         {
           "type": "block",
           "named": true
@@ -1517,6 +1588,10 @@
       "required": true,
       "types": [
         {
+          "type": "arms",
+          "named": true
+        },
+        {
           "type": "block",
           "named": true
         },
@@ -1691,6 +1766,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "arms",
+            "named": true
+          },
           {
             "type": "block",
             "named": true

@@ -333,6 +333,16 @@ impl Elaborator<'_> {
                 h::ExprKind::Is(value, pattern) => {
                     t::ExprKind::Is(Box::new(self.expr(*value)), self.pattern(pattern))
                 }
+                h::ExprKind::Match(value, arms) => t::ExprKind::Match(
+                    Box::new(self.expr(*value)),
+                    arms.into_iter()
+                        .map(|arm| t::Arm {
+                            pattern: self.pattern(arm.pattern),
+                            guard: arm.guard.map(|guard| self.expr(guard)),
+                            body: self.expr(arm.body),
+                        })
+                        .collect(),
+                ),
                 h::ExprKind::If(condition, yes, no) => t::ExprKind::If(
                     Box::new(self.expr(*condition)),
                     Box::new(self.expr(*yes)),

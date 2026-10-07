@@ -95,6 +95,10 @@ fn callers(program: &Program) -> HashMap<&FunctionKey, Vec<(&FunctionKey, &Expr)
 }
 
 /// Each call in `expression` naming a definition, with what it names.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm for each kind of expression, to reach every call it holds"
+)]
 fn calls<'a>(expression: &'a Expr, found: &mut impl FnMut(&'a FunctionKey, &'a Expr)) {
     let inner: Vec<&Expr> = match &expression.kind {
         ExprKind::Local(_)
@@ -114,6 +118,14 @@ fn calls<'a>(expression: &'a Expr, found: &mut impl FnMut(&'a FunctionKey, &'a E
         ExprKind::If(condition, yes, no) => vec![&**condition, &**yes, &**no],
         ExprKind::Is(value, rows) => std::iter::once(&**value)
             .chain(rows.iter().filter_map(|(_, guard)| guard.as_ref()))
+            .collect(),
+        ExprKind::Match(value, arms) => std::iter::once(&**value)
+            .chain(arms.iter().flat_map(|arm| {
+                arm.rows
+                    .iter()
+                    .filter_map(|(_, guard)| guard.as_ref())
+                    .chain([&arm.body])
+            }))
             .collect(),
         ExprKind::DirectCall(callee, arguments) => {
             found(callee, expression);
@@ -140,6 +152,10 @@ fn body(body: &Body) -> Result<(), LowerError> {
 }
 
 /// Check `expression`, which is a call's argument or head when `passed`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm for each kind of expression, to reach every one it holds"
+)]
 fn value(expression: &Expr, passed: bool) -> Result<(), LowerError> {
     placed(expression, passed)?;
     match &expression.kind {
@@ -180,6 +196,16 @@ fn value(expression: &Expr, passed: bool) -> Result<(), LowerError> {
             value(condition, false)?;
             value(yes, false)?;
             value(no, false)
+        }
+        ExprKind::Match(tested, arms) => {
+            value(tested, false)?;
+            arms.iter().try_for_each(|arm| {
+                arm.rows
+                    .iter()
+                    .filter_map(|(_, guard)| guard.as_ref())
+                    .try_for_each(|guard| value(guard, false))?;
+                value(&arm.body, false)
+            })
         }
     }
 }

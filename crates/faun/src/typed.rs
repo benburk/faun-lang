@@ -54,6 +54,14 @@ pub struct Signature {
 
 pub type Pattern = h::Pattern<Infallible>;
 
+/// One arm; see [`crate::hir::Arm`].
+#[derive(Clone, Debug)]
+pub struct Arm {
+    pub pattern: Pattern,
+    pub guard: Option<Expr>,
+    pub body: Expr,
+}
+
 #[derive(Clone, Debug)]
 pub struct Body {
     pub bindings: Vec<Binding>,
@@ -116,6 +124,8 @@ pub enum ExprKind {
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `value is pattern`; see [`crate::hir::ExprKind::Is`].
     Is(Box<Expr>, Pattern),
+    /// `value is ( arms )`; see [`crate::hir::ExprKind::Match`].
+    Match(Box<Expr>, Vec<Arm>),
     /// Bindings, then the answer; see [`crate::hir::ExprKind::Block`].
     Block(Box<Body>),
 }

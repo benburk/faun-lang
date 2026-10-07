@@ -1638,6 +1638,36 @@ impl ClauseResolver<'_> {
         Ok(self.sites.expr(expression.span, kind))
     }
 
+    /// One arm: what its pattern binds, as a test's does, seen by its guard
+    /// and its body, and nowhere after the arm.
+    fn arm(&mut self, arm: &s::Arm) -> Result<h::Arm, ResolveError> {
+        let before = self.locals.clone();
+        let outer = std::mem::replace(&mut self.testing, true);
+        let comparing = self.compared.replace(Vec::new());
+        self.shadowing = Some(HashSet::new());
+        let pattern = self.pattern(&arm.pattern);
+        self.shadowing = None;
+        self.testing = outer;
+        let compared = std::mem::replace(&mut self.compared, comparing).unwrap_or_default();
+        let resolved = pattern.and_then(|pattern| {
+            let written = arm
+                .guard
+                .as_ref()
+                .map(|guard| self.condition(guard))
+                .transpose()?;
+            let guard = matched_alike(compared, written, self.sites);
+            let body = self.expr(&arm.body)?;
+            Ok(h::Arm {
+                pattern,
+                guard,
+                body,
+            })
+        });
+        self.hide(&before, arm.pattern.span());
+        self.locals = before;
+        resolved
+    }
+
     /// The two sides of an `|`, the right binding as the same locals the
     /// names the left bound. A name both bind is seen past the `|`, where
     /// one side or the other held; one only a side binds is hidden.
@@ -2218,6 +2248,15 @@ impl ClauseResolver<'_> {
             }
             // Only where its clause answers, so its value is that answer.
             s::ExprKind::Return(value) => return self.expr(value),
+            s::ExprKind::Match(value, arms) => {
+                let value = self.expr(value)?;
+                let arms = arms
+                    .iter()
+                    .map(|arm| self.arm(arm))
+                    .collect::<Result<_, _>>()?;
+                h::ExprKind::Match(Box::new(value), arms)
+            }
+            s::ExprKind::Arms(_) => unreachable!("the parser refuses arms no `is` takes"),
             // Alone, a test binds for nothing after it.
             s::ExprKind::Is(..) => {
                 let before = self.locals.clone();
@@ -2327,7 +2366,7 @@ impl ClauseResolver<'_> {
                 ),
             )
             .label("not known to hold here")
-            .help("a test binds along its `&` chain, into `then`, into its clause from a guard, and for the lines below an `expect`; past an `|` only what both sides bind, and nothing under `!` or in `else`"));
+            .help("a test binds along its `&` chain, into `then`, into its clause from a guard, for the lines below an `expect`, and into its arm from an arm's pattern; past an `|` only what both sides bind, and nothing under `!` or in `else`"));
         }
         Err(error(
             self.module,

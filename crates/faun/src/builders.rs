@@ -190,6 +190,15 @@ impl Builder<'_> {
                 self.expr(right);
             }
             h::ExprKind::Is(value, _) => self.expr(value),
+            h::ExprKind::Match(value, arms) => {
+                self.expr(value);
+                for arm in arms {
+                    if let Some(guard) = &mut arm.guard {
+                        self.expr(guard);
+                    }
+                    self.expr(&mut arm.body);
+                }
+            }
             h::ExprKind::If(condition, yes, no) => {
                 self.expr(condition);
                 self.expr(yes);

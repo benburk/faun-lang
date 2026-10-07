@@ -561,6 +561,7 @@ const READ: &[&str] = &[
     "f(r) -> if r is Ok(v) & v > 0 then v else 0\nf(r) -> r is (A | B(_)) | r is [*_, C]\n",
     "f(a, b) -> (a, b) is (Ok(x), Ok(y)) & x <= y\n",
     "f(x, ==y, all is [_, *_]) -> x is Some(==y) | x is (==z, w)\n",
+    "f(x) -> x is (\n  A(v) if v > 0 -> v\n  B | C -> (\n    y = 1\n    y\n  )\n  _ -> 0\n)\n",
     "f(xs) -> (\n  expect xs is [x, *_] else return 0\n  y = x\n  expect y > 1\n    else (\n      z = y\n      return z\n    )\n  y\n)\n",
 ];
 
@@ -573,7 +574,6 @@ const REFUSED: &[&str] = &[
     "f(x) -> x?? .y\n",
     "f(x) -> [a\"b\"]\n",
     "f(x) -> [a b]\n",
-    "f(x) -> (x -> x)\n",
     "f(x) -> x ->\n",
     "f(x) if -> x\n",
     "f(x) if x if y -> x\n",
@@ -597,6 +597,8 @@ const REFUSED: &[&str] = &[
     "f(x) -> (\n  y = x\n  expect y else return 0\n)\n",
     "f(x) -> x is Some(==)\n",
     "f(x) -> x is Some(==Y)\n",
+    "f(x) -> x is (\n  A -> 1\n  B 2\n)\n",
+    "f(x) -> x is (\n  A -> 1\n  B ->\n)\n",
 ];
 
 #[test]
