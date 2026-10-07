@@ -1,0 +1,7 @@
+import std.host {Host}
+
+first : List(Nat) -> Nat
+first(ready) -> if ready is [node, *ready] then node else 0
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

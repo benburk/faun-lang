@@ -1,0 +1,7 @@
+error: `ready` is a name already, and a test binds it anew rather than comparing with it
+ --> a_test_binds_the_name_it_tests_anew.fn:4:37
+  |
+4 | first(ready) -> if ready is [node, *ready] then node else 0
+  |                                     ^^^^^ bound again here
+  |
+  = help: to go on with what is left of `ready`, bind a name of its own and bind `ready` to it after: `ready is [x, *rest]`, then `ready = rest`

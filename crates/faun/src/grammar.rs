@@ -102,6 +102,12 @@ const fn infix(kind: Kind) -> Option<(u8, BinaryOp)> {
     })
 }
 
+/// A block's line as far as its first value; see [`Parser::begun`].
+enum Begun {
+    Value(Expr),
+    Line(Statement),
+}
+
 /// How tightly `is` binds: looser than a comparison, tighter than `&`.
 const IS: u8 = 4;
 
@@ -400,8 +406,50 @@ impl Parser<'_> {
     /// `statement`: a value, or `pattern = value`.
     fn statement(&mut self) -> Parsed<Statement> {
         self.no_expect_in_a_block()?;
-        let value = self.expr()?;
-        self.statement_after(value)
+        match self.begun()? {
+            Begun::Value(value) => self.statement_after(value),
+            Begun::Line(line) => Ok(line),
+        }
+    }
+
+    /// A block's line as far as its first value: where it begins `if`, the
+    /// token after the condition says whether it is the ternary or a line
+    /// leaving where its condition holds.
+    fn begun(&mut self) -> Parsed<Begun> {
+        if self.peek() != Kind::KwIf {
+            return Ok(Begun::Value(self.expr()?));
+        }
+        let keyword = self.bump();
+        let condition = self.expr()?;
+        if !matches!(
+            self.peek(),
+            Kind::KwReturn | Kind::KwContinue | Kind::KwBreak
+        ) {
+            self.note("`return`");
+            return Ok(Begun::Value(self.if_after(keyword, condition)?));
+        }
+        let out = self.leaving()?;
+        Ok(Begun::Line(Statement::If(
+            keyword.span().through(out.span),
+            condition,
+            out,
+        )))
+    }
+
+    /// What a leaving line leaves by: `return value`. `continue` and `break`
+    /// come with loops.
+    fn leaving(&mut self) -> Parsed<Expr> {
+        if matches!(self.peek(), Kind::KwContinue | Kind::KwBreak) {
+            let keyword = self.bump();
+            return Err(SyntaxError::new(
+                keyword.span(),
+                format!(
+                    "`{}` leaves a loop's round or the loop, and there are no loops yet",
+                    keyword.span().text(self.source)
+                ),
+            ));
+        }
+        self.expr()
     }
 
     /// A block's line beginning `expect`, which a later assumption will be.
@@ -979,6 +1027,11 @@ impl Parser<'_> {
     fn if_(&mut self) -> Parsed<Expr> {
         let keyword = self.bump();
         let condition = self.expr()?;
+        self.if_after(keyword, condition)
+    }
+
+    /// The ternary after its condition.
+    fn if_after(&mut self, keyword: Token, condition: Expr) -> Parsed<Expr> {
         self.expect(Kind::KwThen, "`then`")?;
         let yes = self.expr()?;
         self.expect(Kind::KwElse, "`else`")?;
@@ -1040,7 +1093,10 @@ impl Parser<'_> {
     fn parenthesized(&mut self) -> Parsed<Expr> {
         let open = self.bump();
         self.no_expect_in_a_block()?;
-        let first = self.expr()?;
+        let first = match self.begun()? {
+            Begun::Value(first) => first,
+            Begun::Line(line) => return self.lines_from(open, line),
+        };
         match self.peek() {
             Kind::Comma => self.tuple(open, first),
             Kind::Eq | Kind::KwElse | Kind::Newline => self.block(open, first),

@@ -480,6 +480,14 @@ pub enum ExprKind {
         otherwise: Box<Expr>,
         rest: Box<Body>,
     },
+    /// A block's line `if condition return value`, holding the lines after
+    /// it: where the condition holds, `out` leaves, seeing what it bound;
+    /// where it fails, those lines answer.
+    Leave {
+        condition: Box<Expr>,
+        out: Box<Expr>,
+        rest: Box<Body>,
+    },
     /// `return value`: the answer of the clause or lambda, which stands
     /// only where a line's `else` leaves.
     Return(Box<Expr>),

@@ -522,27 +522,31 @@ Clauses suit a body that is the dispatch;
 arms suit a value worked out partway through one. Not yet: arms of a value
 holding a resource.
 
-## Leaving by `else`
+## Leaving lines
 
 A block's line `condition else …` goes on where the condition holds, the
 lines after it seeing what it bound, and where it fails, leaves the clause
 or lambda: `else return value`, or `else` a block whose last line returns,
-doing its steps first. It is never a block's last line, since the lines
+doing its steps first. A line `if condition return value` leaves where the
+condition holds, what the condition bound seen by the `return` alone, and
+goes on where it fails. Neither is a block's last line, since the lines
 after it answer.
 
 ```
-first_doubled(xs) -> (
+first_over(xs, k) -> (
+  if k == 0 return 0
   xs is [x, *_] else return 0
-  x * 2
+  x / k
 )
 ```
 
-It says what should hold, so a line leaving where a shape matches is
-negated: `n != 0 else return 0`. `return` stands only in such an `else`, so
-every way out of a body is a line's `else`. An `else` line leaves from any
-block, its clause's body, a branch, an arm, or a block whose value goes on
-into more of the body. `expect` stands only at the top level, as a test; in a body it
-will be an assumption checked in development, which is not built.
+An `else` line says what should hold, its names going on below; an `if`
+line bails out on a case. `return` stands only in a leaving line, so every
+way out of a body is one. A leaving line leaves from any block, its
+clause's body, a branch, an arm, or a block whose value goes on into more
+of the body. `continue` and `break` leave the same way, and come with
+loops. `expect` stands only at the top level, as a test; in a body it will
+be an assumption checked in development, which is not built.
 
 ## Or-patterns
 

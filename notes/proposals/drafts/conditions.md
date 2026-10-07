@@ -294,6 +294,13 @@ partway through a body is.
   join point's parameters where one does. Refused: binding an outer name in
   a condition or the right of `&` or `|`, and a lambda binding its body's
   name. First built holding a name to one type everywhere.
+- **`if` leaving lines,** 2026-10-07: `if condition return value` as a
+  block's line, read where the token after an `if`'s condition is a leaving
+  keyword; resolution makes it the `if` an `else` line is the other way
+  round, its `then` the leave, which alone sees the condition's names.
+  `continue` and `break` are keywords, refused until loops. A test binding
+  the very name it tests is told to bind a name of its own and bind the
+  tested name to it after.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.
@@ -396,7 +403,7 @@ The survey compares these as whole designs.
 6. **`if` leaving lines.** The parser reads `if condition` followed by a
    leaving keyword as a block line; resolution makes it the `if` an `else`
    line is, its branches the other way round, the condition's names seen by
-   the leave alone.
+   the leave alone. Built.
 7. **Programs.** Helpers that branch partway through their caller folded;
    those whose body is the dispatch kept as clauses; steps that took fresh
    names may assign.

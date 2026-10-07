@@ -73,6 +73,8 @@ pub(crate) enum Statement {
     Binding(Expr, Expr),
     /// `condition else otherwise`, written at `span`.
     Else(Span, Expr, Expr),
+    /// `if condition out`, written at `span`.
+    If(Span, Expr, Expr),
 }
 
 /// Why lines do not make items.
@@ -429,7 +431,9 @@ pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
                 "a block ends with its answer, a line after its last binding",
             ));
         }
-        Statement::Else(..) => unreachable!("an `else` line holds the lines after it"),
+        Statement::Else(..) | Statement::If(..) => {
+            unreachable!("a leaving line holds the lines after it")
+        }
     };
     let bindings = lines
         .into_iter()
@@ -444,40 +448,57 @@ pub(crate) fn body(lines: Vec<Statement>, source: &str) -> Result<Body, Error> {
                 value,
                 discarded: false,
             }),
-            Statement::Else(..) => unreachable!("an `else` line holds the lines after it"),
+            Statement::Else(..) | Statement::If(..) => {
+                unreachable!("a leaving line holds the lines after it")
+            }
         })
         .collect::<Result<_, Error>>()?;
     Ok(Body { bindings, result })
 }
 
-/// `lines` with their first `else` line holding the lines after it, which
-/// answer where it holds, those taken apart the same way.
+/// `lines` with their first leaving line, `else` or `if`, holding the
+/// lines after it, which answer where it goes on, those taken apart the same
+/// way.
 fn held(mut lines: Vec<Statement>, source: &str) -> Result<Vec<Statement>, Error> {
     let Some(at) = lines
         .iter()
-        .position(|line| matches!(line, Statement::Else(..)))
+        .position(|line| matches!(line, Statement::Else(..) | Statement::If(..)))
     else {
         return Ok(lines);
     };
     let rest = lines.split_off(at + 1);
-    let Some(Statement::Else(span, condition, otherwise)) = lines.pop() else {
-        unreachable!("the line found has an `else`")
+    let line = lines.pop().expect("the line found");
+    let span = match &line {
+        Statement::Else(span, ..) | Statement::If(span, ..) => *span,
+        _ => unreachable!("the line found leaves"),
     };
     if rest.is_empty() {
-        return Err(error(
-            span,
-            "a line with `else` is not a block's last: the lines after it answer where its condition holds",
-        ));
+        let message = match line {
+            Statement::If(..) => {
+                "an `if` line is not a block's last: the lines after it answer where its condition fails"
+            }
+            _ => {
+                "a line with `else` is not a block's last: the lines after it answer where its condition holds"
+            }
+        };
+        return Err(error(span, message));
     }
-    let rest = body(rest, source)?;
-    lines.push(Statement::Value(Expr {
-        span: span.through(rest.result.span),
-        kind: ExprKind::Else {
+    let rest = Box::new(body(rest, source)?);
+    let span = span.through(rest.result.span);
+    let kind = match line {
+        Statement::Else(_, condition, otherwise) => ExprKind::Else {
             condition: Box::new(condition),
             otherwise: Box::new(otherwise),
-            rest: Box::new(rest),
+            rest,
         },
-    }));
+        Statement::If(_, condition, out) => ExprKind::Leave {
+            condition: Box::new(condition),
+            out: Box::new(out),
+            rest,
+        },
+        _ => unreachable!("the line found leaves"),
+    };
+    lines.push(Statement::Value(Expr { span, kind }));
     Ok(lines)
 }
 
@@ -869,9 +890,23 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             expression(value, source, true)?;
             body_expressions(rest, source, true)
         }
+        // What the condition binds, the leave sees; the lines after it
+        // answer where it fails.
+        ExprKind::Leave {
+            condition,
+            out,
+            rest,
+        } => {
+            let ExprKind::Return(value) = &out.kind else {
+                unreachable!("the parser reads only `return` after an `if` line's condition")
+            };
+            expression(condition, source, false)?;
+            expression(value, source, true)?;
+            body_expressions(rest, source, true)
+        }
         ExprKind::Return(_) => Err(error(
             expr.span,
-            "`return` stands only where a line's `else` leaves: `c else return x`",
+            "`return` stands only in a leaving line: `c else return x`, or `if c return x`",
         )),
     }
 }
@@ -941,6 +976,16 @@ fn passed_on(expr: &Expr) -> Option<Span> {
         ExprKind::Match(value, arms) => passed_on(value).or_else(|| arms_passed_on(arms)),
         ExprKind::Arms(arms) => arms_passed_on(arms),
         ExprKind::Return(value) => passed_on(value),
+        ExprKind::Leave {
+            condition,
+            out,
+            rest,
+        } => each(
+            [&**condition, &**out]
+                .into_iter()
+                .chain(rest.bindings.iter().map(|binding| &binding.value))
+                .chain([&rest.result]),
+        ),
         ExprKind::Else {
             condition,
             otherwise,

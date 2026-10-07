@@ -272,6 +272,13 @@ module.exports = grammar({
       field('otherwise', $._expression),
     ),
 
+    // A block's line: leave where the condition holds, else go on.
+    if_line: $ => seq(
+      'if',
+      field('condition', $._expression),
+      field('leave', choice($.return_expression, 'continue', 'break')),
+    ),
+
     return_expression: $ => prec.right(seq('return', field('value', $._expression))),
 
     binary_expression: $ => choice(...INFIX.map((operators, level) =>
@@ -394,7 +401,7 @@ module.exports = grammar({
     // binds nothing is an effect asked for what it does.
     block: $ => seq(
       '(',
-      repeat1(seq(choice($.binding, $.else_line, $._expression), $._block_newline)),
+      repeat1(seq(choice($.binding, $.else_line, $.if_line, $._expression), $._block_newline)),
       field('answer', $._expression),
       ')',
     ),

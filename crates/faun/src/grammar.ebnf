@@ -75,9 +75,11 @@ field-types       = NAME ":" type [ "," [ field-types ] ]
    compared, which this grammar does not say. *)
 (* An `if` takes everything after its `else`, so it begins an expression
    and is no operand: `1 + (if c then a else b)`. *)
-expr              = "if" expr "then" expr "else" expr
-                  | "return" expr
+expr              = if-head "then" expr "else" expr
+                  | plain ;
+plain             = "return" expr
                   | operand expr-tail ;
+if-head           = "if" expr ;
 expr-tail         = { infix operand } ;
 infix             = "|" | "^" | "&" | "is" | "==" | "!=" | "<" | "<=" | ">"
                   | ">=" | "+" | "-" | "/" | "%" | "*" ;
@@ -112,17 +114,26 @@ exprs             = expr [ "," [ exprs ] ] ;
 (* After `(` and one expression, the next token says which: `,` a tuple, `=`,
    `else` or a line's end a block, whose lines are bindings and then its
    answer, `->` or `if` arms, and `)` one value grouped. *)
-parenthesized     = expr [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE statements
-                         | arm-tail { NEWLINE arm } ] ;
+parenthesized     = if-head ( "then" expr "else" expr after-first | leave NEWLINE statements )
+                  | plain after-first ;
+after-first       = [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE statements
+                    | arm-tail { NEWLINE arm } ] ;
 (* Arms a line apiece, which an `is` takes: `x is (P -> a` … `)`. Arms no
    `is` takes are refused after parsing. *)
 arm               = expr arm-tail ;
 arm-tail          = [ "if" expr ] "->" expr ;
-statements        = expr [ line-tail NEWLINE statements | NEWLINE statements ] ;
+(* A line beginning `if` is the ternary, or, where a leave follows its
+   condition, a line leaving where the condition holds, the lines after it
+   answering where it fails. *)
+statements        = if-head ( "then" expr "else" expr statement-tail | leave NEWLINE statements )
+                  | plain statement-tail ;
+statement-tail    = [ line-tail NEWLINE statements | NEWLINE statements ] ;
 (* A binding, or a line going on where its condition holds, the lines after
    it answering, and leaving by its `else` where it fails. Where `return` and
-   an `else` line may stand is told after parsing. *)
+   a leaving line may stand is told after parsing, and `continue` and `break`
+   wait for loops. *)
 line-tail         = "=" expr | "else" expr ;
+leave             = "return" expr | "continue" | "break" ;
 (* A list's rest may have elements after it, which its end matches:
    `[*front, last]`. *)
 elements          = expr [ "," [ elements ] ]

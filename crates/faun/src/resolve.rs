@@ -1485,6 +1485,7 @@ fn resolve_clause(
         shadowing: None,
         compared: Some(Vec::new()),
         choosing: false,
+        tested: None,
         testing: false,
         hidden: HashMap::new(),
         merged: Vec::new(),
@@ -1592,6 +1593,9 @@ struct ClauseResolver<'a> {
     compared: Option<Vec<Compared>>,
     /// Whether an alternative of an `|` pattern is being resolved.
     choosing: bool,
+    /// While a test's pattern is resolved, the name of the value it tests,
+    /// where that is a name.
+    tested: Option<Symbol>,
     /// Each local a name bound again in a branch is after it, and the name.
     merged: Vec<(h::LocalId, Symbol)>,
     /// Inside a lambda, the names its body sees from around it, which it
@@ -1627,14 +1631,17 @@ impl ClauseResolver<'_> {
     fn asked(&mut self, expression: &s::Expr) -> Result<h::Expr, ResolveError> {
         let kind = match &expression.kind {
             // A test, each `==name` in its pattern asked after it matches.
-            s::ExprKind::Is(value, pattern) => {
-                let value = self.expr(value)?;
+            s::ExprKind::Is(tested, pattern) => {
+                let value = self.expr(tested)?;
                 let outer = std::mem::replace(&mut self.testing, true);
+                let named = self.tested_name(tested);
+                let outer_named = std::mem::replace(&mut self.tested, named);
                 let comparing = self.compared.replace(Vec::new());
                 self.shadowing = Some(HashSet::new());
                 let pattern = self.pattern(pattern);
                 self.shadowing = None;
                 self.testing = outer;
+                self.tested = outer_named;
                 let compared = std::mem::replace(&mut self.compared, comparing);
                 let tested = h::ExprKind::Is(Box::new(value), pattern?);
                 let tested = self.sites.expr(expression.span, tested);
@@ -1687,6 +1694,14 @@ impl ClauseResolver<'_> {
         self.hide(&before, arm.pattern.span());
         self.locals = before;
         Ok((resolved?, end))
+    }
+
+    /// The name `expression` is, where it is one.
+    fn tested_name(&mut self, expression: &s::Expr) -> Option<Symbol> {
+        match expression.kind {
+            s::ExprKind::Name(name) => Some(self.symbols.intern(name.text(self.source))),
+            _ => None,
+        }
     }
 
     /// `name = …` where `name` is in scope: a new local the name is from
@@ -1939,13 +1954,22 @@ impl ClauseResolver<'_> {
                         return self.assign(*name, spelling);
                     }
                     let shown = name.text(self.source);
+                    let help = if self.tested == Some(spelling) {
+                        format!(
+                            "to go on with what is left of `{shown}`, bind a name of its own and bind `{shown}` to it after: `{shown} is [x, *rest]`, then `{shown} = rest`"
+                        )
+                    } else {
+                        format!(
+                            "to compare, write `=={shown}` in its place; to bind, use a name of its own"
+                        )
+                    };
                     return Err(error(
                         self.module,
                         name.0,
                         format!("`{shown}` is a name already, and a test binds it anew rather than comparing with it"),
                     )
                     .label("bound again here")
-                    .help(format!("to compare, write `=={shown}` in its place; to bind, use a name of its own")));
+                    .help(help));
                 }
                 // An alternative after the first binds the names the first did.
                 let alternate = self
@@ -2397,14 +2421,50 @@ impl ClauseResolver<'_> {
                 };
                 h::ExprKind::If(Box::new(condition), Box::new(yes), Box::new(otherwise))
             }
+            // An `if` line is an `if` whose `then` leaves, seeing what its
+            // condition bound, and whose `else` is the lines after it.
+            s::ExprKind::Leave {
+                condition,
+                out,
+                rest,
+            } => {
+                let before = self.locals.clone();
+                let asked = condition.span;
+                let condition = self.condition(condition);
+                let leaving = condition.and_then(|condition| Ok((condition, self.expr(out)?)));
+                self.hide(&before, asked);
+                self.locals.clone_from(&before);
+                let (condition, leaving) = leaving?;
+                let rest = self.body(rest)?;
+                let rest = self
+                    .sites
+                    .expr(expression.span, h::ExprKind::Block(Box::new(rest)));
+                let end = self.locals.clone();
+                self.locals.clone_from(&before);
+                let mut branches = self
+                    .merged(
+                        (&before, expression.span),
+                        vec![(leaving, None), (rest, Some(end))],
+                    )
+                    .into_iter();
+                let (leaving, rest) = (branches.next(), branches.next());
+                let (Some(leaving), Some(rest)) = (leaving, rest) else {
+                    unreachable!("two branches in, two out")
+                };
+                h::ExprKind::If(Box::new(condition), Box::new(leaving), Box::new(rest))
+            }
             s::ExprKind::Return(value) => h::ExprKind::Return(Box::new(self.expr(value)?)),
             s::ExprKind::Match(value, arms) => {
+                let named = self.tested_name(value);
                 let value = self.expr(value)?;
                 let before = self.locals.clone();
                 let mut resolved = Vec::with_capacity(arms.len());
                 let mut branches = Vec::with_capacity(arms.len());
                 for arm in arms {
-                    let (arm, end) = self.arm(arm)?;
+                    let outer = std::mem::replace(&mut self.tested, named);
+                    let arm = self.arm(arm);
+                    self.tested = outer;
+                    let (arm, end) = arm?;
                     branches.push((arm.body.clone(), Some(end)));
                     resolved.push(arm);
                 }

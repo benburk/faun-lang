@@ -132,3 +132,15 @@ tally(xs, strict) -> (
 )
 
 expect tally([1, 2], True) == (3, 6) & tally([1, 2], False) == (2, 3)
+
+# `if condition return …`, a block's line, leaves where its condition holds,
+# what the condition bound seen by the leave alone; the lines after it go on
+# where it fails.
+explained : Result(Nat, [Bad(Str)]) -> Str
+explained(r) -> (
+  if r is Err(Bad(why)) return "bad: ${why}"
+  if r is Ok(0) return "nothing"
+  "some"
+)
+
+expect explained(Err(Bad("x"))) == "bad: x" & explained(Ok(0)) == "nothing" & explained(Ok(2)) == "some"
