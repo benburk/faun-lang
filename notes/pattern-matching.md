@@ -40,15 +40,17 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   equal, `[a, a, *_]`, in a test as in a clause's head; `[a, ==a]` is
   refused, since `==` reads as reaching outside the pattern.
   Built, 2026-10-06.
-- **Assignment, not shadowing.** `name = value` on a name in scope changes
-  it from there on, past branches and across a loop's rounds, keeping its
-  type; nothing changes in place, so a step is `order =
-  order.append(node)`. Patterns only declare: one binding a name in scope
-  is refused. This replaced no-rebinding (built 2026-10-05) and the loops
-  draft's `$` variables on 2026-10-07; it comes with join points.
-- **Leaving where a test holds** reads negated, `!(n1 is Bot) else return
-  Bot`, or `n1 != Bot else return Bot` where the type has equality. Accepted: it is rare, and a second form would be two ways to
-  write one exit.
+- **`=` binds a name from here on,** Python's model: past branches and
+  across a loop's rounds, at any type on a straight line and one type where
+  paths meet. Nothing changes in place, so a step is `order =
+  order.append(node)`. Patterns only bind new names: one binding a name in
+  scope is refused. This replaced no-rebinding (built 2026-10-05) and the
+  loops draft's `$` variables on 2026-10-07, after a separate assignment
+  operator was weighed against it.
+- **Leaving where a test holds** is an `if` line, `if n1 is Bot return
+  Bot`, beside the `else` line for what should hold: one passes names down,
+  the other bails out. First accepted as a negated `else` line, to keep one
+  direction to one form; revised 2026-10-07, the two lines doing two jobs.
 - **`?` anywhere an expression goes,** as an `else` line will be in any
   block: in a branch, an arm, a block inside either, the right of `&`
   or `|`, leaving the clause or lambda from there. Today's refusals are a

@@ -19,13 +19,14 @@ One operator and one line form, as the
   guard's clause body, an arm's value, and the lines below an `else` line.
 - **`condition else …`**, a block's line, goes on where the condition
   holds, keeping what it bound for the lines below, and otherwise leaves the
-  clause, a round or a loop.
+  clause, a round or a loop; **`if condition return …`** leaves where it
+  holds.
 - **`value is ( arms )`** answers by the first arm that matches.
 - **`is` inside a pattern** binds a value and takes it apart: `right is [y,
   *_]`; **`==name`** in a pattern compares with a name from outside it.
-- **Assignment, not shadowing.** `name = value` on a name in scope changes
-  it from there on, past branches and across a loop's rounds. Patterns only
-  ever declare names.
+- **`=` binds a name from here on,** as Python's does: past branches and
+  across a loop's rounds, its type free on a straight line and one where
+  paths meet. Patterns only ever bind new names.
 
 Built already, as parts of this proposal: `if c then a else b`, and `&` and
 `|` on `Bool` working out their right side only where the left has not
@@ -155,12 +156,14 @@ area(shape) -> shape is (
 Clauses where the body is the dispatch; arms where a value worked out
 partway through a body is.
 
-### `else` lines
+### Leaving lines
 
-- **Syntax.** A block line, `condition "else" out`, with `out = "return"
-  expr | "continue" | "break" | block`, a block's last line being one of
-  the others; `continue` and `break` come with [loops](loops.md). Not an
-  expression, and not a block's last line.
+- **Syntax.** Two block lines, `condition "else" out` and `"if" condition
+  out`, with `out = "return" expr | "continue" | "break"`, and for `else` a
+  block whose last line is one of those; `continue` and `break` come with
+  [loops](loops.md). Neither is an expression, and an `else` line is not a
+  block's last line. After `if condition`, the next token says which: `then`
+  begins the ternary, a leaving keyword the line.
 - **Meaning.** Where the condition holds, the block goes on, what it bound
   in scope for every line below. Where it fails, the `else` runs and leaves:
   `return x` answers `x` from the clause or lambda the block is in, as `?`
@@ -172,36 +175,52 @@ partway through a body is.
     return defaults
   )
   ```
-- **One direction.** A line says what should hold. A plain test reads
-  `n != 0 else return 0`; a shape to leave on is negated, `!(n is Bot) else
-  return Bot`, and binds nothing.
+- **`if condition out`** leaves where the condition holds, and goes on
+  where it fails: `if seen continue`, `if n is Bot return Bot`. What the
+  condition binds is seen by the leave alone, `if r is Err(e) return
+  Err(e)`, since below the line the condition failed.
+- **Two lines, two jobs.** An `else` line takes a value apart or checks
+  what should hold, its names going on below: `r is Ok(v) else return 0`.
+  An `if` line bails out on a case, nothing going on from it: `if done
+  break`. Neither is negated to fit the other's direction.
 - **Every way out is marked.** `return`, `continue` and `break` stand only
-  after a line's `else`, so a body leaves only on a line saying `else
-  return`, `else continue` or `else break`. A line `r is Ok(v)` missing its
-  `else` throws away a `Bool`, which is refused.
+  in a leaving line, so a body leaves only on a line saying one of them. A
+  line `r is Ok(v)` missing its `else` throws away a `Bool`, which is
+  refused.
 - **`expect` stays a test.** At the top level, `expect` is a test, as
   before. In a body it will be an assumption: checked in development and in
   tests, skipped in optimized builds, binding nothing, changing nothing a
   program does. It is not built yet, and a body's line beginning `expect`
   is refused, saying how to leave.
-- **Which to write.** An `else` line for a check before the main work; the
-  ternary for the answer itself, on a body's last line: `if done then
-  Ok(order) else Err(Cycle)`; arms for a choice among shapes; clauses where
-  the whole body is the dispatch.
-- **Leave, not exit.** A program ends with `host.exit!`; an `else` leaves a
-  clause, a round or a loop.
+- **Which to write.** An `else` line where names go on, an `if` line to
+  bail out; the ternary for the answer itself, on a body's last line: `if
+  done then Ok(order) else Err(Cycle)`; arms for a choice among shapes;
+  clauses where the whole body is the dispatch.
+- **Leave, not exit.** A program ends with `host.exit!`; a leaving line
+  leaves a clause, a round or a loop.
 
-### Names: assignment, not shadowing
+### Names: `=` binds from here on
 
-- **`name = value` on a name in scope assigns it.** From that line on the
-  name holds the new value: on the lines below, after the branch or arm it
-  was assigned in, and in a loop's next round and after the loop. `x = x +
-  1` is a step, as in Python.
-- **A name keeps its type.** Assigning a value of another type is refused.
-- **Patterns declare.** A name in a pattern, a clause's head, a lambda's
-  parameters, a test or an arm, is a new one, and one already in scope is
-  refused. Only `=` assigns. A destructuring binding assigns the names it
-  holds that are in scope and declares the rest: `(a, b) = (b, a)` swaps.
+- **`name = value` binds the name from that line on,** as Python's `=`
+  does, whether or not it was bound before: on the lines below, after the
+  branch or arm it was bound in, and in a loop's next round and after the
+  loop. `x = x + 1` is a step. There is one `=`; whether a name was there
+  before matters only where paths meet.
+- **On a straight line, any type.** `x = "12"` then `x = Nat.from_str(x)?`
+  binds a `Str` and then a `Nat`.
+- **Where paths meet, one type.** A name bound again in a branch, an arm or
+  below an `else` line has one type after it whichever way was taken, and
+  one a loop binds again has one type across its rounds. A mismatch is
+  refused there, naming both types. This holds whether or not the name is
+  read after the branch, which keeps the rule one to state.
+- **A name first bound in a block leaves with it.** Only names bound before
+  a branch or a loop carry past it; one first bound inside is the block's,
+  so a name is never unbound where it is read, as Python's may be.
+- **Patterns bind new names.** A name in a pattern, a clause's head, a
+  lambda's parameters, a test or an arm, is a new one, and one already in
+  scope is refused: `r is Ok(limit)` would read as a comparison, written
+  `Ok(==limit)`. Only `=` binds a name again. A destructuring binding binds
+  each name it holds: `(a, b) = (b, a)` swaps.
 - **Nothing changes in place.** A method answers a new value and changes
   nothing it was given: `order = order.append(node)`, never a bare
   `order.append(node)`, which throws its answer away and is refused. A list
@@ -209,13 +228,14 @@ partway through a body is.
   mutation would.
 - **No aliasing.** `snapshot = order` stays a snapshot when `order`
   changes: values have no identity.
-- **A lambda assigns only its own names.** One assigning a name of the body
-  around it is refused: a callee may call it any number of times, or none.
-- **Meaning.** Each assignment is a new version of the name. Where branches
+- **A lambda binds again only its own names.** One binding a name of the
+  body around it is refused: a callee may call it any number of times, or
+  none. A lambda captures values, never a name.
+- **Meaning.** Each binding is a new version of the name. Where branches
   meet, after an `if`, an `is` with arms, or an `else` line's block, the
-  names a branch assigned are the parameters of the code after it, a join
-  point; a loop's round is a call of the loop with the names its body
-  assigned. So a function with assignments is as pure as one without.
+  names a branch bound again are the parameters of the code after it, a
+  join point; a loop's round is a call of the loop with the names its body
+  bound again. So a function with steps is as pure as one without.
 
 ### Built
 
@@ -265,14 +285,15 @@ partway through a body is.
   function of the branch's value and what they read, each branch going on
   calls it, and a `return` answers where it stands. `return` stays a node
   until then. No change to Barb.
-- **Assignment,** 2026-10-07: a binding naming a name in scope assigns it,
-  a new local from there on, held to the old one's type. After an `if`,
-  arms or an `else` line, each name a branch going on assigned is a new
-  local every such branch binds last; a block's assignments stay. Lowering
-  hands those out of a branch as a tuple beside its value where no branch
-  leaves, and as the join point's parameters where one does. Refused: an
-  assignment in a condition or the right of `&` or `|`, and a lambda
-  assigning its body's name.
+- **`=` binding from here on,** 2026-10-07: a binding naming a name in
+  scope binds it again, a new local from there on, at any type. After an
+  `if`, arms or an `else` line, each name a branch going on bound again is
+  a new local every such branch binds last, which holds the branches to one
+  type; a block's bindings of outer names stay. Lowering hands those out of
+  a branch as a tuple beside its value where no branch leaves, and as the
+  join point's parameters where one does. Refused: binding an outer name in
+  a condition or the right of `&` or `|`, and a lambda binding its body's
+  name. First built holding a name to one type everywhere.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.
@@ -289,11 +310,16 @@ partway through a body is.
   The order marks the meaning: one cannot fail, the other can.
 - **Flow-sensitive scope.** Where a name is seen depends on `&` and on
   `else` lines, not only on blocks and clauses.
-- **Leaving on a shape reads negated:** `!(n is Bot) else return Bot`.
+- **Two leaving lines.** `else` and `if` lines both leave, each for its
+  own job; a reader learns which reads which way.
 - **A name may change.** A reader meeting `order` must look above for the
-  lines assigning it, where a name meaning one value spared that. A typo,
-  `totl = total + 1`, declares a new name, which an unused-name lint
-  catches.
+  lines binding it, where a name meaning one value spared that; nothing on
+  a line in a loop says whether it carries state across rounds. A typo,
+  `totl = total + 1`, binds a new name, which an unused-name warning
+  catches, the new name being read nowhere.
+- **One type where paths meet, even unread.** `x = 1`, then `x = "s"` in
+  one branch only, is refused though nothing reads `x` after: stricter than
+  needed, and simpler to state and check.
 - **A shared failure branch.** In `if a is P & b is Q then x else y`, `y`
   is reached from either test. Lowering copies it to each place it is
   reached from until join points share it.
@@ -304,9 +330,12 @@ partway through a body is.
   leading every exit, where `return` already marks one; and `expect` in a
   body would have meant both an assumption and a leave, told apart at the
   line's end.
-- **`if` lines in both directions,** `if c return x` and `if c else return
-  x`. Two forms for one job; both designs drawn up afresh from the survey's
-  brief chose a single line form.
+- **One direction only,** every leave an `else` line. It forced a negation
+  wherever a line bails out on a case, `!(n is Bot) else return Bot`, `n ==
+  0 else continue`; the two lines do two jobs, one passing names down and
+  one not.
+- **`if c else return x`,** the `else` line spelled with `if`. A keyword
+  where the `else` already says it.
 - **`guard`,** the keyword both fresh designs chose. A keyword where `else`
   and `return` already say it.
 - **`&` guards,** `f(Move(d)) & d > 100 ->`, reading as `is P & c`. A
@@ -324,9 +353,18 @@ partway through a body is.
   loops draft had it. A name meant one value for its whole scope, at the
   price of a fresh name for every step and a sigil on every mention of what
   a loop changes.
+- **A separate assignment operator,** `x := x + 1`, `=` binding only new
+  names. Every change and every new name would show on its line, and a typo
+  would be refused rather than warned of; but it is a second binding
+  operator for what one `=` says, and Python's model does without it.
+- **A name keeping its type everywhere,** as first built. A straight line
+  of steps converting a value, `Str` to `Nat`, needed a name for each.
 - **Shadowing,** a name bound again hiding the one before for the rest of
-  its block. Straight-line code reads the same as assignment, but a branch's
-  `count = count + 1` would vanish after the branch, silently.
+  its block. Straight-line code reads the same, but a branch's `count =
+  count + 1` would vanish after the branch, silently.
+- **A pattern binding the very name it tests,** `ready is [node, *ready]`.
+  It saves `ready = rest` on a worklist, but the same name would be read on
+  the left and bound on the right of one `is`, the reading `=` mirrors.
 - **Writing back,** a bare `order.append(node)` changing `order`. Whether a
   line changes a name would hang on the line's shape and the method's type.
 - **Word operators, `and` and `or`,** freeing `|` for patterns. Every
@@ -351,11 +389,15 @@ The survey compares these as whole designs.
    branch an ordinary function of the names live there, called in tail
    position from each branch that goes on, so a branch can leave instead:
    `?` and `else` lines anywhere, and no copied branches. No change to Barb.
-5. **Assignment.** Resolution makes each assignment a new version of the
-   name and records, for each branch and loop, the names it assigns; those
-   are the join point's parameters. The no-rebinding refusal for `=` goes;
-   patterns keep theirs.
-6. **Programs.** Helpers that branch partway through their caller folded;
+5. **`=` from here on.** Resolution makes each binding of a name in scope
+   a new version of it and records, for each branch and loop, the names it
+   binds again; those are the join point's parameters, held to one type.
+   The no-rebinding refusal for `=` goes; patterns keep theirs. Built.
+6. **`if` leaving lines.** The parser reads `if condition` followed by a
+   leaving keyword as a block line; resolution makes it the `if` an `else`
+   line is, its branches the other way round, the condition's names seen by
+   the leave alone.
+7. **Programs.** Helpers that branch partway through their caller folded;
    those whose body is the dispatch kept as clauses; steps that took fresh
    names may assign.
 
@@ -366,7 +408,7 @@ The survey compares these as whole designs.
   block.
 - Refused cases with their `.err`: a name used where `|` or `!` hid it, a
   pattern binding a name in scope, `?` on the right of `&`, `return` outside
-  a line's `else`, an assignment changing a name's type, a lambda assigning
+  a leaving line, a name bound again in a branch at another type, a lambda binding
   its body's name.
 - Running cases across the three backends: tests in `if`, chains, tuples,
   a test as a value, `else` lines, arms, `==name`, and a name assigned in a

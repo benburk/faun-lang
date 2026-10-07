@@ -10,19 +10,20 @@
 
 ## Summary
 
-A body may loop with `for`, `while` and `loop`. A name assigned in a
-loop's body, as the [conditions](conditions.md) draft assigns, carries into
-its next round and out of it. `else continue` and `else break` leave a
-round or a loop. Each loop compiles to a recursive function whose
-parameters are the names it assigns, so a function with loops is as pure
-as one without.
+A body may loop with `for`, `while` and `loop`. A name bound before a loop
+and again in its body, as the [conditions](conditions.md) draft's `=`
+binds, carries into its next round and out of it. Leaving lines leave a
+round or a loop: `if c continue` and `if c break` where `c` holds, `c else
+continue` and `c else break` where it fails. Each loop compiles to a
+recursive function whose parameters are the names it binds again, so a
+function with loops is as pure as one without.
 
 | Form               | Today                     | Proposed                   |
 | ------------------ | ------------------------- | -------------------------- |
 | Loop state         | a record type of its own  | names the loop assigns     |
 | Walk a list        | a fold and a visit helper | `for P in list ( … )`      |
 | Worklist           | `drain_stack` and a visit | `while s is [x, *t] ( … )` |
-| Skip an item       | a helper's guarded clause | `c else continue`          |
+| Skip an item       | a helper's guarded clause | `if c continue`            |
 | Update a value     | `next = put(state, …)`    | `state = state.put(…)`     |
 | Unconditional loop | a recursive helper        | `loop ( … )`               |
 
@@ -74,7 +75,7 @@ toposort(graph) -> (
     order = order.append(node)
     for {target, *} in graph.edges_from(node) (
       degrees = degrees.update(target, |degree| degree - 1)
-      degrees.get_or(target, 0) == 0 else continue
+      if degrees.get_or(target, 0) > 0 continue
       ready = ready.prepend(target)
     )
   )
@@ -111,17 +112,17 @@ what Python's mutation costs.
 
 ### Names a loop changes
 
-Assignment is the conditions draft's: `name = value` on a name in scope
-changes it, keeping its type, and a lambda assigns only its own names. A
-loop adds:
+`=` is the conditions draft's: `name = value` binds the name from that
+line on, and a lambda binds again only its own names. A loop adds:
 
-- **A name assigned in a loop's body carries.** Its next round sees the
-  value the last one left, and the lines after the loop see the value the
-  loop ended with.
-- **A name declared in a loop's body is the round's.** It is new each round
-  and unseen after the loop.
-- **Patterns declare,** so a worklist takes its head into a new name and
-  assigns its rest: `while ready is [node, *rest] ( ready = rest …`.
+- **A name bound before the loop and again in its body carries.** Its next
+  round sees the value the last one left, and the lines after the loop see
+  the value the loop ended with. Across rounds it has one type, as where a
+  branch's paths meet.
+- **A name first bound in a loop's body is the round's.** It is new each
+  round and unseen after the loop.
+- **Patterns bind new names,** so a worklist takes its head into a new name
+  and binds its rest again: `while ready is [node, *rest] ( ready = rest …`.
 
 ### Loops
 
@@ -136,7 +137,7 @@ loop-line = "for" operand "in" expr "(" loop-body ")"
   `List`; a range is `List.range`.
 - **`while c ( … )`** runs while `c` holds. `c` may be an `is`, whose names
   the body sees.
-- **`loop ( … )`** runs until an `else break` or `else return` leaves it.
+- **`loop ( … )`** runs until a `break` or a `return` leaves it.
   It writes the loop whose test is partway through, as in reading until
   input ends.
 - **The space before the body's `(` matters,** as anywhere: `while
@@ -144,18 +145,19 @@ loop-line = "for" operand "in" expr "(" loop-body ")"
 - **A loop is a line of a block,** not an expression, and not the block's
   last line, which answers. What a loop computes is left in the names it
   assigned.
-- **A loop's body is block lines with no answer:** bindings, assignments,
-  `else` lines and loops.
+- **A loop's body is block lines with no answer:** bindings, leaving lines
+  and loops.
 
 ### Leaving a round or a loop
 
-`continue` and `break` are exits, written only after `else`, as `return`
-is:
+`continue` and `break` are exits, written only in the conditions draft's
+leaving lines, as `return` is, `if` leaving where its condition holds and
+`else` where it fails:
 
-- **`c else continue`** ends the round where `c` fails; the loop goes on.
-- **`c else break`** ends the loop where `c` fails; the line after it runs.
-- **`c else return x`** answers `x` from the function, from inside any
-  loop.
+- **`if c continue`, `c else continue`** end the round; the loop goes on.
+- **`if c break`, `c else break`** end the loop; the line after it runs.
+- **`if c return x`, `c else return x`** answer `x` from the function, from
+  inside any loop.
 
 Each applies to the innermost loop. Neither is an expression; neither
 stands outside a loop.
