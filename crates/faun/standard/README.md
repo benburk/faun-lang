@@ -181,9 +181,12 @@ insertion order, so no program observes the mixing. The package exports
 `Mixer` as a type alone, for a generic signature over a map to bound its
 key by `k.hash_into : (k, Mixer) -> Mixer`; neither its seed nor its digest
 is exported. `SortedMap` and `SortedSet` are AVL trees ordered by the key's
-`cmp`, for keys that must come back in order. `List.group_by` gathers into a
-`Map`, and `List.counts` counts how many times each element occurs, as
-Python's `Counter` does: `["a", "b", "a"].counts().get_or("a", 0)` is 2.
+`cmp`, for keys that must come back in order. A container is built from a
+list by the container, so the caller says which: `Map.of_list(entries)`,
+`Map.grouped(values, key)` gathering values by a key, and
+`Map.counted(values)` counting how many times each occurs, as Python's
+`Counter` does, `Map.counted(["a", "b", "a"]).get_or("a", 0)` being 2.
+`SortedMap` has the same three, its keys in order.
 
 A type's block asks for `equals`, `cmp`, `to_str` or `hash_into` by writing
 its signature with no clauses, as in Ori, and has the structural member of

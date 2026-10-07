@@ -68,7 +68,7 @@ the graph answers only `node_count` and `neighbors`:
 ```
 toposort(graph) -> (
   nodes = List.range(graph.node_count())
-  degrees = nodes.flat_map(|node| graph.neighbors(node)).counts()
+  degrees = Map.counted(nodes.flat_map(|node| graph.neighbors(node)))
   ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
   order = []
   while ready is [node, *rest] (
@@ -84,7 +84,7 @@ toposort(graph) -> (
 )
 ```
 
-The in-degrees are one line, `List.counts` as Python's `Counter`, where a
+The in-degrees are one line, `Map.counted` as Python's `Counter`, where a
 Python that counts them itself spends four; the cycle check is one line
 where Python's is two. Faun spends three lines on closing parentheses and
 one on taking the rest of the worklist, and a step is written whole:

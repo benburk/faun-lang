@@ -70,7 +70,7 @@ fn sorted_containers_keep_their_keys_in_order() {
 }
 
 /// A map and a set keyed by hash answer in insertion order, a key of any
-/// shape that feeds a hasher, and `group_by` gathers into one.
+/// shape that feeds a hasher, and `Map.grouped` gathers into one.
 #[test]
 fn hashed_containers_keep_insertion_order() {
     let package = Package::new(
@@ -97,8 +97,9 @@ fn hashed_containers_keep_insertion_order() {
          expect Map.of_list([({a: 1, b: [2]}, 7)]).get({b: [2], a: 1}) == Ok(7)
          expect Map.of_list(List.range(40).map(|n| (n, n))).remove(3).remove(20).insert(3, 9).keys().len() == 39
 
-         expect [1, 2, 3, 4, 5, 6].group_by(|n| n % 3).to_list() == [(1, [1, 4]), (2, [2, 5]), (0, [3, 6])]
-         expect ["ab", "c", "de", "f"].group_by(|word| word.len()).values() == [["ab", "de"], ["c", "f"]]
+         expect Map.grouped([1, 2, 3, 4, 5, 6], |n| n % 3).to_list() == [(1, [1, 4]), (2, [2, 5]), (0, [3, 6])]
+         expect Map.grouped(["ab", "c", "de", "f"], |word| word.len()).values() == [["ab", "de"], ["c", "f"]]
+         expect Map.counted(["b", "a", "b"]).to_list() == [("b", 2), ("a", 1)]
 
          letters : Set(Str)
          letters = Set.of_list(["x", "y", "x", "z"])
@@ -110,5 +111,5 @@ fn hashed_containers_keep_insertion_order() {
          expect letters.difference(Set.of_list(["x"])).to_list() == ["y", "z"]
          expect letters == Set.of_list(["z", "y", "x"])"#,
     );
-    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 26));
+    assert_eq!(support::test_file(&package.entry()), (Vec::new(), 27));
 }

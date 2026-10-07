@@ -75,6 +75,13 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   fold(Bin(left, key, value, right, _), initial, combine) ->
     fold(right, combine(fold(left, initial, combine), key, value), combine)
 
+  # `map` with each value changed by `change`, its keys and shape as they
+  # were.
+  map_values : (SortedMap(k, v), v -> w) -> SortedMap(k, w)
+  map_values(Tip, _) -> Tip
+  map_values(Bin(left, key, value, right, depth), change) ->
+    Bin(map_values(left, change), key, change(value), map_values(right, change), depth)
+
   # The entries of `map` in ascending key order — the map's one observable
   # shape.
   to_list : SortedMap(k, v) -> List((k, v))
@@ -86,6 +93,22 @@ SortedMap(k, v) : [Tip, Bin(SortedMap(k, v), k, v, SortedMap(k, v), Nat)].(
   # repeated `insert` calls would.
   of_list : List((k, v)) -> SortedMap(k, v) where k.cmp : (k, k) -> Order
   of_list(entries) -> entries.fold(Tip, |built, (key, value)| insert(built, key, value))
+
+  # The elements of `values` gathered by `key`, as `Map.grouped` gathers
+  # them, the groups in ascending key order and each in the order read.
+  grouped : (List(v), v -> k) -> SortedMap(k, List(v)) where k.cmp : (k, k) -> Order
+  grouped(values, key) -> (
+    gathered = values.fold(Tip, |table, value| (
+      at = key(value)
+      insert(table, at, [value, *get_or(table, at, [])])
+    ))
+    map_values(gathered, |group| group.reverse())
+  )
+
+  # How many times each of `values` occurs, as `Map.counted` counts, in
+  # ascending order of the values.
+  counted : List(k) -> SortedMap(k, Nat) where k.cmp : (k, k) -> Order
+  counted(values) -> values.fold(Tip, |tally, value| insert(tally, value, get_or(tally, value, 0) + 1))
 )
 
 height : SortedMap(k, v) -> Nat
@@ -186,3 +209,6 @@ split_smallest(Bin(inner_left, inner_key, inner_value, inner_right, _), key, val
   (least, rest) = split_smallest(inner_left, inner_key, inner_value, inner_right)
   (least, balanced(rest, key, value, right))
 )
+
+expect SortedMap.counted(["b", "a", "b"]).to_list() == [("a", 1), ("b", 2)]
+expect SortedMap.grouped([1, 2, 3, 4, 5], |n| n % 2).to_list() == [(0, [2, 4]), (1, [1, 3, 5])]

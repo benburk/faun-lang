@@ -12,8 +12,6 @@
 # front to back in a loop; one building something else calls itself last.
 
 import hasher {Hasher}
-import map {Map}
-import mixer {Mixer}
 
 export {List.*}
 
@@ -189,34 +187,6 @@ List(a) : [Nil, Cons(a, List(a))].(
   split_at : (List(a), Nat) -> (List(a), List(a))
   split_at(values, count) -> (take(values, count), drop(values, count))
 
-  # The elements `keep` holds of, and those it does not, each in order.
-  # The elements of `values` gathered by `key`: each element in the group
-  # its key names, the groups in the order their keys first appear, and the
-  # elements within a group in the order they are read. `Map` observing
-  # insertion order is what makes both of those statable rather than
-  # incidental.
-  #
-  # Nothing is lost and nothing is duplicated: `values.group_by(key)
-  # .values().flatten()` is `values` reordered by where each key first
-  # appears and stable within a group, and `values.group_by(key).len()` is
-  # how many distinct keys there are. Each group is built by prepending and
-  # turned round at the end, so gathering does no work proportional to what
-  # a group already holds.
-  group_by : (List(v), v -> k) -> Map(k, List(v)) where
-    k.hash_into : (k, Mixer) -> Mixer,
-    k.equals : (k, k) -> Bool
-  group_by(values, key) ->
-    Map.map_values(fold(values, Map.empty, |table, value| gathered(table, key(value), value)), reverse)
-
-  # How many times each of `values` occurs, as Python's `Counter` counts:
-  # each value a key, in the order it first appears, bound to its count.
-  # A value that never occurs is missing, so `get_or(value, 0)` reads it.
-  counts : List(v) -> Map(v, Nat) where
-    v.hash_into : (v, Mixer) -> Mixer,
-    v.equals : (v, v) -> Bool
-  counts(values) ->
-    fold(values, Map.empty, |counted, value| counted.insert(value, counted.get_or(value, 0) + 1))
-
   # `values` cut into a quotient and a remainder: `complete` holds every
   # whole run of exactly `size` elements, in order, and `remainder` the short
   # run left at the end. Nothing is lost: `complete.flatten()` followed by
@@ -238,6 +208,7 @@ List(a) : [Nil, Cons(a, List(a))].(
     (last, [result, *results])
   )
 
+  # The elements `keep` holds of, and those it does not, each in order.
   partition : (List(a), a -> Bool) -> (List(a), List(a))
   partition(values, keep) -> partition_into(values, keep, [], [])
 
@@ -293,14 +264,6 @@ List(a) : [Nil, Cons(a, List(a))].(
 reverse_into : (List(a), List(a)) -> List(a)
 reverse_into([], output) -> output
 reverse_into([head, *tail], output) -> reverse_into(tail, [head, *output])
-
-# `values` with the element at `index` replaced, unchanged where there is
-# none: the store `exchange` makes once its reads have succeeded.
-# `table` with `value` put before the rest of `key`'s group.
-gathered : (Map(k, List(v)), k, v) -> Map(k, List(v)) where
-  k.hash_into : (k, Mixer) -> Mixer,
-  k.equals : (k, k) -> Bool
-gathered(table, key, value) -> table.insert(key, [value, *table.get_or(key, [])])
 
 # `values` with the element at `index` replaced by `value`, and unchanged
 # where there is none. Written as a walk rebuilding the front, a compiler
@@ -442,4 +405,3 @@ expect [1, 2, 3, 4, 5].blocks(2) == {complete: [[1, 2], [3, 4]], remainder: [5]}
 expect [1, 2, 3, 4].blocks(2) == {complete: [[1, 2], [3, 4]], remainder: []}
 expect [1, 2].blocks(0) == {complete: [], remainder: [1, 2]}
 expect [1, 2, 3].map_accum(10, |sum, x| (sum + x, sum)) == (16, [10, 11, 13])
-expect ["a", "b", "a"].counts().to_list() == [("a", 2), ("b", 1)] & [0].drop(1).counts().is_empty()
