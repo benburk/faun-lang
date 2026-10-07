@@ -114,7 +114,8 @@ fn calls<'a>(expression: &'a Expr, found: &mut impl FnMut(&'a FunctionKey, &'a E
         ExprKind::Project(inner, _)
         | ExprKind::Lambda(_, _, inner)
         | ExprKind::Widen(inner)
-        | ExprKind::Try(inner) => vec![&**inner],
+        | ExprKind::Try(inner)
+        | ExprKind::Return(inner) => vec![&**inner],
         ExprKind::If(condition, yes, no) => vec![&**condition, &**yes, &**no],
         ExprKind::Is(value, rows) => std::iter::once(&**value)
             .chain(rows.iter().filter_map(|(_, guard)| guard.as_ref()))
@@ -185,7 +186,7 @@ fn value(expression: &Expr, passed: bool) -> Result<(), LowerError> {
         }
         ExprKind::Lambda(_, _, result) => value(result, false),
         ExprKind::Widen(inner) => value(inner, passed),
-        ExprKind::Try(inner) => value(inner, false),
+        ExprKind::Try(inner) | ExprKind::Return(inner) => value(inner, false),
         ExprKind::Is(tested, rows) => {
             value(tested, false)?;
             rows.iter()

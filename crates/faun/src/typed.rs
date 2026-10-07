@@ -120,6 +120,8 @@ pub enum ExprKind {
     Project(Box<Expr>, Symbol),
     Widen(Box<Expr>),
     Try(Box<Expr>),
+    /// `return value`; see [`crate::hir::ExprKind::Return`].
+    Return(Box<Expr>),
     /// `if condition then yes else no`; see [`crate::hir::ExprKind::If`].
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `value is pattern`; see [`crate::hir::ExprKind::Is`].

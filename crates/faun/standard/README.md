@@ -424,12 +424,10 @@ binding's value, an argument or a branch; as an operand it is written in
 parentheses, `1 + (if late then 10 else 0)`. A line of a block beginning
 `if` begins one, where after a clause it is that clause's guard.
 
-A branch answering the clause, its value the clause's answer, may leave it
-with `?`, as the clause's body may. One whose value goes on into more of the
-body may not yet: there a failure is passed on by answering a `Result` from
-both branches and asking `?` of the whole, `(if strict then
-Nat.from_str(text) else Ok(0))?`. A resource one branch uses up the other
-uses up too.
+A branch may leave its clause with `?`, as the clause's body may, whether
+its value is the clause's answer or goes on into more of the body: the rest
+of the body goes on from each branch that does not leave. A resource one
+branch uses up the other uses up too, unless that one leaves.
 
 On `Bool`, `&` and `|` likewise work out their right side only where the
 left has not decided: `n == 0 | odd(n - 1)` stops at nought. That is
@@ -512,8 +510,8 @@ area(shape) -> shape is (
 
 An arm takes every pattern a clause's parameter does, alternatives
 unparenthesized, `Celsius(c) | Kelvin(c) -> c`, and its value may be a
-block. As an `if`'s branches, arms may leave by `?` or an `else` line where
-the `is` answers its clause. Clauses suit a body that is the dispatch;
+block. As an `if`'s branches, arms may leave by `?` or an `else` line.
+Clauses suit a body that is the dispatch;
 arms suit a value worked out partway through one. Not yet: arms of a value
 holding a resource.
 
@@ -534,10 +532,9 @@ first_doubled(xs) -> (
 
 It says what should hold, so a line leaving where a shape matches is
 negated: `n != 0 else return 0`. `return` stands only in such an `else`, so
-every way out of a body is a line's `else`. An `else` line leaves from a
-block answering its clause or lambda, a body or a branch answering it, and
-not yet from one whose value goes on into more of the body, such as a
-binding's. `expect` stands only at the top level, as a test; in a body it
+every way out of a body is a line's `else`. An `else` line leaves from any
+block, its clause's body, a branch, an arm, or a block whose value goes on
+into more of the body. `expect` stands only at the top level, as a test; in a body it
 will be an assumption checked in development, which is not built.
 
 ## Or-patterns

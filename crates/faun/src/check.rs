@@ -2353,6 +2353,20 @@ impl<'a> Checker<'a> {
                 Ok(self.infer.instantiate(&scheme))
             }
             h::ExprKind::Try(value) => self.try_(module, expression.span, value, locals),
+            // What a `return` answers is its clause's or lambda's answer;
+            // the `return` itself is worth whatever its place asks.
+            h::ExprKind::Return(value) => {
+                let answered = self.expr(module, value, locals)?;
+                let Some(Some(answer)) = self.answers.last().cloned() else {
+                    return Err(failure(
+                        module,
+                        expression.span,
+                        "`return` answers its clause or lambda, and a guard answers nothing",
+                    ));
+                };
+                self.unify_at(module, value.span, &answered, &answer)?;
+                Ok(self.infer.fresh())
+            }
             // A test answers a `Bool`; its pattern types what it binds,
             // each at one type, as a binding's names are.
             h::ExprKind::Is(value, pattern) => {
@@ -4540,8 +4554,8 @@ fn validate_effect_expr(
                 source_name(symbols, *name)
             ),
         )),
-        // What `?` propagates stands where the `?` does.
-        h::ExprKind::Try(value) => {
+        // What `?` propagates, or `return` answers, stands where it does.
+        h::ExprKind::Try(value) | h::ExprKind::Return(value) => {
             validate_effect_expr(module, value, owner_effectful, stands_alone, symbols)
         }
         // A block's lines stand on their own, and its answer where the
@@ -4868,7 +4882,7 @@ fn expr_globals(expression: &h::Expr, symbols: &Symbols, output: &mut HashSet<Sy
                 expr_globals(member, symbols, output);
             }
         }
-        h::ExprKind::Lambda(_, body) | h::ExprKind::Try(body) => {
+        h::ExprKind::Lambda(_, body) | h::ExprKind::Try(body) | h::ExprKind::Return(body) => {
             expr_globals(body, symbols, output);
         }
         h::ExprKind::If(condition, yes, no) => {
@@ -5192,7 +5206,8 @@ mod tests {
                 | ExprKind::Is(value, _)
                 | ExprKind::Project(value, _)
                 | ExprKind::Widen(value)
-                | ExprKind::Try(value) => waiting.push(value),
+                | ExprKind::Try(value)
+                | ExprKind::Return(value) => waiting.push(value),
                 ExprKind::If(condition, yes, no) => {
                     waiting.extend([condition, yes, no].map(|e| &**e));
                 }

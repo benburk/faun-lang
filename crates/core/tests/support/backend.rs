@@ -1232,6 +1232,49 @@ fn arms_answer_by_the_first_that_matches() {
     assert_eq!(answers, [11, 105]);
 }
 
+/// A branch whose value goes on into more of the body may leave by `?`
+/// or a line's `else`, the rest of the body going on from each branch that
+/// does not.
+#[test]
+fn a_branch_whose_value_goes_on_may_leave() {
+    let program = read(
+        "import std.host {Host}
+
+         parsed : (Bool, Str) -> Result(Nat, [Malformed])
+         parsed(strict, text) -> (
+           n = if strict then Nat.from_str(text)? else 3
+           Ok(n + 1)
+         )
+
+         scaled : (Nat, Nat) -> Nat
+         scaled(n, k) -> (
+           step = (
+             k > 0 else return 7
+             n / k
+           )
+           step * 10
+         )
+
+         main! : Host -> []
+         main!(host) -> (
+           n = host.args.len()
+           text = if n > 1 then \"x\" else \"5\"
+           tried = parsed(True, text).ok_or(9) + parsed(False, text).ok_or(9)
+           answer = tried + scaled(4, n - 1)
+           host.exit!(U8.of_nat(answer))
+         )",
+    )
+    .expect("a program leaving from branches");
+    let program = TARGET
+        .prepare(&program)
+        .expect("a program this machine holds");
+    let answers: Vec<_> = execute_counts(&program, &[1, 2])
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(answers, [17, 53]);
+}
+
 /// The arguments a program is run with are a list of strings, its own name
 /// first: a greeting names the first after it, or the world where there is
 /// none, and the count is how many there are.

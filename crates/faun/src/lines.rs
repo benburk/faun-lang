@@ -822,20 +822,10 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             arms.first().map_or(expr.span, |arm| arm.pattern.span()),
             "arms stand after an `is`, which says what they match: `value is (P -> a` … `)`",
         )),
-        // An arm is a branch: where the `is` answers the clause, it may
-        // leave it.
+        // An arm is a branch, which may leave.
         ExprKind::Match(value, arms) => {
             expression(value, source, false)?;
             for arm in arms {
-                if !answering && let Some(span) = passed_on(&arm.body) {
-                    return Err(
-                        error(span, "an arm is a value, so `?` does not leave from it")
-                            .label("would leave here")
-                            .help(
-                                "answer a `Result` from every arm, and ask `?` of the whole `is`",
-                            ),
-                    );
-                }
                 if let Some(guard) = &arm.guard {
                     expression(guard, source, false)?;
                 }
@@ -843,22 +833,8 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             }
             Ok(())
         }
-        // A branch that answers the clause may leave it, as its body may;
-        // one whose value goes on into more of the body cannot, yet.
+        // A branch may leave, as a body may.
         ExprKind::If(condition, yes, no) => {
-            for branch in [yes, no].into_iter().filter(|_| !answering) {
-                if let Some(span) = passed_on(branch) {
-                    return Err(error(
-                        span,
-                        "a branch of an `if` is a value, so `?` does not leave from it",
-                    )
-                    .label("would leave here")
-                    .help(
-                        "answer a `Result` from both branches, and ask `?` of the whole `if`: \
-                               `(if c then f(x) else Ok(0))?`",
-                    ));
-                }
-            }
             expression(condition, source, false)?;
             expression(yes, source, answering)?;
             expression(no, source, answering)
@@ -868,14 +844,6 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             otherwise,
             rest,
         } => {
-            if !answering {
-                return Err(error(
-                    expr.span,
-                    "a line's `else` leaves where its block answers the clause or lambda, and nowhere else yet",
-                )
-                .label("its block's value goes on into more of the body")
-                .help("take this step out into a function of its own, where its block answers"));
-            }
             let leaving = match &otherwise.kind {
                 ExprKind::Return(value) => Some(value),
                 ExprKind::Block(body) => match &body.result.kind {

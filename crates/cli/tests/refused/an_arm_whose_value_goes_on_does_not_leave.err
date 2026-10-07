@@ -1,7 +1,0 @@
-error: an arm is a value, so `?` does not leave from it
- --> an_arm_whose_value_goes_on_does_not_leave.fn:6:16
-  |
-6 |     [r, *_] -> r?
-  |                ^^ would leave here
-  |
-  = help: answer a `Result` from every arm, and ask `?` of the whole `is`

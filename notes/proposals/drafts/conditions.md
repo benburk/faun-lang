@@ -259,6 +259,12 @@ partway through a body is.
   decision tests the value for every arm, a row for each alternative, each
   arm's body a block as an `if`'s branch is; arms cover every value, as
   clauses do, and a resource is not yet taken apart by them.
+- **Join points,** 2026-10-07: `?` and `else` lines leave from any branch,
+  arm or block. In a function's tail, an `if` or arms with a branch that
+  may leave is made to answer the function: the lines after it become a
+  function of the branch's value and what they read, each branch going on
+  calls it, and a `return` answers where it stands. `return` stays a node
+  until then. No change to Barb.
 - **No rebinding,** 2026-10-05: a binding or a test binding a name already
   in scope is refused; a lambda's and a clause's patterns already were. The
   parser library's example and AoC 2015 day 19 took names of their own.

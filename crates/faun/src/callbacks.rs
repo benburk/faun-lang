@@ -450,6 +450,7 @@ impl<'a> Callbacks<'a> {
             }
             ExprKind::Widen(value) => d::ExprKind::Widen(Box::new(self.expr(frame, value)?)),
             ExprKind::Try(value) => d::ExprKind::Try(Box::new(self.expr(frame, value)?)),
+            ExprKind::Return(value) => d::ExprKind::Return(Box::new(self.expr(frame, value)?)),
             ExprKind::Is(value, rows) => d::ExprKind::Is(
                 Box::new(self.expr(frame, value)?),
                 rows.iter()
@@ -704,7 +705,10 @@ fn for_each<'a>(expression: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
                 for_each(field, visit);
             }
         }
-        ExprKind::Project(value, _) | ExprKind::Widen(value) | ExprKind::Try(value) => {
+        ExprKind::Project(value, _)
+        | ExprKind::Widen(value)
+        | ExprKind::Try(value)
+        | ExprKind::Return(value) => {
             for_each(value, visit);
         }
         ExprKind::If(condition, yes, no) => {
@@ -873,7 +877,7 @@ fn free_locals(expression: &Expr, bound: &HashSet<LocalId>, found: &mut BTreeMap
                 free_locals(field, bound, found);
             }
         }
-        S::Project(receiver, _) | S::Widen(receiver) | S::Try(receiver) => {
+        S::Project(receiver, _) | S::Widen(receiver) | S::Try(receiver) | S::Return(receiver) => {
             free_locals(receiver, bound, found);
         }
         S::If(condition, yes, no) => {

@@ -1,7 +1,0 @@
-error: a line's `else` leaves where its block answers the clause or lambda, and nowhere else yet
- --> an_else_line_leaves_only_where_its_block_answers.fn:6:5
-  |
-6 |     n > 0 else return 0
-  |     ^^^^^^^^^^^^^^^^^^^ its block's value goes on into more of the body
-  |
-  = help: take this step out into a function of its own, where its block answers

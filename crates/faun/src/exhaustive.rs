@@ -150,7 +150,8 @@ fn with_arms<'e>(expression: &'e t::Expr, found: &mut Vec<(&'e t::Expr, &'e [t::
         | t::ExprKind::Is(inner, _)
         | t::ExprKind::Project(inner, _)
         | t::ExprKind::Widen(inner)
-        | t::ExprKind::Try(inner) => each(inner),
+        | t::ExprKind::Try(inner)
+        | t::ExprKind::Return(inner) => each(inner),
         t::ExprKind::If(condition, yes, no) => {
             for inner in [condition, yes, no] {
                 each(inner);

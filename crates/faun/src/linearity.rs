@@ -280,6 +280,7 @@ impl<'a> Facts<'a> {
                 refused: Vec::new(),
                 guarded: false,
                 answering: Some(place(&clause.body.result)),
+                returned: false,
             };
             walk.clause(clause, parameters);
             paths.append(&mut walk.paths);
@@ -596,6 +597,9 @@ struct Walk<'f, 'a> {
     guarded: bool,
     /// Where the clause walked answers, for what its head is refused.
     answering: Option<Place>,
+    /// Whether the branch walked last ended in a `return`, so that nothing
+    /// after it is held as it left things.
+    returned: bool,
 }
 
 impl Walk<'_, '_> {
@@ -738,6 +742,14 @@ impl Walk<'_, '_> {
             }
             ExprKind::Project(receiver, _) | ExprKind::Widen(receiver) => self.value(receiver),
             ExprKind::DirectCall(callee, arguments) => self.call(expr, callee, arguments),
+            // A way the function ends: what is held there is as at any
+            // answer, and nothing goes on from it.
+            ExprKind::Return(answered) => {
+                let origins = self.value(answered);
+                self.end(&origins, (place(expr), Leaving::Answering));
+                self.returned = true;
+                Vec::new()
+            }
             ExprKind::Try(tried) => {
                 let origins = self.value(tried);
                 self.end(&origins, (place(expr), Leaving::Asking));
@@ -796,11 +808,35 @@ impl Walk<'_, '_> {
     ) -> Vec<Origin> {
         self.lend(condition);
         let before: Vec<State> = self.held.iter().map(|held| held.state).collect();
+        let outer = std::mem::take(&mut self.returned);
         let mut answered = self.value(yes);
+        let yes_returned = std::mem::take(&mut self.returned);
         let taken = self.restored(&before);
         answered.extend(self.value(no));
-        self.agreed(expr, taken);
+        let no_returned = std::mem::take(&mut self.returned);
+        self.joined(expr, vec![(taken, yes_returned)], no_returned);
+        self.returned = outer || (yes_returned && no_returned);
         answered
+    }
+
+    /// The branches walked, each what it left and whether it returned, met
+    /// with the one walked last, whose states are the current ones: those
+    /// that went on must agree, and one that returned has no say.
+    fn joined(&mut self, expr: &d::Expr, others: Vec<(Vec<State>, bool)>, last_returned: bool) {
+        let mut returned = last_returned;
+        for (taken, other_returned) in others {
+            if other_returned {
+                continue;
+            }
+            if returned {
+                for (held, state) in self.held.iter_mut().zip(&taken) {
+                    held.state = *state;
+                }
+                returned = false;
+                continue;
+            }
+            self.agreed(expr, taken);
+        }
     }
 
     /// An `is` with arms: each arm, its guards looked at, walked from what
@@ -808,20 +844,23 @@ impl Walk<'_, '_> {
     /// use up what the others do.
     fn arms(&mut self, expr: &d::Expr, arms: &[d::Arm]) -> Vec<Origin> {
         let before: Vec<State> = self.held.iter().map(|held| held.state).collect();
+        let outer = std::mem::take(&mut self.returned);
         let mut answered = Vec::new();
         let mut taken = Vec::new();
+        let mut returned = false;
         for (at, arm) in arms.iter().enumerate() {
             if at > 0 {
-                taken.push(self.restored(&before));
+                taken.push((self.restored(&before), returned));
             }
             for guard in arm.rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
                 self.lend(guard);
             }
             answered.extend(self.value(&arm.body));
+            returned = std::mem::take(&mut self.returned);
         }
-        for each in taken {
-            self.agreed(expr, each);
-        }
+        let every = returned && taken.iter().all(|(_, returned)| *returned);
+        self.joined(expr, taken, returned);
+        self.returned = outer || every;
         answered
     }
 

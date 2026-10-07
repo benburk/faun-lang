@@ -2246,8 +2246,7 @@ impl ClauseResolver<'_> {
                     Box::new(self.expr(otherwise)?),
                 )
             }
-            // Only where its clause answers, so its value is that answer.
-            s::ExprKind::Return(value) => return self.expr(value),
+            s::ExprKind::Return(value) => h::ExprKind::Return(Box::new(self.expr(value)?)),
             s::ExprKind::Match(value, arms) => {
                 let value = self.expr(value)?;
                 let arms = arms

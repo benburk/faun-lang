@@ -6,7 +6,8 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use num_traits::ToPrimitive;
 
@@ -15,7 +16,7 @@ use crate::declarations::Data;
 use crate::diagnostic::LowerError;
 use crate::first_order::{self as d, Expr, ExprKind};
 use crate::hir::LocalId;
-use crate::specialize::{FunctionKey, Pattern, Split, Type};
+use crate::specialize::{FunctionKey, Instance, Pattern, Signature, Split, Type};
 use crate::{Symbol, Symbols};
 
 #[derive(Clone, Debug)]
@@ -84,13 +85,15 @@ pub(crate) fn compile(
     prelude: &PreludeIds,
     symbols: &Symbols,
 ) -> Result<Program, LowerError> {
+    let joins = Joins::default();
     let compiler = Compiler {
         data: &program.data,
         prelude,
         symbols,
         run_out: RunOut::Refused,
+        joins: &joins,
     };
-    let functions = program
+    let mut functions: Vec<Function> = program
         .functions
         .into_iter()
         .map(|function| {
@@ -117,7 +120,7 @@ pub(crate) fn compile(
                                     .guard
                                     .map(|guard| asked(guard, prelude))
                                     .unwrap_or_default(),
-                                body: compiler.body(clause.body)?,
+                                body: compiler.tail_body(clause.body, &function.key)?,
                                 locals: HashMap::new(),
                             })
                         })
@@ -132,6 +135,7 @@ pub(crate) fn compile(
             })
         })
         .collect::<Result<_, LowerError>>()?;
+    functions.extend(joins.functions.into_inner());
     Ok(Program {
         entry: program.entry,
         functions,
@@ -251,6 +255,14 @@ struct Compiler<'a> {
     prelude: &'a PreludeIds,
     symbols: &'a Symbols,
     run_out: RunOut,
+    joins: &'a Joins,
+}
+
+/// The join points made while compiling, and how many there are.
+#[derive(Default)]
+struct Joins {
+    functions: RefCell<Vec<Function>>,
+    made: Cell<u32>,
 }
 
 /// What a plan makes of a way no row is left for.
@@ -267,6 +279,167 @@ enum RunOut {
 }
 
 impl Compiler<'_> {
+    /// A body the function answers, made so that each branch that may
+    /// leave answers it too; see [`Self::joined`].
+    fn tail_body(&self, body: d::Body, key: &FunctionKey) -> Result<Body, LowerError> {
+        let body = d::Body {
+            bindings: body
+                .bindings
+                .into_iter()
+                .map(|binding| d::Binding {
+                    pattern: binding.pattern,
+                    value: tested(binding.value, self.prelude),
+                })
+                .collect(),
+            result: tested(body.result, self.prelude),
+        };
+        let body = self.joined(hoisted(body, &mut 0), key)?;
+        self.compiled(body)
+    }
+
+    /// A hoisted body the function answers, each `if` or arms of it whose
+    /// branches may leave, by `?` or `return`, made to answer the function:
+    /// where lines follow it, those lines become a join point, a function
+    /// of the branch's value and what they read, which each branch going
+    /// on calls; a branch leaving answers the function itself. The same is
+    /// made of each branch, and of the join point, in turn.
+    fn joined(&self, mut body: d::Body, key: &FunctionKey) -> Result<d::Body, LowerError> {
+        let Some(at) = body
+            .bindings
+            .iter()
+            .position(|binding| branches_leave(&binding.value))
+        else {
+            return Ok(body);
+        };
+        let answer = key.signature.result.as_ref().clone();
+        let rest = d::Body {
+            bindings: body.bindings.split_off(at + 1),
+            result: body.result,
+        };
+        let construct = body.bindings.pop().expect("the binding found");
+        let Pattern::Bind(local) = construct.pattern else {
+            unreachable!("hoisting binds each `if` and arms to a local of its own")
+        };
+        let last = rest.bindings.is_empty()
+            && matches!(rest.result.kind, ExprKind::Local(answered) if answered == local);
+        let join = if last {
+            None
+        } else {
+            let live = live_in(&rest, local);
+            let mut parameters = vec![construct.value.ty.clone()];
+            parameters.extend(live.iter().map(|(_, ty)| ty.clone()));
+            let made = self.joins.made.get();
+            self.joins.made.set(made + 1);
+            let join = FunctionKey {
+                name: key.name,
+                signature: Signature {
+                    parameters,
+                    result: Box::new(answer.clone()),
+                },
+                instance: Instance::Join(made),
+            };
+            let rest = self.joined(rest, key)?;
+            let locals = std::iter::once(local)
+                .chain(live.iter().map(|(local, _)| *local))
+                .enumerate()
+                .map(|(at, local)| (local, Value(u32::try_from(at).expect("a sane arity"))))
+                .collect();
+            let body = self.compiled(rest)?;
+            self.joins.functions.borrow_mut().push(Function {
+                key: join.clone(),
+                definition: Definition::Body(Box::new(Decision::Body { body, locals })),
+            });
+            Some((join, live))
+        };
+        let (module, span) = (construct.value.module, construct.value.span);
+        let value = self.answering(construct.value, &answer, join.as_ref(), key)?;
+        body.bindings.push(d::Binding {
+            pattern: Pattern::Bind(local),
+            value,
+        });
+        body.result = Expr {
+            module,
+            span,
+            ty: answer,
+            kind: ExprKind::Local(local),
+        };
+        Ok(body)
+    }
+
+    /// An `if` or arms made to answer the function: each branch's body
+    /// [`Self::joined`], its answer handed to `join` where there is one, and
+    /// a `return` answering where it stands.
+    fn answering(
+        &self,
+        construct: Expr,
+        answer: &Type,
+        join: Option<&(FunctionKey, Vec<(LocalId, Type)>)>,
+        key: &FunctionKey,
+    ) -> Result<Expr, LowerError> {
+        let branch = |branch: Expr| -> Result<Expr, LowerError> {
+            let ExprKind::Block(body) = branch.kind else {
+                unreachable!("hoisting makes each branch a block")
+            };
+            let mut body = *body;
+            body.result = match body.result.kind {
+                ExprKind::Return(value) => *value,
+                kind => {
+                    let result = Expr {
+                        kind,
+                        ..body.result
+                    };
+                    match join {
+                        Some((join, live)) => {
+                            let mut arguments = vec![result];
+                            arguments.extend(live.iter().map(|(local, ty)| Expr {
+                                module: branch.module,
+                                span: branch.span,
+                                ty: ty.clone(),
+                                kind: ExprKind::Local(*local),
+                            }));
+                            Expr {
+                                module: branch.module,
+                                span: branch.span,
+                                ty: answer.clone(),
+                                kind: ExprKind::DirectCall(join.clone(), arguments),
+                            }
+                        }
+                        None => result,
+                    }
+                }
+            };
+            Ok(Expr {
+                module: branch.module,
+                span: branch.span,
+                ty: answer.clone(),
+                kind: ExprKind::Block(Box::new(self.joined(body, key)?)),
+            })
+        };
+        let kind = match construct.kind {
+            ExprKind::If(condition, yes, no) => {
+                ExprKind::If(condition, Box::new(branch(*yes)?), Box::new(branch(*no)?))
+            }
+            ExprKind::Match(subject, arms) => ExprKind::Match(
+                subject,
+                arms.into_iter()
+                    .map(|arm| {
+                        Ok(d::Arm {
+                            rows: arm.rows,
+                            body: branch(arm.body)?,
+                        })
+                    })
+                    .collect::<Result<_, LowerError>>()?,
+            ),
+            _ => unreachable!("only an `if` or arms has branches that leave"),
+        };
+        Ok(Expr {
+            module: construct.module,
+            span: construct.span,
+            ty: answer.clone(),
+            kind,
+        })
+    }
+
     fn body(&self, body: d::Body) -> Result<Body, LowerError> {
         let body = d::Body {
             bindings: body
@@ -948,6 +1121,155 @@ fn hoisted(body: d::Body, fresh: &mut u32) -> d::Body {
     d::Body { bindings, result }
 }
 
+/// Whether `value` is an `if` or arms with a branch that may leave the
+/// function, by `?` or `return`, anywhere inside it.
+fn branches_leave(value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::If(_, yes, no) => leaves(yes) || leaves(no),
+        ExprKind::Match(_, arms) => arms.iter().any(|arm| leaves(&arm.body)),
+        _ => false,
+    }
+}
+
+/// Whether a `?` or a `return` is anywhere in `expression`.
+fn leaves(expression: &Expr) -> bool {
+    let mut found = false;
+    each_expr(expression, &mut |inner| {
+        found |= matches!(inner.kind, ExprKind::Try(_) | ExprKind::Return(_));
+    });
+    found
+}
+
+/// What `rest` reads that it does not bind, but `answered`, each at its
+/// type, in order: a join point's parameters after the branch's value.
+fn live_in(rest: &d::Body, answered: LocalId) -> Vec<(LocalId, Type)> {
+    let mut read = BTreeMap::new();
+    let mut bound = HashSet::from([answered]);
+    for binding in &rest.bindings {
+        pattern_bound(&binding.pattern, &mut bound);
+    }
+    let mut visit = |inner: &Expr| match &inner.kind {
+        ExprKind::Local(local) => {
+            read.entry(*local).or_insert_with(|| inner.ty.clone());
+        }
+        ExprKind::Block(body) => {
+            for binding in &body.bindings {
+                pattern_bound(&binding.pattern, &mut bound);
+            }
+        }
+        ExprKind::Is(_, rows) => {
+            for (pattern, _) in rows {
+                pattern_bound(pattern, &mut bound);
+            }
+        }
+        ExprKind::Match(_, arms) => {
+            for (pattern, _) in arms.iter().flat_map(|arm| &arm.rows) {
+                pattern_bound(pattern, &mut bound);
+            }
+        }
+        _ => {}
+    };
+    for binding in &rest.bindings {
+        each_expr(&binding.value, &mut visit);
+    }
+    each_expr(&rest.result, &mut visit);
+    read.into_iter()
+        .filter(|(local, _)| !bound.contains(local))
+        .collect()
+}
+
+/// The locals `pattern` binds.
+fn pattern_bound(pattern: &Pattern, bound: &mut HashSet<LocalId>) {
+    match pattern {
+        Pattern::Bind(local) => {
+            bound.insert(*local);
+        }
+        Pattern::As(local, inner) => {
+            bound.insert(*local);
+            pattern_bound(inner, bound);
+        }
+        Pattern::Constructor(_, parts) | Pattern::Product(parts) => {
+            for part in parts {
+                pattern_bound(part, bound);
+            }
+        }
+        Pattern::List(elements, rest) => {
+            for part in elements.iter().chain(rest.as_deref()) {
+                pattern_bound(part, bound);
+            }
+        }
+        Pattern::Record(fields) => {
+            for (_, part) in fields {
+                pattern_bound(part, bound);
+            }
+        }
+        Pattern::Split(split) => {
+            for part in std::iter::once(&split.front).chain(&split.last) {
+                pattern_bound(part, bound);
+            }
+        }
+        Pattern::Wild
+        | Pattern::Number { .. }
+        | Pattern::Range
+        | Pattern::String
+        | Pattern::Ending => {}
+    }
+}
+
+/// `visit` on `expression` and every expression inside it.
+fn each_expr(expression: &Expr, visit: &mut impl FnMut(&Expr)) {
+    visit(expression);
+    match &expression.kind {
+        ExprKind::Local(_) | ExprKind::Natural(_) | ExprKind::Bytes(_) => {}
+        ExprKind::Construct(_, list) | ExprKind::Tuple(list) | ExprKind::DirectCall(_, list) => {
+            for inner in list {
+                each_expr(inner, visit);
+            }
+        }
+        ExprKind::Record(fields) => {
+            for (_, inner) in fields {
+                each_expr(inner, visit);
+            }
+        }
+        ExprKind::Update(base, fields) => {
+            each_expr(base, visit);
+            for (_, inner) in fields {
+                each_expr(inner, visit);
+            }
+        }
+        ExprKind::Project(inner, _)
+        | ExprKind::Widen(inner)
+        | ExprKind::Try(inner)
+        | ExprKind::Return(inner) => each_expr(inner, visit),
+        ExprKind::If(condition, yes, no) => {
+            for inner in [condition, yes, no] {
+                each_expr(inner, visit);
+            }
+        }
+        ExprKind::Is(value, rows) => {
+            each_expr(value, visit);
+            for guard in rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+                each_expr(guard, visit);
+            }
+        }
+        ExprKind::Match(value, arms) => {
+            each_expr(value, visit);
+            for arm in arms {
+                for guard in arm.rows.iter().filter_map(|(_, guard)| guard.as_ref()) {
+                    each_expr(guard, visit);
+                }
+                each_expr(&arm.body, visit);
+            }
+        }
+        ExprKind::Block(body) => {
+            for binding in &body.bindings {
+                each_expr(&binding.value, visit);
+            }
+            each_expr(&body.result, visit);
+        }
+    }
+}
+
 /// `expression` with every test the condition of an `if` of its own: an
 /// `if` asking a chain of `&` and `|` holding a test asks each part in
 /// turn, as [`branched`] does, so what a test binds is in scope for the
@@ -1017,6 +1339,7 @@ fn tested(expression: Expr, prelude: &PreludeIds) -> Expr {
         ExprKind::DirectCall(key, arguments) => ExprKind::DirectCall(key, each(arguments)),
         ExprKind::Widen(value) => ExprKind::Widen(one(value)),
         ExprKind::Try(value) => ExprKind::Try(one(value)),
+        ExprKind::Return(value) => ExprKind::Return(one(value)),
         // A guard is asked a part at a time where its arm is planned.
         ExprKind::Match(value, arms) => ExprKind::Match(
             one(value),
@@ -1187,6 +1510,8 @@ fn lifted(expression: Expr, bindings: &mut Vec<d::Binding>, fresh: &mut u32) -> 
             ExprKind::DirectCall(key, arguments.into_iter().map(&mut lift).collect())
         }
         ExprKind::Widen(value) => ExprKind::Widen(Box::new(lift(*value))),
+        // A branch's answer, which stays where it stands.
+        ExprKind::Return(value) => ExprKind::Return(Box::new(lift(*value))),
         ExprKind::Is(..) => unreachable!("each test is an `if`'s condition by now"),
         ExprKind::If(condition, yes, no) => {
             // A test's value is worked out ahead; its pattern is asked by
@@ -1372,6 +1697,7 @@ mod tests {
             prelude,
             symbols: &checked.resolved.symbols,
             run_out: RunOut::Refused,
+            joins: &Joins::default(),
         };
         let subjects = [Subject {
             value: Value(0),
@@ -1422,6 +1748,7 @@ mod tests {
             prelude,
             symbols: &checked.resolved.symbols,
             run_out: RunOut::Refused,
+            joins: &Joins::default(),
         };
         let nat = Type::Named(prelude.nat, Vec::new());
         let record = Type::Record(vec![(a, nat.clone()), (b, nat)]);

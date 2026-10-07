@@ -177,7 +177,10 @@ impl Builder<'_> {
                 self.exprs(fields.iter_mut().map(|(_, value)| value));
             }
             h::ExprKind::Tuple(members) => self.exprs(members.iter_mut()),
-            h::ExprKind::Lambda(_, body) | h::ExprKind::Try(body) | h::ExprKind::Unary(_, body) => {
+            h::ExprKind::Lambda(_, body)
+            | h::ExprKind::Try(body)
+            | h::ExprKind::Return(body)
+            | h::ExprKind::Unary(_, body) => {
                 self.expr(body);
             }
             h::ExprKind::Member(head, _) => self.expr(head),

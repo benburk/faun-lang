@@ -134,6 +134,9 @@ pub(crate) enum Instance {
     /// A lambda written in the definition, for one set of the callbacks it
     /// reads, numbered.
     Lambda(u32),
+    /// The rest of a body after a branch that may leave, made a function
+    /// each branch going on calls; see [`crate::pattern_compile`].
+    Join(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -247,6 +250,8 @@ pub(crate) enum ExprKind {
     /// `value?`: an `Ok`'s value, or its `Err` answered at once by the
     /// function or lambda this is in.
     Try(Box<Expr>),
+    /// `return value`; see [`crate::hir::ExprKind::Return`].
+    Return(Box<Expr>),
     /// `if condition then yes else no`; see [`crate::hir::ExprKind::If`].
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `value is pattern`; see [`crate::hir::ExprKind::Is`]: a row for
@@ -1430,6 +1435,9 @@ impl<'a> Specializer<'a> {
             ),
             t::ExprKind::Try(value) => {
                 ExprKind::Try(Box::new(self.expr(module, value, substitution)?))
+            }
+            t::ExprKind::Return(value) => {
+                ExprKind::Return(Box::new(self.expr(module, value, substitution)?))
             }
         };
         Ok(Expr {

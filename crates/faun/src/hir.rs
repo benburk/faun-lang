@@ -397,6 +397,9 @@ pub enum ExprKind {
     /// `value?`: an `Ok`'s value, or the `Err` answered at once by the
     /// clause or lambda it is written in.
     Try(Box<Expr>),
+    /// `return value`, after a line's `else`: the clause's or lambda's
+    /// answer, at once.
+    Return(Box<Expr>),
     /// `if condition then yes else no`: the branch the condition chooses.
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `value is pattern`: whether it matches. What the pattern binds is

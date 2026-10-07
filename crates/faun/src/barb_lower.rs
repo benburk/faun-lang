@@ -291,6 +291,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ExprKind::Project(receiver, _) => self.collect_expr(receiver, answer)?,
+            ExprKind::Return(value) => self.collect_expr(value, answer)?,
             // An `Err` answered early is widened into what is answered.
             ExprKind::Try(value) => {
                 self.collect_expr(value, answer)?;
@@ -1172,6 +1173,8 @@ fn emit_expr(
             context.widen(builder, atom, &value.ty, &expression.ty)
         }
         ExprKind::Try(_) => unreachable!("every `?` is bound on its own before emission"),
+        // Pattern compiling put each `return` where the function answers.
+        ExprKind::Return(value) => emit_expr(context, builder, value, locals),
     }
 }
 
@@ -1284,6 +1287,7 @@ fn function_name(key: &FunctionKey, symbols: &crate::Symbols) -> String {
     let name = source_name(key.name, symbols);
     match key.instance {
         specialize::Instance::Lambda(_) => format!("lambda in {name}"),
+        specialize::Instance::Join(_) => format!("{name}, going on"),
         specialize::Instance::Written | specialize::Instance::Called(_) => name.to_owned(),
     }
 }
