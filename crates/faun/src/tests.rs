@@ -477,6 +477,11 @@ fn a_body_leaves_only_by_a_leaving_line() {
     assert!(error.message.contains("`return`"), "{error}");
     let error = parse("f(xs) -> (\n  for x in xs (\n    if x break\n  )\n  0\n)").unwrap_err();
     assert!(error.message.contains("touches what it calls"), "{error}");
+    let error = parse("f(xs) -> (\n  for x in xs do log!(x)\n  0\n)").unwrap_err();
+    assert!(
+        format!("{error:?}").contains("lines in parentheses"),
+        "{error:?}"
+    );
     let error = parse("f(x) -> g (x)").unwrap_err();
     assert!(error.message.contains("touches what it calls"), "{error}");
 }

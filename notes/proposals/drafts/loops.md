@@ -142,9 +142,9 @@ loop-line = "while" expr "do" "(" round ")"
   until input ends, is `while True do ( … if done break … )`.
 - **`do` before the body,** as `then` before a branch and `->` before a
   clause's body: every construct puts a word between its head and its body.
-  The body is always a block, a round being lines. So no `(` depends on its
-  spacing: a call's `(` touches what it calls, and one apart from it is
-  refused.
+  The body is always a block, a round being lines where a branch is a
+  value. So no `(` depends on its spacing: a call's `(` touches what it
+  calls, and one apart from it is refused.
 - **A loop is a line of a block,** not an expression, and not the last
   line of a block that answers. What a loop computes is left in the names
   it bound again.
@@ -225,6 +225,16 @@ answers.
 - **Nesting limits,** two loops deep and no multi-line lambda in a round,
   as first drafted. They said what style should, which is a linter's to
   say.
+- **A bare one-line body,** `for x in xs do log!(x)`, as a branch may be a
+  bare value. A one-line round is nearly always a method already: `sum`,
+  `map`, `find`, `count`; only an effect for each element is not, lambdas
+  being pure. A body beginning `(` would have had to mean the round's lines
+  even where the line was `(a, b) = (b, a)`. The parentheses cost the effect
+  case two lines, and a single effect line, which always begins with a name,
+  can be added if programs ask for it.
+- **No `do`,** the body's `(` alone ending the head. Then `while done (` and
+  `while done(x) (` part by the spacing before a `(`, which nothing else
+  in the grammar does.
 - **`loop` beside `while`,** for a loop whose test is partway through. It
   is `while True ( … if done break … )`, a keyword fewer.
 - **`loop` only, no `while`.** `while c ( … )` is `loop ( c else break …

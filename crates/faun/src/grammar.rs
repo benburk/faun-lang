@@ -477,7 +477,14 @@ impl Parser<'_> {
             LoopHead::For(pattern, Box::new(list))
         };
         self.expect(Kind::KwDo, "`do`")?;
-        self.expect(Kind::LParen, "`(`, beginning the loop's body")?;
+        if self.peek() != Kind::LParen {
+            let error = self
+                .expect(Kind::LParen, "`(`, beginning the loop's body")
+                .expect_err("the token is no `(`");
+            return Err(error
+                .help("a loop's body is lines in parentheses, as one line is too: `do (` … `)`"));
+        }
+        self.bump();
         let mut lines = vec![self.statement()?];
         while self.eat(Kind::Newline).is_some() {
             lines.push(self.statement()?);
