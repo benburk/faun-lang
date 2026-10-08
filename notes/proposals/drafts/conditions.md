@@ -119,6 +119,9 @@ job, so a default for a failed `Result` stays `ok_or`.
   [Names](#names-assignment-not-shadowing).
 - **`==name`** in a pattern matches a value equal, by its type's `equals`,
   to a name from outside the pattern, binding nothing: `r is Some(==node)`.
+  It compares a part: as a test's or an arm's whole pattern it is refused,
+  `x == y` comparing the whole value. So no arm begins with `==`, which a
+  line break before would join to the line above as an infix `==`.
   Within one pattern, a clause's parameters too, a name written twice asks
   its two parts equal, `[a, a, *_]`; `[a, ==a]` would read as if `a` were
   bound before the pattern, and is refused.

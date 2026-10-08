@@ -457,3 +457,12 @@ fn an_if_line_and_a_loop_are_not_a_block_s_last() {
     assert!(parse("f(x) -> (\n  if x return 0\n  x\n)").is_ok());
     assert!(parse("f(x) -> (\n  for y in x (\n    if y break\n  )\n  0\n)").is_ok());
 }
+
+/// A line beginning `==` goes on with the one above, so an arm cannot begin
+/// with one, and the message says how to compare the whole value.
+#[test]
+fn an_arm_does_not_begin_with_equals() {
+    let error = parse("f(n) -> n is (\n  0 -> 1\n  ==limit -> 2\n  _ -> 3\n)").unwrap_err();
+    assert!(error.message.contains("begins no arm"), "{error}");
+    assert!(parse("f(n) -> n is (\n  0 -> 1\n    == 2\n  _ -> 3\n)").is_ok());
+}

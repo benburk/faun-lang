@@ -1,0 +1,7 @@
+import std.host {Host}
+
+f : (Nat, Nat) -> Bool
+f(n, limit) -> n is ==limit
+
+main! : Host -> []
+main!(host) -> host.exit!(0)

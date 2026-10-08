@@ -1150,6 +1150,23 @@ impl Parser<'_> {
             let pattern = self.expr()?;
             arms.push(self.arm(pattern)?);
         }
+        // A line beginning `==` went on with the arm above it.
+        if self.peek() == Kind::Arrow
+            && arms.last().is_some_and(|arm| {
+                arm.body
+                    .span
+                    .text(self.source)
+                    .lines()
+                    .skip(1)
+                    .any(|line| line.trim_start().starts_with("=="))
+            })
+        {
+            return Err(SyntaxError::new(
+                self.tokens[self.at].span(),
+                "a line beginning `==` goes on with the line above, so it begins no arm",
+            )
+            .help("compare the whole value with a guard: `n if n == limit -> …`"));
+        }
         self.note("a new line");
         let close = self.expect(Kind::RParen, "`)`")?;
         Ok(Expr {

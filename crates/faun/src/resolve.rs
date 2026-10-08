@@ -1656,6 +1656,7 @@ impl ClauseResolver<'_> {
         let kind = match &expression.kind {
             // A test, each `==name` in its pattern asked after it matches.
             s::ExprKind::Is(tested, pattern) => {
+                self.part_compared(pattern, tested.span.text(self.source))?;
                 let value = self.expr(tested)?;
                 let outer = std::mem::replace(&mut self.testing, true);
                 let named = self.tested_name(tested);
@@ -1692,6 +1693,7 @@ impl ClauseResolver<'_> {
     /// One arm: what its pattern binds, as a test's does, seen by its guard
     /// and its body, and nowhere after the arm.
     fn arm(&mut self, arm: &s::Arm) -> Result<(h::Arm, HashMap<Symbol, h::LocalId>), ResolveError> {
+        self.part_compared(&arm.pattern, "value")?;
         let before = self.locals.clone();
         let outer = std::mem::replace(&mut self.testing, true);
         let comparing = self.compared.replace(Vec::new());
@@ -1718,6 +1720,23 @@ impl ClauseResolver<'_> {
         self.hide(&before, arm.pattern.span());
         self.locals = before;
         Ok((resolved?, end))
+    }
+
+    /// Refuse `==name` as a test's or an arm's whole pattern: it compares a
+    /// part, and the whole value is compared with `==` between values.
+    fn part_compared(&self, pattern: &s::Pattern, value: &str) -> Result<(), ResolveError> {
+        let s::Pattern::Equal { span, name } = pattern else {
+            return Ok(());
+        };
+        let shown = name.text(self.source);
+        Err(error(
+            self.module,
+            *span,
+            format!("`=={shown}` compares a part of a pattern, not the whole value"),
+        )
+        .help(format!(
+            "to compare the whole value, write `==` between values: `{value} == {shown}`"
+        )))
     }
 
     /// The name `expression` is, where it is one.

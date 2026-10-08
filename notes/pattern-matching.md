@@ -36,7 +36,8 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - **`is` inside a pattern** binds the whole and its parts: `right is [y,
   *_]`. Built, 2026-10-06.
 - **`==name` in a pattern** compares with a name from outside it:
-  `Some(==node)`. Within one pattern, a name written twice asks its parts
+  `Some(==node)`, a part only, never a test's or an arm's whole pattern,
+  which `x == y` writes. Within one pattern, a name written twice asks its parts
   equal, `[a, a, *_]`, in a test as in a clause's head; `[a, ==a]` is
   refused, since `==` reads as reaching outside the pattern.
   Built, 2026-10-06.

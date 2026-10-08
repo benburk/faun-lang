@@ -1,0 +1,7 @@
+error: `==limit` compares a part of a pattern, not the whole value
+ --> equal_to_a_name_compares_a_part.fn:4:21
+  |
+4 | f(n, limit) -> n is ==limit
+  |                     ^^^^^^^
+  |
+  = help: to compare the whole value, write `==` between values: `n == limit`

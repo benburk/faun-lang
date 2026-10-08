@@ -495,7 +495,9 @@ strip_prefix([byte, *rest], [byte, *prefix]) -> strip_prefix(rest, prefix)
 
 `==name` asks its equality where the rest of the pattern has matched,
 before a clause's written guard, and so stands in a clause's head or a
-test, outside any `|`. A binding cannot fail, so neither form stands in a
+test, outside any `|`. It compares a part: a test's or an arm's whole
+pattern is never one, the whole value being compared with `x == y`, or in
+arms with a guard. A binding cannot fail, so neither form stands in a
 binding's or a lambda's pattern. A value holding a resource is named whole
 or taken apart, not both.
 
