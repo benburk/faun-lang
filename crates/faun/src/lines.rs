@@ -915,25 +915,8 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             otherwise,
             rest,
         } => {
-            let leave = match &otherwise.kind {
-                ExprKind::Block(body) if leaves(&body.result) => {
-                    thrown_away(body, source)?;
-                    for binding in &body.bindings {
-                        expression(&binding.value, source, false)?;
-                    }
-                    &body.result
-                }
-                _ if leaves(otherwise) => otherwise,
-                _ => {
-                    return Err(error(
-                        otherwise.span,
-                        "a line's `else` leaves: `return` a value, `continue`, `break`, or a block whose last line does",
-                    )
-                    .label("goes on rather than leaving"));
-                }
-            };
             expression(condition, source, false)?;
-            left_by(leave, source)?;
+            left_by(otherwise, source)?;
             body_expressions(rest, source, true)
         }
         // A loop's head is worked out as values are; its body and what
@@ -969,14 +952,6 @@ fn expression(expr: &Expr, source: &str, answering: bool) -> Result<(), Error> {
             "`return` stands only in a leaving line: `c else return x`, or `if c return x`",
         )),
     }
-}
-
-/// Whether `expr` is a leave: `return value`, `continue` or `break`.
-const fn leaves(expr: &Expr) -> bool {
-    matches!(
-        expr.kind,
-        ExprKind::Return(_) | ExprKind::Continue | ExprKind::Break
-    )
 }
 
 /// Refuse a pattern-only form in what `leave` leaves with.

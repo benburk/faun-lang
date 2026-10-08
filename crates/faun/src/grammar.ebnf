@@ -77,8 +77,7 @@ field-types       = NAME ":" type [ "," [ field-types ] ]
    and is no operand: `1 + (if c then a else b)`. *)
 expr              = if-head "then" expr "else" expr
                   | plain ;
-plain             = "return" expr
-                  | operand expr-tail ;
+plain             = operand expr-tail ;
 if-head           = "if" expr ;
 expr-tail         = { infix operand } ;
 infix             = "|" | "^" | "&" | "is" | "==" | "!=" | "<" | "<=" | ">"
@@ -117,7 +116,6 @@ exprs             = expr [ "," [ exprs ] ] ;
    grouped. *)
 parenthesized     = if-head ( "then" expr "else" expr after-first | leave NEWLINE statements )
                   | loop-line NEWLINE statements
-                  | bare-leave
                   | plain after-first ;
 after-first       = [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE statements
                     | arm-tail { NEWLINE arm } ] ;
@@ -131,7 +129,6 @@ arm-tail          = [ "if" expr ] "->" expr ;
    `break` may stand is told after parsing. *)
 statements        = if-head ( "then" expr "else" expr statement-tail | leave NEWLINE statements )
                   | loop-line NEWLINE statements
-                  | bare-leave
                   | plain statement-tail ;
 statement-tail    = [ line-tail NEWLINE statements | NEWLINE statements ] ;
 (* A loop's body: lines, any of which may be the last, the round going on
@@ -139,17 +136,17 @@ statement-tail    = [ line-tail NEWLINE statements | NEWLINE statements ] ;
 round             = block-line { NEWLINE block-line } ;
 block-line        = if-head ( "then" expr "else" expr [ line-tail ] | leave )
                   | loop-line
-                  | bare-leave
                   | plain [ line-tail ] ;
 (* A binding, or a line going on where its condition holds and leaving by
    its `else` where it fails. *)
-line-tail         = "=" expr | "else" ( bare-leave | expr ) ;
-leave             = "return" expr | bare-leave ;
-bare-leave        = "continue" | "break" ;
-(* A loop runs its body each round. The body's `(` follows a space, so
-   that `while done(` is a call. *)
-loop-line         = "while" expr "(" round ")"
-                  | "for" operand "in" expr "(" round ")" ;
+line-tail         = "=" expr | "else" leave ;
+(* The only ways a body leaves: `return`'s value is any expression, a
+   block among them. *)
+leave             = "return" expr | "continue" | "break" ;
+(* A loop runs its body each round, after `do`, as an `if`'s branch runs
+   after `then`. *)
+loop-line         = "while" expr "do" "(" round ")"
+                  | "for" operand "in" expr "do" "(" round ")" ;
 (* A list's rest may have elements after it, which its end matches:
    `[*front, last]`. *)
 elements          = expr [ "," [ elements ] ]

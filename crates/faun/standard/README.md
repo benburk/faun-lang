@@ -528,8 +528,8 @@ holding a resource.
 
 A block's line `condition else …` goes on where the condition holds, the
 lines after it seeing what it bound, and where it fails, leaves the clause
-or lambda: `else return value`, or `else` a block whose last line returns,
-doing its steps first. A line `if condition return value` leaves where the
+or lambda: `else return value`, the value any expression, a block doing
+its steps first among them. A line `if condition return value` leaves where the
 condition holds, what the condition bound seen by the `return` alone, and
 goes on where it fails. Neither is a block's last line, since the lines
 after it answer.
@@ -564,7 +564,7 @@ not the last of a block that answers.
 ```
 summed(xs) -> (
   total = 0
-  for x in xs (
+  for x in xs do (
     if x > 100 continue
     total = total + x
   )

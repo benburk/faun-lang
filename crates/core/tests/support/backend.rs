@@ -1324,14 +1324,14 @@ fn loops_carry_names_and_keep_their_effects_in_order() {
          counted! : (Stdout, Nat) -> Result(Nat, IoError)
          counted!(out, n) -> (
            total = 0
-           for x in List.range(n + 3) (
+           for x in List.range(n + 3) do (
              if x == 4 break
              x % 2 == 1 else continue
              written = out.write_all!(\"${x};\".to_utf8())?
              total = total + x
            )
            ready = [5, 6]
-           while ready is [head, *rest] (
+           while ready is [head, *rest] do (
              ready = rest
              if head > 5 return Ok(total * 10 + head)
            )

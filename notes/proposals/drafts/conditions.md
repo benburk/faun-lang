@@ -162,20 +162,22 @@ partway through a body is.
 ### Leaving lines
 
 - **Syntax.** Two block lines, `condition "else" out` and `"if" condition
-  out`, with `out = "return" expr | "continue" | "break"`, and for `else` a
-  block whose last line is one of those; `continue` and `break` come with
-  [loops](loops.md). Neither is an expression, and an `else` line is not a
-  block's last line. After `if condition`, the next token says which: `then`
-  begins the ternary, a leaving keyword the line.
+  out`, with `out = "return" expr | "continue" | "break"`; `return`'s value
+  is any expression, a block among them, and `continue` and `break` come
+  with [loops](loops.md). These are the only places `return`, `continue`
+  and `break` stand. Neither line is an expression, nor the last line of a
+  block that answers. After `if condition`, the next token says which:
+  `then` begins the ternary, a leaving keyword the line.
 - **Meaning.** Where the condition holds, the block goes on, what it bound
   in scope for every line below. Where it fails, the `else` runs and leaves:
   `return x` answers `x` from the clause or lambda the block is in, as `?`
-  does, its type that clause's; a block may do its effects first.
+  does, its type that clause's; its value may be a block doing its effects
+  first.
 
   ```
-  config is Ok(settings) else (
+  config is Ok(settings) else return (
     log!("no config, using defaults")
-    return defaults
+    defaults
   )
   ```
 - **`if condition out`** leaves where the condition holds, and goes on

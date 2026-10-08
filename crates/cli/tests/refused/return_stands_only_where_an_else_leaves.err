@@ -1,5 +1,0 @@
-error: `return` stands only in a leaving line: `c else return x`, or `if c return x`
- --> return_stands_only_where_an_else_leaves.fn:4:14
-  |
-4 | halved(n) -> return n / 2
-  |              ^^^^^^^^^^^^

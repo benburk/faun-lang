@@ -262,14 +262,13 @@ module.exports = grammar({
       $.is_expression,
       $._operand,
       $.if_expression,
-      $.return_expression,
     ),
 
     // A block's line: go on where the condition holds, else leave.
     else_line: $ => seq(
       field('condition', $._expression),
       'else',
-      field('otherwise', choice($._expression, $.leave)),
+      field('otherwise', choice($.return_expression, $.leave)),
     ),
 
     // `continue` or `break`: on to the next round, or out of the loop.
@@ -277,12 +276,13 @@ module.exports = grammar({
 
     // A loop runs its body each round, any of whose lines may be its last.
     loop_line: $ => choice(
-      seq('while', field('condition', $._expression), field('body', $.round)),
+      seq('while', field('condition', $._expression), 'do', field('body', $.round)),
       seq(
         'for',
         field('pattern', $._operand),
         'in',
         field('list', $._expression),
+        'do',
         field('body', $.round),
       ),
     ),
@@ -299,7 +299,6 @@ module.exports = grammar({
       $.else_line,
       $.if_line,
       $.loop_line,
-      $.leave,
       $._expression,
     ),
 
@@ -433,7 +432,7 @@ module.exports = grammar({
     block: $ => seq(
       '(',
       repeat1(seq(choice($.binding, $.else_line, $.if_line, $.loop_line, $._expression), $._block_newline)),
-      field('answer', choice($._expression, $.leave)),
+      field('answer', $._expression),
       ')',
     ),
 

@@ -452,10 +452,10 @@ fn an_else_line_is_not_a_block_s_last() {
 fn an_if_line_and_a_loop_are_not_a_block_s_last() {
     let error = parse("f(x) -> (\n  y = x\n  if y return 0\n)").unwrap_err();
     assert!(error.message.contains("not a block's last"), "{error}");
-    let error = parse("f(x) -> (\n  for y in x (\n    if y break\n  )\n)").unwrap_err();
+    let error = parse("f(x) -> (\n  for y in x do (\n    if y break\n  )\n)").unwrap_err();
     assert!(error.message.contains("not a block's last"), "{error}");
     assert!(parse("f(x) -> (\n  if x return 0\n  x\n)").is_ok());
-    assert!(parse("f(x) -> (\n  for y in x (\n    if y break\n  )\n  0\n)").is_ok());
+    assert!(parse("f(x) -> (\n  for y in x do (\n    if y break\n  )\n  0\n)").is_ok());
 }
 
 /// A line beginning `==` goes on with the one above, so an arm cannot begin
@@ -465,4 +465,18 @@ fn an_arm_does_not_begin_with_equals() {
     let error = parse("f(n) -> n is (\n  0 -> 1\n  ==limit -> 2\n  _ -> 3\n)").unwrap_err();
     assert!(error.message.contains("begins no arm"), "{error}");
     assert!(parse("f(n) -> n is (\n  0 -> 1\n    == 2\n  _ -> 3\n)").is_ok());
+}
+
+/// A body leaves only by a leaving line, whose `else` is followed by a
+/// leave: `return` stands nowhere else, and an `else` going on is refused.
+#[test]
+fn a_body_leaves_only_by_a_leaving_line() {
+    let error = parse("f(n) -> return n").unwrap_err();
+    assert!(error.message.contains("only by a leaving line"), "{error}");
+    let error = parse("f(n) -> (\n  n > 0 else 0\n  n\n)").unwrap_err();
+    assert!(error.message.contains("`return`"), "{error}");
+    let error = parse("f(xs) -> (\n  for x in xs (\n    if x break\n  )\n  0\n)").unwrap_err();
+    assert!(error.message.contains("touches what it calls"), "{error}");
+    let error = parse("f(x) -> g (x)").unwrap_err();
+    assert!(error.message.contains("touches what it calls"), "{error}");
 }

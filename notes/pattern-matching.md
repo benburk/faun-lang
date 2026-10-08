@@ -17,11 +17,13 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
   held: along `&`, into `then`, below an `else` line. Built.
 - **`condition else …`,** a block's line, goes on where the condition
   holds, keeping its names for the lines below, and otherwise leaves: `else
-  return x`, `else continue`, `else break`, or `else` a block whose last
-  line is one of those. One direction only. It replaces design E's `if`
-  lines. Both fresh designs led it with a keyword, `guard`, and it was
-  built first as `expect … else`; the keyword went on 2026-10-07, since
-  `return`, `continue` and `break` already mark every leave. Built.
+  return x`, `else continue` or `else break`, `return`'s value any
+  expression, a block doing effects first among them; beside it, `if c
+  return x` leaves where `c` holds. These replace design E's `if` lines.
+  Both fresh designs led the line with a keyword, `guard`, and it was built
+  first as `expect … else`; the keyword went on 2026-10-07, since `return`,
+  `continue` and `break` already mark every leave, and a block ending in a
+  leave as an `else`'s went on 2026-10-08, `return` taking a block. Built.
 - **A bare `expect` in a body,** an assumption checked in development and
   skipped in optimized builds, binding nothing, is for later; until then a
   body's line beginning `expect` is refused.

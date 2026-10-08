@@ -71,10 +71,10 @@ toposort(graph) -> (
   degrees = Map.counted(nodes.flat_map(|node| graph.neighbors(node)))
   ready = nodes.filter(|node| degrees.get_or(node, 0) == 0)
   order = []
-  while ready is [node, *rest] (
+  while ready is [node, *rest] do (
     ready = rest
     order = order.append(node)
-    for target in graph.neighbors(node) (
+    for target in graph.neighbors(node) do (
       degrees = degrees.update(target, |degree| degree - 1)
       if degrees.get_or(target, 0) > 0 continue
       ready = ready.prepend(target)
@@ -129,8 +129,8 @@ line on, and a lambda binds again only its own names. A loop adds:
 ### Loops
 
 ```
-loop-line = "while" expr "(" round ")"
-          | "for" operand "in" expr "(" round ")" ;
+loop-line = "while" expr "do" "(" round ")"
+          | "for" operand "in" expr "do" "(" round ")" ;
 ```
 
 - **`for P in list ( … )`** runs its body once for each element, in order,
@@ -139,9 +139,12 @@ loop-line = "while" expr "(" round ")"
 - **`while c ( … )`** runs while `c` holds. `c` may be an `is`, whose names
   the body sees.
 - **No `loop`.** A loop whose test is partway through, as in reading
-  until input ends, is `while True ( … if done break … )`.
-- **The space before the body's `(` matters,** as anywhere: `while
-  done(` is a call to `done`. The formatter writes the space.
+  until input ends, is `while True do ( … if done break … )`.
+- **`do` before the body,** as `then` before a branch and `->` before a
+  clause's body: every construct puts a word between its head and its body.
+  The body is always a block, a round being lines. So no `(` depends on its
+  spacing: a call's `(` touches what it calls, and one apart from it is
+  refused.
 - **A loop is a line of a block,** not an expression, and not the last
   line of a block that answers. What a loop computes is left in the names
   it bound again.

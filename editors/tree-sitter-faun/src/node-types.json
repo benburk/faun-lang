@@ -68,10 +68,6 @@
         "named": true
       },
       {
-        "type": "return_expression",
-        "named": true
-      },
-      {
         "type": "string",
         "named": true
       },
@@ -334,10 +330,6 @@
           {
             "type": "_expression",
             "named": true
-          },
-          {
-            "type": "leave",
-            "named": true
           }
         ]
       }
@@ -585,11 +577,11 @@
         "required": true,
         "types": [
           {
-            "type": "_expression",
+            "type": "leave",
             "named": true
           },
           {
-            "type": "leave",
+            "type": "return_expression",
             "named": true
           }
         ]
@@ -1666,10 +1658,6 @@
           "named": true
         },
         {
-          "type": "leave",
-          "named": true
-        },
-        {
           "type": "loop_line",
           "named": true
         }
@@ -2282,6 +2270,10 @@
   {
     "type": "decimal",
     "named": true
+  },
+  {
+    "type": "do",
+    "named": false
   },
   {
     "type": "effect_identifier",

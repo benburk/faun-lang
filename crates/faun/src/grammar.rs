@@ -419,8 +419,6 @@ impl Parser<'_> {
         match self.peek() {
             Kind::KwIf => {}
             Kind::KwWhile | Kind::KwFor => return self.loop_line().map(Begun::Line),
-            // A block's last line, after an `else`.
-            Kind::KwContinue | Kind::KwBreak => return self.leaving().map(Begun::Value),
             _ => return Ok(Begun::Value(self.expr()?)),
         }
         let keyword = self.bump();
@@ -440,12 +438,26 @@ impl Parser<'_> {
         )))
     }
 
-    /// What a leaving line leaves by: `return value`, `continue` or `break`.
+    /// What a leaving line leaves by: `return value`, its value any
+    /// expression, a block among them; `continue`; or `break`.
     fn leaving(&mut self) -> Parsed<Expr> {
         let kind = match self.peek() {
             Kind::KwContinue => ExprKind::Continue,
             Kind::KwBreak => ExprKind::Break,
-            _ => return self.expr(),
+            Kind::KwReturn => {
+                let keyword = self.bump();
+                let value = self.expr()?;
+                return Ok(Expr {
+                    span: keyword.span().through(value.span),
+                    kind: ExprKind::Return(Box::new(value)),
+                });
+            }
+            _ => {
+                self.note("`return`");
+                self.note("`continue`");
+                self.expect(Kind::KwBreak, "`break`")?;
+                unreachable!("the token is no `break`")
+            }
         };
         let keyword = self.bump();
         Ok(atom(keyword, kind))
@@ -464,10 +476,8 @@ impl Parser<'_> {
             let pattern = lines::pattern(written, self.source).map_err(SyntaxError::from)?;
             LoopHead::For(pattern, Box::new(list))
         };
-        self.expect(
-            Kind::LParen,
-            "`(`, after a space, beginning the loop's body",
-        )?;
+        self.expect(Kind::KwDo, "`do`")?;
+        self.expect(Kind::LParen, "`(`, beginning the loop's body")?;
         let mut lines = vec![self.statement()?];
         while self.eat(Kind::Newline).is_some() {
             lines.push(self.statement()?);
@@ -847,14 +857,10 @@ impl Parser<'_> {
     fn expr(&mut self) -> Parsed<Expr> {
         match self.peek() {
             Kind::KwIf => self.if_(),
-            Kind::KwReturn => {
-                let keyword = self.bump();
-                let value = self.expr()?;
-                Ok(Expr {
-                    span: keyword.span().through(value.span),
-                    kind: ExprKind::Return(Box::new(value)),
-                })
-            }
+            Kind::KwReturn | Kind::KwContinue | Kind::KwBreak => Err(SyntaxError::new(
+                self.tokens[self.at].span(),
+                "a body leaves only by a leaving line: `if c return x`, or `c else return x`",
+            )),
             _ => self.binary(0),
         }
     }
@@ -939,6 +945,7 @@ impl Parser<'_> {
                             }
                         }
                         Kind::Dot => self.member(value)?,
+                        Kind::LParen => return Err(self.apart_call()),
                         _ => return Ok(value),
                     };
                 }
@@ -954,6 +961,15 @@ impl Parser<'_> {
             span: equals.span().through(name.span()),
             kind: ExprKind::Equal(Name(name.span())),
         })
+    }
+
+    /// A `(` apart from the operand before it, which would have called it.
+    fn apart_call(&self) -> SyntaxError {
+        SyntaxError::new(
+            self.tokens[self.at].span(),
+            "a call's `(` touches what it calls: `f(x)`",
+        )
+        .help("a loop's body follows `do`: `while c do (`")
     }
 
     /// `.name`, or `.name(arguments)`, of `value`.

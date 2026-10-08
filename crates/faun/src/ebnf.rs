@@ -95,6 +95,7 @@ fn terminal(spelling: &str) -> Kind {
         "\"continue\"" => Kind::KwContinue,
         "\"break\"" => Kind::KwBreak,
         "\"while\"" => Kind::KwWhile,
+        "\"do\"" => Kind::KwDo,
         "\"for\"" => Kind::KwFor,
         "\"in\"" => Kind::KwIn,
         "\"(\"" => Kind::LParen,
@@ -566,12 +567,12 @@ const READ: &[&str] = &[
     "f(r) -> if r is Ok(v) & v > 0 then v else 0\nf(r) -> r is (A | B(_)) | r is [*_, C]\n",
     "f(a, b) -> (a, b) is (Ok(x), Ok(y)) & x <= y\n",
     "f(x, ==y, all is [_, *_]) -> x is Some(==y) | x is (==z, w)\n",
-    "f(xs) -> (\n  total = 0\n  for (a, b) in xs (\n    if a break\n    total = total + b\n    while total > 9 (\n      total = total - 1\n      total > 3 else continue\n    )\n  )\n  total\n)\n",
-    "f(x) -> (while x (\n  break\n)\n  0)\n",
+    "f(xs) -> (\n  total = 0\n  for (a, b) in xs do (\n    if a break\n    total = total + b\n    while total > 9 do (\n      total = total - 1\n      total > 3 else continue\n    )\n  )\n  total\n)\n",
+    "f(x) -> (while x do (\n  if x break\n)\n  0)\n",
     "f(r) -> (\n  if r is Err(e) return Err(e)\n  if done return 0\n  r\n)\n",
     "f(x) -> (if x return 1\n  2\n)\n",
     "f(x) -> x is (\n  A(v) if v > 0 -> v\n  B | C -> (\n    y = 1\n    y\n  )\n  _ -> 0\n)\n",
-    "f(xs) -> (\n  xs is [x, *_] else return 0\n  y = x\n  y > 1\n    else (\n      z = y\n      return z\n    )\n  y\n)\n",
+    "f(xs) -> (\n  xs is [x, *_] else return 0\n  y = x\n  y > 1\n    else return (\n      z = y\n      z\n    )\n  y\n)\n",
 ];
 
 /// Programs both refuse.
@@ -609,7 +610,7 @@ const REFUSED: &[&str] = &[
     "f(x) -> x is Some(==Y)\n",
     "f(x) -> (\n  y = x\n  if y return 0\n)\n",
     "f(x) -> (\n  if x then 1\n  2\n)\n",
-    "f(x) -> (\n  for y x (\n    y\n  )\n  0\n)\n",
+    "f(x) -> (\n  for y x do (\n    y\n  )\n  0\n)\n",
     "f(x) -> (\n  while x\n    0\n  0\n)\n",
     "f(x) -> x is (\n  A -> 1\n  B 2\n)\n",
     "f(x) -> x is (\n  A -> 1\n  B ->\n)\n",

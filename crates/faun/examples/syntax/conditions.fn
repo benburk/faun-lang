@@ -71,7 +71,7 @@ expect [1, 2] is [_, *_] & !([] is [_, *_])
 
 # `condition else …`, a block's line: the lines after it go on where the
 # condition holds, seeing what it bound, and the `else` leaves where it
-# fails, by `return`, or by a block whose last line returns.
+# fails, by `return`, its value any expression, a block among them.
 head_doubled : List(Nat) -> Nat
 head_doubled(xs) -> (
   xs is [x, *_] else return 0
@@ -82,9 +82,9 @@ head_doubled(xs) -> (
 checked : (Str, Nat) -> Result(Nat, [Invalid])
 checked(name, limit) -> (
   name.starts_with("_") else return Err(Invalid)
-  Nat.from_str(name.drop_prefix("_")) is Ok(n) & n < limit else (
+  Nat.from_str(name.drop_prefix("_")) is Ok(n) & n < limit else return (
     reason = Invalid
-    return Err(reason)
+    Err(reason)
   )
   Ok(n)
 )

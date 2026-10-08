@@ -3,7 +3,7 @@ import std.host {Host}
 f : List(Nat) -> List(Nat)
 f(xs) -> (
   total = 0
-  for x in xs (
+  for x in xs do (
     doubled = xs.map(|y| (
       if y > 1 continue
       y
