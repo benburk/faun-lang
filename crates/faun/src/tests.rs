@@ -159,6 +159,14 @@ fn elements_are_parted_by_commas_however_they_are_spaced() {
             error.message
         );
     }
+    for source in ["f(a, b) -> [a *b]\n", "f([a, * rest]) -> a\n"] {
+        let error = parse(source).unwrap_err();
+        assert!(
+            error.message.contains("touches the rest it takes"),
+            "{source}: {}",
+            error.message
+        );
+    }
     let error = parse("f(a b) -> a\n").unwrap_err();
     assert!(error.message.contains("`,`"), "{}", error.message);
     let error = parse("f(a) -> (a,)\n").unwrap_err();

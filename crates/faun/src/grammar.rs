@@ -223,6 +223,10 @@ impl Parser<'_> {
             }
             Kind::Detached => format!("`{text}` goes against what it follows: no space before it"),
             Kind::Apart if text == "!" => "`!` touches what it negates: `!ready`".to_owned(),
+            Kind::Apart if text == "*" => {
+                "`*` touches the rest it takes, `[x, *rest]`, and stands apart between two values, `a * b`"
+                    .to_owned()
+            }
             Kind::Apart => {
                 "`-` touches what it negates, `-3`, and stands apart between two values, `x - 3`"
                     .to_owned()

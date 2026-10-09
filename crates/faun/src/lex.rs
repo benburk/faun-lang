@@ -18,8 +18,8 @@
 //! where it stands, as in any expression grammar. What joins by adjacency is
 //! read here, so the grammar reads kinds alone: a `(` against an operand is a
 //! call's, [`Kind::CallParen`]; `.`, `..`, `.*` and `?` go against what they
-//! join, or they are [`Kind::Detached`]; and a prefix `-` or `!` touches what
-//! it negates, or it is [`Kind::Apart`]. Space never chooses between two
+//! join, or they are [`Kind::Detached`]; and a prefix `-` or `!`, or a
+//! rest's `*`, touches what it takes, or it is [`Kind::Apart`]. Space never chooses between two
 //! readings: each spelling has one, or none.
 
 // Token recognition is clearer as one exhaustive byte match than as forwarding
@@ -113,8 +113,9 @@ pub enum Kind {
     Error,
     /// `.`, `..`, `.*` or `?` with space where it joins: an error.
     Detached,
-    /// A prefix `-` or `!` apart from what it negates, or a `-` touching
-    /// what follows it but apart from the value before it: an error.
+    /// A prefix `-`, `!` or rest's `*` apart from what it takes, or a `-` or
+    /// `*` touching what follows it but apart from the value before it: an
+    /// error.
     Apart,
     /// The end of a line of items or of a body; see the module notes.
     Newline,
@@ -371,8 +372,8 @@ impl Lexer<'_> {
             Kind::DotStar | Kind::Question if before => Kind::Detached,
             // A prefix touches its operand; an infix `-` has an operand
             // before it, spaced or touching on both sides alike.
-            Kind::Minus if operand && before && !after => Kind::Apart,
-            Kind::Minus | Kind::Bang if !operand && after => Kind::Apart,
+            Kind::Minus | Kind::Star if operand && before && !after => Kind::Apart,
+            Kind::Minus | Kind::Bang | Kind::Star if !operand && after => Kind::Apart,
             kind => kind,
         }
     }
@@ -801,6 +802,9 @@ mod tests {
             ("a\n  -b", 2, Minus),
             ("a * b", 1, Star),
             ("[a, *rest]", 3, Star),
+            ("[a, * rest]", 3, Apart),
+            ("a *b", 1, Apart),
+            ("{x, *}", 3, Star),
             ("a | b", 1, Bar),
             ("f(a, |x| x)", 4, Bar),
         ] {

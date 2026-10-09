@@ -11,9 +11,9 @@ LL(1), with no edge cases a reader trips on?
   does on each probe.
 - **Space never chooses between two readings.** It decides only whether a
   spelling is valid: what binds touches what it binds, and infix stands
-  apart. A call's `(`, `.`, `..`, `.*`, `?`, and a prefix `-` or `!` touch;
-  `f (x)`, `x .y`, `x -3` and `! x` are refused, each saying how to write
-  it.
+  apart. A call's `(`, `.`, `..`, `.*`, `?`, a prefix `-` or `!`, and a
+  rest's `*` touch; `f (x)`, `x .y`, `x -3`, `! x`, `[a, * rest]` and `a *b`
+  are refused, each saying how to write it.
 - **Every construct puts a word between its head and its body:** `->` a
   clause's and an arm's, `then` and `else` a branch's, `do` a loop's, and
   the leave itself a leaving line's.
@@ -36,7 +36,7 @@ cannot see.
 - **`-`:** negation, or subtraction. Touching its operand, or with a value
   before it.
 - **`*`:** multiplication, or a list's or record's rest. A rest only begins
-  an element.
+  an element, touching what it takes.
 - **`==`:** a comparison, or a pattern's `==name`, which only begins an
   operand.
 - **`is`:** a test, or inside a pattern the whole and its parts.
@@ -68,10 +68,10 @@ a spaced infix operator.
 
 ## Findings
 
-1. **`*` is not held to the prefix rule.** `[a, * rest]` is accepted, a
-   rest apart from what it takes; and `[a *b]` reads as `a * b`, though it
-   looks like a rest. Holding `*` to `-`'s rule, a rest touching what it
-   takes and `a *b` refused, would make every prefix one rule.
+1. **`*` was not held to the prefix rule:** `[a, * rest]` was accepted,
+   and `[a *b]` read as `a * b`, though it looks like a rest. Resolved
+   2026-10-09: a rest touches what it takes, as a prefix `-` does, and `a
+   *b` is refused.
 2. **`if a then b else c else return 0`** parses, as a ternary on a line
    whose `else` leaves; it reads badly. A linter's to flag, as the
    conditions draft leaves which form to write.
