@@ -144,12 +144,21 @@ fn a_where_list_s_constraints_are_parted_by_commas() {
 
 #[test]
 fn elements_are_parted_by_commas_however_they_are_spaced() {
-    let lines = body("f(a, b) ->\n  [a -b, a- b,]\n");
+    let lines = body("f(a, b) ->\n  [a - b, a- b, a-b,]\n");
     assert!(matches!(
         lines.result.kind,
-        ExprKind::List(ref elements, None) if elements.len() == 2
+        ExprKind::List(ref elements, None) if elements.len() == 3
             && elements.iter().all(|element| matches!(element.kind, ExprKind::Binary(..)))
     ));
+    // A prefix touches what it negates, so `a -b` would be two values.
+    for source in ["f(a, b) -> [a -b]\n", "f(a) -> - a\n", "f(a) -> ! a\n"] {
+        let error = parse(source).unwrap_err();
+        assert!(
+            error.message.contains("touches what it negates"),
+            "{source}: {}",
+            error.message
+        );
+    }
     let error = parse("f(a b) -> a\n").unwrap_err();
     assert!(error.message.contains("`,`"), "{}", error.message);
     let error = parse("f(a) -> (a,)\n").unwrap_err();

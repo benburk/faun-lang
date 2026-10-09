@@ -10,7 +10,12 @@
                  `if` goes on with the line before where items are written,
                  as a guard, and begins a block's next line
      CALL_PAREN  `(` straight after an operand: a call's, or a type's
-   and `.`, `..`, `.*` and `?` are written against what they join.
+   and `.`, `..`, `.*` and `?` are written against what they join. A prefix
+   `-` or `!` touches what it negates, and an infix `-` has its value before
+   it, spaced or touching on both sides alike: `x -3` and `! x` are refused,
+   so space never chooses between two readings. A line beginning `- ` goes
+   on with the line before, as `-` is then infix; one beginning `-3` does
+   not.
 
    Elements are parted by commas, and a sequence may end with one: each
    `xs = x [ "," [ xs ] ]` below is one or more `x`, commas between, and

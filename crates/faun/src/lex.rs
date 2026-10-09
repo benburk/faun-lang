@@ -17,8 +17,10 @@
 //! Whether `-`, `*` or `|` is a prefix or infix is the grammar's to say, by
 //! where it stands, as in any expression grammar. What joins by adjacency is
 //! read here, so the grammar reads kinds alone: a `(` against an operand is a
-//! call's, [`Kind::CallParen`]; and `.`, `..`, `.*` and `?` go against what
-//! they join, or they are [`Kind::Detached`].
+//! call's, [`Kind::CallParen`]; `.`, `..`, `.*` and `?` go against what they
+//! join, or they are [`Kind::Detached`]; and a prefix `-` or `!` touches what
+//! it negates, or it is [`Kind::Apart`]. Space never chooses between two
+//! readings: each spelling has one, or none.
 
 // Token recognition is clearer as one exhaustive byte match than as forwarding
 // helpers cut to satisfy a line-count heuristic.
@@ -111,6 +113,9 @@ pub enum Kind {
     Error,
     /// `.`, `..`, `.*` or `?` with space where it joins: an error.
     Detached,
+    /// A prefix `-` or `!` apart from what it negates, or a `-` touching
+    /// what follows it but apart from the value before it: an error.
+    Apart,
     /// The end of a line of items or of a body; see the module notes.
     Newline,
     /// The end of the text: every token stream ends with one.
@@ -364,6 +369,10 @@ impl Lexer<'_> {
             Kind::Dot if before && !self.newline_before || after => Kind::Detached,
             Kind::DotDot if before || after => Kind::Detached,
             Kind::DotStar | Kind::Question if before => Kind::Detached,
+            // A prefix touches its operand; an infix `-` has an operand
+            // before it, spaced or touching on both sides alike.
+            Kind::Minus if operand && before && !after => Kind::Apart,
+            Kind::Minus | Kind::Bang if !operand && after => Kind::Apart,
             kind => kind,
         }
     }
@@ -776,14 +785,20 @@ mod tests {
     }
 
     #[test]
-    fn an_operator_is_one_kind_however_it_is_spaced() {
-        use Kind::{Bar, Minus, Star};
+    fn an_operator_is_one_kind_however_it_is_spaced_but_a_prefix_touches() {
+        use Kind::{Apart, Bang, Bar, Minus, Star};
         for (source, at, kind) in [
             ("a - b", 1, Minus),
             ("a-b", 1, Minus),
-            ("a -b", 1, Minus),
-            ("x = - b", 2, Minus),
+            ("a- b", 1, Minus),
+            ("a -b", 1, Apart),
+            ("x = - b", 2, Apart),
+            ("x = -b", 2, Minus),
             ("[-4, -5]", 1, Minus),
+            ("!ready", 0, Bang),
+            ("! ready", 0, Apart),
+            ("a\n  - b", 1, Minus),
+            ("a\n  -b", 2, Minus),
             ("a * b", 1, Star),
             ("[a, *rest]", 3, Star),
             ("a | b", 1, Bar),

@@ -222,6 +222,11 @@ impl Parser<'_> {
                 format!("`{text}` goes against what it joins: no space around it")
             }
             Kind::Detached => format!("`{text}` goes against what it follows: no space before it"),
+            Kind::Apart if text == "!" => "`!` touches what it negates: `!ready`".to_owned(),
+            Kind::Apart => {
+                "`-` touches what it negates, `-3`, and stands apart between two values, `x - 3`"
+                    .to_owned()
+            }
             kind => {
                 let mut expected = self.expected.clone();
                 expected.sort_unstable();
