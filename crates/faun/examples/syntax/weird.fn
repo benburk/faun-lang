@@ -10,7 +10,7 @@ minus_minus : Int -> Int
 minus_minus(n) -> ----n
 
 expect not_quite(True) == False
-expect minus_minus(Int.of_nat(3)) == Int.of_nat(3)
+expect minus_minus(3) == 3 & minus_minus(-3) == -3
 
 # An `if` is no operand, so its condition can be one only in parentheses;
 # but a condition may be an `if` whole.

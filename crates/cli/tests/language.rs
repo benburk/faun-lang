@@ -26,7 +26,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          main!(host) -> (
            n = host.args.len()
            xs = [U32.of_nat(n), U32.of_nat(n + 1), U32.of_nat(n + 2)]
-           ys = xs.map(|x| x + U32.of_nat(10))
+           ys = xs.map(|x| x + 10)
            host.exit!(U8.of_nat(xs.fold(0, |s, x| s + x.to_nat()) * 10 + ys.fold(0, |s, y| s + y.to_nat()) + ys.len() - 3))
          )",
         96,
@@ -653,7 +653,7 @@ const RUNNING: &[(&str, &str, u32)] = &[
          nested(_) -> 3
 
          main! : Host -> []
-         main!(host) -> host.exit!(U8.of_nat(verb(\"put\") + verb(\"post\") * 10 + bytes(U8.of_nat(255)) + bytes(U8.of_nat(150)) + bytes(U8.of_nat(3)) + nested(Ok(U8.of_nat(7))) + nested(Err(\"x\")) * 10))",
+         main!(host) -> host.exit!(U8.of_nat(verb(\"put\") + verb(\"post\") * 10 + bytes(255) + bytes(150) + bytes(3) + nested(Ok(7)) + nested(Err(\"x\")) * 10))",
         113,
     ),
     (

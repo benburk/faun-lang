@@ -119,8 +119,8 @@ expect F32.of_nat(8388609).to_bits() == 0x4b000001
 expect F32.of_nat(2.pow(100)) == 1.2676506e30
 expect F32.of_nat(10.pow(40)) == F32.infinity
 expect F32.of_int(3.neg()) == -3.0
-expect F32.integer_part(2.75) == Ok(Int.of_nat(2))
-expect F32.integer_part(-2.75) == Ok(Int.of_nat(2).neg())
+expect F32.integer_part(2.75) == Ok(2)
+expect F32.integer_part(-2.75) == Ok(-2)
 expect F32.integer_part(3.4028235e38) == Ok(Int.of_nat(2.pow(128) - 2.pow(104)))
 expect F32.integer_part(F32.nan) == Err(NotFinite)
 expect F32.integer_part(F32.infinity) == Err(NotFinite)

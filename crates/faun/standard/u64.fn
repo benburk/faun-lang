@@ -152,4 +152,4 @@ U64 : Nat.(
 expect !U64.of_nat(0) == 0xffffffffffffffff
 expect U64.of_le_bytes(1, 0, 0, 0, 0, 0, 0, 0x80) == 0x8000000000000001
 expect U64.of_nat(0x1122334455667788).to_u32() == 0x55667788 & U64.of_nat(0x1ff).to_u8() == 0xff
-expect U32.of_nat(7).min(3) == 3 & U64.of_nat(7).max(9) == 9 & U64.of_u32(U32.of_nat(5)) == 5
+expect U32.of_nat(7).min(3) == 3 & U64.of_nat(7).max(9) == 9 & U64.of_u32(5) == 5
