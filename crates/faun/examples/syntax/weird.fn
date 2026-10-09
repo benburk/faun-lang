@@ -1,0 +1,143 @@
+# Strange, but valid: corners of the grammar, each asked to hold, after
+# rustc's `tests/ui/expr/weird-exprs.rs`. Nothing here is how a program
+# should read; everything here is how one may.
+
+# A prefix touches what it takes, so it stacks.
+not_quite : Bool -> Bool
+not_quite(b) -> !!!!!!!!!b
+
+minus_minus : Int -> Int
+minus_minus(n) -> ----n
+
+expect not_quite(True) == False
+expect minus_minus(Int.of_nat(3)) == Int.of_nat(3)
+
+# An `if` is no operand, so its condition can be one only in parentheses;
+# but a condition may be an `if` whole.
+which : (Bool, Bool, Bool) -> Nat
+which(a, b, c) -> if if a then b else c then 1 else 2
+
+expect which(True, True, False) == 1 & which(False, True, False) == 2
+
+# Grouping all the way down.
+onion : Nat -> Nat
+onion(n) -> ((((((n))))))
+
+expect onion(7) == 7
+
+# Every test of `_` holds, and so does one binding a new name.
+always : Nat -> Bool
+always(n) -> n is _ & n is m & m == n
+
+expect always(4)
+
+# Arms whose values are arms, a test of a tuple of lists, and a range.
+sorted_out : (List(Nat), Nat) -> Str
+sorted_out(xs, n) -> (xs, n) is (
+  ([], 0) -> "nothing at all"
+  ([], _) -> "a number alone"
+  ([_, *_], m) -> m is (
+    0..9 -> "a digit and some"
+    _ -> "much"
+  )
+)
+
+expect sorted_out([], 0) == "nothing at all" & sorted_out([1], 3) == "a digit and some"
+expect sorted_out([1], 30) == "much" & sorted_out([], 5) == "a number alone"
+
+# A loop that leaves at once, one that never runs, and one that leaves the
+# clause from inside a loop inside a block bound to a name.
+at_once : Nat -> Nat
+at_once(n) -> (
+  count = n
+  while True do (
+    if True break
+    count = count + 1
+  )
+  for _ in [] do (
+    count = 0
+  )
+  found = (
+    for x in List.range(10) do (
+      if x == count return x * 100
+    )
+    7
+  )
+  found
+)
+
+expect at_once(3) == 300 & at_once(20) == 7
+
+# `return` takes any expression, a ternary or a block holding arms among
+# them.
+returned : (Nat, Bool) -> Str
+returned(n, loud) -> (
+  if n == 0 return if loud then "ZERO" else "zero"
+  n > 1 else return (
+    word = n is (
+      1 -> "one"
+      _ -> "?"
+    )
+    word
+  )
+  "many"
+)
+
+expect returned(0, True) == "ZERO" & returned(1, False) == "one" & returned(5, False) == "many"
+
+# A name bound to itself, a swap, and a step that changes a name's type.
+shuffled : (Nat, Nat) -> (Str, Nat)
+shuffled(a, b) -> (
+  x = a
+  x = x
+  y = b
+  (x, y) = (y, x)
+  x = "${x}"
+  (x, y)
+)
+
+expect shuffled(1, 2) == ("2", 1)
+
+# A string spliced into a string spliced into a string.
+nested : Nat -> Str
+nested(n) -> "<${"<${"<${n}>"}>"}>"
+
+expect nested(1) == "<<<1>>>"
+
+# A pattern naming the whole and its parts, asking two of its parts equal,
+# a part equal to a parameter, and one equal to a name from outside.
+answer : Nat
+answer = 42
+
+pairs_of : (Nat, List(Nat)) -> Nat
+pairs_of(limit, all is [first, first, *rest]) if all.len() > limit -> first + rest.len()
+pairs_of(limit, [limit, *_]) -> 1000
+pairs_of(_, [==answer]) -> answer
+pairs_of(_, _) -> 0
+
+expect pairs_of(1, [4, 4, 9]) == 5 & pairs_of(2, [2, 3]) == 1000
+expect pairs_of(0, [42]) == 42 & pairs_of(0, []) == 0
+
+# `?`s on `?`s.
+deep : Result(Result(Result(Nat, [A]), [A]), [A]) -> Result(Nat, [A])
+deep(r) -> Ok(r???)
+
+expect deep(Ok(Ok(Ok(1)))) == Ok(1) & deep(Ok(Err(A))) == Err(A)
+
+# Names flowing along a chain of tests, each reading what the last bound.
+fibby : List(Nat) -> Bool
+fibby(xs) -> xs is [a, *r] & r is [b, *s] & s is [c, *_] & a + b == c
+
+expect fibby([1, 2, 3, 9]) & !fibby([1, 2, 4]) & !fibby([1])
+
+# Arms as the condition of an `else` line, spanning lines of their own.
+somewhere : Result(Nat, [Gone]) -> Nat
+somewhere(r) -> (
+  r is (
+    Ok(n) -> n > 0
+    Err(_) -> False
+  ) else return 0
+  1
+)
+
+expect somewhere(Ok(3)) == 1 & somewhere(Ok(0)) == 0 & somewhere(Err(Gone)) == 0
