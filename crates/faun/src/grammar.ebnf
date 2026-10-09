@@ -128,10 +128,11 @@ after-first       = [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE sta
    `is` takes are refused after parsing. *)
 arm               = expr arm-tail ;
 arm-tail          = [ "if" expr ] "->" expr ;
-(* A block answering: lines whose last is its answer, or a leave. A line
-   beginning `if` is the ternary, or, where a leave follows its condition, a
-   line leaving where the condition holds. Where `return`, `continue` and
-   `break` may stand is told after parsing. *)
+(* A block answering: lines whose last is its answer, a binding, a leaving
+   line or a loop being followed by more. A line beginning `if` is the
+   ternary, or, where a leave follows its condition, a line leaving where
+   the condition holds. That `continue` and `break` stand in a loop's body
+   is told after parsing. *)
 statements        = if-head ( "then" expr "else" expr statement-tail | leave NEWLINE statements )
                   | loop-line NEWLINE statements
                   | plain statement-tail ;
