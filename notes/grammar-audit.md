@@ -85,3 +85,8 @@ a spaced infix operator.
 4. **Paired rules.** `operand` and `untyped-operand`, `primary` and
    `untyped-primary`, differ only in a type's name, which begins a type's
    line at the top level; they keep that line LL(1).
+5. **`clause` and `arm-tail`** were one rule written twice. Resolved
+   2026-10-10: an arm is an expression and a clause.
+
+What reads but is better written another way, `if if …` or `!!c`, is a
+linter's to flag: see [lints](lints.md).

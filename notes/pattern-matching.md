@@ -72,7 +72,8 @@ brief at the end (by Claude and by GPT-6 Astra, both of which arrived at
 - **Rules that pick between forms** are a linter's, not the compiler's:
   `x is 3` written `x == 3`; a two-arm `is` ending in `_` written as an
   `if`; an `else` line before a block's last line written as a ternary; a
-  many-way `is` on a bare parameter written as clauses.
+  many-way `is` on a bare parameter written as clauses. Gathered in
+  [lints](lints.md).
 - **Alternatives after `is` are parenthesized,** `x is (A(v) | B(v))`,
   since `|` is also the `Bool` or.
 - **Clauses where the body is the dispatch;** `is` where a test is one step

@@ -39,6 +39,7 @@ line              = directive
                   | untyped-operand expr-tail ( ":" typed | clause | "=" expr ) ;
 after-type        = "=" ( constraints | type )
                   | ":" typed ;
+(* A clause's guard and body, and an arm's guard and value, alike. *)
 clause            = [ "if" expr ] "->" expr ;
 
 directive         = "package" "{" [ dependencies ] "}"
@@ -124,14 +125,13 @@ parenthesized     = if-head ( "then" expr "else" expr after-ternary | leave NEWL
                   | loop-line NEWLINE statements
                   | plain after-first ;
 after-first       = [ "," [ exprs ] | line-tail NEWLINE statements | NEWLINE statements
-                    | arm-tail { NEWLINE arm } ] ;
+                    | clause { NEWLINE arm } ] ;
 (* A line beginning with a ternary takes no `=` and no `else` of its own:
    `(if a then b else c) else return x` puts it in parentheses. *)
 after-ternary     = [ "," [ exprs ] | NEWLINE statements ] ;
 (* Arms a line apiece, which an `is` takes: `x is (P -> a` … `)`. Arms no
    `is` takes are refused after parsing. *)
-arm               = expr arm-tail ;
-arm-tail          = [ "if" expr ] "->" expr ;
+arm               = expr clause ;
 (* A block answering: lines whose last is its answer, a binding, a leaving
    line or a loop being followed by more. A line beginning `if` is the
    ternary, or, where a leave follows its condition, a line leaving where

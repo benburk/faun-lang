@@ -1,0 +1,41 @@
+# Lints
+
+What a linter should flag, and the compiler leaves alone. The compiler
+refuses what has no meaning, or one a reader would misread; a lint flags
+what means one thing plainly but is likely a slip, or is better written
+another way. No linter is built yet. This list gathers what the drafts
+left to one, so none is lost.
+
+## Likely slips
+
+- **An unused binding.** It catches a typo that makes a new name,
+  `totl = total + 1`, since binding again is a binding.
+- **`x = x`,** a binding to itself.
+- **A test that always holds,** `n is _`, or `n is m` binding `m`.
+- **Lines no path reaches,** after an unconditional leave, and a loop
+  over an empty literal, `for _ in [] do (…)`.
+- **An effect's answer dropped** where it is a `Result`: a `write!(…)` on
+  a line of its own, neither bound nor passed on with `?`. See
+  [discarded answers](proposals/rejected/discarded-answers.md).
+- **A file name some host cannot create,** `CON`, `aux.txt`, a trailing
+  dot, warned about on every host. See [files](effects/files.md).
+
+## Forms with a plainer spelling
+
+- **`x is 3`,** written `x == 3`.
+- **A two-arm `is` ending in `_`,** written as an `if`.
+- **An `else` line before a block's last line,** where the rest is one
+  value, written as a ternary.
+- **A many-way `is` on a bare parameter,** written as clauses.
+- **A one-line loop body that is a method already,** `sum`, `map`,
+  `find`, `count` or a fold.
+- **A conversion where a numeral would do,** `Int.of_nat(3)` where the
+  type is known, written `3`.
+- **Redundant parentheses,** and a doubled prefix, `!!c` or `--x`.
+- **A ternary as a condition,** `if if a then b else c then …`, which
+  reads but should be parenthesized.
+
+## Style
+
+- **Loop nesting** past a depth a style chooses. The compiler refuses no
+  depth. See [loops](proposals/drafts/loops.md).

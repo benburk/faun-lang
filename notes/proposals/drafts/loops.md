@@ -170,7 +170,7 @@ stands outside a loop.
 
 Loops nest as deep as blocks do. How deep is a style's to say, a
 linter's, as the conditions draft leaves which form to write; the
-compiler refuses no depth. A lambda inside a loop is no part of its
+compiler refuses no depth. See [lints](../../lints.md). A lambda inside a loop is no part of its
 round: a `continue` or `break` in it is refused.
 
 ### Meaning
